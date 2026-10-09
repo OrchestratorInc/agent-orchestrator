@@ -132,7 +132,7 @@ func TestReleasedNeovateTUIConformance(t *testing.T) {
 		t.Fatal("resume lost or duplicated original task, or retained stale hidden instructions")
 	}
 	waitConformanceEvent(t, hookLog, "stop", 2, restored)
-	if err := validateRestore(workspace, "ao-session", marker.NativeID); err != nil {
+	if err := validateRestore(workspace, "ao-session", marker.NativeID, ports.PermissionModeDefault); err != nil {
 		t.Fatal(err)
 	}
 
@@ -182,6 +182,51 @@ func TestReleasedNeovateTUIConformance(t *testing.T) {
 		if entry.Payload.SessionID != marker.NativeID || entry.Payload.LaunchID != "launch-neovate-conformance" {
 			t.Fatalf("hook identity changed: %s", line)
 		}
+	}
+
+	restored.stop()
+	history, err := os.ReadFile(marker.Transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		policy  nativePermissionPolicy
+		mode    ports.PermissionMode
+		message string
+	}{
+		{"autoEdit into default", nativePermissionPolicy{ApprovalMode: "autoEdit"}, ports.PermissionModeDefault, "saved autoEdit exceeds default permissions"},
+		{"tool grant into default", nativePermissionPolicy{ApprovalMode: "default", ApprovalTools: []string{"bash"}}, ports.PermissionModeDefault, "saved tool approvals exceed the requested permission mode"},
+		{"tool grant into edits", nativePermissionPolicy{ApprovalMode: "default", ApprovalTools: []string{"bash"}}, ports.PermissionModeAcceptEdits, "saved tool approvals exceed the requested permission mode"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writeTestFile(t, marker.Transcript, string(history))
+			argv, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{ID: "ao-session", WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: marker.NativeID}}, Permissions: tc.mode, Prompt: "AO_MUST_NOT_RUN_WITH_SAVED_GRANTS"})
+			if err != nil || !ok {
+				t.Fatalf("clean restore: %v, %v", ok, err)
+			}
+			policy, err := json.Marshal(map[string]any{"type": "config", "config": tc.policy})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Change the persisted grant after AO preflight: native initialization
+			// must repeat the policy check before accepting the queued task.
+			writeTestFile(t, marker.Transcript, string(policy)+"\n"+string(history))
+			blocked := startConformanceTUI(t, workspace, env, argv)
+			deadline := time.Now().Add(30 * time.Second)
+			for !strings.Contains(blocked.output(), tc.message) && time.Now().Before(deadline) {
+				time.Sleep(25 * time.Millisecond)
+			}
+			if !strings.Contains(blocked.output(), tc.message) {
+				t.Fatalf("native restore omitted permission error %q\n%s", tc.message, blocked.output())
+			}
+			blocked.stop()
+			select {
+			case <-requests:
+				t.Fatal("blocked restored task reached model provider")
+			default:
+			}
+		})
 	}
 }
 

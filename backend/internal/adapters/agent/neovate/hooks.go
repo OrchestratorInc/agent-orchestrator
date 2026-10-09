@@ -120,7 +120,7 @@ type sessionMarker struct {
 	Transcript string `json:"transcript"`
 }
 
-func validateRestore(workspace, session, nativeID string) error {
+func validateRestore(workspace, session, nativeID string, mode ports.PermissionMode) error {
 	if !validNativeID(nativeID) {
 		return errors.New("missing or invalid native session ID")
 	}
@@ -139,10 +139,10 @@ func validateRestore(workspace, session, nativeID string) error {
 	if marker.NativeID != nativeID || filepath.Clean(marker.Workspace) != abs || !filepath.IsAbs(marker.Transcript) {
 		return errors.New("native session does not belong to this workspace")
 	}
-	return validateTranscript(marker.Transcript, nativeID)
+	return validateTranscript(marker.Transcript, nativeID, mode)
 }
 
-func validateTranscript(path, nativeID string) error {
+func validateTranscript(path, nativeID string, mode ports.PermissionMode) error {
 	f, err := os.Open(path) //nolint:gosec // captured native transcript path
 	if err != nil {
 		return fmt.Errorf("open native transcript: %w", err)
@@ -156,14 +156,23 @@ func validateTranscript(path, nativeID string) error {
 			continue
 		}
 		var entry struct {
-			Type      string          `json:"type"`
-			SessionID string          `json:"sessionId"`
-			Role      string          `json:"role"`
-			UUID      string          `json:"uuid"`
-			Content   json.RawMessage `json:"content"`
+			Type      string                  `json:"type"`
+			SessionID string                  `json:"sessionId"`
+			Role      string                  `json:"role"`
+			UUID      string                  `json:"uuid"`
+			Content   json.RawMessage         `json:"content"`
+			Config    *nativePermissionPolicy `json:"config"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			return fmt.Errorf("corrupt native transcript: %w", err)
+		}
+		if entry.Type == "config" {
+			if entry.Config == nil {
+				return errors.New("native transcript has invalid session configuration")
+			}
+			if err := validatePermissionPolicy(*entry.Config, mode); err != nil {
+				return err
+			}
 		}
 		if entry.Type != "message" {
 			continue
@@ -202,4 +211,25 @@ func validTranscriptContent(raw json.RawMessage) bool {
 		return true
 	}
 	return false
+}
+
+// Native saved grants are evaluated in addition to argv approval mode. A strict
+// AO restore must not inherit broader approval from an earlier interactive run.
+type nativePermissionPolicy struct {
+	ApprovalMode  string   `json:"approvalMode"`
+	ApprovalTools []string `json:"approvalTools"`
+}
+
+func validatePermissionPolicy(saved nativePermissionPolicy, requested ports.PermissionMode) error {
+	mode := ports.NormalizePermissionMode(requested)
+	if mode == ports.PermissionModeBypassPermissions {
+		return nil
+	}
+	if len(saved.ApprovalTools) != 0 {
+		return errors.New("saved native tool approvals exceed the requested permission mode; revoke them in Neovate before restoring")
+	}
+	if mode == ports.PermissionModeDefault && saved.ApprovalMode == "autoEdit" {
+		return errors.New("saved native autoEdit approval exceeds default permissions; reset it in Neovate before restoring")
+	}
+	return nil
 }

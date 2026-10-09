@@ -58,6 +58,12 @@ against deliberate local file tampering.
 | auto | `autoEdit`: conservative mapping; shell commands still reviewed |
 | bypass | `yolo`: native approval bypass |
 
+Saved native `approvalTools` grants block every non-bypass restore; saved
+`autoEdit` blocks a restore requesting default permissions. Neovate otherwise
+retains these grants despite stricter argv flags. AO checks them before launch
+and again at native initialization, without modifying the provider history.
+Revoke incompatible grants in Neovate before restoring.
+
 Tool allow/deny lists are unsupported and fail explicitly. Native ask-user tools
 can still request interaction in bypass mode.
 

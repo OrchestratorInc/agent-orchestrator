@@ -65,7 +65,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, errors.New("neovate: tool-restricted restores are unsupported")
 	}
 	id := cfg.Session.Metadata[ports.MetadataKeyAgentSessionID]
-	if err := validateRestore(cfg.Session.WorkspacePath, cfg.Session.ID, id); err != nil {
+	if err := validateRestore(cfg.Session.WorkspacePath, cfg.Session.ID, id, cfg.Permissions); err != nil {
 		return nil, false, fmt.Errorf("neovate: cannot restore native session: %w", err)
 	}
 	cmd, err := p.command(ctx, cfg.Session.WorkspacePath, cfg.Session.ID, cfg.Config, cfg.Permissions, id, cfg.Prompt)

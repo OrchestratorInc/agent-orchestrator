@@ -84,7 +84,7 @@ func TestRestoreRejectsWorkspaceMismatch(t *testing.T) {
 	seedTranscript(t, workspace, "ao-session", "a1b2c3d4")
 	marker, _ := json.Marshal(sessionMarker{NativeID: "a1b2c3d4", Workspace: t.TempDir(), Transcript: "/unrelated"})
 	writeTestFile(t, pluginPath(workspace, "ao-session")+".session.json", string(marker))
-	if err := validateRestore(workspace, "ao-session", "a1b2c3d4"); err == nil {
+	if err := validateRestore(workspace, "ao-session", "a1b2c3d4", ports.PermissionModeDefault); err == nil {
 		t.Fatal("foreign workspace accepted")
 	}
 }
@@ -171,5 +171,40 @@ func TestRejectsNativeCommandTasksAndToolRestrictions(t *testing.T) {
 	_, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{AllowedTools: []string{"read"}})
 	if err == nil {
 		t.Fatal("accepted unsupported reviewer tool restriction")
+	}
+}
+
+func TestRestoreRejectsSavedApprovalsBroaderThanRequestedMode(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		saved     nativePermissionPolicy
+		requested ports.PermissionMode
+		wantError bool
+	}{
+		{"default", nativePermissionPolicy{ApprovalMode: "default"}, ports.PermissionModeDefault, false},
+		{"saved autoEdit", nativePermissionPolicy{ApprovalMode: "autoEdit"}, ports.PermissionModeDefault, true},
+		{"explicit edits", nativePermissionPolicy{ApprovalMode: "autoEdit"}, ports.PermissionModeAcceptEdits, false},
+		{"saved tool default", nativePermissionPolicy{ApprovalTools: []string{"bash"}}, ports.PermissionModeDefault, true},
+		{"saved tool edits", nativePermissionPolicy{ApprovalTools: []string{"bash"}}, ports.PermissionModeAcceptEdits, true},
+		{"saved tool auto", nativePermissionPolicy{ApprovalTools: []string{"bash"}}, ports.PermissionModeAuto, true},
+		{"explicit bypass", nativePermissionPolicy{ApprovalMode: "autoEdit", ApprovalTools: []string{"bash"}}, ports.PermissionModeBypassPermissions, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			path := seedTranscript(t, workspace, "ao-session", "a1b2c3d4")
+			history, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			config, err := json.Marshal(map[string]any{"type": "config", "config": tc.saved})
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeTestFile(t, path, string(config)+"\n"+string(history))
+			_, ok, err := (&Plugin{resolvedBinary: "neovate"}).GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{ID: "ao-session", WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "a1b2c3d4"}}, Permissions: tc.requested})
+			if (err != nil) != tc.wantError || ok == tc.wantError {
+				t.Fatalf("restore = %v, %v", ok, err)
+			}
+		})
 	}
 }

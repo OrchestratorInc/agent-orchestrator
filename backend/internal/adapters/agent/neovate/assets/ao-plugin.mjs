@@ -11,6 +11,7 @@ const resumeIndex = optionArgs.indexOf('--resume');
 const resumedID = resumeIndex < 0 ? '' : optionArgs[resumeIndex + 1];
 let mainID = resumedID;
 let pendingAcceptance;
+let initialAccepted = false;
 
 function readEntries(transcript) {
   try {
@@ -21,7 +22,7 @@ function readEntries(transcript) {
   }
 }
 
-function checkRestore(context) {
+function checkRestore(context, checkPermissions = false) {
   if (!resumedID) return;
   const marker = JSON.parse(fs.readFileSync(config.marker, 'utf8'));
   const transcript = context.paths.getSessionLogPath(resumedID);
@@ -29,6 +30,14 @@ function checkRestore(context) {
     throw new Error('AO: Neovate native session/workspace mismatch');
   }
   const entries = readEntries(transcript);
+  if (checkPermissions) {
+    const saved = entries.find(entry => entry.type === 'config')?.config;
+    const requested = context.config.approvalMode;
+    if (saved && requested !== 'yolo') {
+      if (saved.approvalTools?.length) throw new Error('AO: Neovate saved tool approvals exceed the requested permission mode');
+      if (requested === 'default' && saved.approvalMode === 'autoEdit') throw new Error('AO: Neovate saved autoEdit exceeds default permissions');
+    }
+  }
   const messages = entries.filter(x => x.type === 'message');
   if (!messages.some(x => x.role === 'user') || messages.some(x => x.sessionId !== resumedID || !x.uuid || !['system', 'user', 'assistant', 'tool'].includes(x.role) || !(typeof x.content === 'string' || Array.isArray(x.content)))) {
     throw new Error('AO: Neovate native history is missing or corrupt');
@@ -60,6 +69,7 @@ function confirmAcceptance(context) {
   fs.writeFileSync(config.marker + '.tmp', JSON.stringify(marker), {mode: 0o600});
   fs.renameSync(config.marker + '.tmp', config.marker);
   pendingAcceptance = undefined;
+  initialAccepted = true;
   report('user-prompt-submit', sessionId, {prompt, transcript_path: transcript, native_message_id: message.uuid});
 }
 
@@ -68,7 +78,7 @@ export default {
   enforce: 'post',
   initialized() {
     if (path.resolve(this.cwd) !== config.workspace) return;
-    checkRestore(this);
+    checkRestore(this, !initialAccepted);
   },
   systemPrompt(defaults, {sessionId}) {
     if (path.resolve(this.cwd) !== config.workspace) return defaults;
@@ -79,7 +89,7 @@ export default {
     if (path.resolve(this.cwd) !== config.workspace) return prompt;
     if (!mainID) mainID = sessionId;
     if (sessionId !== mainID) return prompt;
-    checkRestore(this);
+    checkRestore(this, !initialAccepted);
     const transcript = this.paths.getSessionLogPath(sessionId);
     const entries = readEntries(transcript);
     const sessionModel = entries.find(entry => entry.type === 'config')?.config?.model;
