@@ -297,7 +297,7 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
 	});
 
-	it("shows configured MiMo Code without asking for login again", async () => {
+	it("shows configured MiMo Code as connected and offers refresh login", async () => {
 		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: configured } as never;
@@ -308,9 +308,10 @@ describe("HarnessSettingsSection", () => {
 		});
 		renderSection();
 		const row = (await screen.findByText("MiMo Code")).closest('[data-agent="mimo-code"]') as HTMLElement;
-		expect(await within(row).findByText("Configured")).toBeInTheDocument();
-		expect(within(row).queryByRole("button", { name: "Configured" })).toBeNull();
+		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "Refresh login" })).toBeEnabled();
 	});
 
 	it("offers fx installation while readiness refreshes automatically", async () => {
@@ -685,9 +686,10 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "auth-mimo" } },
 		}));
-		expect(await within(row).findByText("Configured")).toBeInTheDocument();
-		expect(within(row).queryByRole("button", { name: "Configured" })).toBeNull();
+		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "Refresh login" })).toBeEnabled();
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
 

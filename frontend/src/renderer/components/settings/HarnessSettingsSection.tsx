@@ -706,11 +706,10 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						const isSetupAction = authPlan?.action === "setup";
 						const authState = authStates[agentId];
 						const authStatus = readinessAgent?.authentication.state;
-						const mimoConfigured = agentId === "mimo-code" && authStatus === "configured";
+						const connectedCredential = authStatus === "authorized" || authStatus === "configured";
 						const installationStatusLabel = t("settings.harness.installed");
-						const showInstallationStatus = authStatus === "authorized"
+						const showInstallationStatus = connectedCredential
 							|| authStatus === "not_applicable"
-							|| mimoConfigured
 							|| (!authPlans.isPending && (!authPlan || authPlan.action === "instructions"));
 						const rowHasError = failed || Boolean(authState?.error);
 						const rowAuthWorkflow = authWorkflow?.agentId === agentId ? authWorkflow : null;
@@ -723,7 +722,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						const authSummary = authState?.error
 							? authState.error
 							: authStatus === "configured"
-								? t("settings.harness.configured")
+								? t("settings.harness.loggedIn")
 								: authStatus === "authorized"
 								? (isSetupAction ? t("settings.harness.configured") : t("settings.harness.loggedIn"))
 								: authPlan && !authPlan.available
@@ -747,7 +746,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						) : null;
 						const authControls = authPlan && authPlan.action !== "instructions" ? (
 							<>
-								{authStatus !== "authorized" && !mimoConfigured ? (
+								{!connectedCredential ? (
 									<Button data-harness-primary-action="" data-terminal-focus-handoff="true" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} size="sm" onClick={() => void startAuth(agentId)}>
 										{authState?.pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
 										{authState?.pending ? t("settings.harness.loggingIn") : isSetupAction ? t("settings.harness.setup") : t("settings.harness.login")}
@@ -756,7 +755,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 							</>
 						) : null;
 						// A logged-in harness's only action is to re-run its login.
-						const refreshLocal = authPlan?.action === "login" && authStatus === "authorized" ? (
+						const refreshLocal = authPlan?.action === "login" && connectedCredential ? (
 							<Button type="button" size="sm" variant="outline" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} onClick={() => void startAuth(agentId)}>
 								{t("settings.harness.refreshLogin")}
 							</Button>
@@ -767,7 +766,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 								<div className="flex shrink-0 items-center gap-2">
 								{/* The subtitle already states a login ("Connected", "Configured"); the
 								    chip is only for installed harnesses whose subtitle doesn't say so. */}
-								{showInstallationStatus && authStatus !== "authorized" && !mimoConfigured ? (
+								{showInstallationStatus && !connectedCredential ? (
 									<Button
 										type="button"
 										size="none"
