@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2, RotateCcw } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import {
 	createContext,
 	useCallback,
@@ -58,6 +58,8 @@ type TerminalPaneProps = {
 	onToggleFullscreen?: () => void | Promise<void>;
 	/** Refuse agent PTY input while a controller transition owns the source. */
 	inputDisabled?: boolean;
+	/** The agent terminal is coming up after an interface switch; show the boot spinner instead of ended/empty chrome. */
+	booting?: boolean;
 	/** Focus the terminal when an in-flight controller asks for human input. */
 	focusRequested?: boolean;
 	/** Observe attachment state without taking ownership of the terminal lifecycle. */
@@ -132,6 +134,7 @@ function terminalPropsMatch(left: TerminalPaneProps, right: TerminalPaneProps): 
 		left.isFullscreen === right.isFullscreen &&
 		left.onToggleFullscreen === right.onToggleFullscreen &&
 		left.inputDisabled === right.inputDisabled &&
+		left.booting === right.booting &&
 		left.focusRequested === right.focusRequested &&
 		left.onTerminalStateChange === right.onTerminalStateChange &&
 		left.onTerminalContentReadyChange === right.onTerminalContentReadyChange &&
@@ -691,6 +694,7 @@ function CachedTerminalSlot({
 	return <div className="h-full min-h-0 w-full" data-testid="session-terminal-slot" ref={slotRef} />;
 }
 
+const BOOT_SPINNER_FRAMES = ["|", "/", "-", "\\"];
 const BOOT_STATUS_STEPS = [
 	"Preparing the {subject}",
 	"Clearing a workspace",
@@ -704,13 +708,13 @@ const BOOT_STATUS_STEPS = [
 function TerminalBootStatus({ subject }: { subject: string }) {
 	const [tick, setTick] = useState(0);
 	useEffect(() => {
-		const id = window.setInterval(() => setTick((value) => value + 1), 1800);
+		const id = window.setInterval(() => setTick((value) => value + 1), 120);
 		return () => window.clearInterval(id);
 	}, []);
-	const step = Math.min(tick, BOOT_STATUS_STEPS.length - 1);
+	const step = Math.min(Math.floor(tick / 15), BOOT_STATUS_STEPS.length - 1);
 	return (
 		<div className="flex items-center gap-2.5 text-terminal-dim" role="status" aria-live="polite">
-			<Loader2 aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-terminal" />
+			<span aria-hidden="true" className="inline-block w-[1ch] text-center text-terminal">{BOOT_SPINNER_FRAMES[tick % BOOT_SPINNER_FRAMES.length]}</span>
 			<span>{BOOT_STATUS_STEPS[step].replace("{subject}", subject)}</span>
 		</div>
 	);
@@ -727,6 +731,7 @@ export function TerminalPane({
 	isFullscreen,
 	onToggleFullscreen,
 	inputDisabled,
+	booting,
 	focusRequested,
 	onTerminalStateChange,
 	onTerminalContentReadyChange,
@@ -829,6 +834,7 @@ export function TerminalPane({
 		isFullscreen,
 		onToggleFullscreen,
 		inputDisabled,
+		booting,
 		focusRequested,
 		onTerminalStateChange,
 		onTerminalContentReadyChange,
@@ -859,6 +865,7 @@ export function TerminalPane({
 			fontSize={fontSize}
 			isFullscreen={isFullscreen}
 			inputDisabled={inputDisabled}
+			booting={booting}
 			onChangeFontSize={onChangeFontSize}
 			onToggleFullscreen={onToggleFullscreen}
 			focusRequested={focusRequested}
@@ -1025,6 +1032,7 @@ function AttachedTerminal({
 	isFullscreen,
 	onToggleFullscreen,
 	inputDisabled,
+	booting,
 	focusRequested,
 	onTerminalStateChange,
 	onTerminalContentReadyChange,
@@ -1312,7 +1320,7 @@ function AttachedTerminal({
 		!showEmptyState &&
 		!showEndedStatePreview &&
 		!cloudRevealedRef.current;
-	const showEndedState = showEndedStatePreview && !isBoxComingUp && !session?.cloud;
+	const showEndedState = showEndedStatePreview && !isBoxComingUp && !session?.cloud && !booting;
 
 	return (
 		<div className="terminal-surface flex h-full min-h-0 flex-col" data-testid="session-terminal">
@@ -1352,7 +1360,7 @@ function AttachedTerminal({
 					supportsCursorColorScheme={provider === "cursor"}
 					theme={theme}
 				/>
-				{showEmptyState && (
+				{(showEmptyState || booting) && (
 					<div className="terminal-surface absolute inset-0 grid place-items-center font-mono text-control">
 						{session ? (
 							<TerminalBootStatus subject={session.kind === "orchestrator" ? "orchestrator" : "agent"} />

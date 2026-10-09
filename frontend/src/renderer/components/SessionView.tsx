@@ -1941,6 +1941,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								<CenterPane
 									hostId={hostId}
 									agentInputDisabled={interfaceUi.agentInputDisabled}
+									terminalBooting={interfaceUi.optimisticTarget === "tui"}
 									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
 									onCloseShellTerminal={closeShellTerminalByHandle}
 									onRenameShellTerminal={renameShellTerminalByHandle}

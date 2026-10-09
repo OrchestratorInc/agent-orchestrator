@@ -494,6 +494,30 @@ describe("TerminalPane empty states", () => {
 		}
 	});
 
+	it("shows the boot spinner instead of the ended strip while an interface switch starts the terminal", () => {
+		const previousAO = window.ao;
+		window.ao = {} as typeof window.ao;
+		terminalState.value = "exited";
+		try {
+			render(
+				<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+					<TerminalPane
+						booting
+						daemonReady
+						fontSize={12}
+						session={worker}
+						terminalTarget={{ kind: "worker" }}
+						theme="dark"
+					/>
+				</QueryClientProvider>,
+			);
+			expect(screen.getByRole("status")).toHaveTextContent("Preparing the agent");
+			expect(screen.queryByText("Terminal ended")).not.toBeInTheDocument();
+		} finally {
+			window.ao = previousAO;
+		}
+	});
+
 	it("refreshes cloud review state without showing a false terminal-ended banner", async () => {
 		const previousAO = window.ao;
 		window.ao = {} as typeof window.ao;
