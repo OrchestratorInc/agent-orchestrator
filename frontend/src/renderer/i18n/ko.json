@@ -1743,7 +1743,7 @@
 	"tray.attentionTooltip_other": "{{count}}개 세션에 확인이 필요합니다",
 	"tray.empty": "확인이 필요한 세션이 없습니다",
 	"tray.more": "더 보기",
-	"tray.quit": "Agent Orchestrator 종료",
+	"tray.quit": "AO 완전히 종료",
 	"tray.show": "Agent Orchestrator 표시",
 	"tray.untitledSession": "제목 없는 세션",
 	"time.daysAgo": "{{n}}일 전",

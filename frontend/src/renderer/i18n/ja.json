@@ -1743,7 +1743,7 @@
 	"tray.attentionTooltip_other": "{{count}} 件のセッションに対応が必要です",
 	"tray.empty": "対応が必要なセッションはありません",
 	"tray.more": "その他",
-	"tray.quit": "Agent Orchestrator を終了",
+	"tray.quit": "AO を完全に終了",
 	"tray.show": "Agent Orchestrator を表示",
 	"tray.untitledSession": "無題のセッション",
 	"time.daysAgo": "{{n}}日前",

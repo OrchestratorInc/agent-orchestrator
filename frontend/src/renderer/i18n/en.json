@@ -1965,7 +1965,7 @@
 	"tray.attentionTooltip_other": "{{count}} sessions need attention",
 	"tray.empty": "No sessions need attention",
 	"tray.more": "More",
-	"tray.quit": "Quit Agent Orchestrator",
+	"tray.quit": "Quit AO Completely",
 	"tray.show": "Show Agent Orchestrator",
 	"tray.untitledSession": "Untitled session",
 	"time.daysAgo": "{{n}}d ago",

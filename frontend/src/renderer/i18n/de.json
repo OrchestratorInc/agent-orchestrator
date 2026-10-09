@@ -1743,7 +1743,7 @@
 	"tray.attentionTooltip_other": "{{count}} Sitzungen benötigen Aufmerksamkeit",
 	"tray.empty": "Keine Sitzungen benötigen Aufmerksamkeit",
 	"tray.more": "Mehr",
-	"tray.quit": "Agent Orchestrator beenden",
+	"tray.quit": "AO vollständig beenden",
 	"tray.show": "Agent Orchestrator anzeigen",
 	"tray.untitledSession": "Unbenannte Sitzung",
 	"time.daysAgo": "vor {{n}} T.",

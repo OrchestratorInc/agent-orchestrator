@@ -1772,7 +1772,7 @@
 	"tray.attentionTooltip_other": "{{count}} sessões precisam de atenção",
 	"tray.empty": "Nenhuma sessão precisa de atenção",
 	"tray.more": "Mais",
-	"tray.quit": "Sair do Agent Orchestrator",
+	"tray.quit": "Sair completamente do AO",
 	"tray.show": "Mostrar Agent Orchestrator",
 	"tray.untitledSession": "Sessão sem título",
 	"time.daysAgo": "há {{n}}d",

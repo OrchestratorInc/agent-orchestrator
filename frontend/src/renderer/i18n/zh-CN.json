@@ -1798,7 +1798,7 @@
 	"tray.attentionTooltip_other": "{{count}} 个会话需要关注",
 	"tray.empty": "没有会话需要关注",
 	"tray.more": "更多",
-	"tray.quit": "退出 Agent Orchestrator",
+	"tray.quit": "完全退出 AO",
 	"tray.show": "显示 Agent Orchestrator",
 	"tray.untitledSession": "未命名会话",
 	"time.daysAgo": "{{n}} 天前",

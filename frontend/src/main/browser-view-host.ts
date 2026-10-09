@@ -2276,13 +2276,16 @@ export function createBrowserViewHost(
     rendererOwnersByViewId.delete(viewId);
     forgetNativeFocus(viewId);
     forgetBrowserShortcutTarget(viewId);
-    // When the window is already gone (dispose fired from mainWindow "closed"),
-    // Electron has torn down contentView and the child WebContentsViews. Touching
-    // them throws "Object has been destroyed", so just drop our reference.
+    // BaseWindow close leaves child WebContents alive, but destroys contentView.
     if (options.mainWindow.isDestroyed?.()) {
       for (const entry of session.tabs.values()) {
         tabsByWebContentsId.delete(entry.view.webContents.id);
         disposeNetworkCapture(entry, "session-closed");
+        try {
+          entry.view.webContents.close?.();
+        } catch {
+          // The tab may already have closed before the window teardown.
+        }
       }
       if (partitionToClear) clearTemporaryPartition(partitionToClear);
       return;
