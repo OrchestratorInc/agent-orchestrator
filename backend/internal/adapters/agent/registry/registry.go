@@ -41,6 +41,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/qwen"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/tau"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/unrealagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/vibe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -81,6 +82,7 @@ func Constructors() []adapters.Adapter {
 		kilocode.New(),
 		vibe.New(),
 		pi.New(),
+		tau.New(),
 		kimchi.New(),
 		primeagent.New(),
 		autohand.New(),

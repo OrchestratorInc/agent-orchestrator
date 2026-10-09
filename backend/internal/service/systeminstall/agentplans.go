@@ -46,6 +46,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
+	TargetTau:         "https://github.com/huggingface/tau",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -264,6 +265,8 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
+	case TargetTau:
+		plans = []Plan{s.planUV(target, "tau-ai==0.4.7")}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
 	default:
