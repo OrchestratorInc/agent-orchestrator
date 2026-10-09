@@ -2,7 +2,7 @@
 
 AO integrates the native Textual TUI from [Tau v0.4.7](https://github.com/huggingface/tau/releases/tag/v0.4.7), commit `e4eab0dc5d6c7a92dc40e660087e55f0d5929eba`. The install plan pins `tau-ai==0.4.7`; launch and native restore reject other versions until their contract has been reviewed.
 
-Tau requires **explicit bypass permissions** in AO. Tau's `--approve` trusts project instructions for one process; it does not implement a tool approval policy. Default/manual, accept-edits, and auto modes are rejected. Configure a provider through Tau's native `/login` flow first. AO reports configured credentials as `configured`, never as verified authorization.
+Tau requires **explicit bypass permissions** in AO. Tau's `--approve` trusts project instructions for one process; it does not implement a tool approval policy. Default/manual, accept-edits, and auto modes are rejected. Tool allow/deny restrictions are also rejected on launch and restore because Tau cannot enforce them. Configure a provider through Tau's native `/login` flow first. AO reports configured credentials as `configured`, never as verified authorization.
 
 The integration launches `tau --cwd <workspace> --approve --no-extensions --extension <AO observer> --new-session`. The task is delivered through the mounted composer after observing `Ask Tau…` and native startup readiness. Task text never enters CLI arguments: values such as `sessions` and `setup` are commands in Tau's CLI. Missing composer evidence fails delivery instead of injecting text into an unknown screen.
 
