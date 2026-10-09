@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { installFakeAgent, type FakeWorker } from "./support/fake-bridge";
 
+// Opt-in diagnostics only: this fake bridge exercises renderer cache, event,
+// and polling paths. It cannot reproduce Electron background throttling and is
+// excluded from the default @T0/@P0 renderer CI gate.
+
 const cacheState = (page: import("@playwright/test").Page) =>
 	page.evaluate(() => {
 		const client = (window as unknown as { __qc?: { getQueryData: (key: readonly unknown[]) => unknown } }).__qc;
@@ -76,7 +80,7 @@ const setDocumentVisibility = (page: import("@playwright/test").Page, visibility
 		window.dispatchEvent(new Event("visibilitychange"));
 	}, visibility);
 
-test("diagnostic: large workspace snapshot, refetch race, and SSE replay keep the worker row in sync @T0 @SIDEBAR_DIAG", async ({ page }) => {
+test("diagnostic: large workspace snapshot, refetch race, and SSE replay keep the worker row in sync @SIDEBAR_DIAG", async ({ page }) => {
 	test.setTimeout(90_000);
 	page.on("pageerror", (error) => console.log("SIDEBAR_DIAGNOSTIC pageerror", error.message));
 	const workers: FakeWorker[] = Array.from({ length: 491 }, (_, index) => {
@@ -173,7 +177,7 @@ test("diagnostic: large workspace snapshot, refetch race, and SSE replay keep th
 	expect(afterPoll.row.visible).toBe(true);
 });
 
-test("diagnostic: continuous SSE pressure does not starve workspace invalidation for two minutes @T0 @SIDEBAR_DIAG", async ({ page }) => {
+test("diagnostic: continuous SSE pressure does not starve workspace invalidation for two minutes @SIDEBAR_DIAG", async ({ page }) => {
 	test.setTimeout(180_000);
 	await openLargeExpandedWorkspace(page);
 
@@ -224,7 +228,7 @@ test("diagnostic: continuous SSE pressure does not starve workspace invalidation
 	expect(capture.row.visible).toBe(true);
 });
 
-test("diagnostic: exhausted snapshot retries do not stop the 15-second workspace poll @T0 @SIDEBAR_DIAG", async ({ page }) => {
+test("diagnostic: exhausted snapshot retries do not stop the 15-second workspace poll @SIDEBAR_DIAG", async ({ page }) => {
 	test.setTimeout(60_000);
 	await openLargeExpandedWorkspace(page);
 	const baseline = await page.evaluate(() => window.__aoFakeAgent!.snapshotCallCount());
@@ -263,7 +267,7 @@ test("diagnostic: exhausted snapshot retries do not stop the 15-second workspace
 	expect(recoveryCapture.workerIndex).toBeGreaterThanOrEqual(0);
 });
 
-test("diagnostic: a delivered SSE event updates the cache while document is hidden @T0 @SIDEBAR_DIAG", async ({ page }) => {
+test("diagnostic: a delivered SSE event updates the cache while document is hidden @SIDEBAR_DIAG", async ({ page }) => {
 	test.setTimeout(165_000);
 	await openLargeExpandedWorkspace(page);
 	const beforeHidden = await page.evaluate(() => window.__aoFakeAgent!.snapshotCallCount());
@@ -298,7 +302,7 @@ test("diagnostic: a delivered SSE event updates the cache while document is hidd
 	await setDocumentVisibility(page, "visible");
 });
 
-test("diagnostic: a missed hidden SSE event recovers on the next interval after visibility returns @T0 @SIDEBAR_DIAG", async ({ page }) => {
+test("diagnostic: a missed hidden SSE event recovers on the next interval after visibility returns @SIDEBAR_DIAG", async ({ page }) => {
 	test.setTimeout(165_000);
 	await openLargeExpandedWorkspace(page);
 	await setDocumentVisibility(page, "hidden");
@@ -342,7 +346,7 @@ test("diagnostic: a missed hidden SSE event recovers on the next interval after 
 	expect(recoveryCapture.workerIndex).toBeGreaterThanOrEqual(0);
 });
 
-test("diagnostic: EventSource reopen performs a workspace catch-up after a hidden missed event @T0 @SIDEBAR_DIAG", async ({ page }) => {
+test("diagnostic: EventSource reopen performs a workspace catch-up after a hidden missed event @SIDEBAR_DIAG", async ({ page }) => {
 	test.setTimeout(30_000);
 	await openLargeExpandedWorkspace(page);
 	await setDocumentVisibility(page, "hidden");
