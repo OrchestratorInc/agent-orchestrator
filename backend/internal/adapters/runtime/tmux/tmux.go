@@ -1118,8 +1118,17 @@ func (r *Runtime) runOnSocket(ctx context.Context, socketName string, args ...st
 		r.confirmCompatibleClient(ctx, binary, "", false)
 		return out, err
 	}
-	if protocolVersionMismatchOutput(string(out)) || serverExitedUnexpectedlyOutput(string(out)) {
+	// A protocol mismatch is reported before tmux runs the command, so any
+	// command can be replayed with another client. An unexpected server exit
+	// proves no such rejection: send-keys may already be in the pane and
+	// kill-session may already have run. Only read-only commands are replayed
+	// after one; a mutating command is probed and reported as inconclusive.
+	if protocolVersionMismatchOutput(string(out)) ||
+		(serverExitedUnexpectedlyOutput(string(out)) && readOnlyCommand(rawArgs)) {
 		return r.runWithRetainedClient(ctx, socketName, args, binary, out, err)
+	}
+	if serverExitedUnexpectedlyOutput(string(out)) {
+		return r.probeAfterAmbiguousExit(ctx, socketName, rawArgs, binary, out, err)
 	}
 	if isCompatibilityProbe(rawArgs) &&
 		(serverNotRunningOutput(string(out)) || serverSocketAbsentOutput(string(out))) {
@@ -1143,6 +1152,48 @@ type retainedClientCandidate struct {
 
 func isCompatibilityProbe(args []string) bool {
 	return len(args) > 0 && (args[0] == "has-session" || args[0] == "new-session")
+}
+
+// readOnlyCommand reports whether running args again cannot change server or
+// pane state. Unknown commands are treated as mutating. capture-pane and
+// display-message only qualify with -p, which prints instead of writing a
+// buffer or a client message.
+func readOnlyCommand(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "has-session", "list-sessions", "list-panes", "show-options":
+		return true
+	case "capture-pane", "display-message":
+		for _, arg := range args[1:] {
+			if arg == "-p" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// probeAfterAmbiguousExit handles a mutating command whose server exited
+// unexpectedly. A read-only probe still selects a compatible client for later
+// operations, but the original command is never replayed: tmux may already
+// have applied it, so its outcome stays inconclusive for the caller.
+func (r *Runtime) probeAfterAmbiguousExit(ctx context.Context, socketName string, rawArgs []string, failedBinary string, out []byte, err error) ([]byte, error) {
+	name := "command"
+	if len(rawArgs) > 0 {
+		name = rawArgs[0]
+	}
+	probe := []string{"-L", socketName, "list-sessions", "-F", "#{session_name}"}
+	_, probeErr := r.runWithRetainedClient(ctx, socketName, probe, failedBinary, out, err)
+	command := fmt.Errorf("tmux runtime: %s may have reached private server %q before it exited unexpectedly: %w",
+		name, socketName, errors.Join(ports.ErrRuntimeProbeInconclusive, err))
+	if probeErr != nil {
+		// The probe's classification describes the candidate clients, not the
+		// original command, so it is reported as text without its sentinels.
+		return out, fmt.Errorf("%w; compatibility probe: %s", command, probeErr.Error())
+	}
+	return out, command
 }
 
 func (r *Runtime) runWithRetainedClient(ctx context.Context, socketName string, args []string, failedBinary string, currentOut []byte, currentErr error) ([]byte, error) {
