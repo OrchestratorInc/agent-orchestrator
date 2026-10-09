@@ -2257,8 +2257,6 @@
 	"settings.harness.health.lastChecked": "Última comprobación",
 	"settings.harness.health.latestVersion": "Última versión",
 	"settings.harness.health.updateChecked": "Actualización comprobada",
-	"settings.harness.health.notChecked": "Sin comprobar",
-	"settings.harness.health.notVerified": "Sin verificar",
 	"settings.harness.health.stale": "desactualizado",
 	"settings.harness.health.checkAgain": "Comprobar de nuevo",
 	"settings.harness.health.checking": "Comprobando…",

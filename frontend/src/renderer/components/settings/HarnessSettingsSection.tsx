@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, ChevronLeft, ChevronRight, Copy, KeyRound, LoaderCircle, LogIn, LogOut, RefreshCw, Search, Trash2, TriangleAlert, X } from "lucide-react";
+import { ArrowUpCircle, BookOpen, Check, ChevronLeft, ChevronRight, Copy, KeyRound, LoaderCircle, LogIn, LogOut, RefreshCw, Search, Trash2, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -465,9 +465,16 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		(primaryAction ?? detail.querySelector<HTMLElement>("[role=tab][data-state=active]"))?.focus({ preventScroll: true });
 	}, [selectedAgentId]);
 
+	// Wide layouts keep the list beside the open harness; narrow ones swap between them.
+	const layoutRef = useRef<HTMLDivElement>(null);
+	const split = useWideLayout(layoutRef);
 	useEffect(() => {
-		onDetailChange?.(selectedAgentId !== null);
-	}, [onDetailChange, selectedAgentId]);
+		if (!split || selectedAgentRef.current !== null || rows.length === 0) return;
+		openDetail(rows[0]);
+	});
+	useEffect(() => {
+		onDetailChange?.(selectedAgentId !== null && !split);
+	}, [onDetailChange, selectedAgentId, split]);
 	useEffect(() => () => onDetailChange?.(false), [onDetailChange]);
 
 	useEffect(() => () => {
@@ -888,6 +895,8 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 			: currentOperation === "uninstall" ? t("settings.harness.uninstalling")
 			: currentOperation === "install" ? t("settings.harness.installing") : t("settings.harness.working");
 		const rowError = actionError ?? authState?.error ?? (jobFailed ? job?.error ?? t("settings.harness.installFailed") : undefined);
+		const listTone: HarnessTone = !isInstalled ? (rowError ? "error" : "off")
+			: rowError || needsLogin ? "error" : "ok";
 		const authProgress = rowAuthWorkflow?.phase === "verifying" ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.checkingLogout" : "settings.harness.checkingLogin")
 			: rowAuthWorkflow?.phase === "closing" ? t("settings.harness.authClosing")
 			: rowAuthWorkflow && rowAuthWorkflow.phase !== "running" ? rowAuthWorkflow.reason ?? t("settings.harness.loginUnknown")
@@ -933,24 +942,11 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 			: canRelogin ? <Button type="button" data-terminal-focus-handoff="true" size="sm" variant="outline" className={actionClass} disabled={Boolean(authWorkflow)} onClick={() => void startAuth(agentId)}>
 				{t(isSetupAction ? "settings.harness.openSetup" : "settings.harness.loginAgain")}
 			</Button> : null;
-		const identityText = <>
-			<span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-				<span className="text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</span>
-				{isInstalled ? <span className="break-all font-mono text-[11px] text-settings-muted" title={t(versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")}>{versionText}{versionUnverified && currentVersion ? ` · ${t("settings.harness.unverified")}` : ""}</span> : null}
-			</span>
-			{statusLabel || (isInstalled && updateAvailable) ? <span className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 text-xs text-settings-muted">
-				{statusLabel ? <span className={cn("break-words", Boolean(rowError) && "text-error")}>{statusLabel}</span> : null}
-				{isInstalled && updateAvailable ? <>
-					{statusLabel ? <span aria-hidden="true">·</span> : null}
-					<span className="font-medium text-settings-accent">{t("settings.harness.versionAvailable", { version: versionLabel(advisory!.latestVersion!) })}</span>
-				</> : null}
-			</span> : null}
-		</>;
 		return {
 			agentId, plan, job, isInstalled, methodId, maintenanceMethod, canUpdate, canUninstall, manualOnly, updateReason, uninstallReason,
 			advisoryQuery, advisory, updateUnknown, updateAvailable, currentVersion, busy, failed, jobFailed, currentOperation, readinessAgent,
 			authPlan, authStatus, authSummary, rowAuthWorkflow, authBusy, showUpdate, hasDiagnostics, rowError, versionText, versionUnverified,
-			updatedAt, installationAction, accountAction, identityText, progressLabel, installationPending, installNote,
+			updatedAt, installationAction, accountAction, progressLabel, installationPending, installNote, listTone, statusLabel,
 		};
 	};
 	type HarnessDetails = ReturnType<typeof describe>;
@@ -1063,40 +1059,41 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const authState = details.authStatus === "authorized" || details.authStatus === "configured" || details.authStatus === "not_applicable" ? "ok"
 			: details.authStatus === "unauthorized" ? "error" : "off";
 		const checking = agents.isFetching || Boolean(details.advisoryQuery?.isFetching);
-		const notChecked = <span className="text-xs text-settings-muted">{t("settings.harness.health.notChecked")}</span>;
+		// Only facts AO has observed: a row with nothing to report is left out rather than filled with a placeholder.
+		const lastChecked = formatTimestamp(installation?.checkedAt);
+		const updateChecked = formatTimestamp(advisory?.checkedAt);
+		const executable = advisory?.binaryPath || details.job?.expectedDestination;
+		const hasDetails = Boolean(executable || (isInstalled && details.currentVersion) || advisory?.latestVersion || details.maintenanceMethod || updateChecked);
 		return <div className="flex flex-col gap-5">
 			<HarnessDetailGroup title={t("settings.harness.health.status")}>
 				<HarnessDetailRow label={t("settings.harness.installation")} description={installation?.state !== "installed" ? installation?.reason || undefined : undefined}>
 					<HarnessStateText tone={installState.tone}>{installState.label}</HarnessStateText>
 				</HarnessDetailRow>
-				<HarnessDetailRow label={t("settings.harness.health.authentication")} description={authState === "error" ? readinessAgent?.authentication.reason || undefined : undefined}>
-					<HarnessStateText tone={isInstalled ? authState : "off"}>{isInstalled ? details.authSummary : t("settings.harness.health.notChecked")}</HarnessStateText>
-				</HarnessDetailRow>
-				<HarnessDetailRow label={t("settings.harness.health.lastChecked")}>
-					{formatTimestamp(installation?.checkedAt) ? <span className="text-xs text-settings-label">{formatTimestamp(installation?.checkedAt)}{installation?.freshness === "stale" ? ` · ${t("settings.harness.health.stale")}` : ""}</span> : notChecked}
-				</HarnessDetailRow>
-			</HarnessDetailGroup>
-			<HarnessDetailGroup title={t("settings.harness.health.details")}>
-				<HarnessDetailRow label={t("settings.harness.health.executable")}>
-					{advisory?.binaryPath ? <span className="min-w-0 break-all font-mono text-xs text-settings-label">{advisory.binaryPath}</span> : notChecked}
-				</HarnessDetailRow>
-				<HarnessDetailRow label={t(details.versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")}>
-					{isInstalled && details.currentVersion ? <span className="break-all font-mono text-xs text-settings-label">{details.versionText}</span> : notChecked}
-				</HarnessDetailRow>
-				<HarnessDetailRow label={t("settings.harness.health.latestVersion")}>
-					{advisory?.latestVersion ? <span className="break-all font-mono text-xs text-settings-label">{versionLabel(advisory.latestVersion)}</span> : notChecked}
-					{details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-settings-accent">{t("settings.harness.updateAvailable")}</span> : null}
-				</HarnessDetailRow>
-				<HarnessDetailRow label={t("settings.harness.installMethod")}>
-					<span className="text-xs text-settings-label">{details.maintenanceMethod?.label ?? (isInstalled ? t("settings.harness.health.notVerified") : "—")}</span>
-				</HarnessDetailRow>
-				<HarnessDetailRow label={t("settings.harness.health.updateChecked")}>
-					{formatTimestamp(advisory?.checkedAt) ? <span className="text-xs text-settings-label">{formatTimestamp(advisory?.checkedAt)}</span> : notChecked}
-				</HarnessDetailRow>
-				{details.job?.expectedDestination ? <HarnessDetailRow label={t("settings.harness.expectedDestination")}>
-					<span className="min-w-0 break-all font-mono text-xs text-settings-label">{details.job.expectedDestination}</span>
+				{isInstalled ? <HarnessDetailRow label={t("settings.harness.health.authentication")} description={authState === "error" ? readinessAgent?.authentication.reason || undefined : undefined}>
+					<HarnessStateText tone={authState}>{details.authSummary}</HarnessStateText>
+				</HarnessDetailRow> : null}
+				{lastChecked ? <HarnessDetailRow label={t("settings.harness.health.lastChecked")}>
+					<span className="text-xs text-settings-label">{lastChecked}{installation?.freshness === "stale" ? ` · ${t("settings.harness.health.stale")}` : ""}</span>
 				</HarnessDetailRow> : null}
 			</HarnessDetailGroup>
+			{hasDetails ? <HarnessDetailGroup title={t("settings.harness.health.details")}>
+				{executable ? <HarnessDetailRow label={t("settings.harness.health.executable")}>
+					<span className="min-w-0 break-all font-mono text-xs text-settings-label">{executable}</span>
+				</HarnessDetailRow> : null}
+				{isInstalled && details.currentVersion ? <HarnessDetailRow label={t(details.versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")}>
+					<span className="break-all font-mono text-xs text-settings-label">{details.versionText}</span>
+				</HarnessDetailRow> : null}
+				{advisory?.latestVersion ? <HarnessDetailRow label={t("settings.harness.health.latestVersion")}>
+					<span className="break-all font-mono text-xs text-settings-label">{versionLabel(advisory.latestVersion)}</span>
+					{details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-settings-accent">{t("settings.harness.updateAvailable")}</span> : null}
+				</HarnessDetailRow> : null}
+				{details.maintenanceMethod ? <HarnessDetailRow label={t("settings.harness.installMethod")}>
+					<span className="text-xs text-settings-label">{details.maintenanceMethod.label}</span>
+				</HarnessDetailRow> : null}
+				{updateChecked ? <HarnessDetailRow label={t("settings.harness.health.updateChecked")}>
+					<span className="text-xs text-settings-label">{updateChecked}</span>
+				</HarnessDetailRow> : null}
+			</HarnessDetailGroup> : null}
 			<div className="flex flex-wrap gap-2">
 				<Button type="button" size="sm" variant="outline" disabled={checking || details.busy} onClick={() => refreshInstalledAgent(agentId)}>
 					{checking ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
@@ -1124,65 +1121,81 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				</div>
 			) : null}
 
-			{selectedDetails ? (
-				<div
-					className="flex w-full flex-col gap-4"
-					data-agent={selectedDetails.agentId}
-					data-focus-highlighted={highlightedAgentId === selectedDetails.agentId ? "" : undefined}
-					ref={detailRef}
-				>
-					<div>
-						<Button type="button" size="sm" variant="ghost" className="-ml-2 h-7 gap-1 px-2 text-settings-muted" onClick={closeDetail}>
-							<ChevronLeft aria-hidden="true" />{t("settings.harness.allHarnesses")}
-						</Button>
+			<div ref={layoutRef} className={cn("w-full", split && "grid grid-cols-[minmax(13rem,15rem)_minmax(0,1fr)] items-start gap-6")}>
+				{split || !selectedDetails ? (
+					<div className={cn("flex w-full flex-col", split ? "sticky top-14 max-h-[calc(100dvh-10rem)] gap-0.5 overflow-y-auto overscroll-contain" : "settings-grouped-rows")}>
+						{rows.map((agentId) => {
+							const details = describe(agentId);
+							const selected = split && selectedAgentId === agentId;
+							return <button
+								type="button"
+								aria-label={t("settings.harness.openDetails", { agent: agentLabel(agentId) })}
+								aria-current={selected ? "true" : undefined}
+								className={cn(
+									"flex w-full items-center gap-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+									split ? "h-9 rounded-md px-2 hover:bg-accent" : "settings-row-bar min-h-12 hover:bg-(--color-bg-settings-row-hover)",
+									selected && "bg-accent",
+								)}
+								data-agent={agentId}
+								key={agentId}
+								title={details.statusLabel || undefined}
+								onClick={() => openDetail(agentId)}
+							>
+								<AgentAvatar className={cn("shrink-0", split ? "size-5" : "size-6")} decorative provider={agentId} />
+								<span className="min-w-0 flex-1 truncate text-sm text-settings-label">{agentLabel(agentId)}</span>
+								{details.isInstalled && details.updateAvailable ? <ArrowUpCircle
+									className="size-3.5 shrink-0 text-settings-accent"
+									aria-label={t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}
+									role="img"
+								/> : null}
+								{details.busy ? <span role="status" className="flex shrink-0 items-center"><LoaderCircle className="size-3.5 animate-spin text-settings-muted" aria-hidden="true" /><span className="sr-only">{details.progressLabel}</span></span>
+									: details.authBusy ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
+									: <HarnessStatusDot tone={details.listTone} />}
+								{split ? null : <ChevronRight className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />}
+							</button>;
+						})}
+						{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
 					</div>
+				) : null}
+				{selectedDetails ? (
 					<div
-						className={cn("-mx-2 flex items-center gap-3 rounded-lg px-2 py-1 transition-[background-color,box-shadow] duration-200", highlightedAgentId === selectedDetails.agentId && "bg-accent-weak ring-2 ring-inset ring-accent")}
+						className="flex w-full min-w-0 flex-col gap-4"
+						data-agent={selectedDetails.agentId}
+						data-focus-highlighted={highlightedAgentId === selectedDetails.agentId ? "" : undefined}
+						ref={detailRef}
 					>
-						<AgentAvatar className="size-8 shrink-0" decorative provider={selectedDetails.agentId} />
-						<span className="min-w-0 flex-1 text-base font-semibold text-settings-label" id={`harness-agent-${selectedDetails.agentId}`}>{agentLabel(selectedDetails.agentId)}</span>
-					</div>
-					<Tabs value={detailTab} onValueChange={(value) => setDetailTab(value as HarnessDetailTab)}>
-						<TabsList aria-label={t("settings.harness.detailTabs", { agent: agentLabel(selectedDetails.agentId) })}>
-							<TabsTrigger value="account">{t("settings.harness.tabAccount")}</TabsTrigger>
-							<TabsTrigger value="models">{t("settings.harness.tabModels")}</TabsTrigger>
-							<TabsTrigger value="health">{t("settings.harness.tabHealth")}</TabsTrigger>
-						</TabsList>
-						<TabsContent value="account" className="pt-4">{accountTab(selectedDetails)}</TabsContent>
-						<TabsContent value="models" className="pt-4">
-							<HarnessModelsPanel
-								agentId={selectedDetails.agentId}
-								hostId={hostId}
-								installed={selectedDetails.isInstalled}
-								needsLogin={needsAuthentication(selectedDetails.agentId)}
-								onOpenAccount={() => setDetailTab("account")}
-							/>
-						</TabsContent>
-						<TabsContent value="health" className="pt-4">{healthTab(selectedDetails)}</TabsContent>
-					</Tabs>
-				</div>
-			) : (
-				<div className="settings-grouped-rows flex w-full flex-col">
-					{rows.map((agentId) => {
-						const details = describe(agentId);
-						return <button
-							type="button"
-							aria-label={t("settings.harness.openDetails", { agent: agentLabel(agentId) })}
-							className="settings-row-bar min-h-14 w-full gap-3 text-left outline-none hover:bg-(--color-bg-settings-row-hover) focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-							data-agent={agentId}
-							key={agentId}
-							onClick={() => openDetail(agentId)}
+						{split ? null : <div>
+							<Button type="button" size="sm" variant="ghost" className="-ml-2 h-7 gap-1 px-2 text-settings-muted" onClick={closeDetail}>
+								<ChevronLeft aria-hidden="true" />{t("settings.harness.allHarnesses")}
+							</Button>
+						</div>}
+						<div
+							className={cn("-mx-2 flex items-center gap-3 rounded-lg px-2 py-1 transition-[background-color,box-shadow] duration-200", highlightedAgentId === selectedDetails.agentId && "bg-accent-weak ring-2 ring-inset ring-accent")}
 						>
-							<AgentAvatar className="size-7 shrink-0" decorative provider={agentId} />
-							<span className="min-w-0 flex-1">{details.identityText}</span>
-							{details.busy ? <span role="status" className="flex shrink-0 items-center gap-1.5 text-xs text-settings-muted"><LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />{details.progressLabel}</span>
-								: details.authBusy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" aria-hidden="true" /> : null}
-							<ChevronRight className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />
-						</button>;
-					})}
-					{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
-				</div>
-			)}
+							<AgentAvatar className="size-8 shrink-0" decorative provider={selectedDetails.agentId} />
+							<span className="min-w-0 flex-1 text-base font-semibold text-settings-label" id={`harness-agent-${selectedDetails.agentId}`}>{agentLabel(selectedDetails.agentId)}</span>
+						</div>
+						<Tabs value={detailTab} onValueChange={(value) => setDetailTab(value as HarnessDetailTab)}>
+							<TabsList aria-label={t("settings.harness.detailTabs", { agent: agentLabel(selectedDetails.agentId) })}>
+								<TabsTrigger value="account">{t("settings.harness.tabAccount")}</TabsTrigger>
+								<TabsTrigger value="models">{t("settings.harness.tabModels")}</TabsTrigger>
+								<TabsTrigger value="health">{t("settings.harness.tabHealth")}</TabsTrigger>
+							</TabsList>
+							<TabsContent value="account" className="pt-4">{accountTab(selectedDetails)}</TabsContent>
+							<TabsContent value="models" className="pt-4">
+								<HarnessModelsPanel
+									agentId={selectedDetails.agentId}
+									hostId={hostId}
+									installed={selectedDetails.isInstalled}
+									needsLogin={needsAuthentication(selectedDetails.agentId)}
+									onOpenAccount={() => setDetailTab("account")}
+								/>
+							</TabsContent>
+							<TabsContent value="health" className="pt-4">{healthTab(selectedDetails)}</TabsContent>
+						</Tabs>
+					</div>
+				) : null}
+			</div>
 			<ConfirmDialog
 				open={logoutRequest !== null}
 				title={t("settings.harness.logoutConfirmTitle", { agent: logoutRequest ? agentLabel(logoutRequest) : "" })}
@@ -1216,6 +1229,25 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 
 type HarnessDetailTab = "account" | "models" | "health";
 type HarnessTone = "ok" | "error" | "off";
+
+const SPLIT_LAYOUT_MIN_WIDTH = 720;
+
+/** True once the element is wide enough to show the harness list beside the open harness. */
+function useWideLayout(ref: { current: HTMLElement | null }): boolean {
+	const [wide, setWide] = useState(false);
+	useEffect(() => {
+		const element = ref.current;
+		if (!element || typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(([entry]) => setWide((entry?.contentRect.width ?? 0) >= SPLIT_LAYOUT_MIN_WIDTH));
+		observer.observe(element);
+		return () => observer.disconnect();
+	}, [ref]);
+	return wide;
+}
+
+function HarnessStatusDot({ tone }: { tone: HarnessTone }) {
+	return <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", tone === "ok" ? "bg-success" : tone === "error" ? "bg-error" : "bg-settings-muted/50")} />;
+}
 
 function HarnessDetailGroup({ title, children }: { title: string; children: ReactNode }) {
 	return <section className="flex flex-col gap-1.5">
@@ -1302,10 +1334,11 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 							{model.isDefault ? <span className="rounded-sm bg-(--color-bg-settings-input) px-1.5 py-0.5 text-[11px] text-settings-muted">{t("settings.harness.models.default")}</span> : null}
 						</span>
 						{model.label !== model.id ? <span className="block break-all font-mono text-[11px] text-settings-muted">{model.id}</span> : null}
-						<span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-settings-muted">
-							<span>{t("settings.harness.models.context")}: {model.contextWindow ? new Intl.NumberFormat(i18n.resolvedLanguage).format(model.contextWindow) : t("activity.unknown")}</span>
-							<span>{t("settings.harness.models.inputs")}: {model.inputs?.length ? model.inputs.map((input) => input === "text" ? t("settings.harness.models.inputText") : input === "image" ? t("settings.harness.models.inputImage") : input).join(" · ") : t("activity.unknown")}</span>
-						</span>
+						{/* Only facts the harness reports; nothing is shown in place of a missing value. */}
+						{model.contextWindow || model.inputs?.length ? <span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-settings-muted">
+							{model.contextWindow ? <span>{t("settings.harness.models.context")}: {new Intl.NumberFormat(i18n.resolvedLanguage).format(model.contextWindow)}</span> : null}
+							{model.inputs?.length ? <span>{t("settings.harness.models.inputs")}: {model.inputs.map((input) => input === "text" ? t("settings.harness.models.inputText") : input === "image" ? t("settings.harness.models.inputImage") : input).join(" · ")}</span> : null}
+						</span> : null}
 					</span>
 					<span className="shrink-0 text-right text-xs text-settings-muted">
 						{model.efforts?.length ? t("settings.harness.models.efforts", { levels: model.efforts.join(" · ") }) : t("settings.harness.models.noEffort")}

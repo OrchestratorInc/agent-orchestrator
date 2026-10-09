@@ -268,14 +268,16 @@ describe("HarnessSettingsSection", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("lists versions and status, then opens one harness page with its actions", async () => {
+	it("lists names with a status and update mark, then opens one harness page with its actions", async () => {
 		mockInstalledOperations("npm");
 		renderSection();
 		const listRow = await findListRow("codex");
 		expect(listRow).toHaveAccessibleName("Open Codex details");
-		expect(await within(listRow).findByText("v1.2.3")).toBeInTheDocument();
-		expect(await within(listRow).findByText("v1.3.0 available")).toBeInTheDocument();
-		expect(within(listRow).getByText("Connected")).toBeInTheDocument();
+		expect(await within(listRow).findByRole("img", { name: "v1.3.0 available" })).toBeInTheDocument();
+		expect(listRow).toHaveAttribute("title", "Connected");
+		// Versions live on the harness page, not in the list.
+		expect(within(listRow).queryByText("v1.2.3")).toBeNull();
+		expect(within(listRow).queryByText("v1.3.0 available")).toBeNull();
 		// The list only navigates; actions live on the harness page.
 		expect(within(listRow).queryByRole("button")).toBeNull();
 		listRow.focus();
@@ -319,6 +321,8 @@ describe("HarnessSettingsSection", () => {
 		expect(within(list).getByText("Default")).toBeInTheDocument();
 		expect(within(list).getByText("Effort: low · medium · high")).toBeInTheDocument();
 		expect(within(list).getByText("No effort control")).toBeInTheDocument();
+		// Unreported context and inputs are left out, not shown as unknown.
+		expect(within(list).queryByText(/Context|Inputs|Unknown/)).toBeNull();
 		expect(within(page).getByRole("button", { name: "Default model" })).toBeInTheDocument();
 		expect(within(list).getByText("Context (tokens): 200,000")).toBeInTheDocument();
 		expect(within(list).getByText("Inputs: Text · Image")).toBeInTheDocument();
@@ -421,6 +425,34 @@ describe("HarnessSettingsSection", () => {
 		expect(await screen.findByRole("button", { name: "Complete login terminal" })).toBeInTheDocument();
 	});
 
+	it("keeps the list beside the open harness when there is room", async () => {
+		mockInstalledOperations("npm");
+		const original = window.ResizeObserver;
+		window.ResizeObserver = class {
+			constructor(private readonly callback: ResizeObserverCallback) {}
+			observe() { this.callback([{ contentRect: { width: 900 } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
+			unobserve() {}
+			disconnect() {}
+		} as unknown as typeof ResizeObserver;
+		try {
+			renderSection();
+			// The first harness in the sorted list opens without a click.
+			const first = await findListRow("claude-code");
+			await waitFor(() => expect(first).toHaveAttribute("aria-current", "true"));
+			expect(document.querySelector('div[data-agent="claude-code"]')).not.toBeNull();
+			expect(screen.queryByRole("button", { name: "All harnesses" })).toBeNull();
+			expect(screen.getByRole("textbox", { name: "Search harnesses" })).toBeInTheDocument();
+			await userEvent.click(await findListRow("codex"));
+			const page = await waitFor(() => document.querySelector<HTMLElement>('div[data-agent="codex"]')!);
+			expect(await within(page).findByRole("button", { name: "Update" })).toBeEnabled();
+			expect(await findListRow("codex")).toHaveAttribute("aria-current", "true");
+			expect(first).not.toHaveAttribute("aria-current");
+			expect(await findListRow("cursor")).toBeInTheDocument();
+		} finally {
+			window.ResizeObserver = original;
+		}
+	});
+
 	it("checks updates from initial readiness without waiting for the page refresh", async () => {
 		mockInstalledOperations("npm");
 		let resolveRefresh!: (value: unknown) => void;
@@ -511,13 +543,13 @@ describe("HarnessSettingsSection", () => {
 		mockInstalledOperations("npm");
 		const { client } = renderSection();
 		const listRow = await findListRow("codex");
-		await within(listRow).findByText("v1.2.3");
+		await within(listRow).findByRole("img", { name: "v1.3.0 available" });
 		act(() => { client.setQueryData(["agent-update-advisory", "local", "codex"], {
 			agentId: "codex", status, currentVersion: "2025.09.25", source: "npm", checkedAt: "2026-10-06T00:00:00Z",
 		}); });
-		expect(await within(listRow).findByText("2025.09.25")).toBeInTheDocument();
-		expect(within(listRow).queryByText(/available$/)).toBeNull();
+		await waitFor(() => expect(within(listRow).queryByRole("img")).toBeNull());
 		const row = await findAgentRow("codex");
+		expect(within(row).getByText("2025.09.25")).toBeInTheDocument();
 		expect(within(row).queryByText(/available$/)).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
 		expect(within(row).getByText("Update availability could not be verified.")).toBeInTheDocument();
@@ -531,7 +563,7 @@ describe("HarnessSettingsSection", () => {
 			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
 		const { client } = renderSection();
-		await within(await findListRow("codex")).findByText("v1.2.3");
+		await within(await findListRow("codex")).findByRole("img", { name: "v1.3.0 available" });
 		act(() => { client.setQueryData(["agent-update-advisory", "local", "codex"], {
 			agentId: "codex", status: "behind_latest", currentVersion: "1.2.3", latestVersion: "1.3.0", source: "homebrew",
 		}); });
@@ -703,7 +735,7 @@ describe("HarnessSettingsSection", () => {
 	it.each(["removed", "different-owner", "ownership-unknown"] as const)("blocks an open confirmation when fresh state is %s", async (state) => {
 		mockInstalledOperations("npm");
 		const { client } = renderSection();
-		await within(await findListRow("codex")).findByText("v1.2.3");
+		await within(await findListRow("codex")).findByRole("img", { name: "v1.3.0 available" });
 		await userEvent.click(within(await findAgentRow("codex")).getByRole("button", { name: "Uninstall" }));
 		const dialog = screen.getByRole("dialog");
 		act(() => {
@@ -854,11 +886,12 @@ describe("HarnessSettingsSection", () => {
 		});
 		try {
 			renderSection();
-			await within(await findListRow("codex")).findByText("v1.2.3");
+			await within(await findListRow("codex")).findByRole("img", { name: "v1.3.0 available" });
 			await userEvent.click(screen.getByRole("button", { name: "Host" }));
 			await userEvent.click(screen.getByRole("menuitem", { name: "remote-1" }));
-			await waitFor(() => expect(within(document.querySelector<HTMLElement>('button[data-agent="codex"]')!).getByText("v9.4.0")).toBeInTheDocument());
+			await waitFor(() => expect(within(document.querySelector<HTMLElement>('button[data-agent="codex"]')!).getByRole("img", { name: "v9.5.0 available" })).toBeInTheDocument());
 			const row = await findAgentRow("codex");
+			expect(within(row).getByText("v9.4.0")).toBeInTheDocument();
 			expect(within(row).queryByText("v1.2.3")).toBeNull();
 			expect(within(row).getByText("v9.5.0 available")).toBeInTheDocument();
 			await userEvent.click(within(row).getByRole("button", { name: "Update" }));

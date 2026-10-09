@@ -2224,8 +2224,6 @@
 	"settings.harness.health.lastChecked": "마지막 확인",
 	"settings.harness.health.latestVersion": "최신 버전",
 	"settings.harness.health.updateChecked": "업데이트 확인",
-	"settings.harness.health.notChecked": "확인 안 됨",
-	"settings.harness.health.notVerified": "검증 안 됨",
 	"settings.harness.health.stale": "오래됨",
 	"settings.harness.health.checkAgain": "다시 확인",
 	"settings.harness.health.checking": "확인 중…",

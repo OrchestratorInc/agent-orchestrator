@@ -1406,8 +1406,6 @@
 	"settings.harness.health.lastChecked": "Last checked",
 	"settings.harness.health.latestVersion": "Latest version",
 	"settings.harness.health.updateChecked": "Update checked",
-	"settings.harness.health.notChecked": "Not checked",
-	"settings.harness.health.notVerified": "Not verified",
 	"settings.harness.health.stale": "stale",
 	"settings.harness.health.checkAgain": "Check again",
 	"settings.harness.health.checking": "Checking…",

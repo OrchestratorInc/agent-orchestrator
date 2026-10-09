@@ -2290,8 +2290,6 @@
 	"settings.harness.health.lastChecked": "上次检查",
 	"settings.harness.health.latestVersion": "最新版本",
 	"settings.harness.health.updateChecked": "更新检查",
-	"settings.harness.health.notChecked": "未检查",
-	"settings.harness.health.notVerified": "未验证",
 	"settings.harness.health.stale": "已过期",
 	"settings.harness.health.checkAgain": "重新检查",
 	"settings.harness.health.checking": "正在检查…",

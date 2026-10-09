@@ -2224,8 +2224,6 @@
 	"settings.harness.health.lastChecked": "最終確認",
 	"settings.harness.health.latestVersion": "最新バージョン",
 	"settings.harness.health.updateChecked": "更新確認",
-	"settings.harness.health.notChecked": "未確認",
-	"settings.harness.health.notVerified": "未検証",
 	"settings.harness.health.stale": "古い情報",
 	"settings.harness.health.checkAgain": "再確認",
 	"settings.harness.health.checking": "確認中…",
