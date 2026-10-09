@@ -16,19 +16,6 @@ const topbarButtonVariants = cva(
 					"topbar-control--feature h-control-lg gap-1.5 rounded-md border px-3 text-control font-semibold leading-none",
 				icon:
 					"topbar-control--icon grid size-control-md place-items-center rounded-md text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
-				kill: "h-control-lg gap-1.5 rounded-md border border-transparent bg-transparent px-3.5 text-sm font-semibold leading-none text-error/80 hover:border-error/50 hover:bg-error/10 hover:text-error",
-				killIcon:
-					"topbar-control--icon topbar-control--danger-icon grid size-control-md place-items-center rounded-md text-error/80 hover:bg-error/10 hover:text-error",
-				killConfirm:
-					"h-control-lg gap-1.5 rounded-md border border-error/40 bg-error/10 px-3 text-control font-semibold leading-none text-error hover:bg-error/16",
-				killCancel:
-					"h-control-lg rounded-md px-2.5 text-control font-semibold leading-none text-muted-foreground hover:text-foreground",
-				// The workspace handoff is one split control. Its joined edges and
-				// token-backed widths live beside the shared topbar rules in styles.css.
-				splitMain:
-					"topbar-control--split-main topbar-control--labeled h-control-lg gap-1.5 rounded-l-md border border-r-0 border-border text-sm font-semibold leading-none bg-raised text-muted-foreground hover:bg-surface hover:text-foreground",
-				splitTrigger:
-					"topbar-control--split-trigger grid h-control-lg place-items-center rounded-r-md border border-border bg-raised text-muted-foreground hover:bg-surface hover:text-foreground data-[state=open]:bg-surface data-[state=open]:text-foreground",
 			},
 		},
 		defaultVariants: { variant: "primary" },
