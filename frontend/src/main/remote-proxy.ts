@@ -25,9 +25,9 @@ export type ActiveProxy = {
 	close: () => Promise<void>;
 };
 
-type PreviewTarget = { sessionId: string; kind: "static" | "app"; entry: string };
+type PreviewTarget = { sessionId: string; kind: "static" | "app" | "artifact"; entry: string };
 
-function previewHostForSession(id: string): string {
+function previewHostForSession(id: string, label = "ao-preview"): string {
 	const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
 	let bits = 0;
 	let value = 0;
@@ -40,7 +40,7 @@ function previewHostForSession(id: string): string {
 		}
 	}
 	if (bits) encoded += alphabet[(value << (5 - bits)) & 31];
-	return `ao-preview.${encoded.match(/.{1,50}/g)?.join(".")}.localhost`;
+	return `${label}.${encoded.match(/.{1,50}/g)?.join(".")}.localhost`;
 }
 
 function previewAssetPath(entry: string, requested: string): string {
@@ -122,6 +122,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	const prefix = upstream.pathname.replace(/\/+$/, "");
 	const server: Server = createServer();
 	const previewHosts = new Map<string, PreviewTarget>();
+	const artifactHosts = new Map<string, { host: string; sourceHref: string }>();
 	const previewSessions = new Map<string, { host: string; sourceUrl: string; sourceHref: string; url: string }>();
 	const tunnels = new Set<() => void>();
 	// Allow slow uploads; SSE response timeouts are disabled on the upstream request below.
@@ -139,9 +140,14 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		if (!rawHost || !rawUrl?.startsWith("/")) return null;
 		const target = previewHosts.get(rawHost.toLowerCase());
 		if (!target) return null;
-		if (target.kind === "static" && method !== "GET" && method !== "HEAD") return null;
+		if (target.kind !== "app" && method !== "GET" && method !== "HEAD") return null;
 		const parsed = new URL(rawUrl, "http://localhost");
 		const asset = target.kind === "static" ? previewAssetPath(target.entry, parsed.pathname) : parsed.pathname.replace(/^\/+/, "");
+		if (target.kind === "artifact") {
+			const query = new URLSearchParams(parsed.search);
+			query.set("source", "artifact");
+			return { path: `${prefix}/api/v1/sessions/${encodeURIComponent(target.sessionId)}/preview/files/${asset}?${query}`, kind: target.kind };
+		}
 		const route = target.kind === "static" ? "files" : "app";
 		return { path: `${prefix}/api/v1/sessions/${encodeURIComponent(target.sessionId)}/preview/${route}/${asset}${parsed.search}`, kind: target.kind };
 	};
@@ -244,7 +250,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 				};
 				delete headers.connection;
 				delete headers["keep-alive"];
-				if (preview?.kind === "static") delete headers["set-cookie"];
+				if (preview && preview.kind !== "app") delete headers["set-cookie"];
 				res.writeHead(upstreamRes.statusCode ?? 502, headers);
 				// Node holds the header block until the first body byte or an explicit
 				// flush. An SSE upstream (GET /api/v1/events) can go arbitrarily long
@@ -343,16 +349,31 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		listeningAddress,
 		previewUrl: (sessionId, sourceUrl) => {
 			if (!sessionId || sessionId.length > 256) throw new Error("invalid preview session");
+			const raw = sourceUrl.trim();
+			if (!raw) {
+				const previous = previewSessions.get(sessionId);
+				if (previous) { previewHosts.delete(previous.host); previewSessions.delete(sessionId); }
+				return "";
+			}
+			const parsed = new URL(/^(?:localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(raw) ? `http://${raw}` : raw);
+			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("unsupported preview URL");
+			if (parsed.hostname === previewHostForSession(sessionId, "ao-preview-artifact")) {
+				// Artifact reads and images must not replace the active Browser app
+				// preview. Keep one independent, read-only origin per session.
+				let artifact = artifactHosts.get(sessionId);
+				if (!artifact) {
+					artifact = { host: `ao-preview-${randomBytes(16).toString("hex")}.localhost:${port}`, sourceHref: parsed.href };
+					artifactHosts.set(sessionId, artifact);
+					previewHosts.set(artifact.host, { sessionId, kind: "artifact", entry: "" });
+				}
+				return `http://${artifact.host}${parsed.pathname}${parsed.search}${parsed.hash}`;
+			}
 			const previous = previewSessions.get(sessionId);
 			if (previous?.sourceUrl === sourceUrl) return previous.url;
 			if (previous) {
 				previewHosts.delete(previous.host);
 				previewSessions.delete(sessionId);
 			}
-			const raw = sourceUrl.trim();
-			if (!raw) return "";
-			const parsed = new URL(/^(?:localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(raw) ? `http://${raw}` : raw);
-			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("unsupported preview URL");
 			let kind: PreviewTarget["kind"];
 			const previewHost = parsed.hostname.replace(/^\[|\]$/g, "").replace(/\.+$/, "");
 			const loopback = previewHost === "localhost" || previewHost === "0.0.0.0" || previewHost === "::1" ||
@@ -373,6 +394,14 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			let viewed: URL;
 			try { viewed = new URL(viewedUrl); } catch { return viewedUrl; }
 			if (!/^ao-preview-[0-9a-f]{32}\.localhost$/.test(viewed.hostname)) return viewedUrl;
+			const artifact = artifactHosts.get(sessionId);
+			if (artifact && viewed.host === artifact.host) {
+				const source = new URL(artifact.sourceHref);
+				source.pathname = viewed.pathname;
+				source.search = viewed.search;
+				source.hash = viewed.hash;
+				return source.href;
+			}
 			const active = previewSessions.get(sessionId);
 			if (!active || viewed.origin !== new URL(active.url).origin) return "";
 			const source = new URL(active.sourceHref);

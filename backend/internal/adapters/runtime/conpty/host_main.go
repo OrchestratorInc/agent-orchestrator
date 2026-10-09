@@ -29,9 +29,9 @@ import (
 // the assigned port. A per-session random token handshake is the upgrade path
 // if multi-user isolation is needed.
 func RunHost(args []string, stdout io.Writer) int {
-	startOnAttach, args := splitStartOnAttachArg(args)
+	opts, args := splitHostOptionArgs(args)
 	if len(args) < 3 {
-		fmt.Fprintf(os.Stderr, "usage: ao pty-host [--start=attach] <sessionId> <cwd> <shellCmd> [shellArg...]\n")
+		fmt.Fprintf(os.Stderr, "usage: ao pty-host [--start=attach] [--surface=lazy] <sessionId> <cwd> <shellCmd> [shellArg...]\n")
 		return 1
 	}
 
@@ -59,7 +59,7 @@ func RunHost(args []string, stdout io.Writer) int {
 	port := tcpAddr.Port
 
 	var pty ptyConn
-	if startOnAttach {
+	if opts.StartOnAttach {
 		pty = newDeferredPTY(func(cols, rows uint16) (ptyConn, error) {
 			conn, err := newConPTY(cwd, shellCmd, shellArgs, cols, rows)
 			if err != nil {
@@ -96,10 +96,11 @@ func RunHost(args []string, stdout io.Writer) int {
 
 	ring := NewRing()
 	cfg := ServeConfig{
-		SessionID: sessionID,
-		Listener:  ln,
-		PTY:       pty,
-		Ring:      ring,
+		SessionID:   sessionID,
+		Listener:    ln,
+		PTY:         pty,
+		Ring:        ring,
+		LazySurface: opts.LazySurface,
 	}
 
 	if err := Serve(ctx, cfg); err != nil {

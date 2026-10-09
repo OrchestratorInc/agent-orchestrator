@@ -212,25 +212,26 @@ func TestServeStartsDeferredProcessAtFirstClientGrid(t *testing.T) {
 	}
 }
 
-func TestPtyHostArgsCarryStartOnAttach(t *testing.T) {
+func TestPtyHostArgsCarryHostOptions(t *testing.T) {
 	argv := []string{"/bin/zsh", "-l"}
-	deferred := ptyHostArgs("shellterm-1", "/tmp/ws", argv, true)
-	if want := []string{"pty-host", "--start=attach", "shellterm-1", "/tmp/ws", "/bin/zsh", "-l"}; !slices.Equal(deferred, want) {
-		t.Fatalf("deferred args = %q, want %q", deferred, want)
+	opts := HostOptions{StartOnAttach: true, LazySurface: true}
+	shell := ptyHostArgs("shellterm-1", "/tmp/ws", argv, opts)
+	if want := []string{"pty-host", "--start=attach", "--surface=lazy", "shellterm-1", "/tmp/ws", "/bin/zsh", "-l"}; !slices.Equal(shell, want) {
+		t.Fatalf("shell args = %q, want %q", shell, want)
 	}
-	startOnAttach, rest := splitStartOnAttachArg(deferred[1:])
-	if !startOnAttach || !slices.Equal(rest, deferred[2:]) {
-		t.Fatalf("split deferred = %v, %q", startOnAttach, rest)
+	got, rest := splitHostOptionArgs(shell[1:])
+	if got != opts || !slices.Equal(rest, shell[3:]) {
+		t.Fatalf("split shell = %+v, %q", got, rest)
 	}
 
-	// Agents, command terminals and hosts spawned by older daemons keep the
-	// legacy positional argv and start immediately.
-	immediate := ptyHostArgs("shellterm-1", "/tmp/ws", argv, false)
-	if want := []string{"pty-host", "shellterm-1", "/tmp/ws", "/bin/zsh", "-l"}; !slices.Equal(immediate, want) {
-		t.Fatalf("immediate args = %q, want %q", immediate, want)
+	// Agents and hosts spawned by older daemons keep the legacy positional
+	// argv: they start immediately and keep their rendered surface current.
+	agent := ptyHostArgs("session-1", "/tmp/ws", argv, HostOptions{})
+	if want := []string{"pty-host", "session-1", "/tmp/ws", "/bin/zsh", "-l"}; !slices.Equal(agent, want) {
+		t.Fatalf("agent args = %q, want %q", agent, want)
 	}
-	startOnAttach, rest = splitStartOnAttachArg(immediate[1:])
-	if startOnAttach || !slices.Equal(rest, immediate[1:]) {
-		t.Fatalf("split immediate = %v, %q", startOnAttach, rest)
+	got, rest = splitHostOptionArgs(agent[1:])
+	if got != (HostOptions{}) || !slices.Equal(rest, agent[1:]) {
+		t.Fatalf("split agent = %+v, %q", got, rest)
 	}
 }

@@ -159,15 +159,27 @@ function createFakeTerminal(): FakeTerminal {
 	return terminal;
 }
 
+type SetupOptions = {
+	coverInitialReplay?: boolean;
+	waitForInitialOutput?: boolean;
+	exitNotice?: string;
+	daemonReady?: boolean;
+	attachedSession?: WorkspaceSession;
+	isVisible?: boolean;
+	inputDisabled?: boolean;
+	hasMeasuredGrid?: boolean;
+};
+
 function setup({
 	coverInitialReplay = true,
 	waitForInitialOutput = false,
+	exitNotice,
 	daemonReady = true,
 	attachedSession = session as WorkspaceSession | undefined,
 	isVisible = true,
 	inputDisabled = false,
 	hasMeasuredGrid = true,
-} = {}) {
+}: SetupOptions = {}) {
 	const muxes: FakeMux[] = [];
 	const createMux = () => {
 		const fake = createFakeMux();
@@ -189,6 +201,7 @@ function setup({
 			useTerminalSession(attachedSession, {
 				coverInitialReplay,
 				waitForInitialOutput,
+				exitNotice,
 				daemonReady: ready,
 				createMux,
 				inputDisabled: blocked,
@@ -509,6 +522,34 @@ describe("useTerminalSession", () => {
 			expect(terminal.lines).toEqual(["replay", "live-1"]);
 			act(() => muxes[0].emitData("handle-1", "live-2"));
 			expect(terminal.lines).toEqual(["replay", "live-1", "live-2"]);
+		});
+
+		// A burst arrives as many messages; output that lands while xterm is still
+		// parsing the previous write goes in as one batch, in order, instead of a
+		// write (and parse/render cycle) per message.
+		it("joins live output that arrives while a write is being parsed", () => {
+			const { terminal, muxes } = setup({ coverInitialReplay: false });
+			terminal.autoCompleteWrites = false;
+			act(() => muxes[0].emitData("handle-1", "a"));
+			act(() => muxes[0].emitData("handle-1", "b"));
+			act(() => muxes[0].emitData("handle-1", "c"));
+			expect(terminal.lines).toEqual(["a"]);
+
+			act(() => terminal.completeWrites());
+			expect(terminal.lines).toEqual(["a", "bc"]);
+			act(() => muxes[0].emitData("handle-1", "d"));
+			expect(terminal.lines).toEqual(["a", "bc"]);
+			act(() => terminal.completeWrites());
+			expect(terminal.lines).toEqual(["a", "bc", "d"]);
+		});
+
+		it("hands held live output to xterm when the attachment is torn down", () => {
+			const { terminal, muxes, detach } = setup({ coverInitialReplay: false });
+			terminal.autoCompleteWrites = false;
+			act(() => muxes[0].emitData("handle-1", "a"));
+			act(() => muxes[0].emitData("handle-1", "held"));
+			act(() => detach());
+			expect(terminal.lines).toEqual(["a", "held"]);
 		});
 
 		it("reveals a pane that replays nothing instead of holding the cover to the cap", () => {
@@ -851,6 +892,13 @@ describe("useTerminalSession", () => {
 		expect(terminal.lines.some((line) => line.includes("[process exited]"))).toBe(true);
 		expect(muxes[0].disposed).toBe(true);
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: workspaceQueryKey });
+	});
+
+	it("uses a contextual exit notice for intentionally short-lived terminals", () => {
+		const { terminal, muxes } = setup({ exitNotice: "[reviewer terminal finished]" });
+		act(() => muxes[0].emitExit("handle-1"));
+		expect(terminal.lines).toContain("[reviewer terminal finished]");
+		expect(terminal.lines.some((line) => line.includes("[process exited]"))).toBe(false);
 	});
 
 	it("reconnects when a merged terminated session is restored with the same terminal handle", () => {

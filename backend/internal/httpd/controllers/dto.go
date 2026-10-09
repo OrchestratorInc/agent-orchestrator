@@ -203,6 +203,13 @@ type SessionIDParam struct {
 	SessionID string `path:"sessionId" description:"Session identifier, e.g. project-1."`
 }
 
+// PreviewFileQuery is the query string accepted by GET
+// /api/v1/sessions/{sessionId}/preview/files/*.
+type PreviewFileQuery struct {
+	Source string `query:"source,omitempty" enum:"workspace,artifact" description:"File root to serve from. Defaults to the session workspace; artifact selects the session artifact directory."`
+	Raw    bool   `query:"raw,omitempty" description:"When true, serve Markdown files as raw source instead of rendering them to HTML for Browser preview."`
+}
+
 // PRNumberParam is the associated pull-request number in Files routes.
 type PRNumberParam struct {
 	PRNumber int `path:"prNumber" description:"Associated pull request number." minimum:"1"`
@@ -357,9 +364,36 @@ type SessionView struct {
 	Model string `json:"model,omitempty"`
 	// LastUserMessageAt is the latest real user-authored task direction time.
 	// Lifecycle and internal automation updates do not advance it.
-	LastUserMessageAt *time.Time       `json:"lastUserMessageAt,omitempty"`
-	PRs               []SessionPRFacts `json:"prs"`
-	ActiveAgentSwitch *AgentSwitchView `json:"activeAgentSwitch,omitempty"`
+	LastUserMessageAt *time.Time `json:"lastUserMessageAt,omitempty"`
+	// LastInteractionAt includes human direction and same-project orchestrator messages.
+	LastInteractionAt *time.Time `json:"lastInteractionAt,omitempty"`
+	// LastEventAt is when something a person would notice last happened: an
+	// activity-state transition, a PR lifecycle or CI change, or a review
+	// submission. Derived at read time; see domain.Session.LastEventAt.
+	LastEventAt       time.Time             `json:"lastEventAt"`
+	PRs               []SessionPRFacts      `json:"prs"`
+	ArtifactFiles     []SessionArtifactView `json:"artifactFiles,omitempty"`
+	ActiveAgentSwitch *AgentSwitchView      `json:"activeAgentSwitch,omitempty"`
+}
+
+// SessionArtifactView is one inferred file artifact for a session.
+type SessionArtifactView struct {
+	Path       string                     `json:"path"`
+	Name       string                     `json:"name"`
+	Kind       domain.SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
+	Size       int64                      `json:"size"`
+	UpdatedAt  time.Time                  `json:"updatedAt"`
+	PreviewURL string                     `json:"previewUrl,omitempty"`
+	// RawURL fetches this artifact's raw bytes on the artifact preview
+	// origin — a distinct host from the workspace preview origin, so a
+	// workspace-relative path can never collide with an artifact-relative
+	// one. Set for every kind, unlike PreviewURL (html only, meant for
+	// Browser navigation rather than a raw fetch).
+	RawURL string `json:"rawUrl,omitempty"`
+	// InlineURL frames this page inside the chat thread, from its own origin:
+	// its files load same-origin there, but the daemon refuses that origin, so
+	// unlike PreviewURL the page cannot call the daemon. HTML only.
+	InlineURL string `json:"inlineUrl,omitempty"`
 }
 
 // ListSessionsResponse is the body of GET /api/v1/sessions.
@@ -378,7 +412,7 @@ type SpawnSessionRequest struct {
 	ParentSessionID domain.SessionID       `json:"parentSessionId,omitempty"`
 	TrackerProvider domain.TrackerProvider `json:"trackerProvider,omitempty" enum:"github,gitlab"`
 	Kind            domain.SessionKind     `json:"kind,omitempty" enum:"worker,orchestrator"`
-	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,mimo-code,deepseek-harness"`
+	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands"`
 	Branch          string                 `json:"branch,omitempty"`
 	// Mode picks the conversation controller: chat talks to the agent over a
 	// structured connection, tui opens the agent's native terminal interface.
@@ -957,9 +991,10 @@ type InterfaceTransitionNoticeAckResponse struct {
 
 // KillSessionResponse is the body of POST /api/v1/sessions/{sessionId}/kill.
 type KillSessionResponse struct {
-	OK        bool             `json:"ok"`
-	SessionID domain.SessionID `json:"sessionId"`
-	Freed     bool             `json:"freed,omitempty"`
+	OK             bool             `json:"ok"`
+	SessionID      domain.SessionID `json:"sessionId"`
+	Freed          bool             `json:"freed,omitempty"`
+	CleanupPending bool             `json:"cleanupPending,omitempty"`
 }
 
 // RollbackSessionResponse is the body of POST /api/v1/sessions/{sessionId}/rollback.
@@ -993,7 +1028,9 @@ type CleanupSessionsResponse struct {
 
 // SendSessionMessageRequest is the body of POST /api/v1/sessions/{sessionId}/send.
 type SendSessionMessageRequest struct {
-	Message string `json:"message" minLength:"1" maxLength:"4096"`
+	// SenderSessionID is cooperative loopback attribution, not authentication.
+	SenderSessionID string `json:"senderSessionId,omitempty"`
+	Message         string `json:"message" minLength:"1" maxLength:"4096"`
 	// UserAuthored marks content written directly by the user but delivered via
 	// AO's automation relay, such as inline document feedback.
 	UserAuthored bool `json:"userAuthored,omitempty"`
@@ -1016,7 +1053,7 @@ type DelegateTaskRequest struct {
 	ClientRequestID string              `json:"clientRequestId,omitempty" maxLength:"128"`
 	ProjectID       domain.ProjectID    `json:"projectId"`
 	Brief           string              `json:"brief" maxLength:"16384"`
-	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,mimo-code,deepseek-harness,fake"`
+	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,fake"`
 	Model           string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
 	// inherits the project default; an empty string selects the provider default.
@@ -1266,7 +1303,9 @@ func newSessionPRMergeabilitySummary(in sessionsvc.PRMergeabilitySummary) Sessio
 	for _, file := range in.ConflictFiles {
 		files = append(files, SessionPRConflictFile{Path: file.Path, URL: file.URL})
 	}
-	return SessionPRMergeabilitySummary{State: in.State, Reasons: in.Reasons, PRURL: in.PRURL, ConflictFiles: files}
+	// No reasons is an empty array, never null: clients read it as a list.
+	reasons := append([]string{}, in.Reasons...)
+	return SessionPRMergeabilitySummary{State: in.State, Reasons: reasons, PRURL: in.PRURL, ConflictFiles: files}
 }
 
 // ClaimPRRequest is the body of POST /sessions/{sessionId}/pr/claim.
@@ -1298,6 +1337,8 @@ type SetActivityRequest struct {
 	Event                        string                              `json:"event,omitempty" description:"AO hook sub-command that produced this state (e.g. post-tool-use)."`
 	ToolName                     string                              `json:"toolName,omitempty" description:"Native tool name, for tool-use hook events."`
 	ToolUseID                    string                              `json:"toolUseId,omitempty" description:"Native tool-use id, for tool-use hook events."`
+	SubagentID                   string                              `json:"subagentId,omitempty" description:"Native child agent id for this hook event."`
+	RunningSubagentIDs           *[]string                           `json:"runningSubagentIds,omitempty" description:"Running Claude subagent ids observed in a parent Stop hook; empty means none, absent means no snapshot."`
 	AgentSessionID               string                              `json:"agentSessionId,omitempty" description:"Native agent session identifier used to resume its transcript."`
 	LatestUserPrompt             string                              `json:"latestUserPrompt,omitempty" maxLength:"16384" description:"Latest real user prompt exposed by the provider hook."`
 	LatestAssistantUpdate        string                              `json:"latestAssistantUpdate,omitempty" maxLength:"16384" description:"Latest assistant update exposed by the provider hook."`
@@ -1327,6 +1368,29 @@ type SetActivityResponse struct {
 	OK        bool             `json:"ok"`
 	SessionID domain.SessionID `json:"sessionId"`
 	State     string           `json:"state"`
+}
+
+// CodewhaleLifecycleWebhookRequest is Codewhale v0.10's lifecycle webhook
+// envelope. The thread id is process-local correlation, not the durable saved
+// conversation UUID used for restore.
+type CodewhaleLifecycleWebhookRequest struct {
+	At    time.Time               `json:"at,omitempty"`
+	Event CodewhaleLifecycleEvent `json:"event"`
+}
+
+// CodewhaleLifecycleEvent is the provider-owned RuntimeEventEnvelope nested in
+// a lifecycle webhook delivery.
+type CodewhaleLifecycleEvent struct {
+	SchemaVersion int       `json:"schema_version"`
+	Sequence      uint64    `json:"seq"`
+	Event         string    `json:"event"`
+	Kind          string    `json:"kind" enum:"session.started,turn.started,turn.completed,turn.failed,turn.interrupted,turn.stalled,session.ended,subagent.spawned,subagent.completed"`
+	ThreadID      string    `json:"thread_id"`
+	TurnID        string    `json:"turn_id,omitempty"`
+	ItemID        *string   `json:"item_id,omitempty"`
+	Timestamp     time.Time `json:"timestamp,omitempty"`
+	CreatedAt     time.Time `json:"created_at,omitempty"`
+	Payload       any       `json:"payload,omitempty"`
 }
 
 // SetReviewActivityRequest is the body of POST /api/v1/reviews/{reviewSessionID}/activity.
@@ -1660,6 +1724,120 @@ type ListCompactSessionUsageResponse struct {
 	Sessions []CompactSessionUsageResponse `json:"sessions"`
 }
 
+// SessionMemoryProcessResponse is one process in a session's runtime tree.
+type SessionMemoryProcessResponse struct {
+	PID        int     `json:"pid"`
+	PPID       int     `json:"ppid"`
+	RSSBytes   uint64  `json:"rssBytes" minimum:"0"`
+	CPUPercent float64 `json:"cpuPercent" minimum:"0" description:"Share of one core used since the previous sample; zero on the first."`
+	Command    string  `json:"command"`
+}
+
+// SessionMemoryResponse is the resident memory of one live session's process
+// tree at sampledAt. Sessions without a live runtime are absent, never zero.
+type SessionMemoryResponse struct {
+	SessionID    domain.SessionID               `json:"sessionId"`
+	RSSBytes     uint64                         `json:"rssBytes" minimum:"0" description:"Resident set size summed over the runtime process tree."`
+	ProcessCount int                            `json:"processCount" minimum:"0"`
+	CPUPercent   float64                        `json:"cpuPercent" minimum:"0" description:"Share of one core the whole tree used since the previous sample; zero on the first."`
+	SampledAt    time.Time                      `json:"sampledAt"`
+	Processes    []SessionMemoryProcessResponse `json:"processes"`
+	// Activity is what the agent has been doing, from its tool hooks. Absent
+	// for harnesses that emit none (the process tree is all there is).
+	Activity *SessionActivityResponse `json:"activity,omitempty"`
+}
+
+// SessionStepResponse is one tool call the agent made: which kind of tool
+// and when. Deliberately not what it was given; the window is a glance.
+type SessionStepResponse struct {
+	Tool      string     `json:"tool"`
+	StartedAt time.Time  `json:"startedAt"`
+	EndedAt   *time.Time `json:"endedAt,omitempty" description:"Absent while the tool is still running."`
+	Failed    bool       `json:"failed"`
+}
+
+// SessionActivityResponse is the step in flight and the last few finished.
+type SessionActivityResponse struct {
+	Current *SessionStepResponse `json:"current,omitempty"`
+	// Recent is newest first, at most a handful.
+	Recent []SessionStepResponse `json:"recent"`
+}
+
+// ListSessionMemoryResponse is the batch memory reading for the board.
+type ListSessionMemoryResponse struct {
+	Sessions []SessionMemoryResponse `json:"sessions"`
+	// System is host RAM for the panel's total bar. Absent where the
+	// platform can't be read.
+	System *SystemMemoryResponse `json:"system,omitempty"`
+	// App is the resident memory of everything AO runs (daemon, desktop
+	// shell, every live session), for the topbar pressure indicator.
+	App *AppMemoryResponse `json:"app,omitempty"`
+}
+
+// AppMemoryResponse is everything AO runs at sample time, with AO's own
+// daemon and shell broken out so the panel can pin them as their own row.
+type AppMemoryResponse struct {
+	RSSBytes     uint64  `json:"rssBytes" minimum:"0"`
+	ProcessCount int     `json:"processCount" minimum:"0"`
+	CPUPercent   float64 `json:"cpuPercent" minimum:"0"`
+	CPUMeasured  bool    `json:"cpuMeasured" description:"False when there was no earlier sample to measure against: cpuPercent is unknown, not zero."`
+	// Own is the daemon and desktop shell alone, without any session.
+	Own *SessionMemoryResponse `json:"own,omitempty"`
+	// Reviewers is memory held by live reviewer panes, named separately from
+	// Own because a reviewer has no session row: its identity is the review
+	// it belongs to, and it can outlive the worker that spawned it.
+	Reviewers []ReviewerMemoryResponse `json:"reviewers,omitempty"`
+}
+
+// ReviewerMemoryResponse is one live reviewer pane's process-tree reading,
+// attributed back to the review record that owns it (never a session).
+type ReviewerMemoryResponse struct {
+	ReviewID  string                `json:"reviewId"`
+	SessionID domain.SessionID      `json:"sessionId" description:"The worker session this reviewer reviews, not the reviewer's own identity."`
+	Harness   string                `json:"harness"`
+	Memory    SessionMemoryResponse `json:"memory"`
+}
+
+// SystemMemoryResponse is the host's headroom at sample time. The pressure
+// light reads this, never AO's share: a machine about to swap is red whoever
+// holds the memory.
+type SystemMemoryResponse struct {
+	TotalBytes     uint64 `json:"totalBytes" minimum:"0"`
+	AvailableBytes uint64 `json:"availableBytes" minimum:"0" description:"What the kernel would hand out without swapping (MemAvailable)."`
+	SwapTotalBytes uint64 `json:"swapTotalBytes" minimum:"0"`
+	SwapUsedBytes  uint64 `json:"swapUsedBytes" minimum:"0"`
+	// SwapBytesPerSec is how fast pages moved to or from swap since the
+	// previous sample. Sustained non-zero is the frozen-cursor signal.
+	SwapBytesPerSec float64 `json:"swapBytesPerSec" minimum:"0"`
+	CPUCount        int     `json:"cpuCount" minimum:"0"`
+	// Load1 is the one-minute load average; over cpuCount means work is
+	// queueing. -1 on a platform with no such concept (Windows); never
+	// otherwise negative.
+	Load1 float64 `json:"load1"`
+	// CPUPercent is how busy the whole host was since the previous sample,
+	// 0..100 across all cores; zero on the first sample.
+	CPUPercent float64 `json:"cpuPercent" minimum:"0"`
+	// CPUMeasured is false when there was no earlier sample to measure
+	// against: cpuPercent is unknown, not zero.
+	CPUMeasured bool `json:"cpuMeasured"`
+	// PressureRaw is the kernel's memory-pressure figure: PSI "some avg10"
+	// (percent of the last ten seconds a task stalled on memory) on Linux,
+	// macOS's own kernel pressure level (1/2/4) on macOS, or 100 minus the
+	// available percent where neither is available. Clients derive
+	// fine / tight-soon / tight from it.
+	PressureRaw float64 `json:"pressureRaw" minimum:"0"`
+	// PressureSource says which reading produced pressureRaw.
+	PressureSource string `json:"pressureSource" enum:"psi,available_pct,memorystatus"`
+}
+
+// MemoryPressureResponse is the machine's memory-pressure verdict alone, the
+// same two fields SystemMemoryResponse carries, read without sampling any
+// process so the board can poll it often.
+type MemoryPressureResponse struct {
+	PressureRaw    float64 `json:"pressureRaw" minimum:"0"`
+	PressureSource string  `json:"pressureSource" enum:"psi,available_pct,memorystatus"`
+}
+
 // UsageTotalsResponse is the canonical telemetry aggregate for one scope.
 //
 // Provider-specific counters are no longer projected here: they live verbatim
@@ -1956,24 +2134,22 @@ type CueProjectIDParam struct {
 // CueDefinitionRequest is the complete editable definition accepted when
 // creating or replacing a cue.
 type CueDefinitionRequest struct {
-	Name        string `json:"name" maxLength:"64" description:"Short cue name, unique within the project. Trimmed; must be non-empty and at most 64 bytes."`
-	Description string `json:"description,omitempty" maxLength:"240" description:"Optional human note about the cue, at most 240 bytes."`
-	Type        string `json:"type" description:"Cue kind: command sends to a project- or session-scoped shell terminal; agent sends an authored prompt. Definition body limit: 128 KiB."`
-	Command     string `json:"command,omitempty" maxLength:"4096" description:"Shell command for a command cue. At most 4096 bytes; cleared when saving agent cues."`
-	Prompt      string `json:"prompt,omitempty" maxLength:"16384" description:"Agent instruction for an agent cue. At most 16384 bytes; cleared when saving command cues."`
+	Name    string `json:"name" maxLength:"64" description:"Short cue name, unique within the project. Trimmed; must be non-empty and at most 64 bytes."`
+	Type    string `json:"type" description:"Cue kind: command sends to a project- or session-scoped shell terminal; agent sends an authored prompt. Definition body limit: 128 KiB."`
+	Command string `json:"command,omitempty" maxLength:"4096" description:"Shell command for a command cue. At most 4096 bytes; cleared when saving agent cues."`
+	Prompt  string `json:"prompt,omitempty" maxLength:"16384" description:"Agent instruction for an agent cue. At most 16384 bytes; cleared when saving command cues."`
 }
 
 // CueResponse is one project-scoped reusable quick action.
 type CueResponse struct {
-	ID          string    `json:"id"`
-	ProjectID   string    `json:"projectId"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Type        string    `json:"type"`
-	Command     string    `json:"command,omitempty"`
-	Prompt      string    `json:"prompt,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID        string    `json:"id"`
+	ProjectID string    `json:"projectId"`
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
+	Command   string    `json:"command,omitempty"`
+	Prompt    string    `json:"prompt,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // ListCuesResponse is the body of GET /api/v1/projects/{projectId}/cues.
@@ -2246,14 +2422,47 @@ type UnregisterPushDeviceResponse struct {
 
 /* ---- chat conversations ------------------------------------------------ */
 
+// SetChatViewRequest renews or releases one renderer's Chat view lease.
+type SetChatViewRequest struct {
+	ViewID        string `json:"viewId"`
+	Active        bool   `json:"active"`
+	activePresent bool
+}
+
+// UnmarshalJSON distinguishes an omitted active value from an explicit false
+// while keeping the generated API schema non-nullable.
+func (r *SetChatViewRequest) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ViewID string `json:"viewId"`
+		Active *bool  `json:"active"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	r.ViewID = wire.ViewID
+	r.Active = wire.Active != nil && *wire.Active
+	r.activePresent = wire.Active != nil
+	return nil
+}
+
 // SendConversationMessageRequest is a message for a Chat session's agent.
 type SendConversationMessageRequest struct {
 	Text string `json:"text"`
 	// ClientMessageID makes delivery idempotent. A retry carrying the same value
 	// must not produce a second provider turn.
-	ClientMessageID string                               `json:"clientMessageId,omitempty"`
-	Attachments     []ConversationImageContentRequest    `json:"attachments,omitempty"`
-	Resources       []ConversationResourceContentRequest `json:"resources,omitempty"`
+	ClientMessageID string                                `json:"clientMessageId,omitempty"`
+	Attachments     []ConversationImageContentRequest     `json:"attachments,omitempty"`
+	Resources       []ConversationResourceContentRequest  `json:"resources,omitempty"`
+	Excerpts        []ConversationExcerptReferenceRequest `json:"excerpts,omitempty"`
+}
+
+// ConversationExcerptReferenceRequest attaches verified selected transcript
+// text to the next message.
+type ConversationExcerptReferenceRequest struct {
+	ConversationID string `json:"conversationId"`
+	MessageID      string `json:"messageId"`
+	Revision       int64  `json:"revision"`
+	Text           string `json:"text"`
 }
 
 // ConversationImageContentRequest is a native raster image prompt block.
@@ -2302,6 +2511,9 @@ type SendConversationMessageResponse struct {
 type SteerConversationRequest struct {
 	// Text is the correction to hand the agent mid-turn.
 	Text string `json:"text"`
+	// SenderSessionID identifies the AO session that authored an automation steer.
+	// It is optional so older callers and in-app human steering remain unchanged.
+	SenderSessionID string `json:"senderSessionId,omitempty"`
 	// Attachments are native image prompt blocks delivered with the correction.
 	Attachments []ConversationImageContentRequest `json:"attachments,omitempty"`
 	// ClientMessageID makes a retry idempotent at AO's durable daemon boundary. The
@@ -2350,6 +2562,13 @@ type ConversationContentSummaryResponse struct {
 	MIMEType string `json:"mimeType,omitempty"`
 	URI      string `json:"uri,omitempty"`
 	Name     string `json:"name,omitempty"`
+	// Text is exposed only for verified chat excerpts, so the timeline can show
+	// what the user referred to without exposing internal resource URIs.
+	Text string `json:"text,omitempty"`
+	// SourceMessageID and SourceRevision let the renderer navigate back to the
+	// verified transcript message without exposing the internal excerpt URI.
+	SourceMessageID string `json:"sourceMessageId,omitempty"`
+	SourceRevision  int64  `json:"sourceRevision,omitempty"`
 }
 
 // EditConversationMessageResponse identifies the newly selected branch and its
@@ -2577,16 +2796,22 @@ type ConversationDiffFileResponse struct {
 
 // ConversationMessageResponse is one readable block of text.
 type ConversationMessageResponse struct {
-	Kind          string                               `json:"kind" enum:"message"`
-	ID            string                               `json:"id"`
-	TurnID        string                               `json:"turnId,omitempty"`
-	Sequence      int64                                `json:"sequence"`
-	Revision      int64                                `json:"revision"`
-	Role          string                               `json:"role" enum:"user,assistant"`
-	Origin        string                               `json:"origin" enum:"human,automation,daemon,provider"`
-	Text          string                               `json:"text"`
-	Content       []ConversationContentSummaryResponse `json:"content,omitempty"`
-	EditAvailable bool                                 `json:"editAvailable"`
+	Kind              string                               `json:"kind" enum:"message"`
+	ID                string                               `json:"id"`
+	TurnID            string                               `json:"turnId,omitempty"`
+	Sequence          int64                                `json:"sequence"`
+	Revision          int64                                `json:"revision"`
+	Role              string                               `json:"role" enum:"user,assistant"`
+	Origin            string                               `json:"origin" enum:"human,automation,daemon,provider"`
+	Text              string                               `json:"text"`
+	Content           []ConversationContentSummaryResponse `json:"content,omitempty"`
+	SenderSessionID   string                               `json:"senderSessionId,omitempty"`
+	SenderProjectID   string                               `json:"senderProjectId,omitempty"`
+	SenderDisplayName string                               `json:"senderDisplayName,omitempty"`
+	// ClientMessageID echoes the sender's idempotency key so a client can match its
+	// local echo to this row without comparing text or clocks.
+	ClientMessageID string `json:"clientMessageId,omitempty"`
+	EditAvailable   bool   `json:"editAvailable"`
 	// Streaming is true while more deltas are expected for this message.
 	Streaming bool   `json:"streaming"`
 	CreatedAt string `json:"createdAt"`
@@ -2647,7 +2872,7 @@ type ConversationSnapshotResponse struct {
 	Mode                       string `json:"mode" enum:"chat,tui"`
 	// Controller is reported separately from history so a client can tell "no
 	// messages yet" apart from "the agent is not running".
-	Controller     string `json:"controller" enum:"connecting,ready,busy,recovering,stopped"`
+	Controller     string `json:"controller" enum:"connecting,ready,busy,recovering,hibernated,stopped"`
 	LatestSequence int64  `json:"latestSequence"`
 	OldestSequence int64  `json:"oldestSequence,omitempty"`
 	HasMoreBefore  bool   `json:"hasMoreBefore"`
@@ -2842,6 +3067,72 @@ type ConversationTurnIDParam struct {
 	TurnID string `path:"turnId" description:"AO conversation turn identifier, from the snapshot's turns array."`
 }
 
+// PublishRenderRequest is a self-contained HTML page an agent shows inline in
+// its chat thread.
+type PublishRenderRequest struct {
+	HTML   string `json:"html" description:"A complete, self-contained HTML document, at most 25 MiB."`
+	Title  string `json:"title" description:"Short name for the page."`
+	Height int    `json:"height,omitempty" description:"First-paint frame height in CSS pixels, clamped to 80-2000; the frame then fits the page."`
+	// Artifact keeps the page as a session artifact too. A failed save does not fail the publish.
+	Artifact bool `json:"artifact,omitempty" description:"Also keep the page as a session artifact, a deliverable the user keeps."`
+}
+
+// PublishRenderResponse names the stored page and the timeline row showing it.
+type PublishRenderResponse struct {
+	RenderID      string `json:"renderId"`
+	ActivityID    string `json:"activityId"`
+	Path          string `json:"path"`
+	ArtifactPath  string `json:"artifactPath,omitempty" description:"With artifact: the absolute path of the kept page."`
+	ArtifactError string `json:"artifactError,omitempty" description:"With artifact: why the page was not kept. The page is still published."`
+}
+
+// SaveRenderArtifactRequest keeps a published render as a session artifact.
+type SaveRenderArtifactRequest struct {
+	Title string `json:"title" minLength:"1" maxLength:"200" description:"Name for the file. Characters a file system refuses are replaced."`
+}
+
+// SaveRenderArtifactResponse names the file the render was kept as.
+type SaveRenderArtifactResponse struct {
+	Path string `json:"path" description:"The file, relative to the session's artifact directory."`
+	Name string `json:"name"`
+}
+
+// RenderCheckRequest is a page an agent wants to see before it publishes it.
+type RenderCheckRequest struct {
+	HTML  string `json:"html" description:"A complete, self-contained HTML document, at most 25 MiB."`
+	Width int    `json:"width,omitempty" description:"Viewport width in CSS pixels, 240-1600. Defaults to 720."`
+}
+
+// RenderCheckScreenshot is the page as the desktop app drew it.
+type RenderCheckScreenshot struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data" description:"Base64 PNG."`
+	Width    int    `json:"width" description:"Page width the screenshot shows, in CSS pixels."`
+	Height   int    `json:"height" description:"Page height the screenshot shows, in CSS pixels."`
+	// The desktop app scales a very large image down so it can be handed back.
+	ImageWidth  int `json:"imageWidth,omitempty" description:"PNG width in pixels, when it differs from the page width."`
+	ImageHeight int `json:"imageHeight,omitempty" description:"PNG height in pixels, when it differs from the page height."`
+}
+
+// RenderConsoleMessage is one console line the page wrote while it loaded.
+type RenderConsoleMessage struct {
+	Level string `json:"level" enum:"debug,log,warning,error"`
+	Text  string `json:"text"`
+}
+
+// RenderCheckResponse reports how the page rendered.
+type RenderCheckResponse struct {
+	Screenshot      RenderCheckScreenshot  `json:"screenshot"`
+	ContentHeight   int                    `json:"contentHeight" description:"Height the page needs at this width, in CSS pixels."`
+	ConsoleMessages []RenderConsoleMessage `json:"consoleMessages"`
+	Network         string                 `json:"network" enum:"public,none" description:"Network the page could use. none when the agent's own sandbox has no network, so remote resources did not load."`
+}
+
+// RenderIDParam names a published render.
+type RenderIDParam struct {
+	RenderID string `path:"renderId" description:"Render identifier returned when the page was published."`
+}
+
 // ConversationBranchIDParam names one durable provider-thread branch.
 type ConversationBranchIDParam struct {
 	BranchID string `path:"branchId" description:"Conversation branch identifier, from a snapshot branch navigation point."`
@@ -2886,6 +3177,8 @@ type SettingsResponse struct {
 	// CloudOffering is the user's persisted cloud toggle (Settings, Developer
 	// Mode). Distinct from CloudEnabled, which is the effective gate.
 	CloudOffering bool `json:"cloudOffering"`
+	// ChatHibernationEnabled is the developer-mode gate for idle Chat process shutdown.
+	ChatHibernationEnabled bool `json:"chatHibernationEnabled"`
 	// CloudEnabled reports whether the cloud offering is effectively available:
 	// the user's toggle (or the env override) plus a configured control plane.
 	CloudEnabled bool `json:"cloudEnabled"`
@@ -2910,6 +3203,11 @@ type UpdateSessionInterfaceRequest struct {
 // UpdateCloudOfferingRequest flips the user's cloud toggle.
 type UpdateCloudOfferingRequest struct {
 	// Enabled turns the cloud offering on or off for this machine's user.
+	Enabled *bool `json:"enabled"`
+}
+
+// UpdateChatHibernationRequest flips the daemon-owned idle Chat gate.
+type UpdateChatHibernationRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
@@ -2940,8 +3238,17 @@ func capabilityNames(caps ports.ChatCapabilities) []string {
 // it for this pass only, without editing project config, so one session's choice
 // cannot change what another session in the project runs.
 type TriggerReviewRequest struct {
-	Harness     domain.ReviewerHarness `json:"harness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,opencode-v2,kiro,pi,agy,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`
-	AgentConfig domain.AgentConfig     `json:"agentConfig,omitempty"`
+	Harness       domain.ReviewerHarness       `json:"harness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,opencode-v2,kiro,pi,agy,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`
+	AgentConfig   domain.AgentConfig           `json:"agentConfig,omitempty"`
+	InterfaceMode domain.ReviewerInterfaceMode `json:"interfaceMode,omitempty" enum:"chat,tui"`
+	PRURL         string                       `json:"prUrl,omitempty" description:"Restrict the pass to this pull request, attaching it to the session first if AO does not track it yet (never from another active session). Omit to review every eligible PR on the session."`
+	// Source labels who asked for the pass. Omitted means a person (manual).
+	Source string `json:"source,omitempty" enum:"manual,agent" description:"Who requested the pass: manual (a person, the default) or agent (an AO session through the CLI)."`
+	// RejectReviewedHead is the CLI's same-commit policy. Omitting it keeps the
+	// reuse behavior the desktop app relies on.
+	RejectReviewedHead bool `json:"rejectReviewedHead,omitempty" description:"Return 409 instead of reusing when every open PR head is already being reviewed or already has a review."`
+	Rerun              bool `json:"rerun,omitempty" description:"Start a fresh pass for already-reviewed current heads; a different reviewer may run alongside one that is still running. A person's rerun reuses an active pass from the same reviewer; an agent's rerun returns 409 REVIEW_ALREADY_RUNNING instead."`
+	EnableAutoInject   bool `json:"enableAutoInject,omitempty" description:"Turn on the worker session's review auto-inject once a pass has started, so the reviewer's PR review comments reach the worker."`
 }
 
 // ResolveReviewCommentRequest is the body of POST /api/v1/sessions/{sessionId}/reviews/comments/resolve.

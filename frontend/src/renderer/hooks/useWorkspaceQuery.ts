@@ -11,6 +11,7 @@ import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { toReviewerHarnessId } from "../lib/reviewer-harnesses";
 import { captureRendererEvent } from "../lib/telemetry";
 import { agentSwitchVisibility } from "../lib/agent-switch-visibility";
+import { aoBridge } from "../lib/bridge";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "./useHostConnection";
 import { requestRemoteHostsRefresh } from "./useRemoteHosts";
@@ -20,6 +21,7 @@ import {
 	type AgentSwitchSummary,
 	type PRState,
 	type PullRequestFacts,
+	type SessionArtifact,
 	toAgentProvider,
 	toKanbanColumn,
 	toProjectKind,
@@ -41,15 +43,10 @@ function standaloneWorkspaceName(): string {
 function placeStandaloneWorkspaceLast(workspaces: WorkspaceSummary[]): WorkspaceSummary[] {
 	const standalone = workspaces.find((workspace) => workspace.id === STANDALONE_WORKSPACE_ID);
 	if (!standalone) return workspaces;
-	return [
-		...workspaces.filter((workspace) => workspace.id !== STANDALONE_WORKSPACE_ID),
-		standalone,
-	];
+	return [...workspaces.filter((workspace) => workspace.id !== STANDALONE_WORKSPACE_ID), standalone];
 }
 
-function toAgentSwitchSummary(
-	agentSwitch: components["schemas"]["AgentSwitch"],
-): AgentSwitchSummary {
+function toAgentSwitchSummary(agentSwitch: components["schemas"]["AgentSwitch"]): AgentSwitchSummary {
 	return {
 		agentHandoffStatus: agentSwitch.agentHandoffStatus,
 		errorCode: agentSwitch.errorCode,
@@ -74,13 +71,25 @@ function toPullRequestFacts(pr: components["schemas"]["SessionPRFacts"]): PullRe
 	};
 }
 
-function toWorkspaceSession(
+function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): SessionArtifact {
+	return {
+		kind: artifact.kind,
+		name: artifact.name,
+		path: artifact.path,
+		previewUrl: artifact.previewUrl,
+		rawUrl: artifact.rawUrl,
+		inlineUrl: artifact.inlineUrl,
+		size: artifact.size,
+		updatedAt: artifact.updatedAt,
+	};
+}
+
+export function toWorkspaceSession(
 	session: components["schemas"]["ControllersSessionView"],
 	project: Pick<WorkspaceSummary, "id" | "name">,
 ): WorkspaceSession {
 	const statusReadiness = session.statusReadiness ?? "ready";
-	const status =
-		statusReadiness === "ready" ? toSessionStatus(session.status, session.isTerminated) : "unknown";
+	const status = statusReadiness === "ready" ? toSessionStatus(session.status, session.isTerminated) : "unknown";
 	const scmStatus = session.scmStatus ? toSessionStatus(session.scmStatus) : undefined;
 	const kanbanColumn = toKanbanColumn(session.kanbanColumn, status);
 	const activity = statusReadiness === "ready" ? toSessionActivity(session.activity) : undefined;
@@ -100,10 +109,10 @@ function toWorkspaceSession(
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
 		reviewerConfig: session.reviewerConfig
 			? {
-				model: session.reviewerConfig.model ?? undefined,
-				mode: session.reviewerConfig.mode ?? undefined,
-				permissions: session.reviewerConfig.permissions ?? undefined,
-			}
+					model: session.reviewerConfig.model ?? undefined,
+					mode: session.reviewerConfig.mode ?? undefined,
+					permissions: session.reviewerConfig.permissions ?? undefined,
+				}
 			: undefined,
 		autoReviewEnabled: session.autoReviewEnabled ?? false,
 		kind: session.kind === "orchestrator" ? "orchestrator" : session.kind === "worker" ? "worker" : undefined,
@@ -116,7 +125,15 @@ function toWorkspaceSession(
 		statusReadiness,
 		provisionState: session.provisionState,
 		provisionError: session.provisionError || undefined,
+		provisionSteps: session.provisionSteps?.map((step) => ({
+			id: step.id,
+			status: step.status,
+			startedAt: step.startedAt ?? undefined,
+			endedAt: step.endedAt ?? undefined,
+		})),
+		branchState: session.branchState,
 		isTerminated: session.isTerminated,
+		workspaceCleanup: session.workspaceCleanup,
 		chatProviderPreserved: session.chatProviderPreserved,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
@@ -124,6 +141,7 @@ function toWorkspaceSession(
 		createdAt: session.createdAt,
 		updatedAt: session.updatedAt,
 		lastUserMessageAt: session.lastUserMessageAt ?? undefined,
+		lastInteractionAt: session.lastInteractionAt ?? undefined,
 		activity,
 		activeAgentSwitch: session.activeAgentSwitch ? toAgentSwitchSummary(session.activeAgentSwitch) : undefined,
 		previewUrl: session.previewUrl,
@@ -131,6 +149,8 @@ function toWorkspaceSession(
 		isPinned: session.isPinned ?? false,
 		pinnedAt: session.pinnedAt ?? undefined,
 		prs: (session.prs ?? []).map(toPullRequestFacts),
+		outputType: session.outputType,
+		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
 	};
 }
 
@@ -150,7 +170,10 @@ function recheckRemoteHost(hostId: string, status: number): void {
 	requestRemoteHostsRefresh();
 }
 export function workspaceStatusesChecking(workspaces: WorkspaceSummary[] | undefined): boolean {
-	return workspaces?.some((workspace) => workspace.sessions.some((session) => session.statusReadiness === "checking")) ?? false;
+	return (
+		workspaces?.some((workspace) => workspace.sessions.some((session) => session.statusReadiness === "checking")) ??
+		false
+	);
 }
 const reportedUnknownSessionFields = new Set<string>();
 
@@ -159,7 +182,10 @@ function reportUnknownSessionField(field: "status" | "activity", value?: string)
 	const key = `${field}:${reason}`;
 	if (reportedUnknownSessionFields.has(key)) return;
 	reportedUnknownSessionFields.add(key);
-	void captureRendererEvent("ao.renderer.session_state_unknown", { field, reason });
+	void captureRendererEvent("ao.renderer.session_state_unknown", {
+		field,
+		reason,
+	});
 }
 
 function toLocalWorkspaceSession(
@@ -183,11 +209,13 @@ function toLocalWorkspaceSession(
 		issueId: session.issueId,
 		provider: toAgentProvider(session.harness),
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
-		reviewerConfig: session.reviewerConfig ? {
-			model: session.reviewerConfig.model ?? undefined,
-			mode: session.reviewerConfig.mode ?? undefined,
-			permissions: session.reviewerConfig.permissions ?? undefined,
-		} : undefined,
+		reviewerConfig: session.reviewerConfig
+			? {
+					model: session.reviewerConfig.model ?? undefined,
+					mode: session.reviewerConfig.mode ?? undefined,
+					permissions: session.reviewerConfig.permissions ?? undefined,
+				}
+			: undefined,
 		autoReviewEnabled: session.autoReviewEnabled ?? false,
 		kind: session.kind === "orchestrator" ? "orchestrator" : session.kind === "worker" ? "worker" : undefined,
 		// Carried through verbatim: the session surface must render from
@@ -198,13 +226,24 @@ function toLocalWorkspaceSession(
 		scmStatus,
 		kanbanColumn,
 		displayStatus: session.displayStatus || undefined,
+		provisionState: session.provisionState,
+		provisionError: session.provisionError || undefined,
+		provisionSteps: session.provisionSteps?.map((step) => ({
+			id: step.id,
+			status: step.status,
+			startedAt: step.startedAt ?? undefined,
+			endedAt: step.endedAt ?? undefined,
+		})),
+		branchState: session.branchState,
 		isTerminated: session.isTerminated,
+		workspaceCleanup: session.workspaceCleanup,
 		terminateOnPrMerge: session.terminateOnPrMerge ?? false,
 		autoInjectReview: session.autoInjectReview ?? true,
 		autoInjectCI: session.autoInjectCI ?? true,
 		createdAt: session.createdAt,
 		updatedAt: session.updatedAt,
 		lastUserMessageAt: session.lastUserMessageAt ?? undefined,
+		lastInteractionAt: session.lastInteractionAt ?? undefined,
 		activity,
 		activeAgentSwitch: session.activeAgentSwitch ? toAgentSwitchSummary(session.activeAgentSwitch) : undefined,
 		previewUrl: session.previewUrl,
@@ -212,6 +251,8 @@ function toLocalWorkspaceSession(
 		isPinned: session.isPinned ?? false,
 		pinnedAt: session.pinnedAt ?? undefined,
 		prs: (session.prs ?? []).map(toPullRequestFacts),
+		outputType: session.outputType,
+		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
 	};
 }
 
@@ -292,7 +333,16 @@ async function fetchRemoteSessions(hostId: string) {
 		recheckRemoteHost(hostId, response.status);
 		throw error;
 	}
-	return data?.sessions ?? [];
+	return Promise.all((data?.sessions ?? []).map(async (session) => ({
+		...session,
+		artifactFiles: await Promise.all((session.artifactFiles ?? []).map(async (artifact) => ({
+			...artifact,
+			rawUrl: artifact.rawUrl ? await aoBridge.remotes.previewUrl(hostId, session.id, artifact.rawUrl) : undefined,
+			// The remote daemon's inline origin is a localhost name, which here
+			// would mean this computer; a remote chat shows no frame anyway.
+			inlineUrl: undefined,
+		}))),
+	})));
 }
 
 function toRemoteWorkspaces(
@@ -340,8 +390,7 @@ export const workspaceQueryOptions = {
 	queryFn: fetchWorkspaces,
 	retry: 1,
 	staleTime: 10_000,
-	refetchInterval: (query: Query<WorkspaceSummary[]>) =>
-		workspaceStatusesChecking(query.state.data) ? 300 : 15_000,
+	refetchInterval: (query: Query<WorkspaceSummary[]>) => (workspaceStatusesChecking(query.state.data) ? 300 : 15_000),
 };
 
 // Cloud projects are a separate query so a control-plane failure can never
@@ -377,6 +426,8 @@ export function toCloudWorkspaceSession(
 		workspaceName: project.displayName,
 		title: session.displayName || session.id,
 		provider: toAgentProvider(session.harness),
+		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
+		autoReviewEnabled: session.autoReviewEnabled ?? false,
 		kind: session.kind === "orchestrator" ? "orchestrator" : "worker",
 		mode: session.interfaceMode ?? "tui",
 		branch: session.branch || undefined,
@@ -408,17 +459,17 @@ export function toCloudWorkspaceSession(
 			sandboxProvider: session.sandboxProvider,
 			desiredState: session.desiredState,
 			observedState: session.observedState,
+			runtimeState: session.runtimeState,
+			runtimeError: session.runtimeError,
+			startupError: session.startupError,
 		},
 	};
 }
 
-function toCloudWorkspace(
-	project: CloudCpProject,
-	sessions: CloudCpSession[],
-	orgId: string,
-): WorkspaceSummary {
+export function toCloudWorkspace(project: CloudCpProject, sessions: CloudCpSession[], orgId: string): WorkspaceSummary {
 	return {
 		id: project.id,
+		cloudOrgId: orgId,
 		name: project.displayName,
 		kind: "cloud",
 		// Cloud projects run in control-plane sandboxes; there is no local folder.
@@ -432,6 +483,7 @@ function toCloudWorkspace(
 type WorkspaceSubscriptionOptions = {
 	subscribed?: boolean;
 	enabled?: boolean;
+	includeCloud?: boolean;
 };
 
 export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}) {
@@ -540,14 +592,17 @@ export function useCloudSessionQuery(
 
 export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const local = useQuery({ ...workspaceQueryOptions, subscribed: options.subscribed, enabled: options.enabled });
-	const cloud = useCloudProjectsQuery(options);
-	const cloudSessions = useCloudSessionsQuery(options);
+	const includeCloud = options.includeCloud !== false;
+	const cloudOptions = { ...options, enabled: includeCloud && options.enabled !== false };
+	const cloud = useCloudProjectsQuery(cloudOptions);
+	const cloudSessions = useCloudSessionsQuery(cloudOptions);
 	const { org, ready } = useCloudOrg();
 	const orgId = org?.id;
 	const localData = local.data;
 	const cloudData = cloud.data;
 	const cloudSessionData = cloudSessions.data;
 	const data = useMemo(() => {
+		if (!includeCloud) return localData;
 		// Local stays authoritative for loading/error semantics: cloud items only
 		// render once the local list exists, and never replace it.
 		if (localData === undefined) return localData;
@@ -561,7 +616,7 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 			...localData,
 			...cloudData.map((project) => toCloudWorkspace(project, sessions, orgId)),
 		]);
-	}, [localData, cloudData, cloudSessionData, orgId, ready]);
+	}, [localData, cloudData, cloudSessionData, includeCloud, orgId, ready]);
 	return { ...local, data };
 }
 
@@ -602,9 +657,12 @@ export function useWorkspaceSession(sessionId: string, hostId?: string, localLoo
 			const session = data?.session;
 			if (!session) return undefined;
 			const project = session.projectId
-				? localWorkspaces.data?.find((workspace) => workspace.id === session.projectId) ??
-					({ id: session.projectId, name: "" } satisfies Pick<WorkspaceSummary, "id" | "name">)
-				: ({ id: STANDALONE_WORKSPACE_ID, name: standaloneWorkspaceName() } satisfies Pick<WorkspaceSummary, "id" | "name">);
+				? (localWorkspaces.data?.find((workspace) => workspace.id === session.projectId) ??
+					({ id: session.projectId, name: "" } satisfies Pick<WorkspaceSummary, "id" | "name">))
+				: ({
+						id: STANDALONE_WORKSPACE_ID,
+						name: standaloneWorkspaceName(),
+					} satisfies Pick<WorkspaceSummary, "id" | "name">);
 			return toWorkspaceSession(session, project);
 		},
 	});
@@ -634,7 +692,10 @@ export function useWorkspaceSession(sessionId: string, hostId?: string, localLoo
 				if (workspace.id !== resolvedDirectSession.workspaceId) return workspace;
 				if (workspace.sessions.some((session) => session.id === resolvedDirectSession.id)) return workspace;
 				changed = true;
-				return { ...workspace, sessions: [...workspace.sessions, resolvedDirectSession] };
+				return {
+					...workspace,
+					sessions: [...workspace.sessions, resolvedDirectSession],
+				};
 			});
 			return changed ? next : current;
 		});
@@ -676,7 +737,8 @@ function selectWorkspaceScope(
 			}
 		: undefined;
 	return {
-		project, session,
+		project,
+		session,
 		hasWorkerSessions: workspace ? workerSessions(workspace.sessions).length > 0 : false,
 		orchestrator: workspace ? newestActiveOrchestrator(workspace.sessions) : undefined,
 	};
@@ -733,7 +795,10 @@ function selectTraySessions(workspaces: WorkspaceSummary[]): TraySessionEntry[] 
  * query boundary so ordinary streamed activity does not wake the runtime.
  */
 export function useWorkspaceTraySessions() {
-	const local = useQuery({ ...workspaceQueryOptions, select: selectTraySessions });
+	const local = useQuery({
+		...workspaceQueryOptions,
+		select: selectTraySessions,
+	});
 	const cloud = useCloudProjectsQuery();
 	const cloudSessions = useCloudSessionsQuery();
 	const { org, ready } = useCloudOrg();

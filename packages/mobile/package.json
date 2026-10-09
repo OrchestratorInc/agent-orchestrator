@@ -27,6 +27,7 @@
     "expo-camera": "~57.0.4",
     "expo-clipboard": "~57.0.1",
     "expo-constants": "~57.0.13",
+    "expo-crypto": "~57.0.3",
     "expo-device": "~57.0.1",
     "expo-document-picker": "~57.0.1",
     "expo-file-system": "~57.0.5",
@@ -70,8 +71,10 @@
   "devDependencies": {
     "@types/node": "^26.2.0",
     "@types/react": "~19.2.4",
+    "@types/react-test-renderer": "^19.3.0",
     "patch-package": "^8.0.1",
     "pngjs": "3.4.0",
+    "react-test-renderer": "^19.2.3",
     "typescript": "~6.0.3",
     "vitest": "^4.1.10"
   }

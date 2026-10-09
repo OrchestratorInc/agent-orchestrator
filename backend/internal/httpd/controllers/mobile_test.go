@@ -49,10 +49,11 @@ func (f *fakeBridge) SetSecurePairing(on bool) (MobileStatusResponse, error) {
 
 // fakeLAN is a minimal LANController for exercising BridgeService directly.
 type fakeLAN struct {
-	running   bool
-	hash      string
-	stopCalls int
-	bindHost  string
+	running     bool
+	hash        string
+	accountHash string
+	stopCalls   int
+	bindHost    string
 }
 
 func (f *fakeLAN) Start(port int) (int, error) {
@@ -78,8 +79,95 @@ func (f *fakeLAN) BoundPort() int {
 	}
 	return 3011
 }
-func (f *fakeLAN) SetPasswordHash(h string) { f.hash = h }
-func (f *fakeLAN) PasswordHash() string     { return f.hash }
+func (f *fakeLAN) SetPasswordHash(h string)     { f.hash = h }
+func (f *fakeLAN) PasswordHash() string         { return f.hash }
+func (f *fakeLAN) SetAccountTokenHash(h string) { f.accountHash = h }
+func (f *fakeLAN) AccountTokenHash() string     { return f.accountHash }
+
+func TestIssueAccountTokenRequiresPairingPasswordAndPersistsHash(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mobile", "config.json")
+	if err := mobilebridge.Save(path, mobilebridge.State{Enabled: true, Password: "secret12"}); err != nil {
+		t.Fatal(err)
+	}
+	lan := &fakeLAN{running: true}
+	bridge := &BridgeService{LAN: lan, ConfigPath: path, HostID: "h_test"}
+	if _, err := bridge.IssueAccountToken("wrong", "user-a"); err == nil {
+		t.Fatal("wrong password accepted")
+	}
+	issued, err := bridge.IssueAccountToken("secret12", "user-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issued.HostID != "h_test" || len(issued.Token) != 64 {
+		t.Fatalf("bad token: %+v", issued)
+	}
+	state, err := mobilebridge.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mobilebridge.PasswordMatches(state.AccountTokenHash, issued.Token) || state.AccountToken != issued.Token || state.AccountTokenOwner != "user-a" || lan.accountHash != state.AccountTokenHash {
+		t.Fatal("account credential was not persisted and armed")
+	}
+	if state.Password != "secret12" {
+		t.Fatal("pairing password changed")
+	}
+}
+
+func TestPasswordRotationRevokesAccountToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mobile", "config.json")
+	lan := &fakeLAN{}
+	bridge := &BridgeService{LAN: lan, ConfigPath: path, HostID: "h_test", DefaultPort: 3011}
+	status, err := bridge.Enable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bridge.IssueAccountToken(status.Password, "user-a"); err != nil {
+		t.Fatal(err)
+	}
+	if lan.accountHash == "" {
+		t.Fatal("account token was not armed")
+	}
+	if _, err := bridge.Regenerate(); err != nil {
+		t.Fatal(err)
+	}
+	state, err := mobilebridge.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.AccountTokenHash != "" || lan.accountHash != "" {
+		t.Fatal("password rotation left the account token valid")
+	}
+}
+
+func TestIssueAccountTokenReusesCredentialForSameAccount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mobile", "config.json")
+	if err := mobilebridge.Save(path, mobilebridge.State{Enabled: true, Password: "secret12"}); err != nil {
+		t.Fatal(err)
+	}
+	lan := &fakeLAN{running: true}
+	bridge := &BridgeService{LAN: lan, ConfigPath: path, HostID: "h_test"}
+	first, err := bridge.IssueAccountToken("secret12", "user-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := bridge.IssueAccountToken("secret12", "user-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Token != first.Token {
+		t.Fatalf("same-account retry rotated token: first=%q second=%q", first.Token, second.Token)
+	}
+	third, err := bridge.IssueAccountToken("secret12", "user-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Token == first.Token {
+		t.Fatal("different account did not rotate token")
+	}
+	if got, err := bridge.IssueAccountToken(third.Token, "user-b"); err != nil || got.Token != third.Token {
+		t.Fatalf("current token retry = %+v, %v; want current credential", got, err)
+	}
+}
 
 // When Save fails during a fresh enable, the listener that Start already opened
 // must be torn back down and the armed hash rolled back — otherwise a LAN
@@ -974,14 +1062,17 @@ func (f *startErrorLAN) Start(int) (int, error) { return 0, f.err }
 
 func TestMobileRestoreOnBootRollsBackHashWhenStartFails(t *testing.T) {
 	startErr := errors.New("bind failed")
-	lan := &startErrorLAN{fakeLAN: fakeLAN{hash: "previous-hash"}, err: startErr}
+	lan := &startErrorLAN{fakeLAN: fakeLAN{hash: "previous-hash", accountHash: "previous-account-hash"}, err: startErr}
 	bridge := &BridgeService{LAN: lan}
 
-	err := bridge.RestoreOnBoot(mobilebridge.State{Enabled: true, Password: "restored-password", LastPort: 3011})
+	err := bridge.RestoreOnBoot(mobilebridge.State{Enabled: true, Password: "restored-password", AccountTokenHash: "restored-account-hash", LastPort: 3011})
 	if !errors.Is(err, startErr) {
 		t.Fatalf("RestoreOnBoot error = %v, want %v", err, startErr)
 	}
 	if got := lan.PasswordHash(); got != "previous-hash" {
 		t.Fatalf("password hash after failed restore = %q, want previous-hash", got)
+	}
+	if got := lan.AccountTokenHash(); got != "previous-account-hash" {
+		t.Fatalf("account token hash after failed restore = %q, want previous-account-hash", got)
 	}
 }

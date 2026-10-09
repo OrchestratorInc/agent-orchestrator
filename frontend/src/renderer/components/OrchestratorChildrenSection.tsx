@@ -6,6 +6,7 @@ import { useOrchestratorChildren, type OrchestratorChildView } from "../hooks/us
 import { cn } from "../lib/utils";
 import { getSessionStatusDotView, getSessionStatusView } from "../lib/session-presentation";
 import { captureRendererEvent } from "../lib/telemetry";
+import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import type { PullRequestFacts, WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
@@ -48,6 +49,7 @@ export function OrchestratorChildrenSection({ session }: { session: WorkspaceSes
 							key={child.id}
 							child={child}
 							onOpen={() => {
+								recordManualWorkerOpen(child.id);
 								void captureRendererEvent("ao.renderer.cloud_worker_opened", {
 									has_pr: child.prs.length > 0,
 								});
@@ -71,7 +73,7 @@ function ChildRow({ child, onOpen }: { child: OrchestratorChildView; onOpen: () 
 	return (
 		<div
 			className={cn(
-				"overflow-hidden rounded-settings-row bg-settings-row px-3 py-1.5",
+				"overflow-hidden rounded-lg bg-settings-row px-3 py-1.5",
 				child.isTerminated && "opacity-60",
 			)}
 			data-testid="orchestrator-child-row"
@@ -87,8 +89,8 @@ function ChildRow({ child, onOpen }: { child: OrchestratorChildView; onOpen: () 
 					data-session-status={child.status}
 				/>
 				<AgentAvatar className="size-4 shrink-0" decorative provider={child.provider} />
-				<span className="min-w-0 flex-1 truncate text-xs">{child.title}</span>
-				<span className="shrink-0 text-2xs text-settings-muted">{statusLabel}</span>
+				<span className="min-w-0 flex-1 truncate text-sm">{child.title}</span>
+				<span className="shrink-0 text-xs text-settings-muted">{statusLabel}</span>
 			</button>
 			{child.prs.length > 0 ? (
 				<div className="mt-1 flex flex-wrap items-center gap-1.5 pl-4">
@@ -108,7 +110,7 @@ function PullRequestChip({ pr }: { pr: PullRequestFacts }) {
 	return (
 		<ProductExternalLink
 			ariaLabel={`${t("pr.short")} #${pr.number}`}
-			className="truncate text-2xs text-settings-muted underline-offset-2 hover:underline"
+			className="truncate text-xs text-settings-muted underline-offset-2 hover:underline"
 			href={pr.url}
 			stopPropagation
 		>

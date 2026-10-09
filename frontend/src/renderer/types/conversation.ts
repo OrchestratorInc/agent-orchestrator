@@ -152,6 +152,9 @@ export interface ConversationContentSummary {
 	mimeType?: string;
 	uri?: string;
 	name?: string;
+	text?: string;
+	sourceMessageId?: string;
+	sourceRevision?: number;
 }
 
 export interface QueuedMessageEditOptions {
@@ -181,6 +184,11 @@ export interface ConversationMessage {
 	delivery?: DeliveryState;
 	/** Set when origin is a worker or automation, for the attribution line. */
 	senderLabel?: string;
+	senderSessionId?: string;
+	senderProjectId?: string;
+	senderDisplayName?: string;
+	/** The sender's idempotency key. Lets the local echo and this row share one identity. */
+	clientMessageId?: string;
 	createdAt: string;
 }
 
@@ -387,6 +395,26 @@ export interface AutoReviewDetail {
 	commandSource?: string;
 }
 
+/** An agent HTML page published with `ao render`, shown inline in its turn. */
+export interface RenderRef {
+	id: string;
+	title: string;
+	height: number;
+	/** Daemon-relative route, `/api/v1/sessions/{id}/renders/{renderId}`. */
+	path: string;
+	/** `[width, height]` pairs measured when the page was published, sorted by width. */
+	heights?: Array<[number, number]>;
+}
+
+/** An HTML session artifact the agent reported with `ao report --artifact`, shown inline in its turn. */
+export interface ArtifactRef {
+	/** Relative to the session's artifact directory, slash-separated. */
+	path: string;
+	name: string;
+	/** Daemon-relative route, `/api/v1/sessions/{id}/artifact-files/{path}`. */
+	url: string;
+}
+
 /**
  * A `system` activity's discriminator and the fields that belong to it.
  *
@@ -403,7 +431,13 @@ export interface SystemEventDetail {
 		| "steer"
 		| "plan"
 		| "context.reset"
-		| "context.boundary";
+		| "context.boundary"
+		| "render"
+		| "artifact";
+	/** render */
+	render?: RenderRef;
+	/** artifact */
+	artifact?: ArtifactRef;
 	/** model.rerouted */
 	fromModel?: string;
 	toModel?: string;
@@ -413,6 +447,10 @@ export interface SystemEventDetail {
 	revision?: number;
 	/** steer: the user's own words, delivered into a turn already running. */
 	origin?: string;
+	/** steer: source session metadata for an AO automation steer. */
+	senderSessionId?: string;
+	senderProjectId?: string;
+	senderDisplayName?: string;
 	clientMessageId?: string;
 	/** steer: complete provider-neutral content copied from a promoted queue item. */
 	content?: Array<{
@@ -624,8 +662,8 @@ export interface ChatSkill {
 	source?: string;
 }
 
-/** Health of the daemon's connection to the provider. */
-export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped";
+/** State of the daemon's connection to the provider. */
+export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped" | "hibernated";
 
 /**
  * How full this conversation is.

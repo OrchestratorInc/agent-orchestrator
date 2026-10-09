@@ -27,20 +27,28 @@ type CreateInput struct {
 	Outputs   []domain.ReportOutput
 }
 
+// ArtifactRecorder shows a reported artifact in the worker's chat thread. It
+// is best effort: it skips what it cannot show and never fails the report.
+type ArtifactRecorder interface {
+	RecordReportedArtifact(ctx context.Context, id domain.SessionID, reference string)
+}
+
 // Service validates and creates durable worker reports.
 type Service struct {
 	store     Store
 	now       func() time.Time
 	newID     func() string
 	onCreated func(domain.ReportRecord)
+	artifacts ArtifactRecorder
 }
 
-// Deps configures a Service.
+// Deps configures a Service. Artifacts is optional.
 type Deps struct {
 	Store     Store
 	Now       func() time.Time
 	NewID     func() string
 	OnCreated func(domain.ReportRecord)
+	Artifacts ArtifactRecorder
 }
 
 // New constructs a report Service.
@@ -51,7 +59,7 @@ func New(d Deps) *Service {
 	if d.NewID == nil {
 		d.NewID = func() string { return "rpt_" + uuid.NewString() }
 	}
-	return &Service{store: d.Store, now: d.Now, newID: d.NewID, onCreated: d.OnCreated}
+	return &Service{store: d.Store, now: d.Now, newID: d.NewID, onCreated: d.OnCreated, artifacts: d.Artifacts}
 }
 
 // ListProject returns persisted report facts ordered by created_at then id,
@@ -125,8 +133,21 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.ReportR
 		SettlementDeadline: settlementDeadline, RepeatCount: 1,
 	}
 	created, err := s.store.CreateReport(ctx, rec)
-	if err == nil && s.onCreated != nil {
+	if err != nil {
+		return created, err
+	}
+	if s.onCreated != nil {
 		s.onCreated(created)
 	}
-	return created, err
+	// Synchronous on purpose: ao report --done is often the agent's last tool
+	// call, so a goroutine would race the turn's completion and could drop the
+	// artifact or put it on the next turn.
+	if s.artifacts != nil {
+		for _, output := range created.Outputs {
+			if output.Kind == domain.ReportOutputArtifact {
+				s.artifacts.RecordReportedArtifact(ctx, created.SessionID, output.Reference)
+			}
+		}
+	}
+	return created, nil
 }

@@ -256,11 +256,67 @@ func TestMiMoCodeDiscoveryUsesNativeModelsCommand(t *testing.T) {
 	}
 }
 
+func TestParseMiMoModelsAcceptsInlineDetails(t *testing.T) {
+	got, err := parseMiMoModels([]byte("mimo/mimo-auto — window 1M, compacts at 900K\nxiaomi/mimo-v2.5 — window 1.05M\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "mimo/mimo-auto" || got[1].ID != "xiaomi/mimo-v2.5" {
+		t.Fatalf("models = %#v", got)
+	}
+}
+
 func TestAiderUsesDocumentedDiscoveryCommand(t *testing.T) {
 	spec := commandSpecs["aider"]
 	want := []string{"--no-check-update", "--no-git", "--no-gitignore", "--no-analytics", "--list-models", "."}
 	if strings.Join(spec.args, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("aider discovery args = %q, want %q", spec.args, want)
+	}
+}
+
+func TestCodewhaleResolvedModelMarksCatalogDefault(t *testing.T) {
+	models := []ports.AgentModelInfo{
+		{ID: "deepseek-chat", Label: "DeepSeek Chat"},
+		{ID: "deepseek-flash", Label: "DeepSeek Flash"},
+	}
+	got := applyCodewhaleResolvedModel(models, []byte(
+		"requested: deepseek-flash\nresolved: deepseek-flash\nprovider: deepseek\nused_fallback: false\n"))
+	if len(got) != 2 {
+		t.Fatalf("models len = %d, want 2", len(got))
+	}
+	if !got[1].IsDefault || got[0].IsDefault {
+		t.Fatalf("default flags = [%v, %v], want [false, true]", got[0].IsDefault, got[1].IsDefault)
+	}
+}
+
+func TestCodewhaleResolvedModelOutsideCatalogIsAppended(t *testing.T) {
+	models := []ports.AgentModelInfo{{ID: "deepseek-chat", Label: "DeepSeek Chat"}}
+	got := applyCodewhaleResolvedModel(models, []byte(
+		"requested: deepseek-v4-pro\nresolved: deepseek-v4-pro\nprovider: deepseek\n"))
+	if len(got) != 2 {
+		t.Fatalf("models len = %d, want the resolved model appended", len(got))
+	}
+	appended := got[1]
+	if appended.ID != "deepseek-v4-pro" || !appended.IsDefault || appended.Provider != "deepseek" {
+		t.Fatalf("appended entry = %+v, want deepseek-v4-pro default from deepseek", appended)
+	}
+	if got[0].IsDefault {
+		t.Fatal("the unmatched catalog entry must not be marked default")
+	}
+}
+
+func TestCodewhaleResolveFailureLeavesCatalogUnchanged(t *testing.T) {
+	models := []ports.AgentModelInfo{{ID: "deepseek-chat", Label: "DeepSeek Chat"}}
+	for name, output := range map[string][]byte{
+		"empty":       nil,
+		"unparseable": []byte("provider: deepseek\nmodel: none\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := applyCodewhaleResolvedModel(models, output)
+			if len(got) != 1 || got[0].IsDefault {
+				t.Fatalf("catalog changed on %s: %+v", name, got)
+			}
+		})
 	}
 }
 
@@ -270,6 +326,7 @@ func TestOMPAndHelpBackedAgentsUseDocumentedDiscoveryCommands(t *testing.T) {
 		want  []string
 	}{
 		{agent: "omp", want: []string{"models", "--json"}},
+		{agent: "codewhale", want: []string{"models", "--json"}},
 		{agent: "copilot", want: []string{"help", "config"}},
 		{agent: "droid", want: []string{"exec", "--help"}},
 		{agent: "crush", want: []string{"models"}},
@@ -457,7 +514,7 @@ func TestCustomModelEntryPolicy(t *testing.T) {
 		{agent: "goose", wantEntryMode: "direct", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "auggie", wantEntryMode: "none", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "continue", wantEntryMode: "configured", wantSelection: ports.ModelSelectionCatalog},
-		{agent: "devin", wantEntryMode: "none", wantSelection: ports.ModelSelectionCatalog},
+		{agent: "devin", wantEntryMode: "direct", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "omp", wantEntryMode: "none", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "cline", wantEntryMode: "configured", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "kiro", wantEntryMode: "none", wantSelection: ports.ModelSelectionCatalog},
@@ -605,6 +662,39 @@ func TestClineDiscoveryUsesACPModelOptions(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Models, want) || got.Source != "acp" {
 		t.Fatalf("catalog = %#v, want models %#v from ACP", got, want)
+	}
+}
+
+func TestDevinDiscoveryUsesACPModelOptions(t *testing.T) {
+	discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{"devin": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+		return []ports.ChatConfigOption{
+			{
+				ID: "permissionMode", Name: "Permission Mode", Type: ports.ChatConfigOptionSelect,
+				Choices: []ports.ChatConfigOptionChoice{{Value: "accept-edits", Name: "Code"}},
+			},
+			{
+				ID: "model", Name: "Model", Category: "model", Type: ports.ChatConfigOptionSelect,
+				Current: ports.ChatConfigOptionValue{Select: "swe-1-6-slow"},
+				Choices: []ports.ChatConfigOptionChoice{
+					{Value: "swe-1-6-slow", Name: "SWE-1.6 Slow"},
+					{Value: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6"},
+				},
+			},
+		}, nil
+	}}}
+	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "devin", Binary: "devin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ports.AgentModelInfo{
+		{ID: "swe-1-6-slow", Label: "SWE-1.6 Slow", IsDefault: true},
+		{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6"},
+	}
+	if !reflect.DeepEqual(got.Models, want) || got.Source != "acp" {
+		t.Fatalf("catalog = %#v, want models %#v from ACP", got, want)
+	}
+	if got.SelectionMode != ports.ModelSelectionCatalog || got.CustomModelEntry != ports.CustomModelEntryDirect {
+		t.Fatalf("selectionMode = %q, customModelEntry = %q; want a catalog that still accepts direct entry", got.SelectionMode, got.CustomModelEntry)
 	}
 }
 
@@ -1019,26 +1109,31 @@ func TestCatalogFingerprintKeepsTheExecutableOnlyValueForConfiglessAgents(t *tes
 }
 
 // TestACPOnlyHarnessReportsDiscoveryFailure guards the difference between the
-// two ACP harnesses. Cline keeps configured provider selections, so an ACP
-// failure falls back to those. DeepSeek Harness has no second source, and the
-// generic path answers with an empty catalog and no error — which the caller
-// stores as a successful discovery, parking the picker until the next calendar
-// day and skipping the retry ladder. The error has to survive instead.
+// ACP harnesses. Cline keeps configured provider selections, so an ACP
+// failure falls back to those. DeepSeek Harness and Devin have no second
+// source, and the generic path answers with an empty catalog and no error —
+// which the caller stores as a successful discovery, parking the picker until
+// the next calendar day and skipping the retry ladder. The error has to
+// survive instead.
 func TestACPOnlyHarnessReportsDiscoveryFailure(t *testing.T) {
 	boom := errors.New("workspace path must be absolute")
-	discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{
-		"deepseek-harness": func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
-			return nil, boom
-		},
-	}}
-	_, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{
-		AgentID: "deepseek-harness", Binary: "/bin/dsh",
-	})
-	if err == nil {
-		t.Fatal("an ACP-only harness swallowed its discovery failure; the caller will cache an empty catalog as success")
-	}
-	if !errors.Is(err, boom) {
-		t.Fatalf("err = %v, want it to wrap %v", err, boom)
+	for _, agentID := range []string{"deepseek-harness", "devin"} {
+		t.Run(agentID, func(t *testing.T) {
+			discoverer := Discoverer{ACPOptions: map[string]ACPOptionListFunc{
+				agentID: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+					return nil, boom
+				},
+			}}
+			_, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+				AgentID: agentID, Binary: "/bin/agent",
+			})
+			if err == nil {
+				t.Fatal("an ACP-only harness swallowed its discovery failure; the caller will cache an empty catalog as success")
+			}
+			if !errors.Is(err, boom) {
+				t.Fatalf("err = %v, want it to wrap %v", err, boom)
+			}
+		})
 	}
 }
 

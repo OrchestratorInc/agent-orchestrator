@@ -6,7 +6,7 @@ import { cloudWorkspaceReviewDiffsQueryOptions } from "../../hooks/useCloudWorks
 import type { CloudCpClient, CloudCpWorkspaceReviewCommit, CloudCpWorkspaceReviewFileSummary, CloudCpWorkspaceReviewResponse, CloudCpWorkspaceReviewScope } from "../../lib/cloud-cp";
 import { cn } from "../../lib/utils";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
-import { PanelMessage, RetryButton } from "../WorkspaceDiffView";
+import { cancelFileAnnotations, FileAnnotationSendBar, PanelMessage, RetryButton } from "../WorkspaceDiffView";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { CloudDiffFile } from "./CloudDiffFile";
@@ -141,10 +141,10 @@ export function CloudWorkspaceReviewPane({
 		window.localStorage.setItem(storageKey, JSON.stringify(next));
 		return next;
 	});
-	const selectScope = (next: CloudCpWorkspaceReviewScope) => { annotation.cancel(); setScope(next); setCommitSha(undefined); setCommitBrowserOpen(false); };
-	const selectCommit = (commit: CloudCpWorkspaceReviewCommit) => { annotation.cancel(); setScope("committed"); setCommitSha(commit.sha); setCommitBrowserOpen(false); };
+	const selectScope = (next: CloudCpWorkspaceReviewScope) => { cancelFileAnnotations(annotation, (target) => target.surface === "review"); setScope(next); setCommitSha(undefined); setCommitBrowserOpen(false); };
+	const selectCommit = (commit: CloudCpWorkspaceReviewCommit) => { cancelFileAnnotations(annotation, (target) => target.surface === "review"); setScope("committed"); setCommitSha(commit.sha); setCommitBrowserOpen(false); };
 	const collapseFile = useCallback((path: string) => {
-		if (annotation.target?.surface === "review" && annotation.target.path === path) annotation.cancel();
+		cancelFileAnnotations(annotation, (target) => target.surface === "review" && target.path === path);
 		setCollapsed((current) => {
 			if (current.has(path)) return current;
 			const next = new Set(current);
@@ -199,6 +199,7 @@ export function CloudWorkspaceReviewPane({
 				</section>;
 			})}
 		</div>}
+		<FileAnnotationSendBar annotation={annotation} surface="review" />
 	</div>;
 }
 

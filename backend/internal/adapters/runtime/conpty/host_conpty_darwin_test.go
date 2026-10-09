@@ -86,7 +86,7 @@ func TestDarwinDefaultSpawnHostEndToEnd(t *testing.T) {
 	addr, hostPID, err := defaultSpawnHost(ctx, "spawn-e2e", t.TempDir(), []string{
 		"env", "AO_PREFIX_VALUE=prefix", "/bin/sh", "-c",
 		`printf '\033[c'; sleep 0.05; printf 'ready:%s:%s\n' "$AO_DIRECT_PTY_TEST" "$AO_PREFIX_VALUE"; IFS= read -r line; printf 'received:%s\n' "$line"; sleep 30`,
-	}, map[string]string{"AO_DIRECT_PTY_TEST": "works"}, false)
+	}, map[string]string{"AO_DIRECT_PTY_TEST": "works"}, HostOptions{})
 	if err != nil {
 		cancel()
 		t.Fatal(err)

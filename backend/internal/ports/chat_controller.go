@@ -19,7 +19,9 @@ const (
 
 // ChatControllerStart is the resolved launch contract shared by the coordinator and Chat service.
 type ChatControllerStart struct {
-	SessionID domain.SessionID
+	// ReconnectOnly restricts startup recovery to an existing provider process.
+	ReconnectOnly bool
+	SessionID     domain.SessionID
 	// Owner distinguishes worker and review conversations that share a worker
 	// session. Empty preserves the existing worker-session owner.
 	Owner         domain.ConversationOwner
@@ -46,6 +48,11 @@ type ChatControllerStart struct {
 	PrepareControllerEnv func(context.Context, domain.SessionControllerOwner) (map[string]string, error)
 	// ProviderConversationID resumes an existing provider conversation when set.
 	ProviderConversationID string
+	// FreshIfProviderConversationMissing is set only when AO has durable proof
+	// that the conversation never started. A driver that must reload the stored
+	// provider conversation and is told it does not exist may then start a fresh
+	// one instead; a live provider that still holds it is always reattached.
+	FreshIfProviderConversationMissing bool
 	// ProviderScopeID reserves the opaque-id namespace for a provider boundary
 	// that ControllerReady will commit. Empty derives the namespace from the
 	// active branch, which is the ordinary initial-start and resume path.

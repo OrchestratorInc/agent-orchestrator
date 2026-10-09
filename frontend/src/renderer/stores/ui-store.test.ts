@@ -92,8 +92,8 @@ describe("remoteHosts flag", () => {
 		useUiStore.setState({ remoteHosts: false });
 	});
 
-	it("is off until the user turns it on", async () => {
-		expect((await bootStore()).getState().remoteHosts).toBe(false);
+	it("is on by default behind developer mode", async () => {
+		expect((await bootStore()).getState().remoteHosts).toBe(true);
 	});
 
 	it("persists the switch so the choice survives a restart", () => {
@@ -106,6 +106,11 @@ describe("remoteHosts flag", () => {
 	it("reads a stored choice back at startup", async () => {
 		window.localStorage.setItem("ao.remoteHosts", "true");
 		expect((await bootStore()).getState().remoteHosts).toBe(true);
+	});
+
+	it("honors an explicit opt-out", async () => {
+		window.localStorage.setItem("ao.remoteHosts", "false");
+		expect((await bootStore()).getState().remoteHosts).toBe(false);
 	});
 });
 
