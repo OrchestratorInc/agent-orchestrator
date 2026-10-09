@@ -369,6 +369,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	reviewOpts = append(reviewOpts, reviewsvc.WithPRRefresher(reviewPRRefresher{sessions: sessionSvc}))
 	reviewSvc := reviewsvc.New(reviewEngine, store, reviewOpts...)
 	mgr.SetReviewerTerminator(reviewSvc)
+	lcm.SetReviewerTeardown(reviewSvc) // #5948: lifecycle terminal writes also tear down the reviewer pane
 	return sessionSvc, reviewSvc, mgr, nil
 }
 
