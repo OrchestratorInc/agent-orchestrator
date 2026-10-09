@@ -397,8 +397,8 @@ func Load() (Config, error) {
 	default:
 		return Config{}, errors.New("AO_CLOUD_SANDBOX_PROVIDER must be coder, daytona, docker, ecs, freestyle, or nodeops")
 	}
-	if cfg.Hosted() && cfg.SandboxProvider != "nodeops" && cfg.SandboxProvider != "coder" {
-		return Config{}, errors.New("AO_CLOUD_SANDBOX_PROVIDER must be coder or nodeops in staging and production")
+	if cfg.Hosted() && !hostedSandboxProvider(cfg.SandboxProvider) {
+		return Config{}, errors.New("AO_CLOUD_SANDBOX_PROVIDER must be coder, freestyle, or nodeops in staging and production")
 	}
 	available, err := resolveAvailableProviders(cfg.SandboxProvider, cfg.Hosted())
 	if err != nil {
@@ -692,6 +692,18 @@ func durationEnv(key string, fallback time.Duration) time.Duration {
 // Hosted environments run on NodeOps, which is also the only provider they are
 // allowed to run on; locally there is no NodeOps account, so the default is the
 // provider a developer can actually reach.
+// hostedSandboxProvider reports whether a provider runs workers on hosted
+// compute and may therefore be offered by a staging or production control
+// plane. Each one's settings are still validated at boot, so a misconfigured
+// hosted provider fails fast.
+func hostedSandboxProvider(provider string) bool {
+	switch provider {
+	case sandbox.ProviderNodeOps, sandbox.ProviderCoder, sandbox.ProviderFreestyle:
+		return true
+	}
+	return false
+}
+
 func defaultSandboxProvider(hosted bool) string {
 	if hosted {
 		return sandbox.ProviderNodeOps
@@ -704,8 +716,8 @@ func defaultSandboxProvider(hosted bool) string {
 // includes defaultProvider, so an unset value yields exactly the single default
 // and existing single-provider deployments are unchanged. Order is preserved
 // (default first) and duplicates are dropped. Every entry must be a known
-// provider, and in hosted environments only nodeops and coder are permitted,
-// mirroring the AO_CLOUD_SANDBOX_PROVIDER rules.
+// provider, and in hosted environments only the hosted providers are
+// permitted, mirroring the AO_CLOUD_SANDBOX_PROVIDER rules.
 func resolveAvailableProviders(defaultProvider string, hosted bool) ([]string, error) {
 	list := []string{defaultProvider}
 	seen := map[string]bool{defaultProvider: true}
@@ -723,9 +735,9 @@ func resolveAvailableProviders(defaultProvider string, hosted bool) ([]string, e
 		default:
 			return nil, fmt.Errorf("AO_CLOUD_SANDBOX_PROVIDERS contains unknown provider %q", provider)
 		}
-		if hosted && provider != "nodeops" && provider != "coder" {
+		if hosted && !hostedSandboxProvider(provider) {
 			return nil, fmt.Errorf(
-				"AO_CLOUD_SANDBOX_PROVIDERS may only contain coder or nodeops in staging and production, got %q",
+				"AO_CLOUD_SANDBOX_PROVIDERS may only contain coder, freestyle, or nodeops in staging and production, got %q",
 				provider,
 			)
 		}
