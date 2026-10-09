@@ -53,10 +53,13 @@ type OpenShellTerminalInput struct {
 }
 
 // InitialInputReadyState describes a terminal state that is ready to receive
-// the command's initial input.
+// the command's initial input. RawPrefix can type a reviewed command without
+// submitting it; SubmitReadyText then proves its completion is available
+// before Enter is sent.
 type InitialInputReadyState struct {
-	Text      string
-	RawPrefix string
+	Text            string
+	RawPrefix       string
+	SubmitReadyText string
 }
 
 // OpenCommandTerminalInput is a daemon-trusted command terminal request. It

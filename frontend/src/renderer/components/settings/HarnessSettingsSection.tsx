@@ -705,7 +705,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						const authState = authStates[agentId];
 						const authStatus = readinessAgent?.authentication.state;
 						const connectedCredential = authStatus === "authorized" || authStatus === "configured";
-						const showAuthAction = authStatus !== "authorized" && (authStatus !== "configured" || isSetupAction);
+						const showAuthAction = !connectedCredential;
 						const installationStatusLabel = t("settings.harness.installed");
 						const showInstallationStatus = connectedCredential
 							|| authStatus === "not_applicable"
@@ -753,12 +753,12 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 								) : null}
 							</>
 						) : null;
-						// A logged-in harness's only action is to re-run its login.
-						const refreshLocal = authPlan?.action === "login" && connectedCredential ? (
+						// A connected/configured harness's only action is to re-run its auth flow.
+						const refreshLocal = authPlan && authPlan.action !== "instructions" && connectedCredential ? (
 							<Button type="button" size="sm" variant="outline" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} onClick={() => void startAuth(agentId)}>
 								{t("settings.harness.refreshLogin")}
 							</Button>
-						) : null;
+					) : null;
 					const localControls = active ? (
 				<span className="inline-flex items-center gap-1.5 text-xs text-settings-muted" role="status"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{job?.status === "installing" ? t("settings.harness.installing") : t("settings.harness.verifying")}</span>
 							) : isInstalled ? (

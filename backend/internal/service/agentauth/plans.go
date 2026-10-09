@@ -116,10 +116,18 @@ func copilotLoginPlan() Plan {
 	return p
 }
 
-// geminiSetupPlan uses Gemini's interactive prompt flag so Gemini dispatches
-// /auth through its slash-command handler as part of startup.
+// geminiSetupPlan waits for Gemini's editor to render, types /auth, then waits
+// for the command completion to prove the slash-command registry is loaded
+// before pressing Enter. Gemini's --prompt-interactive flag (and submitting
+// too early during startup) treats /auth as a model prompt instead.
 func geminiSetupPlan() Plan {
-	return plan("gemini", ActionSetup, "Set up Gemini CLI", []string{"gemini", "--prompt-interactive", "/auth"}, "Gemini opens its authentication picker automatically", "https://geminicli.com/docs/get-started/authentication/")
+	p := plan("gemini", ActionSetup, "Set up Gemini CLI", []string{"gemini"}, "Gemini opens its authentication picker automatically", "https://geminicli.com/docs/get-started/authentication/")
+	p.initialInputReadyStates = []shellterm.InitialInputReadyState{{
+		Text:            "Type your message or @path/to/file",
+		RawPrefix:       "/auth",
+		SubmitReadyText: "Manage authentication",
+	}}
+	return p
 }
 
 func documentationPlan(agentID string, action Action, title, guidance, docs string) Plan {

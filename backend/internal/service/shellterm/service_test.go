@@ -604,6 +604,49 @@ func TestOpenCommandTerminalEntersQwenVimInsertModeBeforeAuth(t *testing.T) {
 	}
 }
 
+func TestOpenCommandTerminalWaitsForCompletionBeforeSubmittingPrefix(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "Type your message or @path/to/file"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:  []string{"gemini"},
+		Title: "Set up Gemini CLI",
+		InitialInputReadyStates: []InitialInputReadyState{{
+			Text:            "Type your message or @path/to/file",
+			RawPrefix:       "/auth",
+			SubmitReadyText: "Manage authentication",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: "/auth"}); got != want {
+			t.Fatalf("prefix = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Gemini auth prefix was not entered")
+	}
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("auth command submitted before completion appeared: %#v", got)
+	case <-time.After(2 * initialInputPollInterval):
+	}
+
+	rt.setOutput("auth   Manage authentication")
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: ""}); got != want {
+			t.Fatalf("submission = %#v, want Enter-only %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Gemini auth command was not submitted after completion appeared")
+	}
+}
+
 func TestOpenCommandTerminalCanConfirmReviewedPromptWithEnterOnly(t *testing.T) {
 	rt := newFakeShellRuntime()
 	rt.output = "Trust this folder?"
