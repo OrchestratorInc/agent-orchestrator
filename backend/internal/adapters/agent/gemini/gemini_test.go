@@ -77,6 +77,36 @@ func TestAuthStatusUnknownWithoutCachedCredentials(t *testing.T) {
 	}
 }
 
+func TestAuthStatusPropagatesCredentialStatError(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+	t.Setenv("GEMINI_CLI_HOME", t.TempDir())
+	wantErr := errors.New("credential stat failed")
+	old := statGeminiCredentialFile
+	t.Cleanup(func() { statGeminiCredentialFile = old })
+	statGeminiCredentialFile = func(string) (os.FileInfo, error) { return nil, wantErr }
+
+	status, err := (&Plugin{resolvedBinary: "gemini"}).AuthStatus(context.Background())
+	if status != ports.AgentAuthStatusUnknown || !errors.Is(err, wantErr) {
+		t.Fatalf("AuthStatus = (%q, %v), want unknown/%v", status, err, wantErr)
+	}
+}
+
+func TestAuthStatusPropagatesHomeResolutionError(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+	t.Setenv("GEMINI_CLI_HOME", "")
+	wantErr := errors.New("home resolution failed")
+	old := geminiUserHomeDir
+	t.Cleanup(func() { geminiUserHomeDir = old })
+	geminiUserHomeDir = func() (string, error) { return "", wantErr }
+
+	status, err := (&Plugin{resolvedBinary: "gemini"}).AuthStatus(context.Background())
+	if status != ports.AgentAuthStatusUnknown || !errors.Is(err, wantErr) {
+		t.Fatalf("AuthStatus = (%q, %v), want unknown/%v", status, err, wantErr)
+	}
+}
+
 func TestLaunchAndRestore(t *testing.T) {
 	p := &Plugin{resolvedBinary: "gemini"}
 	ctx := context.Background()

@@ -140,31 +140,61 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if _, err := p.ResolveBinary(ctx); err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	if hasCachedCredentials() {
+	configured, err := hasCachedCredentials()
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	if configured {
 		return ports.AgentAuthStatusConfigured, nil
 	}
 	return ports.AgentAuthStatusUnknown, nil
 }
 
-func hasCachedCredentials() bool {
+var (
+	geminiUserHomeDir        = os.UserHomeDir
+	statGeminiCredentialFile = os.Stat
+)
+
+func hasCachedCredentials() (bool, error) {
 	for _, name := range []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"} {
 		if strings.TrimSpace(os.Getenv(name)) != "" {
-			return true
+			return true, nil
 		}
 	}
+	configDir, err := geminiConfigDir()
+	if err != nil {
+		return false, err
+	}
+	if configDir == "" {
+		return false, nil
+	}
+	return geminiCredentialFileConfigured(filepath.Join(configDir, "oauth_creds.json"), statGeminiCredentialFile)
+}
+
+func geminiConfigDir() (string, error) {
 	home := strings.TrimSpace(os.Getenv("GEMINI_CLI_HOME"))
 	if home == "" {
 		var err error
-		home, err = os.UserHomeDir()
+		home, err = geminiUserHomeDir()
 		if err != nil {
-			return false
+			return "", err
 		}
-		home = filepath.Join(home, ".gemini")
-	} else {
-		home = filepath.Join(home, ".gemini")
 	}
-	info, err := os.Stat(filepath.Join(home, "oauth_creds.json"))
-	return err == nil && !info.IsDir() && info.Size() > 0
+	if home == "" {
+		return "", nil
+	}
+	return filepath.Join(home, ".gemini"), nil
+}
+
+func geminiCredentialFileConfigured(path string, stat func(string) (os.FileInfo, error)) (bool, error) {
+	info, err := stat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !info.IsDir() && info.Size() > 0, nil
 }
 
 // ResolveBinaryPresence keeps initial inventory discovery free of child processes.
