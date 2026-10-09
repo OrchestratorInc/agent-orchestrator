@@ -142,7 +142,7 @@ func TestStartPiInjectsLoginAutomatically(t *testing.T) {
 	}
 }
 
-func TestStartGeminiInjectsAuthAutomatically(t *testing.T) {
+func TestStartGeminiPassesAuthAsInteractivePrompt(t *testing.T) {
 	t.Parallel()
 
 	opener := &recordingTerminalOpener{}
@@ -153,11 +153,8 @@ func TestStartGeminiInjectsAuthAutomatically(t *testing.T) {
 		t.Fatalf("Start(gemini): %v", err)
 	}
 	wantInput := shellterm.OpenCommandTerminalInput{
-		Argv:                           []string{"/test/bin/gemini"},
-		Title:                          "Set up Gemini CLI",
-		InitialInput:                   "/auth",
-		InitialInputReadyStates:        []shellterm.InitialInputReadyState{{Text: "Tips for getting started:"}},
-		SendInitialInputOnReadyTimeout: true,
+		Argv:  []string{"/test/bin/gemini", "--prompt-interactive", "/auth"},
+		Title: "Set up Gemini CLI",
 	}
 	if !reflect.DeepEqual(opener.input, wantInput) {
 		t.Fatalf("OpenCommandTerminal input = %#v, want %#v", opener.input, wantInput)

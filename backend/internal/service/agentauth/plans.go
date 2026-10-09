@@ -116,17 +116,10 @@ func copilotLoginPlan() Plan {
 	return p
 }
 
-// geminiSetupPlan opens Gemini's TUI and injects /auth once its startup tips
-// show that the prompt is ready. The command is safe to send after the ready
-// wait expires as a fallback, including when Gemini changes or suppresses its
-// startup tips. initialInput has no trailing Enter because terminal delivery
-// (SendMessage) presses it.
+// geminiSetupPlan uses Gemini's interactive prompt flag so Gemini dispatches
+// /auth through its slash-command handler as part of startup.
 func geminiSetupPlan() Plan {
-	p := plan("gemini", ActionSetup, "Set up Gemini CLI", []string{"gemini"}, "Gemini opens its authentication picker automatically", "https://geminicli.com/docs/get-started/authentication/")
-	p.initialInput = "/auth"
-	p.initialInputReadyStates = []shellterm.InitialInputReadyState{{Text: "Tips for getting started:"}}
-	p.sendInitialInputOnReadyTimeout = true
-	return p
+	return plan("gemini", ActionSetup, "Set up Gemini CLI", []string{"gemini", "--prompt-interactive", "/auth"}, "Gemini opens its authentication picker automatically", "https://geminicli.com/docs/get-started/authentication/")
 }
 
 func documentationPlan(agentID string, action Action, title, guidance, docs string) Plan {
