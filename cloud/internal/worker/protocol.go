@@ -1,6 +1,16 @@
 package worker
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+)
+
+// ReviewTerminalEnv marks a dedicated reviewer process. Reviewer harnesses
+// share the parent session's worker credential, but their lifecycle hooks must
+// not overwrite the interactive agent's activity state.
+const ReviewTerminalEnv = "AO_CLOUD_REVIEW_TERMINAL"
 
 // BootstrapRequest is what a worker sends to redeem its one-time ticket.
 type BootstrapRequest struct {
@@ -19,13 +29,20 @@ type LaunchContext struct {
 	Branch         string `json:"branch"`
 	Prompt         string `json:"prompt,omitempty"`
 	AgentSessionID string `json:"agentSessionId,omitempty"`
+	Interface      string `json:"interface"`
 	// ParentSessionID is the orchestrator that spawned this session; empty for
 	// top-level sessions.
-	ParentSessionID string   `json:"parentSessionId,omitempty"`
-	Mode            string   `json:"mode"`
-	DeniedCommands  []string `json:"deniedCommands"`
-	RepositoryURL   string   `json:"repositoryUrl"`
-	DefaultBranch   string   `json:"defaultBranch"`
+	ParentSessionID string `json:"parentSessionId,omitempty"`
+	Mode            string `json:"mode"`
+	// Model is the coding-agent model the worker launches the harness with;
+	// empty uses the harness default.
+	Model           string                    `json:"model,omitempty"`
+	ReasoningEffort string                    `json:"reasoningEffort,omitempty"`
+	SelectionAt     time.Time                 `json:"selectionAt,omitempty"`
+	AgentConfig     domain.ProjectAgentConfig `json:"agentConfig,omitempty"`
+	DeniedCommands  []string                  `json:"deniedCommands"`
+	RepositoryURL   string                    `json:"repositoryUrl"`
+	DefaultBranch   string                    `json:"defaultBranch"`
 	// ExtraRepos are additional repositories the worker clones alongside the
 	// primary repo (multi-repo dev kit). Empty for a single-repo session.
 	ExtraRepos []RepoRef `json:"extraRepos,omitempty"`
@@ -107,11 +124,35 @@ type ClaimPullRequestRequest struct {
 	Reference string `json:"reference"`
 }
 
+type GitRef struct {
+	Branch string `json:"branch"`
+	SHA    string `json:"sha"`
+}
+
+// ReportGitRefsRequest lets verified PR webhooks associate a custom branch
+// with the worker session that actually holds its head commit.
+type ReportGitRefsRequest struct {
+	Refs []GitRef `json:"refs"`
+}
+
 // ClaimPullRequestResponse describes the tracked pull request.
 type ClaimPullRequestResponse struct {
 	ID      string `json:"id"`
 	Number  int    `json:"number"`
 	HTMLURL string `json:"htmlUrl"`
+}
+
+// TriggerReviewResponse lists this session's open pull requests that a
+// worker-requested AO review covers. Started is false when a review of that
+// head was already running.
+type TriggerReviewResponse struct {
+	Reviews []TriggeredReview `json:"reviews"`
+}
+
+type TriggeredReview struct {
+	Number  int    `json:"number"`
+	URL     string `json:"url"`
+	Started bool   `json:"started"`
 }
 
 // SubmitReviewRequest reports a review session's verdict on the AO review
@@ -134,17 +175,59 @@ type EventRequest struct {
 	Payload any    `json:"payload,omitempty"`
 }
 
+type NotificationEventRequest struct {
+	EventID    string          `json:"eventId"`
+	Type       string          `json:"type"`
+	OccurredAt time.Time       `json:"occurredAt"`
+	Payload    json.RawMessage `json:"payload"`
+}
+
+type NotificationEventResponse struct {
+	Accepted  bool   `json:"accepted"`
+	EventID   string `json:"eventId"`
+	Duplicate bool   `json:"duplicate"`
+}
+
 type ClaimTurnRequest struct{}
 
 type Turn struct {
 	ID              string   `json:"id"`
 	Prompt          string   `json:"prompt"`
+	Model           string   `json:"model,omitempty"`
+	ReasoningEffort string   `json:"reasoningEffort,omitempty"`
 	Mode            string   `json:"mode"`
+	ApprovalMode    string   `json:"approvalMode,omitempty"`
 	DeniedCommands  []string `json:"deniedCommands"`
 	Harness         string   `json:"harness"`
 	Attempt         int      `json:"attempt"`
 	CancelRequested bool     `json:"cancelRequested"`
 	AgentSessionID  string   `json:"agentSessionId,omitempty"`
+}
+
+type ChatModel struct {
+	ID            string   `json:"id"`
+	DisplayName   string   `json:"displayName"`
+	Description   string   `json:"description,omitempty"`
+	Default       bool     `json:"default"`
+	Efforts       []string `json:"efforts,omitempty"`
+	DefaultEffort string   `json:"defaultEffort,omitempty"`
+}
+
+type ChatModelsResponse struct {
+	Modes           []string    `json:"modes,omitempty"`
+	Models          []ChatModel `json:"models"`
+	Model           string      `json:"model,omitempty"`
+	ReasoningEffort string      `json:"reasoningEffort,omitempty"`
+}
+
+type ChatApproval struct {
+	RequestID   string          `json:"requestId"`
+	TurnID      string          `json:"turnId"`
+	Attempt     int             `json:"attempt"`
+	WorkerEpoch int64           `json:"workerEpoch,omitempty"`
+	Summary     string          `json:"summary"`
+	ToolKind    string          `json:"toolKind,omitempty"`
+	Decisions   json.RawMessage `json:"decisions"`
 }
 
 type ClaimTurnResponse struct {
@@ -183,11 +266,21 @@ type ReadyEvent struct {
 	Capabilities []string `json:"capabilities"`
 }
 
+type ChatActivity struct {
+	ID      string         `json:"id"`
+	Kind    string         `json:"kind"`
+	Status  string         `json:"status"`
+	Summary string         `json:"summary"`
+	Detail  map[string]any `json:"detail,omitempty"`
+}
+
 type OutputEvent struct {
-	TurnID  string `json:"turnId"`
-	Attempt int    `json:"attempt"`
-	Stream  string `json:"stream"`
-	Text    string `json:"text"`
+	TurnID   string        `json:"turnId"`
+	Attempt  int           `json:"attempt"`
+	Stream   string        `json:"stream,omitempty"`
+	Text     string        `json:"text,omitempty"`
+	ItemID   string        `json:"itemId,omitempty"`
+	Activity *ChatActivity `json:"activity,omitempty"`
 }
 
 // TransportRequest is a fenced, durably routed workspace or terminal command.
@@ -234,6 +327,25 @@ type WorkspaceDiffFileRequest struct {
 type WorkspaceWriteRequest struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
+}
+
+type HarnessInspectRequest struct {
+	Harnesses []string `json:"harnesses"`
+}
+
+type HarnessInstallRequest struct {
+	Harness string `json:"harness"`
+}
+
+type HarnessStatus struct {
+	Harness string `json:"harness"`
+	Status  string `json:"status"`
+	Version string `json:"version,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+type HarnessInspectResponse struct {
+	Harnesses []HarnessStatus `json:"harnesses"`
 }
 
 // BrowserFetchRequest asks the session worker to fetch a browser resource from
@@ -298,11 +410,21 @@ type WorkspaceDiffFile struct {
 }
 
 type TerminalCommand struct {
-	TerminalID string `json:"terminalId"`
-	Kind       string `json:"kind,omitempty"`
-	Data       []byte `json:"data,omitempty"`
-	Columns    uint16 `json:"columns,omitempty"`
-	Rows       uint16 `json:"rows,omitempty"`
+	TerminalID         string `json:"terminalId"`
+	NextOutputSequence int64  `json:"nextOutputSequence,omitempty"`
+	Kind               string `json:"kind,omitempty"`
+	// Harness selects the provider for a dedicated reviewer terminal. It is
+	// ignored for regular workspace and interactive agent terminals.
+	Harness string `json:"harness,omitempty"`
+	// Review starts an isolated coding-agent conversation for an automated PR
+	// review. It shares the session workspace, but never resumes the session's
+	// interactive agent thread.
+	Review      bool                    `json:"review,omitempty"`
+	Data        []byte                  `json:"data,omitempty"`
+	Columns     uint16                  `json:"columns,omitempty"`
+	Rows        uint16                  `json:"rows,omitempty"`
+	ReviewRunID string                  `json:"reviewRunId,omitempty"`
+	Reviewer    *domain.ProjectReviewer `json:"reviewer,omitempty"`
 }
 
 // TerminalStreamFrame is one message on the persistent duplex terminal
@@ -311,11 +433,16 @@ type TerminalCommand struct {
 // pushes user keystrokes down; "error" tells the worker to fall back to the
 // polled transport.
 type TerminalStreamFrame struct {
-	Type     string `json:"type"`
-	Data     []byte `json:"data,omitempty"`
-	ID       int64  `json:"id,omitempty"`
-	Sequence int64  `json:"sequence,omitempty"`
-	Code     string `json:"code,omitempty"`
+	Type       string          `json:"type"`
+	Data       []byte          `json:"data,omitempty"`
+	ID         int64           `json:"id,omitempty"`
+	Sequence   int64           `json:"sequence,omitempty"`
+	Code       string          `json:"code,omitempty"`
+	EventID    string          `json:"eventId,omitempty"`
+	EventType  string          `json:"eventType,omitempty"`
+	OccurredAt time.Time       `json:"occurredAt,omitempty"`
+	Payload    json.RawMessage `json:"payload,omitempty"`
+	Duplicate  bool            `json:"duplicate,omitempty"`
 }
 
 type TerminalOutputRequest struct {
@@ -324,9 +451,11 @@ type TerminalOutputRequest struct {
 }
 
 type TerminalExitRequest struct {
-	ExitCode int `json:"exitCode"`
+	ExitCode         int  `json:"exitCode"`
+	InterfaceHandoff bool `json:"interfaceHandoff,omitempty"`
 }
 
 type AgentTerminalResponse struct {
-	TerminalID string `json:"terminalId"`
+	TerminalID         string `json:"terminalId"`
+	NextOutputSequence int64  `json:"nextOutputSequence"`
 }

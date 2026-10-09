@@ -715,6 +715,12 @@ func TestConversationBranchSnapshotFollowsOnlyActiveLineage(t *testing.T) {
 	activateTestBranch(t, s, session, conversation, child.ID, child.ProviderConversationID, "generation-child")
 	appendBranchPrompt(t, s, session, conversation, "generation-child", "b-edited", "B edited")
 	appendBranchPrompt(t, s, session, conversation, "generation-child", "c-edited", "C edited")
+	if err := s.SettleTurnByID(ctx, "turn-c-edited", domain.TurnStateCompleted, "", testNow); err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.LatestVisibleUserTurnSettled(ctx, conversation.ID, session.ID); err != nil || !settled {
+		t.Fatalf("latest turn on child branch settled = %v, %v", settled, err)
+	}
 
 	childSnapshot, err := s.LoadConversationSnapshot(ctx, conversation.ID)
 	if err != nil {
@@ -723,6 +729,9 @@ func TestConversationBranchSnapshotFollowsOnlyActiveLineage(t *testing.T) {
 	assertMessageTexts(t, childSnapshot.Messages, []string{"A", "B edited", "C edited"})
 
 	activateTestBranch(t, s, session, conversation, rootID, "thread-root", "generation-root-2")
+	if settled, err := s.LatestVisibleUserTurnSettled(ctx, conversation.ID, session.ID); err != nil || settled {
+		t.Fatalf("latest turn on root branch settled = %v, %v", settled, err)
+	}
 	rootSnapshot, err := s.LoadConversationSnapshot(ctx, conversation.ID)
 	if err != nil {
 		t.Fatalf("LoadConversationSnapshot root: %v", err)
@@ -932,6 +941,7 @@ func TestConversationBranchPointDescribesSiblingNavigation(t *testing.T) {
 	}
 	if point == nil {
 		t.Fatalf("branch points = %+v", snapshot.BranchPoints)
+		return
 	}
 	if point.Position != 3 || point.Total != 3 || point.PreviousBranchID != "branch-child-1" || point.NextBranchID != "" {
 		t.Fatalf("active child branch point = %+v", *point)

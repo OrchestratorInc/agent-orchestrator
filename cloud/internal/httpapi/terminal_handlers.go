@@ -50,7 +50,8 @@ func (s *Server) createTerminalTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Kind string `json:"kind"`
+		Kind       string `json:"kind"`
+		TerminalID string `json:"terminalId,omitempty"`
 	}
 	if err := decodeJSONLimit(w, r, &input, maxWorkerControlBody); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
@@ -60,8 +61,12 @@ func (s *Server) createTerminalTicket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "TERMINAL_KIND_UNSUPPORTED", "Terminal kind must be agent or workspace.")
 		return
 	}
+	if input.TerminalID != "" && requireUUID(input.TerminalID, "terminalId") != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The terminal ID must be a UUID.")
+		return
+	}
 	token, scopes, err := s.store.IssueTerminalTicket(
-		r.Context(), principalFrom(r), orgID, sessionID, input.Kind, terminalTicketTTL,
+		r.Context(), principalFrom(r), orgID, sessionID, input.Kind, input.TerminalID, terminalTicketTTL,
 	)
 	if errors.Is(err, postgres.ErrTerminalSessionExited) {
 		writeError(w, r, http.StatusGone, "TERMINAL_SESSION_EXITED", "The coding-agent terminal has exited. Start a new session to continue.")
@@ -85,11 +90,13 @@ func (s *Server) createTerminalTicket(w http.ResponseWriter, r *http.Request) {
 func (s *Server) connectTerminal(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimSpace(r.URL.Query().Get("ticket"))
 	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
+	terminalID := strings.TrimSpace(r.URL.Query().Get("terminalId"))
 	if kind == "" {
 		kind = "workspace"
 	}
 	after, err := strconv.ParseInt(defaultString(r.URL.Query().Get("after"), "0"), 10, 64)
-	if token == "" || (kind != "workspace" && kind != "agent") || err != nil || after < 0 {
+	if token == "" || (kind != "workspace" && kind != "agent") ||
+		(terminalID != "" && requireUUID(terminalID, "terminalId") != nil) || err != nil || after < 0 {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "A valid ticket, kind, and after cursor are required.")
 		return
 	}
@@ -97,7 +104,7 @@ func (s *Server) connectTerminal(w http.ResponseWriter, r *http.Request) {
 	if kind == "agent" {
 		ttl = agentTerminalTTL
 	}
-	terminal, err := s.store.OpenTerminal(r.Context(), token, kind, ttl)
+	terminal, err := s.store.OpenTerminal(r.Context(), token, kind, terminalID, ttl)
 	if errors.Is(err, postgres.ErrInvalidTicket) {
 		if s.logger != nil {
 			s.logger.Warn(
@@ -153,10 +160,9 @@ func (s *Server) connectTerminal(w http.ResponseWriter, r *http.Request) {
 	if structured {
 		// Replay this attachment from sequence zero and tell the client to discard
 		// whatever it was showing. A workspace reconnect gets a fresh shell; an
-		// agent terminal's output sequence space is per worker epoch (an idle
-		// resume or worker restart bumps the epoch and restarts sequences at 1), so
-		// a resume cursor carried across a bump would point past the new epoch's
-		// output and strand the pane. A from-0 replay is always correct, and the
+		// agent terminal can be reopened across worker epochs, so a client cursor
+		// from an earlier attachment cannot safely describe its current replay
+		// window. A from-0 replay is always correct, and the
 		// reset makes the client wipe stale content so the replay does not stack.
 		// (A future epoch-aware CP can compare the client's `after` against this
 		// epoch's output floor and resume within an epoch instead — see the cursor
@@ -436,6 +442,12 @@ func (s *Server) writeTerminalOutput(
 		live, cancelLive = s.terminalStreams.subscribeRelayOutput(terminal.ID)
 		defer cancelLive()
 	}
+	var notificationHints chan terminalRelayNotification
+	if structured && s.terminalRelayEnabled && s.terminalStreams != nil {
+		var cancelNotifications func()
+		notificationHints, cancelNotifications = s.terminalStreams.subscribeRelayNotifications(terminal.ID)
+		defer cancelNotifications()
+	}
 	replayComplete := false
 	startingSent := false
 	ready := false
@@ -554,6 +566,16 @@ func (s *Server) writeTerminalOutput(
 					"terminal_id", terminal.ID, "sequence", frame.sequence,
 					"bytes", len(frame.data))
 			}
+		case hint := <-notificationHints:
+			writeMu.Lock()
+			writeErr := writeTerminalMessage(ctx, connection, terminalServerMessage{
+				Type: "notification_hint", EventID: hint.eventID, EventType: hint.typeName,
+				OccurredAt: hint.occurredAt, Payload: hint.payload,
+			})
+			writeMu.Unlock()
+			if writeErr != nil {
+				return writeErr
+			}
 		case <-wake:
 			pollDurable = true
 		case <-ticker.C:
@@ -563,11 +585,15 @@ func (s *Server) writeTerminalOutput(
 }
 
 type terminalServerMessage struct {
-	Type     string `json:"type"`
-	Data     string `json:"data,omitempty"`
-	Message  string `json:"message,omitempty"`
-	Sequence int64  `json:"sequence,omitempty"`
-	InputID  string `json:"inputId,omitempty"`
+	Type       string          `json:"type"`
+	Data       string          `json:"data,omitempty"`
+	Message    string          `json:"message,omitempty"`
+	Sequence   int64           `json:"sequence,omitempty"`
+	InputID    string          `json:"inputId,omitempty"`
+	EventID    string          `json:"eventId,omitempty"`
+	EventType  string          `json:"eventType,omitempty"`
+	OccurredAt time.Time       `json:"occurredAt,omitempty"`
+	Payload    json.RawMessage `json:"payload,omitempty"`
 }
 
 func writeTerminalMessage(

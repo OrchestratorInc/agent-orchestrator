@@ -3,6 +3,7 @@ package systeminstall
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -62,6 +63,27 @@ func (s installCapabilitiesStub) Probe(ctx context.Context) (ports.InstallCapabi
 	}, nil
 }
 
+func TestOpenCodeV2NPMPlanUsesPrivatePrefixWhenGlobalPrefixIsReadOnly(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	s.installCapabilities = installCapabilitiesStub{prefix: "/usr/local", writable: false}
+	privatePrefix := s.privateNPMPrefixes[TargetOpencodeV2]
+	var probed string
+	s.pathWritable = pathWritableProbeFunc(func(_ context.Context, path string) (bool, error) {
+		probed = path
+		return true, nil
+	})
+	plan := s.planNPM(TargetOpencodeV2, "@opencode/cli")
+	if plan.Unsupported {
+		t.Fatalf("plan = %+v, want private install available", plan)
+	}
+	if probed != privatePrefix || plan.ExpectedDestination != filepath.Join(privatePrefix, "bin") {
+		t.Fatalf("private prefix probe/destination = (%q, %q), want %q", probed, plan.ExpectedDestination, privatePrefix)
+	}
+	if !slices.Contains(plan.Command, privatePrefix) {
+		t.Fatalf("command = %v, want private prefix %q", plan.Command, privatePrefix)
+	}
+}
+
 func TestAgentPlansSnapshotsCapabilitiesOnce(t *testing.T) {
 	calls := 0
 	s := newTestService("darwin", "npm", "brew")
@@ -101,8 +123,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 28 {
-		t.Fatalf("got %d plans, want 28", len(plans))
+	if len(plans) != 35 {
+		t.Fatalf("got %d plans, want 35", len(plans))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
@@ -119,6 +141,68 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	}
 }
 
+func TestOpenCodeV2UsesOfficialRecipesAndWarnsAboutReplacingV1(t *testing.T) {
+	const replacement = "replaces the default OpenCode 1"
+	for _, tc := range []struct {
+		goos string
+		want map[string]string
+	}{
+		{goos: "darwin", want: map[string]string{
+			"homebrew":           "brew install anomalyco/tap/opencode-v2",
+			"npm":                "npm install -g --prefix",
+			"official-installer": "https://opencode.ai/v2/install",
+		}},
+		{goos: "linux", want: map[string]string{
+			"npm":                "npm install -g --prefix",
+			"official-installer": "https://opencode.ai/v2/install",
+		}},
+		{goos: "windows", want: map[string]string{
+			"npm": "npm install -g --prefix",
+		}},
+	} {
+		t.Run(tc.goos, func(t *testing.T) {
+			s := newTestService(tc.goos, "brew", "npm", "bash")
+			s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", writable: true}
+			plans, err := s.AgentPlans(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got AgentPlan
+			for _, plan := range plans {
+				if plan.AgentID == "opencode-v2" {
+					got = plan
+					break
+				}
+			}
+			if got.AgentID == "" {
+				t.Fatal("OpenCode 2 install plan is missing")
+			}
+			if got.DocumentationURL != "https://opencode.ai/v2/docs" {
+				t.Fatalf("OpenCode 2 plan metadata = %+v", got)
+			}
+			if len(got.Methods) != len(tc.want) {
+				t.Fatalf("OpenCode 2 methods = %+v, want %d official choices", got.Methods, len(tc.want))
+			}
+			for _, method := range got.Methods {
+				want, ok := tc.want[method.ID]
+				if !ok {
+					t.Fatalf("unexpected OpenCode 2 method %+v", method)
+				}
+				if !strings.Contains(method.Command, want) {
+					t.Errorf("%s command = %q, want %q", method.ID, method.Command, want)
+				}
+				if method.ID == "npm" {
+					if method.Notice != "" || !strings.Contains(method.Command, "opencode-v2-home") {
+						t.Errorf("npm method must install into the private prefix without a replacement warning: %+v", method)
+					}
+				} else if !strings.Contains(method.Notice, replacement) {
+					t.Errorf("%s notice = %q, want replacement warning", method.ID, method.Notice)
+				}
+			}
+		})
+	}
+}
+
 func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -132,6 +216,7 @@ func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 		{"codex npm", "linux", TargetCodex, []string{"npm"}, "npm", "npm install -g @openai/codex"},
 		{"copilot winget", "windows", TargetCopilot, []string{"winget", "npm"}, "winget", "winget install -e --id GitHub.Copilot --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"},
 		{"vibe pipx", "linux", TargetVibe, []string{"pipx"}, "pipx", "pipx install mistral-vibe"},
+		{"openhands uv", "windows", TargetOpenHands, []string{"uv"}, "uv", "uv tool install openhands"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -140,6 +225,23 @@ func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 				t.Fatalf("plan = %+v, want method %q command %q", plan, tt.wantMethod, tt.wantCommand)
 			}
 		})
+	}
+}
+
+func TestGeminiMacInstallUsesSupportedNPMRelease(t *testing.T) {
+	s := newTestService("darwin", "brew", "npm")
+	s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", writable: true}
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans := planner.agentMethodPlans(TargetGemini, AgentOperationInstall)
+	if len(plans) != 1 || plans[0].Method != "npm" || plans[0].Unsupported ||
+		strings.Join(plans[0].Command, " ") != "npm install -g @google/gemini-cli@latest" {
+		t.Fatalf("Gemini install plans = %+v, want supported npm release only", plans)
+	}
+	if _, err := planner.resolveAgentMethod(TargetGemini, "homebrew", AgentOperationInstall); err == nil {
+		t.Fatal("Homebrew method should not be offered while its Gemini CLI formula is below the required version")
 	}
 }
 
@@ -576,5 +678,18 @@ func TestAgentTargetsAreValidButPrerequisitesAreNotHarnessRows(t *testing.T) {
 		if !Valid(target) || IsAgentTarget(target) {
 			t.Fatalf("prerequisite target %q was classified incorrectly", target)
 		}
+	}
+}
+
+func TestCodewhaleInstallPlanIsManualOnly(t *testing.T) {
+	plan := newTestService("darwin", "brew", "npm", "sh").planAgent(TargetCodewhale)
+	if !plan.Unsupported || plan.Method != "manual" || len(plan.Command) != 0 || plan.Script != nil {
+		t.Fatalf("Codewhale plan = %+v, want command-free manual plan", plan)
+	}
+	if plan.DocsURL != "https://github.com/Hmbown/Codewhale" {
+		t.Fatalf("Codewhale documentation URL = %q", plan.DocsURL)
+	}
+	if !strings.Contains(plan.Reason, "does not automatically install Codewhale") {
+		t.Fatalf("Codewhale reason = %q", plan.Reason)
 	}
 }

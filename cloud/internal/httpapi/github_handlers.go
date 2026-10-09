@@ -327,12 +327,22 @@ func (s *Server) disconnectGitHubUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) githubCallbackError(w http.ResponseWriter, r *http.Request, err error) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// A GitHub account already connected by another AO workspace is an expected,
+	// actionable outcome — render a specific page naming the account instead of
+	// the generic failure page, and do not log it as an unexpected error.
+	var ownedErr *postgres.InstallationOwnedByAnotherOrgError
+	if errors.As(err, &ownedErr) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write(s.github.InstallationConflictHTML(ownedErr.AccountLogin))
+		return
+	}
 	if !errors.Is(err, postgres.ErrInvalid) &&
 		!errors.Is(err, postgres.ErrForbidden) &&
-		!errors.Is(err, postgres.ErrNotFound) {
+		!errors.Is(err, postgres.ErrNotFound) &&
+		!errors.Is(err, postgres.ErrConflict) {
 		s.logger.Error("GitHub callback", "error", err, "request_id", requestID(r))
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadRequest)
 	_, _ = w.Write(s.github.CompletionHTML(false))
 }
@@ -472,6 +482,10 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")
 		return
 	}
+	if err := validateProjectCoderConfig(config); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
+		return
+	}
 	store, ok := s.store.(githubProjectStore)
 	if !ok {
 		writeError(w, r, http.StatusNotImplemented, "not_implemented", "GitHub project creation is unavailable.")
@@ -489,9 +503,16 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 		},
 	)
 	if err != nil {
-		s.writeStoreError(w, r, err)
+		s.writeProjectStoreError(w, r, err)
 		return
 	}
+	s.logger.Info(
+		"github project created",
+		"org_id", orgID,
+		"user_id", principalFrom(r).UserID,
+		"project_id", project.ID,
+		"github_repository_id", githubRepositoryID,
+	)
 	writeJSON(w, http.StatusCreated, map[string]any{"project": toProjectResponse(project)})
 }
 
@@ -642,8 +663,7 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	if event != "installation" && event != "installation_repositories" &&
-		event != "github_app_authorization" {
+	if !supportedGitHubWebhookEvent(event) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
@@ -690,6 +710,7 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 		Action:               envelope.Action,
 		GitHubInstallationID: installationID,
 		GitHubRepositoryID:   repositoryID,
+		PullRequestNumber:    githubWebhookPullRequestNumber(payload),
 		Payload:              payload,
 	})
 	if err != nil {
@@ -701,6 +722,49 @@ func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func supportedGitHubWebhookEvent(event string) bool {
+	switch event {
+	case "installation", "installation_repositories", "github_app_authorization",
+		"pull_request", "check_suite", "check_run", "pull_request_review",
+		"pull_request_review_comment", "pull_request_review_thread",
+		"status", "push":
+		return true
+	default:
+		return false
+	}
+}
+
+func githubWebhookPullRequestNumber(payload []byte) int {
+	var envelope struct {
+		PullRequest *struct {
+			Number int `json:"number"`
+		} `json:"pull_request"`
+		CheckRun *struct {
+			PullRequests []struct {
+				Number int `json:"number"`
+			} `json:"pull_requests"`
+		} `json:"check_run"`
+		CheckSuite *struct {
+			PullRequests []struct {
+				Number int `json:"number"`
+			} `json:"pull_requests"`
+		} `json:"check_suite"`
+	}
+	if json.Unmarshal(payload, &envelope) != nil {
+		return 0
+	}
+	if envelope.PullRequest != nil {
+		return envelope.PullRequest.Number
+	}
+	if envelope.CheckRun != nil && len(envelope.CheckRun.PullRequests) > 0 {
+		return envelope.CheckRun.PullRequests[0].Number
+	}
+	if envelope.CheckSuite != nil && len(envelope.CheckSuite.PullRequests) > 0 {
+		return envelope.CheckSuite.PullRequests[0].Number
+	}
+	return 0
 }
 
 func githubInstallationParams(

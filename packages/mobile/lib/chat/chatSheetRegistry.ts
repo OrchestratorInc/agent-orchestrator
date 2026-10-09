@@ -4,8 +4,12 @@ import type { ChatConfigOption, ChatModel, ConversationSnapshot, TurnSettings } 
 
 export type ConversationActionsEntry = {
 	kind: "conversation-actions";
+	sessionId: string;
 	snapshot: ConversationSnapshot;
+	subscribeEntry(listener: (entry: ConversationActionsEntry) => void): () => void;
 	sessionTitle: string;
+	/** What the Turn settings row names; empty when nothing is known. */
+	modelLabel: string;
 	openingShell: boolean;
 	compacting: boolean;
 	mcpReloading: boolean;

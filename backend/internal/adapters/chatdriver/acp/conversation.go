@@ -90,6 +90,7 @@ type conversation struct {
 
 	mu                 sync.Mutex
 	sessionID          string
+	reportedSessionID  string
 	capabilities       ports.ChatCapabilities
 	prepared           *preparedTurn
 	activeTurn         string
@@ -128,6 +129,7 @@ type conversation struct {
 	// credential mid-turn. Nil when the binding does not supply one.
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
+	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 
 	contextTokens     int64
 	contextWindow     int64
@@ -162,6 +164,7 @@ var _ ports.ChatSteerer = (*conversation)(nil)
 var _ ports.ChatInputResponder = (*conversation)(nil)
 var _ ports.ChatProviderPreserver = (*conversation)(nil)
 var _ ports.ChatProviderTerminator = (*conversation)(nil)
+var _ ports.ChatProviderHibernator = (*conversation)(nil)
 var _ ports.ChatLiveReconnector = (*conversation)(nil)
 var _ ports.ChatLiveReconnectActivator = (*conversation)(nil)
 var _ ports.ChatProviderEventAcknowledger = (*conversation)(nil)
@@ -278,6 +281,7 @@ func (c *conversation) start(
 ) {
 	c.mu.Lock()
 	c.sessionID = sessionID
+	c.reportedSessionID = sessionID
 	c.capabilities = capabilities
 	// Preserve config options received via session/update during session/new.
 	// An agent may send config_option_update before start() runs; only overwrite
@@ -308,7 +312,13 @@ func (c *conversation) start(
 func (c *conversation) ProviderConversationID() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.sessionID
+	return c.reportedSessionID
+}
+
+func (c *conversation) setReportedProviderConversationID(sessionID string) {
+	c.mu.Lock()
+	c.reportedSessionID = sessionID
+	c.mu.Unlock()
 }
 
 func (c *conversation) Capabilities() ports.ChatCapabilities {
@@ -671,9 +681,15 @@ func (c *conversation) finishPrompt(
 			c.mu.Unlock()
 		}
 	}
-	c.mu.Lock()
-	c.terminalEventID = eventID
-	c.mu.Unlock()
+	// Only a durable host receipt replaces the outstanding one. A host-local
+	// rejection carries no event ID; erasing the receipt here would make the
+	// controller's later ACK of that receipt a no-op and leave the host refusing
+	// every prompt until restart.
+	if eventID != "" {
+		c.mu.Lock()
+		c.terminalEventID = eventID
+		c.mu.Unlock()
+	}
 	c.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderEventID: eventID,
 		ProviderTurnID: turnID, TurnState: state, Err: turnErr,
@@ -929,16 +945,32 @@ func (c *conversation) discard() {
 }
 
 func (c *conversation) Close() error {
-	return c.closeProvider(false)
+	return c.closeProvider(false, false)
 }
 
 // Terminate destroys the provider host. Close deliberately only detaches during
 // daemon shutdown or updater replacement.
 func (c *conversation) Terminate() error {
-	return c.closeProvider(true)
+	return c.closeProvider(true, true)
 }
 
-func (c *conversation) closeProvider(terminate bool) error {
+func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
+	if c.hibernationCheck == nil {
+		return true, nil
+	}
+	c.mu.Lock()
+	id := c.sessionID
+	c.mu.Unlock()
+	return c.hibernationCheck(ctx, c.conn, acpsdk.SessionId(id))
+}
+
+// Hibernate releases the bridge and its provider without closing the native
+// ACP session. session/close can delete the resume state on some agents.
+func (c *conversation) Hibernate() error {
+	return c.closeProvider(true, false)
+}
+
+func (c *conversation) closeProvider(terminate, closeSession bool) error {
 	var closeErr error
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
@@ -957,7 +989,7 @@ func (c *conversation) closeProvider(terminate bool) error {
 		}
 		c.failPendingPermissions()
 		c.failPendingInputs()
-		if sessionID != "" {
+		if closeSession && sessionID != "" {
 			closeCtx, cancelClose := context.WithTimeout(context.Background(), 2*time.Second)
 			_, _ = c.conn.CloseSession(closeCtx, acpsdk.CloseSessionRequest{SessionId: acpsdk.SessionId(sessionID)})
 			cancelClose()

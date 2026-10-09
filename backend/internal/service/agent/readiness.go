@@ -203,6 +203,9 @@ func (s *Service) Probe(ctx context.Context, agentID string) (ProbeResult, error
 	if _, ok := s.agent(agentID); !ok {
 		return ProbeResult{Agent: Info{ID: agentID}, Supported: false, Installed: false}, nil
 	}
+	if agentID == string(domain.HarnessCodex) {
+		s.reconcileCodexDeviceCredentialForRecheck(ctx)
+	}
 	s.InvalidateAgentAuthentication(agentID)
 	readiness, err := s.EnsureReadiness(ctx, []string{agentID}, domain.AgentReadinessPurposeLaunch)
 	if err != nil {
@@ -262,10 +265,10 @@ func readinessInfo(snapshot domain.AgentReadinessSnapshot) Info {
 	switch snapshot.Authentication.State {
 	case domain.AgentAuthenticationAuthorized, domain.AgentAuthenticationNotApplicable:
 		status = ports.AgentAuthStatusAuthorized
-	case domain.AgentAuthenticationUnauthorized:
-		status = ports.AgentAuthStatusUnauthorized
 	case domain.AgentAuthenticationConfigured:
 		status = ports.AgentAuthStatusConfigured
+	case domain.AgentAuthenticationUnauthorized:
+		status = ports.AgentAuthStatusUnauthorized
 	}
 	return Info{
 		ID: snapshot.ID, Label: snapshot.Label, AuthStatus: status,

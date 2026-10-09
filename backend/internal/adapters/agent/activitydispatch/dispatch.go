@@ -20,10 +20,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/fake"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/gemini"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimchi"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mimocode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/omp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/vibe"
@@ -50,14 +53,18 @@ var Derivers = map[string]DeriveFunc{
 	"aider":       aider.DeriveActivityState,
 	"kimchi":      kimchi.DeriveActivityState,
 	"opencode":    opencode.DeriveActivityState,
+	"opencode-v2": opencodev2.DeriveActivityState,
 	"prime-agent": primeagent.DeriveActivityState,
+	"mimo-code":   mimocode.DeriveActivityState,
 	"amp":         amp.DeriveActivityState,
 	"pi":          pi.DeriveActivityState,
 	"auggie":      auggie.DeriveActivityState,
 	"goose":       activitystate.StandardDeriveActivityState,
+	"openhands":   activitystate.StandardDeriveActivityState,
 	"devin":       activitystate.StandardDeriveActivityState,
 	"cursor":      cursor.DeriveActivityState,
 	"qwen":        activitystate.StandardDeriveActivityState,
+	"gemini":      gemini.DeriveActivityState,
 	"copilot":     activitystate.StandardDeriveActivityState,
 	"kimi":        activitystate.StandardDeriveActivityState,
 	"cline":       activitystate.StandardDeriveActivityState,

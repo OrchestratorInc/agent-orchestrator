@@ -17,8 +17,9 @@
  * provider's; only the grouping of the triggers is AO's.
  */
 
-import { Fragment, useMemo, type FocusEvent, type ReactNode } from "react";
-import { Shuffle } from "lucide-react";
+import { Fragment, useMemo, useState, type FocusEvent, type ReactNode } from "react";
+import { ChevronDown, Shuffle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
 	OptionMenu,
 	OptionMenuContent,
@@ -29,8 +30,10 @@ import {
 	OptionMenuSubTrigger,
 	OptionMenuTrigger,
 } from "../ui/option-menu";
+import { fallbackEffort, useApplyEffortDefault } from "../../lib/effort";
 import { cn } from "../../lib/utils";
-import { isDefaultPlaceholderLabel } from "../../lib/agent-model-choices";
+import { effortDisplayLabel, EffortMenuItems, EffortPicker, formatEffortLabel } from "../settings/EffortPicker";
+import { agentModelDisplayLabel, isDefaultPlaceholderLabel, splitClaudeModels } from "../../lib/agent-model-choices";
 import { Switch } from "../ui/switch";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import type {
@@ -75,13 +78,15 @@ const CODEX_APPROVAL_ORDER: ApprovalMode[] = [
 ];
 
 const TRIGGER_CLASS =
-	"h-7 gap-1 bg-transparent rounded-lg px-3 text-[12px]! leading-none text-muted-foreground hover:bg-white/5 hover:text-foreground data-[state=open]:bg-white/5 data-[state=open]:text-foreground";
-const CHAT_MENU_CLASS = "chat-settings-menu text-[12px]!";
+	"h-7 gap-1 bg-transparent rounded-lg px-3 text-xs! leading-none text-muted-foreground hover:bg-interactive-active hover:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground";
+const CHAT_MENU_CLASS = "chat-settings-menu text-xs!";
 
 export function TurnSettingsBar({
 	models,
 	settings,
 	harness,
+	showApprovalMode = true,
+	approvalModes,
 	reroute,
 	onChange,
 	onRememberPermissions,
@@ -93,12 +98,16 @@ export function TurnSettingsBar({
 	configPending,
 	error,
 	disabled,
+	autoSelectEffortOnOpen = false,
 	children,
 }: {
 	models: ChatModel[];
 	settings: TurnSettings;
 	/** The active provider selects its own supported permission vocabulary. */
 	harness?: string;
+	/** Cloud permissions are fixed for the session, not a per-turn setting. */
+	showApprovalMode?: boolean;
+	approvalModes?: ApprovalMode[];
 	/**
 	 * The provider answered with a different model than the one chosen. Separate from
 	 * `settings` all the way down: settings are what the user asked for, this is what
@@ -119,36 +128,89 @@ export function TurnSettingsBar({
 	) => Promise<unknown> | void;
 	/** Prevent overlapping writes because provider responses replace the catalog. */
 	configPending?: boolean;
+	/**
+	 * Pick an effort as soon as this opens when the model reports levels but no
+	 * default. Only for a conversation with no turns yet, so reopening an existing
+	 * one never changes the effort it was running with. Choosing another model
+	 * always selects one regardless.
+	 */
+	autoSelectEffortOnOpen?: boolean;
 	error?: string;
 	disabled?: boolean;
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
 	children?: ReactNode;
 }) {
-	const selected = models.find((model) => model.id === settings.model);
-	const fallback = settings.model ? undefined : models.find((model) => model.default);
+	const { t } = useTranslation();
+	const displayModels = useMemo(
+		() => models.map((model) => ({
+			...model,
+			displayName: agentModelDisplayLabel(harness, model.displayName),
+		})),
+		[harness, models],
+	);
+	const claudeLabels = useMemo(() => (harness === "claude-code" ? claudeChoiceLabels(displayModels) : undefined), [harness, displayModels]);
+	const displayConfigOptions = useMemo(
+		() => (configOptions ?? []).map((option) => isModelOption(option) ? {
+			...option,
+			choices: option.choices.map((choice) => ({
+				...choice,
+				name: claudeLabels?.(choice.value) ?? agentModelDisplayLabel(harness, choice.name),
+				description: choice.description
+					? agentModelDisplayLabel(harness, choice.description)
+					: choice.description,
+			})),
+		} : option),
+		[claudeLabels, configOptions, harness],
+	);
+	const selected = displayModels.find((model) => model.id === settings.model);
+	const fallback = settings.model ? undefined : displayModels.find((model) => model.default);
 	// A catalog miss must not relabel an explicit choice or borrow another model's
 	// effort settings. Custom or newly available models may not be listed yet.
 	const chosenLabel =
 		selected?.displayName ?? settings.model ?? fallback?.displayName ?? "Choose a model";
 	const rerouted = reroute
-		? models.find((model) => model.id === reroute.toModel)?.displayName ?? reroute.toModel
+		? displayModels.find((model) => model.id === reroute.toModel)?.displayName ?? reroute.toModel
 		: undefined;
 	const modelLabel = rerouted ?? chosenLabel;
-	const efforts = (selected ?? fallback)?.efforts ?? [];
-	const effortLabel =
-		settings.reasoningEffort ?? (selected ?? fallback)?.defaultEffort ?? undefined;
+	const availableEfforts = (selected ?? fallback)?.efforts ?? [];
+	const efforts = availableEfforts.filter((effort) => effort.toLowerCase() !== "default");
+	const selectedEffort =
+		settings.reasoningEffort && settings.reasoningEffort !== "default"
+			? settings.reasoningEffort
+			: (selected ?? fallback)?.defaultEffort;
+	const effortLabel = selectedEffort === "default" ? undefined : selectedEffort;
 	const approvalCopy = harness === "codex" ? CODEX_APPROVAL_COPY : APPROVAL_COPY;
 	const approvalOrder = harness === "codex" ? CODEX_APPROVAL_ORDER : APPROVAL_ORDER;
 	const approvalLabel = approvalCopy[settings.approvalMode ?? "default"].label;
 	const modelGroupLabel = effortLabel
-		? `${modelLabel} ${capitalize(effortLabel)}`
+		? `${modelLabel} ${formatEffortLabel(effortLabel, t)}`
 		: modelLabel;
-	const grouped = partitionConfigOptions(configOptions ?? []);
+	const grouped = partitionConfigOptions(displayConfigOptions);
 	const optionDisabled = Boolean(disabled || configPending || rememberPermissionsPending);
 	const applyOption = (optionId: string, value: ChatConfigOptionValue) => {
 		if (!onChangeConfigOption) return;
 		void Promise.resolve(onChangeConfigOption(optionId, value)).catch(() => {});
 	};
+	const nativeModelMenu = Boolean(onChange && displayModels.length > 0 && grouped.model.length === 0);
+	// A model with effort levels but no provider default would otherwise show no
+	// selected effort. AO picks a level and sets it, so what the picker shows is
+	// what the next turn uses.
+	const acpEffortOption = grouped.effort.at(0);
+	useApplyEffortDefault(
+		`${harness}:${grouped.model.map((option) => option.currentValue).join(":")}`,
+		acpEffortOption ? acpFallbackEffort(acpEffortOption) : undefined,
+		(value) => {
+			if (acpEffortOption) applyOption(acpEffortOption.id, { value });
+		},
+		{ disabled: optionDisabled || !onChangeConfigOption, applyOnMount: autoSelectEffortOnOpen },
+	);
+	const nativeEffortUnset = !settings.reasoningEffort || settings.reasoningEffort === "default";
+	useApplyEffortDefault(
+		`${harness}:${settings.model ?? fallback?.id}`,
+		nativeModelMenu && nativeEffortUnset ? fallbackEffort(efforts, (selected ?? fallback)?.defaultEffort) : undefined,
+		(value) => onChange?.({ ...settings, reasoningEffort: value }),
+		{ disabled: optionDisabled || !onChange, applyOnMount: autoSelectEffortOnOpen },
+	);
 	const modeOption = grouped.mode;
 	const inlineExecutionMode =
 		grouped.executionMode && isPlanBinary(grouped.executionMode) ? grouped.executionMode : undefined;
@@ -161,7 +223,6 @@ export function TurnSettingsBar({
 	const planReturn = modeOption?.choices.find(
 		(choice) => choice.permissionMode === (settings.approvalMode ?? "default"),
 	)?.value;
-	const nativeModelMenu = Boolean(onChange && models.length > 0 && grouped.model.length === 0);
 	const clubbedLeft =
 		grouped.model.length > 0 ||
 		grouped.effort.length > 0 ||
@@ -182,7 +243,7 @@ export function TurnSettingsBar({
 			Remember for this project
 		</OptionMenuItem>
 	) : null;
-	const showRightDropdown = Boolean(children || (!planning && (onChange || modeOption)));
+	const showRightDropdown = Boolean(children || (!planning && ((showApprovalMode && onChange) || modeOption)));
 
 	return (
 		<div role="group" aria-label="Turn settings" className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -190,14 +251,15 @@ export function TurnSettingsBar({
 				<div className="flex h-7 min-w-0 flex-wrap items-center gap-0.5">
 					{nativeModelMenu && onChange ? (
 						<ModelEffortPicker
-							models={models}
+							models={harness === "claude-code" ? displayModels.filter((model) => model.id !== "default") : displayModels}
 							settings={settings}
 							onChange={onChange}
 							disabled={optionDisabled}
 							modelLabel={modelLabel}
 							groupLabel={modelGroupLabel}
-							effortLabel={effortLabel}
 							efforts={efforts}
+							defaultEffort={(selected ?? fallback)?.defaultEffort}
+							availability={(selected ?? fallback)?.efforts === undefined ? "unknown" : efforts.length ? "supported" : "unsupported"}
 							reroute={reroute}
 							rerouted={rerouted}
 							chosenLabel={chosenLabel}
@@ -211,6 +273,7 @@ export function TurnSettingsBar({
 
 					{onChangeConfigOption && clubbedLeft && !nativeModelMenu ? (
 						<ClubbedConfigPicker
+							groupClaude={harness === "claude-code"}
 							modelOptions={grouped.model}
 							effortOptions={grouped.effort}
 							executionMode={inlineExecutionMode}
@@ -242,13 +305,13 @@ export function TurnSettingsBar({
 								onChange={(value) => applyOption(modeOption.id, value)}
 								footer={rememberAction}
 							/>
-						) : onChange ? (
+						) : showApprovalMode && onChange ? (
 							<Picker
 								label={approvalLabel}
 													title="Approval policy for the next turn"
 													disabled={optionDisabled}
 							>
-								{approvalOrder.map((mode) => (
+								{approvalOrder.filter((mode) => !approvalModes || approvalModes.includes(mode)).map((mode) => (
 									<OptionMenuItem
 										key={mode}
 										active={mode === (settings.approvalMode ?? "default")}
@@ -275,20 +338,37 @@ export function TurnSettingsBar({
 				) : null}
 			</div>
 			{rememberPermissionsPending || (rememberedPermissionMode !== undefined && rememberedPermissionMode === rememberMode && !planning && !configPending) ? (
-				<p role="status" className="px-1 text-[11px] text-muted-foreground">
+				<p role="status" className="px-1 text-xs text-muted-foreground">
 					{rememberPermissionsPending ? "Saving project permissions…" : "Permission mode saved for new sessions in this project."}
 				</p>
 			) : null}
 			{rememberPermissionsError ? (
-				<p role="alert" className="px-1 text-[11px] text-destructive">{rememberPermissionsError}</p>
+				<p role="alert" className="px-1 text-xs text-destructive">{rememberPermissionsError}</p>
 			) : null}
 			{error ? (
-				<p role="alert" className="px-1 text-[11px] leading-snug text-destructive">
+				<p role="alert" className="px-1 text-xs leading-snug text-destructive">
 					{error}
 				</p>
 			) : null}
 		</div>
 	);
+}
+
+/**
+ * The provider's model option offers family aliases ("opus") and bare ids. The new-task
+ * picker names them by version, so the chat does too: an alias is the newest model of
+ * its family in the catalog, and an id is its catalog entry.
+ */
+function claudeChoiceLabels(catalog: { id: string; displayName: string }[]) {
+	if (catalog.length === 0) return undefined;
+	const entries = catalog.map((model) => ({ id: model.id, label: model.displayName }));
+	const newest = splitClaudeModels(entries).current;
+	return (value: string): string | undefined => {
+		const id = value.replace(/\[.*?\]$/, "").toLowerCase();
+		const exact = entries.find((model) => model.id.toLowerCase() === id);
+		if (exact) return exact.label;
+		return newest.find((model) => model.id.toLowerCase().includes(`-${id}-`) || model.label.toLowerCase().startsWith(id))?.label;
+	};
 }
 
 function ModelEffortPicker({
@@ -298,8 +378,9 @@ function ModelEffortPicker({
 	disabled,
 	modelLabel,
 	groupLabel,
-	effortLabel,
 	efforts,
+	defaultEffort,
+	availability,
 	reroute,
 	rerouted,
 	chosenLabel,
@@ -315,8 +396,9 @@ function ModelEffortPicker({
 	disabled?: boolean;
 	modelLabel: string;
 	groupLabel: string;
-	effortLabel?: string;
 	efforts: string[];
+	defaultEffort?: string;
+	availability: "supported" | "unsupported" | "unknown";
 	reroute?: ModelReroute;
 	rerouted?: string;
 	chosenLabel: string;
@@ -326,12 +408,15 @@ function ModelEffortPicker({
 	extraOptions?: ChatConfigOption[];
 	onChangeConfigOption?: (optionId: string, value: ChatConfigOptionValue) => void;
 }) {
+	const { t } = useTranslation();
 	const catalog = useMemo(() => models.map((model) => ({ ...model, label: model.displayName })), [models]);
+	const effortChoices = useMemo(() => efforts.map((value) => ({ value })), [efforts]);
+	const savedEffort = settings.reasoningEffort === "default" ? "" : settings.reasoningEffort ?? "";
 
 	return (
 		<OptionMenu>
-			
 				<OptionMenuTrigger
+					showCaret={false}
 					disabled={disabled}
 					aria-label="Model and reasoning effort for the next turn"
 					title={
@@ -361,10 +446,12 @@ function ModelEffortPicker({
 					    events do not reliably reach an outer overflow on nested submenus. */}
 					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
 						<ModelMenuChoices models={catalog}>
-							{(matches) => matches.map((model) => (
+							{(matches, searchActiveID, optionID) => matches.map((model) => (
 								<OptionMenuItem
 									key={model.id}
+									id={optionID?.(model.id)}
 									active={model.id === settings.model}
+									searchActive={model.id === searchActiveID}
 									radio
 									onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined })}
 									className={cn("text-xs", model.id === settings.model ? "text-foreground" : "text-muted-foreground")}
@@ -376,29 +463,21 @@ function ModelEffortPicker({
 					</OptionMenuSubContent>
 				</OptionMenuSub>
 
-				{efforts.length > 0 ? (
+				{efforts.length > 0 || savedEffort ? (
 					<OptionMenuSub>
-						<OptionMenuSubTrigger label="Effort" value={effortLabel ? capitalize(effortLabel) : "Effort"} />
+						<OptionMenuSubTrigger
+							label={t("settings.models.effort")}
+							value={effortDisplayLabel({ value: savedEffort, choices: effortChoices, followLabel: t("settings.models.effort"), t, defaultEffort })}
+						/>
 						<OptionMenuSubContent className={CHAT_MENU_CLASS}>
-							{efforts.map((effort) => (
-								<OptionMenuItem
-									key={effort}
-									active={effort === settings.reasoningEffort}
-									radio
-									onSelect={() => onChange({ ...settings, reasoningEffort: effort })}
-									className={cn("text-xs")}
-								>
-									<span
-										className={cn(
-											effort === settings.reasoningEffort
-												? "text-foreground"
-												: "text-muted-foreground",
-										)}
-									>
-										{capitalize(effort)}
-									</span>
-								</OptionMenuItem>
-							))}
+							<EffortMenuItems
+								value={savedEffort}
+								choices={effortChoices}
+								availability={availability}
+								defaultEffort={defaultEffort}
+								compact
+								onChange={(value) => onChange({ ...settings, reasoningEffort: value || undefined })}
+							/>
 						</OptionMenuSubContent>
 					</OptionMenuSub>
 				) : null}
@@ -425,7 +504,9 @@ function ClubbedConfigPicker({
 	extraOptions,
 	disabled,
 	onChange,
+	groupClaude,
 }: {
+	groupClaude?: boolean;
 	modelOptions: ChatConfigOption[];
 	effortOptions: ChatConfigOption[];
 	executionMode?: ChatConfigOption;
@@ -435,14 +516,26 @@ function ClubbedConfigPicker({
 	disabled?: boolean;
 	onChange: (optionId: string, value: ChatConfigOptionValue) => void;
 }) {
-	const primaryModel = modelOptions[0];
-	const primaryEffort = effortOptions[0];
+	const { t } = useTranslation();
+	const primaryModel = modelOptions.at(0);
+	const primaryEffort = effortOptions.at(0);
 	const modelLabel = primaryModel ? optionCurrentLabel(primaryModel) : undefined;
-	const effortLabel = primaryEffort ? optionCurrentLabel(primaryEffort) : undefined;
+	const effortLabel = primaryEffort ? effortDisplayLabel({ ...acpEffortProps(primaryEffort), followLabel: "", t }) : undefined;
 	const groupLabel = [modelLabel, effortLabel].filter(Boolean).join(" ") || "More";
 	const leftCount =
 		modelOptions.length + effortOptions.length + Number(Boolean(executionMode)) + toggles.length + extraOptions.length;
+	if (leftCount === 0) return null;
 	if (leftCount === 1) {
+		if (primaryEffort) {
+			return (
+				<EffortPicker
+					{...acpEffortMenuProps(primaryEffort)}
+					disabled={disabled}
+					triggerClassName={TRIGGER_CLASS}
+					onChange={(value) => onChange(primaryEffort.id, { value })}
+				/>
+			);
+		}
 		if (executionMode)
 			return (
 				<ExecutionModePicker
@@ -452,21 +545,22 @@ function ClubbedConfigPicker({
 					onChange={onChange}
 				/>
 			);
-		const option = primaryModel ?? primaryEffort ?? executionMode ?? toggles[0] ?? extraOptions[0];
+		const option = primaryModel ?? toggles[0] ?? extraOptions[0];
 		if (!option) return null;
 		return (
 			<ConfigOptionPicker
 				option={option}
 				disabled={disabled}
 				onChange={(value) => onChange(option.id, value)}
+				groupClaude={groupClaude}
 			/>
 		);
 	}
 
 	return (
 		<OptionMenu>
-			
 				<OptionMenuTrigger
+					showCaret={false}
 					disabled={disabled}
 					aria-label="Model and reasoning effort for the next turn"
 					title="Model and reasoning effort for the next turn"
@@ -476,10 +570,10 @@ function ClubbedConfigPicker({
 				</OptionMenuTrigger>
 			<OptionMenuContent align="start" className={CHAT_MENU_CLASS}>
 				{modelOptions.map((option) => (
-					<OptionSubmenu key={option.id} option={option} onChange={onChange} scrollable />
+					<OptionSubmenu key={option.id} option={option} onChange={onChange} scrollable groupClaude={groupClaude} />
 				))}
 				{effortOptions.map((option) => (
-					<OptionSubmenu key={option.id} option={option} onChange={onChange} />
+					<EffortOptionSubmenu key={option.id} option={option} onChange={onChange} />
 				))}
 				{executionMode ? <PlanModeToggle option={executionMode} planReturn={planReturn} onChange={onChange} /> : null}
 				{toggles.map((option) => (
@@ -490,6 +584,57 @@ function ClubbedConfigPicker({
 				) : null}
 			</OptionMenuContent>
 		</OptionMenu>
+	);
+}
+
+// ACP exposes the provider-owned reset as a "default" choice whose description
+// names the concrete level it resolves to.
+function acpEffortMenuProps(option: ChatConfigOption) {
+	const defaultChoice = option.choices.find((choice) => choice.value === "default");
+	return {
+		value: option.currentValue ?? "",
+		choices: option.choices.map((choice) => ({ value: choice.value, label: choice.name })),
+		defaultValue: defaultChoice?.value ?? null,
+		defaultEffort: defaultChoice?.description,
+	};
+}
+
+function acpEffortProps(option: ChatConfigOption) {
+	const { value, choices, defaultEffort } = acpEffortMenuProps(option);
+	return { value: value === "default" ? "" : value, choices, defaultEffort };
+}
+
+// ACP exposes the provider-owned reset as a "default" choice. When it names no
+// concrete level, nothing is selected, so AO supplies one.
+function acpFallbackEffort(option: ChatConfigOption): string | undefined {
+	if (option.currentValue && option.currentValue !== "default") return undefined;
+	const concrete = option.choices.filter((choice) => choice.value && choice.value !== "default");
+	const described = option.choices.find((choice) => choice.value === "default")?.description?.trim().toLowerCase();
+	const reported = concrete.find(
+		(choice) => described && (choice.value.toLowerCase() === described || choice.name.toLowerCase() === described),
+	)?.value;
+	return fallbackEffort(
+		concrete.map((choice) => choice.value),
+		reported,
+	);
+}
+
+function EffortOptionSubmenu({
+	option,
+	onChange,
+}: {
+	option: ChatConfigOption;
+	onChange: (id: string, value: ChatConfigOptionValue) => void;
+}) {
+	const { t } = useTranslation();
+	const followLabel = t("settings.models.effort");
+	return (
+		<OptionMenuSub>
+			<OptionMenuSubTrigger label={followLabel} value={effortDisplayLabel({ ...acpEffortProps(option), followLabel, t })} />
+			<OptionMenuSubContent className={CHAT_MENU_CLASS}>
+				<EffortMenuItems {...acpEffortMenuProps(option)} compact onChange={(value) => onChange(option.id, { value })} />
+			</OptionMenuSubContent>
+		</OptionMenuSub>
 	);
 }
 
@@ -580,6 +725,7 @@ function ExecutionModePicker({
 	return (
 		<OptionMenu>
 			<OptionMenuTrigger
+				showCaret={false}
 				disabled={disabled}
 				aria-label="Model mode for the next turn"
 				title="Model mode for the next turn"
@@ -625,12 +771,14 @@ function OptionSubmenu({
 	label,
 	onChange,
 	scrollable,
+	groupClaude,
 }: {
 	option: ChatConfigOption;
 	/** A semantic label when one provider option is deliberately split in two. */
 	label?: string;
 	onChange: (optionId: string, value: ChatConfigOptionValue) => void;
 	scrollable?: boolean;
+	groupClaude?: boolean;
 }) {
 	const current = optionCurrentLabel(option);
 	return (
@@ -642,7 +790,7 @@ function OptionSubmenu({
 				onFocus={isModelOption(option) ? focusModelSearch : undefined}
 			>
 				{isModelOption(option) ? (
-					<ConfigModelChoices option={option} onChange={(value) => onChange(option.id, value)} />
+					<ConfigModelChoices option={option} onChange={(value) => onChange(option.id, value)} groupClaude={groupClaude} />
 				) : (
 					<ConfigOptionChoices
 						option={option}
@@ -661,6 +809,7 @@ function ConfigOptionPicker({
 	onChange,
 	disabled,
 	footer,
+	groupClaude,
 }: {
 	option: ChatConfigOption;
 	label?: string;
@@ -668,6 +817,7 @@ function ConfigOptionPicker({
 	onChange: (value: ChatConfigOptionValue) => void;
 	disabled?: boolean;
 	footer?: ReactNode;
+	groupClaude?: boolean;
 }) {
 	return (
 		<Picker
@@ -677,7 +827,7 @@ function ConfigOptionPicker({
 			onFocus={isModelOption(option) ? focusModelSearch : undefined}
 		>
 			{isModelOption(option) ? (
-				<ConfigModelChoices option={option} onChange={onChange} />
+				<ConfigModelChoices option={option} onChange={onChange} groupClaude={groupClaude} />
 			) : (
 				<ConfigOptionChoices option={option} onChange={onChange} />
 			)}
@@ -689,18 +839,52 @@ function ConfigOptionPicker({
 function ConfigModelChoices({
 	option,
 	onChange,
+	groupClaude,
 }: {
 	option: ChatConfigOption;
 	onChange: (value: ChatConfigOptionValue) => void;
+	/** Newest model per Claude family first, the rest behind a toggle, as in the new-task picker. */
+	groupClaude?: boolean;
 }) {
+	const { t } = useTranslation();
 	const models = useMemo(() => option.choices.map((choice) => ({
 		...choice,
 		id: choice.value,
 		label: choice.name,
 	})), [option.choices]);
+	const claude = useMemo(() => (groupClaude ? splitClaudeModels(models) : undefined), [groupClaude, models]);
+	const [otherOpen, setOtherOpen] = useState(false);
+	const selectedIsOther = Boolean(claude?.other.some((model) => model.id === option.currentValue));
+	const showOther = otherOpen || selectedIsOther;
+	const menuModels = claude ? (showOther ? [...claude.current, ...claude.other] : claude.current) : models;
 	return (
-		<ModelMenuChoices models={models}>
-			{(matches) => <ConfigOptionChoices option={{ ...option, choices: matches }} onChange={onChange} />}
+		<ModelMenuChoices models={menuModels}>
+			{(matches, searchActiveID, optionID) => (
+				<>
+					<ConfigOptionChoices
+						option={{ ...option, choices: matches }}
+						onChange={onChange}
+						searchActiveID={searchActiveID}
+						optionID={optionID}
+					/>
+					{claude?.other.length && !selectedIsOther ? (
+						<OptionMenuItem
+							// The composer focuses its editor on any click that bubbles out of the portal,
+							// which would pull focus out of the menu and close it.
+							onClick={(event) => event.stopPropagation()}
+							onSelect={(event) => {
+								event.preventDefault();
+								setOtherOpen((open) => !open);
+							}}
+							className="text-xs text-muted-foreground"
+							aria-expanded={otherOpen}
+						>
+							{t("settings.models.otherModels")}
+							<ChevronDown className={cn("ml-auto size-3 opacity-70 transition-transform", otherOpen && "rotate-180")} aria-hidden="true" />
+						</OptionMenuItem>
+					) : null}
+				</>
+			)}
 		</ModelMenuChoices>
 	);
 }
@@ -708,9 +892,13 @@ function ConfigModelChoices({
 function ConfigOptionChoices({
 	option,
 	onChange,
+	searchActiveID,
+	optionID,
 }: {
 	option: ChatConfigOption;
 	onChange: (value: ChatConfigOptionValue) => void;
+	searchActiveID?: string;
+	optionID?: (id: string) => string;
 }) {
 	if (option.type === "boolean") {
 		return (
@@ -745,12 +933,14 @@ function ConfigOptionChoices({
 				return (
 					<Fragment key={choice.value}>
 						{choice.group && choice.group !== previousGroup ? (
-							<OptionMenuLabel className="px-3 pb-1 pt-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+							<OptionMenuLabel className="px-3 pb-1 pt-2 text-micro text-muted-foreground">
 								{choice.groupName || choice.group}
 							</OptionMenuLabel>
 						) : null}
 						<OptionMenuItem
+							id={optionID?.(choice.value)}
 							active={choice.value === option.currentValue}
+							searchActive={choice.value === searchActiveID}
 							radio
 							onSelect={() => onChange({ value: choice.value })}
 							className={cn("text-xs")}
@@ -799,8 +989,13 @@ function Picker({
 }) {
 	return (
 		<OptionMenu>
-			
-				<OptionMenuTrigger aria-label={title} title={title} disabled={disabled} className={TRIGGER_CLASS}>
+				<OptionMenuTrigger
+					showCaret={false}
+					aria-label={title}
+					title={title}
+					disabled={disabled}
+					className={TRIGGER_CLASS}
+				>
 					<span className="min-w-0 max-w-[16ch] truncate">{label}</span>
 					{badge}
 				</OptionMenuTrigger>
@@ -819,10 +1014,6 @@ function focusModelSearch(event: FocusEvent<HTMLDivElement>) {
 		event.preventDefault();
 		search.focus();
 	}
-}
-
-function capitalize(value: string): string {
-	return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function isModelOption(option: ChatConfigOption): boolean {
@@ -887,8 +1078,12 @@ function partitionConfigOptions(options: ChatConfigOption[]): {
 	let executionMode: ChatConfigOption | undefined;
 	let mode: ChatConfigOption | undefined;
 	for (const rawOption of options) {
-		const option = rawOption.type === "select" ? resolveImplicitChoice(rawOption) : rawOption;
-		if (option.type === "select" && option.choices.length === 0) continue;
+		const option = rawOption.type === "select"
+			? isEffortOption(rawOption)
+				? rawOption
+				: resolveImplicitChoice(rawOption)
+			: rawOption;
+		if (option.type === "select" && option.choices.length === 0 && !isEffortOption(option)) continue;
 		if (isAgentOption(option)) continue;
 		if (isModelOption(option)) {
 			if (option.category === "model" || option.id === "model") primaryModel.push(option);
@@ -896,6 +1091,7 @@ function partitionConfigOptions(options: ChatConfigOption[]): {
 			continue;
 		}
 		if (isEffortOption(option)) {
+			if (!option.choices.some((choice) => choice.value && choice.value !== "default")) continue;
 			effort.push(option);
 			continue;
 		}
@@ -924,8 +1120,6 @@ function partitionConfigOptions(options: ChatConfigOption[]): {
 	return { model: [...primaryModel, ...otherModel], effort, executionMode, toggles, mode, extra };
 }
 
-// ACP may expose a provider-owned choice whose description names a concrete
-// option. Keep its wire value so users can return to following the provider.
 function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 	const mapped = isModeOption(option) ? {
 		...option,
@@ -945,7 +1139,7 @@ function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 	const concrete = mapped.choices.find((choice) =>
 		choice.value !== implicit.value && choice.name.toLowerCase() === implicit.description?.trim().toLowerCase(),
 	);
-	const followLabel = isModelOption(mapped) ? "Use agent model" : isEffortOption(mapped) ? "Use agent effort" : "Use agent setting";
+	const followLabel = isModelOption(mapped) ? "Use agent model" : "Use agent setting";
 	if (concrete && mapped.currentValue !== concrete.value) {
 		const label = isDefaultPlaceholderLabel(concrete.name) ? concrete.value : concrete.name;
 		return {
@@ -954,6 +1148,10 @@ function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 				choice === implicit ? { ...choice, name: label } : choice,
 			),
 		};
+	}
+	// A model picker lists models only; the agent's own choice is not a row of its own.
+	if (isModelOption(mapped) && mapped.currentValue !== implicit.value) {
+		return { ...mapped, choices: mapped.choices.filter((choice) => choice !== implicit) };
 	}
 	return {
 		...mapped,

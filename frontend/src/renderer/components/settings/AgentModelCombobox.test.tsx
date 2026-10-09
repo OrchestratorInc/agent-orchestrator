@@ -27,7 +27,7 @@ function renderCombobox(
 describe("AgentModelCombobox", () => {
 	beforeEach(() => window.localStorage.clear());
 
-	it("opens effort after selecting a model and closes after selecting both", async () => {
+	it("shows resolved effort beside the model and keeps effort in the menu", async () => {
 		function Picker() {
 			const [model, setModel] = useState("capable");
 			const [effort, setEffort] = useState("high");
@@ -41,9 +41,11 @@ describe("AgentModelCombobox", () => {
 		}
 		render(<Picker />);
 		const picker = screen.getByRole("button", { name: "Worker model" });
-		expect(picker).toHaveTextContent("Capable · High");
+		expect(picker).toHaveTextContent("Capable");
+		expect(picker).toHaveTextContent("High");
 		await userEvent.click(picker);
 		expect(screen.getByRole("menuitem", { name: "Capable" })).toHaveAttribute("aria-current", "true");
+		expect(screen.getByRole("menuitem", { name: /Reasoning effort/ })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: "Plain" }));
 		expect(picker).toHaveTextContent("Plain · Low");
 		expect(screen.queryByRole("menuitemradio", { name: "High" })).not.toBeInTheDocument();
@@ -57,6 +59,11 @@ describe("AgentModelCombobox", () => {
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
 		expect(picker).toHaveTextContent("Plain · Low");
 		expect(screen.queryByRole("menuitem", { name: "Plain" })).not.toBeInTheDocument();
+		await userEvent.click(picker);
+		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		expect(picker).toHaveTextContent("Plain");
+		expect(picker).toHaveTextContent("Low");
 	});
 
 	it("closes only the effort submenu on Escape", async () => {
@@ -124,16 +131,6 @@ describe("AgentModelCombobox", () => {
 		expect(onChange).toHaveBeenCalledWith("");
 	});
 
-	it("can clear an override when the agent does not report its model", async () => {
-		const { onChange } = renderCombobox([
-			{ id: "default", label: "Default (recommended)", isDefault: true },
-			{ id: "sonnet", label: "Sonnet" },
-		], { value: "sonnet" });
-		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		await userEvent.click(screen.getByRole("menuitem", { name: "Use agent model" }));
-		expect(onChange).toHaveBeenCalledWith("");
-	});
-
 	it("clears an effort override when the reported agent effort is selected", async () => {
 		const onEffortChange = vi.fn();
 		renderCombobox([
@@ -152,11 +149,14 @@ describe("AgentModelCombobox", () => {
 			{ id: "sonnet", label: "Sonnet" },
 		]);
 		const picker = screen.getByRole("button", { name: "Worker model" });
-		expect(picker).toHaveTextContent("Model not reported");
+		expect(picker).toHaveTextContent("Select model");
+		expect(picker).not.toHaveTextContent("Model not reported");
 		expect(onChange).not.toHaveBeenCalled();
 		await userEvent.click(picker);
 		expect(screen.queryByRole("menuitem", { name: /Default/ })).not.toBeInTheDocument();
-		expect(screen.getByRole("menuitem", { name: "Sonnet" })).toBeInTheDocument();
+		// The models are listed with none selected.
+		const sonnet = screen.getByRole("menuitem", { name: "Sonnet" });
+		expect(sonnet).not.toHaveAttribute("aria-current");
 	});
 
 	it("keeps the model menu closed while its owning operation is pending", async () => {
@@ -166,6 +166,53 @@ describe("AgentModelCombobox", () => {
 		expect(trigger).toBeDisabled();
 		await userEvent.click(trigger);
 		expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
+	});
+
+	describe("Claude Code models", () => {
+		const claudeModels = ["Opus 4.5", "Opus 5.5", "Opus 4.8", "Haiku 4.5", "Sonnet 4.6", "Sonnet 5", "Fable 5", "Fable 5.1"]
+			.map((label) => ({ id: label.toLowerCase().replace(" ", "-"), label }));
+		const menuLabels = () => screen.getAllByRole("menuitem").map((item) => item.textContent);
+		const open = async (overrides: Parameters<typeof renderCombobox>[1] = {}) => {
+			renderCombobox(claudeModels, { compact: true, agentId: "claude-code", ...overrides });
+			await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		};
+
+		it("lists the newest model per family, then folds the rest under Other models", async () => {
+			await open();
+			expect(menuLabels()).toEqual(["Fable 5.1", "Opus 5.5", "Sonnet 5", "Haiku 4.5", "Other models"]);
+			await userEvent.click(screen.getByRole("menuitem", { name: "Other models" }));
+			expect(menuLabels()).toEqual([
+				"Fable 5.1", "Opus 5.5", "Sonnet 5", "Haiku 4.5",
+				"Fable 5", "Opus 4.8", "Opus 4.5", "Sonnet 4.6",
+				"Other models",
+			]);
+		});
+
+		it("collapses again the next time the menu opens", async () => {
+			await open({ value: "opus-5.5" });
+			await userEvent.click(screen.getByRole("menuitem", { name: "Other models" }));
+			expect(menuLabels()).toHaveLength(9);
+			await userEvent.keyboard("{Escape}");
+			await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+			expect(menuLabels()).toHaveLength(5);
+		});
+
+		it("opens expanded, without the toggle, when the selected model is older", async () => {
+			await open({ value: "opus-4.5" });
+			expect(screen.getByRole("menuitem", { name: "Opus 4.5" })).toBeInTheDocument();
+			expect(screen.queryByRole("menuitem", { name: "Other models" })).not.toBeInTheDocument();
+		});
+
+		it("still finds other models by search", async () => {
+			await open();
+			await userEvent.keyboard("opus 4.5");
+			expect(menuLabels()).toContain("Opus 4.5");
+		});
+
+		it("leaves other agents in their reported order", async () => {
+			await open({ agentId: "codex" });
+			expect(menuLabels()).toEqual(claudeModels.map((model) => model.label));
+		});
 	});
 
 	it("uses direct lookup and provider buckets instead of scanning the complete catalog", () => {
@@ -290,7 +337,6 @@ describe("AgentModelCombobox", () => {
 		const onRefresh = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
 		renderCombobox(Array.from({ length: 10 }, (_, index) => ({ id: `model-${index}`, label: `Model ${index}` })), {
 			onRefresh,
-			lastSuccessAt: "2026-09-07T08:00:00Z",
 		});
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		const search = screen.getByRole("searchbox", { name: "Search worker model" });
@@ -298,7 +344,7 @@ describe("AgentModelCombobox", () => {
 		await userEvent.type(search, "missing-model");
 		const refresh = screen.getByRole("button", { name: "Refresh models" });
 		expect(search.parentElement?.parentElement).toContainElement(refresh);
-		expect(screen.getByText(/Last updated/)).toBeInTheDocument();
+		expect(screen.queryByText(/Last updated/)).not.toBeInTheDocument();
 		await userEvent.click(refresh);
 		const busy = screen.getByRole("button", { name: /Refreshing/ });
 		expect(busy).toBeDisabled();

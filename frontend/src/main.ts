@@ -1,9 +1,12 @@
+import { syncMacWindowButtons } from "./main/window-chrome";
+import { MAC_TITLEBAR_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
 import { finishUpdateQuit } from "./main/update-quit";
 import { acknowledgeMacUpdateRestart } from "./main/mac-update-progress";
 import { consumeUpdateRelaunchFlag } from "./main/update-relaunch-flag";
 import {
 	app,
 	BaseWindow,
+	BrowserWindow,
 	clipboard,
 	dialog,
 	ipcMain,
@@ -46,6 +49,9 @@ import { readKeybindingOverrides, writeKeybindingOverrides } from "./main/keybin
 import { readEditorSettings, writeEditorPreference } from "./main/editor-settings";
 import { createEditorHandoff } from "./main/editor-handoff";
 import { launchCommand } from "./main/launch-command";
+import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
+import { agentPageRequestAllowed } from "./main/render-frame-network";
+import { isAgentPageUrl } from "./shared/agent-page-url";
 import {
 	decideRelocation,
 	inspectInstalledBundle,
@@ -69,6 +75,7 @@ import { promisify } from "node:util";
 import { type DaemonLaunchSpec, bundledDaemonIdentityError, resolveDaemonLaunch } from "./shared/daemon-launch";
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
 import type { DaemonStatus } from "./shared/daemon-status";
+import { canonicalPathInside, sameCanonicalPath } from "./shared/path-identity";
 import {
 	refreshSlowDaemonStartupDetails,
 	slowDaemonStartupStatus,
@@ -118,6 +125,7 @@ import { DEFAULT_TERMINAL_SHELL, type TerminalShellPreference } from "./shared/u
 import { bundledTmuxBinaryPath, stableBundledTmuxBinaryPath } from "./shared/bundled-tmux";
 import {
 	handleCloudDeepLink,
+	getCloudSession,
 	installCloudIPC,
 	registerCloudProtocol,
 	showCloudSignInFailure,
@@ -139,6 +147,7 @@ import {
 	createBrowserViewHost,
 	shouldHandleAppShortcutInBrowserContext,
 	type BrowserViewHost,
+	type BrowserRuntimeState,
 } from "./main/browser-view-host";
 import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
@@ -155,6 +164,7 @@ import { AgentBrowserRuntime } from "./main/agent-browser-runtime";
 import { sameBrowserRuntimeIdentity, type BrowserRuntimeIdentity } from "./main/browser-runtime-identity";
 import { connectSupervisor, type SupervisorLinkHandle } from "./main/supervisor-link";
 import { connectBrowserRuntime, type BrowserRuntimeLinkHandle } from "./main/browser-runtime-link";
+import { checkRender, measureRender } from "./main/render-check";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
@@ -169,6 +179,8 @@ import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenu
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
 import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
+import { RemoteRegistry } from "./main/remote-registry";
+import { startRemoteProxy } from "./main/remote-proxy";
 import { AGENT_SWITCH_VISIBILITY_IPC_CHANNEL } from "./shared/agent-switch-observability";
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
@@ -357,11 +369,6 @@ const isDev = !app.isPackaged;
 const DEV_DAEMON_PORT = 3002;
 const DEV_STATE_SUBDIR = "dev"; // ~/.ao/dev/
 
-// Traffic lights stay fixed across sidebar expand/collapse. Y matches the
-// natural macOS titlebar band (TitlebarNav is h-traffic-light-clearance).
-const MAC_WINDOW_BUTTON_X = 14;
-const MAC_WINDOW_BUTTON_Y = 12;
-
 const RENDERER_SCHEME = "app";
 const RENDERER_HOST = "renderer";
 const RENDERER_ORIGIN = `${RENDERER_SCHEME}://${RENDERER_HOST}`;
@@ -372,10 +379,16 @@ function getShellWebContents(): WebContents | null {
 	return windowComposition?.shellWebContents ?? null;
 }
 
+// Renderer-resolved sidebar colour. The shell root is transparent while a live
+// browser page shows, so the native window background must match it or the
+// gutters around the panels render in the fallback colour.
+let rendererWindowBackground: string | null = null;
+
 function syncNativeWindowBackground(): void {
 	if (!windowComposition || !mainWindow || mainWindow.isDestroyed()) return;
 	mainWindow.setBackgroundColor(
-		nativeTheme.shouldUseDarkColors ? NATIVE_WINDOW_BACKGROUND_DARK : NATIVE_WINDOW_BACKGROUND_LIGHT,
+		rendererWindowBackground ??
+			(nativeTheme.shouldUseDarkColors ? NATIVE_WINDOW_BACKGROUND_DARK : NATIVE_WINDOW_BACKGROUND_LIGHT),
 	);
 }
 
@@ -638,8 +651,8 @@ async function createWindowInternal(): Promise<void> {
 					}
 				: {
 						titleBarStyle: "hiddenInset" as const,
-						// Fixed natural titlebar position — never moved on sidebar toggle.
-						trafficLightPosition: { x: MAC_WINDOW_BUTTON_X, y: MAC_WINDOW_BUTTON_Y },
+						// Center on the shared header; zoom/resize synchronization follows below.
+						trafficLightPosition: { x: MAC_WINDOW_BUTTON_X, y: MAC_TITLEBAR_HEIGHT / 2 - MAC_WINDOW_BUTTON_RADIUS },
 					}),
 	};
 	mainWindow = new BaseWindow(windowOptions);
@@ -705,6 +718,50 @@ async function createWindowInternal(): Promise<void> {
 		if (url !== shellWebContents.getURL()) {
 			event.preventDefault();
 		}
+	});
+
+	shellWebContents.on("will-frame-navigate", (event) => {
+		if (event.isMainFrame || !event.frame) return;
+		// The app moving its own frame (to the daemon's new port, or to an
+		// artifact's inline origin) is not the page navigating away.
+		const app = shellWebContents.mainFrame;
+		if (event.initiator?.processId === app.processId && event.initiator.routingId === app.routingId) return;
+		if (blocksRenderFrameNavigation(event.frame.url, event.url)) event.preventDefault();
+	});
+
+	// Agent pages framed in the chat (renders, HTML artifacts) stay off this
+	// computer and its network, as the render check's window does: they may
+	// load public addresses and their own files. A request is judged by the
+	// nearest agent page around its frame; the app's own pass untouched. Pages
+	// cannot start workers (their CSP has worker-src 'none'), whose requests
+	// carry no frame.
+	const blockedPageHosts = new Set<string>();
+	shellWebContents.session.webRequest.onBeforeRequest((details, callback) => {
+		// Loading an agent page into a frame is always allowed: the page's own
+		// CSP sandboxes it, and it is judged by its own rule from then on.
+		if (details.resourceType === "subFrame" && isAgentPageUrl(details.url)) return callback({});
+		let pageUrl: string | undefined;
+		try {
+			for (let frame = details.frame; frame && !pageUrl; frame = frame.parent) {
+				if (isAgentPageUrl(frame.url)) pageUrl = frame.url;
+			}
+		} catch {
+			// The frame went away mid-request; nothing of its page is left to load.
+		}
+		if (!pageUrl) return callback({});
+		void agentPageRequestAllowed(details.url, pageUrl).then(
+			(allowed) => {
+				if (!allowed) {
+					const host = URL.canParse(details.url) ? new URL(details.url).host : details.url.slice(0, 80);
+					if (blockedPageHosts.size < 100 && !blockedPageHosts.has(host)) {
+						blockedPageHosts.add(host);
+						console.warn(`AO: blocked an agent page request to ${host}`);
+					}
+				}
+				callback({ cancel: !allowed });
+			},
+			() => callback({ cancel: true }),
+		);
 	});
 
 	shellWebContents.on("will-prevent-unload", (event) => {
@@ -803,6 +860,14 @@ async function createWindowInternal(): Promise<void> {
 			});
 			return result.response === 1;
 		},
+		reportSwitchFailure: (message, labels) => {
+			if (!mainWindow || mainWindow.isDestroyed()) return;
+			void dialog.showMessageBox(mainWindow, {
+				type: "error",
+				title: labels.switchTitle,
+				message,
+			}).catch((error) => console.error("browser profile error dialog failed:", error));
+		},
 	});
 	if (daemonStatus.state === "ready") establishBrowserRuntimeLink();
 
@@ -814,9 +879,18 @@ async function createWindowInternal(): Promise<void> {
 		});
 	}
 
-	// macOS: traffic lights vanish in native fullscreen, so the renderer drops
-	// the clearance pad above TitlebarNav. Push state so the sidebar can react
-	// without polling isFullScreen().
+	const syncWindowChrome = () => {
+		if (!mainWindow || shellWebContents.isDestroyed()) return;
+		if (process.platform === "darwin") syncMacWindowButtons(mainWindow, shellWebContents);
+		shellWebContents.send("window:zoom", shellWebContents.getZoomFactor());
+	};
+	// Resize/zoom and fullscreen exit can reset AppKit's button placement.
+	mainWindow.on("resize", syncWindowChrome);
+	shellWebContents.on("did-finish-load", syncWindowChrome);
+	shellWebContents.on("zoom-changed", () => setTimeout(syncWindowChrome, 0));
+
+	// Native fullscreen removes the traffic-light horizontal reserve, while
+	// the renderer keeps the same header height and navigation centerline.
 	const pushFullScreen = () => {
 		if (!mainWindow) return;
 		getShellWebContents()?.send("window:fullscreen", mainWindow.isFullScreen());
@@ -826,7 +900,10 @@ async function createWindowInternal(): Promise<void> {
 		getShellWebContents()?.send("window:maximized", mainWindow.isMaximized());
 	};
 	mainWindow.on("enter-full-screen", pushFullScreen);
-	mainWindow.on("leave-full-screen", pushFullScreen);
+	mainWindow.on("leave-full-screen", () => {
+		syncWindowChrome();
+		pushFullScreen();
+	});
 	mainWindow.on("maximize", pushMaximized);
 	mainWindow.on("unmaximize", pushMaximized);
 	mainWindow.on("blur", () => {
@@ -914,9 +991,13 @@ function editorStateDir(): string {
 	return path.dirname(runFile);
 }
 
+// Tagged so the renderer reads these as "couldn't check" rather than "the worktree is gone".
+const workspaceCheckUnavailable = (message: string) =>
+	Object.assign(new Error(message), { code: "SERVICE_UNAVAILABLE" });
+
 async function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<string> {
 	if (daemonStatus.state !== "ready" || !daemonStatus.port) {
-		throw new Error("AO daemon is not ready.");
+		throw workspaceCheckUnavailable("AO daemon is not ready.");
 	}
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), DAEMON_PROBE_TIMEOUT_MS);
@@ -924,11 +1005,17 @@ async function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<str
 		const response = await net.fetch(
 			`http://127.0.0.1:${daemonStatus.port}/api/v1/desktop/sessions/${encodeURIComponent(sessionId)}/workspace`,
 			{ signal: controller.signal },
-		);
-		const body = await response.json() as Record<string, unknown>;
+		).catch((error: unknown) => {
+			if (error instanceof Error && error.name === "AbortError") throw error;
+			throw workspaceCheckUnavailable("AO daemon is not reachable.");
+		});
+		const body = await response.json().catch((error: unknown) => {
+			if (response.status >= 500) throw workspaceCheckUnavailable("AO daemon is not ready.");
+			throw error;
+		}) as Record<string, unknown>;
 		if (!response.ok) {
 			const message = typeof body.message === "string" ? body.message : "Session workspace is not available.";
-			throw new Error(message);
+			throw Object.assign(new Error(message), typeof body.code === "string" ? { code: body.code } : {});
 		}
 		const workspacePath = body.workspacePath;
 		if (typeof workspacePath !== "string" || !path.isAbsolute(workspacePath)) {
@@ -937,7 +1024,7 @@ async function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<str
 		return workspacePath;
 	} catch (error) {
 		if (error instanceof Error && error.name === "AbortError") {
-			throw new Error("Timed out while resolving the session workspace.");
+			throw workspaceCheckUnavailable("Timed out while resolving the session workspace.");
 		}
 		throw error;
 	} finally {
@@ -1187,21 +1274,6 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 	);
 }
 
-function pathKey(value: string): string {
-	const resolved = path.resolve(value);
-	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
-function samePath(a: string, b: string): boolean {
-	return pathKey(a) === pathKey(b);
-}
-
-function pathInside(child: string, parent: string): boolean {
-	const childKey = pathKey(child);
-	const parentKey = pathKey(parent);
-	return childKey === parentKey || childKey.startsWith(parentKey + path.sep);
-}
-
 function processAlive(pid: number): boolean {
 	if (!pid) return false;
 	try {
@@ -1228,11 +1300,11 @@ async function readDaemonProbe(port: number, endpoint: "healthz" | "readyz"): Pr
 
 function daemonIdentityError(launch: DaemonLaunchSpec, probe: DaemonProbe): string | null {
 	if (launch.source === "dev") {
-		const cwdMatches = probe.workingDirectory ? samePath(probe.workingDirectory, launch.cwd) : false;
+		const cwdMatches = probe.workingDirectory ? sameCanonicalPath(probe.workingDirectory, launch.cwd) : false;
 		const startupCwdMatches = probe.startupWorkingDirectory
-			? samePath(probe.startupWorkingDirectory, launch.cwd)
+			? sameCanonicalPath(probe.startupWorkingDirectory, launch.cwd)
 			: false;
-		const executableMatches = probe.executablePath ? pathInside(probe.executablePath, launch.cwd) : false;
+		const executableMatches = probe.executablePath ? canonicalPathInside(probe.executablePath, launch.cwd) : false;
 		if (!probe.workingDirectory && !probe.startupWorkingDirectory && !probe.executablePath) {
 			return "An older AO daemon is already running, but it does not report its checkout identity. Stop it and restart this app.";
 		}
@@ -1245,7 +1317,7 @@ function daemonIdentityError(launch: DaemonLaunchSpec, probe: DaemonProbe): stri
 	}
 
 	if (launch.source === "bundled") {
-		return bundledDaemonIdentityError(probe, launch.command, process.env.APPIMAGE, samePath);
+		return bundledDaemonIdentityError(probe, launch.command, process.env.APPIMAGE, sameCanonicalPath);
 	}
 	return null;
 }
@@ -1272,6 +1344,15 @@ function disposeBrowserRuntimeLink(): void {
 	browserRuntimeLink?.dispose();
 	browserRuntimeLink = null;
 	browserRuntimeLinkIdentity = null;
+}
+
+function publishBrowserRuntimeState(connected: boolean): void {
+	getShellWebContents()?.send("browser:runtimeState", { connected } satisfies BrowserRuntimeState);
+}
+
+function reconnectBrowserRuntimeLink(): void {
+	disposeBrowserRuntimeLink();
+	establishBrowserRuntimeLink();
 }
 
 function establishBrowserRuntimeLink(): void {
@@ -1306,6 +1387,15 @@ function establishBrowserRuntimeLink(): void {
 	browserRuntimeLink = connectBrowserRuntime(address, {
 		token,
 		execute: (command, signal) => {
+			// A render check or measure uses its own hidden offscreen window,
+			// never the main window or the session's Browser panel, so it does
+			// not need (or disturb) the view host.
+			if (command.action === "__render-check") {
+				return checkRender({ BrowserWindow }, command.args ?? {}, signal);
+			}
+			if (command.action === "__render-measure") {
+				return measureRender({ BrowserWindow }, command.args ?? {}, signal);
+			}
 			const host = browserViewHost;
 			if (!host) {
 				throw Object.assign(new Error("Browser target owner is unavailable"), {
@@ -1315,6 +1405,7 @@ function establishBrowserRuntimeLink(): void {
 			return host.execute(command.sessionId, command.action, command.args, signal);
 		},
 		log: (message) => console.log(`AO: ${message}`),
+		onStateChange: publishBrowserRuntimeState,
 	});
 	browserRuntimeLinkIdentity = identity;
 }
@@ -1997,6 +2088,11 @@ ipcMain.handle("app:openExternal", async (_event, url: string) => {
 	await openAllowedAppExternalURL(url, shell);
 });
 
+ipcMain.handle("window:getZoomFactor", () => {
+	const shell = getShellWebContents();
+	if (process.platform === "darwin" && mainWindow && shell) syncMacWindowButtons(mainWindow, shell);
+	return shell?.getZoomFactor() ?? 1;
+});
 ipcMain.handle("window:isFullScreen", () => mainWindow?.isFullScreen() ?? false);
 ipcMain.handle("window:isMaximized", () => mainWindow?.isMaximized() ?? false);
 
@@ -2011,6 +2107,13 @@ ipcMain.handle("theme:set", (_event, preference: "light" | "dark" | "system") =>
 	}
 });
 
+ipcMain.handle("theme:set-window-background", (_event, color: unknown) => {
+	if (typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color)) {
+		rendererWindowBackground = color;
+		syncNativeWindowBackground();
+	}
+});
+
 ipcMain.handle("theme:persist-terminal", (_event, scheme: unknown) => {
 	if (scheme === "light" || scheme === "dark") {
 		persistTerminalThemeHint(scheme);
@@ -2019,6 +2122,16 @@ ipcMain.handle("theme:persist-terminal", (_event, scheme: unknown) => {
 
 // Renderer calls this when focus lands on real shell UI (not the titlebar menu), so menu:action's panel fallback below doesn't go stale.
 ipcMain.on("shell:focus", () => browserViewHost?.forgetLastFocusedPanel());
+
+ipcMain.handle("browser:runtime:reconnect", (event) => {
+		if (event.sender !== getShellWebContents()) throw new Error("Untrusted browser runtime request.");
+		reconnectBrowserRuntimeLink();
+});
+
+ipcMain.handle("browser:runtime:state", (event): BrowserRuntimeState => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted browser runtime request.");
+	return { connected: browserRuntimeLink?.connected ?? false };
+});
 
 ipcMain.on("browser:overlay", (event, open: unknown) => {
 	if (event.sender !== getShellWebContents() || typeof open !== "boolean") return;
@@ -2092,11 +2205,20 @@ ipcMain.handle("menu:action", (_event, action: string) => {
 			}
 			return wc?.toggleDevTools();
 		case "view.zoomIn":
-			return wc.setZoomLevel(wc.getZoomLevel() + 0.5);
+			wc.setZoomLevel(wc.getZoomLevel() + 0.5);
+			if (process.platform === "darwin" && wc === getShellWebContents()) syncMacWindowButtons(win, wc);
+			wc.send("window:zoom", wc.getZoomFactor());
+			return;
 		case "view.zoomOut":
-			return wc.setZoomLevel(wc.getZoomLevel() - 0.5);
+			wc.setZoomLevel(wc.getZoomLevel() - 0.5);
+			if (process.platform === "darwin" && wc === getShellWebContents()) syncMacWindowButtons(win, wc);
+			wc.send("window:zoom", wc.getZoomFactor());
+			return;
 		case "view.zoomReset":
-			return wc.setZoomLevel(0);
+			wc.setZoomLevel(0);
+			if (process.platform === "darwin" && wc === getShellWebContents()) syncMacWindowButtons(win, wc);
+			wc.send("window:zoom", wc.getZoomFactor());
+			return;
 		case "view.fullscreen":
 			return win.setFullScreen(!win.isFullScreen());
 		case "window.minimize":
@@ -2171,11 +2293,19 @@ async function chooseDirectory(title: string, defaultPath?: string): Promise<str
 	return result.filePaths[0] ?? null;
 }
 
+const remoteRegistry = new RemoteRegistry((entry) => {
+	// Node reports "null" for the custom app:// origin; only Vite's HTTP URL
+	// needs parsing. Never reflect an arbitrary request Origin here.
+	const devUrl = typeof MAIN_WINDOW_VITE_DEV_SERVER_URL === "undefined" ? undefined : MAIN_WINDOW_VITE_DEV_SERVER_URL;
+	return startRemoteProxy(entry, devUrl ? new URL(devUrl).origin : RENDERER_ORIGIN);
+});
 registerRemotesIpc(ipcMain, {
 	file: remotesFilePath(),
-	// No host is ever connected yet; the proxy registry that owns live
-	// connections lands in the next change and replaces this.
-	disconnect: async () => undefined,
+	registry: remoteRegistry,
+	requireAccount: async () => {
+		if (!await getCloudSession(cloudDataDir())) throw new Error("Sign in to AO Cloud to use remote hosts.");
+	},
+	getAccountId: async () => (await getCloudSession(cloudDataDir()))?.user.id ?? "",
 });
 
 ipcMain.handle("app:chooseDirectory", async (_event, input?: string | { title?: string; defaultPath?: string }) => {
@@ -2593,6 +2723,7 @@ function cloudDataDir(): string {
 }
 
 function notifyRenderersOfCloudSession(account: import("./shared/cloud-account").CloudAccount | null): void {
+	if (!account) void remoteRegistry.disconnectAll();
 	const contents = getShellWebContents();
 	if (!contents || contents.isDestroyed()) return;
 	contents.send("cloud:sessionChanged", account);
@@ -2935,6 +3066,7 @@ app.on("before-quit", (event) => {
 		if (!browserQuitCleanupPromise) {
 			const cleanup = Promise.all([
 				disposeAllBrowserViewHosts(),
+				remoteRegistry.closeAll(),
 				telemetryPolicyController?.close() ?? Promise.resolve(),
 			]);
 			const finishQuit = () => {

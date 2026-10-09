@@ -42,6 +42,12 @@ const (
 	// maxWorkspaceImageBytes caps a single image revision streamed to the diff
 	// viewer. Anything larger is refused rather than buffered.
 	maxWorkspaceImageBytes = 16 * 1024 * 1024
+	// maxCommitLogCommits caps a Commits menu to its newest commits. GitHub's
+	// pull request commits API stops at the same 250.
+	maxCommitLogCommits = 250
+	// maxCommitLogBytes caps each of a Commits menu's two git log passes, so a
+	// huge commit cannot become an unbounded in-memory buffer.
+	maxCommitLogBytes = 2 * 1024 * 1024
 )
 
 // WorkspaceFileStatus describes a session-worktree file relative to its compare base.
@@ -84,6 +90,8 @@ type WorkspaceFiles struct {
 	Sections WorkspaceFileSections
 	// Commits are the commits between the compare base and HEAD, newest first.
 	Commits []CommitSummary
+	// CommitsTruncated means older commits were left out of Commits.
+	CommitsTruncated bool
 	// Summary aggregates Files (excluding unmodified entries) into totals for
 	// the panel header.
 	Summary WorkspaceSummary
@@ -138,6 +146,39 @@ type WorkspaceSummary struct {
 	Files     int
 	Additions int
 	Deletions int
+}
+
+// WorkspaceManifest is the latency-sensitive workspace review read model.
+// Unlike WorkspaceFiles it contains only changed files and omits complete
+// repository inventory and commit-history enrichment. WorkspaceVersion is
+// deliberately identical to the compatible WorkspaceFiles snapshot so the
+// existing detail, revision, and batch-diff endpoints can fence requests
+// against either read model during migration.
+type WorkspaceManifest struct {
+	SessionID        domain.SessionID
+	WorkspaceVersion string
+	CompareBaseSHA   string
+	CompareBaseRef   string
+	CompareMode      WorkspaceCompareMode
+	Files            []WorkspaceFileSummary
+	Sections         WorkspaceFileSections
+	Summary          WorkspaceSummary
+	Truncated        bool
+	Stale            bool
+	Refreshing       bool
+	Degraded         bool
+	DegradedCode     string
+}
+
+// WorkspaceHistory is the non-critical commit metadata loaded after the
+// latency-sensitive manifest. It deliberately avoids enumerating every file
+// in the repository.
+type WorkspaceHistory struct {
+	SessionID        domain.SessionID
+	Commits          []CommitSummary
+	CommitsTruncated bool
+	Ahead            *int
+	Behind           *int
 }
 
 // WorkspaceFileSummary is one file row in the session workspace browser.
@@ -226,6 +267,9 @@ func (s *Service) WorkspaceWatchPaths(ctx context.Context, id domain.SessionID) 
 // the first request after that load completes recomputes the data.
 func (s *Service) InvalidateWorkspaceCache(id domain.SessionID) {
 	s.workspaceCache.invalidateSession(id)
+	if s.workspaceManifests.markStale(id) {
+		s.refreshWorkspaceManifestInBackground(id)
+	}
 }
 
 // ListWorkspaceFiles returns all tracked and untracked, non-ignored files in a
@@ -291,18 +335,66 @@ func (s *Service) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (
 		}), nil
 	}
 	return finalizeWorkspaceFiles(WorkspaceFiles{
-		SessionID:      id,
-		CompareBaseSHA: compare.BaseSHA,
-		CompareBaseRef: compare.BaseRef,
-		CompareMode:    compare.Mode,
-		Files:          files,
-		Truncated:      truncated,
-		Sections:       sections,
-		Commits:        commits,
-		Summary:        workspaceSummaryFromFiles(files),
-		Ahead:          ahead,
-		Behind:         behind,
+		SessionID:        id,
+		CompareBaseSHA:   compare.BaseSHA,
+		CompareBaseRef:   compare.BaseRef,
+		CompareMode:      compare.Mode,
+		Files:            files,
+		Truncated:        truncated,
+		Sections:         sections,
+		Commits:          commits.list,
+		CommitsTruncated: commits.truncated,
+		Summary:          workspaceSummaryFromFiles(files),
+		Ahead:            ahead,
+		Behind:           behind,
 	}), nil
+}
+
+// GetWorkspaceHistory loads commit and upstream metadata without paying for
+// the legacy all-files inventory used by the full workspace browser.
+func (s *Service) GetWorkspaceHistory(ctx context.Context, id domain.SessionID) (WorkspaceHistory, error) {
+	rec, err := s.sessionWorkspaceRecord(ctx, id)
+	if err != nil {
+		return WorkspaceHistory{}, err
+	}
+	project, projectOK, err := s.sessionProject(ctx, rec)
+	if err != nil {
+		return WorkspaceHistory{}, err
+	}
+	if isStandaloneScratchWorkspace(rec) || (projectOK && project.Kind.WithDefault() == domain.ProjectKindWorkspace) {
+		return WorkspaceHistory{SessionID: id, Commits: []CommitSummary{}}, nil
+	}
+	prs, err := s.workspaceComparePRs(ctx, rec.ID)
+	if err != nil {
+		return WorkspaceHistory{}, err
+	}
+	resolve := func(rctx context.Context) workspaceCompareTarget {
+		return resolveWorkspaceCompare(rctx, rec.Metadata.WorkspacePath, rec.Metadata.DiffBaseSHA, rec.Metadata.DiffBaseRef, defaultBranchForProject(project, projectOK), prs)
+	}
+	compare, _, err := s.resolveWorkspaceChanges(ctx, id, rec.Metadata.WorkspacePath, resolve)
+	if err != nil {
+		return WorkspaceHistory{}, err
+	}
+	var commits workspaceCommits
+	var ahead, behind *int
+	g, gctx := errgroup.WithContext(ctx)
+	if base := strings.TrimSpace(compare.gitBase()); base != "" && base != "HEAD" {
+		g.Go(func() (err error) {
+			commits.list, commits.truncated, err = gitCommitLog(gctx, rec.Metadata.WorkspacePath, base)
+			return err
+		})
+	}
+	g.Go(func() error {
+		ahead, behind = gitAheadBehind(gctx, rec.Metadata.WorkspacePath)
+		return nil
+	})
+	if err := g.Wait(); err != nil {
+		return WorkspaceHistory{}, err
+	}
+	if commits.list == nil {
+		commits.list = []CommitSummary{}
+	}
+	return WorkspaceHistory{SessionID: id, Commits: commits.list, CommitsTruncated: commits.truncated, Ahead: ahead, Behind: behind}, nil
 }
 
 func workspaceDegradedCode(err error) string {
@@ -1721,17 +1813,14 @@ func workspaceChangeMaps(ctx context.Context, root, base string) (workspaceChang
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
-		diffStatuses, diffPrevious, err = workspaceDiffStatuses(gctx, root, base)
+		diffStatuses, diffPrevious, counts, err = workspaceDiffStats(gctx, root, base)
 		return err
 	})
 	g.Go(func() (err error) {
 		statusStatuses, statusPrevious, err = workspaceStatuses(gctx, root)
 		return err
 	})
-	g.Go(func() (err error) {
-		counts, err = workspaceNumstat(gctx, root, base)
-		return err
-	})
+
 	if err := g.Wait(); err != nil {
 		return workspaceChangeSet{}, err
 	}
@@ -1781,21 +1870,24 @@ func workspaceChangeMaps(ctx context.Context, root, base string) (workspaceChang
 	return workspaceChangeSet{statuses: statuses, counts: counts, previous: previous, untracked: untracked}, nil
 }
 
+// workspaceCommits is the commit list between base and HEAD, newest first,
+// and whether older commits were left out of it.
+type workspaceCommits struct {
+	list      []CommitSummary
+	truncated bool
+}
+
 // workspaceGitState computes the git-state sections, the commit list between
 // base and HEAD, and ahead/behind counts for one worktree root. The four
 // section diffs, the commit log, and the ahead/behind lookup are independent
 // git subprocesses and run concurrently.
-func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSections, []CommitSummary, *int, *int, error) {
+func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSections, workspaceCommits, *int, *int, error) {
 	var sections WorkspaceFileSections
-	var commits []CommitSummary
+	var commits workspaceCommits
 	var ahead, behind *int
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		statuses, previous, err := workspaceDiffNameStatus(gctx, root, "--cached")
-		if err != nil {
-			return err
-		}
-		counts, err := workspaceDiffNumstat(gctx, root, "--cached")
+		statuses, previous, counts, err := workspaceDiffStats(gctx, root, "--cached")
 		if err != nil {
 			return err
 		}
@@ -1803,11 +1895,7 @@ func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSec
 		return nil
 	})
 	g.Go(func() error {
-		statuses, previous, err := workspaceDiffNameStatus(gctx, root)
-		if err != nil {
-			return err
-		}
-		counts, err := workspaceDiffNumstat(gctx, root)
+		statuses, previous, counts, err := workspaceDiffStats(gctx, root)
 		if err != nil {
 			return err
 		}
@@ -1824,11 +1912,7 @@ func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSec
 	})
 	if base = strings.TrimSpace(base); base != "" && base != "HEAD" {
 		g.Go(func() error {
-			statuses, previous, err := workspaceDiffNameStatus(gctx, root, base, "HEAD")
-			if err != nil {
-				return err
-			}
-			counts, err := workspaceDiffNumstat(gctx, root, base, "HEAD")
+			statuses, previous, counts, err := workspaceDiffStats(gctx, root, base, "HEAD")
 			if err != nil {
 				return err
 			}
@@ -1836,7 +1920,7 @@ func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSec
 			return nil
 		})
 		g.Go(func() (err error) {
-			commits, err = gitCommitLog(gctx, root, base)
+			commits.list, commits.truncated, err = gitCommitLog(gctx, root, base)
 			return err
 		})
 	}
@@ -1845,7 +1929,7 @@ func workspaceGitState(ctx context.Context, root, base string) (WorkspaceFileSec
 		return nil
 	})
 	if err := g.Wait(); err != nil {
-		return WorkspaceFileSections{}, nil, nil, nil, err
+		return WorkspaceFileSections{}, workspaceCommits{}, nil, nil, err
 	}
 	return sections, commits, ahead, behind, nil
 }
@@ -1917,29 +2001,74 @@ func gitUntrackedFiles(ctx context.Context, root string) ([]string, error) {
 }
 
 // gitCommitLog lists the commits reachable from HEAD but not base, newest
-// first. Metadata/name-status and numstat are collected in two bounded Git
-// passes, rather than spawning Git once or twice for every commit.
-func gitCommitLog(ctx context.Context, root, base string) ([]CommitSummary, error) {
-	var statusOutput, numstatOutput string
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() (err error) {
-		statusOutput, err = gitWorkspaceOutput(gctx, root, "log", "--format=%x1e%H%x1f%s%x1f%an%x1f%aI", "--name-status", "--find-renames", "-z", base+"..HEAD")
-		return err
-	})
-	g.Go(func() (err error) {
-		numstatOutput, err = gitWorkspaceOutput(gctx, root, "log", "--format=%x1e%H", "--numstat", "--find-renames", "-z", base+"..HEAD")
-		return err
-	})
-	if err := g.Wait(); err != nil {
-		return nil, err
+// first, up to maxCommitLogCommits of them. truncated reports that older
+// commits were left out.
+func gitCommitLog(ctx context.Context, root, base string) ([]CommitSummary, bool, error) {
+	commits, changes, counts, truncated, err := gitCommitLogChanges(ctx, root, base+"..HEAD", maxCommitLogCommits, maxCommitLogBytes)
+	if err != nil {
+		return nil, false, err
 	}
-	commits, changes := parseCommitStatusLog(statusOutput)
-	counts := parseCommitNumstatLog(numstatOutput)
 	for i := range commits {
 		change := changes[commits[i].SHA]
 		commits[i].Files = buildSectionSummaries(root, change.statuses, counts[commits[i].SHA], change.previous)
 	}
-	return commits, nil
+	return commits, truncated, nil
+}
+
+// gitCommitLogChanges lists up to maxCommits commits in revRange, newest
+// first, with each commit's name-status changes and numstat counts. Both are
+// collected in two Git passes, rather than spawning Git once or twice for every
+// commit, and each pass keeps at most maxBytes of output. A commit either
+// fits whole in both passes or is left out, never listed with part of its
+// files. truncated reports that older commits were left out.
+func gitCommitLogChanges(ctx context.Context, root, revRange string, maxCommits, maxBytes int) ([]CommitSummary, map[string]commitChangeSet, map[string]map[string][2]int, bool, error) {
+	// Reading one commit past the cap tells a full list from a truncated one.
+	maxCount := "--max-count=" + strconv.Itoa(maxCommits+1)
+	var statusOutput, numstatOutput string
+	var statusCapped, numstatCapped bool
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) {
+		statusOutput, statusCapped, err = gitWorkspaceOutputCapped(gctx, root, maxBytes, "log", maxCount, "--format=%x1e%H%x1f%s%x1f%an%x1f%aI", "--name-status", "--find-renames", "-z", revRange)
+		return err
+	})
+	g.Go(func() (err error) {
+		numstatOutput, numstatCapped, err = gitWorkspaceOutputCapped(gctx, root, maxBytes, "log", maxCount, "--format=%x1e%H", "--numstat", "--find-renames", "-z", revRange)
+		return err
+	})
+	if err := g.Wait(); err != nil {
+		return nil, nil, nil, false, err
+	}
+	commits, changes := parseCommitStatusLog(wholeCommitChunks(statusOutput, statusCapped))
+	counts := parseCommitNumstatLog(wholeCommitChunks(numstatOutput, numstatCapped))
+	truncated := statusCapped || numstatCapped
+	if numstatCapped {
+		// Past the numstat pass's last whole commit, text files would read as
+		// binary for want of counts.
+		for i, commit := range commits {
+			if _, ok := counts[commit.SHA]; !ok {
+				commits = commits[:i]
+				break
+			}
+		}
+	}
+	if len(commits) > maxCommits {
+		commits = commits[:maxCommits]
+		truncated = true
+	}
+	return commits, changes, counts, truncated, nil
+}
+
+// wholeCommitChunks drops the commit a capped git log pass stopped partway
+// through. Every commit's chunk starts with \x1e, so all output before the
+// last one is whole.
+func wholeCommitChunks(out string, capped bool) string {
+	if !capped {
+		return out
+	}
+	if end := strings.LastIndexByte(out, '\x1e'); end >= 0 {
+		return out[:end]
+	}
+	return ""
 }
 
 type commitChangeSet struct {
@@ -2059,8 +2188,40 @@ func classifyWorkspaceStatus(xy string) WorkspaceFileStatus {
 	}
 }
 
-func workspaceDiffStatuses(ctx context.Context, root, base string) (map[string]WorkspaceFileStatus, map[string]string, error) {
-	return workspaceDiffNameStatus(ctx, root, base)
+// workspaceDiffStats obtains status, rename sources and line counts in one
+// Git traversal. Separate name-status and numstat calls each rescan the worktree.
+func workspaceDiffStats(ctx context.Context, root string, revArgs ...string) (map[string]WorkspaceFileStatus, map[string]string, map[string][2]int, error) {
+	args := append([]string{"diff", "--raw", "--numstat", "--find-renames", "-z"}, revArgs...)
+	args = append(args, "--")
+	out, err := gitWorkspaceOutput(ctx, root, args...)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	parts := splitNUL(out)
+	statuses := map[string]WorkspaceFileStatus{}
+	previous := map[string]string{}
+	index := 0
+	for index < len(parts) && strings.HasPrefix(parts[index], ":") {
+		fields := strings.Fields(parts[index])
+		if len(fields) != 5 || index+1 >= len(parts) {
+			return nil, nil, nil, fmt.Errorf("invalid Git raw diff record")
+		}
+		code := fields[4]
+		oldPath := filepath.ToSlash(parts[index+1])
+		newPath := oldPath
+		index += 2
+		status := classifyNameStatus(code)
+		if status == WorkspaceFileRenamed {
+			if index >= len(parts) {
+				return nil, nil, nil, fmt.Errorf("invalid Git rename record")
+			}
+			newPath = filepath.ToSlash(parts[index])
+			index++
+			previous[newPath] = oldPath
+		}
+		statuses[newPath] = status
+	}
+	return statuses, previous, parseNumstatOutput(strings.Join(parts[index:], "\x00")), nil
 }
 
 // workspaceDiffNameStatus runs `git diff --name-status` with the given
@@ -2148,10 +2309,6 @@ func classifyNameStatus(status string) WorkspaceFileStatus {
 	}
 }
 
-func workspaceNumstat(ctx context.Context, root, base string) (map[string][2]int, error) {
-	return workspaceDiffNumstat(ctx, root, base)
-}
-
 // workspaceDiffNumstat runs `git diff --numstat` with the given revision
 // arguments; see workspaceDiffNameStatus for the argument forms.
 func workspaceDiffNumstat(ctx context.Context, root string, revArgs ...string) (map[string][2]int, error) {
@@ -2173,7 +2330,7 @@ func parseNumstatOutput(out string) map[string][2]int {
 	counts := map[string][2]int{}
 	parts := splitNUL(out)
 	for i := 0; i < len(parts); {
-		fields := strings.Split(parts[i], "\t")
+		fields := strings.SplitN(parts[i], "\t", 3)
 		i++
 		if len(fields) < 3 {
 			continue
@@ -2481,6 +2638,7 @@ func gitWorkspaceOutputCapped(ctx context.Context, root string, limit int, args 
 	globalArgs := make([]string, 0, 10+len(args))
 	globalArgs = append(globalArgs, "--no-pager", "--no-optional-locks", "-c", "core.hooksPath="+os.DevNull, "-c", "diff.external=", "-c", "core.fsmonitor=false", "-C", root)
 	cmd := aoprocess.CommandContext(ctx, "git", append(globalArgs, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
 	stdout := &cappedWorkspaceOutput{limit: limit}
 	stderr := &cappedWorkspaceOutput{limit: 64 * 1024}
 	cmd.Stdout = stdout

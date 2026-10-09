@@ -117,7 +117,7 @@ func TestSend_SteerActiveTurnUsesProviderSteeringWithoutQueueing(t *testing.T) {
 	if err := json.Unmarshal([]byte(bodies[0]), &req); err != nil {
 		t.Fatal(err)
 	}
-	if req.Text != "[from source-2] correct course" || req.ClientMessageID == "" {
+	if req.Text != "[from source-2] correct course" || req.ClientMessageID == "" || req.SenderSessionID != "source-2" {
 		t.Errorf("request = %+v", req)
 	}
 	if !strings.Contains(out, "accepted by provider") || !strings.Contains(out, "action is not confirmed") {
@@ -614,5 +614,28 @@ func TestSend_NetworkErrorExits1(t *testing.T) {
 	}
 	if got := ExitCode(err); got != 1 {
 		t.Fatalf("exit code = %d, want 1", got)
+	}
+}
+
+func TestSendCarriesCooperativeSessionIdentity(t *testing.T) {
+	for _, sender := range []string{"", "project-1"} {
+		t.Run("sender="+sender, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", sender)
+			cfg := setConfigEnv(t)
+			srv, capture := sendServer(t, http.StatusOK, `{"ok":true}`)
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
+			_, stderr, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "send", "--session", "demo-1", "--message", "continue")
+			if err != nil {
+				t.Fatalf("err=%v stderr=%s", err, stderr)
+			}
+			var req sendAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if req.SenderSessionID != sender || req.UserAuthored != (sender == "") {
+				t.Fatalf("request=%+v", req)
+			}
+		})
 	}
 }

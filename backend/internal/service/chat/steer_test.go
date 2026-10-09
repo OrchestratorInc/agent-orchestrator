@@ -336,6 +336,18 @@ func TestSteerOrSendSendsWhenIdleAndRecoversWithoutRedispatch(t *testing.T) {
 	if recovered.Steered || !recovered.Duplicate || recovered.Turn.ID != first.Turn.ID {
 		t.Fatalf("recovered = %+v, want sent turn %s", recovered, first.Turn.ID)
 	}
+	for _, changed := range []ports.ChatUserMessage{
+		{Text: "different work", ClientMessageID: msg.ClientMessageID, Origin: msg.Origin},
+		{Text: msg.Text, ClientMessageID: msg.ClientMessageID, Origin: msg.Origin,
+			Content: []ports.ChatContent{{Type: "image", Data: "aGVsbG8=", MIMEType: "image/png"}}},
+		{Text: msg.Text, ClientMessageID: msg.ClientMessageID, Origin: msg.Origin, AuthoredByUser: true},
+		{Text: msg.Text, ClientMessageID: msg.ClientMessageID, Origin: msg.Origin,
+			Settings: ports.ChatTurnSettings{Model: "different-model"}},
+	} {
+		if _, err := h.svc.SteerOrSend(context.Background(), testSession, changed, false); !errors.Is(err, domain.ErrClientMessageConflict) {
+			t.Fatalf("changed retry error = %v, want client message conflict", err)
+		}
+	}
 	if calls := provider.sendCallCount(); calls != 1 {
 		t.Fatalf("provider received %d sends, want one", calls)
 	}
@@ -551,6 +563,38 @@ func TestSteerWithNothingInFlightIsTypedAndNeverReachesTheProvider(t *testing.T)
 	}
 	if len(provider.steers()) != 0 {
 		t.Error("a recovered refusal was delivered into a later turn")
+	}
+}
+
+func TestSteerOrSendIdleCrossSessionUsesAutomationOrigin(t *testing.T) {
+	provider := newSteerRecorder()
+	h := newHarnessWithConversation(t, provider)
+
+	_, err := h.svc.SteerOrSend(context.Background(), testSession, ports.ChatUserMessage{
+		Text:              "[from worker-1] use the simpler approach",
+		ClientMessageID:   "idle-cross-session-steer",
+		Origin:            domain.MessageOriginHuman,
+		SenderSessionID:   "worker-1",
+		SenderProjectID:   "project-1",
+		SenderDisplayName: "Backend worker",
+	}, false)
+	if err != nil {
+		t.Fatalf("SteerOrSend: %v", err)
+	}
+
+	snapshot, err := h.st.LoadConversationSnapshot(context.Background(), h.ctrl.ConversationID())
+	if err != nil {
+		t.Fatalf("load snapshot: %v", err)
+	}
+	if len(snapshot.Messages) == 0 {
+		t.Fatal("idle steer did not persist a message")
+	}
+	message := snapshot.Messages[len(snapshot.Messages)-1]
+	if message.Origin != domain.MessageOriginAutomation {
+		t.Fatalf("idle cross-session steer origin = %q, want automation", message.Origin)
+	}
+	if message.SenderSessionID != "worker-1" || message.SenderProjectID != "project-1" || message.SenderDisplayName != "Backend worker" {
+		t.Fatalf("idle cross-session sender metadata = (%q, %q, %q)", message.SenderSessionID, message.SenderProjectID, message.SenderDisplayName)
 	}
 }
 

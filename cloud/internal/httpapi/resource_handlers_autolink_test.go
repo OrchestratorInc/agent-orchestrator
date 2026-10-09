@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,10 +16,32 @@ import (
 const autolinkProjectID = "00000000-0000-0000-0000-0000000000d4"
 const autolinkOrgID = "00000000-0000-0000-0000-0000000000a1"
 
+func TestCreateSessionInitialEffort(t *testing.T) {
+	for _, effort := range []string{"medium", "unsupported"} {
+		t.Run(effort, func(t *testing.T) {
+			store := &stubAutolinkStore{}
+			srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+			req := createSessionRequestHTTP(t, "worker", "")
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Body = io.NopCloser(strings.NewReader(strings.TrimSuffix(string(body), "}") + `,"reasoningEffort":"` + effort + `"}`))
+			recorder := httptest.NewRecorder()
+			srv.createSession(recorder, req)
+			if effort == "medium" {
+				if recorder.Code != http.StatusCreated || store.captured.ReasoningEffort != effort {
+					t.Fatalf("status=%d captured effort=%q body=%s", recorder.Code, store.captured.ReasoningEffort, recorder.Body)
+				}
+			} else if recorder.Code != http.StatusUnprocessableEntity || store.created {
+				t.Fatalf("unsupported effort accepted: status=%d", recorder.Code)
+			}
+		})
+	}
+}
+
 // stubAutolinkStore embeds Store (nil) so it satisfies the interface while
-// implementing only the two methods createSession reaches on the auto-link
-// path. It deliberately does not implement providerConnectionStore, so the
-// handler's coding-agent credential check is skipped.
+// implementing only the methods createSession reaches on the auto-link path.
 type stubAutolinkStore struct {
 	Store
 	orchestratorID string
@@ -39,6 +62,12 @@ func (s *stubAutolinkStore) GetProject(
 	_ context.Context, _ domain.Principal, _, projectID string,
 ) (domain.Project, error) {
 	return domain.Project{ID: projectID}, nil
+}
+
+func (s *stubAutolinkStore) UserAgentCredentialAvailable(
+	_ context.Context, _, _ string,
+) (bool, error) {
+	return true, nil
 }
 
 func (s *stubAutolinkStore) CreateSession(

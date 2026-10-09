@@ -1,8 +1,9 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { createRendererCloudCpClient } from "../hooks/useCloudCp";
 import type { CloudCpAgentProvider, CloudCpProviderConnection } from "./cloud-cp";
+import { CLOUD_AGENT_PROVIDERS } from "./cloud-agents";
 import { settingsQueryKey, type Settings } from "../hooks/useSettings";
-import { readSelectedSandboxProvider } from "../stores/sandbox-provider-store";
+import { readSelectedSandboxProvider, resolveSandboxProviderPreference } from "../stores/sandbox-provider-store";
 import { captureRendererEvent } from "./telemetry";
 
 // A cloud project has no locally-configured orchestrator agent (that config
@@ -16,11 +17,15 @@ import { captureRendererEvent } from "./telemetry";
 // palette) render everywhere, and subscribing them to the cloud session/org
 // queries just for this click handler would fire cloud requests on every
 // mount. The client is built lazily from the settings query cache instead.
-// A Cloud worker image currently ships these three harnesses. This ordering
-// preserves the former Codex default whenever it is available, while allowing
-// a user's connected Claude Code or Cursor credential to run the orchestrator
-// when Codex is not connected.
-const CLOUD_ORCHESTRATOR_HARNESS_PRIORITY: readonly CloudCpAgentProvider[] = ["codex", "claude-code", "cursor"];
+// Orchestrator harness preference. Codex stays the historical default; the rest
+// follow in the canonical CLOUD_AGENT_PROVIDERS order. Derived from that single
+// list so a newly onboarded cloud harness is automatically eligible to run the
+// orchestrator with no change here (see cloud-agents.ts).
+const ORCHESTRATOR_PREFERRED_HARNESSES: readonly string[] = ["codex"];
+const CLOUD_ORCHESTRATOR_HARNESS_PRIORITY: readonly CloudCpAgentProvider[] = [
+	...ORCHESTRATOR_PREFERRED_HARNESSES,
+	...CLOUD_AGENT_PROVIDERS.filter((provider) => !ORCHESTRATOR_PREFERRED_HARNESSES.includes(provider)),
+] as readonly CloudCpAgentProvider[];
 
 function connectedProviders(
 	connections: readonly CloudCpProviderConnection[],
@@ -71,18 +76,14 @@ export async function spawnCloudOrchestrator(queryClient: QueryClient, projectId
 	// The user's client-side provider preference (when the control plane offers
 	// more than one); omitted lets the control plane use its default. Read
 	// directly from localStorage since this launcher is deliberately hook-free.
-	const provider = readSelectedSandboxProvider();
+	const provider = resolveSandboxProviderPreference(readSelectedSandboxProvider(), me.sandboxProviders?.available ?? []);
 	// Pick the orchestrator harness. Prefer the agent the user configured for
 	// this project (config.orchestrator.agent); only when the project has not
 	// chosen one do we fall back to the connected-credential priority
 	// (#4960: Codex -> Claude Code -> Cursor). Previously the configured choice
 	// was ignored, so a project set to Claude Code still launched Codex whenever
 	// a Codex credential happened to be connected.
-	const [orgCredentials, personalCredentials] = await Promise.all([
-		client.listProviderConnections(orgId),
-		client.listUserProviderConnections(),
-	]);
-	const connections = [...orgCredentials.providerConnections, ...personalCredentials.providerConnections];
+	const { providerConnections: connections } = await client.listUserProviderConnections();
 	// The project's configured orchestrator agent is an optional preference. Load
 	// it separately and tolerate a failure: it must not block a spawn that the
 	// connected-credential priority could still satisfy. A fetch error (or the

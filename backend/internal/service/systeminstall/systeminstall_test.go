@@ -163,12 +163,20 @@ func newTestService(goos string, found ...string) *Service {
 		installCapabilities: installCapabilitiesStub{
 			prefix: "/Users/test/.npm", writable: true,
 		},
+		pathWritable:       pathWritableProbeFunc(func(context.Context, string) (bool, error) { return true, nil }),
+		privateNPMPrefixes: map[Target]string{TargetOpencodeV2: "/Users/test/.local/share/opencode-v2-home/npm"},
 		commands: testCommandRunner(func(ctx context.Context, argv []string) *exec.Cmd {
 			return exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // test-only, deterministic argv
 		}),
 		goos:           goos,
 		installTimeout: 2 * time.Second,
 	}
+}
+
+type pathWritableProbeFunc func(context.Context, string) (bool, error)
+
+func (f pathWritableProbeFunc) PathWritable(ctx context.Context, path string) (bool, error) {
+	return f(ctx, path)
 }
 
 func TestPlanFor(t *testing.T) {
@@ -179,6 +187,7 @@ func TestPlanFor(t *testing.T) {
 		found           []string
 		wantUnsupported bool
 		wantReasonHas   string
+		wantNoticeHas   string
 		wantCommand     []string
 	}{
 		{
@@ -287,6 +296,10 @@ func TestPlanFor(t *testing.T) {
 			name: "opencode with sh remains manual", target: TargetOpencode, goos: "linux", found: []string{"curl", "sh"},
 			wantUnsupported: true, wantReasonHas: "does not automatically execute",
 		},
+		{
+			name: "opencode v2 legacy route uses official installer", target: TargetOpencodeV2, goos: "linux", found: []string{"bash"},
+			wantNoticeHas: "replaces the default OpenCode 1",
+		},
 	}
 
 	for _, tt := range tests {
@@ -302,6 +315,9 @@ func TestPlanFor(t *testing.T) {
 			if tt.wantReasonHas != "" && !strings.Contains(plan.Reason, tt.wantReasonHas) {
 				t.Fatalf("Reason = %q, want substring %q", plan.Reason, tt.wantReasonHas)
 			}
+			if tt.wantNoticeHas != "" && !strings.Contains(plan.Notice, tt.wantNoticeHas) {
+				t.Fatalf("Notice = %q, want substring %q", plan.Notice, tt.wantNoticeHas)
+			}
 			if tt.wantCommand != nil {
 				if strings.Join(plan.Command, " ") != strings.Join(tt.wantCommand, " ") {
 					t.Fatalf("Command = %v, want %v", plan.Command, tt.wantCommand)
@@ -312,7 +328,7 @@ func TestPlanFor(t *testing.T) {
 }
 
 func TestValid(t *testing.T) {
-	for _, target := range []Target{TargetTmux, TargetGH, TargetClaude, TargetCodex, TargetOpencode, TargetCopilot} {
+	for _, target := range []Target{TargetTmux, TargetGH, TargetClaude, TargetCodex, TargetOpencode, TargetOpencodeV2, TargetCopilot} {
 		if !Valid(target) {
 			t.Errorf("Valid(%q) = false, want true", target)
 		}
@@ -729,6 +745,91 @@ func TestAgentVendorScriptInstallPreservesDigestOnRunnerFailure(t *testing.T) {
 	}
 }
 
+func TestDevinInstallerFailureAfterInstallConfirmationVerifiesBinary(t *testing.T) {
+	s := newTestService("darwin", "bash")
+	s.installScripts = installScriptRunnerFunc(func(_ context.Context, _ ports.InstallScriptCommand, stdout, _ io.Writer) (ports.InstallScriptResult, error) {
+		_, _ = io.WriteString(stdout, "\x1b[0;32m✓\x1b[0m Installed devin v3000.")
+		_, _ = io.WriteString(stdout, "11.3 to ~/.local/bin/devin.\n")
+		_, _ = io.WriteString(stdout, strings.Repeat("setup output\n", maxOutputBytes))
+		_, _ = io.WriteString(stdout, "Error: setup failed\n")
+		return ports.InstallScriptResult{SHA256: "abc123"}, errors.New("exit status 1")
+	})
+	verified := make(chan Target, 1)
+	s.verifier = harnessVerifierFunc(func(_ context.Context, target Target) (VerifyResult, error) {
+		verified <- target
+		return VerifyResult{ResolvedPath: "/home/test/.local/bin/devin", Output: "devin 3000.11.3\n"}, nil
+	})
+
+	if _, err := s.StartAgent(context.Background(), TargetDevin, "official-installer"); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, s, TargetDevin, StatusSucceeded)
+	job, err := s.Status(context.Background(), TargetDevin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target := <-verified; target != TargetDevin {
+		t.Fatalf("verified target = %q, want devin", target)
+	}
+	if job.Error != "" || job.ExpectedDestination != "/home/test/.local/bin/devin" || !strings.Contains(job.Output, "sha256: abc123") {
+		t.Fatalf("job = %+v, want verified install", job)
+	}
+	if strings.Contains(job.Output, "Installed devin") {
+		t.Fatalf("output = %q, want confirmation evicted from bounded diagnostics", job.Output)
+	}
+}
+
+func TestDevinInstallerDoesNotIgnoreOtherFailures(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		target Target
+		output string
+	}{
+		{name: "no install confirmation", target: TargetDevin, output: "Error: Login canceled\n"},
+		{name: "different target", target: TargetCursor, output: "Installed devin v3000.11.3 to ~/.local/bin/devin.\nError: Login canceled\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := newTestService("darwin", "bash")
+			s.installScripts = installScriptRunnerFunc(func(_ context.Context, _ ports.InstallScriptCommand, stdout, _ io.Writer) (ports.InstallScriptResult, error) {
+				_, _ = io.WriteString(stdout, test.output)
+				return ports.InstallScriptResult{}, errors.New("exit status 1")
+			})
+			verified := false
+			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+				verified = true
+				return VerifyResult{ResolvedPath: "/home/test/.local/bin/devin"}, nil
+			})
+			if _, err := s.StartAgent(context.Background(), test.target, "official-installer"); err != nil {
+				t.Fatal(err)
+			}
+			waitForStatus(t, s, test.target, StatusFailed)
+			job, _ := s.Status(context.Background(), test.target)
+			if job.Error != "exit status 1" || verified {
+				t.Fatalf("job = %+v, verified = %t; want original failure without verification", job, verified)
+			}
+		})
+	}
+}
+
+func TestDevinInstallerFailureAfterInstallConfirmationFailsWhenBinaryVerificationFails(t *testing.T) {
+	s := newTestService("darwin", "bash")
+	s.installScripts = installScriptRunnerFunc(func(_ context.Context, _ ports.InstallScriptCommand, stdout, _ io.Writer) (ports.InstallScriptResult, error) {
+		_, _ = io.WriteString(stdout, "Installed devin v3000.11.3 to ~/.local/bin/devin.\nError: setup failed\n")
+		return ports.InstallScriptResult{}, errors.New("exit status 1")
+	})
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{}, errors.New("version probe failed")
+	})
+	if _, err := s.StartAgent(context.Background(), TargetDevin, "official-installer"); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, s, TargetDevin, StatusFailed)
+	job, _ := s.Status(context.Background(), TargetDevin)
+	if !strings.Contains(job.Error, "version probe failed") {
+		t.Fatalf("job = %+v, want failed verification", job)
+	}
+}
+
 func TestAgentVendorScriptInstallTimeoutAndShutdown(t *testing.T) {
 	for _, test := range []struct {
 		name       string
@@ -946,6 +1047,15 @@ func TestRecoverInterruptsAndHydratesDurableJobs(t *testing.T) {
 	}
 	s := newTestService("darwin", "npm")
 	s.jobStore = store
+	s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", writable: true}
+	installCalls := 0
+	s.commands = commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error {
+		installCalls++
+		return nil
+	})
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/Users/test/.npm/bin/codex"}, nil
+	})
 	if err := s.Recover(context.Background()); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
@@ -955,6 +1065,13 @@ func TestRecoverInterruptsAndHydratesDurableJobs(t *testing.T) {
 	}
 	if job.Status != StatusInterrupted || job.FinishedAt == nil || job.Error == "" {
 		t.Fatalf("recovered job = %+v", job)
+	}
+	if _, err := s.StartAgent(context.Background(), TargetCodex, "npm"); err != nil {
+		t.Fatalf("retry interrupted install: %v", err)
+	}
+	waitForStatus(t, s, TargetCodex, StatusSucceeded)
+	if installCalls != 1 {
+		t.Fatalf("retry installer calls = %d, want 1", installCalls)
 	}
 }
 

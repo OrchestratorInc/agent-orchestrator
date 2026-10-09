@@ -192,7 +192,11 @@ func mountControl(r chi.Router, deps ControlDeps) {
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
 		}
-		go deps.RequestShutdown()
+		// Start shutdown only after the accepted response has had a chance to
+		// leave this handler. Otherwise http.Server.Shutdown can observe the
+		// /shutdown request itself as still active and wait until its graceful
+		// deadline under the race detector.
+		time.AfterFunc(10*time.Millisecond, deps.RequestShutdown)
 	})
 }
 
@@ -212,10 +216,14 @@ func mountMobile(r chi.Router, c *controllers.MobileController) {
 	}
 	r.Get("/api/v1/mobile/status", c.Status)
 	r.Post("/api/v1/mobile/enable", c.Enable)
+	r.Post("/api/v1/mobile/enable-lan-only", c.EnableLANOnly)
+	r.Post("/api/v1/mobile/enable-tunnel-only", c.EnableTunnelOnly)
 	r.Post("/api/v1/mobile/remote-access", c.StartRemoteAccess)
 	r.Post("/api/v1/mobile/disable", c.Disable)
 	r.Post("/api/v1/mobile/regenerate", c.Regenerate)
 	r.Post("/api/v1/mobile/secure-pairing", c.SecurePairing)
+	r.Post("/api/v1/mobile/keep-awake", c.KeepAwake)
+	r.Post("/api/v1/remote-host/account-token", c.IssueAccountToken)
 }
 
 // mountMobileDevices registers the desktop-only mobile device roster. These sit

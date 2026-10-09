@@ -4,7 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { agentModelsQueryKey } from "../hooks/useAgentModelsQuery";
 import { apiClient } from "../lib/api-client";
-import type { AgentSwitchSummary, WorkspaceSession } from "../types/workspace";
+import {
+	STANDALONE_WORKSPACE_ID,
+	type AgentSwitchSummary,
+	type WorkspaceSession,
+} from "../types/workspace";
 import { SwitchAgentDialog } from "./SwitchAgentDialog";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -49,6 +53,16 @@ const worker: WorkspaceSession = {
 	workspaceName: "my-app",
 };
 
+const standaloneWorker: WorkspaceSession = {
+	...worker,
+	branch: undefined,
+	id: "standalone-1",
+	terminalHandleId: "standalone-terminal",
+	title: "research something",
+	workspaceId: STANDALONE_WORKSPACE_ID,
+	workspaceName: "Scratchpad",
+};
+
 function renderDialog(
 	session: WorkspaceSession = worker,
 	onOpenChange = vi.fn(),
@@ -58,9 +72,17 @@ function renderDialog(
 	const queryClient = new QueryClient({
 		defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
 	});
-	if (projectConfig !== null) queryClient.setQueryData(["project", session.workspaceId], projectConfig);
-	for (const agentId of ["claude-code", "codex"]) {
-		queryClient.setQueryData(agentModelsQueryKey(agentId, session.workspaceId), {
+	if (projectConfig !== null) {
+		queryClient.setQueryData(
+			session.hostId
+				? ["project", session.hostId, session.workspaceId]
+				: ["project", session.workspaceId],
+			projectConfig,
+		);
+	}
+	const catalogProjectId = session.workspaceId === STANDALONE_WORKSPACE_ID ? "" : session.workspaceId;
+	for (const agentId of ["claude-code", "codex", "fx"]) {
+		queryClient.setQueryData(agentModelsQueryKey(agentId, catalogProjectId, session.hostId), {
 			agentId,
 			allowCustom: false,
 			fetchedAt: "2026-06-10T00:00:00Z",
@@ -161,6 +183,38 @@ describe("SwitchAgentDialog", () => {
 		expect(onOpenChange).toHaveBeenCalledWith(false);
 	});
 
+	it("offers fx as a switch target", async () => {
+		const tuiWorker = { ...worker, mode: "tui" as const };
+		renderDialog(tuiWorker);
+		const dialog = screen.getByRole("dialog", { name: "Switch agent" });
+		await userEvent.click(within(dialog).getByRole("button", { name: "Target agent" }));
+
+		const fxOption = screen.getByRole("menuitem", { name: "fx" });
+		expect(fxOption).not.toHaveAttribute("data-disabled");
+		await userEvent.click(fxOption);
+		await userEvent.click(within(dialog).getByRole("button", { name: "Switch" }));
+
+		expect(switchMocks.mutate).toHaveBeenCalledWith(
+			{
+				idempotencyKey: "idempotency-1",
+				model: "",
+				session: tuiWorker,
+				targetHarness: "fx",
+			},
+			{ onSuccess: expect.any(Function) },
+		);
+	});
+
+	it("keeps fx unavailable as a Chat switch target", async () => {
+		renderDialog({ ...worker, mode: "chat" });
+		const dialog = screen.getByRole("dialog", { name: "Switch agent" });
+		await userEvent.click(within(dialog).getByRole("button", { name: "Target agent" }));
+
+		expect(screen.getByRole("menuitem", { name: /fx,\s*Coming soon/ })).toHaveAttribute(
+			"data-disabled",
+		);
+	});
+
 	it("keeps direct model IDs in the same searchable model picker", async () => {
 		const { queryClient } = renderDialog();
 		queryClient.setQueryData(agentModelsQueryKey("codex", worker.workspaceId), {
@@ -233,6 +287,48 @@ describe("SwitchAgentDialog", () => {
 		);
 	});
 
+	it("switches standalone sessions without loading the standalone sentinel as a project", async () => {
+		const getSpy = vi.spyOn(apiClient, "GET").mockRejectedValue(new Error("unexpected project lookup"));
+		renderDialog(standaloneWorker, vi.fn(), undefined, null);
+		const dialog = screen.getByRole("dialog", { name: "Switch agent" });
+
+		expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+		expect(within(dialog).getByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.4");
+		expect(getSpy).not.toHaveBeenCalled();
+
+		await userEvent.click(within(dialog).getByRole("button", { name: "Switch" }));
+
+		expect(getSpy).not.toHaveBeenCalled();
+		expect(switchMocks.mutate).toHaveBeenCalledWith(
+			{
+				idempotencyKey: "idempotency-1",
+				model: "",
+				session: standaloneWorker,
+				targetHarness: "codex",
+			},
+			{ onSuccess: expect.any(Function) },
+		);
+	});
+
+	it("ignores a cached standalone project error", async () => {
+		const { queryClient } = renderDialog(standaloneWorker, vi.fn(), undefined, null);
+		const projectQuery = queryClient.getQueryCache().build(queryClient, {
+			queryKey: ["project", STANDALONE_WORKSPACE_ID],
+			queryFn: async () => ({}),
+		});
+		projectQuery.setState({
+			...projectQuery.state,
+			data: undefined,
+			error: new Error("Project id failed storage-path validation"),
+			status: "error",
+		});
+
+		await waitFor(() =>
+			expect(screen.getByRole("dialog")).not.toHaveTextContent("Project id failed storage-path validation"),
+		);
+		expect(screen.getByRole("dialog").querySelector('[role="alert"]')).not.toBeInTheDocument();
+	});
+
 	it("shows the project model and inherits it when switching without a model change", async () => {
 		const { queryClient } = renderDialog();
 		queryClient.setQueryData(["project", worker.workspaceId], {
@@ -243,6 +339,44 @@ describe("SwitchAgentDialog", () => {
 		await userEvent.click(within(dialog).getByRole("button", { name: "Switch" }));
 		expect(switchMocks.mutate).toHaveBeenCalledWith(
 			expect.objectContaining({ model: "", targetHarness: "codex" }),
+			expect.any(Object),
+		);
+	});
+
+	it("uses the owning host's project and model when equal session IDs change hosts", async () => {
+		const remoteA = { ...worker, hostId: "host-a" };
+		const remoteB = { ...worker, hostId: "host-b" };
+		const { queryClient, rerender } = renderDialog(remoteA, vi.fn(), undefined, {
+			config: { worker: { agent: "codex", agentConfig: { model: "gpt-5.4-mini" } } },
+		});
+		queryClient.setQueryData(["project", worker.workspaceId], {
+			config: { worker: { agent: "codex", agentConfig: { model: "local-only" } } },
+		});
+		queryClient.setQueryData(["project", "host-b", worker.workspaceId], {
+			config: { worker: { agent: "codex", agentConfig: { model: "gpt-5.4" } } },
+		});
+		queryClient.setQueryData(agentModelsQueryKey("codex", worker.workspaceId, "host-b"), {
+			agentId: "codex",
+			allowCustom: false,
+			fetchedAt: "2026-06-10T00:00:00Z",
+			models: [{ id: "gpt-5.4", label: "Host B model", isDefault: true }],
+			selectionMode: "catalog",
+			source: "test",
+			stale: false,
+		});
+		const dialog = screen.getByRole("dialog", { name: "Switch agent" });
+		expect(within(dialog).getByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.4 Mini");
+		rerender(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<SwitchAgentDialog container={document.body} onOpenChange={vi.fn()} open session={remoteB} />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Host B model"));
+		await userEvent.click(screen.getByRole("button", { name: "Switch" }));
+		expect(switchMocks.mutate).toHaveBeenCalledWith(
+			expect.objectContaining({ session: remoteB, model: "" }),
 			expect.any(Object),
 		);
 	});
@@ -410,6 +544,28 @@ describe("SwitchAgentDialog", () => {
 			switchId: "switch-source-recovery",
 		});
 		expect(within(dialog).queryByRole("button", { name: "Target agent" })).not.toBeInTheDocument();
+	});
+
+	it("routes source recovery to the session host", async () => {
+		const remote = {
+			...worker,
+			hostId: "host-a",
+			activeAgentSwitch: {
+				agentHandoffStatus: "received",
+				errorCode: "source_restore_unconfirmed",
+				fromHarness: "claude-code",
+				id: "switch-source-recovery",
+				state: "source_stopped",
+				targetHarness: "codex",
+			},
+		} satisfies WorkspaceSession;
+		renderDialog(remote);
+		await userEvent.click(screen.getByRole("button", { name: "Restore Claude Code" }));
+		expect(switchMocks.recoverMutate).toHaveBeenCalledWith({
+			sessionId: worker.id,
+			hostId: "host-a",
+			switchId: "switch-source-recovery",
+		});
 	});
 
 	it("offers to recover an unconfirmed source stop", async () => {

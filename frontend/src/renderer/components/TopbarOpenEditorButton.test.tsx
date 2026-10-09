@@ -72,7 +72,9 @@ describe("TopbarOpenEditorButton", () => {
 
 		// the failure must trigger a refetch, not just show a message
 		await waitFor(() => expect(getState).toHaveBeenCalledTimes(2));
-		await waitFor(() => expect(screen.getByRole("button", { name: "Open in Cursor" })).toBeDisabled());
+		await waitFor(() =>
+			expect(screen.getByRole("button", { name: "Session workspace is not available" })).toBeDisabled(),
+		);
 	});
 
 	// Regression: an ipcMain rejection arrives wrapped as "Error invoking remote
@@ -160,16 +162,17 @@ describe("TopbarOpenEditorButton", () => {
 		expect(document.body.textContent).not.toContain("No supported editor found");
 	});
 
-	it("shows a missing workspace and disables every launch action", async () => {
+	it("disables every launch action for a missing workspace and explains why only on the button", async () => {
 		setState({
 			...availableState,
 			workspaceAvailable: false,
 			unavailableReason: "Session workspace is not available.",
 		});
 		renderButton();
-		expect(await screen.findByRole("alert")).toHaveTextContent("Session workspace is not available.");
-		expect(screen.getByRole("button", { name: "Open in Cursor" })).toBeDisabled();
+		expect(await screen.findByRole("button", { name: "Session workspace is not available." })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Open workspace options" })).toBeDisabled();
+		// A standing unavailable state must not take inline topbar space.
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
 	it("never renders a transient unavailable error while a fresh session becomes ready", async () => {
@@ -221,7 +224,7 @@ describe("TopbarOpenEditorButton", () => {
 		}
 	});
 
-	it("shows the unavailable error only after the fresh-session readiness timeout", async () => {
+	it("explains the unavailable workspace only after the fresh-session readiness timeout", async () => {
 		vi.useFakeTimers();
 		try {
 			const getState = vi.fn().mockResolvedValue({
@@ -243,8 +246,65 @@ describe("TopbarOpenEditorButton", () => {
 				await vi.runOnlyPendingTimersAsync();
 			});
 			expect(getState).toHaveBeenCalledTimes(11);
-			expect(screen.getByRole("alert")).toHaveTextContent("Session workspace is not available.");
-			expect(screen.getByRole("button", { name: "Open in Cursor" })).toBeDisabled();
+			expect(screen.getByRole("button", { name: "Session workspace is not available." })).toBeDisabled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not call the workspace missing when the check itself failed, and checks again", async () => {
+		vi.useFakeTimers();
+		try {
+			const getState = vi
+				.fn()
+				.mockResolvedValueOnce({
+					...availableState,
+					workspaceAvailable: false,
+					unavailableReason: "Internal server error",
+					unavailableCode: "INTERNAL_ERROR",
+				})
+				.mockResolvedValue(availableState);
+			window.ao!.editorHandoff.getState = getState;
+			renderButton();
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(0);
+			});
+			expect(screen.getByRole("button", { name: "Checking workspace…" })).toBeDisabled();
+			expect(screen.queryByText(/Internal server error|not available/)).not.toBeInTheDocument();
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(5_000);
+			});
+			await act(async () => {
+				await vi.runOnlyPendingTimersAsync();
+			});
+			expect(getState).toHaveBeenCalledTimes(2);
+			expect(screen.getByRole("button", { name: "Open in Cursor" })).toBeEnabled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("stops checking after three failed checks and shows the reason", async () => {
+		vi.useFakeTimers();
+		try {
+			const getState = vi.fn().mockResolvedValue({
+				...availableState,
+				workspaceAvailable: false,
+				unavailableReason: "AO daemon is not ready.",
+				unavailableCode: "SERVICE_UNAVAILABLE",
+			});
+			window.ao!.editorHandoff.getState = getState;
+			renderButton();
+
+			for (let i = 0; i < 6; i += 1) {
+				await act(async () => {
+					await vi.advanceTimersByTimeAsync(5_000);
+				});
+			}
+			expect(getState).toHaveBeenCalledTimes(3);
+			expect(screen.getByRole("button", { name: "AO daemon is not ready." })).toBeDisabled();
 		} finally {
 			vi.useRealTimers();
 		}
@@ -259,7 +319,7 @@ describe("TopbarOpenEditorButton", () => {
 		window.ao!.editorHandoff.getState = getState;
 		renderButton({ sessionCreatedAt: new Date().toISOString(), sessionTerminated: true });
 
-		expect(await screen.findByRole("alert")).toHaveTextContent("Session workspace is not available.");
+		expect(await screen.findByRole("button", { name: "Session workspace is not available." })).toBeDisabled();
 		expect(getState).toHaveBeenCalledTimes(1);
 	});
 

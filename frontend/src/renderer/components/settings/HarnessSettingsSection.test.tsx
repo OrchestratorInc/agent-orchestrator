@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../lib/api-client";
@@ -8,7 +8,49 @@ import { appI18n } from "../../i18n";
 import { agentReadinessQueryKey, useAgentReadinessQuery, type AgentReadiness } from "../../hooks/useAgentReadinessQuery";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentReadiness } from "../../test/agent-readiness-fixtures";
+import { TooltipProvider } from "../ui/tooltip";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
+
+// Cloud sign-in state for the cloud login rows. Signed out by default, which
+// leaves every row on its local-only controls.
+const cloudMocks = vi.hoisted(() => ({
+	cloudEnabled: false,
+	org: undefined as { id: string } | undefined,
+	connections: [] as Array<{ provider: string; label?: string; validationState: string }>,
+}));
+
+vi.mock("../../hooks/useCloudGate", () => ({
+	useCloudGate: () => ({ cloudEnabled: cloudMocks.cloudEnabled, localEnabled: true, client: "" }),
+}));
+
+vi.mock("../../hooks/useCloudOrg", () => ({
+	useCloudOrg: () => ({ org: cloudMocks.org, isLoading: false, error: null, ready: cloudMocks.org !== undefined }),
+}));
+
+vi.mock("../../hooks/useProviderConnections", () => ({
+	useProviderConnections: () => ({ data: cloudMocks.connections, isSuccess: true }),
+}));
+
+// A connected remote host, off by default; the remote diagnostics test turns it on.
+const hostMocks = vi.hoisted(() => {
+	const remoteGET = vi.fn();
+	const remotePOST = vi.fn();
+	// One object, like the real per-host client cache: a fresh one each call
+	// would change the component's client every render.
+	return { connected: [] as string[], remoteGET, remotePOST, remote: { GET: remoteGET, POST: remotePOST } };
+});
+vi.mock("../../hooks/useHostConnection", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useHostConnection")>()),
+	useConnectedHosts: () => hostMocks.connected,
+}));
+vi.mock("../../lib/host-clients", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../lib/host-clients")>();
+	return {
+		...actual,
+		clientForHost: (hostId: string) => (hostId === "remote-1" ? (hostMocks.remote as never) : actual.clientForHost(hostId)),
+		clientForSessionHost: (hostId?: string) => (hostId === "remote-1" ? (hostMocks.remote as never) : actual.clientForSessionHost(hostId)),
+	};
+});
 
 const { terminalFocusRequested, terminalStateCallback } = vi.hoisted(() => ({
 	terminalFocusRequested: { value: false },
@@ -34,6 +76,7 @@ function catalogWithInstalled(...installed: string[]) {
 			{ id: "codex", label: "Codex" },
 			{ id: "cursor", label: "Cursor" },
 			{ id: "goose", label: "Goose" },
+			{ id: "codewhale", label: "Codewhale" },
 		].map((agent) => ({
 			...agent,
 			installation: { state: installed.includes(agent.id) ? "installed" : "not_installed", freshness: "fresh", reason: "", reasonCode: "", attemptedAt: null, checkedAt: null },
@@ -77,6 +120,11 @@ const plans = {
 			documentationUrl: "https://goose-docs.ai/docs/getting-started/installation/",
 			methods: [{ id: "official-installer", label: "Official installer", available: true, recommended: true, command: "pwsh.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <downloaded from https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1>", reinstallAvailable: false, reinstallReason: "No headless reinstall" }],
 		},
+		{
+			agentId: "codewhale", available: false, automatic: false, method: "manual",
+			reason: "AO does not automatically install Codewhale.", documentationUrl: "https://github.com/Hmbown/Codewhale",
+			methods: [{ id: "manual", label: "Manual", available: false, recommended: true, reason: "AO does not automatically install Codewhale.", reinstallAvailable: false }],
+		},
 	],
 };
 
@@ -89,12 +137,14 @@ function ReadinessSelector({ agentId }: { agentId: string }) {
 	);
 }
 
-function renderSection(focusAgentId?: string, selectorAgentId?: string) {
+function renderSection(focusAgentId?: string, selectorAgentId?: string, initialView?: "local" | "cloud") {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const view = render(
 		<QueryClientProvider client={client}>
-			{selectorAgentId ? <ReadinessSelector agentId={selectorAgentId} /> : null}
-			<HarnessSettingsSection focusAgentId={focusAgentId} />
+			<TooltipProvider>
+				{selectorAgentId ? <ReadinessSelector agentId={selectorAgentId} /> : null}
+				<HarnessSettingsSection focusAgentId={focusAgentId} initialView={initialView} />
+			</TooltipProvider>
 		</QueryClientProvider>,
 	);
 	return { ...view, client };
@@ -105,6 +155,9 @@ describe("HarnessSettingsSection", () => {
 		await appI18n.changeLanguage("en");
 		terminalFocusRequested.value = false;
 		terminalStateCallback.value = undefined;
+		cloudMocks.cloudEnabled = false;
+		cloudMocks.org = undefined;
+		cloudMocks.connections = [];
 		window.ao!.clipboard.writeText = vi.fn().mockResolvedValue(undefined);
 		vi.spyOn(apiClient, "GET").mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
@@ -125,6 +178,168 @@ describe("HarnessSettingsSection", () => {
 	afterEach(() => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
+	});
+
+	it("keeps the local view free of cloud logins", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.org = { id: "org-1" };
+		renderSection();
+
+		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		expect(screen.getByRole("tab", { name: "Local" })).toHaveAttribute("aria-selected", "true");
+		expect(within(claudeRow).queryByRole("button", { name: "Login" })).toBeNull();
+		expect(within(claudeRow).queryByText(/Cloud/)).toBeNull();
+		expect(screen.getByText("Goose")).toBeInTheDocument();
+	});
+
+	it("logs cloud harnesses in from the cloud view", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.org = { id: "org-1" };
+		cloudMocks.connections = [{ provider: "codex", label: "default", validationState: "valid" }];
+		const user = userEvent.setup();
+		renderSection();
+		await screen.findByText("Goose");
+
+		await user.click(screen.getByRole("tab", { name: "Cloud" }));
+		// Only cloud-supported harnesses, with no local install or login controls.
+		expect(screen.queryByText("Goose")).toBeNull();
+		const claudeRow = screen.getByText("Claude Code").closest('[data-agent="claude-code"]') as HTMLElement;
+		expect(within(claudeRow).getByText("Not connected")).toBeInTheDocument();
+		// One action: the cloud login, not a local one alongside it.
+		expect(within(claudeRow).getAllByRole("button")).toHaveLength(1);
+		await user.click(within(claudeRow).getByRole("button", { name: "Login" }));
+		expect(within(claudeRow).getByTestId("cloud-harness-login")).toBeInTheDocument();
+		expect(within(claudeRow).queryByRole("button", { name: "Login" })).toBeNull();
+		await user.click(within(claudeRow).getByRole("button", { name: "Cancel" }));
+		expect(within(claudeRow).queryByTestId("cloud-harness-login")).toBeNull();
+
+		const codexRow = screen.getByText("Codex").closest('[data-agent="codex"]') as HTMLElement;
+		expect(within(codexRow).getByText("Connected")).toBeInTheDocument();
+		expect(within(codexRow).queryByRole("button", { name: "Install" })).toBeNull();
+		await user.click(within(codexRow).getByRole("button", { name: "Refresh login" }));
+		expect(within(codexRow).getByRole("button", { name: "Log in with ChatGPT" })).toBeInTheDocument();
+	});
+
+	it("reads a harness as connected only from its valid default connection", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.org = { id: "org-1" };
+		// Several connections for one provider: whichever comes last must not decide.
+		cloudMocks.connections = [
+			{ provider: "codex", label: "default", validationState: "valid" },
+			{ provider: "codex", label: "secondary", validationState: "invalid" },
+			{ provider: "claude-code", label: "default", validationState: "invalid" },
+			{ provider: "claude-code", label: "secondary", validationState: "valid" },
+		];
+		renderSection(undefined, undefined, "cloud");
+
+		const codexRow = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		expect(within(codexRow).getByText("Connected")).toBeInTheDocument();
+		const claudeRow = screen.getByText("Claude Code").closest('[data-agent="claude-code"]') as HTMLElement;
+		expect(within(claudeRow).getByText("Not connected")).toBeInTheDocument();
+	});
+
+	it("opens straight into the cloud view when asked", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.org = { id: "org-1" };
+		renderSection(undefined, undefined, "cloud");
+
+		expect(await screen.findByRole("tab", { name: "Cloud" })).toHaveAttribute("aria-selected", "true");
+		expect((await screen.findAllByRole("button", { name: "Login" })).length).toBeGreaterThan(0);
+		expect(screen.queryByText("Goose")).toBeNull();
+	});
+
+	it("asks to sign in to AO Cloud in the cloud view when signed out", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.org = undefined;
+		renderSection(undefined, undefined, "cloud");
+
+		expect(await screen.findByText(/Sign in to AO Cloud/)).toBeInTheDocument();
+		expect(screen.queryByText("Claude Code")).toBeNull();
+	});
+
+	it("offers no cloud view while the cloud feature is off", async () => {
+		cloudMocks.cloudEnabled = false;
+		cloudMocks.org = { id: "org-1" };
+		cloudMocks.connections = [{ provider: "claude-code", label: "default", validationState: "valid" }];
+		renderSection(undefined, undefined, "cloud");
+
+		const claudeRow = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		expect(screen.queryByRole("tab", { name: "Cloud" })).toBeNull();
+		expect(within(claudeRow).queryByRole("button", { name: "Login" })).toBeNull();
+		expect(screen.getByText("Goose")).toBeInTheDocument();
+	});
+
+	it("offers to refresh an existing local login", async () => {
+		const authorized = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "authorized" })] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: authorized } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "claude-code", action: "login", launchMode: "terminal", available: true }] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: authorized } as never);
+		renderSection();
+
+		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		expect(await within(row).findByRole("button", { name: "Refresh login" })).toBeEnabled();
+		expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
+		expect(within(row).queryByRole("button", { name: "Authorized" })).toBeNull();
+	});
+
+	it("offers native login when fx is installed but unauthorized", async () => {
+		const fxCatalog = { agents: [{ ...catalogWithInstalled("claude-code").agents[0], id: "fx", label: "fx", authentication: { state: "unauthorized", freshness: "fresh", reason: "fx is not logged in.", reasonCode: "", attemptedAt: null, checkedAt: null } }] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: fxCatalog } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "fx", action: "login", launchMode: "terminal", available: true, displayCommand: "fx login", documentationUrl: "https://fx.sh/docs" }] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [{ agentId: "fx", available: true, automatic: true, method: "official-installer", documentationUrl: "https://fx.sh/docs", methods: [] }] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: fxCatalog } as never);
+		renderSection();
+		const row = (await screen.findByText("fx")).closest("[data-agent]") as HTMLElement;
+		expect(await within(row).findByRole("button", { name: "Login" })).toBeInTheDocument();
+		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
+	});
+
+	it("shows configured MiMo Code as connected and offers refresh login", async () => {
+		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: configured } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "mimo-code", action: "login", launchMode: "terminal", available: true }] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		renderSection();
+		const row = (await screen.findByText("MiMo Code")).closest('[data-agent="mimo-code"]') as HTMLElement;
+		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(within(row).queryByText("Configured")).toBeNull();
+		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "Refresh login" })).toBeEnabled();
+	});
+
+	it("offers fx installation while readiness refreshes automatically", async () => {
+		const fxCatalog = { agents: [{ ...catalogWithInstalled().agents[0], id: "fx", label: "fx" }] };
+		const fxPlan = { agentId: "fx", available: true, automatic: true, method: "official-installer", command: "bash <downloaded from https://fx.sh/setup.sh>", documentationUrl: "https://fx.sh/docs", expectedDestination: "~/.local/bin/fx", methods: [{ id: "official-installer", label: "Official installer", available: true, recommended: true, command: "bash <downloaded from https://fx.sh/setup.sh>", reinstallAvailable: false }] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "fx", action: "login", launchMode: "terminal", available: true, displayCommand: "fx login", documentationUrl: "https://fx.sh/docs" }] } } as never;
+			if (path === "/api/v1/agents/readiness") return { data: fxCatalog } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [fxPlan] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/install") return { data: { target: "fx", status: "installing", method: "official-installer" } } as never;
+			return { data: fxCatalog } as never;
+		});
+		renderSection();
+		const row = (await screen.findByText("fx")).closest("[data-agent]") as HTMLElement;
+		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/refresh"));
+		await userEvent.click(await within(row).findByRole("button", { name: "Install" }));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "fx" } }, body: { method: "official-installer", operation: "install" } });
 	});
 
 	it("keeps a targeted harness visible, scrolls it, focuses Install, and highlights it for two seconds once", async () => {
@@ -219,6 +434,57 @@ describe("HarnessSettingsSection", () => {
 		expect(openExternal).toHaveBeenCalledWith("https://example.test/login");
 	});
 
+	it("opens the installation guide for a manual-only harness", async () => {
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		renderSection();
+		const row = (await screen.findByText("Codewhale")).closest('[data-agent="codewhale"]') as HTMLElement;
+		await userEvent.click(await within(row).findByRole("button", { name: "Open installation guide" }));
+
+		expect(openExternal).toHaveBeenCalledWith("https://github.com/Hmbown/Codewhale");
+	});
+
+	it("classifies an unauthorized Unreal Agent as not configured and offers documentation", async () => {
+		const unrealCatalog = { agents: [agentReadiness("unreal-agent", "Unreal Agent", { authentication: "unauthorized" })] };
+		const documentationUrl = "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/harnesses/unreal-agent.md";
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: unrealCatalog } as never;
+			if (path === "/api/v1/agents/auth-plans") {
+				return { data: { plans: [{ agentId: "unreal-agent", action: "setup", launchMode: "documentation", available: true, documentationUrl }] } } as never;
+			}
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: unrealCatalog } as never);
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+
+		renderSection();
+		const row = (await screen.findByText("Unreal Agent")).closest('[data-agent="unreal-agent"]') as HTMLElement;
+		expect(await within(row).findByText("Not set up")).toBeInTheDocument();
+		const documentation = within(row).getByRole("button", { name: "View documentation" });
+		await userEvent.click(documentation);
+		expect(openExternal).toHaveBeenCalledWith(documentationUrl);
+	});
+
+	it("keeps Unreal documentation available when credentials are configured but unverified", async () => {
+		const unrealCatalog = { agents: [agentReadiness("unreal-agent", "Unreal Agent", { authentication: "configured" })] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: unrealCatalog } as never;
+			if (path === "/api/v1/agents/auth-plans") {
+				return { data: { plans: [{ agentId: "unreal-agent", action: "setup", launchMode: "documentation", available: true, documentationUrl: "https://example.test/unreal" }] } } as never;
+			}
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: unrealCatalog } as never);
+
+		renderSection();
+		const row = (await screen.findByText("Unreal Agent")).closest('[data-agent="unreal-agent"]') as HTMLElement;
+		expect(await within(row).findByText("Configured")).toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "View documentation" })).toBeEnabled();
+	});
+
 	it("shows cached readiness while silently refreshing when the page opens", async () => {
 		const refreshed = catalogWithInstalled("claude-code", "codex");
 		let current = catalog;
@@ -307,6 +573,183 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
 
+	function mockClaudeLogin({ probeStatus = "authorized" }: { probeStatus?: string } = {}) {
+		const authorized = catalogWithInstalled("claude-code");
+		authorized.agents[0].authentication.state = "authorized";
+		const calls = { auth: 0, probe: 0 };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [
+				{ agentId: "claude-code", action: "login", launchMode: "terminal", available: true },
+			] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/probe") {
+				calls.probe += 1;
+				return { data: { agent: { id: "claude-code", label: "Claude Code", authStatus: probeStatus }, supported: true, installed: true } } as never;
+			}
+			if (path === "/api/v1/agents/readiness/ensure") return { data: calls.probe > 0 ? authorized : catalog } as never;
+			if (path === "/api/v1/agents/refresh") return { data: catalog } as never;
+			if (path === "/api/v1/agents/{agent}/auth") {
+				calls.auth += 1;
+				return { data: {
+					agentId: "claude-code", action: "login", guidance: "",
+					terminal: { handleId: "auth-terminal-1", title: "Claude Code login", workingDir: "/tmp", createdAt: "2026-09-15T00:00:00Z" },
+				} } as never;
+			}
+			return { data: undefined } as never;
+		});
+		vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
+		return calls;
+	}
+
+	// The task composer's "Log in" shortcut opens this page asking it to start
+	// the login, so the user lands in the same flow the row's button runs.
+	it("starts the focused harness login once when opened from a login shortcut", async () => {
+		const calls = mockClaudeLogin();
+		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={client}>
+				<TooltipProvider>
+					<HarnessSettingsSection focusAgentId="claude-code" startLogin />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		await within(row).findByTestId("inline-terminal-body");
+		expect(calls.auth).toBe(1);
+	});
+
+	// A login fixed here must clear a stale model-discovery error in an open
+	// task composer without the user pressing refresh.
+	it("invalidates the harness's cached model catalogs after a login check", async () => {
+		const calls = mockClaudeLogin();
+		const user = userEvent.setup();
+		const { client } = renderSection();
+		const local = ["agent-models", "claude-code", ""] as const;
+		const otherAgent = ["agent-models", "codex", ""] as const;
+		client.setQueryData(local, { agentId: "claude-code", models: [], warning: "OAuth access token has expired." });
+		client.setQueryData(otherAgent, { agentId: "codex", models: [] });
+		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		await user.click(await within(row).findByRole("button", { name: "Login" }));
+		await within(row).findByTestId("inline-terminal-body");
+		expect(client.getQueryState(local)?.isInvalidated).toBe(false);
+
+		act(() => terminalStateCallback.value?.("exited"));
+		await waitFor(() => expect(calls.probe).toBeGreaterThan(0));
+		await waitFor(() => expect(client.getQueryState(local)?.isInvalidated).toBe(true));
+		expect(client.getQueryState(otherAgent)?.isInvalidated).toBe(false);
+	});
+
+	// The first check right after a login terminal exits can fail transiently;
+	// the panel must not report a completed login as signed out.
+	async function loginWithProbeResults(statuses: string[], readinessAfterProbes: number, terminalInput?: string) {
+		const authorized = catalogWithInstalled("claude-code");
+		authorized.agents[0].authentication.state = "authorized";
+		let probeCalls = 0;
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [
+				{ agentId: "claude-code", action: "login", launchMode: "terminal", available: true },
+			] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/probe") {
+				const authStatus = statuses[Math.min(probeCalls, statuses.length - 1)];
+				probeCalls += 1;
+				return { data: { agent: { id: "claude-code", label: "Claude Code", authStatus }, supported: true, installed: true } } as never;
+			}
+			if (path === "/api/v1/agents/readiness/ensure") return { data: probeCalls >= readinessAfterProbes ? authorized : catalog } as never;
+			if (path === "/api/v1/agents/{agent}/auth") return { data: {
+				agentId: "claude-code", action: "login", guidance: "Complete login in the terminal.", terminalInput,
+				terminal: { handleId: "auth-terminal-1", title: "Claude Code login", workingDir: "/tmp", createdAt: "2026-09-15T00:00:00Z" },
+			} } as never;
+			return { data: undefined } as never;
+		});
+		const close = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
+		const user = userEvent.setup();
+		renderSection();
+		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		await user.click(await within(row).findByRole("button", { name: "Login" }));
+		await within(row).findByTestId("inline-terminal-body");
+		return { row, close, probeCalls: () => probeCalls, exit: () => act(() => terminalStateCallback.value?.("exited")) };
+	}
+
+	it("shows login guidance only when it asks for an action outside the terminal", async () => {
+		const { row, exit } = await loginWithProbeResults(["authorized"], Number.POSITIVE_INFINITY);
+		expect(within(row).queryByText("Complete login in the terminal.")).toBeNull();
+		exit();
+		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
+		cleanup();
+
+		const withAction = await loginWithProbeResults(["authorized"], Number.POSITIVE_INFINITY, "/login\r");
+		expect(within(withAction.row).getByText("Complete login in the terminal.")).toBeInTheDocument();
+	});
+
+	it("re-checks a login whose first post-login check fails transiently", async () => {
+		const { row, close, probeCalls, exit } = await loginWithProbeResults(["unauthorized", "authorized"], Number.POSITIVE_INFINITY);
+		exit();
+
+		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument(), { timeout: 5_000 });
+		expect(probeCalls()).toBe(2);
+		expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", { params: { path: { handleId: "auth-terminal-1" } } });
+	});
+
+	it("closes a login panel it could not confirm once the harness reads as logged in", async () => {
+		// Every post-login probe misses, but the daemon's readiness later reports
+		// the harness logged in.
+		const { row, probeCalls, exit } = await loginWithProbeResults(["unauthorized"], 4);
+		exit();
+
+		await waitFor(() => expect(probeCalls()).toBe(4), { timeout: 8_000 });
+		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument(), { timeout: 5_000 });
+	}, 15_000);
+
+	it("completes MiMo Code login when the key is configured locally", async () => {
+		const initial = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "unknown" })] };
+		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
+		let probed = false;
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: initial } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "mimo-code", action: "login", launchMode: "terminal", available: true }] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/auth") return { data: {
+				agentId: "mimo-code", action: "login", terminal: { handleId: "auth-mimo", projectId: null, sessionId: null, workingDir: "/tmp", title: "MiMo Code login", createdAt: "2026-09-29T00:00:00Z" },
+			} } as never;
+			if (path === "/api/v1/agents/{agent}/probe") {
+				probed = true;
+				return { data: { agent: { id: "mimo-code", authStatus: "configured" }, installed: true } } as never;
+			}
+			if (path === "/api/v1/agents/readiness/ensure") return { data: probed ? configured : initial } as never;
+			return { data: undefined } as never;
+		});
+		const close = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
+		renderSection();
+		const row = (await screen.findByText("MiMo Code")).closest('[data-agent="mimo-code"]') as HTMLElement;
+		await userEvent.click(await within(row).findByRole("button", { name: "Login" }));
+		await userEvent.click(await within(row).findByRole("button", { name: "Complete login terminal" }));
+
+		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
+			params: { path: { handleId: "auth-mimo" } },
+		}));
+		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(within(row).queryByText("Configured")).toBeNull();
+		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "Refresh login" })).toBeEnabled();
+		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
+	});
+
 	it("refreshes authentication when the user closes the login terminal", async () => {
 		const authorized = catalogWithInstalled("claude-code");
 		authorized.agents[0].authentication.state = "authorized";
@@ -351,10 +794,11 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/probe", {
 			params: { path: { agent: "claude-code" } },
 		}));
-		await within(row).findByRole("button", { name: "Authorized" });
+		await within(row).findByText("Connected");
+		expect(within(row).queryByRole("button", { name: "Authorized" })).toBeNull();
 	});
 
-	it("uses Set up for a completed setup action", async () => {
+	it("uses Configured for a completed setup action", async () => {
 		const authorized = catalogWithInstalled("codex");
 		authorized.agents[1].authentication.state = "authorized";
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
@@ -375,7 +819,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
 
-		await within(row).findByText("Set up");
+		await within(row).findByText("Configured");
 	});
 
 	it("does not expose manual readiness controls", async () => {
@@ -546,6 +990,51 @@ describe("HarnessSettingsSection", () => {
 		}));
 	});
 
+	it("treats a separate OpenCode major as ordinarily not installed", async () => {
+		const reason = 'OpenCode 2 requires OpenCode 2, but "/usr/local/bin/opencode" reports OpenCode 1 (1.18.33); select the matching harness or put OpenCode 2 on PATH';
+		const mismatch = agentReadiness("opencode-v2", "OpenCode 2", {
+			installation: "not_installed",
+			authentication: "unknown",
+		});
+		mismatch.installation.reasonCode = "install_incompatible_version";
+		mismatch.installation.reason = reason;
+		const readiness = { agents: [mismatch] };
+		const installerPlans = { agents: [{
+			agentId: "opencode-v2",
+			available: true,
+			automatic: true,
+			method: "npm",
+			command: "npm install -g opencode-ai@latest",
+			methods: [{ id: "npm", label: "npm", available: true, recommended: true, command: "npm install -g opencode-ai@latest", reinstallAvailable: true }],
+		}] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
+			if (path === "/api/v1/agents/installers") return { data: installerPlans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/install") {
+				return { data: { target: "opencode-v2", status: "installing", method: "npm" } } as never;
+			}
+			return { data: readiness } as never;
+		});
+
+		renderSection();
+		const row = (await screen.findByText("OpenCode 2")).closest('[data-agent="opencode-v2"]') as HTMLElement;
+		const install = await within(row).findByRole("button", { name: "Install" });
+		expect(row).toHaveTextContent("Available via npm");
+		expect(row).not.toHaveTextContent(reason);
+		expect(row).not.toHaveTextContent("Installation status unknown");
+		expect(install).toBeEnabled();
+
+		await userEvent.click(install);
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
+			params: { path: { agent: "opencode-v2" } },
+			body: { method: "npm", operation: "install" },
+		}));
+	});
+
 	it("does not offer reinstall actions for installed harnesses", async () => {
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: catalogWithInstalled("claude-code", "cursor") } as never;
@@ -672,7 +1161,7 @@ describe("HarnessSettingsSection", () => {
 		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
 		await userEvent.click(await within(row).findByRole("button", { name: "Install" }));
 
-		await waitFor(() => expect(row).toHaveTextContent(authentication === "authorized" ? "Authorized" : "Installed"));
+		await waitFor(() => expect(row).toHaveTextContent(authentication === "authorized" ? "Connected" : "Installed"));
 		await waitFor(() => expect(selector).toHaveTextContent(authentication === "authorized" ? /^ready$/ : /^not_ready$/));
 		expect(client.getQueryData<AgentReadiness>(agentReadinessQueryKey)?.agents).toEqual([initial.agents[0], updated]);
 		expect(screen.getByTestId("originating-selector")).toBe(selector);
@@ -794,6 +1283,13 @@ describe("HarnessSettingsSection", () => {
 			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
 			if (path === "/api/v1/agents/installers") return { data: plans } as never;
 			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [{ target: "codex", status: "failed", method: "npm", error: "exit status 1", output: "permission denied", expectedDestination: "/Users/test/.npm/bin/codex" }] } } as never;
+			if (path === "/api/v1/usage/sessions/memory") {
+				return { data: {
+					sessions: [{ sessionId: "s1", rssBytes: 641_728_512, processCount: 3, cpuPercent: 0, sampledAt: "2026-09-22T00:00:00Z", processes: [] }],
+					app: { rssBytes: 2 * 1024 ** 3, processCount: 20, cpuPercent: 12 },
+					system: { totalBytes: 32 * 1024 ** 3, availableBytes: 4 * 1024 ** 3, swapTotalBytes: 0, swapUsedBytes: 0, swapBytesPerSec: 0, cpuCount: 8, load1: 1.25, cpuPercent: 30, pressureRaw: 5, pressureSource: "psi" },
+				} } as never;
+			}
 			return { data: undefined } as never;
 		});
 		const user = userEvent.setup();
@@ -803,7 +1299,104 @@ describe("HarnessSettingsSection", () => {
 		expect(row).toHaveTextContent("permission denied");
 		expect(row).toHaveTextContent("/Users/test/.npm/bin/codex");
 		await user.click(within(row).getByRole("button", { name: "Copy diagnostics" }));
-		expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("permission denied"));
+		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
+		const copied = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0] as string;
+		// The machine the install died on is part of the report.
+		expect(copied).toContain("permission denied");
+		expect(copied).toContain("Memory: AO 2.0 GB · available 4.0 GB of 32.0 GB");
+		expect(copied).toContain("CPU: 30% of 8 cores · load 1.25");
+		expect(copied).toContain("Live sessions: 1 · 612 MB");
+	});
+
+	it("copies the remote host's machine numbers, not this computer's", async () => {
+		hostMocks.connected = ["remote-1"];
+		try {
+			const memory = (availableGB: number, cores: number) => ({ data: {
+				sessions: [],
+				app: { rssBytes: 1024 ** 3, processCount: 4, cpuPercent: 2 },
+				system: { totalBytes: 64 * 1024 ** 3, availableBytes: availableGB * 1024 ** 3, swapTotalBytes: 0, swapUsedBytes: 0, swapBytesPerSec: 0, cpuCount: cores, load1: 0.5, cpuPercent: 10, pressureRaw: 0, pressureSource: "psi" },
+			} });
+			hostMocks.remoteGET.mockImplementation(async (path: string) => {
+				if (path === "/api/v1/agents/readiness") return { data: catalog };
+				if (path === "/api/v1/agents/installers") return { data: plans };
+				if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [{ target: "codex", status: "failed", method: "npm", error: "exit status 1", output: "remote failure" }] } };
+				if (path === "/api/v1/usage/sessions/memory") return memory(48, 32);
+				return { data: undefined };
+			});
+			// Readiness refreshes and installs answer the same as this computer's.
+			hostMocks.remotePOST.mockImplementation((path: never, init: never) => apiClient.POST(path, init));
+			vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+				if (path === "/api/v1/usage/sessions/memory") return memory(3, 8) as never;
+				return { data: undefined } as never;
+			});
+			const user = userEvent.setup();
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			render(
+				<QueryClientProvider client={client}>
+					<TooltipProvider>
+						<HarnessSettingsSection hostId="remote-1" />
+					</TooltipProvider>
+				</QueryClientProvider>,
+			);
+			const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+			await user.click(await within(row).findByRole("button", { name: "Show diagnostics" }));
+			await user.click(within(row).getByRole("button", { name: "Copy diagnostics" }));
+			await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
+			const copied = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0] as string;
+			expect(copied).toContain("remote failure");
+			expect(copied).toContain("available 48.0 GB of 64.0 GB");
+			expect(copied).toContain("of 32 cores");
+			expect(apiClient.GET).not.toHaveBeenCalledWith("/api/v1/usage/sessions/memory", expect.anything());
+		} finally {
+			hostMocks.connected = [];
+			hostMocks.remoteGET.mockReset();
+			hostMocks.remotePOST.mockReset();
+		}
+	});
+
+	it("leaves load out of copied diagnostics on a platform with no load average", async () => {
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [{ target: "codex", status: "failed", method: "npm", error: "exit status 1", output: "permission denied", expectedDestination: "/Users/test/.npm/bin/codex" }] } } as never;
+			if (path === "/api/v1/usage/sessions/memory") {
+				return { data: {
+					sessions: [],
+					app: { rssBytes: 2 * 1024 ** 3, processCount: 20, cpuPercent: 12 },
+					// Windows reports load1 = -1 to mean "no such concept here", not 0.
+					system: { totalBytes: 32 * 1024 ** 3, availableBytes: 4 * 1024 ** 3, swapTotalBytes: 0, swapUsedBytes: 0, swapBytesPerSec: 0, cpuCount: 8, load1: -1, cpuPercent: 30, pressureRaw: 5, pressureSource: "available_pct" },
+				} } as never;
+			}
+			return { data: undefined } as never;
+		});
+		const user = userEvent.setup();
+		renderSection();
+		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		await user.click(await within(row).findByRole("button", { name: "Show diagnostics" }));
+		await user.click(within(row).getByRole("button", { name: "Copy diagnostics" }));
+		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
+		const copied = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0] as string;
+		expect(copied).toContain("CPU: 30% of 8 cores");
+		expect(copied).not.toContain("load");
+	});
+
+	it("still copies diagnostics when the host cannot be measured", async () => {
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [{ target: "codex", status: "failed", method: "npm", error: "exit status 1", output: "permission denied" }] } } as never;
+			if (path === "/api/v1/usage/sessions/memory") return { error: { code: "MEMORY_UNSUPPORTED" } } as never;
+			return { data: undefined } as never;
+		});
+		const user = userEvent.setup();
+		renderSection();
+		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		await user.click(await within(row).findByRole("button", { name: "Show diagnostics" }));
+		await user.click(within(row).getByRole("button", { name: "Copy diagnostics" }));
+		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
+		const copied = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0] as string;
+		expect(copied).toContain("permission denied");
+		expect(copied).not.toContain("Machine");
 	});
 
 	it("surfaces install job polling failures", async () => {

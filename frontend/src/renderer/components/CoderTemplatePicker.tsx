@@ -30,15 +30,18 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 	// Parameter controls appear only when the selected template declares them.
 	const supportsSize = supportedParams.includes("size");
 	const supportsStartup = supportedParams.includes("startup_script");
-	const templateOptions = [
-		{ id: "", name: t("coder.template.default", { defaultValue: "Organization workspace" }), description: t("coder.template.defaultHint", { defaultValue: "The workspace configured for your org." }), parameters: [] as string[] },
-		...templates.map((tpl) => ({
-			id: tpl.id,
-			name: tpl.displayName || tpl.name,
-			description: tpl.description,
-			parameters: tpl.parameters ?? [],
-		})),
-	];
+	// Every project must choose a concrete template: there is no implicit
+	// "organization default" option, because a bring-your-own-Coder org may have
+	// no deployment-default template, in which case an empty choice fails only
+	// later at session start (HTTP 422 coder_template_required). The picker lists
+	// every template the deployment or org connection exposes, as-is; curation
+	// (e.g. hiding an internal template) is done by removing it in Coder, not here.
+	const templateOptions = templates.map((tpl) => ({
+		id: tpl.id,
+		name: tpl.displayName || tpl.name,
+		description: tpl.description,
+		parameters: tpl.parameters ?? [],
+	}));
 
 	return (
 		<div className="flex flex-col gap-4 text-sm">
@@ -48,7 +51,7 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 						<span className="font-medium text-foreground">{t("coder.template.label", { defaultValue: "Template" })}</span>
 						<SearchablePicker
 							ariaLabel={t("coder.template.label", { defaultValue: "Template" })}
-							placeholder={t("coder.template.default", { defaultValue: "Organization workspace" })}
+							placeholder={t("coder.template.select", { defaultValue: "Select a template" })}
 							searchPlaceholder={t("coder.template.search", { defaultValue: "Search templates" })}
 							value={templateId}
 							onChange={(id) => {
@@ -119,6 +122,8 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 }
 
 // These cards are placed directly below the project's primary repository.
+// Not shown in the cloud project form for now; kept so it can
+// be re-enabled without rebuilding it.
 export function AdditionalRepositoriesPicker({ repos = [] }: { repos?: { label: string; url: string; private?: boolean }[] }) {
 	const { t } = useTranslation();
 	const extraRepos = useCoderSessionOptionsStore((s) => s.extraRepos);
@@ -174,13 +179,6 @@ export function AdditionalRepositoriesPicker({ repos = [] }: { repos?: { label: 
 												aria-label={t("coder.repos.url", { defaultValue: "Repository" })}
 											/>
 										)}
-										<Input
-											value={repo.branch ?? ""}
-											onChange={(e) => updateRepo(index, { branch: e.target.value })}
-											placeholder={t("coder.repos.branch", { defaultValue: "branch" })}
-											className="w-32 shrink-0"
-											aria-label={t("coder.repos.branch", { defaultValue: "branch" })}
-										/>
 										<Button
 											type="button"
 											variant="ghost"

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,10 +19,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/notificationoutbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
@@ -115,13 +119,23 @@ func run(args []string) error {
 		return runDelete(ctx, c, args[1:])
 	case "claim-pr":
 		return runClaimPullRequest(ctx, c, args[1:])
+	case "review":
+		return runReview(ctx, c, args[1:])
 	default:
 		return fmt.Errorf("unknown command %q; run `ao help`", args[0])
 	}
 }
 
 func runHook(ctx context.Context, c *client, args []string, input io.Reader) error {
+	hookAt := time.Now()
 	if len(args) != 2 {
+		return nil
+	}
+	// A reviewer is a separate, short-lived harness process inside the same
+	// sandbox. Its hooks inherit the parent worker credential, but publishing
+	// them as parent-agent activity leaves that session stuck active after the
+	// reviewer exits and prevents queued feedback from reaching the real agent.
+	if os.Getenv(worker.ReviewTerminalEnv) == "1" {
 		return nil
 	}
 	// A completed turn (Stop) is the event that drives durable-restore
@@ -139,6 +153,18 @@ func runHook(ctx context.Context, c *client, args []string, input io.Reader) err
 	if !ok {
 		return nil
 	}
+	activity.SourceInterface = strings.TrimSpace(os.Getenv("AO_CLOUD_SOURCE_INTERFACE"))
+	if activity.SourceInterface == "tui" && activity.Event == "stop" && activity.State != "" {
+		// Keep the provider's native idle proof beside the worker. The durable
+		// control-plane projection can lag terminal input and is not a safe
+		// handoff fence on its own.
+		_ = worker.RecordTUIStop(strings.TrimSpace(os.Getenv("AO_DATA_DIR")), hookAt)
+	}
+	if activity.Harness == "codex" && activity.Event == "stop" && activity.LatestAssistantUpdate == "" {
+		activity.LatestAssistantUpdate = latestCodexAssistantMessage(
+			strings.TrimSpace(os.Getenv("CODEX_HOME")), activity.AgentSessionID,
+		)
+	}
 	hookCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	_ = c.request(
@@ -152,8 +178,74 @@ func runHook(ctx context.Context, c *client, args []string, input io.Reader) err
 		false,
 		nil,
 	)
+	if event, ok := notificationFromActivity(
+		strings.TrimSpace(os.Getenv("AO_SESSION_ID")),
+		workerEpochFromEnvironment(),
+		activity,
+	); ok {
+		dataDir := strings.TrimSpace(os.Getenv("AO_DATA_DIR"))
+		if dataDir != "" {
+			if outbox, err := notificationoutbox.Open(filepath.Join(dataDir, "notification-outbox.db")); err == nil {
+				_ = outbox.Enqueue(hookCtx, event)
+				_ = outbox.Close()
+			}
+		}
+	}
 	// Hook delivery is best-effort and must never break the coding agent.
 	return nil
+}
+
+func workerEpochFromEnvironment() int64 {
+	epoch, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_EPOCH")), 10, 64)
+	return epoch
+}
+
+func notificationFromActivity(sessionID string, epoch int64, activity worker.ActivityEvent) (notificationoutbox.Event, bool) {
+	if sessionID == "" || epoch <= 0 {
+		return notificationoutbox.Event{}, false
+	}
+	eventType := ""
+	activityID := strings.TrimSpace(activity.ToolUseID)
+	if activityID == "" {
+		activityID = strings.TrimSpace(activity.AgentSessionID)
+	}
+	message := ""
+	switch {
+	case activity.State == contract.ActivityWaitingInput || activity.State == contract.ActivityBlocked:
+		eventType = "needs_input"
+		if activityID == "" {
+			activityID = hookNotificationID(activity.Harness, activity.Event, activity.AgentSessionID)
+		}
+		message = "Agent needs your input"
+		if activity.ToolName != "" {
+			message = activity.ToolName + " requires your input"
+		}
+	case activity.Event == "session-end" && activity.State == contract.ActivityExited:
+		eventType = "agent_failed"
+		message = "Agent session ended unexpectedly"
+	default:
+		return notificationoutbox.Event{}, false
+	}
+	payload, err := json.Marshal(map[string]string{
+		"activityId": activityID,
+		"message":    message,
+		"harness":    activity.Harness,
+		"event":      activity.Event,
+	})
+	if err != nil {
+		return notificationoutbox.Event{}, false
+	}
+	identity := strings.Join([]string{sessionID, strconv.FormatInt(epoch, 10), eventType, activity.Harness, activity.Event, activityID}, "\x00")
+	hash := sha256.Sum256([]byte(identity))
+	return notificationoutbox.Event{
+		EventID: "evt_" + hex.EncodeToString(hash[:16]), EventType: eventType,
+		Payload: payload, OccurredAt: time.Now().UTC(), WorkerEpoch: epoch,
+	}, true
+}
+
+func hookNotificationID(values ...string) string {
+	hash := sha256.Sum256([]byte(strings.Join(values, "\x00")))
+	return hex.EncodeToString(hash[:16])
 }
 
 // pokeCheckpoint signals the worker's checkpoint bridge (a unix socket at
@@ -404,6 +496,35 @@ func runClaimPullRequest(ctx context.Context, c *client, args []string) error {
 	return nil
 }
 
+// runReview starts AO's reviewer on this session's open pull requests, the
+// same review the desktop Reviews panel starts.
+func runReview(ctx context.Context, c *client, args []string) error {
+	if len(args) != 1 || args[0] != "trigger" {
+		return errors.New("usage: ao review trigger")
+	}
+	// A reviewer process inherits the worker credential; it submits a verdict
+	// and must never start reviews of its own.
+	if os.Getenv(worker.ReviewTerminalEnv) == "1" {
+		return errors.New("a reviewer cannot start another review; submit your verdict with $AO_REVIEW_HELP")
+	}
+	var response worker.TriggerReviewResponse
+	if err := c.request(ctx, http.MethodPost, "/worker/reviews/trigger", nil, true, &response); err != nil {
+		return err
+	}
+	if len(response.Reviews) == 0 {
+		fmt.Println("no open pull request to review; open one first")
+		return nil
+	}
+	for _, review := range response.Reviews {
+		if review.Started {
+			fmt.Printf("started AO review of PR #%d %s\n", review.Number, review.URL)
+		} else {
+			fmt.Printf("AO review of PR #%d is already running %s\n", review.Number, review.URL)
+		}
+	}
+	return nil
+}
+
 func (c *client) request(
 	ctx context.Context,
 	method, path string,
@@ -477,6 +598,7 @@ func printUsage(out io.Writer) {
   ao report MESSAGE
   ao kill SESSION_ID
   ao claim-pr NUMBER_OR_URL
+  ao review trigger
 
 All commands are authenticated through the control plane. spawn/list/send/kill
 require an orchestrator session; report requires an orchestrator parent. Child

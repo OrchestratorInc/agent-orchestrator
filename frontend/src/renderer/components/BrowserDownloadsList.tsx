@@ -28,13 +28,13 @@ export function BrowserDownloadsList({
 		return (
 			<>
 				<p className="px-3 py-6 text-center text-xs text-muted-foreground">{t("browser.downloads.empty")}</p>
-				{error ? <p className="px-3 py-2 text-xs text-destructive" role="alert">{error}</p> : null}
+				{error ? <p className={cn("py-2 text-xs text-destructive", compact && "px-3")} role="alert">{error}</p> : null}
 			</>
 		);
 	}
 
 	return (
-		<div className={cn("board-scrollbar flex flex-col overflow-y-auto", compact ? "max-h-80" : "max-h-[28rem] gap-2")}>
+		<div className={cn("board-scrollbar flex flex-col overflow-y-auto", compact ? "max-h-80" : "max-h-[28rem]")}>
 			{downloads.map((download) => {
 				const progress = download.totalBytes > 0
 					? Math.min(100, Math.max(0, (download.receivedBytes / download.totalBytes) * 100))
@@ -43,16 +43,19 @@ export function BrowserDownloadsList({
 				const active = download.active ?? (
 					download.status === "progressing" || download.status === "paused" || resumableInterrupted
 				);
-				const terminalStatus = download.status === "completed"
+				const blocked = download.status === "blocked";
+				const terminalStatus = blocked
+					? t(download.source ? "browser.downloads.blockedFrom" : "browser.downloads.blocked", { source: download.source })
+					: download.status === "completed"
 					? t("browser.downloads.completed")
 					: download.status === "cancelled"
 						? t("browser.downloads.cancelled")
 						: t("browser.downloads.interrupted");
 				return (
-					<div className={cn("min-w-0", compact ? "border-b border-border px-3 py-2.5 last:border-b-0" : "rounded-md border border-border bg-card px-3 py-3")} key={download.id}>
+					<div className={cn("min-w-0 border-b border-border py-2.5 last:border-b-0", compact && "px-3")} key={download.id}>
 						<div className="flex min-w-0 items-center gap-2">
 							<div className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
-								{download.status === "cancelled" || download.status === "interrupted"
+								{blocked || download.status === "cancelled" || download.status === "interrupted"
 									? <Ban aria-hidden="true" className="size-4" />
 									: <FolderOpen aria-hidden="true" className="size-4" />}
 							</div>
@@ -70,7 +73,9 @@ export function BrowserDownloadsList({
 								</p>
 							</div>
 							<div className="flex shrink-0 items-center gap-0.5">
-								{download.status === "progressing" ? (
+								{blocked ? (
+									<Button aria-label={t("browser.downloads.allow", { file: download.fileName })} onClick={() => onAction(download.id, "allow")} size="sm" type="button" variant="outline">{t("browser.downloads.allowAction")}</Button>
+								) : download.status === "progressing" ? (
 									<Button aria-label={t("browser.downloads.pause", { file: download.fileName })} onClick={() => onAction(download.id, "pause")} size="icon-sm" type="button" variant="ghost"><Pause aria-hidden="true" className="size-3.5" /></Button>
 								) : download.status === "paused" || resumableInterrupted ? (
 									<Button aria-label={t("browser.downloads.resume", { file: download.fileName })} onClick={() => onAction(download.id, "resume")} size="icon-sm" type="button" variant="ghost"><Play aria-hidden="true" className="size-3.5" /></Button>
@@ -81,21 +86,21 @@ export function BrowserDownloadsList({
 									</>
 								) : null}
 								<Button
-									aria-label={t(active ? "browser.downloads.cancel" : "browser.downloads.remove", { file: download.fileName })}
+									aria-label={t(active ? "browser.downloads.cancel" : blocked ? "browser.downloads.dismiss" : "browser.downloads.remove", { file: download.fileName })}
 									onClick={() => onAction(download.id, active ? "cancel" : "remove")}
 									size="icon-sm"
 									type="button"
 									variant="ghost"
 								>
-									{active ? <X aria-hidden="true" className="size-3.5" /> : <Trash2 aria-hidden="true" className="size-3.5" />}
+									{active || blocked ? <X aria-hidden="true" className="size-3.5" /> : <Trash2 aria-hidden="true" className="size-3.5" />}
 								</Button>
 							</div>
 						</div>
-						{active ? <div aria-label={t("browser.downloads.progressLabel", { file: download.fileName })} aria-valuemax={100} aria-valuemin={0} aria-valuenow={Math.round(progress)} className="mt-2 h-1 overflow-hidden rounded-full bg-muted" role="progressbar"><div className="h-full rounded-full bg-accent transition-[width]" style={{ width: `${progress}%` }} /></div> : null}
+						{active ? <div aria-label={t("browser.downloads.progressLabel", { file: download.fileName })} aria-valuemax={100} aria-valuemin={0} aria-valuenow={Math.round(progress)} className="mt-2 h-1 overflow-hidden rounded-full bg-muted" role="progressbar"><div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${progress}%` }} /></div> : null}
 					</div>
 				);
 			})}
-			{error ? <p className="px-3 py-2 text-xs text-destructive" role="alert">{error}</p> : null}
+			{error ? <p className={cn("py-2 text-xs text-destructive", compact && "px-3")} role="alert">{error}</p> : null}
 		</div>
 	);
 }

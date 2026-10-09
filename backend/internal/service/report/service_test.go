@@ -101,3 +101,36 @@ func TestCreateDefendsValidationAndOwnership(t *testing.T) {
 		})
 	}
 }
+
+type artifactCalls []string
+
+func (a *artifactCalls) RecordReportedArtifact(_ context.Context, id domain.SessionID, reference string) {
+	*a = append(*a, string(id)+" "+reference)
+}
+
+func TestCreateShowsEachReportedArtifactAfterTheReportIsStored(t *testing.T) {
+	st := &fakeStore{ok: true, session: domain.SessionRecord{ID: "ao-7", ProjectID: "ao", Kind: domain.KindWorker}}
+	var calls artifactCalls
+	r, err := New(Deps{Store: st, Artifacts: &calls}).Create(context.Background(), CreateInput{
+		SessionID: "ao-7", State: domain.ReportDone, Note: "done",
+		Outputs: []domain.ReportOutput{
+			{Kind: domain.ReportOutputArtifact, Reference: "report.html"},
+			{Kind: domain.ReportOutputPRCreated, Reference: "https://github.com/o/r/pull/1"},
+			{Kind: domain.ReportOutputArtifact, Reference: "/abs/notes.md"},
+		},
+	})
+	if err != nil || r.ID == "" || st.created.ID != r.ID {
+		t.Fatalf("report = %+v, %v", r, err)
+	}
+	if len(calls) != 2 || calls[0] != "ao-7 report.html" || calls[1] != "ao-7 /abs/notes.md" {
+		t.Fatalf("recorded = %q, want the two artifacts in order", calls)
+	}
+
+	// A refused report shows nothing.
+	calls = nil
+	if _, err := New(Deps{Store: &fakeStore{}, Artifacts: &calls}).Create(context.Background(), CreateInput{
+		SessionID: "ao-7", Outputs: []domain.ReportOutput{{Kind: domain.ReportOutputArtifact, Reference: "report.html"}},
+	}); err == nil || len(calls) != 0 {
+		t.Fatalf("unknown session: err = %v, recorded %q", err, calls)
+	}
+}

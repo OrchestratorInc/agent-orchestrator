@@ -150,6 +150,47 @@ func TestGetLaunchCommandBypassWithPrompt(t *testing.T) {
 	}
 }
 
+func TestGetLaunchCommandAvoidsTranscriptOfReusedAOSessionID(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	p := &Plugin{resolvedBinary: "claude"}
+	derived := claudeSessionUUID("flash-1")
+
+	sessionIDFlag := func(t *testing.T) string {
+		t.Helper()
+		cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{SessionID: "flash-1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, arg := range cmd {
+			if arg == "--session-id" && i+1 < len(cmd) {
+				return cmd[i+1]
+			}
+		}
+		t.Fatalf("no --session-id in %#v", cmd)
+		return ""
+	}
+
+	if got := sessionIDFlag(t); got != derived {
+		t.Fatalf("fresh launch session id = %q, want derived %q", got, derived)
+	}
+
+	project := filepath.Join(configDir, "projects", "-old-data-dir-flash-1")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, derived+".jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := sessionIDFlag(t)
+	if got == derived {
+		t.Fatalf("launch reused the derived id %q that already has a transcript", derived)
+	}
+	if _, err := uuid.Parse(got); err != nil {
+		t.Fatalf("fallback session id %q is not a UUID: %v", got, err)
+	}
+}
+
 func TestGetLaunchCommandMapsPermissionModes(t *testing.T) {
 	tests := []struct {
 		name        string

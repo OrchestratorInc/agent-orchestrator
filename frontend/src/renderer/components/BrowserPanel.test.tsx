@@ -12,6 +12,7 @@ import {
 import { reorderBrowserTabs } from "../lib/browser-tab-order";
 import { useBrowserView, type BrowserNavState } from "../hooks/useBrowserView";
 import { useUiStore } from "../stores/ui-store";
+import { aoBridge } from "../lib/bridge";
 import type { WorkspaceSession } from "../types/workspace";
 import { TooltipProvider } from "./ui/tooltip";
 import type {
@@ -34,12 +35,18 @@ vi.mock("../lib/api-client", () => ({
 			: fallback,
 }));
 
+vi.mock("../lib/host-clients", () => ({ clientForSessionHost: () => ({ POST: postMock }) }));
+
 const hookState = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	goBack: vi.fn(),
 	goForward: vi.fn(),
 	reload: vi.fn(),
 	stop: vi.fn(),
+	findInPage: vi.fn(),
+	stopFindInPage: vi.fn(),
+	findOpenRequest: 0,
+	findState: { viewId: "42:sess-1", tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true },
 	selectTab: vi.fn(),
 	closeTab: vi.fn(),
 	openTab: vi.fn(),
@@ -48,11 +55,13 @@ const hookState = vi.hoisted(() => ({
 	reopenClosedTab: vi.fn(),
 	openDevTools: vi.fn(),
 	closeDevTools: vi.fn(),
+	reconnectBrowserRuntime: vi.fn(),
 	devtoolsState: { viewId: "42:sess-1", open: false, activeTabId: "t1" },
 	setAnnotationMode: vi.fn(),
 	annotationAction: vi.fn(),
 	annotationMode: false,
 	annotationState: { count: 0, screenshotCount: 0, hasDraft: false },
+	browserRuntimeConnected: true as boolean | null,
 	tabs: [{ id: "t1", url: "", title: "", active: true }],
 	activeTabId: "t1",
 	tabNotice: "",
@@ -82,6 +91,10 @@ vi.mock("../hooks/useBrowserView", () => ({
 			goForward: hookState.goForward,
 			reload: hookState.reload,
 			stop: hookState.stop,
+			findInPage: hookState.findInPage,
+			stopFindInPage: hookState.stopFindInPage,
+			findOpenRequest: hookState.findOpenRequest,
+			findState: hookState.findState,
 			tabs: hookState.tabs,
 			activeTabId: hookState.activeTabId,
 			tabNotice: hookState.tabNotice,
@@ -97,6 +110,8 @@ vi.mock("../hooks/useBrowserView", () => ({
 			devtoolsState: hookState.devtoolsState,
 			openDevTools: hookState.openDevTools,
 			closeDevTools: hookState.closeDevTools,
+			browserRuntimeConnected: hookState.browserRuntimeConnected,
+			reconnectBrowserRuntime: hookState.reconnectBrowserRuntime,
 			annotationMode: hookState.annotationMode,
 			annotationState: hookState.annotationState,
 			setAnnotationMode: hookState.setAnnotationMode,
@@ -239,12 +254,20 @@ describe("BrowserPanel", () => {
 		hookState.goForward.mockReset();
 		hookState.reload.mockReset();
 		hookState.stop.mockReset();
+		hookState.findInPage.mockReset();
+		hookState.stopFindInPage.mockReset();
+		hookState.findOpenRequest = 0;
+		hookState.findState = {
+			viewId: "42:sess-1", tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true,
+		};
 		hookState.selectTab.mockReset();
 		hookState.closeTab.mockReset();
 		hookState.reopenClosedTab.mockReset();
 		hookState.closedTabs = [];
 		hookState.openDevTools.mockReset();
 		hookState.closeDevTools.mockReset();
+		hookState.reconnectBrowserRuntime.mockReset();
+		hookState.reconnectBrowserRuntime.mockResolvedValue(undefined);
 		hookState.devtoolsState = { viewId: "42:sess-1", open: false, activeTabId: "t1" };
 		hookState.navState = {
 			viewId: "42:sess-1",
@@ -260,6 +283,7 @@ describe("BrowserPanel", () => {
 		hookState.annotationAction.mockResolvedValue(undefined);
 		hookState.annotationMode = false;
 		hookState.annotationState = { count: 0, screenshotCount: 0, hasDraft: false };
+		hookState.browserRuntimeConnected = true;
 		postMock.mockReset();
 		postMock.mockResolvedValue({ data: {} });
 		annotationSubmitListeners.clear();
@@ -330,6 +354,55 @@ describe("BrowserPanel", () => {
 
 		expect(hookState.navigate).toHaveBeenCalledWith("localhost:5173");
 		expect(input).not.toHaveFocus();
+	});
+
+	it("toggles find-in-page, searches as text changes, and supports keyboard navigation", async () => {
+		let focusFrame: FrameRequestCallback | undefined;
+		vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+			focusFrame = callback;
+			return 1;
+		});
+		const view = render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		expect(screen.queryByRole("search")).not.toBeInTheDocument();
+
+		hookState.findOpenRequest = 1;
+		view.rerender(
+			<TooltipProvider>
+				<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />
+			</TooltipProvider>,
+		);
+		const input = await screen.findByRole("textbox", { name: "Find in page" });
+		act(() => focusFrame?.(0));
+		expect(input).toHaveFocus();
+
+		await userEvent.type(input, "alpha");
+		expect(hookState.findInPage).toHaveBeenLastCalledWith("alpha", true, true);
+
+		await userEvent.keyboard("{Enter}");
+		expect(hookState.findInPage).toHaveBeenLastCalledWith("alpha", true, false);
+		await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+		expect(hookState.findInPage).toHaveBeenLastCalledWith("alpha", false, false);
+
+		hookState.findOpenRequest = 2;
+		view.rerender(
+			<TooltipProvider>
+				<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />
+			</TooltipProvider>,
+		);
+		expect(screen.queryByRole("search")).not.toBeInTheDocument();
+		expect(hookState.stopFindInPage).toHaveBeenCalledWith(true);
+
+		hookState.findOpenRequest = 3;
+		view.rerender(
+			<TooltipProvider>
+				<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />
+			</TooltipProvider>,
+		);
+		expect(await screen.findByRole("textbox", { name: "Find in page" })).toBeInTheDocument();
+		act(() => focusFrame?.(0));
+		await userEvent.keyboard("{Escape}");
+		expect(screen.queryByRole("search")).not.toBeInTheDocument();
+		expect(hookState.stopFindInPage).toHaveBeenCalledTimes(2);
 	});
 
 	it("supports consecutive address-bar navigations after refocusing", async () => {
@@ -1257,6 +1330,25 @@ describe("BrowserPanel", () => {
 		expect(onTogglePopOut).toHaveBeenCalledWith(true);
 	});
 
+	it("shows a one-click return button while popped out", async () => {
+		const onTogglePopOut = vi.fn();
+		render(<BrowserPanel active onTogglePopOut={onTogglePopOut} poppedOut session={session} />);
+
+		const returnButton = screen.getByRole("button", { name: "Return to panel" });
+		await openBrowserControls();
+		expect(screen.queryByRole("menuitem", { name: "Return to panel" })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		await userEvent.click(returnButton);
+
+		expect(onTogglePopOut).toHaveBeenCalledWith(false);
+	});
+
+	it("keeps the one-click return action out of the docked toolbar", () => {
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		expect(screen.queryByRole("button", { name: "Return to panel" })).not.toBeInTheDocument();
+	});
+
 	it("keeps workspace sizing controls out of the browser toolbar", async () => {
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
@@ -1301,6 +1393,16 @@ describe("BrowserPanel", () => {
 
 		expect(screen.getByTestId("browser-toolbar")).toHaveClass("browser-panel__toolbar");
 		expect(screen.getByTestId("browser-viewport")).toHaveClass("browser-panel__viewport");
+	});
+
+	it("offers to reconnect when the browser runtime is disconnected", async () => {
+		hookState.browserRuntimeConnected = false;
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		expect(screen.getByTestId("browser-runtime-alert")).toHaveTextContent("Browser runtime disconnected.");
+		await userEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+
+		expect(hookState.reconnectBrowserRuntime).toHaveBeenCalledOnce();
 	});
 
 	it("does not render a globe icon in the URL input", () => {
@@ -1363,6 +1465,7 @@ describe("BrowserPanel", () => {
 			params: { path: { sessionId: "sess-1" } },
 			body: {
 				message: expect.stringContaining("Make this button blue."),
+				userAuthored: true,
 			},
 		});
 		const body = postMock.mock.calls[0][1].body as { message: string };
@@ -1585,6 +1688,32 @@ describe("BrowserPanel", () => {
 
 		expect(await screen.findByText("Sent")).toBeInTheDocument();
 		expect(postMock).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		{ viewedHost: `ao-preview-${"a".repeat(32)}.localhost`, expectedUrl: "http://localhost:5173/design?x=1" },
+		{ viewedHost: `ao-preview-${"b".repeat(32)}.localhost`, expectedUrl: "(unknown)" },
+	])("maps only this session's preview URL in annotation chat ($viewedHost)", async ({ viewedHost, expectedUrl }) => {
+		const ownPreview = `http://ao-preview-${"a".repeat(32)}.localhost:4321/`;
+		const resolvePreviewUrl = vi.spyOn(aoBridge.remotes, "resolvePreviewUrl").mockResolvedValue(expectedUrl === "(unknown)" ? "" : expectedUrl);
+		const previewUrl = vi.spyOn(aoBridge.remotes, "previewUrl");
+		try {
+			const { result } = renderHook(() => useBrowserAnnotationQueue({
+				sessionId: "sess-1", hostId: "host-1", sourcePreviewUrl: "http://localhost:5173/", navUrl: ownPreview,
+			}));
+			const payload = annotationPayload("Fix this.");
+			payload.session.page.url = `http://${viewedHost}:4321/design?x=1`;
+			act(() => result.current.enqueue(payload));
+			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+			const message = (postMock.mock.calls[0][1].body as { message: string }).message;
+			expect(message).toContain(`URL: ${expectedUrl}`);
+			expect(message).not.toContain(viewedHost);
+			expect(resolvePreviewUrl).toHaveBeenCalledWith("host-1", "sess-1", payload.session.page.url);
+			expect(previewUrl).not.toHaveBeenCalled();
+		} finally {
+			resolvePreviewUrl.mockRestore();
+			previewUrl.mockRestore();
+		}
 	});
 
 	it("clears the annotation delivery confirmation after two seconds", async () => {
