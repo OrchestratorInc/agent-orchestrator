@@ -239,6 +239,8 @@ func run(logger *slog.Logger) error {
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Before any goroutine below can read the prefetch fields.
+	client.startStartupPrefetch(runCtx, bootstrap.Launch)
 	started := make(chan error, 1)
 	chatWorkspaceReady := make(chan struct{})
 	checkoutRequested := make(chan struct{}, 1)
@@ -621,6 +623,31 @@ type client struct {
 	tokenFile string
 	mu        sync.RWMutex
 	token     string
+	// Startup lookups made beside the checkout (see startStartupPrefetch).
+	// Set before any goroutine that reads them starts; nil means none.
+	credentialPrefetch *prefetch[worker.CredentialResponse]
+	transcriptPrefetch *prefetch[transcriptLookup]
+}
+
+// startStartupPrefetch begins the lookups the coding agent's launch needs but
+// the checkout does not: the captured transcript (read by rehydration) and the
+// coding-agent credential. They run while the repository is fetched, so once
+// the checkout gate opens the agent launches without two more round trips. The
+// gate itself is unchanged: the agent still starts only after checkout and
+// rehydration.
+func (c *client) startStartupPrefetch(ctx context.Context, launch worker.LaunchContext) {
+	c.transcriptPrefetch = startPrefetch(ctx, prefetchMaxAge, func(ctx context.Context) (transcriptLookup, error) {
+		checkpoint, found, err := c.fetchTranscript(ctx)
+		return transcriptLookup{checkpoint: checkpoint, found: found}, err
+	})
+	// Only a terminal (TUI) launch builds the agent right after the gate; a chat
+	// session asks for the credential on its first turn, likely past maxAge.
+	if verifyHarnessAvailable(launch.Harness) == nil &&
+		strings.TrimSpace(launch.Interface) != workertransport.InterfaceChat {
+		c.credentialPrefetch = startPrefetch(ctx, prefetchMaxAge, func(ctx context.Context) (worker.CredentialResponse, error) {
+			return c.agentCredential(ctx, "")
+		})
+	}
 }
 
 func (c *client) bootstrap(ctx context.Context, bootstrapToken string) (worker.BootstrapResponse, error) {
@@ -825,6 +852,9 @@ func (c *client) EnsureAgentTerminal(ctx context.Context) (worker.AgentTerminalR
 }
 
 func (c *client) Credential(ctx context.Context) (worker.CredentialResponse, error) {
+	if credential, ok := c.credentialPrefetch.take(ctx); ok {
+		return credential, nil
+	}
 	return c.agentCredential(ctx, "")
 }
 

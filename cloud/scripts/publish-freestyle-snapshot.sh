@@ -175,7 +175,9 @@ registry="${CP_IMAGE%%/*}"
 if [[ "$registry" == *.dkr.ecr.*.amazonaws.com ]]; then
 	aws_cli ecr get-login-password | docker login --username AWS --password-stdin "$registry" >/dev/null
 fi
-container="$(docker create --platform linux/amd64 "$CP_IMAGE")"
+# The control-plane image carries the amd64 worker at /ao-worker whatever its
+# own platform, so a single-platform local build (arm64 on a Mac) works too.
+container="$(docker create --platform linux/amd64 "$CP_IMAGE" 2>/dev/null || docker create "$CP_IMAGE")"
 docker cp "$container:/ao-worker" "$workdir/ao-worker" >/dev/null
 docker cp "$container:/ao" "$workdir/ao" >/dev/null
 docker rm "$container" >/dev/null
