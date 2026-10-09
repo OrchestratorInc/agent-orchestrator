@@ -31,6 +31,16 @@ type State struct {
 	LastPort int    `json:"lastPort"`
 	// The last rotated credential stays recognizable as stale after restart.
 	RetiredPasswordHash string `json:"retiredPasswordHash,omitempty"`
+	// AccountTokenHash permits a separate, machine-scoped credential to be
+	// synchronized across devices without uploading the pairing password.
+	AccountTokenHash string `json:"accountTokenHash,omitempty"`
+	// AccountToken is kept beside the pairing password in this owner-only file
+	// so a failed cloud registration can retry the same credential instead of
+	// rotating the host on every sync.
+	AccountToken string `json:"accountToken,omitempty"`
+	// AccountTokenOwner makes issuance idempotent for retries by the same AO
+	// account while still allowing an intentional re-link by another account.
+	AccountTokenOwner string `json:"accountTokenOwner,omitempty"`
 	// NoPublicTunnel keeps the self-hosted remote listener off the managed
 	// Cloudflare tunnel, including after daemon restart. Old Connect Mobile
 	// configs default to false and keep their existing behavior.

@@ -4,6 +4,22 @@ import { RemoteRegistry } from "./remote-registry";
 const workbox = { label: "workbox", url: "http://192.0.2.1:3011", password: "secret", hostId: "h_workbox" };
 
 describe("connected remote hosts", () => {
+	it("closes proxies on account sign-out but permits a later sign-in", async () => {
+		let closed = 0;
+		const registry = new RemoteRegistry(async () => ({
+			base: "http://127.0.0.1:7654/token",
+			previewUrl: (_sessionId, sourceUrl) => sourceUrl,
+			resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl,
+			close: async () => { closed++; },
+		}));
+		await registry.connect(workbox);
+		await registry.disconnectAll();
+		expect(closed).toBe(1);
+		await expect(registry.connect(workbox)).resolves.toMatchObject({ hostId: workbox.hostId });
+		await registry.closeAll();
+		expect(closed).toBe(2);
+	});
+
 	it("keeps two different machines connected at once", async () => {
 		const closed: string[] = [];
 		const registry = new RemoteRegistry(async (entry) => ({

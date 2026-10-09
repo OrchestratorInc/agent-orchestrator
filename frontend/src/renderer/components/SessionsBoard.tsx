@@ -1,4 +1,5 @@
-import { memo, useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
+import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -6,12 +7,15 @@ import {
 	SessionsArchiveView,
 	SessionsBoardGridView,
 	archiveToggleOffsetClassName,
+	chipTone,
+	largestSession,
+	type ChipTone,
 } from "@aoagents/product-ui";
 import { AlertTriangle, LayoutDashboard, RotateCw } from "lucide-react";
 import {
 	CLOUD_PROJECT_KIND,
-	toProjectKind,
 	type WorkspaceSession,
+	isOrchestratorSession,
 	newestActiveOrchestrator,
 	orchestratorHealth,
 	workerSessions,
@@ -48,13 +52,16 @@ import { useConnectedHosts } from "../hooks/useHostConnection";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { useShellMaybe } from "../lib/shell-context";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
+import { ProjectTerminationFeedback } from "./ShellTopbar";
 import { ProjectBoardActions } from "./ProjectBoardActions";
+import { useDiagnosticsEnabled, usePressureState, useSessionMemory } from "../hooks/useSessionMemory";
+import { AppMemoryIndicator, toSessionFacts, useHasAppMemory } from "./SessionMemoryPanel";
+import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import {
 	ArchivedSessionCardAdapter,
 	BoardSessionCardAdapter,
 	sessionsBoardLabels,
 } from "./SessionsBoardAdapters";
-import { CueRunMenu } from "./chat/CueRunMenu";
 
 type SessionsBoardProps = {
 	/** When set, the board shows only this project's sessions. */
@@ -159,12 +166,34 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const showProjectEmpty = hostId
 		? connected && remoteProjectQuery.isSuccess && Boolean(workspace) && liveSessions.length === 0
 		: presentation.showProjectEmpty;
-	const hasArchive = archived.length > 0;
+	// Memory and CPU monitoring is a developer tool: the light, the card chips
+	// and the window behind them only exist with Diagnostics on in Developer mode.
+	// They read this machine, so another machine's board shows none of them.
+	const diagnostics = useDiagnosticsEnabled();
+	const hasMemory = useHasAppMemory(!hostId) && diagnostics && !hostId;
+	// Per-session readings feed each card's resource chip. Chips are grey
+	// unless the machine is tight and the card is part of the fix (idle, or
+	// the single largest).
+	const sessionMemory = useSessionMemory(projectId, !hostId).data;
+	const memoryBySession = diagnostics ? sessionMemory : undefined;
+	const pressure = usePressureState(!hostId);
+	const chipToneOf = useMemo(() => {
+		const now = Date.now();
+		const facts = sessions
+			.filter((session) => session.isTerminated !== true && !isOrchestratorSession(session))
+			.map((session) => toSessionFacts(session, memoryBySession?.get(session.id), now));
+		const largest = largestSession(facts);
+		return (session: WorkspaceSession): ChipTone =>
+			chipTone(pressure ?? "fine", facts.find((f) => f.id === session.id) ?? toSessionFacts(session, memoryBySession?.get(session.id), now), largest);
+	}, [sessions, memoryBySession, pressure]);
+	// The bar hosts the memory indicator too, so it stays up with an empty archive.
+	const hasArchive = archived.length > 0 || hasMemory;
 	const terminateSession = useTerminateSession();
 	const activeScopeRef = useRef(scopeKey);
 	activeScopeRef.current = scopeKey;
 
 	const openSession = useCallback((session: WorkspaceSession) => {
+		if (session.kind === "worker") recordManualWorkerOpen(session.id, hostId);
 		void navigate(sessionNavigateTarget(session.workspaceId, session.id, hostId));
 	}, [navigate, hostId]);
 
@@ -196,13 +225,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 
 	const actions = projectId && (!hostId || connected) ? (
 		<>
+			<ProjectTerminationFeedback projectId={projectId} hostId={hostId} />
 			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />
-			{!hostId && workspace && toProjectKind(workspace.kind) ? <span className="inline-flex">
-				<CueRunMenu
-					projectId={projectId}
-					disabled={isProjectRestarting || isProvisioning}
-				/>
-			</span> : null}
 			{boardOwnsNotificationCenter ? (
 				<>
 					<NotificationCenter />
@@ -212,6 +236,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	) : boardOwnsNotificationCenter ? (
 		<NotificationCenter />
 	) : undefined;
+
+	if (projectId && (isProvisioning || projectActions.isSpawning)) {
+		return <OrchestratorStartingChat />;
+	}
 
 	return (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="board" data-host-id={hostId} data-project-id={projectId}>
@@ -301,6 +329,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						labels={boardLabels}
 						renderSessionCard={(session) => (
 							<BoardSessionCardAdapter
+								memory={memoryBySession?.get(session.id)}
+								memoryTone={chipToneOf(session)}
 								onOpen={() => openSession(session)}
 								onTerminate={!hostId || connected ? () => terminateSession.mutate(session) : undefined}
 								session={session}
@@ -350,6 +380,7 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
+	const diagnostics = useDiagnosticsEnabled();
 	const restoreSessionById = useRestoreSession();
 	const [restoringSessionId, setRestoringSessionId] = useState<string | undefined>();
 	const [restoreErrors, setRestoreErrors] = useState<Record<string, string>>({});
@@ -415,6 +446,7 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 					archiveAria: t("shell.archiveSessionsAria", { count: sessions.length }),
 					archivedSessions: t("shell.archivedSessions"),
 				}}
+				trailing={diagnostics && !hostId ? <AppMemoryIndicator /> : undefined}
 				renderSessionCard={(session) => (
 					<ArchivedSessionCardAdapter
 						isRestoreDisabled={!connected || restoringSessionId !== undefined}

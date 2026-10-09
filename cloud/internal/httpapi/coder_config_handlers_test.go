@@ -296,6 +296,104 @@ func TestPutOrgCoderConfigRejectsMissingToken(t *testing.T) {
 	}
 }
 
+// The slimmed form sends only a base URL and a token. The owner is derived from
+// the token (GET /api/v2/users/me) and stored, and a config with no template is
+// accepted — the template is chosen per project now.
+func TestPutOrgCoderConfigDerivesOwnerFromToken(t *testing.T) {
+	t.Parallel()
+	coderSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Header.Get("Coder-Session-Token") != coderCfgToken {
+			t.Errorf("missing/wrong Coder token header: %q", req.Header.Get("Coder-Session-Token"))
+		}
+		if req.Method != http.MethodGet || req.URL.Path != "/api/v2/users/me" {
+			http.Error(w, "unexpected route", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"u1","username":"derived-bot"}`))
+	}))
+	defer coderSrv.Close()
+
+	store := &coderConfigFakeStore{}
+	srv, _ := newCoderConfigServer(t, store, false)
+	body := `{"token":"` + coderCfgToken + `","baseUrl":"` + coderSrv.URL + `"}`
+
+	rec := httptest.NewRecorder()
+	srv.putOrgCoderConfig(rec, coderConfigRequest(t, http.MethodPut, body, nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+	if store.upserted != 1 {
+		t.Fatalf("UpsertProviderConnection called %d times, want 1", store.upserted)
+	}
+	cfg, err := domain.DecodeOrgCoderConfig(store.lastConfig)
+	if err != nil {
+		t.Fatalf("decode stored config: %v", err)
+	}
+	if cfg.Owner != "derived-bot" {
+		t.Fatalf("stored owner = %q, want derived-bot", cfg.Owner)
+	}
+	if cfg.TemplateID != "" {
+		t.Fatalf("stored template = %q, want empty (chosen per project)", cfg.TemplateID)
+	}
+	var resp orgCoderConfigResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.CoderConfig == nil || resp.CoderConfig.Owner != "derived-bot" {
+		t.Fatalf("response owner not the derived user: %+v", resp.CoderConfig)
+	}
+}
+
+// When the owner is empty and the Coder cannot be reached to resolve it, the save
+// fails with a clear 502 rather than storing an unusable, ownerless connection.
+func TestPutOrgCoderConfigFailsWhenOwnerUnresolvable(t *testing.T) {
+	t.Parallel()
+	coderSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer coderSrv.Close()
+
+	store := &coderConfigFakeStore{}
+	srv, _ := newCoderConfigServer(t, store, false)
+	body := `{"token":"` + coderCfgToken + `","baseUrl":"` + coderSrv.URL + `"}`
+
+	rec := httptest.NewRecorder()
+	srv.putOrgCoderConfig(rec, coderConfigRequest(t, http.MethodPut, body, nil))
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body = %s", rec.Code, rec.Body.String())
+	}
+	if store.upserted != 0 {
+		t.Fatal("an ownerless, unresolvable config must not be stored")
+	}
+}
+
+// An explicit owner is left untouched (backward compatible) and no owner
+// resolution call is made — a config that already carries one still saves.
+func TestPutOrgCoderConfigKeepsExplicitOwnerWithoutTemplate(t *testing.T) {
+	t.Parallel()
+	store := &coderConfigFakeStore{}
+	srv, _ := newCoderConfigServer(t, store, false)
+	// baseUrl is never contacted because owner is present; a template is omitted.
+	body := `{"token":"` + coderCfgToken + `","baseUrl":"https://coder.acme.example.com","owner":"ao-bot"}`
+
+	rec := httptest.NewRecorder()
+	srv.putOrgCoderConfig(rec, coderConfigRequest(t, http.MethodPut, body, nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+	cfg, err := domain.DecodeOrgCoderConfig(store.lastConfig)
+	if err != nil {
+		t.Fatalf("decode stored config: %v", err)
+	}
+	if cfg.Owner != "ao-bot" || cfg.TemplateID != "" {
+		t.Fatalf("stored config = %+v, want owner ao-bot and empty template", cfg)
+	}
+}
+
 func TestPutOrgCoderConfigRejectsNonUUIDTemplate(t *testing.T) {
 	t.Parallel()
 	store := &coderConfigFakeStore{}

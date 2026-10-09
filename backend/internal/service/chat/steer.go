@@ -79,6 +79,22 @@ type SteerOrSendResult struct {
 	Turn      domain.ConversationTurn
 }
 
+// resolveSteerSender enriches CLI-originated steering with the source session's
+// current durable identity. A missing source is tolerated so older workers and
+// cross-daemon callers keep the raw text prefix as their fallback.
+func (s *Service) resolveSteerSender(ctx context.Context, msg ports.ChatUserMessage) ports.ChatUserMessage {
+	if msg.SenderSessionID == "" || s.sessions == nil {
+		return msg
+	}
+	record, found, err := s.sessions.GetSession(ctx, domain.SessionID(msg.SenderSessionID))
+	if err != nil || !found {
+		return msg
+	}
+	msg.SenderProjectID = string(record.ProjectID)
+	msg.SenderDisplayName = strings.TrimSpace(record.DisplayName)
+	return msg
+}
+
 // PromoteQueuedTurnResult attributes a durable queue item to the running turn
 // that absorbed it.
 type PromoteQueuedTurnResult struct {
@@ -104,13 +120,15 @@ func (s *Service) Steer(
 	if strings.TrimSpace(msg.Text) == "" {
 		return SteerResult{}, ErrSteerTextRequired
 	}
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return SteerResult{}, err
+	msg = s.resolveSteerSender(ctx, msg)
+	if msg.SenderSessionID != "" {
+		msg.Origin = domain.MessageOriginAutomation
 	}
-	controller, err := s.Controller(id)
+	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return SteerResult{}, err
 	}
+	defer release()
 	return controller.Steer(ctx, msg)
 }
 
@@ -148,13 +166,18 @@ func (s *Service) SteerOrSend(
 	if msg.ClientMessageID == "" {
 		return SteerOrSendResult{}, ErrSteerDeliveryUncertain
 	}
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return SteerOrSendResult{}, err
+	msg = s.resolveSteerSender(ctx, msg)
+	// A cross-session steer that finds no active turn falls through to the normal
+	// send path. Keep that message attributed as automation so idle and busy
+	// targets render the same way.
+	if msg.SenderSessionID != "" {
+		msg.Origin = domain.MessageOriginAutomation
 	}
-	controller, err := s.Controller(id)
+	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return SteerOrSendResult{}, err
 	}
+	defer release()
 	return controller.SteerOrSend(ctx, msg, recoverOnly)
 }
 
@@ -528,15 +551,17 @@ func (c *Controller) SteerOrSend(
 }
 
 type steerDeliveryRequest struct {
-	Text     string                  `json:"text"`
-	Content  []ports.ChatContent     `json:"content,omitempty"`
-	Origin   domain.MessageOrigin    `json:"origin"`
-	Settings deliveryRequestSettings `json:"settings"`
+	Text            string                  `json:"text"`
+	Content         []ports.ChatContent     `json:"content,omitempty"`
+	Origin          domain.MessageOrigin    `json:"origin"`
+	SenderSessionID string                  `json:"senderSessionId,omitempty"`
+	Settings        deliveryRequestSettings `json:"settings"`
 }
 
 func encodeSteerDeliveryRequest(msg ports.ChatUserMessage) (string, error) {
 	encoded, err := json.Marshal(steerDeliveryRequest{
 		Text: msg.Text, Content: msg.Content, Origin: normalizeOrigin(msg.Origin),
+		SenderSessionID: msg.SenderSessionID,
 		Settings: deliveryRequestSettings{
 			Model: msg.Settings.Model, Effort: msg.Settings.Effort, Approval: msg.Settings.Approval,
 		},
@@ -630,8 +655,9 @@ func classifySteerRejection(
 // opens a NEW turn — using it here would mint a second turn row that the drain loop
 // would later dispatch as its own turn, sending the user's correction twice. The row
 // is tagged `event: "steer"` in its detail so a client can render it as the user's
-// own words rather than as a system notice, the same way compaction entries are
-// identified by their discriminator instead of by the general `system` kind.
+// own words rather than as a system notice. Cross-session CLI steers additionally
+// carry sender metadata so the client can attribute them as automation without
+// changing the activity storage model.
 //
 // The provider's own echo is not the record. It replays the guidance as a
 // `userMessage` item on the turn, but the driver drops those: AO records what the
@@ -663,6 +689,15 @@ func makeSteerActivity(
 		"event":  "steer",
 		"text":   msg.Text,
 		"origin": string(normalizeOrigin(msg.Origin)),
+	}
+	if msg.SenderSessionID != "" {
+		detail["senderSessionId"] = msg.SenderSessionID
+		if msg.SenderProjectID != "" {
+			detail["senderProjectId"] = msg.SenderProjectID
+		}
+		if msg.SenderDisplayName != "" {
+			detail["senderDisplayName"] = msg.SenderDisplayName
+		}
 	}
 	if msg.ClientMessageID != "" {
 		detail["clientMessageId"] = msg.ClientMessageID

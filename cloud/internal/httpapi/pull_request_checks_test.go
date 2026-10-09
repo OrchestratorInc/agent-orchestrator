@@ -3,10 +3,24 @@ package httpapi
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
+
+func TestObservedCloudPullRequestUnknownCIIsUnavailable(t *testing.T) {
+	pr := domain.PullRequest{CIState: contract.CIUnknown, ObservedAt: time.Now()}
+	got := toPullRequestSummaryResponse(pr, domain.PullRequestSnapshot{})
+	if len(got.Mergeability.Reasons) != 1 || got.Mergeability.Reasons[0] != "github_checks_unavailable" {
+		t.Fatalf("missing unavailable CI reason: %+v", got.Mergeability)
+	}
+	pr.ObservedAt = time.Time{}
+	got = toPullRequestSummaryResponse(pr, domain.PullRequestSnapshot{})
+	if len(got.Mergeability.Reasons) != 0 {
+		t.Fatalf("unobserved PR should keep checking: %+v", got.Mergeability)
+	}
+}
 
 func TestPullRequestFailingChecksFromStoredSnapshot(t *testing.T) {
 	checks := json.RawMessage(`[{"name":"unit","status":"completed","conclusion":"failure","html_url":"https://example.test/unit"},{"name":"lint","status":"completed","conclusion":"success"}]`)

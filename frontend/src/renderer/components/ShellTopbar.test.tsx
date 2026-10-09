@@ -231,6 +231,20 @@ beforeEach(() => {
 	useUiStore.setState({ inspectorSessions: {}, settingsModal: null, newTaskRequest: null });
 });
 
+describe("optimistic orchestrator topbar", () => {
+	it("uses the actual orchestrator actions before a session exists", () => {
+		useWorkspaceQueryMock.mockReturnValue({ data: [], isError: false, isLoading: false, isSuccess: true });
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider><ShellTopbar embedded startingOrchestrator /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByRole("button", { name: "New task" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Open Kanban" })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
+	});
+});
+
 describe("ShellTopbar route identity", () => {
 	it("identifies the Automations route instead of presenting it as the board", () => {
 		locationMock.pathname = "/automations";
@@ -413,18 +427,19 @@ describe("ShellTopbar orchestrator actions", () => {
 		},
 	);
 
-	it.each([CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, "unknown"] as const)(
+	it.each(["single_repo", "multi_repo", CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, "unknown"] as const)(
 		"hides the board cue runner for %s projects", (kind) => {
 			renderTopbarSessions([orchestrator], "", false, undefined, kind as WorkspaceSummary["kind"]);
 			expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
 		},
 	);
 
-	it("shows the play-icon cue runner for a worker session", () => {
-		renderTopbar(sessionWith());
+	it.each(["worker", "orchestrator"] as const)("shows the play-icon cue runner for a %s session", (kind) => {
+		renderTopbar(sessionWith({ kind }));
 
 		const runner = screen.getByRole("button", { name: "Run a cue" });
 		expect(runner.querySelector(".lucide-play")).not.toBeNull();
+		expect(runner).toBeEnabled();
 		expect(screen.getByTestId("workspace-topbar-actions")).toContainElement(runner);
 	});
 
@@ -443,7 +458,7 @@ describe("ShellTopbar orchestrator actions", () => {
 
 		const actions = screen.getByTestId("workspace-topbar-actions");
 		expect(actions.closest("header")).toHaveClass("workspace-topbar-container");
-		expect(screen.getByRole("button", { name: "Run a cue" }).querySelector(".lucide-play")).not.toBeNull();
+		expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
 	});
 
 	it.each([
@@ -791,7 +806,9 @@ describe("TopbarArchiveButton", () => {
 			response: { status: 500 },
 		});
 
-		expect(await screen.findByRole("alert")).toHaveTextContent("do the thing: runtime teardown failed");
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("runtime teardown failed");
+		expect(alert).toHaveAttribute("title", "do the thing: runtime teardown failed");
 	});
 
 	it("falls back to the project board when no orchestrator is available", async () => {

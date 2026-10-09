@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +49,26 @@ func TestCreateSessionReturnsCompleteSession(t *testing.T) {
 	}
 }
 
+func TestCreateSessionPreservesInitialEffort(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	session, err := store.CreateSession(ctx, domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID,
+		"create-effort-"+uuid.NewString(), 10, domain.CreateSession{
+			ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "Effort test",
+			Prompt: "hello", Provider: "docker", ReasoningEffort: "medium",
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch, err := store.WorkerLaunchSpec(ctx, fixture.orgID, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launch.ReasoningEffort != "medium" {
+		t.Fatalf("launch effort = %q, want medium", launch.ReasoningEffort)
+	}
+}
+
 func TestQueuedTurnDoesNotOverrideIdleWorkerActivity(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()
@@ -84,5 +105,20 @@ func TestQueuedTurnDoesNotOverrideIdleWorkerActivity(t *testing.T) {
 				t.Fatalf("status = %q, want idle despite %s turn", got, turnState)
 			}
 		})
+	}
+}
+
+func TestSessionInsertReturningMatchesScannerArity(t *testing.T) {
+	const scanSessionDestinations = 32
+	if got := strings.Count(sessionInsertReturning, ",") + 1; got != scanSessionDestinations {
+		t.Fatalf("session insert RETURNING fields = %d, want %d", got, scanSessionDestinations)
+	}
+	for _, field := range []string{
+		"reviewer_harness", "auto_review_enabled", "auto_inject_ci",
+		"auto_inject_review", "terminate_on_pr_merge",
+	} {
+		if !strings.Contains(sessionInsertReturning, field) {
+			t.Fatalf("session insert RETURNING is missing %s", field)
+		}
 	}
 }

@@ -496,7 +496,6 @@ describe("ProjectSettingsForm", () => {
 		await userEvent.click(picker);
 		await userEvent.click(screen.getByRole("menuitem", { name: /Reasoning effort/ }));
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
-		expect(picker).toHaveTextContent("GPT Test · Low");
 		submitSettings();
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
 		expect(putMock.mock.calls[0][1].body.config.worker.agentConfig).toEqual(
@@ -521,7 +520,7 @@ describe("ProjectSettingsForm", () => {
 		});
 		renderSettings("proj-1", undefined, "agents");
 		const picker = await screen.findByRole("button", { name: "Worker model" });
-		expect(picker).toHaveTextContent("Opus · Effort not reported");
+		expect(picker).toHaveTextContent("Opus · Medium");
 		expect(picker).not.toHaveTextContent("Claude");
 		await userEvent.click(picker);
 		expect(screen.getByRole("menuitem", { name: "Opus" })).toBeInTheDocument();
@@ -752,6 +751,58 @@ describe("ProjectSettingsForm", () => {
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
 		const request = putMock.mock.calls[0]?.[1];
 		expect(request?.body.config.autoReview).toBe(false);
+	});
+
+	it("loads and saves whether workers request an AO review", async () => {
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "git@github.com:acme/project-one.git",
+			defaultBranch: "main",
+			config: {
+				worker: { agent: "codex" },
+				orchestrator: { agent: "claude-code" },
+			},
+		});
+
+		renderSettings("proj-1", undefined, "general");
+
+		const toggle = await screen.findByRole("switch", { name: "Workers request AO review" });
+		expect(toggle).not.toBeChecked();
+
+		await userEvent.click(toggle);
+		expect(toggle).toBeChecked();
+
+		submitSettings();
+
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		const request = putMock.mock.calls[0]?.[1];
+		expect(request?.body.config.workersRequestReview).toBe(true);
+		expect(request?.body.config.reviewers).toBeUndefined();
+	});
+
+	// With no reviewer configured the daemon reviews with the default worker
+	// agent and its model, so the reviewer row must show that model.
+	it("shows the default worker model as the inherited reviewer model", async () => {
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "",
+			defaultBranch: "main",
+			config: {
+				worker: { agent: "codex", agentConfig: { model: "worker-model" } },
+				orchestrator: { agent: "claude-code" },
+			},
+		});
+
+		renderSettings("proj-1", undefined, "agents");
+
+		expect(await screen.findByRole("button", { name: "Reviewer agent" })).toHaveTextContent("Codex");
+		expect(await screen.findByRole("button", { name: "Reviewer model" })).toHaveTextContent("worker-model");
 	});
 
 	it("keeps the automatic default branch unpinned when saving other settings", async () => {

@@ -7,7 +7,6 @@ export type CueInvokeResult = components["schemas"]["InvokeCueResponse"];
 
 export const CUE_LIMITS = {
 	name: 64,
-	description: 240,
 	command: 4096,
 	prompt: 16384,
 } as const;
