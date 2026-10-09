@@ -2010,6 +2010,30 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true");
 	});
 
+	it("docks the composer at the bottom while arriving in a chat that already has messages", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }}
+				session={{ ...chatSession, lastUserMessageAt: "2026-10-09T00:00:00Z" }}
+				controllerTransitioning
+			/>,
+		);
+		const placement = document.querySelector("[data-composer-placement]");
+		expect(placement).toHaveAttribute("data-composer-placement", "dock");
+		expect(placement).toHaveClass("justify-end");
+	});
+
+	it("centers the composer while arriving in a chat with no messages yet", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }}
+				session={{ ...chatSession, lastUserMessageAt: undefined }}
+				controllerTransitioning
+			/>,
+		);
+		expect(document.querySelector("[data-composer-placement]")).toHaveAttribute("data-composer-placement", "center");
+	});
+
 	it("keeps the composer quiet while leaving chat for the terminal", () => {
 		render(
 			<ChatWorkspace

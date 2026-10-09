@@ -1918,7 +1918,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									controllerResumeError={!hostId && autoResume.variables === sessionId && autoResume.isError
 										? apiErrorMessage(autoResume.error) : undefined}
 									controllerTransitioning={interfaceUi.controllerTransitioning}
-									arriving={interfaceUi.optimisticTarget === "chat" && session.mode !== "chat"}
+									arriving={interfaceUi.optimisticTarget === "chat"}
 									agentResuming={quietResume}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}

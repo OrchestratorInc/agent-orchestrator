@@ -1403,7 +1403,10 @@ function ChatWorkspaceContent({
 		? "Restoring your conversation"
 		: "Starting the chat agent";
 	const compactStartup = sessionRole === "orchestrator" && startupState === "failed" ? startup : undefined;
-	const conversationEmpty = !arrivingInChat && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
+	// Arriving in a chat that already has messages docks the composer at the
+	// bottom while they load; a chat with none opens centered like any new chat.
+	const arrivingWithHistory = arrivingInChat && Boolean(session?.lastUserMessageAt);
+	const conversationEmpty = !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
 	const { t } = useTranslation();
 	const [emptyChatPlaceholder] = useState(
 		() => sessionRole === "orchestrator"
@@ -1617,7 +1620,7 @@ function ChatWorkspaceContent({
 					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
 					<div
-						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center")}
+						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
 					>
 						<ChatLinkProvider
