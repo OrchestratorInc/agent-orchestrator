@@ -14,7 +14,9 @@ import (
 )
 
 func fixturePlugin() *Plugin {
-	return &Plugin{resolvedBinary: "/test/tau", run: func(context.Context, string, ...string) ([]byte, error) { return []byte("tau 0.4.7\n"), nil }}
+	return &Plugin{resolvedBinary: "/test/tau", run: func(context.Context, string, map[string]string, ...string) ([]byte, error) {
+		return []byte("tau 0.4.7\n"), nil
+	}}
 }
 
 func TestLaunchKeepsTasksOutOfArgvAndRequiresExplicitBypass(t *testing.T) {
@@ -78,7 +80,9 @@ func TestRestoreUsesExactNativeIDAndReappliesPrivateInstructions(t *testing.T) {
 
 func TestVersionGateRejectsUninspectedBinary(t *testing.T) {
 	p := fixturePlugin()
-	p.run = func(context.Context, string, ...string) ([]byte, error) { return []byte("tau 0.3.0"), nil }
+	p.run = func(context.Context, string, map[string]string, ...string) ([]byte, error) {
+		return []byte("tau 0.3.0"), nil
+	}
 	_, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeBypassPermissions})
 	if err == nil || !strings.Contains(err.Error(), SupportedVersion) {
 		t.Fatalf("version gate = %v", err)
@@ -133,7 +137,7 @@ func TestToolRestrictionsAreRejectedOnLaunchAndRestore(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := fixturePlugin()
-			p.run = func(context.Context, string, ...string) ([]byte, error) {
+			p.run = func(context.Context, string, map[string]string, ...string) ([]byte, error) {
 				t.Fatal("unsupported policy reached provider probe")
 				return nil, nil
 			}
@@ -152,7 +156,7 @@ func TestToolRestrictionsAreRejectedOnLaunchAndRestore(t *testing.T) {
 
 func fixtureRestorePlugin(id, workspace string) *Plugin {
 	p := fixturePlugin()
-	p.run = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+	p.run = func(_ context.Context, _ string, _ map[string]string, args ...string) ([]byte, error) {
 		if len(args) == 1 && args[0] == "sessions" {
 			return []byte(id + "\tUntitled\tmodel\t" + workspace + "\n"), nil
 		}
@@ -194,5 +198,29 @@ func TestRestoreAcceptsSymlinkToSameDirectory(t *testing.T) {
 	_, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}, Permissions: ports.PermissionModeBypassPermissions})
 	if err != nil || !ok {
 		t.Fatalf("same workspace alias rejected: %v, %v", ok, err)
+	}
+}
+
+func TestNativeProbesUseSessionEnvironment(t *testing.T) {
+	const id = "8bc1a3fbba2142bcb406fe4a4b6fe21b"
+	workspace := t.TempDir()
+	nativeHome := t.TempDir()
+	env := map[string]string{"TAU_HOME": nativeHome}
+	p := fixturePlugin()
+	p.run = func(_ context.Context, _ string, got map[string]string, args ...string) ([]byte, error) {
+		if got["TAU_HOME"] != nativeHome {
+			t.Fatalf("probe ignored session environment: %#v", got)
+		}
+		if len(args) == 1 && args[0] == "sessions" {
+			return []byte(id + "\tUntitled\tmodel\t" + workspace + "\n"), nil
+		}
+		return []byte("tau 0.4.7\n"), nil
+	}
+	if _, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{Env: env, WorkspacePath: workspace, Permissions: ports.PermissionModeBypassPermissions}); err != nil {
+		t.Fatal(err)
+	}
+	_, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{Env: env, Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}, Permissions: ports.PermissionModeBypassPermissions})
+	if err != nil || !ok {
+		t.Fatalf("restore = %v, %v", ok, err)
 	}
 }
