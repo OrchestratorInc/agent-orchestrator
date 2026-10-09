@@ -37,6 +37,12 @@ const (
 	// attachment's read loop blocks, so tmux throttles at the source instead of
 	// the connection being torn down under a flood.
 	dataWatermark = 1 << 20
+	// burstFlushInterval spaces writes while output streams. A frame queued
+	// after a quiet period (a keystroke's echo) is written at once; frames
+	// queued within this interval of the previous write wait for it, so a flood
+	// leaves as a few large messages instead of thousands of tiny ones, each of
+	// which costs the renderer an event, a JSON parse and a decode.
+	burstFlushInterval = 4 * time.Millisecond
 )
 
 // Manager serves WebSocket clients, opening one attach Stream per opened pane
@@ -608,18 +614,38 @@ func (c *connState) enqueue(msg serverMsg) {
 }
 
 func (c *connState) writeLoop(ctx context.Context) {
+	var lastWrite time.Time
+	var pace *time.Timer
+	defer func() {
+		if pace != nil {
+			pace.Stop()
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-c.out.wake:
-			for _, msg := range c.out.drain() {
-				if err := c.conn.WriteJSON(ctx, msg); err != nil {
-					c.cancel()
-					return
-				}
+		}
+		if wait := burstFlushInterval - time.Since(lastWrite); wait > 0 {
+			if pace == nil {
+				pace = time.NewTimer(wait)
+			} else {
+				pace.Reset(wait)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-pace.C:
 			}
 		}
+		for _, msg := range c.out.drain() {
+			if err := c.conn.WriteJSON(ctx, msg); err != nil {
+				c.cancel()
+				return
+			}
+		}
+		lastWrite = time.Now()
 	}
 }
 

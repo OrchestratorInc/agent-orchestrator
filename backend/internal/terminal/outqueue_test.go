@@ -1,8 +1,10 @@
 package terminal
 
 import (
+	"context"
 	"encoding/base64"
 	"testing"
+	"time"
 )
 
 // PTY output arrives in many small reads; consecutive queued output for one
@@ -54,5 +56,48 @@ func TestOutQueueBoundsAMergedFrame(t *testing.T) {
 	q.push(serverMsg{Ch: chTerminal, ID: "a", Type: msgData, raw: chunk})
 	if frames := q.drain(); len(frames) != 2 {
 		t.Fatalf("frames = %d, want the second chunk in its own frame past maxMergedData", len(frames))
+	}
+}
+
+// A frame queued after a quiet period (a keystroke's echo) is written at once;
+// output that keeps arriving within burstFlushInterval of the previous write
+// waits for it and leaves as one merged frame.
+func TestWriteLoopPacesBurstsButNotIsolatedFrames(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	conn := newFakeConn()
+	c := &connState{conn: conn, ctx: ctx, cancel: cancel, out: newOutQueue(), terms: map[string]*attachment{}}
+	go c.writeLoop(ctx)
+
+	start := time.Now()
+	c.enqueue(serverMsg{Ch: chTerminal, ID: "a", Type: msgData, raw: []byte("e")})
+	first := <-conn.out
+	if elapsed := time.Since(start); elapsed >= burstFlushInterval {
+		t.Fatalf("isolated frame took %v; it must not wait for the burst interval", elapsed)
+	}
+	if first.Data != base64.StdEncoding.EncodeToString([]byte("e")) {
+		t.Fatalf("first frame = %q", first.Data)
+	}
+
+	// Right behind that write: these chunks must wait out the interval and merge.
+	for _, chunk := range []string{"1", "2", "3"} {
+		c.enqueue(serverMsg{Ch: chTerminal, ID: "a", Type: msgData, raw: []byte(chunk)})
+	}
+	select {
+	case burst := <-conn.out:
+		if burst.Data != base64.StdEncoding.EncodeToString([]byte("123")) {
+			t.Fatalf("burst frame = %q, want the three chunks merged", burst.Data)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("paced burst was never written")
+	}
+
+	// After a quiet period the next frame is immediate again.
+	time.Sleep(2 * burstFlushInterval)
+	start = time.Now()
+	c.enqueue(serverMsg{Ch: chTerminal, ID: "a", Type: msgData, raw: []byte("x")})
+	<-conn.out
+	if elapsed := time.Since(start); elapsed >= burstFlushInterval {
+		t.Fatalf("frame after a quiet period took %v", elapsed)
 	}
 }
