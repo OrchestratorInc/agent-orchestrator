@@ -77,7 +77,7 @@ import {
 	slowDaemonStartupStatus,
 } from "./shared/daemon-startup-status";
 import { toggleAppDevTools } from "./main/app-devtools";
-import { attachAppShortcuts } from "./main/app-shortcuts";
+import { attachAppShortcuts, cancelSessionSwitcherForFocusLoss } from "./main/app-shortcuts";
 import {
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
 	SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL,
@@ -746,6 +746,10 @@ async function createWindowInternal(): Promise<void> {
 	// contents holds focus — the shell renderer, xterm's helper textarea, or a
 	// browser-preview view (wired per-view in the browser host).
 	const isMac = process.platform === "darwin";
+	mainWindow.on("blur", () => {
+		cancelSessionSwitcherForFocusLoss();
+	});
+
 	attachAppShortcuts(
 		shellWebContents,
 		isMac,

@@ -123,6 +123,9 @@ if (typeof window !== "undefined") {
 			onNextSessionShortcut: () => () => undefined,
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
+			onSessionSwitcherStep: () => () => undefined,
+			onSessionSwitcherRelease: () => () => undefined,
+			onSessionSwitcherCancel: () => () => undefined,
 			onFocusTerminalShortcut: () => () => undefined,
 		},
 		terminal: {

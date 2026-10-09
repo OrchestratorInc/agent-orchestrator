@@ -33,6 +33,9 @@ export const aoBridge: AoBridge =
 			onNextSessionShortcut: () => () => undefined,
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
+			onSessionSwitcherStep: () => () => undefined,
+			onSessionSwitcherRelease: () => () => undefined,
+			onSessionSwitcherCancel: () => () => undefined,
 			onFocusTerminalShortcut: () => () => undefined,
 		},
 		terminal: {

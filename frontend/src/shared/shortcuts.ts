@@ -30,7 +30,7 @@ export function terminalFontSizeDelta(chord: ShortcutChord, isMac: boolean): -1 
 }
 
 export type AppShortcutId =
-	"new-session" | "new-shell-terminal" | "close-shell-terminal" | "keyboard-shortcuts" | "toggle-sidebar" | "open-project" | "toggle-inspector" | "command-palette" | "open-settings" | "previous-session" | "next-session" | "previous-tab" | "next-tab" | "focus-terminal" | "toggle-browser-devtools";
+	"new-session" | "new-shell-terminal" | "close-shell-terminal" | "keyboard-shortcuts" | "toggle-sidebar" | "open-project" | "toggle-inspector" | "command-palette" | "open-settings" | "previous-session" | "next-session" | "previous-tab" | "next-tab" | "switch-session" | "focus-terminal" | "toggle-browser-devtools";
 
 export type ShortcutCategory = "General" | "Navigation" | "Session";
 
@@ -120,6 +120,14 @@ export const APP_SHORTCUTS: readonly ShortcutDefinition[] = [
 		category: "Navigation",
 	},
 	{
+		id: "switch-session",
+		label: "Switch session",
+		category: "Navigation",
+		// Held-modifier switcher. The chord is platform-fixed so it cannot be
+		// rebound onto a terminal or browser shortcut.
+		customizable: false,
+	},
+	{
 		id: "toggle-inspector",
 		label: "Toggle inspector",
 		category: "Session",
@@ -176,6 +184,12 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 			return [binding("Tab", { ctrl: true, shift: true })];
 		case "next-tab":
 			return [binding("Tab", { ctrl: true })];
+		case "switch-session":
+			// macOS Option+Tab. Windows/Linux Ctrl+Tab. Shift reverses.
+			// Both directions are listed so the shortcut help matches the switcher.
+			return isMac
+				? [binding("Tab", { alt: true }), binding("Tab", { alt: true, shift: true })]
+				: [binding("Tab", { ctrl: true }), binding("Tab", { ctrl: true, shift: true })];
 		case "focus-terminal":
 			return [isMac ? binding("t", { meta: true, shift: true }) : binding("t", { ctrl: true, shift: true })];
 		case "toggle-browser-devtools":
@@ -298,6 +312,9 @@ export const PREVIOUS_SESSION_SHORTCUT_CHANNEL = "app:previous-session";
 export const NEXT_SESSION_SHORTCUT_CHANNEL = "app:next-session";
 export const PREVIOUS_TAB_SHORTCUT_CHANNEL = "app:previous-tab";
 export const NEXT_TAB_SHORTCUT_CHANNEL = "app:next-tab";
+export const SESSION_SWITCHER_STEP_CHANNEL = "app:session-switcher-step";
+export const SESSION_SWITCHER_RELEASE_CHANNEL = "app:session-switcher-release";
+export const SESSION_SWITCHER_CANCEL_CHANNEL = "app:session-switcher-cancel";
 export const FOCUS_TERMINAL_SHORTCUT_CHANNEL = "app:focus-terminal";
 
 // New session: ⌘N on macOS, Ctrl+Shift+N on Windows/Linux. Plain Ctrl+N is a
@@ -340,6 +357,30 @@ export function matchesPreviousTabShortcut(chord: ShortcutChord, isMac: boolean)
 
 export function matchesNextTabShortcut(chord: ShortcutChord, isMac: boolean): boolean {
 	return matchesAppShortcut("next-tab", chord, isMac);
+}
+
+/**
+ * Direction for one Tab press of the project session switcher.
+ * 1 moves forward, -1 moves backward. Null when the chord belongs to something else.
+ * macOS is Option+Tab. Windows and Linux are Ctrl+Tab. Shift reverses.
+ * The binding is fixed: a customized next-tab chord must not move this switcher,
+ * and this switcher must not follow a customized binding onto Ctrl+C or similar.
+ */
+export function sessionSwitcherDirection(chord: ShortcutChord, isMac: boolean): -1 | 1 | null {
+	if (normalizedKey(chord.key) !== "tab") return null;
+	if (chord.meta) return null;
+	if (isMac) {
+		if (!chord.alt || chord.ctrl) return null;
+		return chord.shift ? -1 : 1;
+	}
+	if (!chord.ctrl || chord.alt) return null;
+	return chord.shift ? -1 : 1;
+}
+
+/** True when this keyup is the modifier whose release commits the switcher. */
+export function isSessionSwitcherModifierRelease(key: string, isMac: boolean): boolean {
+	const normalized = normalizedKey(key);
+	return isMac ? normalized === "alt" || normalized === "option" : normalized === "control" || normalized === "ctrl";
 }
 
 export function matchesFocusTerminalShortcut(chord: ShortcutChord, isMac: boolean): boolean {
