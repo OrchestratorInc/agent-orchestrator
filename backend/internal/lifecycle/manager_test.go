@@ -991,7 +991,7 @@ func TestActivity_ReorderedPromptPreservesLatestHumanCheckpoint(t *testing.T) {
 				if tt.prompt != before.Metadata.LatestUserPrompt {
 					before.Metadata.ConversationCheckpointUnsettled = true
 				}
-				if got.Metadata != before.Metadata {
+				if !reflect.DeepEqual(got.Metadata, before.Metadata) {
 					t.Fatalf("delayed or duplicate prompt replaced newer checkpoint or lost ordering uncertainty: got %+v, want %+v", got.Metadata, before.Metadata)
 				}
 			}
