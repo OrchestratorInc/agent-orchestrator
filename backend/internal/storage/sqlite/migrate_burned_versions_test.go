@@ -193,7 +193,10 @@ var shippedMigrations = map[int64]string{
 	188: "0188_remove_worktree_startup_cues.sql",
 	189: "0189_session_interaction.sql",
 	190: "0190_session_hibernation.sql",
-	191: "0191_allow_zcode_harness.sql",
+	191: "0191_session_branch_state.sql",
+	192: "0192_allow_openhands_harness.sql",
+	193: "0193_allow_codewhale_harness.sql",
+	194: "0194_allow_zcode_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

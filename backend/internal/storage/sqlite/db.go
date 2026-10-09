@@ -2103,10 +2103,12 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsOMP := !strings.Contains(schema, "'omp'")
 	needsGemini := !strings.Contains(schema, "'gemini'")
 	needsUnreal := !strings.Contains(schema, "'unreal-agent'")
+	needsCodewhale := !strings.Contains(schema, "'codewhale'")
 	needsMiMo := !strings.Contains(schema, "'mimo-code'")
 	needsDeepSeek := !strings.Contains(schema, "'deepseek-harness'")
+	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsZCode := !strings.Contains(schema, "'zcode'")
-	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsMiMo && !needsDeepSeek && !needsZCode {
+	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsZCode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2199,8 +2201,22 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		// instead of enumerating the shapes repaired above.
 		repairs = append(repairs, replacement{"'fake'))", "'deepseek-harness', 'fake'))"})
 	}
+	if needsOpenHands {
+		// Migration 0192 rewrites the current constraint variants by exact
+		// string. A database that skipped an earlier harness migration matches
+		// none of them, so it reaches this repair with the harness list still
+		// missing entries; goose has already run, so nothing else adds this
+		// harness. Every variant ends with the retained 'fake' fixture harness,
+		// so anchor there instead of enumerating the shapes repaired above.
+		// This runs after the DeepSeek repair, so a database missing both gets
+		// 'deepseek-harness', 'openhands', 'fake' in that order.
+		repairs = append(repairs, replacement{"'fake'))", "'openhands', 'fake'))"})
+	}
+	if needsCodewhale {
+		repairs = append(repairs, replacement{"'fake'))", "'codewhale', 'fake'))"})
+	}
 	if needsZCode {
-		// Same shape as the DeepSeek repair: migration 0191 rewrites the known
+		// Same shape as the DeepSeek repair: migration 0194 rewrites the known
 		// variants by exact string, and any database that missed it still ends
 		// with the 'fake' fixture harness to anchor on.
 		repairs = append(repairs, replacement{"'fake'))", "'zcode', 'fake'))"})
@@ -2247,6 +2263,12 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'deepseek-harness'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing DeepSeek Harness and did not match known pre-DeepSeek schema")
+	}
+	if !strings.Contains(schema, "'codewhale'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Codewhale")
+	}
+	if !strings.Contains(schema, "'openhands'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing OpenHands and did not match known pre-OpenHands schema")
 	}
 	return nil
 }

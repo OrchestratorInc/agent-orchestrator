@@ -24,7 +24,7 @@ func TestChatProviderPreservationIsDerivedFromLiveOwnership(t *testing.T) {
 		{"terminal", domain.SessionModeTUI, false, &yes, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := &Service{clock: func() time.Time { return time.Unix(1, 0) }}
+			svc := &Service{store: &fakeStore{}, clock: func() time.Time { return time.Unix(1, 0) }}
 			if tc.observed != nil {
 				svc.SetChatProviderPreserver(func(id domain.SessionID) bool { return id == "s" && *tc.observed })
 			}

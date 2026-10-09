@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -543,6 +544,13 @@ func (s *Service) sendInitialInputWhenReady(ctx context.Context, handle ports.Ru
 		output, err := s.runtime.GetOutput(ctx, handle, initialInputOutputLines)
 		if err == nil {
 			ready := MatchInitialInputReadyState(output, readyStates)
+			if ready == nil {
+				if styled, ok := s.runtime.(ports.StyledTerminalOutputReader); ok {
+					if rendered, styledErr := styled.GetStyledOutput(ctx, handle, initialInputOutputLines); styledErr == nil {
+						ready = MatchInitialInputReadyState(terminalui.PlainTerminalText(rendered), readyStates)
+					}
+				}
+			}
 			if ready == nil {
 				goto wait
 			}

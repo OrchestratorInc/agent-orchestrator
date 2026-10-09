@@ -1742,7 +1742,20 @@ export function createBrowserViewHost(
         return;
       }
       const closingTabId = session.activeTabId;
-      if (isNativePage && session.tabs.size > 1) {
+      if (session.tabs.size === 1) {
+        // Focus the shell first so a fast second ⌘W cannot land in the hidden
+        // page and fall through to the menu's Close item.
+        const shell = shellContents(options);
+        shell.focus();
+        forgetNativeFocus(session.viewId);
+        forgetBrowserShortcutTarget(session.viewId);
+        shell.send("browser:closePanel", session.viewId);
+        void openUserTab(session)
+          .then(() => closeUserTab(session, closingTabId))
+          .catch(() => undefined);
+        return;
+      }
+      if (isNativePage) {
         // The focused view is about to be destroyed asynchronously. Move OS
         // focus to its replacement synchronously — making it visible first
         // so the focus sticks — or a fast second ⌘W lands in focus limbo

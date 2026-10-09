@@ -341,6 +341,9 @@ const api = {
 		set: (preference: "light" | "dark" | "system") => ipcRenderer.invoke("theme:set", preference) as Promise<void>,
 		persistTerminal: (scheme: "light" | "dark") =>
 			ipcRenderer.invoke("theme:persist-terminal", scheme) as Promise<void>,
+		// The shell goes transparent over a live native browser page, so whatever
+		// shows through its unpainted gutters is the native window background.
+		setWindowBackground: (color: string) => ipcRenderer.invoke("theme:set-window-background", color) as Promise<void>,
 	},
 	menu: {
 		action: (action: string) => ipcRenderer.invoke("menu:action", action) as Promise<void>,
@@ -473,6 +476,13 @@ const api = {
 			ipcRenderer.on("browser:reopenClosedTab", wrapped);
 			return () => {
 				ipcRenderer.off("browser:reopenClosedTab", wrapped);
+			};
+		},
+		onClosePanel: (listener: (viewId: string) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, viewId: string) => listener(viewId);
+			ipcRenderer.on("browser:closePanel", wrapped);
+			return () => {
+				ipcRenderer.off("browser:closePanel", wrapped);
 			};
 		},
 		devtools: (input: BrowserDevToolsInput) =>

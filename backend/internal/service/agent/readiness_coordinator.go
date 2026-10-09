@@ -16,11 +16,13 @@ import (
 )
 
 const (
-	defaultDisplayReadinessTTL = 5 * time.Minute
-	defaultLaunchReadinessTTL  = 30 * time.Second
-	defaultInstallCheckTimeout = 2 * time.Second
-	defaultAuthCheckTimeout    = 10 * time.Second
-	defaultReadinessWorkers    = 4
+	defaultDisplayReadinessTTL  = 5 * time.Minute
+	defaultLaunchReadinessTTL   = 30 * time.Second
+	defaultInstallCheckTimeout  = 2 * time.Second
+	opencodeInstallCheckTimeout = 12 * time.Second
+	opencodeV2MigrationTimeout  = 30 * time.Minute
+	defaultAuthCheckTimeout     = 10 * time.Second
+	defaultReadinessWorkers     = 4
 )
 
 var defaultReadinessRetryDelays = []time.Duration{15 * time.Second, time.Minute, 5 * time.Minute}
@@ -46,6 +48,11 @@ type readinessCoordinatorConfig struct {
 	RetryDelays         []time.Duration
 	Workers             int
 	AuthenticationCheck func(context.Context, string, domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool)
+	// OnAuthenticationRecovered runs (asynchronously) when a check observes an
+	// agent that was signed out become signed in or configured, however the
+	// login happened: AO's login terminal, the agent's own CLI, or a renewed
+	// token. Caches derived from the signed-out state hook in here.
+	OnAuthenticationRecovered func(agentID string)
 }
 
 type readinessEntry struct {
@@ -84,6 +91,7 @@ type readinessCoordinator struct {
 	retryDelays         []time.Duration
 	workers             int
 	authenticationCheck func(context.Context, string, domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool)
+	onAuthRecovered     func(agentID string)
 
 	mu      sync.Mutex
 	entries map[string]*readinessEntry
@@ -136,6 +144,7 @@ func newReadinessCoordinator(cfg readinessCoordinatorConfig) *readinessCoordinat
 		installTimeout: cfg.InstallTimeout, authTimeout: cfg.AuthTimeout,
 		retryDelays: cfg.RetryDelays, workers: cfg.Workers,
 		authenticationCheck: cfg.AuthenticationCheck,
+		onAuthRecovered:     cfg.OnAuthenticationRecovered,
 		entries:             make(map[string]*readinessEntry, len(cfg.Agents)), calls: make(map[readinessCallKey]*readinessCall),
 	}
 	for _, item := range cfg.Agents {
@@ -461,6 +470,7 @@ func (c *readinessCoordinator) runCheck(id string, purpose domain.AgentReadiness
 		}
 	}
 
+	recovered := false
 	c.mu.Lock()
 	entry := c.entries[id]
 	if needed&readinessInvalidateInstallation != 0 {
@@ -480,6 +490,8 @@ func (c *readinessCoordinator) runCheck(id string, purpose domain.AgentReadiness
 		if authFailed {
 			preserveAuthenticationFailure(&entry.snapshot.Authentication, auth)
 		} else {
+			recovered = entry.snapshot.Authentication.State == domain.AgentAuthenticationUnauthorized &&
+				(auth.State == domain.AgentAuthenticationAuthorized || auth.State == domain.AgentAuthenticationConfigured)
 			entry.snapshot.Authentication = auth
 			if entry.authVersion == call.authVersion {
 				entry.invalidated &^= readinessInvalidateAuthentication
@@ -512,11 +524,18 @@ func (c *readinessCoordinator) runCheck(id string, purpose domain.AgentReadiness
 	close(call.done)
 	c.mu.Unlock()
 	c.logDecision(id, purpose, "new_check", duration, snapshot, failureCode, nextRetry)
+	if recovered && c.onAuthRecovered != nil {
+		go c.onAuthRecovered(id)
+	}
 }
 
 func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent, presenceOnly bool) (domain.AgentInstallationObservation, bool) {
 	attempted := c.now()
-	ctx, cancel := context.WithTimeout(c.ctx, c.installTimeout)
+	timeout := c.installTimeout
+	if timeout == defaultInstallCheckTimeout && (item.Harness == domain.HarnessOpenCode || item.Harness == domain.HarnessOpenCodeV2) {
+		timeout = opencodeInstallCheckTimeout
+	}
+	ctx, cancel := context.WithTimeout(c.ctx, timeout)
 	defer cancel()
 	var path string
 	var err error
@@ -538,7 +557,7 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 	}
 	var incompatibleVersion *opencode.IncompatibleVersionError
 	if errors.As(err, &incompatibleVersion) {
-		return successfulInstallation(attempted, domain.AgentInstallationNotInstalled, domain.AgentReadinessReasonInstallIncompatibleVersion, err.Error()), false
+		return successfulInstallation(attempted, domain.AgentInstallationNotInstalled, domain.AgentReadinessReasonNotInstalled, item.Manifest.Name+" is not installed."), false
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return failedInstallation(attempted, domain.AgentReadinessReasonInstallCheckTimeout, "Installation check timed out."), true
@@ -561,7 +580,12 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	if !ok {
 		return successfulAuthentication(attempted, domain.AgentAuthenticationUnknown, domain.AgentReadinessReasonAuthCheckUnsupported, "Authentication checks are not supported for this harness."), false
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, c.authTimeout)
+	timeout := c.authTimeout
+	if timeout == defaultAuthCheckTimeout && item.Harness == domain.HarnessOpenCodeV2 {
+		// First-use migration needs its own budget; the adapter bounds its auth CLI separately.
+		timeout = opencodeV2MigrationTimeout
+	}
+	ctx, cancel := context.WithTimeout(c.ctx, timeout)
 	defer cancel()
 	status, err := checker.AuthStatus(ctx)
 	if err != nil {

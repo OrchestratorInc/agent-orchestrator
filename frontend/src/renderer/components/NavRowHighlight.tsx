@@ -20,12 +20,15 @@ export const NAV_ROW_HIGHLIGHT_HOST_CLASS =
  *   Keyboard uses `:focus-visible` / `:has(:focus-visible)` there — NOT
  *   `:focus-within` (mouse click focus would stick the pill on after toggle).
  * - Shared by Sidebar and HomePage recent rows; keep one implementation.
+ *   `className` may only swap the fill (home uses the action-card surface).
  */
 export function NavRowHighlight({
 	active = false,
+	className,
 	disabled = false,
 }: {
 	active?: boolean;
+	className?: string;
 	disabled?: boolean;
 }) {
 	return (
@@ -39,6 +42,7 @@ export function NavRowHighlight({
 					? "h-full w-full bg-interactive-active opacity-100"
 					: "h-[calc(100%-8px)] w-[calc(100%-8px)] opacity-0",
 				disabled && !active && "opacity-0!",
+				className,
 			)}
 			data-nav-row-highlight=""
 			data-nav-row-highlight-idle={active || disabled ? undefined : ""}

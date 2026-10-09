@@ -1,12 +1,28 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
+
+func TestRunHookDoesNotPublishReviewerActivity(t *testing.T) {
+	t.Setenv(worker.ReviewTerminalEnv, "1")
+
+	err := runHook(
+		context.Background(),
+		nil,
+		[]string{"codex", "user-prompt-submit"},
+		strings.NewReader(`{}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestNotificationFromActivityMapsNeedsInputWithStableIdentity(t *testing.T) {
 	t.Parallel()

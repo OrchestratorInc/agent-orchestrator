@@ -36,8 +36,10 @@ const (
 	HarnessOMP        AgentHarness = "omp"
 	HarnessFX         AgentHarness = "fx"
 	HarnessUnreal     AgentHarness = "unreal-agent"
+	HarnessCodewhale  AgentHarness = "codewhale"
 	HarnessMiMoCode   AgentHarness = "mimo-code"
 	HarnessDeepSeek   AgentHarness = "deepseek-harness"
+	HarnessOpenHands  AgentHarness = "openhands"
 	HarnessZCode      AgentHarness = "zcode"
 	// HarnessFake is retained for existing test fixtures and historical session
 	// rows, but is not user-selectable.
@@ -52,7 +54,7 @@ var AllHarnesses = []AgentHarness{
 	HarnessCopilot, HarnessGoose, HarnessAuggie, HarnessContinue, HarnessDevin,
 	HarnessCline, HarnessKimi, HarnessMuse, HarnessKiro, HarnessKilocode, HarnessVibe, HarnessPi,
 	HarnessKimchi, HarnessPrimeAgent, HarnessAutohand,
-	HarnessOMP, HarnessFX, HarnessUnreal, HarnessMiMoCode, HarnessDeepSeek,
+	HarnessOMP, HarnessFX, HarnessUnreal, HarnessCodewhale, HarnessMiMoCode, HarnessDeepSeek, HarnessOpenHands,
 	HarnessZCode,
 }
 

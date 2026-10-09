@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pressly/goose/v3"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -725,6 +727,33 @@ func TestMigrateAllowsEveryShippedHarness(t *testing.T) {
 	}
 }
 
+func TestCodewhaleHarnessMigrationDownRestoresConstraint(t *testing.T) {
+	db := openMigratedTestDB(t)
+	if _, err := db.Exec(`
+INSERT INTO projects (id, path, registered_at, config)
+VALUES ('codewhale-project', '/repo/codewhale', ?, '{}');
+INSERT INTO sessions (id, project_id, num, harness, activity_last_at, created_at, updated_at)
+VALUES ('codewhale-project-1', 'codewhale-project', 1, 'codewhale', ?, ?, ?);
+`, time.Unix(100, 0).UTC(), time.Unix(101, 0).UTC(), time.Unix(101, 0).UTC(), time.Unix(101, 0).UTC()); err != nil {
+		t.Fatalf("insert codewhale session: %v", err)
+	}
+	if _, err := db.Exec(`DELETE FROM change_log WHERE session_id = 'codewhale-project-1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM sessions WHERE id = 'codewhale-project-1'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.DownTo(db, "migrations", 192); err != nil {
+		t.Fatalf("down migration 193: %v", err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO sessions (id, project_id, num, harness, activity_last_at, created_at, updated_at)
+VALUES ('codewhale-project-2', 'codewhale-project', 2, 'codewhale', ?, ?, ?)
+`, time.Unix(102, 0).UTC(), time.Unix(102, 0).UTC(), time.Unix(102, 0).UTC()); err == nil {
+		t.Fatal("codewhale harness remained allowed after migration down")
+	}
+}
+
 func TestMigrateRepairsSkippedMuseHarnessConstraint(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 43)
 
@@ -949,6 +978,53 @@ VALUES ('agent-orchestrator-2', 'agent-orchestrator', 2, 'gemini', ?, ?, ?);
 	}
 }
 
+// TestMigrateAllowsOpenHandsHarness checks both paths to an OpenHands-capable
+// schema: running migration 192, and startup repair of a profile that has 192
+// recorded but still carries the pre-OpenHands physical CHECK constraint.
+func TestMigrateAllowsOpenHandsHarness(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		recorded192 bool
+	}{
+		{name: "migration", recorded192: false},
+		{name: "repair", recorded192: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openMigratedDatabaseCopy(t, 191)
+			if tc.recorded192 {
+				if _, err := db.Exec(
+					`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`,
+					192,
+				); err != nil {
+					t.Fatalf("seed migration 192: %v", err)
+				}
+			}
+			if err := migrate(db); err != nil {
+				t.Fatalf("migrate pre-openhands profile: %v", err)
+			}
+			var schema string
+			if err := db.QueryRow(
+				"SELECT sql FROM sqlite_master WHERE type='table' AND name='sessions'",
+			).Scan(&schema); err != nil {
+				t.Fatalf("read sessions schema: %v", err)
+			}
+			for _, harness := range []string{"'omp'", "'unreal-agent'", "'openhands'"} {
+				if !strings.Contains(schema, harness) {
+					t.Fatalf("sessions.harness CHECK is missing %s:\n%s", harness, schema)
+				}
+			}
+			if _, err := db.Exec(`
+INSERT INTO projects (id, path, registered_at, config)
+VALUES ('agent-orchestrator', '/repo/agent-orchestrator', ?, '{}');
+INSERT INTO sessions (id, project_id, num, harness, activity_last_at, created_at, updated_at)
+VALUES ('agent-orchestrator-1', 'agent-orchestrator', 1, 'openhands', ?, ?, ?);
+`, time.Unix(100, 0).UTC(), time.Unix(101, 0).UTC(), time.Unix(101, 0).UTC(), time.Unix(101, 0).UTC()); err != nil {
+				t.Fatalf("insert openhands session: %v", err)
+			}
+		})
+	}
+}
+
 func TestOpenReadOnlyDoesNotCreateDatabase(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "missing")
 	if _, err := OpenReadOnly(context.Background(), dataDir); err == nil {
@@ -1011,13 +1087,13 @@ INSERT INTO projects (id, path, registered_at) VALUES ('alpha', '/repos/alpha', 
 	}
 }
 
-// TestMigration0191AddsZcodeToLegacyQMConstraint seeds the QM-variant
+// TestMigration0194AddsZcodeToLegacyQMConstraint seeds the QM-variant
 // post-0163 constraint (... 'omp', 'unreal-agent', 'fx', 'qm', 'fake') and
-// runs only migration 0191, asserting the QM replace pair inserted 'zcode'.
+// runs only migration 0194, asserting the QM replace pair inserted 'zcode'.
 // Without the QM pair, the replace() source string omits 'qm' and no-ops,
 // leaving zcode session inserts to fail with a CHECK violation on installs
 // that took the legacy QM branch.
-func TestMigration0191AddsZcodeToLegacyQMConstraint(t *testing.T) {
+func TestMigration0194AddsZcodeToLegacyQMConstraint(t *testing.T) {
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -1044,8 +1120,8 @@ WHERE type = 'table' AND name = 'sessions'`,
 		t.Fatalf("reparse legacy qm harness constraint: %v", err)
 	}
 
-	// Run only migration 0191 (versions 1–190 are already applied).
-	upTo(t, db, 191)
+	// Run only migration 0194 (versions 1–193 are already applied).
+	upTo(t, db, 194)
 
 	var schema string
 	if err := db.QueryRow(
@@ -1055,7 +1131,7 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	for _, harness := range []string{"'zcode'", "'qm'", "'omp'"} {
 		if !strings.Contains(schema, harness) {
-			t.Fatalf("sessions.harness CHECK is missing %s after migration 0191:\n%s", harness, schema)
+			t.Fatalf("sessions.harness CHECK is missing %s after migration 0194:\n%s", harness, schema)
 		}
 	}
 }

@@ -35,10 +35,12 @@ import (
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 )
 
 type fakeSessionService struct {
+	cleanupPending             bool
 	sessions                   map[domain.SessionID]domain.Session
 	sent                       string
 	sentAttachment             *ports.SpawnAttachment
@@ -4467,5 +4469,27 @@ func TestSessionsAPI_InteractionRecencyKeepsHumanTimestampSeparate(t *testing.T)
 	}
 	if !response.Session.LastInteractionAt.Equal(rec.Metadata.LatestUserPromptAt) {
 		t.Fatalf("new human recency=%v", response.Session.LastInteractionAt)
+	}
+}
+
+func (f *fakeSessionService) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
+	freed, err := f.Kill(ctx, id)
+	return sessionmanager.KillResult{Freed: freed && !f.cleanupPending, CleanupPending: f.cleanupPending}, err
+}
+
+func TestSessionsAPI_KillReportsAcceptedCleanup(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.cleanupPending = true
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/kill", "")
+	var result struct {
+		CleanupPending bool `json:"cleanupPending"`
+		Freed          bool `json:"freed"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusOK || !result.CleanupPending || result.Freed || !svc.sessions["ao-1"].IsTerminated {
+		t.Fatalf("accepted cleanup response = %d %s", status, body)
 	}
 }

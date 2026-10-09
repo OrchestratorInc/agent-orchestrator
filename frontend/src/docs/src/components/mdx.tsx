@@ -253,7 +253,7 @@ export function InstallDownloads() {
   return (
     <div style={{ marginBlock: "1.25rem", overflowX: "auto" }}>
       <table>
-        <caption>Download the latest Agent Orchestrator desktop release</caption>
+        <caption>Download the latest Orchestrator desktop release</caption>
         <thead>
           <tr><th scope="col">Platform</th><th scope="col">Download</th></tr>
         </thead>

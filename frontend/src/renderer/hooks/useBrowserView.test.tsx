@@ -127,6 +127,7 @@ function setupBridge() {
 		})),
 		onFindOpen: vi.fn(() => () => undefined),
 		onReopenClosedTab: vi.fn(() => () => undefined),
+		onClosePanel: vi.fn(() => () => undefined),
 		devtools: vi.fn(
 			async ({ viewId, operation, placement }: {
 				viewId: string;

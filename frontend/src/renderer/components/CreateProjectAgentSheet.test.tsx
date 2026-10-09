@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -23,6 +24,7 @@ vi.mock("../hooks/useSettings", () => ({
 
 beforeEach(() => {
 	trackerIntakeGate.enabled = true;
+	useUiStore.setState({ settingsModal: null });
 });
 
 function renderSheet(
@@ -57,6 +59,31 @@ function renderSheet(
 	);
 	return onSubmit;
 }
+
+it("unmounts the modal on submit and does not bring it back when creation succeeds", async () => {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	queryClient.setQueryData(agentReadinessQueryKey, { agents: [agentReadiness("codex")] });
+	queryClient.setQueryData(workspaceQueryKey, []);
+	let finish!: () => void;
+	const pending = new Promise<void>((resolve) => { finish = resolve; });
+	function Harness() {
+		const [busy, setBusy] = useState(false);
+		const [open, setOpen] = useState(true);
+		return <QueryClientProvider client={queryClient}><TooltipProvider>
+			<CreateProjectAgentSheet open={open} isCreating={busy} kind="single_repo" path="/repo/new-project" onOpenChange={setOpen} onSubmit={async () => {
+				setBusy(true);
+				await pending;
+				setOpen(false);
+				setBusy(false);
+			}} />
+		</TooltipProvider></QueryClientProvider>;
+	}
+	render(<Harness />);
+	await userEvent.click(await screen.findByRole("button", { name: "Create and start" }));
+	expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
+	await act(async () => finish());
+	expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
+});
 
 async function chooseOption(trigger: HTMLElement, optionName: string) {
 	await userEvent.click(trigger);
