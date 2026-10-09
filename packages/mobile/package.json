@@ -76,6 +76,6 @@
     "pngjs": "3.4.0",
     "react-test-renderer": "^19.2.3",
     "typescript": "~6.0.3",
-    "vitest": "^4.1.10"
+    "vitest": "^5.0.1"
   }
 }
