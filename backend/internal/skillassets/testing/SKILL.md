@@ -11,9 +11,15 @@ running or launching the app and any diagnostics or triage skill for
 gathering evidence.
 
 For a PR, read its description, comments, reviews, linked issues and diff. Run
-the PR's latest commit once, verify the fix through the UI and backend, and
-give a code-review opinion. For an issue, read it and its comments, then
-reproduce it on current code. Do not run a base commit by default.
+the PR's latest commit once in dev mode and verify the fix through the UI and
+backend with screenshots, clips and logs. Give a code-review opinion. For an
+issue, read it and its comments, then reproduce it on current code. Do not
+run a base commit by default.
+
+Do not run the repository's build, test or lint suites, even if its docs or
+skills recommend them. This includes `go build`, `go test`, `npm test`,
+`npm run build` and lint commands. For suite results, only read existing CI
+status, for example `gh pr checks`. Starting the app in dev mode is allowed.
 
 Explore the repository at that commit. Start with its own docs and skills:
 `AGENTS.md`, `CLAUDE.md`, `README`, `.claude/skills` and `.agents/skills`. Learn
