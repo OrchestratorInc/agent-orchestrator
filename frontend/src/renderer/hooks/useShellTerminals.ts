@@ -370,9 +370,18 @@ export async function closeShellTerminal(handleId: string, hostId?: HostId): Pro
 		previewShellTerminals = previewShellTerminals.filter((shell) => shell.handleId !== handleId);
 		return;
 	}
-	const { error } = await clientForSessionHost(hostId).DELETE("/api/v1/shell-terminals/{handleId}", {
-		params: { path: { handleId } },
-	});
+	// A stalled connection must release the closing marker so the tab can be retried.
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(new DOMException("Shell terminal close timed out", "TimeoutError")), 10_000);
+	let error: unknown;
+	try {
+		({ error } = await clientForSessionHost(hostId).DELETE("/api/v1/shell-terminals/{handleId}", {
+			params: { path: { handleId } },
+			signal: controller.signal,
+		}));
+	} finally {
+		clearTimeout(timeout);
+	}
 	// The desired postcondition is already true when the daemon no longer owns
 	// the record. Treat this as confirmed cleanup, not a failed cancellation.
 	if (error && apiErrorCode(error) !== "SHELL_TERMINAL_NOT_FOUND") throw error;
@@ -420,12 +429,21 @@ export function useCloseShellTerminal(hostId?: HostId) {
 			removeClosedShell();
 			return { previous, isCloud };
 		},
-		onError: (error, _handleId, context) => {
+		onError: (error, handleId, context) => {
 			// A 404 means the daemon has already removed the shell, so restoring its
 			// stale tab would be misleading. Other failures put the tab back so the
 			// user can retry instead of losing access to a still-live PTY.
 			if (apiErrorCode(error) !== "SHELL_TERMINAL_NOT_FOUND" && context?.previous) {
-				queryClient.setQueryData(queryKey, context.previous);
+				// Sibling closes and edits since this snapshot must remain authoritative.
+				const index = context.previous.findIndex((shell) => shell.handleId === handleId);
+				const shell = context.previous[index];
+				if (!shell) return;
+				queryClient.setQueryData<ShellTerminal[]>(queryKey, (current) => {
+					if (current?.some((candidate) => candidate.handleId === handleId)) return current;
+					const restored = [...(current ?? [])];
+					restored.splice(index, 0, shell);
+					return restored;
+				});
 			}
 		},
 		// Settled, not success: a close that 404s means the daemon already lost
