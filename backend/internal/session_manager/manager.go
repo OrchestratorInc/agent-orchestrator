@@ -4602,8 +4602,28 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat || !m.harnessSemanticAcceptance(rec.Harness) {
 		return ErrSemanticAcceptanceUnsupported
 	}
+	if rec.Metadata.RuntimeHandleID == "" {
+		return ErrSemanticAcceptanceUnsupported
+	}
+	return m.interruptTerminal(ctx, rec)
+}
+
+// interruptTerminal preserves each harness's native cancel key across direct
+// cancellation and controller handoffs. It never appends a submission key.
+func (m *Manager) interruptTerminal(ctx context.Context, rec domain.SessionRecord) error {
+	if agent, found := m.agents.Agent(rec.Harness); found {
+		if native, supported := agent.(ports.AgentInterruptInputProvider); supported {
+			sender, supported := m.runtime.(interface {
+				SendInput(context.Context, ports.RuntimeHandle, string) error
+			})
+			if !supported {
+				return ErrSemanticAcceptanceUnsupported
+			}
+			return sender.SendInput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, native.InterruptInput())
+		}
+	}
 	interrupter, ok := m.runtime.(runtimeInterrupter)
-	if !ok || rec.Metadata.RuntimeHandleID == "" {
+	if !ok {
 		return ErrSemanticAcceptanceUnsupported
 	}
 	return interrupter.Interrupt(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID})
@@ -6167,6 +6187,9 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 	callerDeadline, hasCallerDeadline := ctx.Deadline()
 	if hints.InitialDelay > 0 {
 		if hasCallerDeadline && time.Until(callerDeadline)-promptDeliveryDeadlineReserve <= hints.InitialDelay {
+			if hints.RequireReady {
+				return fmt.Errorf("prompt readiness: %w", context.DeadlineExceeded)
+			}
 			m.logger.Warn("prompt readiness skipped to preserve caller deadline for fallback delivery",
 				"sessionID", cfg.SessionID,
 				"kind", string(cfg.Kind),
@@ -6179,6 +6202,9 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 		}
 	}
 	if len(hints.Patterns) == 0 || hints.Timeout <= 0 {
+		if hints.RequireReady {
+			return fmt.Errorf("prompt readiness: required readiness markers and timeout are missing")
+		}
 		return nil
 	}
 	poll := hints.PollInterval
@@ -6192,6 +6218,9 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 
 	waitTimeout, hasReadinessBudget := promptReadinessWaitTimeout(hints.Timeout, callerDeadline, hasCallerDeadline)
 	if !hasReadinessBudget {
+		if hints.RequireReady {
+			return fmt.Errorf("prompt readiness: %w", context.DeadlineExceeded)
+		}
 		m.logger.Warn("prompt readiness skipped to preserve caller deadline for fallback delivery",
 			"sessionID", cfg.SessionID,
 			"kind", string(cfg.Kind),
@@ -6214,6 +6243,9 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
+			if hints.RequireReady {
+				return fmt.Errorf("prompt readiness: required composer was not observed: %w", context.DeadlineExceeded)
+			}
 			// Prompt readiness is best-effort: a missing terminal marker must not
 			// block spawn forever or be treated as confirmed readiness. Fall back
 			// to delivering the prompt and make the degraded path observable.

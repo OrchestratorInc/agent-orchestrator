@@ -20,6 +20,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/letta"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
@@ -556,7 +557,13 @@ func newHooksCommand(ctx *commandContext) *cobra.Command {
 		Hidden: true,
 		Args:   cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return ctx.runHook(cmd.Context(), args[0], args[1])
+			err := ctx.runHook(cmd.Context(), args[0], args[1])
+			// Letta treats ANY successful PermissionRequest hook as approval.
+			// Exit 1 is its non-blocking error/abstain path; never return 0 or 2.
+			if args[0] == string(domain.HarnessLettaCode) && args[1] == "permission-request" {
+				return fmt.Errorf("letta-code permission observation only: awaiting native approval")
+			}
+			return err
 		},
 	}
 }
@@ -605,6 +612,9 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	if activitydispatch.SupportsHarness(domain.AgentHarness(agent)) {
 		agentSessionID = hookAgentSessionID(payload)
 	}
+	if agent == string(domain.HarnessLettaCode) {
+		agentSessionID = letta.NativeConversationID(payload)
+	}
 	usage := hookUsageMetadata(agent, payload)
 	var subagentID string
 	var runningSubagentIDs *[]string
@@ -631,6 +641,9 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	}
 
 	toolName, toolUseID := activityMeta(payload)
+	if agent == string(domain.HarnessLettaCode) {
+		toolUseID = letta.NativeToolCallID(payload)
+	}
 	if domain.AgentHarness(agent) == domain.HarnessCursor && event == "post-tool-use-failure" {
 		if failureEvent, failureTool, ok := cursor.TerminalFailureCorrelation(payload); ok {
 			event = failureEvent
@@ -643,7 +656,7 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		conversation = hookConversationFacts(domain.AgentHarness(agent), event, payload)
 	case domain.HarnessOpenCode, domain.HarnessGrok, domain.HarnessKilocode,
 		domain.HarnessOMP, domain.HarnessPi,
-		domain.HarnessAmp, domain.HarnessPrimeAgent:
+		domain.HarnessAmp, domain.HarnessPrimeAgent, domain.HarnessLettaCode:
 		conversation = hookSemanticAcceptanceFacts(event, payload)
 	}
 	path := "sessions/" + url.PathEscape(sessionID) + "/activity"
@@ -849,7 +862,7 @@ type openHandsContextHookOutput struct {
 }
 
 func shouldEmitSessionStartContext(agent, event string) bool {
-	if agent == "gemini" {
+	if agent == "gemini" || agent == string(domain.HarnessLettaCode) {
 		return event == "user-prompt-submit"
 	}
 	if agent == string(domain.HarnessOpenHands) {
@@ -881,6 +894,12 @@ func (c *commandContext) emitSessionStartContext(agent, event, sessionID string)
 	}
 	prompt := strings.TrimSpace(string(data))
 	if prompt == "" {
+		return
+	}
+	if agent == string(domain.HarnessLettaCode) {
+		if _, err := fmt.Fprintln(c.deps.Out, prompt); err != nil {
+			c.reportHookFailure(agent, event, sessionID, err)
+		}
 		return
 	}
 	var out any

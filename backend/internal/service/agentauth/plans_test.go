@@ -54,6 +54,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"deepseek-harness", "Set up DeepSeek", "dsh", "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness", "", ActionSetup, []string{"dsh", "--profile", "web"}},
 		{"openhands", "Set up OpenHands", "openhands", "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start", "", ActionSetup, []string{"openhands"}},
 		{"command-code", "Log in to Command Code", "command-code", "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart", "", ActionLogin, []string{"command-code", "login"}},
+		{"letta-code", "Set up Letta Code", "letta", "Use Letta Code’s native setup to connect a local model provider or Letta Cloud", "https://docs.letta.com/letta-code/", "", ActionSetup, []string{"letta"}},
 	}
 
 	svc := New(foundExecutables(cases), nil)

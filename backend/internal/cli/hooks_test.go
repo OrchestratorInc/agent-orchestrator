@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -2260,5 +2261,57 @@ func TestHooksSessionDeliveryPreservesCoordinationOrigin(t *testing.T) {
 	}
 	if req.ConversationCheckpointOrigin != "coordination" || req.CoordinationID != "session-send:1" || req.LatestUserPrompt != "" {
 		t.Fatalf("hook facts=%+v", req)
+	}
+}
+
+func TestHooksLettaQuietPromptContextAndNativeConversation(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-letta-1")
+	cfg := setConfigEnv(t)
+	dir := filepath.Join(cfg.dataDir, "prompts", "ao-letta-1")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "system.md"), []byte("PRIVATE-LETTA-STANDING-INSTRUCTIONS"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	out, _, err := executeCLI(t, Deps{In: strings.NewReader(`{"session_id":"wrong-transient-id","conversation_id":"conv-native-1","agent_id":"agent-1","prompt":"--help as task data"}`), ProcessAlive: func(int) bool { return true }}, "hooks", "letta-code", "user-prompt-submit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "PRIVATE-LETTA-STANDING-INSTRUCTIONS\n" {
+		t.Fatalf("native hook context = %q", out)
+	}
+	var request setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.AgentSessionID != "conv-native-1" || request.State != "active" || request.LatestUserPrompt != "" {
+		t.Fatalf("activity request = %#v", request)
+	}
+	if strings.Contains(capture.body, "PRIVATE-LETTA") {
+		t.Fatal("private instructions entered activity/user prompt metadata")
+	}
+}
+
+func TestHooksLettaPermissionObservationNeverApproves(t *testing.T) {
+	for _, managed := range []bool{false, true} {
+		t.Run(fmt.Sprint(managed), func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "")
+			if managed {
+				t.Setenv("AO_SESSION_ID", "ao-letta-2")
+				cfg := setConfigEnv(t)
+				srv, _ := activityServer(t, http.StatusOK, `{"ok":true}`)
+				writeRunFileFor(t, cfg, srv)
+			}
+			out, _, err := executeCLI(t, Deps{In: strings.NewReader(`{"tool_name":"Bash","permission":{"type":"ask"}}`), ProcessAlive: func(int) bool { return true }}, "hooks", "letta-code", "permission-request")
+			if err == nil {
+				t.Fatal("exit 0 would auto-approve the native permission")
+			}
+			if out != "" {
+				t.Fatalf("permission hook returned decision text: %q", out)
+			}
+		})
 	}
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/fake"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/gemini"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimchi"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/letta"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mimocode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/omp"
@@ -45,6 +46,7 @@ var Derivers = map[string]DeriveFunc{
 	// deriver; the rest share the name-only StandardDeriveActivityState.
 	"claude-code":  claudecode.DeriveActivityState,
 	"command-code": commandcode.DeriveActivityState,
+	"letta-code":   letta.DeriveActivityState,
 	"grok":         claudecode.DeriveActivityState,
 	"muse":         muse.DeriveActivityState,
 	"omp":          omp.DeriveActivityState,

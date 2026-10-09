@@ -332,6 +332,7 @@ func TestOMPAndHelpBackedAgentsUseDocumentedDiscoveryCommands(t *testing.T) {
 		{agent: "crush", want: []string{"models"}},
 		{agent: "fx", want: []string{"models", "--json"}},
 		{agent: "command-code", want: []string{"--list-models"}},
+		{agent: "letta-code", want: []string{"model", "list"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.agent, func(t *testing.T) {
@@ -1193,5 +1194,18 @@ func TestCatalogFingerprintTracksTheDeepSeekProfile(t *testing.T) {
 	}
 	if second := CatalogFingerprint(context.Background(), "deepseek-harness", "", "", env); second == first {
 		t.Fatalf("fingerprint unchanged (%q) after the profile's model route changed", second)
+	}
+}
+
+func TestLettaModelsUseNativeHandles(t *testing.T) {
+	models, err := parseLettaModels([]byte(`[{"id":"short-alias","handle":"anthropic/model-a","label":"Model A"},{"id":"local-model","label":"Local"}]`))
+	if err != nil || len(models) != 2 || models[0].ID != "anthropic/model-a" || models[1].ID != "local-model" {
+		t.Fatalf("models = %#v, %v", models, err)
+	}
+	if _, err := parseLettaModels([]byte(`{"error":"unauthorized"}`)); err == nil {
+		t.Fatal("accepted provider error as a catalog")
+	}
+	if got := Manual("letta-code"); got.CustomModelEntry != ports.CustomModelEntryConfigured {
+		t.Fatalf("fallback policy = %#v", got)
 	}
 }

@@ -132,3 +132,9 @@ func TestCommandCodeHarnessIsKnown(t *testing.T) {
 		t.Fatal("AllHarnesses does not contain HarnessCommandCode")
 	}
 }
+
+func TestLettaCodeHarnessIsKnown(t *testing.T) {
+	if HarnessLettaCode != "letta-code" || !HarnessLettaCode.IsKnown() {
+		t.Fatal("Letta Code is not selectable")
+	}
+}

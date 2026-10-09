@@ -153,6 +153,8 @@ func setRawField(fields map[string]json.RawMessage, key string, value any) error
 // optional matcher, and the command to run. Adapters define these in code rather
 // than reading an embedded template.
 type HookSpec struct {
+	// Quiet suppresses provider-side hook output, including private context.
+	Quiet   bool
 	Event   string
 	Matcher *string
 	Command string
@@ -206,6 +208,9 @@ func (m Manager) Install(ctx context.Context, workspacePath string) error {
 		groups = removeManagedPrefixes(groups, m.LegacyCommandPrefixes)
 		for _, spec := range specs {
 			entry := HookEntry{Type: "command", Command: spec.Command, Timeout: m.Timeout}
+			if spec.Quiet {
+				entry.Extra = map[string]json.RawMessage{"quiet": json.RawMessage("true")}
+			}
 			groups = reconcileHook(groups, entry, spec.Matcher)
 		}
 		if err := marshalEvent(rawHooks, event, groups); err != nil {

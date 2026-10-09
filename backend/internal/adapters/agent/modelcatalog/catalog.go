@@ -128,6 +128,7 @@ var commandSpecs = map[string]commandSpec{
 	"crush":        {args: []string{"models"}, parser: parseIDLines},
 	"fx":           {args: []string{"models", "--json"}, parser: parseFXModels},
 	"mimo-code":    {args: []string{"models"}, parser: parseMiMoModels},
+	"letta-code":   {args: []string{"model", "list"}, parser: parseLettaModels},
 	"command-code": {args: []string{"--list-models"}, parser: parseAgyModels},
 }
 
@@ -193,7 +194,7 @@ func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
 		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin":
 		return ports.CustomModelEntryDirect
-	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
+	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent", "letta-code":
 		return ports.CustomModelEntryConfigured
 	default:
 		return ports.CustomModelEntryNone
@@ -881,6 +882,23 @@ func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string,
 // discoveryConfigInputs returns the configuration an agent's discovery consults,
 // or "" when the catalog depends on the binary alone.
 func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env map[string]string) string {
+	if agentID == "letta-code" {
+		home, _ := os.UserHomeDir()
+		root := envValue(env, "LETTA_LOCAL_BACKEND_DIR")
+		if root == "" {
+			root = filepath.Join(home, ".letta", "lc-local-backend")
+		}
+		paths := []string{filepath.Join(home, ".letta", "settings.json"), filepath.Join(root, "providers", "auth.json")}
+		if workingDir != "" {
+			paths = append(paths, filepath.Join(workingDir, ".letta", "settings.json"), filepath.Join(workingDir, ".letta", "settings.local.json"))
+		}
+		hash := sha256.New()
+		_, _ = hash.Write([]byte(fingerprintConfigPaths(paths)))
+		for _, key := range []string{"LETTA_API_KEY", "LETTA_BASE_URL", "LETTA_BACKEND", "LETTA_LOCAL_BACKEND_DIR", "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"} {
+			_, _ = hash.Write([]byte(key + "\x00" + envValue(env, key) + "\x00"))
+		}
+		return fmt.Sprintf("config=%x", hash.Sum(nil)[:8])
+	}
 	if agentID == "unreal-agent" {
 		provider, selected := unrealConfiguredModel(env)
 		return "provider=" + provider + ";model=" + selected
@@ -1288,4 +1306,32 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 		return strings.ToLower(out[i].Label) < strings.ToLower(out[j].Label)
 	})
 	return out
+}
+
+// parseLettaModels consumes v0.34.9's native backend catalog, not a static model list.
+func parseLettaModels(output []byte) ([]ports.AgentModelInfo, error) {
+	var rows []struct {
+		ID     string `json:"id"`
+		Handle string `json:"handle"`
+		Label  string `json:"label"`
+	}
+	if err := json.Unmarshal(output, &rows); err != nil {
+		return nil, err
+	}
+	result := make([]ports.AgentModelInfo, 0, len(rows))
+	for _, row := range rows {
+		id := strings.TrimSpace(row.Handle)
+		if id == "" {
+			id = strings.TrimSpace(row.ID)
+		}
+		if id == "" {
+			continue
+		}
+		label := strings.TrimSpace(row.Label)
+		if label == "" {
+			label = id
+		}
+		result = append(result, ports.AgentModelInfo{ID: id, Label: label})
+	}
+	return result, nil
 }

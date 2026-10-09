@@ -37,6 +37,7 @@ export const AGENT_OPTIONS = [
 	"deepseek-harness",
 	"openhands",
 	"command-code",
+	"letta-code",
 ] as const;
 
 export type AgentId = (typeof AGENT_OPTIONS)[number];
@@ -84,6 +85,7 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 	"deepseek-harness": "DeepSeek",
 	openhands: "OpenHands",
 	"command-code": "Command Code",
+	"letta-code": "Letta Code",
 };
 
 export const AGENT_IDENTITIES: ReadonlyMap<AgentId, AgentIdentity> = new Map(

@@ -324,3 +324,14 @@ func hasLine(content, line string) bool {
 	}
 	return false
 }
+
+func TestRegistryIncludesLettaCode(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("letta-code")
+	if !ok || adapter.Manifest().Name != "Letta Code" {
+		t.Fatal("Letta Code adapter is not registered")
+	}
+}
