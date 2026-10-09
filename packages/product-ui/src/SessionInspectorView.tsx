@@ -1,5 +1,5 @@
-import { type KeyboardEvent, type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
-import { motion, useReducedMotion } from "motion/react";
+import { type KeyboardEvent, type ReactNode, type RefObject, useEffect, useId, useRef, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ExternalLinkComponent } from "./external-link";
 import {
 	ArrowUpRightIcon,
@@ -19,6 +19,7 @@ import type {
 	PRSummaryMetadata,
 } from "./pull-request-models";
 import { scmUserAvatarUrl } from "./scm-avatar";
+import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
@@ -36,7 +37,7 @@ export type InspectorTab = {
 
 const inspectorShellClass = "@container/inspector flex h-full min-h-0 flex-col overflow-hidden";
 const inspectorBodyBaseClass = "min-h-0 flex-1";
-const inspectorScrollableBodyClass = "board-scrollbar overflow-x-hidden overflow-y-auto p-3 pb-4 @max-[300px]/inspector:px-2.5";
+const inspectorScrollableBodyClass = "board-scrollbar overflow-x-hidden overflow-y-auto pt-0.5 pb-3";
 export const inspectorEmptyClass = "text-xs text-settings-muted leading-normal";
 
 export function SessionInspectorShellView({
@@ -205,37 +206,50 @@ export function SessionInspectorShellView({
 }
 
 export function InspectorSection({
-	action,
 	children,
-	className,
 	surface = true,
 	title,
-	titleClassName,
 }: {
-	action?: ReactNode;
 	children: ReactNode;
-	className?: string;
 	surface?: boolean;
-	title?: string;
-	titleClassName?: string;
+	title: string;
 }) {
-	const heading =
-		title || action ? (
-			<div className={cn("mb-1 flex items-center justify-between gap-2 text-2xs font-bold uppercase tracking-settings-section text-settings-muted", titleClassName)}>
-				{title ? <span>{title}</span> : <span />}
-				{action ?? null}
-			</div>
-		) : null;
+	const contentId = useId();
+	const [open, setOpen] = useState(true);
+	const reduceMotion = useReducedMotion();
+	// Header: 6px slot + 6px button inset puts the label 12px from the edge; collapsed headers sit 4px apart.
 	return (
-		<section className={cn("mb-4 last:mb-0", className)} data-testid="inspector-section">
-			{heading}
-			{surface ? (
-				<div className="overflow-hidden rounded-settings-row bg-settings-row px-3.5 py-1.5">
-					{children}
-				</div>
-			) : (
-				children
-			)}
+		<section className="group/inspector-section flex flex-col" data-testid="inspector-section">
+			<div className="px-1.5 py-0.5">
+				<button
+					aria-controls={contentId}
+					aria-expanded={open}
+					className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "relative flex w-full items-center rounded-lg p-1.5 text-left text-muted-foreground")}
+					onClick={() => setOpen((current) => !current)}
+					type="button"
+				>
+					<NavRowHighlight />
+					<span className="relative z-[1] flex w-full min-w-0 items-center justify-between gap-2 text-sm">
+						<span className="min-w-0 flex-1">{title}</span>
+						<ChevronIcon aria-hidden="true" className="size-icon-2xs shrink-0 text-passive" direction={open ? "down" : "right"} />
+					</span>
+				</button>
+			</div>
+			<AnimatePresence initial={false}>
+				{open ? (
+					// Clips only while animating, so open sections never cut off action menus.
+					<motion.div
+						animate={{ height: "auto", opacity: 1, transitionEnd: { overflow: "visible" } }}
+						exit={{ height: 0, opacity: 0, overflow: "hidden" }}
+						initial={{ height: 0, opacity: 0, overflow: "hidden" }}
+						transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
+					>
+						<div className="min-w-0 px-3 pt-0.5 pb-3.5 group-last/inspector-section:pb-0" id={contentId}>
+							{surface ? <div className="overflow-hidden bg-settings-row py-1">{children}</div> : children}
+						</div>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
 		</section>
 	);
 }
@@ -385,7 +399,7 @@ export function InspectorPullRequestCardView({
 					/>
 					{statusNotice}
 					{mergeError ? (
-						<p className="mt-2 text-2xs leading-normal text-error" role="status">
+						<p className="mt-2 text-xs leading-normal text-error" role="status">
 							{mergeError}
 						</p>
 					) : null}
@@ -426,9 +440,9 @@ export function InspectorActivityTimelineView({ events }: { events: InspectorTim
 						)}
 						style={event.markerTone ? { background: event.markerTone } : undefined}
 					/>
-					<div className="min-w-0 flex-1 truncate text-control text-foreground [&_b]:font-semibold">{event.content}</div>
+					<div className="min-w-0 flex-1 truncate text-sm text-foreground [&_b]:font-semibold">{event.content}</div>
 					{event.timestamp ? (
-						<span className="shrink-0 font-mono text-caption tabular-nums text-passive">{event.timestamp}</span>
+						<span className="shrink-0 font-mono text-xs tabular-nums text-passive">{event.timestamp}</span>
 					) : null}
 				</div>
 			))}
@@ -587,14 +601,14 @@ export function InspectorReviewsView({
 }) {
 	if (isLoading && groups.length === 0) {
 		return (
-			<InspectorSection surface title={labels.reviews}>
+			<InspectorSection surface={false} title={labels.reviews}>
 				<p className={inspectorEmptyClass}>{labels.loadingReviews}</p>
 			</InspectorSection>
 		);
 	}
 	if (groups.length === 0) return null;
 	return (
-		<InspectorSection surface={false} title={labels.reviews} titleClassName="text-foreground [&>span:first-child]:text-xs [&>span:first-child]:tracking-wide">
+		<InspectorSection surface={false} title={labels.reviews}>
 			<div className="flex flex-col gap-2">
 				{groups.map((group) => (
 					<ReviewDisclosure
