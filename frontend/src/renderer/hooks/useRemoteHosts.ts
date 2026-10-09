@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { aoBridge } from "../lib/bridge";
+import { apiClient } from "../lib/api-client";
 import { connectHost, connectedHosts, disconnectHost } from "../lib/host-clients";
 import { useCloudSession } from "../lib/cloud-session";
 import { listAccountRemoteHosts } from "../lib/account-remote-hosts";
@@ -46,11 +47,19 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<
 	const retryingHosts = useRef(new Set<string>());
 	const savedHostUrls = useRef(new Map<string, string>());
 	const refreshGeneration = useRef(0);
+	const localHostId = useRef("");
 	const refresh = useCallback(async () => {
 		if (!enabledRef.current) return;
 		const generation = ++refreshGeneration.current;
 		const current = () => enabledRef.current && accountRef.current === accountId && refreshGeneration.current === generation;
-		let saved = await aoBridge.remotes.list();
+		const [initialSaved, identity] = await Promise.all([
+			aoBridge.remotes.list(),
+			// shortcut: keep paired hosts usable until local identity is readable; retry each refresh.
+			apiClient.GET("/api/v1/identity", { signal: AbortSignal.timeout(5_000) }).catch(() => undefined),
+		]);
+		if (!current()) return;
+		if (identity?.data?.hostId) localHostId.current = identity.data.hostId;
+		let saved = initialSaved;
 		if (cloudBaseUrl) {
 			try {
 				const accountHosts = await listAccountRemoteHosts(cloudBaseUrl);
@@ -61,6 +70,8 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<
 			} catch { /* Cloud outage must not hide locally paired machines. */ }
 		}
 		if (!current()) return;
+		// Keep our account record for other devices, not as another copy of local projects.
+		if (localHostId.current) saved = saved.filter((host) => host.hostId !== localHostId.current);
 		await Promise.all(connectedHosts().filter((hostId) => !saved.some((host) => host.hostId === hostId)).map(disconnectHost));
 		if (!current()) return;
 		savedHostUrls.current = new Map(saved.map((host) => [host.hostId, host.url]));

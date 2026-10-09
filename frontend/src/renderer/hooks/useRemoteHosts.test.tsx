@@ -11,6 +11,7 @@ const remotes = vi.hoisted(() => ({
 const account = vi.hoisted(() => ({ status: "authenticated" as "authenticated" | "unauthenticated" }));
 
 vi.mock("../lib/bridge", () => ({ aoBridge: { remotes } }));
+vi.mock("../lib/api-client", () => ({ apiClient: { GET: vi.fn(async () => ({ data: { hostId: "this-mac" } })) } }));
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ status: account.status, session: account.status === "authenticated" ? { user: { id: "user-a" } } : null }) }));
 vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }) }));
 
