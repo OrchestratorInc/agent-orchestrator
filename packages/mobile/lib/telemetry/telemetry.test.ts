@@ -155,6 +155,36 @@ describe("createMobileTelemetry", () => {
 			expect(captures).toEqual([]);
 		});
 
+		it("does not let a late saved preference overwrite a newer desktop opt-out", () => {
+			const { client, captures, calls } = fakeClient();
+			const persisted: boolean[] = [];
+			const t = createMobileTelemetry(client, {}, { awaitPreference: true, onOptOutChange: (v) => persisted.push(v) });
+			// The desktop answers before the storage read returns (and the read finds nothing).
+			t.adoptDesktopIdentity({ optedOut: true });
+			t.restoreOptOut(false);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toEqual([]);
+			expect(calls).not.toContain("optIn");
+			expect(persisted).toEqual([true]);
+		});
+
+		it("a late saved opt-in does not override a newer desktop opt-in either", () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { awaitPreference: true });
+			t.adoptDesktopIdentity({ distinctId: "ins_a", optedOut: false });
+			t.restoreOptOut(true); // stale saved opt-out loses to the live desktop state
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toHaveLength(1);
+		});
+
+		it("restoreOptOut applies the saved value when no desktop has answered", () => {
+			const { client, captures } = fakeClient();
+			const t = createMobileTelemetry(client, {}, { awaitPreference: true });
+			t.restoreOptOut(true);
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures).toEqual([]);
+		});
+
 		it("releases capture when the saved preference is opted in", () => {
 			const { client, captures } = fakeClient();
 			const t = createMobileTelemetry(client, {}, { awaitPreference: true });

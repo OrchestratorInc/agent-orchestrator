@@ -121,7 +121,7 @@ export async function loadMobileOptOut(): Promise<void> {
 	} catch {
 		/* unreadable storage: stay opted in rather than guess */
 	}
-	telemetry?.setOptedOut(stored);
+	telemetry?.restoreOptOut(stored);
 }
 
 /** Adopts the identity and opt-out of the connected desktops (see identitySync.ts). */

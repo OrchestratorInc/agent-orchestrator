@@ -38,8 +38,13 @@ export type MobileTelemetry = {
 	active(storage?: ActiveStorage, now?: Date): Promise<void>;
 	/** Join the paired desktop's person, or stop everything if it has opted out. */
 	adoptDesktopIdentity(identity: DesktopTelemetryIdentity): void;
-	/** Restore a persisted opt-out before anything is captured. */
 	setOptedOut(optedOut: boolean): void;
+	/**
+	 * Applies the saved opt-out read from storage and releases capture. Ignored
+	 * for the opt-out value if a connected desktop has already reported its live
+	 * state, because that is newer than what was saved.
+	 */
+	restoreOptOut(saved: boolean): void;
 };
 
 export type MobileTelemetryOptions = {
@@ -74,6 +79,7 @@ export function createMobileTelemetry(
 	const allow = options.allow ?? (() => true);
 	let optedOut = options.optedOut ?? false;
 	let blocked = options.awaitPreference ?? false;
+	let liveStateApplied = false;
 	let identified = false;
 	let adoptedId: string | null = null;
 	let adoptedKey: string | null = null;
@@ -123,7 +129,16 @@ export function createMobileTelemetry(
 		});
 	};
 
+	const restoreOptOut = (saved: boolean): void => {
+		if (liveStateApplied) {
+			blocked = false;
+			return;
+		}
+		setOptedOut(saved);
+	};
+
 	const adoptDesktopIdentity = (identity: DesktopTelemetryIdentity): void => {
+		liveStateApplied = true;
 		setOptedOut(identity.optedOut);
 		if (optedOut || !identity.distinctId) return;
 		const key = JSON.stringify([identity.distinctId, identity.cloudUserId, identity.githubLogin]);
@@ -151,6 +166,7 @@ export function createMobileTelemetry(
 		capture,
 		adoptDesktopIdentity,
 		setOptedOut,
+		restoreOptOut,
 		active: async (storage, now) => {
 			if (await reserveDailyActive(storage, now)) {
 				capture(MOBILE_EVENTS.active);
