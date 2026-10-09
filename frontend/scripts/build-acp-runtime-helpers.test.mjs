@@ -117,6 +117,7 @@ describe("patchClaudeHibernationCheck", () => {
 		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
 		writeFileSync(adapterPath, `
 			// session.liveBackgroundTasks.set(message.task_id
+			// session.lastSessionState = message.state;
 			connection.onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params));
 		`);
 		expect(patchClaudeHibernationCheck(adapterPath)).toBe(true);
@@ -141,6 +142,13 @@ describe("patchClaudeHibernationCheck", () => {
 		tasks.delete("server");
 		expect(check(ctx)).toEqual({ canHibernate: true });
 		tasks.set("ended", { isSubagent: true, endedPerLevel: "ended" });
+		expect(check(ctx)).toEqual({ canHibernate: true });
+		// A finished task's notification starts a cycle AO has no turn for.
+		agent.sessions.native.lastSessionState = "running";
+		expect(check(ctx)).toEqual({ canHibernate: false });
+		agent.sessions.native.lastSessionState = "requires_action";
+		expect(check(ctx)).toEqual({ canHibernate: false });
+		agent.sessions.native.lastSessionState = "idle";
 		expect(check(ctx)).toEqual({ canHibernate: true });
 		for (const sessionId of [undefined, "missing", "__proto__"]) {
 			expect(() => check({ params: { sessionId } })).toThrow("invalid session");

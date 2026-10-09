@@ -129,13 +129,18 @@ export function patchClaudeContextUsage(adapterPath) {
 }
 
 // Reuse the pinned bridge's native task registry. Ending its process loses the
-// task monitor even when a background shell's process group survives.
+// task monitor even when a background shell's process group survives. Claude
+// Code also starts cycles on its own after an AO turn, for example to answer a
+// finished task's notification. AO has no turn for those, and the finished
+// task has already left the registry, so the SDK's last reported state is the
+// only signal that the agent is still working.
 export function patchClaudeHibernationCheck(adapterPath) {
 	const source = readFileSync(adapterPath, "utf8");
 	const method = '"_ao/session/can_hibernate"';
 	if (source.includes(method)) return false;
 	const marker = ".onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params))";
-	if (!source.includes(marker) || !source.includes("session.liveBackgroundTasks.set(message.task_id")) {
+	if (!source.includes(marker) || !source.includes("session.liveBackgroundTasks.set(message.task_id") ||
+		!source.includes("session.lastSessionState = message.state;")) {
 		throw new Error("claude-agent-acp no longer matches AO's native-task hibernation check");
 	}
 	const registration = `.onRequest(${method}, { parse: params => params }, (ctx) => {
@@ -144,7 +149,8 @@ export function patchClaudeHibernationCheck(adapterPath) {
             if (!session || session.queryClosed || !(session.liveBackgroundTasks instanceof Map)) {
                 throw RequestError.invalidParams(undefined, "Live Claude session unavailable.");
             }
-            return { canHibernate: !Array.from(session.liveBackgroundTasks.values()).some(task => !task.endedPerLevel) };
+            const sdkIdle = session.lastSessionState === undefined || session.lastSessionState === "idle";
+            return { canHibernate: sdkIdle && !Array.from(session.liveBackgroundTasks.values()).some(task => !task.endedPerLevel) };
         })
         `;
 	writeFileSync(adapterPath, source.replace(marker, registration + marker));
