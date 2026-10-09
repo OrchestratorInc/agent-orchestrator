@@ -234,7 +234,6 @@ func (a *API) Register(root chi.Router) {
 					ordinary.ServeHTTP(w, req)
 				})
 			})
-			r.Use(sideConversationPolicy)
 			r.Use(presenceMiddleware(a.deps.Presence))
 			a.agents.Register(r)
 			a.codexAccounts.Register(r)

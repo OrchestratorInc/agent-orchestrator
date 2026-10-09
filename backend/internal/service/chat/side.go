@@ -372,7 +372,7 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	if err != nil {
 		return domain.SideConversation{}, err
 	}
-	if err := validateSidePolicy(ctx, driver, cfg); err != nil {
+	if err := validateSideProvider(cfg.Harness); err != nil {
 		return domain.SideConversation{}, err
 	}
 	anchor, nativeAnchor, _, err := s.resolveSideAnchor(ctx, source, nil)
@@ -586,7 +586,7 @@ func (m *sideManager) open(side domain.SideConversation, _ *Controller, cfg Star
 		m.failOpen(side, ErrSidePolicyRecreate)
 		return
 	}
-	if err := validateSidePolicy(m.ctx, driver, cfg); err != nil {
+	if err := validateSideProvider(cfg.Harness); err != nil {
 		m.failOpen(side, err)
 		return
 	}
@@ -622,7 +622,7 @@ func (m *sideManager) open(side domain.SideConversation, _ *Controller, cfg Star
 		if forker, ok := driver.(ports.ChatIsolatedForker); ok {
 			anchor := side.NativeAnchorID
 
-			conv, err = forker.ForkIntoHost(ctx, side.SourceProviderID, anchor, ports.ChatStartConfig{SidePolicy: true,
+			conv, err = forker.ForkIntoHost(ctx, side.SourceProviderID, anchor, ports.ChatStartConfig{
 				SessionID: domain.SessionID(side.ProviderHostID), DataDir: cfg.DataDir,
 				WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: side.Model, Effort: side.Effort,
 				Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt),
@@ -650,7 +650,7 @@ func (m *sideManager) open(side domain.SideConversation, _ *Controller, cfg Star
 		}
 	}
 	if conv == nil && providerID != "" {
-		conv, err = driver.Resume(ctx, ports.ChatResumeConfig{SidePolicy: true,
+		conv, err = driver.Resume(ctx, ports.ChatResumeConfig{
 			SessionID: domain.SessionID(side.ProviderHostID), ProviderConversationID: providerID,
 			DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env,
 			Model: side.Model, Effort: side.Effort, Permissions: cfg.Permissions,
@@ -659,7 +659,7 @@ func (m *sideManager) open(side domain.SideConversation, _ *Controller, cfg Star
 			ProviderScopeID: side.ID, ProviderIDsScoped: true,
 		})
 	} else if conv == nil {
-		conv, err = driver.Start(ctx, ports.ChatStartConfig{SidePolicy: true,
+		conv, err = driver.Start(ctx, ports.ChatStartConfig{
 			SessionID: domain.SessionID(side.ProviderHostID), DataDir: cfg.DataDir,
 			WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Model: side.Model, Effort: side.Effort,
 			Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly,
@@ -781,12 +781,12 @@ func (m *sideManager) restore(ctx context.Context, side domain.SideConversation)
 		m.service.log.Warn("side restore: main controller unavailable", "side", side.ID, "error", err)
 		return
 	}
-	if err := validateSidePolicy(ctx, driver, cfg); err != nil {
+	if err := validateSideProvider(cfg.Harness); err != nil {
 		m.failOpen(side, err)
 		connected = true
 		return
 	}
-	conv, err := driver.Resume(ctx, ports.ChatResumeConfig{SidePolicy: true,
+	conv, err := driver.Resume(ctx, ports.ChatResumeConfig{
 		SessionID: domain.SessionID(side.ProviderHostID), ProviderConversationID: side.ProviderForkID,
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env,
 		Model: side.Model, Effort: side.Effort, Permissions: cfg.Permissions,

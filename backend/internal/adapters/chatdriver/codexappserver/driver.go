@@ -281,9 +281,6 @@ func installedCodexVersion(ctx context.Context, bin string) (string, error) {
 
 // Start opens a new Codex thread in the session worktree.
 func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
-	if cfg.SidePolicy {
-		cfg.Env = sidePolicyEnv(cfg.Env)
-	}
 	if !cfg.ProviderIDsScoped {
 		cfg.ProviderScopeID = ""
 	}
@@ -327,9 +324,6 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
 		params["config"] = config
 	}
-	if cfg.SidePolicy {
-		applySideThreadConfig(params)
-	}
 	if cfg.SystemPrompt != "" {
 		params["developerInstructions"] = cfg.SystemPrompt
 	}
@@ -365,9 +359,6 @@ func (d *Driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (por
 // Resume reattaches to a stored Codex thread after a daemon or app-server
 // restart. A thread that is still running is rejoined rather than restarted.
 func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
-	if cfg.SidePolicy {
-		cfg.Env = sidePolicyEnv(cfg.Env)
-	}
 	if !cfg.ProviderIDsScoped {
 		cfg.ProviderScopeID = ""
 	}
@@ -416,9 +407,6 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	// Developer instructions are launch context, not durable conversation
 	// history. Reapply AO's current standing role when app-server reconstructs a
 	// native thread, just as the TUI adapter does with its resume command.
-	if cfg.SidePolicy {
-		applySideThreadConfig(params)
-	}
 	if cfg.SystemPrompt != "" {
 		params["developerInstructions"] = cfg.SystemPrompt
 	}
@@ -525,12 +513,6 @@ func (d *Driver) connectSession(
 			}
 		}
 		conv, err := d.connect(ctx, workdir, env, providerScopeID)
-		if err == nil && env[sidePolicyEnvKey] == "1" {
-			if verifyErr := verifySideProviderConfig(ctx, conv, workdir); verifyErr != nil {
-				_ = conv.Close()
-				return nil, false, verifyErr
-			}
-		}
 		return conv, false, err
 	}
 	var bin string
@@ -547,7 +529,7 @@ func (d *Driver) connectSession(
 		DataDir:       dataDir,
 		Workdir:       workdir,
 		Env:           envSlice(env),
-		Argv:          sidePolicyArgv(bin, env),
+		Argv:          []string{bin, "app-server"},
 	}
 	if prepareEnv != nil {
 		hostConfig.Prepare = func(prepareCtx context.Context) (persistenthost.PreparedProvider, error) {
@@ -556,7 +538,7 @@ func (d *Driver) connectSession(
 				return persistenthost.PreparedProvider{}, prepareErr
 			}
 			return persistenthost.PreparedProvider{
-				Env: envSlice(preparedEnv), Argv: sidePolicyArgv(bin, env),
+				Env: envSlice(preparedEnv), Argv: []string{bin, "app-server"},
 			}, nil
 		}
 	}
@@ -588,23 +570,11 @@ func (d *Driver) connectSession(
 	}
 	conv := newConversation(proc, d.log, providerScopeID)
 	if transport.Reconnected {
-		if env[sidePolicyEnvKey] == "1" {
-			if err := verifySideProviderConfig(ctx, conv, workdir); err != nil {
-				_ = conv.Close()
-				return nil, false, err
-			}
-		}
 		return conv, true, nil
 	}
 	if err := d.initialize(ctx, conv); err != nil {
 		_ = conv.Terminate()
 		return nil, false, err
-	}
-	if env[sidePolicyEnvKey] == "1" {
-		if err := verifySideProviderConfig(ctx, conv, workdir); err != nil {
-			_ = conv.Terminate()
-			return nil, false, err
-		}
 	}
 	return conv, false, nil
 }
@@ -681,13 +651,7 @@ func launchApprovalSettings(mode ports.PermissionMode, readOnly bool) (policy, s
 
 // spawnAppServer is the real launcher.
 func spawnAppServer(ctx context.Context, bin, workdir string, env []string) (*process, error) {
-	overlay := map[string]string{}
-	for _, item := range env {
-		if key, value, ok := strings.Cut(item, "="); ok {
-			overlay[key] = value
-		}
-	}
-	args := sidePolicyArgv(bin, overlay)[1:]
+	args := []string{"app-server"}
 	cmd := aoprocess.Command(bin, args...)
 	cmd.Dir = workdir
 	if len(env) > 0 {
@@ -774,9 +738,6 @@ func codexProcessEnv(ctx context.Context, bin string, env map[string]string) []s
 
 // ForkIntoHost starts an inclusive native fork in an independent provider host.
 func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
-	if cfg.SidePolicy {
-		cfg.Env = sidePolicyEnv(cfg.Env)
-	}
 	if sourceProviderConversationID == "" || lastProviderTurnID == "" {
 		return nil, errors.New("source thread and completed turn are required")
 	}
@@ -806,9 +767,6 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 	}
 	if cfg.Effort != "" {
 		params["config"] = map[string]any{"model_reasoning_effort": cfg.Effort}
-	}
-	if cfg.SidePolicy {
-		applySideThreadConfig(params)
 	}
 	if cfg.SystemPrompt != "" {
 		params["developerInstructions"] = cfg.SystemPrompt

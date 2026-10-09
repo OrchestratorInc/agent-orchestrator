@@ -2708,7 +2708,7 @@
 	"sideChat.editingQueuedMessage": "Editing queued message",
 	"sideChat.editQueuedSideQuestion": "Edit queued side question",
 	"sideChat.aboutIsolation": "About side-chat isolation",
-	"sideChat.isolationPolicy": "History is frozen at creation; attach later messages as needed. Files and Git are shared. Read-only is behavioral, not a filesystem restriction; explicit requests here allow edits. No sub-agents.",
+	"sideChat.isolationPolicy": "History is frozen at creation. Later main messages require explicit attachment. Files and Git are shared. Read-only is behavioral; explicit requests here may authorize edits. Sub-agent interaction is prohibited by instruction.",
 	"sideChat.forkPoint": "Frozen fork point: {{turn}}",
 	"sideChat.noInheritedTurns": "Created before any completed main-chat turn.",
 	"sideChat.tabs": "Side chat tabs",
