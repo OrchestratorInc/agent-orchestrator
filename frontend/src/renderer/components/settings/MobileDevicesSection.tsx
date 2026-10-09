@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Bell, Loader2, Smartphone, Trash2 } from "lucide-react";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { usesPreviewWorkspaceData } from "../../lib/preview-mode";
+import { cn } from "../../lib/utils";
 import { Switch } from "../ui/switch";
 
 export const mobileDevicesQueryKey = ["mobile-devices"] as const;
@@ -73,6 +74,10 @@ export function MobileDevicesSection() {
 	// mutation's own isPending/variables only describe the latest call, so a
 	// second toggle would otherwise unlock the first device's switch early.
 	const [mutingIds, setMutingIds] = useState<ReadonlySet<string>>(() => new Set());
+	// Mute failures by installId, for the same reason: the mutation's own
+	// `error` only reflects the latest call, so a row whose PATCH fails while
+	// another row's toggle is in flight would roll back with no explanation.
+	const [muteErrors, setMuteErrors] = useState<ReadonlyMap<string, string>>(new Map());
 	const removalTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 	const trashButtons = useRef(new Map<string, HTMLButtonElement>());
 
@@ -98,12 +103,44 @@ export function MobileDevicesSection() {
 			});
 			if (error) throw new Error(apiErrorMessage(error));
 		},
-		onMutate: ({ installId }) => {
+		onMutate: async ({ installId, muted }) => {
+			await queryClient.cancelQueries({ queryKey: mobileDevicesQueryKey });
+			const previous = queryClient.getQueryData<MobileDevice[]>(mobileDevicesQueryKey);
+			const prevMuted = previous?.find((d) => d.installId === installId)?.muted;
+			if (previous) {
+				queryClient.setQueryData<MobileDevice[]>(mobileDevicesQueryKey, (old) =>
+					(old ?? previous).map((d) => (d.installId === installId ? { ...d, muted } : d)),
+				);
+			}
 			setMutingIds((prev) => new Set(prev).add(installId));
+			setMuteErrors((errors) => {
+				if (!errors.has(installId)) return errors;
+				const next = new Map(errors);
+				next.delete(installId);
+				return next;
+			});
+			return { installId, prevMuted };
 		},
 		onSuccess: invalidate,
+		onError: (err, { installId: failedId }, context) => {
+			// onMutate cleared this row's entry, so the newest failure is last.
+			setMuteErrors((errors) =>
+				new Map(errors).set(failedId, err instanceof Error ? err.message : String(err)),
+			);
+			// Restore only this device's preference onto the current list: a
+			// 3s poll may have landed fresher data for other rows between the
+			// optimistic flip and the failure, and wholesale restoring the
+			// snapshot would clobber it.
+			if (context?.prevMuted !== undefined) {
+				const { installId, prevMuted } = context;
+				queryClient.setQueryData<MobileDevice[]>(mobileDevicesQueryKey, (old) =>
+					(old ?? []).map((d) => (d.installId === installId ? { ...d, muted: prevMuted } : d)),
+				);
+			}
+		},
 		onSettled: (_data, _error, { installId }) => {
 			setMutingIds((prev) => without(prev, installId));
+			invalidate();
 		},
 	});
 
@@ -201,8 +238,12 @@ export function MobileDevicesSection() {
 	// No paired devices (or still loading with nothing cached) → no section at
 	// all. Errors and an unreadable registry still render so they stay visible.
 	if (!registryUnavailable && !queryError && devices.length === 0) return null;
+	// Newest mute failure for a device still on the roster.
+	const muteError = [...muteErrors]
+		.reverse()
+		.find(([installId]) => devices.some((d) => d.installId === installId))?.[1];
 	const mutationError =
-		(mute.error instanceof Error && mute.error.message) ||
+		muteError ||
 		(remove.error instanceof Error && remove.error.message) ||
 		null;
 
@@ -267,17 +308,26 @@ export function MobileDevicesSection() {
 									<Smartphone className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />
 									<div className="min-w-0 flex-1">
 										<div className="truncate text-sm">{name}</div>
+										{!device.notificationsEnabled && (
+											<p className="mt-0.5 text-caption leading-(--leading-settings-mobile-hint) text-settings-muted">
+												{t("mobile.devices.enableInAppHint")}
+											</p>
+										)}
 									</div>
 
 									<div className="flex items-center gap-2" title={notificationsTitle}>
 										<Bell className="size-4 text-settings-muted" aria-hidden="true" data-testid="bell" />
 										<Switch
-											checked={device.notificationsEnabled && !device.muted}
-											disabled={tokenless || mutingIds.has(device.installId)}
+											checked={!device.muted}
+											disabled={mutingIds.has(device.installId)}
 											aria-label={t("mobile.devices.notificationsFor", { name })}
 											onCheckedChange={(next) =>
 												mute.mutate({ installId: device.installId, muted: !next })
 											}
+											className={cn(
+												"data-[state=unchecked]:bg-[var(--color-border-settings-input)]",
+												"**:data-[slot=switch-thumb]:bg-white",
+											)}
 										/>
 									</div>
 

@@ -763,6 +763,7 @@
 	"mobile.devices.undo": "Annuler",
 	"mobile.devices.undoRemoveAria": "Annuler la suppression de {{name}}",
 	"mobile.devices.unnamed": "Appareil sans nom",
+	"mobile.devices.enableInAppHint": "Turn on Agent notifications in the AO phone app to receive alerts on this device.",
 	"mobile.generate": "Générer",
 	"mobile.preparingQr": "Préparation de votre lien sécurisé — cela prend généralement 30 à 60 secondes",
 	"mobile.getApp": "Obtenir l'application",

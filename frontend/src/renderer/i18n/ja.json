@@ -756,6 +756,7 @@
 	"mobile.devices.undo": "元に戻す",
 	"mobile.devices.undoRemoveAria": "{{name}} の削除を元に戻す",
 	"mobile.devices.unnamed": "名前未設定のデバイス",
+	"mobile.devices.enableInAppHint": "Turn on Agent notifications in the AO phone app to receive alerts on this device.",
 	"mobile.generate": "生成",
 	"mobile.preparingQr": "セキュアリンクを準備しています — 通常30〜60秒かかります",
 	"mobile.getApp": "アプリを入手",

@@ -756,6 +756,7 @@
 	"mobile.devices.undo": "Rückgängig",
 	"mobile.devices.undoRemoveAria": "Entfernen von {{name}} rückgängig machen",
 	"mobile.devices.unnamed": "Unbenanntes Gerät",
+	"mobile.devices.enableInAppHint": "Turn on Agent notifications in the AO phone app to receive alerts on this device.",
 	"mobile.generate": "Generieren",
 	"mobile.preparingQr": "Sichere Verbindung wird vorbereitet – das dauert meist 30-60 Sekunden",
 	"mobile.getApp": "App holen",
