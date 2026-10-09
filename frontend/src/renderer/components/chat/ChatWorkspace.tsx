@@ -236,6 +236,38 @@ function DraggableChatTab({ children, value }: { children: ReactNode; value: str
 	);
 }
 
+// The tab strip re-renders with every session view update. A shell tab only
+// changes with its shell or selection, so it skips the rest; with a dozen
+// tabs this is most of the strip's render work.
+const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
+	tabKey,
+	shell,
+	isActive,
+	onSelect,
+	onClose,
+	onRename,
+}: {
+	tabKey: string;
+	shell: ShellTerminal;
+	isActive: boolean;
+	onSelect: (handleId: string) => void;
+	onClose: (handleId: string) => void;
+	onRename?: (handleId: string, title: string) => void;
+}) {
+	return (
+		<DraggableChatTab value={tabKey}>
+			<ShellTerminalTab
+				appearance="connected"
+				isActive={isActive}
+				onClose={() => onClose(shell.handleId)}
+				onRename={onRename ? (title) => onRename(shell.handleId, title) : undefined}
+				onSelect={() => onSelect(shell.handleId)}
+				shell={shell}
+			/>
+		</DraggableChatTab>
+	);
+});
+
 const isMac = isMacPlatform();
 const isLinux = isLinuxPlatform();
 
@@ -1986,6 +2018,9 @@ function ChatHeader({
 		if (orderedAuxiliaryTabs.length > previousTabCountRef.current) scrollTabsToEnd();
 		previousTabCountRef.current = orderedAuxiliaryTabs.length;
 	}, [orderedAuxiliaryTabs.length, scrollTabsToEnd]);
+	const selectShellTerminal = useStableCallback(onSelectShellTerminal);
+	const closeShellTerminal = useStableCallback(onCloseShellTerminal);
+	const renameShellTerminal = useStableCallback(onRenameShellTerminal);
 	// The chat tab is "selected" only when neither terminal pane is the body.
 	const timelineActive = !workspaceActiveTabKey && !reviewerActive && !shellActiveHandleId;
 	// Match CenterPane: when the sidebar is off-canvas, the fixed TitlebarNav
@@ -2057,7 +2092,17 @@ function ChatHeader({
 									onReorder={onReorderAuxiliaryTabs}
 									values={orderedAuxiliaryTabs.map((tab) => tab.key)}
 								>
-									{orderedAuxiliaryTabs.map((tab) => (
+									{orderedAuxiliaryTabs.map((tab) => tab.kind === "shell" ? (
+										<ShellTerminalTabEntry
+											isActive={tab.terminal.handleId === shellActiveHandleId && !workspaceActiveTabKey}
+											key={tab.key}
+											onClose={closeShellTerminal}
+											onRename={onRenameShellTerminal ? renameShellTerminal : undefined}
+											onSelect={selectShellTerminal}
+											shell={tab.terminal}
+											tabKey={tab.key}
+										/>
+									) : (
 										<DraggableChatTab key={tab.key} value={tab.key}>
 											{tab.kind === "reviewer" || tab.kind === "reviewer-chat" ? (
 												<button
@@ -2079,15 +2124,6 @@ function ChatHeader({
 													<AgentAvatar className="size-icon-base" decorative provider={tab.terminal.harness} />
 													<span className="truncate">Reviewer</span>
 												</button>
-											) : tab.kind === "shell" ? (
-												<ShellTerminalTab
-													appearance="connected"
-													isActive={tab.terminal.handleId === shellActiveHandleId && !workspaceActiveTabKey}
-													onClose={() => onCloseShellTerminal?.(tab.terminal.handleId)}
-													onRename={onRenameShellTerminal ? (title) => onRenameShellTerminal(tab.terminal.handleId, title) : undefined}
-													onSelect={() => onSelectShellTerminal?.(tab.terminal.handleId)}
-													shell={tab.terminal}
-												/>
 											) : (
 												tab.tab.content
 											)}
