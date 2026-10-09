@@ -145,14 +145,11 @@ export function createMobileTelemetry(
 		if (key === adoptedKey) return;
 		adoptedKey = key;
 		identified = true;
-		if (adoptedId !== identity.distinctId) {
-			adoptedId = identity.distinctId;
-			// Same distinct id as the desktop (and its daemon), so the phone's events
-			// land on the person the desktop already identified.
-			client.identify(identity.distinctId);
-		}
-		// Registered properties merge in the SDK, so a property the new identity
-		// lacks (signed out, or a desktop with no GitHub login) must be removed.
+		// Registered properties merge in the SDK and the identify payload is built
+		// from the ones registered at that moment, so the new identity's properties
+		// go in first: a property it lacks (signed out, or a desktop with no GitHub
+		// login) is removed, and the outgoing $identify never carries the previous
+		// account's attributes.
 		const props: Record<string, string> = {};
 		if (identity.githubLogin) props.github_actor = identity.githubLogin;
 		if (identity.cloudUserId) props.ao_cloud_user_id = identity.cloudUserId;
@@ -160,6 +157,12 @@ export function createMobileTelemetry(
 			if (!(name in props)) void client.unregister(name);
 		}
 		if (Object.keys(props).length > 0) void client.register(props);
+		if (adoptedId !== identity.distinctId) {
+			adoptedId = identity.distinctId;
+			// Same distinct id as the desktop (and its daemon), so the phone's events
+			// land on the person the desktop already identified.
+			client.identify(identity.distinctId);
+		}
 	};
 
 	return {

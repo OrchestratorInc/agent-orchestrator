@@ -209,6 +209,28 @@ describe("createMobileTelemetry", () => {
 			expect(calls).toEqual(expect.arrayContaining(["unregister:github_actor", "unregister:ao_cloud_user_id"]));
 		});
 
+		it("identifies with the new account's properties registered, not the previous account's", () => {
+			// Model the SDK: identify() snapshots whatever is registered at that moment.
+			const live: Record<string, unknown> = {};
+			const identifyPayloads: Array<{ id: string; props: Record<string, unknown> }> = [];
+			const client: MobileTelemetryClient = {
+				capture: () => undefined,
+				register: (p) => void Object.assign(live, p),
+				unregister: (name) => void delete live[name],
+				identify: (id) => void identifyPayloads.push({ id, props: { ...live } }),
+				reset: () => undefined,
+				optOut: () => undefined,
+				optIn: () => undefined,
+			};
+			const t = createMobileTelemetry(client, {});
+			t.adoptDesktopIdentity({ distinctId: "user_A", cloudUserId: "user_A", githubLogin: "alice", optedOut: false });
+			t.adoptDesktopIdentity({ distinctId: "user_B", cloudUserId: "user_B", optedOut: false });
+			expect(identifyPayloads).toEqual([
+				{ id: "user_A", props: { github_actor: "alice", ao_cloud_user_id: "user_A" } },
+				{ id: "user_B", props: { ao_cloud_user_id: "user_B" } },
+			]);
+		});
+
 		it("re-registers when only the GitHub login changes for the same distinct id", () => {
 			const { client, registered } = fakeClient();
 			const t = createMobileTelemetry(client, {});
