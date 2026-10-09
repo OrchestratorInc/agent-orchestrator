@@ -1031,6 +1031,130 @@ func TestIsAliveRetainedUnexpectedServerExitRemainsInconclusive(t *testing.T) {
 	}
 }
 
+// An unexpected server exit does not prove tmux rejected the command, so a
+// mutating command must never reach a second client: replaying send-keys or
+// paste-buffer would deliver input twice, and replaying kill-session or
+// respawn-pane would repeat a destructive action.
+func TestMutatingCommandIsNotReplayedAfterUnexpectedServerExit(t *testing.T) {
+	for _, command := range []string{
+		"send-keys", "paste-buffer", "load-buffer", "kill-session", "respawn-pane", "set-option", "new-session",
+	} {
+		t.Run(command, func(t *testing.T) {
+			current := writeTestTmuxClient(t, "tmux-current", "current-client")
+			retained := writeTestTmuxClient(t, "tmux-retained", "retained-client")
+			store := &fakeCompatibleClientStore{}
+			r := New(Options{
+				Binary: current, RetainedBinary: retained, SocketName: "ao",
+				CompatibleClientStore: store, Timeout: time.Second,
+			})
+			fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+				{out: []byte("server exited unexpectedly"), err: &exec.ExitError{}},
+				{},
+			}}
+			r.runner = fr
+
+			out, err := r.runOnSocket(context.Background(), "ao", command, "-t", "=sess-1")
+			if !errors.Is(err, ports.ErrRuntimeProbeInconclusive) {
+				t.Fatalf("runOnSocket err = %v, want inconclusive", err)
+			}
+			if errors.Is(err, ports.ErrRuntimeProtocolMismatch) || errors.Is(err, ports.ErrRuntimeCompatibleClientUnavailable) {
+				t.Fatalf("runOnSocket err = %v, want only inconclusive classification", err)
+			}
+			if confirmedAbsentOutput(err, string(out)) {
+				t.Fatalf("output %q classified as confirmed absence", out)
+			}
+			if len(fr.calls) != 2 {
+				t.Fatalf("calls = %#v, want original command then one read-only probe", fr.calls)
+			}
+			if fr.calls[0].name != current || !slices.Contains(fr.calls[0].args, command) {
+				t.Fatalf("first call = %#v, want %s on the current client", fr.calls[0], command)
+			}
+			if fr.calls[1].name != retained || slices.Contains(fr.calls[1].args, command) || !slices.Contains(fr.calls[1].args, "list-sessions") {
+				t.Fatalf("second call = %#v, want a read-only list-sessions probe on the retained client", fr.calls[1])
+			}
+			// The probe still adopts the compatible client for later operations.
+			if !store.found || store.path != retained {
+				t.Fatalf("compatible-client association = %+v, want retained client", store)
+			}
+			if got := r.compatibleBinaryForSocket("ao"); got != retained {
+				t.Fatalf("compatible client = %q, want retained client %q", got, retained)
+			}
+		})
+	}
+}
+
+func TestSendMessageDoesNotRepeatChunkAfterUnexpectedServerExit(t *testing.T) {
+	current := writeTestTmuxClient(t, "tmux-current", "current-client")
+	retained := writeTestTmuxClient(t, "tmux-retained", "retained-client")
+	r := New(Options{Binary: current, RetainedBinary: retained, SocketName: "ao", Timeout: time.Second})
+	r.rememberSessionSocket("sess-1", "ao")
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("server exited unexpectedly"), err: &exec.ExitError{}},
+		{},
+	}}
+	r.runner = fr
+
+	err := r.SendMessage(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, "hello")
+	if !errors.Is(err, ports.ErrRuntimeProbeInconclusive) {
+		t.Fatalf("SendMessage err = %v, want inconclusive", err)
+	}
+	sends := 0
+	for _, call := range fr.calls {
+		if slices.Contains(call.args, "send-keys") {
+			sends++
+		}
+	}
+	if sends != 1 {
+		t.Fatalf("send-keys calls = %d (%#v), want the chunk sent exactly once", sends, fr.calls)
+	}
+}
+
+// A protocol mismatch is reported during the client handshake, before tmux
+// runs the command, so even a mutating command is safe to replay.
+func TestMutatingCommandReplaysAfterProtocolMismatch(t *testing.T) {
+	current := writeTestTmuxClient(t, "tmux-current", "current-client")
+	retained := writeTestTmuxClient(t, "tmux-retained", "retained-client")
+	r := New(Options{Binary: current, RetainedBinary: retained, SocketName: "ao", Timeout: time.Second})
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("protocol version mismatch (client 8, server 7)"), err: &exec.ExitError{}},
+		{},
+	}}
+	r.runner = fr
+
+	if _, err := r.runOnSocket(context.Background(), "ao", "send-keys", "-t", "sess-1", "Enter"); err != nil {
+		t.Fatalf("runOnSocket: %v", err)
+	}
+	if len(fr.calls) != 2 || fr.calls[1].name != retained || !slices.Contains(fr.calls[1].args, "send-keys") {
+		t.Fatalf("calls = %#v, want send-keys replayed on the retained client", fr.calls)
+	}
+}
+
+func TestReadOnlyCommand(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"has-session", "-t", "=sess-1"}, true},
+		{[]string{"list-sessions"}, true},
+		{[]string{"list-panes", "-s", "-t", "=sess-1"}, true},
+		{[]string{"show-options", "-t", "=sess-1:", "-v", "detach-on-destroy"}, true},
+		{capturePaneArgs("sess-1", 10), true},
+		{panePIDArgs("sess-1"), true},
+		{[]string{"capture-pane", "-t", "sess-1"}, false},
+		{[]string{"display-message", "-t", "sess-1", "hello"}, false},
+		{sendKeysLiteralArgs("sess-1", "hi"), false},
+		{killSessionArgs("sess-1"), false},
+		{setDetachOnDestroyOnArgs("sess-1"), false},
+		{[]string{"paste-buffer", "-t", "sess-1"}, false},
+		{[]string{"unknown-command"}, false},
+		{nil, false},
+	} {
+		if got := readOnlyCommand(tc.args); got != tc.want {
+			t.Errorf("readOnlyCommand(%q) = %v, want %v", tc.args, got, tc.want)
+		}
+	}
+}
+
 func TestProtocolVersionMismatchOutputMatchesBothObservedTmuxDirections(t *testing.T) {
 	for _, output := range []string{
 		"protocol version mismatch (client 7, server 8)",
