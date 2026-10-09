@@ -18,6 +18,9 @@ const CLOUD_USER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 export class TelemetryIdentityController {
 	private cloudUserId: string | null = null;
 	private pushed = true;
+	// Bumped whenever the daemon's copy goes stale (restart, or a new user), so an
+	// in-flight hand-off to the previous daemon cannot mark the new one as synced.
+	private generation = 0;
 
 	constructor(
 		private readonly dataDir: string,
@@ -47,6 +50,7 @@ export class TelemetryIdentityController {
 		if (userId !== null && !CLOUD_USER_ID_PATTERN.test(userId)) throw new Error("invalid cloud user id");
 		this.cloudUserId = userId;
 		this.pushed = false;
+		this.generation++;
 		await this.flush();
 	}
 
@@ -57,6 +61,7 @@ export class TelemetryIdentityController {
 	 */
 	invalidate(): void {
 		this.pushed = false;
+		this.generation++;
 	}
 
 	/** Retries the hand-off; called when the daemon becomes ready. */
@@ -65,9 +70,11 @@ export class TelemetryIdentityController {
 		const base = this.origin();
 		if (!base) return;
 		const sent = this.cloudUserId ?? "";
+		const generation = this.generation;
 		try {
 			const response = await this.request(base, "/internal/telemetry/identity", { method: "POST", body: { cloudUserId: sent } });
 			// An older daemon without the route answers 404/405; nothing to retry.
+			if (generation !== this.generation) return;
 			this.pushed = response.ok || response.status === 404 || response.status === 405;
 		} catch {
 			// Daemon not reachable yet; flush() runs again on the next ready transition.

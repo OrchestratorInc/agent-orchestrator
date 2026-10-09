@@ -67,6 +67,45 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 		expect(JSON.parse((fetcher.mock.calls[1] as unknown as [string, RequestInit])[1].body as string)).toEqual({ cloudUserId: "user_1" });
 	});
 
+	it("a response from the invalidated daemon cannot mark the new daemon as synced", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => (release = resolve));
+		const fetcher = vi.fn(async () => {
+			if (fetcher.mock.calls.length === 1) await gate; // daemon A's request hangs
+			return new Response(null, { status: 204 });
+		});
+		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
+
+		const setUser = ctl.setCloudUser("user_1"); // in flight to daemon A
+		ctl.invalidate(); // A leaves ready
+		release(); // A's late 204 arrives before daemon B is ready
+		await setUser;
+		await ctl.flush(); // B ready: must still replay the user
+		expect(fetcher).toHaveBeenCalledTimes(2);
+		await ctl.flush(); // and B is now synced
+		expect(fetcher).toHaveBeenCalledTimes(2);
+	});
+
+	it("a late response for a replaced user does not mark the new user as synced", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => (release = resolve));
+		const fetcher = vi.fn(async () => {
+			if (fetcher.mock.calls.length === 1) await gate;
+			return new Response(null, { status: 204 });
+		});
+		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
+		const first = ctl.setCloudUser("user_1");
+		await ctl.setCloudUser("user_2");
+		release();
+		await first;
+		const bodies = fetcher.mock.calls.map((c) => JSON.parse((c as unknown as [string, RequestInit])[1].body as string).cloudUserId);
+		expect(bodies).toEqual(["user_1", "user_2"]);
+		await ctl.flush(); // already synced to user_2: nothing more to send
+		expect(fetcher).toHaveBeenCalledTimes(2);
+	});
+
 	it("refuses a non-loopback origin", async () => {
 		const { ctl, fetcher } = await controller(undefined, "http://example.com:4010");
 		await ctl.setCloudUser("user_1");
