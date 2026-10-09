@@ -657,6 +657,15 @@ func doctorContext(t *testing.T, paths map[string]string, commandOutput func(con
 			}
 			return path, nil
 		},
+		// The codex launch-flag canary resolves the binary the way a spawn does,
+		// not through LookPath, so it gets its own seam (#6443).
+		ResolveCodexBinary: func(context.Context) (string, error) {
+			path, ok := paths["codex"]
+			if !ok || path == "" {
+				return "", fmt.Errorf("codex missing")
+			}
+			return path, nil
+		},
 		ProcessAlive: func(int) bool { return false },
 	}
 	if commandOutput != nil {
@@ -803,5 +812,44 @@ func writeHooksLogLines(t *testing.T, dataDir string, lines ...string) {
 	content := strings.Join(lines, "\n") + "\n"
 	if err := os.WriteFile(filepath.Join(dataDir, hooksLogName), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestDoctorCodexLaunchFlagsProbesSpawnResolvedBinary pins the regression in
+// #6443. On Windows `codex` on PATH is the npm shim, and running a .cmd goes
+// through cmd.exe, which re-parses and corrupts AO's `-c hooks.*=` value: codex
+// then exits 255 with `failed to load bootstrap configuration` even though its
+// real executable accepts the same argv. The canary must therefore probe the
+// binary a spawn would use, and must not fall back to a PATH lookup.
+func TestDoctorCodexLaunchFlagsProbesSpawnResolvedBinary(t *testing.T) {
+	setConfigEnv(t)
+	dir := t.TempDir()
+	resolved := filepath.Join(dir, "codex.exe")
+	shim := filepath.Join(dir, "codex.cmd")
+
+	// LookPath still answers with the shim, as it does on a real Windows box.
+	// The canary must ignore it.
+	c := doctorContext(t, map[string]string{"git": "/bin/git", "codex": shim},
+		func(_ context.Context, name string, args ...string) ([]byte, error) {
+			if name == "/bin/git" {
+				return []byte("git version 2.43.0\n"), nil
+			}
+			// The separate `codex` harness version check legitimately resolves
+			// through PATH; only the launch-flag canary is under test here.
+			if len(args) == 1 && args[0] == "--version" {
+				return []byte("codex-cli 0.159.2\n"), nil
+			}
+			if name != resolved {
+				t.Fatalf("canary probed %q, want the spawn-resolved %q; a PATH lookup would reach the .cmd shim", name, resolved)
+			}
+			return []byte("ok\n"), nil
+		})
+	// doctorContext seeds this from paths["codex"] (the shim); point it at the
+	// spawn-resolved binary, which is what the seam must supply.
+	c.deps.ResolveCodexBinary = func(context.Context) (string, error) { return resolved, nil }
+
+	check := findDoctorCheck(t, c.runDoctor(context.Background()), "codex-launch-flags")
+	if check.Level != doctorPass || !strings.Contains(check.Message, "accepts") {
+		t.Fatalf("canary = %+v, want PASS accepts", check)
 	}
 }

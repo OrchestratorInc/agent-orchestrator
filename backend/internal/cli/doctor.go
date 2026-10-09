@@ -466,9 +466,18 @@ func (c *commandContext) checkHarness(ctx context.Context, harness harnessProbe)
 // can silently break activity tracking; this canary turns that breakage into
 // a doctor warning. The probes come from the codex adapter itself so they
 // cannot drift from the real spawn argv.
+//
+// The binary must be resolved exactly the way a spawn resolves it. A bare PATH
+// lookup is not equivalent on Windows: `codex` on PATH is the npm shim
+// (codex.cmd / codex.ps1), and Windows runs a .cmd through cmd.exe, which
+// re-parses the command line and corrupts AO's `-c hooks.*=` value. Codex then
+// exits 255 with `failed to load bootstrap configuration` and the canary
+// reports a config regression that does not exist, while the real launch - which
+// uses the npm package's own codex.exe and passes argv directly - is unaffected
+// (#6443).
 func (c *commandContext) checkCodexLaunchFlags(ctx context.Context) doctorCheck {
 	const name = "codex-launch-flags"
-	path, err := c.deps.LookPath("codex")
+	path, err := c.deps.ResolveCodexBinary(ctx)
 	if err != nil || path == "" {
 		return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: name, Message: "skipped: codex not found in PATH"}
 	}
