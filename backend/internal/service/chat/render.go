@@ -32,6 +32,9 @@ const (
 	maxRenderTitleRunes = 200
 	minRenderHeight     = 80
 	maxRenderHeight     = 2000
+	// defaultRenderHeight is the frame height for a page published without
+	// one, as ao render and html_render default to.
+	defaultRenderHeight = 400
 
 	defaultRenderCheckWidth = 720
 	minRenderCheckWidth     = 240
@@ -107,12 +110,13 @@ func (s *Service) PublishRender(ctx context.Context, id domain.SessionID, in Ren
 	if err != nil {
 		return RenderResult{}, err
 	}
-	renderID := s.newID()
+	renderID := renderIDFor(controller.renderNetwork(), s.newID())
 	if err := s.renders.PutRender(ctx, id, renderID, []byte(in.HTML)); err != nil {
 		return RenderResult{}, fmt.Errorf("store render: %w", err)
 	}
 	path := "/api/v1/sessions/" + url.PathEscape(string(id)) + "/renders/" + url.PathEscape(renderID)
-	height := min(max(in.Height, minRenderHeight), maxRenderHeight)
+	height := cmp.Or(in.Height, defaultRenderHeight)
+	height = min(max(height, minRenderHeight), maxRenderHeight)
 	activityID, turn, err := controller.recordRender(ctx, renderID, title, height, nil, path)
 	if err != nil {
 		// Only the timeline row lets anything find the page, so an unrecorded page goes.
@@ -288,7 +292,7 @@ func (s *Service) measureRenderLater(ctx context.Context, controller *Controller
 	s.renderMeasures.Add(1)
 	go func() {
 		defer s.renderMeasures.Done()
-		heights := s.measureRender(ctx, id, pageURL, controller.renderNetwork())
+		heights := s.measureRender(ctx, id, pageURL, renderIDNetwork(renderID))
 		if len(heights) == 0 {
 			return
 		}
@@ -432,10 +436,47 @@ const (
 	RenderNetworkNone   = "none"
 )
 
-// renderNetwork is the network this agent's pages may use in the desktop app's
-// hidden window.
+// offlineRenderPrefix starts the id of a page made by an agent whose sandbox
+// has no network. The id never changes, so the page keeps no network for as
+// long as it is shown: publishing a page is not a way around the sandbox.
+const offlineRenderPrefix = "offline-"
+
+// renderIDFor names a new page made under network.
+func renderIDFor(network, id string) string {
+	if network == RenderNetworkNone {
+		return offlineRenderPrefix + id
+	}
+	return id
+}
+
+// renderIDNetwork is the network the page renderID may use.
+func renderIDNetwork(renderID string) string {
+	if RenderOffline(renderID) {
+		return RenderNetworkNone
+	}
+	return RenderNetworkPublic
+}
+
+// RenderOffline reports whether the page renderID must be served with no network.
+func RenderOffline(renderID string) bool {
+	return strings.HasPrefix(renderID, offlineRenderPrefix)
+}
+
+// renderNetwork is the network this agent's pages may use: the network of the
+// sandbox its turn in flight runs under. The mode picked for the next turn
+// does not apply until that turn is sent.
 func (c *Controller) renderNetwork() string {
-	if sandbox, ok := c.conv.(ports.ChatSandboxNetwork); ok && !sandbox.SandboxAllowsNetwork(c.Settings().ApprovalMode) {
+	sandbox, ok := c.conv.(ports.ChatSandboxNetwork)
+	if !ok {
+		return RenderNetworkPublic
+	}
+	c.mu.Lock()
+	mode, dispatched := c.dispatchedApproval, c.hasDispatchedApproval
+	c.mu.Unlock()
+	if !dispatched {
+		mode = c.Settings().ApprovalMode
+	}
+	if !sandbox.SandboxAllowsNetwork(mode) {
 		return RenderNetworkNone
 	}
 	return RenderNetworkPublic
@@ -472,7 +513,12 @@ func (s *Service) CheckRender(ctx context.Context, id domain.SessionID, in Rende
 	if _, err := s.requireChatSession(ctx, id); err != nil {
 		return RenderCheckResult{}, err
 	}
-	renderID := "check-" + s.newID()
+	// No live controller means no way to tell what the agent's sandbox allows.
+	network := RenderNetworkNone
+	if controller, err := s.Controller(id); err == nil {
+		network = controller.renderNetwork()
+	}
+	renderID := renderIDFor(network, "check-"+s.newID())
 	if err := s.renders.PutRender(ctx, id, renderID, []byte(in.HTML)); err != nil {
 		return RenderCheckResult{}, fmt.Errorf("store render check: %w", err)
 	}
@@ -483,11 +529,6 @@ func (s *Service) CheckRender(ctx context.Context, id domain.SessionID, in Rende
 	}()
 	pageURL := strings.TrimRight(in.BaseURL, "/") +
 		"/api/v1/sessions/" + url.PathEscape(string(id)) + "/renders/" + url.PathEscape(renderID)
-	// No live controller means no way to tell what the agent's sandbox allows.
-	network := RenderNetworkNone
-	if controller, err := s.Controller(id); err == nil {
-		network = controller.renderNetwork()
-	}
 	value, err := s.renderCheck(ctx, id, map[string]any{"url": pageURL, "width": width, "network": network})
 	if err != nil {
 		return RenderCheckResult{}, err

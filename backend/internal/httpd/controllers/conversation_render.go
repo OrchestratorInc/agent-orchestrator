@@ -40,6 +40,11 @@ const (
 	// and corsMiddleware refuses it everywhere but its own host, so the page
 	// still cannot call the daemon.
 	inlineArtifactContentSecurityPolicy = "sandbox allow-scripts allow-forms allow-same-origin; worker-src 'none'"
+	// A page made by an agent whose sandbox has no network loads nothing over
+	// the network either: only what it carries inline.
+	// ponytail: CSP does not cover WebRTC or a dns-prefetch hint; the reader's
+	// frames would need a proxy, as the check window has, to close those too.
+	offlineRenderContentSecurityPolicy = renderContentSecurityPolicy + "; default-src data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'"
 	// A terminal session has no thread to show a page in; point the agent at
 	// the command that does work there.
 	renderNeedsChatMessage = "ao render works only in chat sessions; in a terminal session, open the file with ao preview <file>"
@@ -175,10 +180,14 @@ func (c *ConversationsController) renderFile(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	renderID := chi.URLParam(r, "renderId")
+	csp := renderContentSecurityPolicy
+	if chatsvc.RenderOffline(renderID) {
+		csp = offlineRenderContentSecurityPolicy
+	}
 	// A stored render never changes, so its id and the bootstrap version name
 	// the served page, and a revalidation is answered without reading it. An
 	// id unfit for a header is left to the store, which refuses it.
-	if renderTagID.MatchString(renderID) && notModified(w, r, renderContentSecurityPolicy, pageTag(r, renderpage.Version+"-"+renderID)) {
+	if renderTagID.MatchString(renderID) && notModified(w, r, csp, pageTag(r, renderpage.Version+"-"+renderID)) {
 		return
 	}
 	file, _, err := c.Renders.OpenRender(r.Context(), sessionID(r), renderID)
@@ -192,7 +201,7 @@ func (c *ConversationsController) renderFile(w http.ResponseWriter, r *http.Requ
 		envelope.WriteError(w, r, fmt.Errorf("read render: %w", err))
 		return
 	}
-	serveSandboxedPage(w, r, renderContentSecurityPolicy, stored, renderpage.Version+"-"+renderID)
+	serveSandboxedPage(w, r, csp, stored, renderpage.Version+"-"+renderID)
 }
 
 // renderTagID is a render id fit to put in an ETag.

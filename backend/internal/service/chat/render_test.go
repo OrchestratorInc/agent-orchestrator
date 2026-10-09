@@ -88,6 +88,20 @@ func TestPublishRenderLandsOnTheRunningTurn(t *testing.T) {
 	}
 }
 
+// An API client may omit the height; the frame opens at the CLI's 400, not the 80 floor.
+func TestPublishRenderWithoutAHeightOpensAt400(t *testing.T) {
+	h, _ := steerHarness(t)
+	if _, err := h.svc.PublishRender(context.Background(), testSession, chatsvc.RenderInput{HTML: "<p>chart</p>", Title: "Chart"}); err != nil {
+		t.Fatalf("PublishRender: %v", err)
+	}
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(renderRows(s)) == 1 })
+	var d renderDetail
+	_ = json.Unmarshal(renderRows(snapshot)[0].Detail, &d)
+	if d.Render.Height != 400 {
+		t.Fatalf("height = %d, want 400", d.Render.Height)
+	}
+}
+
 func TestPublishRenderWithoutARunningTurnLeavesNoFile(t *testing.T) {
 	h := newHarnessForHarness(t, domain.HarnessCodex)
 	// The page has no turn to show in, so publishing does not wait on a measure.
@@ -208,6 +222,34 @@ func TestRenderCheckAndMeasureUseNoMoreNetworkThanTheAgentHas(t *testing.T) {
 	})
 	if measureArgs["network"] != chatsvc.RenderNetworkNone {
 		t.Fatalf("measure args = %v, want network none", measureArgs)
+	}
+	// Readers get the page with no network too, for as long as it is shown.
+	if !strings.Contains(checkArgs["url"].(string), "/renders/offline-check-") || !strings.Contains(measureArgs["url"].(string), "/renders/offline-") {
+		t.Fatalf("check url = %v, measure url = %v, want offline render ids", checkArgs["url"], measureArgs["url"])
+	}
+	if !chatsvc.RenderOffline(strings.TrimPrefix(measureArgs["url"].(string), "http://127.0.0.1:3001/api/v1/sessions/"+string(testSession)+"/renders/")) {
+		t.Fatalf("measure url %v names a page with network", measureArgs["url"])
+	}
+}
+
+// The page runs under the sandbox of the turn in flight; a mode the user picks
+// for the next turn does not apply to this one.
+func TestRenderNetworkFollowsTheTurnInFlightNotTheNextOne(t *testing.T) {
+	h, provider := steerHarness(t)
+	provider.networkMode = domain.PermissionModeBypassPermissions
+	if _, err := h.svc.SetTurnSettings(context.Background(), testSession, domain.ConversationSettings{
+		ApprovalMode: domain.PermissionModeBypassPermissions,
+	}); err != nil {
+		t.Fatalf("SetTurnSettings: %v", err)
+	}
+	var checkArgs map[string]any
+	h.svc.SetRenderCheck(func(_ context.Context, _ domain.SessionID, args map[string]any) (any, error) {
+		checkArgs = args
+		return map[string]any{"data": "iVBORw0KGgo=", "width": 720.0, "height": 120.0, "contentHeight": 120.0}, nil
+	})
+	result, err := h.svc.CheckRender(context.Background(), testSession, chatsvc.RenderCheckInput{HTML: "<p>x</p>", BaseURL: "http://127.0.0.1:3001"})
+	if err != nil || checkArgs["network"] != chatsvc.RenderNetworkNone || result.Network != chatsvc.RenderNetworkNone {
+		t.Fatalf("check: err=%v args=%v network=%q, want none: the turn in flight was sent without full access", err, checkArgs, result.Network)
 	}
 }
 

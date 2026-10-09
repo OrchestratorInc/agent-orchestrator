@@ -224,6 +224,11 @@ type Controller struct {
 	// activeTurn maps a provider turn id to AO's turn id for the turn currently
 	// in flight, so a completion can be attributed without a round trip.
 	pendingTurnID string
+	// dispatchedApproval is the approval mode the latest turn was sent with,
+	// the one its sandbox runs under; settings hold the next turn's. Unset
+	// until this controller sends a turn.
+	dispatchedApproval    ports.PermissionMode
+	hasDispatchedApproval bool
 	// dispatchingTurnID is AO's durable turn row while SendTurn is in flight.
 	// Eager providers can emit turn/started before SendTurn returns with the
 	// provider id; that event must bind this row instead of adopting a duplicate.
@@ -1720,6 +1725,7 @@ func (c *Controller) dispatch(
 
 	c.mu.Lock()
 	c.dispatchingTurnID = turnID
+	c.dispatchedApproval, c.hasDispatchedApproval = msg.Settings.Approval, true
 	c.mu.Unlock()
 	ref, err := c.conv.SendTurn(ctx, msg)
 	if err != nil {

@@ -131,6 +131,27 @@ func TestRenderRouteServesTheStoredPageSandboxed(t *testing.T) {
 	}
 }
 
+// A page made by an agent with no network is served with no network either.
+func TestRenderRouteServesAnOfflinePageWithNoNetwork(t *testing.T) {
+	dir := t.TempDir()
+	store := attachmentstore.New(dir)
+	if err := store.PutRender(context.Background(), "proj-1", "offline-r1", []byte("<p>chart</p>")); err != nil {
+		t.Fatal(err)
+	}
+	srv := renderRouter(t, dir, &renderStub{fakeConversationService: &fakeConversationService{}})
+	want := "sandbox allow-scripts allow-forms; worker-src 'none'; default-src data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'"
+	for _, path := range []string{"/renders/offline-r1", "/renders/offline-r1?source=1"} {
+		resp, err := http.Get(srv.URL + "/api/v1/sessions/proj-1" + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if got := resp.Header.Get("Content-Security-Policy"); resp.StatusCode != http.StatusOK || got != want {
+			t.Fatalf("%s: status=%d CSP=%q, want %q", path, resp.StatusCode, got, want)
+		}
+	}
+}
+
 func TestRenderRouteServesTheStoredSourceAsPlainText(t *testing.T) {
 	dir := t.TempDir()
 	const page = "<p>chart</p><script>x()</script>"

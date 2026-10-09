@@ -80,6 +80,8 @@ func fullSnapshotReader(st *sqlite.Store) chatsvc.SnapshotReader {
 type fakeConversation struct {
 	// noNetwork makes SandboxAllowsNetwork report a sandbox with no network.
 	noNetwork bool
+	// networkMode, when set, is the one approval mode whose sandbox has network.
+	networkMode            ports.PermissionMode
 	events                 chan ports.ChatEvent
 	providerConversationID string
 
@@ -261,7 +263,12 @@ func (f *fakeConversation) ProviderConversationID() string { return f.providerCo
 
 // SandboxAllowsNetwork is the agent sandbox's network, as Codex reports it;
 // noNetwork plays a Codex thread in accept-edits or auto.
-func (f *fakeConversation) SandboxAllowsNetwork(ports.PermissionMode) bool { return !f.noNetwork }
+func (f *fakeConversation) SandboxAllowsNetwork(mode ports.PermissionMode) bool {
+	if f.networkMode != "" {
+		return mode == f.networkMode
+	}
+	return !f.noNetwork
+}
 func (f *fakeConversation) Capabilities() ports.ChatCapabilities {
 	f.mu.Lock()
 	defer f.mu.Unlock()
