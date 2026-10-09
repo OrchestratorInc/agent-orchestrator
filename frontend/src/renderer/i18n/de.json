@@ -2217,7 +2217,7 @@
 	"settings.harness.models.notInstalled": "Installiere {{agent}}, um seine Modelle zu sehen.",
 	"settings.harness.models.needsLogin": "Melde dich bei {{agent}} an, um seine Modelle zu laden.",
 	"settings.harness.models.loadFailed": "Modelle konnten nicht geladen werden.",
-	"settings.harness.models.hint": "Nur lesen. Wähle Modell und Aufwand pro Projekt oder Aufgabe.",
+	"settings.harness.models.hint": "Fähigkeiten stammen aus dem Harness-Katalog. Unbekannt bedeutet, dass kein Wert gemeldet wurde.",
 	"settings.harness.health.status": "Status",
 	"settings.harness.health.details": "Details",
 	"settings.harness.health.authentication": "Authentifizierung",
@@ -2733,5 +2733,17 @@
 	"cues.cancelSetup": "Cancel setup",
 	"cues.dismissStartupError": "Dismiss startup cue error",
 	"cues.commandAndOutput": "Command and output: {{name}}",
-	"cues.noCommandOutput": "No command output."
+	"cues.noCommandOutput": "No command output.",
+	"settings.harness.models.defaultTitle": "Standardwerte für neue Sitzungen",
+	"settings.harness.models.defaultHint": "Projekt- und Aufgabeneinstellungen haben Vorrang. Bestehende Sitzungen bleiben unverändert.",
+	"settings.harness.models.defaultModel": "Standardmodell",
+	"settings.harness.models.defaultEffort": "Standard-Denkaufwand",
+	"settings.harness.models.useHarnessDefault": "Harness-Standard verwenden",
+	"settings.harness.models.resetDefault": "Zurücksetzen",
+	"settings.harness.models.saveDefault": "Standardwerte speichern",
+	"settings.harness.models.savingDefault": "Wird gespeichert…",
+	"settings.harness.models.context": "Kontext (Tokens)",
+	"settings.harness.models.inputs": "Eingaben",
+	"settings.harness.models.inputText": "Text",
+	"settings.harness.models.inputImage": "Bild"
 }

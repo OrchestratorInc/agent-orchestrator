@@ -498,6 +498,7 @@ func (s ChatTurnSettings) IsZero() bool {
 // is wrong within a week: models are added, renamed, hidden per account, and
 // gated by entitlement the provider knows about and AO does not.
 type ChatModel struct {
+	Inputs      []string
 	ID          string
 	DisplayName string
 	Description string

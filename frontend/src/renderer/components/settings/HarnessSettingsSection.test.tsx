@@ -295,12 +295,12 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.getByRole("textbox", { name: "Search harnesses" })).toBeInTheDocument();
 	});
 
-	it("lists the models a harness reports, read-only, and refreshes the catalog", async () => {
+	it("lists model metadata, offers defaults, and refreshes the catalog", async () => {
 		mockInstalledOperations("npm");
 		const models = {
 			agentId: "codex", lastSuccessAt: "2026-10-08T09:00:00Z",
 			models: [
-				{ id: "gpt-5.3-codex", label: "GPT-5.3 Codex", isDefault: true, efforts: ["low", "medium", "high"] },
+				{ id: "gpt-5.3-codex", label: "GPT-5.3 Codex", isDefault: true, efforts: ["low", "medium", "high"], contextWindow: 200000, inputs: ["text", "image"] },
 				{ id: "gpt-5.3-mini", label: "gpt-5.3-mini", efforts: [] },
 			],
 		};
@@ -319,9 +319,10 @@ describe("HarnessSettingsSection", () => {
 		expect(within(list).getByText("Default")).toBeInTheDocument();
 		expect(within(list).getByText("Effort: low · medium · high")).toBeInTheDocument();
 		expect(within(list).getByText("No effort control")).toBeInTheDocument();
-		// Read-only: no picker, no default to change here.
-		expect(within(page).queryByRole("combobox")).toBeNull();
-		expect(within(page).queryByRole("radio")).toBeNull();
+		expect(within(page).getByRole("button", { name: "Default model" })).toBeInTheDocument();
+		expect(within(list).getByText("Context (tokens): 200,000")).toBeInTheDocument();
+		expect(within(list).getByText("Inputs: Text · Image")).toBeInTheDocument();
+		expect(within(list).getByText("Context (tokens): Unknown")).toBeInTheDocument();
 		await userEvent.click(within(page).getByRole("button", { name: "Refresh" }));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", { params: { path: { agent: "codex" }, query: { projectId: undefined, revalidate: undefined } } });
 		await waitFor(() => expect(within(page).queryByText("gpt-5.3-mini")).toBeNull());

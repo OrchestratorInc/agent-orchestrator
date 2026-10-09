@@ -2217,7 +2217,7 @@
 	"settings.harness.models.notInstalled": "모델을 보려면 {{agent}}을(를) 설치하세요.",
 	"settings.harness.models.needsLogin": "모델을 불러오려면 {{agent}}에 로그인하세요.",
 	"settings.harness.models.loadFailed": "모델을 불러오지 못했습니다.",
-	"settings.harness.models.hint": "읽기 전용입니다. 모델과 Effort는 프로젝트나 작업별로 선택하세요.",
+	"settings.harness.models.hint": "기능 정보는 하네스 카탈로그에서 제공됩니다. 알 수 없음은 값이 보고되지 않았음을 뜻합니다.",
 	"settings.harness.health.status": "상태",
 	"settings.harness.health.details": "세부 정보",
 	"settings.harness.health.authentication": "인증",
@@ -2733,5 +2733,17 @@
 	"cues.cancelSetup": "Cancel setup",
 	"cues.dismissStartupError": "Dismiss startup cue error",
 	"cues.commandAndOutput": "Command and output: {{name}}",
-	"cues.noCommandOutput": "No command output."
+	"cues.noCommandOutput": "No command output.",
+	"settings.harness.models.defaultTitle": "새 세션 기본값",
+	"settings.harness.models.defaultHint": "프로젝트 및 작업 설정이 우선합니다. 기존 세션은 변경되지 않습니다.",
+	"settings.harness.models.defaultModel": "기본 모델",
+	"settings.harness.models.defaultEffort": "기본 추론 수준",
+	"settings.harness.models.useHarnessDefault": "하네스 기본값 사용",
+	"settings.harness.models.resetDefault": "초기화",
+	"settings.harness.models.saveDefault": "기본값 저장",
+	"settings.harness.models.savingDefault": "저장 중…",
+	"settings.harness.models.context": "컨텍스트(토큰)",
+	"settings.harness.models.inputs": "입력",
+	"settings.harness.models.inputText": "텍스트",
+	"settings.harness.models.inputImage": "이미지"
 }

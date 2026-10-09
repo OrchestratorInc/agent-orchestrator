@@ -977,7 +977,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// Resolve the effective agent config (project base + role override + spawn
 	// override) and validate the model before any durable state is created. A
 	// model the harness cannot honor should not leave a seed row behind.
-	agentConfig := applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config), cfg.AgentConfig)
+	agentConfig := m.harnessDefault(ctx, cfg.Harness).Apply(applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config), cfg.AgentConfig))
 	if err := validateSpawnModel(cfg.Harness, agentConfig.Model); err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %s", ErrUnsupportedModel, err.Error())
 	}
@@ -1021,7 +1021,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			cfg.AgentConfigResolved = true
 		}
 	}
-	if mode == domain.SessionModeTUI && cfg.Harness == domain.HarnessClaudeCode {
+	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex) {
 		resolved, err := m.resolveAgentConfig(ctx, cfg, project.Config)
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
@@ -1493,7 +1493,9 @@ func replayClientRequest(rec domain.SessionRecord, hash string) (domain.SessionR
 func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig) (ports.AgentConfig, error) {
 	base := effectiveAgentConfig(cfg.Harness, cfg.Kind, project)
 	requested := cfg.AgentConfig
-	resolved := applySpawnAgentConfig(base, requested)
+	preference := m.harnessDefault(ctx, cfg.Harness)
+	resolved := preference.Apply(applySpawnAgentConfig(base, requested))
+	base = preference.Apply(base)
 	modelChangedWithoutExplicitEffort := requested.Model != "" && requested.Model != base.Model &&
 		!cfg.EffortOverride && requested.Effort == ""
 	if cfg.EffortOverride {
@@ -6257,4 +6259,12 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// harnessDefault supplies machine preferences below project and task choices.
+func (m *Manager) harnessDefault(ctx context.Context, harness domain.AgentHarness) domain.HarnessDefault {
+	if m.defaults != nil {
+		return m.defaults.HarnessDefault(ctx, harness)
+	}
+	return domain.HarnessDefault{}
 }

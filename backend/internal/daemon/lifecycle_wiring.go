@@ -344,6 +344,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	}
 	reviewerChat, _ := chat.(reviewcore.ReviewerChatController)
 	reviewEngine := reviewcore.New(reviewcore.Deps{
+		Defaults: defaults,
 		Store:    store,
 		Sessions: store,
 		PRs:      store,

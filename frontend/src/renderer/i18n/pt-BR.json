@@ -2250,7 +2250,7 @@
 	"settings.harness.models.notInstalled": "Instale {{agent}} para ver seus modelos.",
 	"settings.harness.models.needsLogin": "Entre no {{agent}} para carregar seus modelos.",
 	"settings.harness.models.loadFailed": "Não foi possível carregar os modelos.",
-	"settings.harness.models.hint": "Somente leitura. Escolha modelo e esforço por projeto ou por tarefa.",
+	"settings.harness.models.hint": "As capacidades vêm do catálogo do agente. Desconhecido significa que nenhum valor foi informado.",
 	"settings.harness.health.status": "Status",
 	"settings.harness.health.details": "Detalhes",
 	"settings.harness.health.authentication": "Autenticação",
@@ -2772,5 +2772,17 @@
 	"cues.cancelSetup": "Cancel setup",
 	"cues.dismissStartupError": "Dismiss startup cue error",
 	"cues.commandAndOutput": "Command and output: {{name}}",
-	"cues.noCommandOutput": "No command output."
+	"cues.noCommandOutput": "No command output.",
+	"settings.harness.models.defaultTitle": "Padrões para novas sessões",
+	"settings.harness.models.defaultHint": "As escolhas do projeto e da tarefa têm prioridade. As sessões existentes não são alteradas.",
+	"settings.harness.models.defaultModel": "Modelo padrão",
+	"settings.harness.models.defaultEffort": "Esforço padrão",
+	"settings.harness.models.useHarnessDefault": "Usar padrão do agente",
+	"settings.harness.models.resetDefault": "Redefinir",
+	"settings.harness.models.saveDefault": "Salvar padrões",
+	"settings.harness.models.savingDefault": "Salvando…",
+	"settings.harness.models.context": "Contexto (tokens)",
+	"settings.harness.models.inputs": "Entradas",
+	"settings.harness.models.inputText": "Texto",
+	"settings.harness.models.inputImage": "Imagem"
 }

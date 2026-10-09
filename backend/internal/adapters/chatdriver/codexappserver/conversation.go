@@ -413,13 +413,14 @@ func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error
 func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error) {
 	type modelListResponse struct {
 		Data []struct {
-			ID          string `json:"id"`
-			Model       string `json:"model"`
-			DisplayName string `json:"displayName"`
-			Description string `json:"description"`
-			IsDefault   bool   `json:"isDefault"`
-			Hidden      bool   `json:"hidden"`
-			DefaultEff  string `json:"defaultReasoningEffort"`
+			ID          string   `json:"id"`
+			Model       string   `json:"model"`
+			DisplayName string   `json:"displayName"`
+			Description string   `json:"description"`
+			IsDefault   bool     `json:"isDefault"`
+			Hidden      bool     `json:"hidden"`
+			DefaultEff  string   `json:"defaultReasoningEffort"`
+			Inputs      []string `json:"inputModalities"`
 			Efforts     []struct {
 				ReasoningEffort string `json:"reasoningEffort"`
 			} `json:"supportedReasoningEfforts"`
@@ -464,6 +465,7 @@ func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error
 			models = append(models, ports.ChatModel{
 				ID: id, DisplayName: display, Description: entry.Description,
 				Default: entry.IsDefault, Efforts: efforts, DefaultEffort: entry.DefaultEff,
+				Inputs: entry.Inputs,
 			})
 		}
 		if resp.NextCursor == nil || *resp.NextCursor == "" {

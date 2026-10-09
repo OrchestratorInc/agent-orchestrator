@@ -2283,7 +2283,7 @@
 	"settings.harness.models.notInstalled": "安装 {{agent}} 后即可查看其模型。",
 	"settings.harness.models.needsLogin": "登录 {{agent}} 后即可加载其模型。",
 	"settings.harness.models.loadFailed": "无法加载模型。",
-	"settings.harness.models.hint": "只读。请按项目或任务选择模型和推理强度。",
+	"settings.harness.models.hint": "能力信息来自工具目录。“未知”表示目录未提供该值。",
 	"settings.harness.health.status": "状态",
 	"settings.harness.health.details": "详情",
 	"settings.harness.health.authentication": "认证",
@@ -2715,5 +2715,17 @@
 	"cues.cancelSetup": "Cancel setup",
 	"cues.dismissStartupError": "Dismiss startup cue error",
 	"cues.commandAndOutput": "Command and output: {{name}}",
-	"cues.noCommandOutput": "No command output."
+	"cues.noCommandOutput": "No command output.",
+	"settings.harness.models.defaultTitle": "新会话默认设置",
+	"settings.harness.models.defaultHint": "项目和任务设置优先。更改默认设置不会影响现有会话。",
+	"settings.harness.models.defaultModel": "默认模型",
+	"settings.harness.models.defaultEffort": "默认推理强度",
+	"settings.harness.models.useHarnessDefault": "使用工具默认值",
+	"settings.harness.models.resetDefault": "重置",
+	"settings.harness.models.saveDefault": "保存默认设置",
+	"settings.harness.models.savingDefault": "正在保存…",
+	"settings.harness.models.context": "上下文（令牌）",
+	"settings.harness.models.inputs": "输入",
+	"settings.harness.models.inputText": "文本",
+	"settings.harness.models.inputImage": "图像"
 }

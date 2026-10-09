@@ -3076,6 +3076,8 @@ type SetConversationTitleResponse struct {
 
 // SettingsResponse is the daemon-owned preference set.
 type SettingsResponse struct {
+	// HarnessDefaults are machine preferences below project and task overrides.
+	HarnessDefaults map[string]domain.HarnessDefault `json:"harnessDefaults,omitempty"`
 	// DefaultSessionMode applies to sessions created from now on. Changing it
 	// never alters an existing session; only an explicit interface transition can.
 	DefaultSessionMode string `json:"defaultSessionMode" enum:"chat,tui"`
@@ -3110,6 +3112,13 @@ type AgentInstallerCatalogResponse struct {
 // UpdateSessionInterfaceRequest changes the default interface for new sessions.
 type UpdateSessionInterfaceRequest struct {
 	DefaultSessionMode string `json:"defaultSessionMode" enum:"chat,tui"`
+}
+
+// UpdateHarnessDefaultRequest replaces one harness preference; an empty model
+// removes it and restores the harness's own selection.
+type UpdateHarnessDefaultRequest struct {
+	Model  *string `json:"model" maxLength:"256"`
+	Effort string  `json:"effort,omitempty" maxLength:"32"`
 }
 
 // UpdateCloudOfferingRequest flips the user's cloud toggle.

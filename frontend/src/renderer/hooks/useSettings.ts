@@ -11,9 +11,12 @@ import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import type { SessionMode } from "../types/workspace";
 
+export type HarnessDefault = { model?: string; effort?: string };
+
 export const settingsQueryKey = ["settings"] as const;
 
 export interface Settings {
+	harnessDefaults?: Record<string, HarnessDefault>;
 	/** Applies to sessions created from now on; never to an existing one. */
 	defaultSessionMode: SessionMode;
 	/** Agents that can run in chat mode today. Empty means chat is unavailable. */
@@ -48,6 +51,7 @@ export function useSettings(hostId?: string, enabled = true) {
 			if (error) throw error;
 			return {
 				defaultSessionMode: (data?.defaultSessionMode ?? "tui") as SessionMode,
+				harnessDefaults: data?.harnessDefaults ?? {},
 				chatHarnesses: data?.chatHarnesses ?? [],
 				client: data?.client ?? "",
 				// Offering gates fail closed for cloud and open for local, so a daemon
@@ -110,4 +114,24 @@ export function useUpdateCloudOffering() {
 		saving: mutation.isPending,
 		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
 	};
+}
+
+/** Saves one host's preference without replacing other harnesses' defaults. */
+export function useUpdateHarnessDefault(hostId?: string) {
+	const queryClient = useQueryClient();
+	const key = hostId ? ["settings", hostId] : settingsQueryKey;
+	const mutation = useMutation({
+		mutationFn: async ({ agentId, ...value }: HarnessDefault & { agentId: string }) => {
+			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).PATCH("/api/v1/settings/harness-defaults/{agent}", {
+				params: { path: { agent: agentId } }, body: { model: value.model ?? "", effort: value.effort ?? "" },
+			});
+			if (error) throw error;
+			return data;
+		},
+		onSuccess: async (data) => {
+			queryClient.setQueryData<Settings>(key, (current) => current ? { ...current, harnessDefaults: data?.harnessDefaults ?? {} } : current);
+			await queryClient.invalidateQueries({ queryKey: key, exact: true });
+		},
+	});
+	return { update: mutation.mutateAsync, saving: mutation.isPending, error: mutation.error ? apiErrorMessage(mutation.error) : undefined };
 }

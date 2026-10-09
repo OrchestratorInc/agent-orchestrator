@@ -105,3 +105,7 @@ func TestOfferingBakedURLDoesNotEnableCloud(t *testing.T) {
 		t.Fatal("cloud enabled with only the baked URL set; a local-only install must stay off")
 	}
 }
+
+func (*hibernationSettingsStore) SetHarnessDefault(context.Context, domain.AgentHarness, domain.HarnessDefault, time.Time) error {
+	return nil
+}

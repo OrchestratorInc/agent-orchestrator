@@ -2250,7 +2250,7 @@
 	"settings.harness.models.notInstalled": "Instala {{agent}} para ver sus modelos.",
 	"settings.harness.models.needsLogin": "Inicia sesión en {{agent}} para cargar sus modelos.",
 	"settings.harness.models.loadFailed": "No se pudieron cargar los modelos.",
-	"settings.harness.models.hint": "Solo lectura. Elige modelo y esfuerzo por proyecto o por tarea.",
+	"settings.harness.models.hint": "Las capacidades provienen del catálogo del agente. Desconocido indica que no se informó un valor.",
 	"settings.harness.health.status": "Estado",
 	"settings.harness.health.details": "Detalles",
 	"settings.harness.health.authentication": "Autenticación",
@@ -2772,5 +2772,17 @@
 	"cues.cancelSetup": "Cancel setup",
 	"cues.dismissStartupError": "Dismiss startup cue error",
 	"cues.commandAndOutput": "Command and output: {{name}}",
-	"cues.noCommandOutput": "No command output."
+	"cues.noCommandOutput": "No command output.",
+	"settings.harness.models.defaultTitle": "Valores predeterminados para nuevas sesiones",
+	"settings.harness.models.defaultHint": "Las opciones del proyecto y la tarea tienen prioridad. Las sesiones existentes no cambian.",
+	"settings.harness.models.defaultModel": "Modelo predeterminado",
+	"settings.harness.models.defaultEffort": "Esfuerzo predeterminado",
+	"settings.harness.models.useHarnessDefault": "Usar valor del agente",
+	"settings.harness.models.resetDefault": "Restablecer",
+	"settings.harness.models.saveDefault": "Guardar valores",
+	"settings.harness.models.savingDefault": "Guardando…",
+	"settings.harness.models.context": "Contexto (tokens)",
+	"settings.harness.models.inputs": "Entradas",
+	"settings.harness.models.inputText": "Texto",
+	"settings.harness.models.inputImage": "Imagen"
 }

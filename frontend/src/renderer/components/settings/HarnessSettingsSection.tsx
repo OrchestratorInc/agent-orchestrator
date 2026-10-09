@@ -20,6 +20,7 @@ import { useCloudCp } from "../../hooks/useCloudCp";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
 import { providerConnectionsQueryKey, useProviderConnections } from "../../hooks/useProviderConnections";
 import { GitHubTokenField } from "../onboarding/GitHubTokenField";
+import { HarnessModelDefaults } from "./HarnessModelDefaults";
 import { HarnessUninstallGuide } from "./HarnessUninstallGuide";
 import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPanel";
 import { SettingsRow } from "./SettingsRow";
@@ -1239,7 +1240,7 @@ function HarnessStateText({ tone, children }: { tone: HarnessTone; children: Rea
 	</span>;
 }
 
-/** Read-only view of the models a harness reports. Defaults stay per project and per task. */
+/** The harness catalog and machine defaults for future sessions. */
 function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAccount }: {
 	agentId: AgentId;
 	hostId?: string;
@@ -1255,10 +1256,12 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	const [refreshError, setRefreshError] = useState<string | null>(null);
 	const agent = agentLabel(agentId);
 	if (!installed || needsLogin) {
-		return <div className="flex flex-col items-center gap-3 px-3 py-8 text-center">
+		return <div className="space-y-3">
+			<HarnessModelDefaults key={`${hostId ?? LOCAL_HOST}:${agentId}`} agentId={agentId} agentLabel={agent} hostId={hostId} />
+			<div className="flex flex-col items-center gap-3 px-3 py-8 text-center">
 			<p className="text-sm text-settings-muted">{t(installed ? "settings.harness.models.needsLogin" : "settings.harness.models.notInstalled", { agent })}</p>
 			<Button type="button" size="sm" variant="outline" onClick={onOpenAccount}>{t("settings.harness.tabAccount")}</Button>
-		</div>;
+		</div></div>;
 	}
 	const refresh = async () => {
 		setRefreshing(true);
@@ -1276,6 +1279,7 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	const busy = refreshing || data?.refreshState === "refreshing" || data?.refreshState === "queued";
 	const error = refreshError ?? (catalog.error instanceof Error ? catalog.error.message : undefined) ?? data?.refreshError;
 	return <div className="flex flex-col gap-3">
+		<HarnessModelDefaults key={`${hostId ?? LOCAL_HOST}:${agentId}`} agentId={agentId} agentLabel={agent} hostId={hostId} catalog={data} />
 		<div className="flex items-center justify-between gap-3">
 			<h3 className="text-xs font-medium leading-4 text-settings-muted">{t("settings.harness.models.title")}</h3>
 			<span className="flex items-center gap-2 text-xs text-settings-muted">
@@ -1297,6 +1301,10 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 							{model.isDefault ? <span className="rounded-sm bg-(--color-bg-settings-input) px-1.5 py-0.5 text-[11px] text-settings-muted">{t("settings.harness.models.default")}</span> : null}
 						</span>
 						{model.label !== model.id ? <span className="block break-all font-mono text-[11px] text-settings-muted">{model.id}</span> : null}
+						<span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-settings-muted">
+							<span>{t("settings.harness.models.context")}: {model.contextWindow ? new Intl.NumberFormat(i18n.resolvedLanguage).format(model.contextWindow) : t("activity.unknown")}</span>
+							<span>{t("settings.harness.models.inputs")}: {model.inputs?.length ? model.inputs.map((input) => input === "text" ? t("settings.harness.models.inputText") : input === "image" ? t("settings.harness.models.inputImage") : input).join(" · ") : t("activity.unknown")}</span>
+						</span>
 					</span>
 					<span className="shrink-0 text-right text-xs text-settings-muted">
 						{model.efforts?.length ? t("settings.harness.models.efforts", { levels: model.efforts.join(" · ") }) : t("settings.harness.models.noEffort")}

@@ -524,8 +524,8 @@ openai     gpt-5.6-sol           400K     128K     yes       yes
 		t.Fatal(err)
 	}
 	want := []ports.AgentModelInfo{
-		{ID: "anthropic/claude-opus-4-8", Label: "claude-opus-4-8", Provider: "anthropic"},
-		{ID: "openai/gpt-5.6-sol", Label: "gpt-5.6-sol", Provider: "openai"},
+		{ID: "anthropic/claude-opus-4-8", Label: "claude-opus-4-8", Provider: "anthropic", ContextWindow: 200_000},
+		{ID: "openai/gpt-5.6-sol", Label: "gpt-5.6-sol", Provider: "openai", ContextWindow: 400_000},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("models = %#v, want %#v", got, want)

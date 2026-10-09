@@ -2217,7 +2217,7 @@
 	"settings.harness.models.notInstalled": "モデルを表示するには {{agent}} をインストールしてください。",
 	"settings.harness.models.needsLogin": "モデルを読み込むには {{agent}} にログインしてください。",
 	"settings.harness.models.loadFailed": "モデルを読み込めませんでした。",
-	"settings.harness.models.hint": "読み取り専用です。モデルと Effort はプロジェクトまたはタスクごとに選択します。",
+	"settings.harness.models.hint": "機能情報はハーネスのカタログに基づきます。「不明」は値が報告されていないことを示します。",
 	"settings.harness.health.status": "状態",
 	"settings.harness.health.details": "詳細",
 	"settings.harness.health.authentication": "認証",
@@ -2733,5 +2733,17 @@
 	"cues.cancelSetup": "Cancel setup",
 	"cues.dismissStartupError": "Dismiss startup cue error",
 	"cues.commandAndOutput": "Command and output: {{name}}",
-	"cues.noCommandOutput": "No command output."
+	"cues.noCommandOutput": "No command output.",
+	"settings.harness.models.defaultTitle": "新規セッションのデフォルト",
+	"settings.harness.models.defaultHint": "プロジェクトとタスクの設定が優先されます。既存のセッションは変更されません。",
+	"settings.harness.models.defaultModel": "デフォルトのモデル",
+	"settings.harness.models.defaultEffort": "デフォルトの推論強度",
+	"settings.harness.models.useHarnessDefault": "ハーネスのデフォルトを使用",
+	"settings.harness.models.resetDefault": "リセット",
+	"settings.harness.models.saveDefault": "デフォルトを保存",
+	"settings.harness.models.savingDefault": "保存中…",
+	"settings.harness.models.context": "コンテキスト（トークン）",
+	"settings.harness.models.inputs": "入力",
+	"settings.harness.models.inputText": "テキスト",
+	"settings.harness.models.inputImage": "画像"
 }

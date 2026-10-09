@@ -155,6 +155,8 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"DomainHarnessDefault":                                 "HarnessDefault",
+	"ControllersUpdateHarnessDefaultRequest":               "UpdateHarnessDefaultRequest",
 	"ControllersSettingsResponse":                          "SettingsResponse",
 	"ControllersDesktopWorkspaceLocationResponse":          "DesktopWorkspaceLocationResponse",
 	"ControllersUpdateSessionInterfaceRequest":             "UpdateSessionInterfaceRequest",
@@ -891,6 +893,18 @@ func shellTerminalOperations() []operation {
 			summary: "Read the daemon-owned user preferences",
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/settings/harness-defaults/{agent}", id: "updateHarnessDefault", tag: "settings",
+			summary:    "Choose the default model and effort for new sessions using one harness",
+			pathParams: []any{controllers.AgentIDParam{}},
+			reqBody:    controllers.UpdateHarnessDefaultRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},

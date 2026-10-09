@@ -2892,6 +2892,23 @@ export interface paths {
         patch: operations["updateCloudOffering"];
         trace?: never;
     };
+    "/api/v1/settings/harness-defaults/{agent}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Choose the default model and effort for new sessions using one harness */
+        patch: operations["updateHarnessDefault"];
+        trace?: never;
+    };
     "/api/v1/settings/session-interface": {
         parameters: {
             query?: never;
@@ -3227,9 +3244,12 @@ export interface components {
             agents: components["schemas"]["AgentInstallPlan"][];
         };
         AgentModelInfo: {
+            /** Format: int64 */
+            contextWindow?: number;
             defaultEffort?: string;
             efforts?: string[];
             id: string;
+            inputs?: string[];
             isDefault?: boolean;
             label: string;
             /** Format: date-time */
@@ -4278,6 +4298,10 @@ export interface components {
             remoteUrl?: string;
             repoPath: string;
         };
+        HarnessDefault: {
+            effort?: string;
+            model?: string;
+        };
         IdentityResponse: {
             apiVersion: number;
             hostId: string;
@@ -5281,6 +5305,9 @@ export interface components {
             cloudOffering: boolean;
             /** @enum {string} */
             defaultSessionMode: "chat" | "tui";
+            harnessDefaults?: {
+                [key: string]: components["schemas"]["HarnessDefault"];
+            };
             localEnabled: boolean;
             trackerIntakeEnabled: boolean;
         };
@@ -5536,6 +5563,10 @@ export interface components {
         };
         UpdateChatHibernationRequest: {
             enabled: null | boolean;
+        };
+        UpdateHarnessDefaultRequest: {
+            effort?: string;
+            model: null | string;
         };
         UpdateProjectSettingsInput: {
             config: components["schemas"]["ProjectConfig"];
@@ -16763,6 +16794,60 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ControllersUpdateCloudOfferingRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateHarnessDefault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateHarnessDefaultRequest"];
             };
         };
         responses: {

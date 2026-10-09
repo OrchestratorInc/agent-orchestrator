@@ -1399,7 +1399,7 @@
 	"settings.harness.models.notInstalled": "Install {{agent}} to see its models.",
 	"settings.harness.models.needsLogin": "Log in to {{agent}} to load its models.",
 	"settings.harness.models.loadFailed": "Could not load models.",
-	"settings.harness.models.hint": "Read-only. Choose a model and effort per project or per task.",
+	"settings.harness.models.hint": "Capabilities come from the harness catalog. Unknown means the catalog did not report a value.",
 	"settings.harness.health.status": "Status",
 	"settings.harness.health.details": "Details",
 	"settings.harness.health.authentication": "Authentication",
@@ -2713,5 +2713,17 @@
 	"cues.cancelSetup": "Cancel setup",
 	"cues.dismissStartupError": "Dismiss startup cue error",
 	"cues.commandAndOutput": "Command and output: {{name}}",
-	"cues.noCommandOutput": "No command output."
+	"cues.noCommandOutput": "No command output.",
+	"settings.harness.models.defaultTitle": "Defaults for new sessions",
+	"settings.harness.models.defaultHint": "Project and task choices take priority. Changing these defaults does not change existing sessions.",
+	"settings.harness.models.defaultModel": "Default model",
+	"settings.harness.models.defaultEffort": "Default effort",
+	"settings.harness.models.useHarnessDefault": "Use harness default",
+	"settings.harness.models.resetDefault": "Reset",
+	"settings.harness.models.saveDefault": "Save defaults",
+	"settings.harness.models.savingDefault": "Saving…",
+	"settings.harness.models.context": "Context (tokens)",
+	"settings.harness.models.inputs": "Inputs",
+	"settings.harness.models.inputText": "Text",
+	"settings.harness.models.inputImage": "Image"
 }
