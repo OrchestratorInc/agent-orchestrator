@@ -12035,6 +12035,7 @@ components:
           - codewhale
           - mimo-code
           - deepseek-harness
+          - openhands
           - fake
           type: string
         approvalMode:
@@ -12674,6 +12675,7 @@ components:
           - codewhale
           - mimo-code
           - deepseek-harness
+          - openhands
           - cloudflared
           type: string
         updatedAt:
@@ -15198,6 +15200,7 @@ components:
           - codewhale
           - mimo-code
           - deepseek-harness
+          - openhands
           type: string
         issueId:
           type: string

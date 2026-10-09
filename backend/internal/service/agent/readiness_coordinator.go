@@ -557,7 +557,7 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 	}
 	var incompatibleVersion *opencode.IncompatibleVersionError
 	if errors.As(err, &incompatibleVersion) {
-		return successfulInstallation(attempted, domain.AgentInstallationNotInstalled, domain.AgentReadinessReasonInstallIncompatibleVersion, err.Error()), false
+		return successfulInstallation(attempted, domain.AgentInstallationNotInstalled, domain.AgentReadinessReasonNotInstalled, item.Manifest.Name+" is not installed."), false
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return failedInstallation(attempted, domain.AgentReadinessReasonInstallCheckTimeout, "Installation check timed out."), true

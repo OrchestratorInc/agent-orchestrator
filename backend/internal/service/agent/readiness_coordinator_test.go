@@ -517,7 +517,7 @@ func TestReadinessCoordinatorAllowsOpenCodeVersionProbeBudget(t *testing.T) {
 	}
 }
 
-func TestReadinessCoordinatorClassifiesIncompatibleOpenCodeVersionsAsNotInstalled(t *testing.T) {
+func TestReadinessCoordinatorDoesNotSurfaceSeparateOpenCodeVersionAsMismatch(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		id                  string
@@ -552,13 +552,12 @@ func TestReadinessCoordinatorClassifiesIncompatibleOpenCodeVersionsAsNotInstalle
 			if observation.State != domain.AgentInstallationNotInstalled || observation.Freshness != domain.AgentReadinessFresh {
 				t.Fatalf("installation = %#v, want fresh not_installed", observation)
 			}
-			if observation.ReasonCode != domain.AgentReadinessReasonInstallIncompatibleVersion {
-				t.Fatalf("installation reason code = %q, want install_incompatible_version", observation.ReasonCode)
+			if observation.ReasonCode != domain.AgentReadinessReasonNotInstalled {
+				t.Fatalf("installation reason code = %q, want not_installed", observation.ReasonCode)
 			}
-			for _, detail := range []string{tc.binaryPath, tc.version, fmt.Sprintf("OpenCode %d", tc.expected), fmt.Sprintf("OpenCode %d", tc.found)} {
-				if !strings.Contains(observation.Reason, detail) {
-					t.Fatalf("installation reason = %q, want detail %q", observation.Reason, detail)
-				}
+			wantReason := tc.label + " is not installed."
+			if observation.Reason != wantReason {
+				t.Fatalf("installation reason = %q, want %q", observation.Reason, wantReason)
 			}
 			if items[0].EffectiveReadiness != domain.AgentReadinessNotReady {
 				t.Fatalf("effective readiness = %q, want not_ready", items[0].EffectiveReadiness)

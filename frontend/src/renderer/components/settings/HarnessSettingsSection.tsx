@@ -699,20 +699,16 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						// the installer plan so install controls stay usable.
 						const installationPending = !agents.error
 							&& (agents.isPending || readinessAgent?.installation.state === "unknown");
-						const incompatibleVersionReason = readinessAgent?.installation.reasonCode === "install_incompatible_version"
-							? readinessAgent.installation.reason
-							: undefined;
 						const authPlan = agentAuthPlans.get(agentId);
 						const isSetupAction = authPlan?.action === "setup";
 						const authState = authStates[agentId];
 						const authStatus = readinessAgent?.authentication.state;
-						const mimoConfigured = agentId === "mimo-code" && authStatus === "configured";
+						const connectedCredential = authStatus === "authorized" || authStatus === "configured";
 						const installationStatusLabel = t("settings.harness.installed");
-						const showInstallationStatus = authStatus === "authorized"
+						const showInstallationStatus = connectedCredential
 							|| authStatus === "not_applicable"
-							|| mimoConfigured
 							|| (!authPlans.isPending && (!authPlan || authPlan.action === "instructions"));
-						const rowHasError = failed || Boolean(authState?.error) || Boolean(incompatibleVersionReason);
+						const rowHasError = failed || Boolean(authState?.error);
 						const rowAuthWorkflow = authWorkflow?.agentId === agentId ? authWorkflow : null;
 						const hasDiagnostics = Boolean(
 							job &&
@@ -723,7 +719,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						const authSummary = authState?.error
 							? authState.error
 							: authStatus === "configured"
-								? t("settings.harness.configured")
+								? t("settings.harness.loggedIn")
 								: authStatus === "authorized"
 								? (isSetupAction ? t("settings.harness.configured") : t("settings.harness.loggedIn"))
 								: authPlan && !authPlan.available
@@ -747,7 +743,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						) : null;
 						const authControls = authPlan && authPlan.action !== "instructions" ? (
 							<>
-								{authStatus !== "authorized" && !mimoConfigured ? (
+								{!connectedCredential ? (
 									<Button data-harness-primary-action="" data-terminal-focus-handoff="true" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} size="sm" onClick={() => void startAuth(agentId)}>
 										{authState?.pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
 										{authState?.pending ? t("settings.harness.loggingIn") : isSetupAction ? t("settings.harness.setup") : t("settings.harness.login")}
@@ -756,7 +752,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 							</>
 						) : null;
 						// A logged-in harness's only action is to re-run its login.
-						const refreshLocal = authPlan?.action === "login" && authStatus === "authorized" ? (
+						const refreshLocal = authPlan?.action === "login" && connectedCredential ? (
 							<Button type="button" size="sm" variant="outline" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} onClick={() => void startAuth(agentId)}>
 								{t("settings.harness.refreshLogin")}
 							</Button>
@@ -767,7 +763,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 								<div className="flex shrink-0 items-center gap-2">
 								{/* The subtitle already states a login ("Connected", "Configured"); the
 								    chip is only for installed harnesses whose subtitle doesn't say so. */}
-								{showInstallationStatus && authStatus !== "authorized" && !mimoConfigured ? (
+								{showInstallationStatus && !connectedCredential ? (
 									<Button
 										type="button"
 										size="none"
@@ -831,8 +827,8 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 								<div className="flex items-center gap-1.5">
 									<p className="truncate text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</p>
 								</div>
-								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? incompatibleVersionReason ?? authPlan?.reason ?? plan?.reason}>
-									{isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : incompatibleVersionReason ?? (plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired"))))}
+								<p className={cn("truncate text-xs text-settings-muted", rowHasError && "text-error")} title={authState?.error ?? actionError ?? job?.error ?? authPlan?.reason ?? plan?.reason}>
+									{isInstalled ? authSummary : installationPending ? t("settings.harness.installationUnknown") : actionError ?? (job?.status === "interrupted" ? t("settings.harness.interrupted") : failed ? (job?.error ?? t("settings.harness.installFailed")) : (plan?.available ? t("settings.harness.availableWith", { method: availableMethodsLabel }) : (plan?.reason ?? t("settings.harness.manualRequired"))))}
 								</p>
 							</div>
 

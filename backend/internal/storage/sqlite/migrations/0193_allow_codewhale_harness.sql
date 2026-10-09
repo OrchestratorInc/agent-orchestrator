@@ -1,5 +1,5 @@
 -- Widen the sessions.harness CHECK to allow Codewhale after the shipped
--- OpenCode 2, DeepSeek Harness, and MiMo Code harness migrations.
+-- OpenCode 2, DeepSeek Harness, MiMo Code, and OpenHands harness migrations.
 -- SQLite cannot ALTER a CHECK constraint, so rewrite the sessions schema.
 
 -- +goose NO TRANSACTION
