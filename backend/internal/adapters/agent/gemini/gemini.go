@@ -3,6 +3,7 @@ package gemini
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -168,7 +169,32 @@ func hasCachedCredentials() (bool, error) {
 	if configDir == "" {
 		return false, nil
 	}
+	configured, err := geminiAPIKeySelected(filepath.Join(configDir, "settings.json"))
+	if err != nil || configured {
+		return configured, err
+	}
 	return geminiCredentialFileConfigured(filepath.Join(configDir, "oauth_creds.json"), statGeminiCredentialFile)
+}
+
+func geminiAPIKeySelected(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var settings struct {
+		Security struct {
+			Auth struct {
+				SelectedType string `json:"selectedType"`
+			} `json:"auth"`
+		} `json:"security"`
+	}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return false, err
+	}
+	return settings.Security.Auth.SelectedType == "gemini-api-key", nil
 }
 
 func geminiConfigDir() (string, error) {

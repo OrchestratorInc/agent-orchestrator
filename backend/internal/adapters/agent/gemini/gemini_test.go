@@ -66,6 +66,45 @@ func TestAuthStatusUsesCachedOAuthCredentials(t *testing.T) {
 	}
 }
 
+func TestAuthStatusUsesSelectedAPIKeyAuth(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+	cliHome := t.TempDir()
+	t.Setenv("GEMINI_CLI_HOME", cliHome)
+	configDir := filepath.Join(cliHome, ".gemini")
+	if err := os.Mkdir(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settings := `{"security":{"auth":{"selectedType":"gemini-api-key"}}}`
+	if err := os.WriteFile(filepath.Join(configDir, "settings.json"), []byte(settings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := (&Plugin{resolvedBinary: "gemini"}).AuthStatus(context.Background())
+	if err != nil || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("AuthStatus = (%q, %v), want configured", status, err)
+	}
+}
+
+func TestAuthStatusPropagatesInvalidSettings(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+	cliHome := t.TempDir()
+	t.Setenv("GEMINI_CLI_HOME", cliHome)
+	configDir := filepath.Join(cliHome, ".gemini")
+	if err := os.Mkdir(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "settings.json"), []byte(`{invalid`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := (&Plugin{resolvedBinary: "gemini"}).AuthStatus(context.Background())
+	if status != ports.AgentAuthStatusUnknown || err == nil {
+		t.Fatalf("AuthStatus = (%q, %v), want unknown/error", status, err)
+	}
+}
+
 func TestAuthStatusUnknownWithoutCachedCredentials(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "")
 	t.Setenv("GOOGLE_API_KEY", "")
