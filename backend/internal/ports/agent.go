@@ -375,6 +375,12 @@ const (
 	AgentExitDetectionSupervisor AgentExitDetectionMode = "supervisor"
 )
 
+// AgentInterruptInputProvider selects a native cancellation key for TUIs where
+// Ctrl+C does not cancel the active turn. The input is sent without Enter.
+type AgentInterruptInputProvider interface {
+	InterruptInput() string
+}
+
 // AgentExitDetector is an optional adapter capability. Adapters that omit it
 // keep their existing launch behavior.
 type AgentExitDetector interface {

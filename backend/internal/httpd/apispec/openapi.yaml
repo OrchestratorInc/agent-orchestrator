@@ -12339,6 +12339,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - neovate
           - fake
           type: string
         approvalMode:
@@ -12980,6 +12981,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - neovate
           - cloudflared
           type: string
         updatedAt:
@@ -15650,6 +15652,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - neovate
           type: string
         issueId:
           type: string
