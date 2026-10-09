@@ -65,13 +65,21 @@ function embeddedIPv4(address: string): string | undefined {
 	return [high >> 8, high & 0xff, low >> 8, low & 0xff].join(".");
 }
 
-/** The addresses this machine's interfaces hold right now. */
+// The reader's frames ask about every request a page makes, so the list is
+// rebuilt at most this often rather than on each one.
+const OWN_ADDRESSES_TTL_MS = 5_000;
+let ownAddressesCache: { list: BlockList; at: number } | undefined;
+
+/** The addresses this machine's interfaces held within the last few seconds. */
 function ownAddresses(): BlockList {
-	const own = new BlockList();
+	const now = Date.now();
+	if (ownAddressesCache && now - ownAddressesCache.at < OWN_ADDRESSES_TTL_MS) return ownAddressesCache.list;
+	const list = new BlockList();
 	for (const entry of Object.values(networkInterfaces()).flat()) {
-		if (entry) own.addAddress(entry.address, entry.family === "IPv6" ? "ipv6" : "ipv4");
+		if (entry) list.addAddress(entry.address, entry.family === "IPv6" ? "ipv6" : "ipv4");
 	}
-	return own;
+	ownAddressesCache = { list, at: now };
+	return list;
 }
 
 /**

@@ -50,7 +50,8 @@ import { readEditorSettings, writeEditorPreference } from "./main/editor-setting
 import { createEditorHandoff } from "./main/editor-handoff";
 import { launchCommand } from "./main/launch-command";
 import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
-import { agentPageRequestAllowed, isAgentPageUrl } from "./main/render-frame-network";
+import { agentPageRequestAllowed } from "./main/render-frame-network";
+import { isAgentPageUrl } from "./shared/agent-page-url";
 import {
 	decideRelocation,
 	inspectInstalledBundle,
@@ -714,25 +715,34 @@ async function createWindowInternal(): Promise<void> {
 
 	shellWebContents.on("will-frame-navigate", (event) => {
 		if (event.isMainFrame || !event.frame) return;
+		// The app moving its own frame (to the daemon's new port, or to an
+		// artifact's inline origin) is not the page navigating away.
+		const app = shellWebContents.mainFrame;
+		if (event.initiator?.processId === app.processId && event.initiator.routingId === app.routingId) return;
 		if (blocksRenderFrameNavigation(event.frame.url, event.url)) event.preventDefault();
 	});
 
 	// Agent pages framed in the chat (renders, HTML artifacts) stay off this
 	// computer and its network, as the render check's window does: they may
-	// load public addresses and the daemon. Only requests from inside such a
-	// frame are checked; the app's own pass untouched. Pages cannot start
-	// workers (their CSP has worker-src 'none'), whose requests carry no frame.
+	// load public addresses and their own files. A request is judged by the
+	// nearest agent page around its frame; the app's own pass untouched. Pages
+	// cannot start workers (their CSP has worker-src 'none'), whose requests
+	// carry no frame.
 	const blockedPageHosts = new Set<string>();
 	shellWebContents.session.webRequest.onBeforeRequest((details, callback) => {
-		let fromPage = false;
+		// Loading an agent page into a frame is always allowed: the page's own
+		// CSP sandboxes it, and it is judged by its own rule from then on.
+		if (details.resourceType === "subFrame" && isAgentPageUrl(details.url)) return callback({});
+		let pageUrl: string | undefined;
 		try {
-			for (let frame = details.frame; frame && !fromPage; frame = frame.parent) fromPage = isAgentPageUrl(frame.url);
+			for (let frame = details.frame; frame && !pageUrl; frame = frame.parent) {
+				if (isAgentPageUrl(frame.url)) pageUrl = frame.url;
+			}
 		} catch {
 			// The frame went away mid-request; nothing of its page is left to load.
 		}
-		if (!fromPage) return callback({});
-		const daemonPort = daemonStatus.state === "ready" ? daemonStatus.port : undefined;
-		void agentPageRequestAllowed(details.url, daemonPort).then(
+		if (!pageUrl) return callback({});
+		void agentPageRequestAllowed(details.url, pageUrl).then(
 			(allowed) => {
 				if (!allowed) {
 					const host = URL.canParse(details.url) ? new URL(details.url).host : details.url.slice(0, 80);

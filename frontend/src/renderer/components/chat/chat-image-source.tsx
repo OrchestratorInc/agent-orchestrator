@@ -10,6 +10,7 @@ import { createContext, useContext, useMemo, useState, useSyncExternalStore, typ
 import { getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { isAbsoluteMarkdownAssetSrc, resolveMarkdownImageSrc } from "../../lib/markdown-image-resolver";
 import type { SessionArtifact } from "../../types/workspace";
+import { isInlineArtifactUrl } from "../../../shared/agent-page-url";
 
 type ChatImageSource = { sessionId: string; version: number; baseUrl?: string; remoteHost: boolean; artifacts?: SessionArtifact[] };
 
@@ -36,20 +37,6 @@ export function useChatImageSrc(src: string | undefined): string | undefined {
 /** Whether the open chat runs on a remote host, whose session files the local daemon cannot serve. */
 export function useChatRemoteHost(): boolean {
 	return useContext(ChatImageSourceContext)?.remoteHost ?? false;
-}
-
-/**
- * Whether a URL is on an inline-artifact origin. The chat frames such a page
- * with allow-same-origin, which is only safe on an origin that is not the
- * app's own, so nothing else is accepted.
- */
-export function isInlineArtifactUrl(url: string): boolean {
-	try {
-		const { protocol, hostname } = new URL(url);
-		return protocol === "http:" && hostname.startsWith("ao-inline-artifact.") && hostname.endsWith(".localhost");
-	} catch {
-		return false;
-	}
 }
 
 /**

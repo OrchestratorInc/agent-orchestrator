@@ -1,4 +1,5 @@
 import type { BrowserWindow, NativeImage, Session } from "electron";
+import { isOwnPageRequest } from "../shared/agent-page-url";
 import { allowRenderPage, type RenderNetwork, startRenderCheckProxy } from "./render-check-proxy";
 
 export type RenderCheckMessage = { level: "debug" | "log" | "warning" | "error"; text: string };
@@ -63,6 +64,25 @@ export const CONTENT_HEIGHT_SCRIPT = `(() => {
 // Every check on a network shares its partition's session, so it is proxied once.
 const proxiedSessions = new WeakMap<Session, Promise<void>>();
 
+// The page each open check window shows, by webContents id, and where its refusals go.
+const checkPages = new Map<number, { page: URL; onRefused: (destination: string) => void }>();
+
+/**
+ * Keeps each check window's daemon requests on its own page. The proxy lets
+ * the page's host and port through, and that is the daemon, whose other
+ * routes would otherwise be open to the page: one fetches any URL it is
+ * given, which reaches the network a "none" check withholds.
+ */
+function guardDaemonRequests(session: Session): void {
+	session.webRequest.onBeforeRequest((details, callback) => {
+		const check = details.webContentsId === undefined ? undefined : checkPages.get(details.webContentsId);
+		const url = URL.canParse(details.url) ? new URL(details.url) : undefined;
+		const refused = !!check && !!url && url.host === check.page.host && !isOwnPageRequest(check.page, url);
+		if (refused) check.onRefused(`${url.host}${url.pathname}`);
+		callback({ cancel: refused });
+	});
+}
+
 /**
  * Sends every connection the check window makes through the proxy listener
  * for its network. "<-loopback>" matters: without it Chromium connects to
@@ -72,6 +92,7 @@ const proxiedSessions = new WeakMap<Session, Promise<void>>();
 function proxyPartition(session: Session, network: RenderNetwork): Promise<void> {
 	let proxied = proxiedSessions.get(session);
 	if (!proxied) {
+		guardDaemonRequests(session);
 		proxied = startRenderCheckProxy(network)
 			.then((port) => session.setProxy({ proxyRules: `socks5://127.0.0.1:${port}`, proxyBypassRules: "<-loopback>" }))
 			.catch((error: unknown) => {
@@ -263,11 +284,17 @@ async function withRenderWindow<T>(
 			network === "none"
 				? "The agent has no network access, so the check loads no network resources."
 				: "A render check loads only public addresses.";
-		release = allowRenderPage(page.hostname, Number(page.port || 80), (destination) => {
+		const onRefused = (destination: string) => {
 			if (refused.has(destination)) return;
 			refused.add(destination);
 			record({ level: "warning", text: `AO blocked a request to ${destination}. ${why}` });
-		});
+		};
+		const releasePage = allowRenderPage(page.hostname, Number(page.port || 80), onRefused);
+		checkPages.set(contents.id, { page, onRefused });
+		release = () => {
+			releasePage();
+			checkPages.delete(contents.id);
+		};
 		const run = async () => {
 			await proxyPartition(contents.session, network);
 			await contents.loadURL(page.href);

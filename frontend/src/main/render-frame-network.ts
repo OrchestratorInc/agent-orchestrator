@@ -1,33 +1,19 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { isOwnPageRequest } from "../shared/agent-page-url";
 import { isLocal } from "./render-check-proxy";
-
-// The daemon routes that serve agent pages, and the inline-artifact origin.
-const PAGE_ROUTE = /^\/api\/v1\/sessions\/[^/]+\/(renders\/[^/]+$|artifact-files\/)/;
-
-/** Whether a frame URL is an agent page: a render or an HTML artifact framed in the chat. */
-export function isAgentPageUrl(url: string): boolean {
-	let parsed: URL;
-	try {
-		parsed = new URL(url);
-	} catch {
-		return false;
-	}
-	if (parsed.protocol !== "http:") return false;
-	if (parsed.hostname.startsWith("ao-inline-artifact.") && parsed.hostname.endsWith(".localhost")) return true;
-	return (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") && PAGE_ROUTE.test(parsed.pathname);
-}
 
 type Resolve = (host: string) => Promise<Array<{ address: string; family: number }>>;
 
 const resolveAll: Resolve = (host) => lookup(host, { all: true, verbatim: true }).catch(() => []);
 
-const DEFAULT_PORTS: Record<string, number> = { "http:": 80, "ws:": 80, "https:": 443, "wss:": 443 };
+const SCHEMES = new Set(["http:", "https:", "ws:", "wss:"]);
 
 /**
- * Whether a request made from an agent page in the chat may go out. A page
- * may load public addresses and the daemon (its own route, other daemon
- * routes refuse its origin); nothing else on this computer or its network.
+ * Whether a request made from agent page `pageUrl` in the chat may go out. A
+ * page may load public addresses and its own files on this computer; nothing
+ * else here or on its network: not the daemon's API, not another session's
+ * origin (a preview origin the daemon trusts, say), not another port.
  * The same rule the render check enforces, here for the reader's frames.
  *
  * ponytail: the name is resolved here and again by Chromium, so a name that
@@ -35,24 +21,22 @@ const DEFAULT_PORTS: Record<string, number> = { "http:": 80, "ws:": 80, "https:"
  * window's proxy connects only to the addresses it checked, if this ever needs
  * the same guarantee.
  */
-export async function agentPageRequestAllowed(requestUrl: string, daemonPort: number | undefined, resolve: Resolve = resolveAll): Promise<boolean> {
+export async function agentPageRequestAllowed(requestUrl: string, pageUrl: string, resolve: Resolve = resolveAll): Promise<boolean> {
 	let url: URL;
+	let page: URL;
 	try {
 		url = new URL(requestUrl);
+		page = new URL(pageUrl);
 	} catch {
 		return false;
 	}
 	if (url.protocol === "data:" || url.protocol === "blob:" || url.protocol === "about:") return true;
-	const defaultPort = DEFAULT_PORTS[url.protocol];
-	if (defaultPort === undefined) return false;
-	const port = url.port ? Number(url.port) : defaultPort;
+	if (!SCHEMES.has(url.protocol)) return false;
 	const host = url.hostname.replace(/^\[|\]$/g, "");
-	const isDaemon = port === daemonPort;
-	if (host === "localhost" || host.endsWith(".localhost")) return isDaemon;
+	if (host === "localhost" || host.endsWith(".localhost")) return isOwnPageRequest(page, url);
 	const family = isIP(host);
 	const addresses = family ? [{ address: host, family }] : await resolve(host);
-	const local = addresses.filter(({ address, family }) => isLocal(address, family));
-	if (local.length === 0) return true;
-	// Loopback on the daemon's own port is the daemon; any other local address is not.
-	return isDaemon && local.every(({ address, family }) => (family === 6 ? address === "::1" : address.startsWith("127.")));
+	if (!addresses.some(({ address, family }) => isLocal(address, family))) return true;
+	// Only the page's own route on the daemon, named as loopback; any other local address is refused.
+	return isOwnPageRequest(page, url);
 }
