@@ -108,7 +108,7 @@ func TestResolveBinaryForMajorAcceptsSlowShim(t *testing.T) {
 	name, body := "opencode", "#!/bin/sh\nsleep 4\nprintf '2.0.0\\n'\n"
 	if runtime.GOOS == "windows" {
 		name = "opencode.cmd"
-		body = "@echo off\r\npowershell -NoProfile -Command \"Start-Sleep -Seconds 4\"\r\necho 2.0.0\r\n"
+		body = "@echo off\r\nping -n 5 127.0.0.1 >nul\r\necho 2.0.0\r\n"
 	}
 	binary := filepath.Join(dir, name)
 	if err := os.WriteFile(binary, []byte(body), 0o755); err != nil {
