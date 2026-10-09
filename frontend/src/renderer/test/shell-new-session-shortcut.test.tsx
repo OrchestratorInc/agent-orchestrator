@@ -451,9 +451,26 @@ describe("shell workspace startup", () => {
 		expect(shellMocks.warmSessionUsageSummaries).toHaveBeenCalledWith(queryClient, workspaces);
 	});
 
+	it("warms local boards' usage when the daemon becomes ready after the loader ran", async () => {
+		// The loader returned early: the daemon was still starting, so nothing
+		// was warmed and the workspace list has not loaded yet.
+		shellMocks.state.daemonStatus = { state: "starting" };
+		shellMocks.state.workspaceQuery = { data: [], dataUpdatedAt: 0, isError: false, isSuccess: false };
+		const view = await renderShell();
+		expect(shellMocks.warmSessionUsageSummaries).not.toHaveBeenCalled();
+
+		const reverb = { id: "reverb", sessions: [{ id: "reverb-1" }] } as WorkspaceSummary;
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
+		shellMocks.state.workspaceQuery = { data: [reverb], dataUpdatedAt: 1, isError: false, isSuccess: true };
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+
+		await waitFor(() => expect(shellMocks.warmSessionUsageSummaries).toHaveBeenCalledWith(shellMocks.queryClient, [reverb]));
+	});
+
 	it("warms remote boards' usage once each host's sessions are known", async () => {
 		const boxA = { hostId: "box-a", id: "project-a", sessions: [{ id: "a-1" }] } as WorkspaceSummary;
 		const boxB = { hostId: "box-b", id: "project-b", sessions: [] } as unknown as WorkspaceSummary;
+		shellMocks.state.workspaceQuery = { data: [], dataUpdatedAt: 0, isError: false, isSuccess: true };
 		shellMocks.state.remoteWorkspaces = [boxA, boxB];
 		shellMocks.state.remoteSessionHostIds = ["box-a"];
 		const view = await renderShell();

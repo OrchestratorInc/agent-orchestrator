@@ -95,6 +95,17 @@ describe("session usage summaries", () => {
 		expect(queryClient.getQueryData(sessionUsageQueryKey("far"))).toBeUndefined();
 	});
 
+	it("shares one request between overlapping warm-ups", async () => {
+		getMock.mockResolvedValueOnce({ data: { sessions: [usage("reverb-1", 10)] } });
+		const queryClient = new QueryClient();
+		const workspaces = [workspace("reverb", ["reverb-1"])];
+
+		await Promise.all([warmSessionUsageSummaries(queryClient, workspaces), warmSessionUsageSummaries(queryClient, workspaces)]);
+
+		expect(getMock).toHaveBeenCalledOnce();
+		expect(queryClient.getQueryData(sessionUsageQueryKey("reverb"))).toEqual([usage("reverb-1", 10)]);
+	});
+
 	it("does not request usage when every board is already cached", async () => {
 		const queryClient = new QueryClient();
 		queryClient.setQueryData(sessionUsageQueryKey("reverb"), []);
