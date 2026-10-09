@@ -1026,6 +1026,7 @@ export const ChatComposer = memo(function ChatComposer({
 		(snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab"): string | undefined => {
 			const currentTrigger = snapshot.trigger;
 			if (!currentTrigger) return undefined;
+			if (key === "Enter" && snapshot.text.trim() === "/btw" && skills.some((skill) => skill.name === "btw" && skill.source === "AO")) return undefined;
 			if (key === "Enter" && snapshot.text.trim() === "/compact" && onCompact) {
 				return undefined;
 			}
@@ -1037,7 +1038,7 @@ export const ChatComposer = memo(function ChatComposer({
 			dismissedKeyRef.current = null;
 			return chosen.value;
 		},
-		[onCompact, suggestionsFor],
+		[onCompact, skills, suggestionsFor],
 	);
 
 	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {

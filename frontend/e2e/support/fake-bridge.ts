@@ -134,7 +134,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						return unsubscribe();
 					},
 				},
-				editorHandoff: {
+				sideChats: { capture: async () => undefined },
+	editorHandoff: {
 					getState: async () => ({
 						targets: [
 							{ id: "cursor" as const, name: "Cursor", kind: "editor" as const },
