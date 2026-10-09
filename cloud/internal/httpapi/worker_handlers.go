@@ -1019,7 +1019,7 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			output.Attempt <= 0 ||
 			(output.Stream != "stdout" && output.Stream != "stderr") ||
 			output.Text == "" ||
-			len(output.Text) > maxWorkerOutput {
+			len(output.Text) > maxWorkerOutput || len(output.ItemID) > 512 {
 			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The assistant output payload is invalid.")
 			return
 		}

@@ -3131,6 +3131,10 @@ components:
       additionalProperties: false
       required: [turnId, attempt, stream, text]
       properties:
+        itemId:
+          type: string
+          maxLength: 512
+          description: Provider message identity within this turn attempt.
         turnId:
           type: string
           format: uuid
@@ -4470,6 +4474,20 @@ components:
           properties:
             text:
               type: string
+            origin:
+              type: string
+              enum: [human, automation]
+              description: Server-owned message attribution; absent on older events.
+            senderSessionId:
+              type: string
+              format: uuid
+              description: Source agent session for automation messages.
+            senderLabel:
+              type: string
+              description: Server-owned display label for an automation sender.
+            displayText:
+              type: string
+              description: Display text for an automation message; text retains the full agent prompt.
             turnId:
               type: string
               format: uuid

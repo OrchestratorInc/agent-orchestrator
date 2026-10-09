@@ -38,7 +38,8 @@ var clientEventTypes = []string{
 }
 
 type chatMessagePayload struct {
-	Text string `json:"text"`
+	Text   string `json:"text"`
+	Origin string `json:"origin,omitempty"`
 	domain.ChatTurnSettings
 }
 
@@ -266,7 +267,11 @@ func (s *Store) AppendInteractiveConversationFacts(ctx context.Context, orgID, s
 	if text == "" {
 		return nil
 	}
-	payload, err := json.Marshal(map[string]string{"text": text})
+	fields := map[string]string{"text": text}
+	if eventTypeOut == "chat.user_message" {
+		fields["origin"] = "human"
+	}
+	payload, err := json.Marshal(fields)
 	if err != nil {
 		return err
 	}
@@ -538,7 +543,7 @@ func appendUserMessageEvent(
 	if len(selected) > 0 {
 		settings = selected[0]
 	}
-	payload, err := json.Marshal(chatMessagePayload{Text: text, ChatTurnSettings: settings})
+	payload, err := json.Marshal(chatMessagePayload{Text: text, Origin: "human", ChatTurnSettings: settings})
 	if err != nil {
 		return domain.ClientEvent{}, err
 	}
@@ -611,7 +616,55 @@ func (s *Store) ListClientEvents(
 			}
 			events = append(events, event)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+		legacySequences := make([]int64, 0)
+		bySequence := make(map[int64]*domain.ClientEvent)
+		for i := range events {
+			event := &events[i]
+			if event.Type != "chat.user_message" {
+				continue
+			}
+			var payload struct {
+				Origin string `json:"origin"`
+			}
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				return err
+			}
+			if payload.Origin == "human" || payload.Origin == "automation" {
+				continue
+			}
+			legacySequences = append(legacySequences, event.Sequence)
+			bySequence[event.Sequence] = event
+		}
+		if len(legacySequences) == 0 {
+			return nil
+		}
+		// Older reports already have durable actor attribution in their audit row.
+		// Recover it without guessing from user-editable message prefixes.
+		audits, err := tx.Query(ctx, `SELECT (metadata->>'sequence')::bigint, metadata->>'actorSessionId'
+			FROM ao_audit_events WHERE org_id=$1 AND resource_id=$2
+			AND resource_type='session' AND action='session.message_queued'
+			AND metadata ? 'actorSessionId' AND (metadata->>'sequence')::bigint = ANY($3::bigint[])`, orgID, sessionID, legacySequences)
+		if err != nil {
+			return err
+		}
+		defer audits.Close()
+		for audits.Next() {
+			var sequence int64
+			var source string
+			if err := audits.Scan(&sequence, &source); err != nil {
+				return err
+			}
+			if event := bySequence[sequence]; event != nil && event.Type == "chat.user_message" {
+				if err := annotateAutomationMessage(event, source); err != nil {
+					return err
+				}
+			}
+		}
+		return audits.Err()
 	})
 	if err != nil {
 		return nil, false, err
@@ -631,4 +684,19 @@ func scanClientEvent(row scanner, event *domain.ClientEvent) error {
 		&event.Payload,
 		&event.CreatedAt,
 	)
+}
+
+// Attribution is server-owned. A user writing a report-like prefix stays human.
+func annotateAutomationMessage(event *domain.ClientEvent, source string) error {
+	var payload map[string]any
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		return err
+	}
+	payload["origin"] = "automation"
+	payload["senderSessionId"] = source
+	encoded, err := json.Marshal(payload)
+	if err == nil {
+		event.Payload = encoded
+	}
+	return err
 }

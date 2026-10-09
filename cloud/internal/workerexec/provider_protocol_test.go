@@ -403,3 +403,35 @@ func TestCodexProjectsToolCallsAndFilePatches(t *testing.T) {
 		t.Fatalf("file patch = %#v", edit[0].Activity.Detail["files"])
 	}
 }
+
+func TestACPMessageIdentityAndWhitespaceSurviveLiveOutput(t *testing.T) {
+	var got []Output
+	client := &cloudACPClient{publish: func(output Output) error { got = append(got, output); return nil }}
+	client.live.Store(true)
+	for _, raw := range []string{
+		`{"sessionId":"session","update":{"sessionUpdate":"agent_message_chunk","messageId":"progress","content":{"type":"text","text":"Checking."}}}`,
+		`{"sessionId":"session","update":{"sessionUpdate":"agent_message_chunk","messageId":"answer","content":{"type":"text","text":"\n\n"}}}`,
+	} {
+		var notification acp.SessionNotification
+		if err := json.Unmarshal([]byte(raw), &notification); err != nil {
+			t.Fatal(err)
+		}
+		if err := client.SessionUpdate(context.Background(), notification); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []Output{{Stream: "stdout", ItemID: "progress", Text: "Checking."}, {Stream: "stdout", ItemID: "answer", Text: "\n\n"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("output = %#v, want %#v", got, want)
+	}
+}
+
+func TestCodexMessageOutputPreservesIdentityAndWhitespace(t *testing.T) {
+	output := projectCodexNotification(codexFrame{Method: "item/agentMessage/delta", Params: json.RawMessage(`{"threadId":"current","itemId":"answer","delta":"\n\n"}`)}, "current")
+	if len(output) != 1 || output[0].ItemID != "answer" || output[0].Text != "\n\n" {
+		t.Fatalf("output=%#v", output)
+	}
+	if output := projectCodexNotification(codexFrame{Method: "item/agentMessage/delta", Params: json.RawMessage(`{"threadId":"other","itemId":"answer","delta":"foreign"}`)}, "current"); len(output) != 0 {
+		t.Fatal("another thread's output was accepted")
+	}
+}
