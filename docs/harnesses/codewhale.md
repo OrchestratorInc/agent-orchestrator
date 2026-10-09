@@ -11,7 +11,11 @@ Codewhale's `--prompt` mode exits after one response. AO maps its
 default and accept-edits modes to Codewhale's `on-request` approval policy,
 auto to `auto`, and bypass-permissions to Codewhale's explicit `--yolo` mode.
 Model overrides are passed through `--model`, and the picker is populated from
-`codewhale models --json`.
+`codewhale models --json`. The default selection shown in the picker is
+Codewhale's own runtime-effective model, resolved from the same provider and
+model configuration a launched session would use via `codewhale model
+resolve`; a configured model missing from the catalog is appended as the
+default rather than reporting no model.
 
 Auth readiness reads `codewhale auth status` for the active provider's
 credential source and reports a present credential as `configured`. It then

@@ -474,10 +474,63 @@ func Discover(ctx context.Context, agentID, binary, workingDir string, env map[s
 	if len(models) == 0 {
 		return base, fmt.Errorf("%s model discovery returned no models", agentID)
 	}
+	if agentID == "codewhale" {
+		models = markCodewhaleResolvedDefault(ctx, binary, workingDir, env, models)
+	}
 	base.Models = models
 	base.Source = "cli"
 	base.FetchedAt = time.Now().UTC()
 	return base, nil
+}
+
+var codewhaleResolvedModelPattern = regexp.MustCompile(`(?mi)^resolved:\s*([^\s]+)`)
+var codewhaleResolvedProviderPattern = regexp.MustCompile(`(?mi)^provider:\s*([^\s]+)`)
+
+// markCodewhaleResolvedDefault marks Codewhale's runtime-effective model as
+// the catalog default by asking `codewhale model resolve`, which reads the
+// same provider and model configuration a launched session would use. The
+// result keeps the picker from reporting "model not reported": a resolved id
+// is matched case-insensitively against the catalog, and a configured model
+// the catalog does not list is appended the way Claude's configured model is.
+// A failed or empty resolve is best-effort and leaves the catalog unchanged.
+func markCodewhaleResolvedDefault(ctx context.Context, binary, workingDir string, env map[string]string, models []ports.AgentModelInfo) []ports.AgentModelInfo {
+	if err := ctx.Err(); err != nil {
+		return models
+	}
+	runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	output, err := modelCommand(runCtx, binary, []string{"model", "resolve"}, workingDir, env).CombinedOutput()
+	if err != nil {
+		return models
+	}
+	return applyCodewhaleResolvedModel(models, output)
+}
+
+// applyCodewhaleResolvedModel marks the resolved model in the catalog.
+func applyCodewhaleResolvedModel(models []ports.AgentModelInfo, resolveOutput []byte) []ports.AgentModelInfo {
+	match := codewhaleResolvedModelPattern.FindSubmatch(resolveOutput)
+	if len(match) < 2 {
+		return models
+	}
+	resolved := strings.TrimSpace(string(match[1]))
+	if resolved == "" {
+		return models
+	}
+	found := false
+	for i := range models {
+		if strings.EqualFold(models[i].ID, resolved) {
+			models[i].IsDefault = true
+			found = true
+		}
+	}
+	if !found {
+		entry := ports.AgentModelInfo{ID: resolved, Label: resolved, IsDefault: true}
+		if provider := codewhaleResolvedProviderPattern.FindSubmatch(resolveOutput); len(provider) >= 2 {
+			entry.Provider = strings.TrimSpace(string(provider[1]))
+		}
+		models = append(models, entry)
+	}
+	return models
 }
 
 func discoverUnrealCatalog(env map[string]string) ports.AgentModelCatalog {
