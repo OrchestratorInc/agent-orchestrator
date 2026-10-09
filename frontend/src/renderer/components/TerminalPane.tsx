@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { RotateCcw } from "lucide-react";
+import { Loader2, RotateCcw } from "lucide-react";
 import {
 	createContext,
 	useCallback,
@@ -691,7 +691,6 @@ function CachedTerminalSlot({
 	return <div className="h-full min-h-0 w-full" data-testid="session-terminal-slot" ref={slotRef} />;
 }
 
-const BOOT_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const BOOT_STATUS_STEPS = [
 	"Preparing the {subject}",
 	"Clearing a workspace",
@@ -705,13 +704,13 @@ const BOOT_STATUS_STEPS = [
 function TerminalBootStatus({ subject }: { subject: string }) {
 	const [tick, setTick] = useState(0);
 	useEffect(() => {
-		const id = window.setInterval(() => setTick((value) => value + 1), 80);
+		const id = window.setInterval(() => setTick((value) => value + 1), 1800);
 		return () => window.clearInterval(id);
 	}, []);
-	const step = Math.min(Math.floor(tick / 22), BOOT_STATUS_STEPS.length - 1);
+	const step = Math.min(tick, BOOT_STATUS_STEPS.length - 1);
 	return (
 		<div className="flex items-center gap-2.5 text-terminal-dim" role="status" aria-live="polite">
-			<span aria-hidden="true" className="w-[1ch] text-terminal">{BOOT_SPINNER_FRAMES[tick % BOOT_SPINNER_FRAMES.length]}</span>
+			<Loader2 aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-terminal" />
 			<span>{BOOT_STATUS_STEPS[step].replace("{subject}", subject)}</span>
 		</div>
 	);

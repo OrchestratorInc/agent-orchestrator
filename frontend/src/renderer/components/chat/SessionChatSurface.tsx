@@ -462,14 +462,16 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	const renderShellFallback = Boolean(shellTarget && session);
 	// A switch from the terminal shows the chat before the daemon has a
-	// conversation to read, so the starting snapshot stands in until it does.
-	const optimisticArrival = Boolean(arriving) && !snapshot && !renderShellFallback;
+	// conversation to read. The starting snapshot stands in for the whole
+	// arrival, even over a cached transcript, so history appears once and fades
+	// in instead of flashing, hiding, and reappearing as the controller restarts.
+	const optimisticArrival = Boolean(arriving) && !renderShellFallback;
 	const optimisticChat = (session.kind === "orchestrator" && isLoading && !renderShellFallback) || optimisticArrival;
 	const renderSnapshot =
-		snapshot ??
 		(optimisticArrival
 			? { ...startingConversationSnapshot(session.id, session.provider), controller: { state: "stopped" as const } }
-			: optimisticChat ? startingConversationSnapshot(session.id, session.provider) : undefined) ??
+			: snapshot) ??
+		(optimisticChat ? startingConversationSnapshot(session.id, session.provider) : undefined) ??
 		(renderShellFallback
 			? unavailableConversationSnapshot(session)
 			: undefined);
