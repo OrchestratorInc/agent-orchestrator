@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/windows"
 
@@ -23,11 +24,17 @@ func previewCommand(name string, args ...string) *exec.Cmd {
 		}
 		cmd := aoprocess.Command(shell) //nolint:gosec // COMSPEC is the OS-selected command interpreter for .cmd/.bat shims
 		cmd.Args = nil
+		if cmd.SysProcAttr == nil {
+			cmd.SysProcAttr = &syscall.SysProcAttr{}
+		}
 		cmd.SysProcAttr.CmdLine = `/d /s /c "` + windowsBatchCommandLine(resolved, args) + `"`
 		cmd.SysProcAttr.CreationFlags |= windows.CREATE_NEW_PROCESS_GROUP
 		return cmd
 	}
 	cmd := aoprocess.Command(name, args...)
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NEW_PROCESS_GROUP
 	return cmd
 }

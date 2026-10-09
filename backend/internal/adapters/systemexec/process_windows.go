@@ -30,6 +30,9 @@ func commandContext(ctx context.Context, name string, args ...string) (*exec.Cmd
 	}
 	cmd := aoprocess.CommandContext(ctx, shell) //nolint:gosec // ComSpec is Windows' configured batch interpreter.
 	cmd.Args = nil
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
 	cmd.SysProcAttr.CmdLine = `/d /s /c "` + windowsBatchCommandLine(resolved, args) + `"`
 	return cmd, nil
 }
