@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/preview"
 )
 
 const (
@@ -46,13 +47,47 @@ type BrowserLiveHub struct {
 	enabled  func() bool
 	log      *slog.Logger
 
-	mu     sync.Mutex
-	leases map[string]context.CancelFunc
+	mu           sync.Mutex
+	leases       map[string]context.CancelFunc
+	loopbackBase string
 }
 
 // NewBrowserLiveHub creates the authenticated LAN WebSocket bridge.
 func NewBrowserLiveHub(broker browserLiveBroker, sessions browserLiveSessionReader, enabled func() bool, log *slog.Logger) *BrowserLiveHub {
 	return &BrowserLiveHub{broker: broker, sessions: sessions, enabled: enabled, log: loggerOrDefault(log), leases: map[string]context.CancelFunc{}}
+}
+
+// SetLoopbackBaseURL records the daemon's own loopback origin. The desktop
+// browser loads workspace previews from it, so the hub needs it to hand the
+// desktop a preview URL on behalf of a phone that reached the LAN listener.
+func (h *BrowserLiveHub) SetLoopbackBaseURL(base string) {
+	h.mu.Lock()
+	h.loopbackBase = strings.TrimSpace(base)
+	h.mu.Unlock()
+}
+
+// previewTarget is what the desktop browser panel would open for this session:
+// the target set by `ao preview`, else the workspace's web entrypoint (the same
+// file the phone's App preview tab shows).
+func (h *BrowserLiveHub) previewTarget(session domain.Session) string {
+	if target := strings.TrimSpace(session.Metadata.PreviewURL); target != "" {
+		return target
+	}
+	h.mu.Lock()
+	base := h.loopbackBase
+	h.mu.Unlock()
+	if base == "" {
+		return ""
+	}
+	entry, ok := preview.DiscoverWebEntrypoint(session.Metadata.WorkspacePath)
+	if !ok {
+		return ""
+	}
+	target, err := preview.FileURL(base, session.ID, entry.Path)
+	if err != nil {
+		return ""
+	}
+	return target
 }
 
 // CloseAll revokes every active mobile browser lease.
@@ -139,6 +174,17 @@ func (h *BrowserLiveHub) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer sub.Close()
+
+	// The desktop panel opens a session's preview only once someone mounts it.
+	// Offer the same target to the stream so a phone that looks first does not
+	// watch an empty browser. The desktop ignores it when a page is already open.
+	if target := h.previewTarget(session); target != "" {
+		previewCtx, cancelPreview := context.WithTimeout(r.Context(), 5*time.Second)
+		if sendErr := h.broker.Send(previewCtx, sessionID, "preview", map[string]string{"url": target}); sendErr != nil {
+			h.log.Debug("browser live: preview offer failed", "session", sessionID, "err", sendErr)
+		}
+		cancelPreview()
+	}
 
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 	if err != nil {

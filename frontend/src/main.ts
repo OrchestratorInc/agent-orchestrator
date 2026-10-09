@@ -1462,6 +1462,11 @@ async function handleBrowserStreamControl(control: BrowserStreamControl): Promis
 		case "tab":
 			await host.handleRemoteTab(sessionId, control.payload as BrowserRemoteTabAction);
 			return;
+		case "preview": {
+			const url = (control.payload as { url?: unknown } | undefined)?.url;
+			if (typeof url === "string") await host.openLivePreview(sessionId, url);
+			return;
+		}
 		default:
 			throw Object.assign(new Error(`Unsupported browser stream command: ${control.type}`), { code: "INVALID_ARGUMENT" });
 	}

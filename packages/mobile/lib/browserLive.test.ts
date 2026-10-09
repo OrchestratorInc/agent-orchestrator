@@ -124,6 +124,13 @@ describe("browser live transport", () => {
 		expect(browserWheelDeltaFromDrag(-8, 24)).toEqual({ deltaX: -8, deltaY: 24 });
 	});
 
+	it("scrolls the desktop page by what the finger covered on the fitted frame", () => {
+		// A 1280px page fitted into 320pt: each phone point is four desktop pixels.
+		expect(browserWheelDeltaFromDrag(10, -30, 320 / 1280)).toEqual({ deltaX: 40, deltaY: -120 });
+		expect(browserWheelDeltaFromDrag(10, -30, 0)).toEqual({ deltaX: 10, deltaY: -30 });
+		expect(browserWheelDeltaFromDrag(10, -30, Number.NaN)).toEqual({ deltaX: 10, deltaY: -30 });
+	});
+
 	it("encodes JPEG bytes as a React Native image data URI", () => {
 		expect(browserJPEGDataURI(Uint8Array.from([0xff, 0xd8, 0xff]).buffer)).toBe("data:image/jpeg;base64,/9j/");
 	});

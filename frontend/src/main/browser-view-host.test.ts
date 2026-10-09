@@ -235,6 +235,7 @@ function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").Agent
 		findInPage,
 		reload: vi.fn(),
 		send: vi.fn(),
+		sendInputEvent: vi.fn(),
 		setWindowOpenHandler: () => undefined,
 		stop: () => undefined,
 		stopFindInPage,
@@ -427,6 +428,116 @@ describe("browser live stream", () => {
 			y: 0.5,
 			button: "left",
 		})).rejects.toMatchObject({ code: "BROWSER_REMOTE_NOT_VIEWED" });
+	});
+
+	const liveSink = () => ({ frame: vi.fn(), state: vi.fn(), error: vi.fn() });
+	const panelRect = { x: 300, y: 40, width: 480, height: 520 };
+	const hiddenRect = { x: 0, y: 0, width: 0, height: 0 };
+
+	// Regression, reported live: with a phone watching, the native browser view
+	// stayed painted over the board and over other sessions. A parked native
+	// view keeps its last on-screen frame, so parking it "visible" un-hides it.
+	it("keeps a streamed browser hidden on the desktop after its panel is left", async () => {
+		const { emit, host, invoke, setCurrentURL, view } = setupHost();
+		const { viewId } = await invoke("browser:ensure", "sess-1");
+		setCurrentURL("https://example.com/");
+		emit("browser:setBounds", 1, { viewId, revision: 1, rect: panelRect, visible: true });
+		await host.startLiveStream("sess-1", 7, liveSink());
+		expect(view.setVisible).toHaveBeenLastCalledWith(true);
+
+		view.setVisible.mockClear();
+		emit("browser:setBounds", 1, { viewId, revision: 2, rect: hiddenRect, visible: false });
+		// Restarting the stream re-applies the parked bounds, as a session switch does.
+		await host.startLiveStream("sess-1", 8, liveSink());
+
+		expect(view.setVisible).toHaveBeenCalled();
+		expect(view.setVisible).not.toHaveBeenCalledWith(true);
+	});
+
+	it("gives a parked streamed page the viewport the desktop last showed", async () => {
+		const { debuggerSendCommand, emit, host, invoke, setCurrentURL, webContents } = setupHost();
+		const { viewId } = await invoke("browser:ensure", "sess-1");
+		setCurrentURL("https://example.com/");
+		emit("browser:setBounds", 1, { viewId, revision: 1, rect: panelRect, visible: true });
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		expect(debuggerSendCommand).not.toHaveBeenCalledWith("Emulation.setDeviceMetricsOverride", expect.anything());
+
+		emit("browser:setBounds", 1, { viewId, revision: 2, rect: hiddenRect, visible: false });
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Emulation.setDeviceMetricsOverride", {
+			width: 480,
+			height: 520,
+			deviceScaleFactor: 0,
+			mobile: false,
+		});
+
+		await host.handleRemoteInput("sess-1", { kind: "pointer", phase: "down", x: 1, y: 1, button: "left" });
+		expect(webContents.sendInputEvent).toHaveBeenLastCalledWith(expect.objectContaining({ type: "mouseDown", x: 479, y: 519 }));
+
+		emit("browser:setBounds", 1, { viewId, revision: 3, rect: panelRect, visible: true });
+		expect(debuggerSendCommand).toHaveBeenLastCalledWith("Emulation.clearDeviceMetricsOverride");
+	});
+
+	// A session whose desktop panel was never opened has no layout size at all,
+	// so without a viewport the stream stays empty and input lands nowhere.
+	it("gives a never-shown streamed page a default viewport", async () => {
+		const { debuggerSendCommand, host } = setupHost();
+		const state = await host.startLiveStream("sess-1", 7, liveSink());
+
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Emulation.setDeviceMetricsOverride", {
+			width: 1280,
+			height: 720,
+			deviceScaleFactor: 0,
+			mobile: false,
+		});
+		expect(state).toMatchObject({ width: 1280, height: 720 });
+
+		await host.stopLiveStream("sess-1", 7);
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Emulation.clearDeviceMetricsOverride");
+	});
+
+	it("lets a phone scroll while the desktop panel is focused but not click", async () => {
+		const { emit, host, invoke, setCurrentURL, webContents } = setupHost();
+		const { viewId } = await invoke("browser:ensure", "sess-1");
+		setCurrentURL("https://example.com/");
+		emit("browser:setBounds", 1, { viewId, revision: 1, rect: panelRect, visible: true });
+		await host.startLiveStream("sess-1", 7, liveSink());
+
+		await host.handleRemoteInput("sess-1", { kind: "wheel", deltaX: 0, deltaY: -40 });
+		expect(webContents.sendInputEvent).toHaveBeenLastCalledWith({ type: "mouseWheel", x: 240, y: 260, deltaX: 0, deltaY: -40 });
+
+		await expect(
+			host.handleRemoteInput("sess-1", { kind: "pointer", phase: "down", x: 0.5, y: 0.5, button: "left" }),
+		).rejects.toMatchObject({ code: "BROWSER_REMOTE_READ_ONLY" });
+	});
+
+	// Regression, reported live: a page the agent built showed in the phone's
+	// App preview tab but not in its Browser tab until someone opened the
+	// desktop Browser panel, because only that panel opens a session's preview.
+	it("opens the session preview for a phone watching an empty browser", async () => {
+		const { host, webContents } = setupHost();
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		webContents.loadURL.mockClear();
+
+		await host.openLivePreview("sess-1", "http://localhost:4317/index.html");
+
+		expect(webContents.loadURL).toHaveBeenCalledWith("http://localhost:4317/index.html");
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ url: "http://localhost:4317/index.html" }));
+	});
+
+	it("never replaces a page that is already open with the session preview", async () => {
+		const { host, setCurrentURL, webContents } = setupHost();
+		await host.startLiveStream("sess-1", 7, liveSink());
+		setCurrentURL("https://example.com/docs");
+		webContents.loadURL.mockClear();
+
+		await host.openLivePreview("sess-1", "http://localhost:4317/index.html");
+		await host.stopLiveStream("sess-1", 7);
+		setCurrentURL("");
+		await host.openLivePreview("sess-1", "http://localhost:4317/index.html");
+
+		expect(webContents.loadURL).not.toHaveBeenCalled();
 	});
 });
 

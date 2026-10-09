@@ -491,6 +491,7 @@ export type BrowserViewHost = {
 	handleRemoteInput: (sessionId: string, input: BrowserRemoteInput) => Promise<void>;
 	handleRemoteNavigation: (sessionId: string, input: BrowserRemoteNavigation) => Promise<void>;
 	handleRemoteTab: (sessionId: string, input: BrowserRemoteTabAction) => Promise<void>;
+	openLivePreview: (sessionId: string, url: string) => Promise<void>;
 };
 
 type BrowserEntry = {
@@ -539,6 +540,9 @@ type BrowserSessionEntry = {
   nextTabNumber: number;
   bounds: BrowserRect;
   rendererBounds: BrowserRect;
+  // Size the desktop panel last showed this session at. A remotely viewed
+  // session keeps laying out at that size while its native view is parked.
+  lastVisibleSize?: { width: number; height: number };
   zoomFactor: number;
   visible: boolean;
   layoutRevision: number;
@@ -864,6 +868,7 @@ export function createBrowserViewHost(
       ...(commandId ? { commandId } : {}),
     } satisfies BrowserAgentActivityState);
   };
+  const liveViewportOverrides = new WeakMap<BrowserEntry, string>();
   const applyBrowserViewBounds = (
     view: BrowserViewLike,
     bounds: BrowserRect,
@@ -2029,11 +2034,13 @@ export function createBrowserViewHost(
     session: BrowserSessionEntry,
     entry: BrowserEntry,
   ): void {
+    syncLiveViewport(session, entry);
     if (!session.visible) {
-			// A remotely viewed tab must remain composited even though it is parked
-			// outside the desktop window. UI visibility and capture paintability are
-			// deliberately separate.
-			applyBrowserViewBounds(entry.view, OFFSCREEN_BOUNDS, Boolean(session.live));
+      // Park hidden even while a phone is watching. A parked native view keeps
+      // its last on-screen frame (only its hidden flag changes), so re-applying
+      // these bounds to a "visible" view un-hides it over whatever the desktop
+      // shows next. The screencast capturer keeps a hidden page painting.
+      applyBrowserViewBounds(entry.view, OFFSCREEN_BOUNDS, false);
       return;
     }
     // Keep the initialized blank target available to automation, but let the
@@ -2111,6 +2118,12 @@ export function createBrowserViewHost(
       options.mainWindow.getContentBounds(),
     );
     session.visible = true;
+    if (session.bounds.width > 0 && session.bounds.height > 0) {
+      session.lastVisibleSize = {
+        width: session.bounds.width,
+        height: session.bounds.height,
+      };
+    }
     // A profile replacement may temporarily have no active tab. Keep accepting
     // renderer geometry during that interval; rebuilt tabs receive the latest
     // bounds instead of a stale pre-switch viewport.
@@ -3239,10 +3252,43 @@ export function createBrowserViewHost(
   );
   on("browser:annotation:discard", (event) => discardAnnotationFromPage(event));
 
+	// CSS-pixel size the streamed page is laid out at. Remote pointer and wheel
+	// input is mapped against this, so it must match what the capture shows.
+	function liveViewport(session: BrowserSessionEntry): { width: number; height: number } {
+		const source = session.visible ? session.bounds : session.lastVisibleSize ?? OFFSCREEN_BOUNDS;
+		return {
+			width: Math.max(1, Math.round(source.width)),
+			height: Math.max(1, Math.round(source.height)),
+		};
+	}
+
+	// A parked native view has no layout of its own: it keeps the size the
+	// desktop last showed, and a session whose panel was never opened has no
+	// size at all, so nothing paints and input lands nowhere. Pin the viewport
+	// while a parked page is streamed, and release it once the desktop shows it.
+	function syncLiveViewport(session: BrowserSessionEntry, entry: BrowserEntry): void {
+		const size = session.live && !session.visible ? liveViewport(session) : undefined;
+		const key = size ? `${size.width}x${size.height}` : undefined;
+		if (liveViewportOverrides.get(entry) === key) return;
+		const debug = entry.view.webContents.debugger;
+		if (!debug?.isAttached()) {
+			if (!key) liveViewportOverrides.delete(entry);
+			return;
+		}
+		if (key) liveViewportOverrides.set(entry, key);
+		else liveViewportOverrides.delete(entry);
+		const pending = size
+			? debug.sendCommand("Emulation.setDeviceMetricsOverride", { ...size, deviceScaleFactor: 0, mobile: false })
+			: debug.sendCommand("Emulation.clearDeviceMetricsOverride");
+		void Promise.resolve(pending).catch(() => {
+			if (liveViewportOverrides.get(entry) === key) liveViewportOverrides.delete(entry);
+		});
+	}
+
 	function browserLiveState(session: BrowserSessionEntry): BrowserLiveState {
 		const current = activeEntry(session);
 		const nav = readNavState(current);
-		const bounds = session.visible ? session.bounds : OFFSCREEN_BOUNDS;
+		const bounds = liveViewport(session);
 		return {
 			url: nav.url,
 			title: nav.title,
@@ -3254,8 +3300,8 @@ export function createBrowserViewHost(
 				const state = readNavState(tab);
 				return { id: tab.tabId, title: state.title, url: state.url, active: tab.tabId === session.activeTabId };
 			}),
-			width: Math.max(1, Math.round(bounds.width)),
-			height: Math.max(1, Math.round(bounds.height)),
+			width: bounds.width,
+			height: bounds.height,
 		};
 	}
 
@@ -3354,12 +3400,15 @@ export function createBrowserViewHost(
 		return Promise.all(stops).then(() => undefined);
 	}
 
-	function assertRemoteWritable(session: BrowserSessionEntry): void {
+	function assertRemoteWritable(session: BrowserSessionEntry, scrollOnly = false): void {
 		if (!session.live) throw browserError("BROWSER_REMOTE_NOT_VIEWED", "Remote browser stream is not active");
 		if (session.agentBrowserCommands > 0 || session.profileSwitching) {
 			throw browserError("BROWSER_REMOTE_READ_ONLY", "Browser control is temporarily read-only while the agent is active");
 		}
+		// Scrolling has no target to fight over, so a phone can always scroll the
+		// page it is watching. Everything else yields to an active desktop user.
 		if (
+			!scrollOnly &&
 			session.visible &&
 			options.mainWindow.isFocused?.() !== false &&
 			options.mainWindow.isMinimized?.() !== true &&
@@ -3371,12 +3420,13 @@ export function createBrowserViewHost(
 
 	async function handleRemoteInput(sessionId: string, input: BrowserRemoteInput): Promise<void> {
 		const session = await ensureSessionReady(sessionId);
-		assertRemoteWritable(session);
+		const scrollOnly = input.kind === "wheel";
+		assertRemoteWritable(session, scrollOnly);
 		await queueNativeOperation(session, async () => {
-			assertRemoteWritable(session);
+			assertRemoteWritable(session, scrollOnly);
 			const entry = activeEntry(session);
 			await entry.ready;
-			const bounds = session.visible ? session.bounds : OFFSCREEN_BOUNDS;
+			const bounds = liveViewport(session);
 			if (input.kind === "pointer") {
 				if (!Number.isFinite(input.x) || !Number.isFinite(input.y) || input.x < 0 || input.x > 1 || input.y < 0 || input.y > 1) {
 					throw browserError("INVALID_ARGUMENT", "Pointer coordinates are invalid");
@@ -3438,6 +3488,24 @@ export function createBrowserViewHost(
 				case "stop": entry.view.webContents.stop(); break;
 				default: throw browserError("INVALID_ARGUMENT", "Navigation action is unsupported");
 			}
+			emitLiveState(session);
+		});
+	}
+
+	// The desktop panel only opens a session's preview once it is mounted. A
+	// phone that starts watching first would otherwise stream an empty browser,
+	// so open the preview for it, but never over a page that is already there.
+	async function openLivePreview(sessionId: string, url: string): Promise<void> {
+		const viewId = viewIdsBySessionId.get(sessionId);
+		const session = viewId ? entries.get(viewId) : undefined;
+		const target = url.trim();
+		if (!session?.live || !target) return;
+		if (session.agentBrowserCommands > 0 || session.profileSwitching) return;
+		if (!isBlankBrowserEntry(activeEntry(session))) return;
+		await withBrowserOperation(session, async () => {
+			const entry = activeEntry(session);
+			if (!session.live || !isBlankBrowserEntry(entry)) return;
+			await navigateEntry(entry, normalizeAgentBrowserURL(target));
 			emitLiveState(session);
 		});
 	}
@@ -4115,6 +4183,7 @@ export function createBrowserViewHost(
 		handleRemoteInput,
 		handleRemoteNavigation,
 		handleRemoteTab,
+		openLivePreview,
     getLastFocusedPanelContents: () => {
       if (lastFocusedViewId === null) return null;
       const session = entries.get(lastFocusedViewId);

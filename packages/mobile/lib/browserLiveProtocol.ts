@@ -11,9 +11,14 @@ export type BrowserFrameRect = { left: number; top: number; width: number; heigh
 /**
  * Electron mouse-wheel deltas use the same sign as a direct-manipulation drag:
  * positive Y scrolls up, moving content down with a downward finger gesture.
+ *
+ * `scale` is how many phone points one desktop pixel occupies in the fitted
+ * frame. The drag is measured on the phone but scrolls the desktop page, so
+ * dividing by it keeps the content under the finger instead of crawling.
  */
-export function browserWheelDeltaFromDrag(deltaX: number, deltaY: number): { deltaX: number; deltaY: number } {
-	return { deltaX, deltaY };
+export function browserWheelDeltaFromDrag(deltaX: number, deltaY: number, scale = 1): { deltaX: number; deltaY: number } {
+	const factor = Number.isFinite(scale) && scale > 0 ? scale : 1;
+	return { deltaX: deltaX / factor, deltaY: deltaY / factor };
 }
 
 export function browserLiveURL(config: { secure?: boolean; host: string; httpPort: string }, sessionID: string): string {

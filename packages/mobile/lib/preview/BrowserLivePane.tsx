@@ -34,6 +34,13 @@ export function BrowserLivePane({ sessionID }: { sessionID: string }) {
 	const frameRect = useMemo(() => containBrowserFrame(viewportSize, frameSize), [frameSize, viewportSize]);
 	const frameRectRef = useRef<BrowserFrameRect>(frameRect);
 	frameRectRef.current = frameRect;
+	// Width of the desktop page in its own pixels. A frame can be captured at a
+	// different resolution than the page is laid out at, so prefer the reported
+	// viewport and fall back to the frame until the first state arrives.
+	const pageWidth = useRef(0);
+	const frameWidth = useRef(1);
+	frameWidth.current = frameSize.width;
+	const [blank, setBlank] = useState(false);
 
 	useEffect(() => {
 		if (!config) {
@@ -70,7 +77,11 @@ export function BrowserLivePane({ sessionID }: { sessionID: string }) {
 					setError(message);
 				}
 			},
-			onState: () => {},
+			onState: (state) => {
+				if (disposed) return;
+				pageWidth.current = state.width;
+				setBlank(!state.url);
+			},
 			onFrame: (frame) => {
 				if (disposed) return;
 				try {
@@ -120,7 +131,8 @@ export function BrowserLivePane({ sessionID }: { sessionID: string }) {
 			const deltaY = gesture.dy - drag.current.lastDY;
 			drag.current.lastDX = gesture.dx;
 			drag.current.lastDY = gesture.dy;
-			client.current?.send({ type: "input", payload: { kind: "wheel", ...browserWheelDeltaFromDrag(deltaX, deltaY) } });
+			const scale = frameRectRef.current.width / (pageWidth.current > 1 ? pageWidth.current : frameWidth.current);
+			client.current?.send({ type: "input", payload: { kind: "wheel", ...browserWheelDeltaFromDrag(deltaX, deltaY, scale) } });
 		},
 		onPanResponderRelease: () => {
 			if (!drag.current.moved) tap(drag.current.x, drag.current.y);
@@ -135,8 +147,9 @@ export function BrowserLivePane({ sessionID }: { sessionID: string }) {
 			onLayout={(event) => setViewportSize(event.nativeEvent.layout)}
 			{...responder.panHandlers}
 		>
-			{frameURI ? <View pointerEvents="none" style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} /></View> : null}
-			{status === "open" && !frameURI ? <View pointerEvents="none" style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.supporting}>Waiting for the desktop browser…</Text></View> : null}
+			{frameURI && !blank ? <View pointerEvents="none" style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} /></View> : null}
+			{status === "open" && blank ? <View pointerEvents="none" style={styles.center}><Feather name="monitor" size={iconSize.lg} color={t.textTertiary} /><Text style={styles.supporting}>Nothing is open in the desktop browser yet.</Text></View> : null}
+			{status === "open" && !blank && !frameURI ? <View pointerEvents="none" style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.supporting}>Waiting for the desktop browser…</Text></View> : null}
 			{status === "open" && notice ? <View pointerEvents="none" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}
 			{status !== "open" ? <BrowserState status={status} error={error} retry={retry} /> : null}
 		</View>

@@ -4,6 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -102,4 +105,33 @@ func TestBrowserLiveLeaseIsExclusiveAndRevocable(t *testing.T) {
 		t.Fatal("lease was not reusable after release")
 	}
 	releaseAgain()
+}
+
+func TestBrowserLivePreviewTargetMatchesWhatTheDesktopWouldOpen(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "index.html"), []byte("<h1>hi</h1>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hub := NewBrowserLiveHub(nil, nil, nil, nil)
+	explicit := domain.Session{ID: "s1", Metadata: domain.SessionMetadata{PreviewURL: " http://localhost:5173/ ", WorkspacePath: workspace}}
+	if got := hub.previewTarget(explicit); got != "http://localhost:5173/" {
+		t.Fatalf("explicit preview target = %q", got)
+	}
+
+	// A workspace entrypoint that was never opened with `ao preview` is what the
+	// phone's App preview tab shows, so the streamed browser must open it too.
+	discovered := domain.Session{ID: "s1", Metadata: domain.SessionMetadata{WorkspacePath: workspace}}
+	if got := hub.previewTarget(discovered); got != "" {
+		t.Fatalf("preview target without a loopback origin = %q, want empty", got)
+	}
+	hub.SetLoopbackBaseURL("http://127.0.0.1:4317")
+	got := hub.previewTarget(discovered)
+	if !strings.HasPrefix(got, "http://") || !strings.Contains(got, ":4317/") || !strings.HasSuffix(got, "index.html") {
+		t.Fatalf("discovered preview target = %q", got)
+	}
+
+	empty := domain.Session{ID: "s2", Metadata: domain.SessionMetadata{WorkspacePath: t.TempDir()}}
+	if got := hub.previewTarget(empty); got != "" {
+		t.Fatalf("preview target for an empty workspace = %q, want empty", got)
+	}
 }
