@@ -320,7 +320,8 @@ describe("HarnessSettingsSection", () => {
 		expect(within(list).getByText("gpt-5.3-codex")).toBeInTheDocument();
 		expect(within(list).getByText("Default")).toBeInTheDocument();
 		expect(within(list).getByText("Effort: low · medium · high")).toBeInTheDocument();
-		expect(within(list).getByText("No effort control")).toBeInTheDocument();
+		// A model without effort levels shows nothing in their place.
+		expect(within(list).queryByText("No effort control")).toBeNull();
 		// Unreported context and inputs are left out, not shown as unknown.
 		expect(within(list).queryByText(/Context|Inputs|Unknown/)).toBeNull();
 		expect(within(page).getByRole("button", { name: "Default model" })).toBeInTheDocument();
@@ -330,6 +331,26 @@ describe("HarnessSettingsSection", () => {
 		await userEvent.click(within(page).getByRole("button", { name: "Refresh" }));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", { params: { path: { agent: "codex" }, query: { projectId: undefined, revalidate: undefined } } });
 		await waitFor(() => expect(within(page).queryByText("gpt-5.3-mini")).toBeNull());
+	});
+
+	it("pages through more than ten models", async () => {
+		mockInstalledOperations("npm");
+		const models = { agentId: "codex", models: Array.from({ length: 12 }, (_, index) => ({ id: `model-${index + 1}`, label: `Model ${index + 1}`, efforts: [] })) };
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models"
+			? { data: models } as never : (get as (path: string, options: unknown) => Promise<never>)(path, options));
+		renderSection();
+		const page = await findAgentRow("codex");
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		const list = await within(page).findByRole("list", { name: "Available models" });
+		expect(within(list).getAllByRole("listitem")).toHaveLength(10);
+		expect(within(page).getByText("1–10 of 12")).toBeInTheDocument();
+		expect(within(page).getByRole("button", { name: "Previous models" })).toBeDisabled();
+		await userEvent.click(within(page).getByRole("button", { name: "Next models" }));
+		expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+		expect(within(list).getByText("Model 11")).toBeInTheDocument();
+		expect(within(page).getByText("11–12 of 12")).toBeInTheDocument();
+		expect(within(page).getByRole("button", { name: "Next models" })).toBeDisabled();
 	});
 
 	it("asks for login before loading models", async () => {

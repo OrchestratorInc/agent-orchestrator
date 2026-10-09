@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { ArrowUpCircle, BookOpen, Check, ChevronLeft, ChevronRight, Copy, KeyRound, LoaderCircle, LogIn, LogOut, RefreshCw, Search, Trash2, TriangleAlert, X } from "lucide-react";
+import { BookOpen, Check, CircleArrowUp, ChevronLeft, ChevronRight, Copy, KeyRound, LoaderCircle, LogIn, LogOut, RefreshCw, Search, Trash2, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -978,7 +978,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const { agentId, plan, isInstalled, authPlan, rowAuthWorkflow, authBusy } = details;
 		const methodLabel = details.maintenanceMethod?.label;
 		const showAccount = isInstalled;
-		return <div className="flex flex-col gap-5">
+		return <div className="flex flex-col gap-6">
 			<HarnessDetailGroup title={t("settings.harness.installation")}>
 				<HarnessDetailRow
 					label={isInstalled ? t(details.versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")
@@ -986,7 +986,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 					description={isInstalled ? (methodLabel ? t("settings.harness.installedWith", { method: methodLabel }) : undefined) : details.installNote}
 				>
 					{isInstalled ? <span className="break-all font-mono text-xs text-settings-label">{details.versionText}{details.versionUnverified && details.currentVersion ? ` · ${t("settings.harness.unverified")}` : ""}</span> : null}
-					{isInstalled && details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-settings-accent">{t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}</span> : null}
+					{isInstalled && details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-(--color-brand-logo)">{t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}</span> : null}
 					{isInstalled && !details.updateUnknown && !details.updateAvailable && !details.busy ? <span className="text-xs text-settings-muted">{t("settings.harness.latest")}</span> : null}
 					{details.installationAction}
 				</HarnessDetailRow>
@@ -1064,7 +1064,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const updateChecked = formatTimestamp(advisory?.checkedAt);
 		const executable = advisory?.binaryPath || details.job?.expectedDestination;
 		const hasDetails = Boolean(executable || (isInstalled && details.currentVersion) || advisory?.latestVersion || details.maintenanceMethod || updateChecked);
-		return <div className="flex flex-col gap-5">
+		return <div className="flex flex-col gap-6">
 			<HarnessDetailGroup title={t("settings.harness.health.status")}>
 				<HarnessDetailRow label={t("settings.harness.installation")} description={installation?.state !== "installed" ? installation?.reason || undefined : undefined}>
 					<HarnessStateText tone={installState.tone}>{installState.label}</HarnessStateText>
@@ -1121,9 +1121,11 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				</div>
 			) : null}
 
-			<div ref={layoutRef} className={cn("w-full", split && "grid grid-cols-[minmax(13rem,15rem)_minmax(0,1fr)] items-start gap-6")}>
+			<div ref={layoutRef} className={cn("w-full", split && "grid grid-cols-[minmax(14rem,16rem)_minmax(0,1fr)] items-stretch overflow-clip rounded-xl border border-border bg-(--color-bg-primary)")}>
 				{split || !selectedDetails ? (
-					<div className={cn("flex w-full flex-col", split ? "sticky top-14 max-h-[calc(100dvh-10rem)] gap-0.5 overflow-y-auto overscroll-contain" : "settings-grouped-rows")}>
+					<div className={cn("flex w-full flex-col", split
+						? "sticky top-14 h-full max-h-[calc(100dvh-10rem)] self-start divide-y divide-border overflow-y-auto overscroll-contain bg-(--color-bg-secondary)"
+						: "divide-y divide-border overflow-hidden rounded-lg border border-border")}>
 						{rows.map((agentId) => {
 							const details = describe(agentId);
 							const selected = split && selectedAgentId === agentId;
@@ -1133,24 +1135,28 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 								aria-current={selected ? "true" : undefined}
 								className={cn(
 									"flex w-full items-center gap-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-									split ? "h-9 rounded-md px-2 hover:bg-accent" : "settings-row-bar min-h-12 hover:bg-(--color-bg-settings-row-hover)",
-									selected && "bg-accent",
+									split ? "min-h-11 shrink-0 px-3" : "min-h-12 px-3",
+									selected
+										? (split ? "bg-(--color-bg-tertiary) font-medium shadow-[inset_2px_0_0_var(--color-brand-logo)]" : "bg-accent font-medium")
+										: "hover:bg-(--color-interactive-hover)",
 								)}
 								data-agent={agentId}
 								key={agentId}
 								title={details.statusLabel || undefined}
 								onClick={() => openDetail(agentId)}
 							>
-								<AgentAvatar className={cn("shrink-0", split ? "size-5" : "size-6")} decorative provider={agentId} />
-								<span className="min-w-0 flex-1 truncate text-sm text-settings-label">{agentLabel(agentId)}</span>
-								{details.isInstalled && details.updateAvailable ? <ArrowUpCircle
-									className="size-3.5 shrink-0 text-settings-accent"
+								{/* Not-installed harnesses stay in place but recede. */}
+								<AgentAvatar className={cn("shrink-0", split ? "size-5" : "size-6", !details.isInstalled && "opacity-45 grayscale")} decorative provider={agentId} />
+								<span className={cn("min-w-0 flex-1 truncate text-sm", details.isInstalled || selected ? "text-settings-label" : "text-settings-muted")}>{agentLabel(agentId)}</span>
+								{details.isInstalled && details.updateAvailable ? <CircleArrowUp
+									className="size-4 shrink-0 text-settings-muted"
+									strokeWidth={1.75}
 									aria-label={t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}
 									role="img"
 								/> : null}
 								{details.busy ? <span role="status" className="flex shrink-0 items-center"><LoaderCircle className="size-3.5 animate-spin text-settings-muted" aria-hidden="true" /><span className="sr-only">{details.progressLabel}</span></span>
 									: details.authBusy ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
-									: <HarnessStatusDot tone={details.listTone} />}
+									: details.listTone === "error" ? <HarnessStatusDot tone="error" /> : null}
 								{split ? null : <ChevronRight className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />}
 							</button>;
 						})}
@@ -1159,7 +1165,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				) : null}
 				{selectedDetails ? (
 					<div
-						className="flex w-full min-w-0 flex-col gap-4"
+						className={cn("flex w-full min-w-0 flex-col gap-4", split && "p-5")}
 						data-agent={selectedDetails.agentId}
 						data-focus-highlighted={highlightedAgentId === selectedDetails.agentId ? "" : undefined}
 						ref={detailRef}
@@ -1172,14 +1178,15 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 						<div
 							className={cn("-mx-2 flex items-center gap-3 rounded-lg px-2 py-1 transition-[background-color,box-shadow] duration-200", highlightedAgentId === selectedDetails.agentId && "bg-accent-weak ring-2 ring-inset ring-accent")}
 						>
-							<AgentAvatar className="size-8 shrink-0" decorative provider={selectedDetails.agentId} />
-							<span className="min-w-0 flex-1 text-base font-semibold text-settings-label" id={`harness-agent-${selectedDetails.agentId}`}>{agentLabel(selectedDetails.agentId)}</span>
+							<AgentAvatar className="size-7 shrink-0" decorative provider={selectedDetails.agentId} />
+							{/* Pane title: one step above row labels (15px), below the page heading. */}
+							<span className="min-w-0 flex-1 text-subtitle font-semibold leading-6 text-settings-label" id={`harness-agent-${selectedDetails.agentId}`}>{agentLabel(selectedDetails.agentId)}</span>
 						</div>
 						<Tabs value={detailTab} onValueChange={(value) => setDetailTab(value as HarnessDetailTab)}>
-							<TabsList aria-label={t("settings.harness.detailTabs", { agent: agentLabel(selectedDetails.agentId) })}>
-								<TabsTrigger value="account">{t("settings.harness.tabAccount")}</TabsTrigger>
-								<TabsTrigger value="models">{t("settings.harness.tabModels")}</TabsTrigger>
-								<TabsTrigger value="health">{t("settings.harness.tabHealth")}</TabsTrigger>
+							<TabsList className={HARNESS_TABS_CLASS} aria-label={t("settings.harness.detailTabs", { agent: agentLabel(selectedDetails.agentId) })}>
+								<TabsTrigger className={HARNESS_TAB_CLASS} value="account">{t("settings.harness.tabAccount")}</TabsTrigger>
+								<TabsTrigger className={HARNESS_TAB_CLASS} value="models">{t("settings.harness.tabModels")}</TabsTrigger>
+								<TabsTrigger className={HARNESS_TAB_CLASS} value="health">{t("settings.harness.tabHealth")}</TabsTrigger>
 							</TabsList>
 							<TabsContent value="account" className="pt-4">{accountTab(selectedDetails)}</TabsContent>
 							<TabsContent value="models" className="pt-4">
@@ -1245,19 +1252,27 @@ function useWideLayout(ref: { current: HTMLElement | null }): boolean {
 	return wide;
 }
 
+// Page tabs underline the active section instead of nesting a pill inside a pill.
+const HARNESS_TABS_CLASS = "h-auto w-full justify-start gap-5 rounded-none border-b border-border bg-transparent p-0";
+const HARNESS_TAB_CLASS = "-mb-px h-9 flex-none rounded-none border-0 border-b-2 border-transparent bg-transparent px-0.5 shadow-none data-[state=active]:border-foreground data-[state=active]:bg-transparent dark:data-[state=active]:border-foreground dark:data-[state=active]:bg-transparent";
+
 function HarnessStatusDot({ tone }: { tone: HarnessTone }) {
 	return <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", tone === "ok" ? "bg-success" : tone === "error" ? "bg-error" : "bg-settings-muted/50")} />;
 }
 
+// Harness page sections: one bordered, tonal card per section, rows divided by hairlines.
+const HARNESS_CARD_CLASS = "flex w-full flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-(--color-bg-secondary)";
+const HARNESS_CARD_ROW_CLASS = "flex min-h-12 items-center px-3 py-2.5";
+
 function HarnessDetailGroup({ title, children }: { title: string; children: ReactNode }) {
 	return <section className="flex flex-col gap-1.5">
 		<h3 className="text-xs font-medium leading-4 text-settings-muted">{title}</h3>
-		<div className="settings-grouped-rows flex w-full flex-col">{children}</div>
+		<div className={HARNESS_CARD_CLASS}>{children}</div>
 	</section>;
 }
 
 function HarnessDetailRow({ label, description, children }: { label: string; description?: string; children?: ReactNode }) {
-	return <div className="settings-row-bar min-h-12 flex-wrap gap-x-4 gap-y-1">
+	return <div className={cn(HARNESS_CARD_ROW_CLASS, "flex-wrap gap-x-4 gap-y-1")}>
 		<span className="min-w-0 flex-1">
 			<span className="block text-sm leading-5 text-settings-label">{label}</span>
 			{description ? <span className="mt-0.5 block text-pretty text-xs leading-4 text-settings-muted">{description}</span> : null}
@@ -1273,6 +1288,8 @@ function HarnessStateText({ tone, children }: { tone: HarnessTone; children: Rea
 	</span>;
 }
 
+const MODELS_PAGE_SIZE = 10;
+
 /** The harness catalog and machine defaults for future sessions. */
 function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAccount }: {
 	agentId: AgentId;
@@ -1287,6 +1304,8 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	const catalog = useQuery({ ...options, enabled: installed && !needsLogin });
 	const [refreshing, setRefreshing] = useState(false);
 	const [refreshError, setRefreshError] = useState<string | null>(null);
+	const [page, setPage] = useState(0);
+	useEffect(() => setPage(0), [agentId, hostId]);
 	const agent = agentLabel(agentId);
 	if (!installed || needsLogin) {
 		return <div className="space-y-3">
@@ -1310,6 +1329,12 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	const data = catalog.data;
 	const updated = data?.lastSuccessAt ?? data?.fetchedAt;
 	const busy = refreshing || data?.refreshState === "refreshing" || data?.refreshState === "queued";
+	// Long catalogs page through MODELS_PAGE_SIZE at a time; short ones show no paging controls.
+	const models = data?.models ?? [];
+	const pageCount = Math.max(1, Math.ceil(models.length / MODELS_PAGE_SIZE));
+	const currentPage = Math.min(page, pageCount - 1);
+	const pageStart = currentPage * MODELS_PAGE_SIZE;
+	const visibleModels = models.slice(pageStart, pageStart + MODELS_PAGE_SIZE);
 	const error = refreshError ?? (catalog.error instanceof Error ? catalog.error.message : undefined) ?? data?.refreshError;
 	return <div className="flex flex-col gap-3">
 		<HarnessModelDefaults key={`${hostId ?? LOCAL_HOST}:${agentId}`} agentId={agentId} agentLabel={agent} hostId={hostId} catalog={data} />
@@ -1326,8 +1351,8 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 		{error ? <p role="alert" className="text-xs text-error">{error}</p> : null}
 		{catalog.isPending ? <p className="flex items-center gap-2 px-3 py-6 text-sm text-settings-muted"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("settings.harness.models.loading")}</p>
 			: !data?.models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.models.empty")}</p>
-			: <ul className="settings-grouped-rows flex w-full flex-col" aria-label={t("settings.harness.models.title")}>
-				{data.models.map((model) => <li key={model.id} className="settings-row-bar min-h-12 gap-4">
+			: <ul className={HARNESS_CARD_CLASS} aria-label={t("settings.harness.models.title")}>
+				{visibleModels.map((model) => <li key={model.id} className={cn(HARNESS_CARD_ROW_CLASS, "gap-4")}>
 					<span className="min-w-0 flex-1">
 						<span className="flex flex-wrap items-center gap-2 text-sm leading-5 text-settings-label">
 							{model.label}
@@ -1340,11 +1365,20 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 							{model.inputs?.length ? <span>{t("settings.harness.models.inputs")}: {model.inputs.map((input) => input === "text" ? t("settings.harness.models.inputText") : input === "image" ? t("settings.harness.models.inputImage") : input).join(" · ")}</span> : null}
 						</span> : null}
 					</span>
-					<span className="shrink-0 text-right text-xs text-settings-muted">
-						{model.efforts?.length ? t("settings.harness.models.efforts", { levels: model.efforts.join(" · ") }) : t("settings.harness.models.noEffort")}
-					</span>
+					{model.efforts?.length ? <span className="shrink-0 text-right text-xs text-settings-muted">
+						{t("settings.harness.models.efforts", { levels: model.efforts.join(" · ") })}
+					</span> : null}
 				</li>)}
 			</ul>}
+		{pageCount > 1 ? <nav className="flex items-center justify-end gap-2 text-xs text-settings-muted" aria-label={t("settings.harness.models.pagination")}>
+			<span className="tabular-nums">{t("settings.harness.models.pageRange", { start: pageStart + 1, end: pageStart + visibleModels.length, total: models.length })}</span>
+			<Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.harness.models.previousPage")} disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>
+				<ChevronLeft aria-hidden="true" />
+			</Button>
+			<Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.harness.models.nextPage")} disabled={currentPage >= pageCount - 1} onClick={() => setPage(currentPage + 1)}>
+				<ChevronRight aria-hidden="true" />
+			</Button>
+		</nav> : null}
 		<p className="text-xs text-settings-muted">{t("settings.harness.models.hint")}</p>
 	</div>;
 }
