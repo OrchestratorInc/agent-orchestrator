@@ -1019,8 +1019,10 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 		activity.activityKind === "file_change" ||
 		activity.activityKind === "mcp_tool" ||
 		activity.activityKind === "auto_review";
-	const renderRef = readRenderRef(activity.detail);
-	const artifactRef = readArtifactRef(activity.detail);
+	// AO records pages as system rows; a page named by any other row (a cloud
+	// session's, say) is not one this daemon serves.
+	const renderRef = activity.activityKind === "system" ? readRenderRef(activity.detail) : undefined;
+	const artifactRef = activity.activityKind === "system" ? readArtifactRef(activity.detail) : undefined;
 
 	let content: ReactNode;
 	if (activity.activityKind === "mcp_tool") content = <McpToolRow activity={activity} />;
