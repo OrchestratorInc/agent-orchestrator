@@ -97,11 +97,11 @@ func (scheme versionScheme) parse(text string) (updateVersion, bool) {
 // different builds have no order: a same-day Cursor rebuild or a new Muse
 // build number is neither provably newer nor provably current.
 func (scheme versionScheme) compare(installed, latest updateVersion) (int, bool) {
-	comparison, comparable := compareUpdateVersions(installed, latest)
-	if comparable && comparison == 0 && scheme == versionBuildSuffix && unorderedBuilds(installed, latest) {
+	comparison, canCompare := compareUpdateVersions(installed, latest)
+	if canCompare && comparison == 0 && scheme == versionBuildSuffix && unorderedBuilds(installed, latest) {
 		return 0, false
 	}
-	return comparison, comparable
+	return comparison, canCompare
 }
 
 func unorderedBuilds(installed, latest updateVersion) bool {

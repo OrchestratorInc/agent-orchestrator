@@ -141,9 +141,9 @@ func TestBuildSuffixSchemeOrdersByCoreOnly(t *testing.T) {
 			if !ok {
 				t.Fatalf("parse(%q) failed", tt.latest)
 			}
-			got, comparable := versionBuildSuffix.compare(installed, latest)
-			if comparable != tt.comparable || comparable && got != tt.want {
-				t.Fatalf("compare = %d, %t; want %d, %t", got, comparable, tt.want, tt.comparable)
+			got, canCompare := versionBuildSuffix.compare(installed, latest)
+			if canCompare != tt.comparable || canCompare && got != tt.want {
+				t.Fatalf("compare = %d, %t; want %d, %t", got, canCompare, tt.want, tt.comparable)
 			}
 		})
 	}

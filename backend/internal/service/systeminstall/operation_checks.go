@@ -170,8 +170,8 @@ func updateOutcome(baseline *installedBaseline, result VerifyResult) (failure, n
 	}
 	if baseline.expected != "" {
 		expected, ok := baseline.scheme.parse(baseline.expected)
-		comparison, comparable := baseline.scheme.compare(after, expected)
-		if !ok || !comparable || comparison < 0 {
+		comparison, canCompare := baseline.scheme.compare(after, expected)
+		if !ok || !canCompare || comparison < 0 {
 			return fmt.Sprintf("the update finished, but the installed version %s did not reach the requested version %s", after.display, baseline.expected), note
 		}
 	}
@@ -182,19 +182,19 @@ func updateOutcome(baseline *installedBaseline, result VerifyResult) (failure, n
 	if comparison, versionsComparable := baseline.scheme.compare(after, latest); latestOK && versionsComparable && comparison < 0 {
 		return fmt.Sprintf("the update finished, but %s still reports %s (latest is %s); it may have changed a different installation", result.ResolvedPath, after.display, latest.display), note
 	}
-	if _, comparable := baseline.scheme.compare(after, latest); latestOK && !comparable {
+	if _, canCompare := baseline.scheme.compare(after, latest); latestOK && !canCompare {
 		return "the update finished, but the installed version does not match the expected release channel", note
 	}
 	if !beforeOK {
 		return "", strings.TrimSpace(fmt.Sprintf("Verified version %s. %s", after.display, note))
 	}
-	comparison, comparable := baseline.scheme.compare(after, before)
-	if !comparable && latestOK && after.display == latest.display {
+	comparison, canCompare := baseline.scheme.compare(after, before)
+	if !canCompare && latestOK && after.display == latest.display {
 		// A same-version rebuild (e.g. Cursor's same-day build) has no order
 		// against the old build, but reaching the announced build is an update.
 		return "", strings.TrimSpace(fmt.Sprintf("Updated %s to %s. %s", before.display, after.display, note))
 	}
-	if !comparable || comparison < 0 {
+	if !canCompare || comparison < 0 {
 		return "the update finished, but the installed version regressed or changed release channel", note
 	}
 	if comparison > 0 {

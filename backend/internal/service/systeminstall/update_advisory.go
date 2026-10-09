@@ -221,7 +221,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		if !ok {
 			return advisory, nil
 		}
-		if !officialChannelFits(official.kind, layout) && !(npmInstallerTargets[target] && layout == layoutNPM) {
+		if !officialChannelFits(official.kind, layout) && (!npmInstallerTargets[target] || layout != layoutNPM) {
 			advisory.Reason = UpdateReasonOwnershipUnconfirmed
 			return advisory, nil
 		}
