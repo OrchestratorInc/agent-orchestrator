@@ -22,7 +22,9 @@ import (
 
 const adapterID = "autohand"
 
-const autohandNoBrowserEnv = "AUTOHAND_NO_BROWSER"
+// NoBrowserEnv is Autohand's opt-out for opening an external browser when a
+// command discovers that authentication is required.
+const NoBrowserEnv = "AUTOHAND_NO_BROWSER"
 
 // Plugin is the Autohand agent adapter. It is safe for concurrent use; the
 // binary path is resolved once and cached under binaryMu.
@@ -46,7 +48,7 @@ var _ ports.Agent = (*Plugin)(nil)
 // required. The explicit agent-auth action still runs outside this session
 // environment and retains Autohand's native browser login flow.
 func (p *Plugin) AugmentRuntimeEnv(env map[string]string, _ string) {
-	env[autohandNoBrowserEnv] = "1"
+	env[NoBrowserEnv] = "1"
 }
 
 // Manifest returns the adapter's static self-description.
