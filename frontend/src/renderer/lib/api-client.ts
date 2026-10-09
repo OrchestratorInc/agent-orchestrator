@@ -326,6 +326,18 @@ export const apiClient = createClient<paths>({
 	fetch: runtimeFetch,
 });
 
+// Build each request against the daemon's current address, so runtimeFetch
+// passes it straight to fetch. Rebasing a request built against the
+// placeholder base has to buffer its body asynchronously, which held every
+// POST back behind whatever React rendered in the same click (a new terminal
+// waited ~20 ms for its own tab to render). runtimeFetch still rebases a
+// request built before the daemon's address changed.
+for (const method of ["GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"] as const) {
+	const send = apiClient[method] as (url: unknown, init?: { baseUrl?: string }) => unknown;
+	(apiClient as unknown as Record<string, unknown>)[method] = (url: unknown, init?: { baseUrl?: string }) =>
+		send(url, runtimeApiBaseUrl && !init?.baseUrl ? { ...init, baseUrl: runtimeApiBaseUrl } : init);
+}
+
 /**
  * Human-readable message from an openapi-fetch `error` value. The daemon's
  * error body is `{ error, code, message, requestId }` (backend apierr) — a
