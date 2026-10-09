@@ -11,8 +11,15 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => mocks.workspace(),
 	useCloudProjectsQuery: () => mocks.cloudProjects(),
 	useCloudSessionsQuery: () => mocks.cloudSessions(),
+	toCloudWorkspace: (project: { id: string; displayName?: string }, sessions: Array<{ id: string; projectId: string }>) => ({
+		id: project.id,
+		name: project.displayName ?? project.id,
+		path: "",
+		sessions: sessions.filter((session) => session.projectId === project.id),
+	}),
 	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
 }));
+vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ ready: true, org: { id: "org-1" } }) }));
 
 describe("useSessionLinkNavigation", () => {
 	beforeEach(() => {

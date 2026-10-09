@@ -492,6 +492,7 @@ func TestBuildInteractiveWorkerPromptWithParent(t *testing.T) {
 		"$AO_PULL_REQUEST_HELP",
 		"$AO_SESSION_BRANCH",
 		"ao claim-pr",
+		"ao review trigger",
 		"using-ao/SKILL.md",
 	} {
 		if !strings.Contains(prompt, needle) {

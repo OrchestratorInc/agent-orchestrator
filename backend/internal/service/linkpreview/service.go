@@ -432,6 +432,13 @@ func parseTag(doc []byte, start int) (map[string]string, int) {
 		for i < len(doc) && isNameByte(doc[i]) {
 			i++
 		}
+		if i == nameStart {
+			// Not '>', '/' or a name byte (a stray quote, '=' or '<'): skip it.
+			// Without this the loop re-reads the same byte forever, and the
+			// request goroutine spins a core until the daemon restarts.
+			i++
+			continue
+		}
 		name := strings.ToLower(string(doc[nameStart:i]))
 		i = skipSpaces(doc, i)
 		value := ""

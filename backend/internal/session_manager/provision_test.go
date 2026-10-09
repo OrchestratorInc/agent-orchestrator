@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -494,14 +495,23 @@ func TestApplySymlinksRejectsParentTraversal(t *testing.T) {
 
 func TestRunPostCreate(t *testing.T) {
 	workspace := t.TempDir()
-	if err := runPostCreate(context.Background(), workspace, []string{"echo hi > out.txt"}, nil); err != nil {
+	source := t.TempDir()
+	command := `printf '%s|%s|%s' "$PROJECT_TOKEN" "$AO_SOURCE_TREE_PATH" "$AO_WORKTREE_PATH" > out.txt`
+	if runtime.GOOS == "windows" {
+		command = `echo %PROJECT_TOKEN%^|%AO_SOURCE_TREE_PATH%^|%AO_WORKTREE_PATH%> out.txt`
+	}
+	if err := runPostCreate(context.Background(), workspace, source, []string{command}, map[string]string{"PROJECT_TOKEN": "setup-value"}); err != nil {
 		t.Fatalf("runPostCreate: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(workspace, "out.txt")); err != nil {
+	output, err := os.ReadFile(filepath.Join(workspace, "out.txt"))
+	if err != nil {
 		t.Fatalf("post-create command did not run in workspace: %v", err)
 	}
+	if !strings.Contains(string(output), "setup-value|"+source+"|"+workspace) {
+		t.Fatalf("post-create environment = %q", output)
+	}
 	// A failing command surfaces an error.
-	if err := runPostCreate(context.Background(), workspace, []string{"exit 3"}, nil); err == nil {
+	if err := runPostCreate(context.Background(), workspace, source, []string{"exit 3"}, nil); err == nil {
 		t.Fatal("expected error from failing post-create command")
 	}
 }
@@ -512,7 +522,7 @@ func TestRunPostCreateReceivesAndRedactsProjectEnv(t *testing.T) {
 		command = `echo %PROJECT_TOKEN% && exit /b 3`
 	}
 	secret := "project-secret-123"
-	err := runPostCreate(context.Background(), t.TempDir(), []string{command}, map[string]string{"PROJECT_TOKEN": secret})
+	err := runPostCreate(context.Background(), t.TempDir(), t.TempDir(), []string{command}, map[string]string{"PROJECT_TOKEN": secret})
 	if err == nil || !strings.Contains(err.Error(), "[REDACTED]") || strings.Contains(err.Error(), secret) {
 		t.Fatalf("postCreate error did not redact project value: %v", err)
 	}
@@ -540,5 +550,69 @@ func TestSpawnPermissionPrecedence(t *testing.T) {
 	}
 	if got := effectiveAgentConfig(domain.HarnessCodex, domain.KindWorker, domain.ProjectConfig{}); got.Permissions != "" {
 		t.Fatalf("non-spawn resolution changed: %q", got.Permissions)
+	}
+}
+
+func TestRunPostCreateStopsLaterStepsAfterCancellation(t *testing.T) {
+	workspace := t.TempDir()
+	command := "while :; do :; done"
+	if runtime.GOOS == "windows" {
+		command = "for /L %i in (1,0,2) do @rem waiting"
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	err := runPostCreate(ctx, workspace, t.TempDir(), []string{"", command, "echo unexpected > later.txt"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "setup step 2 failed") {
+		t.Fatalf("cancellation error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "later.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("later setup step ran after cancellation: %v", err)
+	}
+}
+
+// A configured family alias has no capabilities of its own; it must accept
+// exactly the efforts of the family's newest concrete model.
+func TestResolveClaudeFamilyAliasUsesNewestModelEfforts(t *testing.T) {
+	models := []ports.AgentModelInfo{
+		{ID: "opus", Label: "Opus", IsDefault: true},
+		{ID: "sonnet", Label: "Sonnet"},
+		{ID: "haiku", Label: "Haiku"},
+		{ID: "fable", Label: "Fable"},
+		{ID: "claude-opus-4-1", Label: "Claude Opus 4.1", Efforts: []string{"low", "medium"}},
+		{ID: "claude-opus-5-5", Label: "Claude Opus 5.5", Efforts: []string{"low", "medium", "high", "xhigh", "max"}},
+		{ID: "claude-sonnet-5-5", Label: "Claude Sonnet 5.5", Efforts: []string{"low", "medium", "high"}},
+		{ID: "claude-haiku-4-5-20251001", Label: "Claude Haiku 4.5", Efforts: []string{"low"}},
+		{ID: "claude-fable-5-1", Label: "Claude Fable 5.1", Efforts: []string{"medium", "high", "max"}},
+	}
+	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: models}}}
+	all := []string{"low", "medium", "high", "xhigh", "max"}
+	cases := map[string][]string{
+		"opus":             {"low", "medium", "high", "xhigh", "max"},
+		"opus[1m]":         nil,
+		"sonnet":           {"low", "medium", "high"},
+		"haiku":            {"low"},
+		"fable":            {"medium", "high", "max"},
+		"claude-opus-5-5":  {"low", "medium", "high", "xhigh", "max"},
+		"claude-opus-4-1":  {"low", "medium"},
+		"claude-fable-5-1": {"medium", "high", "max"},
+	}
+	for model, allowed := range cases {
+		for _, effort := range all {
+			_, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+				ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+				AgentConfig:    ports.AgentConfig{Model: model, Effort: effort},
+				EffortOverride: true,
+			}, domain.ProjectConfig{})
+			want := containsString(allowed, effort)
+			if model == "opus[1m]" {
+				continue // not in catalog: rejected before effort is checked
+			}
+			if want && err != nil {
+				t.Errorf("model %q effort %q: unexpected error %v", model, effort, err)
+			}
+			if !want && !errors.Is(err, ports.ErrUnsupportedEffort) {
+				t.Errorf("model %q effort %q: error = %v, want ErrUnsupportedEffort", model, effort, err)
+			}
+		}
 	}
 }

@@ -804,27 +804,32 @@ button.settings-row-bar {
 }
 
 /* Match the open row layout used by the main Settings pages. */
-.project-settings-form > section {
+.project-settings-form > section,
+.project-settings-form > fieldset > section {
 	gap: var(--space-2);
 }
 
-.project-settings-form > section > h2 {
+.project-settings-form > section > h2,
+.project-settings-form > fieldset > section > h2 {
 	padding-inline: 0;
-	font-size: var(--font-size-xs);
+	font-size: var(--font-size-sm);
 	font-weight: 500;
+	line-height: 1rem;
 	color: var(--color-text-settings-muted);
 }
 
-.project-settings-form > section > .settings-grouped-rows {
+.project-settings-form > section > .settings-grouped-rows,
+.project-settings-form > fieldset > section > .settings-grouped-rows {
 	background: transparent;
 }
 
-.project-settings-form > section > .settings-grouped-rows .settings-row-bar {
-	min-height: 3.5rem;
+.project-settings-form > section > .settings-grouped-rows .settings-row-bar,
+.project-settings-form > fieldset > section > .settings-grouped-rows .settings-row-bar {
 	padding-inline: 0;
 }
 
-.project-settings-form > section > .settings-grouped-rows > .settings-row-bar + .settings-row-bar {
+.project-settings-form > section > .settings-grouped-rows > .settings-row-bar + .settings-row-bar,
+.project-settings-form > fieldset > section > .settings-grouped-rows > .settings-row-bar + .settings-row-bar {
 	border-top: 0;
 }
 
@@ -1892,6 +1897,16 @@ textarea,
 	to { opacity: 0; transform: scale(0); }
 }
 
+/* Streamed prose: each newly revealed character fades in once, on mount (see
+   lib/rehype-stream-fade.ts). */
+.stream-char {
+	animation: stream-char-in 300ms ease both;
+}
+
+@keyframes stream-char-in {
+	from { opacity: 0; }
+}
+
 @keyframes chat-working-shift {
 	from { transform: translateX(0); }
 	to { transform: translateX(-18px); }
@@ -2302,7 +2317,7 @@ textarea,
 }
 
 /* ── Global resize state (sidebar / inspector drag) ─────────────────────── */
-/* Grip paint lives on ResizeHandle's fixed span — DO NOT restore
+/* No grip is painted on resize handles — DO NOT restore
    `body.is-resizing-x [data-slot="resize-handle"]::after` (rejected chrome). */
 body.is-resizing-x {
 	cursor: col-resize;
@@ -2653,7 +2668,7 @@ html.sidebar-reordering * {
 
 .cursor-chat-timeline {
 	--chat-readable-font-size: var(--chat-font-size, var(--font-size-md));
-	--chat-readable-code-font-size: max(10px, calc(var(--chat-readable-font-size) - 1.5px));
+	--chat-readable-code-font-size: max(10px, calc(var(--chat-readable-font-size) - 2px));
 	background: transparent;
 }
 
@@ -2675,10 +2690,13 @@ html.sidebar-reordering * {
 	font-size: var(--chat-readable-font-size);
 }
 
-.cursor-chat-timeline .chat-md h5,
+.cursor-chat-timeline .chat-md h5 {
+	font-size: var(--chat-readable-font-size);
+}
+
 .cursor-chat-timeline .chat-md h6,
 .cursor-chat-timeline .chat-md table {
-	font-size: max(10px, calc(var(--chat-readable-font-size) - 0.5px));
+	font-size: max(10px, calc(var(--chat-readable-font-size) - 2px));
 }
 
 .cursor-chat-timeline .chat-md code,
@@ -2735,6 +2753,33 @@ html.sidebar-reordering * {
 	border-radius: var(--radius-chat-composer);
 	background: var(--composer-bg);
 	box-shadow: none;
+}
+
+.chat-composer-startup-shimmer {
+	position: absolute;
+	inset: 0;
+	z-index: 20;
+	border-radius: inherit;
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity 300ms ease-out;
+	background: linear-gradient(90deg, color-mix(in srgb, var(--color-text-primary) 2%, transparent) 25%, color-mix(in srgb, var(--color-text-primary) 6%, transparent) 50%, color-mix(in srgb, var(--color-text-primary) 2%, transparent) 75%);
+	background-size: 200% 100%;
+	animation: chat-composer-starting 1.5s ease-in-out infinite paused;
+}
+
+.cursor-chat-composer[data-starting] > .chat-composer-startup-shimmer {
+	opacity: 1;
+	animation-play-state: running;
+}
+
+@keyframes chat-composer-starting {
+	from { background-position: -200% 0; }
+	to { background-position: 200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-composer-startup-shimmer { animation: none; transition: none; }
 }
 
 .cursor-chat-composer[data-attached-top] {
@@ -2972,6 +3017,20 @@ html.sidebar-reordering * {
 	border-color: color-mix(in srgb, var(--color-border-strong) 85%, transparent);
 }
 
+/* Opacity only, so the fade stays on the compositor. */
+.chat-welcome-leaving {
+	animation: chat-welcome-out 150ms ease-out both;
+}
+
+@keyframes chat-welcome-out {
+	from {
+		opacity: 1;
+	}
+	to {
+		opacity: 0;
+	}
+}
+
 .chat-human-message-enter {
 	animation: chat-human-message-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
@@ -2979,13 +3038,11 @@ html.sidebar-reordering * {
 @keyframes chat-human-message-in {
 	from {
 		opacity: 0;
-		transform: scale(0.9);
-		transform-origin: 100% 100%;
+		transform: translateY(16px);
 	}
 	to {
 		opacity: 1;
-		transform: scale(1);
-		transform-origin: 100% 100%;
+		transform: translateY(0);
 	}
 }
 
@@ -3184,6 +3241,10 @@ html.sidebar-reordering * {
 	}
 
 	.chat-human-message-enter {
+		animation: none;
+	}
+
+	.chat-welcome-leaving {
 		animation: none;
 	}
 }
@@ -6056,4 +6117,16 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	.ao-qr-resolved {
 		animation: none;
 	}
+}
+
+::highlight(chat-annotation) {
+	background-color: #6b728040;
+	color: inherit;
+}
+
+.chat-annotation-target {
+	background-color: #6b72801f;
+	outline: 2px solid #6b7280;
+	outline-offset: 4px;
+	border-radius: 10px;
 }

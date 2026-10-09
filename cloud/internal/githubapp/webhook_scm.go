@@ -255,6 +255,7 @@ func (s *Service) claimOpenedWebhookPullRequest(ctx context.Context, orgID strin
 	if err != nil {
 		return domain.PullRequest{}, err
 	}
-	s.triggerReview(ctx, orgID, sessionID, record)
+	// Like worker claims, a webhook claim does not start a review: automatic
+	// reviews follow the session's preference through the status refresh path.
 	return record, nil
 }

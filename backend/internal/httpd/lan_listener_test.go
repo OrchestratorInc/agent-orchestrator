@@ -2,6 +2,7 @@ package httpd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -112,6 +113,39 @@ func TestLANManagerTunnelOnlyBindsLoopback(t *testing.T) {
 	}
 	if _, err := m.Start(0); err == nil {
 		t.Fatal("LAN start silently reused a loopback-only listener")
+	}
+}
+
+func TestAccountTokenIssuanceReturnsThroughRealLANListener(t *testing.T) {
+	bridge := &controllers.BridgeService{ConfigPath: mobilebridge.Path(t.TempDir()), HostID: "h_test"}
+	if err := mobilebridge.Save(bridge.ConfigPath, mobilebridge.State{Enabled: true, Password: "secret12"}); err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	mountMobile(router, &controllers.MobileController{Bridge: bridge})
+	lan := NewMobileLAN(router, bridge.HostID, 0, nil, nil)
+	bridge.LAN = lan
+	lan.SetPasswordHash(mobilebridge.HashPassword("secret12"))
+	port, err := lan.StartLoopback(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lan.Stop(context.Background())
+	client := &http.Client{Timeout: 2 * time.Second}
+	for _, account := range []string{"account-a", "account-b"} {
+		req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/api/v1/remote-host/account-token", port), nil)
+		req.Header.Set("Authorization", "Bearer secret12")
+		req.Header.Set("X-AO-Account-ID", account)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("account linking lost its response: %v", err)
+		}
+		var issued controllers.RemoteHostAccountTokenResponse
+		err = json.NewDecoder(resp.Body).Decode(&issued)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || err != nil || issued.HostID != bridge.HostID || len(issued.Token) != 64 {
+			t.Fatalf("account linking: status=%d decode=%v host=%s tokenLength=%d", resp.StatusCode, err, issued.HostID, len(issued.Token))
+		}
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -40,7 +41,7 @@ func (s *Service) queueWithoutController(
 			return domain.ConversationTurn{}, err
 		}
 	}
-	if !record.ProvisionState.IsProvisioning() {
+	if !record.ProvisionState.IsProvisioning() && record.HibernatedAt == nil {
 		return domain.ConversationTurn{}, ErrNotProvisioning
 	}
 	conversation, err := s.ensureConversation(ctx, record)
@@ -55,6 +56,26 @@ func (s *Service) queueWithoutController(
 		encoded, marshalErr := json.Marshal(msg.Content)
 		if marshalErr != nil {
 			return domain.ConversationTurn{}, fmt.Errorf("encode chat delivery content: %w", marshalErr)
+		}
+		deliveryContent = string(encoded)
+	}
+	if len(msg.Excerpts) > 0 {
+		// The transcript is verified when the controller drains this turn; bound
+		// the stored references now so the queue cannot hold oversized payloads.
+		if err := validateExcerptReferences(msg.Excerpts, conversation.ID); err != nil {
+			return domain.ConversationTurn{}, err
+		}
+		queuedContent := append([]ports.ChatContent(nil), msg.Content...)
+		for _, excerpt := range msg.Excerpts {
+			// SelectedText keeps the timeline chip and a later retry meaningful;
+			// the paired turn is only resolved at drain time.
+			queuedContent = append(queuedContent, ports.ChatContent{Type: "excerpt", Excerpt: &ports.ChatExcerptContext{
+				Reference: excerpt, SelectedText: strings.TrimSpace(excerpt.Text),
+			}})
+		}
+		encoded, marshalErr := json.Marshal(queuedContent)
+		if marshalErr != nil {
+			return domain.ConversationTurn{}, fmt.Errorf("encode queued excerpts: %w", marshalErr)
 		}
 		deliveryContent = string(encoded)
 	}
@@ -86,7 +107,7 @@ func (s *Service) queueWithoutController(
 	// The controller may have appeared after Send read the provisioning row, or
 	// after a prior drain found the queue empty. Kicking the same serialized drain
 	// here closes both races; NextQueuedTurn still owns ordering.
-	if controller, controllerErr := s.Controller(record.ID); controllerErr == nil {
+	if controller, controllerErr := s.Controller(record.ID); controllerErr == nil && controller.State() != ports.ChatControllerStopped {
 		_ = controller.drain(ctx) // The message is already accepted; drain logs failures.
 	}
 	return turn, nil

@@ -23,6 +23,7 @@ import (
 	claudecodeagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	chatdriveracp "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
@@ -30,6 +31,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/autoreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/codexops"
@@ -77,6 +79,8 @@ import (
 // reconcile: hookless resume transcripts and silently lost fsnotify watches
 // are healed on this cadence even when no event or hook fires.
 const usageReconcileTick = 3 * time.Minute
+
+const chatHibernateSweepTick = 30 * time.Second
 
 // sentryEnvironment maps the daemon's app version to a Sentry environment so a
 // nightly/edge build's issues do not mix with stable release health.
@@ -402,8 +406,12 @@ func Run() error {
 	// loudly instead of silently becoming a TUI session.
 	var sessMgr sessionLifecycle
 	chatSvc := chatsvc.New(chatsvc.Options{
-		Store:    store,
-		Sessions: store,
+		Store:               store,
+		Sessions:            store,
+		Renders:             attachmentstore.New(cfg.DataDir),
+		DataDir:             cfg.DataDir,
+		ReconcileOutputType: lcStack.LCM.ReconcileSessionOutputType,
+		HibernationEnabled:  settingsSvc.ChatHibernationEnabled,
 		StopProviderHost: func(ctx context.Context, id domain.SessionID) error {
 			return persistenthost.Shutdown(ctx, cfg.DataDir, string(id))
 		},
@@ -482,6 +490,8 @@ func Run() error {
 			}
 		},
 	})
+	chatSvc.SetRenderCheck(renderViaDesktop(browserBroker, "__render-check"))
+	chatSvc.SetRenderMeasure(renderViaDesktop(browserBroker, "__render-measure"))
 
 	codexModelDriver := codexappserver.New(codexagent.New(), log)
 	modelDiscoverer := modelcatalog.Discoverer{
@@ -557,7 +567,9 @@ func Run() error {
 	agentSvc = agentsvc.NewWithDeps(agentDeps)
 	agentSvc.WarmModelCatalogs(ctx)
 
-	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc}, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
+	persistentHostsReconciled := make(chan struct{})
+	reviewerChatsRecovered := make(chan struct{})
+	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
 	if err != nil {
 		stop()
 		lcStack.Stop()
@@ -590,6 +602,20 @@ func Run() error {
 		},
 	})
 	sessMgr = wiredSessMgr
+	if fenced, ok := sessMgr.(interface{ SetPersistentHostReconcileDone(<-chan struct{}) }); ok {
+		fenced.SetPersistentHostReconcileDone(persistentHostsReconciled)
+	}
+	if wake, ok := sessMgr.(interface {
+		WakeHibernatedChat(context.Context, domain.SessionID) error
+	}); ok {
+		chatSvc.SetWakeCallback(func(requestCtx context.Context, id domain.SessionID) error {
+			wakeCtx, cancel := context.WithCancel(requestCtx)
+			stopOnShutdown := context.AfterFunc(ctx, cancel)
+			defer stopOnShutdown()
+			defer cancel()
+			return wake.WakeHibernatedChat(wakeCtx, id)
+		})
+	}
 	if tunable, ok := sessMgr.(interface {
 		SetModelCatalog(interface {
 			Models(context.Context, string, string, bool) (ports.AgentModelCatalog, error)
@@ -612,7 +638,7 @@ func Run() error {
 		return errors.New("wire report delivery: session manager lacks semantic send support")
 	}
 	var reportCoordinator *reportsvc.Coordinator
-	reportSvc := reportsvc.New(reportsvc.Deps{Store: store, OnCreated: func(domain.ReportRecord) {
+	reportSvc := reportsvc.New(reportsvc.Deps{Store: store, Artifacts: chatSvc, OnCreated: func(domain.ReportRecord) {
 		if reportCoordinator != nil {
 			reportCoordinator.Wake()
 		}
@@ -631,10 +657,15 @@ func Run() error {
 
 	hostCommands := systemexec.New(cfg.DataDir)
 	systemChecks := systemcheck.NewWithCommandRunner(agentSvc, hostCommands, hostCommands)
+	privateNPMPrefixes := map[systeminstall.Target]string{}
+	if prefix, err := opencode.V2NPMPrefix(); err == nil {
+		privateNPMPrefixes[systeminstall.TargetOpencodeV2] = prefix
+	}
 	systemInstall := systeminstall.NewWithDeps(hostCommands, hostCommands, systeminstall.Deps{
-		JobStore: store,
-		Verifier: systeminstall.NewVerifier(agents, hostCommands),
-		Sessions: store,
+		JobStore:           store,
+		Verifier:           systeminstall.NewVerifier(agents, hostCommands),
+		Sessions:           store,
+		PrivateNPMPrefixes: privateNPMPrefixes,
 	})
 	if err := systemInstall.Recover(ctx); err != nil {
 		stop()
@@ -754,7 +785,7 @@ func Run() error {
 		}()
 		lcStack.LCM.SetUsageFinalizer(usageCollector)
 	}
-	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, cfg.GitLab, log)
+	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, sessionSvc, cfg.GitLab, log)
 	var prActions prsvc.ActionManager
 	prReader := newMultiSCMProvider(cfg.GitLab, log)
 	prMerger := newMultiSCMMerger(cfg.GitLab, log)
@@ -790,12 +821,6 @@ func Run() error {
 			log.Error("cdc pipeline shutdown", "err", cdcErr)
 		}
 		return fmt.Errorf("reconcile sessions on boot: %w", reconcileErr)
-	}
-	// Reviewer-owned Chat controllers are durable independently of the worker's
-	// currently selected reviewer. Recover them through the required review
-	// service contract before accepting new automatic review work.
-	if reconcileErr := reviewSvc.RecoverChatReviewers(ctx); reconcileErr != nil {
-		log.Warn("reviewer chat recovery deferred", "err", reconcileErr)
 	}
 	agentSvc.WarmCodexAccounts()
 	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, log)
@@ -883,6 +908,10 @@ func Run() error {
 	if mobilebridge.KeepAwakeSupported() {
 		bs.KeepAwake = mobilebridge.NewKeepAwake(os.Getpid())
 	}
+	var nativeSessions ports.AgentNativeSessionResolver
+	if codewhaleAgent, ok := agents.Agent(domain.HarnessCodewhale); ok {
+		nativeSessions, _ = codewhaleAgent.(ports.AgentNativeSessionResolver)
+	}
 
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
 		Projects:           projectSvc,
@@ -915,6 +944,7 @@ func Run() error {
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,
 		Activity:           lcStack.LCM,
+		NativeSessions:     nativeSessions,
 		UsageHooks:         usageCollector,
 		UsageSummary:       usagesvc.NewSummaryReader(store),
 		SessionMemory:      memoryReader,
@@ -976,6 +1006,7 @@ func Run() error {
 	if err := restoreMobileOnBoot(mobilebridge.Path(cfg.DataDir), bs); err != nil {
 		log.Warn("restore mobile bridge on boot failed", "err", err)
 	}
+	go runRemoteHostAddressPublisher(ctx, bs, cfg.CloudControlPlaneURL, log)
 
 	if usagePipeline != nil {
 		usageDone = usagePipeline.Start(ctx)
@@ -1011,11 +1042,38 @@ func Run() error {
 			if reconcileErr := reconcilePersistentChatHosts(ctx, cfg.DataDir, store); reconcileErr != nil {
 				log.Error("persistent chat host reconciliation on boot failed", "err", reconcileErr)
 			}
+			close(persistentHostsReconciled)
+			// Reviewer-owned Chat controllers wait for persistent host reconciliation.
+			// Recover them only after the listener is ready and the gate is closed, or
+			// startup can deadlock before the daemon binds its port.
+			if reconcileErr := reviewSvc.RecoverChatReviewers(ctx); reconcileErr != nil {
+				log.Warn("reviewer chat recovery deferred", "err", reconcileErr)
+			}
+			close(reviewerChatsRecovered)
 			if reconcileErr := sessMgr.ReconcileBackground(ctx); reconcileErr != nil {
 				log.Error("background session reconciliation on boot failed", "err", reconcileErr)
 			}
 			if reconcileErr := lcStack.ReconcileRuntime(ctx); reconcileErr != nil {
 				log.Error("background agent-process reconciliation on boot failed", "err", reconcileErr)
+			}
+		}()
+		go func() {
+			// The session operation gate skips reconciliation in progress, so
+			// a slow provider reconnect must not stall hibernation of others.
+			ticker := time.NewTicker(chatHibernateSweepTick)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if !settingsSvc.ChatHibernationEnabled() {
+						continue
+					}
+					if err := sessMgr.HibernateIdleChats(ctx); err != nil && ctx.Err() == nil {
+						log.Warn("idle Chat hibernation failed", "err", err)
+					}
+				}
 			}
 		}()
 	})

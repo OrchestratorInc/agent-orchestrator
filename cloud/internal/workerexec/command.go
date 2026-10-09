@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,8 +37,10 @@ type CommandBuilder interface {
 // HarnessBuilder owns Cloud's headless streaming flags and fail-closed policy
 // mapping; process lifecycle is shared with desktop AO through agentruntime.
 type HarnessBuilder struct {
-	Binaries   map[string]string
-	DataDir    string
+	Binaries map[string]string
+	DataDir  string
+	// ConfigRoot isolates reviewer credentials and conversations from the worker.
+	ConfigRoot string
 	Launch     worker.LaunchContext
 	Env        map[string]string
 	CodexLogin func(binary, home, credentialType, secret string) error
@@ -87,6 +91,10 @@ func (b HarnessBuilder) BuildInteractive(
 	if launch.ReasoningEffort == "default" {
 		launch.ReasoningEffort = ""
 	}
+	// A per-session Chat selection wins; otherwise apply the project's role default.
+	if launch.ReasoningEffort == "" {
+		launch.ReasoningEffort = launch.AgentConfig.Effort
+	}
 	if credential.Provider != launch.Harness ||
 		strings.TrimSpace(credential.Secret) == "" {
 		return Command{}, errors.New("credential does not match the selected harness")
@@ -122,10 +130,18 @@ func (b HarnessBuilder) BuildInteractive(
 	}
 	var providerArgs []string
 	switch launch.Harness {
+	case "claude-code":
+		if launch.Kind == "reviewer" {
+			// The shared checkout contains the worker's AO hooks. A separate
+			// CLAUDE_CONFIG_DIR alone does not exclude project/local settings.
+			providerArgs = []string{"--setting-sources", "user"}
+		}
 	case "codex":
-		providerArgs = codexActivityHookArgs(hookHelperPath(b.DataDir))
+		if launch.Kind != "reviewer" {
+			providerArgs = codexActivityHookArgs(hookHelperPath(b.DataDir))
+		}
 		if launch.ReasoningEffort != "" {
-			providerArgs = append(providerArgs, "-c", "model_reasoning_effort="+launch.ReasoningEffort)
+			providerArgs = append(providerArgs, "-c", "model_reasoning_effort="+strconv.Quote(launch.ReasoningEffort))
 		}
 	case "cursor":
 		pluginDir, err := b.writeCursorPromptPlugin(launch.SessionID, systemPrompt)
@@ -133,11 +149,17 @@ func (b HarnessBuilder) BuildInteractive(
 			return Command{}, err
 		}
 		providerArgs = []string{"--trust", "--plugin-dir", pluginDir}
+		if launch.AgentConfig.Mode != "" {
+			providerArgs = append(providerArgs, "--mode", launch.AgentConfig.Mode)
+		}
 	}
 	harness := agentruntime.Harness(launch.Harness)
 	permission := agentruntime.PermissionPolicyForMode(
 		agentruntime.SessionMode(launch.Mode),
 	)
+	if launch.AgentConfig.Permissions != "" {
+		permission = agentruntime.PermissionPolicy(launch.AgentConfig.Permissions)
+	}
 	var argv []string
 	identity := b.interactiveRestoreIdentity(launch)
 	if identity != "" {
@@ -176,6 +198,11 @@ func (b HarnessBuilder) BuildInteractive(
 	if err != nil {
 		return Command{}, err
 	}
+	if launch.Harness == "codex" && launch.AgentConfig.Permissions == "default" {
+		// The shared builder's historical default bypasses approvals. An explicit
+		// project choice of agent defaults must leave Codex's own policy intact.
+		argv = slices.DeleteFunc(argv, func(arg string) bool { return arg == "--dangerously-bypass-approvals-and-sandbox" })
+	}
 	command := Command{
 		Path: argv[0],
 		Args: argv[1:],
@@ -190,14 +217,14 @@ func (b HarnessBuilder) BuildInteractive(
 		return Command{}, err
 	}
 	if launch.Harness == "claude-code" {
-		if err := b.prepareClaudeCloudExperience(&command, workspace); err != nil {
+		if err := b.prepareClaudeCloudExperience(&command, workspace, permission); err != nil {
 			if command.Cleanup != nil {
 				command.Cleanup()
 			}
 			return Command{}, err
 		}
 	}
-	if launch.Harness == "cursor" {
+	if launch.Harness == "cursor" && launch.Kind != "reviewer" {
 		if err := installCursorActivityHooks(hookHelperPath(b.DataDir), workspace); err != nil {
 			if command.Cleanup != nil {
 				command.Cleanup()
@@ -241,6 +268,9 @@ func (b HarnessBuilder) BuildInteractive(
 func (b HarnessBuilder) systemPrompt(launch worker.LaunchContext, workspace string) string {
 	skillDir := skillassets.Dir(b.DataDir)
 	systemPrompt := workerSystemPrompt(skillDir, launch.ParentSessionID != "")
+	if launch.Kind == "reviewer" {
+		systemPrompt = "You are an independent pull request reviewer. Inspect the diff and report concrete correctness issues. Submit your verdict using AO_REVIEW_HELP."
+	}
 	if launch.Kind == "orchestrator" {
 		systemPrompt = orchestratorSystemPrompt(skillDir)
 	}
@@ -253,7 +283,7 @@ func (b HarnessBuilder) systemPrompt(launch worker.LaunchContext, workspace stri
 	// codes nothing itself, so it gets multi-repo awareness from the shared
 	// project context (roleprompt) instead — enough to coordinate work across the
 	// repos without being pointed at sibling directories to edit.
-	if launch.Kind != "orchestrator" {
+	if launch.Kind != "orchestrator" && launch.Kind != "reviewer" {
 		if note := extraReposPromptNote(workspace, launch.ExtraRepos); note != "" {
 			systemPrompt += "\n\n" + note
 		}
@@ -264,6 +294,9 @@ func (b HarnessBuilder) systemPrompt(launch worker.LaunchContext, workspace stri
 func (b HarnessBuilder) interactiveRestoreIdentity(
 	launch worker.LaunchContext,
 ) string {
+	if launch.Kind == "reviewer" {
+		return ""
+	}
 	if launch.Harness != "claude-code" {
 		return strings.TrimSpace(launch.AgentSessionID)
 	}
@@ -275,6 +308,9 @@ func (b HarnessBuilder) interactiveRestoreIdentity(
 }
 
 func (b HarnessBuilder) claudeConfigDir() (string, error) {
+	if b.ConfigRoot != "" {
+		return filepath.Join(b.ConfigRoot, "claude"), nil
+	}
 	configDir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR"))
 	if configDir != "" {
 		return configDir, nil
@@ -427,7 +463,7 @@ func setClaudeNonEssentialTrafficDisabled(command *Command) {
 	command.Env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 }
 
-func (b HarnessBuilder) prepareClaudeCloudExperience(command *Command, workspace string) error {
+func (b HarnessBuilder) prepareClaudeCloudExperience(command *Command, workspace string, permission agentruntime.PermissionPolicy) error {
 	configDir, err := b.claudeConfigDir()
 	if err != nil {
 		return err
@@ -460,11 +496,23 @@ func (b HarnessBuilder) prepareClaudeCloudExperience(command *Command, workspace
 			permissions = map[string]any{}
 			settings["permissions"] = permissions
 		}
-		permissions["defaultMode"] = "bypassPermissions"
+		mode := "default"
+		switch permission {
+		case agentruntime.PermissionAuto:
+			mode = "auto"
+		case agentruntime.PermissionAcceptEdits:
+			mode = "acceptEdits"
+		case agentruntime.PermissionBypassPermissions:
+			mode = "bypassPermissions"
+		}
+		permissions["defaultMode"] = mode
 	}); err != nil {
 		return fmt.Errorf("prepare Claude settings: %w", err)
 	}
 	helperBinary := hookHelperPath(b.DataDir)
+	if b.ConfigRoot != "" {
+		return nil
+	}
 	if err := updateJSONFile(
 		filepath.Join(workspace, ".claude", "settings.local.json"),
 		func(settings map[string]any) { installClaudeActivityHooks(helperBinary, settings) },
@@ -678,6 +726,9 @@ func (b HarnessBuilder) configureCodexCredential(
 }
 
 func (b HarnessBuilder) codexHome() (string, error) {
+	if b.ConfigRoot != "" {
+		return filepath.Join(b.ConfigRoot, "codex"), nil
+	}
 	if home := strings.TrimSpace(os.Getenv("CODEX_HOME")); home != "" {
 		return home, nil
 	}

@@ -6,7 +6,7 @@ When the user asks to turn a repetitive workflow into a Cue, first list the proj
 
 ```text
 ao cue list [--project <id>] [--json]
-ao cue create --name <name> (--prompt <instruction> | --command <shell-command>) [--description <text>] [--project <id>] [--json]
+ao cue create --name <name> (--prompt <instruction> | --command <shell-command>) [--project <id>] [--json]
 ```
 
 `--prompt` creates an agent Cue. `--command` creates a command Cue. Supply exactly one. Use `--json` to inspect full definitions or the created Cue ID. The daemon validates length, project existence, and unique names; its API error code and request ID are preserved on failure.
@@ -20,3 +20,5 @@ ao cue list --json
 ```
 
 This CLI intentionally has no update or delete subcommands. If a matching Cue already exists, report it and ask the user to edit or delete it in project settings instead of replacing it.
+
+In the desktop app, Cues run from a session's play button. Hover opens the cue list; clicking repeats the project's last successfully dispatched Cue, remembered across app restarts. With no remembered Cue (or after its deletion), clicking opens the list for a choice. Enter/Space also opens the list. New cue opens a creation dialog within the session and saves without running. Cues are managed in project settings and have no controls on the kanban board. Definitions consist of a name, type, and command or prompt; descriptions are no longer supported. Successful Cue actions are silent; failures show an error toast.
