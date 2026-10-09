@@ -15953,6 +15953,8 @@ components:
           type: boolean
         model:
           type: string
+        recreateRequired:
+          type: boolean
         selectedText:
           type: string
         sessionId:
@@ -16082,6 +16084,10 @@ components:
           additionalProperties:
             type: string
           type: object
+        boundaryState:
+          type: string
+        boundaryTurnId:
+          type: string
         createKey:
           type: string
         decisionData:
@@ -16108,6 +16114,8 @@ components:
           type: array
         nativeAnchorId:
           type: string
+        policyVersion:
+          type: integer
         providerForkId:
           type: string
         providerHostId:
@@ -16127,6 +16135,7 @@ components:
             $ref: '#/components/schemas/SideRecoveryTurn'
           type: array
       required:
+      - policyVersion
       - sourceProviderId
       - launchConfig
       - createKey

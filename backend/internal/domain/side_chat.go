@@ -8,6 +8,9 @@ import (
 // SideConversation is one launch-scoped /btw provider conversation. Its
 // provider host and transcript are independent of the main conversation.
 type SideConversation struct {
+	PolicyVersion      int             `json:"-"`
+	BoundaryTurnID     string          `json:"-"`
+	BoundaryState      string          `json:"-"`
 	HasWork            bool            `json:"hasWork"`
 	ID                 string          `json:"id"`
 	SessionID          SessionID       `json:"sessionId"`
@@ -36,6 +39,7 @@ type SideConversation struct {
 	Label              string          `json:"label"`
 	State              string          `json:"state"`
 	ErrorMessage       string          `json:"errorMessage,omitempty"`
+	RecreateRequired   bool            `json:"recreateRequired,omitempty"`
 	CleanupPending     bool            `json:"cleanupPending,omitempty"`
 	CreatedAt          time.Time       `json:"createdAt"`
 	UpdatedAt          time.Time       `json:"updatedAt"`

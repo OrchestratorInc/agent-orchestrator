@@ -3,6 +3,7 @@ package chat_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -208,7 +209,7 @@ func TestSideStaleQueuedExcerptsAllowLaterQuestions(t *testing.T) {
 					t.Fatalf("stale failure: %q", turn.ErrorMessage)
 				}
 			}
-			if got := h.provider(0).sentTexts(); len(got) != 2 || !strings.HasSuffix(got[1], "Current side-chat request:\nnext") {
+			if got := h.provider(0).sentTexts(); len(got) != 2 || got[1] != "next" {
 				t.Fatalf("dispatches: %v", got)
 			}
 		})
@@ -237,7 +238,7 @@ func TestSideFreshAndReconstructedContext(t *testing.T) {
 			h.driver.mu.Lock()
 			cfg := h.driver.configs[0]
 			h.driver.mu.Unlock()
-			if cfg.SessionID == testSession || !strings.HasPrefix(cfg.SystemPrompt, "Frozen instructions") || !strings.Contains(cfg.SystemPrompt, "[AO independent side chat]") || cfg.Model != "initial" || cfg.Effort != "low" || cfg.Permissions != "default" {
+			if cfg.SessionID == testSession || !strings.HasPrefix(cfg.SystemPrompt, "Frozen instructions") || !strings.Contains(cfg.SystemPrompt, "Side conversation boundary.") || cfg.Model != "initial" || cfg.Effort != "low" || cfg.Permissions != "default" {
 				t.Fatalf("config not inherited: %+v", cfg)
 			}
 			msg := ports.ChatUserMessage{Text: "  Explain it.  ", ClientMessageID: "question", Content: []ports.ChatContent{{Type: "resource_link", URI: "/workspace/note.txt", Name: "note.txt"}}}
@@ -310,6 +311,58 @@ func TestSideProviderFailurePausesQueueUntilExplicitRetry(t *testing.T) {
 	}
 	h.provider(0).emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-2", TurnState: domain.TurnStateCompleted})
 	h.awaitSide(t, side.ID, func(domain.SideSnapshot) bool { return h.provider(0).sendCallCount() == 3 })
+}
+
+func TestSideUncertainFirstDeliveryRequiresRecreation(t *testing.T) {
+	h := newSideWorkflow(t, "")
+	h.source(t)
+	side := h.side(t, "uncertain", true)
+	provider := h.provider(0)
+	provider.mu.Lock()
+	provider.sendErr = errors.New("acceptance receipt lost")
+	provider.mu.Unlock()
+	ctx := context.Background()
+	turn, err := h.svc.SendSideQuestion(ctx, testSession, side.ID, ports.ChatUserMessage{Text: "first request", ClientMessageID: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool {
+		return s.Side.RecreateRequired && len(s.Turns) == 1 && s.Turns[0].State == "failed"
+	})
+	if snap.Side.ErrorMessage != chatsvc.ErrSidePolicyRecreate.Error() {
+		t.Fatal(snap.Side.ErrorMessage)
+	}
+	if err := h.svc.RetrySideQuestion(ctx, testSession, side.ID, turn.ID); !errors.Is(err, chatsvc.ErrSidePolicyRecreate) {
+		t.Fatalf("unsafe replay allowed: %v", err)
+	}
+	if provider.sendCallCount() != 1 {
+		t.Fatal("uncertain request dispatched again")
+	}
+}
+
+func TestSideSnapshotDuringFirstDeliveryDoesNotRequireRecreation(t *testing.T) {
+	h := newSideWorkflow(t, "")
+	h.source(t)
+	side := h.side(t, "pending-live", true)
+	entered, release := make(chan struct{}), make(chan struct{})
+	provider := h.provider(0)
+	provider.mu.Lock()
+	provider.onSend = func(string) { close(entered); <-release }
+	provider.mu.Unlock()
+	defer close(release)
+	ctx := context.Background()
+	if _, err := h.svc.SendSideQuestion(ctx, testSession, side.ID, ports.ChatUserMessage{Text: "first request", ClientMessageID: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first delivery did not start")
+	}
+	snap, err := h.svc.SideSnapshot(ctx, testSession, side.ID, time.Time{}, 0)
+	if err != nil || snap.Side.State != "ready" || snap.Side.RecreateRequired {
+		t.Fatalf("live pending delivery treated as lost: %+v %v", snap.Side, err)
+	}
 }
 
 func TestSideLaterMainExcerptDoesNotMoveFrozenFork(t *testing.T) {
@@ -404,5 +457,88 @@ func TestSideSelfExcerptDeliveryAndCrossConversationRejection(t *testing.T) {
 	}
 	if h.provider(1).sendCallCount() != 0 {
 		t.Fatal("other side was dispatched")
+	}
+}
+
+func TestSideCreationFromOlderExcerptUsesLatestCompletedAnchor(t *testing.T) {
+	h := newSideWorkflow(t, "")
+	ref := h.source(t)
+	ctx := context.Background()
+	latest, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "main B", ClientMessageID: "B"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: latest.ProviderTurnID, ProviderItemID: "B", Text: "main B answer"}, ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: latest.ProviderTurnID, TurnState: domain.TurnStateCompleted})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		for _, turn := range s.Turns {
+			if turn.ID == latest.ID {
+				return turn.State == domain.TurnStateCompleted
+			}
+		}
+		return false
+	})
+	side, err := h.svc.CreateIndependentSideChat(ctx, testSession, chatsvc.SideCreateRequest{IdempotencyKey: "older-selection", ForceNew: true, Reference: &ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool { return s.Side.State == "ready" })
+	if side.AnchorTurnID != latest.ID || side.SourceMessageID != ref.MessageID {
+		t.Fatalf("anchor=%s want=%s source=%s", side.AnchorTurnID, latest.ID, side.SourceMessageID)
+	}
+	if h.provider(0).sendCallCount() != 0 {
+		t.Fatal("creation dispatched inherited work")
+	}
+	h.driver.mu.Lock()
+	cfg := h.driver.configs[0]
+	h.driver.mu.Unlock()
+	if !cfg.SidePolicy || cfg.ReadOnly || cfg.Permissions != "default" || cfg.WorkspacePath == "" || cfg.Env["AO_SIDE_CONVERSATION_ID"] != side.ID {
+		t.Fatalf("side launch policy: %+v", cfg)
+	}
+}
+
+func TestSideBoundaryDeliveryOrderAndTranscriptWording(t *testing.T) {
+	for _, harnessType := range []domain.AgentHarness{domain.HarnessCodex, domain.HarnessClaudeCode} {
+		t.Run(string(harnessType), func(t *testing.T) {
+			h := newSideWorkflow(t, "", harnessType)
+			ref := h.source(t)
+			side := h.side(t, "boundary", true)
+			ctx := context.Background()
+			question := "Please explain this; do not edit anything."
+			first, err := h.svc.SendSideQuestion(ctx, testSession, side.ID, ports.ChatUserMessage{Text: question, ClientMessageID: "first", Excerpts: []ports.ChatExcerptReference{ref}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			snap := h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool { return h.provider(0).sendCallCount() == 1 })
+			text := h.provider(0).sentTexts()[0]
+			boundary := strings.Index(text, "Side conversation boundary.")
+			request := strings.Index(text, "Current side-chat request:")
+			if boundary < 0 || request < boundary || strings.Index(text, "Reference 1 source turn") < request || !strings.Contains(text, question) {
+				t.Fatal(text)
+			}
+			if harnessType == domain.HarnessClaudeCode && strings.Index(text, "Selected source text.") > boundary {
+				t.Fatal("boundary precedes inherited history")
+			}
+			for _, msg := range snap.Messages {
+				if msg.Role == "user" && msg.Text != question {
+					t.Fatal("durable user wording changed")
+				}
+			}
+			h.provider(0).emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
+			h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool {
+				for _, turn := range s.Turns {
+					if turn.ID == first.ID {
+						return turn.State == "completed"
+					}
+				}
+				return false
+			})
+			if _, err := h.svc.SendSideQuestion(ctx, testSession, side.ID, ports.ChatUserMessage{Text: "next question", ClientMessageID: "next"}); err != nil {
+				t.Fatal(err)
+			}
+			h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool { return h.provider(0).sendCallCount() == 2 })
+			if got := h.provider(0).sentTexts()[1]; got != "next question" {
+				t.Fatalf("boundary repeated: %s", got)
+			}
+		})
 	}
 }

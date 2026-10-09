@@ -37,6 +37,10 @@ func sideID(r *http.Request) string { return chi.URLParam(r, "sideId") }
 
 func writeSideChatError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, chatsvc.ErrSideNameLimit):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_SIDE_NAME_LIMIT", err.Error(), nil)
+	case errors.Is(err, chatsvc.ErrSidePolicyRecreate):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_SIDE_RECREATE_REQUIRED", err.Error(), nil)
 	case errors.Is(err, chatsvc.ErrSideNotReady):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_SIDE_NOT_READY", err.Error(), nil)
 	case errors.Is(err, chatsvc.ErrSideUnavailable), errors.Is(err, chatsvc.ErrSideLaunchUnclaimed):

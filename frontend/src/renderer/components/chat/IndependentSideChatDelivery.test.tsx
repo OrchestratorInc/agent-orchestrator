@@ -260,6 +260,7 @@ function SidePanelHarness() {
 	return (
 		<TooltipProvider>
 			<button onClick={() => chat.show("side")}>Reopen side chat</button>
+			<button onClick={() => chat.hide()}>Hide inspector</button>
 			{chat.panel}
 		</TooltipProvider>
 	);
@@ -317,7 +318,7 @@ describe("side panel navigation and recovery", () => {
 			return result;
 		});
 		render(<SidePanelHarness />);
-		expect(await screen.findByRole("tab", { name: "Side Chat 1" })).toHaveAttribute("aria-selected", "true");
+		expect(await screen.findByRole("tab", { name: "Side Chat" })).toHaveAttribute("aria-selected", "true");
 		await screen.findByLabelText("Side chat question");
 	});
 
@@ -326,7 +327,7 @@ describe("side panel navigation and recovery", () => {
 		const field = await screen.findByLabelText("Side chat question");
 		await waitFor(() => expect(lexicalEditorText(field)).toBe("First draft"));
 		await typeInLexicalEditor(field, " with an unsent follow-up");
-		await userEvent.click(screen.getByRole("button", { name: "Hide side chat" }));
+		await userEvent.click(screen.getByRole("button", { name: "Hide inspector" }));
 		expect(screen.queryByRole("complementary", { name: "Side chats" })).not.toBeInTheDocument();
 		expect(remove).not.toHaveBeenCalled();
 		await userEvent.click(screen.getByRole("button", { name: "Reopen side chat" }));
@@ -335,6 +336,29 @@ describe("side panel navigation and recovery", () => {
 				"First draft with an unsent follow-up",
 			),
 		);
+	});
+
+	it("shows the shorter isolation explanation without info or collapse controls", async () => {
+        render(<SidePanelHarness />);
+        await screen.findByLabelText("Side chat question");
+        expect(screen.getByText(/Files and Git are shared/)).toBeVisible();
+        expect(screen.queryByRole("button", { name: "About side-chat isolation" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Hide side chat" })).not.toBeInTheDocument();
+    });
+
+	it("offers a new side for an unverifiable legacy boundary without removing its transcript", async () => {
+		const normalGet = get.getMockImplementation()!;
+		get.mockImplementation(async (path, options) => {
+			const result = await normalGet(path, options);
+			if (result.data?.snapshot) result.data.snapshot.side = { ...result.data.snapshot.side, state: "failed", recreateRequired: true, errorMessage: "side-chat safety boundary cannot be verified; close this side and create a new one" };
+			return result;
+		});
+		render(<SidePanelHarness />);
+		await screen.findByText(/side-chat safety boundary cannot be verified/);
+		expect(screen.queryByRole("button", { name: "Retry connection" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getAllByRole("button", { name: "New side chat" }).at(-1)!);
+		await waitFor(() => expect(post).toHaveBeenCalled());
+		expect(remove).not.toHaveBeenCalled();
 	});
 
 	it("switches tabs by keyboard without losing independent drafts", async () => {
@@ -451,12 +475,38 @@ describe("side panel navigation and recovery", () => {
 		fireEvent.keyDown(screen.getByRole("textbox", { name: "Rename side chat" }), { key: "Escape" });
 		expect(patch).toHaveBeenCalledOnce();
 	});
-	it("offers Rename and Close on a tab's right-click menu", async () => {
+	it("offers only Rename on a tab's right-click menu", async () => {
 		render(<SidePanelHarness />);
 		const tab = await screen.findByRole("tab", { name: "Second question" });
 		fireEvent.contextMenu(tab, { button: 2 });
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
+		expect(await screen.findByRole("menuitem", { name: "Rename" })).toBeVisible();
+		expect(screen.queryByRole("menuitem", { name: "Close" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
 		expect(screen.getByRole("textbox", { name: "Rename side chat" })).toHaveValue("Second question");
+	});
+	it("selects the existing name and commits on blur, discarding empty or unchanged names", async () => {
+		patch.mockResolvedValue({});
+		render(<SidePanelHarness />);
+		const tab = await screen.findByRole("tab", { name: "First question" });
+		fireEvent.doubleClick(tab);
+		const input = screen.getByRole("textbox", { name: "Rename side chat" }) as HTMLInputElement;
+		expect(input.selectionStart).toBe(0);
+		expect(input.selectionEnd).toBe("First question".length);
+		await userEvent.clear(input);
+		await userEvent.type(input, "  Notes  ");
+		fireEvent.blur(input);
+		await waitFor(() => expect(patch).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/label",
+			expect.objectContaining({ body: { label: "Notes" } }),
+		));
+		for (const value of ["", "First question"]) {
+			fireEvent.doubleClick(screen.getByRole("tab", { name: "First question" }));
+			const edit = screen.getByRole("textbox", { name: "Rename side chat" });
+			fireEvent.change(edit, { target: { value } });
+			fireEvent.blur(edit);
+			expect(screen.queryByRole("textbox", { name: "Rename side chat" })).not.toBeInTheDocument();
+		}
+		expect(patch).toHaveBeenCalledOnce();
 	});
 	it("confirms closing an inactive tab without changing the active draft", async () => {
 		render(<SidePanelHarness />);

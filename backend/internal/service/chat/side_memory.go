@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,13 +23,14 @@ var (
 	ErrSideLaunchUnclaimed = errors.New("desktop launch has not claimed side chats")
 	// ErrSideIdempotencyConflict indicates that a request key was reused for another question.
 	ErrSideIdempotencyConflict = errors.New("side request key belongs to another question")
+	// ErrSideNameLimit indicates that the highest open default name is already 99.
+	ErrSideNameLimit = errors.New("side chat numbering has reached 99; close or rename the highest-numbered tab before creating another")
 )
 
 // memorySideStore is deliberately process-local. Electron owns recovery across
 // supervised daemon restarts; AO never writes side transcripts or drafts to DB.
 type memorySideStore struct {
 	mu         sync.Mutex
-	numbers    map[domain.SessionID]int
 	runID      string
 	closed     map[string]bool
 	sides      map[string]domain.SideConversation
@@ -41,6 +44,9 @@ type memorySideStore struct {
 // SideRecoveryRecord travels only between the daemon and Electron main process.
 // Electron holds it in RAM for this desktop launch and never writes it to disk.
 type SideRecoveryRecord struct {
+	PolicyVersion       int                     `json:"policyVersion"`
+	BoundaryTurnID      string                  `json:"boundaryTurnId,omitempty"`
+	BoundaryState       string                  `json:"boundaryState,omitempty"`
 	MessageProviderIDs  map[string]string       `json:"messageProviderIds,omitempty"`
 	ActivityProviderIDs map[string]string       `json:"activityProviderIds,omitempty"`
 	DecisionData        map[string][][]byte     `json:"decisionData,omitempty"`
@@ -93,7 +99,7 @@ func (m *memorySideStore) export(runID string) []SideRecoveryRecord {
 				decisions[activity.ID] = append(decisions[activity.ID], decision.Raw)
 			}
 		}
-		out = append(out, SideRecoveryRecord{MessageProviderIDs: messageIDs, ActivityProviderIDs: activityIDs, DecisionData: decisions, Side: side, SourceProviderID: side.SourceProviderID, LaunchConfig: side.LaunchConfig, CreateKey: side.CreateKey, ProviderHostID: side.ProviderHostID,
+		out = append(out, SideRecoveryRecord{PolicyVersion: side.PolicyVersion, BoundaryTurnID: side.BoundaryTurnID, BoundaryState: side.BoundaryState, MessageProviderIDs: messageIDs, ActivityProviderIDs: activityIDs, DecisionData: decisions, Side: side, SourceProviderID: side.SourceProviderID, LaunchConfig: side.LaunchConfig, CreateKey: side.CreateKey, ProviderHostID: side.ProviderHostID,
 			ProviderForkID: side.ProviderForkID, NativeAnchorID: side.NativeAnchorID,
 			Harness: side.Harness, Generation: side.Generation,
 			ReferenceContext: side.ReferenceContext, ReferencePending: side.ReferencePending, SeedHistory: side.SeedHistory,
@@ -149,11 +155,19 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 		side.ReferenceContext = record.ReferenceContext
 		side.ReferencePending = record.ReferencePending
 		side.SeedHistory = record.SeedHistory
+		side.PolicyVersion = record.PolicyVersion
+		side.BoundaryTurnID = record.BoundaryTurnID
+		side.BoundaryState = record.BoundaryState
 		if side.ProviderForkID == "" {
 			side.State = "failed"
 			side.ErrorMessage = "Side opening was interrupted; close and reopen it."
 		} else {
 			side.State = "recovering"
+		}
+		if side.PolicyVersion != sidePolicyVersion || side.BoundaryState == "uncertain" || side.BoundaryState == "pending" {
+			side.State = "failed"
+			side.ErrorMessage = ErrSidePolicyRecreate.Error()
+			side.RecreateRequired = true
 		}
 		side.UpdatedAt = now
 		m.sides[side.ID] = side
@@ -220,7 +234,6 @@ func (m *memorySideStore) ClaimSideLaunch(_ context.Context, runID string, _ tim
 	m.runID = runID
 	m.closed = map[string]bool{}
 	m.sides = map[string]domain.SideConversation{}
-	m.numbers = map[domain.SessionID]int{}
 	m.turns = map[string][]domain.SideTurn{}
 	m.messages = map[string][]domain.SideMessage{}
 	m.activities = map[string][]domain.SideActivity{}
@@ -256,13 +269,36 @@ func (m *memorySideStore) CreateSideConversation(_ context.Context, side domain.
 			return current, false, nil
 		}
 	}
-	if m.numbers == nil {
-		m.numbers = map[domain.SessionID]int{}
+	largest, open := 1, false
+	for _, current := range m.sides {
+		if current.SessionID == side.SessionID && current.ClosedAt == nil {
+			open = true
+			largest = max(largest, sideChatNumber(current.Label))
+		}
 	}
-	m.numbers[side.SessionID]++
-	side.Label = fmt.Sprintf("Side Chat %d", m.numbers[side.SessionID])
+	side.Label = "Side Chat"
+	if open {
+		if largest >= 99 {
+			return domain.SideConversation{}, false, ErrSideNameLimit
+		}
+		side.Label = fmt.Sprintf("Side Chat %d", largest+1)
+	}
 	m.sides[side.ID] = side
 	return side, true, nil
+}
+
+func sideChatNumber(label string) int {
+	if label == "Side Chat" {
+		return 1
+	}
+	if !strings.HasPrefix(label, "Side Chat ") {
+		return 0
+	}
+	number, err := strconv.Atoi(strings.TrimPrefix(label, "Side Chat "))
+	if err != nil || number < 1 || number > 99 {
+		return 0
+	}
+	return number
 }
 func (m *memorySideStore) SideConversation(_ context.Context, id string) (domain.SideConversation, error) {
 	m.mu.Lock()
@@ -316,6 +352,7 @@ func (m *memorySideStore) SetSideRecovering(_ context.Context, id, generation st
 	return m.updateSide(id, generation, func(side *domain.SideConversation) {
 		side.State = "recovering"
 		side.ErrorMessage = ""
+		side.RecreateRequired = false
 		side.UpdatedAt = now
 	})
 }
@@ -325,6 +362,7 @@ func (m *memorySideStore) SetSideReady(_ context.Context, id, generation, provid
 	return m.updateSide(id, generation, func(s *domain.SideConversation) {
 		s.State = "ready"
 		s.ErrorMessage = ""
+		s.RecreateRequired = false
 		s.ProviderForkID = providerID
 		s.UpdatedAt = now
 	})
@@ -341,7 +379,15 @@ func (m *memorySideStore) RegisterSideFork(_ context.Context, id, generation, pr
 func (m *memorySideStore) SetSideFailed(_ context.Context, id, generation, message string, now time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.updateSide(id, generation, func(s *domain.SideConversation) { s.State = "failed"; s.ErrorMessage = message; s.UpdatedAt = now })
+	return m.updateSide(id, generation, func(s *domain.SideConversation) {
+		if s.BoundaryState == "pending" {
+			s.BoundaryState = "uncertain"
+		}
+		s.State = "failed"
+		s.ErrorMessage = message
+		s.RecreateRequired = message == ErrSidePolicyRecreate.Error()
+		s.UpdatedAt = now
+	})
 }
 func (m *memorySideStore) CloseSideConversation(_ context.Context, id string, now time.Time) (domain.SideConversation, error) {
 	m.mu.Lock()
@@ -727,6 +773,9 @@ func sideReferenceContexts(refs []domain.SideReference) []string {
 
 // SetSideTurnProviderID records acceptance before streaming or deferred execution starts.
 func (m *memorySideStore) SetSideTurnProviderID(_ context.Context, sideID, turnID, generation, providerID string) error {
+	if providerID == "" {
+		return ErrSidePolicyRecreate
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	side, ok := m.sides[sideID]
@@ -737,8 +786,36 @@ func (m *memorySideStore) SetSideTurnProviderID(_ context.Context, sideID, turnI
 		turn := &m.turns[sideID][i]
 		if turn.ID == turnID && turn.State == "running" {
 			turn.ProviderTurnID = providerID
+			if side.BoundaryTurnID == turnID {
+				side.BoundaryState = "delivered"
+				m.sides[sideID] = side
+			}
 			return nil
 		}
 	}
 	return ErrSideClosed
+}
+
+// PrepareSideBoundary records the first delivery before provider I/O. An
+// unacknowledged boundary is never replayed into a possibly accepted history.
+func (m *memorySideStore) PrepareSideBoundary(_ context.Context, sideID, turnID, generation string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	side, ok := m.sides[sideID]
+	if !ok || side.ClosedAt != nil || side.Generation != generation {
+		return false, ErrSideClosed
+	}
+	if side.PolicyVersion != sidePolicyVersion {
+		return false, ErrSidePolicyRecreate
+	}
+	switch side.BoundaryState {
+	case "delivered":
+		return false, nil
+	case "":
+		side.BoundaryTurnID, side.BoundaryState = turnID, "pending"
+		m.sides[sideID] = side
+		return true, nil
+	default:
+		return false, ErrSidePolicyRecreate
+	}
 }
