@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ client: { getSession: mocks.getSession } }) }));
 vi.mock("./useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true }) }));
-vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { chatHarnesses: ["claude-code"] } }) }));
+vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { chatHarnesses: ["claude-code", "codex", "gemini", "cursor"] } }) }));
 vi.mock("./useSessionInterfaceTransition", async (importOriginal) => ({
 	...await importOriginal<typeof import("./useSessionInterfaceTransition")>(),
 	useSessionInterfaceTransition: (sessionId: string, context: unknown) => {
@@ -115,6 +115,40 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, mode: "chat" }));
 		expect(result.current.optimisticTarget).toBeUndefined();
 		expect(result.current.controllerTransitioning).toBe(false);
+	});
+
+	it.each(["claude-code", "codex", "gemini", "cursor"] as const)("shows the terminal again when the daemon refuses a %s switch to Chat", async (provider) => {
+		mocks.status = { supported: true, targetMode: "chat" };
+		mocks.start.mockRejectedValueOnce(new Error("handoff refused"));
+		const { cloud: _cloud, ...localSession } = cloudSession;
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, provider, mode: "tui", status: "idle" }));
+		requestSwitch(result.current.menuItem as ReactElement<{ onClick: () => void }> | null);
+		await waitFor(() => expect(mocks.start).toHaveBeenCalled());
+		await waitFor(() => expect(result.current.optimisticTarget).toBeUndefined());
+		expect(result.current.renderedMode).toBe("tui");
+	});
+
+	it("falls back to the source interface when a switch fails after it was shown", () => {
+		mocks.status = {
+			supported: true,
+			targetMode: "chat",
+			transition: {
+				id: "failed-handoff",
+				sessionId: "session-1",
+				sourceMode: "tui",
+				targetMode: "chat",
+				policy: "drain",
+				historyPolicy: "strict",
+				phase: "failed",
+				errorCode: "TARGET_RESUME_FAILED",
+				createdAt: "2026-10-01T00:00:00Z",
+				updatedAt: "2026-10-01T00:00:01Z",
+			},
+		};
+		const { cloud: _cloud, ...localSession } = cloudSession;
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, mode: "tui" }));
+		expect(result.current.optimisticTarget).toBeUndefined();
+		expect(result.current.renderedMode).toBe("tui");
 	});
 
 	it("keeps source Chat visible while a Cloud drain waits and scopes transition to its org", () => {
