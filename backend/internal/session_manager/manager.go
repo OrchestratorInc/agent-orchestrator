@@ -4611,15 +4611,17 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 // interruptTerminal preserves each harness's native cancel key across direct
 // cancellation and controller handoffs. It never appends a submission key.
 func (m *Manager) interruptTerminal(ctx context.Context, rec domain.SessionRecord) error {
-	if agent, found := m.agents.Agent(rec.Harness); found {
-		if native, supported := agent.(ports.AgentInterruptInputProvider); supported {
-			sender, supported := m.runtime.(interface {
-				SendInput(context.Context, ports.RuntimeHandle, string) error
-			})
-			if !supported {
-				return ErrSemanticAcceptanceUnsupported
+	if m.agents != nil {
+		if agent, found := m.agents.Agent(rec.Harness); found {
+			if native, supported := agent.(ports.AgentInterruptInputProvider); supported {
+				sender, supported := m.runtime.(interface {
+					SendInput(context.Context, ports.RuntimeHandle, string) error
+				})
+				if !supported {
+					return ErrSemanticAcceptanceUnsupported
+				}
+				return sender.SendInput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, native.InterruptInput())
 			}
-			return sender.SendInput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, native.InterruptInput())
 		}
 	}
 	interrupter, ok := m.runtime.(runtimeInterrupter)
