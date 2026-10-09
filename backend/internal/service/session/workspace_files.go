@@ -103,8 +103,9 @@ type WorkspaceFiles struct {
 	// Ahead and Behind are commit counts against the branch's upstream (or
 	// origin/<branch> when no upstream is configured). Nil when neither can
 	// be resolved — that means "no push/pull data," not an error.
-	Ahead  *int
-	Behind *int
+	Ahead    *int
+	Behind   *int
+	Delivery DeliveryStatus
 }
 
 // WorkspaceFileSections groups the session worktree's changed files by git
@@ -296,14 +297,18 @@ func (s *Service) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (
 		if err != nil {
 			return WorkspaceFiles{}, err
 		}
-		return finalizeWorkspaceFiles(WorkspaceFiles{SessionID: id, Files: files, Truncated: truncated}), nil
+		result := finalizeWorkspaceFiles(WorkspaceFiles{SessionID: id, Files: files, Truncated: truncated})
+		result.Delivery = classifyUnsupportedDelivery(result, "Scratch workspaces cannot be published as pull requests.")
+		return result, nil
 	}
 	if projectKind == domain.ProjectKindWorkspace {
 		result, err := s.listWorkspaceProjectFiles(ctx, rec, project)
 		if err != nil {
 			return WorkspaceFiles{}, err
 		}
-		return finalizeWorkspaceFiles(result), nil
+		result = finalizeWorkspaceFiles(result)
+		result.Delivery = classifyUnsupportedDelivery(result, "Workspace projects must be delivered from an individual repository.")
+		return result, nil
 	}
 	prs, err := s.workspaceComparePRs(ctx, rec.ID)
 	if err != nil {
@@ -334,7 +339,7 @@ func (s *Service) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (
 			DegradedCode:   workspaceDegradedCode(err),
 		}), nil
 	}
-	return finalizeWorkspaceFiles(WorkspaceFiles{
+	result := finalizeWorkspaceFiles(WorkspaceFiles{
 		SessionID:        id,
 		CompareBaseSHA:   compare.BaseSHA,
 		CompareBaseRef:   compare.BaseRef,
@@ -347,7 +352,9 @@ func (s *Service) ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (
 		Summary:          workspaceSummaryFromFiles(files),
 		Ahead:            ahead,
 		Behind:           behind,
-	}), nil
+	})
+	result.Delivery = classifyDelivery(result, readDeliveryGitFacts(ctx, rec.Metadata.WorkspacePath), prs)
+	return result, nil
 }
 
 // GetWorkspaceHistory loads commit and upstream metadata without paying for

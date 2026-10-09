@@ -5970,6 +5970,69 @@ paths:
       summary: Promote a queued message into the in-flight turn
       tags:
       - conversations
+  /api/v1/sessions/{sessionId}/delivery:
+    post:
+      operationId: advanceSessionDelivery
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdvanceDeliveryRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdvanceDeliveryResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Commit, push, or publish the reviewed session workspace safely
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/exit-agent:
     post:
       operationId: exitAgent
@@ -9335,6 +9398,38 @@ components:
       required:
       - path
       type: object
+    AdvanceDeliveryRequest:
+      properties:
+        action:
+          enum:
+          - commit_and_publish_pr
+          - publish_pr
+          - commit_and_push
+          - push
+          type: string
+        commitMessage:
+          type: string
+        expectedWorkspaceVersion:
+          type: string
+      required:
+      - action
+      - expectedWorkspaceVersion
+      type: object
+    AdvanceDeliveryResponse:
+      properties:
+        committed:
+          type: boolean
+        delivery:
+          $ref: '#/components/schemas/DeliveryStatus'
+        pullRequest:
+          $ref: '#/components/schemas/DeliveryPullRequest'
+        pushed:
+          type: boolean
+      required:
+      - delivery
+      - committed
+      - pushed
+      type: object
     AgentAuthPlan:
       properties:
         action:
@@ -11976,6 +12071,71 @@ components:
       - ok
       - workerId
       type: object
+    DeliveryPullRequest:
+      properties:
+        number:
+          type: integer
+        url:
+          type: string
+      required:
+      - url
+      - number
+      type: object
+    DeliveryStatus:
+      properties:
+        action:
+          enum:
+          - commit_and_publish_pr
+          - publish_pr
+          - commit_and_push
+          - push
+          type: string
+        additions:
+          type: integer
+        ahead:
+          type:
+          - "null"
+          - integer
+        behind:
+          type:
+          - "null"
+          - integer
+        blockedReason:
+          type: string
+        branch:
+          type: string
+        changedFiles:
+          type: integer
+        commitCount:
+          type: integer
+        commitSubject:
+          type: string
+        deletions:
+          type: integer
+        pullRequest:
+          $ref: '#/components/schemas/DeliveryPullRequest'
+        repository:
+          type: string
+        state:
+          enum:
+          - empty
+          - uncommitted
+          - ready_to_publish
+          - uncommitted_for_pr
+          - ahead_of_pr
+          - synchronized
+          - blocked
+          type: string
+        workspaceVersion:
+          type: string
+      required:
+      - state
+      - workspaceVersion
+      - commitCount
+      - changedFiles
+      - additions
+      - deletions
+      type: object
     DesktopWorkspaceLocationResponse:
       properties:
         sessionId:
@@ -12935,6 +13095,8 @@ components:
           type: boolean
         degradedCode:
           type: string
+        delivery:
+          $ref: '#/components/schemas/DeliveryStatus'
         files:
           items:
             $ref: '#/components/schemas/WorkspaceFileSummary'
@@ -12958,6 +13120,7 @@ components:
       - commits
       - summary
       - degraded
+      - delivery
       type: object
     ListWorkspaceTreeResponse:
       properties:

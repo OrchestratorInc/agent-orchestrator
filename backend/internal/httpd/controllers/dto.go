@@ -552,8 +552,33 @@ type ListWorkspaceFilesResponse struct {
 	DegradedCode string `json:"degradedCode,omitempty"`
 	// Ahead and Behind are omitted when no push/pull data is available (no
 	// upstream, detached HEAD).
-	Ahead  *int `json:"ahead,omitempty"`
-	Behind *int `json:"behind,omitempty"`
+	Ahead    *int           `json:"ahead,omitempty"`
+	Behind   *int           `json:"behind,omitempty"`
+	Delivery DeliveryStatus `json:"delivery"`
+}
+
+// DeliveryStatus describes the session's authoritative local-to-PR state.
+type DeliveryStatus struct {
+	State            sessionsvc.DeliveryState  `json:"state" enum:"empty,uncommitted,ready_to_publish,uncommitted_for_pr,ahead_of_pr,synchronized,blocked"`
+	Action           sessionsvc.DeliveryAction `json:"action,omitempty" enum:"commit_and_publish_pr,publish_pr,commit_and_push,push"`
+	BlockedReason    string                    `json:"blockedReason,omitempty"`
+	WorkspaceVersion string                    `json:"workspaceVersion"`
+	Branch           string                    `json:"branch,omitempty"`
+	Repository       string                    `json:"repository,omitempty"`
+	CommitCount      int                       `json:"commitCount"`
+	CommitSubject    string                    `json:"commitSubject,omitempty"`
+	ChangedFiles     int                       `json:"changedFiles"`
+	Additions        int                       `json:"additions"`
+	Deletions        int                       `json:"deletions"`
+	Ahead            *int                      `json:"ahead,omitempty"`
+	Behind           *int                      `json:"behind,omitempty"`
+	PullRequest      *DeliveryPullRequest      `json:"pullRequest,omitempty"`
+}
+
+// DeliveryPullRequest identifies the exact session-owned PR targeted by an update.
+type DeliveryPullRequest struct {
+	URL    string `json:"url"`
+	Number int    `json:"number"`
 }
 
 // WorkspaceManifestResponse is the compact, latency-sensitive response used
@@ -583,6 +608,21 @@ type WorkspaceHistoryResponse struct {
 	CommitsTruncated bool                     `json:"commitsTruncated,omitempty"`
 	Ahead            *int                     `json:"ahead,omitempty"`
 	Behind           *int                     `json:"behind,omitempty"`
+}
+
+// AdvanceDeliveryRequest asks AO to perform exactly the action shown for a reviewed workspace snapshot.
+type AdvanceDeliveryRequest struct {
+	Action                   sessionsvc.DeliveryAction `json:"action" enum:"commit_and_publish_pr,publish_pr,commit_and_push,push"`
+	ExpectedWorkspaceVersion string                    `json:"expectedWorkspaceVersion"`
+	CommitMessage            string                    `json:"commitMessage,omitempty"`
+}
+
+// AdvanceDeliveryResponse reports completed irreversible stages and refreshed state.
+type AdvanceDeliveryResponse struct {
+	Delivery    DeliveryStatus       `json:"delivery"`
+	PullRequest *DeliveryPullRequest `json:"pullRequest,omitempty"`
+	Committed   bool                 `json:"committed"`
+	Pushed      bool                 `json:"pushed"`
 }
 
 // ListPRFilesResponse is the exact base...head changed-file set for one PR.

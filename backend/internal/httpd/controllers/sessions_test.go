@@ -84,6 +84,8 @@ type fakeSessionService struct {
 	listPRErr                  error
 	linkedPRs                  []domain.ChangeRequestReference
 	workspaceErr               error
+	deliveryInput              sessionsvc.DeliveryActionInput
+	deliveryResult             sessionsvc.DeliveryActionResult
 	staged                     []ports.SpawnAttachment
 	stagedPaths                []string
 	stageErr                   error
@@ -687,6 +689,11 @@ func (f *fakeSessionService) GetWorkspaceHistory(ctx context.Context, id domain.
 		SessionID: files.SessionID, Commits: files.Commits, CommitsTruncated: files.CommitsTruncated,
 		Ahead: files.Ahead, Behind: files.Behind,
 	}, nil
+}
+
+func (f *fakeSessionService) AdvanceDelivery(_ context.Context, _ domain.SessionID, input sessionsvc.DeliveryActionInput) (sessionsvc.DeliveryActionResult, error) {
+	f.deliveryInput = input
+	return f.deliveryResult, f.workspaceErr
 }
 
 func (f *fakeSessionService) ListPRFiles(_ context.Context, id domain.SessionID, _ int, _ string) (sessionsvc.PRFiles, error) {
@@ -3337,6 +3344,11 @@ func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 			{Path: "notes.txt", PreviousPath: "old-notes.txt", Status: sessionsvc.WorkspaceFileRenamed, Additions: 1, Size: 11},
 		},
 		CommitsTruncated: true,
+		Delivery: sessionsvc.DeliveryStatus{
+			State: sessionsvc.DeliveryStateReadyToPublish, Action: sessionsvc.DeliveryActionPublishPR,
+			WorkspaceVersion: "version-1", Branch: "ao/card", Repository: "acme/widget",
+			CommitCount: 1, CommitSubject: "feat: card", ChangedFiles: 2, Additions: 3, Deletions: 1,
+		},
 	}
 	srv := newSessionTestServer(t, svc)
 
@@ -3360,6 +3372,14 @@ func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 			Editable     bool   `json:"editable"`
 		} `json:"files"`
 		CommitsTruncated bool `json:"commitsTruncated"`
+		Delivery         struct {
+			State            string `json:"state"`
+			Action           string `json:"action"`
+			WorkspaceVersion string `json:"workspaceVersion"`
+			Branch           string `json:"branch"`
+			Repository       string `json:"repository"`
+			CommitSubject    string `json:"commitSubject"`
+		} `json:"delivery"`
 	}
 	mustJSON(t, body, &got)
 	if got.SessionID != "ao-1" || len(got.Files) != 2 || !got.CommitsTruncated {
@@ -3376,6 +3396,32 @@ func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 	}
 	if got.Files[1].Path != "notes.txt" || got.Files[1].PreviousPath != "old-notes.txt" || got.Files[1].Status != "renamed" {
 		t.Fatalf("second file = %#v", got.Files[1])
+	}
+	if got.Delivery.State != "ready_to_publish" || got.Delivery.Action != "publish_pr" || got.Delivery.WorkspaceVersion != "version-1" || got.Delivery.Branch != "ao/card" || got.Delivery.Repository != "acme/widget" || got.Delivery.CommitSubject != "feat: card" {
+		t.Fatalf("delivery = %#v", got.Delivery)
+	}
+}
+
+func TestSessionsAPI_AdvanceDelivery(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.deliveryResult = sessionsvc.DeliveryActionResult{
+		Committed: true, Pushed: true,
+		PullRequest: &sessionsvc.DeliveryPullRequest{URL: "https://github.com/acme/widget/pull/42", Number: 42},
+		Delivery:    sessionsvc.DeliveryStatus{State: sessionsvc.DeliveryStateSynchronized, WorkspaceVersion: "v2"},
+	}
+	srv := newSessionTestServer(t, svc)
+	body, status, headers := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/delivery", `{"action":"commit_and_publish_pr","expectedWorkspaceVersion":"v1","commitMessage":"feat: card"}`)
+	assertJSON(t, headers)
+	if status != http.StatusOK {
+		t.Fatalf("POST delivery = %d, want 200; body=%s", status, body)
+	}
+	if svc.deliveryInput.Action != sessionsvc.DeliveryActionCommitAndPublish || svc.deliveryInput.ExpectedWorkspaceVersion != "v1" || svc.deliveryInput.CommitMessage != "feat: card" {
+		t.Fatalf("delivery input = %#v", svc.deliveryInput)
+	}
+	var got controllers.AdvanceDeliveryResponse
+	mustJSON(t, body, &got)
+	if !got.Committed || !got.Pushed || got.PullRequest == nil || got.PullRequest.Number != 42 || got.Delivery.State != sessionsvc.DeliveryStateSynchronized {
+		t.Fatalf("response = %#v", got)
 	}
 }
 

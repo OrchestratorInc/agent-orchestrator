@@ -304,6 +304,10 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersWorkspaceFileSections":                    "WorkspaceFileSections",
 	"ControllersWorkspaceCommitSummary":                   "WorkspaceCommitSummary",
 	"ControllersWorkspaceSummary":                         "WorkspaceSummary",
+	"ControllersDeliveryStatus":                           "DeliveryStatus",
+	"ControllersDeliveryPullRequest":                      "DeliveryPullRequest",
+	"ControllersAdvanceDeliveryRequest":                   "AdvanceDeliveryRequest",
+	"ControllersAdvanceDeliveryResponse":                  "AdvanceDeliveryResponse",
 	"ControllersEnsureCodexAccountsRequest":               "EnsureCodexAccountsRequest",
 	"ControllersConsumeCodexAccountResetCreditRequest":    "ConsumeCodexAccountResetCreditRequest",
 	"ControllersCodexAccountsResponse":                    "CodexAccountsResponse",
@@ -2451,6 +2455,12 @@ func sessionOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/delivery", id: "advanceSessionDelivery", tag: "sessions",
+			summary:    "Commit, push, or publish the reviewed session workspace safely",
+			pathParams: []any{controllers.SessionIDParam{}}, reqBody: controllers.AdvanceDeliveryRequest{},
+			resps: []respUnit{{http.StatusOK, controllers.AdvanceDeliveryResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/pr/{prNumber}/files", id: "listSessionPRFiles", tag: "sessions",

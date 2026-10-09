@@ -189,6 +189,14 @@ func (c *Client) doRESTWithETag(ctx context.Context, path string, q url.Values, 
 // methods must not replay cached responses). The response body and status code
 // are returned for caller-side interpretation.
 func (c *Client) doMERGE(ctx context.Context, path string, q url.Values, body any) (RESTResponse, error) {
+	return c.doMutation(ctx, http.MethodPut, path, q, body)
+}
+
+func (c *Client) doPOST(ctx context.Context, path string, q url.Values, body any) (RESTResponse, error) {
+	return c.doMutation(ctx, http.MethodPost, path, q, body)
+}
+
+func (c *Client) doMutation(ctx context.Context, method, path string, q url.Values, body any) (RESTResponse, error) {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -199,7 +207,7 @@ func (c *Client) doMERGE(ctx context.Context, path string, q url.Values, body an
 	}
 
 	u := c.restURL(path, q)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, rdr)
+	req, err := http.NewRequestWithContext(ctx, method, u, rdr)
 	if err != nil {
 		return RESTResponse{}, fmt.Errorf("gitlab scm: build %s request: %w", path, err)
 	}
@@ -213,7 +221,7 @@ func (c *Client) doMERGE(ctx context.Context, path string, q url.Values, body an
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return RESTResponse{}, fmt.Errorf("gitlab scm: PUT %s: %w", path, err)
+		return RESTResponse{}, fmt.Errorf("gitlab scm: %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	b, err := readResponseBody(resp, path)

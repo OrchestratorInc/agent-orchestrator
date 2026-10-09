@@ -2097,6 +2097,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/delivery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Commit, push, or publish the reviewed session workspace safely */
+        post: operations["advanceSessionDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/exit-agent": {
         parameters: {
             query?: never;
@@ -3096,6 +3113,18 @@ export interface components {
             path: string;
             projectId?: null | string;
         };
+        AdvanceDeliveryRequest: {
+            /** @enum {string} */
+            action: "commit_and_publish_pr" | "publish_pr" | "commit_and_push" | "push";
+            commitMessage?: string;
+            expectedWorkspaceVersion: string;
+        };
+        AdvanceDeliveryResponse: {
+            committed: boolean;
+            delivery: components["schemas"]["DeliveryStatus"];
+            pullRequest?: components["schemas"]["DeliveryPullRequest"];
+            pushed: boolean;
+        };
         AgentAuthPlan: {
             action: string;
             agentId: string;
@@ -4058,6 +4087,28 @@ export interface components {
             orchestratorId?: string;
             workerId: string;
         };
+        DeliveryPullRequest: {
+            number: number;
+            url: string;
+        };
+        DeliveryStatus: {
+            /** @enum {string} */
+            action?: "commit_and_publish_pr" | "publish_pr" | "commit_and_push" | "push";
+            additions: number;
+            ahead?: null | number;
+            behind?: null | number;
+            blockedReason?: string;
+            branch?: string;
+            changedFiles: number;
+            commitCount: number;
+            commitSubject?: string;
+            deletions: number;
+            pullRequest?: components["schemas"]["DeliveryPullRequest"];
+            repository?: string;
+            /** @enum {string} */
+            state: "empty" | "uncommitted" | "ready_to_publish" | "uncommitted_for_pr" | "ahead_of_pr" | "synchronized" | "blocked";
+            workspaceVersion: string;
+        };
         DesktopWorkspaceLocationResponse: {
             sessionId: string;
             workspacePath: string;
@@ -4414,6 +4465,7 @@ export interface components {
             compareMode?: "base" | "head_fallback";
             degraded: boolean;
             degradedCode?: string;
+            delivery: components["schemas"]["DeliveryStatus"];
             files: components["schemas"]["WorkspaceFileSummary"][];
             sections: components["schemas"]["WorkspaceFileSections"];
             sessionId: string;
@@ -13336,6 +13388,87 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    advanceSessionDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdvanceDeliveryRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdvanceDeliveryResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

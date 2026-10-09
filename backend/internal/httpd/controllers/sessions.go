@@ -120,6 +120,7 @@ type SessionService interface {
 	ReconcileWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
 	GetWorkspaceHistory(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceHistory, error)
 	ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error)
+	AdvanceDelivery(ctx context.Context, id domain.SessionID, input sessionsvc.DeliveryActionInput) (sessionsvc.DeliveryActionResult, error)
 	GetWorkspaceFile(ctx context.Context, id domain.SessionID, path string, section sessionsvc.WorkspaceFileSection) (sessionsvc.WorkspaceFileDetail, error)
 	GetWorkspaceFileAtCommit(ctx context.Context, id domain.SessionID, path, commitSHA string) (sessionsvc.WorkspaceFileDetail, error)
 	UpdateWorkspaceFile(ctx context.Context, id domain.SessionID, input sessionsvc.UpdateWorkspaceFileInput) (sessionsvc.WorkspaceFileDetail, error)
@@ -213,6 +214,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/workspace/manifest", c.getWorkspaceManifest)
 	r.Get("/sessions/{sessionId}/workspace/history", c.getWorkspaceHistory)
 	r.Get("/sessions/{sessionId}/workspace/files", c.listWorkspaceFiles)
+	r.Post("/sessions/{sessionId}/delivery", c.advanceDelivery)
 	r.Get("/sessions/{sessionId}/workspace/file", c.getWorkspaceFile)
 	r.Put("/sessions/{sessionId}/workspace/file", c.updateWorkspaceFile)
 	r.Get("/sessions/{sessionId}/workspace/file/blob", c.getWorkspaceFileBlob)
@@ -785,6 +787,24 @@ func (c *SessionsController) listWorkspaceFiles(w http.ResponseWriter, r *http.R
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, workspaceFilesResponse(files))
+}
+
+func (c *SessionsController) advanceDelivery(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/delivery")
+		return
+	}
+	var in AdvanceDeliveryRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_DELIVERY_REQUEST", "Invalid delivery request", nil)
+		return
+	}
+	result, err := c.Svc.AdvanceDelivery(r.Context(), sessionID(r), sessionsvc.DeliveryActionInput{Action: in.Action, ExpectedWorkspaceVersion: strings.TrimSpace(in.ExpectedWorkspaceVersion), CommitMessage: in.CommitMessage})
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, advanceDeliveryResponse(result))
 }
 
 func (c *SessionsController) getWorkspaceManifest(w http.ResponseWriter, r *http.Request) {
@@ -2626,6 +2646,7 @@ func workspaceFilesResponse(files sessionsvc.WorkspaceFiles) ListWorkspaceFilesR
 		DegradedCode:     files.DegradedCode,
 		Ahead:            files.Ahead,
 		Behind:           files.Behind,
+		Delivery:         deliveryStatusResponse(files.Delivery),
 	}
 }
 
@@ -2652,6 +2673,27 @@ func workspaceHistoryResponse(history sessionsvc.WorkspaceHistory) WorkspaceHist
 		SessionID: history.SessionID, Commits: workspaceCommitsResponse(history.Commits),
 		CommitsTruncated: history.CommitsTruncated, Ahead: history.Ahead, Behind: history.Behind,
 	}
+}
+
+func deliveryStatusResponse(status sessionsvc.DeliveryStatus) DeliveryStatus {
+	out := DeliveryStatus{
+		State: status.State, Action: status.Action, BlockedReason: status.BlockedReason,
+		WorkspaceVersion: status.WorkspaceVersion, Branch: status.Branch, Repository: status.Repository,
+		CommitCount: status.CommitCount, CommitSubject: status.CommitSubject, ChangedFiles: status.ChangedFiles,
+		Additions: status.Additions, Deletions: status.Deletions, Ahead: status.Ahead, Behind: status.Behind,
+	}
+	if status.PullRequest != nil {
+		out.PullRequest = &DeliveryPullRequest{URL: status.PullRequest.URL, Number: status.PullRequest.Number}
+	}
+	return out
+}
+
+func advanceDeliveryResponse(result sessionsvc.DeliveryActionResult) AdvanceDeliveryResponse {
+	out := AdvanceDeliveryResponse{Delivery: deliveryStatusResponse(result.Delivery), Committed: result.Committed, Pushed: result.Pushed}
+	if result.PullRequest != nil {
+		out.PullRequest = &DeliveryPullRequest{URL: result.PullRequest.URL, Number: result.PullRequest.Number}
+	}
+	return out
 }
 
 func prFilesResponse(files sessionsvc.PRFiles) ListPRFilesResponse {

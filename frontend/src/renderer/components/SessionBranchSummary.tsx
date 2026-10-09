@@ -51,6 +51,7 @@ export function SessionBranchSummary({
 	openPRNumber,
 	pullRequests,
 	session,
+	suppressAction = false,
 }: {
 	hostId?: string;
 	onOpenFiles: () => void;
@@ -58,6 +59,7 @@ export function SessionBranchSummary({
 	openPRNumber?: number;
 	pullRequests: ReactNode;
 	session: WorkspaceSession;
+	suppressAction?: boolean;
 }) {
 	const { t } = useTranslation();
 	const key = sessionUiKey(session.id, hostId);
@@ -133,7 +135,7 @@ export function SessionBranchSummary({
 				{pendingLabel(pending.kind, t)}
 			</Button>
 		);
-	} else if (plan) {
+	} else if (plan && !suppressAction) {
 		action = (
 			<GitActionButton
 				menu={plan.menu.map((kind) => ({ kind, label: menuLabel(kind, t) }))}

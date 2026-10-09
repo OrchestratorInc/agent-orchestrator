@@ -85,6 +85,8 @@ import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog } from "./SessionArchiveDialog";
+import { SessionDeliveryCard } from "./SessionDeliveryCard";
+import { sessionDeliveryQueryKey } from "../hooks/useSessionDelivery";
 import { ReviewerSelect } from "./ReviewerSelect";
 import { agentLabel } from "../lib/agent-options";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
@@ -383,6 +385,15 @@ const SummaryView = memo(function SummaryView({
 	const { t } = useTranslation();
 	const query = useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud ? session.autoInjectCI === true : false, hostId);
 	const linkedPRs = query.data?.linkedPrs ?? [];
+	const deliveryQuery = useQuery({
+		queryKey: sessionDeliveryQueryKey(session.id, hostId),
+		enabled: !session.cloud,
+		queryFn: async () => {
+			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/files", { params: { path: { sessionId: session.id } } });
+			if (error) throw error;
+			return data?.delivery;
+		},
+	});
 	const projectQuery = useQuery({
 		queryKey: hostId ? ["project", hostId, session.workspaceId] : ["project", session.workspaceId],
 		enabled: linkedPRs.length > 0 && !session.cloud,
@@ -405,9 +416,10 @@ const SummaryView = memo(function SummaryView({
 	const prSummaries = sessionPRDisplaySummaries(session, query.data?.prs);
 	const prCount = prSummaries.length + linkedPRs.length;
 	const hasPRs = prCount > 0;
+	const delivery = deliveryQuery.data;
 	const artifacts = sessionArtifacts(session);
 	const hasArtifacts = artifacts.length > 0;
-	const prSectionTitle = prCount > 1 ? t("inspector.pullRequests", { count: prCount }) : t("inspector.pullRequest");
+	const prSectionTitle = !hasPRs && delivery ? t("inspector.delivery.title") : prCount > 1 ? t("inspector.pullRequests", { count: prCount }) : t("inspector.pullRequest");
 	const artifactSectionTitle = artifacts.length > 1
 		? t("inspector.artifacts", { count: artifacts.length })
 		: t("inspector.artifact");
@@ -450,8 +462,10 @@ const SummaryView = memo(function SummaryView({
 					hostId={hostId}
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
-					pullRequests={hasPRs ? (
-						<Section surface={false} title={prSectionTitle}>
+					pullRequests={delivery || hasPRs ? (
+					<div className="flex flex-col gap-1.5">
+						{delivery && delivery.state !== "synchronized" ? <SessionDeliveryCard delivery={delivery} hostId={hostId} onOpenFiles={onOpenFiles} sessionId={session.id} /> : null}
+						{hasPRs ? <Section surface={false} title={prSectionTitle}>
 							<div className="flex flex-col gap-1.5">
 								{prSummaries.map((pr) => (
 									<PRSummaryCard
@@ -466,9 +480,11 @@ const SummaryView = memo(function SummaryView({
 								))}
 								{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectQuery.data)} key={pr.url} pr={pr} />)}
 							</div>
-						</Section>
+						</Section> : null}
+					</div>
 					) : null}
 					session={session}
+					suppressAction={Boolean(delivery)}
 				/>
 			}
 			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
