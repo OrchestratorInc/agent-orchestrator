@@ -635,6 +635,7 @@ type client struct {
 	// Set before any goroutine that reads them starts; nil means none.
 	credentialPrefetch *prefetch[worker.CredentialResponse]
 	transcriptPrefetch *prefetch[transcriptLookup]
+	grantPrefetch      *prefetch[worker.CheckoutGrantResponse]
 }
 
 // startStartupPrefetch begins the lookups the coding agent's launch needs but
@@ -643,7 +644,13 @@ type client struct {
 // the checkout gate opens the agent launches without two more round trips. The
 // gate itself is unchanged: the agent still starts only after checkout and
 // rehydration.
+//
+// The checkout grant is requested here too, so the checkout does not wait for
+// the transport to start and worker.ready to post before asking for it.
 func (c *client) startStartupPrefetch(ctx context.Context, launch worker.LaunchContext) {
+	if launch.RepositoryURL != "" && !worker.IsScratchRepositoryURL(launch.RepositoryURL) {
+		c.grantPrefetch = startPrefetch(ctx, prefetchMaxAge, c.fetchCheckoutGrant)
+	}
 	c.transcriptPrefetch = startPrefetch(ctx, prefetchMaxAge, func(ctx context.Context) (transcriptLookup, error) {
 		checkpoint, found, err := c.fetchTranscript(ctx)
 		return transcriptLookup{checkpoint: checkpoint, found: found}, err
@@ -882,7 +889,19 @@ func (c *client) agentCredential(ctx context.Context, query string) (worker.Cred
 	return response, nil
 }
 
+// grantReuseMargin is how long a prefetched checkout token must stay valid to
+// be used; a shorter-lived one is replaced so the fetch cannot outlive it.
+const grantReuseMargin = 2 * time.Minute
+
 func (c *client) checkoutGrant(ctx context.Context) (worker.CheckoutGrantResponse, error) {
+	if grant, ok := c.grantPrefetch.take(ctx); ok &&
+		(grant.Token == "" || time.Until(grant.ExpiresAt) > grantReuseMargin) {
+		return grant, nil
+	}
+	return c.fetchCheckoutGrant(ctx)
+}
+
+func (c *client) fetchCheckoutGrant(ctx context.Context) (worker.CheckoutGrantResponse, error) {
 	var response worker.CheckoutGrantResponse
 	if err := c.do(ctx, "/worker/checkout-grant", struct{}{}, &response); err != nil {
 		return worker.CheckoutGrantResponse{}, err
