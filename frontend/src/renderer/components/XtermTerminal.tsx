@@ -803,9 +803,9 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			}
 			scrollbarTrack.dataset.active = "false";
 		};
-		// Called on every scroll, which streaming output fires continuously: keep
-		// it to a timestamp. The single hide timer re-arms itself while activity
-		// continues instead of being cleared and re-created per scroll.
+		// Called once per frame while scrolling (streaming output fires a scroll
+		// per line feed): keep it to a timestamp. The single hide timer re-arms
+		// itself while activity continues instead of being cleared and re-created.
 		const revealScrollbar = () => {
 			if (!scrollbarTrack || scrollbarTrack.dataset.scrollable !== "true") return;
 			scrollbarLastActive = Date.now();
@@ -813,8 +813,11 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			if (scrollbarDrag || scrollbarHideTimer !== null) return;
 			scrollbarHideTimer = window.setTimeout(hideScrollbarWhenIdle, MAC_TERMINAL_SCROLLBAR_IDLE_MS);
 		};
+		let revealAfterUpdate = false;
 		const updateScrollbar = () => {
 			scrollbarFrame = null;
+			const reveal = revealAfterUpdate;
+			revealAfterUpdate = false;
 			if (!scrollbarTrack || !scrollbarThumb) return;
 			const buffer = term.buffer.active;
 			const maxScrollLine = buffer.type === "normal" ? buffer.baseY : 0;
@@ -831,6 +834,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			scrollbarThumb.style.height = `${thumbHeight}px`;
 			scrollbarThumb.style.transform = `translateY(${thumbTop}px)`;
 			scrollbarTrack.dataset.scrollable = "true";
+			if (reveal) revealScrollbar();
 		};
 		const scheduleScrollbarUpdate = () => {
 			if (!scrollbarTrack || scrollbarFrame !== null) return;
@@ -838,8 +842,8 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		};
 		const scrollPositionChange = scrollbarTrack
 			? term.onScroll(() => {
+				revealAfterUpdate = true;
 				scheduleScrollbarUpdate();
-				revealScrollbar();
 			})
 			: null;
 		const scrollbarResize = scrollbarTrack ? term.onResize(scheduleScrollbarUpdate) : null;
