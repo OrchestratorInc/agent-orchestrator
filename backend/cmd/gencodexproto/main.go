@@ -659,13 +659,12 @@ func (g *generator) renderDef(b *strings.Builder, name string, s *schema, inline
 		emitted[name] = true
 		doc(b, name, s.Description)
 		fmt.Fprintf(b, "type %s string\n\nconst (\n", name)
-		used := map[string]bool{}
 		for _, v := range s.Enum {
 			str, ok := v.(string)
 			if !ok {
 				continue
 			}
-			fmt.Fprintf(b, "\t%s %s = %q\n", enumConstantName(name, str, used), name, str)
+			fmt.Fprintf(b, "\t%s%s %s = %q\n", name, exportName(str), name, str)
 		}
 		b.WriteString(")\n\n")
 		return
@@ -680,7 +679,6 @@ func (g *generator) renderDef(b *strings.Builder, name string, s *schema, inline
 			arms = s.AnyOf
 		}
 		seen := map[string]bool{}
-		used := map[string]bool{}
 		for _, a := range arms {
 			for _, v := range a.Enum {
 				str, ok := v.(string)
@@ -691,7 +689,7 @@ func (g *generator) renderDef(b *strings.Builder, name string, s *schema, inline
 				if a.Description != "" {
 					fmt.Fprintf(b, "\t// %s\n", oneLine(a.Description))
 				}
-				fmt.Fprintf(b, "\t%s %s = %q\n", enumConstantName(name, str, used), name, str)
+				fmt.Fprintf(b, "\t%s%s %s = %q\n", name, exportName(str), name, str)
 			}
 		}
 		b.WriteString(")\n\n")
@@ -956,28 +954,15 @@ func (g *generator) renderFlattenedUnion(
 	emitted[tagType] = true
 	fmt.Fprintf(b, "// %s is the discriminator of %s.\ntype %s string\n\nconst (\n", tagType, name, tagType)
 	seen := map[string]bool{}
-	usedConstants := map[string]bool{}
 	sort.Strings(tagValues)
 	for _, v := range tagValues {
 		if seen[v] {
 			continue
 		}
 		seen[v] = true
-		fmt.Fprintf(b, "\t%s %s = %q\n", enumConstantName(tagType, v, usedConstants), tagType, v)
+		fmt.Fprintf(b, "\t%s%s %s = %q\n", tagType, exportName(v), tagType, v)
 	}
 	b.WriteString(")\n\n")
-}
-
-// Distinct wire values can normalize to the same Go identifier, such as
-// "openai/form" and "openaiForm". Retain both values with unique names.
-func enumConstantName(owner, value string, used map[string]bool) string {
-	base := owner + exportName(value)
-	name := base
-	for suffix := 2; used[name]; suffix++ {
-		name = fmt.Sprintf("%s%d", base, suffix)
-	}
-	used[name] = true
-	return name
 }
 
 func isStringEnum(s *schema) bool {

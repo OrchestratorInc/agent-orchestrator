@@ -875,7 +875,7 @@ func autoReviewDetail(
 		detail["rawCommand"] = *action.Command
 	}
 	if action.Cwd != nil && *action.Cwd != "" {
-		detail["cwd"] = *action.Cwd
+		detail["cwd"] = string(*action.Cwd)
 	}
 	if action.Source != nil {
 		detail["commandSource"] = string(*action.Source)

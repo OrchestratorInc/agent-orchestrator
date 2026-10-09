@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
@@ -139,9 +138,11 @@ func capabilities() ports.ChatCapabilities {
 		// all: every turn re-sends the history, so context fills on its own and the
 		// only way back is to summarize what is already there.
 		ports.ChatCapabilityCompaction: true,
-		// New providers removed the deprecated rollback RPC. Keep legacy handling,
-		// but only advertise operations declared by the generated protocol.
-		ports.ChatCapabilityRollback: codexproto.Declares("thread/rollback"),
+		// History operations, all three exercised against a live app-server. Rollback
+		// is advertised despite thread/rollback carrying a DEPRECATED annotation:
+		// what the installed provider does is the only honest answer, and gating the
+		// feature off while the call still works would take undo away for no reason.
+		ports.ChatCapabilityRollback: true,
 		ports.ChatCapabilityFork:     true,
 		ports.ChatCapabilityRename:   true,
 		ports.ChatCapabilitySkills:   true,
