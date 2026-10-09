@@ -189,7 +189,9 @@ func TestMCPHTMLPreviewReturnsTheScreenshotAndReport(t *testing.T) {
 		got.Content[0].Data != "iVBORw0KGgo=" {
 		t.Fatalf("result = %+v", got)
 	}
-	want := `{"width":390,"contentHeight":412,"consoleMessages":[{"level":"error","text":"d3 is not defined"}],"missingImages":["` + gone + `"]}`
+	// JSON-encoded, so a Windows path's backslashes are escaped as in the report.
+	goneJSON, _ := json.Marshal(gone)
+	want := `{"width":390,"contentHeight":412,"consoleMessages":[{"level":"error","text":"d3 is not defined"}],"missingImages":[` + string(goneJSON) + `]}`
 	if got.Content[1].Type != "text" || got.Content[1].Text != want {
 		t.Fatalf("report = %s, want %s", got.Content[1].Text, want)
 	}
