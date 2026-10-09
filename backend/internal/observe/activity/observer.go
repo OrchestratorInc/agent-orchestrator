@@ -2,7 +2,9 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -36,6 +38,22 @@ type activitySink interface {
 
 type outputReader interface {
 	GetOutput(ctx context.Context, handle ports.RuntimeHandle, lines int) (string, error)
+}
+
+func terminalOutput(ctx context.Context, runtime outputReader, handle ports.RuntimeHandle, lines int) (string, error) {
+	if styled, ok := runtime.(ports.StyledTerminalOutputReader); ok {
+		output, err := styled.GetStyledOutput(ctx, handle, lines)
+		switch {
+		case err == nil:
+			// Current-screen output is authoritative even when blank. Falling back
+			// to raw history after a successful blank read could classify an old
+			// idle frame while the provider is drawing a new active one.
+			return output, nil
+		case !errors.Is(err, ports.ErrStyledTerminalOutputUnavailable):
+			return "", err
+		}
+	}
+	return runtime.GetOutput(ctx, handle, lines)
 }
 
 // Observer reconciles stale hook activity from adapter-owned terminal markers.
@@ -133,9 +151,13 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		session.Activity.State != domain.ActivityWaitingInput {
 		return
 	}
-	output, err := o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	handle := ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}
+	output, err := terminalOutput(ctx, o.runtime, handle, o.outputLines)
 	if err != nil {
 		o.logger.Debug("activity observer: terminal output unavailable", "session", session.ID, "err", err)
+		return
+	}
+	if strings.TrimSpace(output) == "" {
 		return
 	}
 	state, ok := detector.DetectTerminalActivity(output)
