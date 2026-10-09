@@ -34,6 +34,7 @@ import {
 	useEffect,
 	useImperativeHandle,
 	useRef,
+	useState,
 	type ClipboardEvent,
 	type JSX,
 	type KeyboardEvent,
@@ -527,6 +528,30 @@ const EditorBridge = forwardRef<
 	return null;
 });
 
+/**
+ * Fades a changing placeholder (the orchestrator's start-up steps) out, swaps
+ * the text, and fades it back in. Fast on purpose. The first text mounts
+ * directly.
+ */
+const PLACEHOLDER_FADE_MS = 80;
+
+function FadingPlaceholder({ text }: { text: string }) {
+	const [shown, setShown] = useState(text);
+	useEffect(() => {
+		if (text === shown) return;
+		const timer = setTimeout(() => setShown(text), PLACEHOLDER_FADE_MS);
+		return () => clearTimeout(timer);
+	}, [text, shown]);
+	return (
+		<span
+			className="transition-opacity ease-out motion-reduce:transition-none"
+			style={{ opacity: text === shown ? 1 : 0, transitionDuration: `${PLACEHOLDER_FADE_MS}ms` }}
+		>
+			{shown}
+		</span>
+	);
+}
+
 export const ComposerEditor = forwardRef<
 	ComposerEditorHandle,
 	{
@@ -584,7 +609,7 @@ export const ComposerEditor = forwardRef<
 	const placeholderNode = useCallback(
 		() => (
 			<div className="pointer-events-none absolute inset-x-0 top-0 py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground">
-				{placeholder}
+				<FadingPlaceholder text={placeholder} />
 			</div>
 		),
 		[placeholder],

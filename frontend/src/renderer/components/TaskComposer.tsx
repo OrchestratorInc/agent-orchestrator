@@ -40,9 +40,13 @@ import { cloudSessionsQueryKey, useCloudProjectsQuery } from "../hooks/useWorksp
 import {
 	agentModelsQueryKey,
 	agentModelsQueryOptions,
+	modelCatalogAuthIssue,
 	refreshAgentModels,
 	revalidateAgentModels,
 } from "../hooks/useAgentModelsQuery";
+import { useModelCatalogAuthRecovery } from "../hooks/useModelCatalogAuthRecovery";
+import { useUiStore } from "../stores/ui-store";
+import { ModelCatalogNotice } from "./ModelCatalogNotice";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
 import { EffortPicker, type EffortAvailability } from "./settings/EffortPicker";
@@ -431,18 +435,25 @@ export function TaskComposer({
 			);
 		}
 	}, [hostId, modelsProjectId, queryClient, revalidationQuery.data, selectedAgent]);
-	const modelWarning =
-		(revalidationQuery.isError
-			? revalidationQuery.error instanceof Error
-				? revalidationQuery.error.message
-				: t("settings.models.validateFailed")
-			: undefined) ??
+	const revalidationWarning = revalidationQuery.isError
+		? revalidationQuery.error instanceof Error
+			? revalidationQuery.error.message
+			: t("settings.models.validateFailed")
+		: undefined;
+	const modelWarningText =
+		revalidationWarning ??
 		modelCatalogQuery.data?.warning ??
 		(modelCatalogQuery.isError
 			? modelCatalogQuery.error instanceof Error
 				? modelCatalogQuery.error.message
 				: t("settings.models.loadFailed")
 			: undefined);
+	// A login problem behind the catalog warning gets a plain-language notice
+	// with the fix in place. Discovery runs against this computer's login even
+	// for a cloud project, whose task runs with the cloud connection instead,
+	// so there the notice is informational and never reads as blocking.
+	const modelAuthIssue = revalidationWarning === undefined ? modelCatalogAuthIssue(modelCatalogQuery.data) : undefined;
+	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
 	const modelCatalog: TaskComposerModelCatalog | undefined = modelCatalogQuery.data
 		? {
 				allowCustom: modelCatalogQuery.data.allowCustom,
@@ -553,6 +564,26 @@ export function TaskComposer({
 		const refreshed = await refreshAgentModels(selectedAgent, modelsProjectId, hostId);
 		queryClient.setQueryData(agentModelsQueryKey(selectedAgent, modelsProjectId, hostId), refreshed);
 	}, [hostId, modelsProjectId, queryClient, selectedAgent]);
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	const startAgentLogin = useCallback(() => {
+		openGlobalSettings("harness", {
+			focusAgentId: selectedAgent,
+			...(hostId ? { hostId } : {}),
+			harnessView: "local",
+			startLogin: true,
+			preserveProject: true,
+		});
+	}, [hostId, openGlobalSettings, selectedAgent]);
+	const modelWarning = modelAuthIssue ? (
+		<ModelCatalogNotice
+			agentLabel={selectedAgentLabel}
+			issue={modelAuthIssue}
+			detail={modelWarningText}
+			cloud={isCloudProject}
+			onLogin={startAgentLogin}
+			onRetry={refreshSelectedModels}
+		/>
+	) : modelWarningText;
 	useEffect(() => {
 		if (!agentTouched) setAgent(defaultWorkerAgent);
 	}, [agentTouched, defaultWorkerAgent]);

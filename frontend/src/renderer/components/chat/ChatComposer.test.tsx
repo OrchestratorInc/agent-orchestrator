@@ -18,6 +18,7 @@ import {
 	readChatSessionDraft,
 	writeChatComposerText,
 	writeChatAttachments,
+	writeChatExcerptReferences,
 } from "../../lib/chat-drafts";
 import {
 	getChatDraftBoundaries,
@@ -87,6 +88,39 @@ const textFile = (name = "notes.txt") => new File(["hello"], name, { type: "text
 /* ---- the keyboard contract the composer already had ---------------------- */
 
 describe("send keys", () => {
+	it("navigates to the selected annotation from the composer popover", async () => {
+		const excerpt = { id: "navigation", conversationId: "conversation-1", messageId: "source-1", revision: 2, text: "navigate here", role: "assistant" as const };
+		writeChatExcerptReferences("composer-navigation", [excerpt]);
+		const onSelectAnnotation = vi.fn();
+		renderComposer({ draftSessionId: "composer-navigation", onSelectAnnotation });
+		const user = userEvent.setup();
+		await user.click(screen.getByRole("button", { name: "1 annotation" }));
+		await user.click(screen.getByRole("button", { name: "navigate here" }));
+		expect(onSelectAnnotation).toHaveBeenCalledWith(excerpt);
+	});
+	it("sends the exact durable transcript excerpts with the next message", async () => {
+		const sessionId = "composer-excerpts";
+		const excerpts = [{
+			id: "excerpt-1",
+			conversationId: "conversation-1",
+			messageId: "message-1",
+			revision: 4,
+			text: "selected transcript text",
+			role: "assistant" as const,
+		}];
+		writeChatExcerptReferences(sessionId, excerpts);
+		const { onSend, field } = renderComposer({ draftSessionId: sessionId });
+		await typeInComposer(field, "use this context");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith(
+			"use this context",
+			undefined,
+			expect.any(String),
+			undefined,
+			excerpts,
+		));
+	});
+
 	it("focuses the message field when the chat composer opens", () => {
 		const { field } = renderComposer({ autoFocusKey: "session-1" });
 		expect(document.activeElement).toBe(field);
@@ -436,6 +470,38 @@ describe("send keys", () => {
 		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it.each(["CHAT_EXCERPT_STALE", "CHAT_EXCERPT_INVALID"])("returns a rejected excerpt send (%s) to the draft instead of an uncertain retry", async (code) => {
+		const sessionId = `composer-excerpt-refused-${code}`;
+		const excerpts = [{ id: "stale", conversationId: "conversation-1", messageId: "source-1", revision: 1, text: "old text", role: "assistant" as const }];
+		writeChatExcerptReferences(sessionId, excerpts);
+		const onSend = vi.fn().mockRejectedValueOnce({ code, message: "source message changed; reselect it" });
+		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "explain this");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("reselect it"));
+		const draft = readChatSessionDraft(sessionId).composer;
+		expect(draft.delivery).toBeUndefined();
+		expect(draft.excerpts).toEqual(excerpts);
+		expect(screen.queryByRole("button", { name: "Retry message safely" })).not.toBeInTheDocument();
+	});
+
+	it("queues instead of steering when excerpts are attached", async () => {
+		const sessionId = "composer-excerpt-no-steer";
+		const excerpts = [{ id: "keep", conversationId: "conversation-1", messageId: "source-1", revision: 1, text: "keep me", role: "assistant" as const }];
+		writeChatExcerptReferences(sessionId, excerpts);
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const onSteer = vi.fn();
+		render(<ChatComposer onSend={onSend} onSteer={onSteer} canSteer willQueue draftSessionId={sessionId} />);
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "about this");
+		fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onSteer).not.toHaveBeenCalled();
+		expect(onSend.mock.calls[0]?.[4]).toEqual(excerpts);
 	});
 
 	it.each([

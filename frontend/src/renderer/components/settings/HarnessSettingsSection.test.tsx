@@ -297,7 +297,7 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
 	});
 
-	it("shows configured MiMo Code without asking for login again", async () => {
+	it("shows configured MiMo Code as connected and offers refresh login", async () => {
 		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: configured } as never;
@@ -308,9 +308,10 @@ describe("HarnessSettingsSection", () => {
 		});
 		renderSection();
 		const row = (await screen.findByText("MiMo Code")).closest('[data-agent="mimo-code"]') as HTMLElement;
-		expect(await within(row).findByText("Configured")).toBeInTheDocument();
-		expect(within(row).queryByRole("button", { name: "Configured" })).toBeNull();
+		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "Refresh login" })).toBeEnabled();
 	});
 
 	it("offers fx installation while readiness refreshes automatically", async () => {
@@ -515,6 +516,78 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
 
+	function mockClaudeLogin({ probeStatus = "authorized" }: { probeStatus?: string } = {}) {
+		const authorized = catalogWithInstalled("claude-code");
+		authorized.agents[0].authentication.state = "authorized";
+		const calls = { auth: 0, probe: 0 };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [
+				{ agentId: "claude-code", action: "login", launchMode: "terminal", available: true },
+			] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/{agent}/probe") {
+				calls.probe += 1;
+				return { data: { agent: { id: "claude-code", label: "Claude Code", authStatus: probeStatus }, supported: true, installed: true } } as never;
+			}
+			if (path === "/api/v1/agents/readiness/ensure") return { data: calls.probe > 0 ? authorized : catalog } as never;
+			if (path === "/api/v1/agents/refresh") return { data: catalog } as never;
+			if (path === "/api/v1/agents/{agent}/auth") {
+				calls.auth += 1;
+				return { data: {
+					agentId: "claude-code", action: "login", guidance: "",
+					terminal: { handleId: "auth-terminal-1", title: "Claude Code login", workingDir: "/tmp", createdAt: "2026-09-15T00:00:00Z" },
+				} } as never;
+			}
+			return { data: undefined } as never;
+		});
+		vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
+		return calls;
+	}
+
+	// The task composer's "Log in" shortcut opens this page asking it to start
+	// the login, so the user lands in the same flow the row's button runs.
+	it("starts the focused harness login once when opened from a login shortcut", async () => {
+		const calls = mockClaudeLogin();
+		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={client}>
+				<TooltipProvider>
+					<HarnessSettingsSection focusAgentId="claude-code" startLogin />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		await within(row).findByTestId("inline-terminal-body");
+		expect(calls.auth).toBe(1);
+	});
+
+	// A login fixed here must clear a stale model-discovery error in an open
+	// task composer without the user pressing refresh.
+	it("invalidates the harness's cached model catalogs after a login check", async () => {
+		const calls = mockClaudeLogin();
+		const user = userEvent.setup();
+		const { client } = renderSection();
+		const local = ["agent-models", "claude-code", ""] as const;
+		const otherAgent = ["agent-models", "codex", ""] as const;
+		client.setQueryData(local, { agentId: "claude-code", models: [], warning: "OAuth access token has expired." });
+		client.setQueryData(otherAgent, { agentId: "codex", models: [] });
+		const row = (await screen.findByText("Claude Code")).closest('[data-agent="claude-code"]') as HTMLElement;
+		await user.click(await within(row).findByRole("button", { name: "Login" }));
+		await within(row).findByTestId("inline-terminal-body");
+		expect(client.getQueryState(local)?.isInvalidated).toBe(false);
+
+		act(() => terminalStateCallback.value?.("exited"));
+		await waitFor(() => expect(calls.probe).toBeGreaterThan(0));
+		await waitFor(() => expect(client.getQueryState(local)?.isInvalidated).toBe(true));
+		expect(client.getQueryState(otherAgent)?.isInvalidated).toBe(false);
+	});
+
 	// The first check right after a login terminal exits can fail transiently;
 	// the panel must not report a completed login as signed out.
 	async function loginWithProbeResults(statuses: string[], readinessAfterProbes: number, terminalInput?: string) {
@@ -613,9 +686,10 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "auth-mimo" } },
 		}));
-		expect(await within(row).findByText("Configured")).toBeInTheDocument();
-		expect(within(row).queryByRole("button", { name: "Configured" })).toBeNull();
+		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "Refresh login" })).toBeEnabled();
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
 
@@ -859,7 +933,7 @@ describe("HarnessSettingsSection", () => {
 		}));
 	});
 
-	it("shows an incompatible OpenCode version reason and keeps installation available", async () => {
+	it("treats a separate OpenCode major as ordinarily not installed", async () => {
 		const reason = 'OpenCode 2 requires OpenCode 2, but "/usr/local/bin/opencode" reports OpenCode 1 (1.18.33); select the matching harness or put OpenCode 2 on PATH';
 		const mismatch = agentReadiness("opencode-v2", "OpenCode 2", {
 			installation: "not_installed",
@@ -891,9 +965,10 @@ describe("HarnessSettingsSection", () => {
 
 		renderSection();
 		const row = (await screen.findByText("OpenCode 2")).closest('[data-agent="opencode-v2"]') as HTMLElement;
-		expect(await within(row).findByText(reason)).toBeInTheDocument();
+		const install = await within(row).findByRole("button", { name: "Install" });
+		expect(row).toHaveTextContent("Available via npm");
+		expect(row).not.toHaveTextContent(reason);
 		expect(row).not.toHaveTextContent("Installation status unknown");
-		const install = within(row).getByRole("button", { name: "Install" });
 		expect(install).toBeEnabled();
 
 		await userEvent.click(install);

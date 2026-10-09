@@ -26,6 +26,7 @@ import { SessionInspectorRail, initialInspectorSize, inspectorSizing, sizingGeom
 import { SessionFileExplorer } from "./SessionFileExplorer";
 import { FilesTopbarHostContext } from "./files-topbar-host";
 import { CloudFileContentPane, CloudWorkspaceDiff } from "./CloudWorkspaceDiff";
+import { CloudSessionStartupError } from "./CloudSessionStartupError";
 import { SessionFileTab } from "./SessionFileTabs";
 import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionFilesPopOut } from "./SessionFilesPopOut";
@@ -65,7 +66,7 @@ import {
 	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
-import { cloudLifecycleStage } from "../lib/cloud-lifecycle";
+import { cloudLifecycleStage, cloudStartupProblem } from "../lib/cloud-lifecycle";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
@@ -219,7 +220,7 @@ function cloudStartupStage(observedState: string | undefined, workerConnected: b
 		: 0;
 }
 
-function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false }: { sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean }) {
+function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false, startupNote }: { sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean; startupNote?: string }) {
 	const { t } = useTranslation();
 	const { baseUrl, client } = useCloudCp();
 	const factIndex = cloudStartupStage(observedState, workerConnected, terminalOnly);
@@ -331,12 +332,29 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			className={cn("absolute inset-0 z-chrome grid place-items-center bg-background", completed && "cloud-session-loader--complete pointer-events-none")}
 			data-testid="cloud-session-loader-screen"
 		>
-			<MultiStepLoader
-				ariaLabel={t("terminal.sessionLoader.label")}
-				activeIndex={completed ? 3 : target.index}
-				complete={completed}
-				steps={steps}
-			/>
+			{startupNote ? (
+				// AO hit a startup problem but is still retrying in the background:
+				// keep the progress up and explain the delay underneath it.
+				<div className="flex w-80 max-w-[calc(100%-2rem)] flex-col gap-4">
+					<MultiStepLoader
+						ariaLabel={t("terminal.sessionLoader.label")}
+						activeIndex={completed ? 3 : target.index}
+						className="w-full max-w-none"
+						complete={completed}
+						steps={steps}
+					/>
+					<p className="text-xs leading-relaxed text-muted-foreground" data-testid="cloud-session-startup-note">
+						{startupNote} {t("cloud.startupError.stillRetrying")}
+					</p>
+				</div>
+			) : (
+				<MultiStepLoader
+					ariaLabel={t("terminal.sessionLoader.label")}
+					activeIndex={completed ? 3 : target.index}
+					complete={completed}
+					steps={steps}
+				/>
+			)}
 		</div>
 	);
 }
@@ -638,6 +656,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useEffect(() => stopTerminalLiveResize, [stopTerminalLiveResize]);
 
 	const cloudStage = cloudLifecycleStage(session);
+	// A startup failure AO gave up on (or a runtime that ended without one)
+	// replaces the pane; while AO still retries, the loader carries the reason.
+	const startupProblem = cloudStartupProblem(session);
+	const startupFailure = startupProblem && startupProblem.phase !== "retrying" ? startupProblem : undefined;
 	const cloudReconnecting = useTerminalResetStore((state) => Boolean(state.reconnecting[sessionId]));
 	const [terminalAttachment, setTerminalAttachment] = useState({ sessionId: "", attached: false });
 	const terminalAttached = terminalAttachment.sessionId === sessionId && terminalAttachment.attached;
@@ -658,6 +680,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// the actual terminal attachment before dismissing the startup view.
 	const expectsTerminal = session?.mode !== "chat" && !browserOnly;
 	const sessionReady = expectsTerminal ? terminalAttached : cloudStage === "connected";
+	useEffect(() => {
+		if (session?.kind !== "orchestrator" || session.cloud || session.mode === "chat") return;
+		if (terminalAttached || session.provisionState === "failed") {
+			useUiStore.getState().setProjectProvisioning(session.workspaceId, false, hostId);
+		}
+	}, [hostId, session?.kind, session?.cloud, session?.mode, session?.provisionState, session?.workspaceId, terminalAttached]);
 	const connectedSessionRef = useRef("");
 	if (sessionReady) connectedSessionRef.current = sessionId;
 	const hasConnectedOnce = connectedSessionRef.current === sessionId;
@@ -668,9 +696,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// "restoring_agent" while the sandbox is still running (a transient runtime
 	// relay drop mid-turn). A terminal re-mint (cloudReconnecting, covers a blank
 	// flash) and a genuine workspace restart still raise the loader.
-	const showLifecycleLoader = hasConnectedOnce
+	const showLifecycleLoader = !startupFailure && (hasConnectedOnce
 		? (cloudReconnecting || workspaceRestarting)
-		: (cloudReconnecting || (cloudStage != null && cloudStage !== "paused_by_coder" && !sessionReady));
+		: (cloudReconnecting || (cloudStage != null && cloudStage !== "paused_by_coder" && !sessionReady)));
 	const loaderVisibleLongEnoughRef = useRef("");
 	const [completionDismissed, setCompletionDismissed] = useState(false);
 	useEffect(() => {
@@ -1765,7 +1793,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// direct control-plane lookup is in flight; only show "not found" after
 	// both sources have settled.
 	const cloudSessionResolving = cloudLookupEnabled && cloudRouteSession.isLoading;
-	if (!session && (hostId ? !remoteSessionQuery.isLoading : !workspaceQuery.isLoading && !cloudSessionResolving)) {
+	if (!session && (hostId ? !remoteSessionQuery.isLoading : !workspaceQuery.isLoading && !workspaceSessionQuery.isLoading && !cloudSessionResolving)) {
 		const remoteCode = hostId && remoteSessionQuery.error ? apiErrorCode(remoteSessionQuery.error) : undefined;
 		const remoteError = hostId ? t(remoteCode === "BAD_PASSWORD" ? "remote.hostUnauthorized"
 			: remoteCode === "HOST_API_INCOMPATIBLE" ? "remote.hostIncompatible"
@@ -1814,6 +1842,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						/>
 						<div className="relative min-h-0 flex-1" ref={bindHandoffDialogContainer}>
 							{cloudStage === "paused_by_coder" ? <CloudPausedStatus /> : null}
+							{startupFailure && session?.cloud ? (
+								<CloudSessionStartupError orgId={session.cloud.orgId} problem={startupFailure} sessionId={session.id} />
+							) : null}
 							{session && !session.cloud && handoffDialogContainer ? (
 								<SwitchAgentDialog
 									agentSwitch={handoffAgentSwitch}
@@ -2086,6 +2117,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						workerConnected={Boolean(session?.runtimeConnected)}
 						terminalOnly={cloudReconnecting && !workspaceRestarting}
 						completed={showCompletedLoader}
+						startupNote={startupProblem?.phase === "retrying" ? startupProblem.message : undefined}
 					/>
 					: null}
 			{interfaceUi.dialogs}

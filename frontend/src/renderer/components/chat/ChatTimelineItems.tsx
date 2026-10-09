@@ -78,6 +78,7 @@ import {
 	isNonzeroCommandExit,
 } from "./activity-command";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -559,6 +560,7 @@ export function HumanMessage({
 	onActivateBranch,
 	activateBranchPending = false,
 	activateBranchError,
+	onSelectAnnotation,
 }: {
 	message: ConversationMessage;
 	/** The staged paths are relative to this session's workspace. */
@@ -586,11 +588,20 @@ export function HumanMessage({
 	onActivateBranch?: (branchId: string) => Promise<unknown> | void;
 	activateBranchPending?: boolean;
 	activateBranchError?: string;
+	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 }) {
 	const visibleMessageText = humanVisibleText(message.text);
 	const { body, attachments } = stagedAttachmentParts(visibleMessageText);
+	const excerptReferences = (message.content ?? []).filter(
+		(content) => content.type === "excerpt" && Boolean(content.text),
+	);
 	return (
-		<div className="group/message flex flex-col items-end gap-1">
+		<div
+			className="group/message flex flex-col items-end gap-1"
+			data-chat-message-id={!queued && !editing ? message.id : undefined}
+			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
+			data-chat-message-role={!queued && !editing ? message.role : undefined}
+		>
 			{/* A queued message reads as not-yet-sent rather than as sent-and-ignored:
 			    the agent has not seen it, and the timeline should not imply it has. */}
 			{editing ? (
@@ -625,8 +636,19 @@ export function HumanMessage({
 							: "bg-raised text-foreground",
 					)}
 				>
+					{excerptReferences.length > 0 ? (
+						<ChatAnnotationSummary
+							annotations={excerptReferences.map((excerpt) => ({
+								text: excerpt.text ?? "",
+								messageId: excerpt.sourceMessageId,
+								revision: excerpt.sourceRevision,
+							}))}
+							onSelect={onSelectAnnotation}
+							className="mb-2"
+						/>
+					) : null}
 					{body ? (
-						<p className="break-words whitespace-pre-wrap text-pretty">
+						<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
 							<ProseWithInlineImages
 								text={body}
 								attachments={attachments}
@@ -844,8 +866,14 @@ export function AssistantMessage({
 	const renderingStreaming = message.streaming || visibleText.length < message.text.length;
 	const showActions = !live && !renderingStreaming && (showCopy || Boolean(onRollback));
 	return (
-		<div className="group/message relative" data-chat-streaming-output={renderingStreaming ? "" : undefined}>
-			<ChatMarkdown text={visibleText} streaming={renderingStreaming} />
+		<div
+			className="group/message relative"
+			data-chat-streaming-output={renderingStreaming ? "" : undefined}
+			data-chat-message-id={!live && !renderingStreaming ? message.id : undefined}
+			data-chat-message-revision={!live && !renderingStreaming ? message.revision : undefined}
+			data-chat-message-role={!live && !renderingStreaming ? message.role : undefined}
+		>
+			<div data-chat-message-body=""><ChatMarkdown text={visibleText} streaming={renderingStreaming} /></div>
 			{showActions ? (
 				// One action row for the completed answer, not one after every prose
 				// fragment the provider emitted while working. Copy, rollback, and

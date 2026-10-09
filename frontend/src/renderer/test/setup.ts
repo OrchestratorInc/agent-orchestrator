@@ -141,6 +141,7 @@ if (typeof window !== "undefined") {
 		theme: {
 			set: async () => undefined,
 			persistTerminal: async () => undefined,
+			setWindowBackground: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,

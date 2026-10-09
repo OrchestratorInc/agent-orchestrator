@@ -37,6 +37,17 @@ var ErrAgentBinaryIdentityUnknown = errors.New("agent: binary identity unknown")
 // keep the last catalog and retry once the agent reports a login.
 var ErrAgentModelDiscoverySignInRequired = errors.New("agent: sign-in required to list models")
 
+// ErrAgentModelDiscoveryCredentialRejected marks a discovery failure caused by
+// the provider definitively rejecting the agent's credential. The catalog
+// service reports it as an auth problem so clients can offer a login instead
+// of a raw provider error.
+var ErrAgentModelDiscoveryCredentialRejected = errors.New("agent: credential rejected while listing models")
+
+// ErrAgentModelDiscoveryCredentialExpired marks a discovery failure caused by
+// a stored login whose access token expired while a refresh token remains.
+// The agent CLI renews such a login on its next run; it is not a sign-out.
+var ErrAgentModelDiscoveryCredentialExpired = errors.New("agent: stored login expired while listing models")
+
 // AgentAuthStatus describes the result of a short local auth probe for an
 // installed agent. It is advisory only: credentials, quota, selected model
 // availability, or CLI state can still fail at session spawn/model-call time.
@@ -253,7 +264,19 @@ type AgentModelCatalog struct {
 	RefreshRecommended bool   `json:"refreshRecommended,omitempty"`
 	Stale              bool   `json:"stale"`
 	Warning            string `json:"warning,omitempty"`
+	// WarningCode classifies Warning when it is an authentication problem, so
+	// clients can offer the agent's login instead of showing provider text.
+	// auth_required: the agent is signed out or its credential was rejected.
+	// auth_expired: a stored login's access token expired; the agent CLI
+	// renews it on its next run.
+	WarningCode string `json:"warningCode,omitempty" enum:"auth_required,auth_expired"`
 }
+
+// Model catalog warning codes.
+const (
+	ModelCatalogWarningAuthRequired = "auth_required"
+	ModelCatalogWarningAuthExpired  = "auth_expired"
+)
 
 // CachedAgentModelCatalog is the persistence record used by the model-catalog
 // service. CatalogJSON contains a serialized AgentModelCatalog.
@@ -315,6 +338,15 @@ type AgentModelDiscoverer interface {
 	// stay cheap enough to compute before deciding to skip discovery.
 	CatalogFingerprint(ctx context.Context, request AgentModelDiscoveryRequest) string
 	Manual(agentID string) AgentModelCatalog
+}
+
+// AgentModelAliasLabeler is an optional AgentModelDiscoverer capability. When a
+// discovery fails and AO falls back to an agent's static alias list, it labels
+// those aliases with the versions a previous successful discovery reported
+// (reference), so "opus" can read "Opus 5.5" instead of a bare family name.
+// Implementations return models unchanged when reference cannot resolve them.
+type AgentModelAliasLabeler interface {
+	LabelAliases(agentID string, models, reference []AgentModelInfo) []AgentModelInfo
 }
 
 // AgentExitDetectionMode describes how AO learns that an agent CLI process

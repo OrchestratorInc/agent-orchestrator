@@ -804,27 +804,32 @@ button.settings-row-bar {
 }
 
 /* Match the open row layout used by the main Settings pages. */
-.project-settings-form > section {
+.project-settings-form > section,
+.project-settings-form > fieldset > section {
 	gap: var(--space-2);
 }
 
-.project-settings-form > section > h2 {
+.project-settings-form > section > h2,
+.project-settings-form > fieldset > section > h2 {
 	padding-inline: 0;
-	font-size: var(--font-size-xs);
+	font-size: var(--font-size-sm);
 	font-weight: 500;
+	line-height: 1rem;
 	color: var(--color-text-settings-muted);
 }
 
-.project-settings-form > section > .settings-grouped-rows {
+.project-settings-form > section > .settings-grouped-rows,
+.project-settings-form > fieldset > section > .settings-grouped-rows {
 	background: transparent;
 }
 
-.project-settings-form > section > .settings-grouped-rows .settings-row-bar {
-	min-height: 3.5rem;
+.project-settings-form > section > .settings-grouped-rows .settings-row-bar,
+.project-settings-form > fieldset > section > .settings-grouped-rows .settings-row-bar {
 	padding-inline: 0;
 }
 
-.project-settings-form > section > .settings-grouped-rows > .settings-row-bar + .settings-row-bar {
+.project-settings-form > section > .settings-grouped-rows > .settings-row-bar + .settings-row-bar,
+.project-settings-form > fieldset > section > .settings-grouped-rows > .settings-row-bar + .settings-row-bar {
 	border-top: 0;
 }
 
@@ -2748,6 +2753,33 @@ html.sidebar-reordering * {
 	border-radius: var(--radius-chat-composer);
 	background: var(--composer-bg);
 	box-shadow: none;
+}
+
+.chat-composer-startup-shimmer {
+	position: absolute;
+	inset: 0;
+	z-index: 20;
+	border-radius: inherit;
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity 300ms ease-out;
+	background: linear-gradient(90deg, color-mix(in srgb, var(--color-text-primary) 2%, transparent) 25%, color-mix(in srgb, var(--color-text-primary) 6%, transparent) 50%, color-mix(in srgb, var(--color-text-primary) 2%, transparent) 75%);
+	background-size: 200% 100%;
+	animation: chat-composer-starting 1.5s ease-in-out infinite paused;
+}
+
+.cursor-chat-composer[data-starting] > .chat-composer-startup-shimmer {
+	opacity: 1;
+	animation-play-state: running;
+}
+
+@keyframes chat-composer-starting {
+	from { background-position: -200% 0; }
+	to { background-position: 200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-composer-startup-shimmer { animation: none; transition: none; }
 }
 
 .cursor-chat-composer[data-attached-top] {
@@ -6087,19 +6119,14 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	}
 }
 
-/* Cloud settings use a fieldset for save-state disabling. Keep headings aligned
- * with the dialog title and indent row labels without moving right values. */
-.cloud-project-settings-form > fieldset > section {
-	gap: var(--space-2);
+::highlight(chat-annotation) {
+	background-color: #6b728040;
+	color: inherit;
 }
-.cloud-project-settings-form > fieldset > section > h2 {
-	padding-inline: 0;
-}
-.cloud-project-settings-form > fieldset > section > .settings-grouped-rows {
-	background: transparent;
-}
-.cloud-project-settings-form > fieldset > section > .settings-grouped-rows .settings-row-bar {
-	min-height: 3.5rem;
-	padding-inline: var(--space-3) 0;
-	border-top: 0;
+
+.chat-annotation-target {
+	background-color: #6b72801f;
+	outline: 2px solid #6b7280;
+	outline-offset: 4px;
+	border-radius: 10px;
 }

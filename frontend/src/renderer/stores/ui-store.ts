@@ -46,6 +46,8 @@ export type SettingsModal =
 			hostId?: string;
 			/** Which Harness page view (local or cloud logins) to open. */
 			harnessView?: "local" | "cloud";
+			/** Start focusAgentId's login flow as soon as the Harness page can. */
+			startLogin?: boolean;
 			/** Preserve the project form while global recovery settings is above it. */
 			returnTo?: Extract<SettingsModal, { scope: "project" }>;
 	}
@@ -132,6 +134,7 @@ export type UiState = {
 	// running in the background. The board renders a progress banner and gates
 	// session actions until the spawn settles, instead of blocking navigation.
 	provisioningProjectIds: ReadonlySet<string>;
+	projectCreationPending: boolean;
 	orchestratorReplacementErrors: Record<string, OrchestratorReplacementFailure>;
 	orchestratorStartupErrors: Record<string, string>;
 	globalToasts: GlobalToast[];
@@ -180,7 +183,7 @@ export type UiState = {
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; preserveProject?: boolean }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; preserveProject?: boolean }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
@@ -206,6 +209,7 @@ export type UiState = {
 	setCommandPaletteOpen: (open: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
 	setProjectProvisioning: (projectId: string, provisioning: boolean, hostId?: string) => void;
+	setProjectCreationPending: (pending: boolean) => void;
 	setOrchestratorReplacementError: (projectId: string, failure: OrchestratorReplacementFailure | null) => void;
 	setOrchestratorStartupError: (projectId: string, message: string | null, hostId?: string) => void;
 	showGlobalToast: (title: string, body?: string, style?: GlobalToast["tone"] | GlobalToast["placement"] | GlobalToastOptions) => void;
@@ -319,6 +323,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
+	projectCreationPending: false,
 	orchestratorReplacementErrors: {},
 	orchestratorStartupErrors: {},
 	globalToasts: [],
@@ -376,6 +381,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			...(options?.focusAgentId ? { focusAgentId: options.focusAgentId } : {}),
 			...(options?.hostId && options.hostId !== "local" ? { hostId: options.hostId } : {}),
 			...(options?.harnessView ? { harnessView: options.harnessView } : {}),
+			...(options?.startLogin && options.focusAgentId ? { startLogin: true } : {}),
 			...(options?.preserveProject && state.settingsModal?.scope === "project"
 				? { returnTo: state.settingsModal }
 				: options?.preserveProject && state.settingsModal?.scope === "global" && state.settingsModal.returnTo
@@ -533,6 +539,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			}
 			return { restartingProjectIds };
 		}),
+	setProjectCreationPending: (pending) => set({ projectCreationPending: pending }),
 	setProjectProvisioning: (projectId, provisioning, hostId) =>
 		set((state) => {
 			const provisioningProjectIds = new Set(state.provisioningProjectIds);
