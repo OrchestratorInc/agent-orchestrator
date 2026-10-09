@@ -599,6 +599,7 @@ func (l *sqliteTransitionLifecycle) ApplyActivitySignal(
 ) error {
 	return lifecycle.New(l.store, nil).ApplyActivitySignal(ctx, id, signal)
 }
+func (l *sqliteTransitionLifecycle) HoldExitedForRecovery(domain.SessionID, string) {}
 func (l *sqliteTransitionLifecycle) MarkChatReconnected(
 	ctx context.Context,
 	id domain.SessionID,

@@ -430,6 +430,8 @@ func (l *fakeLCM) MarkSpawned(_ context.Context, id domain.SessionID, metadata d
 	return nil
 }
 
+func (l *fakeLCM) HoldExitedForRecovery(domain.SessionID, string) {}
+
 func (l *fakeLCM) MarkChatReconnected(_ context.Context, id domain.SessionID, metadata domain.SessionMetadata) error {
 	rec := l.store.sessions[id]
 	rec.Metadata = metadata

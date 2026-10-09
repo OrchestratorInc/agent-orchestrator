@@ -46,6 +46,11 @@ type Config struct {
 	// because a single failed probe must not kill the loop. nil means
 	// slog.Default.
 	Logger *slog.Logger
+	// Ready, when non-nil, holds the periodic loop until it closes. The daemon
+	// closes it after boot reconciliation has adopted, relaunched, or preserved
+	// the sessions the previous daemon left; until then a runtime that died
+	// across the restart is a session awaiting recovery, not a crash.
+	Ready <-chan struct{}
 }
 
 type sessionSource interface {
@@ -70,6 +75,7 @@ type Reaper struct {
 	tick     time.Duration
 	clock    func() time.Time
 	logger   *slog.Logger
+	ready    <-chan struct{}
 
 	// The periodic loop and boot-time reconciliation may call Tick on the same
 	// Reaper concurrently, so the per-run warning set needs synchronization.
@@ -87,6 +93,7 @@ func New(sink runtimeObservationSink, sessions sessionSource, runtime runtimePro
 		tick:                cfg.Tick,
 		clock:               cfg.Clock,
 		logger:              cfg.Logger,
+		ready:               cfg.Ready,
 		warnedMissingHandle: make(map[domain.SessionID]struct{}),
 	}
 	if workload, ok := runtime.(ports.SupervisedProcessInspector); ok {
@@ -122,6 +129,13 @@ func (r *Reaper) Start(ctx context.Context) <-chan struct{} {
 
 func (r *Reaper) loop(ctx context.Context, done chan<- struct{}) {
 	defer close(done)
+	if r.ready != nil {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.ready:
+		}
+	}
 	t := time.NewTicker(r.tick)
 	defer t.Stop()
 	for {

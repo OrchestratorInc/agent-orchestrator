@@ -837,6 +837,53 @@ func TestRuntimeObservation_AliveWorkloadCannotResurrectExitedSession(t *testing
 	}
 }
 
+// Boot reconciliation preserves a session whose relaunch failed as exited so
+// Resume Agent can recover it (#6200). The dead runtime it failed to replace
+// must not let the reaper terminate it on the next tick.
+func TestRuntimeObservation_HeldRecoveryIsNotTerminatedByKnownDeadRuntime(t *testing.T) {
+	m, st, _ := newManager()
+	rec := exited("mer-1")
+	rec.Activity.LastActivityAt = time.Now().Add(-2 * time.Minute)
+	rec.Metadata.RuntimeLaunchID = "launch-1"
+	st.sessions["mer-1"] = rec
+	m.HoldExitedForRecovery("mer-1", "launch-1")
+	dead := ports.RuntimeFacts{Runtime: ports.ProbeDead, Workload: ports.ProbeFailed, LaunchID: "launch-1"}
+
+	if err := m.ApplyRuntimeObservation(ctx, "mer-1", dead); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"]; got.IsTerminated || got.Activity.State != domain.ActivityExited {
+		t.Fatalf("held recovery session was terminated: %+v", got)
+	}
+
+	// A new launch outlives the hold: its own confirmed death terminates as usual.
+	relaunched := st.sessions["mer-1"]
+	relaunched.Metadata.RuntimeLaunchID = "launch-2"
+	st.sessions["mer-1"] = relaunched
+	dead.LaunchID = "launch-2"
+	if err := m.ApplyRuntimeObservation(ctx, "mer-1", dead); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"]; !got.IsTerminated {
+		t.Fatalf("hold outlived the launch it protected: %+v", got)
+	}
+}
+
+func TestRuntimeObservation_UnheldExitedSessionStillTerminatesOnRuntimeDeath(t *testing.T) {
+	m, st, _ := newManager()
+	rec := exited("mer-1")
+	rec.Metadata.RuntimeLaunchID = "launch-1"
+	st.sessions["mer-1"] = rec
+	if err := m.ApplyRuntimeObservation(ctx, "mer-1", ports.RuntimeFacts{
+		Runtime: ports.ProbeDead, Workload: ports.ProbeFailed, LaunchID: "launch-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"]; !got.IsTerminated {
+		t.Fatalf("exited session with a dead runtime stayed live without a recovery hold: %+v", got)
+	}
+}
+
 func TestRuntimeObservation_StaleLaunchIsIgnored(t *testing.T) {
 	m, st, _ := newManager()
 	rec := working("mer-1")
