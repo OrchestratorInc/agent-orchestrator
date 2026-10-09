@@ -7,7 +7,7 @@ Use **Connect Mobile** to pair the native phone app with your desktop.
 
 ## Pair on the same network
 
-1. Install [AO Mobile from the App Store](https://apps.apple.com/app/ao-mobile/id6792552173) or [Google Play](https://play.google.com/store/apps/details?id=aoagents.dev). Open the desktop app and go to **Settings → Connect Mobile**.
+1. Install [Orchestrator Mobile from the App Store](https://apps.apple.com/app/ao-mobile/id6792552173) or [Google Play](https://play.google.com/store/apps/details?id=aoagents.dev). Open the desktop app and go to **Settings → Connect Mobile**.
 2. Put both devices on the same trusted network. In Connect Mobile, choose **Generate** to turn on the separate mobile connection. The app shows an address, password, and QR when a reachable endpoint is ready; a blurred or preparing QR cannot pair a phone.
 3. In the mobile app, tap **Pair Desktop** during onboarding. Newer mobile builds call this button **Pair a machine**. From an unpaired screen, tap **Scan pairing code**. The app opens the scanner. Scan the desktop QR. Treat the entire QR/link as a password.
 4. If scanning fails or camera access is unavailable, tap **Enter details manually** on the pairing screen and enter the address, port, and password shown on the desktop. The listener normally starts at port `3011` but can choose another free port. Use the displayed address, not `127.0.0.1`, which means the phone itself when entered there. A failed scan offers **Try again**.
@@ -15,7 +15,7 @@ Use **Connect Mobile** to pair the native phone app with your desktop.
 
 Turning mobile access off closes the authenticated listener. Regenerating its password invalidates old pairing credentials. If the phone reports an incompatible pairing or identity contract, update both apps; current desktop pairing does not generate a legacy v1 fallback.
 
-Where available, AO can manage a remote-access connector using `cloudflared`. If Connect Mobile says remote access is unavailable, use its **Install cloudflared** control and wait for the connector status to become ready. A LAN code can be ready first; scan the refreshed QR after the remote endpoint appears. Test once with the phone off the home Wi-Fi. A successful home-network connection alone does not prove away-from-home access. The managed connector's address can change when it restarts, so use a refreshed offer if the old endpoint stops working.
+Where available, Orchestrator can manage a remote-access connector using `cloudflared`. If Connect Mobile says remote access is unavailable, use its **Install cloudflared** control and wait for the connector status to become ready. A LAN code can be ready first; scan the refreshed QR after the remote endpoint appears. Test once with the phone off the home Wi-Fi. A successful home-network connection alone does not prove away-from-home access. The managed connector's address can change when it restarts, so use a refreshed offer if the old endpoint stops working.
 
 ## Tailscale
 
@@ -23,7 +23,7 @@ iPhones cannot connect through the current raw Tailscale endpoint. Use a managed
 
 If Connect Mobile shows a secure-pairing failure reason, follow that text. A direct plaintext LAN endpoint remains suitable only for a trusted network. The phone races only the endpoints in the offer, and uses TLS only when an endpoint is marked `secure: true`.
 
-Do not point `tailscale serve`, a public proxy, or port forwarding at the unauthenticated primary daemon. AO's secure endpoint setup targets the separate authenticated mobile listener.
+Do not point `tailscale serve`, a public proxy, or port forwarding at the unauthenticated primary daemon. Orchestrator's secure endpoint setup targets the separate authenticated mobile listener.
 
 ## Security model
 
@@ -52,7 +52,7 @@ Mobile also exposes pull request, workspace review, and reviewer-run views. Push
 | Works on Wi-Fi but not elsewhere | Confirm a managed HTTPS endpoint is ready, rescan the refreshed QR, and test off Wi-Fi. A plain LAN or raw Tailscale address is not an iOS remote endpoint. |
 | Wrong computer or contract-version error | Check the computer name shown by the phone and update both apps. QR pairing checks the offered host identity before sending the password. |
 | Password rejected | Copy the current password from Connect Mobile or scan a new QR. Regeneration invalidates old credentials. Repeated wrong attempts can trigger a temporary lockout. |
-| Connection drops after sleep or app exit | Wake the desktop and reopen AO. On supported Macs, enable keep-awake if appropriate; the app and daemon still need to run. Reopen the session after the network returns. |
+| Connection drops after sleep or app exit | Wake the desktop and reopen Orchestrator. On supported Macs, enable keep-awake if appropriate; the app and daemon still need to run. Reopen the session after the network returns. |
 | No push alerts | Allow phone notifications, check that the device is not muted, and confirm the daemon can reach its push service. Open the app directly for interactive work. |
 
 <details>
@@ -63,5 +63,5 @@ This walkthrough was checked against the desktop pairing UI, daemon mobile bridg
 </details>
 
 <Callout type="info">
-	Chat and Terminal UI are two controllers for the same AO session. Switching does not create a new worktree, but a first switch from Terminal UI to Chat does not reconstruct old terminal screen output as structured messages.
+	Chat and Terminal UI are two controllers for the same Orchestrator session. Switching does not create a new worktree, but a first switch from Terminal UI to Chat does not reconstruct old terminal screen output as structured messages.
 </Callout>

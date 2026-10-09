@@ -481,6 +481,26 @@ func TestPoll_SkipsProviderWhenCredentialsUnavailable(t *testing.T) {
 	}
 }
 
+type countingBranchStates struct{ calls int }
+
+func (c *countingBranchStates) ReconcileBranchStates(context.Context) error {
+	c.calls++
+	return nil
+}
+
+func TestPoll_ReconcilesBranchStatesWithoutCredentials(t *testing.T) {
+	provider := &fakeProvider{credentialGate: true, credentialOK: false, observations: map[string]ports.SCMObservation{}}
+	obs := newTestObserver(testStoreWithSession(), provider, &fakeLifecycle{}, time.Unix(1, 0).UTC())
+	branchStates := &countingBranchStates{}
+	obs.branchStates = branchStates
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if branchStates.calls != 1 {
+		t.Fatalf("branch state reconciles = %d, want one per tick even without credentials", branchStates.calls)
+	}
+}
+
 func TestPoll_ResumesAfterCredentialsBecomeAvailable(t *testing.T) {
 	store := testStoreWithSession()
 	provider := &fakeProvider{

@@ -150,11 +150,10 @@ func (s *Service) Delete(ctx context.Context, cueID domain.CueID) error {
 
 func normalizeInput(input Input) domain.Cue {
 	return domain.Cue{
-		Name:        strings.TrimSpace(input.Name),
-		Description: input.Description,
-		Type:        input.Type,
-		Command:     input.Command,
-		Prompt:      input.Prompt,
+		Name:    strings.TrimSpace(input.Name),
+		Type:    input.Type,
+		Command: input.Command,
+		Prompt:  input.Prompt,
 	}
 }
 
@@ -181,8 +180,6 @@ func invalidCueError(err error) *apierr.Error {
 	switch {
 	case errors.Is(err, domain.ErrInvalidCueName):
 		return apierr.Invalid("INVALID_CUE_NAME", "Cue name is required and must be at most 64 bytes", nil)
-	case errors.Is(err, domain.ErrInvalidCueDescription):
-		return apierr.Invalid("INVALID_CUE_DESCRIPTION", "Cue description must be at most 240 bytes", nil)
 	case errors.Is(err, domain.ErrInvalidCueType):
 		return apierr.Invalid("INVALID_CUE_TYPE", "Cue type must be command or agent", nil)
 	case errors.Is(err, domain.ErrInvalidCueCommand):

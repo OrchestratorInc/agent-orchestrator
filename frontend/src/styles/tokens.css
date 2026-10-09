@@ -638,6 +638,16 @@
 	--font-mono: var(--font-family-mono);
 }
 
+/* macOS uses the system faces (SF Pro / SF Mono). Preload sets data-ao-platform
+   before first paint; the Nerd Font entries stay as per-glyph fallbacks for
+   terminal powerline and file-type icons. */
+:root[data-ao-platform="darwin"] {
+	--font-family-base: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+	--font-family-mono:
+		"SF Mono", SFMono-Regular, ui-monospace, "JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font",
+		"FiraCode Nerd Font Mono", "FiraCode Nerd Font", "MesloLGS NF", Menlo, monospace;
+}
+
 /* Light theme — set via data-theme (apply-initial-theme + Zustand toggle). */
 
 :root[data-theme="light"] {

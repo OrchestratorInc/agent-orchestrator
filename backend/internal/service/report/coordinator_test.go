@@ -102,6 +102,16 @@ func TestCoordinatorStuckInterruptRateLimitAndCoalescing(t *testing.T) {
 	}
 }
 
+func TestReportSessionLinkUsesDisplayName(t *testing.T) {
+	got := reportSessionLink(domain.ReportRecord{
+		SessionID: "worker/1", ProjectID: "proj 1", SessionDisplayName: "Backend [worker]",
+	})
+	want := `[Backend \[worker\]](ao://sessions/proj%201/worker%2F1)`
+	if got != want {
+		t.Fatalf("link = %q, want %q", got, want)
+	}
+}
+
 func TestCoordinatorAcceptanceAndPiggybackFencing(t *testing.T) {
 	now := time.Date(2026, 9, 14, 13, 0, 0, 0, time.UTC)
 	store := newCoordinatorStore(now)
@@ -116,6 +126,9 @@ func TestCoordinatorAcceptanceAndPiggybackFencing(t *testing.T) {
 	if !strings.HasPrefix(combined, "hello\n\n<ao-worker-reports>\n") ||
 		!strings.HasSuffix(combined, "\n</ao-worker-reports>") {
 		t.Fatalf("piggyback text = %q", combined)
+	}
+	if !strings.Contains(combined, "[checkpoint] [worker](ao://sessions/p/worker)") {
+		t.Fatalf("piggyback link = %q", combined)
 	}
 	if store.acked != 0 {
 		t.Fatal("claimed report acknowledged before acceptance")

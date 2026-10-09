@@ -48,7 +48,7 @@ export function SessionStartup({
 							key={step.id}
 							data-step={step.id}
 							data-status={status}
-							className="flex min-h-7 items-center gap-1.5 text-[13px]"
+							className="flex min-h-7 items-center gap-1.5 text-xs"
 						>
 							<StepIcon status={status} />
 							<span className="sr-only">{t(`chat.startup.status.${status}`)}:</span>
@@ -66,12 +66,12 @@ export function SessionStartup({
 									: t(`chat.startup.step.${step.id}`)}
 							</span>
 							{detail && status !== "pending" ? (
-								<span className="min-w-0 truncate font-mono text-[11px] text-passive" title={detail}>
+								<span className="min-w-0 truncate font-mono text-caption text-passive" title={detail}>
 									{detail}
 								</span>
 							) : null}
 							{elapsed !== undefined ? (
-								<span className="ml-auto shrink-0 pl-2 font-mono text-[11px] tabular-nums text-passive">
+								<span className="ml-auto shrink-0 pl-2 font-mono text-caption tabular-nums text-passive">
 									{formatStepDuration(elapsed, status === "running")}
 								</span>
 							) : null}

@@ -3,7 +3,7 @@ import path from "node:path";
 import { IncompatibleRemoteVersionError, probeRemote, readRemoteIdentity, type RemoteHealth } from "./remote-request";
 import { findRemote, removeSavedRemote, toHostViews, updateSavedRemote } from "./remotes-ipc";
 import type { RemoteRegistry } from "./remote-registry";
-import { addRemote, readRemotes, type RemoteChanges, type RemoteEntry } from "./remotes-store";
+import { addRemote, readRemotes, updateRemote, type RemoteChanges, type RemoteEntry } from "./remotes-store";
 
 // An isolated desktop run must not read or write the real user's credentials.
 // Without an override, keep the existing ~/.ao location.
@@ -22,6 +22,8 @@ type IpcMainLike = {
 export type RemotesIpcDeps = {
 	file: string;
 	registry: RemoteRegistry;
+	requireAccount: () => Promise<void>;
+	getAccountId: () => Promise<string>;
 	probe?: (entry: RemoteEntry) => Promise<RemoteHealth>;
 	identity?: (entry: Pick<RemoteEntry, "url">) => Promise<string>;
 };
@@ -33,7 +35,7 @@ export type RemotesIpcDeps = {
  */
 export function registerRemotesIpc(
 	ipcMain: IpcMainLike,
-	{ file, registry, probe = probeRemote, identity = readRemoteIdentity }: RemotesIpcDeps,
+	{ file, registry, requireAccount, getAccountId, probe = probeRemote, identity = readRemoteIdentity }: RemotesIpcDeps,
 ): void {
 	const disconnect = (url: string) => registry.disconnect(url);
 	const checkedProbe = async (entry: RemoteEntry): Promise<RemoteHealth> => {
@@ -56,9 +58,24 @@ export function registerRemotesIpc(
 		pending = result.then(() => undefined, () => undefined);
 		return result;
 	};
+	const accountID = async () => {
+		await requireAccount();
+		const id = await getAccountId();
+		if (!id) throw new Error("Sign in to AO Cloud to use remote hosts.");
+		return id;
+	};
+	const owned = async () => {
+		const account = await accountID();
+		const entries = await readRemotes(file);
+		if (!account) return entries;
+		// Legacy rows stay local-only: show them without attributing them to the
+		// signed-in account, while keeping other accounts isolated.
+		return entries.filter((item) => !item.accountUserId || item.accountUserId === account);
+	};
 
-	ipcMain.handle("remotes:list", async () => toHostViews(await readRemotes(file)));
+	ipcMain.handle("remotes:list", () => ordered(async () => toHostViews(await owned())));
 	ipcMain.handle("remotes:add", async (_event, input: RemoteEntry) => ordered(async () => {
+		const account = await accountID();
 		// Probe before saving: a host that never answered is worse than no host,
 		// because it looks configured.
 		let hostId: string;
@@ -68,31 +85,78 @@ export function registerRemotesIpc(
 			if (error instanceof IncompatibleRemoteVersionError) return "incompatible" as RemoteHealth;
 			return "offline" as RemoteHealth;
 		}
-		const entry = { label: input.label, url: input.url, password: input.password, hostId };
+		const entry = { label: input.label, url: input.url, password: input.password, hostId, accountUserId: account };
 		const health = await checkedProbe(entry);
 		if (health === "online") {
-			const previous = (await readRemotes(file)).find((saved) => saved.hostId === hostId);
+			const previous = (await owned()).find((saved) => saved.hostId === hostId);
 			await addRemote(file, entry);
 			if (previous && previous.url !== entry.url) await disconnect(previous.url);
 			await disconnect(entry.url);
 		}
 		return health;
 	}));
-	ipcMain.handle("remotes:update", async (_event, url: string, changes: RemoteChanges) => ordered(() =>
-		updateSavedRemote(file, url, changes, disconnect, checkedProbe),
-	));
-	ipcMain.handle("remotes:remove", async (_event, url: string) => ordered(() =>
-		removeSavedRemote(file, url, disconnect),
-	));
+	ipcMain.handle("remotes:update", async (_event, url: string, changes: RemoteChanges) => ordered(async () => {
+		if (!(await owned()).some((entry) => entry.url === url)) throw new Error("Host does not belong to this account.");
+		const { accountUserId: _ignored, ...editable } = changes;
+		return updateSavedRemote(file, url, editable, disconnect, checkedProbe);
+	}));
+	ipcMain.handle("remotes:remove", async (_event, url: string) => ordered(async () => {
+		if (!(await owned()).some((entry) => entry.url === url)) throw new Error("Host does not belong to this account.");
+		return removeSavedRemote(file, url, disconnect);
+	}));
 	ipcMain.handle("remotes:connect", async (_event, url: string, hostId?: string) => ordered(async () => {
+		if (!(await owned()).some((entry) => entry.url === url && (!hostId || entry.hostId === hostId))) throw new Error("Host does not belong to this account.");
 		const entry = await findRemote(file, url, hostId);
 		const health = await checkedProbe(entry);
 		if (health !== "online") throw new Error(`host ${url} is ${health}`);
 		return registry.connect(entry);
 	}));
+	ipcMain.handle("remotes:importAccountHost", async (_event, expectedAccountId: string, input: RemoteEntry) => ordered(async () => {
+		const account = await accountID();
+		if (!account || account !== expectedAccountId || !input.hostId || !/^[0-9a-f]{64}$/.test(input.password)) throw new Error("Invalid account host credential.");
+		const local = (await readRemotes(file)).find((entry) => entry.hostId === input.hostId);
+		// Keep the original password on the machine that performed pairing; a
+		// Cloud refresh must not replace it with the narrower account token.
+		if (local?.password && !/^[0-9a-f]{64}$/.test(local.password)) {
+			if (local.label !== input.label || local.url !== input.url) await updateRemote(file, local.url, { label: input.label, url: input.url });
+			return;
+		}
+		await addRemote(file, { ...input, accountUserId: account });
+	}));
+	ipcMain.handle("remotes:pruneAccountHosts", async (_event, expectedAccountId: string, currentHostIds: string[]) => ordered(async () => {
+		if (await accountID() !== expectedAccountId) throw new Error("Account changed during host sync.");
+		const current = new Set(currentHostIds);
+		for (const entry of await owned()) {
+			// Only account-imported credentials are directory-managed. A machine
+			// paired here with its original password remains a local pairing.
+			if (entry.hostId && !current.has(entry.hostId) && /^[0-9a-f]{64}$/.test(entry.password)) {
+				await removeSavedRemote(file, entry.url, disconnect);
+			}
+		}
+	}));
+	ipcMain.handle("remotes:issueAccountToken", async (_event, url: string) => ordered(async () => {
+		const account = await accountID();
+		const entry = (await readRemotes(file)).find((saved) => saved.url === url && (!saved.accountUserId || saved.accountUserId === account));
+		if (!entry?.hostId) throw new Error("Pair this host before linking it to your account.");
+		if (await identity(entry) !== entry.hostId) throw new Error("Remote host identity changed; connection refused.");
+		const endpoint = new URL("/api/v1/remote-host/account-token", entry.url);
+		const response = await fetch(endpoint, {
+			method: "POST", redirect: "error",
+			headers: { Authorization: `Bearer ${entry.password}`, "X-AO-Expected-Host-ID": entry.hostId, "X-AO-Account-ID": account },
+			signal: AbortSignal.timeout(8_000),
+		});
+		if (!response.ok) throw new Error("The host did not accept account linking. Check its password and version.");
+		const result = await response.json() as { hostId?: string; token?: string };
+		if (result.hostId !== entry.hostId || !/^[0-9a-f]{64}$/.test(result.token ?? "")) throw new Error("The host returned an invalid account credential.");
+		return result.token;
+	}));
 	ipcMain.handle("remotes:disconnect", async (_event, url: string) => ordered(() => disconnect(url)));
-	ipcMain.handle("remotes:previewUrl", async (_event, hostId: string, sessionId: string, sourceUrl: string) =>
-		registry.previewUrl(hostId, sessionId, sourceUrl));
-	ipcMain.handle("remotes:resolvePreviewUrl", async (_event, hostId: string, sessionId: string, viewedUrl: string) =>
-		registry.resolvePreviewUrl(hostId, sessionId, viewedUrl));
+	ipcMain.handle("remotes:previewUrl", async (_event, hostId: string, sessionId: string, sourceUrl: string) => {
+		await requireAccount();
+		return registry.previewUrl(hostId, sessionId, sourceUrl);
+	});
+	ipcMain.handle("remotes:resolvePreviewUrl", async (_event, hostId: string, sessionId: string, viewedUrl: string) => {
+		await requireAccount();
+		return registry.resolvePreviewUrl(hostId, sessionId, viewedUrl);
+	});
 }

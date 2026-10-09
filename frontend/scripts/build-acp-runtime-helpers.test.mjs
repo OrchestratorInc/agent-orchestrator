@@ -17,6 +17,7 @@ import {
 	createWorkDirectory,
 	npmInvocation,
 	patchClaudeContextUsage,
+	patchClaudeHibernationCheck,
 	patchClaudeRetryDetails,
 	pruneNodeDistribution,
 	runtimeSourceFiles,
@@ -108,6 +109,50 @@ describe("patchClaudeRetryDetails", () => {
 		expect(patched).toContain("message.retry_delay_ms / 1000");
 		expect(patched).toContain("Trying again in ${retryDelay}.");
 		expect(patched).toContain("details: retryDetails");
+	});
+});
+
+describe("patchClaudeHibernationCheck", () => {
+	it("keeps live native tasks awake and allows sleep after they settle", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, `
+			// session.liveBackgroundTasks.set(message.task_id
+			connection.onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params));
+		`);
+		expect(patchClaudeHibernationCheck(adapterPath)).toBe(true);
+		expect(patchClaudeHibernationCheck(adapterPath)).toBe(false);
+		const handlers = new Map();
+		const connection = { onRequest: (method, parser, handler) => {
+			expect(typeof parser.parse).toBe("function");
+			expect(typeof handler).toBe("function");
+			handlers.set(method, (ctx) => handler({ params: parser.parse(ctx.params) }));
+			return connection;
+		} };
+		const tasks = new Map();
+		const agent = { sessions: { native: { liveBackgroundTasks: tasks } } };
+		new Function("connection", "agent", "GOAL_CONTROL_METHOD", "parseGoalRequest", "RequestError", readFileSync(adapterPath, "utf8"))(
+			connection, agent, "goal", params => params, { invalidParams: () => new Error("invalid session") },
+		);
+		const check = handlers.get("_ao/session/can_hibernate");
+		const ctx = { params: { sessionId: "native" } };
+		expect(check(ctx)).toEqual({ canHibernate: true });
+		tasks.set("server", { isSubagent: false });
+		expect(check(ctx)).toEqual({ canHibernate: false });
+		tasks.delete("server");
+		expect(check(ctx)).toEqual({ canHibernate: true });
+		tasks.set("ended", { isSubagent: true, endedPerLevel: "ended" });
+		expect(check(ctx)).toEqual({ canHibernate: true });
+		for (const sessionId of [undefined, "missing", "__proto__"]) {
+			expect(() => check({ params: { sessionId } })).toThrow("invalid session");
+		}
+		agent.sessions.native.queryClosed = true;
+		expect(() => check(ctx)).toThrow("invalid session");
+	});
+
+	it("fails packaging if the pinned native task registry changes", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, "// incompatible adapter");
+		expect(() => patchClaudeHibernationCheck(adapterPath)).toThrow("native-task hibernation check");
 	});
 });
 

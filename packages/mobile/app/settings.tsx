@@ -9,6 +9,8 @@ import * as Updates from "expo-updates";
 import { Children, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { ApiError, pingServer } from "../lib/api";
+import { loadAccount, signInToAccount, signOutOfAccount, type Account } from "../lib/account";
+import { clearAccountHosts, ignoreAccountHost, syncAccountHosts } from "../lib/accountHosts";
 import { formatVersionLine, type BuildInfo } from "../lib/appInfo";
 import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../lib/bugReport";
 import { isConfigured, type ServerConfig } from "../lib/config";
@@ -65,6 +67,17 @@ export default function SettingsScreen() {
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
 	const [switchingHostId, setSwitchingHostId] = useState<string | null>(null);
 	const [loaded, setLoaded] = useState(false);
+	const [account, setAccount] = useState<Account | null>(null);
+	const [accountBusy, setAccountBusy] = useState(false);
+	const [accountLoading, setAccountLoading] = useState(true);
+
+	useFocusEffect(useCallback(() => {
+		let current = true;
+		void loadAccount().then((value) => { if (current) setAccount(value); }).catch(() => {
+			if (current) setAccount(null);
+		}).finally(() => { if (current) setAccountLoading(false); });
+		return () => { current = false; };
+	}, []));
 
 	useFocusEffect(useCallback(() => {
 		let current = true;
@@ -130,6 +143,32 @@ export default function SettingsScreen() {
 					</SettingsCard>
 				</SettingsSection>
 
+				<SettingsSection title="Account" footer="Paired machines sync across signed-in devices.">
+					<SettingsCard>
+						<CardRow icon="user" label={account ? "AO Cloud" : "Sign in to AO Cloud"} value={account?.email} loading={accountLoading || accountBusy} onPress={account ? undefined : () => {
+							setAccountBusy(true);
+							void signInToAccount().then(async (value) => {
+								if (!value) return;
+								setAccount(value);
+								await syncAccountHosts(value);
+								setPairedHosts(await loadHosts());
+								await reloadConfig();
+							}).catch((error: unknown) => {
+								Alert.alert("Could not sign in", error instanceof Error ? error.message : "Try again.");
+							}).finally(() => setAccountBusy(false));
+						}} />
+						{account ? <CardRow icon="log-out" label="Sign out" onPress={() => {
+							setAccountBusy(true);
+							void signOutOfAccount().then(async () => {
+								await clearAccountHosts();
+								setAccount(null);
+								setPairedHosts(await loadHosts());
+								await reloadConfig();
+							}).catch(() => Alert.alert("Could not sign out", "Try again.")).finally(() => setAccountBusy(false));
+						}} disabled={accountBusy} /> : null}
+					</SettingsCard>
+				</SettingsSection>
+
 				{__DEV__ ? (
 					<SettingsSection title="Developer" footer="Layout grid draws the app's 4pt steps, with the 44pt control lines emphasised.">
 						<SettingsCard>
@@ -161,6 +200,14 @@ export default function SettingsScreen() {
 					machineName={selectedHost?.name}
 					onForget={async () => {
 						let failed = false;
+						if (account && selectedHostId) {
+							try { await ignoreAccountHost(account.id, selectedHostId); }
+							catch { failed = true; }
+						}
+						if (failed) {
+							Alert.alert("Couldn't disconnect", "This machine could not be hidden from account sync. Try again.");
+							return;
+						}
 						try { await forgetServer(); } catch { failed = true; }
 						try { await reloadConfig(); } catch {}
 						let remaining: PairedHost[];

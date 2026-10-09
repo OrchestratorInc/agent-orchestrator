@@ -45,7 +45,7 @@ function renderWithQuery(children: ReactNode) {
 }
 
 function noopAnnotation(): FileAnnotationModel {
-	return { target: null, draft: "", status: "idle", error: "", begin: vi.fn(), setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
+	return { targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", statusFor: () => "idle", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
 }
 
 describe("FileContentPane", () => {
@@ -395,7 +395,7 @@ describe("FileContentPane", () => {
 
 	it("anchors whole-file feedback below the focused header", async () => {
 		const model = noopAnnotation();
-		model.target = { path: "src/App.tsx", side: "file", scope: "combined", surface: "focused" };
+		model.targets = [{ path: "src/App.tsx", side: "file", scope: "combined", surface: "focused" }];
 		getMock.mockResolvedValue({
 			data: {
 				sessionId: "sess-1",

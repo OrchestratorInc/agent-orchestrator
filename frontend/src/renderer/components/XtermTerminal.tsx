@@ -34,7 +34,7 @@ import type {
 	TerminalUserInputSource,
 } from "../hooks/useTerminalSession";
 import { aoBridge } from "../lib/bridge";
-import { isDialogOrMenuOpen } from "../lib/dom-selectors";
+import { isDialogOrMenuOpenOutside } from "../lib/dom-selectors";
 import { TERMINAL_FONT_SIZE_DEFAULT } from "../lib/design-tokens";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { findSessionLinks } from "../lib/session-links";
@@ -286,7 +286,7 @@ function terminalHasFocus(host: HTMLElement): boolean {
 }
 
 function canAutoFocusTerminal(host: HTMLElement): boolean {
-	if (isDialogOrMenuOpen()) return false;
+	if (isDialogOrMenuOpenOutside(host)) return false;
 	const activeElement = document.activeElement;
 	if (!(activeElement instanceof HTMLElement) || activeElement === document.body || !activeElement.isConnected) return true;
 	if (host.contains(activeElement)) return true;

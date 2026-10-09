@@ -1254,6 +1254,8 @@ func TestSwitchAgentChatForwardsResolvedCodexEffort(t *testing.T) {
 		live:              true,
 	}
 	manager.chat = launcher
+	manager.executable = func() (string, error) { return "/opt/ao/bin/ao", nil }
+	manager.runFilePath = "/ao-test/running.json"
 
 	if _, err := switchAgentSynchronously(context.Background(), manager, rec.ID, SwitchAgentConfig{
 		TargetHarness: domain.HarnessCodex, IdempotencyKey: "chat-codex-effort",
@@ -1265,6 +1267,14 @@ func TestSwitchAgentChatForwardsResolvedCodexEffort(t *testing.T) {
 	}
 	if got := launcher.started[0]; got.Model != "gpt-5.6-sol" || got.Effort != "high" {
 		t.Fatalf("Codex Chat tuning = model %q effort %q, want gpt-5.6-sol/high", got.Model, got.Effort)
+	}
+	// The switched-to controller gets AO's tool server too.
+	want := []ports.ChatMCPServerConfig{{
+		Name: "ao", Type: "stdio", Command: "/opt/ao/bin/ao", Args: []string{"mcp"},
+		Env: map[string]string{EnvSessionID: string(rec.ID), EnvRunFile: "/ao-test/running.json", EnvDataDir: manager.dataDir},
+	}}
+	if got := launcher.started[0].MCPServers; !reflect.DeepEqual(got, want) {
+		t.Fatalf("switch MCPServers = %+v, want %+v", got, want)
 	}
 }
 

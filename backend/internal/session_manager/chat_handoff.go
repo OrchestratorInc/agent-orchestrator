@@ -106,7 +106,11 @@ func reserveChatProviderHandoff(ctx context.Context, store chatProviderOwnership
 	if err != nil {
 		return nil, err
 	}
-	if branch.SessionID == rec.ID && branch.ProviderConversationID == rec.Metadata.ProviderConversationID {
+	// A project root's session_id records the orchestrator that created it; after
+	// a rebind the conversation's current session owns that root.
+	owned := branch.SessionID == rec.ID || (conversation.Scope == domain.ConversationScopeProject &&
+		branch.ParentBranchID == "" && conversation.SessionID == rec.ID)
+	if owned && branch.ProviderConversationID == rec.Metadata.ProviderConversationID {
 		return nil, nil // also makes retry after a committed boundary idempotent
 	}
 	if branch.SessionID == "" || branch.ProviderConversationID == "" {

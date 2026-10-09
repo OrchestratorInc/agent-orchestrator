@@ -64,7 +64,6 @@ export function useCloudSession(): UseCloudSessionResult {
     };
   }, []);
 
-  // Parked while the sidebar sign-in entry point is intentionally hidden.
   const signIn = () => {
     void aoBridge.cloud.signIn();
   };

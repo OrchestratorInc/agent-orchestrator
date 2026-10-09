@@ -295,6 +295,59 @@ func TestLANManagerPasswordRotationClosesHijackedWebSocket(t *testing.T) {
 	fresh.CloseNow()
 }
 
+func TestLANManagerAccountRotationClosesOnlyRetiredTokenWebSockets(t *testing.T) {
+	m, base := startShutdownTestLAN(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		for {
+			kind, data, err := conn.Read(context.Background())
+			if err != nil {
+				return
+			}
+			if err := conn.Write(context.Background(), kind, data); err != nil {
+				return
+			}
+		}
+	}))
+	m.SetAccountTokenHash(mobilebridge.HashPassword("account-a"))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	open := func(token string) *websocket.Conn {
+		t.Helper()
+		conn, _, err := websocket.Dial(ctx, base+"/mux", &websocket.DialOptions{
+			HTTPHeader: http.Header{"Authorization": {"Bearer " + token}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.CloseNow() })
+		return conn
+	}
+	retired, paired := open("account-a"), open("secret12")
+	m.SetAccountTokenHash(mobilebridge.HashPassword("account-b"))
+	if _, _, err := retired.Read(ctx); err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("retired account WebSocket remained usable: %v", err)
+	}
+	if err := paired.Write(ctx, websocket.MessageText, []byte("still paired")); err != nil {
+		t.Fatal(err)
+	}
+	if _, data, err := paired.Read(ctx); err != nil || string(data) != "still paired" {
+		t.Fatalf("pairing-password connection was interrupted: %v", err)
+	}
+	open("account-b")
+	if stale, response, err := websocket.Dial(ctx, base+"/mux", &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": {"Bearer account-a"}},
+	}); err == nil {
+		stale.CloseNow()
+		t.Fatal("retired account token opened a new WebSocket")
+	} else if response == nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("retired account token status = %v, want 401", response)
+	}
+}
+
 func TestFailedPasswordRotationPreservesExistingWebSocket(t *testing.T) {
 	m, base := startShutdownTestLAN(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)

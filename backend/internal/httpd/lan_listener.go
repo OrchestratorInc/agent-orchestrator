@@ -161,11 +161,34 @@ func (m *LANManager) SetPasswordHash(hash string) {
 	ln := m.ln
 	m.mu.Unlock()
 	if ln != nil {
-		if err := ln.closeConnections(); err != nil {
+		if err := ln.closeConnections(""); err != nil {
 			m.log.Warn("close LAN connections after password rotation", "err", err)
 		}
 	}
 }
+
+// SetAccountTokenHash rotates the separate account credential without changing
+// the password used for direct/mobile pairing. Only connections authenticated
+// with the retired account token are closed; the pairing request must survive.
+func (m *LANManager) SetAccountTokenHash(hash string) {
+	m.transitionMu.Lock()
+	defer m.transitionMu.Unlock()
+	previous := m.state.accountHash()
+	if previous == hash {
+		return
+	}
+	m.state.setAccountHash(hash)
+	m.lock.resetAll()
+	m.mu.Lock()
+	ln := m.ln
+	m.mu.Unlock()
+	if ln != nil && previous != "" {
+		_ = ln.closeConnections(previous)
+	}
+}
+
+// AccountTokenHash returns the currently accepted account credential digest.
+func (m *LANManager) AccountTokenHash() string { return m.state.accountHash() }
 
 // PasswordHash returns the current connection password hash. Used to snapshot the
 // prior hash before an enable/regenerate so a failed persist can be rolled back.
@@ -227,6 +250,9 @@ func (m *LANManager) start(port int, host string) (int, error) {
 		Handler:           m.handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return streamCtx },
+		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
+			return context.WithValue(ctx, lanConnContextKey{}, conn)
+		},
 	}
 	srv := m.srv
 	boundPort := m.bound
@@ -262,7 +288,7 @@ func (m *LANManager) Stop(ctx context.Context) error {
 	err = errors.Join(err, ln.Close())
 	// Shutdown and Close deliberately leave hijacked connections alone. The
 	// listener owns them until their actual Close, even after HTTP's handoff.
-	err = errors.Join(err, ln.closeConnections())
+	err = errors.Join(err, ln.closeConnections(""))
 	m.mu.Lock()
 	m.srv, m.ln, m.cancel, m.bound, m.bindHost = nil, nil, nil, 0, ""
 	m.mu.Unlock()
@@ -306,25 +332,33 @@ func (l *lanListener) Close() error {
 	return l.closeErr
 }
 
-func (l *lanListener) closeConnections() error {
+// An empty tokenHash closes every connection; account rotation passes the
+// retired token's hash so password-authenticated clients keep their connections.
+func (l *lanListener) closeConnections(tokenHash string) error {
 	l.mu.Lock()
-	conns := make([]*lanConn, 0, len(l.conns))
-	for conn := range l.conns {
-		conns = append(conns, conn)
-	}
-	l.mu.Unlock()
+	defer l.mu.Unlock()
 	var errs []error
-	for _, conn := range conns {
-		if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+	for conn := range l.conns {
+		if tokenHash != "" && conn.tokenHash != tokenHash {
+			continue
+		}
+		// Keep selection and TCP close atomic with credential recording. Calling
+		// lanConn.Close here would re-enter mu; close its underlying socket instead.
+		if err := conn.Conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			errs = append(errs, err)
 		}
+		delete(l.conns, conn)
 	}
 	return errors.Join(errs...)
 }
 
+type lanConnContextKey struct{}
+
 type lanConn struct {
 	net.Conn
 	owner *lanListener
+	// Last authenticated credential, guarded by owner.mu; includes hijacked streams.
+	tokenHash string
 }
 
 // Preserve the TCP capabilities net/http uses for response copying and sending

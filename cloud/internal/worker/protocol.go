@@ -3,7 +3,14 @@ package worker
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
+
+// ReviewTerminalEnv marks a dedicated reviewer process. Reviewer harnesses
+// share the parent session's worker credential, but their lifecycle hooks must
+// not overwrite the interactive agent's activity state.
+const ReviewTerminalEnv = "AO_CLOUD_REVIEW_TERMINAL"
 
 // BootstrapRequest is what a worker sends to redeem its one-time ticket.
 type BootstrapRequest struct {
@@ -29,12 +36,13 @@ type LaunchContext struct {
 	Mode            string `json:"mode"`
 	// Model is the coding-agent model the worker launches the harness with;
 	// empty uses the harness default.
-	Model           string    `json:"model,omitempty"`
-	ReasoningEffort string    `json:"reasoningEffort,omitempty"`
-	SelectionAt     time.Time `json:"selectionAt,omitempty"`
-	DeniedCommands  []string  `json:"deniedCommands"`
-	RepositoryURL   string    `json:"repositoryUrl"`
-	DefaultBranch   string    `json:"defaultBranch"`
+	Model           string                    `json:"model,omitempty"`
+	ReasoningEffort string                    `json:"reasoningEffort,omitempty"`
+	SelectionAt     time.Time                 `json:"selectionAt,omitempty"`
+	AgentConfig     domain.ProjectAgentConfig `json:"agentConfig,omitempty"`
+	DeniedCommands  []string                  `json:"deniedCommands"`
+	RepositoryURL   string                    `json:"repositoryUrl"`
+	DefaultBranch   string                    `json:"defaultBranch"`
 	// ExtraRepos are additional repositories the worker clones alongside the
 	// primary repo (multi-repo dev kit). Empty for a single-repo session.
 	ExtraRepos []RepoRef `json:"extraRepos,omitempty"`
@@ -132,6 +140,19 @@ type ClaimPullRequestResponse struct {
 	ID      string `json:"id"`
 	Number  int    `json:"number"`
 	HTMLURL string `json:"htmlUrl"`
+}
+
+// TriggerReviewResponse lists this session's open pull requests that a
+// worker-requested AO review covers. Started is false when a review of that
+// head was already running.
+type TriggerReviewResponse struct {
+	Reviews []TriggeredReview `json:"reviews"`
+}
+
+type TriggeredReview struct {
+	Number  int    `json:"number"`
+	URL     string `json:"url"`
+	Started bool   `json:"started"`
 }
 
 // SubmitReviewRequest reports a review session's verdict on the AO review
@@ -308,6 +329,25 @@ type WorkspaceWriteRequest struct {
 	Content string `json:"content"`
 }
 
+type HarnessInspectRequest struct {
+	Harnesses []string `json:"harnesses"`
+}
+
+type HarnessInstallRequest struct {
+	Harness string `json:"harness"`
+}
+
+type HarnessStatus struct {
+	Harness string `json:"harness"`
+	Status  string `json:"status"`
+	Version string `json:"version,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+type HarnessInspectResponse struct {
+	Harnesses []HarnessStatus `json:"harnesses"`
+}
+
 // BrowserFetchRequest asks the session worker to fetch a browser resource from
 // inside its own VM. The Cloud UI never connects to the VM directly, so a URL
 // such as http://localhost:3000 resolves against the VM rather than the
@@ -373,9 +413,18 @@ type TerminalCommand struct {
 	TerminalID         string `json:"terminalId"`
 	NextOutputSequence int64  `json:"nextOutputSequence,omitempty"`
 	Kind               string `json:"kind,omitempty"`
-	Data               []byte `json:"data,omitempty"`
-	Columns            uint16 `json:"columns,omitempty"`
-	Rows               uint16 `json:"rows,omitempty"`
+	// Harness selects the provider for a dedicated reviewer terminal. It is
+	// ignored for regular workspace and interactive agent terminals.
+	Harness string `json:"harness,omitempty"`
+	// Review starts an isolated coding-agent conversation for an automated PR
+	// review. It shares the session workspace, but never resumes the session's
+	// interactive agent thread.
+	Review      bool                    `json:"review,omitempty"`
+	Data        []byte                  `json:"data,omitempty"`
+	Columns     uint16                  `json:"columns,omitempty"`
+	Rows        uint16                  `json:"rows,omitempty"`
+	ReviewRunID string                  `json:"reviewRunId,omitempty"`
+	Reviewer    *domain.ProjectReviewer `json:"reviewer,omitempty"`
 }
 
 // TerminalStreamFrame is one message on the persistent duplex terminal

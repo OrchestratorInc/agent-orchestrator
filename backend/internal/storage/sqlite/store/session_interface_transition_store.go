@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
@@ -314,7 +315,7 @@ func (s *Store) commitSessionControllerEpoch(
 		// Chat reservation and event namespace in the same transaction, so a
 		// later return can bind that identity without inventing inherited history.
 		released, err := q.ReleaseUntouchedConversationProvider(ctx, gen.ReleaseUntouchedConversationProviderParams{
-			SessionID:       sql.NullString{String: string(id), Valid: true},
+			SessionID:       &id,
 			ProviderScopeID: uuid.NewString(),
 		})
 		if err != nil {
@@ -330,23 +331,69 @@ func (s *Store) commitSessionControllerEpoch(
 	return true, nil
 }
 
+// ReplaceUnpersistedChatProvider moves a Chat whose provider never persisted
+// its reserved conversation onto the fresh conversation the provider started
+// instead. The session and its untouched root branch move together; recorded
+// history or a different current owner fails the swap and changes nothing.
+func (s *Store) ReplaceUnpersistedChatProvider(
+	ctx context.Context,
+	id domain.SessionID,
+	expectedProviderConversationID, providerConversationID string,
+) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "replace unpersisted Chat provider for "+string(id), func(q *gen.Queries) error {
+		moved, err := q.ReplaceUnpersistedChatProvider(ctx, gen.ReplaceUnpersistedChatProviderParams{
+			ProviderConversationID:         providerConversationID,
+			ID:                             id,
+			ExpectedProviderConversationID: expectedProviderConversationID,
+		})
+		if err != nil {
+			return fmt.Errorf("move session provider: %w", err)
+		}
+		if moved != 1 {
+			return errors.New("controller owner changed")
+		}
+		rebound, err := q.ReplaceUntouchedConversationProvider(ctx, gen.ReplaceUntouchedConversationProviderParams{
+			ProviderConversationID:         providerConversationID,
+			SessionID:                      &id,
+			ExpectedProviderConversationID: expectedProviderConversationID,
+		})
+		if err != nil {
+			return fmt.Errorf("rebind root branch: %w", err)
+		}
+		if rebound != 1 {
+			return errors.New("empty root proof changed")
+		}
+		return nil
+	})
+}
+
 // EnqueueSessionInterfaceTransitionMessage queues a user message while an interface transition is active.
 func (s *Store) EnqueueSessionInterfaceTransitionMessage(
 	ctx context.Context,
 	transitionID, clientMessageID, message string,
 	now time.Time,
+	opts ports.MessageDeliveryOptions,
 ) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.qw.EnqueueSessionInterfaceTransitionMessage(ctx, gen.EnqueueSessionInterfaceTransitionMessageParams{
-		TransitionID:    transitionID,
-		ClientMessageID: clientMessageID,
-		Message:         message,
-		CreatedAt:       now,
-	}); err != nil {
-		return fmt.Errorf("queue interface transition message: %w", err)
-	}
-	return nil
+	return s.inTx(ctx, "queue interface transition message", func(q *gen.Queries) error {
+		if err := q.EnqueueSessionInterfaceTransitionMessage(ctx, gen.EnqueueSessionInterfaceTransitionMessageParams{
+			SenderSessionID: opts.SenderSessionID, AuthoredByUser: opts.AuthoredByUser,
+			TransitionID: transitionID, ClientMessageID: clientMessageID, Message: message, CreatedAt: now,
+		}); err != nil {
+			return err
+		}
+		if opts.SenderSessionID == "" {
+			return nil
+		}
+		transition, err := q.GetSessionInterfaceTransition(ctx, transitionID)
+		if err != nil {
+			return err
+		}
+		return recordSessionInteraction(ctx, q, transition.SessionID, opts.SenderSessionID, now)
+	})
 }
 
 // ListPendingSessionInterfaceTransitionMessages lists queued transition messages awaiting delivery.
@@ -362,6 +409,7 @@ func (s *Store) ListPendingSessionInterfaceTransitionMessages(
 	for _, row := range rows {
 		out = append(out, domain.SessionInterfaceTransitionMessage{
 			ID: row.ID, TransitionID: row.TransitionID,
+			SenderSessionID: row.SenderSessionID, AuthoredByUser: row.AuthoredByUser,
 			ClientMessageID: row.ClientMessageID, Message: row.Message,
 			CreatedAt: row.CreatedAt, DeliveredAt: nullTimeToTime(row.DeliveredAt),
 		})

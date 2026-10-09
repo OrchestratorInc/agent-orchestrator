@@ -4,7 +4,6 @@ import { Loader2, MessageSquare, Play, Plus, TerminalSquare } from "lucide-react
 import { useQueryClient } from "@tanstack/react-query";
 import { useUiStore } from "../../stores/ui-store";
 import { apiErrorMessage } from "../../lib/api-client";
-import { useNavigateToSession, useNavigateToTerminals } from "../../lib/navigate-to-session";
 import { useInvokeCueMutation, useProjectCuesQuery } from "../../hooks/useCuesQuery";
 import { fetchProjectCues, projectCuesQueryKey, type CueDTO } from "../../lib/cues";
 import { shellTerminalsQueryKey, toShellTerminal, type ShellTerminal } from "../../hooks/useShellTerminals";
@@ -18,15 +17,15 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { CreateCueDialog } from "../CuesDialog";
+import { readLastRunCue, rememberLastRunCue } from "../../lib/last-run-cue";
 
 // Hovering the trigger opens the menu immediately — it is the discoverability
 // affordance, not a tooltip. The close delay only lets the pointer cross the
 // gap between the trigger and the menu without the menu vanishing underneath it.
 const CUE_MENU_CLOSE_MS = 150;
 
-// The cue runner targets the selected session from its topbar. Without a
-// sessionId, it starts a worker for agent cues or a project terminal for commands.
+// The cue runner requires a selected session; boards never render this control.
 // Keying by target drops in-flight menu state when switching project or session.
 export function CueRunMenu({
 	projectId,
@@ -34,7 +33,7 @@ export function CueRunMenu({
 	disabled = false,
 }: {
 	projectId: string;
-	sessionId?: string;
+	sessionId: string;
 	disabled?: boolean;
 }) {
 	return (
@@ -53,20 +52,20 @@ function CueRunMenuTrigger({
 	disabled,
 }: {
 	projectId: string;
-	sessionId?: string;
+	sessionId: string;
 	disabled: boolean;
 }) {
 	const { t } = useTranslation();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const queryClient = useQueryClient();
-	const navigateToSession = useNavigateToSession();
-	const navigateToTerminals = useNavigateToTerminals();
 	const setActiveShellTerminal = useUiStore((state) => state.setActiveShellTerminal);
 	const [open, setOpen] = useState(false);
-	const [runningPrimary, setRunningPrimary] = useState(false);
+	const [creating, setCreating] = useState(false);
+	const [runningLastCue, setRunningLastCue] = useState(false);
 	const pending = useRef(false);
 	const generation = useRef(0);
 	const hoverCloseTimer = useRef<number | null>(null);
+	const buttonRef = useRef<HTMLButtonElement>(null);
 	// The menu is hover-driven, so the pointerdown Radix uses to toggle a menu —
 	// and the dismiss layer that same press wakes up — must not close a menu the
 	// pointer is still inside. Escape is the keyboard escape hatch.
@@ -75,7 +74,7 @@ function CueRunMenuTrigger({
 	const invokeMutation = useInvokeCueMutation();
 	const [invokingId, setInvokingId] = useState<string | null>(null);
 	const busy = invokingId !== null;
-	const spinner = busy || runningPrimary;
+	const spinner = busy || runningLastCue;
 
 	const cancelHoverClose = () => {
 		if (hoverCloseTimer.current === null) return;
@@ -97,7 +96,7 @@ function CueRunMenuTrigger({
 	const handlePointerEnter = () => {
 		pointerInsideControl.current = true;
 		cancelHoverClose();
-		if (disabled || spinner) return;
+		if (disabled || spinner || creating) return;
 		if (!open) openMenu();
 	};
 
@@ -119,6 +118,7 @@ function CueRunMenuTrigger({
 
 	const handleOpenChange = (next: boolean) => {
 		if (next) {
+			if (creating) return;
 			openMenu();
 			return;
 		}
@@ -135,8 +135,11 @@ function CueRunMenuTrigger({
 		setInvokingId(cue.id);
 		try {
 			await useTerminalShellStore.getState().load();
+			if (origin !== generation.current) return;
 			const shell = terminalShellRequestValue(useTerminalShellStore.getState().preference);
 			const result = await invokeMutation.mutateAsync({ cueId: cue.id, sessionId, shell });
+			if (result.kind === "command" && !result.shellTerminal) throw new Error(t("cues.invokeFailed"));
+			rememberLastRunCue(projectId, cue.id);
 			if (result.kind === "command") {
 				if (!result.shellTerminal) throw new Error(t("cues.invokeFailed"));
 				const terminal = toShellTerminal(result.shellTerminal);
@@ -152,13 +155,8 @@ function CueRunMenuTrigger({
 				// A delayed response must not redirect a different project or session.
 				if (origin !== generation.current) return;
 				setActiveShellTerminal(terminal.handleId);
-				showGlobalToast(t("cues.invokeCommandSent"), t("cues.invokeCommandSentBody", { name: cue.name }));
-				if (!sessionId) navigateToTerminals();
 				return;
 			}
-			if (origin !== generation.current) return;
-			showGlobalToast(t("cues.invokeSent"), t("cues.invokeSentBody", { name: cue.name }));
-			if (!sessionId && result.sessionId) navigateToSession(projectId, result.sessionId);
 		} catch (error) {
 			if (origin !== generation.current) return;
 			showGlobalToast(t("cues.invokeFailed"), apiErrorMessage(error, t("cues.invokeFailed")), "error");
@@ -168,75 +166,88 @@ function CueRunMenuTrigger({
 		}
 	};
 
-	// A tap runs the menu's primary cue — the first entry, which the daemon
-	// returns in name order — instead of toggling the menu that hover owns.
-	const runPrimaryCue = async () => {
-		if (disabled || spinner) return;
-		setRunningPrimary(true);
+	// A pointer click repeats the project's last successfully dispatched cue.
+	// Without a valid remembered cue, open the list for an explicit choice.
+	const runLastCue = async () => {
+		if (disabled || spinner || creating) return;
+		const origin = generation.current;
+		setRunningLastCue(true);
 		try {
 			const cues = await queryClient.fetchQuery({
 				queryKey: projectCuesQueryKey(projectId),
 				queryFn: () => fetchProjectCues(projectId),
 				staleTime: 0,
 			});
-			const primary = cues[0];
+			if (origin !== generation.current) return;
+			const lastCue = cues.find((cue) => cue.id === readLastRunCue(projectId));
 			// Nothing to run: leave the hover menu up so its empty state can
 			// offer creating the first cue.
-			if (!primary) {
+			if (!lastCue) {
 				openMenu();
 				return;
 			}
-			await handleInvoke(primary);
+			await handleInvoke(lastCue);
 		} catch (error) {
-			showGlobalToast(t("cues.loadFailed"), apiErrorMessage(error, t("cues.loadFailed")), "error");
+			if (origin !== generation.current) return;
+			showGlobalToast(t("cues.loadFailed"), apiErrorMessage(error, t("cues.loadFailed")), { tone: "error", dedupeKey: `cues.load.${projectId}` });
 		} finally {
-			setRunningPrimary(false);
+			if (origin === generation.current) setRunningLastCue(false);
 		}
 	};
 
 	return (
-		<DropdownMenu modal={false} open={open} onOpenChange={handleOpenChange}>
-			<DropdownMenuTrigger asChild>
-				<TopbarButton
-					type="button"
-					aria-label={t("cues.run")}
-					// The menu is anchored to this button: pressing must not scale it,
-					// or the open menu shifts with the trigger.
-					className="topbar-control--static-press"
-					data-priority="secondary"
-					disabled={disabled || spinner}
-					variant="icon"
-					onPointerEnter={handlePointerEnter}
-					onPointerLeave={handlePointerLeave}
-					// Keyboard activation opens the menu (Radix); only pointer
-					// presses run the primary cue, so Enter/Space stay safe.
-					onClick={(event) => {
-						if (event.detail === 0) return;
-						void runPrimaryCue();
-					}}
-				>
-					{spinner ? (
-						<Loader2 className="size-icon-md animate-spin" aria-hidden="true" />
-					) : (
-						<Play className="size-icon-md" aria-hidden="true" />
-					)}
-				</TopbarButton>
-			</DropdownMenuTrigger>
+		<>
+			<DropdownMenu modal={false} open={open} onOpenChange={handleOpenChange}>
+				<DropdownMenuTrigger asChild>
+					<TopbarButton
+						ref={buttonRef}
+						type="button"
+						aria-label={t("cues.run")}
+						// The menu is anchored to this button: pressing must not scale it,
+						// or the open menu shifts with the trigger.
+						className="topbar-control--static-press"
+						data-priority="secondary"
+						disabled={disabled || spinner}
+						variant="icon"
+						onPointerEnter={handlePointerEnter}
+						onPointerLeave={handlePointerLeave}
+						// Keyboard activation opens the menu (Radix); only pointer
+						// presses run the last cue, so Enter/Space stay safe.
+						onClick={(event) => {
+							if (event.detail === 0) return;
+							void runLastCue();
+						}}
+					>
+						{spinner ? (
+							<Loader2 className="size-icon-md animate-spin" aria-hidden="true" />
+						) : (
+							<Play className="size-icon-md" aria-hidden="true" />
+						)}
+					</TopbarButton>
+				</DropdownMenuTrigger>
 
-			{open ? (
-				<CueMenuItems
-					projectId={projectId}
-					busy={busy}
-					onInvoke={handleInvoke}
-					onDismiss={() => setOpen(false)}
-					onPointerEnter={handleMenuPointerEnter}
-					onPointerLeave={handlePointerLeave}
-					onEscapeKeyDown={() => {
-						escapeRequested.current = true;
-					}}
-				/>
-			) : null}
-		</DropdownMenu>
+				{open ? (
+					<CueMenuItems
+						projectId={projectId}
+						busy={spinner}
+						onInvoke={handleInvoke}
+						onCreate={() => {
+							cancelHoverClose();
+							pointerInsideControl.current = false;
+							setOpen(false);
+							setCreating(true);
+						}}
+						onPointerEnter={handleMenuPointerEnter}
+						onPointerLeave={handlePointerLeave}
+						onEscapeKeyDown={() => {
+							escapeRequested.current = true;
+						}}
+					/>
+				) : null}
+			</DropdownMenu>
+			<CreateCueDialog projectId={projectId} open={creating} onOpenChange={setCreating}
+				onClosed={() => buttonRef.current?.focus()} />
+		</>
 	);
 }
 
@@ -244,7 +255,7 @@ function CueMenuItems({
 	projectId,
 	busy,
 	onInvoke,
-	onDismiss,
+	onCreate,
 	onPointerEnter,
 	onPointerLeave,
 	onEscapeKeyDown,
@@ -252,14 +263,19 @@ function CueMenuItems({
 	projectId: string;
 	busy: boolean;
 	onInvoke: (cue: CueDTO) => Promise<void>;
-	onDismiss: () => void;
+	onCreate: () => void;
 	onPointerEnter: () => void;
 	onPointerLeave: () => void;
 	onEscapeKeyDown: () => void;
 }) {
 	const { t } = useTranslation();
-	const openProjectSettings = useUiStore((state) => state.openProjectSettings);
 	const query = useProjectCuesQuery(projectId);
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	useEffect(() => {
+		if (query.isError && !query.isFetching) {
+			showGlobalToast(t("cues.loadFailed"), apiErrorMessage(query.error, t("cues.loadFailed")), { tone: "error", dedupeKey: `cues.load.${projectId}` });
+		}
+	}, [projectId, query.isError, query.isFetching, query.error, showGlobalToast, t]);
 	// The menu refreshes on every open, and hover opens it constantly, so cached
 	// cues render straight away: the background refresh that keeps them fresh must
 	// not blank the list into a loading row first. Loading is only for a cold read.
@@ -295,13 +311,7 @@ function CueMenuItems({
 				<DropdownMenuItem disabled>{t("cues.emptyMenu")}</DropdownMenuItem>
 			)}
 			<DropdownMenuSeparator />
-			<DropdownMenuItem
-				onSelect={() => {
-					// Settings replaces the menu: leaving a stale popover floating
-					// over the dialog reads as a stuck control.
-					onDismiss();
-					openProjectSettings(projectId, { section: "cues" });
-				}}
+			<DropdownMenuItem disabled={busy} onSelect={onCreate}
 			>
 				<Plus aria-hidden="true" />
 				{t("cues.newCue")}
@@ -310,30 +320,15 @@ function CueMenuItems({
 	);
 }
 
-// Rows stay one line: the name is the only thing that has to be scannable, so
-// the description rides along as a tooltip instead of pushing rows taller.
-function CueMenuItem({
-	cue,
-	busy,
-	onInvoke,
-}: {
+function CueMenuItem({ cue, busy, onInvoke }: {
 	cue: CueDTO;
 	busy: boolean;
 	onInvoke: (cue: CueDTO) => Promise<void>;
 }) {
-	const item = (
+	return (
 		<DropdownMenuItem disabled={busy} onSelect={() => void onInvoke(cue)}>
 			{cue.type === "agent" ? <MessageSquare aria-hidden="true" /> : <TerminalSquare aria-hidden="true" />}
 			<span className="min-w-0 flex-1 truncate">{cue.name}</span>
 		</DropdownMenuItem>
-	);
-	if (!cue.description) return item;
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>{item}</TooltipTrigger>
-			<TooltipContent side="left" className="max-w-64">
-				{cue.description}
-			</TooltipContent>
-		</Tooltip>
 	);
 }

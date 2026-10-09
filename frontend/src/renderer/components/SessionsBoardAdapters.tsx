@@ -56,6 +56,15 @@ export function toBoardSessionPresentation(
 					tone: "var(--color-status-working)",
 				}
 			: undefined;
+	const failedStartStatus =
+		session.provisionState === "failed"
+			? {
+					className: "text-status-exited",
+					indicatorClassName: "bg-status-exited",
+					label: "Start failed",
+					tone: "var(--color-status-exited)",
+				}
+			: undefined;
 	return {
 		activity: session.activity,
 		branch: session.branch,
@@ -67,7 +76,7 @@ export function toBoardSessionPresentation(
 		status: session.status,
 		statusReadiness: session.statusReadiness,
 		statusPresentation:
-			provisioningStatus ??
+			provisioningStatus ?? failedStartStatus ??
 			(t && switchPresentation && switchVisual
 				? {
 						className: switchVisual.className,

@@ -23,6 +23,12 @@ describe("AgentAvatar", () => {
 		expect(screen.getByRole("img", { name: "omp" })).toHaveAttribute("src", expect.stringContaining("omp.png"));
 	});
 
+	it("renders the Codewhale brand asset", () => {
+		render(<AgentAvatar provider="codewhale" />);
+
+		expect(screen.getByRole("img", { name: "codewhale" })).toHaveAttribute("src", expect.stringContaining("codewhale.svg"));
+	});
+
 	it("renders the Gemini CLI brand asset", () => {
 		render(<AgentAvatar provider="gemini" />);
 
@@ -68,6 +74,15 @@ describe("AgentAvatar", () => {
 		expect(screen.getByRole("img", { name: "opencode-v2" })).toHaveAttribute(
 			"src",
 			screen.getByRole("img", { name: "opencode" }).getAttribute("src"),
+		);
+	});
+
+	it("renders the OpenHands brand asset", () => {
+		render(<AgentAvatar provider="openhands" />);
+
+		expect(screen.getByRole("img", { name: "openhands" })).toHaveAttribute(
+			"src",
+			expect.stringContaining("openhands.svg"),
 		);
 	});
 });

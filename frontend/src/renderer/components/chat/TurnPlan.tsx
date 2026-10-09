@@ -61,7 +61,7 @@ export const TurnPlan = memo(function TurnPlan({
 				) : null}
 				<span className="flex-1" />
 				{/* Tabular so the count does not jitter the header as it climbs. */}
-				<span className="shrink-0 font-mono text-[10.5px] tabular-nums text-muted-foreground">
+				<span className="shrink-0 font-mono text-caption tabular-nums text-muted-foreground">
 					{done}/{plan.steps.length}
 				</span>
 			</div>
@@ -69,7 +69,7 @@ export const TurnPlan = memo(function TurnPlan({
 			{expanded ? (
 				<>
 					{plan.explanation ? (
-						<p className="px-3.5 pb-2 text-[11px] leading-relaxed text-muted-foreground">
+						<p className="px-3.5 pb-2 text-caption leading-relaxed text-muted-foreground">
 							{plan.explanation}
 						</p>
 					) : null}
@@ -86,7 +86,7 @@ export const TurnPlan = memo(function TurnPlan({
 								<StepMark status={step.status} />
 								<span
 									className={cn(
-										"min-w-0 flex-1 text-[11.5px] leading-[1.45]",
+										"min-w-0 flex-1 text-xs leading-[1.45]",
 										step.status === "completed" && "text-muted-foreground/70 line-through",
 										step.status === "in_progress" && "text-foreground",
 										step.status === "pending" && "text-muted-foreground",

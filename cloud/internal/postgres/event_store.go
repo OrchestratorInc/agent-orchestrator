@@ -391,7 +391,11 @@ func appendUserMessage(
 		FROM ao_terminal_sessions terminal
 		JOIN ao_sessions session
 			ON session.org_id = terminal.org_id AND session.id = terminal.session_id
-		WHERE terminal.org_id = $1 AND terminal.session_id = $2 AND terminal.kind = 'agent'
+		WHERE terminal.org_id = $1 AND terminal.session_id = $2 AND terminal.kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = terminal.org_id
+				  AND review_terminal_run.review_terminal_id = terminal.id
+			)
 		  AND session.interface = 'tui'
 		  AND terminal.state = 'open' AND terminal.expires_at > now()
 		  AND session.activity_state <> 'active'

@@ -316,6 +316,9 @@ SELECT
     pr.target_branch,
     pr.head_sha,
     pr.updated_at,
+    pr.state_changed_at,
+    pr.ci_observed_at,
+    last_review.submitted_at AS last_review_at,
     EXISTS (
         SELECT 1
         FROM pr_comment
@@ -350,6 +353,18 @@ SELECT
           AND external_review.state = 'changes_requested'
     ) AS external_changes_requested
 FROM pr
+LEFT JOIN pr_reviews last_review ON last_review.pr_url = pr.url
+    -- The newest review by provider submission time, so re-fetching a review
+    -- does not move it.
+    AND NOT EXISTS (
+        SELECT 1
+        FROM pr_reviews newer_review
+        WHERE newer_review.pr_url = last_review.pr_url
+          AND (
+              newer_review.submitted_at > last_review.submitted_at
+              OR (newer_review.submitted_at = last_review.submitted_at AND newer_review.review_id > last_review.review_id)
+          )
+    )
 WHERE pr.session_id = sqlc.arg(session_id)
 ORDER BY pr.updated_at DESC;
 
@@ -417,6 +432,9 @@ SELECT
     pr.target_branch,
     pr.head_sha,
     pr.updated_at,
+    pr.state_changed_at,
+    pr.ci_observed_at,
+    last_review.submitted_at AS last_review_at,
     EXISTS (
         SELECT 1
         FROM pr_comment
@@ -454,6 +472,18 @@ SELECT
     ) AS external_changes_requested
 FROM pr
 JOIN wanted_session ON wanted_session.session_id = pr.session_id
+LEFT JOIN pr_reviews last_review ON last_review.pr_url = pr.url
+    -- The newest review by provider submission time, so re-fetching a review
+    -- does not move it.
+    AND NOT EXISTS (
+        SELECT 1
+        FROM pr_reviews newer_review
+        WHERE newer_review.pr_url = last_review.pr_url
+          AND (
+              newer_review.submitted_at > last_review.submitted_at
+              OR (newer_review.submitted_at = last_review.submitted_at AND newer_review.review_id > last_review.review_id)
+          )
+    )
 ORDER BY pr.session_id, pr.updated_at DESC;
 
 -- name: ClaimPRForSession :exec

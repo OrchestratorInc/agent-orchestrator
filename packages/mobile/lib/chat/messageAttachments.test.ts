@@ -10,6 +10,11 @@ describe("mobile Chat staged attachments", () => {
 		});
 	});
 
+	it("labels images the desktop composer placed inline instead of showing their paths", () => {
+		const text = "Make .ao/attachments/attachment-a.png shorter than .ao/attachments/attachment-b.png\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-a.png\n- .ao/attachments/attachment-b.png";
+		expect(stagedAttachmentParts(text).body).toBe("Make [Image 1] shorter than [Image 2]");
+	});
+
 	it("accepts every AO-shipped wording, including mobile's own and legacy image-only prompts", () => {
 		for (const header of [
 			"Attached files (read these files in the workspace for context):",

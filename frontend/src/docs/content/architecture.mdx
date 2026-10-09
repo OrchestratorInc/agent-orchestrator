@@ -3,10 +3,10 @@ title: Architecture
 description: How the Go daemon, Electron app, storage, controllers, and adapters fit together.
 ---
 
-Agent Orchestrator is a local, single-user system built around a long-running Go daemon. The Electron/React desktop app, optional CLI, and Expo mobile app connect to it over HTTP, server-sent events (SSE), and terminal streams.
+Orchestrator is a local, single-user system built around a long-running Go daemon. The Electron/React desktop app, optional CLI, and Expo mobile app connect to it over HTTP, server-sent events (SSE), and terminal streams.
 
 <Callout type="info">
-	This page is a technical reference for contributors and users who want to understand AO internals. For everyday controls and workflows, start with the [Dashboard guide](/dashboard).
+	This page is a technical reference for contributors and users who want to understand Orchestrator internals. For everyday controls and workflows, start with the [Dashboard guide](/dashboard).
 </Callout>
 
 ## System overview
@@ -25,20 +25,20 @@ The desktop app finds, starts, and supervises the daemon. Its renderer uses a ge
 
 ## Sessions and worktrees
 
-Workers in Git projects use isolated worktrees. A workspace can include its root repository and child repositories. Scratch and standalone sessions use AO-managed directories. Each session uses one agent interface at a time:
+Workers in Git projects use isolated worktrees. A workspace can include its root repository and child repositories. Scratch and standalone sessions use Orchestrator-managed directories. Each session uses one agent interface at a time:
 
 - **Terminal UI** runs the harness in a detached native pseudo-terminal (PTY) host on macOS/Linux. Older sessions and fallback launches can use tmux. Windows uses ConPTY.
 - **Chat** runs a native provider controller without an agent terminal runtime.
 
-AO saves Chat conversation history, including provider identity, messages, activities, approvals, structured input, usage, compaction, and rollback state.
+Orchestrator saves Chat conversation history, including provider identity, messages, activities, approvals, structured input, usage, compaction, and rollback state.
 
-Compatible Claude Code and Codex sessions can move the same provider conversation between Terminal UI and Chat. AO finishes or interrupts the old controller before starting the replacement, so both controllers are never active at once. The session and worktree stay the same.
+Compatible Claude Code and Codex sessions can move the same provider conversation between Terminal UI and Chat. Orchestrator finishes or interrupts the old controller before starting the replacement, so both controllers are never active at once. The session and worktree stay the same.
 
 ## Saved facts and derived status
 
 <span id="durable-facts-derived-status" />
 
-AO saves session facts and derives the status shown in the app when it reads a session. Saved facts include:
+Orchestrator saves session facts and derives the status shown in the app when it reads a session. Saved facts include:
 
 - Agent activity: active, idle, waiting for input, blocked, or exited.
 - Whether the session has been terminated.
@@ -52,7 +52,7 @@ Failed or unknown runtime probes are observations, not proof of death. Cleanup a
 
 ## Storage and live updates
 
-AO stores local data in SQLite under `~/.ao/data` by default. Database triggers append changes to `change_log`. A background poller reads that log and tells in-process subscribers and `GET /api/v1/events` which data to refresh.
+Orchestrator stores local data in SQLite under `~/.ao/data` by default. Database triggers append changes to `change_log`. A background poller reads that log and tells in-process subscribers and `GET /api/v1/events` which data to refresh.
 
 The event stream supports replay with `Last-Event-ID`. Clients use it to invalidate targeted queries rather than transferring every full session or Chat payload on each update.
 
@@ -62,13 +62,13 @@ All application state stays under `~/.ao`, including the run file, managed workt
 
 HTTP controllers validate requests and call domain services. Services decide how data is read and changed. Session and lifecycle managers coordinate multi-step work. External systems connect through Go interfaces and adapters.
 
-Adapters currently support more than twenty agent harnesses, native PTY and ConPTY hosts, tmux for older sessions and fallback launches, Git worktrees, native Chat drivers, and GitHub/GitLab source-control observation. AO uses the provider binaries and sign-ins already installed on the machine.
+Adapters currently support more than twenty agent harnesses, native PTY and ConPTY hosts, tmux for older sessions and fallback launches, Git worktrees, native Chat drivers, and GitHub/GitLab source-control observation. Orchestrator uses the provider binaries and sign-ins already installed on the machine.
 
-Issue intake from GitHub or GitLab requires opt-in in both daemon and project settings. AO reads issues but does not change them. Recurring Automations run through a local scheduler. Project Cues save reusable prompts or commands. These features are separate from repository lifecycle reactions.
+Issue intake from GitHub or GitLab requires opt-in in both daemon and project settings. Orchestrator reads issues but does not change them. Recurring Automations run through a local scheduler. Project Cues save reusable prompts or commands. These features are separate from repository lifecycle reactions.
 
 ## Pull requests and lifecycle reactions
 
-The source-control observer connects to GitHub and GitLab. GitHub authentication happens only when needed. AO uses HTTP ETags to avoid fetching unchanged data and compares changed pull-request details before updating SQLite. The observer notifies lifecycle logic when CI fails, a review requests changes, or a merge conflict appears.
+The source-control observer connects to GitHub and GitLab. GitHub authentication happens only when needed. Orchestrator uses HTTP ETags to avoid fetching unchanged data and compares changed pull-request details before updating SQLite. The observer notifies lifecycle logic when CI fails, a review requests changes, or a merge conflict appears.
 
 The daemon also exposes pull-request merge and comment-resolution actions plus reviewer-agent routes. Desktop clients receive concise summaries rather than raw CI logs or complete review bodies.
 
@@ -86,7 +86,7 @@ Direct connections use plain HTTP and are intended for trusted networks. A manag
 
 Browser automation uses a local connection between the daemon and Electron. The daemon authorizes and matches commands to results. Electron displays each session's browser in an isolated `WebContentsView`. The mobile listener cannot control the browser.
 
-The temporary browser profile is isolated per session. Named profiles save cookies and storage and can be reused across sessions. Sessions using the same named profile share its browser state. AO copies imported browser data into AO-owned storage and does not change the source profile.
+The temporary browser profile is isolated per session. Named profiles save cookies and storage and can be reused across sessions. Sessions using the same named profile share its browser state. Orchestrator copies imported browser data into Orchestrator-owned storage and does not change the source profile.
 
 The architecture above describes local sessions. Cloud execution is a separate gated integration requiring build enablement, account access, and a reachable control plane. Standalone local workers are projectless; they are not Cloud sessions.
 

@@ -158,6 +158,7 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao remote-host status":     {},
 	"ao remote-host enable":     {},
 	"ao remote-host disable":    {},
+	"ao render":                 {},
 	"ao review":                 {},
 	"ao review cancel":          {},
 	"ao review ls":              {},

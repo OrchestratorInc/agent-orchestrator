@@ -32,6 +32,20 @@ type fakeUsageHookRecorder struct {
 	err       error
 }
 
+type fakeNativeSessionResolver struct {
+	id    string
+	ok    bool
+	err   error
+	got   ports.NativeSessionResolveConfig
+	calls int
+}
+
+func (f *fakeNativeSessionResolver) ResolveNativeSessionID(_ context.Context, cfg ports.NativeSessionResolveConfig) (string, bool, error) {
+	f.calls++
+	f.got = cfg
+	return f.id, f.ok, f.err
+}
+
 func (f *fakeUsageHookRecorder) RecordHook(_ context.Context, id domain.SessionID, signal usagesvc.HookSignal) error {
 	f.calls++
 	f.gotID = id
@@ -104,6 +118,103 @@ func TestSessionsAPI_ActivityContentionRemainsRetryableAndRecordsUsage(t *testin
 	}
 	if usage.calls != 1 || usage.gotSignal.TranscriptPath != "/tmp/main.jsonl" {
 		t.Fatalf("projection contention discarded independent usage signal: %+v", usage)
+	}
+}
+
+func TestSessionsAPI_CodewhaleLifecycleMapsRootEvents(t *testing.T) {
+	tests := []struct {
+		kind      string
+		wantState domain.ActivityState
+		wantEvent string
+		valid     bool
+	}{
+		{"session.started", "", "session-start", false},
+		{"turn.started", domain.ActivityActive, "user-prompt-submit", true},
+		{"turn.completed", domain.ActivityWaitingInput, "stop", true},
+		{"turn.failed", domain.ActivityWaitingInput, "stop", true},
+		{"turn.interrupted", domain.ActivityWaitingInput, "stop", true},
+		{"turn.stalled", domain.ActivityWaitingInput, "stop", true},
+		{"session.ended", domain.ActivityExited, "session-end", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.kind, func(t *testing.T) {
+			recorder := &fakeActivityRecorder{}
+			srv := newActivityTestServer(t, recorder)
+			body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/activity/codewhale?launchId=launch-7", `{
+				"at":"2026-09-24T10:00:00Z",
+				"event":{"schema_version":1,"seq":3,"event":"native-name","kind":"`+tc.kind+`","thread_id":"sess_native-1","turn_id":"turn-2","timestamp":"2026-09-24T10:00:01Z"}
+			}`)
+			if status != http.StatusOK {
+				t.Fatalf("status=%d body=%s", status, body)
+			}
+			got := recorder.gotSignal
+			if recorder.calls != 1 || got.State != tc.wantState || got.Valid != tc.valid || got.Event != tc.wantEvent || got.AgentSessionID != "" || got.LaunchID != "launch-7" || got.ProviderTurnID != "turn-2" {
+				t.Fatalf("signal = %+v, calls=%d", got, recorder.calls)
+			}
+			if !got.Timestamp.Equal(time.Date(2026, 9, 24, 10, 0, 1, 0, time.UTC)) {
+				t.Fatalf("timestamp = %v", got.Timestamp)
+			}
+		})
+	}
+}
+
+func TestSessionsAPI_CodewhaleLifecycleCapturesSavedConversationIDForRestore(t *testing.T) {
+	const savedSessionID = "0e9dfb74-4a65-4067-964f-152e432cccb6"
+	recorder := &fakeActivityRecorder{}
+	resolver := &fakeNativeSessionResolver{id: savedSessionID, ok: true}
+	dataDir := t.TempDir()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(
+		config.Config{DataDir: dataDir},
+		log,
+		nil,
+		httpd.APIDeps{Activity: recorder, NativeSessions: resolver},
+		httpd.ControlDeps{},
+	))
+	t.Cleanup(srv.Close)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/activity/codewhale?launchId=launch-7", `{
+		"event":{"schema_version":1,"kind":"turn.completed","thread_id":"sess_beec7292","turn_id":"3e380029-07a3-4585-b301-e9d86913bb53"}
+	}`)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	if resolver.calls != 1 || resolver.got.DataDir != dataDir || resolver.got.SessionID != "ao-1" || resolver.got.LaunchID != "launch-7" {
+		t.Fatalf("resolver calls=%d config=%+v", resolver.calls, resolver.got)
+	}
+	if recorder.gotSignal.AgentSessionID != savedSessionID {
+		t.Fatalf("AgentSessionID=%q, want saved UUID; hook thread id must not be persisted", recorder.gotSignal.AgentSessionID)
+	}
+}
+
+func TestSessionsAPI_CodewhaleLifecycleIgnoresSubagents(t *testing.T) {
+	recorder := &fakeActivityRecorder{}
+	srv := newActivityTestServer(t, recorder)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/activity/codewhale?launchId=launch-7",
+		`{"event":{"schema_version":1,"kind":"subagent.spawned","thread_id":"sess_native-1"}}`)
+	if status != http.StatusOK || recorder.calls != 0 {
+		t.Fatalf("status=%d calls=%d body=%s", status, recorder.calls, body)
+	}
+}
+
+func TestSessionsAPI_CodewhaleLifecycleRequiresGenerationAndSchema(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		url  string
+		body string
+	}{
+		{"missing launch", "/api/v1/sessions/ao-1/activity/codewhale", `{"event":{"schema_version":1,"kind":"turn.started","thread_id":"sess_1"}}`},
+		{"wrong schema", "/api/v1/sessions/ao-1/activity/codewhale?launchId=launch-1", `{"event":{"schema_version":2,"kind":"turn.started","thread_id":"sess_1"}}`},
+		{"missing thread", "/api/v1/sessions/ao-1/activity/codewhale?launchId=launch-1", `{"event":{"schema_version":1,"kind":"turn.started"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := &fakeActivityRecorder{}
+			srv := newActivityTestServer(t, recorder)
+			_, status, _ := doRequest(t, srv, "POST", tc.url, tc.body)
+			if status != http.StatusBadRequest || recorder.calls != 0 {
+				t.Fatalf("status=%d calls=%d", status, recorder.calls)
+			}
+		})
 	}
 }
 

@@ -252,6 +252,64 @@ describe("TopbarOpenEditorButton", () => {
 		}
 	});
 
+	it("does not call the workspace missing when the check itself failed, and checks again", async () => {
+		vi.useFakeTimers();
+		try {
+			const getState = vi
+				.fn()
+				.mockResolvedValueOnce({
+					...availableState,
+					workspaceAvailable: false,
+					unavailableReason: "Internal server error",
+					unavailableCode: "INTERNAL_ERROR",
+				})
+				.mockResolvedValue(availableState);
+			window.ao!.editorHandoff.getState = getState;
+			renderButton();
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(0);
+			});
+			expect(screen.getByRole("button", { name: "Checking workspace…" })).toBeDisabled();
+			expect(screen.queryByText(/Internal server error|not available/)).not.toBeInTheDocument();
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(5_000);
+			});
+			await act(async () => {
+				await vi.runOnlyPendingTimersAsync();
+			});
+			expect(getState).toHaveBeenCalledTimes(2);
+			expect(screen.getByRole("button", { name: "Open in Cursor" })).toBeEnabled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("stops checking after three failed checks and shows the reason", async () => {
+		vi.useFakeTimers();
+		try {
+			const getState = vi.fn().mockResolvedValue({
+				...availableState,
+				workspaceAvailable: false,
+				unavailableReason: "AO daemon is not ready.",
+				unavailableCode: "SERVICE_UNAVAILABLE",
+			});
+			window.ao!.editorHandoff.getState = getState;
+			renderButton();
+
+			for (let i = 0; i < 6; i += 1) {
+				await act(async () => {
+					await vi.advanceTimersByTimeAsync(5_000);
+				});
+			}
+			expect(getState).toHaveBeenCalledTimes(3);
+			expect(screen.getByRole("button", { name: "AO daemon is not ready." })).toBeDisabled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("does not poll a terminated session whose workspace is gone", async () => {
 		const getState = vi.fn().mockResolvedValue({
 			...availableState,

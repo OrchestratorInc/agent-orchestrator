@@ -52,16 +52,8 @@ func (l integrationChatLauncher) StartChatTurn(ctx context.Context, id domain.Se
 	return l.service.StartChatTurn(ctx, id, text)
 }
 
-func (l integrationChatLauncher) RelayChatTurn(ctx context.Context, id domain.SessionID, text string) (string, error) {
-	return l.service.RelayChatTurn(ctx, id, text)
-}
-
-func (l integrationChatLauncher) RelayChatTurnWithID(
-	ctx context.Context,
-	id domain.SessionID,
-	text, clientMessageID string,
-) (string, error) {
-	return l.service.RelayChatTurnWithID(ctx, id, text, clientMessageID)
+func (l integrationChatLauncher) RelaySessionChatTurn(ctx context.Context, id domain.SessionID, text, clientMessageID string, options ports.MessageDeliveryOptions) (string, error) {
+	return l.service.RelaySessionChatTurn(ctx, id, text, clientMessageID, options)
 }
 
 func (l integrationChatLauncher) HasLiveChatController(id domain.SessionID) bool {

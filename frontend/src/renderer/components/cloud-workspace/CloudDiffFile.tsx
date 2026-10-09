@@ -41,9 +41,9 @@ export function CloudDiffFile({
 	const containerRef = useRef<HTMLDivElement>(null);
 	const metadata = useMemo(() => metadataForPath(patch, file.path), [file.path, patch]);
 	const rows = useMemo(() => parseUnifiedDiff(patch), [patch]);
-	const activeTarget = annotation.target?.surface !== "focused" && annotation.target?.path === file.path && annotation.target.side !== "file" ? annotation.target : null;
-	const annotations: DiffLineAnnotation<"feedback">[] | undefined = activeTarget?.line != null
-		? [{ lineNumber: activeTarget.line, side: activeTarget.side === "old" ? "deletions" : "additions", metadata: "feedback" }]
+	const activeTargets = annotation.targets.filter((target) => target.surface !== "focused" && target.path === file.path && target.side !== "file" && target.line != null);
+	const annotations: DiffLineAnnotation<"feedback">[] | undefined = activeTargets.length > 0
+		? activeTargets.map((target) => ({ lineNumber: target.line as number, side: target.side === "old" ? "deletions" : "additions", metadata: "feedback" }))
 		: undefined;
 	useEffect(() => {
 		const onSelectionChange = () => {
@@ -88,7 +88,10 @@ export function CloudDiffFile({
 				theme: { dark: "github-dark", light: "github-light" }, themeType: resolvedTheme,
 				tokenizeMaxLength: 200_000, tokenizeMaxLineLength: 2_000, unsafeCSS: AO_PIERRE_SURFACE_CSS,
 			}}
-			renderAnnotation={() => <FileAnnotationComposer annotation={annotation} />}
+			renderAnnotation={(line) => {
+				const target = activeTargets.find((open) => open.line === line.lineNumber && (open.side === "old" ? "deletions" : "additions") === line.side);
+				return target ? <FileAnnotationComposer annotation={annotation} target={target} /> : null;
+			}}
 			renderGutterUtility={(getHoveredLine) => <LineFeedbackButtonControl gutter label={t("files.addFeedback")} onClick={() => {
 				const line = getHoveredLine();
 				if (line) beginLineAnnotation(line.side, line.lineNumber);

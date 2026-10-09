@@ -9,6 +9,7 @@ export type RemoteEntry = {
 	url: string;
 	password: string;
 	hostId?: string;
+	accountUserId?: string;
 };
 
 export class RemotesFilePermissionError extends Error {
@@ -97,6 +98,7 @@ export function applyRemoteChanges(entry: RemoteEntry, changes: RemoteChanges): 
 		url: changes.url ?? entry.url,
 		password: changes.password ?? entry.password,
 		hostId: entry.hostId,
+		accountUserId: changes.accountUserId ?? entry.accountUserId,
 	};
 }
 

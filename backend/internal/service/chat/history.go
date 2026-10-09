@@ -109,13 +109,11 @@ const maxTitleRunes = 80
 // not. The controller holds its dispatch lock across the check and the call, so
 // within AO the answer cannot change underneath.
 func (s *Service) Rollback(ctx context.Context, id domain.SessionID, turnID string) (int, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return 0, err
-	}
-	controller, err := s.Controller(id)
+	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return 0, err
 	}
+	defer release()
 	if _, ok := controller.conv.(ports.ChatRollbacker); !ok {
 		return 0, ErrRollbackUnsupported
 	}
@@ -138,13 +136,11 @@ func (s *Service) Rollback(ctx context.Context, id domain.SessionID, turnID stri
 // exists so the provider call is written, tested, and honest about what it returns,
 // rather than half-wired into a UI that cannot be correct.
 func (s *Service) ForkConversation(ctx context.Context, id domain.SessionID) (string, error) {
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return "", err
-	}
-	controller, err := s.Controller(id)
+	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return "", err
 	}
+	defer release()
 	forker, ok := controller.conv.(ports.ChatForker)
 	if !ok {
 		return "", ErrForkUnsupported
@@ -165,12 +161,6 @@ func (s *Service) EditMessage(
 	turnID string,
 	msg ports.ChatUserMessage,
 ) (EditMessageResult, error) {
-	gate := s.controllerGate(domain.SessionConversationOwner(id))
-	if err := gate.lock(ctx); err != nil {
-		return EditMessageResult{}, err
-	}
-	defer gate.unlock()
-
 	requestJSON, err := encodeEditDeliveryRequest(turnID, msg)
 	if err != nil {
 		return EditMessageResult{}, err
@@ -197,6 +187,16 @@ func (s *Service) EditMessage(
 			return replayEditDelivery(delivery, requestJSON)
 		}
 	}
+	_, release, err := s.workingController(ctx, id)
+	if err != nil {
+		return EditMessageResult{}, err
+	}
+	defer release()
+	gate := s.controllerGate(domain.SessionConversationOwner(id))
+	if err := gate.lock(ctx); err != nil {
+		return EditMessageResult{}, err
+	}
+	defer gate.unlock()
 	if _, err := s.requireChatSession(ctx, id); err != nil {
 		return EditMessageResult{}, err
 	}
@@ -828,6 +828,11 @@ func (s *Service) persistRejectedEditDelivery(
 // ActivateBranch resumes a durable provider branch in the same worktree and
 // swaps controllers without sending a new prompt.
 func (s *Service) ActivateBranch(ctx context.Context, id domain.SessionID, branchID string) (string, error) {
+	_, release, err := s.workingController(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	gate := s.controllerGate(domain.SessionConversationOwner(id))
 	if err := gate.lock(ctx); err != nil {
 		return "", err
@@ -1115,16 +1120,20 @@ func (s *Service) SetTitle(ctx context.Context, id domain.SessionID, title strin
 	if normalized == "" {
 		return "", ErrTitleRequired
 	}
-	controller, err := s.Controller(id)
+	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return "", err
 	}
+	defer release()
 	renamer, ok := controller.conv.(ports.ChatRenamer)
 	if !ok {
 		return "", ErrRenameUnsupported
 	}
 	if err := renamer.SetTitle(ctx, normalized); err != nil {
 		return "", classify(fmt.Errorf("set title for %s: %w", id, err))
+	}
+	if err := controller.applyThreadTitle(ctx, normalized, s.now()); err != nil {
+		return "", err
 	}
 	return normalized, nil
 }

@@ -3,7 +3,7 @@ title: Configuration
 description: Configure projects, agents, session interfaces, and local daemon behavior in current AO.
 ---
 
-AO keeps its durable state under `~/.ao`. The daemon stores projects, sessions, pull-request facts, notifications, and typed project configuration in SQLite under `~/.ao/data`; `~/.ao/running.json` lets the desktop app and CLI find the running daemon.
+Orchestrator keeps its durable state under `~/.ao`. The daemon stores projects, sessions, pull-request facts, notifications, and typed project configuration in SQLite under `~/.ao/data`; `~/.ao/running.json` lets the desktop app and CLI find the running daemon.
 
 The desktop app is the normal place to add projects and change settings. The CLI talks to the same daemon API when you need a scriptable path.
 
@@ -23,13 +23,13 @@ ao project add --path /absolute/path/to/repo \
   --orchestrator-agent claude-code
 ```
 
-AO also supports workspace projects, which contain a root repository and direct child repositories:
+Orchestrator also supports workspace projects, which contain a root repository and direct child repositories:
 
 ```bash
 ao project add --path /absolute/path/to/workspace --as-workspace
 ```
 
-Standalone workers support projectless work: `ao spawn --standalone --agent codex --name notes`. Existing Scratch projects also use AO-managed directories without branches or PR claims.
+Standalone workers support projectless work: `ao spawn --standalone --agent codex --name notes`. Existing Scratch projects also use Orchestrator-managed directories without branches or PR claims.
 
 ## Inspect and update configuration
 
@@ -65,11 +65,11 @@ Do not set `HOST=0.0.0.0` or proxy the primary daemon to a network. For phone ac
 Every session commits to one interface at a time:
 
 - **Chat** uses a structured, runtime-less provider controller with durable messages, activities, approvals, and usage.
-- **Terminal UI** runs the agent's native terminal interface through AO's terminal runtime.
+- **Terminal UI** runs the agent's native terminal interface through Orchestrator's terminal runtime.
 
-Choose the default for new sessions in **Settings → General**. A choice made for a specific task takes precedence. If a requested interface is unavailable, AO uses Terminal UI as its compatibility fallback.
+Choose the default for new sessions in **Settings → General**. A choice made for a specific task takes precedence. If a requested interface is unavailable, Orchestrator uses Terminal UI as its compatibility fallback.
 
-Project `agentConfig.mode` selects a provider execution mode. It does not select Chat or Terminal UI. Choose the interface in the new-session flow or with `ao spawn --mode chat|tui`. Compatible Claude Code and Codex sessions can switch interfaces without changing the AO session or worktree.
+Project `agentConfig.mode` selects a provider execution mode. It does not select Chat or Terminal UI. Choose the interface in the new-session flow or with `ao spawn --mode chat|tui`. Compatible Claude Code and Codex sessions can switch interfaces without changing the Orchestrator session or worktree.
 
 Manage recurring tasks in **Automations**, reusable project actions in **Cues**, installed provider readiness in **Settings → Harness**, and persistent profiles/imports in **Settings → Browser**. These features have their own settings/resources rather than legacy YAML keys.
 

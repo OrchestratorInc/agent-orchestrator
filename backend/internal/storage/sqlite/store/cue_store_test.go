@@ -21,15 +21,12 @@ func sampleCue(id, project, name string, typ domain.CueType) domain.Cue {
 	}
 	if typ == domain.CueTypeCommand {
 		cue.Command = "pnpm test"
-		cue.Description = "Run the test suite"
 	} else {
 		cue.Prompt = "Run the test suite, investigate failures, and fix them."
 	}
 	return cue
 }
 
-// TestCueInsertAndSelectRoundTrip pins command and agent cue round-trips: every
-// field survives the SQLite write, including the typed enums and ids.
 func TestCueInsertAndSelectRoundTrip(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -47,7 +44,7 @@ func TestCueInsertAndSelectRoundTrip(t *testing.T) {
 			t.Fatalf("select %s: ok=%v err=%v", cue.ID, ok, err)
 		}
 		if got.ID != cue.ID || got.ProjectID != cue.ProjectID || got.Name != cue.Name ||
-			got.Description != cue.Description || got.Type != cue.Type ||
+			got.Type != cue.Type ||
 			got.Command != cue.Command || got.Prompt != cue.Prompt ||
 			!got.CreatedAt.Equal(cue.CreatedAt) || !got.UpdatedAt.Equal(cue.UpdatedAt) {
 			t.Fatalf("round-trip mismatch: got %+v want %+v", got, cue)

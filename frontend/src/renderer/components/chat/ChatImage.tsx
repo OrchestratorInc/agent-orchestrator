@@ -58,7 +58,7 @@ export function ChatImageLinkScope({ children }: { children: ReactNode }) {
  * A source that fails falls back to its alt text rather than a broken-image box,
  * matching `MarkdownImage` in the file viewer.
  */
-export function ChatImage({ src, alt }: { src?: string | Blob; alt?: string }) {
+export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: string; /** A chip sized for a line of prose. */ inline?: boolean }) {
 	const { t } = useTranslation();
 	const inGallery = useContext(InGallery);
 	const inLink = useContext(InLink);
@@ -101,8 +101,19 @@ export function ChatImage({ src, alt }: { src?: string | Blob; alt?: string }) {
 				type="button"
 				onClick={() => setOpen(true)}
 				aria-label={label ? t("chat.image.open", { name: label }) : t("chat.image.openUnnamed")}
-				className="inline-block max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border bg-background align-top transition-opacity duration-150 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+				className={cn(
+					"max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border bg-background transition-opacity duration-150 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+					inline
+						? "mx-0.5 inline-flex items-center gap-1 py-0.5 pl-0.5 pr-1.5 align-middle text-[0.9em] leading-none"
+						: "inline-block align-top",
+				)}
 			>
+				{inline ? (
+					<>
+						<img src={url} alt="" onError={onError} className="size-4 shrink-0 rounded-sm object-cover" />
+						<span>{label}</span>
+					</>
+				) : (
 				<img
 					src={url}
 					alt={label}
@@ -120,6 +131,7 @@ export function ChatImage({ src, alt }: { src?: string | Blob; alt?: string }) {
 						inGallery ? "h-40 w-auto min-w-24" : "h-auto max-h-80",
 					)}
 				/>
+				)}
 			</button>
 			<Dialog open={open} onOpenChange={setOpen}>
 				<DialogContent

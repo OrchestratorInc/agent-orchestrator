@@ -624,10 +624,12 @@ type RetryPrompt struct {
 
 // ConversationMessage is one readable block of text.
 type ConversationMessage struct {
-	ID             string `json:"id"`
-	ConversationID string `json:"conversationId"`
-	TurnID         string `json:"turnId,omitempty"`
-	Sequence       int64  `json:"sequence"`
+	// InteractionAt is an internal write fact, independent of history CreatedAt.
+	InteractionAt  time.Time `json:"-"`
+	ID             string    `json:"id"`
+	ConversationID string    `json:"conversationId"`
+	TurnID         string    `json:"turnId,omitempty"`
+	Sequence       int64     `json:"sequence"`
 	// Revision increases each time streaming rewrites this message's text, so a
 	// client can detect a gap and resync instead of rendering stale text.
 	Revision int64         `json:"revision"`

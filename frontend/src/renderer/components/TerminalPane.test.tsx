@@ -51,6 +51,7 @@ const {
 		terminalSessionOptions: [] as Array<{
 			coverInitialReplay?: boolean;
 			createMux?: () => unknown;
+			exitNotice?: string;
 			waitForInitialOutput?: boolean;
 			shellTerminalHandleId?: string;
 		}>,
@@ -147,7 +148,7 @@ vi.mock("./XtermTerminal", () => ({
 vi.mock("../hooks/useTerminalSession", () => ({
 	useTerminalSession: (
 		_session: WorkspaceSession | undefined,
-		options: { coverInitialReplay?: boolean; createMux?: () => unknown; waitForInitialOutput?: boolean; shellTerminalHandleId?: string },
+		options: { coverInitialReplay?: boolean; createMux?: () => unknown; exitNotice?: string; waitForInitialOutput?: boolean; shellTerminalHandleId?: string },
 	) => {
 		terminalSessionOptions.push(options);
 		return {
@@ -260,6 +261,38 @@ describe("cloud terminal routing", () => {
 			expect(cloudTicketMock).toHaveBeenCalledWith("cloud-org", cloudSession.id, {
 				kind: "workspace",
 			});
+		} finally {
+			view.restore();
+		}
+	});
+});
+
+describe("TerminalPane Cloud reviewer connections", () => {
+	it("dials each Cloud reviewer through the control plane by its own terminal ID", async () => {
+		const cloudSession = { ...worker, cloud: { orgId: "cloud-org" } } as WorkspaceSession;
+		const reviewer = (handleId: string) => ({ kind: "reviewer", handleId, harness: "codex", sessionId: cloudSession.id }) satisfies TerminalTarget;
+		const connect = async () => {
+			// A reviewer pane mounts fresh, outside the retained cache, yet must not
+			// fall back to the local daemon mux.
+			await waitFor(() => expect(terminalSessionOptions.at(-1)?.createMux).toBeTypeOf("function"));
+			terminalSessionOptions.at(-1)?.createMux?.();
+			await cloudMuxOptions.at(-1)?.mintTicket("agent");
+			return (cloudTicketMock.mock.calls.at(-1) as unknown[] | undefined)?.[2];
+		};
+		const view = renderCachedPane({ session: cloudSession, sessions: [cloudSession], terminalTarget: reviewer("reviewer-1") });
+		try {
+			expect(await connect()).toEqual({ kind: "agent", terminalId: "reviewer-1" });
+			view.show(cloudSession, reviewer("reviewer-2"));
+			expect(await connect()).toEqual({ kind: "agent", terminalId: "reviewer-2" });
+		} finally {
+			view.restore();
+		}
+	});
+
+	it("keeps local reviewer panes on the local daemon", () => {
+		const view = renderCachedPane({ session: worker, sessions: [worker], terminalTarget: { kind: "reviewer", handleId: "local-reviewer", harness: "codex", sessionId: worker.id } });
+		try {
+			expect(terminalSessionOptions.at(-1)?.createMux).toBeUndefined();
 		} finally {
 			view.restore();
 		}
@@ -426,6 +459,77 @@ describe("TerminalPane empty states", () => {
 				</QueryClientProvider>,
 			);
 			await waitFor(() => expect(onTerminalStateChange).toHaveBeenLastCalledWith("exited"));
+		} finally {
+			window.ao = previousAO;
+		}
+	});
+
+	it("shows a delivered reviewer as completed instead of terminal ended", () => {
+		const previousAO = window.ao;
+		window.ao = {} as typeof window.ao;
+		terminalState.value = "exited";
+		try {
+			render(
+				<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+					<TerminalPane
+						daemonReady
+						fontSize={12}
+						session={worker}
+						terminalTarget={{
+							handleId: "reviewer-1",
+							harness: "codex",
+							kind: "reviewer",
+							reviewStatus: "delivered",
+							sessionId: worker.id,
+						}}
+						theme="dark"
+					/>
+				</QueryClientProvider>,
+			);
+			expect(screen.getByText("Review completed")).toBeInTheDocument();
+			expect(screen.getByText("Review completed and posted to the pull request.")).toBeInTheDocument();
+			expect(terminalSessionOptions.at(-1)?.exitNotice).toContain("reviewer terminal finished");
+		} finally {
+			window.ao = previousAO;
+		}
+	});
+
+	it("refreshes cloud review state without showing a false terminal-ended banner", async () => {
+		const previousAO = window.ao;
+		window.ao = {} as typeof window.ao;
+		terminalState.value = "exited";
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+		const cloudSession = {
+			...worker,
+			cloud: { orgId: "cloud-org" },
+		} satisfies WorkspaceSession;
+		try {
+			render(
+				<QueryClientProvider client={queryClient}>
+					<TerminalPane
+						daemonReady
+						fontSize={12}
+						session={cloudSession}
+						terminalTarget={{
+							handleId: "reviewer-1",
+							harness: "codex",
+							kind: "reviewer",
+							reviewStatus: "running",
+							sessionId: cloudSession.id,
+						}}
+						theme="dark"
+					/>
+				</QueryClientProvider>,
+			);
+
+			await waitFor(() =>
+				expect(invalidateQueries).toHaveBeenCalledWith({
+					queryKey: ["cloud-session-reviews"],
+				}),
+			);
+			expect(screen.queryByText("Terminal ended")).not.toBeInTheDocument();
+			expect(screen.queryByText("Review terminal has ended.")).not.toBeInTheDocument();
 		} finally {
 			window.ao = previousAO;
 		}

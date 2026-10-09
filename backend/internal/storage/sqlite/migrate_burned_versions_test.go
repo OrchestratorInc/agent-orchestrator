@@ -184,7 +184,19 @@ var shippedMigrations = map[int64]string{
 	178: "0178_archive_reviewers.sql",
 	179: "0179_conversation_message_sender.sql",
 	180: "0180_session_provision_steps.sql",
-	181: "0181_tmux_server_clients.sql",
+	181: "0181_session_artifacts.sql",
+	185: "0185_worktree_startup_cues.sql",
+	186: "0186_remove_cue_description.sql",
+	187: "0187_remove_cue_startup_options.sql",
+	// 188 removes the obsolete cue worktree-startup schema; project setup now
+	// owns automatic workspace initialization.
+	188: "0188_remove_worktree_startup_cues.sql",
+	189: "0189_session_interaction.sql",
+	190: "0190_session_hibernation.sql",
+	191: "0191_session_branch_state.sql",
+	192: "0192_allow_openhands_harness.sql",
+	193: "0193_allow_codewhale_harness.sql",
+	194: "0194_tmux_server_clients.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

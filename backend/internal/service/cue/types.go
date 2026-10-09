@@ -11,11 +11,10 @@ import (
 // replaces the whole definition, including the type switch between command and
 // agent, so every field is carried in both directions.
 type Input struct {
-	Name        string
-	Description string
-	Type        domain.CueType
-	Command     string
-	Prompt      string
+	Name    string
+	Type    domain.CueType
+	Command string
+	Prompt  string
 }
 
 // InvokeInput identifies the optional session target and local shell selection.

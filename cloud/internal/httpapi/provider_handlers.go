@@ -201,6 +201,13 @@ func (s *Server) putAgentConnection(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	s.logger.Info(
+		"provider connection saved",
+		"org_id", orgID,
+		"user_id", principalFrom(r).UserID,
+		"provider", agent,
+		"connection_id", connection.ID,
+	)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"providerConnection": toProviderConnectionResponse(connection),
 	})

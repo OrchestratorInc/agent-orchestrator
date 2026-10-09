@@ -215,6 +215,9 @@ func TestBuildSystemPrompt_WorkerRequiresDurableReports(t *testing.T) {
 		"ao report --stuck --note <text>",
 		"ao report --done --note <text>",
 		"Do not narrate routine commands",
+		"Keep routine test logs",
+		"Summarize validation in the report note",
+		"not external publishing authorization",
 		"`--done` does not terminate the session",
 	} {
 		if !strings.Contains(got, want) {

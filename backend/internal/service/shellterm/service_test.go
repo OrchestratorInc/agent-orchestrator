@@ -44,6 +44,8 @@ type fakeShellRuntime struct {
 	outputMu     sync.RWMutex
 	outputErr    error
 	outputReady  <-chan struct{}
+	styledOutput string
+	styledErr    error
 	// aliveByHandle answers IsAlive; a handle absent from the map is dead.
 	aliveByHandle map[string]bool
 	aliveErr      error
@@ -130,6 +132,10 @@ func (f *fakeShellRuntime) GetOutput(_ context.Context, _ ports.RuntimeHandle, _
 	f.outputMu.RLock()
 	defer f.outputMu.RUnlock()
 	return f.output, f.outputErr
+}
+
+func (f *fakeShellRuntime) GetStyledOutput(_ context.Context, _ ports.RuntimeHandle, _ int) (string, error) {
+	return f.styledOutput, f.styledErr
 }
 
 func (f *fakeShellRuntime) setOutput(output string) {
@@ -459,6 +465,109 @@ func TestOpenCommandTerminalWaitsForReadinessMarkerBeforeSendingInitialInput(t *
 		}
 	case <-time.After(time.Second):
 		t.Fatal("automatic login input was not sent after terminal output")
+	}
+}
+
+func TestOpenCommandTerminalSendsInitialInputOnReadyTimeoutWhenOptedIn(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "pi prompt without any reviewed marker"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	svc.initialInputTimeout = 3 * initialInputPollInterval
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                           []string{"pi"},
+		Title:                          "Log in to Pi",
+		InitialInput:                   "/login",
+		InitialInputReadyStates:        readyStates("0.0%/"),
+		SendInitialInputOnReadyTimeout: true,
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: "/login"}); got != want {
+			t.Errorf("sent = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial input was not sent after the ready wait expired")
+	}
+}
+
+func TestOpenCommandTerminalSkipsInitialInputOnReadyTimeoutByDefault(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "no reviewed marker"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	svc.initialInputTimeout = 3 * initialInputPollInterval
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                    []string{"kimi"},
+		Title:                   "Log in to Kimi",
+		InitialInput:            "/login",
+		InitialInputReadyStates: readyStates("Run /login or /provider to get started."),
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("initial input sent without a ready marker or opt-in: %#v", got)
+	case <-time.After(svc.initialInputTimeout + 4*initialInputPollInterval):
+	}
+}
+
+func TestOpenCommandTerminalSkipsReadyTimeoutFallbackForExitedTerminal(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "no reviewed marker"
+	rt.aliveErr = errors.New("runtime gone")
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	svc.initialInputTimeout = 3 * initialInputPollInterval
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                           []string{"pi"},
+		Title:                          "Log in to Pi",
+		InitialInput:                   "/login",
+		InitialInputReadyStates:        readyStates("0.0%/"),
+		SendInitialInputOnReadyTimeout: true,
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("initial input sent to an exited terminal: %#v", got)
+	case <-time.After(svc.initialInputTimeout + 4*initialInputPollInterval):
+	}
+}
+
+func TestOpenCommandTerminalFindsReadinessMarkerInRenderedTerminalSurface(t *testing.T) {
+	rt := newFakeShellRuntime()
+	// Full-screen TUIs can keep their current footer out of the raw line ring,
+	// and rendered styling may split a visible marker with SGR sequences.
+	rt.output = "startup bytes without the current footer"
+	rt.styledOutput = "Interactive · Manual Approval · \x1b[1m/\x1b[m commands · ? help"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                    []string{"copilot"},
+		Title:                   "Log in to GitHub Copilot",
+		InitialInput:            "/login",
+		InitialInputReadyStates: readyStates("/ commands"),
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: "/login"}); got != want {
+			t.Fatalf("sent = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("automatic login input was not sent after the rendered terminal became ready")
 	}
 }
 

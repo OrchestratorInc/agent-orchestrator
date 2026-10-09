@@ -116,6 +116,17 @@ func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) e
 	return nil
 }
 
+func (f *fakeStore) UpdateSessionArtifactOutput(_ context.Context, id domain.SessionID, artifactDir string, outputType domain.SessionOutputType) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok {
+		return false, nil
+	}
+	rec.Metadata.ArtifactDir = artifactDir
+	rec.OutputType = outputType
+	f.sessions[id] = rec
+	return true, nil
+}
+
 func (f *fakeStore) UpdateSessionFromActivitySignal(_ context.Context, rec domain.SessionRecord, expected int64) (bool, error) {
 	if f.sessions[rec.ID].Revision != expected {
 		return false, nil
@@ -2269,11 +2280,17 @@ func TestMarkSpawnedReactivatesUsageAfterLifecycleTransition(t *testing.T) {
 		Activity:     domain.Activity{State: domain.ActivityExited},
 		Metadata:     domain.SessionMetadata{RuntimeLaunchID: "launch-old"},
 	}
+	rec := st.sessions["mer-1"]
+	rec.CleanupGeneration = 7
+	st.sessions[rec.ID] = rec
 	usage := &fakeUsageLifecycle{fakeUsageFinalizer: fakeUsageFinalizer{store: st}}
 	m.SetUsageFinalizer(usage)
 
 	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{RuntimeLaunchID: "launch-new"}); err != nil {
 		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].CleanupGeneration; got != 8 {
+		t.Fatalf("restored cleanup generation = %d, want 8", got)
 	}
 	if usage.reactivateCalls != 1 || usage.reactivateID != "mer-1" ||
 		usage.reactivateLaunch != "launch-new" || !usage.sawLive {

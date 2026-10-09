@@ -176,6 +176,10 @@ func codexComposerFrame(output string) string {
 		if !strings.Contains(plainFooter, " · ") {
 			continue
 		}
+		// Codex can stack several " · " footer rows; the frame ends above all of them.
+		for footer > start && strings.Contains(terminalui.PlainTerminalText(raw[footer-1]), " · ") {
+			footer--
+		}
 		for prompt := footer - 1; prompt >= start; prompt-- {
 			plainPrompt := strings.TrimSpace(terminalui.PlainTerminalText(raw[prompt]))
 			if strings.HasPrefix(plainPrompt, "›") {

@@ -3,15 +3,16 @@ title: Introduction
 description: Learn what Agent Orchestrator does, when to use it, and where to start.
 ---
 
-Agent Orchestrator (**AO**) is a desktop app for supervising AI coding agents. It gives each worker an isolated workspace, keeps its conversation or terminal available, and connects Git work to pull requests, CI, reviews, and merge conflicts.
+Orchestrator is a desktop app for supervising AI coding agents. It gives each worker an isolated workspace, keeps its conversation or terminal available, and connects Git work to pull requests, CI, reviews, and merge conflicts.
 
-The agents write the code. AO helps you manage projects and sessions, follow work, send instructions, review changes, and open browser previews.
+The agents write the code. Orchestrator helps you manage projects and sessions, follow work, send instructions, review changes, and open browser previews.
 
 <Callout type="info" title="Fastest path">
 	Download the desktop app, add a repository, and start one small session. See [Installation](/installation), then [Quickstart](/quickstart).
 </Callout>
 
-## What AO helps you do
+<span id="what-ao-helps-you-do" />
+## What Orchestrator helps you do
 
 - Run several coding agents without mixing their files, branches, or pull requests.
 - Choose a native terminal UI or structured Chat for each session.
@@ -22,7 +23,7 @@ The agents write the code. AO helps you manage projects and sessions, follow wor
 - Schedule recurring work with Automations and reuse project instructions or shell commands with Cues.
 - Check and respond from the companion mobile app through Connect Mobile.
 
-AO works best when each worker has a clear, reviewable outcome: a focused bug, feature, refactor, test, documentation update, or review follow-up.
+Orchestrator works best when each worker has a clear, reviewable outcome: a focused bug, feature, refactor, test, documentation update, or review follow-up.
 
 ## The basic loop
 
@@ -30,7 +31,7 @@ AO works best when each worker has a clear, reviewable outcome: a focused bug, f
 add project -> start session -> isolated worktree -> pull request -> CI/review -> merge -> cleanup
 ```
 
-Create sessions from the desktop app or the optional CLI. AO starts the selected agent interface and combines saved activity and pull-request data to show a session's status.
+Create sessions from the desktop app or the optional CLI. Orchestrator starts the selected agent interface and combines saved activity and pull-request data to show a session's status.
 
 ## Chat and Terminal UI
 
@@ -47,7 +48,7 @@ Chat support depends on the harness and installed version; see the [agent capabi
 
 <span id="local-by-design" />
 
-The desktop app runs a Go background service on `127.0.0.1` and talks to it through a local API. AO stores app data and worktree metadata under `~/.ao` by default. Most integrations use coding agents and source-control credentials already on your computer; AO does not bundle external agents or their credentials. Unreal Agent is a built-in Chat-only adapter on macOS and Linux.
+The desktop app runs a Go background service on `127.0.0.1` and talks to it through a local API. Orchestrator stores app data and worktree metadata under `~/.ao` by default. Most integrations use coding agents and source-control credentials already on your computer; Orchestrator does not bundle external agents or their credentials. Unreal Agent is a built-in Chat-only adapter on macOS and Linux.
 
 Connect Mobile is a separate, opt-in listener protected by a connection password. See [Connect Mobile](/configuration/remote-access) for local and secure remote pairing.
 
@@ -57,7 +58,7 @@ Cloud sessions are a separate service with account access requirements. See the 
 
 ## Supported agents
 
-AO supports coding agents such as Claude Code, Codex, Cursor, Aider, OpenCode, Droid, Kimi Code, and GitHub Copilot. Their support for worker, Chat, and reviewer roles varies. Check the [agent catalog](/plugins/agents) for details. Cloud offers a smaller [provider set](/guides/cloud#before-you-start).
+Orchestrator supports coding agents such as Claude Code, Codex, Cursor, Aider, OpenCode, Droid, Kimi Code, and GitHub Copilot. Their support for worker, Chat, and reviewer roles varies. Check the [agent catalog](/plugins/agents) for details. Cloud offers a smaller [provider set](/guides/cloud#before-you-start).
 
 GitHub and GitLab provide source-control observation and issue intake. Intake is opt-in and read-only toward the issue tracker; Linear and legacy Node plugin packages are not supported.
 

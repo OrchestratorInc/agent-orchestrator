@@ -72,8 +72,8 @@ type SpawnConfig struct {
 	// its conversation exist, leaving the worktree and the agent controller to
 	// finish in the background. Only a caller with a UI to return to should set
 	// it: `ao spawn` and the tests rely on a returned session being fully live.
-	// Ignored for TUI mode and for orchestrators, which own a project-scoped
-	// narrative that must not be rebound before its controller exists.
+	// Ignored for TUI mode. Orchestrator callers serialize project-scoped
+	// starts and reuse the published session while its controller is starting.
 	Async bool
 	// TaskPreparation is the opaque speculative-worktree token returned while
 	// the desktop's New Task dialog is open. It is a hint: an absent or expired

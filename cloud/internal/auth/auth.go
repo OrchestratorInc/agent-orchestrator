@@ -28,15 +28,25 @@ type WorkOSVerifier interface {
 	Verify(ctx context.Context, token string) (domain.Principal, error)
 }
 
-type ProfileResolver func(
-	ctx context.Context,
-	userID string,
-) (email string, displayName string, err error)
+// WorkOSProfile is a WorkOS user as AO needs it. LegacyID is the user's ID in
+// the WorkOS environment the user was copied from, read from external_id.
+type WorkOSProfile struct {
+	Email       string
+	DisplayName string
+	LegacyID    string
+}
 
-type OrganizationResolver func(
-	ctx context.Context,
-	organizationID string,
-) (displayName string, capabilities []string, err error)
+// WorkOSOrganization is a WorkOS organization as AO needs it. LegacyID is the
+// organization's ID in the WorkOS environment it was copied from.
+type WorkOSOrganization struct {
+	DisplayName  string
+	Capabilities []string
+	LegacyID     string
+}
+
+type ProfileResolver func(ctx context.Context, userID string) (WorkOSProfile, error)
+
+type OrganizationResolver func(ctx context.Context, organizationID string) (WorkOSOrganization, error)
 
 type OIDCVerifier struct {
 	verifier      *oidc.IDTokenVerifier
@@ -100,16 +110,23 @@ func (v *OIDCVerifier) Verify(ctx context.Context, token string) (domain.Princip
 		))
 	}
 	email := strings.ToLower(strings.TrimSpace(claims.Email))
+	// AO keys accounts by the ID a user had when AO first saw them. A user
+	// copied from an earlier WorkOS environment carries that ID as external_id,
+	// so they keep their account, organizations, and repository grants.
+	externalID := claims.Subject
 	if v.profiles != nil {
-		resolvedEmail, resolvedName, err := v.profiles(ctx, claims.Subject)
+		profile, err := v.profiles(ctx, claims.Subject)
 		if err != nil {
 			return domain.Principal{}, fmt.Errorf("%w: resolve WorkOS user: %v", ErrProviderUnavailable, err)
 		}
-		if resolvedEmail != "" {
-			email = strings.ToLower(strings.TrimSpace(resolvedEmail))
+		if profile.Email != "" {
+			email = strings.ToLower(strings.TrimSpace(profile.Email))
 		}
-		if resolvedName != "" {
-			displayName = strings.TrimSpace(resolvedName)
+		if profile.DisplayName != "" {
+			displayName = strings.TrimSpace(profile.DisplayName)
+		}
+		if profile.LegacyID != "" {
+			externalID = profile.LegacyID
 		}
 	}
 	if email == "" {
@@ -119,24 +136,54 @@ func (v *OIDCVerifier) Verify(ctx context.Context, token string) (domain.Princip
 		displayName = email
 	}
 	orgID := strings.TrimSpace(claims.OrgID)
-	orgName := ""
-	var orgCapabilities []string
+	var organization WorkOSOrganization
 	if orgID != "" && v.organizations != nil {
-		orgName, orgCapabilities, err = v.organizations(ctx, orgID)
+		organization, err = v.organizations(ctx, orgID)
 		if err != nil {
 			return domain.Principal{}, fmt.Errorf("%w: resolve WorkOS organization: %v", ErrProviderUnavailable, err)
 		}
 	}
+	if organization.LegacyID != "" {
+		orgID = organization.LegacyID
+	}
 	return domain.Principal{
 		Provider:        "workos",
-		ExternalID:      claims.Subject,
+		ExternalID:      externalID,
 		Email:           email,
 		DisplayName:     displayName,
 		ExternalOrgID:   orgID,
-		OrgName:         strings.TrimSpace(orgName),
+		OrgName:         strings.TrimSpace(organization.DisplayName),
 		OrgRole:         normalizeOrganizationRole(claims.Role),
-		OrgCapabilities: orgCapabilities,
+		OrgCapabilities: organization.Capabilities,
 	}, nil
+}
+
+// FallbackWorkOSVerifier accepts tokens from the current WorkOS environment
+// and, while users move between environments, from the previous one. Copied
+// users resolve to the same account through either environment, so desktop
+// builds that still sign in with the previous environment keep working.
+type FallbackWorkOSVerifier struct {
+	current  WorkOSVerifier
+	previous WorkOSVerifier
+}
+
+func NewFallbackWorkOSVerifier(current, previous WorkOSVerifier) (*FallbackWorkOSVerifier, error) {
+	if current == nil || previous == nil {
+		return nil, errors.New("current and previous WorkOS verifiers are required")
+	}
+	return &FallbackWorkOSVerifier{current: current, previous: previous}, nil
+}
+
+func (v *FallbackWorkOSVerifier) Verify(ctx context.Context, token string) (domain.Principal, error) {
+	principal, err := v.current.Verify(ctx, token)
+	if err == nil || !errors.Is(err, ErrInvalidToken) {
+		return principal, err
+	}
+	principal, previousErr := v.previous.Verify(ctx, token)
+	if errors.Is(previousErr, ErrInvalidToken) {
+		return domain.Principal{}, err
+	}
+	return principal, previousErr
 }
 
 func normalizeOrganizationRole(role string) string {

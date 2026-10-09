@@ -86,7 +86,10 @@ type Sandbox struct {
 	// short user-interaction lease. It is never stored as display state.
 	KeepAlive bool
 	LastError string
-	UpdatedAt time.Time
+	// StartupErrorCode is the code of the latest user-facing startup error, or
+	// empty when none is recorded (see RecordSandboxStartupError).
+	StartupErrorCode string
+	UpdatedAt        time.Time
 }
 
 // SandboxLifecycle is the small intent/observation projection returned by an
@@ -124,6 +127,7 @@ type WorkerLaunch struct {
 	ProjectID      string
 	ProjectName    string
 	ProjectConfig  json.RawMessage
+	AgentConfig    json.RawMessage
 	Kind           string
 	Harness        string
 	DisplayName    string

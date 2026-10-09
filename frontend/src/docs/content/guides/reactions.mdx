@@ -3,9 +3,10 @@ title: Handle CI and review feedback
 description: Practical guidance for AO's built-in CI, review, conflict, and notification behavior.
 ---
 
-AO routes CI failures, review feedback, and merge conflicts with built-in rules. These rules are not configured through a project `reactions:` field. See [Migration](/migration) before reusing old configuration examples.
+Orchestrator routes CI failures, review feedback, and merge conflicts with built-in rules. These rules are not configured through a project `reactions:` field. See [Migration](/migration) before reusing old configuration examples.
 
-## Let AO route repository feedback
+<span id="let-ao-route-repository-feedback" />
+## Let Orchestrator route repository feedback
 
 Claim the pull request to the worker that should respond:
 
@@ -17,11 +18,11 @@ ao session claim-pr <session-id> <pr-number-or-url>
 
 The one-argument form uses `AO_SESSION_ID` and is preferred inside a worker session.
 
-AO then routes failing checks, requested changes, unresolved comments, and eligible merge conflicts to that session. Delivery is mode-aware, so the same workflow works for structured Chat and Terminal UI.
+Orchestrator then routes failing checks, requested changes, unresolved comments, and eligible merge conflicts to that session. Delivery is mode-aware, so the same workflow works for structured Chat and Terminal UI.
 
 ## Avoid duplicate nudges
 
-AO remembers the feedback it has already sent. It sends another message when the content changes, not on every poll. This prevents the same CI failure or review comment from being repeated to a long-running session.
+Orchestrator remembers the feedback it has already sent. It sends another message when the content changes, not on every poll. This prevents the same CI failure or review comment from being repeated to a long-running session.
 
 ## Know what requires a human
 
@@ -54,7 +55,7 @@ For work on a schedule, use **Automations** rather than lifecycle reaction keys.
 
 ## Switch interfaces when useful
 
-For compatible Claude Code and Codex sessions, choose **Switch to chat UI** or **Switch to terminal UI**. AO keeps the session and worktree, then finishes or interrupts active work as directed before replacing the controller.
+For compatible Claude Code and Codex sessions, choose **Switch to chat UI** or **Switch to terminal UI**. Orchestrator keeps the session and worktree, then finishes or interrupts active work as directed before replacing the controller.
 
 <Callout type="info">
 	The [Dashboard guide](/dashboard#switch-interfaces) explains what happens to conversation history when you switch interfaces.

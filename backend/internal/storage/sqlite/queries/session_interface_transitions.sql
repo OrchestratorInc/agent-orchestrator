@@ -79,12 +79,12 @@ RETURNING id, session_id, source_mode, target_mode, policy, phase,
 
 -- name: EnqueueSessionInterfaceTransitionMessage :exec
 INSERT INTO session_interface_transition_messages (
-    transition_id, client_message_id, message, created_at
+    transition_id, client_message_id, message, created_at, sender_session_id, authored_by_user
 )
-VALUES (?, ?, ?, ?);
+VALUES (?, ?, ?, ?, ?, ?);
 
 -- name: ListPendingSessionInterfaceTransitionMessages :many
-SELECT id, transition_id, client_message_id, message, created_at, delivered_at
+SELECT id, transition_id, client_message_id, message, created_at, delivered_at, sender_session_id, authored_by_user
 FROM session_interface_transition_messages
 WHERE transition_id = ? AND delivered_at IS NULL
 ORDER BY id;

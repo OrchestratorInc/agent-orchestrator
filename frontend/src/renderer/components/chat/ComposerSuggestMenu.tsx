@@ -100,7 +100,7 @@ export function ComposerSuggestMenu({
 			onMouseDown={(event) => event.preventDefault()}
 		>
 			<div className="flex items-start justify-between gap-2 px-2 py-1">
-				<span className="text-micro tracking-wide text-muted-foreground">
+				<span className="text-micro text-muted-foreground">
 					{kind === "skill" ? "Skills" : "Files in this worktree"}
 				</span>
 				<ArrowDownUp
@@ -126,7 +126,7 @@ export function ComposerSuggestMenu({
 								aria-selected={index === highlighted}
 								onClick={() => onPick(item.value)}
 								className={cn(
-									"flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-control text-muted-foreground outline-none !transition-none",
+									"flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground outline-none !transition-none",
 									index === highlighted
 										? "bg-interactive-active text-foreground"
 										: "bg-transparent hover:bg-interactive-hover hover:text-foreground",
@@ -155,13 +155,13 @@ export function ComposerSuggestMenu({
 										{kind === "skill" ? `/${item.label}` : item.label}
 									</span>
 									{item.detail ? (
-										<span className="block truncate text-[11px] leading-snug text-muted-foreground">
+										<span className="block truncate text-caption leading-snug text-muted-foreground">
 											{item.detail}
 										</span>
 									) : null}
 								</span>
 								{displayBadge(item.badge) ? (
-									<span className="shrink-0 text-micro tracking-wide text-muted-foreground">
+									<span className="shrink-0 text-micro text-muted-foreground">
 										{displayBadge(item.badge)}
 									</span>
 								) : null}
@@ -170,7 +170,7 @@ export function ComposerSuggestMenu({
 										aria-label="Press Tab or Enter to insert"
 										className="flex shrink-0 items-center gap-1 text-micro text-muted-foreground"
 									>
-										<kbd className="rounded border border-border-strong bg-background/40 px-1 py-0.5 font-sans text-[10px] leading-none">
+										<kbd className="rounded border border-border-strong bg-background/40 px-1 py-0.5 font-sans text-micro leading-none">
 											Tab
 										</kbd>
 										<CornerDownLeft aria-hidden="true" className="size-3" />

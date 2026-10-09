@@ -64,12 +64,17 @@ export class RemoteRegistry {
 		});
 	}
 
-	closeAll(): Promise<void> {
-		this.closing = true;
+	/** Retire all proxies on account sign-out without disabling later sign-in. */
+	disconnectAll(): Promise<void> {
 		return this.enqueue(async () => {
 			const entries = [...this.live.values()];
 			this.live.clear();
 			await Promise.all(entries.map(({ proxy }) => proxy.close()));
 		});
+	}
+
+	closeAll(): Promise<void> {
+		this.closing = true;
+		return this.disconnectAll();
 	}
 }

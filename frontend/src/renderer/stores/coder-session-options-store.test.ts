@@ -68,4 +68,13 @@ describe("buildCoderRequestOptions", () => {
 		});
 		expect(coder).toEqual({ extraRepos: [{ url: "https://github.com/owner/repo", branch: "main" }] });
 	});
+
+	it("sends a workspace name prefix only when one is set", () => {
+		expect(buildCoderRequestOptions({ ...base, templateId: "tpl-5", workspaceNamePrefix: " team " })).toEqual({
+			templateId: "tpl-5",
+			workspaceNamePrefix: "team",
+		});
+		expect(buildCoderRequestOptions({ ...base, templateId: "tpl-5", workspaceNamePrefix: "" })).toEqual({ templateId: "tpl-5" });
+		expect(buildCoderRequestOptions({ ...base, workspaceNamePrefix: "team" })).toEqual({ workspaceNamePrefix: "team" });
+	});
 });

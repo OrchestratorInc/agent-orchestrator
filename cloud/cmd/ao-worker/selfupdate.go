@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -42,9 +43,18 @@ const (
 // on the sandbox filesystem, so a later restart on the same box reuses it
 // without downloading again. When no expected hash is advertised (an older
 // control plane, or a provider that does not bake), it is a no-op.
+//
+// AO_WORKER_EXPECTED_ARCH names the CPU architecture the advertised hashes were
+// built for. A worker running on a different architecture never heals: the
+// "current" binary would be one it cannot execute.
 func selfUpdateIfStale(ctx context.Context, logger *slog.Logger, publicURL, dataDir string) error {
 	expected := strings.ToLower(strings.TrimSpace(os.Getenv("AO_WORKER_EXPECTED_SHA256")))
 	if expected == "" {
+		return nil
+	}
+	if !advertisedBuildMatchesArch(os.Getenv("AO_WORKER_EXPECTED_ARCH"), runtime.GOARCH) {
+		logger.Warn("advertised worker build targets a different CPU architecture; skipping self-update",
+			"expected_arch", strings.TrimSpace(os.Getenv("AO_WORKER_EXPECTED_ARCH")), "arch", runtime.GOARCH)
 		return nil
 	}
 	binaryBase := strings.TrimRight(publicURL, "/") + "/api/cloud/v1/worker/binary/"
@@ -238,6 +248,14 @@ func fileHashDiffers(path, expectedHex string) (bool, error) {
 		return false, err
 	}
 	return !strings.EqualFold(hex.EncodeToString(h.Sum(nil)), expectedHex), nil
+}
+
+// advertisedBuildMatchesArch reports whether the control plane's advertised
+// build may replace a worker running on arch. An unset expectation (an older
+// control plane, which only ever shipped linux/amd64) is trusted as before.
+func advertisedBuildMatchesArch(expectedArch, arch string) bool {
+	expectedArch = strings.ToLower(strings.TrimSpace(expectedArch))
+	return expectedArch == "" || expectedArch == arch
 }
 
 func parseAttempt(raw string) int {

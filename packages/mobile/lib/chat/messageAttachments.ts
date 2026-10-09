@@ -14,7 +14,18 @@ export function stagedAttachmentParts(text: string): { body: string; attachments
 	// Only reinterpret paths AO itself stages: prose quoting the same wording about
 	// docs/screenshot.png must stay readable text.
 	if (attachments.some((path) => !STAGED_ATTACHMENT_PATH.test(path))) return { body: text, attachments: [] };
-	return { body: text.slice(0, match.index), attachments };
+	return { body: labelInlineImages(text.slice(0, match.index), attachments), attachments };
+}
+
+// Desktop's composer writes an inline image chip as its staged path. Every
+// caller here only displays the body, so those paths read as `[Image N]`,
+// numbered like the image tiles. Mirrors desktop's labelInlineImages.
+const INLINE_IMAGE_PATH = /(?<!\/)\.ao\/attachments\/(?:attachment|image)-[A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|jpe?g|gif|webp|bmp)(?![A-Za-z0-9_-])/gi;
+
+function labelInlineImages(body: string, attachments: string[]): string {
+	const images = attachments.filter(isImageAttachment);
+	if (images.length === 0) return body;
+	return body.replace(INLINE_IMAGE_PATH, (path) => images.includes(path) ? `[Image ${images.indexOf(path) + 1}]` : path);
 }
 
 /** Appends staged paths using desktop's wording, so either surface renders them. */

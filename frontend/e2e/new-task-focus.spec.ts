@@ -217,7 +217,9 @@ test("renderer: hovering a Chat session fetches its conversation before opening 
 	await expect.poll(() => requests).toBe(1);
 	await row.click();
 	await expect(page.getByText(`Existing conversation in ${sessionB}`)).toBeVisible();
-	expect(requests).toBe(1);
+	// Opening registers a Chat view and refreshes the prefetched snapshot after a possible wake.
+	// React Query may also refetch the stale prefetched snapshot on mount.
+	await expect.poll(() => requests).toBeGreaterThanOrEqual(2);
 });
 
 async function setupSwitchAgentSession(page: Page) {

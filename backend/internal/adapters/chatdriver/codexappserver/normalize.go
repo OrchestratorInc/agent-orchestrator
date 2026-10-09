@@ -1205,10 +1205,10 @@ func activityDetail(it threadItem) []byte {
 		// What the tool was called WITH. A tool call with no arguments shown is a
 		// claim the user cannot check: "called search" says nothing about what was
 		// searched for. Capped, because a tool can be handed a whole file.
-		detail["arguments"] = truncatedJSON(it.Arguments)
+		detail["arguments"] = commanddetail.TruncatedJSON(it.Arguments)
 	}
 	if len(it.Result) > 0 && !isJSONNull(it.Result) {
-		detail["result"] = truncatedJSON(it.Result)
+		detail["result"] = commanddetail.TruncatedJSON(it.Result)
 	}
 	if it.Error != nil && it.Error.Message != "" {
 		detail["error"] = it.Error.Message
@@ -1226,27 +1226,6 @@ func activityDetail(it threadItem) []byte {
 		return nil
 	}
 	return encodeDetail(detail)
-}
-
-// maxToolPayloadChars caps one tool call's arguments or result.
-//
-// A tool can be handed a whole file and can hand one back, and this payload is
-// re-read by every conversation snapshot poll. 8K is well past what a card shows
-// and far short of what an unbounded result would cost; over the cap the JSON is
-// replaced by a marker rather than cut, because half a JSON document is not JSON
-// and a client that tried to parse it would fail on valid provider data.
-const maxToolPayloadChars = 8 * 1024
-
-// truncatedJSON keeps a payload only while it is small enough to be worth keeping.
-func truncatedJSON(raw json.RawMessage) any {
-	if len(raw) <= maxToolPayloadChars {
-		return raw
-	}
-	return map[string]any{
-		"truncated": true,
-		"bytes":     len(raw),
-		"note":      "payload exceeded the daemon's tool payload cap and was not stored",
-	}
 }
 
 func isJSONNull(raw json.RawMessage) bool {

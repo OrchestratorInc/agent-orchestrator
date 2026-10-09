@@ -56,7 +56,9 @@ func (p *Plugin) authStatus(ctx context.Context, getenv func(string) string) (po
 
 func credentialStatus(present bool) ports.AgentAuthStatus {
 	if present {
-		return ports.AgentAuthStatusAuthorized
+		// Unreal exposes no non-interactive provider probe. A local key or Codex
+		// auth file proves configuration, not that the provider accepts it.
+		return ports.AgentAuthStatusConfigured
 	}
 	return ports.AgentAuthStatusUnauthorized
 }

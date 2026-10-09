@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type ComponentProps } from "react";
+import { createContext, useContext, useState, type ComponentProps, type ReactNode } from "react";
 import { Copy, ExternalLink, FileText, Globe } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
@@ -17,17 +17,19 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
 export const AppBrowserLinkContext = createContext<((url: string) => void) | undefined>(undefined);
 
 /** Shared web-link behavior; native fragments and special schemes retain their handlers. */
-export function AppLink({ href, onClick, onBrowserOpen, inAppLink, filePath, onFileOpen, ...props }: ComponentProps<"a"> & {
+export function AppLink({ href, onClick, onBrowserOpen, inAppLink, filePath, onFileOpen, hoverPreview, ...props }: ComponentProps<"a"> & {
 	onBrowserOpen?: (url: string) => void;
 	inAppLink?: (url: string) => boolean;
 	filePath?: string;
 	onFileOpen?: (path: string) => void;
+	hoverPreview?: (open: boolean) => ReactNode;
 }) {
 	const { t } = useTranslation();
 	const sessionBrowserOpen = useContext(AppBrowserLinkContext);
 	const openBrowser = onBrowserOpen ?? sessionBrowserOpen;
 	const webLink = !!href && isWebLink(href);
 	const browserLink = !!href && (inAppLink?.(href) ?? webLink);
+	const hasHoverPreview = webLink || Boolean(hoverPreview);
 	const [previewOpen, setPreviewOpen] = useState(false);
 	const previewQuery = useLinkPreview(href ?? "", previewOpen && webLink);
 	const anchor = (
@@ -44,7 +46,7 @@ export function AppLink({ href, onClick, onBrowserOpen, inAppLink, filePath, onF
 		/>
 	);
 	if (!href || href.startsWith("#") || (href.startsWith("/") && !browserLink && !filePath)) return anchor;
-	const trigger = webLink ? (
+	const trigger = hasHoverPreview ? (
 		<ContextMenuTrigger asChild>
 			<HoverCardTrigger asChild>{anchor}</HoverCardTrigger>
 		</ContextMenuTrigger>
@@ -81,11 +83,11 @@ export function AppLink({ href, onClick, onBrowserOpen, inAppLink, filePath, onF
 			</ContextMenuContent>
 		</ContextMenu>
 	);
-	if (!webLink) return menu;
+	if (!hasHoverPreview) return menu;
 	return (
 		<HoverCard onOpenChange={setPreviewOpen}>
 			{menu}
-			{previewOpen && !previewQuery.isError && (
+			{previewOpen && webLink && !previewQuery.isError && (
 				<HoverCardContent collisionPadding={8}>
 					{previewQuery.data ? (
 						<LinkPreviewCard url={href} preview={previewQuery.data} />
@@ -94,6 +96,7 @@ export function AppLink({ href, onClick, onBrowserOpen, inAppLink, filePath, onF
 					)}
 				</HoverCardContent>
 			)}
+			{previewOpen && !webLink && hoverPreview?.(previewOpen)}
 		</HoverCard>
 	);
 }

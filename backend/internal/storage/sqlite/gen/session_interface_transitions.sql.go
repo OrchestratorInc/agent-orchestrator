@@ -92,9 +92,9 @@ func (q *Queries) AdvanceSessionInterfaceTransition(ctx context.Context, arg Adv
 
 const enqueueSessionInterfaceTransitionMessage = `-- name: EnqueueSessionInterfaceTransitionMessage :exec
 INSERT INTO session_interface_transition_messages (
-    transition_id, client_message_id, message, created_at
+    transition_id, client_message_id, message, created_at, sender_session_id, authored_by_user
 )
-VALUES (?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?)
 `
 
 type EnqueueSessionInterfaceTransitionMessageParams struct {
@@ -102,6 +102,8 @@ type EnqueueSessionInterfaceTransitionMessageParams struct {
 	ClientMessageID string
 	Message         string
 	CreatedAt       time.Time
+	SenderSessionID string
+	AuthoredByUser  bool
 }
 
 func (q *Queries) EnqueueSessionInterfaceTransitionMessage(ctx context.Context, arg EnqueueSessionInterfaceTransitionMessageParams) error {
@@ -110,6 +112,8 @@ func (q *Queries) EnqueueSessionInterfaceTransitionMessage(ctx context.Context, 
 		arg.ClientMessageID,
 		arg.Message,
 		arg.CreatedAt,
+		arg.SenderSessionID,
+		arg.AuthoredByUser,
 	)
 	return err
 }
@@ -369,7 +373,7 @@ func (q *Queries) ListDeliverableSessionInterfaceTransitions(ctx context.Context
 }
 
 const listPendingSessionInterfaceTransitionMessages = `-- name: ListPendingSessionInterfaceTransitionMessages :many
-SELECT id, transition_id, client_message_id, message, created_at, delivered_at
+SELECT id, transition_id, client_message_id, message, created_at, delivered_at, sender_session_id, authored_by_user
 FROM session_interface_transition_messages
 WHERE transition_id = ? AND delivered_at IS NULL
 ORDER BY id
@@ -382,6 +386,8 @@ type ListPendingSessionInterfaceTransitionMessagesRow struct {
 	Message         string
 	CreatedAt       time.Time
 	DeliveredAt     sql.NullTime
+	SenderSessionID string
+	AuthoredByUser  bool
 }
 
 func (q *Queries) ListPendingSessionInterfaceTransitionMessages(ctx context.Context, transitionID string) ([]ListPendingSessionInterfaceTransitionMessagesRow, error) {
@@ -400,6 +406,8 @@ func (q *Queries) ListPendingSessionInterfaceTransitionMessages(ctx context.Cont
 			&i.Message,
 			&i.CreatedAt,
 			&i.DeliveredAt,
+			&i.SenderSessionID,
+			&i.AuthoredByUser,
 		); err != nil {
 			return nil, err
 		}

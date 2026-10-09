@@ -31,24 +31,22 @@ func TestCueTypeValid(t *testing.T) {
 // the size bounds boundary-exact (at the cap is valid, one over is rejected).
 func TestCueValidateValid(t *testing.T) {
 	command := Cue{
-		ID:          "cue-1",
-		ProjectID:   "proj",
-		Name:        "Test",
-		Description: "Run the test suite",
-		Type:        CueTypeCommand,
-		Command:     "pnpm test",
+		ID:        "cue-1",
+		ProjectID: "proj",
+		Name:      "Test",
+		Type:      CueTypeCommand,
+		Command:   "pnpm test",
 	}
 	if err := command.Validate(); err != nil {
 		t.Errorf("command cue Validate() = %v, want nil", err)
 	}
 
 	agent := Cue{
-		ID:          "cue-2",
-		ProjectID:   "proj",
-		Name:        "Fix Tests",
-		Description: "Run tests and fix failures",
-		Type:        CueTypeAgent,
-		Prompt:      "Run the test suite, investigate any failures, and fix them.",
+		ID:        "cue-2",
+		ProjectID: "proj",
+		Name:      "Fix Tests",
+		Type:      CueTypeAgent,
+		Prompt:    "Run the test suite, investigate any failures, and fix them.",
 	}
 	if err := agent.Validate(); err != nil {
 		t.Errorf("agent cue Validate() = %v, want nil", err)
@@ -69,14 +67,10 @@ func TestCueValidateValid(t *testing.T) {
 		t.Errorf("name at cap Validate() = %v, want nil", err)
 	}
 
-	command.Description = strings.Repeat("d", MaxCueDescriptionLength)
-	if err := command.Validate(); err != nil {
-		t.Errorf("description at cap Validate() = %v, want nil", err)
-	}
 }
 
 // TestCueValidateRejectsInvalid pins every invalid shape in the validation
-// matrix: missing/whitespace/oversized name, oversized description, unknown
+// matrix: missing/whitespace/oversized name, unknown
 // type, and each type missing or oversizing its executable payload.
 func TestCueValidateRejectsInvalid(t *testing.T) {
 	tests := []struct {
@@ -98,11 +92,6 @@ func TestCueValidateRejectsInvalid(t *testing.T) {
 			"oversized name",
 			Cue{ProjectID: "proj", Name: strings.Repeat("n", MaxCueNameLength+1), Type: CueTypeCommand, Command: "pnpm test"},
 			ErrInvalidCueName,
-		},
-		{
-			"oversized description",
-			Cue{ProjectID: "proj", Name: "Test", Description: strings.Repeat("d", MaxCueDescriptionLength+1), Type: CueTypeCommand, Command: "pnpm test"},
-			ErrInvalidCueDescription,
 		},
 		{
 			"unknown type",

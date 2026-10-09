@@ -547,6 +547,9 @@ SELECT
     pr.target_branch,
     pr.head_sha,
     pr.updated_at,
+    pr.state_changed_at,
+    pr.ci_observed_at,
+    last_review.submitted_at AS last_review_at,
     EXISTS (
         SELECT 1
         FROM pr_comment
@@ -581,6 +584,18 @@ SELECT
           AND external_review.state = 'changes_requested'
     ) AS external_changes_requested
 FROM pr
+LEFT JOIN pr_reviews last_review ON last_review.pr_url = pr.url
+    -- The newest review by provider submission time, so re-fetching a review
+    -- does not move it.
+    AND NOT EXISTS (
+        SELECT 1
+        FROM pr_reviews newer_review
+        WHERE newer_review.pr_url = last_review.pr_url
+          AND (
+              newer_review.submitted_at > last_review.submitted_at
+              OR (newer_review.submitted_at = last_review.submitted_at AND newer_review.review_id > last_review.review_id)
+          )
+    )
 WHERE pr.session_id = ?1
 ORDER BY pr.updated_at DESC
 `
@@ -596,6 +611,9 @@ type ListPRFactsBySessionRow struct {
 	TargetBranch             string
 	HeadSha                  string
 	UpdatedAt                time.Time
+	StateChangedAt           sql.NullTime
+	CIObservedAt             sql.NullTime
+	LastReviewAt             sql.NullTime
 	ExternalComments         bool
 	ReviewComments           bool
 	ExternalApproved         bool
@@ -627,6 +645,9 @@ func (q *Queries) ListPRFactsBySession(ctx context.Context, sessionID domain.Ses
 			&i.TargetBranch,
 			&i.HeadSha,
 			&i.UpdatedAt,
+			&i.StateChangedAt,
+			&i.CIObservedAt,
+			&i.LastReviewAt,
 			&i.ExternalComments,
 			&i.ReviewComments,
 			&i.ExternalApproved,
@@ -706,6 +727,9 @@ SELECT
     pr.target_branch,
     pr.head_sha,
     pr.updated_at,
+    pr.state_changed_at,
+    pr.ci_observed_at,
+    last_review.submitted_at AS last_review_at,
     EXISTS (
         SELECT 1
         FROM pr_comment
@@ -743,6 +767,18 @@ SELECT
     ) AS external_changes_requested
 FROM pr
 JOIN wanted_session ON wanted_session.session_id = pr.session_id
+LEFT JOIN pr_reviews last_review ON last_review.pr_url = pr.url
+    -- The newest review by provider submission time, so re-fetching a review
+    -- does not move it.
+    AND NOT EXISTS (
+        SELECT 1
+        FROM pr_reviews newer_review
+        WHERE newer_review.pr_url = last_review.pr_url
+          AND (
+              newer_review.submitted_at > last_review.submitted_at
+              OR (newer_review.submitted_at = last_review.submitted_at AND newer_review.review_id > last_review.review_id)
+          )
+    )
 ORDER BY pr.session_id, pr.updated_at DESC
 `
 
@@ -758,6 +794,9 @@ type ListPRFactsBySessionsRow struct {
 	TargetBranch             string
 	HeadSha                  string
 	UpdatedAt                time.Time
+	StateChangedAt           sql.NullTime
+	CIObservedAt             sql.NullTime
+	LastReviewAt             sql.NullTime
 	ExternalComments         bool
 	ReviewComments           bool
 	ExternalApproved         bool
@@ -788,6 +827,9 @@ func (q *Queries) ListPRFactsBySessions(ctx context.Context, jsonEach interface{
 			&i.TargetBranch,
 			&i.HeadSha,
 			&i.UpdatedAt,
+			&i.StateChangedAt,
+			&i.CIObservedAt,
+			&i.LastReviewAt,
 			&i.ExternalComments,
 			&i.ReviewComments,
 			&i.ExternalApproved,

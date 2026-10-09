@@ -7,7 +7,7 @@ This change reduces AO's event-delivery and renderer overhead. It does not chang
 | Reproduction / finding | Change | Behavior retained |
 | --- | --- | --- |
 | CDC events arriving every 100 ms repeatedly reset the shared 150 ms debounce, delaying refresh until traffic stops. | Keep the first event's 150 ms deadline. Coalesce IDs, let active fetches finish, and queue a catch-up when an event predates their completion. | Targeted routing, full reconnect refresh, account/workspace boundaries, and durable snapshots. |
-| Already-received text drains at 58–720 graphemes/second; long bursts stay buffered. `useRef` initializers also segment complete strings on each render. | Segment once per changed text; append only new graphemes; flush received backlog on the first animation frame at/after 200 ms from scheduling. | Initial snapshots, completed messages, visible-prefix corrections, Unicode reconciliation, copy, reduced motion, and the Markdown parser. |
+| Already-received text drains at 58–720 graphemes/second; long bursts stay buffered. `useRef` initializers also segment complete strings on each render. | Segment once per changed text; append only new graphemes; flush received backlog on the first animation frame at/after 200 ms from scheduling. **Superseded:** the drain no longer flushes at a deadline; it reveals a decaying share of the backlog (~140 ms time constant, at most ~30 updates/s) and shows the current text at once when the tab was hidden or stalled for over a second. | Initial snapshots, completed messages, visible-prefix corrections, Unicode reconciliation, copy, reduced motion, and the Markdown parser. |
 | Scrolling scans and measures every loaded human-prompt anchor repeatedly. | Cache content-space positions; invalidate on content mutations, layout synchronization, dimensions, and resize observation. | In the measured implementation, every loaded turn stayed mounted. The current long-history timeline virtualizes offscreen turns; see [the current limits](#deliberate-limits). |
 | Large syntax blocks run tokenization on the renderer despite an async function signature. | Use a lazy module worker above 20,000 characters with the same grammar engine. | Small warm synchronous highlights, grammar aliases, token output, escaping, source text, and copying. |
 
@@ -37,6 +37,8 @@ Apple M5, 10 logical CPUs, 24 GiB RAM; macOS arm64; Node 24.20.0; Chromium 148.0
 | Highlight total completion time (ms) | 62.6 (60.6–66.8) | 128.5 (125.1–160.2) |
 | Anchor geometry reads | 60,001.0 (60,001.0–60,252.0) | 251.0 (251.0–251.0) |
 | Maximum scroll frame gap per run (ms) | 25.8 (17.7–33.2) | 17.6 (16.7–25.0) |
+
+The "received burst fully visible" figure was measured under the 200 ms flush deadline. The smoothed drain takes longer on purpose (a 10,000-character burst needs about a second or more), so re-run the streaming workload before quoting that number.
 
 Continuous traffic now causes ten fetches before the stream ends, rather than waiting for silence. In the pre-virtualization scroll-cache measurements, repeated anchor measurements fell by 99.6% while all 250 turns stayed mounted.
 

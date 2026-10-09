@@ -3,9 +3,11 @@ package agentcreds
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func envFrom(values map[string]string) Env {
@@ -364,5 +366,62 @@ func TestAPIKeyHelperIsNeverExecuted(t *testing.T) {
 	})
 	if ok {
 		t.Fatal("a key helper must not produce a credential")
+	}
+}
+
+// Claude Code stores the access token's expiry and a refresh token next to the
+// subscription login. AO records both facts (never the refresh token itself) so
+// an access token that merely expired is not mistaken for a signed-out user.
+func TestStoredLoginCarriesExpiryAndRenewability(t *testing.T) {
+	expiresAt := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	content := fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-stored","refreshToken":"sk-ant-ort01-stored","expiresAt":%d}}`, expiresAt.UnixMilli())
+	for name, opts := range map[string]ResolveOptions{
+		"credentials file": {GOOS: "linux"},
+		"keychain": {GOOS: "darwin", AllowKeychain: true, Runner: func(context.Context, string, ...string) ([]byte, error) {
+			return []byte(content), nil
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			opts.Env = envFrom(nil)
+			opts.ConfigDir = dir
+			cred, ok := ResolveLocal(context.Background(), ProviderFirstParty, opts)
+			if !ok {
+				t.Fatal("expected the stored login to resolve")
+			}
+			if !cred.ExpiresAt.Equal(expiresAt) || !cred.Renewable {
+				t.Fatalf("expiry metadata = (%v, %v), want (%v, true)", cred.ExpiresAt, cred.Renewable, expiresAt)
+			}
+			if cred.ExpiredButRenewable(expiresAt.Add(-time.Minute)) {
+				t.Fatal("a token before its expiry must not read as expired")
+			}
+			if !cred.ExpiredButRenewable(expiresAt) {
+				t.Fatal("a token at its expiry with a refresh token must read as expired but renewable")
+			}
+		})
+	}
+}
+
+func TestExpiredLoginWithoutRefreshTokenIsNotRenewable(t *testing.T) {
+	dir := t.TempDir()
+	content := `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-stored","expiresAt":1000}}`
+	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cred, ok := ResolveLocal(context.Background(), ProviderFirstParty, ResolveOptions{Env: envFrom(nil), ConfigDir: dir, GOOS: "linux"})
+	if !ok {
+		t.Fatal("expected the stored login to resolve")
+	}
+	if cred.ExpiredButRenewable(time.Now()) {
+		t.Fatal("an expired token with no refresh token cannot be renewed by Claude Code")
+	}
+	env, _ := ResolveLocal(context.Background(), ProviderFirstParty, ResolveOptions{
+		Env: envFrom(map[string]string{"ANTHROPIC_API_KEY": "key"}), ConfigDir: dir, GOOS: "linux",
+	})
+	if env.ExpiredButRenewable(time.Now()) || !env.ExpiresAt.IsZero() {
+		t.Fatal("environment credentials carry no stored expiry")
 	}
 }

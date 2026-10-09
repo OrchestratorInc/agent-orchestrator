@@ -216,3 +216,60 @@ func TestListPRFactsForSessionsBatchesBySession(t *testing.T) {
 		t.Fatalf("second session facts = %+v", got[second.ID])
 	}
 }
+
+// The session list orders mobile's workers by when something last changed, so
+// both PR-facts reads project the change timestamps: lifecycle, CI, and the
+// newest review by provider submission time. The review join must pick exactly
+// one review per PR, never fan a PR out into one row per review.
+func TestListPRFactsProjectsChangeTimestamps(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	openedAt := time.Date(2026, 6, 4, 9, 0, 0, 0, time.UTC)
+	ciAt := time.Date(2026, 6, 4, 9, 30, 0, 0, time.UTC)
+	firstReviewAt := time.Date(2026, 6, 4, 10, 0, 0, 0, time.UTC)
+	lastReviewAt := time.Date(2026, 6, 4, 11, 0, 0, 0, time.UTC)
+
+	reviewed := domain.PullRequest{
+		URL: "reviewed", SessionID: r.ID, Number: 1, CI: domain.CIFailing,
+		CreatedAtProvider: openedAt, UpdatedAt: ciAt, ObservedAt: ciAt, CIObservedAt: ciAt,
+	}
+	reviews := []domain.PullRequestReview{
+		{ID: "r1", Author: "alice", State: domain.ReviewChangesRequest, SubmittedAt: firstReviewAt},
+		{ID: "r2", Author: "bob", State: domain.ReviewApproved, SubmittedAt: lastReviewAt},
+	}
+	if err := s.WriteSCMObservation(ctx, reviewed, nil, reviews, nil, nil, ports.ReviewWriteReplace); err != nil {
+		t.Fatal(err)
+	}
+	bare := domain.PullRequest{URL: "bare", SessionID: r.ID, Number: 2, CreatedAtProvider: openedAt, UpdatedAt: openedAt, ObservedAt: openedAt}
+	if err := s.WriteSCMObservation(ctx, bare, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+
+	single, err := s.ListPRFactsForSession(ctx, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := s.ListPRFactsForSessions(ctx, []domain.SessionID{r.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, facts := range map[string][]domain.PRFacts{"single": single, "batch": batch[r.ID]} {
+		if len(facts) != 2 {
+			t.Fatalf("%s: %d facts, want 2 (one row per PR)", name, len(facts))
+		}
+		byURL := map[string]domain.PRFacts{}
+		for _, f := range facts {
+			byURL[f.URL] = f
+		}
+		got := byURL["reviewed"]
+		if !got.StateChangedAt.Equal(openedAt) || !got.CIChangedAt.Equal(ciAt) || !got.LastReviewAt.Equal(lastReviewAt) {
+			t.Fatalf("%s: reviewed timestamps = state %s ci %s review %s, want %s %s %s",
+				name, got.StateChangedAt, got.CIChangedAt, got.LastReviewAt, openedAt, ciAt, lastReviewAt)
+		}
+		if !byURL["bare"].LastReviewAt.IsZero() {
+			t.Fatalf("%s: unreviewed PR LastReviewAt = %s, want zero", name, byURL["bare"].LastReviewAt)
+		}
+	}
+}

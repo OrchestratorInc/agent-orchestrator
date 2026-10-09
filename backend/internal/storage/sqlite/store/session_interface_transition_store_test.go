@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestSessionInterfaceTransitionClaimModeCASAndOutbox(t *testing.T) {
@@ -142,13 +143,16 @@ func TestSessionInterfaceTransitionClaimModeCASAndOutbox(t *testing.T) {
 	}
 
 	if err := st.EnqueueSessionInterfaceTransitionMessage(
-		ctx, transition.ID, "transition-message-1", "CI finished", now.Add(6*time.Second),
+		ctx, transition.ID, "transition-message-1", "CI finished", now.Add(6*time.Second), ports.MessageDeliveryOptions{SenderSessionID: "known-sender", AuthoredByUser: true},
 	); err != nil {
 		t.Fatalf("enqueue transition message: %v", err)
 	}
 	messages, err := st.ListPendingSessionInterfaceTransitionMessages(ctx, transition.ID)
 	if err != nil || len(messages) != 1 || messages[0].Message != "CI finished" {
 		t.Fatalf("pending messages = %+v err=%v", messages, err)
+	}
+	if messages[0].SenderSessionID != "known-sender" || !messages[0].AuthoredByUser {
+		t.Fatalf("lost queued attribution: %+v", messages[0])
 	}
 	if messages[0].ClientMessageID != "transition-message-1" {
 		t.Fatalf("client message id = %q", messages[0].ClientMessageID)

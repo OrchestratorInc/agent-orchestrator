@@ -15,7 +15,7 @@ import (
 )
 
 func TestCueReadinessFromInteractiveUnixShell(t *testing.T) {
-	for _, name := range []string{"bash", "zsh", "sh"} {
+	for _, name := range []string{"bash", "zsh", "sh", "fish"} {
 		t.Run(name, func(t *testing.T) {
 			path, err := exec.LookPath(name)
 			if err != nil {
@@ -25,6 +25,17 @@ func TestCueReadinessFromInteractiveUnixShell(t *testing.T) {
 			t.Setenv("HOME", home)
 			t.Setenv("ENV", "")
 			t.Setenv("ZDOTDIR", "")
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			if name == "fish" {
+				configDir := filepath.Join(home, ".config", "fish")
+				if err := os.MkdirAll(configDir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				config := "printf 'startup-blocked\\n'; read -l answer\nset -g ao_test_config loaded\nfunction fish_prompt; printf 'custom-prompt> '; end\n"
+				if err := os.WriteFile(filepath.Join(configDir, "config.fish"), []byte(config), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if name == "bash" {
 				// Bash must not signal before a user startup hook finishes
 				// reading from its terminal.
@@ -64,7 +75,7 @@ func TestCueReadinessFromInteractiveUnixShell(t *testing.T) {
 					}
 				}
 			}()
-			if name == "bash" {
+			if name == "bash" || name == "fish" {
 				deadline := time.After(5 * time.Second)
 				var transcript string
 				for {
@@ -75,12 +86,12 @@ func TestCueReadinessFromInteractiveUnixShell(t *testing.T) {
 							goto startupBlocked
 						}
 					case <-deadline:
-						t.Fatal("bash startup hook did not run")
+						t.Fatalf("%s startup hook did not run", name)
 					}
 				}
 			startupBlocked:
 				if data, err := os.ReadFile(ready.file); err == nil && strings.TrimSpace(string(data)) == "ready" {
-					t.Fatal("bash signaled before its startup hook read from stdin")
+					t.Fatalf("%s signaled before its startup hook read from stdin", name)
 				}
 				if _, err := io.WriteString(terminal, "continue\n"); err != nil {
 					t.Fatal(err)
@@ -89,6 +100,29 @@ func TestCueReadinessFromInteractiveUnixShell(t *testing.T) {
 			deadline := time.Now().Add(5 * time.Second)
 			for time.Now().Before(deadline) {
 				if data, err := os.ReadFile(ready.file); err == nil && strings.TrimSpace(string(data)) == "ready" {
+					if name == "fish" {
+						// The normal config and prompt survive, and the hook is gone
+						// before a cue command executes in this interactive shell.
+						check := filepath.Join(home, "checked")
+						command := "if test \"$ao_test_config\" = loaded; and not functions -q _ao_cue_ready; printf preserved > checked; end\n"
+						if _, err := io.WriteString(terminal, command); err != nil {
+							t.Fatal(err)
+						}
+						var transcript string
+						for time.Now().Before(deadline) {
+							select {
+							case part := <-output:
+								transcript += part
+							default:
+							}
+							data, _ := os.ReadFile(check)
+							if string(data) == "preserved" && strings.Contains(transcript, "custom-prompt>") {
+								return
+							}
+							time.Sleep(25 * time.Millisecond)
+						}
+						t.Fatalf("fish config, prompt, or one-shot hook was not preserved: %s", transcript)
+					}
 					return
 				}
 				time.Sleep(25 * time.Millisecond)

@@ -71,7 +71,7 @@ for (const destinationMode of ["picker", "typed"] as const) {
 
 		const openClone = async () => {
 			await page.getByRole("button", { name: "New project", exact: true }).first().click();
-			await page.getByRole("button", { name: "Clone from Git", exact: true }).click();
+			await page.getByRole("button", { name: "Clone a repo", exact: true }).click();
 			await page.getByRole("textbox", { name: "Repository URL" }).fill("https://example.com/example.git");
 			await selectDestination();
 			await page.getByRole("button", { name: "Continue", exact: true }).click();

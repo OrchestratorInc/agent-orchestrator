@@ -17,6 +17,7 @@ import (
 type authState struct{ hashes atomic.Pointer[authHashes] }
 type authHashes struct {
 	current string
+	account string
 	retired []string
 }
 
@@ -28,6 +29,7 @@ func (a *authState) setHash(h string) {
 		}
 		next := &authHashes{current: h}
 		if previous != nil {
+			next.account = previous.account
 			next.retired = append(next.retired, previous.retired...)
 			if previous.current != "" {
 				next.retired = append(next.retired, previous.current)
@@ -37,6 +39,25 @@ func (a *authState) setHash(h string) {
 			return
 		}
 	}
+}
+func (a *authState) setAccountHash(h string) {
+	for {
+		previous := a.hashes.Load()
+		next := &authHashes{account: h}
+		if previous != nil {
+			next.current = previous.current
+			next.retired = previous.retired
+		}
+		if a.hashes.CompareAndSwap(previous, next) {
+			return
+		}
+	}
+}
+func (a *authState) accountHash() string {
+	if hashes := a.hashes.Load(); hashes != nil {
+		return hashes.account
+	}
+	return ""
 }
 func (a *authState) currentHash() string {
 	if hashes := a.hashes.Load(); hashes != nil {
@@ -254,7 +275,20 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				return
 			}
 			tok := connectionToken(r)
-			if mobilebridge.PasswordMatches(state.currentHash(), tok) {
+			conn, _ := r.Context().Value(lanConnContextKey{}).(*lanConn)
+			if conn != nil {
+				conn.owner.mu.Lock()
+			}
+			// Record auth atomically with rotation's connection close.
+			authenticated := mobilebridge.PasswordMatches(state.currentHash(), tok) ||
+				mobilebridge.PasswordMatches(state.accountHash(), tok)
+			if conn != nil {
+				if authenticated {
+					conn.tokenHash = mobilebridge.HashPassword(tok)
+				}
+				conn.owner.mu.Unlock()
+			}
+			if authenticated {
 				lock.reset(src)
 				connected.report(remoteSrc)
 				maybeSetPreviewAuthCookie(w, r, tok)

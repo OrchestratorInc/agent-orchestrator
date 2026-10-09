@@ -30,11 +30,14 @@ const UpdatesSection = lazy(async () => {
 type CatalogContext = {
 	cloudEnabled: boolean;
 	developerMode: boolean;
+	/** Developer mode with the Diagnostics toggle on — gates the memory and CPU page. */
+	diagnostics: boolean;
 	/** Signed-in user's email ends with @11x.ai — gates the bring-your-own-Coder page. */
 	is11x: boolean;
 	focusAgentId?: string;
 	hostId?: string;
 	harnessView?: "local" | "cloud";
+	startLogin?: boolean;
 };
 
 export type SettingsCatalogItem = {
@@ -64,7 +67,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "harness",
 		icon: Bot,
 		label: (t) => t("settings.harness"),
-		render: (_t, titleHidden, { focusAgentId, hostId, harnessView }) => <HarnessSettingsSection focusAgentId={focusAgentId} {...(hostId ? { hostId } : {})} {...(harnessView ? { initialView: harnessView } : {})} titleHidden={titleHidden} />,
+		render: (_t, titleHidden, { focusAgentId, hostId, harnessView, startLogin }) => <HarnessSettingsSection focusAgentId={focusAgentId} {...(hostId ? { hostId } : {})} {...(harnessView ? { initialView: harnessView } : {})} {...(startLogin ? { startLogin } : {})} titleHidden={titleHidden} />,
 	},
 	{
 		id: "agents",
@@ -125,7 +128,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: Activity,
 		label: (t) => t("settings.diagnostics"),
 		pageOnly: true,
-		visible: ({ developerMode }) => developerMode,
+		visible: ({ diagnostics }) => diagnostics,
 		render: (t, titleHidden) => (
 			<SettingsSection titleHidden={titleHidden} title={t("settings.diagnostics")}>
 				<MemoryDiagnostics />

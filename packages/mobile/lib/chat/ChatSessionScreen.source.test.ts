@@ -77,3 +77,12 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain("<ChatComposer");
 	});
 });
+
+describe("stopped agents", () => {
+	it("resumes an exited agent once when its session is opened", () => {
+		expect(screenSource).toContain("const autoResumeTried = useRef<string | undefined>(undefined);");
+		expect(screenSource).toContain("shouldAutoResume(session, terminated, Boolean(config))");
+		expect(screenSource).toContain("controllerStoppedBanner(terminated, resumeError ?? snapshot.controller.error)");
+		expect(screenSource).toContain("void resume(true);");
+	});
+});

@@ -68,6 +68,15 @@ func TestOMPHarnessIsKnown(t *testing.T) {
 	}
 }
 
+func TestCodewhaleHarnessIsKnown(t *testing.T) {
+	if HarnessCodewhale != AgentHarness("codewhale") {
+		t.Fatalf("HarnessCodewhale = %q, want codewhale", HarnessCodewhale)
+	}
+	if !HarnessCodewhale.IsKnown() {
+		t.Fatal("HarnessCodewhale.IsKnown() = false, want true")
+	}
+}
+
 func TestMiMoCodeHarnessIsKnown(t *testing.T) {
 	if HarnessMiMoCode != AgentHarness("mimo-code") {
 		t.Fatalf("HarnessMiMoCode = %q, want mimo-code", HarnessMiMoCode)
@@ -93,5 +102,14 @@ func TestDeepSeekHarnessIsKnown(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("AllHarnesses does not contain HarnessDeepSeek")
+	}
+}
+
+func TestOpenHandsHarnessIsKnown(t *testing.T) {
+	if HarnessOpenHands != AgentHarness("openhands") {
+		t.Fatalf("HarnessOpenHands = %q, want openhands", HarnessOpenHands)
+	}
+	if !HarnessOpenHands.IsKnown() {
+		t.Fatal("HarnessOpenHands.IsKnown() = false, want true")
 	}
 }

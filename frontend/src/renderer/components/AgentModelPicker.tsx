@@ -137,6 +137,7 @@ export function AgentModelPicker({
 			allowCustom={catalog?.allowCustom}
 			customModelEntry={customModelEntry}
 			agentLabel={agentLabel}
+			agentId={agentId}
 			onRefresh={refreshCatalog}
 			refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
 			refreshError={catalog?.refreshError}

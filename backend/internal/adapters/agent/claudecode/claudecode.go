@@ -181,11 +181,15 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if permissions == "" {
 		permissions = cfg.Config.Permissions
 	}
+	nativeSessionID, err := p.freshLaunchNativeSessionID(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
 	return agentruntime.BuildLaunchCommand(agentruntime.LaunchConfig{
 		Harness:          agentruntime.HarnessClaudeCode,
 		Binary:           binary,
 		SessionID:        cfg.SessionID,
-		NativeSessionID:  cfg.NativeSessionID,
+		NativeSessionID:  nativeSessionID,
 		Model:            cfg.Config.Model,
 		Effort:           cfg.Config.Effort,
 		Prompt:           cfg.Prompt,
@@ -195,6 +199,27 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		AllowedTools:     cfg.AllowedTools,
 		DisallowedTools:  cfg.DisallowedTools,
 	})
+}
+
+// freshLaunchNativeSessionID keeps a fresh launch from adopting someone else's
+// conversation. The legacy id is derived from the AO session id alone, while
+// Claude's transcripts live in one global config dir, so a reused AO id (a
+// wiped or second data dir) maps onto an old transcript that --session-id would
+// then continue. A fresh launch has no prior conversation of its own, so when
+// the derived id already has a transcript a new id is used instead; hooks
+// capture whichever id Claude ends up with.
+func (p *Plugin) freshLaunchNativeSessionID(ctx context.Context, cfg ports.LaunchConfig) (string, error) {
+	if cfg.NativeSessionID != "" || cfg.SessionID == "" {
+		return cfg.NativeSessionID, nil
+	}
+	taken, err := p.NativeConversationExists(ctx, ports.SessionRef{}, claudeSessionUUID(cfg.SessionID), nil)
+	if err != nil {
+		return "", err
+	}
+	if taken {
+		return p.NewNativeSessionID(), nil
+	}
+	return "", nil
 }
 
 // PreLaunch is an optional capability the spawn engine invokes (via type
