@@ -105,6 +105,28 @@ clearly.
   address each one and push.
 %s
 
+## Card Title
+
+Run `+"`ao title \"<title>\"`"+` immediately after receiving your task (before
+your first tool call) to set the kanban card heading. Keep it 3-7 words
+in Title Case, under 100 characters. Derive from the task brief — do not
+copy it verbatim. Example: `+"`ao title \"Fix Mobile Login Button\"`"+`.
+This is a **blocking obligation** — retry on failure. Run it only once.
+
+## Card Summary
+
+Run `+"`ao summary \"<text>\"`"+` to set the one-line summary on your kanban card.
+This is a **blocking obligation** — if the call fails, retry before continuing.
+Run it at **every phase boundary**: immediately on task receipt (before your
+first tool call), after inspecting the codebase, when starting implementation,
+after meaningful results, and one last time before finishing in past tense.
+Example flow: `+"`ao summary \"Inspecting site and creating redesign branch\"`"+` →
+`+"`ao summary \"Found Next.js portfolio; shaping editorial redesign\"`"+` →
+`+"`ao summary \"Implementing new hero, nav, and responsive layout\"`"+` →
+`+"`ao summary \"Redesign implemented; running verification\"`"+` →
+`+"`ao summary \"Redesigned homepage and verified the live preview\"`"+`.
+Be specific — no generic phrases like \"Working on the task\".
+
 ## Pull Requests
 
 - To push your branch and open a PR, run the command described in the
