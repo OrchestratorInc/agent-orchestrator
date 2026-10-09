@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -288,13 +289,13 @@ func (s *transitionStore) AcknowledgeSessionInterfaceTransitionNotice(
 	return rec, true, nil
 }
 
-func (s *transitionStore) EnqueueSessionInterfaceTransitionMessage(_ context.Context, transitionID, clientMessageID, message string, now time.Time) error {
+func (s *transitionStore) EnqueueSessionInterfaceTransitionMessage(_ context.Context, transitionID, clientMessageID, message string, now time.Time, opts ports.MessageDeliveryOptions) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nextMessage++
 	s.messages[transitionID] = append(s.messages[transitionID], domain.SessionInterfaceTransitionMessage{
 		ID: s.nextMessage, TransitionID: transitionID, ClientMessageID: clientMessageID,
-		Message: message, CreatedAt: now,
+		Message: message, CreatedAt: now, SenderSessionID: opts.SenderSessionID, AuthoredByUser: opts.AuthoredByUser,
 	})
 	return nil
 }
@@ -382,10 +383,6 @@ func (transitionSurfaceAgent) InspectTerminalSurface(output string) ports.Termin
 		return ports.TerminalSurfaceObservation{
 			Work: ports.TerminalSurfaceWorkIdle, Composer: ports.TerminalComposerDraft,
 		}
-	case activeDraftTerminalOutput:
-		return ports.TerminalSurfaceObservation{
-			Work: ports.TerminalSurfaceWorkActive, Composer: ports.TerminalComposerDraft,
-		}
 	case decisionTerminalOutput:
 		return ports.TerminalSurfaceObservation{
 			Work: ports.TerminalSurfaceWorkBlocked, Composer: ports.TerminalComposerDraft,
@@ -406,17 +403,12 @@ func (transitionSurfaceDetectorAgent) DetectTerminalActivity(output string) (dom
 	return "", false
 }
 
-func (transitionSurfaceDetectorAgent) ComposerIsEmpty(output string) bool {
-	return output == idleTerminalOutput
-}
-
 const (
-	idleTerminalOutput        = "idle"
-	draftTerminalOutput       = "draft"
-	activeDraftTerminalOutput = "active-draft"
-	decisionTerminalOutput    = "decision"
-	activeTerminalOutput      = "active"
-	ambiguousTerminalOutput   = "ambiguous"
+	idleTerminalOutput      = "idle"
+	draftTerminalOutput     = "draft"
+	decisionTerminalOutput  = "decision"
+	activeTerminalOutput    = "active"
+	ambiguousTerminalOutput = "ambiguous"
 )
 
 type emptyTransitionAgent struct{ transitionAgent }
@@ -759,12 +751,7 @@ func (c *transitionChat) StartChat(ctx context.Context, cfg ChatStart) (ChatStar
 func (*transitionChat) StartChatTurn(context.Context, domain.SessionID, string) (string, error) {
 	return "", nil
 }
-func (c *transitionChat) RelayChatTurn(_ context.Context, _ domain.SessionID, text string) (string, error) {
-	c.relayMessages = append(c.relayMessages, text)
-	c.relayIDs = append(c.relayIDs, "")
-	return "", nil
-}
-func (c *transitionChat) RelayChatTurnWithID(_ context.Context, _ domain.SessionID, text, clientMessageID string) (string, error) {
+func (c *transitionChat) RelaySessionChatTurn(_ context.Context, _ domain.SessionID, text, clientMessageID string, _ ports.MessageDeliveryOptions) (string, error) {
 	c.relayMessages = append(c.relayMessages, text)
 	c.relayIDs = append(c.relayIDs, clientMessageID)
 	return "", nil
@@ -1206,7 +1193,7 @@ func TestInterfaceTransitionRollbackRejectsOwnerlessTUIHooksBeforeRelaunch(t *te
 	}); err != nil {
 		t.Fatalf("apply delayed ownerless hook: %v", err)
 	}
-	if after := store.sessions["session-1"]; after != before {
+	if after := store.sessions["session-1"]; !reflect.DeepEqual(after, before) {
 		t.Fatalf("ownerless rollback hook mutated session: got %+v, want %+v", after, before)
 	}
 
@@ -1720,7 +1707,7 @@ func TestInterfaceTransitionTUIToChatDrainsAVisibleIdleComposerAfterNonSubmittin
 	}
 }
 
-func TestInterfaceTransitionTUIToChatPreservesAVisibleDraftEvenAfterFreshIdle(t *testing.T) {
+func TestInterfaceTransitionTUIToChatSwitchesPastAVisibleDraft(t *testing.T) {
 	manager, store, runtime, _, _ := newTransitionManager(t, domain.SessionModeTUI)
 	useFastInterfaceTransitionTimings(manager)
 	manager.agents = singleAgent{agent: transitionSurfaceAgent{}}
@@ -1743,118 +1730,11 @@ func TestInterfaceTransitionTUIToChatPreservesAVisibleDraftEvenAfterFreshIdle(t 
 		t.Fatal(err)
 	}
 	settled := awaitTransition(t, store, transition.ID)
-	if settled.Phase != domain.SessionInterfaceTransitionFailed || settled.ErrorCode != "DRAIN_DRAFT_PRESENT" {
-		t.Fatalf("transition = %+v, want failed DRAIN_DRAFT_PRESENT", settled)
-	}
-	if !strings.Contains(settled.ErrorDetail, "unsent text") || !strings.Contains(settled.ErrorDetail, "left untouched") {
-		t.Fatalf("error detail = %q, want preserved-draft guidance", settled.ErrorDetail)
-	}
-	if runtime.destroyed != 0 {
-		t.Fatalf("source runtime destroyed %d times with a visible draft", runtime.destroyed)
-	}
-	if runtime.outputCalls == 0 {
-		t.Fatal("terminal surface was not inspected despite a fresh idle timestamp")
-	}
-	select {
-	case <-gate.released:
-	case <-time.After(time.Second):
-		t.Fatal("terminal input gate remained closed after draft detection")
-	}
-}
-
-func TestInterfaceTransitionTUIToChatIgnoresATransientComposerDraft(t *testing.T) {
-	manager, store, runtime, _, _ := newTransitionManager(t, domain.SessionModeTUI)
-	useFastInterfaceTransitionTimings(manager)
-	manager.agents = singleAgent{agent: transitionSurfaceAgent{}}
-	now := time.Now()
-	rec := store.sessions["session-1"]
-	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now.Add(-time.Minute)}
-	store.sessions["session-1"] = rec
-	runtime.aliveByHandle = map[string]bool{"runtime-1": true}
-	// Providers repaint non-dim chrome through the composer borders between
-	// stable frames. A draft claim that vanishes on the next capture is chrome,
-	// not human input, and must not fail the switch.
-	runtime.outputs = []string{
-		draftTerminalOutput, draftTerminalOutput,
-		idleTerminalOutput, idleTerminalOutput, idleTerminalOutput,
-	}
-	manager.SetTerminalInputGate(&transitionInputGate{
-		acquired: make(chan string, 1),
-		released: make(chan string, 1),
-	})
-
-	transition, err := manager.StartInterfaceTransition(context.Background(), "session-1", domain.SessionModeChat, domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	settled := awaitTransition(t, store, transition.ID)
 	if settled.Phase != domain.SessionInterfaceTransitionCompleted {
-		t.Fatalf("phase = %s, error = %s", settled.Phase, settled.ErrorDetail)
+		t.Fatalf("transition = %+v, want completed despite a visible draft", settled)
 	}
-}
-
-func TestInterfaceTransitionTUIToChatIgnoresASingleDraftFrameBetweenIdleCaptures(t *testing.T) {
-	manager, store, runtime, _, _ := newTransitionManager(t, domain.SessionModeTUI)
-	useFastInterfaceTransitionTimings(manager)
-	manager.agents = singleAgent{agent: transitionSurfaceAgent{}}
-	now := time.Now()
-	rec := store.sessions["session-1"]
-	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now.Add(-time.Minute)}
-	store.sessions["session-1"] = rec
-	runtime.aliveByHandle = map[string]bool{"runtime-1": true}
-	runtime.outputs = []string{
-		idleTerminalOutput, draftTerminalOutput, idleTerminalOutput,
-		idleTerminalOutput, idleTerminalOutput,
-	}
-	manager.SetTerminalInputGate(&transitionInputGate{
-		acquired: make(chan string, 1),
-		released: make(chan string, 1),
-	})
-
-	transition, err := manager.StartInterfaceTransition(context.Background(), "session-1", domain.SessionModeChat, domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	settled := awaitTransition(t, store, transition.ID)
-	if settled.Phase != domain.SessionInterfaceTransitionCompleted {
-		t.Fatalf("phase = %s, error = %s", settled.Phase, settled.ErrorDetail)
-	}
-}
-
-func TestInterfaceTransitionTUIToChatPreservesDraftWhenSurfaceAlsoLooksActive(t *testing.T) {
-	manager, store, runtime, _, _ := newTransitionManager(t, domain.SessionModeTUI)
-	useFastInterfaceTransitionTimings(manager)
-	manager.agents = singleAgent{agent: transitionSurfaceAgent{}}
-	now := time.Now()
-	rec := store.sessions["session-1"]
-	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now.Add(-time.Minute)}
-	store.sessions["session-1"] = rec
-	runtime.aliveByHandle = map[string]bool{"runtime-1": true}
-	runtime.outputs = []string{activeDraftTerminalOutput}
-	gate := &transitionInputGate{
-		acquired: make(chan string, 1),
-		released: make(chan string, 1),
-	}
-	manager.SetTerminalInputGate(gate)
-
-	transition, err := manager.StartInterfaceTransition(context.Background(), "session-1", domain.SessionModeChat, domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	settled := awaitTransition(t, store, transition.ID)
-	if settled.Phase != domain.SessionInterfaceTransitionFailed || settled.ErrorCode != "DRAIN_DRAFT_PRESENT" {
-		t.Fatalf("transition = %+v, want failed DRAIN_DRAFT_PRESENT", settled)
-	}
-	if runtime.destroyed != 0 {
-		t.Fatalf("source runtime destroyed %d times with a visible draft", runtime.destroyed)
-	}
-	select {
-	case <-gate.released:
-	case <-time.After(time.Second):
-		t.Fatal("terminal input gate remained closed after draft detection")
+	if runtime.destroyed != 1 {
+		t.Fatalf("source runtime destroyed %d times, want 1", runtime.destroyed)
 	}
 }
 
@@ -1886,9 +1766,6 @@ func TestInterfaceTransitionTUIToChatReportsAPendingDecisionBeforeComposerDraft(
 	if !strings.Contains(settled.ErrorDetail, "decision") || !strings.Contains(settled.ErrorDetail, "Terminal") {
 		t.Fatalf("error detail = %q, want guidance to answer the decision in Terminal", settled.ErrorDetail)
 	}
-	if strings.Contains(settled.ErrorDetail, "unsent text") {
-		t.Fatalf("error detail = %q, pending decision was misreported as a draft", settled.ErrorDetail)
-	}
 	if runtime.destroyed != 0 {
 		t.Fatalf("source runtime destroyed %d times with a pending decision", runtime.destroyed)
 	}
@@ -1909,53 +1786,6 @@ func TestInterfaceTransitionTUIToChatReportsAPendingDecisionBeforeComposerDraft(
 	}
 	if !strings.Contains(fmt.Sprint(*log), "interrupt:tui:runtime-1") {
 		t.Fatalf("controller log = %v, explicit decision cancellation did not interrupt the provider", *log)
-	}
-}
-
-func TestInterfaceTransitionTUIToChatCanInterruptAfterDraftDrainFailure(t *testing.T) {
-	manager, store, runtime, _, _ := newTransitionManager(t, domain.SessionModeTUI)
-	useFastInterfaceTransitionTimings(manager)
-	manager.agents = singleAgent{agent: transitionSurfaceAgent{}}
-	now := time.Now()
-	rec := store.sessions["session-1"]
-	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}
-	store.sessions["session-1"] = rec
-	runtime.aliveByHandle = map[string]bool{"runtime-1": true}
-	runtime.outputs = []string{draftTerminalOutput}
-	manager.SetTerminalInputGate(&transitionInputGate{
-		acquired: make(chan string, 2), released: make(chan string, 2), lastInputAt: now,
-	})
-
-	drain, err := manager.StartInterfaceTransition(context.Background(), "session-1", domain.SessionModeChat, domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	failed := awaitTransition(t, store, drain.ID)
-	if failed.Phase != domain.SessionInterfaceTransitionFailed || failed.ErrorCode != "DRAIN_DRAFT_PRESENT" {
-		t.Fatalf("drain transition = %+v, want failed DRAIN_DRAFT_PRESENT", failed)
-	}
-	if runtime.destroyed != 0 {
-		t.Fatalf("source runtime destroyed %d times before explicit discard", runtime.destroyed)
-	}
-
-	recovery, err := manager.StartInterfaceTransition(context.Background(), "session-1", domain.SessionModeChat, domain.SessionInterfaceTransitionInterrupt, domain.SessionInterfaceTransitionHistoryStrict)
-
-	if err != nil {
-		t.Fatalf("start interrupt recovery: %v", err)
-	}
-	settled := awaitTransition(t, store, recovery.ID)
-	if settled.Phase != domain.SessionInterfaceTransitionCompleted {
-		t.Fatalf("interrupt recovery = %+v, want completed", settled)
-	}
-	if settled.Policy != domain.SessionInterfaceTransitionInterrupt {
-		t.Fatalf("recovery policy = %q, want interrupt", settled.Policy)
-	}
-	if runtime.destroyed != 1 {
-		t.Fatalf("source runtime destroyed %d times after explicit discard, want 1", runtime.destroyed)
-	}
-	if got := store.sessions["session-1"].Mode; got != domain.SessionModeChat {
-		t.Fatalf("session mode = %q, want chat", got)
 	}
 }
 
@@ -2177,7 +2007,7 @@ func TestInterfaceTransitionTUIToChatFallsBackForARecoveredHostWithoutStyledOutp
 	}
 }
 
-func TestInterfaceTransitionTUIToChatUnstyledFallbackDoesNotApproveAnIdleDraft(t *testing.T) {
+func TestInterfaceTransitionTUIToChatUnstyledFallbackSwitchesPastAnIdleDraft(t *testing.T) {
 	manager, store, runtime, _, _ := newTransitionManager(t, domain.SessionModeTUI)
 	useFastInterfaceTransitionTimings(manager)
 	manager.agents = singleAgent{agent: transitionSurfaceDetectorAgent{}}
@@ -2198,11 +2028,8 @@ func TestInterfaceTransitionTUIToChatUnstyledFallbackDoesNotApproveAnIdleDraft(t
 		t.Fatal(err)
 	}
 	settled := awaitTransition(t, store, transition.ID)
-	if settled.Phase != domain.SessionInterfaceTransitionFailed || settled.ErrorCode != "DRAIN_QUIESCENCE_UNVERIFIED" {
-		t.Fatalf("transition = %+v, want failed DRAIN_QUIESCENCE_UNVERIFIED", settled)
-	}
-	if runtime.destroyed != 0 {
-		t.Fatalf("source runtime destroyed %d times with an unverified draft", runtime.destroyed)
+	if settled.Phase != domain.SessionInterfaceTransitionCompleted {
+		t.Fatalf("transition = %+v, want completed despite an idle draft", settled)
 	}
 }
 
@@ -3049,7 +2876,7 @@ func TestTransitionMessageRetryUsesStableChatIdempotencyKey(t *testing.T) {
 	}
 	store.transitions[transition.ID] = transition
 	if err := store.EnqueueSessionInterfaceTransitionMessage(
-		context.Background(), transition.ID, "handoff-message-1", "review is ready", now,
+		context.Background(), transition.ID, "handoff-message-1", "review is ready", now, ports.MessageDeliveryOptions{},
 	); err != nil {
 		t.Fatal(err)
 	}

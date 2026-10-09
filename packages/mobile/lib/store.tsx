@@ -34,6 +34,8 @@ import { pollIntervalFor } from "./pollInterval";
 import { rejectedEndpointNeedsRace, type ConnectOptions } from "./connectRuntime";
 import type { Endpoint } from "./endpoints";
 import { activeHost, loadHosts, sameHostConnections, setActiveHost, type Host } from "./hosts";
+import { loadAccount } from "./account";
+import { syncAccountHosts } from "./accountHosts";
 import { shouldReRace } from "./reRace";
 import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 import { pollResultIsCurrent, sameServerConfig } from "./sameConfig";
@@ -389,7 +391,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				setConnection("closed");
 			} else {
 				resumedRef.current = true;
-				void reloadConfig();
+				void loadAccount().then(async (account) => {
+					if (account) await syncAccountHosts(account);
+				}).catch(() => {}).finally(() => { void reloadConfig(); });
 			}
 			setAppActive(active);
 		});
@@ -413,8 +417,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	}, [reloadConfig]);
 
 	useEffect(() => {
-		reloadConfig();
+		void loadAccount().then(async (account) => {
+			if (account) await syncAccountHosts(account);
+		}).catch(() => {}).finally(() => { void reloadConfig(); });
 	}, [reloadConfig]);
+
+	useEffect(() => {
+		if (!appActive) return;
+		const timer = setInterval(() => {
+			void loadAccount().then(async (account) => {
+				if (!account) return;
+				await syncAccountHosts(account);
+				const hosts = await loadHosts();
+				setPairedHosts((previous) => sameHostConnections(previous, hosts) ? previous : hosts);
+			}).catch(() => {});
+		}, 30_000);
+		return () => clearInterval(timer);
+	}, [appActive]);
 
 	// An offline selected host still needs to reconnect when its network returns.
 	// Without this, a failed initial endpoint race leaves it closed until a tap.

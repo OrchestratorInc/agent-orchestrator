@@ -296,6 +296,42 @@ it.each(["native", "ACP config"] as const)(
 	},
 );
 
+it("keeps the Claude model menu open when expanding Other models, without an agent-model row", async () => {
+	const user = userEvent.setup();
+	const choices = [
+		{ value: "default", name: "Default (recommended)", description: "Sonnet 5.5" },
+		{ value: "claude-fable-5-1", name: "Fable 5.1" },
+		{ value: "claude-opus-5-5", name: "Opus 5.5" },
+		{ value: "claude-sonnet-5-5", name: "Sonnet 5.5" },
+		{ value: "claude-haiku-4-5", name: "Haiku 4.5" },
+		{ value: "claude-opus-4-1", name: "Opus 4.1" },
+		{ value: "claude-sonnet-4", name: "Sonnet 4" },
+		...Array.from({ length: 6 }, (_, index) => ({ value: `claude-opus-4-${index + 2}`, name: `Opus 4.${index + 2}` })),
+	];
+	const composerClick = vi.fn();
+	render(
+		// Stands in for the composer, which focuses its editor on clicks that bubble out of the menu.
+		<div onClick={composerClick}>
+			<TurnSettingsBar
+				harness="claude-code"
+				models={[]}
+				settings={{}}
+				onChangeConfigOption={vi.fn()}
+				configOptions={[{ id: "model", name: "Model", category: "model", type: "select", currentValue: "claude-sonnet-5-5", choices }]}
+			/>
+		</div>,
+	);
+	await user.click(screen.getByRole("button", { name: "Model" }));
+	expect(screen.queryByRole("menuitemradio", { name: /agent model/i })).not.toBeInTheDocument();
+	composerClick.mockClear();
+	await user.click(screen.getByRole("menuitem", { name: /Other models/ }));
+	expect(composerClick).not.toHaveBeenCalled();
+	expect(screen.getByRole("menuitemradio", { name: "Opus 4.1" })).toBeInTheDocument();
+	await user.click(screen.getByRole("menuitem", { name: /Other models/ }));
+	expect(screen.queryByRole("menuitemradio", { name: "Opus 4.1" })).not.toBeInTheDocument();
+	expect(screen.getByRole("menuitem", { name: /Other models/ })).toBeInTheDocument();
+});
+
 describe("ACP session config options", () => {
 	it("hides a mode with only an implicit default choice", () => {
 		const mode: ChatConfigOption = {
@@ -404,22 +440,6 @@ describe("ACP session config options", () => {
 		await user.click(screen.getByRole("button", { name: "Model" }));
 		await user.click(screen.getByRole("menuitemradio", { name: "Opus" }));
 		expect(onChange).toHaveBeenLastCalledWith("model", { value: "default" });
-	});
-
-	it("lets an explicitly pinned recommended model return to agent control", async () => {
-		const onChange = vi.fn();
-		render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={[{
-			id: "model", name: "Model", category: "model", type: "select", currentValue: "opus",
-			choices: [
-				{ value: "default", name: "Default (recommended)", description: "Opus" },
-				{ value: "opus", name: "Opus" },
-				{ value: "sonnet", name: "Sonnet" },
-			],
-		}]} />);
-		await userEvent.click(screen.getByRole("button", { name: "Model" }));
-		expect(screen.getByRole("menuitemradio", { name: "Opus", checked: true })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("menuitemradio", { name: "Use agent model (Opus)" }));
-		expect(onChange).toHaveBeenCalledWith("model", { value: "default" });
 	});
 
 	it("searches visible model names without matching hidden choice values", async () => {

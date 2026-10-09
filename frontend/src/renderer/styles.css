@@ -810,27 +810,32 @@ button.settings-row-bar {
 }
 
 /* Match the open row layout used by the main Settings pages. */
-.project-settings-form > section {
+.project-settings-form > section,
+.project-settings-form > fieldset > section {
 	gap: var(--space-2);
 }
 
-.project-settings-form > section > h2 {
+.project-settings-form > section > h2,
+.project-settings-form > fieldset > section > h2 {
 	padding-inline: 0;
-	font-size: var(--font-size-xs);
+	font-size: var(--font-size-sm);
 	font-weight: 500;
+	line-height: 1rem;
 	color: var(--color-text-settings-muted);
 }
 
-.project-settings-form > section > .settings-grouped-rows {
+.project-settings-form > section > .settings-grouped-rows,
+.project-settings-form > fieldset > section > .settings-grouped-rows {
 	background: transparent;
 }
 
-.project-settings-form > section > .settings-grouped-rows .settings-row-bar {
-	min-height: 3.5rem;
+.project-settings-form > section > .settings-grouped-rows .settings-row-bar,
+.project-settings-form > fieldset > section > .settings-grouped-rows .settings-row-bar {
 	padding-inline: 0;
 }
 
-.project-settings-form > section > .settings-grouped-rows > .settings-row-bar + .settings-row-bar {
+.project-settings-form > section > .settings-grouped-rows > .settings-row-bar + .settings-row-bar,
+.project-settings-form > fieldset > section > .settings-grouped-rows > .settings-row-bar + .settings-row-bar {
 	border-top: 0;
 }
 
@@ -1898,6 +1903,16 @@ textarea,
 	to { opacity: 0; transform: scale(0); }
 }
 
+/* Streamed prose: each newly revealed character fades in once, on mount (see
+   lib/rehype-stream-fade.ts). */
+.stream-char {
+	animation: stream-char-in 300ms ease both;
+}
+
+@keyframes stream-char-in {
+	from { opacity: 0; }
+}
+
 @keyframes chat-working-shift {
 	from { transform: translateX(0); }
 	to { transform: translateX(-18px); }
@@ -2308,7 +2323,7 @@ textarea,
 }
 
 /* ── Global resize state (sidebar / inspector drag) ─────────────────────── */
-/* Grip paint lives on ResizeHandle's fixed span — DO NOT restore
+/* No grip is painted on resize handles — DO NOT restore
    `body.is-resizing-x [data-slot="resize-handle"]::after` (rejected chrome). */
 body.is-resizing-x {
 	cursor: col-resize;
@@ -2356,9 +2371,9 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 }
 
 /* Icon-only trailing controls (project kebab/orchestrator, session pin/kill,
-   Projects "+") tint the glyph only — never pick up the focus fill above. */
+   section "+") share the instant icon-button fill on hover and focus-visible. */
 .sidebar-focusless .sidebar-icon-action:focus-visible {
-	background-color: transparent !important;
+	background-color: var(--color-interactive-hover) !important;
 }
 
 /* Growing NavRowHighlight owns the fill — don't paint a second focus slab on
@@ -2395,6 +2410,12 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 	opacity: 1;
 }
 
+/* Project label/icon go foreground whenever the project's pill is lit, including
+   when the pointer or keyboard focus is on a trailing action outside the nav button. */
+[data-project-drag-row]:has(:focus-visible) :is([data-project-label], [data-project-folder-visual]) {
+	color: var(--color-foreground);
+}
+
 /* Fine-pointer hover only: row highlight grow, folder↔chevron swap, session
    action reveal. Touch must not sticky-hover; keyboard uses focus-visible above.
    Folder/chevron/actions use `scale`/`rotate` (not `transform`) so Tailwind v4
@@ -2423,6 +2444,10 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 
 	.group\/menu-item:hover:not([data-dragging="true"]) [data-project-folder-visual][data-expanded] [data-project-chevron-icon] {
 		rotate: 90deg;
+	}
+
+	.group\/menu-item:not([data-dragging="true"]) [data-project-drag-row]:hover :is([data-project-label], [data-project-folder-visual]) {
+		color: var(--color-foreground);
 	}
 
 	.group\/session-row:hover [data-session-action-buttons],
@@ -2649,7 +2674,7 @@ html.sidebar-reordering * {
 
 .cursor-chat-timeline {
 	--chat-readable-font-size: var(--chat-font-size, var(--font-size-md));
-	--chat-readable-code-font-size: max(10px, calc(var(--chat-readable-font-size) - 1.5px));
+	--chat-readable-code-font-size: max(10px, calc(var(--chat-readable-font-size) - 2px));
 	background: transparent;
 }
 
@@ -2671,10 +2696,13 @@ html.sidebar-reordering * {
 	font-size: var(--chat-readable-font-size);
 }
 
-.cursor-chat-timeline .chat-md h5,
+.cursor-chat-timeline .chat-md h5 {
+	font-size: var(--chat-readable-font-size);
+}
+
 .cursor-chat-timeline .chat-md h6,
 .cursor-chat-timeline .chat-md table {
-	font-size: max(10px, calc(var(--chat-readable-font-size) - 0.5px));
+	font-size: max(10px, calc(var(--chat-readable-font-size) - 2px));
 }
 
 .cursor-chat-timeline .chat-md code,
@@ -2733,10 +2761,31 @@ html.sidebar-reordering * {
 	box-shadow: none;
 }
 
-/* Keyboard focus ring without a border, so layout never shifts. Must stay
-   after, and not be overridden by, any theme-specific box-shadow. */
-.cursor-chat-composer:has(:focus-visible) {
-	box-shadow: 0 0 0 1px var(--color-border-strong);
+.chat-composer-startup-shimmer {
+	position: absolute;
+	inset: 0;
+	z-index: 20;
+	border-radius: inherit;
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity 300ms ease-out;
+	background: linear-gradient(90deg, color-mix(in srgb, var(--color-text-primary) 2%, transparent) 25%, color-mix(in srgb, var(--color-text-primary) 6%, transparent) 50%, color-mix(in srgb, var(--color-text-primary) 2%, transparent) 75%);
+	background-size: 200% 100%;
+	animation: chat-composer-starting 1.5s ease-in-out infinite paused;
+}
+
+.cursor-chat-composer[data-starting] > .chat-composer-startup-shimmer {
+	opacity: 1;
+	animation-play-state: running;
+}
+
+@keyframes chat-composer-starting {
+	from { background-position: -200% 0; }
+	to { background-position: 200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-composer-startup-shimmer { animation: none; transition: none; }
 }
 
 .cursor-chat-composer[data-attached-top] {
@@ -2974,6 +3023,20 @@ html.sidebar-reordering * {
 	border-color: color-mix(in srgb, var(--color-border-strong) 85%, transparent);
 }
 
+/* Opacity only, so the fade stays on the compositor. */
+.chat-welcome-leaving {
+	animation: chat-welcome-out 150ms ease-out both;
+}
+
+@keyframes chat-welcome-out {
+	from {
+		opacity: 1;
+	}
+	to {
+		opacity: 0;
+	}
+}
+
 .chat-human-message-enter {
 	animation: chat-human-message-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
@@ -2981,13 +3044,11 @@ html.sidebar-reordering * {
 @keyframes chat-human-message-in {
 	from {
 		opacity: 0;
-		transform: scale(0.9);
-		transform-origin: 100% 100%;
+		transform: translateY(16px);
 	}
 	to {
 		opacity: 1;
-		transform: scale(1);
-		transform-origin: 100% 100%;
+		transform: translateY(0);
 	}
 }
 
@@ -3058,14 +3119,10 @@ html.sidebar-reordering * {
 	--composer-bg: var(--color-bg-tertiary);
 }
 
-/* Light theme collapses the surface stack the dark bubble relies on: `--card`
-   and `--background` are the same near-white, so `--color-bg-secondary` cannot
-   sit above the canvas. Take the unwashed tertiary step and paint the hairline
-   this rule has always declared, so the message still reads as enclosed. */
+/* Light needs the tertiary fill to lift a sent message off the canvas; like
+   dark, it carries no border. */
 :root[data-theme="light"] .cursor-chat-human-message:not([data-queued]) {
-	border-width: 1px;
 	background: var(--color-bg-tertiary);
-	border-color: color-mix(in oklch, var(--color-text-primary) 14%, transparent);
 }
 
 /* Queued keeps its dashed, unfilled outline: the agent has not seen it yet, and
@@ -3190,6 +3247,10 @@ html.sidebar-reordering * {
 	}
 
 	.chat-human-message-enter {
+		animation: none;
+	}
+
+	.chat-welcome-leaving {
 		animation: none;
 	}
 }
@@ -6062,4 +6123,16 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	.ao-qr-resolved {
 		animation: none;
 	}
+}
+
+::highlight(chat-annotation) {
+	background-color: #6b728040;
+	color: inherit;
+}
+
+.chat-annotation-target {
+	background-color: #6b72801f;
+	outline: 2px solid #6b7280;
+	outline-offset: 4px;
+	border-radius: 10px;
 }

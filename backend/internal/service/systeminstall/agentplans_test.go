@@ -3,6 +3,7 @@ package systeminstall
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -60,6 +61,27 @@ func (s installCapabilitiesStub) Probe(ctx context.Context) (ports.InstallCapabi
 			Formulae: formulae, Casks: casks, Err: s.homebrewErr,
 		},
 	}, nil
+}
+
+func TestOpenCodeV2NPMPlanUsesPrivatePrefixWhenGlobalPrefixIsReadOnly(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	s.installCapabilities = installCapabilitiesStub{prefix: "/usr/local", writable: false}
+	privatePrefix := s.privateNPMPrefixes[TargetOpencodeV2]
+	var probed string
+	s.pathWritable = pathWritableProbeFunc(func(_ context.Context, path string) (bool, error) {
+		probed = path
+		return true, nil
+	})
+	plan := s.planNPM(TargetOpencodeV2, "@opencode/cli")
+	if plan.Unsupported {
+		t.Fatalf("plan = %+v, want private install available", plan)
+	}
+	if probed != privatePrefix || plan.ExpectedDestination != filepath.Join(privatePrefix, "bin") {
+		t.Fatalf("private prefix probe/destination = (%q, %q), want %q", probed, plan.ExpectedDestination, privatePrefix)
+	}
+	if !slices.Contains(plan.Command, privatePrefix) {
+		t.Fatalf("command = %v, want private prefix %q", plan.Command, privatePrefix)
+	}
 }
 
 func TestAgentPlansSnapshotsCapabilitiesOnce(t *testing.T) {
@@ -127,15 +149,15 @@ func TestOpenCodeV2UsesOfficialRecipesAndWarnsAboutReplacingV1(t *testing.T) {
 	}{
 		{goos: "darwin", want: map[string]string{
 			"homebrew":           "brew install anomalyco/tap/opencode-v2",
-			"npm":                "npm install -g @opencode/cli",
+			"npm":                "npm install -g --prefix",
 			"official-installer": "https://opencode.ai/v2/install",
 		}},
 		{goos: "linux", want: map[string]string{
-			"npm":                "npm install -g @opencode/cli",
+			"npm":                "npm install -g --prefix",
 			"official-installer": "https://opencode.ai/v2/install",
 		}},
 		{goos: "windows", want: map[string]string{
-			"npm": "npm install -g @opencode/cli",
+			"npm": "npm install -g --prefix",
 		}},
 	} {
 		t.Run(tc.goos, func(t *testing.T) {
@@ -155,7 +177,7 @@ func TestOpenCodeV2UsesOfficialRecipesAndWarnsAboutReplacingV1(t *testing.T) {
 			if got.AgentID == "" {
 				t.Fatal("OpenCode 2 install plan is missing")
 			}
-			if !strings.Contains(got.Notice, replacement) || got.DocumentationURL != "https://opencode.ai/v2/docs" {
+			if got.DocumentationURL != "https://opencode.ai/v2/docs" {
 				t.Fatalf("OpenCode 2 plan metadata = %+v", got)
 			}
 			if len(got.Methods) != len(tc.want) {
@@ -169,7 +191,11 @@ func TestOpenCodeV2UsesOfficialRecipesAndWarnsAboutReplacingV1(t *testing.T) {
 				if !strings.Contains(method.Command, want) {
 					t.Errorf("%s command = %q, want %q", method.ID, method.Command, want)
 				}
-				if !strings.Contains(method.Notice, replacement) {
+				if method.ID == "npm" {
+					if method.Notice != "" || !strings.Contains(method.Command, "opencode-v2-home") {
+						t.Errorf("npm method must install into the private prefix without a replacement warning: %+v", method)
+					}
+				} else if !strings.Contains(method.Notice, replacement) {
 					t.Errorf("%s notice = %q, want replacement warning", method.ID, method.Notice)
 				}
 			}

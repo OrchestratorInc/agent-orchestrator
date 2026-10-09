@@ -44,6 +44,8 @@ type fakeShellRuntime struct {
 	outputMu     sync.RWMutex
 	outputErr    error
 	outputReady  <-chan struct{}
+	styledOutput string
+	styledErr    error
 	// aliveByHandle answers IsAlive; a handle absent from the map is dead.
 	aliveByHandle map[string]bool
 	aliveErr      error
@@ -130,6 +132,10 @@ func (f *fakeShellRuntime) GetOutput(_ context.Context, _ ports.RuntimeHandle, _
 	f.outputMu.RLock()
 	defer f.outputMu.RUnlock()
 	return f.output, f.outputErr
+}
+
+func (f *fakeShellRuntime) GetStyledOutput(_ context.Context, _ ports.RuntimeHandle, _ int) (string, error) {
+	return f.styledOutput, f.styledErr
 }
 
 func (f *fakeShellRuntime) setOutput(output string) {
@@ -258,6 +264,7 @@ func (f *fakeShellTerminalStore) DeleteShellTerminalsFromPreviousAppRuns(_ conte
 
 type fakeProjectRootLocator struct {
 	roots map[domain.ProjectID]string
+	envs  map[domain.ProjectID]map[string]string
 	err   error
 }
 
@@ -266,6 +273,13 @@ func (f *fakeProjectRootLocator) ProjectRoot(_ context.Context, id domain.Projec
 		return "", f.err
 	}
 	return f.roots[id], nil
+}
+
+func (f *fakeProjectRootLocator) ProjectEnv(_ context.Context, id domain.ProjectID) (map[string]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.envs[id], nil
 }
 
 // fakeSessionWorkspace is one entry in fakeSessionWorkspaceLocator: a session's
@@ -451,6 +465,109 @@ func TestOpenCommandTerminalWaitsForReadinessMarkerBeforeSendingInitialInput(t *
 		}
 	case <-time.After(time.Second):
 		t.Fatal("automatic login input was not sent after terminal output")
+	}
+}
+
+func TestOpenCommandTerminalSendsInitialInputOnReadyTimeoutWhenOptedIn(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "pi prompt without any reviewed marker"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	svc.initialInputTimeout = 3 * initialInputPollInterval
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                           []string{"pi"},
+		Title:                          "Log in to Pi",
+		InitialInput:                   "/login",
+		InitialInputReadyStates:        readyStates("0.0%/"),
+		SendInitialInputOnReadyTimeout: true,
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: "/login"}); got != want {
+			t.Errorf("sent = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial input was not sent after the ready wait expired")
+	}
+}
+
+func TestOpenCommandTerminalSkipsInitialInputOnReadyTimeoutByDefault(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "no reviewed marker"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	svc.initialInputTimeout = 3 * initialInputPollInterval
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                    []string{"kimi"},
+		Title:                   "Log in to Kimi",
+		InitialInput:            "/login",
+		InitialInputReadyStates: readyStates("Run /login or /provider to get started."),
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("initial input sent without a ready marker or opt-in: %#v", got)
+	case <-time.After(svc.initialInputTimeout + 4*initialInputPollInterval):
+	}
+}
+
+func TestOpenCommandTerminalSkipsReadyTimeoutFallbackForExitedTerminal(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "no reviewed marker"
+	rt.aliveErr = errors.New("runtime gone")
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	svc.initialInputTimeout = 3 * initialInputPollInterval
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                           []string{"pi"},
+		Title:                          "Log in to Pi",
+		InitialInput:                   "/login",
+		InitialInputReadyStates:        readyStates("0.0%/"),
+		SendInitialInputOnReadyTimeout: true,
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("initial input sent to an exited terminal: %#v", got)
+	case <-time.After(svc.initialInputTimeout + 4*initialInputPollInterval):
+	}
+}
+
+func TestOpenCommandTerminalFindsReadinessMarkerInRenderedTerminalSurface(t *testing.T) {
+	rt := newFakeShellRuntime()
+	// Full-screen TUIs can keep their current footer out of the raw line ring,
+	// and rendered styling may split a visible marker with SGR sequences.
+	rt.output = "startup bytes without the current footer"
+	rt.styledOutput = "Interactive · Manual Approval · \x1b[1m/\x1b[m commands · ? help"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                    []string{"copilot"},
+		Title:                   "Log in to GitHub Copilot",
+		InitialInput:            "/login",
+		InitialInputReadyStates: readyStates("/ commands"),
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: "/login"}); got != want {
+			t.Fatalf("sent = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("automatic login input was not sent after the rendered terminal became ready")
 	}
 }
 
@@ -690,7 +807,7 @@ func TestOpenCommandTerminalRejectsInvalidInput(t *testing.T) {
 func TestOpenShellTerminalStillStartsResolvedLoginShellInProjectRoot(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{}
-	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}}
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}, envs: map[domain.ProjectID]map[string]string{"portfolio": {"PROJECT_TOKEN": "shell-value"}}}
 	svc := newTestService(rt, st, projects)
 
 	term, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio"})
@@ -707,6 +824,9 @@ func TestOpenShellTerminalStillStartsResolvedLoginShellInProjectRoot(t *testing.
 	if len(rt.created[0].Argv) == 0 {
 		t.Error("argv is empty; a shell terminal must launch a resolved shell")
 	}
+	if got := rt.created[0].Env["PROJECT_TOKEN"]; got != "shell-value" {
+		t.Fatalf("project shell env = %q, want shell-value", got)
+	}
 	// Without a sized client asking for it, the shell starts immediately.
 	if rt.created[0].StartOnAttach {
 		t.Error("shell deferred its start without a client that will report a grid")
@@ -719,6 +839,37 @@ func TestOpenShellTerminalStillStartsResolvedLoginShellInProjectRoot(t *testing.
 	}
 	if len(st.records) != 1 || st.records[0].AppRunID != testAppRunID {
 		t.Fatalf("record not persisted against the current app run: %+v", st.records)
+	}
+}
+
+func TestOpenShellTerminalRedactsProjectEnvFromRuntimeError(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.createErr = errors.New("could not start with shell-secret")
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}, envs: map[domain.ProjectID]map[string]string{"portfolio": {"PROJECT_TOKEN": "shell-secret"}}}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, projects)
+
+	_, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio"})
+	if err == nil || strings.Contains(err.Error(), "shell-secret") || !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("OpenShellTerminal error = %v, want redacted project env", err)
+	}
+}
+
+func TestOpenShellTerminalDoesNotTrustProjectAOMarkers(t *testing.T) {
+	rt := newFakeShellRuntime()
+	projects := &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": "/repos/portfolio"}, envs: map[domain.ProjectID]map[string]string{
+		"portfolio": {"AO_SESSION_ID": "spoof", "AO_WORKTREE_PATH": "spoof", "PROJECT_TOKEN": "safe"},
+	}}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, projects)
+
+	if _, err := svc.OpenShellTerminal(context.Background(), OpenShellTerminalInput{ProjectID: "portfolio"}); err != nil {
+		t.Fatalf("OpenShellTerminal: %v", err)
+	}
+	got := rt.created[0].Env
+	if got["AO_SESSION_ID"] == "spoof" || got["AO_WORKTREE_PATH"] == "spoof" {
+		t.Fatalf("shell received spoofed AO markers: %#v", got)
+	}
+	if got["PROJECT_TOKEN"] != "safe" {
+		t.Fatalf("project variable = %q, want safe", got["PROJECT_TOKEN"])
 	}
 }
 

@@ -322,6 +322,7 @@ type Deps struct {
 	// DisableUpdateChecks stops update advisories from reaching the network
 	// (AO_HARNESS_UPDATE_CHECKS=off).
 	DisableUpdateChecks bool
+	PrivateNPMPrefixes  map[Target]string
 }
 
 // Service runs real install commands for the fixed Target allowlist.
@@ -340,6 +341,8 @@ type Service struct {
 	installCommands     ports.InstallCommandRunner
 	installScripts      ports.InstallScriptRunner
 	installCapabilities ports.InstallCapabilityProbe
+	pathWritable        ports.PathWritableProbe
+	privateNPMPrefixes  map[Target]string
 	jobStore            ports.AgentInstallJobStore
 	verifier            HarnessVerifier
 	sessions            SessionLister
@@ -406,6 +409,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 	installCommands, _ := commands.(ports.InstallCommandRunner)
 	installScripts, _ := commands.(ports.InstallScriptRunner)
 	installCapabilities, _ := executables.(ports.InstallCapabilityProbe)
+	pathWritable, _ := executables.(ports.PathWritableProbe)
 	backgroundContext, stop := context.WithCancel(context.Background())
 	return &Service{
 		jobs:                 make(map[Target]*Job),
@@ -429,6 +433,8 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		ownsInstallation:     managerOwnsBinary(commands),
 		updateAdvisories:     make(map[Target]UpdateAdvisory),
 		updateAdvisoryCalls:  make(map[Target]*updateAdvisoryCall),
+		pathWritable:         pathWritable,
+		privateNPMPrefixes:   deps.PrivateNPMPrefixes,
 	}
 }
 
@@ -1427,13 +1433,32 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 		}
 	}
 	plan := Plan{Target: target, Command: []string{"npm", "install", "-g", pkg}, Method: "npm", Package: pkg}
+	privatePrefix := ""
+	if target == TargetOpencodeV2 {
+		privatePrefix = strings.TrimSpace(s.privateNPMPrefixes[target])
+		if privatePrefix == "" {
+			plan.Unsupported = true
+			plan.Reason = "OpenCode 2's private npm prefix could not be resolved."
+			return plan
+		}
+		plan.Command = []string{"npm", "install", "-g", "--prefix", privatePrefix, pkg}
+	}
 	if IsAgentTarget(target) {
-		if p.capabilities == nil || p.capabilities.NPM.Err != nil {
+		if p.capabilities == nil {
 			plan.Unsupported = true
 			plan.Reason = "npm and Node.js capabilities could not be inspected."
 			return plan
 		}
 		npm := p.capabilities.NPM
+		capabilityErr := npm.Err
+		if privatePrefix != "" {
+			capabilityErr = npm.RuntimeErr
+		}
+		if capabilityErr != nil {
+			plan.Unsupported = true
+			plan.Reason = "npm and Node.js capabilities could not be inspected."
+			return plan
+		}
 		nodeVersion, nodeOK := parseToolVersion(npm.NodeVersion)
 		_, npmOK := parseToolVersion(npm.NPMVersion)
 		if !nodeOK || !npmOK {
@@ -1448,15 +1473,35 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 			return plan
 		}
 		prefix := npm.GlobalPrefix
+		prefixWritable := npm.PrefixWritable
+		if privatePrefix != "" {
+			prefix = privatePrefix
+			if s.pathWritable == nil {
+				plan.Unsupported = true
+				plan.Reason = "OpenCode 2's private npm prefix could not be validated."
+				return plan
+			}
+			var err error
+			prefixWritable, err = s.pathWritable.PathWritable(p.ctx, prefix)
+			if err != nil {
+				plan.Unsupported = true
+				plan.Reason = "OpenCode 2's private npm prefix could not be validated."
+				return plan
+			}
+		}
 		plan.PackagePrefix = prefix
 		if prefix == "" {
 			plan.Unsupported = true
 			plan.Reason = "npm's global install prefix could not be resolved."
 			return plan
 		}
-		if !npm.PrefixWritable {
+		if !prefixWritable {
 			plan.Unsupported = true
-			plan.Reason = fmt.Sprintf("npm's global prefix %s is not writable by the current user. Configure a user-owned prefix; AO will not use sudo.", prefix)
+			if privatePrefix != "" {
+				plan.Reason = fmt.Sprintf("OpenCode 2's private npm prefix %s is not writable by the current user.", prefix)
+			} else {
+				plan.Reason = fmt.Sprintf("npm's global prefix %s is not writable by the current user. Configure a user-owned prefix; AO will not use sudo.", prefix)
+			}
 			return plan
 		}
 		if s.goos == "windows" {

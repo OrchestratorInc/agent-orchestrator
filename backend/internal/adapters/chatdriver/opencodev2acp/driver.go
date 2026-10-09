@@ -38,13 +38,18 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	}, log)
 }
 
-func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	content, err := opencodev2.PrepareACPConfigContent(
 		cfg.Env["OPENCODE_CONFIG_CONTENT"], cfg.SystemPrompt, cfg.Permissions)
 	if err != nil {
 		return nil, nil, err
 	}
-	return []string{"acp"}, map[string]string{"OPENCODE_CONFIG_CONTENT": content}, nil
+	dataHome, err := opencodev2.DataHome(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("opencode-v2 ACP: prepare data home: %w", err)
+	}
+	env := map[string]string{"OPENCODE_CONFIG_CONTENT": content, "XDG_DATA_HOME": dataHome}
+	return []string{"acp"}, env, nil
 }
 
 // OpenCode 2's ACP bridge advertises the built-in modes before custom agents

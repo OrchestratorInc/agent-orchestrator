@@ -83,6 +83,8 @@ func transitionHasNewHumanReviewFeedback(transition domain.PullRequestTransition
 
 func pullRequestNotificationCopy(kind string, pr domain.PullRequest) (string, string) {
 	switch kind {
+	case "review_completed":
+		return "PR review completed", fmt.Sprintf("AO finished reviewing %s#%d. Open the reviewer to see its verdict and findings.", pr.Repository, pr.Number)
 	case "review_feedback":
 		return "Review changes requested", fmt.Sprintf("%s#%d has unresolved review feedback.", pr.Repository, pr.Number)
 	case "ready_to_merge":

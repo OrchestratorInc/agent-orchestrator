@@ -352,6 +352,9 @@ describe("useWorkspaceQuery", () => {
 						{
 							id: "standalone-1",
 							displayName: "Research",
+							provisionState: "failed",
+							provisionError: "Agent failed to start",
+							provisionSteps: [{ id: "agent", status: "running", startedAt: "2026-06-10T16:15:00Z" }],
 							harness: "codex",
 							status: "working",
 							isTerminated: false,
@@ -378,6 +381,9 @@ describe("useWorkspaceQuery", () => {
 			workspaceName: "Scratchpad",
 			title: "Research",
 			branch: undefined,
+			provisionState: "failed",
+			provisionError: "Agent failed to start",
+			provisionSteps: [{ id: "agent", status: "running", startedAt: "2026-06-10T16:15:00Z" }],
 		});
 	});
 
@@ -588,6 +594,7 @@ describe("useWorkspaceQuery", () => {
 		expect(result.current.data?.[0]).toMatchObject({ id: "proj-1", name: "my-app", path: "/p" });
 		expect(result.current.data?.[1]).toEqual({
 			id: "cp-1",
+			cloudOrgId: "org-1",
 			name: "cloud-app",
 			kind: "cloud",
 			path: "",

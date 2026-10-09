@@ -27,6 +27,7 @@ import type { ImportFolderScan } from "../../preload";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
 import { CoderTemplatePicker } from "./CoderTemplatePicker";
+import { useCoderTemplates } from "../hooks/useCoderTemplates";
 import { SearchablePicker } from "./SearchablePicker";
 import { buildCoderRequestOptions, useCoderSessionOptionsStore } from "../stores/coder-session-options-store";
 import { useCloudGate } from "../hooks/useCloudGate";
@@ -40,6 +41,8 @@ import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { cloudAgentInfos } from "../lib/cloud-agents";
 import { aoBridge } from "../lib/bridge";
 import { CloudCpError } from "../lib/cloud-cp";
+import { DEFAULT_CODER_WORKSPACE_NAME_PREFIX, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
+import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import type { CloudCpGitHubAppRepository } from "../lib/cloud-cp/types";
 import { useCloudSession } from "../lib/cloud-session";
 import { useUiStore } from "../stores/ui-store";
@@ -47,6 +50,7 @@ import { useShellMaybe } from "../lib/shell-context";
 import { resolveSandboxProviderPreference, useSandboxProviderStore } from "../stores/sandbox-provider-store";
 import {
 	onboardingAlertErrorClass,
+	onboardingFieldErrorClass,
 	onboardingFieldHintClass,
 	onboardingFooterActionsClass,
 	onboardingFormLabelClass,
@@ -117,7 +121,6 @@ type ProjectSource = "clone" | "local" | "workspace";
 /** Where the new project should live: on this machine or in AO Cloud. */
 type ProjectOffering = "local" | "cloud";
 type RemoteBrowseRequest = { kind: ProjectKind; preserveCurrentDialog: boolean } | { kind: "clone_destination" };
-type CreateProgressStage = "starting" | "connecting" | "creating" | "settingUp" | "finishing" | "complete";
 
 function initialCloneDetails(hostId?: string): CloneRepositoryDetails {
 	return {
@@ -131,17 +134,6 @@ function createProjectViewReducer(state: CreateProjectView, action: CreateProjec
 	if (action.type === "open") return action.view;
 	if (action.type === "closeProjectImport") return state === "blocked" || state === "prepare_git" ? null : state;
 	return state === action.view ? null : state;
-}
-
-function createProgressMessage(stage: CreateProgressStage, workspace: boolean): string {
-	switch (stage) {
-		case "starting": return "Preparing the project";
-		case "connecting": return "Connecting to the repository";
-		case "creating": return workspace ? "Creating the workspace" : "Creating the project";
-		case "settingUp": return "Setting up the project";
-		case "finishing": return "Finishing project setup";
-		default: return "Project created";
-	}
 }
 
 // Shared create-project flow. The daemon owner determines the folder picker,
@@ -224,7 +216,6 @@ export function CreateProjectFlow({
 	const [isChoosingPath, setIsChoosingPath] = useState(false);
 	const [isCreating, setIsCreating] = useState(false);
 	const [isInitializing, setIsInitializing] = useState(false);
-	const [createProgress, setCreateProgress] = useState({ open: false, value: 0, stage: "starting" as CreateProgressStage });
 	const [isPreparingGit, setIsPreparingGit] = useState(false);
 	const [repositorySetup, setRepositorySetup] = useState<"NOT_A_GIT_REPO" | "PROJECT_UNBORN" | null>(null);
 	const [repositorySetupWarning, setRepositorySetupWarning] = useState<string | null>(null);
@@ -247,27 +238,7 @@ export function CreateProjectFlow({
 	const setCloneDialogOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "clone" } : { type: "close", view: "clone" });
 	const setFolderPickerOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "folder" } : { type: "close", view: "folder" });
 	const setProjectImportStep = (step: ProjectImportStep | null) => dispatchView(step ? { type: "open", view: step } : { type: "closeProjectImport" });
-	useEffect(() => {
-		if (!createProgress.open) return;
-		const startedAt = Date.now();
-		const updateProgress = () => {
-			const elapsed = Date.now() - startedAt;
-			if (elapsed < 800) {
-				setCreateProgress({ open: true, stage: "starting", value: Math.min(12, 4 + elapsed / 100) });
-			} else if (elapsed < 1800) {
-				setCreateProgress({ open: true, stage: "connecting", value: 12 + ((elapsed - 800) / 1000) * 18 });
-			} else if (elapsed < 5000) {
-				setCreateProgress({ open: true, stage: "creating", value: 30 + ((elapsed - 1800) / 3200) * 38 });
-			} else if (elapsed < 7600) {
-				setCreateProgress({ open: true, stage: "settingUp", value: 68 + ((elapsed - 5000) / 2600) * 17 });
-			} else {
-				setCreateProgress({ open: true, stage: "finishing", value: Math.min(90, 85 + (elapsed - 7600) / 1000) });
-			}
-		};
-		updateProgress();
-		const timer = window.setInterval(updateProgress, 250);
-		return () => window.clearInterval(timer);
-	}, [createProgress.open]);
+
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const resetProjectImportState = () => {
 		setProjectValidation(null);
@@ -509,20 +480,15 @@ export function CreateProjectFlow({
 	}, [sourceSignal]);
 
 	const createProject = async (selection: CreateProjectAgentSelection) => {
-		if (!selectedPath) return;
+		if (!selectedPath || isCreating || isInitializing) return;
 		setError(null);
 		setIsCreating(true);
-		const showProgress = Boolean(cloneSelection);
-		if (showProgress) {
-			setCreateProgress({ open: true, stage: "starting", value: 0 });
-		}
+		useUiStore.getState().setProjectCreationPending(true);
 		try {
 			if (cloneSelection) {
 				const prepared = preparedClone.current();
 				if (!prepared) throw new Error(t("createProject.couldNotAdd"));
 				await onCreateProject({ path: selectedPath, clonePreparationId: prepared.preparationId, ...selection });
-				setCreateProgress({ open: true, stage: "complete", value: 100 });
-				await new Promise((resolve) => window.setTimeout(resolve, 180));
 				setSelectedPath(null);
 				setCloneSelection(null);
 				preparedClone.complete();
@@ -550,10 +516,6 @@ export function CreateProjectFlow({
 			...(defaultBranch ? { defaultBranch } : {}),
 			...selection,
 		});
-			if (showProgress) {
-				setCreateProgress({ open: true, stage: "complete", value: 100 });
-				await new Promise((resolve) => window.setTimeout(resolve, 180));
-			}
 			setSelectedPath(null);
 		} catch (err) {
 			const code = err instanceof Error && "code" in err ? (err.code as string | undefined) : undefined;
@@ -590,7 +552,7 @@ export function CreateProjectFlow({
 				setSelectedPath(null);
 			}
 		} finally {
-			setCreateProgress((current) => ({ ...current, open: false }));
+			useUiStore.getState().setProjectCreationPending(false);
 			setIsCreating(false);
 			setIsInitializing(false);
 		}
@@ -785,7 +747,7 @@ export function CreateProjectFlow({
 					error,
 					label,
 				})}
-			<CreateProjectFlowBackdrop open={modePickerOpen || cloneDialogOpen || folderDialogOpen || selectedPath !== null || createProgress.open || childTransitioning || projectImportOpen || remoteBrowse !== null} />
+			{!isCreating && !isInitializing ? <CreateProjectFlowBackdrop open={modePickerOpen || cloneDialogOpen || folderDialogOpen || selectedPath !== null || childTransitioning || projectImportOpen || remoteBrowse !== null} /> : null}
 			{hasModePicker && embedded && !modePickerOpen && !cloneDialogOpen && selectedPath === null && (
 				<div className="flex w-full flex-col items-center gap-3">
 					{cloudEnabled && offering === "cloud" ? (
@@ -984,7 +946,7 @@ export function CreateProjectFlow({
 						: undefined
 				}
 				onSubmit={createProject}
-				open={selectedPath !== null && !createProgress.open}
+				open={selectedPath !== null}
 				path={selectedPath}
 				repositorySetupNeeded={repositorySetup !== null}
 				repositorySetupWarning={repositorySetupWarning}
@@ -1002,11 +964,7 @@ export function CreateProjectFlow({
 					else void chooseDirectory(remoteBrowse.kind, path, remoteBrowse.preserveCurrentDialog);
 				}}
 			/> : null}
-			<CreateProjectProgressDialog
-				message={createProgressMessage(createProgress.stage, selectedKind === "workspace")}
-				open={createProgress.open}
-				progress={createProgress.value}
-			/>
+
 			{error && !hasModePicker && (
 				<span className="sr-only" role="status">
 					{error}
@@ -1175,24 +1133,6 @@ function CreateProjectFlowBackdrop({ open }: { open: boolean }) {
 	);
 }
 
-function CreateProjectProgressDialog({ message, open, progress }: { message: string; open: boolean; progress: number }) {
-	const { t } = useTranslation();
-	const roundedProgress = Math.round(progress);
-	return <Dialog.Root open={open}><Dialog.Portal><Dialog.Content
-		className="fixed left-1/2 top-1/2 z-overlay w-[min(440px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-border bg-popover p-0 text-popover-foreground shadow-xl data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none"
-		onEscapeKeyDown={(event) => event.preventDefault()}
-		onInteractOutside={(event) => event.preventDefault()}
-		onPointerDownOutside={(event) => event.preventDefault()}
-	><div className="px-5 pb-5 pt-5">
-		<Dialog.Title className="text-[18px] font-semibold text-[var(--color-text-import-title)]">{t("createProject.cloneProgressTitle", { defaultValue: "Creating the project" })}</Dialog.Title>
-		<Dialog.Description className="sr-only">{t("createProject.cloneProgressDescription", { defaultValue: "Creating the project" })}</Dialog.Description>
-		<div className="mt-6 space-y-3">
-			<div aria-label={`${roundedProgress}%`} aria-valuemax={100} aria-valuemin={0} aria-valuenow={roundedProgress} className="h-2 w-full overflow-hidden rounded-full bg-muted" role="progressbar"><div className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out" style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} /></div>
-			<p className="min-h-5 text-[13px] text-muted-foreground" role="status">{message}</p>
-		</div>
-	</div></Dialog.Content></Dialog.Portal></Dialog.Root>;
-}
-
 function CreateProjectSourceDialog({
 	childOpen,
 	closeDisabled,
@@ -1328,11 +1268,16 @@ function CloudAgentSetupStep({
 	onCreate,
 	isCreating,
 	createError,
+	templateMissing,
+	createBlocked = false,
 }: {
 	onBack: () => void;
 	onCreate: (selection: { workerAgent: string; orchestratorAgent: string }) => void;
 	isCreating: boolean;
 	createError: string | null;
+	templateMissing: boolean;
+	/** Another field (e.g. an invalid Coder workspace prefix) blocks create; it shows its own error. */
+	createBlocked?: boolean;
 }) {
 	const { t } = useTranslation();
 	const connections = useProviderConnections();
@@ -1352,7 +1297,7 @@ function CloudAgentSetupStep({
 	}, [readyAgentId]);
 
 	const anyAgentReady = cloudAgents.some((agent) => agent.authentication.state === "authorized");
-	const canCreate = !isCreating && workerAgent !== "" && orchestratorAgent !== "";
+	const canCreate = !isCreating && workerAgent !== "" && orchestratorAgent !== "" && !templateMissing && !createBlocked;
 
 	return (
 		<div className="flex flex-col gap-5">
@@ -1403,6 +1348,11 @@ function CloudAgentSetupStep({
 					</Button>
 				</div>
 			) : null}
+			{templateMissing ? (
+				<p className="text-[12px] leading-5 text-muted-foreground" role="alert">
+					{t("createProject.coderTemplateRequiredHint", { defaultValue: "Select a Coder template above before creating this project." })}
+				</p>
+			) : null}
 			<div className={onboardingFooterActionsClass}>
 				<Button type="button" variant="outline" onClick={onBack} disabled={isCreating}>
 					{t("createProject.back", { defaultValue: "Back" })}
@@ -1447,6 +1397,25 @@ function CloudProjectCard({
 	const sessionSandboxProvider =
 		resolveSandboxProviderPreference(selectedSandboxProvider, sandboxProviders.available) ?? sandboxProviders.default;
 	const usesCoder = sessionSandboxProvider === "coder";
+	// A coder project must pick a concrete template before it is created. With no
+	// template, session start fails later with a 422 (coder_template_required) —
+	// there is no implicit org-default for a bring-your-own-Coder deployment. So
+	// require a selection whenever coder is active and the org has selectable
+	// templates, and block create until one is chosen.
+	const coderTemplates = useCoderTemplates(org?.id, usesCoder);
+	const coderTemplateId = useCoderSessionOptionsStore((s) => s.templateId);
+	const coderTemplateMissing =
+		usesCoder &&
+		coderTemplates.templates.length > 0 &&
+		coderTemplateId.trim() === "";
+	const coderWorkspaceNamePrefix = useCoderSessionOptionsStore((s) => s.workspaceNamePrefix);
+	const setCoderWorkspaceNamePrefix = useCoderSessionOptionsStore((s) => s.setWorkspaceNamePrefix);
+	// Workspace naming is a bring-your-own-Coder control: only an org that
+	// connected its own Coder deployment sees and sends the prefix.
+	const orgOwnsCoder = useOrgCoderConfig().data != null;
+	const showCoderWorkspaceNamePrefix = usesCoder && orgOwnsCoder;
+	const coderWorkspaceNamePrefixInvalid =
+		showCoderWorkspaceNamePrefix && !isValidCoderWorkspaceNamePrefix(coderWorkspaceNamePrefix.trim());
 	const resetCoderOptions = useCoderSessionOptionsStore((s) => s.reset);
 	useEffect(() => {
 		resetCoderOptions();
@@ -1646,7 +1615,20 @@ function CloudProjectCard({
 		setSubmitError(null);
 		setIsCreating(true);
 		try {
-			const coder = usesCoder ? buildCoderRequestOptions(useCoderSessionOptionsStore.getState()) : undefined;
+			const coderOptions = useCoderSessionOptionsStore.getState();
+			const coder = usesCoder
+				? buildCoderRequestOptions({ ...coderOptions, workspaceNamePrefix: showCoderWorkspaceNamePrefix ? coderOptions.workspaceNamePrefix : "" })
+				: undefined;
+			if (coderTemplateMissing) {
+				setSubmitError(t("createProject.coderTemplateRequired", { defaultValue: "Select a Coder template before creating this project." }));
+				setIsCreating(false);
+				return;
+			}
+			// The field shows its own error; create stays blocked until it is valid.
+			if (coderWorkspaceNamePrefixInvalid) {
+				setIsCreating(false);
+				return;
+			}
 			// The App path authorizes by repository id and derives the default
 			// branch server-side. Coder config nests under `config.coder`, which
 			// the control plane reads for the dev-kit template and extra repos.
@@ -1853,8 +1835,33 @@ function CloudProjectCard({
 
 				{/* Coder template and size are inherited by every session. */}
 				{usesCoder && selectedRepo !== undefined ? (
-					<div className="space-y-2">
+					<div className="space-y-4">
 						<CoderTemplatePicker orgId={org?.id} />
+						{showCoderWorkspaceNamePrefix ? <div className="flex flex-col gap-2 text-sm">
+							<Label htmlFor="coderWorkspaceNamePrefix" className="font-medium text-foreground">
+								{t("coder.workspacePrefix.label")}
+							</Label>
+							<Input
+								id="coderWorkspaceNamePrefix"
+								value={coderWorkspaceNamePrefix}
+								onChange={(event) => setCoderWorkspaceNamePrefix(event.target.value)}
+								placeholder={DEFAULT_CODER_WORKSPACE_NAME_PREFIX}
+								maxLength={20}
+								spellCheck={false}
+								autoCapitalize="off"
+								autoComplete="off"
+								className="font-mono"
+								aria-invalid={coderWorkspaceNamePrefixInvalid || undefined}
+								aria-describedby="coderWorkspaceNamePrefixHint"
+							/>
+							<p
+								id="coderWorkspaceNamePrefixHint"
+								className={coderWorkspaceNamePrefixInvalid ? onboardingFieldErrorClass : onboardingFieldHintClass}
+								role={coderWorkspaceNamePrefixInvalid ? "alert" : undefined}
+							>
+								{coderWorkspaceNamePrefixInvalid ? t("coder.workspacePrefix.invalid") : t("coder.workspacePrefix.hint")}
+							</p>
+						</div> : null}
 					</div>
 				) : null}
 
@@ -1865,6 +1872,8 @@ function CloudProjectCard({
 						onCreate={(selection) => void createProject(selection)}
 						isCreating={isCreating}
 						createError={submitError}
+						templateMissing={coderTemplateMissing}
+						createBlocked={coderWorkspaceNamePrefixInvalid}
 					/>
 				) : null}
 

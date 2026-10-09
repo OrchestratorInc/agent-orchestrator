@@ -625,7 +625,7 @@ describe("ChatWorkspace steering", () => {
 		};
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		const image = screen.getByRole("img", { name: "attachment-steer123.png" });
+		const image = screen.getByRole("img", { name: "Image 1" });
 		expect(image).toBeInTheDocument();
 		expect(image).toHaveAttribute(
 			"src",
@@ -658,7 +658,7 @@ describe("ChatWorkspace steering", () => {
 		};
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		expect(screen.getAllByRole("img", { name: "attachment-steer123.png" })).toHaveLength(1);
+		expect(screen.getAllByRole("img", { name: "Image 1" })).toHaveLength(1);
 		expect(screen.getByRole("img", { name: "Steered attachment 1" })).toHaveAttribute(
 			"src",
 			"data:image/png;base64,c2Vjb25k",

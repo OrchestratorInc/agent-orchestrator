@@ -38,6 +38,8 @@ const {
 	boardActionsInPanelMock: vi.fn(() => false),
 }));
 
+vi.mock("./ShellTopbar", () => ({ ShellTopbar: () => null }));
+
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
 }));
@@ -86,6 +88,12 @@ vi.mock("../lib/api-client", () => ({
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
+		app: {
+			onCloseShellTerminalShortcut: () => () => {},
+			onPreviousTabShortcut: () => () => {},
+			onNextTabShortcut: () => () => {},
+			setCloseShellTerminalShortcutEnabled: () => {},
+		},
 		cloud: {
 			getSession: vi.fn().mockResolvedValue(null),
 			onSessionChanged: vi.fn(() => () => {}),
@@ -139,8 +147,8 @@ async function expandArchive() {
 }
 
 beforeEach(() => {
-	// The memory light and card chips are Developer mode tools.
-	useUiStore.setState({ developerMode: true });
+	// The memory light and card chips are Developer mode tools behind the Diagnostics toggle.
+	useUiStore.setState({ developerMode: true, diagnostics: true });
 	navigateMock.mockReset();
 	notificationShowMock.mockReset().mockResolvedValue(undefined);
 	postMock.mockReset().mockResolvedValue({ data: {} });
@@ -153,6 +161,19 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
+	it("shows the orchestrator launch surface immediately after project setup", () => {
+		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "New project", path: "/tmp/new-project", sessions: [] }], isSuccess: true });
+		useUiStore.getState().setProjectProvisioning("p1", true);
+		try {
+			renderBoard("p1");
+			expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+			expect(screen.getByLabelText("Message the agent")).toBeInTheDocument();
+			expect(screen.getByTestId("session-workspace-topbar")).toBeInTheDocument();
+		} finally {
+			useUiStore.getState().setProjectProvisioning("p1", false);
+		}
+	});
+
 	it("says a session's status could not be verified, without offering a retry", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([boardSession({ id: "unverified", title: "Unverified task", status: "unknown", displayStatus: "Working", statusReadiness: "unavailable" })])],
@@ -185,8 +206,11 @@ describe("SessionsBoard", () => {
 		expect(screen.getByTestId("session-resource")).toHaveAttribute("data-resource-tone", "neutral");
 	});
 
-	it("shows no memory light or card memory outside Developer mode", async () => {
-		useUiStore.setState({ developerMode: false });
+	it.each([
+		["outside Developer mode", { developerMode: false, diagnostics: true }],
+		["with Diagnostics off in Developer mode", { developerMode: true, diagnostics: false }],
+	])("shows no memory light or card memory %s", async (_case, flags) => {
+		useUiStore.setState(flags);
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([boardSession({ id: "running", title: "Running task", status: "idle", activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" } })])],
 			isSuccess: true, isError: false,

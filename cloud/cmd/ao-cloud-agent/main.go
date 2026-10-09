@@ -119,6 +119,8 @@ func run(args []string) error {
 		return runDelete(ctx, c, args[1:])
 	case "claim-pr":
 		return runClaimPullRequest(ctx, c, args[1:])
+	case "review":
+		return runReview(ctx, c, args[1:])
 	default:
 		return fmt.Errorf("unknown command %q; run `ao help`", args[0])
 	}
@@ -127,6 +129,13 @@ func run(args []string) error {
 func runHook(ctx context.Context, c *client, args []string, input io.Reader) error {
 	hookAt := time.Now()
 	if len(args) != 2 {
+		return nil
+	}
+	// A reviewer is a separate, short-lived harness process inside the same
+	// sandbox. Its hooks inherit the parent worker credential, but publishing
+	// them as parent-agent activity leaves that session stuck active after the
+	// reviewer exits and prevents queued feedback from reaching the real agent.
+	if os.Getenv(worker.ReviewTerminalEnv) == "1" {
 		return nil
 	}
 	// A completed turn (Stop) is the event that drives durable-restore
@@ -487,6 +496,35 @@ func runClaimPullRequest(ctx context.Context, c *client, args []string) error {
 	return nil
 }
 
+// runReview starts AO's reviewer on this session's open pull requests, the
+// same review the desktop Reviews panel starts.
+func runReview(ctx context.Context, c *client, args []string) error {
+	if len(args) != 1 || args[0] != "trigger" {
+		return errors.New("usage: ao review trigger")
+	}
+	// A reviewer process inherits the worker credential; it submits a verdict
+	// and must never start reviews of its own.
+	if os.Getenv(worker.ReviewTerminalEnv) == "1" {
+		return errors.New("a reviewer cannot start another review; submit your verdict with $AO_REVIEW_HELP")
+	}
+	var response worker.TriggerReviewResponse
+	if err := c.request(ctx, http.MethodPost, "/worker/reviews/trigger", nil, true, &response); err != nil {
+		return err
+	}
+	if len(response.Reviews) == 0 {
+		fmt.Println("no open pull request to review; open one first")
+		return nil
+	}
+	for _, review := range response.Reviews {
+		if review.Started {
+			fmt.Printf("started AO review of PR #%d %s\n", review.Number, review.URL)
+		} else {
+			fmt.Printf("AO review of PR #%d is already running %s\n", review.Number, review.URL)
+		}
+	}
+	return nil
+}
+
 func (c *client) request(
 	ctx context.Context,
 	method, path string,
@@ -560,6 +598,7 @@ func printUsage(out io.Writer) {
   ao report MESSAGE
   ao kill SESSION_ID
   ao claim-pr NUMBER_OR_URL
+  ao review trigger
 
 All commands are authenticated through the control plane. spawn/list/send/kill
 require an orchestrator session; report requires an orchestrator parent. Child

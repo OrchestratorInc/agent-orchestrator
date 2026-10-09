@@ -9,6 +9,7 @@ const MAX_ARGUMENT_CHARS = 16_384;
 const MAX_OUTPUT_BYTES = 1 << 20;
 const MAX_SCREENSHOT_BYTES = 5 << 20;
 const COMMAND_TIMEOUT_MS = 60_000;
+const SCREENSHOT_TIMEOUT_MS = 30_000;
 const CLOSE_TIMEOUT_MS = 10_000;
 const BRIDGE_CLOSE_TIMEOUT_MS = 5_000;
 export const BROWSER_RUNTIME_RECLAIM_GRACE_MS = 15 * 60_000;
@@ -179,6 +180,7 @@ export class AgentBrowserRuntime {
 		args: string[],
 		provider: AgentBrowserTargetProvider,
 		signal?: AbortSignal,
+		timeoutMs = COMMAND_TIMEOUT_MS,
 	): Promise<AgentBrowserRunResult> {
 		if (this.disposed) throw runtimeError("AGENT_BROWSER_RUNTIME_CLOSED", "Browser automation runtime is closed");
 		await this.assertBinary();
@@ -203,7 +205,7 @@ export class AgentBrowserRuntime {
 				disabled.stderr.trim() || "Unable to disable agent-browser streaming",
 			);
 		}
-		const result = await this.processRunner(this.options.binaryPath, args, environment, signal);
+		const result = await this.processRunner(this.options.binaryPath, args, environment, signal, timeoutMs);
 		if (result.exitCode !== 0) {
 			throw runtimeError(
 				"AGENT_BROWSER_COMMAND_FAILED",
@@ -261,7 +263,7 @@ export class AgentBrowserRuntime {
 		const target = path.join(directory, "screenshot.png");
 		try {
 			const command = ["screenshot", target, "--json", ...(options.annotate === true ? ["--annotate"] : [])];
-			const result = await this.run(sessionId, command, provider, signal);
+			const result = await this.run(sessionId, command, provider, signal, SCREENSHOT_TIMEOUT_MS);
 			// Read the envelope before the file: a native capture that failed with a
 			// reason reports it here, and its message beats the ENOENT that reading a
 			// PNG it never wrote would raise.

@@ -585,10 +585,47 @@ func TestRecoverChatReviewersRequiresStoreRecoveryQuery(t *testing.T) {
 	}
 }
 
+func TestReviewerOperationsWaitForStartupRecovery(t *testing.T) {
+	for _, operation := range []string{"list", "auto_trigger"} {
+		t.Run(operation, func(t *testing.T) {
+			review := domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode,
+				InterfaceMode: domain.ReviewerInterfaceChat, ReviewerHandleID: "chat-review:rev-1", ReviewerActivityState: domain.ActivityActive}
+			store := &fakeStore{review: &review, recoverableReviews: []domain.Review{review}, runs: []domain.ReviewRun{{ID: "running", ReviewID: review.ID,
+				SessionID: review.SessionID, Harness: review.Harness, Status: domain.ReviewRunRunning,
+				PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1"}}}
+			launcher := &fakeLauncher{interfaceMode: domain.ReviewerInterfaceChat, handle: review.ReviewerHandleID}
+			recovered := make(chan struct{})
+			eng := New(Deps{Store: store, Sessions: fakeSessions{rec: liveWorker(), ok: true}, PRs: prAt("sha1"),
+				Projects: fakeProjects{}, Launcher: launcher, ChatRecoveryDone: recovered,
+				Clock: func() time.Time { return time.Unix(0, 0).UTC() }})
+			call := func(ctx context.Context) error {
+				if operation == "list" {
+					_, err := eng.List(ctx, review.SessionID)
+					return err
+				}
+				_, err := eng.TriggerWithOptions(ctx, review.SessionID, TriggerOptions{Source: domain.ReviewTriggerAuto})
+				return err
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+			defer cancel()
+			if err := call(ctx); !errors.Is(err, context.DeadlineExceeded) || store.runs[0].Status != domain.ReviewRunRunning || launcher.aliveChecked {
+				t.Fatalf("recovery was mistaken for exit: err=%v run=%+v aliveChecked=%v", err, store.runs[0], launcher.aliveChecked)
+			}
+			if err := eng.RecoverChatReviewers(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			close(recovered)
+			if err := call(context.Background()); err != nil || store.runs[0].Status != domain.ReviewRunRunning || launcher.spawned {
+				t.Fatalf("recovered reviewer lost running pass: err=%v run=%+v spawned=%v", err, store.runs[0], launcher.spawned)
+			}
+		})
+	}
+}
+
 func TestTriggerSpawnsNewReviewerAndRecordsRunAfterLaunch(t *testing.T) {
 	store := &fakeStore{}
 	launcher := &fakeLauncher{handle: "review-mer-1"}
-	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{cfg: domain.ProjectConfig{Env: map[string]string{"PROJECT_TOKEN": "review-value"}}}, launcher)
 
 	res, err := trigger(context.Background(), eng, "mer-1", "", domain.AgentConfig{})
 	if err != nil {
@@ -605,6 +642,9 @@ func TestTriggerSpawnsNewReviewerAndRecordsRunAfterLaunch(t *testing.T) {
 	}
 	if launcher.gotSpec.RunID != res.Run.ID || launcher.gotSpec.BatchID != res.Run.BatchID {
 		t.Fatalf("launch spec ids = batch %q run %q, want batch %q run %q", launcher.gotSpec.BatchID, launcher.gotSpec.RunID, res.Run.BatchID, res.Run.ID)
+	}
+	if launcher.gotSpec.ProjectEnv["PROJECT_TOKEN"] != "review-value" {
+		t.Fatal("review launch did not receive current project environment")
 	}
 	if len(store.runs) != 1 || store.review == nil || store.review.ReviewerHandleID != "review-mer-1" {
 		t.Fatalf("persisted review=%+v runs=%+v", store.review, store.runs)
