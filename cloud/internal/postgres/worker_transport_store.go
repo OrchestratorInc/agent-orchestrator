@@ -698,6 +698,50 @@ func (s *Store) IssueTerminalTicket(
 	return token, scopes, nil
 }
 
+// AgentTerminalLive reports whether the session's coding-agent terminal is
+// open at the connected worker's epoch: the condition IssueTerminalTicket
+// waits for before minting an agent ticket. It is read-only, so the ticket
+// handler can poll it cheaply while the agent starts.
+func (s *Store) AgentTerminalLive(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID string,
+) (bool, error) {
+	var live bool
+	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, _ sessionAccess) error {
+		return tx.QueryRow(ctx,
+			`SELECT EXISTS (
+				SELECT 1
+				FROM ao_sessions session
+				JOIN ao_sandboxes sandbox
+				  ON sandbox.org_id = session.org_id
+				 AND sandbox.session_id = session.id
+				JOIN ao_worker_connections worker
+				  ON worker.org_id = session.org_id
+				 AND worker.session_id = session.id
+				 AND worker.disconnected_at IS NULL
+				JOIN ao_terminal_sessions terminal
+				  ON terminal.org_id = session.org_id
+				 AND terminal.session_id = session.id
+				 AND terminal.worker_epoch = worker.epoch
+				WHERE session.org_id = $1 AND session.id = $2
+				  AND NOT session.is_terminated
+				  AND sandbox.desired_state = 'running'
+				  AND terminal.kind = 'agent'
+				  AND terminal.state IN ('opening', 'open')
+				  AND terminal.expires_at > now()
+				  AND NOT EXISTS (
+					SELECT 1 FROM ao_review_runs review_terminal_run
+					WHERE review_terminal_run.org_id = terminal.org_id
+					  AND review_terminal_run.review_terminal_id = terminal.id
+				  )
+			)`,
+			orgID, sessionID,
+		).Scan(&live)
+	})
+	return live, err
+}
+
 // RefreshTerminalInteraction extends the short wake lease after actual user
 // input. Merely opening or retaining either terminal stream is not activity.
 func (s *Store) RefreshTerminalInteraction(
