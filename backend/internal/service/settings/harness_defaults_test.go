@@ -3,10 +3,11 @@ package settings
 import (
 	"context"
 	"errors"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 type harnessSettingsStore struct {

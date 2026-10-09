@@ -2,10 +2,11 @@ package store_test
 
 import (
 	"context"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 func TestHarnessDefaultsPersistIndependentlyAndReset(t *testing.T) {
