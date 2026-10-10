@@ -22,6 +22,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	processutil "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
@@ -94,7 +95,7 @@ func New() *Adapter {
 				return filepath.Abs(resolution.Path)
 			},
 			run: func(ctx context.Context, executable string, args, env []string) ([]byte, error) {
-				command := exec.CommandContext(ctx, executable, args...)
+				command := processutil.CommandContext(ctx, executable, args...)
 				command.Env = strippedEnv(env)
 				return command.CombinedOutput()
 			},
@@ -283,7 +284,7 @@ func prepared(ctx context.Context, frontend, commit string) error {
 	if commit == "" || manifest.CommitSHA != commit {
 		return errors.New("prepared target revision differs from launch specification")
 	}
-	command := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
+	command := processutil.CommandContext(ctx, "git", "rev-parse", "HEAD")
 	command.Dir, command.Env = filepath.Dir(frontend), strippedEnv(os.Environ())
 	head, err := command.Output()
 	if err != nil || strings.TrimSpace(string(head)) != commit {

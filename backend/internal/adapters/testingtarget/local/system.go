@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
+
+	processutil "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 func signalProcess(pid int, signal syscall.Signal) error {
@@ -20,7 +21,7 @@ func signalProcess(pid int, signal syscall.Signal) error {
 }
 
 func startElectron(executable, cwd string, env []string, log *os.File) (int, error) {
-	command := exec.Command(executable, ".")
+	command := processutil.Command(executable, ".")
 	command.Dir, command.Env, command.Stdout, command.Stderr = cwd, env, log, log
 	if err := command.Start(); err != nil {
 		return 0, err
@@ -30,7 +31,7 @@ func startElectron(executable, cwd string, env []string, log *os.File) (int, err
 }
 
 func processSnapshot(ctx context.Context) ([]processInfo, error) {
-	command := exec.CommandContext(ctx, "/bin/ps", "-axo", "pid=,ppid=")
+	command := processutil.CommandContext(ctx, "/bin/ps", "-axo", "pid=,ppid=")
 	command.Env = strippedEnv(os.Environ())
 	output, err := command.Output()
 	if err != nil {

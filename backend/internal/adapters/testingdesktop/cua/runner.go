@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"context"
 	"os"
-	"os/exec"
 	"strings"
+
+	processutil "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // Output contains command diagnostics. Tool stdout is structured JSON.
@@ -22,7 +23,7 @@ type Runner interface {
 type commandRunner struct{}
 
 func (commandRunner) Run(ctx context.Context, executable string, args, env []string) (Output, error) {
-	cmd := exec.CommandContext(ctx, executable, args...)
+	cmd := processutil.CommandContext(ctx, executable, args...)
 	cmd.Env = env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
