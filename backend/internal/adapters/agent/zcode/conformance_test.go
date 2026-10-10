@@ -122,7 +122,10 @@ func TestSourceBuiltZCodeTUIConformance(t *testing.T) {
  "modelConfigRules":{"providerModelRules":[],"manualProviderModelRules":[]},
  "defaultModelSelection":{"providerId":"ao-local","modelId":"ao-test","options":{"reasoningLevel":"disabled"}}
  }}`, server.URL+"/v1"))
-	writeConformanceFile(t, filepath.Join(home, ".zcode", "cli", "config.json"), `{"ui":{"locale":"en-US"},"plugins":{"enabled":false},"features":{"mcp":false}}`)
+	// Memory extraction runs a background subagent whose model requests would
+	// hit the shared fixture server and race the asserted turns (the final
+	// duplicate-request check treats any extra coding request as a failure).
+	writeConformanceFile(t, filepath.Join(home, ".zcode", "cli", "config.json"), `{"ui":{"locale":"en-US"},"plugins":{"enabled":false},"features":{"mcp":false,"memory":false}}`)
 	writeConformanceFile(t, filepath.Join(workspace, "AGENTS.md"), "AO_PROJECT_RULE_PRESERVED")
 	hookLog, recorder := installConformanceHookRecorder(t, home)
 	hiddenFile := filepath.Join(home, "standing.txt")
@@ -241,7 +244,7 @@ exec "$AO_ZCODE_NODE" "$AO_ZCODE_ENTRY" "$@"
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, nativeCommand := range []string{"hooks trust status --workspace", "hooks trust grant --workspace", "--hook-digest", "--mode build --resume " + started.Payload.SessionID} {
+	for _, nativeCommand := range []string{"hooks trust status --workspace", "hooks trust grant --workspace", "--hook-digest", "--mode build --trust-workspace-hooks --resume " + started.Payload.SessionID} {
 		if !strings.Contains(string(cliLog), nativeCommand) {
 			t.Fatalf("native command did not execute: %s\n%s", nativeCommand, cliLog)
 		}

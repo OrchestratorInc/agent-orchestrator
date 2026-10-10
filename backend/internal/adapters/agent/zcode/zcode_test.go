@@ -76,10 +76,10 @@ func TestGetLaunchCommand(t *testing.T) {
 		permissions ports.PermissionMode
 		want        []string
 	}{
-		{"default forces build", ports.PermissionModeDefault, []string{"zcode", "--mode", "build"}},
-		{"accept edits maps to edit", ports.PermissionModeAcceptEdits, []string{"zcode", "--mode", "edit"}},
-		{"auto maps to build", ports.PermissionModeAuto, []string{"zcode", "--mode", "build"}},
-		{"bypass permissions maps to yolo", ports.PermissionModeBypassPermissions, []string{"zcode", "--mode", "yolo"}},
+		{"default forces build", ports.PermissionModeDefault, []string{"zcode", "--mode", "build", "--trust-workspace-hooks"}},
+		{"accept edits maps to edit", ports.PermissionModeAcceptEdits, []string{"zcode", "--mode", "edit", "--trust-workspace-hooks"}},
+		{"auto maps to build", ports.PermissionModeAuto, []string{"zcode", "--mode", "build", "--trust-workspace-hooks"}},
+		{"bypass permissions maps to yolo", ports.PermissionModeBypassPermissions, []string{"zcode", "--mode", "yolo", "--trust-workspace-hooks"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -109,7 +109,7 @@ func TestGetLaunchCommandConfigModeWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	want := []string{"zcode", "--mode", "plan"}
+	want := []string{"zcode", "--mode", "plan", "--trust-workspace-hooks"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -143,7 +143,7 @@ func TestGetLaunchCommandForwardsDisallowedTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	want := []string{"zcode", "--mode", "build", "--disallowed-tools", "Bash(git-push*),WebFetch"}
+	want := []string{"zcode", "--mode", "build", "--disallowed-tools", "Bash(git-push*),WebFetch", "--trust-workspace-hooks"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -172,7 +172,7 @@ func TestGetLaunchCommandDoesNotPassLeadingDashPromptAsSubcommand(t *testing.T) 
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	want := []string{"zcode", "--mode", "build"}
+	want := []string{"zcode", "--mode", "build", "--trust-workspace-hooks"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -204,7 +204,7 @@ func TestGetRestoreCommand(t *testing.T) {
 	if !ok {
 		t.Fatal("ok=false, want true")
 	}
-	want := []string{"zcode", "--mode", "yolo", "--resume", "sess_abc123"}
+	want := []string{"zcode", "--mode", "yolo", "--trust-workspace-hooks", "--resume", "sess_abc123"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -216,9 +216,9 @@ func TestGetRestoreCommandMapsPermissionModes(t *testing.T) {
 		permissions ports.PermissionMode
 		want        []string
 	}{
-		{"accept edits", ports.PermissionModeAcceptEdits, []string{"zcode", "--mode", "edit", "--resume", "sess_abc123"}},
-		{"auto maps to build", ports.PermissionModeAuto, []string{"zcode", "--mode", "build", "--resume", "sess_abc123"}},
-		{"bypass permissions", ports.PermissionModeBypassPermissions, []string{"zcode", "--mode", "yolo", "--resume", "sess_abc123"}},
+		{"accept edits", ports.PermissionModeAcceptEdits, []string{"zcode", "--mode", "edit", "--trust-workspace-hooks", "--resume", "sess_abc123"}},
+		{"auto maps to build", ports.PermissionModeAuto, []string{"zcode", "--mode", "build", "--trust-workspace-hooks", "--resume", "sess_abc123"}},
+		{"bypass permissions", ports.PermissionModeBypassPermissions, []string{"zcode", "--mode", "yolo", "--trust-workspace-hooks", "--resume", "sess_abc123"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -260,7 +260,7 @@ func TestGetRestoreCommandForwardsDisallowedTools(t *testing.T) {
 	if !ok {
 		t.Fatal("ok=false, want true")
 	}
-	want := []string{"zcode", "--mode", "build", "--disallowed-tools", "WebFetch", "--resume", "sess_abc123"}
+	want := []string{"zcode", "--mode", "build", "--disallowed-tools", "WebFetch", "--trust-workspace-hooks", "--resume", "sess_abc123"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}

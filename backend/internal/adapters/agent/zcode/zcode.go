@@ -114,6 +114,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if err := appendDisallowedTools(&cmd, cfg.DisallowedTools); err != nil {
 		return nil, err
 	}
+	cmd = append(cmd, "--trust-workspace-hooks")
 
 	if err := p.prepareHookTrust(ctx, binary, cfg.WorkspacePath, cfg.Env); err != nil {
 		return nil, err
@@ -174,7 +175,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 
-	cmd = make([]string, 0, 4)
+	cmd = make([]string, 0, 5)
 	cmd = append(cmd, binary)
 	if err := appendModeFlags(&cmd, cfg.Permissions, cfg.Config.Mode); err != nil {
 		return nil, false, err
@@ -182,6 +183,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err := appendDisallowedTools(&cmd, cfg.DisallowedTools); err != nil {
 		return nil, false, err
 	}
+	cmd = append(cmd, "--trust-workspace-hooks")
 	validate := p.validateRestore
 	if validate == nil {
 		validate = validateNativeRestore
