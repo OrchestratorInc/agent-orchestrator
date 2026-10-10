@@ -84,9 +84,9 @@ function DockHeader({
 		<div className="flex min-h-8 items-start gap-2 px-3 py-2">
 			<div className="min-w-0 flex-1">
 				{eyebrow ? (
-					<p className="text-[11px] font-medium leading-snug text-muted-foreground">{eyebrow}</p>
+					<p className="line-clamp-3 text-caption font-medium leading-snug text-muted-foreground">{eyebrow}</p>
 				) : null}
-				<p id={id} className="text-xs font-medium leading-relaxed text-foreground" title={title}>
+				<p id={id} className="line-clamp-3 text-xs font-medium leading-relaxed text-foreground" title={title}>
 					{title}
 				</p>
 			</div>
@@ -204,11 +204,13 @@ function FormRequest({
 	// Claude puts the short header on `title` and the question on `description`
 	// (multi) or the elicitation `message` (single). The header must ask the
 	// question; the short label stays an eyebrow when it is a different string.
+	const lead = visibleProperties[0];
 	const asked = questionGroups
 		? claudeQuestionCopy(
-				visibleProperties[0]?.[1],
+				lead?.[1],
 				activity.detail?.message,
 				questionGroups.length === 1,
+				lead ? propertyLabel(lead) : "",
 			)
 		: undefined;
 	const title = asked?.prompt ?? activity.detail?.message ?? schema?.title ?? activity.summary;
@@ -508,21 +510,22 @@ function propertyLabel([name, property]: PropertyEntry): string {
 	return typeof property.title === "string" && property.title ? property.title : humanize(name);
 }
 
-const GENERIC_CLAUDE_QUESTIONS_MESSAGE = "Please answer the following questions.";
-
 /** Question text for one Claude AskUserQuestion field, plus a short header when it differs. */
 function claudeQuestionCopy(
 	property: Record<string, unknown> | undefined,
 	message: string | undefined,
 	single: boolean,
+	fallback: string,
 ): { eyebrow?: string; prompt: string } {
 	const header = typeof property?.title === "string" && property.title.trim() ? property.title.trim() : undefined;
 	const description =
 		typeof property?.description === "string" && property.description.trim() ? property.description.trim() : undefined;
 	const trimmedMessage = message?.trim() ?? "";
 	const fromMessage =
-		single && trimmedMessage !== "" && trimmedMessage !== GENERIC_CLAUDE_QUESTIONS_MESSAGE ? trimmedMessage : undefined;
-	const prompt = description || fromMessage || header || "Question";
+		single && trimmedMessage !== "" && !/^please answer the following questions\.?$/i.test(trimmedMessage)
+			? trimmedMessage
+			: undefined;
+	const prompt = description || fromMessage || header || fallback;
 	return { eyebrow: header && header !== prompt ? header : undefined, prompt };
 }
 

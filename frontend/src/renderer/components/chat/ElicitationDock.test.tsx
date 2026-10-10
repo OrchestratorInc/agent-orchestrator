@@ -110,6 +110,84 @@ describe("ElicitationDock", () => {
 		expect(screen.getByText("Which port should the proxy listen on?")).toBeVisible();
 	});
 
+	it.each(["Please answer the following questions", "please answer the following questions."])(
+		"ignores a generic Claude questions message (%s)",
+		(message) => {
+			render(
+				<ElicitationDock
+					activity={activity({
+						inputMode: "form",
+						message,
+						schema: {
+							type: "object",
+							properties: {
+								question_0: {
+									type: "string",
+									title: "Port",
+									oneOf: [{ const: "8080", title: "8080" }],
+								},
+							},
+						},
+					})}
+					onResolve={vi.fn()}
+				/>,
+			);
+
+			expect(screen.queryByText(message)).not.toBeInTheDocument();
+			expect(screen.getByText("Port")).toBeVisible();
+		},
+	);
+
+	it("uses the field label when a Claude question has no title", () => {
+		render(
+			<ElicitationDock
+				activity={activity({
+					inputMode: "form",
+					message: "Please answer the following questions.",
+					schema: {
+						type: "object",
+						properties: {
+							question_0: {
+								type: "string",
+								oneOf: [{ const: "yes", title: "Yes" }],
+							},
+						},
+					},
+				})}
+				onResolve={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByText("Question 0")).toBeVisible();
+		expect(screen.queryByText(/^Question$/)).not.toBeInTheDocument();
+	});
+
+	it("clamps the dock header and eyebrow to three lines", () => {
+		render(
+			<ElicitationDock
+				activity={activity({
+					inputMode: "form",
+					message: "Please answer the following questions.",
+					schema: {
+						type: "object",
+						properties: {
+							question_0: {
+								type: "string",
+								title: "403 handling",
+								description: "What should a client do when the API returns 403?",
+								oneOf: [{ const: "retry", title: "Retry" }],
+							},
+						},
+					},
+				})}
+				onResolve={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByText("403 handling")).toHaveClass("line-clamp-3");
+		expect(screen.getByText("What should a client do when the API returns 403?")).toHaveClass("line-clamp-3");
+	});
+
 	it("shows one Claude question and its Other field at a time", () => {
 		render(
 			<ElicitationDock
