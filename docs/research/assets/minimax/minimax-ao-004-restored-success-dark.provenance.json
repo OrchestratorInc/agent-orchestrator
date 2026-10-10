@@ -1,0 +1,23 @@
+{
+  "harness": "minimax-code",
+  "interface": "TUI",
+  "nativeVersion": "0.6.5",
+  "provider": "Z.ai",
+  "model": "glm-5.3-flash",
+  "aoSessionId": "audit-minimax-code-acbea22e-1",
+  "nativeSessionIdSha256": "fd7a69d95770906f65b69ddf93dcc012a3457326327446cb044a2cb5706525a4",
+  "aoSourceSha": "17a1467a404234f34d8bc8824d293993e1703564",
+  "binarySha256": "4b47bd780af069862dffd9ace01bb768fca6e5ae9959956da15fe7e75faabf7e",
+  "uiSourceSha": "17a1467a404234f34d8bc8824d293993e1703564",
+  "captureUtc": "2026-10-10T14:53:58.011881+00:00",
+  "captureTool": "scrot on owned Xvfb display via tools/ao-ui-x11.py minimax-ao-004 capture",
+  "artifactPath": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/ui-lab/minimax-ao-004-restored-success-dark.png",
+  "imageSha256": "30419d725e8f6ed3d39547e4d28041d8f9befbfedd2d2afa7e1f67747ef14da0",
+  "surface": "actual AO Electron desktop; native preload bridge verified",
+  "daemon": "http://127.0.0.1:43167",
+  "uiRoute": "#/projects/audit-minimax-code-acbea22e/sessions/audit-minimax-code-acbea22e-1",
+  "observedState": "AO004 retained restored generation: post-restore proof mutation and history/fresh instructions statement, empty composer, model glm-5.3-flash. Visible queued wait completed after restore; active-turn cancellation is not subprocess-reaping proof.",
+  "visualInspection": "Actual AO navigation/session and native TUI visible; no credentials or raw native identity visible.",
+  "displayPreference": "Changed isolated Electron Settings > Theme from System to Dark through actual UI for readability; no pixel alterations or native input.",
+  "attachment": "pending revision-pinned GitHub asset URL"
+}

@@ -117,3 +117,62 @@ This control does not rewrite attempt 002 or establish its cancellation gate.
 Future audits may explicitly opt into clearing their own cancellation draft;
 product behavior never clears a user's draft automatically. Authentication
 remains configured/unverified in all of these observations.
+
+## Final AO004 diagnostic qualification
+
+Audited functional source: `17a1467a404234f34d8bc8824d293993e1703564`.
+AO executable SHA-256: `4b47bd780af069862dffd9ace01bb768fca6e5ae9959956da15fe7e75faabf7e`.
+Runner SHA-256: `8887aa2e7101b9e6d3950bfca08ffddf2e1e6c1c3f1d030c8dec2676443aecea`.
+Contract SHA-256: `0f3d70f48cb15fd450ac98109ad4ed509a56daa274c7d4daa638c7ab54534d7e`.
+Later evidence commits do not change this audited functional revision.
+
+AO003 remains a cancellation **FAIL**: native Stopped and restored draft were
+visible, while AO stayed active through the 45-second deadline. Its cleanup was
+**BLOCKED**, with zero input; kill/restore were **NOT_RUN**. Ring.Tail omitted
+the partial final line, so the observer could not see the current native footer.
+The correction uses existing TerminalSurfaceInspector/StyledOutputReader
+capabilities conservatively, with exact current-screen tail fencing and no
+stale raw fallback. Settled state and empty composer remain separate checks.
+
+![AO003 retained cancellation failure](assets/minimax/minimax-ao-003-cancellation-failure-dark.png)
+
+[Capture record](assets/minimax/minimax-ao-003-cancellation-failure-dark.md) ·
+[Provenance](assets/minimax/minimax-ao-003-cancellation-failure-dark.provenance.json).
+
+AO004 finished at **2026-10-10T14:47:41.253Z**: **28 PASS, 1 BLOCKED,
+0 FAIL, 0 NOT_RUN**. The strict overall result remains **BLOCKED / diagnostic-only**
+because the authentication probe reports configured, not verified authorization.
+The authorized existing Z.ai profile successfully ran native mcode 0.6.5 with
+`glm-5.3-flash`; provider success does not upgrade the auth probe.
+
+The passing gates cover initial/second proof mutations, hidden instructions and
+AGENTS.md, activity, native identity, observed active-turn cancellation, guarded
+one-Ctrl+C cleanup with exact recovery-file presence/removal, confirmed termination,
+same native ID/workspace restore, initialized empty composer, post-restore mutation,
+history/file continuity, newly injected restore-only instructions, and catalog
+agreement. [Frozen gate summary](assets/minimax/minimax-ao-004-gates.json).
+
+![AO004 retained restored session and post-restore proof update](assets/minimax/minimax-ao-004-restored-success-dark.png)
+
+[Capture provenance](assets/minimax/minimax-ao-004-restored-success-dark.provenance.json).
+Captured in actual isolated Electron on this VPS at 14:53:58Z, with AO navigation,
+selected session, native output, empty composer and model visible. No native input
+or new provider turn was sent for capture. The visible queued wait completed after
+restore. Cancellation qualification is limited to an observed active turn; neither
+Interrupted after 0s nor this screenshot proves an already-running subprocess was
+reaped. The exact owned session was then killed through the API and termination
+confirmed; the verified owned daemon and Electron process were stopped.
+
+## Validation boundaries
+
+Final focused adapter/observer race tests and pinned golangci-lint 2.13.2 passed
+with zero issues; independent review found no findings. Functional-head CI at
+17a1467 passed all 23 checks, including generated API/sqlc drift, frontend/container,
+renderer and native OS jobs. macOS/Windows checks ran in GitHub CI, not on this VPS.
+Local frontend tsc previously OOMed with exit 134 and was not rerun.
+
+Earlier full build/vet passed at 6210538; its full nonrace suite failed in fake
+(events.log missing), opencodev2 (installed version fallback), service/agent
+(writable ancestor), chat (50ms render timeout took 3s), and integration delegate
+setup. These are observed failures, not established baseline failures. The final
+bounded full race/lint outcome is recorded with the published evidence comment.
