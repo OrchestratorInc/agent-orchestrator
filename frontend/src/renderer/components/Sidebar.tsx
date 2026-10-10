@@ -1514,7 +1514,6 @@ const ProjectItem = memo(function ProjectItem({
 		}
 	};
 
-	// Projects without worker sessions open their orchestrator.
 	// Expanded + already on the project board → collapse. Expanded + on a
 	// session (orchestrator or worker) → board. Collapsed → expand + board.
 	// Do not treat orchestratorActive like the board: the project row is the
@@ -1523,10 +1522,6 @@ const ProjectItem = memo(function ProjectItem({
 		if (consumeDragClick(workspace.id)) return;
 		if (isStandalone) {
 			toggleDisclosure();
-			return;
-		}
-		if (workerSessions(workspace.sessions).length === 0) {
-			void openOrchestrator();
 			return;
 		}
 		if (!expanded) {

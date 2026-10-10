@@ -1362,11 +1362,18 @@ describe("Sidebar", () => {
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId", params: { projectId: "proj-1" } });
 	});
 
-	it.each([false, true])("opens an empty project's orchestrator (existing: %s)", async (existing) => {
+	it("opens the board, not the orchestrator, when an empty project row is clicked", async () => {
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [] }] });
+		await userEvent.click(screen.getByText("Project One"));
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId", params: { projectId: "proj-1" } });
+		expect(spawnMock).not.toHaveBeenCalled();
+	});
+
+	it.each([false, true])("opens an empty project's orchestrator from its button (existing: %s)", async (existing) => {
 		const orchestrator: WorkspaceSession = { ...session, id: "proj-1-orc", kind: "orchestrator", title: "Orchestrator" };
 		spawnMock.mockResolvedValue(orchestrator.id);
 		renderSidebar({ workspaces: [{ ...workspace, sessions: existing ? [orchestrator] : [] }] });
-		await userEvent.click(screen.getByText("Project One"));
+		await userEvent.click(screen.getByRole("button", { name: existing ? "Open Project One orchestrator" : "Spawn Project One orchestrator" }));
 		await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "proj-1", sessionId: orchestrator.id },

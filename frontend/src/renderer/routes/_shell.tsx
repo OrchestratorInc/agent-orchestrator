@@ -300,6 +300,8 @@ function ShellLayout() {
 	const [isKeyboardShortcutsOpen, setIsKeyboardShortcutsOpen] = useState(false);
 	const [isKeyboardShortcutsSettingsOpen, setIsKeyboardShortcutsSettingsOpen] = useState(false);
 	const routeParams = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
+	const routeParamsRef = useRef(routeParams);
+	routeParamsRef.current = routeParams;
 	const remoteHostsEnabled = useUiStore((state) => state.developerMode && state.remoteHosts);
 	const { status: accountStatus } = useCloudSession();
 	useEffect(() => {
@@ -546,10 +548,19 @@ function ShellLayout() {
 					? { ...item, sessions: [toWorkspaceSession(spawnData.session, { id: workspace.id, name: workspace.name }), ...item.sessions.filter((session) => session.id !== sessionId)] }
 					: item),
 			);
-			void navigate({
-				to: "/projects/$projectId/sessions/$sessionId",
-				params: { projectId: workspace.id, sessionId },
-			});
+			// The session now exists, so the sidebar button can open it even if
+			// the user left while it spawned.
+			window.clearTimeout(provisioningGuard);
+			setProjectProvisioning(workspace.id, false);
+			// Follow the new orchestrator only if the user is still waiting on
+			// this project's board; do not pull them back from another page.
+			const current = routeParamsRef.current;
+			if (current.projectId === workspace.id && !current.sessionId && !current.hostId) {
+				void navigate({
+					to: "/projects/$projectId/sessions/$sessionId",
+					params: { projectId: workspace.id, sessionId },
+				});
+			}
 		} catch (spawnError) {
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
