@@ -526,6 +526,9 @@ type ConversationTurn struct {
 	HandledByReviewID string `json:"handledByReviewId,omitempty"`
 	// ProviderTurnID correlates back to the provider's own turn. Opaque.
 	ProviderTurnID string `json:"providerTurnId,omitempty"`
+	// ProviderInputText identifies a combined native prompt during history replay.
+	// The public transcript continues to use the individual message rows.
+	ProviderInputText string `json:"-"`
 	// RetryOfTurnID is the failed source whose durable prompt created this turn.
 	// It remains present after rollback so the source cannot offer a dead action.
 	RetryOfTurnID string `json:"retryOfTurnId,omitempty"`
@@ -605,8 +608,11 @@ type QueuedTurn struct {
 	Text   string
 	// ClientMessageID is carried through to the provider so a dispatch retried
 	// after a crash cannot produce a second provider turn.
-	ClientMessageID string
-	Origin          MessageOrigin
+	ClientMessageID   string
+	Origin            MessageOrigin
+	SenderSessionID   string
+	SenderProjectID   string
+	SenderDisplayName string
 	// DeliveryContentJSON carries provider-neutral native prompt blocks through
 	// the durable queue. It is not rendered and never contains provider DTOs.
 	DeliveryContentJSON string

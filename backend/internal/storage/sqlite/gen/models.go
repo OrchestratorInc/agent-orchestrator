@@ -382,6 +382,8 @@ type ConversationTurn struct {
 	PromotedToTurnID     sql.NullString
 	RetryOfTurnID        sql.NullString
 	HandledByReviewID    sql.NullString
+	BatchedInput         int64
+	ProviderInputText    string
 }
 
 type Cue struct {

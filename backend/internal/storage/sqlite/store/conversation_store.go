@@ -1271,6 +1271,26 @@ func (s *Store) MarkTurnDispatching(ctx context.Context, turnID string) error {
 	return nil
 }
 
+// RecordProviderInput saves the exact provider text before a combined turn crosses I/O.
+func (s *Store) RecordProviderInput(ctx context.Context, turnID, text string) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	rows, err := q.SetConversationProviderInputText(ctx, gen.SetConversationProviderInputTextParams{
+		ProviderInputText: text, ID: turnID,
+	})
+	return expectBatchRow("record provider input", turnID, rows, err)
+}
+
+func expectBatchRow(action, id string, rows int64, err error) error {
+	if err != nil {
+		return fmt.Errorf("%s %s: %w", action, id, err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("%s %s: expected one row, got %d", action, id, rows)
+	}
+	return nil
+}
+
 // BindTurnToProvider records the provider's turn id once a send is accepted and
 // marks the turn running.
 func (s *Store) BindTurnToProvider(ctx context.Context, turnID, providerTurnID string, now time.Time) error {
@@ -2075,7 +2095,149 @@ func (s *Store) NextQueuedTurn(ctx context.Context, conversationID string) (doma
 		ClientMessageID:     row.ClientMessageID,
 		Origin:              row.Origin,
 		DeliveryContentJSON: row.DeliveryContentJson,
+		SenderSessionID:     row.SenderSessionID,
+		SenderProjectID:     row.SenderProjectID,
+		SenderDisplayName:   row.SenderDisplayName,
 	}, nil
+}
+
+// ListQueuedBatch previews the current queue without reserving any message.
+func (s *Store) ListQueuedBatch(ctx context.Context, conversationID string, limit int) ([]domain.QueuedTurn, error) {
+	rows, err := s.qr.SelectQueuedConversationBatch(ctx, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("list queued batch: %w", err)
+	}
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	if len(rows) == 0 {
+		return nil, domain.ErrNoQueuedTurn
+	}
+	batch := make([]domain.QueuedTurn, 0, len(rows))
+	for _, row := range rows {
+		batch = append(batch, domain.QueuedTurn{
+			TurnID: row.ID, Text: row.Text, ClientMessageID: row.ClientMessageID,
+			Origin: row.Origin, DeliveryContentJSON: row.DeliveryContentJson,
+			SenderSessionID: row.SenderSessionID, SenderProjectID: row.SenderProjectID,
+			SenderDisplayName: row.SenderDisplayName,
+		})
+	}
+	return batch, nil
+}
+
+// ClaimQueuedBatch fixes one delivery boundary before provider I/O. The first
+// row becomes the provider turn for a normal drain. Other rows are reserved as
+// members of that input. A steer reserves every row without starting a new turn.
+func (s *Store) ClaimQueuedBatch(ctx context.Context, conversationID string, dispatch bool, limit int, now time.Time) ([]domain.QueuedTurn, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	var batch []domain.QueuedTurn
+	err := s.inTx(ctx, "claim queued batch", func(q *gen.Queries) error {
+		rows, err := q.SelectQueuedConversationBatch(ctx, conversationID)
+		if err != nil {
+			return err
+		}
+		if limit > 0 && len(rows) > limit {
+			rows = rows[:limit]
+		}
+		for _, row := range rows {
+			changed, err := q.ReserveQueuedConversationTurnForPromotion(ctx, gen.ReserveQueuedConversationTurnForPromotionParams{
+				PromotionStartedAt: sql.NullTime{Time: now, Valid: true}, ID: row.ID, ConversationID: conversationID,
+			})
+			if checkErr := expectBatchRow("reserve queued batch turn", row.ID, changed, err); checkErr != nil {
+				return checkErr
+			}
+			batch = append(batch, domain.QueuedTurn{
+				TurnID: row.ID, Text: row.Text, ClientMessageID: row.ClientMessageID,
+				Origin: row.Origin, DeliveryContentJSON: row.DeliveryContentJson,
+				SenderSessionID: row.SenderSessionID, SenderProjectID: row.SenderProjectID,
+				SenderDisplayName: row.SenderDisplayName,
+			})
+		}
+		if dispatch && len(batch) > 0 {
+			if err := q.MarkConversationTurnStarted(ctx, gen.MarkConversationTurnStartedParams{ID: batch[0].TurnID}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("claim queued batch: %w", err)
+	}
+	if len(batch) == 0 {
+		return nil, domain.ErrNoQueuedTurn
+	}
+	return batch, nil
+}
+
+// CompleteQueuedBatch links each source receipt to the provider turn that took
+// its input. The original messages keep their own transcript metadata.
+func (s *Store) CompleteQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, providerTurnID string, now time.Time) error {
+	if len(turnIDs) == 0 {
+		return nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "complete queued batch", func(q *gen.Queries) error {
+		target, err := q.SelectConversationTurnByProviderID(ctx, gen.SelectConversationTurnByProviderIDParams{
+			ConversationID: conversationID, ProviderTurnID: providerTurnID,
+		})
+		if err != nil {
+			return err
+		}
+		for _, id := range turnIDs {
+			changed, err := q.CompleteQueuedConversationBatchMember(ctx, gen.CompleteQueuedConversationBatchMemberParams{
+				CompletedAt:      sql.NullTime{Time: now, Valid: true},
+				PromotedToTurnID: sql.NullString{String: target.ID, Valid: true},
+				ID:               id, ConversationID: conversationID,
+			})
+			if checkErr := expectBatchRow("complete queued batch turn", id, changed, err); checkErr != nil {
+				return checkErr
+			}
+		}
+		return nil
+	})
+}
+
+// ReleaseQueuedBatch returns a definitively refused steer batch to its queue.
+func (s *Store) ReleaseQueuedBatch(ctx context.Context, conversationID string, turnIDs []string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "release queued batch", func(q *gen.Queries) error {
+		for _, id := range turnIDs {
+			changed, err := q.ReleaseQueuedConversationTurnPromotion(ctx, gen.ReleaseQueuedConversationTurnPromotionParams{ID: id, ConversationID: conversationID})
+			if checkErr := expectBatchRow("release queued batch turn", id, changed, err); checkErr != nil {
+				return checkErr
+			}
+		}
+		return nil
+	})
+}
+
+// FailQueuedBatch retains uncertain source messages without replaying them.
+func (s *Store) FailQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, reason string, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "fail queued batch", func(q *gen.Queries) error {
+		for _, id := range turnIDs {
+			if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
+				State: domain.TurnStateFailed, ErrorMessage: reason,
+				CompletedAt: sql.NullTime{Time: now, Valid: true}, ID: id,
+			}); err != nil {
+				return fmt.Errorf("fail queued batch turn %s: %w", id, err)
+			}
+		}
+		return nil
+	})
+}
+
+// FailReservedQueuedBatch closes stranded reservations during live reconnect.
+func (s *Store) FailReservedQueuedBatch(ctx context.Context, conversationID string, now time.Time) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	return q.FailReservedQueuedConversationTurns(ctx, gen.FailReservedQueuedConversationTurnsParams{
+		CompletedAt: sql.NullTime{Time: now, Valid: true}, ConversationID: conversationID,
+	})
 }
 
 // ReserveQueuedTurnForPromotion atomically removes one selected queued turn from
@@ -3636,6 +3798,7 @@ func turnToDomain(row gen.ConversationTurn) domain.ConversationTurn {
 		BranchID:           row.BranchID,
 		HandledBySessionID: row.HandledBySessionID,
 		ProviderTurnID:     row.ProviderTurnID,
+		ProviderInputText:  row.ProviderInputText,
 		State:              row.State,
 		ErrorMessage:       row.ErrorMessage,
 		RequestedAt:        row.RequestedAt,
@@ -4046,9 +4209,38 @@ func (s *Store) CompleteSteerDelivery(
 	activity domain.ConversationActivity,
 	now time.Time,
 ) error {
+	return s.CompleteSteerBatchDelivery(ctx, conversationID, clientMessageID, providerTurnID, activity, nil, now)
+}
+
+// CompleteSteerBatchDelivery records the steer receipt and all source links together.
+func (s *Store) CompleteSteerBatchDelivery(
+	ctx context.Context,
+	conversationID, clientMessageID, providerTurnID string,
+	activity domain.ConversationActivity,
+	turnIDs []string,
+	now time.Time,
+) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "complete steer delivery", func(q *gen.Queries) error {
+		if len(turnIDs) > 0 {
+			target, err := q.SelectConversationTurnByProviderID(ctx, gen.SelectConversationTurnByProviderIDParams{
+				ConversationID: conversationID, ProviderTurnID: providerTurnID,
+			})
+			if err != nil {
+				return err
+			}
+			for _, id := range turnIDs {
+				changed, err := q.CompleteQueuedConversationBatchMember(ctx, gen.CompleteQueuedConversationBatchMemberParams{
+					CompletedAt:      sql.NullTime{Time: now, Valid: true},
+					PromotedToTurnID: sql.NullString{String: target.ID, Valid: true},
+					ID:               id, ConversationID: conversationID,
+				})
+				if checkErr := expectBatchRow("complete steered batch turn", id, changed, err); checkErr != nil {
+					return checkErr
+				}
+			}
+		}
 		txCtx := context.WithValue(ctx, conversationProjectionTxKey{}, q)
 		if err := s.UpsertActivity(txCtx, conversationID, providerTurnID, activity, now); err != nil {
 			return err

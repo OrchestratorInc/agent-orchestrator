@@ -74,6 +74,7 @@ type Store interface {
 	AppendRetryUserMessage(ctx context.Context, conversationID string, session domain.SessionID, generation string, msg domain.ConversationMessage, turnID, retryOfTurnID string, now time.Time) (bool, error)
 	AppendReviewRetryUserMessage(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation string, msg domain.ConversationMessage, turnID, retryOfTurnID string, now time.Time) (bool, error)
 	MarkTurnDispatching(ctx context.Context, turnID string) error
+	RecordProviderInput(ctx context.Context, turnID, text string) error
 	BindTurnToProvider(ctx context.Context, turnID, providerTurnID string, now time.Time) error
 	SettleTurn(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, now time.Time) error
 	SettleTurnByID(ctx context.Context, turnID string, state domain.TurnState, errMessage string, now time.Time) error
@@ -92,12 +93,19 @@ type Store interface {
 	RecordRateLimits(ctx context.Context, conversationID string, limits domain.ConversationRateLimits) error
 
 	NextQueuedTurn(ctx context.Context, conversationID string) (domain.QueuedTurn, error)
+	ListQueuedBatch(ctx context.Context, conversationID string, limit int) ([]domain.QueuedTurn, error)
+	ClaimQueuedBatch(ctx context.Context, conversationID string, dispatch bool, limit int, now time.Time) ([]domain.QueuedTurn, error)
+	CompleteQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, providerTurnID string, now time.Time) error
+	ReleaseQueuedBatch(ctx context.Context, conversationID string, turnIDs []string) error
+	FailQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, reason string, now time.Time) error
+	FailReservedQueuedBatch(ctx context.Context, conversationID string, now time.Time) error
 	ReserveQueuedTurnForPromotion(ctx context.Context, conversationID, turnID string, now time.Time) (domain.QueuedTurn, error)
 	ReleaseQueuedTurnPromotion(ctx context.Context, conversationID, turnID string) error
 	CompleteQueuedTurnPromotion(ctx context.Context, conversationID, sourceTurnID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error
 	SteerDelivery(ctx context.Context, conversationID, clientMessageID string) (domain.ConversationSteerDelivery, bool, error)
 	ReserveSteerDelivery(ctx context.Context, conversationID, clientMessageID, requestJSON string, now time.Time) (domain.ConversationSteerDelivery, bool, error)
 	CompleteSteerDelivery(ctx context.Context, conversationID, clientMessageID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error
+	CompleteSteerBatchDelivery(ctx context.Context, conversationID, clientMessageID, providerTurnID string, activity domain.ConversationActivity, turnIDs []string, now time.Time) error
 	RejectSteerDelivery(ctx context.Context, conversationID, clientMessageID string, kind domain.ConversationSteerRejectionKind, message string, now time.Time) error
 	EditDelivery(ctx context.Context, conversationID, clientMessageID string) (domain.ConversationEditDelivery, bool, error)
 	ReserveEditDelivery(ctx context.Context, conversationID, clientMessageID, requestJSON string, now time.Time) (domain.ConversationEditDelivery, bool, error)
@@ -1060,6 +1068,10 @@ func indexNativeHistoryTurns(
 			messages:       make(map[string]int),
 			activities:     make(map[string]int),
 		}
+		if turn.ProviderInputText != "" {
+			candidate.text = turn.ProviderInputText
+			candidate.messages[nativeHistoryMessageFingerprint(domain.MessageRoleUser, turn.ProviderInputText)]++
+		}
 		byAOTurnID[turn.ID] = candidate
 		byProviderTurnID[turn.ProviderTurnID] = candidate
 		ordered = append(ordered, candidate)
@@ -1401,13 +1413,15 @@ func (c *Controller) Capabilities() ports.ChatCapabilities {
 func (c *Controller) Send(ctx context.Context, msg ports.ChatUserMessage) (domain.ConversationTurn, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	return c.sendLocked(ctx, msg, true)
+	return c.sendLocked(ctx, msg, true, nil, nil)
 }
 
 func (c *Controller) sendLocked(
 	ctx context.Context,
 	msg ports.ChatUserMessage,
 	queueWhenBusy bool,
+	providerOverride *ports.ChatUserMessage,
+	followers []string,
 ) (domain.ConversationTurn, error) {
 	if msg.ClientPayloadHash == "" {
 		var err error
@@ -1425,8 +1439,17 @@ func (c *Controller) sendLocked(
 
 	now := c.now()
 	turnID := c.newID()
+	queuedAhead := false
+	if queueWhenBusy && !c.busy() {
+		if _, err := c.store.NextQueuedTurn(ctx, c.conversation.ID); err == nil {
+			queuedAhead = true
+		} else if !errors.Is(err, domain.ErrNoQueuedTurn) {
+			return domain.ConversationTurn{}, err
+		}
+	}
+	shouldQueue := queueWhenBusy && (c.busy() || queuedAhead)
 	markedSending := false
-	if !queueWhenBusy || !c.busy() {
+	if !shouldQueue {
 		c.setSendingTurn(turnID)
 		markedSending = true
 	}
@@ -1481,7 +1504,7 @@ func (c *Controller) sendLocked(
 		return domain.ConversationTurn{}, nil
 	}
 
-	if queueWhenBusy && c.busy() {
+	if shouldQueue {
 		// AppendUserMessage wrote it as queued, which is exactly where it belongs
 		// until the running turn ends. drain picks it up from there.
 		c.mu.Lock()
@@ -1489,17 +1512,27 @@ func (c *Controller) sendLocked(
 			"session", c.sessionID, "clientMessageId", msg.ClientMessageID, "turn", turnID,
 			"pendingTurn", c.pendingTurnID, "compactionPending", c.compactionPending, "state", c.state)
 		c.mu.Unlock()
-		return domain.ConversationTurn{
+		queuedTurn := domain.ConversationTurn{
 			ID:                 turnID,
 			ConversationID:     c.conversation.ID,
 			HandledBySessionID: c.sessionID,
 			HandledByReviewID:  c.reviewID,
 			State:              domain.TurnStateQueued,
 			RequestedAt:        now,
-		}, nil
+		}
+		if queuedAhead && !c.busy() {
+			if err := c.drainLocked(ctx, true); err != nil {
+				return queuedTurn, err
+			}
+		}
+		return queuedTurn, nil
 	}
 
-	turn, err := c.dispatch(ctx, turnID, msg, now)
+	providerMessage := msg
+	if providerOverride != nil {
+		providerMessage = *providerOverride
+	}
+	turn, err := c.dispatch(ctx, turnID, providerMessage, now, false, followers)
 	dispatched = err == nil
 	return turn, err
 }
@@ -1610,7 +1643,7 @@ func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.Conve
 		Content:         content,
 		Origin:          prompt.Origin,
 		ClientMessageID: key,
-	}, now)
+	}, now, false, nil)
 }
 
 // retryPromptContent reconstructs provider-neutral durable prompt blocks and
@@ -1761,6 +1794,8 @@ func (c *Controller) dispatch(
 	turnID string,
 	msg ports.ChatUserMessage,
 	requestedAt time.Time,
+	claimed bool,
+	followers []string,
 ) (domain.ConversationTurn, error) {
 	// Every dispatch carries the conversation's choices, including one AO makes on
 	// the user's behalf: a queued message draining, or a relay from `ao send`. A
@@ -1768,11 +1803,29 @@ func (c *Controller) dispatch(
 	// applying exactly when they were not watching.
 	msg.Settings = c.turnSettings()
 	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
+	if len(followers) > 0 {
+		if err := c.store.RecordProviderInput(ctx, turnID, msg.Text); err != nil {
+			ids := append([]string{turnID}, followers...)
+			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, ids,
+				"batch provider input could not be recorded: "+err.Error(), c.now()); failErr != nil {
+				c.log.Error("failed to settle unrecorded queued batch", "error", failErr)
+			}
+			return domain.ConversationTurn{}, fmt.Errorf("record batch provider input: %w", err)
+		}
+	}
+	failFollowers := func(reason string) {
+		if len(followers) == 0 {
+			return
+		}
+		if err := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, followers, reason, c.now()); err != nil {
+			c.log.Error("failed to settle queued batch", "error", err)
+		}
+	}
 	// A provider can accept this turn and then lose its SQLite binding to ENOSPC.
 	// Move it out of the durable queue before crossing that boundary, or a live
 	// reconnect can drain the same prompt after the provider completes it. ACP's
 	// deferred start crosses the provider boundary only after binding succeeds.
-	if !hasDeferredStart {
+	if !hasDeferredStart && !claimed {
 		if err := c.store.MarkTurnDispatching(ctx, turnID); err != nil {
 			return domain.ConversationTurn{}, fmt.Errorf("mark turn dispatching: %w", err)
 		}
@@ -1784,6 +1837,7 @@ func (c *Controller) dispatch(
 	c.mu.Unlock()
 	ref, err := c.conv.SendTurn(ctx, excerptDeliveryMessage(msg))
 	if err != nil {
+		failFollowers("batch delivery to provider is uncertain: " + err.Error())
 		c.mu.Lock()
 		if c.dispatchingTurnID == turnID {
 			c.dispatchingTurnID = ""
@@ -1811,6 +1865,7 @@ func (c *Controller) dispatch(
 	}
 
 	if err := c.store.BindTurnToProvider(ctx, turnID, ref.ProviderTurnID, c.now()); err != nil {
+		failFollowers("batch provider binding is uncertain: " + err.Error())
 		c.mu.Lock()
 		if c.dispatchingTurnID == turnID {
 			c.dispatchingTurnID = ""
@@ -1838,6 +1893,7 @@ func (c *Controller) dispatch(
 	// projected. Eager drivers do not implement this optional interface.
 	if hasDeferredStart {
 		if err := deferred.StartDeferredTurn(ref.ProviderTurnID); err != nil {
+			failFollowers("batch provider start is uncertain: " + err.Error())
 			c.mu.Lock()
 			c.pendingTurnID = ""
 			c.mu.Unlock()
@@ -1846,6 +1902,12 @@ func (c *Controller) dispatch(
 				c.log.Error("failed to settle turn after deferred start error", "error", settleErr)
 			}
 			return domain.ConversationTurn{}, fmt.Errorf("start turn: %w", err)
+		}
+	}
+	if len(followers) > 0 {
+		if err := c.store.CompleteQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, followers, ref.ProviderTurnID, c.now()); err != nil {
+			failFollowers("batch provider acceptance could not be recorded: " + err.Error())
+			return domain.ConversationTurn{}, fmt.Errorf("complete queued batch: %w", err)
 		}
 	}
 
@@ -1904,6 +1966,12 @@ func (c *Controller) drain(ctx context.Context) error {
 	return c.drainLocked(ctx, true)
 }
 
+func (c *Controller) drainOne(ctx context.Context) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	return c.drainLockedWithLimit(ctx, true, 1)
+}
+
 // drainLocked is drain with the dispatch lock already held. Turn completion
 // uses it so committing the completion, clearing primary ownership, and claiming
 // the next queued request are one serialized lifecycle transition.
@@ -1911,6 +1979,10 @@ func (c *Controller) drain(ctx context.Context) error {
 // allowDispatch gates sending the next queued turn. A pending Stop cutoff forces
 // it true so messages typed after Stop still send.
 func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) error {
+	return c.drainLockedWithLimit(ctx, allowDispatch, 0)
+}
+
+func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch bool, limit int) error {
 	c.mu.Lock()
 	cutoff := c.cancelQueuedAt
 	c.cancelQueuedAt = time.Time{}
@@ -1940,68 +2012,46 @@ func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) error 
 	}
 
 	for {
-		queued, err := c.store.NextQueuedTurn(ctx, c.conversation.ID)
+		preview, err := c.store.ListQueuedBatch(ctx, c.conversation.ID, limit)
 		if errors.Is(err, domain.ErrNoQueuedTurn) {
 			return nil
 		}
 		if err != nil {
-			c.log.Error("failed to read queued turn", "session", c.sessionID, "error", err)
 			return err
 		}
-
-		var content []ports.ChatContent
-		if queued.DeliveryContentJSON != "" {
-			if err := json.Unmarshal([]byte(queued.DeliveryContentJSON), &content); err != nil {
-				_ = c.store.SettleTurnByID(ctx, queued.TurnID, domain.TurnStateFailed,
-					"queued chat content is corrupt", c.now())
-				c.log.Error("failed to decode queued chat content",
-					"session", c.sessionID, "turn", queued.TurnID, "error", err)
-				return err
-			}
-		}
-		queuedMessage := ports.ChatUserMessage{
-			Text:            queued.Text,
-			Content:         content,
-			Origin:          queued.Origin,
-			ClientMessageID: queued.ClientMessageID,
-		}
-		for _, item := range content {
-			if item.Type == "excerpt" && item.Excerpt != nil {
-				queuedMessage.Excerpts = append(queuedMessage.Excerpts, item.Excerpt.Reference)
-			}
-		}
-		if len(queuedMessage.Excerpts) > 0 {
-			filtered := content[:0]
-			for _, item := range content {
-				if item.Type != "excerpt" {
-					filtered = append(filtered, item)
+		if _, err := c.queuedBatchInput(ctx, preview, nil); err != nil {
+			if id, ok := invalidBatchTurn(err); ok {
+				if settleErr := c.store.SettleTurnByID(ctx, id, domain.TurnStateFailed, err.Error(), c.now()); settleErr != nil {
+					return settleErr
 				}
+				continue
 			}
-			queuedMessage.Content = filtered
-			if err := hydrateExcerptReferences(ctx, c, &queuedMessage); err != nil {
-				if errors.Is(err, ErrExcerptStale) || errors.Is(err, ErrExcerptInvalid) {
-					if settleErr := c.store.SettleTurnByID(ctx, queued.TurnID, domain.TurnStateFailed,
-						"chat excerpt is stale", c.now()); settleErr != nil {
-						return settleErr
-					}
-					c.log.Error("failed to validate queued chat excerpt",
-						"session", c.sessionID, "turn", queued.TurnID, "error", err)
-					continue
-				}
-				return err
-			}
-		}
-		if _, err := c.dispatch(ctx, queued.TurnID, queuedMessage, c.now()); err != nil {
-			// dispatch already settled this turn as failed. Stopping here rather than
-			// walking the rest of the queue: whatever broke the send is likely to break
-			// the next one too, and failing them all on one bad provider state would
-			// discard messages the user can otherwise still see waiting.
-			c.log.Error("failed to dispatch queued turn",
-				"session", c.sessionID, "turn", queued.TurnID, "error", err)
 			return err
 		}
+		break
+	}
+	batch, err := c.store.ClaimQueuedBatch(ctx, c.conversation.ID, true, limit, c.now())
+	if errors.Is(err, domain.ErrNoQueuedTurn) {
 		return nil
 	}
+	if err != nil {
+		return err
+	}
+	msg, err := c.queuedBatchInput(ctx, batch, nil)
+	if err != nil {
+		if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
+			queuedBatchIDs(batch), err.Error(), c.now()); failErr != nil {
+			return errors.Join(err, failErr)
+		}
+		return err
+	}
+	followers := queuedBatchIDs(batch[1:])
+	if _, err := c.dispatch(ctx, batch[0].TurnID, msg, c.now(), true, followers); err != nil {
+		c.log.Error("failed to dispatch queued batch", "session", c.sessionID,
+			"firstTurn", batch[0].TurnID, "count", len(batch), "error", err)
+		return err
+	}
+	return nil
 }
 
 // ArmHandoff is the linearization point for an interface transition. It closes
