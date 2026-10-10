@@ -27,6 +27,7 @@ import { useObservedAgentSwitchLifecycle } from "../hooks/useObservedAgentSwitch
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { conversationQueryKey } from "../hooks/useConversation";
 import { useHostConnection } from "../hooks/useHostConnection";
 import { useSidebarChromeClearanceRef } from "../hooks/useSidebarChromeGeometry";
 import { MAX_SESSION_DISPLAY_NAME_LEN, useSessionRename } from "../hooks/useSessionRename";
@@ -190,8 +191,11 @@ export function CenterPane({
 	const [tabOrderBySession, setTabOrderBySession] = useState<Record<string, string[]>>({});
 	const queryClient = useQueryClient();
 	const refreshWorkspaces = useCallback(
-		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) }),
-		[hostId, queryClient],
+		() => {
+			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
+			if (session) void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id, hostId) });
+		},
+		[hostId, queryClient, session],
 	);
 	const { baseUrl: remoteBase } = useHostConnection(hostId);
 	const remoteCreateMux = useMemo(

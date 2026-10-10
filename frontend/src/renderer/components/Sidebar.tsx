@@ -2282,8 +2282,11 @@ function SessionRow({
 	const describedBy = switchLabel ? switchStatusId : undefined;
 	const queryClient = useQueryClient();
 	const refreshWorkspaces = useCallback(
-		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) }),
-		[queryClient, session.hostId],
+		() => {
+			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
+			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id, session.hostId) });
+		},
+		[queryClient, session.hostId, session.id],
 	);
 	const rename = useSessionRename(session, refreshWorkspaces);
 	const lastTouchAtRef = useRef(0);
