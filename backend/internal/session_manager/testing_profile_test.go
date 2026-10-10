@@ -60,7 +60,7 @@ func assertTestingServer(t *testing.T, cfg ChatStart, attemptID domain.TestAttem
 		!reflect.DeepEqual(server.Args, []string{"testing", "mcp"}) {
 		t.Fatal("testing MCP command is not pinned to the running daemon")
 	}
-	if len(server.Env) != 4 || server.Env["AO_TEST_ATTEMPT_ID"] != string(attemptID) ||
+	if len(server.Env) != 3 || server.Env["AO_TEST_ATTEMPT_ID"] != "" ||
 		server.Env[EnvSessionID] != string(cfg.SessionID) || server.Env[EnvRunFile] != "/scratch/supervisor/running.json" || server.Env["AO_TEST_CAPABILITY"] == "" {
 		t.Fatal("testing MCP child environment has the wrong binding")
 	}
@@ -77,6 +77,7 @@ func TestLaunchTestingWorkerBindsVisibleChatSessionBeforeStart(t *testing.T) {
 	mgr.SetModelCatalog(tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "claude-opus-5-5", IsDefault: true, Efforts: []string{"medium"}}}}})
 	mgr.dataDir = t.TempDir()
 	profile := &fakeTestingProfile{context: ports.TestingWorkerContext{CheckoutPath: "/scratch/target/checkout", CLIPath: "/scratch/target/target-ao", RunFilePath: "/scratch/target/running.json", DataDir: "/scratch/target/data", FixtureDir: "/scratch/target/fixtures"}}
+	profile.context.LaunchContext = `{"revision":"pr-head","port":31002}`
 	mgr.SetTestingProfileResolver(profile)
 	var logs bytes.Buffer
 	mgr.logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -116,7 +117,7 @@ func TestLaunchTestingWorkerBindsVisibleChatSessionBeforeStart(t *testing.T) {
 		t.Fatal("investigator did not start once with its supplied prompt")
 	}
 	rec := store.sessions[id]
-	for _, required := range []string{filepath.Join(skillassets.TestingDir(mgr.dataDir), "SKILL.md"), profile.context.CLIPath, profile.context.RunFilePath, profile.context.DataDir, profile.context.FixtureDir, "https://github.com/org/repo/pull/1", "pr-head"} {
+	for _, required := range []string{filepath.Join(skillassets.TestingDir(mgr.dataDir), "SKILL.md"), profile.context.CLIPath, profile.context.RunFilePath, profile.context.DataDir, profile.context.FixtureDir, "https://github.com/org/repo/pull/1", "pr-head", "Checked target launch facts:\n```json\n" + profile.context.LaunchContext + "\n```"} {
 		if !strings.Contains(launcher.turns[0], required) {
 			t.Fatalf("investigator prompt missing %q", required)
 		}
@@ -465,4 +466,87 @@ func TestLaunchTestingWorkerRejectsUnsupportedProfileBeforePrepare(t *testing.T)
 			}
 		})
 	}
+}
+
+type cancellingTestingProfile struct {
+	fakeTestingProfile
+	cancelled []domain.SessionID
+	cancelErr error
+}
+
+func (p *cancellingTestingProfile) CancelWorker(_ context.Context, id domain.SessionID) (domain.TestAttemptRecord, error) {
+	p.cancelled = append(p.cancelled, id)
+	return domain.TestAttemptRecord{}, p.cancelErr
+}
+
+func TestKillTestingWorkerJoinsTargetCleanupBeforeProviderStop(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprint(failed), func(t *testing.T) {
+			launcher := &recordingLauncher{}
+			mgr, store, _ := newChatManager(launcher)
+			seedChatResumeSession(store, domain.ActivityActive)
+			profile := &cancellingTestingProfile{fakeTestingProfile: fakeTestingProfile{link: domain.TestToolProfileLink{SessionID: "mer-1", AttemptID: "attempt", ProfileID: domain.TestToolProfileNativeV1}}}
+			if failed {
+				profile.cancelErr = errors.New("owned target listener remains")
+			}
+			mgr.SetTestingProfileResolver(profile)
+			_, err := mgr.Kill(context.Background(), "mer-1")
+			if len(profile.cancelled) != 1 || profile.cancelled[0] != "mer-1" {
+				t.Fatal("target not cancelled", err)
+			}
+			if failed {
+				if err == nil || !strings.Contains(err.Error(), "owned target listener remains") || len(launcher.stopped) != 0 || store.sessions["mer-1"].IsTerminated {
+					t.Fatal("failed cleanup allowed teardown", err)
+				}
+			} else if err != nil || len(launcher.stopped) != 1 {
+				t.Fatal("provider was not stopped after cleanup", err)
+			}
+		})
+	}
+}
+
+func TestComparisonWorkerReadsPinnedDocsBeforeAnyTargetExists(t *testing.T) {
+	launcher := &recordingLauncher{}
+	mgr, _, _ := newChatManager(launcher)
+	pinTestingDaemon(mgr)
+	mgr.dataDir = t.TempDir()
+	if err := skillassets.Install(mgr.dataDir); err != nil {
+		t.Fatal(err)
+	}
+	skillPath := filepath.Join(skillassets.TestingDir(mgr.dataDir), "SKILL.md")
+	skill, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"For a PR, the same worker runs both legs.", "ao testing leg start base --json", "ao testing leg start head --json", "Do not spawn a second investigator or restart the"} {
+		if !strings.Contains(string(skill), required) {
+			t.Fatal("installed skill lost the same-worker flow", required)
+		}
+	}
+	profile := &fakeTestingProfile{}
+	mgr.SetTestingProfileResolver(profile)
+	_, err = mgr.LaunchTestingWorker(context.Background(), testingsvc.WorkerLaunchRequest{
+		ProjectID: chatTestProject, Harness: domain.HarnessClaudeCode, AttemptID: "pending-base", RunID: "base", Comparison: true,
+		Context: ports.TestingWorkerContext{CheckoutPath: "/owned/warm-checkout"}, Prompt: "Compare pinned revisions", Timeout: time.Minute,
+		Prepare: func(_ context.Context, id domain.SessionID) (testingsvc.WorkerBinding, error) {
+			profile.link = domain.TestToolProfileLink{SessionID: id, AttemptID: "pending-base", ProfileID: domain.TestToolProfileNativeV1}
+			return testingsvc.WorkerBinding{Link: profile.link, Capability: "prepare-secret"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(launcher.turns) != 1 {
+		t.Fatal(launcher.turns)
+	}
+	prompt := launcher.turns[0]
+	for _, required := range []string{skillPath, "/owned/warm-checkout", "show <commit>:<path>", "target is not running yet", "ao testing leg start base|head --json", "same worker and conversation"} {
+		if !strings.Contains(prompt, required) {
+			t.Fatal("missing first-turn context", required)
+		}
+	}
+	if strings.Contains(prompt, "target app is already running") || strings.Contains(prompt, "Use `python3") {
+		t.Fatal("comparison claimed a live target", prompt)
+	}
+	assertTestingServer(t, launcher.started[0], "pending-base")
 }

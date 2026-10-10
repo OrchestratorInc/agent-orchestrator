@@ -38,17 +38,16 @@ var testingMCPTools = []struct {
 func newTestingMCPCommand(ctx *commandContext) *cobra.Command {
 	return &cobra.Command{
 		Use:   "mcp",
-		Short: "Serve the attempt's testing tools over stdio",
+		Short: "Serve the worker session's testing tools over stdio",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			for _, name := range []string{"AO_TEST_CAPABILITY", "AO_TEST_ATTEMPT_ID", "AO_SESSION_ID", "AO_RUN_FILE"} {
+			for _, name := range []string{"AO_TEST_CAPABILITY", "AO_SESSION_ID", "AO_RUN_FILE"} {
 				if strings.TrimSpace(os.Getenv(name)) == "" {
 					return fmt.Errorf("testing mcp requires %s in its launch environment", name)
 				}
 			}
 			capability := os.Getenv("AO_TEST_CAPABILITY")
-			attemptID := os.Getenv("AO_TEST_ATTEMPT_ID")
-			server := ctx.newTestingMCPServer(attemptID, os.Getenv("AO_SESSION_ID"), capability)
+			server := ctx.newTestingMCPServer(os.Getenv("AO_SESSION_ID"), capability)
 			reader, ok := cmd.InOrStdin().(io.ReadCloser)
 			if !ok {
 				reader = io.NopCloser(cmd.InOrStdin())
@@ -72,7 +71,7 @@ func redactTestingCapability(text, capability string) string {
 	return strings.ReplaceAll(text, capability, "[redacted]")
 }
 
-func (c *commandContext) newTestingMCPServer(attemptID, sessionID, capability string) *mcp.Server {
+func (c *commandContext) newTestingMCPServer(sessionID, capability string) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "ao-testing", Version: Version}, nil)
 	// SDK validation errors can quote invalid argument values, so redact them too.
 	server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
@@ -112,7 +111,7 @@ func (c *commandContext) newTestingMCPServer(attemptID, sessionID, capability st
 			}
 			var response json.RawMessage
 			err := forward.doJSONPathWithHeaders(ctx, http.MethodPost,
-				"/api/v1/testing/attempts/"+url.PathEscape(attemptID)+"/tools/"+tool.name,
+				"/api/v1/testing/sessions/"+url.PathEscape(sessionID)+"/tools/"+tool.name,
 				testingToolRequestDTO{SessionID: sessionID, RequestID: uuid.NewString(), Input: arguments},
 				&response, map[string]string{testingCapabilityHeader: capability})
 			if err != nil {

@@ -167,22 +167,25 @@ func decodeInput(raw json.RawMessage, name string) (any, json.RawMessage, error)
 	return input, canonical, err
 }
 
+// authorize resolves the session's current durable binding on every admission.
+// An explicit old attempt is fenced even though the session credential survives.
 func (s *Service) authorize(ctx context.Context, id domain.TestAttemptID, session domain.SessionID, token string) (*attemptState, capability, error) {
 	hash := sha256.Sum256([]byte(token))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	grant, ok := s.caps[session]
-	if !ok && token != "" && (s.closed || s.attempts[id] == nil) {
-		link, bound, err := s.deps.Store.GetTestToolBinding(ctx, session)
-		if err != nil {
-			return nil, capability{}, err
-		}
-		if bound && link.AttemptID == id {
-			return nil, capability{}, WorkerNotRunning()
-		}
+	link, bound, err := s.deps.Store.GetTestToolBinding(ctx, session)
+	if err != nil {
+		return nil, capability{}, err
 	}
-	if !ok || token == "" || grant.link.AttemptID != id || subtle.ConstantTimeCompare(grant.hash[:], hash[:]) != 1 {
-		return nil, capability{}, apierr.Forbidden("INVALID_TEST_CAPABILITY", "Testing capability is missing, revoked or does not own this attempt")
+	if !ok && token != "" && (s.closed || s.attempts[id] == nil) && bound && link.AttemptID == id {
+		return nil, capability{}, WorkerNotRunning()
+	}
+	if !ok || token == "" || !bound || link.ProfileID != domain.TestToolProfileNativeV1 || subtle.ConstantTimeCompare(grant.hash[:], hash[:]) != 1 {
+		return nil, capability{}, apierr.Forbidden("INVALID_TEST_CAPABILITY", "Testing capability is missing, revoked or does not own this session")
+	}
+	if link.AttemptID != id {
+		return nil, capability{}, targetChanged()
 	}
 	st := s.attempts[id]
 	if s.closed || st == nil || st.ctx.Err() != nil || grant.ctx.Err() != nil || st.record.Phase != domain.TestAttemptActive || st.record.CancelledAt != nil || !s.deps.Clock.Now().Before(st.record.Deadline) {
@@ -195,17 +198,26 @@ func (s *Service) authorize(ctx context.Context, id domain.TestAttemptID, sessio
 	if !found || r.Phase != domain.TestAttemptActive || r.CancelledAt != nil || !s.deps.Clock.Now().Before(r.Deadline) {
 		return nil, capability{}, inactive()
 	}
-	if !sameTarget(r.Target, grant.target) || !sameTarget(r.Target, st.record.Target) || r.LeaseGeneration != grant.target.Generation {
+	if !sameTarget(r.Target, st.record.Target) || r.LeaseGeneration != st.record.Target.Generation {
 		return nil, capability{}, targetChanged()
 	}
-	link, found, err := s.deps.Store.GetTestToolBinding(ctx, session)
-	if err != nil {
-		return nil, capability{}, err
-	}
-	if !found || link != grant.link {
-		return nil, capability{}, apierr.Forbidden("INVALID_TEST_CAPABILITY", "Session testing binding changed")
-	}
+	grant.link, grant.target = link, r.Target
 	return st, grant, nil
+}
+
+// ExecuteCurrent never accepts a target supplied by the worker or MCP process.
+func (s *Service) ExecuteCurrent(ctx context.Context, session domain.SessionID, token, requestID, name string, raw json.RawMessage) (ToolResult, error) {
+	if err := s.configured(); err != nil {
+		return ToolResult{}, err
+	}
+	link, found, err := s.LookupBinding(ctx, session)
+	if err != nil {
+		return ToolResult{}, err
+	}
+	if !found {
+		return ToolResult{}, apierr.Forbidden("INVALID_TEST_CAPABILITY", "Session has no testing binding")
+	}
+	return s.Execute(ctx, link.AttemptID, session, token, requestID, name, raw)
 }
 
 // Execute validates ownership and journals a tool before dispatch.
@@ -294,6 +306,9 @@ func (s *Service) Execute(ctx context.Context, id domain.TestAttemptID, session 
 			}
 		}
 	}()
+	if record.ConfiguredDeliveryMode == "foreground" && record.DeliveryMode != "foreground" {
+		return result, apierr.Conflict("TEST_INPUT_REFUSED", "Testing input must use foreground; background input is unsupported", nil)
+	}
 	if _, _, err = s.authorize(callCtx, id, session, token); err != nil {
 		return result, err
 	}
@@ -551,7 +566,7 @@ func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.
 		if e := s.deps.Store.SetTestRunReport(ctx, st.record.RunID, receipt.ID); e != nil {
 			return result, e
 		}
-		if _, e = s.finish(ctx, st.record.ID, v.Outcome, false); e != nil {
+		if _, e = s.finish(ctx, st.record.ID, v.Outcome, v.Outcome == domain.TestOutcomeCancelled); e != nil {
 			return result, e
 		}
 		result.Report = &domain.TestSubmitReportResult{Outcome: v.Outcome, EvidenceID: receipt.ID}

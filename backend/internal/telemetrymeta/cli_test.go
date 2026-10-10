@@ -43,6 +43,8 @@ func TestCLIActorTypeKeepsKnownLegacyUserCommands(t *testing.T) {
 		"ao smoke set",
 		"ao testing",
 		"ao testing start",
+		"ao testing leg",
+		"ao testing leg start",
 		"ao testing stop",
 		"ao testing evidence",
 	} {

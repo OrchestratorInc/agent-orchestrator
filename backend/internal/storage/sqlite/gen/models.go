@@ -802,6 +802,13 @@ type TestRun struct {
 	CreatedAt        time.Time
 }
 
+type TestWorkerLeg struct {
+	SessionID      string
+	BaseRunID      string
+	HeadRunID      string
+	TimeoutSeconds int64
+}
+
 type UsageBinding struct {
 	ID             int64
 	SessionID      domain.SessionID

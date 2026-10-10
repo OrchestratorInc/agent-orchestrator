@@ -192,6 +192,11 @@ func TestStopRemovesPrivateStateButKeepsWarmCodeAndEvidence(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			for _, name := range []string{"app-state.json", "update-settings.json", "target-ao"} {
+				if err := os.WriteFile(filepath.Join(f.s.root, name), []byte("owned"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if blocked {
 				f.listener = errors.New("listener absence unproved")
 			}
@@ -203,7 +208,7 @@ func TestStopRemovesPrivateStateButKeepsWarmCodeAndEvidence(t *testing.T) {
 			} else if err != nil || result.State != domain.TestCleanupComplete {
 				t.Fatal(result, err)
 			}
-			for _, name := range []string{"data", "electron", "fixtures"} {
+			for _, name := range []string{"data", "electron", "fixtures", "app-state.json", "update-settings.json", "target-ao"} {
 				_, err := os.Stat(filepath.Join(f.s.root, name))
 				if blocked && err != nil || !blocked && !errors.Is(err, os.ErrNotExist) {
 					t.Fatal("private state removed without proof or left behind", name, err)

@@ -301,7 +301,7 @@ func removePrivateState(s *launch) error {
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	for _, name := range []string{"data", "electron", "fixtures", "daemon", "setup"} {
+	for _, name := range []string{"data", "electron", "fixtures", "daemon", "setup", "app-state.json", "update-settings.json", "target-ao"} {
 		if err := root.RemoveAll(name); err != nil {
 			return err
 		}

@@ -108,6 +108,15 @@ type TestToolProfileLink struct {
 	ProfileID TestToolProfileID
 }
 
+// TestWorkerLegs pins both revisions for one investigator. The current attempt
+// remains in TestToolProfileLink and changes without replacing the worker.
+type TestWorkerLegs struct {
+	SessionID      SessionID
+	BaseRunID      TestRunID
+	HeadRunID      TestRunID
+	TimeoutSeconds int64
+}
+
 // TestEvidenceReceipt identifies an artifact saved outside the target.
 // RelativePath is confined to the attempt's evidence directory under ~/.ao.
 type TestEvidenceReceipt struct {

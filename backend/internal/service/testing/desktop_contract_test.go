@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/png"
 	"os"
@@ -79,6 +80,59 @@ func TestFullFrameAndDeliveryPolicyReachInput(t *testing.T) {
 	var recipe Recipe
 	if err := json.Unmarshal([]byte(f.run.RecipeSnapshot), &recipe); err != nil || recipe.DeliveryMode != "foreground" {
 		t.Fatal("recipe did not retain delivery policy", err)
+	}
+}
+
+type inputPolicyDesktop struct {
+	*policyDesktop
+	inputMode string
+}
+
+func (d *inputPolicyDesktop) InputDeliveryMode(string) string { return d.inputMode }
+
+func TestForegroundPolicyRejectsConfigurationAndInputFallback(t *testing.T) {
+	f := newFixture(t)
+	var recipe Recipe
+	if err := json.Unmarshal([]byte(f.run.RecipeSnapshot), &recipe); err != nil || recipe.DeliveryMode != "foreground" {
+		t.Fatal("default recipe did not require foreground", recipe, err)
+	}
+	for _, mode := range []string{"", "background"} {
+		f.svc.deps.Desktop = &policyDesktop{fakeProviders: f.provider, mode: mode}
+		if _, err := f.svc.StartAttempt(context.Background(), f.run.ID, StartAttemptInput{WorkerPrompt: "Investigate", Timeout: time.Minute}); code(err) != "TESTING_PROVIDER_NOT_CONFIGURED" || len(f.provider.launchSpecs) != 1 {
+			t.Fatal("unsupported policy launched a target", mode, err)
+		}
+	}
+	desktop := &inputPolicyDesktop{policyDesktop: &policyDesktop{fakeProviders: f.provider, mode: "foreground"}}
+	f.svc.deps.Desktop = desktop
+	for i, mode := range []string{"", "background"} {
+		desktop.inputMode = mode
+		shot, err := f.call(fmt.Sprintf("policy-shot-%d", i), "screenshot", domain.TestScreenshotRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.call(fmt.Sprintf("policy-click-%d", i), "click", domain.TestClickRequest{ScreenshotID: shot.Screenshot.Frame.ScreenshotID, X: 1, Y: 1}); code(err) != "TEST_INPUT_REFUSED" || len(f.provider.inputFrames) != 0 {
+			t.Fatal("unsupported input mode was dispatched", mode, err)
+		}
+	}
+	journal, err := os.ReadFile(filepath.Join(f.dir, "testing", string(f.run.ID), string(f.start.AttemptID), "actions.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := 0
+	for _, line := range bytes.Split(bytes.TrimSpace(journal), []byte("\n")) {
+		var record domain.TestActionRecord
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.Tool == "click" && record.State == "refused" {
+			if record.ConfiguredDeliveryMode != "foreground" || record.DeliveryMode == "foreground" {
+				t.Fatal("refused journal lost the configured or actual policy", record)
+			}
+			refused++
+		}
+	}
+	if refused != 2 {
+		t.Fatal("missing refused input receipts", refused)
 	}
 }
 
@@ -164,7 +218,7 @@ func TestScreenshotRefusesInvalidOriginalEvidence(t *testing.T) {
 func TestDeclaredRecordingGapPersistsAndReleasesBeforeTargetStop(t *testing.T) {
 	var desktop *policyDesktop
 	f := newFixture(t, func(deps *Deps) {
-		desktop = &policyDesktop{fakeProviders: deps.Desktop.(*fakeProviders), mode: "background", gap: "main display recording is refused"}
+		desktop = &policyDesktop{fakeProviders: deps.Desktop.(*fakeProviders), mode: "foreground", gap: "main display recording is refused"}
 		deps.Desktop = desktop
 	})
 	rec, _, err := f.store.GetTestAttempt(context.Background(), f.start.AttemptID)

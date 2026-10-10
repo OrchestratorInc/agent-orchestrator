@@ -228,7 +228,9 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newReviewCommand(ctx))
 	root.AddCommand(newAutomationCommand(ctx))
 	root.AddCommand(newCueCommand(ctx))
-	root.AddCommand(newTestingCommand(ctx))
+	testingCommand := newTestingCommand(ctx)
+	testingCommand.AddCommand(newTestingLegCommand(ctx))
+	root.AddCommand(testingCommand)
 	root.AddCommand(newCompletionCommand())
 	root.AddCommand(newVersionCommand())
 

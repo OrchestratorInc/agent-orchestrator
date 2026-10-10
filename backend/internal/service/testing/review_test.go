@@ -45,7 +45,7 @@ func TestCloseCancelsAttemptSavesRecordingAndStopsProviders(t *testing.T) {
 
 func TestCancelRetriesFailedCleanupWithoutRepeatingInput(t *testing.T) {
 	f := newFixture(t, func(deps *Deps) {
-		deps.Desktop = &onceReleasedDesktop{policyDesktop: &policyDesktop{fakeProviders: deps.Desktop.(*fakeProviders), mode: "background", gap: "no recorder"}}
+		deps.Desktop = &onceReleasedDesktop{policyDesktop: &policyDesktop{fakeProviders: deps.Desktop.(*fakeProviders), mode: "foreground", gap: "no recorder"}}
 	})
 	f.provider.stopFail = true
 	_, _ = f.svc.Cancel(context.Background(), f.start.AttemptID)

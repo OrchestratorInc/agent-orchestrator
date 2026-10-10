@@ -19,3 +19,7 @@ INSERT INTO session_test_tools(session_id, attempt_id, profile_id) VALUES (?, ?,
 ON CONFLICT(session_id) DO UPDATE SET attempt_id=excluded.attempt_id, profile_id=excluded.profile_id;
 -- name: GetTestToolBinding :one
 SELECT * FROM session_test_tools WHERE session_id = ?;
+-- name: CreateTestWorkerLegs :exec
+INSERT INTO test_worker_legs(session_id, base_run_id, head_run_id, timeout_seconds) VALUES (?, ?, ?, ?);
+-- name: GetTestWorkerLegs :one
+SELECT * FROM test_worker_legs WHERE session_id = ?;

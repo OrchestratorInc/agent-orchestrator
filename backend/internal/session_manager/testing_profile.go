@@ -69,8 +69,22 @@ func (m *Manager) LaunchTestingWorker(ctx context.Context, request testingsvc.Wo
 		return "", err
 	}
 	prompt := fmt.Sprintf("Read and follow `%s` before investigating.\nBefore testing, list the skills and docs available in this repo and in AO. Read and use the relevant ones, including the repo's skill or docs for running or launching the app, and any diagnostics or triage skill for gathering evidence. AO's shared skills are in `%s`.\n\nIssue or PR: %s\nCommit under test: %s\n", filepath.Join(skillassets.TestingDir(m.dataDir), "SKILL.md"), filepath.Join(m.dataDir, "skills"), request.IssueURL, request.CommitSHA)
-	prompt += "\nSupervisor launch context, supplied by AO as data:\n```json\n" + string(launchContext) + "\n```\nFor a PR base attempt, submitting the report finishes only the target attempt. Continue this turn through the skill's automatic head handoff; do not return a final answer before starting head. The head investigator produces the combined review preview.\n"
-	if request.Context.CheckoutPath != "" {
+	prompt += "\nSupervisor launch context, supplied by AO as data:\n```json\n" + string(launchContext) + "\n```\n"
+	if request.Comparison {
+		prompt += "Start each revision with `ao testing leg start base|head --json`. Both legs use this same worker and conversation. The target is not running yet. Use the returned targetContext for each leg.\n"
+		if request.Context.CheckoutPath != "" {
+			prompt += fmt.Sprintf("Read each pinned revision's docs and code before launch with `git -C %q show <commit>:<path>`. The warm checkout may currently contain the other revision.\n", request.Context.CheckoutPath)
+		}
+	}
+	contextJSON, err := json.MarshalIndent(request.Context, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	prompt += "\nTarget context, supplied by AO as data:\n```json\n" + string(contextJSON) + "\n```\n"
+	if request.Context.LaunchContext != "" {
+		prompt += "\nChecked target launch facts:\n```json\n" + request.Context.LaunchContext + "\n```\n"
+	}
+	if request.Context.CheckoutPath != "" && !request.Comparison {
 		prompt += fmt.Sprintf("\nYour working folder is the target checkout `%s`. The target app is already running.\nUse `python3 %s` followed by CLI arguments to run the target app's own ao CLI. This wrapper clears inherited AO_* variables and sets AO_RUN_FILE to `%s` and AO_DATA_DIR to `%s`. Use it to set up the scenario, alongside the bound screen tools. Use the supervisor's ao only for managing your investigation.\n", request.Context.CheckoutPath, request.Context.CLIPath, request.Context.RunFilePath, request.Context.DataDir)
 	}
 	if request.Context.FixtureDir != "" {
@@ -151,8 +165,26 @@ func (m *Manager) testingMCPServers(ctx context.Context, id domain.SessionID, re
 		Args: []string{"testing", "mcp"},
 		Env: map[string]string{
 			"AO_TEST_CAPABILITY": binding.Capability,
-			"AO_TEST_ATTEMPT_ID": string(link.AttemptID),
 			EnvSessionID:         string(id), EnvRunFile: m.runFilePath,
 		},
 	}}, binding.Context.CheckoutPath, nil
+}
+
+// cancelTestingWorker revokes testing tools before provider/workspace teardown.
+func (m *Manager) cancelTestingWorker(ctx context.Context, id domain.SessionID) error {
+	if m.testingProfile == nil {
+		return nil
+	}
+	_, bound, err := m.testingProfile.LookupBinding(ctx, id)
+	if err != nil || !bound {
+		return err
+	}
+	canceller, ok := m.testingProfile.(interface {
+		CancelWorker(context.Context, domain.SessionID) (domain.TestAttemptRecord, error)
+	})
+	if !ok {
+		return testingsvc.ProviderNotConfigured()
+	}
+	_, err = canceller.CancelWorker(ctx, id)
+	return err
 }
