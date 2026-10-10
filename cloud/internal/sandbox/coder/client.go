@@ -637,7 +637,7 @@ func (c *Client) selectAgent(view workspace) (workspaceAgent, bool) {
 // into it. The launch environment written here already includes
 // AO_WORKER_EXPECTED_SHA256, so a baked coder worker self-heals to the control
 // plane's exact build. Eliminating the multi-megabyte stream (mirroring the
-// createos launch-baked path) is a fast-follow gated on the customer template
+// Freestyle launch-baked path) is a fast-follow gated on the customer template
 // baking ao-worker at Destination; until then the stream remains the delivery
 // channel.
 func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap sandbox.WorkerBootstrap) error {

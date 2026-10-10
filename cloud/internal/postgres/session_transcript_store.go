@@ -139,6 +139,10 @@ func (s *Store) RestoreSession(
 	orgID, sessionID string,
 ) error {
 	return s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+		// A session on a retired provider has no compute to come back to.
+		if err := rejectRetiredSandboxProvider(ctx, tx, orgID, sessionID); err != nil {
+			return err
+		}
 		// Restore reverses a delete, so it is only valid on a TERMINATED session.
 		// Gating on is_terminated=true (with the row lock this UPDATE takes) makes
 		// restore idempotent: once the first restore un-terminates the session, a

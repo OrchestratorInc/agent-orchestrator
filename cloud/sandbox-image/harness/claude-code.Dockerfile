@@ -1,5 +1,5 @@
-# claude-code harness layer, appended to Sandbox.base.Dockerfile by
-# publish-nodeops-template.sh. Version kept in step with Sandbox.Dockerfile.
+# claude-code harness layer, replayed after Sandbox.base.Dockerfile by
+# publish-freestyle-snapshot.sh.
 
 RUN npm install --global @anthropic-ai/claude-code@2.1.228 @agentclientprotocol/claude-agent-acp@0.70.0 && \
     ln -sfn "$(npm root --global)/@anthropic-ai/claude-code/cli-wrapper.cjs" \

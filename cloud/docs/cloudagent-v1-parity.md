@@ -33,7 +33,7 @@ whereas V1's desktop flow is loopback-daemon based.
 4. **Worker GitHub CLI discovery**
    - AO Cloud: the managed `gh` wrapper now resolves the real binary at
      `/usr/local/bin/gh` or `/usr/bin/gh`, while retaining an explicit override.
-     This makes normal `gh pr create` work in the NodeOps image instead of
+     This makes normal `gh pr create` work in the sandbox image instead of
      requiring a manual token/curl fallback.
    - Confirmed in V1: workers receive brokered GitHub credentials through a
      managed wrapper.
@@ -81,4 +81,4 @@ whereas V1's desktop flow is loopback-daemon based.
   replay across the real storage boundary.
 - Hosted staging and production verification must additionally check the GitHub
   App callback, an organization repository grant, a worker `gh pr create`, and
-  a terminal reconnect against the deployed NodeOps image.
+  a terminal reconnect against the deployed sandbox image.

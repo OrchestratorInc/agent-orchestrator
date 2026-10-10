@@ -2,6 +2,7 @@ import type { SessionProvisionStep } from "../../types/workspace";
 import { ShellTopbar } from "../ShellTopbar";
 import type { ConversationSnapshot } from "../../types/conversation";
 import { ChatWorkspace } from "./ChatWorkspace";
+import { CloudSessionStartupLoader } from "../CloudSessionStartupLoader";
 
 export function startingConversationSnapshot(sessionId: string, harness: ConversationSnapshot["harness"]): ConversationSnapshot {
 	return {
@@ -14,7 +15,8 @@ export function startingConversationSnapshot(sessionId: string, harness: Convers
 
 const pendingSnapshot = startingConversationSnapshot("pending-orchestrator", "claude-code");
 
-export function OrchestratorStartingChat({ steps }: { steps?: readonly SessionProvisionStep[] }) {
+export function OrchestratorStartingChat({ steps, cloud = false }: { steps?: readonly SessionProvisionStep[]; cloud?: boolean }) {
+	if (cloud) return <CloudSessionStartupLoader />;
 	return <ChatWorkspace
 		snapshot={pendingSnapshot}
 		sessionRole="orchestrator"

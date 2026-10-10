@@ -4,7 +4,7 @@ AO Cloud can use a customer-operated Coder deployment as its sandbox compute
 provider. AO creates one Coder workspace per AO session, installs `ao-worker`
 in the approved template image, launches it through the workspace's existing
 `coder_agent`, and keeps the rest of the session lifecycle behind the same
-provider-neutral reconciler used by NodeOps. Older templates remain compatible:
+provider-neutral reconciler used by every provider. Older templates remain compatible:
 AO verifies the baked binaries and falls back to the PTY upload on a hash miss.
 
 The first implementation is deployment-scoped: every AO organization on that
@@ -167,7 +167,7 @@ bootstrap. AO uses it to:
 
 The template is also responsible for the tools an AO task uses: `git`, CA
 certificates, and the selected coding-agent harness CLI (for example Claude
-Code or Codex). Those tools are baked into AO's NodeOps image today; the Coder
+Code or Codex). Those tools are baked into AO's own sandbox images today; the Coder
 provider deliberately does not mutate a customer's template by installing
 third-party harnesses at session startup.
 
@@ -248,4 +248,4 @@ persistence check; the restore bootstrap is the gate.
 
 Grant the environment's ECS execution role `secretsmanager:GetSecretValue` on
 that secret, then deploy staging with `AO_CLOUD_SANDBOX_PROVIDER=coder`. The
-task-definition renderer removes stale NodeOps values when switching providers.
+task-definition renderer removes stale values of providers the task no longer serves.

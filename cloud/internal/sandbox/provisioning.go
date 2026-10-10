@@ -13,15 +13,31 @@ import (
 )
 
 const (
-	ProviderDocker  = "docker"
-	ProviderDaytona = "daytona"
-	ProviderECS     = "ecs"
-	ProviderNodeOps = "nodeops"
-	ProviderCoder   = "coder"
+	ProviderDocker    = "docker"
+	ProviderCoder     = "coder"
+	ProviderFreestyle = "freestyle"
 
 	DefaultProvider       = ProviderDocker
 	DefaultWorkerTokenTTL = 15 * time.Minute
 )
+
+// retiredProviders are providers AO no longer runs. Their sandbox rows survive
+// in history (the provider CHECK constraint keeps the names), but no new session
+// can use them and the reconciler never resolves a client for them.
+var retiredProviders = map[string]bool{
+	"nodeops":         true,
+	"ecs":             true,
+	"daytona":         true,
+	"lambda-microvms": true,
+}
+
+// ErrProviderRetired reports a session whose sandbox provider AO no longer runs.
+var ErrProviderRetired = errors.New("sandbox provider is retired")
+
+// IsRetiredProvider reports whether provider is one AO no longer runs.
+func IsRetiredProvider(provider string) bool {
+	return retiredProviders[normalizeProvider(provider)]
+}
 
 // ErrCoderTemplateRequired is returned when a Coder session resolves to no
 // template at all — the organization set no default template and the project
@@ -30,29 +46,45 @@ const (
 // rather than a deployment misconfiguration.
 var ErrCoderTemplateRequired = errors.New("a Coder template must be selected for this session")
 
-type NodeOpsConfig struct {
-	BaseURL       string
-	APIKey        string
-	DefaultShape  string
-	DefaultRootFS string
-	// RootFSByHarness maps a coding-agent harness (e.g. "claude-code") to a
-	// slimmer template that bakes only that agent. A session whose harness has
-	// a mapping provisions from it; anything unmapped falls back to
-	// DefaultRootFS. Smaller templates shrink the provider's cold-host image
-	// pull, which dominates worst-case sandbox creation time.
-	RootFSByHarness  map[string]string
-	Ingress          string
-	SSHKeyPath       string
-	WorkerTokenTTL   time.Duration
-	AutoPauseSeconds int
+// FreestyleConfig configures Freestyle VMs. Sessions boot from a prepared
+// snapshot (the /workspace layout plus one harness and the worker), and
+// SnapshotByHarness picks a slimmer snapshot per harness.
+type FreestyleConfig struct {
+	BaseURL           string
+	APIKey            string
+	DefaultSnapshot   string
+	SnapshotByHarness map[string]string
+	WorkerTokenTTL    time.Duration
+	AutoPauseSeconds  int
 }
 
-// rootFSForHarness resolves the template one session provisions from.
-func (c NodeOpsConfig) rootFSForHarness(harness string) string {
-	if rootFS := strings.TrimSpace(c.RootFSByHarness[strings.TrimSpace(harness)]); rootFS != "" {
-		return rootFS
+// snapshotForHarness resolves the snapshot one session boots from.
+func (c FreestyleConfig) snapshotForHarness(harness string) string {
+	if snapshot := strings.TrimSpace(c.SnapshotByHarness[strings.TrimSpace(harness)]); snapshot != "" {
+		return snapshot
 	}
-	return strings.TrimSpace(c.DefaultRootFS)
+	return strings.TrimSpace(c.DefaultSnapshot)
+}
+
+func (c FreestyleConfig) Validate() error {
+	if strings.TrimSpace(c.APIKey) == "" {
+		return errors.New("AO_CLOUD_FREESTYLE_API_KEY is required")
+	}
+	if strings.TrimSpace(c.DefaultSnapshot) == "" {
+		return errors.New("AO_CLOUD_FREESTYLE_DEFAULT_SNAPSHOT is required")
+	}
+	if c.BaseURL != "" {
+		if _, err := url.ParseRequestURI(c.BaseURL); err != nil {
+			return fmt.Errorf("AO_CLOUD_FREESTYLE_BASE_URL must be a valid URL: %w", err)
+		}
+	}
+	if c.WorkerTokenTTL <= 0 {
+		return errors.New("AO_CLOUD_FREESTYLE_WORKER_TOKEN_TTL must be positive")
+	}
+	if c.AutoPauseSeconds < 0 {
+		return errors.New("AO_CLOUD_FREESTYLE_AUTO_PAUSE_SECONDS must not be negative")
+	}
+	return nil
 }
 
 type DockerConfig struct {
@@ -332,37 +364,12 @@ func (c DockerConfig) Validate() error {
 	return nil
 }
 
-func (c NodeOpsConfig) Validate() error {
-	if strings.TrimSpace(c.BaseURL) == "" {
-		return errors.New("AO_CLOUD_NODEOPS_BASE_URL is required")
-	}
-	if _, err := url.ParseRequestURI(c.BaseURL); err != nil {
-		return fmt.Errorf("AO_CLOUD_NODEOPS_BASE_URL must be a valid URL: %w", err)
-	}
-	if strings.TrimSpace(c.APIKey) == "" {
-		return errors.New("AO_CLOUD_NODEOPS_API_KEY is required")
-	}
-	if strings.TrimSpace(c.DefaultShape) == "" {
-		return errors.New("AO_CLOUD_NODEOPS_DEFAULT_SHAPE is required")
-	}
-	if strings.TrimSpace(c.DefaultRootFS) == "" {
-		return errors.New("AO_CLOUD_NODEOPS_DEFAULT_ROOTFS is required")
-	}
-	if c.WorkerTokenTTL <= 0 {
-		return errors.New("AO_CLOUD_NODEOPS_WORKER_TOKEN_TTL must be positive")
-	}
-	if c.AutoPauseSeconds < 0 {
-		return errors.New("AO_CLOUD_NODEOPS_AUTO_PAUSE_SECONDS must not be negative")
-	}
-	return nil
-}
-
 type ProvisioningDefaults struct {
-	Provider string
-	Release  string
-	NodeOps  NodeOpsConfig
-	Docker   DockerConfig
-	Coder    CoderConfig
+	Provider  string
+	Release   string
+	Docker    DockerConfig
+	Coder     CoderConfig
+	Freestyle FreestyleConfig
 }
 
 type Plan struct {
@@ -372,8 +379,8 @@ type Plan struct {
 }
 
 // SessionPlan stamps the provisioning plan one session's sandbox runs from.
-// The harness selects the rootfs template when a per-harness mapping exists
-// (see NodeOpsConfig.RootFSByHarness); the plan is stored on the sandbox row,
+// The harness selects the Freestyle snapshot when a per-harness mapping exists
+// (see FreestyleConfig.SnapshotByHarness); the plan is stored on the sandbox row,
 // so the choice sticks for the session's whole life, including recreates.
 func (d ProvisioningDefaults) SessionPlan(harness string) (Plan, error) {
 	return d.SessionPlanForProvider(harness, d.Provider)
@@ -383,7 +390,8 @@ func (d ProvisioningDefaults) SessionPlan(harness string) (Plan, error) {
 // when a client selects a provider for a session on a control plane configured
 // with more than one. An empty override falls back to the deployment default.
 // The caller is responsible for confirming the provider is one the control
-// plane offers before calling; this method only builds the plan.
+// plane offers before calling. A retired or unknown provider is rejected rather
+// than given a provider-only plan no reconciler could act on.
 func (d ProvisioningDefaults) SessionPlanForProvider(harness, providerOverride string) (Plan, error) {
 	return d.SessionPlanForProviderWithCoder(harness, providerOverride, nil, nil)
 }
@@ -414,29 +422,22 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 		"provider": provider,
 		"release":  release,
 	}
-	if provider == ProviderNodeOps {
-		if err := d.NodeOps.Validate(); err != nil {
+	if IsRetiredProvider(provider) {
+		return Plan{}, fmt.Errorf("%w: %s", ErrProviderRetired, provider)
+	}
+	if provider == ProviderFreestyle {
+		if err := d.Freestyle.Validate(); err != nil {
 			return Plan{}, err
 		}
-		rootFS := d.NodeOps.rootFSForHarness(harness)
-		resourceProfile["nodeOps"] = map[string]any{
-			"baseUrl":               strings.TrimSpace(d.NodeOps.BaseURL),
-			"defaultShape":          strings.TrimSpace(d.NodeOps.DefaultShape),
-			"defaultRootFs":         rootFS,
-			"ingress":               strings.TrimSpace(d.NodeOps.Ingress),
-			"sshKeyPath":            strings.TrimSpace(d.NodeOps.SSHKeyPath),
-			"workerTokenTtlSeconds": int64(d.NodeOps.WorkerTokenTTL / time.Second),
-			"autoPauseSeconds":      d.NodeOps.AutoPauseSeconds,
+		// The snapshot is stamped on the session so a later recreate boots the
+		// same build even after the deployment moves to newer snapshots.
+		freestyle := map[string]any{
+			"snapshot":              d.Freestyle.snapshotForHarness(harness),
+			"workerTokenTtlSeconds": int64(d.Freestyle.WorkerTokenTTL / time.Second),
+			"autoPauseSeconds":      d.Freestyle.AutoPauseSeconds,
 		}
-		bootstrapContext["nodeOps"] = map[string]any{
-			"baseUrl":               strings.TrimSpace(d.NodeOps.BaseURL),
-			"defaultShape":          strings.TrimSpace(d.NodeOps.DefaultShape),
-			"defaultRootFs":         rootFS,
-			"ingress":               strings.TrimSpace(d.NodeOps.Ingress),
-			"sshKeyPath":            strings.TrimSpace(d.NodeOps.SSHKeyPath),
-			"workerTokenTtlSeconds": int64(d.NodeOps.WorkerTokenTTL / time.Second),
-			"autoPauseSeconds":      d.NodeOps.AutoPauseSeconds,
-		}
+		resourceProfile["freestyle"] = freestyle
+		bootstrapContext["freestyle"] = freestyle
 	} else if provider == ProviderDocker {
 		if err := d.Docker.Validate(); err != nil {
 			return Plan{}, err
@@ -546,6 +547,8 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 			"agentName":   strings.TrimSpace(coderCfg.AgentName),
 			"durableRoot": durableRoot,
 		}
+	} else {
+		return Plan{}, fmt.Errorf("unsupported sandbox provider %q", provider)
 	}
 	resourceJSON, err := json.Marshal(resourceProfile)
 	if err != nil {
@@ -564,4 +567,45 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 
 func normalizeProvider(provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+// FreestyleSnapshot returns the snapshot a Freestyle plan boots from, or "" for
+// any other provider's plan.
+func FreestyleSnapshot(plan Plan) string {
+	var profile struct {
+		Freestyle struct {
+			Snapshot string `json:"snapshot"`
+		} `json:"freestyle"`
+	}
+	if err := json.Unmarshal(plan.ResourceProfile, &profile); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(profile.Freestyle.Snapshot)
+}
+
+// WithFreestyleSnapshot returns plan booting from snapshot instead, used when
+// the session's project has a prepared snapshot for its harness.
+func WithFreestyleSnapshot(plan Plan, snapshot string) (Plan, error) {
+	rewrite := func(raw json.RawMessage) (json.RawMessage, error) {
+		var document map[string]any
+		if err := json.Unmarshal(raw, &document); err != nil {
+			return nil, err
+		}
+		freestyle, ok := document["freestyle"].(map[string]any)
+		if !ok {
+			return nil, errors.New("plan has no freestyle section")
+		}
+		freestyle["snapshot"] = snapshot
+		return json.Marshal(document)
+	}
+	resourceProfile, err := rewrite(plan.ResourceProfile)
+	if err != nil {
+		return Plan{}, err
+	}
+	bootstrapContext, err := rewrite(plan.BootstrapContext)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.ResourceProfile, plan.BootstrapContext = resourceProfile, bootstrapContext
+	return plan, nil
 }

@@ -60,7 +60,7 @@ func (s *Store) ListOrchestratorChildren(
 
 // OrchestratorSandboxProvider returns the sandbox provider a live orchestrator
 // session runs on, so a child it spawns inherits the same provider instead of
-// the control plane default. A NodeOps orchestrator therefore spawns NodeOps
+// the control plane default. A Freestyle orchestrator therefore spawns Freestyle
 // workers and a Coder orchestrator spawns Coder workers, even on a control
 // plane that offers both. It returns ErrForbidden when the session is not an
 // active orchestrator in the organization. Every session has exactly one

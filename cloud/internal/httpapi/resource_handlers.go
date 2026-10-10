@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/projectsnapshot"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -493,6 +494,17 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
+	// A project set up for a specific sandbox provider runs every session there,
+	// whatever the client's saved preference. The availability and entitlement
+	// checks below still apply to it.
+	project, err := s.store.GetProject(r.Context(), principalFrom(r), orgID, request.ProjectID)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	if projectProvider := domain.DecodeProjectSandboxProvider(project.Config); projectProvider != "" {
+		request.Provider = projectProvider
+	}
 	// A top-level worker created for a project that already has an active
 	// orchestrator is auto-linked to it: the orchestrator then sees, drives, and
 	// receives reports from it exactly as it would a worker it spawned itself,
@@ -632,6 +644,23 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
+	// A Freestyle session boots from its project's prepared snapshot (the
+	// repository already cloned) when one exists for the current harness
+	// build; otherwise from the harness snapshot, and a build starts below.
+	var projectSnapshot *projectsnapshot.Request
+	if s.projectSnapshots != nil {
+		base := sandbox.FreestyleSnapshot(plan)
+		if snapshotRequest, ok := projectsnapshot.NewRequest(orgID, project, request.Harness, base); ok && base != "" {
+			if snapshotID, ok := s.projectSnapshots.Lookup(r.Context(), snapshotRequest); ok {
+				if prepared, rewriteErr := sandbox.WithFreestyleSnapshot(plan, snapshotID); rewriteErr == nil {
+					plan = prepared
+				} else {
+					s.logger.Warn("use project snapshot", "error", rewriteErr, "request_id", requestID(r))
+				}
+			}
+			projectSnapshot = &snapshotRequest
+		}
+	}
 	session, err := s.store.CreateSession(
 		r.Context(),
 		principalFrom(r),
@@ -669,6 +698,15 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		"provider", plan.Provider,
 		"harness", request.Harness,
 	)
+	// The sandbox row is committed, so the reconciler can start provisioning
+	// now rather than at its next tick.
+	if s.sandboxWake != nil {
+		s.sandboxWake()
+	}
+	if projectSnapshot != nil {
+		projectSnapshot.SessionID = session.ID
+		s.projectSnapshots.Ensure(*projectSnapshot)
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{"session": toSessionResponse(session, nil)})
 }
 
@@ -835,7 +873,7 @@ func (s *Server) listSessionChildren(w http.ResponseWriter, r *http.Request) {
 }
 
 // wakePausedSessions asks the reconciler to resume this user's idle-paused
-// sandboxes. It intentionally does not wait for NodeOps or a worker heartbeat;
+// sandboxes. It intentionally does not wait for the provider or a worker heartbeat;
 // callers continue to use the regular session projection for readiness.
 func (s *Server) wakePausedSessions(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")

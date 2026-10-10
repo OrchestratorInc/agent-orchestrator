@@ -25,9 +25,9 @@ type coderConnectionStore interface {
 
 // Resolver maps a sandbox row onto the provider that owns its compute.
 type Resolver struct {
-	nodeOps          sandbox.Provider
 	docker           sandbox.Provider
 	coder            sandbox.Provider
+	freestyle        sandbox.Provider
 	coderConnections coderConnectionStore
 	cipher           *secrets.Cipher
 }
@@ -41,14 +41,14 @@ type sessionScopedProvider interface {
 // Coder deployment (a sandbox row carries a provider_connection_id); both may be
 // nil for a deployment that offers only the shared, env-configured Coder.
 func New(
-	nodeOps, docker, coder sandbox.Provider,
+	docker, coder, freestyle sandbox.Provider,
 	coderConnections coderConnectionStore,
 	cipher *secrets.Cipher,
 ) *Resolver {
 	return &Resolver{
-		nodeOps:          nodeOps,
 		docker:           docker,
 		coder:            coder,
+		freestyle:        freestyle,
 		coderConnections: coderConnections,
 		cipher:           cipher,
 	}
@@ -58,20 +58,6 @@ func New(
 // learns which provider it is talking to.
 func (r *Resolver) Resolve(ctx context.Context, record domain.Sandbox) (sandbox.Provider, error) {
 	switch record.Provider {
-	case sandbox.ProviderNodeOps:
-		if record.ProviderConnectionID != "" {
-			// Bring-your-own-NodeOps credentials live encrypted in
-			// ao_provider_connections. Decrypting them needs the secrets
-			// cipher, which this slice does not build.
-			return nil, fmt.Errorf(
-				"per-organization NodeOps credentials are not supported yet (connection %s)",
-				record.ProviderConnectionID,
-			)
-		}
-		if r.nodeOps == nil {
-			return nil, fmt.Errorf("nodeops sandbox provider is not configured")
-		}
-		return r.nodeOps, nil
 	case sandbox.ProviderDocker:
 		if record.ProviderConnectionID != "" {
 			return nil, fmt.Errorf("per-organization Docker connections are not supported")
@@ -95,9 +81,18 @@ func (r *Resolver) Resolve(ctx context.Context, record domain.Sandbox) (sandbox.
 			return nil, fmt.Errorf("coder sandbox provider does not support durable session profiles")
 		}
 		return scoped.ForSandbox(record)
-	case sandbox.ProviderDaytona, sandbox.ProviderECS:
-		return nil, fmt.Errorf("sandbox provider %q is not configured", record.Provider)
+	case sandbox.ProviderFreestyle:
+		if record.ProviderConnectionID != "" {
+			return nil, fmt.Errorf("per-organization Freestyle connections are not supported")
+		}
+		if r.freestyle == nil {
+			return nil, fmt.Errorf("freestyle sandbox provider is not configured")
+		}
+		return r.freestyle, nil
 	default:
+		if sandbox.IsRetiredProvider(record.Provider) {
+			return nil, fmt.Errorf("%w: %s", sandbox.ErrProviderRetired, record.Provider)
+		}
 		return nil, fmt.Errorf("unsupported sandbox provider %q", record.Provider)
 	}
 }

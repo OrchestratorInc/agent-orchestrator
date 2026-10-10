@@ -163,12 +163,16 @@ func run(logger *slog.Logger) error {
 	}
 	// Heartbeat before waiting out the first interval. Bootstrap registration is
 	// not a check-in, so a repaired worker can otherwise be replaced again
-	// before the control plane ever observes it.
-	if renewed, err := client.heartbeat(ctx); err != nil {
-		logger.Warn("first heartbeat failed", "error", err)
-	} else if err := client.setToken(renewed); err != nil {
-		return err
-	}
+	// before the control plane ever observes it. It runs beside the rest of
+	// startup: worker tokens are signed and a renewal does not revoke the one in
+	// use, so nothing below has to wait a control-plane round trip for it.
+	go func() {
+		if renewed, err := client.heartbeat(ctx); err != nil {
+			logger.Warn("first heartbeat failed", "error", err)
+		} else if err := client.setToken(renewed); err != nil {
+			logger.Warn("persist renewed worker token", "error", err)
+		}
+	}()
 	var agentCommandFactory workertransport.AgentCommandFactory
 	pullRequestSocketPath := filepath.Join(dataDir, "ao-pull-request.sock")
 	reviewSocketPath := filepath.Join(dataDir, "ao-review.sock")
@@ -235,6 +239,8 @@ func run(logger *slog.Logger) error {
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Before any goroutine below can read the prefetch fields.
+	client.startStartupPrefetch(runCtx, bootstrap.Launch)
 	started := make(chan error, 1)
 	chatWorkspaceReady := make(chan struct{})
 	checkoutRequested := make(chan struct{}, 1)
@@ -261,10 +267,13 @@ func run(logger *slog.Logger) error {
 			return nil
 		},
 		InitialInterface: committedInterface,
-		AgentSessionID:   bootstrap.Launch.AgentSessionID,
-		SelectedModel:    bootstrap.Launch.Model,
-		SelectedEffort:   bootstrap.Launch.ReasoningEffort,
-		SelectionAt:      bootstrap.Launch.SelectionAt,
+		// Set by providers that restore a paused VM's memory (Freestyle): the
+		// agent then survives the worker restart a wake performs.
+		PersistAgent:   os.Getenv("AO_WORKER_PERSIST_AGENT") == "1",
+		AgentSessionID: bootstrap.Launch.AgentSessionID,
+		SelectedModel:  bootstrap.Launch.Model,
+		SelectedEffort: bootstrap.Launch.ReasoningEffort,
+		SelectionAt:    bootstrap.Launch.SelectionAt,
 	}
 	transportSupervisor.ProjectReviewCommand = func(ctx context.Context, input worker.TerminalCommand) (workerexec.Command, error) {
 		launch, err := reviewerLaunch(bootstrap.Launch, input)
@@ -286,6 +295,11 @@ func run(logger *slog.Logger) error {
 		command.Env["AO_SESSION_ID"] = bootstrap.SessionID
 		command.Env[worker.ReviewTerminalEnv] = "1"
 		return command, nil
+	}
+	// A worker starting in Chat must not leave a TUI agent from an interrupted
+	// handoff running beside the Chat runner; end it before anything starts.
+	if committedInterface == workertransport.InterfaceChat {
+		transportSupervisor.StopPersistentAgent()
 	}
 	// Real-time terminal streaming (duplex predictive echo) rides the same
 	// worker transport; wire it before Run when the sandbox opts in. Preserved
@@ -617,6 +631,38 @@ type client struct {
 	tokenFile string
 	mu        sync.RWMutex
 	token     string
+	// Startup lookups made beside the checkout (see startStartupPrefetch).
+	// Set before any goroutine that reads them starts; nil means none.
+	credentialPrefetch *prefetch[worker.CredentialResponse]
+	transcriptPrefetch *prefetch[transcriptLookup]
+	grantPrefetch      *prefetch[worker.CheckoutGrantResponse]
+}
+
+// startStartupPrefetch begins the lookups the coding agent's launch needs but
+// the checkout does not: the captured transcript (read by rehydration) and the
+// coding-agent credential. They run while the repository is fetched, so once
+// the checkout gate opens the agent launches without two more round trips. The
+// gate itself is unchanged: the agent still starts only after checkout and
+// rehydration.
+//
+// The checkout grant is requested here too, so the checkout does not wait for
+// the transport to start and worker.ready to post before asking for it.
+func (c *client) startStartupPrefetch(ctx context.Context, launch worker.LaunchContext) {
+	if launch.RepositoryURL != "" && !worker.IsScratchRepositoryURL(launch.RepositoryURL) {
+		c.grantPrefetch = startPrefetch(ctx, prefetchMaxAge, c.fetchCheckoutGrant)
+	}
+	c.transcriptPrefetch = startPrefetch(ctx, prefetchMaxAge, func(ctx context.Context) (transcriptLookup, error) {
+		checkpoint, found, err := c.fetchTranscript(ctx)
+		return transcriptLookup{checkpoint: checkpoint, found: found}, err
+	})
+	// Only a terminal (TUI) launch builds the agent right after the gate; a chat
+	// session asks for the credential on its first turn, likely past maxAge.
+	if verifyHarnessAvailable(launch.Harness) == nil &&
+		strings.TrimSpace(launch.Interface) != workertransport.InterfaceChat {
+		c.credentialPrefetch = startPrefetch(ctx, prefetchMaxAge, func(ctx context.Context) (worker.CredentialResponse, error) {
+			return c.agentCredential(ctx, "")
+		})
+	}
 }
 
 func (c *client) bootstrap(ctx context.Context, bootstrapToken string) (worker.BootstrapResponse, error) {
@@ -669,7 +715,7 @@ func (c *client) connect(
 		return worker.BootstrapResponse{}, errors.New(
 			"no valid worker credential and AO_WORKER_BOOTSTRAP_TOKEN is required")
 	}
-	resp, err := c.bootstrap(ctx, bootstrapToken)
+	resp, err := c.bootstrapWithRetry(ctx, logger, bootstrapToken)
 	if err != nil {
 		return worker.BootstrapResponse{}, fmt.Errorf("bootstrap: %w", err)
 	}
@@ -677,6 +723,36 @@ func (c *client) connect(
 		return worker.BootstrapResponse{}, err
 	}
 	return resp, nil
+}
+
+// bootstrapAttempts bounds how often a worker retries its first request when
+// the network drops it (about 3.75s of backoff in all). Without it, one dropped
+// connection at startup strands the session until the control plane's startup
+// deadline replaces the sandbox.
+const bootstrapAttempts = 5
+
+// bootstrapWithRetry retries only transport failures. An HTTP error status is
+// returned at once: the ticket is single-use, so a request the control plane
+// already answered must not be replayed. A transport failure after the ticket
+// was spent is answered on retry with a clean rejection, no worse than failing.
+func (c *client) bootstrapWithRetry(
+	ctx context.Context, logger *slog.Logger, bootstrapToken string,
+) (worker.BootstrapResponse, error) {
+	delay := 250 * time.Millisecond
+	for attempt := 1; ; attempt++ {
+		resp, err := c.bootstrap(ctx, bootstrapToken)
+		var transport *url.Error
+		if err == nil || !errors.As(err, &transport) || attempt == bootstrapAttempts {
+			return resp, err
+		}
+		logger.Warn("worker bootstrap request failed; retrying", "attempt", attempt, "error", err)
+		select {
+		case <-ctx.Done():
+			return resp, err
+		case <-time.After(delay):
+		}
+		delay *= 2
+	}
 }
 
 func (c *client) loadPersistedToken() string {
@@ -791,6 +867,9 @@ func (c *client) EnsureAgentTerminal(ctx context.Context) (worker.AgentTerminalR
 }
 
 func (c *client) Credential(ctx context.Context) (worker.CredentialResponse, error) {
+	if credential, ok := c.credentialPrefetch.take(ctx); ok {
+		return credential, nil
+	}
 	return c.agentCredential(ctx, "")
 }
 
@@ -810,7 +889,19 @@ func (c *client) agentCredential(ctx context.Context, query string) (worker.Cred
 	return response, nil
 }
 
+// grantReuseMargin is how long a prefetched checkout token must stay valid to
+// be used; a shorter-lived one is replaced so the fetch cannot outlive it.
+const grantReuseMargin = 2 * time.Minute
+
 func (c *client) checkoutGrant(ctx context.Context) (worker.CheckoutGrantResponse, error) {
+	if grant, ok := c.grantPrefetch.take(ctx); ok &&
+		(grant.Token == "" || time.Until(grant.ExpiresAt) > grantReuseMargin) {
+		return grant, nil
+	}
+	return c.fetchCheckoutGrant(ctx)
+}
+
+func (c *client) fetchCheckoutGrant(ctx context.Context) (worker.CheckoutGrantResponse, error) {
 	var response worker.CheckoutGrantResponse
 	if err := c.do(ctx, "/worker/checkout-grant", struct{}{}, &response); err != nil {
 		return worker.CheckoutGrantResponse{}, err
@@ -1164,6 +1255,10 @@ func (c *client) setToken(token string) error {
 	if token == "" {
 		return errors.New("control plane returned an empty worker token")
 	}
+	// Held across the file write: the first heartbeat runs beside startup, so
+	// two renewals may persist at once and would otherwise share the temp file.
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.tokenFile != "" {
 		temporary := c.tokenFile + ".tmp"
 		if err := os.WriteFile(temporary, []byte(token), 0o600); err != nil {
@@ -1174,8 +1269,6 @@ func (c *client) setToken(token string) error {
 			return fmt.Errorf("replace rotating worker credential: %w", err)
 		}
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.token = token
 	return nil
 }

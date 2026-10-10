@@ -29,14 +29,14 @@ def main() -> None:
     parser.add_argument("--runtime-database-user", default="")
     parser.add_argument("--worker-image", default="")
     parser.add_argument(
-        "--sandbox-provider", choices=("nodeops", "coder"), default="nodeops"
+        "--sandbox-provider", choices=("coder", "freestyle"), default="coder"
     )
     parser.add_argument(
         "--sandbox-providers",
         default="",
         help=(
             "Comma-separated list of every sandbox provider this control plane "
-            "serves (for example nodeops,coder). Defaults to --sandbox-provider "
+            "serves (for example coder,freestyle). Defaults to --sandbox-provider "
             "for a single-provider deployment. All listed providers' secrets are "
             "plumbed and preserved."
         ),

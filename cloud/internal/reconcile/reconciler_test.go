@@ -3,9 +3,11 @@ package reconcile
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -336,7 +338,7 @@ func TestWorkerSpecAdvertisesWorkerBinaryHashes(t *testing.T) {
 		WorkerHelperBinary: helperBin,
 	})
 	spec, err := reconciler.workerSpec(context.Background(), domain.Sandbox{
-		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderNodeOps,
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -356,7 +358,7 @@ func TestWorkerSpecOmitsHashesWithoutBinary(t *testing.T) {
 	t.Parallel()
 	reconciler := New(&workerSpecStore{}, nil, Options{PublicURL: "https://cloud.example.com"})
 	spec, err := reconciler.workerSpec(context.Background(), domain.Sandbox{
-		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderNodeOps,
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -371,7 +373,7 @@ func TestWorkerSpecPreservesOtherProviderWorkspaceLayout(t *testing.T) {
 	store := &workerSpecStore{}
 	reconciler := New(store, nil, Options{PublicURL: "https://cloud.example.com"})
 	spec, err := reconciler.workerSpec(context.Background(), domain.Sandbox{
-		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderNodeOps,
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -464,7 +466,7 @@ func TestRestoredDeletedSandboxReprovisions(t *testing.T) {
 	provider := &restoreProvider{found: true, env: sandbox.Environment{ID: "env-new"}}
 	reconciler := New(store, fixedResolver{provider}, Options{})
 	if err := reconciler.reconcileSandbox(context.Background(), domain.Sandbox{
-		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderNodeOps,
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
 		DesiredState:          domain.SandboxDesiredRunning,
 		ObservedState:         domain.SandboxObservedDeleted,
 		ProviderEnvironmentID: "",
@@ -487,7 +489,7 @@ func TestRestoredTerminatedSandboxReprovisions(t *testing.T) {
 	provider := &restoreProvider{found: true, env: sandbox.Environment{ID: "env-new"}}
 	reconciler := New(store, fixedResolver{provider}, Options{})
 	if err := reconciler.reconcileSandbox(context.Background(), domain.Sandbox{
-		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderNodeOps,
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
 		DesiredState:          domain.SandboxDesiredRunning,
 		ObservedState:         domain.SandboxObservedTerminated,
 		ProviderEnvironmentID: "",
@@ -510,7 +512,7 @@ func TestTerminatedSandboxStaysParkedWhenNotRunning(t *testing.T) {
 	provider := &restoreProvider{env: sandbox.Environment{ID: "env-1"}}
 	reconciler := New(store, fixedResolver{provider}, Options{})
 	if err := reconciler.reconcileSandbox(context.Background(), domain.Sandbox{
-		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderNodeOps,
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
 		DesiredState:          domain.SandboxDesiredPaused,
 		ObservedState:         domain.SandboxObservedTerminated,
 		ProviderEnvironmentID: "env-1",
@@ -557,7 +559,7 @@ func TestReconcilePauseDisconnectsWorker(t *testing.T) {
 	provider := &stopSpyProvider{state: sandbox.StateRunning}
 	reconciler := New(store, fixedResolver{provider}, Options{})
 	if err := reconciler.reconcileSandbox(context.Background(), domain.Sandbox{
-		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderNodeOps,
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
 		DesiredState:          domain.SandboxDesiredPaused,
 		ObservedState:         domain.SandboxObservedRunning,
 		ProviderEnvironmentID: "env-1",
@@ -583,7 +585,7 @@ func TestReconcilePauseAlreadyStoppedSkipsDisconnect(t *testing.T) {
 	provider := &stopSpyProvider{state: sandbox.StateStopped}
 	reconciler := New(store, fixedResolver{provider}, Options{})
 	if err := reconciler.reconcileSandbox(context.Background(), domain.Sandbox{
-		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderNodeOps,
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
 		DesiredState:          domain.SandboxDesiredPaused,
 		ObservedState:         domain.SandboxObservedStopped,
 		ProviderEnvironmentID: "env-1",
@@ -595,5 +597,344 @@ func TestReconcilePauseAlreadyStoppedSkipsDisconnect(t *testing.T) {
 	}
 	if store.disconnected != 0 {
 		t.Fatalf("DisconnectSessionWorkers called %d times on an already-stopped env, want 0", store.disconnected)
+	}
+}
+
+// claimSignalStore reports each reconcile pass (every pass starts by claiming).
+type claimSignalStore struct {
+	lifecycleStore
+	claims chan struct{}
+}
+
+func (s *claimSignalStore) ClaimSandboxes(context.Context, string, int, time.Duration) ([]domain.Sandbox, error) {
+	s.claims <- struct{}{}
+	return nil, nil
+}
+
+func TestWakeRunsAPassWithoutWaitingForTheInterval(t *testing.T) {
+	store := &claimSignalStore{claims: make(chan struct{}, 4)}
+	reconciler := New(store, nil, Options{
+		Interval: time.Hour,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = reconciler.Run(ctx) }()
+
+	waitForClaim := func(what string) {
+		t.Helper()
+		select {
+		case <-store.claims:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no reconcile pass %s", what)
+		}
+	}
+	waitForClaim("at startup")
+	reconciler.Wake()
+	waitForClaim("after Wake")
+}
+
+func TestWakeNeverBlocksWhenAPassIsAlreadyPending(t *testing.T) {
+	reconciler := New(&lifecycleStore{}, nil, Options{})
+	done := make(chan struct{})
+	go func() {
+		// Nothing drains the channel because Run is not running.
+		reconciler.Wake()
+		reconciler.Wake()
+		reconciler.Wake()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Wake blocked")
+	}
+}
+
+// blockingClaimStore holds the first ticker pass inside its claim so a test can
+// prove a woken pass does not queue behind it.
+type blockingClaimStore struct {
+	lifecycleStore
+	calls   chan int
+	release chan struct{}
+	n       int
+	mu      sync.Mutex
+}
+
+func (s *blockingClaimStore) ClaimSandboxes(context.Context, string, int, time.Duration) ([]domain.Sandbox, error) {
+	s.mu.Lock()
+	s.n++
+	n := s.n
+	s.mu.Unlock()
+	s.calls <- n
+	if n == 2 { // the first ticker pass
+		<-s.release
+	}
+	return nil, nil
+}
+
+func TestWokenPassDoesNotWaitForABusyTickerPass(t *testing.T) {
+	store := &blockingClaimStore{calls: make(chan int, 8), release: make(chan struct{})}
+	defer close(store.release)
+	reconciler := New(store, nil, Options{
+		Interval: 10 * time.Millisecond,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = reconciler.Run(ctx) }()
+
+	next := func(what string) int {
+		t.Helper()
+		select {
+		case n := <-store.calls:
+			return n
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no claim %s", what)
+			return 0
+		}
+	}
+	next("for the initial pass")
+	next("for the ticker pass, which now blocks")
+	reconciler.Wake()
+	if n := next("for the woken pass while the ticker pass is blocked"); n != 3 {
+		t.Fatalf("claim #%d, want the woken pass (#3)", n)
+	}
+}
+
+// resumingProvider reports running as soon as it is started, as a Freestyle
+// VM does once its memory is restored.
+type resumingProvider struct{ lifecycleProvider }
+
+func (p *resumingProvider) Start(ctx context.Context, id sandbox.ID) error {
+	p.environment.State = sandbox.StateRunning
+	return p.lifecycleProvider.Start(ctx, id)
+}
+
+func (p *resumingProvider) Resume(ctx context.Context, id sandbox.ID) error {
+	return p.Start(ctx, id)
+}
+
+func TestFreestyleRestoreRefreshesWorkerInSamePass(t *testing.T) {
+	store := &lifecycleStore{}
+	provider := &resumingProvider{lifecycleProvider{environment: sandbox.Environment{
+		ID: "vm-1", State: sandbox.StatePaused,
+	}}}
+	record := runningRecord(false)
+	record.Provider = sandbox.ProviderFreestyle
+	record.ObservedState = domain.SandboxObservedStopped
+	if err := testReconciler(store, provider).reconcileSandbox(context.Background(), record); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if provider.starts != 1 {
+		t.Fatalf("starts = %d, want 1", provider.starts)
+	}
+	// Without the inline wait the pass would end in "restoring" and the worker
+	// refresh would wait for a later pass.
+	if got := store.observations; len(got) != 1 || got[0] != domain.SandboxObservedBootstrapping {
+		t.Fatalf("observations = %v, want [%s]", got, domain.SandboxObservedBootstrapping)
+	}
+}
+
+func TestCoderRestoreKeepsTickDrivenRefresh(t *testing.T) {
+	store := &lifecycleStore{}
+	provider := &resumingProvider{lifecycleProvider{environment: sandbox.Environment{
+		ID: "workspace-1", State: sandbox.StateStopped,
+	}}}
+	if err := testReconciler(store, provider).reconcileSandbox(context.Background(), runningRecord(false)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := store.observations; len(got) != 1 || got[0] != domain.SandboxObservedRestoring {
+		t.Fatalf("observations = %v, want [%s]", got, domain.SandboxObservedRestoring)
+	}
+}
+
+// uniqueProvider rejects a second Create for the same session, as Freestyle
+// does for a taken slug, and counts the lookups the reconciler makes.
+type uniqueProvider struct {
+	lifecycleProvider
+	exists  bool
+	lookups int
+	creates int
+}
+
+func (p *uniqueProvider) CreateRejectsDuplicates() {}
+
+func (p *uniqueProvider) Create(context.Context, sandbox.Spec) (sandbox.Environment, error) {
+	p.creates++
+	if p.exists {
+		return sandbox.Environment{}, sandbox.ErrAlreadyExists
+	}
+	return p.environment, nil
+}
+
+func (p *uniqueProvider) FindBySession(context.Context, string) (sandbox.Environment, bool, error) {
+	p.lookups++
+	return p.environment, p.exists, nil
+}
+
+func provisionRecord() domain.Sandbox {
+	return domain.Sandbox{
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
+		DesiredState:  domain.SandboxDesiredRunning,
+		ObservedState: domain.SandboxObservedRequested,
+	}
+}
+
+func TestProvisionSkipsLookupForDuplicateRejectingProvider(t *testing.T) {
+	store := &lifecycleStore{}
+	provider := &uniqueProvider{lifecycleProvider: lifecycleProvider{environment: sandbox.Environment{
+		ID: "vm-1", State: sandbox.StateRunning,
+	}}}
+	_ = testReconciler(store, provider).provision(context.Background(), provisionRecord(), provider)
+	if provider.lookups != 0 || provider.creates != 1 {
+		t.Fatalf("lookups = %d, creates = %d; want 0, 1", provider.lookups, provider.creates)
+	}
+}
+
+func TestProvisionAdoptsSandboxOnDuplicateConflict(t *testing.T) {
+	store := &lifecycleStore{}
+	provider := &uniqueProvider{exists: true, lifecycleProvider: lifecycleProvider{environment: sandbox.Environment{
+		ID: "vm-1", State: sandbox.StateRunning,
+	}}}
+	if err := testReconciler(store, provider).provision(context.Background(), provisionRecord(), provider); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if provider.lookups != 1 {
+		t.Fatalf("lookups = %d, want 1 after the conflict", provider.lookups)
+	}
+	if got := store.observations; len(got) != 1 || got[0] != domain.SandboxObservedProvisioning {
+		t.Fatalf("observations = %v, want adoption as provisioning", got)
+	}
+}
+
+// A sandbox last observed paused whose compute is already running (the
+// provider reported it running before the restore branch acted) must get a
+// fresh worker at once: the pause fenced the old one, and without a relaunch
+// the session waits out the whole startup deadline with no worker.
+func TestPausedSandboxFoundRunningRelaunchesWorker(t *testing.T) {
+	store := &lifecycleStore{}
+	provider := &byoProvider{lifecycleProvider: lifecycleProvider{environment: sandbox.Environment{
+		ID: "vm-1", State: sandbox.StateRunning,
+	}}}
+	seen := time.Now().Add(-10 * time.Second)
+	record := domain.Sandbox{
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
+		ProviderEnvironmentID: "vm-1",
+		DesiredState:          domain.SandboxDesiredRunning,
+		ObservedState:         domain.SandboxObservedStopped,
+		WorkerLastSeenAt:      &seen,
+		ResourceProfile:       json.RawMessage(`{"provider":"freestyle","freestyle":{"snapshot":"snap-1"}}`),
+		UpdatedAt:             seen,
+	}
+	if err := byoReconciler(store, provider).reconcileSandbox(context.Background(), record); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(provider.bootstraps) != 1 {
+		t.Fatalf("bootstraps = %d, want a fresh worker launched now", len(provider.bootstraps))
+	}
+	if got := store.observations; len(got) != 1 || got[0] != domain.SandboxObservedBootstrapping {
+		t.Fatalf("observations = %v, want [%s]", got, domain.SandboxObservedBootstrapping)
+	}
+}
+
+// retiredStore records the store calls a retired-provider row may make.
+type retiredStore struct {
+	pausePathStore
+	completed    int
+	startupCode  string
+	startupError string
+	lastError    string
+}
+
+func (s *retiredStore) CompleteSandboxDeletion(context.Context, string, string, string) error {
+	s.completed++
+	return nil
+}
+
+func (s *retiredStore) RecordSandboxStartupError(_ context.Context, _, _, _, code, message string) error {
+	s.startupCode, s.startupError = code, message
+	return nil
+}
+
+func (s *retiredStore) UpdateSandboxObservation(
+	_ context.Context, _, _, _, _, observedState, lastError string, _ time.Time,
+) error {
+	s.observed, s.lastError = observedState, lastError
+	return nil
+}
+
+// failingResolver fails the test if the reconciler asks it for a provider.
+type failingResolver struct{ t *testing.T }
+
+func (r failingResolver) Resolve(context.Context, domain.Sandbox) (sandbox.Provider, error) {
+	r.t.Error("Resolve called for a retired provider")
+	return nil, errors.New("unexpected resolve")
+}
+
+// Deleting a session on a retired provider completes without any provider call,
+// so the row stops retrying and its quota is released.
+func TestRetiredProviderDeletionCompletesWithoutProvider(t *testing.T) {
+	t.Parallel()
+	for _, provider := range []string{"nodeops", "ecs", "lambda-microvms"} {
+		store := &retiredStore{}
+		reconciler := New(store, failingResolver{t}, Options{})
+		if err := reconciler.reconcileSandbox(context.Background(), domain.Sandbox{
+			SessionID: "session-1", OrgID: "org-1", Provider: provider,
+			DesiredState:          domain.SandboxDesiredDeleted,
+			ObservedState:         domain.SandboxObservedRunning,
+			ProviderEnvironmentID: "env-1",
+		}); err != nil {
+			t.Fatalf("%s: reconcileSandbox: %v", provider, err)
+		}
+		if store.completed != 1 {
+			t.Fatalf("%s: CompleteSandboxDeletion called %d times, want 1", provider, store.completed)
+		}
+	}
+}
+
+// A live session on a retired provider is parked as terminated with a reason
+// the session surfaces, instead of failing Resolve every tick forever.
+func TestRetiredProviderSessionIsParkedTerminated(t *testing.T) {
+	t.Parallel()
+	store := &retiredStore{}
+	reconciler := New(store, failingResolver{t}, Options{})
+	if err := reconciler.reconcileSandbox(context.Background(), domain.Sandbox{
+		SessionID: "session-1", OrgID: "org-1", Provider: "nodeops",
+		DesiredState:          domain.SandboxDesiredRunning,
+		ObservedState:         domain.SandboxObservedRunning,
+		ProviderEnvironmentID: "env-1",
+	}); err != nil {
+		t.Fatalf("reconcileSandbox: %v", err)
+	}
+	if store.observed != domain.SandboxObservedTerminated || store.lastError == "" {
+		t.Fatalf("observed = %q lastError = %q, want terminated with a reason", store.observed, store.lastError)
+	}
+	if store.startupCode != sandbox.StartupErrorProviderRetired || store.startupError == "" {
+		t.Fatalf("startup error = %q %q, want %q", store.startupCode, store.startupError, sandbox.StartupErrorProviderRetired)
+	}
+	if store.disconnected != 1 || store.completed != 0 {
+		t.Fatalf("disconnected = %d completed = %d, want 1 and 0", store.disconnected, store.completed)
+	}
+}
+
+// An already parked retired session is not re-disconnected or re-recorded.
+func TestRetiredProviderParkedSessionStaysQuiet(t *testing.T) {
+	t.Parallel()
+	store := &retiredStore{}
+	reconciler := New(store, failingResolver{t}, Options{})
+	if err := reconciler.reconcileSandbox(context.Background(), domain.Sandbox{
+		SessionID: "session-1", OrgID: "org-1", Provider: "nodeops",
+		DesiredState:     domain.SandboxDesiredRunning,
+		ObservedState:    domain.SandboxObservedTerminated,
+		StartupErrorCode: sandbox.StartupErrorProviderRetired,
+	}); err != nil {
+		t.Fatalf("reconcileSandbox: %v", err)
+	}
+	if store.disconnected != 0 || store.startupCode != "" {
+		t.Fatalf("disconnected = %d startup code = %q, want no repeat", store.disconnected, store.startupCode)
+	}
+	if store.observed != domain.SandboxObservedTerminated {
+		t.Fatalf("observed = %q, want terminated", store.observed)
 	}
 }

@@ -27,6 +27,7 @@ import { SessionFileExplorer } from "./SessionFileExplorer";
 import { FilesTopbarHostContext } from "./files-topbar-host";
 import { CloudFileContentPane, CloudWorkspaceDiff } from "./CloudWorkspaceDiff";
 import { CloudSessionStartupError } from "./CloudSessionStartupError";
+import { CloudSessionStartupLoader } from "./CloudSessionStartupLoader";
 import { SessionFileTab } from "./SessionFileTabs";
 import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionFilesPopOut } from "./SessionFilesPopOut";
@@ -40,7 +41,6 @@ import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TerminalSwitchAgentButton } from "./TerminalSwitchAgentButton";
 import { TopbarButton } from "./TopbarButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
-import { MultiStepLoader } from "./ui/multi-step-loader";
 import { useBrowserView } from "../hooks/useBrowserView";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import {
@@ -221,7 +221,6 @@ function cloudStartupStage(observedState: string | undefined, workerConnected: b
 }
 
 function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false, startupNote }: { sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean; startupNote?: string }) {
-	const { t } = useTranslation();
 	const { baseUrl, client } = useCloudCp();
 	const factIndex = cloudStartupStage(observedState, workerConnected, terminalOnly);
 	const [factProgress, setFactProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
@@ -312,51 +311,9 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			if (timer !== undefined) window.clearTimeout(timer);
 		};
 	}, [client, orgId, sessionId, terminalOnly]);
-	const steps = useMemo(() => [
-		t("terminal.sessionLoader.workspace"),
-		t("terminal.sessionLoader.worker"),
-		t("terminal.sessionLoader.repositoryAgent"),
-		t("terminal.sessionLoader.terminal"),
-	], [t]);
 	const confirmedFacts = remoteProgress.index > factProgress.index ? remoteProgress : factProgress;
 	const target = confirmedFacts.index > progress.index ? confirmedFacts : progress;
-	return (
-		<div
-			// Sits at the session-pane chrome level: it must cover the loading
-			// pane's content (topbar/terminal) but MUST stay below the app overlay
-			// layer (`z-overlay`, dialogs/dropdowns). A raw high z (this was `z-[200]`)
-			// painted over any shell modal opened while a cloud session loads — the
-			// New Task dialog, the project three-dots menu — leaving it invisible
-			// behind the loader while Radix still applied `body{pointer-events:none}`,
-			// which froze the whole UI (sidebar included). Keep this <= z-overlay.
-			className={cn("absolute inset-0 z-chrome grid place-items-center bg-background", completed && "cloud-session-loader--complete pointer-events-none")}
-			data-testid="cloud-session-loader-screen"
-		>
-			{startupNote ? (
-				// AO hit a startup problem but is still retrying in the background:
-				// keep the progress up and explain the delay underneath it.
-				<div className="flex w-80 max-w-[calc(100%-2rem)] flex-col gap-4">
-					<MultiStepLoader
-						ariaLabel={t("terminal.sessionLoader.label")}
-						activeIndex={completed ? 3 : target.index}
-						className="w-full max-w-none"
-						complete={completed}
-						steps={steps}
-					/>
-					<p className="text-xs leading-relaxed text-muted-foreground" data-testid="cloud-session-startup-note">
-						{startupNote} {t("cloud.startupError.stillRetrying")}
-					</p>
-				</div>
-			) : (
-				<MultiStepLoader
-					ariaLabel={t("terminal.sessionLoader.label")}
-					activeIndex={completed ? 3 : target.index}
-					complete={completed}
-					steps={steps}
-				/>
-			)}
-		</div>
-	);
+	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} />;
 }
 
 function CloudInterfaceSwitchLoader({ target }: { target: "chat" | "tui" }) {
@@ -678,7 +635,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// bootstrapping — should block after the session has connected once.
 	// Checkout and agent startup continue after the worker connects. Wait for
 	// the actual terminal attachment before dismissing the startup view.
-	const expectsTerminal = session?.mode !== "chat" && !browserOnly;
+	// browserOnly limits the orchestrator's inspector tabs, not its terminal.
+	const expectsTerminal = session?.mode !== "chat" && (!browserOnly || Boolean(session?.cloud));
 	const sessionReady = expectsTerminal ? terminalAttached : cloudStage === "connected";
 	useEffect(() => {
 		if (session?.kind !== "orchestrator" || session.cloud || session.mode === "chat") return;
@@ -696,9 +654,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// "restoring_agent" while the sandbox is still running (a transient runtime
 	// relay drop mid-turn). A terminal re-mint (cloudReconnecting, covers a blank
 	// flash) and a genuine workspace restart still raise the loader.
-	const showLifecycleLoader = !startupFailure && (hasConnectedOnce
+	const cloudSessionResolving = cloudLookupEnabled && cloudRouteSession.isLoading;
+	const showLifecycleLoader = !startupFailure && ((!session && cloudSessionResolving) || (hasConnectedOnce
 		? (cloudReconnecting || workspaceRestarting)
-		: (cloudReconnecting || (cloudStage != null && cloudStage !== "paused_by_coder" && !sessionReady)));
+		: (cloudReconnecting || (cloudStage != null && cloudStage !== "paused_by_coder" && !sessionReady))));
 	const loaderVisibleLongEnoughRef = useRef("");
 	const [completionDismissed, setCompletionDismissed] = useState(false);
 	useEffect(() => {
@@ -1792,7 +1751,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// row. Keep the session surface (and its switch control) mounted while the
 	// direct control-plane lookup is in flight; only show "not found" after
 	// both sources have settled.
-	const cloudSessionResolving = cloudLookupEnabled && cloudRouteSession.isLoading;
 	if (!session && (hostId ? !remoteSessionQuery.isLoading : !workspaceQuery.isLoading && !workspaceSessionQuery.isLoading && !cloudSessionResolving)) {
 		const remoteCode = hostId && remoteSessionQuery.error ? apiErrorCode(remoteSessionQuery.error) : undefined;
 		const remoteError = hostId ? t(remoteCode === "BAD_PASSWORD" ? "remote.hostUnauthorized"
@@ -2113,7 +2071,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					? <CloudSessionLifecycleLoader
 						key={`${sessionId}:${cloudReconnecting && !workspaceRestarting ? "terminal" : "startup"}`}
 						sessionId={sessionId}
-						orgId={session?.cloud?.orgId ?? ""}
+						orgId={session?.cloud?.orgId ?? cloudOrgId ?? ""}
 						createdAt={session?.cloud?.observedState === "requested" ? session.createdAt : undefined}
 						observedState={session?.cloud?.observedState}
 						workerConnected={Boolean(session?.runtimeConnected)}

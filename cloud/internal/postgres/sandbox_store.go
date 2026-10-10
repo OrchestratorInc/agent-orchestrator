@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/jackc/pgx/v5"
 )
@@ -1314,6 +1315,9 @@ func (s *Store) RetrySessionStartup(
 	orgID, sessionID string,
 ) error {
 	return s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, _ sessionAccess) error {
+		if err := rejectRetiredSandboxProvider(ctx, tx, orgID, sessionID); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(
 			ctx,
 			`UPDATE ao_sandboxes sandbox
@@ -1347,6 +1351,29 @@ func (s *Store) RetrySessionStartup(
 		}
 		return nil
 	})
+}
+
+// rejectRetiredSandboxProvider returns sandbox.ErrProviderRetired when the
+// session's sandbox runs on a provider AO no longer supports, so re-arming it
+// fails cleanly instead of queuing a provision no reconciler can make. A session
+// with no sandbox row passes.
+func rejectRetiredSandboxProvider(ctx context.Context, tx pgx.Tx, orgID, sessionID string) error {
+	var provider string
+	err := tx.QueryRow(
+		ctx,
+		`SELECT provider FROM ao_sandboxes WHERE session_id = $1 AND org_id = $2`,
+		sessionID, orgID,
+	).Scan(&provider)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if sandbox.IsRetiredProvider(provider) {
+		return fmt.Errorf("%w: %s", sandbox.ErrProviderRetired, provider)
+	}
+	return nil
 }
 
 func scanSandbox(row rowScanner) (domain.Sandbox, error) {
