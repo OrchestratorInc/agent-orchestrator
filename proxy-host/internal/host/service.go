@@ -5,18 +5,20 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	proxyapi "github.com/router-for-me/CLIProxyAPI/v8/sdk/api"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 )
 
 // Build writes the SDK's configuration under root and puts the boundary in front of the SDK.
-func Build(root string, port int, controlKey, inferenceKey string, routes *Routes) (*cliproxy.Service, error) {
+func Build(root string, port int, controlKey, inferenceKey string, routes *Routes, activity *Activity) (*cliproxy.Service, error) {
 	if !filepath.IsAbs(root) || port < 1 || port > 65535 || len(controlKey) < 32 || len(inferenceKey) < 32 || controlKey == inferenceKey {
 		return nil, errors.New("invalid proxy host configuration")
 	}
@@ -54,15 +56,25 @@ func Build(root string, port int, controlKey, inferenceKey string, routes *Route
 	if err != nil {
 		return nil, err
 	}
-	b := Boundary{Routes: routes, ControlKey: controlKey, InferenceKey: inferenceKey, Logins: newLogins(authDir)}
+	b := Boundary{Routes: routes, ControlKey: controlKey, InferenceKey: inferenceKey, Logins: newLogins(authDir), Activity: activity}
+	coreusage.RegisterNamedPlugin("ao-activity", activity)
+	// The SDK runs an added middleware after its logger, which gives a request the id that bind goes by.
 	return cliproxy.NewBuilder().WithConfig(cfg).WithConfigPath(path).WithLocalManagementPassword(controlKey).
-		WithPostAuthHook(tagLogin).WithServerOptions(proxyapi.WithEngineConfigurator(func(e *gin.Engine) { e.Use(b.Middleware) }), proxyapi.WithRouterConfigurator(b.Configure)).Build()
+		WithPostAuthHook(tagLogin).WithServerOptions(proxyapi.WithEngineConfigurator(func(e *gin.Engine) { e.Use(b.Middleware) }), proxyapi.WithMiddleware(activity.bind), proxyapi.WithRouterConfigurator(b.Configure)).Build()
 }
 func Run(ctx context.Context, root string, port int, controlKey, inferenceKey string) error {
-	service, err := Build(root, port, controlKey, inferenceKey, OpenRoutes(filepath.Join(root, "run", "routes.json")))
+	activity := OpenActivity(filepath.Join(root, "run", "activity.json"))
+	service, err := Build(root, port, controlKey, inferenceKey, OpenRoutes(filepath.Join(root, "run", "routes.json")), activity)
 	if err != nil {
 		return err
 	}
+	// Saved every half minute when something changed, and once when the service stops.
+	defer activity.save()
+	go func() {
+		for range time.Tick(30 * time.Second) {
+			activity.save()
+		}
+	}()
 	return service.Run(ctx)
 }
 func tagLogin(ctx context.Context, a *coreauth.Auth) error {

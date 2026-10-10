@@ -22,6 +22,7 @@ type Boundary struct {
 	Routes                   *Routes
 	ControlKey, InferenceKey string
 	Logins                   *Logins
+	Activity                 *Activity
 }
 type request struct {
 	ID       string           `json:"id"`
@@ -91,6 +92,7 @@ func (b Boundary) Middleware(c *gin.Context) {
 	r.Header.Set(providerHeader, route.Provider)
 	r.Header.Set("Authorization", "Bearer "+b.InferenceKey)
 	r.Header.Del("X-Api-Key")
+	c.Set(sessionKey, route.TicketHash)
 	// Codex's own catalogue request (client_version) has a format of its own and is left to the SDK.
 	if path == "/v1/models" && r.Method == http.MethodGet && !r.URL.Query().Has("client_version") {
 		serveSessionModels(c, route.AuthID)
@@ -149,7 +151,7 @@ func (b Boundary) Configure(engine *gin.Engine, h *handlers.BaseAPIHandler, _ *c
 		return http.StatusOK, gin.H{"models": models}
 	}))
 	engine.POST("/ao/account-state", forAccount(func(_ context.Context, auth *coreauth.Auth, _ request) (int, any) {
-		return http.StatusOK, accountState(auth, time.Now())
+		return http.StatusOK, b.Activity.report(accountState(auth, time.Now()), auth.ID, time.Now())
 	}))
 	engine.POST("/ao/provider-call", forAccount(func(ctx context.Context, auth *coreauth.Auth, body request) (int, any) {
 		if origin := providerOrigins[auth.Provider]; origin == "" || !strings.HasPrefix(body.URL, origin) {

@@ -36,7 +36,7 @@ func TestBuildRejectsUnsafeConfiguration(t *testing.T) {
 		{t.TempDir(), 1234, control, "short"},
 		{t.TempDir(), 1234, control, control},
 	} {
-		if service, err := Build(tc.root, tc.port, tc.control, tc.inference, openTestRoutes(t)); err == nil || service != nil {
+		if service, err := Build(tc.root, tc.port, tc.control, tc.inference, openTestRoutes(t), openTestActivity(t)); err == nil || service != nil {
 			t.Fatalf("unsafe configuration accepted: root=%s port=%d", tc.root, tc.port)
 		}
 		if entries, _ := os.ReadDir(tc.root); len(entries) != 0 {
@@ -62,7 +62,7 @@ func TestBuildKeepsEverythingPrivateAndUnderItsDataDirectory(t *testing.T) {
 	for _, name := range []string{"ordinary", "folder with spaces", "account#data?", "账户"} {
 		root := filepath.Join(t.TempDir(), name)
 		routes := OpenRoutes(filepath.Join(root, "run", "routes.json"))
-		if service, err := Build(root, 12345, control, inference, routes); err != nil || service == nil {
+		if service, err := Build(root, 12345, control, inference, routes, openTestActivity(t)); err != nil || service == nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		cfg, raw := savedConfig(t, root)
@@ -105,7 +105,7 @@ func TestBuildTightensTheCredentialDirectoryAndKeepsItsAccounts(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(authDir, "kept.json"), credential, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Build(root, 12345, control, inference, openTestRoutes(t)); err != nil {
+	if _, err := Build(root, 12345, control, inference, openTestRoutes(t), openTestActivity(t)); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(authDir)
@@ -125,7 +125,7 @@ func TestBuildFailsRatherThanRunOnStorageItCannotUse(t *testing.T) {
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if service, err := Build(root, 12345, control, inference, openTestRoutes(t)); err == nil || service != nil {
+		if service, err := Build(root, 12345, control, inference, openTestRoutes(t), openTestActivity(t)); err == nil || service != nil {
 			t.Fatalf("%s: the helper was built anyway", name)
 		}
 		// Nothing is replaced: a damaged configuration may still hold the person's API keys.
@@ -137,7 +137,7 @@ func TestBuildFailsRatherThanRunOnStorageItCannotUse(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "config.yaml"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if service, err := Build(root, 12345, control, inference, openTestRoutes(t)); err == nil || service != nil {
+	if service, err := Build(root, 12345, control, inference, openTestRoutes(t), openTestActivity(t)); err == nil || service != nil {
 		t.Fatal("a configuration path that is a directory was accepted")
 	}
 }
@@ -202,7 +202,7 @@ func running(t *testing.T, service *cliproxy.Service, port int) (call func(metho
 
 func TestBuiltHelperServesTheSDKsSignInsAndKeepsAPIKeysAcrossRestarts(t *testing.T) {
 	root, port := t.TempDir(), freePort(t)
-	service, err := Build(root, port, control, inference, OpenRoutes(filepath.Join(root, "run", "routes.json")))
+	service, err := Build(root, port, control, inference, OpenRoutes(filepath.Join(root, "run", "routes.json")), openTestActivity(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestBuiltHelperServesTheSDKsSignInsAndKeepsAPIKeysAcrossRestarts(t *testing
 	}
 	stop()
 	restartedPort := freePort(t)
-	if _, err = Build(root, restartedPort, control, inference, OpenRoutes(filepath.Join(root, "run", "routes.json"))); err != nil {
+	if _, err = Build(root, restartedPort, control, inference, OpenRoutes(filepath.Join(root, "run", "routes.json")), openTestActivity(t)); err != nil {
 		t.Fatal(err)
 	}
 	cfg, _ := savedConfig(t, root)

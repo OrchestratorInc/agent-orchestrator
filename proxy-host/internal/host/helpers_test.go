@@ -147,6 +147,7 @@ type fixture struct {
 	routes  *Routes
 	manager *coreauth.Manager
 	logins  *Logins
+	counted *Activity
 	apiKey  bool // sessions present their ticket as X-Api-Key, as Claude Code does
 }
 
@@ -173,7 +174,8 @@ func bareFixture(t *testing.T, providers ...*fakeProvider) (*fixture, *handlers.
 	}
 	f := &fixture{t: t, engine: gin.New(), manager: manager, logins: newLogins(t.TempDir())}
 	f.routes = OpenRoutes(filepath.Join(t.TempDir(), "run", "routes.json"))
-	boundary := Boundary{Routes: f.routes, ControlKey: control, InferenceKey: inference, Logins: f.logins}
+	f.counted = OpenActivity(filepath.Join(t.TempDir(), "run", "activity.json"))
+	boundary := Boundary{Routes: f.routes, ControlKey: control, InferenceKey: inference, Logins: f.logins, Activity: f.counted}
 	base := handlers.NewBaseAPIHandlers(&config.SDKConfig{}, manager)
 	f.engine.Use(boundary.Middleware)
 	boundary.Configure(f.engine, base, &config.Config{})
