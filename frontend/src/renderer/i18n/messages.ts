@@ -10,13 +10,13 @@ import type { AppLocale } from "./locales";
 
 /** English is the source-of-truth catalog; keys are typed from it. */
 export const enMessages = en;
-export const zhCNMessages = { ...enMessages, ...zhCN };
-export const jaMessages = { ...enMessages, ...ja };
-export const koMessages = { ...enMessages, ...ko };
-export const esMessages = { ...enMessages, ...es };
-export const frMessages = { ...enMessages, ...fr };
-export const deMessages = { ...enMessages, ...de };
-export const ptBRMessages = { ...enMessages, ...ptBR };
+export const zhCNMessages = zhCN;
+export const jaMessages = ja;
+export const koMessages = ko;
+export const esMessages = es;
+export const frMessages = fr;
+export const deMessages = de;
+export const ptBRMessages = ptBR;
 
 export type MessageKey = {
 	[K in keyof typeof enMessages]: typeof enMessages[K] extends string ? K : never;

@@ -4,7 +4,6 @@ export type DaemonLaunchSpec = {
 	cwd: string;
 	shell: boolean;
 	source: "configured" | "bundled" | "dev";
-	env?: Record<string, string>;
 };
 
 function joinPath(...segments: string[]): string {
@@ -41,10 +40,6 @@ export function resolveDaemonLaunch(
 		return {
 			command: env.AO_DEV_DAEMON_BINARY?.trim() || joinPath(appPath, "daemon", bundledDaemonBinaryName(platform)),
 			args: ["daemon"],
-			// build-daemon puts the account helper beside the daemon it builds, which
-			// is where the daemon looks for it. Only a helper the developer chose
-			// explicitly is passed on.
-			...(env.AO_PROXY_HOST_BINARY ? { env: { AO_PROXY_HOST_BINARY: env.AO_PROXY_HOST_BINARY } } : {}),
 			cwd: appPath,
 			shell: false,
 			source: "dev",

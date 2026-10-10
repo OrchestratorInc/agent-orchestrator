@@ -289,10 +289,11 @@ describe("normalizeApiOperation", () => {
 		expect(normalizeApiOperation("POST", "/api/v1/sessions/ao-42/renders/r-1/artifact")).toBe("POST /api/v1/sessions/:id/renders/:id/artifact");
 	});
 
-	it("normalizes provider-account and session routes without exposing ids", () => {
-		expect(normalizeApiOperation("DELETE", "/api/v1/provider-accounts/account-42")).toBe("DELETE /api/v1/provider-accounts/:id");
-		expect(normalizeApiOperation("PUT", "/api/v1/provider-accounts/account-42/primary")).toBe("PUT /api/v1/provider-accounts/:id/primary");
-		expect(normalizeApiOperation("GET", "/api/v1/sessions/session-42/provider-account")).toBe("GET /api/v1/sessions/:id/provider-account");
+	it("normalizes provider-account routes without exposing account, session or sign-in ids", () => {
+		expect(normalizeApiOperation("POST", "/api/v1/provider-accounts/account-42/actions")).toBe("POST /api/v1/provider-accounts/:id/actions");
+		expect(normalizeApiOperation("GET", "/api/v1/provider-accounts/sessions/session-42")).toBe("GET /api/v1/provider-accounts/sessions/:id");
+		expect(normalizeApiOperation("GET", "/api/v1/provider-accounts/login/login-42")).toBe("GET /api/v1/provider-accounts/login/:id");
+		expect(normalizeApiOperation("POST", "/api/v1/provider-accounts/login")).toBe("POST /api/v1/provider-accounts/login");
 	});
 });
 

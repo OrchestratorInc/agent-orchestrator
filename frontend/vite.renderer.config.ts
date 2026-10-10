@@ -217,7 +217,6 @@ export default defineConfig({
 	// to the daemon so the renderer can be tested against a running daemon from
 	// a plain browser without an Electron shell.
 	server: {
-		host: "127.0.0.1",
 		proxy: {
 			"/api": {
 				target: process.env.AO_DEV_API_TARGET ?? "http://127.0.0.1:3001",

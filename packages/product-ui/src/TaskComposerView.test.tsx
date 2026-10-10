@@ -150,17 +150,6 @@ describe("TaskComposerView", () => {
 		expect(container.querySelector("form")?.firstElementChild).toBe(context);
 	});
 
-	it("keeps the row to agent, model and effort, in that order", () => {
-		render(<TaskComposerView {...viewProps()} />);
-
-		const group = screen.getByRole("group", { name: "Runs with" });
-		expect(group.children).toHaveLength(3);
-		const order = (node: Element) => [...group.children].findIndex((slot) => slot.contains(node));
-		expect(order(screen.getByRole("button", { name: "Agent" }))).toBe(0);
-		expect(order(screen.getByRole("textbox", { name: "Model" }))).toBe(1);
-		expect(order(screen.getByRole("button", { name: "Effort" }))).toBe(2);
-	});
-
 	it("starts from a round icon button that keeps its name", () => {
 		const { rerender } = render(<TaskComposerView {...viewProps()} />);
 

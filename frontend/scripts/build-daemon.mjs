@@ -66,15 +66,14 @@ if (result.status !== 0) {
 	process.exit(result.status ?? 1);
 }
 
-const helperPath = join(dirname(buildOutPath), process.platform === "win32" ? "ao-proxy-host.exe" : "ao-proxy-host");
-const helper = spawnSync("go", ["build", "-o", helperPath, "./cmd/ao-proxy-host"], {
-	cwd: join(repoRoot, "proxy-host"), env: { ...process.env, GOWORK: "off" }, stdio: "inherit", windowsHide: true,
-});
+// The account helper is a module of its own with a pinned SDK; it and its licence go beside the daemon.
+const helperOptions = { cwd: join(repoRoot, "proxy-host"), env: { ...process.env, GOWORK: "off" }, stdio: "inherit", windowsHide: true };
+const helper = spawnSync("go", ["build", "-o", buildOutPath.replace(/ao(\.exe)?$/, "ao-proxy-host$1"), "./cmd/ao-proxy-host"], helperOptions);
 if (helper.error || helper.status !== 0) {
 	console.error(helper.error?.message ?? "account helper build failed");
 	process.exit(helper.status ?? 1);
 }
-copyFileSync(join(repoRoot, "proxy-host", "CLIProxyAPI-LICENSE"), join(dirname(buildOutPath), "CLIProxyAPI-LICENSE"));
+copyFileSync(join(helperOptions.cwd, "CLIProxyAPI-LICENSE"), join(dirname(buildOutPath), "CLIProxyAPI-LICENSE"));
 
 if (isWindowsDev) {
 	writeFileSync(windowsDevManifestPath, `${JSON.stringify({ path: buildOutPath }, null, 2)}\n`);

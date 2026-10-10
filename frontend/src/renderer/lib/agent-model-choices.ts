@@ -60,94 +60,16 @@ export function splitClaudeModels<T extends { id: string; label: string }>(model
 	return { current, other };
 }
 
-type ClaudeRow = { value: string; name: string; description?: string | null };
-
-function isContextVariant(row: ClaudeRow): boolean {
-	return /\[.*\]$/.test(row.value);
-}
-
-/** The release a Claude Code row runs: read from its name or id, else from what the row says about itself ("Opus 5.5 · Best for…"). */
-function claudeRowRelease(row: ClaudeRow) {
-	return (
-		claudeFamilyVersion({ id: row.value, label: row.name }) ??
-		claudeFamilyVersion({ id: "", label: (row.description ?? "").split("·")[0] ?? "" })
-	);
-}
-
-function rowRunsModel(row: ClaudeRow, model: { id: string; label: string }): boolean {
-	if (row.value.replace(/\[.*\]$/, "").toLowerCase() === model.id.toLowerCase()) return true;
-	const runs = claudeRowRelease(row);
-	const wanted = claudeFamilyVersion(model);
-	return Boolean(
-		runs && wanted && runs.family === wanted.family &&
-			runs.version.length === wanted.version.length && compareVersionsDesc(runs.version, wanted.version) === 0,
-	);
-}
-
-/**
- * The model choices of a Claude chat that runs on a managed account: the
- * account's models, in the account's order and under the account's names.
- *
- * Claude Code only switches to a row it reported, and it reports some models
- * under a short name ("opus" for the newest Opus), so each model is sent as the
- * row that runs it. A model with no row cannot be switched to in this process
- * and is left out, as is every row that is not one of the account's models.
- * A row for the same model with a larger context window stays, next to it. The
- * row the chat is on now always stays, so the picker can show it.
- */
-export function claudeAccountChoices<Row extends ClaudeRow>(
-	rows: Row[],
-	models: { id: string; label: string }[],
-	current?: string,
-): Row[] {
-	if (models.length === 0) return rows;
-	const plain = rows.filter((row) => row.value !== "default" && !isContextVariant(row));
-	const wide = rows.filter(isContextVariant);
-	const choices: Row[] = [];
-	const taken = new Set<string>();
-	const offer = (row: Row | undefined, name: string) => {
-		if (!row || taken.has(row.value)) return;
-		taken.add(row.value);
-		choices.push({ ...row, name });
-	};
-	for (const model of models) {
-		offer(
-			plain.find((row) => row.value.toLowerCase() === model.id.toLowerCase()) ?? plain.find((row) => rowRunsModel(row, model)),
-			model.label,
-		);
-		for (const row of wide) {
-			if (rowRunsModel(row, model)) offer(row, `${model.label} ${row.name.match(/\(.*?\)/)?.[0] ?? "(1M context)"}`);
-		}
-	}
-	const now = rows.find((row) => row.value === current);
-	if (now && !taken.has(now.value)) choices.unshift(now);
-	return choices;
-}
-
-type AccountModel = { id: string; label: string; efforts?: string[]; defaultEffort?: string };
 type LiveModel = { id: string; displayName: string; description?: string; default: boolean; efforts?: string[]; defaultEffort?: string };
-
-/**
- * The model choices of a chat that runs on a managed account and takes any
- * model by name: the account's models. The running chat still says which model
- * it is on, and that model stays listed even if the account's list lacks it.
- */
-export function accountChatModels(account: AccountModel[], live: LiveModel[]): LiveModel[] {
-	const offered = account.filter((model) => isConcreteModelID(model.id));
-	if (offered.length === 0) return live;
-	const running = new Map(live.map((model) => [model.id, model]));
-	const models = offered.map((model) => {
-		const now = running.get(model.id);
-		return {
-			id: model.id,
-			displayName: model.label || model.id,
-			default: Boolean(now?.default),
-			efforts: model.efforts?.length ? model.efforts : now?.efforts,
-			defaultEffort: now?.defaultEffort ?? model.defaultEffort,
-		};
+/** The models of a chat on a managed account that takes any model by name: the account's list, with the model the chat is on kept even when the list lacks it. */
+export function accountChatModels(account: { id: string; label: string; efforts?: string[]; defaultEffort?: string }[], live: LiveModel[]): LiveModel[] {
+	const offered = account.filter((model) => isConcreteModelID(model.id)).map((model) => {
+		const now = live.find((entry) => entry.id === model.id);
+		return { id: model.id, displayName: model.label || model.id, default: Boolean(now?.default), efforts: model.efforts?.length ? model.efforts : now?.efforts, defaultEffort: now?.defaultEffort ?? model.defaultEffort };
 	});
 	const current = live.find((model) => model.default && !offered.some((entry) => entry.id === model.id));
-	return current ? [current, ...models] : models;
+	if (offered.length === 0) return live;
+	return current ? [current, ...offered] : offered;
 }
 
 /** A configured family alias ("sonnet") duplicates that family's newest model, so mark that model as the default instead. */

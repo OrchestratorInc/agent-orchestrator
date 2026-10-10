@@ -34,31 +34,6 @@ describe("resolveDaemonLaunch", () => {
 		});
 	});
 
-	it.each(["darwin", "linux"] as const)("runs the prebuilt daemon, whose helper sits beside it, in %s development", (platform) => {
-		const launch = resolveDaemonLaunch({}, false, "/unused/resources", "/repo with spaces/frontend/", "/home/user", platform);
-		expect(launch?.command).toBe("/repo with spaces/frontend/daemon/ao");
-		expect(launch?.args).toEqual(["daemon"]);
-		// The daemon looks for the account helper next to its own binary, so no path is injected.
-		expect(launch?.env).toBeUndefined();
-	});
-
-	it("preserves an explicitly selected absolute development helper", () => {
-		const launch = resolveDaemonLaunch({ AO_PROXY_HOST_BINARY: "/custom build/ao-proxy-host" }, false, "/resources", "/app", "/home/user", "darwin");
-		expect(launch?.env).toEqual({ AO_PROXY_HOST_BINARY: "/custom build/ao-proxy-host" });
-	});
-
-	it.each(["darwin", "linux", "win32"] as const)("does not inject a source helper into the packaged %s daemon", (platform) => {
-		const launch = resolveDaemonLaunch({}, true, "/resources", "/app.asar", "/home/user", platform);
-		expect(launch?.source).toBe("bundled");
-		expect(launch?.env).toBeUndefined();
-	});
-
-	it("leaves versioned Windows helper discovery beside the selected daemon executable", () => {
-		const launch = resolveDaemonLaunch({ AO_DEV_DAEMON_BINARY: "C:\\AO\\daemon\\dev-123\\ao.exe" }, false, "/resources", "C:\\AO", "C:\\Users\\dev", "win32");
-		expect(launch?.command).toBe("C:\\AO\\daemon\\dev-123\\ao.exe");
-		expect(launch?.env).toBeUndefined();
-	});
-
 	it("uses the versioned daemon exe in Windows dev when build-daemon wrote one", () => {
 		expect(
 			resolveDaemonLaunch(

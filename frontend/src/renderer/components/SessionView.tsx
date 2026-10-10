@@ -1472,19 +1472,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			switchError={handoffSwitchError}
 		/>
 	) : null, [handoffAgentSwitch, handoffControlPresentation, handoffDialogOpen, handoffSwitchError, handleHandoffDialogOpenChange, session]);
-	// Accounts belong to this machine's daemon, so the account choice is offered
-	// only for a local session.
-	const sessionAccountMenuItem = useMemo(() => session && !session.cloud && !hostId ? (
-		<SessionProviderAccountMenuItem sessionId={session.id} />
-	) : null, [hostId, session]);
 	// Cloud sessions only expose the interface switch; agent handoff is local.
 	const sessionTabActions = useMemo(() => interfaceUi.unsupported ? null : (
 		<SessionActionsMenu inlineStatus={interfaceUi.inlineStatus}>
 			{interfaceUi.menuItem}
-			{sessionAccountMenuItem}
+			{session && !session.cloud && !hostId ? <SessionProviderAccountMenuItem sessionId={session.id} /> : null}
 			{handoffMenuItem}
 		</SessionActionsMenu>
-	), [handoffMenuItem, interfaceUi.inlineStatus, interfaceUi.menuItem, interfaceUi.unsupported, sessionAccountMenuItem]);
+	), [handoffMenuItem, hostId, interfaceUi.inlineStatus, interfaceUi.menuItem, interfaceUi.unsupported, session]);
 	const sessionHeaderActions = (
 		<div
 			className="session-topbar-session-chrome flex shrink-0 items-center"

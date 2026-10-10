@@ -1803,7 +1803,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	try {
 		child = spawn(launch.command, launch.args, {
 			cwd: launch.cwd,
-			env: { ...daemonEnv(keep), ...launch.env },
+			env: daemonEnv(keep),
 			shell: launch.shell,
 			detached: true,
 			// Hide the daemon's console on a Windows GUI launch (no flashing terminal).

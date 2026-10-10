@@ -65,7 +65,6 @@ type NewTaskDialogProps = {
 
 export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCreated, onOpenChange }: NewTaskDialogProps) {
 	const { t } = useTranslation();
-	// The composer puts its account button here, level with the title.
 	const [accountSlot, setAccountSlot] = useState<HTMLElement | null>(null);
 	// Settings opens as a page in the center pane; step aside so it is not hidden behind this modal.
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
@@ -177,7 +176,6 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 						/>
 						{hostId ? <span className="text-settings-muted">· {labelForHost(hostId) ?? hostId}</span> : null}
 					</Dialog.Title>
-					{/* The composer puts its account button here, level with the title. */}
 					<div ref={setAccountSlot} className="absolute right-2.5 top-2.5" />
 					<Dialog.Description className="sr-only">
 						{t(selectedProjectId === STANDALONE_WORKSPACE_ID ? "newTask.standaloneDescription" : "newTask.description")}

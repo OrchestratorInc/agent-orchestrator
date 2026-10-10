@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountChatModels, claudeAccountChoices, foldClaudeAliasDefault, splitClaudeModels } from "./agent-model-choices";
+import { accountChatModels, foldClaudeAliasDefault, splitClaudeModels } from "./agent-model-choices";
 
 type TestModel = { id: string; label: string; isDefault?: boolean };
 const model = (label: string, id = label.toLowerCase().replace(/[ .]/g, "-"), extra: { isDefault?: boolean } = {}): TestModel => ({
@@ -57,71 +57,6 @@ describe("foldClaudeAliasDefault", () => {
 	it("never folds a configured alias into a context variant", () => {
 		const models = [model("Opus 5.5", "opus", { isDefault: true }), model("Opus 5.5 (1M context)", "opus[1m]"), model("Sonnet 5.5", "sonnet")];
 		expect(foldClaudeAliasDefault(models)).toBe(models);
-	});
-});
-
-describe("claudeAccountChoices", () => {
-	// What Claude Code reported when it was started with the account's models.
-	const rows = [
-		{ value: "default", name: "Default (recommended)", description: "Opus" },
-		{ value: "opus", name: "Opus", description: "Opus 5.5 · Best for everyday, complex tasks · $4/$20 per Mtok" },
-		{ value: "claude-fable-5-1", name: "Fable", description: "Fable 5.1 · Most capable for your hardest and longest-running tasks" },
-		{ value: "sonnet", name: "Sonnet", description: "Sonnet 5.5 · Efficient for routine tasks · $2/$10 per Mtok" },
-		{ value: "haiku", name: "Haiku", description: "Haiku 4.5 · Fastest for quick answers · $1/$5 per Mtok" },
-		{ value: "claude-opus-4-7", name: "Opus 4.7", description: "Newer version available · select Opus for Opus 5.5" },
-		{ value: "claude-opus-5", name: "Opus 5", description: "Newer version available · select Opus for Opus 5.5" },
-		{ value: "claude-fable-5-dd-5.5-tpg", name: "claude-fable-5-dd-5.5-tpg", description: "" },
-	];
-	const account = [
-		{ id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
-		{ id: "claude-opus-4-7", label: "Opus 4.7" },
-		{ id: "claude-opus-5", label: "Opus 5" },
-		{ id: "claude-fable-5", label: "Fable 5" },
-		{ id: "claude-fable-5-1", label: "Fable 5.1" },
-		{ id: "claude-opus-5-5", label: "Opus 5.5" },
-		{ id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
-		{ id: "claude-haiku-5-5", label: "Haiku 5.5" },
-	];
-	const offered = (choices: { value: string; name: string }[]) => choices.map((choice) => `${choice.value}=${choice.name}`);
-
-	it("offers the account's models, each as the row Claude Code runs it by", () => {
-		expect(offered(claudeAccountChoices(rows, account, "claude-opus-4-7"))).toEqual([
-			"haiku=Haiku 4.5",
-			"claude-opus-4-7=Opus 4.7",
-			"claude-opus-5=Opus 5",
-			"claude-fable-5-1=Fable 5.1",
-			"opus=Opus 5.5",
-			"sonnet=Sonnet 5.5",
-		]);
-	});
-
-	it("leaves out a model this process has no row for, and every row that is not the account's", () => {
-		const values = claudeAccountChoices(rows, account, "opus").map((choice) => choice.value);
-		// Fable 5 and Haiku 5.5 are the account's, but Claude Code reported no row for them.
-		expect(values).not.toContain("claude-fable-5");
-		expect(values).not.toContain("claude-haiku-5-5");
-		expect(values).not.toContain("claude-fable-5-dd-5.5-tpg");
-		expect(values).not.toContain("default");
-	});
-
-	it("keeps the row the chat is on, so the picker can show it", () => {
-		expect(claudeAccountChoices(rows, account, "default")[0]).toEqual(rows[0]);
-	});
-
-	it("keeps a larger-context row beside the model it runs", () => {
-		const withWide = [
-			...rows,
-			{ value: "opus[1m]", name: "Opus (1M context)", description: "Opus 5.5 with 1M context" },
-			{ value: "claude-fable-5[1m]", name: "Fable", description: "" },
-		];
-		expect(offered(claudeAccountChoices(withWide, account, "opus")).filter((entry) => /\[1m\]/.test(entry))).toEqual([
-			"claude-fable-5[1m]=Fable 5 (1M context)",
-			"opus[1m]=Opus 5.5 (1M context)",
-		]);
-	});
-
-	it("changes nothing until the account's models are known", () => {
-		expect(claudeAccountChoices(rows, [], "opus")).toBe(rows);
 	});
 });
 

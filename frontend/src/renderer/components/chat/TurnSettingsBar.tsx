@@ -359,7 +359,7 @@ export function TurnSettingsBar({
  * picker names them by version, so the chat does too: an alias is the newest model of
  * its family in the catalog, and an id is its catalog entry.
  */
-function claudeChoiceLabels(catalog: { id: string; displayName: string }[]) {
+export function claudeChoiceLabels(catalog: { id: string; displayName: string }[]) {
 	if (catalog.length === 0) return undefined;
 	const entries = catalog.map((model) => ({ id: model.id, label: model.displayName }));
 	const newest = splitClaudeModels(entries).current;

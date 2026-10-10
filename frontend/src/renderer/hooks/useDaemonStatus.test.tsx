@@ -6,11 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
 	getStatusMock,
 	onStatusMock,
-		removeStatusMock,
-		connectMock,
-		stopTransportMock,
-		invalidateQueriesMock,
-		setApiBaseUrlMock,
+	removeStatusMock,
+	connectMock,
+	stopTransportMock,
+	setApiBaseUrlMock,
 	setApiDaemonStatusMock,
 	ensureAgentReadinessMock,
 	cacheAgentReadinessMock,
@@ -20,7 +19,6 @@ const {
 	removeStatusMock: vi.fn(),
 	connectMock: vi.fn(),
 	stopTransportMock: vi.fn(),
-	invalidateQueriesMock: vi.fn(),
 	setApiBaseUrlMock: vi.fn(),
 	setApiDaemonStatusMock: vi.fn(),
 	ensureAgentReadinessMock: vi.fn(),
@@ -51,7 +49,7 @@ import { useDaemonStatus } from "./useDaemonStatus";
 type DaemonStatus = { state: "starting" | "ready" | "stopped" | "error"; port?: number; pid?: number; message?: string };
 
 function fakeQueryClient(): QueryClient {
-	return { invalidateQueries: invalidateQueriesMock, removeQueries: vi.fn(), setQueryData: vi.fn() } as unknown as QueryClient;
+	return { invalidateQueries: vi.fn(), removeQueries: vi.fn(), setQueryData: vi.fn() } as unknown as QueryClient;
 }
 
 beforeEach(() => {
@@ -61,7 +59,6 @@ beforeEach(() => {
 	removeStatusMock.mockReset();
 	connectMock.mockReset().mockReturnValue(stopTransportMock);
 	stopTransportMock.mockReset();
-	invalidateQueriesMock.mockReset();
 	setApiBaseUrlMock.mockReset();
 	setApiDaemonStatusMock.mockReset();
 	ensureAgentReadinessMock.mockReset().mockResolvedValue({ agents: [] });
@@ -82,9 +79,8 @@ describe("useDaemonStatus", () => {
 		await waitFor(() => expect(result.current).toEqual({ state: "ready", port: 3037 }));
 		expect(setApiBaseUrlMock).toHaveBeenCalledWith("http://127.0.0.1:3037");
 		expect(connectMock).toHaveBeenCalledTimes(1);
-		expect(invalidateQueriesMock).toHaveBeenCalledWith({
-			queryKey: ["provider-accounts"],
-		});
+		// Refetching is the (debounced) event transport's job; only the accounts, which have no events, are invalidated.
+		expect(queryClient.invalidateQueries).toHaveBeenCalledExactlyOnceWith({ queryKey: ["provider-accounts"] });
 	});
 
 	it("quarantines the base URL for statuses without a port", async () => {
@@ -135,9 +131,6 @@ describe("useDaemonStatus", () => {
 		});
 		expect(queryClient.removeQueries).toHaveBeenCalledWith({
 			queryKey: ["system-requirements"],
-		});
-		expect(invalidateQueriesMock).toHaveBeenCalledWith({
-			queryKey: ["provider-accounts"],
 		});
 		expect(queryClient.removeQueries).toHaveBeenCalledTimes(6);
 	});

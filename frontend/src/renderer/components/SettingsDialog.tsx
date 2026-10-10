@@ -1,7 +1,7 @@
 import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
@@ -22,7 +22,6 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
-import { fetchProviderAccounts, providerAccountsCatalogueKey, providerAccountsKey } from "../hooks/useProviderAccounts";
 
 // Internal testers who see the Coder (bring-your-own) settings page in addition
 // to @11x.ai users, so the flow can be exercised on non-11x accounts.
@@ -39,7 +38,6 @@ function initialProjectSaveState(): ProjectSettingsSaveState {
 function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const { t } = useTranslation();
 	const closeSettings = useUiStore((state) => state.closeSettings);
-	const queryClient = useQueryClient();
 	const developerMode = useUiStore((state) => state.developerMode);
 	// Diagnostics (memory and CPU) is listed only with its toggle on in Developer mode.
 	const diagnostics = useUiStore((state) => state.developerMode && state.diagnostics);
@@ -51,21 +49,6 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const is11x = email.endsWith("@11x.ai") || CODER_PAGE_TEST_EMAILS.has(email);
 
 	const displaySettings = settingsModal;
-	useEffect(() => {
-		// Warm the accounts as soon as global settings opens, whichever page is shown.
-		if (settingsModal?.scope !== "global") return;
-		void queryClient.prefetchQuery({
-			queryKey: providerAccountsCatalogueKey,
-			queryFn: () => fetchProviderAccounts(false),
-			staleTime: 0,
-		});
-		void queryClient.prefetchQuery({
-			queryKey: providerAccountsKey,
-			// Opening settings re-checks every account's sign-in.
-			queryFn: () => fetchProviderAccounts(true, true),
-			staleTime: 0,
-		});
-	}, [queryClient, settingsModal?.scope]);
 	// The selected page includes several store/query subscribers. Mount it one
 	// frame after the lightweight dialog chrome so the opening interaction can
 	// paint first.

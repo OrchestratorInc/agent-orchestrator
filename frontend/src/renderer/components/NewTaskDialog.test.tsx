@@ -39,24 +39,10 @@ vi.mock("../hooks/useWorkspaceQuery", async (importOriginal) => {
 vi.mock("../lib/api-client", () => ({
 	apiClient: {
 		DELETE: (...args: unknown[]) => deleteMock(...args),
-		GET: (...args: unknown[]) => {
-			// Codex and Claude Code run on an account AO manages; without one signed
-			// in, a task for them cannot be created.
-			if (args[0] === "/api/v1/provider-accounts") {
-				return Promise.resolve({ data: {
-					accounts: [
-						{ id: "test-codex", provider: "codex", email: "codex@example.test", signedIn: true, primary: true, sessions: [] },
-						{ id: "test-claude", provider: "claude", email: "claude@example.test", signedIn: true, primary: true, sessions: [] },
-					],
-					defaults: [
-						{ provider: "codex", primaryId: "test-codex", managed: true },
-						{ provider: "claude", primaryId: "test-claude", managed: true },
-					],
-					recoveryRequired: false,
-				} });
-			}
-			return getMock(...args);
-		},
+		// Codex and Claude Code run on an account AO manages; without one signed in, a task for them cannot be created.
+		GET: (...args: unknown[]) => args[0] === "/api/v1/provider-accounts"
+			? Promise.resolve({ data: { accounts: ["codex", "claude"].map((provider) => ({ id: provider, provider, displayName: provider, email: "", signedIn: true, primary: true, sessions: [] })) } })
+			: getMock(...args),
 		POST: (...args: unknown[]) => postMock(...args),
 	},
 	apiErrorMessage: (error: unknown, fallback = "Request failed") => {

@@ -730,7 +730,6 @@ export function CommandPalette() {
 						<span className="min-w-0 truncate rounded-md bg-surface px-2 py-0.5 text-2xs font-medium text-muted-foreground">
 							{contextLabel}
 						</span>
-						{/* The new task composer puts its account button here, at the top right. */}
 						<div ref={setAccountSlot} className="ml-auto" />
 					</div>
 				)}
