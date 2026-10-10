@@ -136,3 +136,14 @@ func TestCurrentNativeDecisionCardsAreBlocked(t *testing.T) {
 		}
 	}
 }
+
+func TestChangedApprovalSelectionAndCurrentThinking(t *testing.T) {
+	card := "Do you want to proceed?\n  1. Yes\n❯ 2. Yes, and don't ask again\n  3. No"
+	footer := "\nmemcode · model · ask"
+	if state, ok := New().DetectTerminalActivity(card + footer); !ok || state != "blocked" {
+		t.Fatal(state, ok)
+	}
+	if state, ok := New().DetectTerminalActivity(card + "\n⠋ Thinking… (1s · esc to interrupt)" + footer); !ok || state != "active" {
+		t.Fatal("historical decision overrode current spinner", state, ok)
+	}
+}

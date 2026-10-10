@@ -25,6 +25,7 @@ type restorePlan struct {
 	freshSequence                       int
 }
 
+// PrepareNativeRestore validates history and prepares a generation-scoped native handshake.
 func (p *Plugin) PrepareNativeRestore(ctx context.Context, cfg ports.RestoreConfig) (ports.NativeRestoreInitialization, error) {
 	target := cfg.Session.Metadata[ports.MetadataKeyAgentSessionID]
 	digest, count, err := transcript(cfg.Session.WorkspacePath, target)
@@ -37,12 +38,20 @@ func (p *Plugin) PrepareNativeRestore(ctx context.Context, cfg ports.RestoreConf
 	}
 	return &restorePlan{argv: argv, target: target, workspace: cfg.Session.WorkspacePath, dataDir: cfg.DataDir, session: cfg.Session.ID, digest: digest, count: count}, nil
 }
+
+// Argv implements the native TUI adapter contract.
 func (p *restorePlan) Argv() []string { return append([]string(nil), p.argv...) }
+
+// LaunchEnv implements the native TUI adapter contract.
 func (*restorePlan) LaunchEnv() map[string]string {
 	return map[string]string{"AO_MEMCODE_INTERACTIVE_RESTORE": "1"}
 }
+
+// ResumeInput implements the native TUI adapter contract.
 func (p *restorePlan) ResumeInput() string { return "/resume " + p.target }
-func (p *restorePlan) TargetID() string    { return p.target }
+
+// TargetID implements the native TUI adapter contract.
+func (p *restorePlan) TargetID() string { return p.target }
 func (p *restorePlan) verifyHistory() error {
 	digest, count, err := transcript(p.workspace, p.target)
 	if err != nil {
@@ -53,6 +62,8 @@ func (p *restorePlan) verifyHistory() error {
 	}
 	return nil
 }
+
+// Ready implements the native TUI adapter contract.
 func (p *restorePlan) Ready(ctx context.Context, generation, output string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -76,6 +87,8 @@ func (p *restorePlan) Ready(ctx context.Context, generation, output string) (boo
 	p.freshSequence = w.Sequence
 	return true, nil
 }
+
+// Restored implements the native TUI adapter contract.
 func (p *restorePlan) Restored(ctx context.Context, generation, output string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -125,12 +138,12 @@ func transcript(workspace, id string) ([32]byte, int, error) {
 	if err != nil {
 		return zero, 0, err
 	}
-	defer confined.Close()
+	defer func() { _ = confined.Close() }()
 	f, err := confined.Open(relative)
 	if err != nil {
 		return zero, 0, errors.New("memcode native history missing")
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	st, err := f.Stat()
 	if err != nil || !st.Mode().IsRegular() || st.Size() > 16<<20 {
 		return zero, 0, errors.New("memcode native history is not a bounded regular file")
@@ -146,7 +159,7 @@ func transcript(workspace, id string) ([32]byte, int, error) {
 			Content []json.RawMessage `json:"content"`
 		} `json:"messages"`
 	}
-	if err = json.Unmarshal(data, &history); err != nil {
+	if err := json.Unmarshal(data, &history); err != nil {
 		return zero, 0, errors.New("memcode malformed native history")
 	}
 	if history.ID != id || len(history.Messages) == 0 {

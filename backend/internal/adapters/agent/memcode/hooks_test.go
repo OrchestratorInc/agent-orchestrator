@@ -68,19 +68,24 @@ func TestPrivateInstructionsAndWitnessPreserveUserHooks(t *testing.T) {
 	}
 }
 func TestLongPrivateContextIsNotTruncated(t *testing.T) {
-	data := []byte(strings.Repeat("Standing instruction αβ.\n", 1200))
-	chunks := instructionChunks(data)
-	if len(chunks) < 2 {
-		t.Fatal("not split")
+	data := []byte(strings.Repeat("Standing instruction αβ.\n\n", 1200))
+	chunks, err := instructionChunks(data)
+	if err != nil || len(chunks) < 2 {
+		t.Fatal("not split", err)
 	}
-	var recovered []byte
+	var recovered []string
 	for _, chunk := range chunks {
 		if len(chunk) > 8192 {
 			t.Fatal("native output cap exceeded")
 		}
-		recovered = append(recovered, chunk...)
+		recovered = append(recovered, strings.TrimSpace(string(chunk)))
 	}
-	if !bytes.Equal(data, recovered) {
-		t.Fatal("private context lost")
+	if strings.Join(recovered, "\n\n") != strings.TrimSpace(string(data)) {
+		t.Fatal("native combination altered context")
+	}
+	for _, indivisible := range []string{strings.Repeat("α", 5000), strings.Repeat("one line\n", 1200), strings.Repeat("x", 8189) + "\n\n    indented boundary"} {
+		if _, err := instructionChunks([]byte(indivisible)); err == nil {
+			t.Fatal("accepted altered or oversized context")
+		}
 	}
 }

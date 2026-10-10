@@ -131,7 +131,7 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		}
 	} else if session.Activity.State != domain.ActivityActive &&
 		session.Activity.State != domain.ActivityIdle &&
-		session.Activity.State != domain.ActivityWaitingInput && !(nativeDecisionCards && session.Activity.State == domain.ActivityBlocked) {
+		session.Activity.State != domain.ActivityWaitingInput && (!nativeDecisionCards || session.Activity.State != domain.ActivityBlocked) {
 		return
 	}
 	output, err := o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
@@ -141,7 +141,7 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	}
 	state, ok := detector.DetectTerminalActivity(output)
 	if !ok || state == session.Activity.State ||
-		(state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput && !(nativeDecisionCards && state == domain.ActivityBlocked)) {
+		(state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput && (!nativeDecisionCards || state != domain.ActivityBlocked)) {
 		return
 	}
 	event := "terminal-" + string(state)

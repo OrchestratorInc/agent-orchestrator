@@ -11,14 +11,22 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// PromptReadinessHints implements the native TUI adapter contract.
 func (*Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	return ports.PromptReadinessHints{Timeout: 30 * time.Second, PollInterval: 100 * time.Millisecond, Lines: 100, Patterns: []string{"→  Ask memcode…   ·   $ = shell"}}, ctx.Err()
 }
-func (*Plugin) ComposerIsEmpty(output string) bool       { return emptyComposer(output) }
+
+// ComposerIsEmpty implements the native TUI adapter contract.
+func (*Plugin) ComposerIsEmpty(output string) bool { return emptyComposer(output) }
+
+// ContinuouslyDetectTerminalActivity implements the native TUI adapter contract.
 func (*Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
+
+var approvalOption = regexp.MustCompile(`(?m)^\s*(?:❯\s*)?1\. (?:Yes|Execute)(?:\s|$)`)
 
 var thinkingLine = regexp.MustCompile(`^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Thinking… \([^\n]*esc to interrupt\)$`)
 
+// DetectTerminalActivity implements the native TUI adapter contract.
 func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
 	if decisionCard(output) {
 		return domain.ActivityBlocked, true
@@ -47,7 +55,6 @@ func decisionCard(output string) bool {
 	if len(lines) > 64 {
 		lines = lines[len(lines)-64:]
 	}
-	text = strings.Join(lines, "\n")
 	footer := -1
 	for i, line := range lines {
 		if strings.HasPrefix(strings.TrimSpace(line), "memcode · ") {
@@ -59,11 +66,24 @@ func decisionCard(output string) bool {
 	}
 	lines = lines[:footer]
 	text = strings.Join(lines, "\n")
-	if strings.Contains(text, "○ idle") || thinkingLine.MatchString(strings.TrimSpace(text)) {
+	// Only indicators after the newest decision cue can settle that card.
+	// Earlier status lines belong to the historical transcript.
+	approval := strings.LastIndex(text, "Do you want to proceed?")
+	question := strings.LastIndex(text, "↑↓ select · Enter · or type your own answer · Esc to skip")
+	plan := strings.LastIndex(text, "↑↓ select · Enter · type to revise · Esc cancel")
+	cue := max(approval, question, plan)
+	if cue < 0 {
 		return false
 	}
-	if strings.Contains(text, "↑↓ select · Enter · or type your own answer · Esc to skip") || strings.Contains(text, "↑↓ select · Enter · type to revise · Esc cancel") {
+	current := text[cue:]
+	for _, line := range strings.Split(current, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "○ idle" || thinkingLine.MatchString(line) {
+			return false
+		}
+	}
+	if cue == question || cue == plan {
 		return true
 	}
-	return strings.Contains(text, "Do you want to proceed?") && (strings.Contains(text, "❯ 1. Yes") || strings.Contains(text, "❯ 1. Execute"))
+	return approvalOption.MatchString(current)
 }
