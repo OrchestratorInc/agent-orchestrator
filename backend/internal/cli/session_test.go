@@ -100,6 +100,9 @@ func sessionCommandServer(t *testing.T) (*httptest.Server, *sessionRequestLog) {
 				return
 			}
 			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1","displayName":`+jsonQuote(req.DisplayName)+`}`)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/v1/sessions/demo-2":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":"bad_request","code":"ORCHESTRATOR_RENAME_UNSUPPORTED","message":"The project orchestrator cannot be renamed"}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -783,6 +786,22 @@ func TestSessionRename_SuccessWithProjectScope(t *testing.T) {
 	want := []string{"GET /api/v1/sessions/demo-1", "PATCH /api/v1/sessions/demo-1"}
 	if got := log.all(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("requests = %#v, want %#v", got, want)
+	}
+}
+
+func TestSessionRename_OrchestratorRefusalIsRuntimeError(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, _ := sessionCommandServer(t)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "session", "rename", "demo-2", "New Name")
+	if err == nil || ExitCode(err) != 1 || !strings.Contains(err.Error(), "ORCHESTRATOR_RENAME_UNSUPPORTED") {
+		t.Fatalf("err=%v exit=%d, want orchestrator rename refusal runtime error", err, ExitCode(err))
+	}
+	if strings.Contains(out, "renamed") {
+		t.Fatalf("refused rename reported success:\n%s", out)
 	}
 }
 

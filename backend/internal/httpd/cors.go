@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 )
 
 // corsMiddleware grants cross-origin read access to the allowlisted browser
@@ -37,6 +38,19 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 			// Cache keys must split on Origin even for rejected values, or a
 			// 403 could be replayed to an allowed origin.
 			w.Header().Add("Vary", "Origin")
+			// An HTML artifact framed in the chat has a real origin so its own
+			// files load same-origin, but it is an agent's page: everywhere but
+			// that host (the daemon API, other sessions, the preview origins) it
+			// is refused like any foreign origin.
+			if host, ok := inlineArtifactOriginHost(origin); ok {
+				if !strings.EqualFold(host, r.Host) {
+					envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "ORIGIN_FORBIDDEN",
+						"Origin is not allowed to access this daemon", nil)
+					return
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
 			if _, ok := allowed[origin]; !ok && !isLoopbackOrigin(origin) {
 				envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "ORIGIN_FORBIDDEN",
 					"Origin is not allowed to access this daemon", nil)
@@ -136,4 +150,17 @@ func isLoopbackOrigin(origin string) bool {
 		return ip.IsLoopback()
 	}
 	return false
+}
+
+// inlineArtifactOriginHost is the host of an inline-artifact origin, the one
+// the chat thread frames an HTML artifact from.
+func inlineArtifactOriginHost(origin string) (string, bool) {
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != "http" {
+		return "", false
+	}
+	if _, ok := previewutil.SessionIDFromInlineArtifactHost(u.Host); !ok {
+		return "", false
+	}
+	return u.Host, true
 }

@@ -483,7 +483,7 @@ describe("ShellTopbar orchestrator actions", () => {
 		if (!pulses) expect(indicator).not.toHaveClass("animate-status-pulse");
 	});
 
-	it("shows a rejected orchestrator resume request", async () => {
+	it("opens an exited orchestrator at once and shows a rejected resume request", async () => {
 		postMock.mockRejectedValueOnce(new Error("resume request failed"));
 		const exitedOrchestrator = {
 			...orchestrator,
@@ -495,7 +495,7 @@ describe("ShellTopbar orchestrator actions", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Orchestrator, Exited" }));
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("resume request failed");
-		expect(navigateMock).not.toHaveBeenCalled();
+		expect(navigateMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows a clear Kanban button on embedded orchestrator sessions", async () => {

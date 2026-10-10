@@ -71,7 +71,10 @@ describe("apiClient runtime base URL", () => {
 
 		setApiBaseUrl("http://127.0.0.1:3037");
 
+		// A request built against an older address (the daemon moved while it was
+		// being built) still takes the rebase path.
 		const { error } = await apiClient.POST("/api/v1/sessions", {
+			baseUrl: "http://127.0.0.1:3001",
 			body: { projectId: "p1", prompt: "hello" },
 		});
 
@@ -81,6 +84,35 @@ describe("apiClient runtime base URL", () => {
 		expect(seen[0].method).toBe("POST");
 		expect(seen[0].contentType).toBe("application/json");
 		expect(JSON.parse(seen[0].body ?? "{}")).toEqual({ projectId: "p1", prompt: "hello" });
+	});
+
+	// Rebasing buffers the body asynchronously; building against the current
+	// address sends the request in the same task that issued it.
+	it("builds requests against the runtime daemon address and passes them straight to fetch", async () => {
+		const seen: Request[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+			seen.push(input as Request);
+			return new Response(JSON.stringify({ session: { id: "s1" } }), {
+				status: 201,
+				headers: { "Content-Type": "application/json" },
+			});
+		});
+		setApiBaseUrl("http://127.0.0.1:3037");
+
+		const pending = apiClient.POST("/api/v1/sessions", { body: { projectId: "p1", prompt: "hello" } });
+		expect(seen).toHaveLength(1);
+		const { error } = await pending;
+
+		expect(error).toBeUndefined();
+		expect(seen[0]).toBeInstanceOf(Request);
+		expect(seen[0].url).toBe("http://127.0.0.1:3037/api/v1/sessions");
+		expect(seen[0].method).toBe("POST");
+		expect(await seen[0].json()).toEqual({ projectId: "p1", prompt: "hello" });
+
+		const viaRequest = apiClient.request("post", "/api/v1/sessions", { body: { projectId: "p1", prompt: "again" } });
+		expect(seen).toHaveLength(2);
+		await viaRequest;
+		expect(seen[1].url).toBe("http://127.0.0.1:3037/api/v1/sessions");
 	});
 
 	it("skips the rebase when the request already targets the runtime base URL", async () => {
@@ -257,6 +289,7 @@ describe("normalizeApiOperation", () => {
 	it("normalizes ids for resources a collection heuristic would miss", () => {
 		expect(normalizeApiOperation("GET", "/api/v1/orchestrators/orch-abc")).toBe("GET /api/v1/orchestrators/:id");
 		expect(normalizeApiOperation("POST", "/api/v1/prs/pr-1/merge")).toBe("POST /api/v1/prs/:id/merge");
+		expect(normalizeApiOperation("POST", "/api/v1/sessions/ao-42/renders/r-1/artifact")).toBe("POST /api/v1/sessions/:id/renders/:id/artifact");
 		expect(normalizeApiOperation("POST", "/api/v1/agents/codex/accounts/ensure")).toBe("POST /api/v1/agents/codex/accounts/ensure");
 		expect(normalizeApiOperation("DELETE", "/api/v1/agents/codex/accounts/private-account-id")).toBe("DELETE /api/v1/agents/codex/accounts/:id");
 	});

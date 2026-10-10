@@ -443,6 +443,48 @@ describe("HarnessSettingsSection", () => {
 		expect(openExternal).toHaveBeenCalledWith("https://github.com/Hmbown/Codewhale");
 	});
 
+	it("classifies an unauthorized Unreal Agent as not configured and offers documentation", async () => {
+		const unrealCatalog = { agents: [agentReadiness("unreal-agent", "Unreal Agent", { authentication: "unauthorized" })] };
+		const documentationUrl = "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/harnesses/unreal-agent.md";
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: unrealCatalog } as never;
+			if (path === "/api/v1/agents/auth-plans") {
+				return { data: { plans: [{ agentId: "unreal-agent", action: "setup", launchMode: "documentation", available: true, documentationUrl }] } } as never;
+			}
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: unrealCatalog } as never);
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+
+		renderSection();
+		const row = (await screen.findByText("Unreal Agent")).closest('[data-agent="unreal-agent"]') as HTMLElement;
+		expect(await within(row).findByText("Not set up")).toBeInTheDocument();
+		const documentation = within(row).getByRole("button", { name: "View documentation" });
+		await userEvent.click(documentation);
+		expect(openExternal).toHaveBeenCalledWith(documentationUrl);
+	});
+
+	it("keeps Unreal documentation available when credentials are configured but unverified", async () => {
+		const unrealCatalog = { agents: [agentReadiness("unreal-agent", "Unreal Agent", { authentication: "configured" })] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: unrealCatalog } as never;
+			if (path === "/api/v1/agents/auth-plans") {
+				return { data: { plans: [{ agentId: "unreal-agent", action: "setup", launchMode: "documentation", available: true, documentationUrl: "https://example.test/unreal" }] } } as never;
+			}
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: unrealCatalog } as never);
+
+		renderSection();
+		const row = (await screen.findByText("Unreal Agent")).closest('[data-agent="unreal-agent"]') as HTMLElement;
+		expect(await within(row).findByText("Configured")).toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "View documentation" })).toBeEnabled();
+	});
+
 	it("shows cached readiness while silently refreshing when the page opens", async () => {
 		const refreshed = catalogWithInstalled("claude-code", "codex");
 		let current = catalog;

@@ -802,7 +802,7 @@ describe("TaskComposer", () => {
 		);
 
 		expect(task().getAttribute("placeholder")).toBeTruthy();
-		expect(task()).toHaveClass("min-h-[calc(3lh+1.75rem)]");
+		expect(task()).toHaveClass("min-h-[calc(3lh+1.125rem)]");
 		await waitForTaskReady();
 		fireEvent.click(screen.getByText("Start task"));
 
@@ -987,27 +987,6 @@ describe("TaskComposer", () => {
 				allowCustom: false,
 			},
 			controls: async () => [await screen.findByRole("button", { name: "Model" })],
-		},
-		{
-			name: "search and direct model ID",
-			catalog: {
-				agent: "codex",
-				selectionMode: "catalog",
-				models: [{ id: "gpt-5", label: "GPT-5", isDefault: true }],
-				customModelEntry: "direct",
-				allowCustom: true,
-			},
-			controls: async () => {
-				const model = await screen.findByRole("button", { name: "Model" });
-				await userEvent.click(model);
-				await userEvent.type(screen.getByRole("searchbox", { name: "Search model" }), "private/model-id");
-				await userEvent.click(
-					screen.getByRole("menuitem", { name: "Use “private/model-id” as a custom model" }),
-				);
-				expect(model).toHaveTextContent("private/model-id");
-				expect(screen.queryByRole("textbox", { name: "Model" })).not.toBeInTheDocument();
-				return [model];
-			},
 		},
 	])("locks the $name selector while creating and restores it after failure", async ({ catalog, controls }) => {
 		h.get.mockImplementation(async (path: string) => {
@@ -1804,8 +1783,11 @@ describe("TaskComposer", () => {
 				return {
 					data: {
 						agent: "codex",
-						selectionMode: "text",
-						models: [],
+						selectionMode: "catalog",
+						models: [
+							{ id: "gpt-5", label: "GPT-5" },
+							{ id: "gpt-5.1", label: "GPT-5.1" },
+						],
 						allowCustom: true,
 						refreshRecommended: false,
 					},
@@ -1831,8 +1813,8 @@ describe("TaskComposer", () => {
 		const model = await screen.findByRole("button", { name: "Model" });
 		await userEvent.click(model);
 		expect(screen.queryByRole("menuitem", { name: "Use agent model" })).not.toBeInTheDocument();
-		await userEvent.type(screen.getByRole("searchbox", { name: "Search model" }), "gpt-5.1");
-		await userEvent.click(screen.getByRole("menuitem", { name: "Use “gpt-5.1” as a custom model" }));
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.1" }));
 		fireEvent.change(task(), { target: { value: "Use the selected model" } });
 		fireEvent.click(screen.getByText("Start task"));
 

@@ -30,6 +30,8 @@ use `--artifact <reference>` on the report for the milestone that produced it.
 Examples include a requested document, a rendered dashboard, or another output
 the orchestrator or human needs to open directly. `--artifact` takes any opaque
 reference string; it is not validated as a URL.
+In a chat session, an HTML file from the artifact directory that you attach
+with `--artifact` also shows in the thread.
 
 Routine test logs, command output, scratch notes, and intermediate diagnostics
 are working material, not deliverables. Do not attach them unless requested or

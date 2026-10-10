@@ -1,4 +1,4 @@
-package process
+package process_test
 
 import (
 	"bytes"
@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
@@ -17,9 +18,9 @@ func TestCommandTreeCancellation(t *testing.T) {
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	cmd := CommandContext(ctx, os.Args[0], "-test.run=^TestCommandTreeCancellationHelper$")
+	cmd := aoprocess.CommandContext(ctx, os.Args[0], "-test.run=^TestCommandTreeCancellationHelper$")
 	cmd.Env = append(os.Environ(), "AO_TREE_TEST_ROLE=parent", "AO_TREE_TEST_DIR="+dir)
-	ConfigureTreeCancellation(cmd)
+	aoprocess.ConfigureTreeCancellation(cmd)
 	cmd.WaitDelay = time.Second
 	var output bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &output, &output

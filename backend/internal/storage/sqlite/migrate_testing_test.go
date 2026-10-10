@@ -5,7 +5,7 @@ import (
 )
 
 func TestTestingMigrationPreservesCDCSequenceTriggersAndRollback(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 193)
+	db := openMigratedDatabaseCopy(t, 194)
 	if _, err := db.Exec(`INSERT INTO projects(id,path,registered_at) VALUES('testing-project','/isolated','2026-10-06T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
@@ -19,7 +19,7 @@ func TestTestingMigrationPreservesCDCSequenceTriggersAndRollback(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='trigger' AND sql LIKE '%change_log%'`).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	upTo(t, db, 194)
+	upTo(t, db, 195)
 	var after int
 	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='trigger' AND sql LIKE '%change_log%'`).Scan(&after); err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestTestingMigrationPreservesCDCSequenceTriggersAndRollback(t *testing.T) {
 	if seq <= 9000 {
 		t.Fatal("CDC sequence regressed", seq)
 	}
-	downTo(t, db, 193)
+	downTo(t, db, 194)
 	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='trigger' AND sql LIKE '%change_log%'`).Scan(&after); err != nil {
 		t.Fatal(err)
 	}
@@ -53,5 +53,5 @@ func TestTestingMigrationPreservesCDCSequenceTriggersAndRollback(t *testing.T) {
 	if seq <= 9001 {
 		t.Fatal("rollback regressed sequence", seq)
 	}
-	upTo(t, db, 194)
+	upTo(t, db, 195)
 }

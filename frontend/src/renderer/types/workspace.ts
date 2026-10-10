@@ -75,6 +75,11 @@ export type SessionArtifact = {
 	path: string;
 	previewUrl?: string;
 	rawUrl?: string;
+	/**
+	 * The page on its own inline origin, for framing it in the chat thread: its
+	 * files load same-origin there, and the daemon refuses that origin. html only.
+	 */
+	inlineUrl?: string;
 	size: number;
 	updatedAt: string;
 };

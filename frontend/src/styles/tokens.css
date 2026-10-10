@@ -511,6 +511,7 @@
 	--leading-settings-mobile-hint: 14px;
 	--leading-settings-mobile-warning: 15px;
 	--size-settings-action-height: 38px;
+	--size-composer-toolbar-height: var(--size-control-form);
 	--radius-settings-action: 16px;
 	--radius-settings-dialog-lg: 24px;
 	--shadow-settings-dialog: var(--elevation-xl);
@@ -796,7 +797,7 @@
 	--color-text-agents-sheet-description: var(--muted-foreground);
 	--color-text-agents-sheet-label: var(--foreground);
 
-	--color-bg-settings-row: var(--card);
+	--color-bg-settings-row: transparent;
 	--color-bg-settings-menu: var(--popover);
 	--color-bg-settings-menu-selected: color-mix(in oklch, var(--popover) 96%, var(--foreground) 4%);
 	--color-bg-settings-dialog: var(--card);

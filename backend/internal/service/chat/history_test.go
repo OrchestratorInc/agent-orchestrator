@@ -479,6 +479,50 @@ func TestAClearedProviderTitleLeavesTheSessionNameAlone(t *testing.T) {
 	}
 }
 
+// The project orchestrator keeps AO's fixed label: neither its own agent naming the
+// thread nor a title request renames it.
+func TestAProjectOrchestratorKeepsItsNameWhenItsThreadIsNamed(t *testing.T) {
+	recorder := newHistoryRecorder()
+	h := &harness{st: openStore(t), conv: recorder.fakeConversation, clock: time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC)}
+	ctx := context.Background()
+	var ids atomic.Int64
+	h.svc = chatsvc.New(chatsvc.Options{
+		Store: h.st, Sessions: h.st,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: recorder}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   func() string { return fmt.Sprintf("id-%03d", ids.Add(1)) },
+		Now:     h.now,
+	})
+	ctrl, err := h.svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: testSession, ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = h.svc.Stop(context.Background(), testSession) })
+	h.ctrl = ctrl
+
+	if _, err := h.svc.SetTitle(ctx, testSession, "A Name"); !errors.Is(err, chatsvc.ErrOrchestratorRename) {
+		t.Fatalf("SetTitle err = %v, want ErrOrchestratorRename", err)
+	}
+	if titles := recorder.setTitles(); len(titles) != 0 {
+		t.Fatalf("provider was asked to set %v", titles)
+	}
+
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: "Self Chosen Name"})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return s.Conversation.ProviderTitle == "Self Chosen Name"
+	})
+	rec, ok, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !ok {
+		t.Fatalf("get session: ok=%v err=%v", ok, err)
+	}
+	if rec.DisplayName != "" {
+		t.Errorf("display name = %q, want the orchestrator left unnamed", rec.DisplayName)
+	}
+}
+
 func TestSetTitleRefusesABlankTitle(t *testing.T) {
 	recorder := newHistoryRecorder()
 	h := newHarnessWithConversation(t, recorder)
@@ -698,6 +742,7 @@ func newEditHarnessWithOptions(
 		Harness: domain.HarnessCodex, WorkspacePath: workspace,
 		Env:          map[string]string{"AO_EDIT_TEST": "yes", "AO_BROWSER_CAPABILITY": "stale"},
 		SystemPrompt: "preserved prompt", PrepareControllerEnv: prepare,
+		MCPServers: []ports.ChatMCPServerConfig{{Name: "ao", Type: "stdio", Command: "/opt/ao/bin/ao", Args: []string{"mcp"}}},
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -1762,6 +1807,11 @@ func TestEditMessageForksBeforeMiddlePromptAndReusesStoredContent(t *testing.T) 
 		resumes[0].SystemPrompt != "preserved prompt" || resumes[0].ProviderScopeID == "" ||
 		len(starts) != 1 || resumes[0].ProviderScopeID != starts[0].ProviderScopeID {
 		t.Fatalf("resume config = %#v", resumes)
+	}
+	// The forked thread keeps the session's tool servers, such as AO's own ao server.
+	if got := resumes[0].MCPServers; len(got) != 1 || got[0].Name != "ao" || got[0].Command != "/opt/ao/bin/ao" ||
+		len(got[0].Args) != 1 || got[0].Args[0] != "mcp" {
+		t.Fatalf("fork resume MCPServers = %+v, want the start's ao server", got)
 	}
 	branch, err := h.st.ConversationBranch(ctx, h.ctrl.ConversationID(), result.ActiveBranchID)
 	if err != nil || branch.ProviderScopeID == "" || branch.ProviderScopeID != resumes[0].ProviderScopeID || !branch.ProviderIDsScoped || !resumes[0].ProviderIDsScoped {

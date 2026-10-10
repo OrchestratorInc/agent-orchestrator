@@ -25,7 +25,7 @@ Natural-language-to-command mappings for common AO tasks.
 | List projects | `ao project ls` |
 | Check installed agent harnesses and readiness | `ao agent ls --refresh` |
 | Save a repetitive agent task or exact command as a Cue | `ao cue list --json`, then `ao cue create --name "..." --prompt "..."` or `--command "..."` |
-| Rename a session | `ao session rename <id> "<name>"` |
+| Rename a worker session (not the orchestrator) | `ao session rename <id> "<name>"` |
 | Restore a killed session | `ao session restore <id>` |
 | Clean up terminated sessions | `ao session cleanup` |
 | Make a Docker container this session starts survive AO cleanup | `docker run --label ao.session=$AO_SESSION_ID --label ao.spare=true ...` |

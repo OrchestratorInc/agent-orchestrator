@@ -633,11 +633,16 @@ describe("shell workspace startup", () => {
 		expect(screen.queryByText("Getting your project ready")).not.toBeInTheDocument();
 	});
 
-	it("opens the returned orchestrator without waiting for a workspace refetch", async () => {
+	const spawnNewProject = () => {
 		shellMocks.state.daemonStatus = { state: "ready", port: 3001 };
 		vi.mocked(apiClient.POST)
 			.mockResolvedValueOnce({ data: { project: { id: "proj-new", name: "New", kind: "single_repo", path: "/repo/new" } } })
 			.mockResolvedValueOnce({ data: { session: { id: "orch-new", projectId: "proj-new", kind: "orchestrator", mode: "chat", provisionState: "provisioning" } } });
+	};
+
+	it("opens the returned orchestrator without waiting for a workspace refetch", async () => {
+		spawnNewProject();
+		shellMocks.state.routeParams = { projectId: "proj-new" };
 		await renderShell();
 		await shellMocks.state.shellValue?.createProject?.({ path: "/repo/new", workerAgent: "codex", orchestratorAgent: "codex" });
 		await waitFor(() => expect(shellMocks.navigate).toHaveBeenCalledWith({
@@ -646,7 +651,16 @@ describe("shell workspace startup", () => {
 		}));
 		const publish = shellMocks.queryClient.setQueryData.mock.calls.at(-1)?.[1] as (current: WorkspaceSummary[]) => WorkspaceSummary[];
 		expect(publish([{ ...workspaces[0], id: "proj-new", name: "New", sessions: [] }])[0].sessions[0]).toMatchObject({ id: "orch-new", mode: "chat", provisionState: "provisioning" });
-		expect(useUiStore.getState().provisioningProjectIds.has("proj-new")).toBe(true);
+		expect(useUiStore.getState().provisioningProjectIds.has("proj-new")).toBe(false);
+	});
+
+	it("does not pull the user back to a new orchestrator after they left the project", async () => {
+		spawnNewProject();
+		shellMocks.state.routeParams = { projectId: "other" };
+		await renderShell();
+		await shellMocks.state.shellValue?.createProject?.({ path: "/repo/new", workerAgent: "codex", orchestratorAgent: "codex" });
+		await waitFor(() => expect(useUiStore.getState().provisioningProjectIds.has("proj-new")).toBe(false));
+		expect(shellMocks.navigate).not.toHaveBeenCalledWith(expect.objectContaining({ to: "/projects/$projectId/sessions/$sessionId" }));
 	});
 
 	it("leaves the session topbar row to the session split instead of reserving a full-width shell row", async () => {

@@ -799,6 +799,9 @@ export function TaskComposer({
 	);
 }
 
+// The agent, model and effort menus share one compact width.
+const COMPOSER_MENU_WIDTH = "w-[min(14rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!";
+
 function TaskEffortPicker({
 	disabled,
 	label,
@@ -817,7 +820,8 @@ function TaskEffortPicker({
 			defaultEffort={defaultEffort}
 			availability={availability}
 			onChange={onChange}
-			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
+			triggerClassName="composer-chip composer-toolbar-option w-fit"
+			menuClassName={COMPOSER_MENU_WIDTH}
 		/>
 	);
 }
@@ -833,7 +837,8 @@ function DesktopAgentControl({ hostId, manageView, ...control }: TaskComposerAge
 			manageView={manageView}
 			managementLabel={(manageView === "cloud" ? t("agentSelector.manageCloud") : t("agentSelector.manage")).replace(/[.…]+$/u, "")}
 			variant="chip"
-			triggerClassName="composer-toolbar-option w-full justify-between"
+			triggerClassName="composer-toolbar-option w-fit"
+			contentClassName={COMPOSER_MENU_WIDTH}
 		/>
 	);
 }
@@ -859,7 +864,7 @@ function TaskModelPicker({
 	if (agentId === "") {
 		return (
 			<span
-				className="composer-chip composer-toolbar-option w-full cursor-not-allowed justify-start opacity-50"
+				className="composer-chip composer-toolbar-option w-fit cursor-not-allowed justify-start opacity-50"
 				aria-disabled="true"
 				aria-label={t("newTask.model")}
 			>
@@ -871,7 +876,7 @@ function TaskModelPicker({
 	if (loading) {
 		return (
 			<span
-				className="composer-chip composer-toolbar-option w-full cursor-not-allowed justify-start opacity-50"
+				className="composer-chip composer-toolbar-option w-fit cursor-not-allowed justify-start opacity-50"
 				aria-label={t("newTask.model")}
 			>
 				<span
@@ -905,8 +910,9 @@ function TaskModelPicker({
 				action={explicitMode && !defaultMode && showFollowAgentAction
 					? { label: t("settings.models.useAgentMode"), onSelect: () => onModeChange("") }
 					: undefined}
-				triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
+				triggerClassName="composer-chip composer-toolbar-option w-fit"
 				menuAlign="start"
+				menuClassName={COMPOSER_MENU_WIDTH}
 				renderTrigger={() => (
 					<span className="min-w-0 truncate text-control text-foreground" title={visibleModeLabel}>
 						{visibleModeLabel}
@@ -917,15 +923,11 @@ function TaskModelPicker({
 		);
 	}
 
-	const customModelEntry = catalog?.customModelEntry ?? (catalog?.allowCustom ? "direct" : "none");
 	const displayModels = (catalog?.models ?? []).map((item) => {
 		if (item.id === "auto") return { ...item, label: t("settings.models.autoRouteLabel") };
 		return { ...item, label: agentModelDisplayLabel(agentId, item.label) };
 	});
 	const selectCatalogModel = (nextModel: string) => {
-		onModelChange(nextModel);
-	};
-	const selectCustomModel = (nextModel: string) => {
 		onModelChange(nextModel);
 	};
 
@@ -935,8 +937,8 @@ function TaskModelPicker({
 			aria-label={t("newTask.model")}
 			value={value}
 			models={displayModels}
-			allowCustom={catalog?.allowCustom}
-			customModelEntry={customModelEntry}
+			allowCustom={false}
+			customModelEntry={catalog?.customModelEntry === "configured" ? "configured" : "none"}
 			agentLabel={agentLabel}
 			onRefresh={onRefresh}
 			refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
@@ -945,11 +947,11 @@ function TaskModelPicker({
 			disabled={disabled || agentId === ""}
 			agentId={agentId}
 			onChange={selectCatalogModel}
-			onCustom={selectCustomModel}
 			compact
 			recentScope={agentId}
-			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
+			triggerClassName="composer-chip composer-toolbar-option w-fit"
 			menuAlign="start"
+			menuClassName={COMPOSER_MENU_WIDTH}
 			renderTrigger={(label) => <span className="min-w-0 truncate text-control text-foreground" title={label}>{label}</span>}
 		/>
 	);

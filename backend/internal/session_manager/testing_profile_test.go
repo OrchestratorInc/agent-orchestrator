@@ -47,8 +47,13 @@ func pinTestingDaemon(mgr *Manager) {
 
 func assertTestingServer(t *testing.T, cfg ChatStart, attemptID domain.TestAttemptID) string {
 	t.Helper()
-	if len(cfg.MCPServers) != 1 {
-		t.Fatalf("MCP server count = %d, want 1", len(cfg.MCPServers))
+	if len(cfg.MCPServers) != 2 {
+		t.Fatalf("MCP server count = %d, want 2", len(cfg.MCPServers))
+	}
+	aoServer := cfg.MCPServers[1]
+	if aoServer.Name != "ao" || aoServer.Command != "/scratch/daemon/ao" ||
+		!reflect.DeepEqual(aoServer.Args, []string{"mcp"}) || aoServer.Env["AO_TEST_CAPABILITY"] != "" {
+		t.Fatal("testing worker lost the ordinary AO server or leaked its testing capability")
 	}
 	server := cfg.MCPServers[0]
 	if server.Name != "ao-testing" || server.Type != "stdio" || server.Command != "/scratch/daemon/ao" ||
@@ -218,8 +223,8 @@ func TestOrdinaryChatSpawnAndRestoreDoNotInjectTestingServer(t *testing.T) {
 		t.Fatal("expected ordinary spawn and restore")
 	}
 	for _, cfg := range launcher.started {
-		if len(cfg.MCPServers) != 0 {
-			t.Fatal("ordinary worker received a testing server")
+		if len(cfg.MCPServers) != 1 || cfg.MCPServers[0].Name != "ao" {
+			t.Fatal("ordinary worker lost its AO server or received a testing server")
 		}
 	}
 }
