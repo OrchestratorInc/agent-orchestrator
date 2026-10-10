@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname, delimiter, resolve } from "node:path";
 import test from "node:test";
 import * as auditModule from "./audit_ao.mjs";
 const { auditAgent, interruptActiveTurn, waitForRestoredTerminalReady } = auditModule;
 
 // Real RFC6455 transport with AO's documented /mux JSON messages.
-async function withMuxFixture(scenario, run) {
+async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
   const received = [];
   const sockets = new Set();
   let opened = false;
@@ -45,14 +48,14 @@ async function withMuxFixture(scenario, run) {
       });
       return;
     }
-    if (req.url.endsWith("/kill")) killRequests++;
+    if (req.url.endsWith("/kill")) { killRequests++; lifecycleHooks.onKill?.(); }
     if (scenario.startsWith("lifecycle") && req.url !== "/api/v1/sessions/fixture") {
       let body;
       if (req.url.endsWith("/probe")) body = { supported: true, installed: true, agent: { authStatus: "configured" } };
       else if (req.url.endsWith("/readiness/ensure")) body = { agents: [{ id: "fixture", installation: { state: "installed", freshness: "fresh" }, authentication: { state: "configured", freshness: "fresh" } }] };
       else if (req.url.endsWith("/models")) body = { models: [] };
       else if (req.url === "/api/v1/sessions") body = { session: { id: "fixture", mode: "tui", harness: "fixture", activity: { state: "active" } } };
-      else if (req.url.endsWith("/workspace")) body = { workspacePath: "/tmp/fixture-workspace" };
+      else if (req.url.endsWith("/workspace")) body = { workspacePath: lifecycleHooks.workspacePath || "/tmp/fixture-workspace" };
       else if (req.url.includes("/workspace/file")) body = { content: scenario === "lifecycle-retains-old-instructions" ? JSON.stringify({
         cwd: "/tmp/fixture-workspace", initialPromptToken: "initial", initialPromptExecutions: 1,
         hiddenInstructionToken: "initial-hidden", projectAgentsToken: "project-agents", secondMessageToken: "second",
@@ -89,7 +92,7 @@ async function withMuxFixture(scenario, run) {
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify({ session: {
       id: cleanupScenario && upgrades > 1 && scenario.endsWith("-foreign") ? "foreign-session" : "fixture", isTerminated: killed, statusReadiness: "ready", activity: { state: cleanupScenario && upgrades > 1 && scenario.endsWith("-reactivated") ? "active" : active ? "active" : "idle" },
-      ...(cleanupScenario && !scenario.endsWith("-marker-absent") ? { lastUserMessageAt: scenario.endsWith("-marker-null") ? null : scenario.endsWith("-marker-blank") ? " " : inputReceived && scenario.endsWith("-newer-during-cancel") || upgrades > 1 && scenario.endsWith("-newer-user") ? "2026-10-10T02:00:00Z" : "2026-10-10T01:00:00Z" } : {}),
+      ...(cleanupScenario && !scenario.endsWith("-marker-absent") ? { lastUserMessageAt: lifecycleHooks.lastUserMessageAt || (scenario.endsWith("-marker-null") ? null : scenario.endsWith("-marker-blank") ? " " : inputReceived && scenario.endsWith("-newer-during-cancel") || upgrades > 1 && scenario.endsWith("-newer-user") ? "2026-10-10T02:00:00Z" : "2026-10-10T01:00:00Z") } : {}),
       terminalHandleId: (opened && scenario === "changed-handle" || cleanupScenario && upgrades > 1 && scenario.endsWith("-handle")) ? "other-terminal" : target,
       terminalGeneration: restored ? "restored-epoch" : (opened && ["changed-generation", "ready-generation-change"].includes(scenario) || cleanupScenario && upgrades > 1 && scenario.endsWith("-generation")) ? "epoch-2" : "epoch-1",
     } }));
@@ -162,6 +165,8 @@ async function withMuxFixture(scenario, run) {
           if (cleanupScenario && upgrades > 1) {
             cleanupInputs++;
             assert.deepEqual(Buffer.from(frame.data, "base64"), Buffer.from("\x03"));
+            const timer = lifecycleHooks.onCleanupInput?.({ emit: text => send(socket, { ch: "terminal", id: target, type: "data", data: Buffer.from(text).toString("base64") }) });
+            if (timer) timers.push(timer);
             if (!scenario.endsWith("-stale-cue")) {
               send(socket, { ch: "terminal", id: scenario.endsWith("-foreign-output") ? "foreign-terminal" : target, type: "data",
                 data: Buffer.from(scenario.endsWith("-draft-remains")
@@ -464,7 +469,8 @@ test("restored provider history cannot substitute for newly configured standing 
 
 async function auditCleanup(fixture, options = {}) {
   return auditAgent({
-    baseURL: fixture.baseURL, agent: "fixture", projectId: "project", timeoutMs: 150,
+    baseURL: fixture.baseURL, agent: "fixture", projectId: "project", timeoutMs: options.timeoutMs || 150,
+    dataDir: options.dataDir || "",
     diagnosticAfterNativeProof: true,
     interruptSpec: { input: "\x1b", postCancelCleanup: { input: "\x03", draftPattern: "(?:^|\\n)> {prompt}\\n─+\\n[ \\t]*\\[model\\][^\\n]*\\n*$", ...options.cleanupSpec }, ...options.interruptSpec },
     restoredReadySpec: options.withoutReadySpec ? null : options.readySpec || nativeReadySpec,
@@ -599,5 +605,113 @@ test("post-cancel cleanup does not accept a historical empty cue with multiline 
     assert.equal(result.gates.find(item => item.name === "post_cancel_draft_cleanup")?.status, "BLOCKED");
     assert.equal(fixture.cleanupInputs, 1);
     assert.equal(fixture.killRequests, 0);
+  });
+});
+
+const persistenceTemplate = "agents/example/{sessionId}/drafts/{workspaceSha256:24}/{nativeSessionIdSha256:24}.json";
+
+// Real files and mux transport; only the read-only sqlite CLI boundary is a
+// deterministic executable, so these fixtures need no database dependency.
+async function withPersistenceFixture(options, run) {
+  const root = mkdtempSync(join(tmpdir(), "ao-draft-witness-"));
+  const dataDir = join(root, "data");
+  const bin = join(root, "bin");
+  mkdirSync(dataDir); mkdirSync(bin);
+  const nativeID = options.missingNativeID ? "" : "native-owned-fixture";
+  const workspacePath = join(root, "workspace-alias");
+  mkdirSync(join(root, "workspace-real"));
+  symlinkSync(join(root, "workspace-real"), workspacePath, "dir");
+  writeFileSync(join(bin, "sqlite3"), "#!" + process.execPath + "\n" +
+    "if (process.argv[2] !== '-readonly' || process.argv[3] !== " + JSON.stringify(join(dataDir, "ao.db")) + ") process.exit(2);\n" +
+    "console.log(" + JSON.stringify(nativeID) + ");\n", { mode: 0o700 });
+  const hash24 = value => createHash("sha256").update(value).digest("hex").slice(0, 24);
+  const relativePath = "agents/example/fixture/drafts/" + hash24(resolve(workspacePath)) + "/" + hash24(nativeID.trim()) + ".json";
+  const witnessPath = join(dataDir, relativePath);
+  mkdirSync(dirname(witnessPath), { recursive: true });
+  if (options.present !== false) writeFileSync(witnessPath, "saved native draft");
+  if (options.symlinkLeaf) {
+    rmSync(witnessPath);
+    writeFileSync(join(root, "foreign"), "must not inspect contents");
+    symlinkSync(join(root, "foreign"), witnessPath);
+  }
+  if (options.directoryLeaf) { rmSync(witnessPath); mkdirSync(witnessPath); }
+  if (options.symlinkParent) {
+    const parent = dirname(witnessPath);
+    rmSync(parent, { recursive: true });
+    mkdirSync(join(root, "foreign-parent"));
+    symlinkSync(join(root, "foreign-parent"), parent, "dir");
+  }
+  if (options.missingParent) rmSync(dirname(witnessPath), { recursive: true });
+  const previousPath = process.env.PATH;
+  process.env.PATH = bin + delimiter + previousPath;
+  const hooks = { workspacePath };
+  let removedAt = 0;
+  let witnessAtKill = null;
+  hooks.onKill = () => { witnessAtKill = { present: existsSync(witnessPath), killedAt: Date.now(), removedAt }; };
+  hooks.onCleanupInput = ({ emit }) => options.removeAfterInput ? setTimeout(() => {
+    rmSync(witnessPath);
+    removedAt = Date.now();
+    if (options.newerUser) hooks.lastUserMessageAt = "2026-10-10T03:00:00Z";
+    if (options.foreignDraft) emit("> foreign draft after clear\n────────\n  [model] | native session\n");
+  }, 80) : undefined;
+  try {
+    await withMuxFixture("lifecycle-cleanup-" + (options.alreadyEmpty ? "already-empty" : "success"), async fixture => {
+      const result = await auditCleanup(fixture, { dataDir, timeoutMs: 400,
+        cleanupSpec: { persistence: { path: options.path ?? persistenceTemplate } } });
+      await run({ fixture, result, witnessPath, removedAt, relativePath, witnessAtKill });
+    }, hooks);
+  } finally {
+    process.env.PATH = previousPath;
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("persistence witness waits for actual draft removal after empty UI before lifecycle kill", async () => {
+  await withPersistenceFixture({ removeAfterInput: true }, async ({ fixture, result, witnessPath, removedAt, witnessAtKill }) => {
+    const cleanup = result.gates.find(item => item.name === "post_cancel_draft_cleanup");
+    assert.equal(cleanup?.status, "PASS", JSON.stringify(result));
+    assert.equal(fixture.cleanupInputs, 1);
+    assert.ok(removedAt > 0, "kill must wait for actual removal, not just empty UI");
+    assert.equal(existsSync(witnessPath), false);
+    assert.equal(witnessAtKill?.present, false, "recovery file must be absent when kill arrives");
+    assert.ok(witnessAtKill?.removedAt > 0 && witnessAtKill.killedAt >= witnessAtKill.removedAt, "removal must precede kill");
+    assert.equal(fixture.killRequests, 1);
+    assert.equal(cleanup.evidence.persistence.beforeInput.state, "present");
+    assert.equal(cleanup.evidence.persistence.afterEmpty.state, "absent");
+  });
+});
+
+for (const [name, options, expectedInputs] of [
+  ["persisted draft remains", {}, 1],
+  ["wrong absent leaf", { present: false }, 0],
+  ["leaf symlink", { symlinkLeaf: true }, 0],
+  ["parent symlink", { symlinkParent: true }, 0],
+  ["nonregular leaf", { directoryLeaf: true }, 0],
+  ["missing native identity", { missingNativeID: true }, 0],
+  ["new user during removal", { removeAfterInput: true, newerUser: true }, 1],
+  ["foreign composer during removal", { removeAfterInput: true, foreignDraft: true }, 1],
+  ["traversal path", { path: "../" + persistenceTemplate }, 0],
+  ["absolute path", { path: "/tmp/" + persistenceTemplate }, 0],
+  ["unbound path", { path: "some-missing-file.json" }, 0],
+  ["already empty but persisted", { alreadyEmpty: true }, 0],
+  ["already empty with missing parent", { alreadyEmpty: true, missingParent: true }, 0],
+]) {
+  test("persistence witness blocks " + name + " without lifecycle kill", async () => {
+    await withPersistenceFixture(options, async ({ fixture, result }) => {
+      assert.equal(result.gates.find(item => item.name === "post_cancel_draft_cleanup")?.status, "BLOCKED", JSON.stringify(result));
+      assert.equal(fixture.cleanupInputs, expectedInputs);
+      assert.equal(fixture.killRequests, 0);
+      assert.equal(result.gates.find(item => item.name === "termination")?.status, "NOT_RUN");
+    });
+  });
+}
+
+test("persistence witness allows already-empty composer only with absent file and no input", async () => {
+  await withPersistenceFixture({ alreadyEmpty: true, present: false }, async ({ fixture, result }) => {
+    const cleanup = result.gates.find(item => item.name === "post_cancel_draft_cleanup");
+    assert.equal(cleanup?.status, "PASS", JSON.stringify(result));
+    assert.equal(fixture.cleanupInputs, 0);
+    assert.equal(fixture.killRequests, 1);
+    assert.equal(cleanup.evidence.persistence.afterEmpty.state, "absent");
   });
 });

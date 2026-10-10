@@ -3,10 +3,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { access, mkdir, mkdtemp, readFile, realpath, rename, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { delimiter, dirname, extname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { StringDecoder } from "node:string_decoder";
@@ -433,9 +433,68 @@ export async function waitForRestoredTerminalReady({ baseURL, sessionId, restore
   return observeNativeTerminalReady({ baseURL, sessionId, restoredState, spec, timeoutMs });
 }
 
+// Resolve only this audit session's declared recovery file; never inspect content.
+function draftPersistencePath(spec, { dataDir, sessionId, workspacePath, nativeSessionId }) {
+  const template = spec?.path;
+  const bindings = {
+    "{sessionId}": sessionId,
+    "{workspaceSha256:24}": typeof workspacePath === "string" && workspacePath ? hash(resolve(workspacePath)).slice(0, 24) : "",
+    "{nativeSessionIdSha256:24}": typeof nativeSessionId === "string" && nativeSessionId.trim() ? hash(nativeSessionId.trim()).slice(0, 24) : "",
+  };
+  if (typeof dataDir !== "string" || !dataDir || !/^[a-zA-Z0-9_-]{1,256}$/.test(sessionId)
+    || typeof template !== "string" || !template || template.length > 1024 || isAbsolute(template)
+    || /[\\\x00-\x1f\x7f]/.test(template)
+    || Object.entries(bindings).some(([key, value]) => !value || !template.includes(key))) {
+    throw new Error("draft persistence requires a bounded relative path bound to the observed session, workspace and native identity");
+  }
+  let relativePath = template;
+  for (const [key, value] of Object.entries(bindings)) relativePath = relativePath.replaceAll(key, value);
+  const components = relativePath.split("/");
+  if (/[{}]/.test(relativePath) || components.length > 32 || components.some(part => !part || part === "." || part === "..")) {
+    throw new Error("draft persistence path contains traversal, empty components or unknown placeholders");
+  }
+  return { path: resolve(dataDir, relativePath), relativePath };
+}
+
+async function waitForDraftPersistence(witness, wanted, deadline) {
+  let lastState = "unknown";
+  while (performance.now() < deadline) {
+    let timer;
+    try {
+      const remaining = Math.max(1, deadline - performance.now());
+      const state = await Promise.race([
+        (async () => {
+          const root = parse(witness.path).root;
+          const components = witness.path.slice(root.length).split(sep);
+          let current = root;
+          for (let index = -1; index < components.length; index++) {
+            if (index >= 0) current = join(current, components[index]);
+            const leaf = index === components.length - 1;
+            let metadata;
+            try { metadata = await lstat(current); }
+            catch (error) {
+              if (error.code === "ENOENT") return leaf ? "absent" : "missing-parent";
+              throw new Error("draft persistence metadata check failed: " + (error.code || "unknown"));
+            }
+            if (metadata.isSymbolicLink() || (leaf ? !metadata.isFile() : !metadata.isDirectory())) {
+              throw new Error("draft persistence path contains a symlink or nonregular file/directory");
+            }
+          }
+          return "present";
+        })(),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("draft persistence metadata check timed out")), remaining); }),
+      ]);
+      lastState = state;
+      if (state === wanted && performance.now() < deadline) return { relativePath: witness.relativePath, state, observedAt: now() };
+    } finally { clearTimeout(timer); }
+    await sleep(Math.min(25, Math.max(1, deadline - performance.now())));
+  }
+  throw new Error("draft persistence did not become " + wanted + " before timeout (last state: " + lastState + ")");
+}
+
 // Only completeLifecycle calls this, for its new exclusive audit session and
 // just-submitted cancellation turn. This is not a general draft-clearing tool.
-async function cleanupCancelledAuditDraft({ baseURL, sessionId, cancellation, startResponse, spec, readySpec, timeoutMs }) {
+async function cleanupCancelledAuditDraft({ baseURL, sessionId, dataDir, workspacePath, nativeSessionId, cancellation, startResponse, spec, readySpec, timeoutMs }) {
   try {
     if (!cancellation.passed || !cancellation.observedActive || !startResponse?.ok
       || startResponse.requestBody?.message !== CANCELLATION_PROMPT) {
@@ -464,6 +523,7 @@ async function cleanupCancelledAuditDraft({ baseURL, sessionId, cancellation, st
     return await observeNativeTerminalReady({
       baseURL, sessionId, restoredState: cancellation.settledState, spec: readySpec, timeoutMs,
       cleanup: { draftPattern, lastUserMessageAt: active.lastUserMessageAt ?? null,
+        persistence: Object.hasOwn(spec, "persistence") ? draftPersistencePath(spec.persistence, { dataDir, sessionId, workspacePath, nativeSessionId }) : null,
         patternSha256: hash(JSON.stringify({ draftPattern: spec.draftPattern, flags: spec.flags || "" })) },
     });
   } catch (error) {
@@ -483,6 +543,7 @@ async function observeNativeTerminalReady({ baseURL, sessionId, restoredState, s
     startedAt: now(), opened: false, outputFrames: 0, outputBytes: 0, matchedPatterns: 0,
     inputSent: false, inputBytes: 0, timedOut: false,
     ...(cleanup ? { outputFramesAfterInput: 0 } : {}),
+    ...(cleanup?.persistence ? { persistence: {} } : {}),
     ...(cleanup ? { auditPromptSha256: hash(CANCELLATION_PROMPT), draftPatternSha256: cleanup.patternSha256,
       lastUserMessageAtObserved: cleanup.lastUserMessageAt !== null } : {}),
     qualification: "Native terminal cue from the runtime contract; API idle/readiness alone is insufficient.",
@@ -548,6 +609,7 @@ async function observeNativeTerminalReady({ baseURL, sessionId, restoredState, s
         && patterns.every(pattern => pattern.test(visible));
       if (cleanup && evidence.opened && evidence.outputFrames && !evidence.inputSent
         && !emptyComposer && cleanup.draftPattern.exec(visible)?.[0].includes(CANCELLATION_PROMPT)) {
+        if (cleanup.persistence) evidence.persistence.beforeInput = await waitForDraftPersistence(cleanup.persistence, "present", deadline);
         const preInput = await sessionState(baseURL, sessionId, Math.max(1, deadline - performance.now()));
         evidence.preInputState = apiEvidence(preInput);
         const current = preInput.response?.session;
@@ -558,7 +620,8 @@ async function observeNativeTerminalReady({ baseURL, sessionId, restoredState, s
           throw new Error("post-cancel session, terminal generation, settled state or latest user turn changed before cleanup");
         }
         if (failure) throw new Error(failure);
-        // Recheck the composer after the awaited API read, before any input.
+        if (performance.now() >= deadline) throw new Error("post-cancel cleanup deadline elapsed before input");
+        // Recheck the composer after the awaited metadata and API reads, before any input.
         const latestVisible = stripVTControlCharacters(output).replaceAll("\r\n", "\n").replaceAll("\r", "\n").slice(-65536);
         if (patterns.every(pattern => pattern.test(latestVisible)) || !cleanup.draftPattern.exec(latestVisible)?.[0].includes(CANCELLATION_PROMPT)) continue;
         evidence.draftCueSha256 = hash(latestVisible);
@@ -574,6 +637,7 @@ async function observeNativeTerminalReady({ baseURL, sessionId, restoredState, s
         continue;
       }
       if (evidence.opened && evidence.outputFrames && emptyComposer) {
+        if (cleanup?.persistence) evidence.persistence.afterEmpty = await waitForDraftPersistence(cleanup.persistence, "absent", deadline);
         const currentResponse = await sessionState(baseURL, sessionId, Math.max(1, deadline - performance.now()));
         evidence.confirmation = apiEvidence(currentResponse);
         const current = currentResponse.response?.session;
@@ -586,6 +650,7 @@ async function observeNativeTerminalReady({ baseURL, sessionId, restoredState, s
           throw new Error("latest user turn changed during post-cancel cleanup");
         }
         if (failure) throw new Error(failure);
+        if (cleanup && performance.now() >= deadline) throw new Error("post-cancel cleanup deadline elapsed before confirmation");
         if (cleanup && !patterns.every(pattern => pattern.test(stripVTControlCharacters(output).replaceAll("\r\n", "\n").replaceAll("\r", "\n").slice(-65536)))) continue;
         evidence.matchedPatterns = patterns.length;
         evidence.matchedAt = now();
@@ -1495,7 +1560,8 @@ async function completeLifecycle({
 
   if (interruptSpec && Object.hasOwn(interruptSpec, "postCancelCleanup")) {
     const cleanup = await cleanupCancelledAuditDraft({
-      baseURL, sessionId, cancellation, startResponse: cancellationStart,
+      baseURL, sessionId, dataDir, workspacePath, nativeSessionId: nativeBefore.done ? nativeBefore.native.value : "",
+      cancellation, startResponse: cancellationStart,
       spec: interruptSpec.postCancelCleanup, readySpec: restoredReadySpec, timeoutMs,
     });
     await record(gate("post_cancel_draft_cleanup", cleanup.passed ? "PASS" : "BLOCKED", cleanup.reason, cleanup.evidence));

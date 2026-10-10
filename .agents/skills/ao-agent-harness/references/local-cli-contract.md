@@ -150,6 +150,37 @@ identity. Empty-output patterns are rejected. It never retries Ctrl+C:
 a second press can exit the native CLI. The mux wire has no generation argument;
 API revalidation and the exact attachment provide the available fence.
 
+If native draft recovery is asynchronous, add a metadata-only durability witness
+under `postCancelCleanup`:
+
+```json
+"persistence": {
+  "path": "agents/example/{sessionId}/drafts/{workspaceSha256:24}/{nativeSessionIdSha256:24}.json"
+}
+```
+
+The path is relative to the AO data directory and must contain all three
+placeholders. Harness-specific directories belong in this contract. Workspace
+hashing uses SHA-256 of Node `path.resolve(workspacePath)`, without resolving
+symlinks; native-ID hashing uses the positively observed native ID after
+`trim()`. Both hashes use the first 24 lowercase hexadecimal characters. There
+is no fallback identity. Paths are bounded to 1,024 characters and 32 components;
+absolute paths, traversal, unknown placeholders, symlink ancestors or leaves,
+and nonregular files are rejected. The runner uses `lstat` only, never reads
+recovery contents, and does not treat missing parent directories as verified
+leaf absence.
+
+For a nonempty owned composer, the exact regular file must first be present.
+After the one clear and fresh empty UI, that same path must become absent before
+lifecycle kill. An already-empty composer requires absence and receives no
+input. Both waits share the existing cleanup deadline (at most 30 seconds),
+and session/generation/latest-user metadata and the current composer are checked
+again after waiting. A failed metadata check or timeout blocks kill/restore.
+Evidence records the relative path and ordered `beforeInput`/`afterEmpty` states
+with timestamps, without file contents. Omitting `persistence` retains the
+UI-only contract; enable it whenever an empty editor is not a native durability
+barrier.
+
 The separate `post_cancel_draft_cleanup` gate preserves the cancellation result.
 Unsafe cleanup, missing cues, or a remaining draft block lifecycle kill/restore
 and leave dependent gates `NOT_RUN`; normal final teardown may still terminate
