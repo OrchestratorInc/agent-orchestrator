@@ -110,6 +110,12 @@ only for an AO target. Input belongs to the returned screenshot and exact
 bound window. Use a fresh observation after each action or leg switch.
 Never reuse a base screenshot ID or send input to an unverified window.
 
+For AO's local desktop recipe, input is foreground-only. Cua must bring the
+exact bound window onto the current Space and verify focus before input. A
+click also requires the exact target window to be topmost at its click point.
+Do not switch to background delivery or bypass a refused action. Retain the
+exact error and the requested and actual delivery modes from the action journal.
+
 For UI changes, each leg needs an actual action that reaches the PR's trigger
 and a screenshot of its result. Keep matching before/after images. Retain a
 short clip around the trigger when recording is available. If capture or

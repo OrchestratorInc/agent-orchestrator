@@ -172,10 +172,10 @@ func configuredTestingProviders(cfg config.Config) (testingProviders, error) {
 func testingProvidersFromEnv(cfg config.Config, getenv func(string) string, target ports.TestingTargetEnvironment, makeDesktop func(cua.Config) (testingDesktopAdapter, error)) (testingProviders, error) {
 	mode := cua.DeliveryMode(getenv("AO_TESTING_DESKTOP_DELIVERY"))
 	if mode == "" {
-		mode = cua.Background
+		mode = cua.Foreground
 	}
-	if mode != cua.Background && mode != cua.Foreground {
-		return testingProviders{}, fmt.Errorf("AO_TESTING_DESKTOP_DELIVERY must be background or foreground")
+	if mode != cua.Foreground {
+		return testingProviders{}, fmt.Errorf("AO_TESTING_DESKTOP_DELIVERY must be foreground; background input is unsupported")
 	}
 	checkout := getenv("AO_TESTING_TARGET_CHECKOUT")
 	desktop := newTestingDesktopBridge(cua.Config{DataDir: cfg.DataDir, DeliveryMode: mode}, makeDesktop)

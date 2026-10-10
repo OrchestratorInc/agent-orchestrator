@@ -59,9 +59,9 @@ func TestTestingProviderComposition(t *testing.T) {
 		wantMode             cua.DeliveryMode
 		configured           bool
 	}{
-		{name: "URL intake without manual checkout", wantMode: cua.Background, configured: true},
-		{name: "configured background", checkout: "/isolated/checkout", wantMode: cua.Background, configured: true},
-		{name: "real providers", checkout: "/isolated/checkout", wantMode: cua.Background, configured: true, real: true},
+		{name: "URL intake without manual checkout", wantMode: cua.Foreground, configured: true},
+		{name: "configured default foreground", checkout: "/isolated/checkout", wantMode: cua.Foreground, configured: true},
+		{name: "real providers", checkout: "/isolated/checkout", wantMode: cua.Foreground, configured: true, real: true},
 		{name: "explicit foreground", checkout: "/isolated/checkout", mode: "foreground", wantMode: cua.Foreground, configured: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -124,12 +124,19 @@ func TestTestingProviderComposition(t *testing.T) {
 }
 
 func TestTestingProviderCompositionDefersFactoryError(t *testing.T) {
-	_, err := testingProvidersFromEnv(config.Config{}, func(string) string { return "auto" }, nil, func(cua.Config) (testingDesktopAdapter, error) {
-		t.Fatal("invalid mode reached desktop factory")
-		return nil, nil
-	})
-	if err == nil {
-		t.Fatal("invalid mode accepted")
+	for _, mode := range []string{"auto", "background"} {
+		_, err := testingProvidersFromEnv(config.Config{}, func(key string) string {
+			if key == "AO_TESTING_DESKTOP_DELIVERY" {
+				return mode
+			}
+			return ""
+		}, nil, func(cua.Config) (testingDesktopAdapter, error) {
+			t.Fatal("invalid mode reached desktop factory")
+			return nil, nil
+		})
+		if err == nil || err.Error() != "AO_TESTING_DESKTOP_DELIVERY must be foreground; background input is unsupported" {
+			t.Fatal("unsupported input mode was accepted", mode, err)
+		}
 	}
 	factoryErr := errors.New("provider configuration failed")
 	calls := 0
