@@ -99,7 +99,10 @@ func TestModelDoesNotPretendFlagOverridesNativeSelection(t *testing.T) {
 	_ = os.MkdirAll(filepath.Join(workspace, ".memcode"), 0700)
 	_ = os.WriteFile(filepath.Join(workspace, ".memcode", "config.json"), []byte(`{"endpoints":[{"name":"local","base_url":"http://127.0.0.1:9","last_model":"actual"}]}`), 0600)
 	t.Setenv("MEMCODE_ENDPOINT_URL", "")
-	if err := validateModel(workspace, "actual"); err != nil {
+	if err := validateModel(workspace, "actual"); err == nil {
+		t.Fatal("partial native provider selection accepted")
+	}
+	if err := validateModel(workspace, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := validateModel(workspace, "ignored-override"); err == nil {
@@ -115,6 +118,21 @@ func TestPermissionAndToolMappingsFailClosed(t *testing.T) {
 	for _, cfg := range []ports.LaunchConfig{{Permissions: ports.PermissionModeAcceptEdits}, {AllowedTools: []string{"read"}}, {DisallowedTools: []string{"bash"}}} {
 		if _, err := New().GetLaunchCommand(context.Background(), cfg); err == nil {
 			t.Fatal("unsupported capability accepted")
+		}
+	}
+}
+func TestCurrentNativeDecisionCardsAreBlocked(t *testing.T) {
+	for _, card := range []string{"Do you want to proceed?\n❯ 1. Yes\n 2. Yes, and don't ask again\n 3. No, and tell me what to do differently (esc)", "Question?\n↑↓ select · Enter · or type your own answer · Esc to skip", "Plan\n↑↓ select · Enter · type to revise · Esc cancel"} {
+		output := card + "\n→  Ask memcode…   ·   $ = shell\nmemcode · model · ask"
+		state, ok := New().DetectTerminalActivity(output)
+		if !ok || state != "blocked" || New().ComposerIsEmpty(output) {
+			t.Fatal(state, ok)
+		}
+		if state, ok := New().DetectTerminalActivity(output + strings.Repeat("\nnew", 70)); ok && state == "blocked" {
+			t.Fatal("historical card accepted")
+		}
+		if state, ok := New().DetectTerminalActivity(card + "\n" + readyTerminal); !ok || state != "idle" {
+			t.Fatal("settled composer not recovered", state, ok)
 		}
 	}
 }

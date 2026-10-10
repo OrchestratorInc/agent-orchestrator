@@ -209,3 +209,28 @@ func TestInteractiveCrashReconcileRefusesUnverifiedBootstrap(t *testing.T) {
 		t.Fatal("unverified runtime adopted")
 	}
 }
+func TestInteractiveActualStartupHealthRefusesUnverifiedBootstrap(t *testing.T) {
+	a := &interactiveTestAgent{plan: &interactiveTestPlan{}}
+	m, st, rt, _ := interactiveManager(t, false, a)
+	rec := st.sessions["mer-1"]
+	rec.Metadata.AgentSessionIDLaunchID = "previous"
+	st.sessions[rec.ID] = rec
+	rt.aliveByHandle = map[string]bool{"tmux-mer-1": true}
+	if err := m.checkSessionHealth(ctx, rec); err == nil || !strings.Contains(err.Error(), "unverified") {
+		t.Fatal(err)
+	}
+	if rt.destroyed != 1 || st.sessions[rec.ID].Activity.State != domain.ActivityExited {
+		t.Fatal("startup adopted fresh runtime")
+	}
+}
+func TestNativeMemcodeDecisionRefusesOrdinarySend(t *testing.T) {
+	a := &interactiveTestAgent{plan: &interactiveTestPlan{}}
+	m, st, _, msg := interactiveManager(t, false, a)
+	r := st.sessions["mer-1"]
+	r.Activity.State = domain.ActivityBlocked
+	st.sessions[r.ID] = r
+	err := m.SendWithOptions(ctx, r.ID, "another task", nil, ports.MessageDeliveryOptions{AuthoredByUser: true})
+	if !errors.Is(err, ErrAwaitingDecision) || len(msg.msgs) != 0 {
+		t.Fatal("pending decision received task input", err, msg.msgs)
+	}
+}

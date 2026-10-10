@@ -587,6 +587,12 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		// without a piped payload can't block on EOF.
 		return nil
 	}
+	if agent == "memcode" && strings.HasPrefix(event, "context-chunk-") {
+		if err := memcode.EmitInstructionChunk(c.deps.Out, event); err != nil {
+			c.reportHookFailure(agent, event, sessionID, err)
+		}
+		return nil
+	}
 	if agent == "memcode" && event == "session-start" {
 		if err := memcode.EmitStartWitness(c.deps.Out); err != nil {
 			c.reportHookFailure(agent, event, sessionID, err)

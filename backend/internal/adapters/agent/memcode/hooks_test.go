@@ -62,8 +62,25 @@ func TestPrivateInstructionsAndWitnessPreserveUserHooks(t *testing.T) {
 	if w.Sequence != 2 || w.NativeID != testID {
 		t.Fatal(w)
 	}
-	cfg.SystemPrompt = strings.Repeat("x", 8193)
+	cfg.SystemPrompt = strings.Repeat("x", (512<<10)+1)
 	if err := p.GetAgentHooks(context.Background(), cfg); err == nil {
 		t.Fatal("native output cap ignored")
+	}
+}
+func TestLongPrivateContextIsNotTruncated(t *testing.T) {
+	data := []byte(strings.Repeat("Standing instruction αβ.\n", 1200))
+	chunks := instructionChunks(data)
+	if len(chunks) < 2 {
+		t.Fatal("not split")
+	}
+	var recovered []byte
+	for _, chunk := range chunks {
+		if len(chunk) > 8192 {
+			t.Fatal("native output cap exceeded")
+		}
+		recovered = append(recovered, chunk...)
+	}
+	if !bytes.Equal(data, recovered) {
+		t.Fatal("private context lost")
 	}
 }
