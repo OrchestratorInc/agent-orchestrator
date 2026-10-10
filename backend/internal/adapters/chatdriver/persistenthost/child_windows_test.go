@@ -98,11 +98,13 @@ func TestWindowsProviderJobReapsGrandchild(t *testing.T) {
 			for time.Now().Before(deadline) {
 				raw, err := os.ReadFile(pidFile)
 				if err == nil {
-					pid, err = strconv.Atoi(string(raw))
-					if err != nil {
-						t.Fatal(err)
+					// WriteFile can be visible before its bytes are, so an empty
+					// read is a retry, not a malformed pid.
+					parsed, parseErr := strconv.Atoi(strings.TrimSpace(string(raw)))
+					if parseErr == nil && parsed > 0 {
+						pid = parsed
+						break
 					}
-					break
 				}
 				time.Sleep(20 * time.Millisecond)
 			}
