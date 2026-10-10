@@ -33,11 +33,16 @@ func (c *ProviderAccountsController) list(w http.ResponseWriter, r *http.Request
 
 func (c *ProviderAccountsController) writeAccounts(w http.ResponseWriter, r *http.Request, usage, refresh bool, outcome string) {
 	accounts, err := c.Svc.Accounts(r.Context(), usage, refresh)
+	writeAnswer(w, r, ProviderAccountsResponse{Accounts: accounts, ResetOutcome: outcome}, err)
+}
+
+// writeAnswer writes an answer, or the error that took its place.
+func writeAnswer(w http.ResponseWriter, r *http.Request, answer any, err error) {
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, ProviderAccountsResponse{Accounts: accounts, ResetOutcome: outcome})
+	envelope.WriteJSON(w, http.StatusOK, answer)
 }
 
 func (c *ProviderAccountsController) act(w http.ResponseWriter, r *http.Request) {
@@ -70,11 +75,7 @@ func (c *ProviderAccountsController) loginStatus(w http.ResponseWriter, r *http.
 }
 
 func writeLogin(w http.ResponseWriter, r *http.Request, login ports.ProviderLogin, err error) {
-	if err != nil {
-		envelope.WriteError(w, r, err)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusOK, ProviderLoginResponse{ID: login.ID, Provider: login.Provider, Mode: login.Mode, URL: login.URL, Code: login.Code, Status: login.Status, AccountID: login.AccountID})
+	writeAnswer(w, r, ProviderLoginResponse{ID: login.ID, Provider: login.Provider, Mode: login.Mode, URL: login.URL, Code: login.Code, Status: login.Status, AccountID: login.AccountID}, err)
 }
 
 func (c *ProviderAccountsController) cancelLogin(w http.ResponseWriter, r *http.Request) {
@@ -87,9 +88,5 @@ func (c *ProviderAccountsController) cancelLogin(w http.ResponseWriter, r *http.
 
 func (c *ProviderAccountsController) sessionAccount(w http.ResponseWriter, r *http.Request) {
 	route, managed, err := c.Svc.SessionAccount(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")))
-	if err != nil {
-		envelope.WriteError(w, r, err)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusOK, SessionProviderAccountResponse{Managed: managed, AccountID: route.AccountID})
+	writeAnswer(w, r, SessionProviderAccountResponse{Managed: managed, AccountID: route.AccountID}, err)
 }

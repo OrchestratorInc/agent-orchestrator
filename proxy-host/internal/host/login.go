@@ -149,7 +149,7 @@ func (l *Logins) post(ctx context.Context, path, contentType string, body []byte
 	if err != nil {
 		return nil, 0
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		return nil, resp.StatusCode
 	}

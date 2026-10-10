@@ -392,16 +392,6 @@ func (s *Service) managedFingerprint(ctx context.Context, agentID, scope, cached
 	return fingerprint, managed
 }
 
-// discoverModels asks Account Manager first and the native agent otherwise.
-func (s *Service) discoverModels(ctx context.Context, agentID, scope string, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
-	if s.managed != nil {
-		if catalog, managed, err := s.managed.DiscoverModels(ctx, domain.AgentHarness(agentID), scope); managed {
-			return catalog, err
-		}
-	}
-	return s.discoverer.Discover(ctx, request)
-}
-
 func (s *Service) modelCatalogInputsChanged(ctx context.Context, agentID, projectID, cachedFingerprint string) bool {
 	if fingerprint, managed := s.managedFingerprint(ctx, agentID, projectID, cachedFingerprint); managed {
 		return fingerprint != cachedFingerprint
@@ -735,7 +725,13 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	if mode == modelLoadRefresh {
 		_ = s.persistCatalogState(ctx, cached, hasCached, "refreshing", "", time.Time{}, generation)
 	}
-	discovered, discoverErr := s.discoverModels(ctx, agentID, projectID, request)
+	var discovered ports.AgentModelCatalog
+	var discoverErr error
+	if managed { // Account Manager owns this scope's catalogue too
+		discovered, _, discoverErr = s.managed.DiscoverModels(ctx, domain.AgentHarness(agentID), projectID)
+	} else {
+		discovered, discoverErr = s.discoverer.Discover(ctx, request)
+	}
 	discovered = applyCustomModelEntryPolicy(discovered, policy)
 	discovered.BinaryVersion = version
 	persistCtx := s.ctx

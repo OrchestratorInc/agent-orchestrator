@@ -826,7 +826,7 @@ func (m *Manager) preflightInterfaceTarget(
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
 	pinRuntimePermissionEnv(env, config.Permissions)
 	m.augmentAgentRuntimeEnv(agent, env)
-	managedAccount, err := m.accountManaged(ctx, rec.ID)
+	_, managedAccount, err := m.sessionAccount(ctx, rec.ID)
 	if err != nil {
 		return err
 	}

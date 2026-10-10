@@ -3296,7 +3296,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, agentConfig.Permissions)
-	managedAccount, err := m.accountManaged(ctx, rec.ID)
+	_, managedAccount, err := m.sessionAccount(ctx, rec.ID)
 	if err != nil {
 		return RestoreResult{}, err
 	}

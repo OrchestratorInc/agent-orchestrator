@@ -1,6 +1,6 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { skipToken, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, ChevronDown, ChevronRight, Eye, EyeOff, FileUp, KeyRound, LogIn, MonitorSmartphone, Plus, X } from "lucide-react";
 import { accountAction, accountHeadroom, cancelProviderLogin, fetchProviderAccounts, fetchProviderLogin, PROVIDERS, providerAccountsCatalogueKey, providerAccountsKey, startProviderLogin, useProviderAccounts, type AccountAction, type ProviderAccount, type ProviderLogin, type ProviderLoginRequest } from "../../hooks/useProviderAccounts";
 import { apiErrorMessage } from "../../lib/api-client";
@@ -64,12 +64,11 @@ function useAccountsPage() {
 	const [selectedId, setSelectedId] = useState(signIn.login?.accountId || null);
 	const [adding, setAdding] = useState<Provider | null>(signIn.waiting && !signIn.login?.accountId ? signIn.login!.provider : null);
 	// Re-reads every account's sign-in state on coming back to the window; opening settings already did.
-	const recheck = useMutation({ mutationFn: () => fetchProviderAccounts(true, true), onSuccess: (next) => cache.setQueryData(providerAccountsKey, next) });
+	const recheck = useCallback(() => fetchProviderAccounts(true, true).then((next) => void cache.setQueryData(providerAccountsKey, next), () => undefined), [cache]);
 	useEffect(() => {
-		const check = () => recheck.mutate();
-		window.addEventListener("focus", check);
-		return () => window.removeEventListener("focus", check);
-	}, [recheck.mutate]);
+		window.addEventListener("focus", recheck);
+		return () => window.removeEventListener("focus", recheck);
+	}, [recheck]);
 	async function run<T>(action: () => Promise<T>): Promise<T | undefined> {
 		setPending(true);
 		setMessage("");
@@ -107,8 +106,7 @@ function useAccountsPage() {
 	});
 	return {
 		query, accounts, pending, message, moveOffer, setMoveOffer, signIn, selectedId, adding,
-		recheck: () => recheck.mutateAsync().catch(() => undefined),
-		run, say: setMessage, show, act, moveSessions,
+		run, say: setMessage, show, act, moveSessions, recheck,
 	};
 }
 function ApiKeyForm({ info, disabled, onAdd }: { info: (typeof PROVIDERS)[number]; disabled: boolean; onAdd: (fields: { apiKey: string; baseUrl: string; label?: string }) => void }) {
@@ -121,10 +119,10 @@ function ApiKeyForm({ info, disabled, onAdd }: { info: (typeof PROVIDERS)[number
 	return (
 		<div className="grid max-w-[620px] gap-2 pb-4 pl-12 pr-4 sm:grid-cols-2">
 			<div className="relative min-w-0">
-				<input className={cn(field, "w-full pr-8")} aria-label={t("providerAccounts.apiKeyLabel")} value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={t("providerAccounts.apiKeyPlaceholder", { example: info.key })} type={shown ? "text" : "password"} autoComplete="off" spellCheck={false} />
+				<input className={cn(field, "w-full pr-8")} aria-label={t("providerAccounts.apiKeyLabel")} value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={`${t("providerAccounts.apiKeyLabel")} (${info.key})`} type={shown ? "text" : "password"} autoComplete="off" spellCheck={false} />
 				<IconAction name={t(shown ? "providerAccounts.hideApiKey" : "providerAccounts.showApiKey")} icon={shown ? EyeOff : Eye} className="absolute right-0.5 top-0.5" aria-pressed={shown} onClick={() => setShown(!shown)} />
 			</div>
-			<input className={field} aria-label={t("providerAccounts.baseUrlLabel")} value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder={t("providerAccounts.baseUrlPlaceholder", { example: info.baseUrl })} spellCheck={false} />
+			<input className={field} aria-label={t("providerAccounts.baseUrlLabel")} value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder={`${t("providerAccounts.baseUrlLabel")} (${info.baseUrl})`} spellCheck={false} />
 			<input className={field} aria-label={t("providerAccounts.displayLabel")} value={label} onChange={(event) => setLabel(event.target.value)} placeholder={t("providerAccounts.displayLabel")} />
 			<div><Button className="h-8" size="sm" disabled={disabled || !apiKey.trim() || !baseUrl.trim()} onClick={() => onAdd({ apiKey, baseUrl, label: label || undefined })}>{t("providerAccounts.addApiKey")}</Button></div>
 		</div>
@@ -198,13 +196,13 @@ function AccountListItem({ account, current, onSelect }: { account: ProviderAcco
 	const marks = (account.signedIn ? [
 		account.primary ? <span>{t("providerAccounts.default")}</span> : null,
 		account.reserved ? <span>{t("providerAccounts.inReserve")}</span> : null,
-		upcoming(account.usage?.pausedUntil) ? <span className="text-warning">{t("providerAccounts.paused")}</span> : null,
+		upcoming(account.usage?.pausedUntil) ? <span className="text-warning">{t("automations.paused")}</span> : null,
 		account.usage?.signInEnding ? <span className="text-warning">{t("providerAccounts.signInEndingMark")}</span> : null,
 		account.kind === "api_key" ? <span>{t("providerAccounts.apiKeyLabel")}</span>
 			: headroom === null ? null
 				: headroom === 0 ? <span className="text-status-needs-you">{t("providerAccounts.limitReached")}</span>
 					: <span className={cn("tabular-nums", headroom <= 20 ? "text-warning" : "")}>{t("providerAccounts.usageRemaining", { percent: headroom })}</span>,
-	] : [<span className="text-status-needs-you">{t("providerAccounts.signedOut")}</span>]).filter(Boolean);
+	] : [<span className="text-status-needs-you">{t("settings.harness.notLoggedIn")}</span>]).filter(Boolean);
 	return (
 		<button type="button" data-testid={`provider-account-${account.id}`} aria-current={current ? "true" : undefined} className={cn("flex w-full items-center gap-3 rounded-[10px] px-3 py-2.5 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring", current ? "bg-interactive-active" : "hover:bg-interactive-hover")} onClick={onSelect}>
 			<AgentAvatar className="size-7 shrink-0" decorative provider={PROVIDERS.find((provider) => provider.id === account.provider)!.agent} />

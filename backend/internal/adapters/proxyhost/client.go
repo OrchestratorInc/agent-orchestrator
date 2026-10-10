@@ -222,12 +222,9 @@ func (c *Client) Credentials(ctx context.Context) (credentials []ports.ProviderC
 			continue
 		}
 		modified, _ := time.Parse(time.RFC3339, text(file, "modtime"))
-		credential := ports.ProviderCredential{AuthID: text(file, "id"), Name: text(file, "name"), Provider: text(file, "provider"), ModifiedAt: modified}
 		reason := strings.ToLower(text(file, "status_message"))
-		if at(file, "disabled") == true || text(file, "status") == "disabled" || strings.Contains(reason, "unauthorized") || strings.Contains(reason, "invalid grant") || strings.Contains(reason, "invalid_grant") {
-			credential.Failed = cmp.Or(text(file, "status_message"), "disabled")
-		}
-		credentials = append(credentials, credential)
+		credentials = append(credentials, ports.ProviderCredential{AuthID: text(file, "id"), Name: text(file, "name"), Provider: text(file, "provider"), ModifiedAt: modified,
+			Failed: at(file, "disabled") == true || text(file, "status") == "disabled" || strings.Contains(reason, "unauthorized") || strings.Contains(reason, "invalid grant") || strings.Contains(reason, "invalid_grant")})
 	}
 	for _, provider := range domain.AccountProviders {
 		keys, _ := c.apiKeys(ctx, provider)
@@ -253,10 +250,8 @@ func (c *Client) DeleteCredential(ctx context.Context, ref string) error {
 	provider, index, _ := strings.Cut(rest, ":")
 	keys, err := c.apiKeys(ctx, provider)
 	// The helper deletes by position, so the position is read just before.
-	for i, key := range keys {
-		if at(key, "auth-index") == index {
-			return c.call(ctx, http.MethodDelete, "/v0/management/"+provider+"-api-key?index="+strconv.Itoa(i), nil, nil)
-		}
+	if i := slices.IndexFunc(keys, func(key any) bool { return at(key, "auth-index") == index }); i >= 0 {
+		return c.call(ctx, http.MethodDelete, "/v0/management/"+provider+"-api-key?index="+strconv.Itoa(i), nil, nil)
 	}
 	return err
 }

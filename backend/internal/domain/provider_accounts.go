@@ -10,13 +10,7 @@ var AccountProviders = []string{"codex", "claude"}
 
 // AccountProvider names the managed provider behind a harness, or "" for none.
 func AccountProvider(h AgentHarness) string {
-	switch h {
-	case HarnessCodex:
-		return "codex"
-	case HarnessClaudeCode:
-		return "claude"
-	}
-	return ""
+	return map[AgentHarness]string{HarnessCodex: "codex", HarnessClaudeCode: "claude"}[h]
 }
 
 // ProviderAccount is one saved account. CredentialRef and AuthID name its
@@ -49,11 +43,7 @@ func GeneratedProviderAccountName(provider, id string) string {
 	words := []string{"Cedar", "Maple", "Willow", "River", "Summit", "Harbor", "Meadow", "Pine", "Juniper", "Clover", "Ember", "Atlas"}
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(strings.ToLower(provider + ":" + id)))
-	name := "Codex"
-	if provider == "claude" {
-		name = "Claude"
-	}
-	return words[int(h.Sum32())%len(words)] + " " + name
+	return words[int(h.Sum32())%len(words)] + " " + map[string]string{"codex": "Codex", "claude": "Claude"}[provider]
 }
 
 // ProviderSessionRoute sends one session's requests to one account. An empty

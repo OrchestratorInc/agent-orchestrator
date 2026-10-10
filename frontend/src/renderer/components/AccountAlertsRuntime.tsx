@@ -2,21 +2,14 @@ import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { percentLeft, useProviderAccounts } from "../hooks/useProviderAccounts";
 
-// said tells the user each thing once: the stamp names the limit window, or the move, it was about.
-function said(key: string, stamp: string): boolean {
+// Tells the user a thing once: the stamp names the limit window, or the move, it was about.
+function tellOnce(key: string, stamp: string, title: string, body: string) {
 	try {
-		if (localStorage.getItem(key) === stamp) return true;
+		if (localStorage.getItem(key) === stamp) return;
 		localStorage.setItem(key, stamp);
-		return false;
-	} catch {
-		return true;
-	}
-}
-function tell(title: string, body: string) {
-	try {
 		new Notification(title, { body });
 	} catch {
-		// Nowhere to show it.
+		// Nowhere to remember it or to show it.
 	}
 }
 // Watches the accounts that asked for it: one notice when little is left, one when a reached limit moved the sessions on.
@@ -26,16 +19,16 @@ export function AccountAlertsRuntime() {
 	const watched = Boolean(catalogue?.some((account) => account.warnAt || account.onLimit));
 	const accounts = useProviderAccounts(watched, true).data?.accounts;
 	useEffect(() => {
-		for (const account of watched ? accounts ?? [] : []) {
-			const general = (account.usage?.status === "available" ? account.usage.windows ?? [] : []).filter((window) => !window.scope);
-			const lowest = general.reduce<typeof general[number] | undefined>((least, window) => (!least || window.remainingFraction < least.remainingFraction ? window : least), undefined);
-			const left = lowest ? percentLeft(lowest.remainingFraction) : null;
-			if (account.warnAt && left !== null && left <= account.warnAt && !said(`ao.account-low.${account.id}`, lowest?.resetTime ?? "now")) {
-				tell(t("providerAccounts.lowTitle", { name: account.displayName }), t("providerAccounts.lowBody", { percent: left }));
+		for (const { id, displayName: name, warnAt, moved, usage } of watched ? accounts ?? [] : []) {
+			const general = (usage?.status === "available" ? usage.windows ?? [] : []).filter((window) => !window.scope);
+			const lowest = general.sort((first, second) => first.remainingFraction - second.remainingFraction)[0];
+			const left = percentLeft(lowest?.remainingFraction ?? 1);
+			if (warnAt && lowest && left <= warnAt) {
+				tellOnce(`ao.account-low.${id}`, lowest.resetTime ?? "now", t("providerAccounts.lowTitle", { name }), t("providerAccounts.lowBody", { percent: left }));
 			}
-			if (account.moved && !said(`ao.account-moved.${account.id}`, account.moved.at)) {
-				const to = accounts?.find((other) => other.id === account.moved?.to)?.displayName ?? "";
-				tell(t("providerAccounts.movedTitle", { name: account.displayName }), t("providerAccounts.movedBody", { count: account.moved.sessions, to }));
+			if (moved) {
+				const to = accounts?.find((other) => other.id === moved.to)?.displayName ?? "";
+				tellOnce(`ao.account-moved.${id}`, moved.at, t("providerAccounts.movedTitle", { name }), t("providerAccounts.sessionsMoved", { count: moved.sessions, name: to }));
 			}
 		}
 	}, [accounts, watched, t]);

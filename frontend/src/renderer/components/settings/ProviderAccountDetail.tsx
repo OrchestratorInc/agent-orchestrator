@@ -1,21 +1,31 @@
 import { useState, type ComponentProps, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, Check, ChevronDown, CirclePause, Copy, ExternalLink, Laptop, Link2, LoaderCircle, X, type LucideIcon } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, ChevronRight, CirclePause, Copy, ExternalLink, Laptop, Link2, LoaderCircle, X, type LucideIcon } from "lucide-react";
 import { PROVIDERS, percentLeft, type ProviderAccount, type ProviderLogin } from "../../hooks/useProviderAccounts";
+import { useSessionUsageSummaries } from "../../hooks/useSessionUsageSummaries";
+import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import { aoBridge } from "../../lib/bridge";
+import { findSession } from "../../lib/command-palette";
+import { formatCostNanos } from "../../lib/format-cost";
+import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { cn } from "../../lib/utils";
-import { AccountMenu } from "../AccountMenu";
+import { useUiStore } from "../../stores/ui-store";
+import { AccountMenu, AccountMenuItems } from "../AccountMenu";
 import { AgentAvatar } from "../AgentAvatar";
 import { Button } from "../ui/button";
-import { AccountHealth, AccountModelMix, AccountRules, AccountSessions, AccountThroughput, ManagePlan } from "./ProviderAccountInsights";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { Switch } from "../ui/switch";
 import type { AccountsPage } from "./ProviderAccountsSection";
 
 const DAY = 24 * 60 * 60;
+// Where each provider shows the plan, its usage and its billing.
+const PLAN_PAGES = { claude: "https://claude.ai/settings/usage", codex: "https://chatgpt.com/codex/settings/usage" } as const;
 const SCOPES = { code_review: "providerAccounts.limitCodeReview", cowork: "providerAccounts.limitCowork", oauth_apps: "providerAccounts.limitApps" } as const;
 const WAITING = { browser: "providerAccounts.browserSignIn", device: "providerAccounts.deviceSignIn", import: "providerAccounts.importWaiting", api_key: "providerAccounts.apiKeyWaiting" } as const;
 const RESET_OUTCOMES = { reset: "providerAccounts.resetDone", nothing_to_reset: "providerAccounts.resetNothing", none_available: "providerAccounts.resetNone", wait: "providerAccounts.resetWait", failed: "providerAccounts.resetFailed", unknown: "providerAccounts.resetUnknown" } as const;
+const FAILURES = { limit: "providerAccounts.limitReached", "sign-in": "providerAccounts.failureSignIn", server: "providerAccounts.failureServer", other: "providerAccounts.failureOther" } as const;
+const SHOWN = 5;
 const danger = "bg-destructive/15 text-destructive hover:bg-destructive/25 dark:hover:bg-destructive/25";
-const pill = "shrink-0 rounded-full bg-interactive-active px-2.5 py-0.5 text-xs text-muted-foreground";
 // A day (with its year when that is not this year), a day and time, or for "soon" the time alone today.
 function formatWhen(value: string, style: "day" | "time" | "soon"): string {
 	const date = new Date(value);
@@ -27,14 +37,13 @@ function formatWhen(value: string, style: "day" | "time" | "soon"): string {
 		: style === "soon" && date.toDateString() === now.toDateString() ? clock : { month: "short", day: "numeric", ...clock };
 	return new Intl.DateTimeFormat(undefined, options).format(date);
 }
-export function formatAgo(time: number, language: string, justNow: string): string {
+function formatAgo(time: number, language: string, justNow: string): string {
 	const minutes = Math.floor((Date.now() - time) / 60_000);
 	if (!(minutes >= 1)) return justNow;
-	const relative = new Intl.RelativeTimeFormat(language, { numeric: "always" });
-	if (minutes < 60) return relative.format(-minutes, "minute");
-	return minutes < 1440 ? relative.format(-Math.floor(minutes / 60), "hour") : relative.format(-Math.floor(minutes / 1440), "day");
+	const [amount, unit] = minutes < 60 ? [minutes, "minute"] as const : minutes < 1440 ? [Math.floor(minutes / 60), "hour"] as const : [Math.floor(minutes / 1440), "day"] as const;
+	return new Intl.RelativeTimeFormat(language, { numeric: "always" }).format(-amount, unit);
 }
-export const formatCount = (value: number, language: string) => new Intl.NumberFormat(language, { notation: "compact", maximumFractionDigits: 1 }).format(value);
+const formatCount = (value: number, language: string) => new Intl.NumberFormat(language, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 const formatSpan = (value: number, unit: "day" | "hour" | "minute", language: string) => new Intl.NumberFormat(language, { style: "unit", unit, unitDisplay: unit === "day" ? "long" : "short" }).format(value);
 function formatTurn(seconds: number, language: string): string {
 	const minutes = Math.max(1, Math.round(seconds / 60));
@@ -67,7 +76,7 @@ export function Rows({ title, className, ...props }: Omit<ComponentProps<"div">,
 export function IconAction({ name, icon: Icon, className, children, ...props }: ComponentProps<typeof Button> & { name: string; icon?: LucideIcon }) {
 	return <Button type="button" size="icon-sm" variant="ghost" className={cn("text-muted-foreground", className)} aria-label={name} title={name} {...props}>{Icon ? <Icon aria-hidden="true" className="size-3.5" /> : children}</Button>;
 }
-export function Row({ title, hint, children, label, icon }: { title: ReactNode; hint?: ReactNode; children?: ReactNode; label?: string; icon?: ReactNode }) {
+function Row({ title, hint, children, label, icon }: { title: ReactNode; hint?: ReactNode; children?: ReactNode; label?: string; icon?: ReactNode }) {
 	return (
 		<div role={label ? "group" : undefined} aria-label={label} className="flex min-h-15 flex-wrap items-center justify-between gap-x-5 gap-y-2 px-4 py-3">
 			<div className="flex min-w-0 items-center gap-3">
@@ -81,7 +90,7 @@ export function Row({ title, hint, children, label, icon }: { title: ReactNode; 
 		</div>
 	);
 }
-export function Fact({ label, children }: { label: ReactNode; children: ReactNode }) {
+function Fact({ label, children }: { label: ReactNode; children: ReactNode }) {
 	return (
 		<div className="flex min-h-11 items-center justify-between gap-4 px-4 py-2 text-[13px]">
 			<span className="min-w-0 truncate text-muted-foreground">{label}</span>
@@ -89,8 +98,20 @@ export function Fact({ label, children }: { label: ReactNode; children: ReactNod
 		</div>
 	);
 }
+// A button that shows what is chosen and opens the menu of choices.
+function Choice({ label, menuClassName = "min-w-52", children, ...props }: ComponentProps<typeof Button> & { label: string; menuClassName?: string }) {
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<Button type="button" variant="secondary" className="max-w-56 gap-1.5 font-normal" {...props}><span className="min-w-0 truncate">{label}</span><ChevronDown aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" /></Button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end" className={cn("text-xs", menuClassName)}>{children}</DropdownMenuContent>
+		</DropdownMenu>
+	);
+}
+const Tick = ({ on }: { on: boolean }) => <Check aria-hidden="true" className={on ? "size-3.5" : "invisible size-3.5"} />;
 // What is left of an allowance. Colour appears only when it is nearly used (caution) or used up (needs attention).
-function MeterRow({ testId, title, hint, percent, value, meterLabel }: { testId?: string; title: string; hint?: string; percent: number; value?: string; meterLabel: string }) {
+function MeterRow({ testId, title, hint, percent, value, meterLabel = title }: { testId?: string; title: string; hint?: string; percent: number; value?: string; meterLabel?: string }) {
 	const { t } = useTranslation();
 	const reached = percent === 0;
 	const low = !reached && percent <= 20;
@@ -145,6 +166,70 @@ export function LoginProgress({ login, page }: { login: ProviderLogin; page: Acc
 		</>
 	);
 }
+// The sessions on the account by name, busiest today first, each one a click from being opened or moved.
+function AccountSessions({ account, page, others, language }: { account: ProviderAccount; page: AccountsPage; others: ProviderAccount[]; language: string }) {
+	const { t } = useTranslation();
+	const openSession = useNavigateToSession();
+	const closeSettings = useUiStore((state) => state.closeSettings);
+	const [all, setAll] = useState(false);
+	const workspaces = useWorkspaceQuery({ includeCloud: false }).data ?? [];
+	const today = account.usage?.activity?.sessions ?? {};
+	const rows = account.sessions.flatMap((id) => findSession(workspaces, id) ?? []).sort((first, second) => (today[second.session.id] ?? 0) - (today[first.session.id] ?? 0));
+	if (!rows.length) return null;
+	return (
+		<Rows title={t("providerAccounts.sessionsOnAccount", { count: rows.length })} data-testid="provider-account-sessions">
+			{(all ? rows : rows.slice(0, SHOWN)).map(({ workspace, session }) => (
+				<div key={session.id} className="flex min-h-11 items-center gap-3 py-1.5 pl-4 pr-2 text-[13px]">
+					<span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", session.status === "working" ? "bg-status-working" : "bg-muted-foreground/50")} />
+					<span className="min-w-0 flex-1 truncate text-foreground" title={session.title}>{session.title || session.id}</span>
+					{today[session.id] ? <span className="shrink-0 tabular-nums text-muted-foreground">{t("providerAccounts.tokensTodayShort", { tokens: formatCount(today[session.id], language) })}</span> : null}
+					{others.length ? (
+						<AccountMenu accounts={others} onSelect={(target) => void page.act(target.id, { action: "assign-session", sessionId: session.id }, t("providerAccounts.sessionMoved", { name: target.displayName }))}>
+							<IconAction name={t("providerAccounts.moveSession")} icon={ChevronDown} disabled={page.pending} />
+						</AccountMenu>
+					) : null}
+					<IconAction name={t("automations.runs.openSession")} icon={ChevronRight} onClick={() => {
+						closeSettings();
+						openSession(workspace.id, session.id);
+					}} />
+				</div>
+			))}
+			{rows.length > SHOWN && !all ? (
+				<button type="button" className="flex min-h-10 w-full items-center px-4 text-left text-[13px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" onClick={() => setAll(true)}>{t("providerAccounts.showMoreSessions", { count: rows.length - SHOWN })}</button>
+			) : null}
+		</Rows>
+	);
+}
+// What passed through AO on this account: a bar a day, then the totals.
+function AccountThroughput({ account, language }: { account: ProviderAccount; language: string }) {
+	const { t } = useTranslation();
+	const activity = account.usage?.activity;
+	const costs = useSessionUsageSummaries().data;
+	const nanos = account.sessions.reduce((sum, id) => sum + (costs?.get(id)?.estimatedCost?.totalNanos ?? 0), 0);
+	const days = activity?.days ?? [];
+	const peak = Math.max(1, ...days.map((day) => day.tokens));
+	const day = (date: string) => new Intl.DateTimeFormat(language, { month: "short", day: "numeric" }).format(new Date(`${date}T12:00:00`));
+	return (
+		<>
+			{days.some((entry) => entry.tokens) ? (
+				<div className="px-4 pb-2.5 pt-3.5" role="img" aria-label={t("providerAccounts.tokensPerDay")}>
+					<div className="flex h-14 items-end gap-1">
+						{days.map((entry, index) => <span key={entry.date} title={`${day(entry.date)} · ${formatCount(entry.tokens, language)}`} className={cn("min-h-0.5 flex-1 rounded-sm", index === days.length - 1 ? "bg-foreground" : "bg-muted-foreground/55")} style={{ height: `${(entry.tokens / peak) * 100}%` }} />)}
+					</div>
+					<div className="mt-1.5 flex justify-between text-2xs text-passive"><span>{day(days[0]!.date)}</span><span>{t("providerAccounts.tokensPerDay")}</span><span>{t("providerAccounts.today")}</span></div>
+				</div>
+			) : null}
+			{activity ? (
+				<>
+					<Fact label={t("providerAccounts.throughToday")}>{formatCount(activity.today, language)}</Fact>
+					<Fact label={t("providerAccounts.throughWeek")}>{formatCount(activity.week, language)}</Fact>
+					{activity.since ? <Fact label={t("providerAccounts.throughSince", { date: day(activity.since) })}>{formatCount(activity.total, language)}</Fact> : null}
+				</>
+			) : null}
+			{nanos > 0 ? <Fact label={<span title={t("providerAccounts.costHint")}>{t("providerAccounts.sessionsCost")}</span>}>{formatCostNanos(nanos)}</Fact> : null}
+		</>
+	);
+}
 // The selected account: each action is a row with one control, beside (when signed in) a column that is only read.
 export function AccountDetail({ account, page }: { account: ProviderAccount; page: AccountsPage }) {
 	const { t, i18n: { language } } = useTranslation();
@@ -194,6 +279,9 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 		if (event.key === "Escape") event.currentTarget.value = name;
 		if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
 	}
+	const setRule = (change: { reserved?: boolean; onLimit?: string; warnAt?: number }) => void page.act(account.id, { action: "settings", ...change });
+	const onLimit = others.find((other) => other.id === account.onLimit);
+	const warn = (percent: number) => (percent ? t("providerAccounts.warnAtPercent", { percent }) : t("providerAccounts.never"));
 	const windows = usage?.windows ?? [];
 	const paused = upcoming(usage?.pausedUntil);
 	const extra = usage?.extraUsage;
@@ -205,8 +293,7 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 	const failed = requests.reduce((sum, slice) => sum + slice.failed, 0);
 	// The narrow column: what the plan is, then what the account has been doing. A missing figure is left out.
 	const facts = (rows: [string, ReactNode][]) => rows.filter(([, value]) => value).map(([label, value]) => <Fact key={label} label={label}>{value}</Fact>);
-	const figure = (value?: number | null, format = formatCount) => (typeof value === "number" ? format(value, language) : null);
-	const days = (value: number) => formatSpan(value, "day", language);
+	const figure = (value?: number | null, unit?: "day") => (typeof value !== "number" ? null : unit ? formatSpan(value, unit, language) : formatCount(value, language));
 	const planFacts = facts([
 		[t("providerAccounts.planHeading"), plan],
 		[t("providerAccounts.factRenews"), usage?.renewsAt ? formatWhen(usage.renewsAt, "day") : null],
@@ -224,8 +311,8 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 		[t("providerAccounts.tokensLifetime"), figure(tokens.lifetime)],
 		[t("providerAccounts.tokensPeakDay"), figure(tokens.peakDaily)],
 		[t("providerAccounts.longestTurn"), tokens.longestTurnSeconds ? formatTurn(tokens.longestTurnSeconds, language) : null],
-		[t("providerAccounts.currentStreak"), figure(tokens.currentStreakDays, days)],
-		[t("providerAccounts.longestStreak"), figure(tokens.longestStreakDays, days)],
+		[t("providerAccounts.currentStreak"), figure(tokens.currentStreakDays, "day")],
+		[t("providerAccounts.longestStreak"), figure(tokens.longestStreakDays, "day")],
 	]) : [];
 	// What the helper counted is known even while the provider is not answering.
 	const activity = requests.length > 0 || tokenFacts.length > 0 || Boolean(account.usage?.activity);
@@ -234,6 +321,10 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 	const twoColumns = signedIn && (planFacts.length > 0 || activity);
 	// A sign-in the helper holds can be replaced by a fresh one from its provider.
 	const renewable = signedIn && !apiKey && Boolean(usage?.refreshedAt || usage?.addedAt || usage?.requests);
+	const health = account.usage?.health;
+	const models = account.usage?.activity?.models ?? [];
+	const modelTokens = models.reduce((sum, model) => sum + model.tokens, 0);
+	const share = (model: { tokens: number }) => Math.round((model.tokens / modelTokens) * 100);
 	return (
 		<div data-testid="provider-account-detail">
 			<div className="flex min-h-11 items-center gap-3.5">
@@ -246,11 +337,11 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 					<p className="flex flex-wrap items-center gap-x-1.5 text-sm text-muted-foreground">
 						<span>{info.name}</span>
 						{apiKey || plan ? <><Dot /><span>{apiKey ? t("providerAccounts.apiKeyLabel") : plan}</span></> : null}
-						{signedIn ? null : <><Dot /><span className="text-status-needs-you">{t("providerAccounts.signedOut")}</span></>}
+						{signedIn ? null : <><Dot /><span className="text-status-needs-you">{t("settings.harness.notLoggedIn")}</span></>}
 					</p>
 				</div>
-				{signedIn && !apiKey ? <ManagePlan account={account} page={page} /> : null}
-				{account.primary && signedIn ? <span className={pill}>{t("providerAccounts.default")}</span> : null}
+				{signedIn && !apiKey ? <Button type="button" variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={() => void page.run(() => aoBridge.app.openExternal(PLAN_PAGES[account.provider]))}>{t("providerAccounts.managePlan")}<ExternalLink aria-hidden="true" className="size-3.5" /></Button> : null}
+				{account.primary && signedIn ? <span className="shrink-0 rounded-full bg-interactive-active px-2.5 py-0.5 text-xs text-muted-foreground">{t("providerAccounts.default")}</span> : null}
 			</div>
 			<div className={cn("grid items-start gap-x-7", twoColumns ? "grid-cols-[minmax(0,1fr)_288px] @max-5xl:grid-cols-1" : "")}>
 				<div className="min-w-0">
@@ -274,7 +365,7 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 								) : null}
 								{windows.map((window, index) => {
 									const seconds = window.durationSeconds ?? 0;
-									const length = seconds === 7 * DAY ? t("providerAccounts.usageWindowWeekly")
+									const length = seconds === 7 * DAY ? t("automations.schedule.weekly")
 										: seconds >= DAY && seconds % DAY === 0 ? t("providerAccounts.usageWindowDays", { days: seconds / DAY })
 											: seconds >= 3600 ? t("providerAccounts.usageWindowHours", { hours: Math.round(seconds / 3600) }) : "";
 									const scope = window.scope && window.scope !== "model" ? t(SCOPES[window.scope]) : window.name ?? "";
@@ -284,16 +375,14 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 									return <MeterRow key={index} testId={`provider-account-usage-${account.id}${index ? `-${index}` : ""}`} title={title} hint={hint} percent={percentLeft(window.remainingFraction)} meterLabel={meterLabel} />;
 								})}
 								{windows.length ? null : <div data-testid={`provider-account-usage-${account.id}`}><Row title={t(!account.usage ? "providerAccounts.loading" : apiKey ? "providerAccounts.usageNotReported" : "providerAccounts.usageUnavailable")} /></div>}
-								{extra && extra.limitCents > 0 ? (
+								{!extra ? null : extra.limitCents > 0 ? (
 									<MeterRow
 										title={t("providerAccounts.extraUsage")}
 										hint={t("providerAccounts.extraUsageSpent", { used: money(extra.usedCents), limit: money(extra.limitCents) })}
 										percent={percentLeft(1 - extra.usedCents / extra.limitCents)}
 										value={t("providerAccounts.amountLeft", { amount: money(Math.max(0, extra.limitCents - extra.usedCents)) })}
-										meterLabel={t("providerAccounts.extraUsage")}
 									/>
-								) : null}
-								{extra && extra.limitCents <= 0 ? <Row title={t("providerAccounts.extraUsage")} hint={t("providerAccounts.extraUsageSpentNoCap", { used: money(extra.usedCents) })} /> : null}
+								) : <Row title={t("providerAccounts.extraUsage")} hint={t("providerAccounts.extraUsageSpentNoCap", { used: money(extra.usedCents) })} />}
 								{usage?.credits ? (
 									<Row title={t("providerAccounts.credits")} hint={t("providerAccounts.creditsHint")}>
 										<span className="text-sm tabular-nums text-foreground">{usage.credits.unlimited ? t("providerAccounts.creditsUnlimited") : t("providerAccounts.creditsAmount", { amount: new Intl.NumberFormat(language, { maximumFractionDigits: 0 }).format(Number(usage.credits.balance)) })}</span>
@@ -339,10 +428,42 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 										</AccountMenu>
 									) : null}
 								</Row>
-								<AccountRules account={account} page={page} others={others} />
+								{/* What the account does without being asked: take new sessions, hand its sessions on at a limit, warn before one. */}
+								<Row title={t("providerAccounts.useForNew")} hint={t(account.primary ? "providerAccounts.useForNewDefault" : "providerAccounts.useForNewHint")}>
+									<Switch aria-label={t("providerAccounts.useForNew")} checked={!account.reserved} disabled={page.pending || account.primary} onCheckedChange={(on) => setRule({ reserved: !on })} />
+								</Row>
+								{others.length ? (
+									<Row title={t("providerAccounts.onLimit")} hint={t("providerAccounts.onLimitHint")}>
+										<Choice label={onLimit ? t("providerAccounts.switchTo", { name: onLimit.displayName }) : t("providerAccounts.doNothing")}>
+											<DropdownMenuItem onSelect={() => setRule({ onLimit: "" })}><Tick on={!onLimit} />{t("providerAccounts.doNothing")}</DropdownMenuItem>
+											<AccountMenuItems accounts={others} selectedId={onLimit?.id ?? ""} markDefault={false} onSelect={(other) => setRule({ onLimit: other.id })} />
+										</Choice>
+									</Row>
+								) : null}
+								<Row title={t("providerAccounts.warnWhenLow")}>
+									<Choice label={warn(account.warnAt ?? 0)}>
+										{[0, 5, 10, 20, 30].map((percent) => <DropdownMenuItem key={percent} onSelect={() => setRule({ warnAt: percent })}><Tick on={(account.warnAt ?? 0) === percent} />{warn(percent)}</DropdownMenuItem>)}
+									</Choice>
+								</Row>
 							</Rows>
 							<AccountSessions account={account} page={page} others={others} language={language} />
-							<AccountHealth health={account.usage?.health} language={language} />
+							{/* How the account's recent requests went, as the helper saw them. */}
+							{health?.lastFailure || health?.firstWordMs ? (
+								<Rows title={t("providerAccounts.healthHeading")}>
+									{health.lastFailure ? (
+										<Row icon={<AlertCircle aria-hidden="true" className="size-4 shrink-0 text-warning" />} title={t("providerAccounts.lastFailure")} hint={`${t(FAILURES[health.lastFailure.kind])} · ${new Intl.DateTimeFormat(language, { dateStyle: "medium", timeStyle: "short" }).format(new Date(health.lastFailure.at))}`}>
+											<span className="flex gap-2.5 text-[13px] tabular-nums text-muted-foreground">
+												{(["limit", "signIn", "server", "other"] as const).filter((kind) => health.failures?.[kind]).map((kind) => <span key={kind}><span className="font-medium text-foreground">{health.failures![kind]}</span> {t(FAILURES[kind === "signIn" ? "sign-in" : kind]).toLowerCase()}</span>)}
+											</span>
+										</Row>
+									) : null}
+									{health.firstWordMs ? (
+										<Row title={t("providerAccounts.firstWord")} hint={t("providerAccounts.firstWordHint")}>
+											<span className="text-sm tabular-nums text-foreground">{t("providerAccounts.seconds", { value: new Intl.NumberFormat(language, { maximumFractionDigits: 1 }).format(health.firstWordMs / 1000) })}</span>
+										</Row>
+									) : null}
+								</Rows>
+							) : null}
 						</>
 					) : null}
 					<Rows title={t("providerAccounts.account")}>
@@ -362,12 +483,9 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 						{removing ? (
 							<Row label={t("providerAccounts.confirmChange")} title={t(signedIn ? "providerAccounts.confirmSignOut" : "providerAccounts.confirmRemove", { email: name })} hint={removalFact}>
 								{replacement ? (
-									<AccountMenu accounts={others} selectedId={replacement.id} markDefault={false} onSelect={(other) => setPicked(other.id)}>
-										<Button type="button" variant="secondary" className="max-w-56 gap-1.5 font-normal" aria-label={t("providerAccounts.replacementPrimary")} disabled={page.pending}>
-											<span className="min-w-0 truncate">{replacement.displayName}</span>
-											<ChevronDown aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-										</Button>
-									</AccountMenu>
+									<Choice label={replacement.displayName} menuClassName="min-w-60" aria-label={t("providerAccounts.replacementPrimary")} disabled={page.pending}>
+										<AccountMenuItems accounts={others} selectedId={replacement.id} markDefault={false} onSelect={(other) => setPicked(other.id)} />
+									</Choice>
 								) : null}
 								<Button type="button" variant="ghost" className="text-muted-foreground" disabled={page.pending} onClick={() => setRemoving(false)}>{t("confirm.cancel")}</Button>
 								<Button type="button" variant="ghost" className={danger} disabled={page.pending} onClick={() => void remove()}>{t(signedIn ? "shell.signOut" : "shell.remove")}</Button>
@@ -396,7 +514,19 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 								{tokenFacts}
 							</Rows>
 						) : null}
-						<AccountModelMix activity={account.usage?.activity} />
+						{modelTokens ? (
+							<Rows title={t("providerAccounts.byModel")}>
+								<div className="grid gap-2 px-4 py-3">
+									{models.map((model) => (
+										<div key={model.model} className="grid grid-cols-[minmax(0,1fr)_72px_36px] items-center gap-2.5 text-[13px]">
+											<span className="truncate text-foreground" title={model.model}>{model.model}</span>
+											<span className="h-1.5 overflow-hidden rounded-full bg-muted"><span className="block h-full rounded-full bg-muted-foreground" style={{ width: `${share(model)}%` }} /></span>
+											<span className="text-right tabular-nums text-muted-foreground">{share(model)}%</span>
+										</div>
+									))}
+								</div>
+							</Rows>
+						) : null}
 					</aside>
 				) : null}
 			</div>

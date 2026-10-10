@@ -35,7 +35,7 @@ type Service struct {
 	starting sync.Mutex // one sign-in start or import at a time
 	memo     sync.Mutex // guards the fields below
 	usage    map[string]domain.ProviderAccountUsage
-	moved    map[string]domain.ProviderAccountMove // by the account the sessions left
+	moved    map[string]*domain.ProviderAccountMove // by the account the sessions left
 	failed   map[string]bool
 	stamps   map[string]time.Time
 	logins   map[string]*attempt
@@ -50,7 +50,7 @@ type attempt struct {
 // New creates the account service.
 func New(store ports.ProviderAccountStore, helper ports.AccountHelper, newID func() string) *Service {
 	return &Service{store: store, helper: helper, newID: newID, now: time.Now, tick: 10 * time.Second, changed: func() {},
-		usage: map[string]domain.ProviderAccountUsage{}, stamps: map[string]time.Time{}, logins: map[string]*attempt{}}
+		usage: map[string]domain.ProviderAccountUsage{}, moved: map[string]*domain.ProviderAccountMove{}, stamps: map[string]time.Time{}, logins: map[string]*attempt{}}
 }
 
 // OnChange sets what is called when the accounts a provider can use change.
@@ -231,7 +231,7 @@ func (s *Service) credentials(ctx context.Context) []ports.ProviderCredential {
 	}
 	failed := map[string]bool{}
 	for _, c := range list {
-		if c.Failed != "" {
+		if c.Failed {
 			failed[c.AuthID] = true
 		}
 	}
@@ -477,10 +477,7 @@ func (s *Service) switchOnLimit(ctx context.Context) error {
 		})
 		if failures = append(failures, err); err == nil && sessions > 0 {
 			s.memo.Lock()
-			if s.moved == nil {
-				s.moved = map[string]domain.ProviderAccountMove{}
-			}
-			s.moved[from.ID] = domain.ProviderAccountMove{To: from.OnLimit, At: s.now().UTC().Format(time.RFC3339), Sessions: sessions}
+			s.moved[from.ID] = &domain.ProviderAccountMove{To: from.OnLimit, At: s.now().UTC().Format(time.RFC3339), Sessions: sessions}
 			s.memo.Unlock()
 		}
 	}
@@ -572,10 +569,7 @@ func (s *Service) importNative(ctx context.Context, force bool) {
 	}
 }
 func receipts(st *domain.ProviderAccountState, key bool) map[string]domain.NativeProviderImport {
-	if key {
-		return st.NativeKeyImports
-	}
-	return st.NativeImports
+	return map[bool]map[string]domain.NativeProviderImport{false: st.NativeImports, true: st.NativeKeyImports}[key]
 }
 func (s *Service) importOne(ctx context.Context, provider string, key bool) {
 	stored, err := s.store.LoadProviderAccounts(ctx)
@@ -708,18 +702,14 @@ func (s *Service) Accounts(ctx context.Context, usage, refresh bool) ([]domain.P
 			SignedIn: a.SignedIn() && !s.dead(a.AuthID, false), Primary: st.Defaults[a.Provider] == a.ID, Sessions: []string{},
 			Reserved: a.Reserved, OnLimit: a.OnLimit, WarnAt: a.WarnAt}
 		s.memo.Lock()
-		if move, ok := s.moved[a.ID]; ok {
-			view.Moved = &move
-		}
+		view.Moved = s.moved[a.ID]
 		s.memo.Unlock()
-		reading, read := used[a.ID]
-		if read {
-			view.Usage = &reading
-		}
-		byHash := map[string]int64(nil)
-		if read && reading.Activity != nil { // The helper knows a session by its ticket; the page knows it by its id.
-			activity := *reading.Activity
-			byHash, activity.Sessions, reading.Activity = activity.Sessions, map[string]int64{}, &activity
+		var byHash map[string]int64 // The helper knows a session by its ticket; the page knows it by its id.
+		if reading, read := used[a.ID]; read {
+			if view.Usage = &reading; reading.Activity != nil {
+				activity := *reading.Activity
+				byHash, activity.Sessions, reading.Activity = activity.Sessions, map[string]int64{}, &activity
+			}
 		}
 		for _, r := range st.Routes {
 			if r.AccountID != a.ID {
@@ -727,7 +717,7 @@ func (s *Service) Accounts(ctx context.Context, usage, refresh bool) ([]domain.P
 			}
 			view.Sessions = append(view.Sessions, string(r.SessionID))
 			if hash, err := s.ticketHash(r.SessionID); err == nil && byHash[hash] > 0 {
-				reading.Activity.Sessions[string(r.SessionID)] = byHash[hash]
+				view.Usage.Activity.Sessions[string(r.SessionID)] = byHash[hash]
 			}
 		}
 		views = append(views, view)
@@ -793,15 +783,14 @@ func (s *Service) ModelsFingerprint(ctx context.Context, harness domain.AgentHar
 // StartLogin starts a sign-in, or returns the provider's waiting one when it is the same.
 func (s *Service) StartLogin(ctx context.Context, in ports.ProviderLoginRequest) (login ports.ProviderLogin, err error) {
 	in.Mode = cmp.Or(strings.TrimSpace(in.Mode), "browser")
-	blank := func(v string) bool { return strings.TrimSpace(v) == "" }
 	switch {
 	case !slices.Contains(domain.AccountProviders, in.Provider):
 		return login, apierr.Invalid("PROVIDER_REQUIRED", "Choose Codex or Claude", nil)
 	case in.Mode == "device" && in.Provider != "codex":
 		return login, apierr.Invalid("LOGIN_MODE_UNSUPPORTED", "Device login is available for Codex only", nil)
-	case in.Mode == "import" && blank(in.CredentialJSON):
+	case in.Mode == "import" && strings.TrimSpace(in.CredentialJSON) == "":
 		return login, apierr.Invalid("CREDENTIAL_JSON_REQUIRED", "Paste or choose a credential JSON file", nil)
-	case in.Mode == "api_key" && (blank(in.APIKey) || blank(in.BaseURL)):
+	case in.Mode == "api_key" && (strings.TrimSpace(in.APIKey) == "" || strings.TrimSpace(in.BaseURL) == ""):
 		return login, apierr.Invalid("API_KEY_FIELDS_REQUIRED", "API key and base URL are required", nil)
 	case !slices.Contains([]string{"browser", "device", "import", "api_key"}, in.Mode):
 		return login, apierr.Invalid("LOGIN_MODE_UNSUPPORTED", "Choose browser, device, API key, or JSON import", nil)

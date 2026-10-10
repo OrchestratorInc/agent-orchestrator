@@ -37,13 +37,13 @@ type ProviderRoute struct {
 }
 
 // ProviderCredential is one sign-in the helper holds on disk. Failed is the
-// helper's short reason when the provider no longer accepts it.
+// helper's verdict that the provider no longer accepts it.
 type ProviderCredential struct {
 	AuthID     string
 	Name       string
 	Provider   string
 	ModifiedAt time.Time
-	Failed     string
+	Failed     bool
 }
 
 // ProviderLoginRequest starts a sign-in, or signs an existing account in again.
@@ -111,10 +111,8 @@ type AccountHelper interface {
 	// ImportNative copies this computer's own login, or its API key, unless known
 	// says to leave it alone. known is asked before anything is copied, with the
 	// login's identity: "id:" and its email for a sign-in (empty when it cannot
-	// be told), a fingerprint for a key. A copied sign-in is renewed by the
-	// helper from then on, which signs the computer's own agent out once, so a
-	// login AO already has must never be copied again. It returns the identity
-	// (empty when there is no login) and the sign-in only when it copied one.
+	// be told), a fingerprint for a key. It returns the identity (empty when
+	// there is no login) and the sign-in only when it copied one.
 	ImportNative(ctx context.Context, provider string, apiKey bool, known func(identity string) bool) (VerifiedProviderLogin, string, error)
 }
 

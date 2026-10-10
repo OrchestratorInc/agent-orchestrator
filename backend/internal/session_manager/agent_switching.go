@@ -260,7 +260,7 @@ func (m *Manager) admitAgentSwitch(ctx context.Context, id domain.SessionID, cfg
 	if rec.Harness == cfg.TargetHarness {
 		return domain.AgentSwitch{}, nil, fmt.Errorf("switch agent %s: %w: %s", id, ErrAlreadyUsingHarness, cfg.TargetHarness)
 	}
-	if managed, accountErr := m.accountManaged(ctx, id); accountErr != nil {
+	if _, managed, accountErr := m.sessionAccount(ctx, id); accountErr != nil {
 		return domain.AgentSwitch{}, nil, accountErr
 	} else if managed {
 		return domain.AgentSwitch{}, nil, fmt.Errorf("managed sessions keep their provider; create a new session for another provider: %w", ports.ErrProviderAccountIncompatible)

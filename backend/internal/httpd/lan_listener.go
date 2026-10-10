@@ -55,7 +55,7 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 // prefixes that must never be reachable through the LAN listener: /shutdown,
 // the telemetry routes under /internal/, and the Connect Mobile control
 // surface under /api/v1/mobile, developer maintenance routes under /api/v1/dev,
-// host-mutating installer routes under /api/v1/system/install, and managed
+// host-mutating installer routes under /api/v1/system/install, and personal
 // provider-account routes under /api/v1/provider-accounts. Some routes
 // are gated in the shared router by localControlRequest, which trusts the
 // client-supplied Host header. That header is spoofable by any LAN client. The

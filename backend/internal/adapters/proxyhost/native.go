@@ -68,12 +68,8 @@ func signInIdentity(email string) string {
 
 // readCodexAuth reads Codex's own auth file; none is a computer not signed in.
 func readCodexAuth() (auth any, err error) {
-	home := os.Getenv("CODEX_HOME")
-	if home == "" {
-		user, _ := os.UserHomeDir()
-		home = filepath.Join(user, ".codex")
-	}
-	data, err := os.ReadFile(filepath.Join(home, "auth.json"))
+	user, _ := os.UserHomeDir()
+	data, err := os.ReadFile(filepath.Join(cmp.Or(os.Getenv("CODEX_HOME"), filepath.Join(user, ".codex")), "auth.json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -89,14 +85,10 @@ func nativeLogin(ctx context.Context, provider string) (login, identity string, 
 	if provider == "claude" {
 		value["access_token"], value["refresh_token"] = agentcreds.LocalOAuth(ctx, agentcreds.ResolveOptions{AllowKeychain: true})
 		// Claude Code records whose login it holds beside its settings, not in the login.
-		dir := os.Getenv("CLAUDE_CONFIG_DIR")
-		if dir == "" {
-			dir, _ = os.UserHomeDir()
-		}
+		home, _ := os.UserHomeDir()
+		data, _ := os.ReadFile(filepath.Join(cmp.Or(os.Getenv("CLAUDE_CONFIG_DIR"), home), ".claude.json"))
 		var settings any
-		if data, errRead := os.ReadFile(filepath.Join(dir, ".claude.json")); errRead == nil {
-			_ = json.Unmarshal(data, &settings)
-		}
+		_ = json.Unmarshal(data, &settings)
 		identity = signInIdentity(text(settings, "oauthAccount", "emailAddress"))
 	} else {
 		auth, err := readCodexAuth()

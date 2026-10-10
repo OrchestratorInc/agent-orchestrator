@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,12 +49,11 @@ func on(a domain.ProviderAccount) accountCall {
 
 // provider sends one request to the account's provider under its sign-in.
 func (c *Client) provider(ctx context.Context, a domain.ProviderAccount, method, url string, body any) (int, any, error) {
-	call := accountCall{a.AuthID, a.Provider, method, url, body}
 	var answer struct {
 		Status int `json:"status"`
 		Body   any `json:"body"`
 	}
-	err := c.call(ctx, http.MethodPost, "/ao/provider-call", call, &answer)
+	err := c.call(ctx, http.MethodPost, "/ao/provider-call", accountCall{a.AuthID, a.Provider, method, url, body}, &answer)
 	return answer.Status, answer.Body, err
 }
 
@@ -185,10 +185,7 @@ func codexUsage(u *domain.ProviderAccountUsage, doc, resets, profile any, now ti
 	if u.Plan == "" && len(u.Windows) == 0 {
 		return
 	}
-	reached := at(doc, "rate_limit", "limit_reached") == true
-	for _, window := range u.Windows {
-		reached = reached || window.RemainingFraction <= 0
-	}
+	reached := at(doc, "rate_limit", "limit_reached") == true || slices.ContainsFunc(u.Windows, func(w domain.ProviderAccountUsageWindow) bool { return w.RemainingFraction <= 0 })
 	u.Windows = append(u.Windows, codexWindows(at(doc, "code_review_rate_limit"), domain.ProviderUsageScopeCodeReview, "", now)...)
 	scoped, _ := at(doc, "additional_rate_limits").([]any)
 	for _, limit := range scoped {
@@ -270,11 +267,7 @@ func claudeUsage(u *domain.ProviderAccountUsage, doc, grants, profile any, now t
 	limits, _ := at(doc, "limits").([]any)
 	for _, limit := range limits {
 		name := text(limit, "scope", "model", "display_name")
-		known := name == "" || text(limit, "kind") != "weekly_scoped"
-		for _, window := range u.Windows {
-			known = known || strings.EqualFold(window.Name, name)
-		}
-		if !known {
+		if name != "" && text(limit, "kind") == "weekly_scoped" && !slices.ContainsFunc(u.Windows, func(w domain.ProviderAccountUsageWindow) bool { return strings.EqualFold(w.Name, name) }) {
 			add(week, domain.ProviderUsageScopeModel, name, limit, "percent")
 		}
 	}

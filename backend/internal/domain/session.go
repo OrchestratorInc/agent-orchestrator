@@ -349,10 +349,8 @@ func (s SessionRecord) EligibleForChatHibernation() bool {
 	return s.Kind != KindOrchestrator && s.EligibleForChatRestart()
 }
 
-// EligibleForChatRestart reports a Chat session whose provider process can be
-// stopped and started again without losing anything: it is idle and its
-// conversation can be resumed. Unlike idle hibernation this includes an
-// orchestrator, because a restart brings the process straight back.
+// EligibleForChatRestart is the same filter for a restart, which brings the
+// provider process straight back and so includes an orchestrator.
 func (s SessionRecord) EligibleForChatRestart() bool {
 	return NormalizeSessionMode(s.Mode) == SessionModeChat &&
 		!s.IsTerminated && !s.IsTaskPreparation && s.ProvisionState.WithDefault() == SessionProvisionReady &&

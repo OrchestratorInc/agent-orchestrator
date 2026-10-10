@@ -4,37 +4,30 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// chatRestarter stops a quiet Chat provider and starts it again.
-type chatRestarter interface {
-	HibernateChatForRestart(context.Context, domain.SessionID) (bool, error)
-	WakeChat(context.Context, domain.SessionID) error
-}
-
 func (m *Manager) applyAccountEnv(ctx context.Context, id domain.SessionID, env map[string]string) error {
 	if m.accounts == nil {
 		return nil
 	}
 	managed, err := m.accounts.LaunchAccountEnv(ctx, id)
-	for key, value := range managed {
-		env[key] = value
-	}
+	maps.Copy(env, managed)
 	return err
 }
 
-// accountManaged reports a session whose sign-in Account Manager supplies.
-func (m *Manager) accountManaged(ctx context.Context, id domain.SessionID) (bool, error) {
+// sessionAccount is a session's route; false is a session whose sign-in Account Manager does not supply.
+func (m *Manager) sessionAccount(ctx context.Context, id domain.SessionID) (domain.ProviderSessionRoute, bool, error) {
 	if m.accounts == nil {
-		return false, nil
+		return domain.ProviderSessionRoute{}, false, nil
 	}
-	_, managed, err := m.accounts.SessionAccount(ctx, id)
-	return managed, err
+	return m.accounts.SessionAccount(ctx, id)
 }
 
 func (m *Manager) forgetAccount(ctx context.Context, id domain.SessionID) error {
@@ -44,19 +37,16 @@ func (m *Manager) forgetAccount(ctx context.Context, id domain.SessionID) error 
 	return m.accounts.ForgetAccount(ctx, id)
 }
 
-// RelatedAccountEnv gives a same-provider reviewer its owning worker's ticket.
-func (m *Manager) RelatedAccountEnv(ctx context.Context, id domain.SessionID, harness domain.AgentHarness) (map[string]string, error) {
-	if m.accounts == nil {
-		return nil, nil
-	}
-	route, managed, err := m.accounts.SessionAccount(ctx, id)
+// RelatedAccountEnv adds its owning worker's ticket to a same-provider reviewer's environment.
+func (m *Manager) RelatedAccountEnv(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, env map[string]string) error {
+	route, managed, err := m.sessionAccount(ctx, id)
 	if err != nil || !managed || route.Provider != domain.AccountProvider(harness) {
-		return nil, err
+		return err
 	}
 	if route.AccountID == "" {
-		return nil, ports.ErrProviderLoginRequired
+		return ports.ErrProviderLoginRequired
 	}
-	return m.accounts.LaunchAccountEnv(ctx, id)
+	return m.applyAccountEnv(ctx, id, env)
 }
 
 // agentSwitching reports a session changing agent: it has no settled provider.
@@ -99,28 +89,25 @@ func (m *Manager) MigrateLegacySessions(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	remaining := 0
-	var failures []error
+	var remaining atomic.Int64
+	failures := make([]error, len(sessions))
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-	for _, rec := range sessions {
+	for i, rec := range sessions {
 		if !legacyCandidate(rec) {
 			continue
 		}
 		wg.Go(func() {
 			left, err := m.moveLegacySession(ctx, rec.ID)
-			mu.Lock()
-			defer mu.Unlock()
 			if err != nil {
-				failures = append(failures, fmt.Errorf("move session %s onto its account: %w", rec.ID, err))
+				failures[i] = fmt.Errorf("move session %s onto its account: %w", rec.ID, err)
 			}
 			if left {
-				remaining++
+				remaining.Add(1)
 			}
 		})
 	}
 	wg.Wait()
-	return remaining, errors.Join(failures...)
+	return int(remaining.Load()), errors.Join(failures...)
 }
 
 // SessionTurnEnded moves such a session as its turn ends, ahead of the next check.
@@ -132,7 +119,7 @@ func (m *Manager) SessionTurnEnded(rec domain.SessionRecord) {
 		defer m.agentSwitchWorkers.Done()
 		ctx, cancel := context.WithTimeout(m.backgroundContext, 2*time.Minute)
 		defer cancel()
-		if managed, err := m.accountManaged(ctx, rec.ID); err != nil || managed {
+		if _, managed, err := m.sessionAccount(ctx, rec.ID); err != nil || managed {
 			return
 		}
 		if _, err := m.moveLegacySession(ctx, rec.ID); err != nil {
@@ -175,16 +162,26 @@ func (m *Manager) moveLegacySession(ctx context.Context, id domain.SessionID) (b
 		m.legacyExited.Delete(id)
 		return false, nil
 	}
-	if managed, err := m.accountManaged(ctx, id); err != nil || managed {
+	if _, managed, err := m.sessionAccount(ctx, id); err != nil || managed {
 		return err != nil, err
 	}
 	if chatMode {
-		chat, ok := m.chat.(chatRestarter)
+		chat, ok := m.chat.(interface {
+			HibernateChatForRestart(context.Context, domain.SessionID) (bool, error)
+			WakeChat(context.Context, domain.SessionID) error
+		})
 		if !ok || !m.chat.HasLiveChatController(id) {
 			return true, nil
 		}
-		moved, err := m.restartLegacyChat(ctx, chat, id)
-		return !moved, err
+		if stopped, err := m.stopLegacySession(ctx, id, chat.HibernateChatForRestart); err != nil || !stopped {
+			return true, err
+		}
+		if err := chat.WakeChat(ctx, id); err != nil {
+			m.legacyExited.Store(id, true) // its start is tried again at each check
+			return true, err
+		}
+		_, managed, err := m.sessionAccount(ctx, id)
+		return !managed, err
 	}
 	if rec.Activity.State != domain.ActivityIdle || rec.Metadata.RuntimeLaunchID == "" ||
 		rec.Metadata.AgentSessionID == "" || m.terminalOnScreen(rec) {
@@ -193,26 +190,12 @@ func (m *Manager) moveLegacySession(ctx context.Context, id domain.SessionID) (b
 	if _, release := m.beginTerminalInputDrain(rec); release != nil {
 		defer release() // keystrokes stay closed until the agent has resumed
 	}
-	exit := func(ctx context.Context) (bool, error) { return m.exitLegacyTerminal(ctx, rec) }
+	exit := func(ctx context.Context, _ domain.SessionID) (bool, error) { return m.exitLegacyTerminal(ctx, rec) }
 	if exited, err := m.stopLegacySession(ctx, id, exit); err != nil || !exited {
 		return true, err
 	}
 	_, err = m.ResumeAgentWithMode(ctx, id)
 	return err != nil, err
-}
-
-// restartLegacyChat restarts one chat if it is doing nothing, and reports
-// whether it now has an account. A failed start is tried again at each check.
-func (m *Manager) restartLegacyChat(ctx context.Context, chat chatRestarter, id domain.SessionID) (bool, error) {
-	stop := func(ctx context.Context) (bool, error) { return chat.HibernateChatForRestart(ctx, id) }
-	if stopped, err := m.stopLegacySession(ctx, id, stop); err != nil || !stopped {
-		return false, err
-	}
-	if err := chat.WakeChat(ctx, id); err != nil {
-		m.legacyExited.Store(id, true)
-		return false, err
-	}
-	return m.accountManaged(ctx, id)
 }
 
 // exitLegacyTerminal gives a terminal its account and exits its agent, unless a
@@ -240,7 +223,6 @@ func (m *Manager) exitLegacyTerminal(ctx context.Context, rec domain.SessionReco
 	return true, nil
 }
 
-// terminalOnScreen reports a terminal that some client is showing.
 func (m *Manager) terminalOnScreen(rec domain.SessionRecord) bool {
 	m.terminalInputGateMu.Lock()
 	defer m.terminalInputGateMu.Unlock()
@@ -248,7 +230,7 @@ func (m *Manager) terminalOnScreen(rec domain.SessionRecord) bool {
 }
 
 // stopLegacySession runs stop while nothing else may operate on the session.
-func (m *Manager) stopLegacySession(ctx context.Context, id domain.SessionID, stop func(context.Context) (bool, error)) (bool, error) {
+func (m *Manager) stopLegacySession(ctx context.Context, id domain.SessionID, stop func(context.Context, domain.SessionID) (bool, error)) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := m.beginAgentOperation(ctx, id, agentOperationHibernate); err != nil {
@@ -264,5 +246,5 @@ func (m *Manager) stopLegacySession(ctx context.Context, id domain.SessionID, st
 	if switching, err := m.agentSwitching(ctx, id); err != nil || switching {
 		return false, err
 	}
-	return stop(ctx)
+	return stop(ctx, id)
 }

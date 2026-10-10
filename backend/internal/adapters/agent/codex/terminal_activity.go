@@ -32,7 +32,7 @@ func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObse
 	observation := ports.TerminalSurfaceObservation{
 		Composer: codexComposerState(terminalui.LastPromptComposerState(codexComposerFrame(output), marker, codexComposerChromeLabels...)),
 	}
-	lines := terminalLines(output)
+	lines := terminalLines(strings.ReplaceAll(output, "»", "›")) // the structure below reads either glyph as ›
 	if len(lines) < 2 {
 		return observation
 	}
@@ -51,7 +51,7 @@ func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObse
 		// non-dim current-prompt marker. Plain or dim transcript prompts do not
 		// satisfy this fallback, so missing structural evidence still fails closed.
 		for i := len(lines) - 1; i >= start; i-- {
-			if codexPromptMarker(lines[i]) != "" {
+			if strings.HasPrefix(strings.TrimSpace(lines[i]), "›") {
 				prompt = i
 				break
 			}
@@ -78,7 +78,7 @@ func codexInitialComposer(lines []string, currentPrompt int) bool {
 		if strings.Contains(line, "OpenAI Codex (v") {
 			header = true
 		}
-		if codexPromptMarker(line) != "" {
+		if strings.HasPrefix(line, "›") {
 			prompts++
 			if i != currentPrompt {
 				return false
@@ -92,13 +92,12 @@ func codexConfirmationFrame(lines []string, start int) bool {
 	selection := -1
 	for i := len(lines) - 1; i >= start; i-- {
 		line := strings.TrimSpace(lines[i])
-		marker := codexPromptMarker(line)
-		if marker == "" {
+		if !strings.HasPrefix(line, "›") {
 			continue
 		}
 		// An ordinary composer below a completed picker makes the picker
 		// transcript. Only the current, last prompt-shaped row can be selected.
-		if !codexNumberedOption(strings.TrimSpace(strings.TrimPrefix(line, marker))) {
+		if !codexNumberedOption(strings.TrimSpace(strings.TrimPrefix(line, "›"))) {
 			return false
 		}
 		selection = i
@@ -144,7 +143,7 @@ func codexPromptFooter(lines []string, start int) (int, int) {
 			continue
 		}
 		for prompt := footer - 1; prompt >= start; prompt-- {
-			if codexPromptMarker(lines[prompt]) != "" {
+			if strings.HasPrefix(strings.TrimSpace(lines[prompt]), "›") {
 				return prompt, footer
 			}
 		}
@@ -186,7 +185,7 @@ func codexComposerFrame(output string) string {
 		}
 		for prompt := footer - 1; prompt >= start; prompt-- {
 			plainPrompt := strings.TrimSpace(terminalui.PlainTerminalText(raw[prompt]))
-			if codexPromptMarker(plainPrompt) != "" {
+			if strings.HasPrefix(plainPrompt, "›") || strings.HasPrefix(plainPrompt, "»") {
 				return strings.Join(raw[prompt:footer], "\n")
 			}
 		}
@@ -198,21 +197,11 @@ func codexComposerFrame(output string) string {
 func codexLastPromptMarker(output string) string {
 	lines := terminalui.PlainTerminalLines(output)
 	for i := len(lines) - 1; i >= 0; i-- {
-		if marker := codexPromptMarker(lines[i]); marker != "" {
-			return marker
+		if line := strings.TrimSpace(lines[i]); strings.HasPrefix(line, "›") || strings.HasPrefix(line, "»") {
+			return string([]rune(line)[:1])
 		}
 	}
 	return "›"
-}
-
-func codexPromptMarker(line string) string {
-	line = strings.TrimSpace(line)
-	for _, marker := range []string{"›", "»"} {
-		if strings.HasPrefix(line, marker) {
-			return marker
-		}
-	}
-	return ""
 }
 
 func codexComposerState(state terminalui.ComposerState) ports.TerminalComposerState {

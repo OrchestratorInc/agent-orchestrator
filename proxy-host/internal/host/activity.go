@@ -40,11 +40,10 @@ type tally struct {
 	last     *event
 }
 
-// event is a failed request with its kind and upstream status, or a streamed request with its milliseconds to the first token.
+// event is a failed request with its upstream status, or a streamed request with its milliseconds to the first token.
 type event struct {
-	at   time.Time
-	kind string
-	n    int
+	at time.Time
+	n  int
 }
 
 // OpenActivity starts from the saved counts when they are readable, and empty otherwise.
@@ -77,11 +76,11 @@ func (a *Activity) HandleUsage(_ context.Context, r coreusage.Record) {
 	t := cmp.Or(a.accounts[account], &tally{Days: map[string]map[string]int64{}})
 	a.accounts[account] = t
 	if r.Failed && r.Fail.StatusCode != 499 { // 499 is the user stopping the agent, not a refusal
-		t.last = &event{at, failureKind(r.Fail.StatusCode), r.Fail.StatusCode}
+		t.last = &event{at, r.Fail.StatusCode}
 		t.failures = append(since(t.failures, at.Add(-3*time.Hour)), *t.last)
 	}
 	if r.Stream && r.TTFT > 0 {
-		t.firsts = append(since(t.firsts, at.Add(-time.Hour)), event{at: at, n: int(r.TTFT.Milliseconds())})
+		t.firsts = append(since(t.firsts, at.Add(-time.Hour)), event{at, int(r.TTFT.Milliseconds())})
 	}
 	// Counting tokens and listing models generate nothing.
 	if tokens <= 0 || !coreusage.GenerateEnabled(r.Generate) {
@@ -139,10 +138,10 @@ func (a *Activity) report(out gin.H, id string, now time.Time) gin.H {
 	t.failures, t.firsts = since(t.failures, now.Add(-3*time.Hour)), since(t.firsts, now.Add(-time.Hour))
 	health, kinds := gin.H{}, map[string]int{}
 	if t.last != nil {
-		health["lastFailure"] = gin.H{"kind": t.last.kind, "at": t.last.at.UTC().Format(time.RFC3339), "status": t.last.n}
+		health["lastFailure"] = gin.H{"kind": failureKind(t.last.n), "at": t.last.at.UTC().Format(time.RFC3339), "status": t.last.n}
 	}
 	for _, failure := range t.failures {
-		kinds[strings.Replace(failure.kind, "sign-in", "signIn", 1)]++
+		kinds[strings.Replace(failureKind(failure.n), "sign-in", "signIn", 1)]++
 		health["failures"] = kinds
 	}
 	// The median: the middle one of the times in order.

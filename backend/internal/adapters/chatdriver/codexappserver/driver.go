@@ -488,6 +488,7 @@ func (d *Driver) connect(ctx context.Context, workdir string, env map[string]str
 	}
 
 	conv := newConversation(proc, d.log, providerScopeID)
+	conv.modelProvider = agentlaunch.CodexProxyProviderFor(env)
 	if err := d.initialize(ctx, conv); err != nil {
 		_ = conv.Close()
 		return nil, err
@@ -518,9 +519,6 @@ func (d *Driver) connectSession(
 			}
 		}
 		conv, err := d.connect(ctx, workdir, env, providerScopeID)
-		if conv != nil {
-			conv.modelProvider = agentlaunch.CodexProxyProviderFor(env)
-		}
 		return conv, false, err
 	}
 	var bin string
@@ -539,14 +537,13 @@ func (d *Driver) connectSession(
 		Env:           envSlice(env),
 		Argv:          agentlaunch.CodexProxyArgv([]string{bin, "app-server"}, env),
 	}
-	launchProvider := agentlaunch.CodexProxyProviderFor(env)
 	if prepareEnv != nil {
 		hostConfig.Prepare = func(prepareCtx context.Context) (persistenthost.PreparedProvider, error) {
 			preparedEnv, prepareErr := prepareEnv(prepareCtx)
 			if prepareErr != nil {
 				return persistenthost.PreparedProvider{}, prepareErr
 			}
-			launchProvider = agentlaunch.CodexProxyProviderFor(preparedEnv)
+			env = preparedEnv // what the provider is launched with
 			return persistenthost.PreparedProvider{
 				Env: envSlice(preparedEnv), Argv: agentlaunch.CodexProxyArgv([]string{bin, "app-server"}, preparedEnv),
 			}, nil
@@ -582,7 +579,7 @@ func (d *Driver) connectSession(
 	if transport.Reconnected {
 		return conv, true, nil
 	}
-	conv.modelProvider = launchProvider
+	conv.modelProvider = agentlaunch.CodexProxyProviderFor(env)
 	if err := d.initialize(ctx, conv); err != nil {
 		_ = conv.Terminate()
 		return nil, false, err

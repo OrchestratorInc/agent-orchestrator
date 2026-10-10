@@ -38,7 +38,7 @@ func providerCall(ctx context.Context, m *coreauth.Manager, auth *coreauth.Auth,
 	if err != nil {
 		return 0, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	return resp.StatusCode, data, err
 }

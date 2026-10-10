@@ -160,7 +160,7 @@ type agentLauncher struct {
 	auth       agentAuthResolver
 	executable func() (string, error)
 	chat       ReviewerChatController
-	accountEnv func(context.Context, domain.SessionID, domain.AgentHarness) (map[string]string, error)
+	accountEnv func(context.Context, domain.SessionID, domain.AgentHarness, map[string]string) error // does nothing unless set
 }
 
 type preLaunchReviewer interface {
@@ -178,9 +178,9 @@ type agentAuthResolver interface {
 // LauncherOption configures reviewer launcher behavior.
 type LauncherOption func(*agentLauncher)
 
-// WithRelatedAccountEnv gives a same-provider reviewer its worker's account ticket.
-func WithRelatedAccountEnv(resolve func(context.Context, domain.SessionID, domain.AgentHarness) (map[string]string, error)) LauncherOption {
-	return func(l *agentLauncher) { l.accountEnv = resolve }
+// WithRelatedAccountEnv adds its worker's account ticket to a same-provider reviewer's environment.
+func WithRelatedAccountEnv(apply func(context.Context, domain.SessionID, domain.AgentHarness, map[string]string) error) LauncherOption {
+	return func(l *agentLauncher) { l.accountEnv = apply }
 }
 
 // WithReviewerChat enables typed reviewer conversations for supporting
@@ -218,7 +218,7 @@ func WithRunFilePath(path string) LauncherOption {
 
 // NewLauncher builds the production reviewer launcher.
 func NewLauncher(reviewers ports.ReviewerResolver, rt reviewerRuntime, dataDir string, opts ...LauncherOption) Launcher {
-	l := &agentLauncher{reviewers: reviewers, runtime: rt, dataDir: dataDir, executable: os.Executable}
+	l := &agentLauncher{reviewers: reviewers, runtime: rt, dataDir: dataDir, executable: os.Executable, accountEnv: func(context.Context, domain.SessionID, domain.AgentHarness, map[string]string) error { return nil }}
 	for _, opt := range opts {
 		opt(l)
 	}
@@ -498,15 +498,14 @@ func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, 
 	if providerID == "" {
 		providerID = strings.TrimSpace(spec.AgentSessionID)
 	}
-	env := l.runtimeEnv(ctx, spec, nil, nil)
-	if err := l.applyAccountEnv(ctx, spec, env); err != nil {
-		return LaunchResult{}, err
-	}
 	prompt := inv.Prompt
 	if spec.DeferInitialMessage {
 		prompt = ""
 	}
-	start := ReviewerChatStart{BatchID: spec.BatchID, ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), Model: spec.AgentConfig.Model, Effort: spec.AgentConfig.Effort, DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: env, Prompt: prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
+	start := ReviewerChatStart{BatchID: spec.BatchID, ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), Model: spec.AgentConfig.Model, Effort: spec.AgentConfig.Effort, DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: l.runtimeEnv(ctx, spec, nil, nil), Prompt: prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
+	if err := l.accountEnv(ctx, spec.WorkerID, domain.AgentHarness(spec.Harness), start.Env); err != nil {
+		return LaunchResult{}, err
+	}
 	if restore {
 		providerID, err = l.chat.RestoreReviewChat(ctx, start)
 	} else {
@@ -558,7 +557,7 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 		}
 	}
 	env := l.runtimeEnv(ctx, spec, cmd.Argv, cmd.Env)
-	if err := l.applyAccountEnv(ctx, spec, env); err != nil {
+	if err := l.accountEnv(ctx, spec.WorkerID, domain.AgentHarness(spec.Harness), env); err != nil {
 		return LaunchResult{}, err
 	}
 	handleID := reviewerHandleID(spec.WorkerID)
@@ -907,17 +906,6 @@ func (l *agentLauncher) Destroy(ctx context.Context, handleID string) error {
 func reviewerChatID(handleID string) (string, bool) {
 	id, ok := strings.CutPrefix(handleID, reviewerChatHandlePrefix)
 	return id, ok && strings.TrimSpace(id) != ""
-}
-
-func (l *agentLauncher) applyAccountEnv(ctx context.Context, spec LaunchSpec, env map[string]string) error {
-	if l.accountEnv == nil {
-		return nil
-	}
-	values, err := l.accountEnv(ctx, spec.WorkerID, domain.AgentHarness(spec.Harness))
-	for key, value := range values {
-		env[key] = value
-	}
-	return err
 }
 
 // BatchMessageID ties a dispatched reviewer Chat turn to its durable review runs.

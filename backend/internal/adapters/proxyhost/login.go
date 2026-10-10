@@ -160,8 +160,7 @@ func (c *Client) CancelLogin(ctx context.Context, login ports.ProviderLogin) err
 }
 
 // LoginResult names the sign-in a finished attempt produced.
-func (c *Client) LoginResult(ctx context.Context, id string) (ports.VerifiedProviderLogin, error) {
-	var result ports.VerifiedProviderLogin
-	err := c.call(ctx, http.MethodGet, "/ao/login-result/"+url.PathEscape(id), nil, &result)
+func (c *Client) LoginResult(ctx context.Context, id string) (result ports.VerifiedProviderLogin, err error) {
+	err = c.call(ctx, http.MethodGet, "/ao/login-result/"+url.PathEscape(id), nil, &result)
 	return result, err
 }

@@ -90,7 +90,7 @@ func writePrivate(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 	_, err = f.Write(data)
 	if err = errors.Join(err, f.Sync(), f.Close()); err != nil {
 		return err

@@ -8,13 +8,11 @@ import (
 )
 
 // LoadProviderAccounts reads the one document Account Manager stores.
-func (s *Store) LoadProviderAccounts(ctx context.Context) (domain.ProviderAccountState, error) {
-	var state domain.ProviderAccountState
+func (s *Store) LoadProviderAccounts(ctx context.Context) (state domain.ProviderAccountState, err error) {
 	facts, err := s.qr.LoadProviderAccounts(ctx)
-	if err != nil {
-		return state, err
+	if err == nil {
+		err = json.Unmarshal([]byte(facts), &state)
 	}
-	err = json.Unmarshal([]byte(facts), &state)
 	return state, err
 }
 
