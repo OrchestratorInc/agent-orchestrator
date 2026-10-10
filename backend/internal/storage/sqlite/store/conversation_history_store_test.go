@@ -47,6 +47,39 @@ func conversationFixture(t *testing.T) (*sqlite.Store, domain.SessionID, string)
 	return s, session.ID, conversation.ID
 }
 
+func TestQueuedBatchReservationIsRecoverableAfterReconnect(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	for i, text := range []string{"first pending", "second pending"} {
+		id := fmt.Sprintf("batch-%d", i)
+		if created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1",
+			domain.ConversationMessage{ID: "message-" + id, Text: text,
+				ClientMessageID: id, Origin: domain.MessageOriginAutomation}, id, histClock.Add(time.Duration(i)*time.Second)); err != nil || !created {
+			t.Fatalf("append %s: created=%v err=%v", id, created, err)
+		}
+	}
+	batch, err := s.ClaimQueuedBatch(ctx, conversation, false, 0, histClock.Add(time.Minute))
+	if err != nil || len(batch) != 2 || batch[0].Text != "first pending" || batch[1].Text != "second pending" {
+		t.Fatalf("claimed batch = %+v, %v", batch, err)
+	}
+	if _, err := s.NextQueuedTurn(ctx, conversation); !errors.Is(err, domain.ErrNoQueuedTurn) {
+		t.Fatalf("reserved messages remained dispatchable: %v", err)
+	}
+	if err := s.FailReservedQueuedBatch(ctx, conversation, histClock.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	for _, queued := range batch {
+		turn, err := s.TurnByID(ctx, queued.TurnID)
+		if err != nil || turn.State != domain.TurnStateFailed || !strings.Contains(turn.ErrorMessage, "uncertain") {
+			t.Fatalf("recovered turn = %+v, %v", turn, err)
+		}
+	}
+	messages, err := s.ConversationMessages(ctx, conversation)
+	if err != nil || !reflect.DeepEqual(texts(messages), []string{"first pending", "second pending"}) {
+		t.Fatalf("retained source messages = %+v, %v", messages, err)
+	}
+}
+
 func texts(messages []domain.ConversationMessage) []string {
 	out := make([]string, 0, len(messages))
 	for _, message := range messages {

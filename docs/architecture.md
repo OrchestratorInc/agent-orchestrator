@@ -560,6 +560,17 @@ sequenceDiagram
     end
 ```
 
+Chat queues every message in SQLite while a provider turn is active. Completion
+claims the waiting messages in enqueue order and sends them as one provider
+input. A steer claims the same waiting queue and appends its guidance to one
+active turn input. Each source message keeps its own transcript row, origin,
+sender, and delivery handle. Messages arriving after the claim wait for the next
+turn. AO does not truncate a batch or impose a provider input size limit;
+provider limits and refusals are surfaced as delivery failures. An uncertain
+provider result closes the claimed receipts without automatically replaying
+input that the provider may already have accepted. Terminal sessions retain
+their existing delivery path.
+
 ---
 
 ## Persistence and CDC
