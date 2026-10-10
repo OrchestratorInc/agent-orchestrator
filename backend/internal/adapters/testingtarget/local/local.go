@@ -114,7 +114,7 @@ func New() *Adapter {
 
 // Start admits only prepared checkouts and creates a fresh private attempt root.
 // Its context bounds startup, not the lifetime of the launched application.
-func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (domain.TestTargetIdentity, error) {
+func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (result domain.TestTargetIdentity, err error) {
 	var empty domain.TestTargetIdentity
 	if err := ctx.Err(); err != nil {
 		return empty, err
@@ -154,14 +154,29 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 	if err != nil {
 		return empty, err
 	}
+	// Until Electron starts, failures still own preparation files but no PIDs.
+	pending := &launch{root: root, rootInfo: rootInfo}
+	launched := false
+	defer func() {
+		if err == nil || launched {
+			return
+		}
+		pending.mu.Lock()
+		defer pending.mu.Unlock()
+		if pending.log != nil {
+			err = errors.Join(err, pending.log.Close())
+			pending.log = nil
+		}
+		cleanupErr := removePrivateState(pending)
+		pending.stopped = cleanupErr == nil
+		err = errors.Join(err, cleanupErr)
+	}()
 	if a.ops.prepare != nil {
 		if err := a.ops.prepare(ctx, frontend, spec.CommitSHA, root); err != nil {
-			cleanupErr := removePrivateState(&launch{root: root, rootInfo: rootInfo})
-			return empty, errors.Join(err, cleanupErr)
+			return empty, err
 		}
 		if err := prepared(ctx, frontend, spec.CommitSHA); err != nil {
-			cleanupErr := removePrivateState(&launch{root: root, rootInfo: rootInfo})
-			return empty, errors.Join(err, cleanupErr)
+			return empty, err
 		}
 	}
 	if err := os.Mkdir(filepath.Join(root, "fixtures"), 0o700); err != nil {
@@ -186,6 +201,7 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 	s := &launch{root: root, rootInfo: rootInfo, frontend: frontend, daemon: filepath.Join(root, "daemon", "ao"), revision: spec.CommitSHA, tmux: tmux, port: port, log: log, owned: make(map[int]time.Time),
 		target: domain.TestTargetIdentity{ID: id, LaunchID: "target-" + id, Generation: spec.Generation,
 			DataDir: filepath.Join(root, "data")}}
+	pending = s
 	a.mu.Lock()
 	for _, existing := range a.launches {
 		existing.mu.Lock()
@@ -193,7 +209,6 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 		existing.mu.Unlock()
 		if busy {
 			a.mu.Unlock()
-			_ = log.Close()
 			return empty, errors.New("target checkout already has an owned active launch")
 		}
 	}
@@ -220,17 +235,15 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 		s.stopped = true
 		_ = log.Close()
 		s.log = nil
-		cleanupErr := removePrivateState(s)
 		s.mu.Unlock()
-		return s.target, errors.Join(err, cleanupErr)
+		return s.target, err
 	}
 	if err := a.prepareOwnedDaemon(ctx, s); err != nil {
 		s.stopped = true
 		_ = log.Close()
 		s.log = nil
-		cleanupErr := removePrivateState(s)
 		s.mu.Unlock()
-		return s.target, errors.Join(err, cleanupErr)
+		return s.target, err
 	}
 	s.liveGuard, err = a.observeLiveDaemon()
 	if err == nil && s.liveGuard.info != nil && s.port == s.liveGuard.info.Port {
@@ -240,9 +253,8 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 		s.stopped = true
 		_ = log.Close()
 		s.log = nil
-		cleanupErr := removePrivateState(s)
 		s.mu.Unlock()
-		return s.target, errors.Join(err, cleanupErr)
+		return s.target, err
 	}
 	s.env = targetEnv(os.Environ(), s, recipe.VisualMarker, recipe.RealProviders)
 	if err := writeTargetCLI(s); err != nil {
@@ -260,6 +272,7 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 		s.mu.Unlock()
 		return s.target, fmt.Errorf("launch Electron: %w", err)
 	}
+	launched = true
 	s.target.ElectronPID = pid
 	started, err := a.ops.startTime(pid)
 	if err == nil {

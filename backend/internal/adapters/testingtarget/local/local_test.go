@@ -363,7 +363,7 @@ func TestStartUsesPreparedCheckoutAndCapturedIdentity(t *testing.T) {
 	}
 }
 
-func testStartUsesPreparedCheckout(t *testing.T, realProviders bool) {
+func preparedStartFixture(t *testing.T, realProviders bool) (*fakeSystem, ports.TestingTargetSpec) {
 	t.Helper()
 	t.Setenv("AO_FAKE_HARNESS", "inherited-sentinel")
 	f := fixture(t)
@@ -421,6 +421,9 @@ func testStartUsesPreparedCheckout(t *testing.T, realProviders bool) {
 		return nil
 	}
 	f.a.ops.start = func(exe, cwd string, env []string, _ *os.File) (int, error) {
+		if !preparedByController {
+			t.Fatal("controller did not prepare the revision before launch")
+		}
 		if exe != electronPath(frontend) || cwd != frontend {
 			t.Fatal("wrong checkout")
 		}
@@ -455,12 +458,15 @@ func testStartUsesPreparedCheckout(t *testing.T, realProviders bool) {
 	if realProviders {
 		spec.RecipeSnapshot = `{"realProviders":true}`
 	}
+	return f, spec
+}
+
+func testStartUsesPreparedCheckout(t *testing.T, realProviders bool) {
+	t.Helper()
+	f, spec := preparedStartFixture(t, realProviders)
 	target, err := f.a.Start(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !preparedByController {
-		t.Fatal("controller did not prepare the revision before launch")
 	}
 	if target.ElectronPID != 11 || target.DaemonPID != 12 || !target.ElectronStartedAt.Equal(f.times[11]) || !target.DaemonStartedAt.Equal(f.times[12]) {
 		t.Fatalf("wrong identity %v", target)
