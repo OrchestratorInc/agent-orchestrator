@@ -276,7 +276,7 @@ func (a *Adapter) screenshot(ctx context.Context, target domain.TestTargetIdenti
 		return shot, err
 	}
 	b.receipt = nil
-	if err = a.startSession(ctx, b); err != nil {
+	if err := a.startSession(ctx, b); err != nil {
 		return shot, err
 	}
 	if _, err = a.liveWindow(ctx, b); err != nil {

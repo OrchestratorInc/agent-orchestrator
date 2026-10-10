@@ -3,9 +3,10 @@ package testing
 import (
 	"context"
 	"encoding/json"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 func TestSessionQueryToolValidatesClosedSelector(t *testing.T) {

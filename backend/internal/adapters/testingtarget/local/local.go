@@ -422,7 +422,7 @@ os.chdir(%q)
 executable = %q
 os.execve(executable, [executable, *sys.argv[1:]], env)
 `, filepath.Join(s.root, "running.json"), s.target.DataDir, filepath.Dir(s.frontend), filepath.Join(s.frontend, "daemon", "ao"))
-	return os.WriteFile(filepath.Join(s.root, "target-ao"), []byte(script), 0o700)
+	return os.WriteFile(filepath.Join(s.root, "target-ao"), []byte(script), 0o700) //nolint:gosec // The target shim must be executable; it lives in the AO-owned launch root.
 }
 
 func (a *Adapter) probe(ctx context.Context, s *launch) error {

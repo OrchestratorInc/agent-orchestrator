@@ -217,11 +217,12 @@ type TestSubmitReportResult struct {
 
 // ValidTestSessionID accepts one path component for a target session read.
 func ValidTestSessionID(id string) bool {
-	if len(id) == 0 || len(id) > 128 {
+	if id == "" || len(id) > 128 {
 		return false
 	}
 	for _, c := range id {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_'
+		if !ok {
 			return false
 		}
 	}

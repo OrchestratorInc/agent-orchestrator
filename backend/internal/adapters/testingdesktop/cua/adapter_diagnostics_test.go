@@ -147,7 +147,7 @@ func TestProviderCallDiagnosticsPreserveCancellationChain(t *testing.T) {
 			f := newFixture(t)
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			if want == context.DeadlineExceeded {
+			if errors.Is(want, context.DeadlineExceeded) {
 				ctx, cancel = context.WithDeadline(context.Background(), time.Unix(1, 0))
 				defer cancel()
 			}

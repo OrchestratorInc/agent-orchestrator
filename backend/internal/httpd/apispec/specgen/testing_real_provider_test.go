@@ -1,10 +1,12 @@
 package specgen_test
 
 import (
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec/specgen"
-	"gopkg.in/yaml.v3"
 	"slices"
 	"testing"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec/specgen"
 )
 
 func TestTestingRealProviderWireContract(t *testing.T) {

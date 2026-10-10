@@ -3,9 +3,10 @@ package local
 import (
 	"context"
 	"encoding/json"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"net/http"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 func TestSessionQueriesUseFixedRoutesAndRecheckIdentity(t *testing.T) {

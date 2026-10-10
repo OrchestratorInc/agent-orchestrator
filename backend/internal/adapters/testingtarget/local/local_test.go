@@ -272,12 +272,12 @@ func TestCancelledCleanupNeverSignals(t *testing.T) {
 }
 
 func TestStartUsesPreparedCheckoutAndCapturedIdentity(t *testing.T) {
-	for _, real := range []bool{false, true} {
-		t.Run(fmt.Sprintf("real=%t", real), func(t *testing.T) { testStartUsesPreparedCheckout(t, real) })
+	for _, realProvider := range []bool{false, true} {
+		t.Run(fmt.Sprintf("real=%t", realProvider), func(t *testing.T) { testStartUsesPreparedCheckout(t, realProvider) })
 	}
 }
 
-func testStartUsesPreparedCheckout(t *testing.T, real bool) {
+func testStartUsesPreparedCheckout(t *testing.T, realProvider bool) {
 	t.Helper()
 	t.Setenv("AO_FAKE_HARNESS", "inherited-sentinel")
 	f := fixture(t)
@@ -336,7 +336,7 @@ func testStartUsesPreparedCheckout(t *testing.T, real bool) {
 			values[key] = value
 		}
 		wantFake := "1"
-		if real {
+		if realProvider {
 			wantFake = "0"
 		}
 		if values["AO_FAKE_HARNESS"] != wantFake || values["AO_DEV_ELECTRON_DIR"] != filepath.Join(base, "attempt", "electron") {
@@ -355,7 +355,7 @@ func testStartUsesPreparedCheckout(t *testing.T, real bool) {
 		return 11, nil
 	}
 	spec := ports.TestingTargetSpec{AttemptID: "attempt", Generation: 1, CheckoutPath: checkout, CommitSHA: strings.TrimSpace(string(head)), Deadline: time.Now().Add(time.Second)}
-	if real {
+	if realProvider {
 		spec.RecipeSnapshot = `{"realProviders":true}`
 	}
 	target, err := f.a.Start(context.Background(), spec)
