@@ -60,6 +60,13 @@ func TestBrokerExecuteRoundTrip(t *testing.T) {
 	if err := enc.Encode(wireMessage{Type: "hello", Version: ProtocolVersion}); err != nil {
 		t.Fatal(err)
 	}
+	var ack wireMessage
+	if err := dec.Decode(&ack); err != nil {
+		t.Fatal(err)
+	}
+	if ack.Type != HelloAckType || ack.Version != ProtocolVersion {
+		t.Fatalf("hello ack = %#v", ack)
+	}
 	waitConnected(t, broker)
 
 	resultCh := make(chan Result, 1)
@@ -183,6 +190,13 @@ func TestBrokerMapsRuntimeError(t *testing.T) {
 	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(conn)
 	_ = enc.Encode(wireMessage{Type: "hello", Version: ProtocolVersion})
+	var ack wireMessage
+	if err := dec.Decode(&ack); err != nil {
+		t.Fatal(err)
+	}
+	if ack.Type != HelloAckType {
+		t.Fatalf("hello ack = %#v", ack)
+	}
 	waitConnected(t, broker)
 
 	errCh := make(chan error, 1)
@@ -242,6 +256,13 @@ func TestBrokerRejectsInvalidRuntimeToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = invalid.SetReadDeadline(time.Now().Add(time.Second))
+	var rejection wireMessage
+	if err := json.NewDecoder(invalid).Decode(&rejection); err != nil {
+		t.Fatalf("read hello rejection: %v", err)
+	}
+	if rejection.Type != HelloRejectedType || rejection.Reason != "invalid-token" {
+		t.Fatalf("hello rejection = %#v", rejection)
+	}
 	if _, err := invalid.Read(make([]byte, 1)); err == nil {
 		t.Fatal("invalid runtime connection remained open")
 	}
@@ -262,7 +283,50 @@ func TestBrokerRejectsInvalidRuntimeToken(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	var ack wireMessage
+	_ = valid.SetReadDeadline(time.Now().Add(browserRuntimeTestTimeout()))
+	if err := json.NewDecoder(valid).Decode(&ack); err != nil {
+		t.Fatal(err)
+	}
+	if ack.Type != HelloAckType {
+		t.Fatalf("hello ack = %#v", ack)
+	}
 	waitConnected(t, broker)
+}
+
+func TestBrokerRejectsUnsupportedProtocolVersion(t *testing.T) {
+	broker := New(nil, "expected-token")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = broker.Serve(ctx, ln) }()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := json.NewEncoder(conn).Encode(wireMessage{
+		Type:    "hello",
+		Version: ProtocolVersion + 1,
+		Token:   "expected-token",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	var rejection wireMessage
+	if err := json.NewDecoder(conn).Decode(&rejection); err != nil {
+		t.Fatalf("read hello rejection: %v", err)
+	}
+	if rejection.Type != HelloRejectedType || rejection.Reason != "unsupported-version" {
+		t.Fatalf("hello rejection = %#v", rejection)
+	}
+	if broker.Status().Connected {
+		t.Fatal("broker accepted an unsupported protocol version")
+	}
 }
 
 func TestBrokerCancellationSendsCancelFrame(t *testing.T) {

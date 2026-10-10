@@ -5,6 +5,13 @@ import { connectBrowserRuntime, type BrowserRuntimeLinkHandle } from "./browser-
 const handles: BrowserRuntimeLinkHandle[] = [];
 const servers: net.Server[] = [];
 
+const HELLO_ACK = `${JSON.stringify({ type: "helloAck", version: 2 })}\n`;
+
+/** Mirror the daemon: acknowledge an accepted hello so the link counts as authenticated. */
+function acknowledgeHello(socket: net.Socket, message: { type?: string }): void {
+	if (message.type === "hello") socket.write(HELLO_ACK);
+}
+
 afterEach(async () => {
 	handles.splice(0).forEach((handle) => handle.dispose());
 	await Promise.all(
@@ -29,8 +36,10 @@ describe("browser runtime link", () => {
 				for (;;) {
 					const newline = inbound.indexOf("\n");
 					if (newline < 0) return;
-					messages.push(JSON.parse(inbound.slice(0, newline)));
+					const message = JSON.parse(inbound.slice(0, newline));
 					inbound = inbound.slice(newline + 1);
+					messages.push(message);
+					acknowledgeHello(socket, message);
 				}
 			});
 		});
@@ -67,6 +76,17 @@ describe("browser runtime link", () => {
 		const states: boolean[] = [];
 		const server = net.createServer((socket) => {
 			serverSocket = socket;
+			let inbound = "";
+			socket.on("data", (chunk) => {
+				inbound += chunk.toString("utf8");
+				for (;;) {
+					const newline = inbound.indexOf("\n");
+					if (newline < 0) return;
+					const message = JSON.parse(inbound.slice(0, newline));
+					inbound = inbound.slice(newline + 1);
+					acknowledgeHello(socket, message);
+				}
+			});
 		});
 		servers.push(server);
 		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -94,7 +114,12 @@ describe("browser runtime link", () => {
 				inbound += chunk.toString("utf8");
 				const lines = inbound.split("\n");
 				inbound = lines.pop() ?? "";
-				for (const line of lines) if (line) messages.push(JSON.parse(line));
+				for (const line of lines) {
+					if (!line) continue;
+					const message = JSON.parse(line);
+					messages.push(message);
+					acknowledgeHello(socket, message);
+				}
 			});
 		});
 		servers.push(server);
@@ -126,6 +151,17 @@ describe("browser runtime link", () => {
 		const execute = vi.fn(async () => ({}));
 		const server = net.createServer((socket) => {
 			serverSocket = socket;
+			let inbound = "";
+			socket.on("data", (chunk) => {
+				inbound += chunk.toString("utf8");
+				for (;;) {
+					const newline = inbound.indexOf("\n");
+					if (newline < 0) return;
+					const message = JSON.parse(inbound.slice(0, newline));
+					inbound = inbound.slice(newline + 1);
+					acknowledgeHello(socket, message);
+				}
+			});
 		});
 		servers.push(server);
 		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -168,7 +204,12 @@ describe("browser runtime link", () => {
 				inbound += chunk.toString("utf8");
 				const lines = inbound.split("\n");
 				inbound = lines.pop() ?? "";
-				for (const line of lines) if (line) messages.push(JSON.parse(line));
+				for (const line of lines) {
+					if (!line) continue;
+					const message = JSON.parse(line);
+					messages.push(message);
+					acknowledgeHello(socket, message);
+				}
 			});
 		});
 		servers.push(server);
@@ -239,7 +280,12 @@ describe("browser runtime link", () => {
 				inbound += chunk.toString("utf8");
 				const lines = inbound.split("\n");
 				inbound = lines.pop() ?? "";
-				for (const line of lines) if (line) messages.push(JSON.parse(line));
+				for (const line of lines) {
+					if (!line) continue;
+					const message = JSON.parse(line);
+					messages.push(message);
+					acknowledgeHello(socket, message);
+				}
 			});
 		});
 		servers.push(server);
@@ -309,7 +355,12 @@ describe("browser runtime link", () => {
 				inbound += chunk.toString("utf8");
 				const lines = inbound.split("\n");
 				inbound = lines.pop() ?? "";
-				for (const line of lines) if (line) messages.push(JSON.parse(line));
+				for (const line of lines) {
+					if (!line) continue;
+					const message = JSON.parse(line);
+					messages.push(message);
+					acknowledgeHello(socket, message);
+				}
 			});
 		});
 		servers.push(server);
@@ -330,5 +381,52 @@ describe("browser runtime link", () => {
 				error: { code: "BROWSER_COMMAND_CANCELED", message: "Browser runtime link closed" },
 			}),
 		);
+	});
+
+	it("backs off instead of hot-looping when the daemon rejects the handshake", async () => {
+		let attempts = 0;
+		const logs: string[] = [];
+		const server = net.createServer((socket) => {
+			attempts += 1;
+			socket.on("data", (chunk) => {
+				for (const line of chunk.toString("utf8").split("\n")) {
+					if (!line.trim()) continue;
+					const message = JSON.parse(line) as { type?: string };
+					if (message.type !== "hello") continue;
+					socket.end(`${JSON.stringify({ type: "helloRejected", reason: "invalid-token" })}\n`);
+				}
+			});
+		});
+		servers.push(server);
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const address = server.address() as net.AddressInfo;
+		const handle = connectBrowserRuntime(
+			{ host: address.address, port: address.port },
+			{ execute: async () => ({}), log: (message) => logs.push(message) },
+		);
+		handles.push(handle);
+
+		await vi.waitFor(() => expect(attempts).toBe(1));
+		await new Promise((resolve) => setTimeout(resolve, 1_500));
+
+		// A rejected handshake is a hard failure: back off at the cap instead of
+		// redialing every 200ms, and never claim the link is connected.
+		expect(attempts).toBeLessThanOrEqual(2);
+		expect(handle.connected).toBe(false);
+		expect(logs).toContain("browser-runtime-link: daemon rejected the runtime handshake: invalid-token");
+		expect(logs.filter((line) => line === "browser-runtime-link: connected")).toEqual([]);
+	});
+
+	it("authenticates a link held open by a daemon that predates the hello ack", async () => {
+		const server = net.createServer((socket) => {
+			socket.on("data", () => undefined);
+		});
+		servers.push(server);
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const address = server.address() as net.AddressInfo;
+		const handle = connectBrowserRuntime({ host: address.address, port: address.port }, { execute: async () => ({}) });
+		handles.push(handle);
+
+		await vi.waitFor(() => expect(handle.connected).toBe(true), { timeout: 5_000 });
 	});
 });
