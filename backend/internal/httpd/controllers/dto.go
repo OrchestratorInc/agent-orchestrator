@@ -2831,7 +2831,7 @@ type ConversationActivityResponse struct {
 	// the agent had run something in the worktree. auto_review is not approval: an
 	// approval is a question waiting on a person, while an auto-review is a decision
 	// the provider already made on their behalf, and those are opposites.
-	ActivityKind string `json:"activityKind" enum:"command,file_change,plan,reasoning,approval,usage,error,system,mcp_tool,auto_review,user_input"`
+	ActivityKind string `json:"activityKind" enum:"command,file_change,plan,reasoning,approval,usage,error,system,mcp_tool,auto_review,user_input,ao_action"`
 	Status       string `json:"status" enum:"running,completed,recovered,failed,cancelled,pending,resolved"`
 	Summary      string `json:"summary"`
 	// Detail is the provider-neutral typed payload for this kind. For an approval
@@ -2855,6 +2855,14 @@ type ConversationActivityResponse struct {
 	//   user_input   inputMode, message, schema, url, elicitationId
 	//   system       event -- "compaction", "model.rerouted" or
 	//                "auth.reauth_required" -- plus that event's own fields
+	//   ao_action    action, operationId, sourceSessionId, targetSessionId,
+	//                displayName, previousDisplayName, harness, previousHarness,
+	//                href, prNumber, prTitle, error. action is the neutral
+	//                outcome (session.spawned, session.terminated,
+	//                session.renamed, session.restored, session.agent_switched,
+	//                pull_request.claimed, pull_request.created). There is no
+	//                event key: an event value is a timeline boundary, and
+	//                these actions stay in the ordinary activity batch.
 	Detail    map[string]any `json:"detail,omitempty"`
 	RequestID string         `json:"requestId,omitempty"`
 	// ProviderItemID is the stable parent key used by nested ACP transcripts.

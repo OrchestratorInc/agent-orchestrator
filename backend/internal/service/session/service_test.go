@@ -83,6 +83,8 @@ type fakeStore struct {
 	listPRFactsCalls    int
 	listReviewRunsCalls int
 	num                 int
+	conversations       map[domain.SessionID]domain.ConversationRecord
+	activities          []domain.ConversationActivity
 }
 
 func newFakeStore() *fakeStore {
@@ -105,6 +107,37 @@ func newFakeStore() *fakeStore {
 
 func (f *fakeStore) ListWorkspaceRepos(context.Context, string) ([]domain.WorkspaceRepoRecord, error) {
 	return nil, nil
+}
+
+func (f *fakeStore) ConversationForSession(_ context.Context, id domain.SessionID) (domain.ConversationRecord, error) {
+	conversation, ok := f.conversations[id]
+	if !ok {
+		return domain.ConversationRecord{}, domain.ErrNoConversation
+	}
+	return conversation, nil
+}
+
+func (f *fakeStore) UpsertActivity(_ context.Context, conversationID, _ string, activity domain.ConversationActivity, now time.Time) error {
+	if activity.ProviderItemID != "" {
+		for i, existing := range f.activities {
+			if existing.ConversationID == conversationID && existing.ProviderItemID == activity.ProviderItemID {
+				activity.ID = existing.ID
+				activity.ConversationID = conversationID
+				activity.Sequence = existing.Sequence
+				activity.Revision = existing.Revision + 1
+				activity.UpdatedAt = now
+				f.activities[i] = activity
+				return nil
+			}
+		}
+	}
+	activity.ConversationID = conversationID
+	activity.Sequence = int64(len(f.activities) + 1)
+	activity.Revision = 1
+	activity.CreatedAt = now
+	activity.UpdatedAt = now
+	f.activities = append(f.activities, activity)
+	return nil
 }
 
 func TestListBatchesKanbanReads(t *testing.T) {
@@ -2548,6 +2581,8 @@ type fakeCommander struct {
 	cleanupErr       error
 	spawnErr         error
 	spawnRecord      domain.SessionRecord
+	switchErr        error
+	switchRecord     domain.AgentSwitch
 	spawnFunc        func(ports.SpawnConfig) domain.SessionRecord
 	spawnCalls       int
 	spawned          bool
@@ -2595,7 +2630,20 @@ func (*fakeCommander) PrepareTaskWorkspace(context.Context, domain.ProjectRecord
 func (*fakeCommander) CancelTaskPreparation(context.Context, domain.TaskPreparationToken) error {
 	return nil
 }
-func (*fakeCommander) SwitchAgent(context.Context, domain.SessionID, sessionmanager.SwitchAgentConfig) (domain.AgentSwitch, error) {
+func (f *fakeCommander) SwitchAgent(_ context.Context, _ domain.SessionID, cfg sessionmanager.SwitchAgentConfig) (domain.AgentSwitch, error) {
+	if f.switchErr != nil {
+		return domain.AgentSwitch{}, f.switchErr
+	}
+	if f.switchRecord.ID != "" || f.switchRecord.State != "" {
+		record := f.switchRecord
+		if record.TargetHarness == "" {
+			record.TargetHarness = cfg.TargetHarness
+		}
+		if record.IdempotencyKey == "" {
+			record.IdempotencyKey = cfg.IdempotencyKey
+		}
+		return record, nil
+	}
 	return domain.AgentSwitch{}, nil
 }
 
