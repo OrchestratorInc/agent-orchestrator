@@ -93,6 +93,21 @@ function useAccountsPage() {
 		setMessage(done);
 		return next;
 	});
+	// A light change shows at once and is put back if the daemon refuses it. Nothing else on the page waits for it.
+	const actNow = (accountId: string, body: AccountAction, change: (account: ProviderAccount) => Partial<ProviderAccount>) => {
+		type List = Awaited<ReturnType<typeof accountAction>>;
+		const before = cache.getQueryData<List>(providerAccountsCatalogueKey);
+		cache.setQueryData<List>(providerAccountsCatalogueKey, (list) => list && { ...list, accounts: list.accounts.map((account) => ({ ...account, ...change(account) })) });
+		setMessage("");
+		return accountAction(accountId, body).then((next) => {
+			cache.setQueryData(providerAccountsCatalogueKey, next);
+			return true;
+		}, (error) => {
+			cache.setQueryData(providerAccountsCatalogueKey, before);
+			setMessage(apiErrorMessage(error));
+			return false;
+		});
+	};
 	// The same switch a session's own menu makes, one session at a time.
 	const moveSessions = (from: ProviderAccount, to: ProviderAccount) => void run(async () => {
 		try {
@@ -106,7 +121,7 @@ function useAccountsPage() {
 	});
 	return {
 		query, accounts, pending, message, moveOffer, setMoveOffer, signIn, selectedId, adding,
-		run, say: setMessage, show, act, moveSessions, recheck,
+		run, say: setMessage, show, act, actNow, moveSessions, recheck,
 	};
 }
 function ApiKeyForm({ info, disabled, onAdd }: { info: (typeof PROVIDERS)[number]; disabled: boolean; onAdd: (fields: { apiKey: string; baseUrl: string; label?: string }) => void }) {

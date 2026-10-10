@@ -258,7 +258,8 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 	// The default only decides where a new session starts, so it changes at once; running sessions stay unless moved.
 	async function makeDefault() {
 		setRemoving(false);
-		if (await page.act(account.id, { action: "primary" })) page.setMoveOffer(currentDefault?.sessions.length ? { fromId: currentDefault.id, toId: account.id } : null);
+		const becomes = (other: ProviderAccount) => (other.provider !== account.provider ? {} : other.id === account.id ? { primary: true, reserved: false } : { primary: false });
+		if (await page.actNow(account.id, { action: "primary" }, becomes)) page.setMoveOffer(currentDefault?.sessions.length ? { fromId: currentDefault.id, toId: account.id } : null);
 	}
 	async function remove() {
 		const done = t(signedIn ? "providerAccounts.signedOutOf" : "providerAccounts.removedAccount", { name });
@@ -279,7 +280,7 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 		if (event.key === "Escape") event.currentTarget.value = name;
 		if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
 	}
-	const setRule = (change: { reserved?: boolean; onLimit?: string; warnAt?: number }) => void page.act(account.id, { action: "settings", ...change });
+	const setRule = (change: { reserved?: boolean; onLimit?: string; warnAt?: number }) => void page.actNow(account.id, { action: "settings", ...change }, (other) => (other.id === account.id ? change : {}));
 	const onLimit = others.find((other) => other.id === account.onLimit);
 	const warn = (percent: number) => (percent ? t("providerAccounts.warnAtPercent", { percent }) : t("providerAccounts.never"));
 	const windows = usage?.windows ?? [];
