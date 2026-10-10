@@ -1,0 +1,15 @@
+{
+  "utc": "2026-10-10T21:43:03.540286+00:00",
+  "sessions": [
+    {
+      "session": "audit-memcode-1ba657e9-1",
+      "killStatus": 200
+    },
+    {
+      "session": "audit-memcode-1ba657e9-2",
+      "killStatus": 200
+    }
+  ],
+  "shutdown": 202,
+  "electronOwnedPID": 795951
+}

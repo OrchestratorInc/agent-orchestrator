@@ -1,0 +1,68 @@
+{
+  "utc": "2026-10-10T22:13:59.928557+00:00",
+  "source": "35a8a3d5debc3e02ae10c59d8dd6775b62b1a8cb",
+  "nativeVersion": "0.38.1",
+  "model": "glm-5.3-flash",
+  "action": "escape",
+  "target": {
+    "session": "audit-memcode-21bee11c-5",
+    "generation": "5e2cbdb2-a414-48cf-8226-e460bbe01230",
+    "state": "active",
+    "terminated": false,
+    "nativeDigest": "d05dc705a7607cb1ffac5ed49c20c87e2ca5c08cb91560afdd3557e4b3c236da"
+  },
+  "marker": {
+    "pid": 814322,
+    "pgid": 814321,
+    "start": "71616058"
+  },
+  "ownedProcessGroupMembers": [
+    {
+      "pid": 814321,
+      "start": "71616058",
+      "state": "S"
+    },
+    {
+      "pid": 814322,
+      "start": "71616058",
+      "state": "S"
+    }
+  ],
+  "reapMs": 593,
+  "settledMs": 5081,
+  "nativeEmptyComposerMs": 921,
+  "nativeObservationTimeline": "native-ao-observation-timeline.json",
+  "noLateArtifact": true,
+  "deadlineObservationSeconds": 32.01,
+  "settleConfirmationWindowSeconds": 45,
+  "controlBefore": {
+    "session": "audit-memcode-21bee11c-1",
+    "generation": "445cabf9-4e81-45a7-a816-0e2335f1bd35",
+    "state": "idle",
+    "terminated": false,
+    "nativeDigest": "592d5f9268d6a16d0ae0cc6c39190324b0914ce73c9e6495fb4b93ddb1b3453f"
+  },
+  "controlAfter": {
+    "session": "audit-memcode-21bee11c-1",
+    "generation": "445cabf9-4e81-45a7-a816-0e2335f1bd35",
+    "state": "idle",
+    "terminated": false,
+    "nativeDigest": "592d5f9268d6a16d0ae0cc6c39190324b0914ce73c9e6495fb4b93ddb1b3453f"
+  },
+  "controlLater": {
+    "session": "audit-memcode-21bee11c-1",
+    "generation": "445cabf9-4e81-45a7-a816-0e2335f1bd35",
+    "state": "idle",
+    "terminated": false,
+    "nativeDigest": "592d5f9268d6a16d0ae0cc6c39190324b0914ce73c9e6495fb4b93ddb1b3453f"
+  },
+  "controlUnchanged": true,
+  "targetAfter": {
+    "session": "audit-memcode-21bee11c-5",
+    "generation": "5e2cbdb2-a414-48cf-8226-e460bbe01230",
+    "state": "idle",
+    "terminated": false,
+    "nativeDigest": "d05dc705a7607cb1ffac5ed49c20c87e2ca5c08cb91560afdd3557e4b3c236da"
+  },
+  "result": "PASS"
+}

@@ -1,0 +1,65 @@
+{
+  "utc": "2026-10-10T22:08:08.695837+00:00",
+  "source": "35a8a3d5debc3e02ae10c59d8dd6775b62b1a8cb",
+  "nativeVersion": "0.38.1",
+  "model": "glm-5.3-flash",
+  "action": "escape",
+  "target": {
+    "session": "audit-memcode-21bee11c-3",
+    "generation": "4730cbf5-1490-4fe9-ae67-02f943102b1d",
+    "state": "active",
+    "terminated": false,
+    "nativeDigest": "cb6adfa716378fa81f07d13d571fae32902b56180a093896d6c2d006c78e6b77"
+  },
+  "marker": {
+    "pid": 812505,
+    "pgid": 812504,
+    "start": "71580940"
+  },
+  "ownedProcessGroupMembers": [
+    {
+      "pid": 812504,
+      "start": "71580940",
+      "state": "S"
+    },
+    {
+      "pid": 812505,
+      "start": "71580940",
+      "state": "S"
+    }
+  ],
+  "reapMs": 253,
+  "settledMs": null,
+  "noLateArtifact": true,
+  "deadlineObservationSeconds": 32,
+  "controlBefore": {
+    "session": "audit-memcode-21bee11c-1",
+    "generation": "445cabf9-4e81-45a7-a816-0e2335f1bd35",
+    "state": "idle",
+    "terminated": false,
+    "nativeDigest": "592d5f9268d6a16d0ae0cc6c39190324b0914ce73c9e6495fb4b93ddb1b3453f"
+  },
+  "controlAfter": {
+    "session": "audit-memcode-21bee11c-1",
+    "generation": "445cabf9-4e81-45a7-a816-0e2335f1bd35",
+    "state": "idle",
+    "terminated": false,
+    "nativeDigest": "592d5f9268d6a16d0ae0cc6c39190324b0914ce73c9e6495fb4b93ddb1b3453f"
+  },
+  "controlLater": {
+    "session": "audit-memcode-21bee11c-1",
+    "generation": "445cabf9-4e81-45a7-a816-0e2335f1bd35",
+    "state": "idle",
+    "terminated": false,
+    "nativeDigest": "592d5f9268d6a16d0ae0cc6c39190324b0914ce73c9e6495fb4b93ddb1b3453f"
+  },
+  "controlUnchanged": true,
+  "targetAfter": {
+    "session": "audit-memcode-21bee11c-3",
+    "generation": "4730cbf5-1490-4fe9-ae67-02f943102b1d",
+    "state": "idle",
+    "terminated": false,
+    "nativeDigest": "cb6adfa716378fa81f07d13d571fae32902b56180a093896d6c2d006c78e6b77"
+  },
+  "result": "FAIL"
+}

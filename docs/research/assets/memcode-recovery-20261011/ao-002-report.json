@@ -1,0 +1,1715 @@
+{
+  "schemaVersion": 4,
+  "state": "finished",
+  "startedAt": "2026-10-10T21:30:58.918Z",
+  "finishedAt": "2026-10-10T21:35:31.084Z",
+  "disposableRoot": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82",
+  "live": true,
+  "diagnosticAfterNativeProof": true,
+  "auditClassification": "diagnostic-only; full strict audit PASS not claimed",
+  "daemon": {
+    "started": true,
+    "stopped": false,
+    "keptRunning": true,
+    "pid": 794393,
+    "port": 34767,
+    "command": [
+      "/home/azureuser/.ao/audits/harness-watch-20261010/tools/memcode/ao-integration/ao"
+    ],
+    "builtFrom": null,
+    "readiness": {
+      "ok": true,
+      "status": 200,
+      "checkedAt": "2026-10-10T21:31:00.606Z"
+    },
+    "build": null
+  },
+  "artifacts": {
+    "directory": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/memcode/ao-002/report.artifacts",
+    "runnerLog": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/memcode/ao-002/report.artifacts/runner.log",
+    "daemonLog": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/memcode/ao-002/report.artifacts/daemon.log",
+    "events": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/memcode/ao-002/report.artifacts/events.jsonl"
+  },
+  "issues": [
+    {
+      "id": "0001",
+      "recordedAt": "2026-10-10T21:31:24.216Z",
+      "agent": "memcode",
+      "sessionId": null,
+      "baseURL": "http://127.0.0.1:34767",
+      "gate": "authentication",
+      "status": "BLOCKED",
+      "reason": "memcode has credentials configured, but AO could not verify them.",
+      "evidence": {
+        "probe": {
+          "method": "POST",
+          "path": "/api/v1/agents/memcode/probe",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "agent": {
+              "id": "memcode",
+              "label": "memcode",
+              "authStatus": "configured"
+            },
+            "supported": true,
+            "installed": true
+          },
+          "startedAt": "2026-10-10T21:31:24.202Z",
+          "finishedAt": "2026-10-10T21:31:24.208Z",
+          "durationMs": 6,
+          "requestBodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        "readiness": {
+          "method": "POST",
+          "path": "/api/v1/agents/readiness/ensure",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "agents": [
+              {
+                "id": "memcode",
+                "label": "memcode",
+                "installation": {
+                  "state": "installed",
+                  "freshness": "fresh",
+                  "checkedAt": "2026-10-10T21:31:00.513146285Z",
+                  "attemptedAt": "2026-10-10T21:31:00.513146285Z",
+                  "reasonCode": "installed",
+                  "reason": "memcode is installed."
+                },
+                "authentication": {
+                  "state": "configured",
+                  "freshness": "fresh",
+                  "checkedAt": "2026-10-10T21:31:24.206526238Z",
+                  "attemptedAt": "2026-10-10T21:31:24.206526238Z",
+                  "reasonCode": "auth_configured_unverified",
+                  "reason": "memcode has credentials configured, but AO could not verify them."
+                },
+                "effectiveReadiness": "unknown",
+                "usageCount": 0
+              }
+            ]
+          },
+          "startedAt": "2026-10-10T21:31:24.208Z",
+          "finishedAt": "2026-10-10T21:31:24.215Z",
+          "durationMs": 7,
+          "requestBodySha256": "3e6c56a770435e597a96571f81370f0e64ed1e994ff93034420ae5b83b969f48"
+        }
+      },
+      "evidencePath": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/memcode/ao-002/report.artifacts/issue-0001.json",
+      "daemonLogTail": "time=2026-10-10T21:31:00.485Z level=INFO msg=\"built per-session agent resolver\" default=claude-code registered=\"[agy aider amp auggie autohand claude-code cline codewhale codex command-code continue copilot crush cursor deepseek-harness devin droid fx gemini goose grok kilocode kimchi kimi kiro memcode mimo-code muse omp opencode opencode-v2 openhands pi prime-agent qwen unreal-agent vibe]\"\ntime=2026-10-10T21:31:00.485Z level=WARN msg=\"fx Herdr listener unavailable\" error=\"listen unix /home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data/run/fx-herdr.sock: bind: invalid argument\"\ntime=2026-10-10T21:31:00.485Z level=WARN msg=\"tracker disabled: no usable token\" provider=gitlab err=\"gitlab scm: no token configured\"\ntime=2026-10-10T21:31:00.486Z level=INFO msg=\"tracker intake: gated off, set AO_TRACKER_INTAKE=on to enable\"\ntime=2026-10-10T21:31:00.501Z level=DEBUG msg=\"agent readiness check\" harness=vibe purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.503Z level=WARN msg=\"Codex account store initialization failed\" reasonCode=account_storage_unsafe retryable=false\ntime=2026-10-10T21:31:00.504Z level=DEBUG msg=\"agent readiness check\" harness=agy purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.504Z level=DEBUG msg=\"agent readiness check\" harness=aider purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.504Z level=DEBUG msg=\"agent readiness check\" harness=amp purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.504Z level=DEBUG msg=\"agent readiness check\" harness=auggie purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.508Z level=DEBUG msg=\"agent readiness check\" harness=claude-code purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.508Z level=DEBUG msg=\"agent readiness check\" harness=cline purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.508Z level=DEBUG msg=\"agent readiness check\" harness=codewhale purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.508Z level=DEBUG msg=\"agent readiness check\" harness=codex purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.509Z level=DEBUG msg=\"agent readiness check\" harness=command-code purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.509Z level=DEBUG msg=\"agent readiness check\" harness=continue purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.509Z level=DEBUG msg=\"agent readiness check\" harness=copilot purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.509Z level=DEBUG msg=\"agent readiness check\" harness=crush purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.510Z level=DEBUG msg=\"agent readiness check\" harness=cursor purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.510Z level=DEBUG msg=\"agent readiness check\" harness=devin purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.510Z level=DEBUG msg=\"agent readiness check\" harness=droid purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.510Z level=DEBUG msg=\"agent readiness check\" harness=fx purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.511Z level=DEBUG msg=\"agent readiness check\" harness=gemini purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.511Z level=DEBUG msg=\"agent readiness check\" harness=goose purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.511Z level=DEBUG msg=\"agent readiness check\" harness=grok purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.511Z level=DEBUG msg=\"agent readiness check\" harness=kilocode purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.512Z level=DEBUG msg=\"agent readiness check\" harness=kimi purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.513Z level=DEBUG msg=\"agent readiness check\" harness=kiro purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.514Z level=DEBUG msg=\"agent readiness check\" harness=kimchi purpose=display decision=new_check duration_ms=2 outcome=not_ready\ntime=2026-10-10T21:31:00.514Z level=DEBUG msg=\"agent readiness check\" harness=mimo-code purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.515Z level=DEBUG msg=\"agent readiness check\" harness=autohand purpose=display decision=new_check duration_ms=10 outcome=not_ready\ntime=2026-10-10T21:31:00.515Z level=DEBUG msg=\"agent readiness check\" harness=omp purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.515Z level=DEBUG msg=\"agent readiness check\" harness=opencode purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.516Z level=DEBUG msg=\"agent readiness check\" harness=deepseek-harness purpose=display decision=new_check duration_ms=6 outcome=not_ready\ntime=2026-10-10T21:31:00.516Z level=DEBUG msg=\"agent readiness check\" harness=openhands purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.517Z level=DEBUG msg=\"agent readiness check\" harness=pi purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.517Z level=DEBUG msg=\"agent readiness check\" harness=prime-agent purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.518Z level=DEBUG msg=\"agent readiness check\" harness=muse purpose=display decision=new_check duration_ms=3 outcome=not_ready\ntime=2026-10-10T21:31:00.518Z level=DEBUG msg=\"agent readiness check\" harness=unreal-agent purpose=display decision=new_check duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:00.518Z level=DEBUG msg=\"agent readiness check\" harness=opencode-v2 purpose=display decision=new_check duration_ms=2 outcome=not_ready\ntime=2026-10-10T21:31:00.518Z level=DEBUG msg=\"agent readiness check\" harness=qwen purpose=display decision=new_check duration_ms=1 outcome=not_ready\ntime=2026-10-10T21:31:00.548Z level=INFO msg=\"mobile remote access available\" cloudflared=/usr/local/bin/cloudflared source=system\ntime=2026-10-10T21:31:00.553Z level=INFO msg=\"browser runtime: listening\" addr=/tmp/ao-brd-794393-782c2b5875345ae8/browser.sock\ntime=2026-10-10T21:31:00.553Z level=WARN msg=\"supervisor: listener unavailable; frontend-death auto-stop disabled\" err=\"listen unix /home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/supervise.sock: bind: invalid argument\"\ntime=2026-10-10T21:31:00.604Z level=INFO msg=\"daemon listening\" addr=127.0.0.1:34767 pid=794393\ntime=2026-10-10T21:31:00.605Z level=DEBUG msg=\"agent readiness check\" harness=vibe purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=agy purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=aider purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=amp purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=auggie purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=autohand purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=claude-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=cline purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=codewhale purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=codex purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=command-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=continue purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=copilot purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=crush purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=cursor purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=deepseek-harness purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=devin purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=goose purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=grok purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=kilocode purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=kimchi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=kimi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=kiro purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=display decision=presence_in_flight_execution duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=mimo-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=muse purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=omp purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=opencode purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=opencode-v2 purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=openhands purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=pi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=prime-agent purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=qwen purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=unreal-agent purpose=display decision=cache_hit duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=droid purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=fx purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=gemini purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.625Z level=DEBUG msg=\"agent readiness check\" harness=vibe purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.625Z level=DEBUG msg=\"agent readiness check\" harness=agy purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.625Z level=DEBUG msg=\"agent readiness check\" harness=aider purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.626Z level=DEBUG msg=\"agent readiness check\" harness=amp purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.626Z level=DEBUG msg=\"agent readiness check\" harness=auggie purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.626Z level=DEBUG msg=\"agent readiness check\" harness=autohand purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.626Z level=DEBUG msg=\"agent readiness check\" harness=claude-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=cline purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=codewhale purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=codex purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=command-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=continue purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=copilot purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=crush purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=cursor purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=deepseek-harness purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=devin purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=droid purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=fx purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=gemini purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=goose purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=grok purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=kilocode purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=kimchi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=kimi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=kiro purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=mimo-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=muse purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=omp purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=opencode purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=opencode-v2 purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=openhands purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=pi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.640Z level=DEBUG msg=\"agent readiness check\" harness=prime-agent purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.640Z level=DEBUG msg=\"agent readiness check\" harness=qwen purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.641Z level=DEBUG msg=\"agent readiness check\" harness=unreal-agent purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.712Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=display decision=new_check duration_ms=199 outcome=unknown\ntime=2026-10-10T21:31:00.723Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=display decision=join duration_ms=87 outcome=unknown\ntime=2026-10-10T21:31:00.724Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=display decision=new_check duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:00.750Z level=WARN msg=\"scm observer credentials check failed; will retry\" err=\"exit status 1\"\ntime=2026-10-10T21:31:00.804Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000001 method=GET path=/readyz status=200 bytes=418 duration=105.487µs remote=127.0.0.1:34554\ntime=2026-10-10T21:31:00.821Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000002 method=GET path=/api/v1/agents status=200 bytes=2327 duration=539.108µs remote=127.0.0.1:34554\ntime=2026-10-10T21:31:24.206Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=launch decision=new_check duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:24.206Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000003 method=POST path=/api/v1/agents/memcode/probe status=200 bytes=105 duration=615.401µs remote=127.0.0.1:51872\ntime=2026-10-10T21:31:24.212Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=launch decision=cache_hit duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:24.212Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000004 method=POST path=/api/v1/agents/readiness/ensure status=200 bytes=572 duration=462.446µs remote=127.0.0.1:51882\n",
+      "screenshot": {
+        "status": "unavailable",
+        "reason": "Headless runner: no capture command configured."
+      },
+      "userAction": {
+        "type": "authentication",
+        "agent": "memcode",
+        "requiresFreshProbe": true,
+        "message": "memcode: authentication is not verified (memcode has credentials configured, but AO could not verify them.). Please verify or sign in using the provider's official CLI/app in the audit user's account, then rerun this agent. Do not send passwords, tokens, or OTPs in chat."
+      }
+    },
+    {
+      "id": "0002",
+      "recordedAt": "2026-10-10T21:31:24.236Z",
+      "agent": "memcode",
+      "sessionId": null,
+      "baseURL": "http://127.0.0.1:34767",
+      "gate": "ao_models_api",
+      "status": "FAIL",
+      "reason": "AO model API failed or returned no models",
+      "evidence": {
+        "method": "GET",
+        "path": "/api/v1/agents/memcode/models",
+        "status": 200,
+        "requestId": "",
+        "response": {
+          "agentId": "memcode",
+          "selectionMode": "catalog",
+          "models": [],
+          "customModelEntry": "none",
+          "allowCustom": false,
+          "source": "manual",
+          "metadata": {
+            "binary": "/home/azureuser/.ao/audits/harness-watch-20261010/tools/memcode/memcode",
+            "scope": "project"
+          },
+          "inputFingerprint": "1f1ac074c7653639",
+          "binaryVersion": "1f1ac074c7653639",
+          "fetchedAt": "2026-10-10T21:31:00.849693062Z",
+          "validatedAt": "2026-10-10T21:31:00.849694775Z",
+          "lastSuccessAt": "2026-10-10T21:31:00.849694775Z",
+          "refreshState": "queued",
+          "refreshRecommended": true,
+          "stale": false
+        },
+        "startedAt": "2026-10-10T21:31:24.232Z",
+        "finishedAt": "2026-10-10T21:31:24.236Z",
+        "durationMs": 4,
+        "models": []
+      },
+      "evidencePath": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/memcode/ao-002/report.artifacts/issue-0002.json",
+      "daemonLogTail": "time=2026-10-10T21:31:00.485Z level=INFO msg=\"built per-session agent resolver\" default=claude-code registered=\"[agy aider amp auggie autohand claude-code cline codewhale codex command-code continue copilot crush cursor deepseek-harness devin droid fx gemini goose grok kilocode kimchi kimi kiro memcode mimo-code muse omp opencode opencode-v2 openhands pi prime-agent qwen unreal-agent vibe]\"\ntime=2026-10-10T21:31:00.485Z level=WARN msg=\"fx Herdr listener unavailable\" error=\"listen unix /home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data/run/fx-herdr.sock: bind: invalid argument\"\ntime=2026-10-10T21:31:00.485Z level=WARN msg=\"tracker disabled: no usable token\" provider=gitlab err=\"gitlab scm: no token configured\"\ntime=2026-10-10T21:31:00.486Z level=INFO msg=\"tracker intake: gated off, set AO_TRACKER_INTAKE=on to enable\"\ntime=2026-10-10T21:31:00.501Z level=DEBUG msg=\"agent readiness check\" harness=vibe purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.503Z level=WARN msg=\"Codex account store initialization failed\" reasonCode=account_storage_unsafe retryable=false\ntime=2026-10-10T21:31:00.504Z level=DEBUG msg=\"agent readiness check\" harness=agy purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.504Z level=DEBUG msg=\"agent readiness check\" harness=aider purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.504Z level=DEBUG msg=\"agent readiness check\" harness=amp purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.504Z level=DEBUG msg=\"agent readiness check\" harness=auggie purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.508Z level=DEBUG msg=\"agent readiness check\" harness=claude-code purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.508Z level=DEBUG msg=\"agent readiness check\" harness=cline purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.508Z level=DEBUG msg=\"agent readiness check\" harness=codewhale purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.508Z level=DEBUG msg=\"agent readiness check\" harness=codex purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.509Z level=DEBUG msg=\"agent readiness check\" harness=command-code purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.509Z level=DEBUG msg=\"agent readiness check\" harness=continue purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.509Z level=DEBUG msg=\"agent readiness check\" harness=copilot purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.509Z level=DEBUG msg=\"agent readiness check\" harness=crush purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.510Z level=DEBUG msg=\"agent readiness check\" harness=cursor purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.510Z level=DEBUG msg=\"agent readiness check\" harness=devin purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.510Z level=DEBUG msg=\"agent readiness check\" harness=droid purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.510Z level=DEBUG msg=\"agent readiness check\" harness=fx purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.511Z level=DEBUG msg=\"agent readiness check\" harness=gemini purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.511Z level=DEBUG msg=\"agent readiness check\" harness=goose purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.511Z level=DEBUG msg=\"agent readiness check\" harness=grok purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.511Z level=DEBUG msg=\"agent readiness check\" harness=kilocode purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.512Z level=DEBUG msg=\"agent readiness check\" harness=kimi purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.513Z level=DEBUG msg=\"agent readiness check\" harness=kiro purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.514Z level=DEBUG msg=\"agent readiness check\" harness=kimchi purpose=display decision=new_check duration_ms=2 outcome=not_ready\ntime=2026-10-10T21:31:00.514Z level=DEBUG msg=\"agent readiness check\" harness=mimo-code purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.515Z level=DEBUG msg=\"agent readiness check\" harness=autohand purpose=display decision=new_check duration_ms=10 outcome=not_ready\ntime=2026-10-10T21:31:00.515Z level=DEBUG msg=\"agent readiness check\" harness=omp purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.515Z level=DEBUG msg=\"agent readiness check\" harness=opencode purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.516Z level=DEBUG msg=\"agent readiness check\" harness=deepseek-harness purpose=display decision=new_check duration_ms=6 outcome=not_ready\ntime=2026-10-10T21:31:00.516Z level=DEBUG msg=\"agent readiness check\" harness=openhands purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.517Z level=DEBUG msg=\"agent readiness check\" harness=pi purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.517Z level=DEBUG msg=\"agent readiness check\" harness=prime-agent purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.518Z level=DEBUG msg=\"agent readiness check\" harness=muse purpose=display decision=new_check duration_ms=3 outcome=not_ready\ntime=2026-10-10T21:31:00.518Z level=DEBUG msg=\"agent readiness check\" harness=unreal-agent purpose=display decision=new_check duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:00.518Z level=DEBUG msg=\"agent readiness check\" harness=opencode-v2 purpose=display decision=new_check duration_ms=2 outcome=not_ready\ntime=2026-10-10T21:31:00.518Z level=DEBUG msg=\"agent readiness check\" harness=qwen purpose=display decision=new_check duration_ms=1 outcome=not_ready\ntime=2026-10-10T21:31:00.548Z level=INFO msg=\"mobile remote access available\" cloudflared=/usr/local/bin/cloudflared source=system\ntime=2026-10-10T21:31:00.553Z level=INFO msg=\"browser runtime: listening\" addr=/tmp/ao-brd-794393-782c2b5875345ae8/browser.sock\ntime=2026-10-10T21:31:00.553Z level=WARN msg=\"supervisor: listener unavailable; frontend-death auto-stop disabled\" err=\"listen unix /home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/supervise.sock: bind: invalid argument\"\ntime=2026-10-10T21:31:00.604Z level=INFO msg=\"daemon listening\" addr=127.0.0.1:34767 pid=794393\ntime=2026-10-10T21:31:00.605Z level=DEBUG msg=\"agent readiness check\" harness=vibe purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=agy purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=aider purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=amp purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=auggie purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=autohand purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=claude-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=cline purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=codewhale purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=codex purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=command-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=continue purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=copilot purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=crush purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=cursor purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=deepseek-harness purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=devin purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=goose purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=grok purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=kilocode purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=kimchi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=kimi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=kiro purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=display decision=presence_in_flight_execution duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=mimo-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=muse purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=omp purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=opencode purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=opencode-v2 purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=openhands purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=pi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=prime-agent purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=qwen purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=unreal-agent purpose=display decision=cache_hit duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=droid purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=fx purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=gemini purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.625Z level=DEBUG msg=\"agent readiness check\" harness=vibe purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.625Z level=DEBUG msg=\"agent readiness check\" harness=agy purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.625Z level=DEBUG msg=\"agent readiness check\" harness=aider purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.626Z level=DEBUG msg=\"agent readiness check\" harness=amp purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.626Z level=DEBUG msg=\"agent readiness check\" harness=auggie purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.626Z level=DEBUG msg=\"agent readiness check\" harness=autohand purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.626Z level=DEBUG msg=\"agent readiness check\" harness=claude-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=cline purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=codewhale purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=codex purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=command-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=continue purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=copilot purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=crush purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=cursor purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=deepseek-harness purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=devin purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=droid purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=fx purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=gemini purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=goose purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=grok purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=kilocode purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=kimchi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=kimi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=kiro purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=mimo-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=muse purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=omp purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=opencode purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=opencode-v2 purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=openhands purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=pi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.640Z level=DEBUG msg=\"agent readiness check\" harness=prime-agent purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.640Z level=DEBUG msg=\"agent readiness check\" harness=qwen purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.641Z level=DEBUG msg=\"agent readiness check\" harness=unreal-agent purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.712Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=display decision=new_check duration_ms=199 outcome=unknown\ntime=2026-10-10T21:31:00.723Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=display decision=join duration_ms=87 outcome=unknown\ntime=2026-10-10T21:31:00.724Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=display decision=new_check duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:00.750Z level=WARN msg=\"scm observer credentials check failed; will retry\" err=\"exit status 1\"\ntime=2026-10-10T21:31:00.804Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000001 method=GET path=/readyz status=200 bytes=418 duration=105.487µs remote=127.0.0.1:34554\ntime=2026-10-10T21:31:00.821Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000002 method=GET path=/api/v1/agents status=200 bytes=2327 duration=539.108µs remote=127.0.0.1:34554\ntime=2026-10-10T21:31:24.206Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=launch decision=new_check duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:24.206Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000003 method=POST path=/api/v1/agents/memcode/probe status=200 bytes=105 duration=615.401µs remote=127.0.0.1:51872\ntime=2026-10-10T21:31:24.212Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=launch decision=cache_hit duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:24.212Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000004 method=POST path=/api/v1/agents/readiness/ensure status=200 bytes=572 duration=462.446µs remote=127.0.0.1:51882\ntime=2026-10-10T21:31:24.234Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000005 method=GET path=/api/v1/agents/memcode/models status=200 bytes=516 duration=630.18µs remote=127.0.0.1:51872\n",
+      "screenshot": {
+        "status": "unavailable",
+        "reason": "Headless runner: no capture command configured."
+      }
+    },
+    {
+      "id": "0003",
+      "recordedAt": "2026-10-10T21:31:24.347Z",
+      "agent": "memcode",
+      "sessionId": null,
+      "baseURL": "http://127.0.0.1:34767",
+      "gate": "authentication",
+      "status": "BLOCKED",
+      "reason": "memcode has credentials configured, but AO could not verify them.",
+      "evidence": {
+        "probe": {
+          "method": "POST",
+          "path": "/api/v1/agents/memcode/probe",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "agent": {
+              "id": "memcode",
+              "label": "memcode",
+              "authStatus": "configured"
+            },
+            "supported": true,
+            "installed": true
+          },
+          "startedAt": "2026-10-10T21:31:24.339Z",
+          "finishedAt": "2026-10-10T21:31:24.343Z",
+          "durationMs": 4,
+          "requestBodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        "readiness": {
+          "method": "POST",
+          "path": "/api/v1/agents/readiness/ensure",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "agents": [
+              {
+                "id": "memcode",
+                "label": "memcode",
+                "installation": {
+                  "state": "installed",
+                  "freshness": "fresh",
+                  "checkedAt": "2026-10-10T21:31:00.513146285Z",
+                  "attemptedAt": "2026-10-10T21:31:00.513146285Z",
+                  "reasonCode": "installed",
+                  "reason": "memcode is installed."
+                },
+                "authentication": {
+                  "state": "configured",
+                  "freshness": "fresh",
+                  "checkedAt": "2026-10-10T21:31:24.340368406Z",
+                  "attemptedAt": "2026-10-10T21:31:24.340368406Z",
+                  "reasonCode": "auth_configured_unverified",
+                  "reason": "memcode has credentials configured, but AO could not verify them."
+                },
+                "effectiveReadiness": "unknown",
+                "usageCount": 0
+              }
+            ]
+          },
+          "startedAt": "2026-10-10T21:31:24.343Z",
+          "finishedAt": "2026-10-10T21:31:24.347Z",
+          "durationMs": 5,
+          "requestBodySha256": "3e6c56a770435e597a96571f81370f0e64ed1e994ff93034420ae5b83b969f48"
+        }
+      },
+      "evidencePath": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/memcode/ao-002/report.artifacts/issue-0003.json",
+      "daemonLogTail": "time=2026-10-10T21:31:00.485Z level=INFO msg=\"built per-session agent resolver\" default=claude-code registered=\"[agy aider amp auggie autohand claude-code cline codewhale codex command-code continue copilot crush cursor deepseek-harness devin droid fx gemini goose grok kilocode kimchi kimi kiro memcode mimo-code muse omp opencode opencode-v2 openhands pi prime-agent qwen unreal-agent vibe]\"\ntime=2026-10-10T21:31:00.485Z level=WARN msg=\"fx Herdr listener unavailable\" error=\"listen unix /home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data/run/fx-herdr.sock: bind: invalid argument\"\ntime=2026-10-10T21:31:00.485Z level=WARN msg=\"tracker disabled: no usable token\" provider=gitlab err=\"gitlab scm: no token configured\"\ntime=2026-10-10T21:31:00.486Z level=INFO msg=\"tracker intake: gated off, set AO_TRACKER_INTAKE=on to enable\"\ntime=2026-10-10T21:31:00.501Z level=DEBUG msg=\"agent readiness check\" harness=vibe purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.503Z level=WARN msg=\"Codex account store initialization failed\" reasonCode=account_storage_unsafe retryable=false\ntime=2026-10-10T21:31:00.504Z level=DEBUG msg=\"agent readiness check\" harness=agy purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.504Z level=DEBUG msg=\"agent readiness check\" harness=aider purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.504Z level=DEBUG msg=\"agent readiness check\" harness=amp purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.504Z level=DEBUG msg=\"agent readiness check\" harness=auggie purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.508Z level=DEBUG msg=\"agent readiness check\" harness=claude-code purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.508Z level=DEBUG msg=\"agent readiness check\" harness=cline purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.508Z level=DEBUG msg=\"agent readiness check\" harness=codewhale purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.508Z level=DEBUG msg=\"agent readiness check\" harness=codex purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.509Z level=DEBUG msg=\"agent readiness check\" harness=command-code purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.509Z level=DEBUG msg=\"agent readiness check\" harness=continue purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.509Z level=DEBUG msg=\"agent readiness check\" harness=copilot purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.509Z level=DEBUG msg=\"agent readiness check\" harness=crush purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.510Z level=DEBUG msg=\"agent readiness check\" harness=cursor purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.510Z level=DEBUG msg=\"agent readiness check\" harness=devin purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.510Z level=DEBUG msg=\"agent readiness check\" harness=droid purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.510Z level=DEBUG msg=\"agent readiness check\" harness=fx purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.511Z level=DEBUG msg=\"agent readiness check\" harness=gemini purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.511Z level=DEBUG msg=\"agent readiness check\" harness=goose purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.511Z level=DEBUG msg=\"agent readiness check\" harness=grok purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.511Z level=DEBUG msg=\"agent readiness check\" harness=kilocode purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.512Z level=DEBUG msg=\"agent readiness check\" harness=kimi purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.513Z level=DEBUG msg=\"agent readiness check\" harness=kiro purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.514Z level=DEBUG msg=\"agent readiness check\" harness=kimchi purpose=display decision=new_check duration_ms=2 outcome=not_ready\ntime=2026-10-10T21:31:00.514Z level=DEBUG msg=\"agent readiness check\" harness=mimo-code purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.515Z level=DEBUG msg=\"agent readiness check\" harness=autohand purpose=display decision=new_check duration_ms=10 outcome=not_ready\ntime=2026-10-10T21:31:00.515Z level=DEBUG msg=\"agent readiness check\" harness=omp purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.515Z level=DEBUG msg=\"agent readiness check\" harness=opencode purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.516Z level=DEBUG msg=\"agent readiness check\" harness=deepseek-harness purpose=display decision=new_check duration_ms=6 outcome=not_ready\ntime=2026-10-10T21:31:00.516Z level=DEBUG msg=\"agent readiness check\" harness=openhands purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.517Z level=DEBUG msg=\"agent readiness check\" harness=pi purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.517Z level=DEBUG msg=\"agent readiness check\" harness=prime-agent purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.518Z level=DEBUG msg=\"agent readiness check\" harness=muse purpose=display decision=new_check duration_ms=3 outcome=not_ready\ntime=2026-10-10T21:31:00.518Z level=DEBUG msg=\"agent readiness check\" harness=unreal-agent purpose=display decision=new_check duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:00.518Z level=DEBUG msg=\"agent readiness check\" harness=opencode-v2 purpose=display decision=new_check duration_ms=2 outcome=not_ready\ntime=2026-10-10T21:31:00.518Z level=DEBUG msg=\"agent readiness check\" harness=qwen purpose=display decision=new_check duration_ms=1 outcome=not_ready\ntime=2026-10-10T21:31:00.548Z level=INFO msg=\"mobile remote access available\" cloudflared=/usr/local/bin/cloudflared source=system\ntime=2026-10-10T21:31:00.553Z level=INFO msg=\"browser runtime: listening\" addr=/tmp/ao-brd-794393-782c2b5875345ae8/browser.sock\ntime=2026-10-10T21:31:00.553Z level=WARN msg=\"supervisor: listener unavailable; frontend-death auto-stop disabled\" err=\"listen unix /home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/supervise.sock: bind: invalid argument\"\ntime=2026-10-10T21:31:00.604Z level=INFO msg=\"daemon listening\" addr=127.0.0.1:34767 pid=794393\ntime=2026-10-10T21:31:00.605Z level=DEBUG msg=\"agent readiness check\" harness=vibe purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=agy purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=aider purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=amp purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=auggie purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=autohand purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=claude-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=cline purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=codewhale purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=codex purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=command-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=continue purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=copilot purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=crush purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=cursor purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=deepseek-harness purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=devin purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=goose purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=grok purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=kilocode purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=kimchi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=kimi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=kiro purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=display decision=presence_in_flight_execution duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=mimo-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=muse purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=omp purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=opencode purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=opencode-v2 purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=openhands purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=pi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=prime-agent purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=qwen purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=unreal-agent purpose=display decision=cache_hit duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=droid purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=fx purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=gemini purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.625Z level=DEBUG msg=\"agent readiness check\" harness=vibe purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.625Z level=DEBUG msg=\"agent readiness check\" harness=agy purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.625Z level=DEBUG msg=\"agent readiness check\" harness=aider purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.626Z level=DEBUG msg=\"agent readiness check\" harness=amp purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.626Z level=DEBUG msg=\"agent readiness check\" harness=auggie purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.626Z level=DEBUG msg=\"agent readiness check\" harness=autohand purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.626Z level=DEBUG msg=\"agent readiness check\" harness=claude-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=cline purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=codewhale purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=codex purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=command-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=continue purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=copilot purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=crush purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=cursor purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=deepseek-harness purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=devin purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=droid purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=fx purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=gemini purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=goose purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=grok purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=kilocode purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=kimchi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=kimi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=kiro purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=mimo-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=muse purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=omp purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=opencode purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=opencode-v2 purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=openhands purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=pi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.640Z level=DEBUG msg=\"agent readiness check\" harness=prime-agent purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.640Z level=DEBUG msg=\"agent readiness check\" harness=qwen purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.641Z level=DEBUG msg=\"agent readiness check\" harness=unreal-agent purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.712Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=display decision=new_check duration_ms=199 outcome=unknown\ntime=2026-10-10T21:31:00.723Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=display decision=join duration_ms=87 outcome=unknown\ntime=2026-10-10T21:31:00.724Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=display decision=new_check duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:00.750Z level=WARN msg=\"scm observer credentials check failed; will retry\" err=\"exit status 1\"\ntime=2026-10-10T21:31:00.804Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000001 method=GET path=/readyz status=200 bytes=418 duration=105.487µs remote=127.0.0.1:34554\ntime=2026-10-10T21:31:00.821Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000002 method=GET path=/api/v1/agents status=200 bytes=2327 duration=539.108µs remote=127.0.0.1:34554\ntime=2026-10-10T21:31:24.206Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=launch decision=new_check duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:24.206Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000003 method=POST path=/api/v1/agents/memcode/probe status=200 bytes=105 duration=615.401µs remote=127.0.0.1:51872\ntime=2026-10-10T21:31:24.212Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=launch decision=cache_hit duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:24.212Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000004 method=POST path=/api/v1/agents/readiness/ensure status=200 bytes=572 duration=462.446µs remote=127.0.0.1:51882\ntime=2026-10-10T21:31:24.234Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000005 method=GET path=/api/v1/agents/memcode/models status=200 bytes=516 duration=630.18µs remote=127.0.0.1:51872\ntime=2026-10-10T21:31:24.335Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000006 method=POST path=/api/v1/projects status=201 bytes=635 duration=10.969278ms remote=127.0.0.1:51872\ntime=2026-10-10T21:31:24.340Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=launch decision=new_check duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:24.340Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000007 method=POST path=/api/v1/agents/memcode/probe status=200 bytes=105 duration=515.755µs remote=127.0.0.1:51872\ntime=2026-10-10T21:31:24.345Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=launch decision=cache_hit duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:24.346Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000008 method=POST path=/api/v1/agents/readiness/ensure status=200 bytes=572 duration=1.695373ms remote=127.0.0.1:51882\n",
+      "screenshot": {
+        "status": "unavailable",
+        "reason": "Headless runner: no capture command configured."
+      },
+      "userAction": {
+        "type": "authentication",
+        "agent": "memcode",
+        "requiresFreshProbe": true,
+        "message": "memcode: authentication is not verified (memcode has credentials configured, but AO could not verify them.). Please verify or sign in using the provider's official CLI/app in the audit user's account, then rerun this agent. Do not send passwords, tokens, or OTPs in chat."
+      }
+    },
+    {
+      "id": "0004",
+      "recordedAt": "2026-10-10T21:31:24.407Z",
+      "agent": "memcode",
+      "sessionId": null,
+      "baseURL": "http://127.0.0.1:34767",
+      "gate": "ao_models_api",
+      "status": "FAIL",
+      "reason": "AO model API failed or returned no models",
+      "evidence": {
+        "method": "GET",
+        "path": "/api/v1/agents/memcode/models",
+        "status": 200,
+        "requestId": "",
+        "response": {
+          "agentId": "memcode",
+          "selectionMode": "catalog",
+          "models": [],
+          "customModelEntry": "none",
+          "allowCustom": false,
+          "source": "manual",
+          "metadata": {
+            "binary": "/home/azureuser/.ao/audits/harness-watch-20261010/tools/memcode/memcode",
+            "scope": "project"
+          },
+          "inputFingerprint": "1f1ac074c7653639",
+          "binaryVersion": "1f1ac074c7653639",
+          "fetchedAt": "2026-10-10T21:31:24.300630394Z",
+          "validatedAt": "2026-10-10T21:31:24.300631386Z",
+          "lastSuccessAt": "2026-10-10T21:31:24.300631386Z",
+          "refreshState": "queued",
+          "refreshRecommended": true,
+          "stale": false
+        },
+        "startedAt": "2026-10-10T21:31:24.404Z",
+        "finishedAt": "2026-10-10T21:31:24.406Z",
+        "durationMs": 2,
+        "models": []
+      },
+      "evidencePath": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/memcode/ao-002/report.artifacts/issue-0004.json",
+      "daemonLogTail": "time=2026-10-10T21:31:00.485Z level=INFO msg=\"built per-session agent resolver\" default=claude-code registered=\"[agy aider amp auggie autohand claude-code cline codewhale codex command-code continue copilot crush cursor deepseek-harness devin droid fx gemini goose grok kilocode kimchi kimi kiro memcode mimo-code muse omp opencode opencode-v2 openhands pi prime-agent qwen unreal-agent vibe]\"\ntime=2026-10-10T21:31:00.485Z level=WARN msg=\"fx Herdr listener unavailable\" error=\"listen unix /home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data/run/fx-herdr.sock: bind: invalid argument\"\ntime=2026-10-10T21:31:00.485Z level=WARN msg=\"tracker disabled: no usable token\" provider=gitlab err=\"gitlab scm: no token configured\"\ntime=2026-10-10T21:31:00.486Z level=INFO msg=\"tracker intake: gated off, set AO_TRACKER_INTAKE=on to enable\"\ntime=2026-10-10T21:31:00.501Z level=DEBUG msg=\"agent readiness check\" harness=vibe purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.503Z level=WARN msg=\"Codex account store initialization failed\" reasonCode=account_storage_unsafe retryable=false\ntime=2026-10-10T21:31:00.504Z level=DEBUG msg=\"agent readiness check\" harness=agy purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.504Z level=DEBUG msg=\"agent readiness check\" harness=aider purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.504Z level=DEBUG msg=\"agent readiness check\" harness=amp purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.504Z level=DEBUG msg=\"agent readiness check\" harness=auggie purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.508Z level=DEBUG msg=\"agent readiness check\" harness=claude-code purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.508Z level=DEBUG msg=\"agent readiness check\" harness=cline purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.508Z level=DEBUG msg=\"agent readiness check\" harness=codewhale purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.508Z level=DEBUG msg=\"agent readiness check\" harness=codex purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.509Z level=DEBUG msg=\"agent readiness check\" harness=command-code purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.509Z level=DEBUG msg=\"agent readiness check\" harness=continue purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.509Z level=DEBUG msg=\"agent readiness check\" harness=copilot purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.509Z level=DEBUG msg=\"agent readiness check\" harness=crush purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.510Z level=DEBUG msg=\"agent readiness check\" harness=cursor purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.510Z level=DEBUG msg=\"agent readiness check\" harness=devin purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.510Z level=DEBUG msg=\"agent readiness check\" harness=droid purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.510Z level=DEBUG msg=\"agent readiness check\" harness=fx purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.511Z level=DEBUG msg=\"agent readiness check\" harness=gemini purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.511Z level=DEBUG msg=\"agent readiness check\" harness=goose purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.511Z level=DEBUG msg=\"agent readiness check\" harness=grok purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.511Z level=DEBUG msg=\"agent readiness check\" harness=kilocode purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.512Z level=DEBUG msg=\"agent readiness check\" harness=kimi purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.513Z level=DEBUG msg=\"agent readiness check\" harness=kiro purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.514Z level=DEBUG msg=\"agent readiness check\" harness=kimchi purpose=display decision=new_check duration_ms=2 outcome=not_ready\ntime=2026-10-10T21:31:00.514Z level=DEBUG msg=\"agent readiness check\" harness=mimo-code purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.515Z level=DEBUG msg=\"agent readiness check\" harness=autohand purpose=display decision=new_check duration_ms=10 outcome=not_ready\ntime=2026-10-10T21:31:00.515Z level=DEBUG msg=\"agent readiness check\" harness=omp purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.515Z level=DEBUG msg=\"agent readiness check\" harness=opencode purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.516Z level=DEBUG msg=\"agent readiness check\" harness=deepseek-harness purpose=display decision=new_check duration_ms=6 outcome=not_ready\ntime=2026-10-10T21:31:00.516Z level=DEBUG msg=\"agent readiness check\" harness=openhands purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.517Z level=DEBUG msg=\"agent readiness check\" harness=pi purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.517Z level=DEBUG msg=\"agent readiness check\" harness=prime-agent purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.518Z level=DEBUG msg=\"agent readiness check\" harness=muse purpose=display decision=new_check duration_ms=3 outcome=not_ready\ntime=2026-10-10T21:31:00.518Z level=DEBUG msg=\"agent readiness check\" harness=unreal-agent purpose=display decision=new_check duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:00.518Z level=DEBUG msg=\"agent readiness check\" harness=opencode-v2 purpose=display decision=new_check duration_ms=2 outcome=not_ready\ntime=2026-10-10T21:31:00.518Z level=DEBUG msg=\"agent readiness check\" harness=qwen purpose=display decision=new_check duration_ms=1 outcome=not_ready\ntime=2026-10-10T21:31:00.548Z level=INFO msg=\"mobile remote access available\" cloudflared=/usr/local/bin/cloudflared source=system\ntime=2026-10-10T21:31:00.553Z level=INFO msg=\"browser runtime: listening\" addr=/tmp/ao-brd-794393-782c2b5875345ae8/browser.sock\ntime=2026-10-10T21:31:00.553Z level=WARN msg=\"supervisor: listener unavailable; frontend-death auto-stop disabled\" err=\"listen unix /home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/supervise.sock: bind: invalid argument\"\ntime=2026-10-10T21:31:00.604Z level=INFO msg=\"daemon listening\" addr=127.0.0.1:34767 pid=794393\ntime=2026-10-10T21:31:00.605Z level=DEBUG msg=\"agent readiness check\" harness=vibe purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=agy purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=aider purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=amp purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=auggie purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=autohand purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=claude-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=cline purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=codewhale purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=codex purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=command-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=continue purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=copilot purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=crush purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=cursor purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=deepseek-harness purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.609Z level=DEBUG msg=\"agent readiness check\" harness=devin purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=goose purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=grok purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=kilocode purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=kimchi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=kimi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=kiro purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=display decision=presence_in_flight_execution duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=mimo-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=muse purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=omp purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=opencode purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=opencode-v2 purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=openhands purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=pi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=prime-agent purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=qwen purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=unreal-agent purpose=display decision=cache_hit duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=droid purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=fx purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.621Z level=DEBUG msg=\"agent readiness check\" harness=gemini purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.625Z level=DEBUG msg=\"agent readiness check\" harness=vibe purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.625Z level=DEBUG msg=\"agent readiness check\" harness=agy purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.625Z level=DEBUG msg=\"agent readiness check\" harness=aider purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.626Z level=DEBUG msg=\"agent readiness check\" harness=amp purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.626Z level=DEBUG msg=\"agent readiness check\" harness=auggie purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.626Z level=DEBUG msg=\"agent readiness check\" harness=autohand purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.626Z level=DEBUG msg=\"agent readiness check\" harness=claude-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=cline purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=codewhale purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=codex purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=command-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=continue purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=copilot purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=crush purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=cursor purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=deepseek-harness purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=devin purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=droid purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=fx purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=gemini purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=goose purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=grok purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=kilocode purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=kimchi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=kimi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=kiro purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=mimo-code purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=muse purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=omp purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=opencode purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=opencode-v2 purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=openhands purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.636Z level=DEBUG msg=\"agent readiness check\" harness=pi purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.640Z level=DEBUG msg=\"agent readiness check\" harness=prime-agent purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.640Z level=DEBUG msg=\"agent readiness check\" harness=qwen purpose=display decision=cache_hit duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.641Z level=DEBUG msg=\"agent readiness check\" harness=unreal-agent purpose=display decision=new_check duration_ms=0 outcome=not_ready\ntime=2026-10-10T21:31:00.712Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=display decision=new_check duration_ms=199 outcome=unknown\ntime=2026-10-10T21:31:00.723Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=display decision=join duration_ms=87 outcome=unknown\ntime=2026-10-10T21:31:00.724Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=display decision=new_check duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:00.750Z level=WARN msg=\"scm observer credentials check failed; will retry\" err=\"exit status 1\"\ntime=2026-10-10T21:31:00.804Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000001 method=GET path=/readyz status=200 bytes=418 duration=105.487µs remote=127.0.0.1:34554\ntime=2026-10-10T21:31:00.821Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000002 method=GET path=/api/v1/agents status=200 bytes=2327 duration=539.108µs remote=127.0.0.1:34554\ntime=2026-10-10T21:31:24.206Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=launch decision=new_check duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:24.206Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000003 method=POST path=/api/v1/agents/memcode/probe status=200 bytes=105 duration=615.401µs remote=127.0.0.1:51872\ntime=2026-10-10T21:31:24.212Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=launch decision=cache_hit duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:24.212Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000004 method=POST path=/api/v1/agents/readiness/ensure status=200 bytes=572 duration=462.446µs remote=127.0.0.1:51882\ntime=2026-10-10T21:31:24.234Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000005 method=GET path=/api/v1/agents/memcode/models status=200 bytes=516 duration=630.18µs remote=127.0.0.1:51872\ntime=2026-10-10T21:31:24.335Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000006 method=POST path=/api/v1/projects status=201 bytes=635 duration=10.969278ms remote=127.0.0.1:51872\ntime=2026-10-10T21:31:24.340Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=launch decision=new_check duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:24.340Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000007 method=POST path=/api/v1/agents/memcode/probe status=200 bytes=105 duration=515.755µs remote=127.0.0.1:51872\ntime=2026-10-10T21:31:24.345Z level=DEBUG msg=\"agent readiness check\" harness=memcode purpose=launch decision=cache_hit duration_ms=0 outcome=unknown\ntime=2026-10-10T21:31:24.346Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000008 method=POST path=/api/v1/agents/readiness/ensure status=200 bytes=572 duration=1.695373ms remote=127.0.0.1:51882\ntime=2026-10-10T21:31:24.406Z level=INFO msg=\"http request\" id=vps-linux/Gxyn18Rvpk-000009 method=GET path=/api/v1/agents/memcode/models status=200 bytes=516 duration=491.019µs remote=127.0.0.1:51872\n",
+      "screenshot": {
+        "status": "unavailable",
+        "reason": "Headless runner: no capture command configured."
+      }
+    }
+  ],
+  "runErrors": [],
+  "cleanup": [],
+  "results": [
+    {
+      "agent": "memcode",
+      "status": "FAIL",
+      "failedGate": "local_models_list",
+      "gates": [
+        {
+          "name": "local_binary",
+          "status": "PASS",
+          "reason": "local executable resolved",
+          "evidence": {
+            "executable": "/home/azureuser/.ao/audits/harness-watch-20261010/tools/memcode/memcode"
+          }
+        },
+        {
+          "name": "local_version",
+          "status": "PASS",
+          "reason": "local version command succeeded",
+          "evidence": {
+            "exitCode": 0,
+            "timedOut": false,
+            "startedAt": "2026-10-10T21:31:00.827Z",
+            "finishedAt": "2026-10-10T21:31:00.913Z",
+            "durationMs": 86,
+            "stdoutBytes": 23,
+            "stderrBytes": 0,
+            "stdoutSha256": "b5de20eeb197695270611b3d26e0c19fbae006662c458816be6d09943080973a",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stdoutTruncated": false,
+            "stderrTruncated": false,
+            "authenticationRequired": false,
+            "arguments": [
+              "--version"
+            ],
+            "stdout": "memcode version 0.38.1",
+            "stderr": ""
+          }
+        },
+        {
+          "name": "local_integration",
+          "status": "PASS",
+          "reason": "local integration probe succeeded",
+          "evidence": {
+            "exitCode": 0,
+            "timedOut": false,
+            "startedAt": "2026-10-10T21:31:00.914Z",
+            "finishedAt": "2026-10-10T21:31:00.940Z",
+            "durationMs": 26,
+            "stdoutBytes": 2149,
+            "stderrBytes": 0,
+            "stdoutSha256": "6b76975de80052a977975ad0a787c1f7efbdc8c16814285c0a3dfb7a37aea367",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stdoutTruncated": false,
+            "stderrTruncated": false,
+            "authenticationRequired": false,
+            "arguments": [
+              "run",
+              "--help"
+            ],
+            "expectedSha256": "d60ff415ad05d97fd6e7c6726fda58016ab02016343a90bfdfd6f2bce7b6bcbf",
+            "expectedObserved": true
+          }
+        },
+        {
+          "name": "local_session_spawn",
+          "status": "PASS",
+          "reason": "direct local CLI session produced the requested proof",
+          "evidence": {
+            "exitCode": 0,
+            "timedOut": false,
+            "startedAt": "2026-10-10T21:31:00.941Z",
+            "finishedAt": "2026-10-10T21:31:24.200Z",
+            "durationMs": 23259,
+            "stdoutBytes": 579,
+            "stderrBytes": 470,
+            "stdoutSha256": "02cebd3e31cf0b203e3b1ae70d7d76f89142e6911032b39e0193fc02b3d82c3e",
+            "stderrSha256": "351371cbe823be9aaf3897a38ed1135a3f65c606d0ca4dc456622ac11a4e392a",
+            "stdoutTruncated": false,
+            "stderrTruncated": false,
+            "authenticationRequired": false,
+            "arguments": [
+              "run",
+              "--allow-all",
+              "--",
+              "{prompt}"
+            ],
+            "promptSha256": "77ac4836464b8c3089e5ffc1b5d7e7c38415c60ad86928b7d81e74a6107aa00b",
+            "expectedTokenSha256": "b714d7c8dcd91bb72bb54163d12fb9e06d4373c76f1e9bb7c114f66b5ae14245",
+            "proofObserved": true,
+            "proofContained": true,
+            "cwdMatches": true
+          }
+        },
+        {
+          "name": "local_models_list",
+          "status": "NOT_RUN",
+          "reason": "local model-list command is not defined"
+        },
+        {
+          "name": "registered",
+          "status": "PASS",
+          "reason": "agent is registered",
+          "evidence": {
+            "method": "POST",
+            "path": "/api/v1/agents/memcode/probe",
+            "status": 200,
+            "requestId": "",
+            "response": {
+              "agent": {
+                "id": "memcode",
+                "label": "memcode",
+                "authStatus": "configured"
+              },
+              "supported": true,
+              "installed": true
+            },
+            "startedAt": "2026-10-10T21:31:24.339Z",
+            "finishedAt": "2026-10-10T21:31:24.343Z",
+            "durationMs": 4,
+            "requestBodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+          }
+        },
+        {
+          "name": "installed",
+          "status": "PASS",
+          "reason": "AO resolved the installed executable",
+          "evidence": {
+            "method": "POST",
+            "path": "/api/v1/agents/readiness/ensure",
+            "status": 200,
+            "requestId": "",
+            "response": {
+              "agents": [
+                {
+                  "id": "memcode",
+                  "label": "memcode",
+                  "installation": {
+                    "state": "installed",
+                    "freshness": "fresh",
+                    "checkedAt": "2026-10-10T21:31:00.513146285Z",
+                    "attemptedAt": "2026-10-10T21:31:00.513146285Z",
+                    "reasonCode": "installed",
+                    "reason": "memcode is installed."
+                  },
+                  "authentication": {
+                    "state": "configured",
+                    "freshness": "fresh",
+                    "checkedAt": "2026-10-10T21:31:24.340368406Z",
+                    "attemptedAt": "2026-10-10T21:31:24.340368406Z",
+                    "reasonCode": "auth_configured_unverified",
+                    "reason": "memcode has credentials configured, but AO could not verify them."
+                  },
+                  "effectiveReadiness": "unknown",
+                  "usageCount": 0
+                }
+              ]
+            },
+            "startedAt": "2026-10-10T21:31:24.343Z",
+            "finishedAt": "2026-10-10T21:31:24.347Z",
+            "durationMs": 5,
+            "requestBodySha256": "3e6c56a770435e597a96571f81370f0e64ed1e994ff93034420ae5b83b969f48"
+          }
+        },
+        {
+          "name": "fresh_probe",
+          "status": "PASS",
+          "reason": "installation and authentication observations are fresh",
+          "evidence": {
+            "probe": {
+              "method": "POST",
+              "path": "/api/v1/agents/memcode/probe",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "agent": {
+                  "id": "memcode",
+                  "label": "memcode",
+                  "authStatus": "configured"
+                },
+                "supported": true,
+                "installed": true
+              },
+              "startedAt": "2026-10-10T21:31:24.339Z",
+              "finishedAt": "2026-10-10T21:31:24.343Z",
+              "durationMs": 4,
+              "requestBodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+            },
+            "readiness": {
+              "method": "POST",
+              "path": "/api/v1/agents/readiness/ensure",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "agents": [
+                  {
+                    "id": "memcode",
+                    "label": "memcode",
+                    "installation": {
+                      "state": "installed",
+                      "freshness": "fresh",
+                      "checkedAt": "2026-10-10T21:31:00.513146285Z",
+                      "attemptedAt": "2026-10-10T21:31:00.513146285Z",
+                      "reasonCode": "installed",
+                      "reason": "memcode is installed."
+                    },
+                    "authentication": {
+                      "state": "configured",
+                      "freshness": "fresh",
+                      "checkedAt": "2026-10-10T21:31:24.340368406Z",
+                      "attemptedAt": "2026-10-10T21:31:24.340368406Z",
+                      "reasonCode": "auth_configured_unverified",
+                      "reason": "memcode has credentials configured, but AO could not verify them."
+                    },
+                    "effectiveReadiness": "unknown",
+                    "usageCount": 0
+                  }
+                ]
+              },
+              "startedAt": "2026-10-10T21:31:24.343Z",
+              "finishedAt": "2026-10-10T21:31:24.347Z",
+              "durationMs": 5,
+              "requestBodySha256": "3e6c56a770435e597a96571f81370f0e64ed1e994ff93034420ae5b83b969f48"
+            }
+          }
+        },
+        {
+          "name": "authentication",
+          "status": "BLOCKED",
+          "reason": "memcode has credentials configured, but AO could not verify them.",
+          "evidence": {
+            "probe": {
+              "method": "POST",
+              "path": "/api/v1/agents/memcode/probe",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "agent": {
+                  "id": "memcode",
+                  "label": "memcode",
+                  "authStatus": "configured"
+                },
+                "supported": true,
+                "installed": true
+              },
+              "startedAt": "2026-10-10T21:31:24.339Z",
+              "finishedAt": "2026-10-10T21:31:24.343Z",
+              "durationMs": 4,
+              "requestBodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+            },
+            "readiness": {
+              "method": "POST",
+              "path": "/api/v1/agents/readiness/ensure",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "agents": [
+                  {
+                    "id": "memcode",
+                    "label": "memcode",
+                    "installation": {
+                      "state": "installed",
+                      "freshness": "fresh",
+                      "checkedAt": "2026-10-10T21:31:00.513146285Z",
+                      "attemptedAt": "2026-10-10T21:31:00.513146285Z",
+                      "reasonCode": "installed",
+                      "reason": "memcode is installed."
+                    },
+                    "authentication": {
+                      "state": "configured",
+                      "freshness": "fresh",
+                      "checkedAt": "2026-10-10T21:31:24.340368406Z",
+                      "attemptedAt": "2026-10-10T21:31:24.340368406Z",
+                      "reasonCode": "auth_configured_unverified",
+                      "reason": "memcode has credentials configured, but AO could not verify them."
+                    },
+                    "effectiveReadiness": "unknown",
+                    "usageCount": 0
+                  }
+                ]
+              },
+              "startedAt": "2026-10-10T21:31:24.343Z",
+              "finishedAt": "2026-10-10T21:31:24.347Z",
+              "durationMs": 5,
+              "requestBodySha256": "3e6c56a770435e597a96571f81370f0e64ed1e994ff93034420ae5b83b969f48"
+            }
+          }
+        },
+        {
+          "name": "ao_models_api",
+          "status": "FAIL",
+          "reason": "AO model API failed or returned no models",
+          "evidence": {
+            "method": "GET",
+            "path": "/api/v1/agents/memcode/models",
+            "status": 200,
+            "requestId": "",
+            "response": {
+              "agentId": "memcode",
+              "selectionMode": "catalog",
+              "models": [],
+              "customModelEntry": "none",
+              "allowCustom": false,
+              "source": "manual",
+              "metadata": {
+                "binary": "/home/azureuser/.ao/audits/harness-watch-20261010/tools/memcode/memcode",
+                "scope": "project"
+              },
+              "inputFingerprint": "1f1ac074c7653639",
+              "binaryVersion": "1f1ac074c7653639",
+              "fetchedAt": "2026-10-10T21:31:24.300630394Z",
+              "validatedAt": "2026-10-10T21:31:24.300631386Z",
+              "lastSuccessAt": "2026-10-10T21:31:24.300631386Z",
+              "refreshState": "queued",
+              "refreshRecommended": true,
+              "stale": false
+            },
+            "startedAt": "2026-10-10T21:31:24.404Z",
+            "finishedAt": "2026-10-10T21:31:24.406Z",
+            "durationMs": 2,
+            "models": []
+          }
+        },
+        {
+          "name": "tui_spawn",
+          "status": "PASS",
+          "reason": "AO created the requested TUI session",
+          "evidence": {
+            "method": "POST",
+            "path": "/api/v1/sessions",
+            "status": 201,
+            "requestId": "",
+            "response": {
+              "session": {
+                "id": "audit-memcode-1ba657e9-1",
+                "projectId": "audit-memcode-1ba657e9",
+                "kind": "worker",
+                "harness": "memcode",
+                "reviewerConfig": {},
+                "autoReviewEnabled": false,
+                "displayName": "audit-memcode",
+                "mode": "tui",
+                "activity": {
+                  "state": "idle",
+                  "lastActivityAt": "2026-10-10T21:31:24.594972374Z"
+                },
+                "isTerminated": false,
+                "terminateOnPrMerge": false,
+                "autoInjectReview": true,
+                "autoInjectCI": true,
+                "outputType": "none",
+                "createdAt": "2026-10-10T21:31:24.418092929Z",
+                "updatedAt": "2026-10-10T21:31:28.069312725Z",
+                "isPinned": false,
+                "provisionState": "ready",
+                "branchState": {
+                  "commits": 0,
+                  "unpushed": 0
+                },
+                "statusReadiness": "ready",
+                "chatProviderPreserved": false,
+                "status": "idle",
+                "kanbanColumn": "building",
+                "displayStatus": "Awaiting PR",
+                "terminalHandleId": "ptyhost-v1:audit-memcode-1ba657e9-1",
+                "branch": "ao/audit-memcode-1ba657e9-1/root",
+                "terminalGeneration": "2f310fcd-f55e-4d3f-9975-191f374493ae",
+                "lastUserMessageAt": "2026-10-10T21:31:24.590744673Z",
+                "lastInteractionAt": "2026-10-10T21:31:24.590744673Z",
+                "lastEventAt": "2026-10-10T21:31:24.594972374Z",
+                "prs": []
+              },
+              "promptBytes": 746,
+              "systemPromptBytes": 15179
+            },
+            "startedAt": "2026-10-10T21:31:24.413Z",
+            "finishedAt": "2026-10-10T21:31:54.921Z",
+            "durationMs": 30508,
+            "requestBodySha256": "87e6ad0e4b810463b6d8d3f2ecf29796b1809678a7e59ee4a32104d7cfa14e6f"
+          }
+        },
+        {
+          "name": "proof_file_creation",
+          "status": "PASS",
+          "reason": "AO_AUDIT_PROOF.json contains valid JSON",
+          "evidence": {
+            "method": "GET",
+            "path": "/api/v1/sessions/audit-memcode-1ba657e9-1/workspace/file?path=AO_AUDIT_PROOF.json",
+            "status": 200,
+            "requestId": "",
+            "response": {
+              "sessionId": "audit-memcode-1ba657e9-1",
+              "path": "AO_AUDIT_PROOF.json",
+              "status": "added",
+              "additions": 7,
+              "deletions": 0,
+              "size": 461,
+              "binary": false,
+              "deleted": false,
+              "editable": true,
+              "content": "{\n  \"cwd\": \"/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data/worktrees/audit-memcode-1ba657e9/audit-memcode-1ba657e9-1\",\n  \"initialPromptToken\": \"[REDACTED]\",\n  \"initialPromptExecutions\": 1,\n  \"hiddenInstructionToken\": \"[REDACTED]\",\n  \"projectAgentsToken\": \"[REDACTED]\"\n}\n",
+              "contentTruncated": false,
+              "diff": "diff --git a/AO_AUDIT_PROOF.json b/AO_AUDIT_PROOF.json\nnew file mode 100644\n--- /dev/null\n+++ b/AO_AUDIT_PROOF.json\n@@ -0,0 +1,8 @@\n+{\n+  \"cwd\": \"/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data/worktrees/audit-memcode-1ba657e9/audit-memcode-1ba657e9-1\",\n+  \"initialPromptToken\": \"[REDACTED]\",\n+  \"initialPromptExecutions\": 1,\n+  \"hiddenInstructionToken\": \"[REDACTED]\",\n+  \"projectAgentsToken\": \"[REDACTED]\"\n+}\n+\n",
+              "diffTruncated": false,
+              "compareBaseSha": "27162d00408de4c4fcd6bd833c77c42b652727de",
+              "compareBaseRef": "refs/heads/main",
+              "compareMode": "base",
+              "workspaceVersion": "5d5b8d0491b50b8ca88192b7ff5dea6dfe5ac9d6c3fa2d8fb7a807066adeac81",
+              "fileFingerprint": "2c551d85e1482917c87c31dd973f7734ea2d8f35c4c3ad317e5a710083208376"
+            },
+            "startedAt": "2026-10-10T21:33:30.613Z",
+            "finishedAt": "2026-10-10T21:33:30.617Z",
+            "durationMs": 3
+          }
+        },
+        {
+          "name": "correct_working_directory",
+          "status": "PASS",
+          "reason": "provider reported AO's session workspace",
+          "evidence": {
+            "workspace": {
+              "method": "GET",
+              "path": "/api/v1/desktop/sessions/audit-memcode-1ba657e9-1/workspace",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "sessionId": "audit-memcode-1ba657e9-1",
+                "workspacePath": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data/worktrees/audit-memcode-1ba657e9/audit-memcode-1ba657e9-1"
+              },
+              "startedAt": "2026-10-10T21:31:54.922Z",
+              "finishedAt": "2026-10-10T21:31:54.923Z",
+              "durationMs": 2
+            },
+            "reportedCwd": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data/worktrees/audit-memcode-1ba657e9/audit-memcode-1ba657e9-1"
+          }
+        },
+        {
+          "name": "initial_prompt_exactly_once",
+          "status": "PASS",
+          "reason": "unique initial token was handled once",
+          "evidence": {
+            "expectedTokenSha256": "8a564818c13ae6fdf01f08a218078bceda835d09fe773f8645231c7b44c664cc",
+            "observedExecutions": 1
+          }
+        },
+        {
+          "name": "hidden_ao_instructions",
+          "status": "PASS",
+          "reason": "provider consumed hidden AO standing instructions",
+          "evidence": {
+            "expectedTokenSha256": "537ff2ff268411d0da9253781fb26ebfe8cd041dce2e9e947b7197d4f9a046e9"
+          }
+        },
+        {
+          "name": "project_agents_md",
+          "status": "PASS",
+          "reason": "provider consumed project AGENTS.md",
+          "evidence": {
+            "expectedTokenSha256": "58986d70d71e2228fa6764c18bf5d48a83f2ade540e09500873e3057cdd43d0c"
+          }
+        },
+        {
+          "name": "activity_status",
+          "status": "PASS",
+          "reason": "AO exposed ready status and an active→idle transition",
+          "evidence": {
+            "method": "GET",
+            "path": "/api/v1/sessions/audit-memcode-1ba657e9-1",
+            "status": 200,
+            "requestId": "",
+            "response": {
+              "session": {
+                "id": "audit-memcode-1ba657e9-1",
+                "projectId": "audit-memcode-1ba657e9",
+                "kind": "worker",
+                "harness": "memcode",
+                "reviewerConfig": {},
+                "autoReviewEnabled": false,
+                "displayName": "audit-memcode",
+                "mode": "tui",
+                "activity": {
+                  "state": "idle",
+                  "lastActivityAt": "2026-10-10T21:33:30.49328716Z"
+                },
+                "isTerminated": false,
+                "terminateOnPrMerge": false,
+                "autoInjectReview": true,
+                "autoInjectCI": true,
+                "outputType": "none",
+                "createdAt": "2026-10-10T21:31:24.418092929Z",
+                "updatedAt": "2026-10-10T21:33:30.496354648Z",
+                "isPinned": false,
+                "provisionState": "ready",
+                "branchState": {
+                  "commits": 0,
+                  "unpushed": 0
+                },
+                "statusReadiness": "ready",
+                "chatProviderPreserved": false,
+                "status": "idle",
+                "kanbanColumn": "building",
+                "displayStatus": "Awaiting PR",
+                "terminalHandleId": "ptyhost-v1:audit-memcode-1ba657e9-1",
+                "branch": "ao/audit-memcode-1ba657e9-1/root",
+                "terminalGeneration": "2f310fcd-f55e-4d3f-9975-191f374493ae",
+                "lastUserMessageAt": "2026-10-10T21:31:24.590744673Z",
+                "lastInteractionAt": "2026-10-10T21:31:24.590744673Z",
+                "lastEventAt": "2026-10-10T21:33:30.49328716Z",
+                "prs": []
+              }
+            },
+            "startedAt": "2026-10-10T21:33:30.613Z",
+            "finishedAt": "2026-10-10T21:33:30.616Z",
+            "durationMs": 3
+          }
+        },
+        {
+          "name": "second_message",
+          "status": "PASS",
+          "reason": "second API message produced the requested provider-authored mutation",
+          "evidence": {
+            "send": {
+              "method": "POST",
+              "path": "/api/v1/sessions/audit-memcode-1ba657e9-1/send",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "ok": true,
+                "sessionId": "audit-memcode-1ba657e9-1",
+                "message": "Update AO_AUDIT_PROOF.json: add JSON field secondMessageToken with value AO_SECOND_d507aaf389d14384a9344ea17a0fc673. Preserve all fields, then stop and wait."
+              },
+              "startedAt": "2026-10-10T21:33:30.617Z",
+              "finishedAt": "2026-10-10T21:33:30.921Z",
+              "durationMs": 304,
+              "requestBodySha256": "0cd9a6fb113e646498f47bd1c02b7830b578faa86ac0e6dd26bf692d6c49d672"
+            },
+            "proof": {
+              "method": "GET",
+              "path": "/api/v1/sessions/audit-memcode-1ba657e9-1/workspace/file?path=AO_AUDIT_PROOF.json",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "sessionId": "audit-memcode-1ba657e9-1",
+                "path": "AO_AUDIT_PROOF.json",
+                "status": "added",
+                "additions": 8,
+                "deletions": 0,
+                "size": 531,
+                "binary": false,
+                "deleted": false,
+                "editable": true,
+                "content": "{\n  \"cwd\": \"/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data/worktrees/audit-memcode-1ba657e9/audit-memcode-1ba657e9-1\",\n  \"initialPromptToken\": \"[REDACTED]\",\n  \"initialPromptExecutions\": 1,\n  \"hiddenInstructionToken\": \"[REDACTED]\",\n  \"projectAgentsToken\": \"[REDACTED]\",\n  \"secondMessageToken\": \"[REDACTED]\"\n}\n",
+                "contentTruncated": false,
+                "diff": "diff --git a/AO_AUDIT_PROOF.json b/AO_AUDIT_PROOF.json\nnew file mode 100644\n--- /dev/null\n+++ b/AO_AUDIT_PROOF.json\n@@ -0,0 +1,9 @@\n+{\n+  \"cwd\": \"/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data/worktrees/audit-memcode-1ba657e9/audit-memcode-1ba657e9-1\",\n+  \"initialPromptToken\": \"[REDACTED]\",\n+  \"initialPromptExecutions\": 1,\n+  \"hiddenInstructionToken\": \"[REDACTED]\",\n+  \"projectAgentsToken\": \"[REDACTED]\",\n+  \"secondMessageToken\": \"[REDACTED]\"\n+}\n+\n",
+                "diffTruncated": false,
+                "compareBaseSha": "27162d00408de4c4fcd6bd833c77c42b652727de",
+                "compareBaseRef": "refs/heads/main",
+                "compareMode": "base",
+                "workspaceVersion": "7f5fa9150e8cf8ed3da98ed5733589fd4b8c4dcca1d6d83078a782ce34e77368",
+                "fileFingerprint": "fd81c2fab937d0fb52241d8cd90ea8d67b4bef283f2c767288ddeabae0c870fe"
+              },
+              "startedAt": "2026-10-10T21:34:01.143Z",
+              "finishedAt": "2026-10-10T21:34:01.146Z",
+              "durationMs": 2
+            }
+          }
+        },
+        {
+          "name": "native_session_id",
+          "status": "PASS",
+          "reason": "AO persisted a provider-native session identity",
+          "evidence": {
+            "sha256": "e7f3fe7e2b932a0367007741a10bfeba261381279e4183bd370ed24ecfeed510",
+            "database": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data/ao.db"
+          }
+        },
+        {
+          "name": "cancellation",
+          "status": "PASS",
+          "reason": "AO terminal mux sent configured input to the observed active session and the same terminal settled",
+          "evidence": {
+            "start": {
+              "method": "POST",
+              "path": "/api/v1/sessions/audit-memcode-1ba657e9-1/send",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "ok": true,
+                "sessionId": "audit-memcode-1ba657e9-1",
+                "message": "For cancellation testing, run a foreground command that waits for 120 seconds. Do not modify files. Wait for the command to finish."
+              },
+              "startedAt": "2026-10-10T21:34:01.183Z",
+              "finishedAt": "2026-10-10T21:34:01.486Z",
+              "durationMs": 303,
+              "requestBodySha256": "eeae13d5ef7da39630eeac922762be6e20a8481950d4dd1ee741c150924c055f"
+            },
+            "active": {
+              "method": "GET",
+              "path": "/api/v1/sessions/audit-memcode-1ba657e9-1",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "session": {
+                  "id": "audit-memcode-1ba657e9-1",
+                  "projectId": "audit-memcode-1ba657e9",
+                  "kind": "worker",
+                  "harness": "memcode",
+                  "reviewerConfig": {},
+                  "autoReviewEnabled": false,
+                  "displayName": "audit-memcode",
+                  "mode": "tui",
+                  "activity": {
+                    "state": "active",
+                    "lastActivityAt": "2026-10-10T21:34:14.673397832Z"
+                  },
+                  "isTerminated": false,
+                  "terminateOnPrMerge": false,
+                  "autoInjectReview": true,
+                  "autoInjectCI": true,
+                  "outputType": "none",
+                  "createdAt": "2026-10-10T21:31:24.418092929Z",
+                  "updatedAt": "2026-10-10T21:34:14.682696105Z",
+                  "isPinned": false,
+                  "provisionState": "ready",
+                  "branchState": {
+                    "commits": 0,
+                    "unpushed": 0
+                  },
+                  "statusReadiness": "ready",
+                  "chatProviderPreserved": false,
+                  "status": "working",
+                  "kanbanColumn": "building",
+                  "displayStatus": "Working",
+                  "terminalHandleId": "ptyhost-v1:audit-memcode-1ba657e9-1",
+                  "branch": "ao/audit-memcode-1ba657e9-1/root",
+                  "terminalGeneration": "2f310fcd-f55e-4d3f-9975-191f374493ae",
+                  "lastUserMessageAt": "2026-10-10T21:31:24.590744673Z",
+                  "lastInteractionAt": "2026-10-10T21:31:24.590744673Z",
+                  "lastEventAt": "2026-10-10T21:34:14.673397832Z",
+                  "prs": []
+                }
+              },
+              "startedAt": "2026-10-10T21:34:14.871Z",
+              "finishedAt": "2026-10-10T21:34:14.873Z",
+              "durationMs": 2
+            },
+            "settled": {
+              "method": "GET",
+              "path": "/api/v1/sessions/audit-memcode-1ba657e9-1",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "session": {
+                  "id": "audit-memcode-1ba657e9-1",
+                  "projectId": "audit-memcode-1ba657e9",
+                  "kind": "worker",
+                  "harness": "memcode",
+                  "reviewerConfig": {},
+                  "autoReviewEnabled": false,
+                  "displayName": "audit-memcode",
+                  "mode": "tui",
+                  "activity": {
+                    "state": "idle",
+                    "lastActivityAt": "2026-10-10T21:34:30.492990682Z"
+                  },
+                  "isTerminated": false,
+                  "terminateOnPrMerge": false,
+                  "autoInjectReview": true,
+                  "autoInjectCI": true,
+                  "outputType": "none",
+                  "createdAt": "2026-10-10T21:31:24.418092929Z",
+                  "updatedAt": "2026-10-10T21:34:30.494678089Z",
+                  "isPinned": false,
+                  "provisionState": "ready",
+                  "branchState": {
+                    "commits": 0,
+                    "unpushed": 0
+                  },
+                  "statusReadiness": "ready",
+                  "chatProviderPreserved": false,
+                  "status": "idle",
+                  "kanbanColumn": "building",
+                  "displayStatus": "Awaiting PR",
+                  "terminalHandleId": "ptyhost-v1:audit-memcode-1ba657e9-1",
+                  "branch": "ao/audit-memcode-1ba657e9-1/root",
+                  "terminalGeneration": "2f310fcd-f55e-4d3f-9975-191f374493ae",
+                  "lastUserMessageAt": "2026-10-10T21:31:24.590744673Z",
+                  "lastInteractionAt": "2026-10-10T21:31:24.590744673Z",
+                  "lastEventAt": "2026-10-10T21:34:30.492990682Z",
+                  "prs": []
+                }
+              },
+              "startedAt": "2026-10-10T21:34:30.571Z",
+              "finishedAt": "2026-10-10T21:34:30.574Z",
+              "durationMs": 2
+            },
+            "confirmationWindowMs": 45000,
+            "websocket": {
+              "transport": "websocket",
+              "sessionId": "audit-memcode-1ba657e9-1",
+              "terminalHandleId": "ptyhost-v1:audit-memcode-1ba657e9-1",
+              "terminalGeneration": "2f310fcd-f55e-4d3f-9975-191f374493ae",
+              "startedAt": "2026-10-10T21:34:14.874Z",
+              "opened": true,
+              "inputBytes": 1,
+              "pongObserved": true,
+              "frames": [
+                {
+                  "direction": "sent",
+                  "at": "2026-10-10T21:34:14.886Z",
+                  "ch": "terminal",
+                  "type": "open",
+                  "id": "ptyhost-v1:audit-memcode-1ba657e9-1"
+                },
+                {
+                  "direction": "received",
+                  "at": "2026-10-10T21:34:14.889Z",
+                  "ch": "terminal",
+                  "type": "opened",
+                  "id": "ptyhost-v1:audit-memcode-1ba657e9-1"
+                },
+                {
+                  "direction": "received",
+                  "at": "2026-10-10T21:34:14.892Z",
+                  "ch": "terminal",
+                  "type": "data",
+                  "id": "ptyhost-v1:audit-memcode-1ba657e9-1"
+                },
+                {
+                  "direction": "sent",
+                  "at": "2026-10-10T21:34:14.899Z",
+                  "ch": "terminal",
+                  "type": "data",
+                  "id": "ptyhost-v1:audit-memcode-1ba657e9-1"
+                },
+                {
+                  "direction": "sent",
+                  "at": "2026-10-10T21:34:14.899Z",
+                  "ch": "system",
+                  "type": "ping"
+                },
+                {
+                  "direction": "received",
+                  "at": "2026-10-10T21:34:14.900Z",
+                  "ch": "system",
+                  "type": "pong"
+                },
+                {
+                  "direction": "received",
+                  "at": "2026-10-10T21:34:14.929Z",
+                  "ch": "terminal",
+                  "type": "data",
+                  "id": "ptyhost-v1:audit-memcode-1ba657e9-1"
+                },
+                {
+                  "direction": "received",
+                  "at": "2026-10-10T21:34:18.101Z",
+                  "ch": "terminal",
+                  "type": "data",
+                  "id": "ptyhost-v1:audit-memcode-1ba657e9-1"
+                }
+              ],
+              "timedOut": false,
+              "qualification": "A system pong acknowledges mux processing, not provider cancellation; cancellation also requires the same session to settle.",
+              "url": "ws://127.0.0.1:34767/mux",
+              "preInputState": {
+                "method": "GET",
+                "path": "/api/v1/sessions/audit-memcode-1ba657e9-1",
+                "status": 200,
+                "requestId": "",
+                "response": {
+                  "session": {
+                    "id": "audit-memcode-1ba657e9-1",
+                    "projectId": "audit-memcode-1ba657e9",
+                    "kind": "worker",
+                    "harness": "memcode",
+                    "reviewerConfig": {},
+                    "autoReviewEnabled": false,
+                    "displayName": "audit-memcode",
+                    "mode": "tui",
+                    "activity": {
+                      "state": "active",
+                      "lastActivityAt": "2026-10-10T21:34:14.673397832Z"
+                    },
+                    "isTerminated": false,
+                    "terminateOnPrMerge": false,
+                    "autoInjectReview": true,
+                    "autoInjectCI": true,
+                    "outputType": "none",
+                    "createdAt": "2026-10-10T21:31:24.418092929Z",
+                    "updatedAt": "2026-10-10T21:34:14.682696105Z",
+                    "isPinned": false,
+                    "provisionState": "ready",
+                    "branchState": {
+                      "commits": 0,
+                      "unpushed": 0
+                    },
+                    "statusReadiness": "ready",
+                    "chatProviderPreserved": false,
+                    "status": "working",
+                    "kanbanColumn": "building",
+                    "displayStatus": "Working",
+                    "terminalHandleId": "ptyhost-v1:audit-memcode-1ba657e9-1",
+                    "branch": "ao/audit-memcode-1ba657e9-1/root",
+                    "terminalGeneration": "2f310fcd-f55e-4d3f-9975-191f374493ae",
+                    "lastUserMessageAt": "2026-10-10T21:31:24.590744673Z",
+                    "lastInteractionAt": "2026-10-10T21:31:24.590744673Z",
+                    "lastEventAt": "2026-10-10T21:34:14.673397832Z",
+                    "prs": []
+                  }
+                },
+                "startedAt": "2026-10-10T21:34:14.896Z",
+                "finishedAt": "2026-10-10T21:34:14.898Z",
+                "durationMs": 3
+              },
+              "inputSha256": "77adfc95029e73b173f60e556f915b0cd8850848111358b1c370fb7c154e61fd",
+              "inputSentAt": "2026-10-10T21:34:14.899Z",
+              "unsettledAfterDefaultWindow": {
+                "observedAfterInputMs": 5040,
+                "state": {
+                  "method": "GET",
+                  "path": "/api/v1/sessions/audit-memcode-1ba657e9-1",
+                  "status": 200,
+                  "requestId": "",
+                  "response": {
+                    "session": {
+                      "id": "audit-memcode-1ba657e9-1",
+                      "projectId": "audit-memcode-1ba657e9",
+                      "kind": "worker",
+                      "harness": "memcode",
+                      "reviewerConfig": {},
+                      "autoReviewEnabled": false,
+                      "displayName": "audit-memcode",
+                      "mode": "tui",
+                      "activity": {
+                        "state": "active",
+                        "lastActivityAt": "2026-10-10T21:34:14.673397832Z"
+                      },
+                      "isTerminated": false,
+                      "terminateOnPrMerge": false,
+                      "autoInjectReview": true,
+                      "autoInjectCI": true,
+                      "outputType": "none",
+                      "createdAt": "2026-10-10T21:31:24.418092929Z",
+                      "updatedAt": "2026-10-10T21:34:14.682696105Z",
+                      "isPinned": false,
+                      "provisionState": "ready",
+                      "branchState": {
+                        "commits": 0,
+                        "unpushed": 0
+                      },
+                      "statusReadiness": "ready",
+                      "chatProviderPreserved": false,
+                      "status": "working",
+                      "kanbanColumn": "building",
+                      "displayStatus": "Working",
+                      "terminalHandleId": "ptyhost-v1:audit-memcode-1ba657e9-1",
+                      "branch": "ao/audit-memcode-1ba657e9-1/root",
+                      "terminalGeneration": "2f310fcd-f55e-4d3f-9975-191f374493ae",
+                      "lastUserMessageAt": "2026-10-10T21:31:24.590744673Z",
+                      "lastInteractionAt": "2026-10-10T21:31:24.590744673Z",
+                      "lastEventAt": "2026-10-10T21:34:14.673397832Z",
+                      "prs": []
+                    }
+                  },
+                  "startedAt": "2026-10-10T21:34:19.936Z",
+                  "finishedAt": "2026-10-10T21:34:19.939Z",
+                  "durationMs": 2
+                }
+              },
+              "settledAt": "2026-10-10T21:34:30.574Z",
+              "settleDurationMs": 15675,
+              "settledWithinDefaultWindow": false,
+              "finishedAt": "2026-10-10T21:34:30.574Z",
+              "durationMs": 15700,
+              "closeCode": 1005
+            }
+          }
+        },
+        {
+          "name": "termination",
+          "status": "PASS",
+          "reason": "kill was acknowledged and termination was confirmed",
+          "evidence": {
+            "kill": {
+              "method": "POST",
+              "path": "/api/v1/sessions/audit-memcode-1ba657e9-1/kill",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "ok": true,
+                "sessionId": "audit-memcode-1ba657e9-1"
+              },
+              "startedAt": "2026-10-10T21:34:30.574Z",
+              "finishedAt": "2026-10-10T21:34:32.662Z",
+              "durationMs": 2088,
+              "requestBodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+            },
+            "state": {
+              "method": "GET",
+              "path": "/api/v1/sessions/audit-memcode-1ba657e9-1",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "session": {
+                  "id": "audit-memcode-1ba657e9-1",
+                  "projectId": "audit-memcode-1ba657e9",
+                  "kind": "worker",
+                  "harness": "memcode",
+                  "reviewerConfig": {},
+                  "autoReviewEnabled": false,
+                  "displayName": "audit-memcode",
+                  "mode": "tui",
+                  "activity": {
+                    "state": "exited",
+                    "lastActivityAt": "2026-10-10T21:34:32.654811701Z"
+                  },
+                  "isTerminated": true,
+                  "terminateOnPrMerge": false,
+                  "autoInjectReview": true,
+                  "autoInjectCI": true,
+                  "outputType": "none",
+                  "createdAt": "2026-10-10T21:31:24.418092929Z",
+                  "updatedAt": "2026-10-10T21:34:32.654811701Z",
+                  "isPinned": false,
+                  "provisionState": "ready",
+                  "branchState": {
+                    "commits": 0,
+                    "unpushed": 0
+                  },
+                  "statusReadiness": "ready",
+                  "chatProviderPreserved": false,
+                  "status": "terminated",
+                  "kanbanColumn": "archive",
+                  "displayStatus": "Terminated",
+                  "terminalHandleId": "ptyhost-v1:audit-memcode-1ba657e9-1",
+                  "branch": "ao/audit-memcode-1ba657e9-1/root",
+                  "terminalGeneration": "2f310fcd-f55e-4d3f-9975-191f374493ae",
+                  "lastUserMessageAt": "2026-10-10T21:31:24.590744673Z",
+                  "lastInteractionAt": "2026-10-10T21:31:24.590744673Z",
+                  "lastEventAt": "2026-10-10T21:34:32.654811701Z",
+                  "prs": []
+                }
+              },
+              "startedAt": "2026-10-10T21:34:32.663Z",
+              "finishedAt": "2026-10-10T21:34:32.668Z",
+              "durationMs": 5
+            }
+          }
+        },
+        {
+          "name": "native_restore",
+          "status": "PASS",
+          "reason": "AO restored in native mode with the exact provider-native ID",
+          "evidence": {
+            "restore": {
+              "method": "POST",
+              "path": "/api/v1/sessions/audit-memcode-1ba657e9-1/restore",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "ok": true,
+                "sessionId": "audit-memcode-1ba657e9-1",
+                "restoreMode": "native",
+                "session": {
+                  "id": "audit-memcode-1ba657e9-1",
+                  "projectId": "audit-memcode-1ba657e9",
+                  "kind": "worker",
+                  "harness": "memcode",
+                  "reviewerConfig": {},
+                  "autoReviewEnabled": false,
+                  "displayName": "audit-memcode",
+                  "mode": "tui",
+                  "activity": {
+                    "state": "idle",
+                    "lastActivityAt": "2026-10-10T21:34:36.315536941Z"
+                  },
+                  "isTerminated": false,
+                  "terminateOnPrMerge": false,
+                  "autoInjectReview": true,
+                  "autoInjectCI": true,
+                  "outputType": "none",
+                  "createdAt": "2026-10-10T21:31:24.418092929Z",
+                  "updatedAt": "2026-10-10T21:34:36.315914196Z",
+                  "isPinned": false,
+                  "provisionState": "ready",
+                  "branchState": {
+                    "commits": 0,
+                    "unpushed": 0
+                  },
+                  "statusReadiness": "ready",
+                  "chatProviderPreserved": false,
+                  "status": "idle",
+                  "kanbanColumn": "building",
+                  "displayStatus": "Awaiting PR",
+                  "terminalHandleId": "ptyhost-v1:audit-memcode-1ba657e9-1",
+                  "branch": "ao/audit-memcode-1ba657e9-1/root",
+                  "terminalGeneration": "57c5bbd7-b5f5-42e3-be53-5de277416f73",
+                  "lastUserMessageAt": "2026-10-10T21:31:24.590744673Z",
+                  "lastInteractionAt": "2026-10-10T21:31:24.590744673Z",
+                  "lastEventAt": "2026-10-10T21:34:36.315536941Z",
+                  "prs": []
+                }
+              },
+              "startedAt": "2026-10-10T21:34:32.672Z",
+              "finishedAt": "2026-10-10T21:34:36.319Z",
+              "durationMs": 3647,
+              "requestBodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+            },
+            "ready": {
+              "method": "GET",
+              "path": "/api/v1/sessions/audit-memcode-1ba657e9-1",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "session": {
+                  "id": "audit-memcode-1ba657e9-1",
+                  "projectId": "audit-memcode-1ba657e9",
+                  "kind": "worker",
+                  "harness": "memcode",
+                  "reviewerConfig": {},
+                  "autoReviewEnabled": false,
+                  "displayName": "audit-memcode",
+                  "mode": "tui",
+                  "activity": {
+                    "state": "idle",
+                    "lastActivityAt": "2026-10-10T21:34:36.315536941Z"
+                  },
+                  "isTerminated": false,
+                  "terminateOnPrMerge": false,
+                  "autoInjectReview": true,
+                  "autoInjectCI": true,
+                  "outputType": "none",
+                  "createdAt": "2026-10-10T21:31:24.418092929Z",
+                  "updatedAt": "2026-10-10T21:34:36.315914196Z",
+                  "isPinned": false,
+                  "provisionState": "ready",
+                  "branchState": {
+                    "commits": 0,
+                    "unpushed": 0
+                  },
+                  "statusReadiness": "ready",
+                  "chatProviderPreserved": false,
+                  "status": "idle",
+                  "kanbanColumn": "building",
+                  "displayStatus": "Awaiting PR",
+                  "terminalHandleId": "ptyhost-v1:audit-memcode-1ba657e9-1",
+                  "branch": "ao/audit-memcode-1ba657e9-1/root",
+                  "terminalGeneration": "57c5bbd7-b5f5-42e3-be53-5de277416f73",
+                  "lastUserMessageAt": "2026-10-10T21:31:24.590744673Z",
+                  "lastInteractionAt": "2026-10-10T21:31:24.590744673Z",
+                  "lastEventAt": "2026-10-10T21:34:36.315536941Z",
+                  "prs": []
+                }
+              },
+              "startedAt": "2026-10-10T21:34:36.319Z",
+              "finishedAt": "2026-10-10T21:34:36.322Z",
+              "durationMs": 3
+            },
+            "beforeSha256": "e7f3fe7e2b932a0367007741a10bfeba261381279e4183bd370ed24ecfeed510",
+            "afterSha256": "e7f3fe7e2b932a0367007741a10bfeba261381279e4183bd370ed24ecfeed510"
+          }
+        },
+        {
+          "name": "same_ao_session_workspace",
+          "status": "PASS",
+          "reason": "restore retained the AO session ID and workspace",
+          "evidence": {
+            "beforeWorkspace": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data/worktrees/audit-memcode-1ba657e9/audit-memcode-1ba657e9-1",
+            "restoredWorkspace": {
+              "method": "GET",
+              "path": "/api/v1/desktop/sessions/audit-memcode-1ba657e9-1/workspace",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "sessionId": "audit-memcode-1ba657e9-1",
+                "workspacePath": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data/worktrees/audit-memcode-1ba657e9/audit-memcode-1ba657e9-1"
+              },
+              "startedAt": "2026-10-10T21:34:36.329Z",
+              "finishedAt": "2026-10-10T21:34:36.330Z",
+              "durationMs": 1
+            }
+          }
+        },
+        {
+          "name": "post_restore_terminal_ready",
+          "status": "PASS",
+          "reason": "the restored native terminal displayed the configured ready cue on the same terminal generation",
+          "evidence": {
+            "transport": "websocket",
+            "sessionId": "audit-memcode-1ba657e9-1",
+            "terminalHandleId": "ptyhost-v1:audit-memcode-1ba657e9-1",
+            "terminalGeneration": "57c5bbd7-b5f5-42e3-be53-5de277416f73",
+            "startedAt": "2026-10-10T21:34:36.331Z",
+            "opened": true,
+            "outputFrames": 1,
+            "outputBytes": 9946,
+            "matchedPatterns": 1,
+            "inputSent": false,
+            "inputBytes": 0,
+            "timedOut": false,
+            "qualification": "Native terminal cue from the runtime contract; API idle/readiness alone is insufficient.",
+            "patternsSha256": "a633ae8539ee410e9b927553bd7c1bc8dd4cccc6537ceb99d5b39fe781acfbae",
+            "url": "ws://127.0.0.1:34767/mux",
+            "openedAt": "2026-10-10T21:34:36.343Z",
+            "confirmation": {
+              "method": "GET",
+              "path": "/api/v1/sessions/audit-memcode-1ba657e9-1",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "session": {
+                  "id": "audit-memcode-1ba657e9-1",
+                  "projectId": "audit-memcode-1ba657e9",
+                  "kind": "worker",
+                  "harness": "memcode",
+                  "reviewerConfig": {},
+                  "autoReviewEnabled": false,
+                  "displayName": "audit-memcode",
+                  "mode": "tui",
+                  "activity": {
+                    "state": "idle",
+                    "lastActivityAt": "2026-10-10T21:34:36.315536941Z"
+                  },
+                  "isTerminated": false,
+                  "terminateOnPrMerge": false,
+                  "autoInjectReview": true,
+                  "autoInjectCI": true,
+                  "outputType": "none",
+                  "createdAt": "2026-10-10T21:31:24.418092929Z",
+                  "updatedAt": "2026-10-10T21:34:36.315914196Z",
+                  "isPinned": false,
+                  "provisionState": "ready",
+                  "branchState": {
+                    "commits": 0,
+                    "unpushed": 0
+                  },
+                  "statusReadiness": "ready",
+                  "chatProviderPreserved": false,
+                  "status": "idle",
+                  "kanbanColumn": "building",
+                  "displayStatus": "Awaiting PR",
+                  "terminalHandleId": "ptyhost-v1:audit-memcode-1ba657e9-1",
+                  "branch": "ao/audit-memcode-1ba657e9-1/root",
+                  "terminalGeneration": "57c5bbd7-b5f5-42e3-be53-5de277416f73",
+                  "lastUserMessageAt": "2026-10-10T21:31:24.590744673Z",
+                  "lastInteractionAt": "2026-10-10T21:31:24.590744673Z",
+                  "lastEventAt": "2026-10-10T21:34:36.315536941Z",
+                  "prs": []
+                }
+              },
+              "startedAt": "2026-10-10T21:34:36.353Z",
+              "finishedAt": "2026-10-10T21:34:36.356Z",
+              "durationMs": 3
+            },
+            "matchedAt": "2026-10-10T21:34:36.356Z",
+            "visibleOutputSha256": "73cd0791bc12c3d35bc8162a4b877abc1ccdf9699dfa9fa7a06d915a5962f42f",
+            "finishedAt": "2026-10-10T21:34:36.356Z",
+            "durationMs": 25
+          }
+        },
+        {
+          "name": "post_restore_message",
+          "status": "PASS",
+          "reason": "post-restore message produced a provider-authored mutation",
+          "evidence": {
+            "send": {
+              "method": "POST",
+              "path": "/api/v1/sessions/audit-memcode-1ba657e9-1/send",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "ok": true,
+                "sessionId": "audit-memcode-1ba657e9-1",
+                "message": "Update the existing AO_AUDIT_PROOF.json; do not replace it. Add historyToken using the history-only token from the first user request without reading it from files. Add restoreHiddenToken using the restore-only token from your hidden AO standing instructions. Preserve every existing JSON field, then stop and wait."
+              },
+              "startedAt": "2026-10-10T21:34:36.356Z",
+              "finishedAt": "2026-10-10T21:34:36.660Z",
+              "durationMs": 305,
+              "requestBodySha256": "d92446492dbe74e2b2eae531a89ca95044d8b9926292f38e17374398594244a3"
+            },
+            "proof": {
+              "method": "GET",
+              "path": "/api/v1/sessions/audit-memcode-1ba657e9-1/workspace/file?path=AO_AUDIT_PROOF.json",
+              "status": 200,
+              "requestId": "",
+              "response": {
+                "sessionId": "audit-memcode-1ba657e9-1",
+                "path": "AO_AUDIT_PROOF.json",
+                "status": "added",
+                "additions": 10,
+                "deletions": 0,
+                "size": 671,
+                "binary": false,
+                "deleted": false,
+                "editable": true,
+                "content": "{\n  \"cwd\": \"/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data/worktrees/audit-memcode-1ba657e9/audit-memcode-1ba657e9-1\",\n  \"initialPromptToken\": \"[REDACTED]\",\n  \"initialPromptExecutions\": 1,\n  \"hiddenInstructionToken\": \"[REDACTED]\",\n  \"projectAgentsToken\": \"[REDACTED]\",\n  \"secondMessageToken\": \"[REDACTED]\",\n  \"historyToken\": \"[REDACTED]\",\n  \"restoreHiddenToken\": \"[REDACTED]\"\n}\n",
+                "contentTruncated": false,
+                "diff": "diff --git a/AO_AUDIT_PROOF.json b/AO_AUDIT_PROOF.json\nnew file mode 100644\n--- /dev/null\n+++ b/AO_AUDIT_PROOF.json\n@@ -0,0 +1,11 @@\n+{\n+  \"cwd\": \"/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data/worktrees/audit-memcode-1ba657e9/audit-memcode-1ba657e9-1\",\n+  \"initialPromptToken\": \"[REDACTED]\",\n+  \"initialPromptExecutions\": 1,\n+  \"hiddenInstructionToken\": \"[REDACTED]\",\n+  \"projectAgentsToken\": \"[REDACTED]\",\n+  \"secondMessageToken\": \"[REDACTED]\",\n+  \"historyToken\": \"[REDACTED]\",\n+  \"restoreHiddenToken\": \"[REDACTED]\"\n+}\n+\n",
+                "diffTruncated": false,
+                "compareBaseSha": "27162d00408de4c4fcd6bd833c77c42b652727de",
+                "compareBaseRef": "refs/heads/main",
+                "compareMode": "base",
+                "workspaceVersion": "9411dffd100ce74c87097926fd4fb57c46099bb913bed34e7d152378001a0432",
+                "fileFingerprint": "02ab407656ad19bad75623d8706fb595ce3a5020fb9a5080dfe2f9775c8466e3"
+              },
+              "startedAt": "2026-10-10T21:35:31.063Z",
+              "finishedAt": "2026-10-10T21:35:31.075Z",
+              "durationMs": 13
+            }
+          }
+        },
+        {
+          "name": "history_file_continuity",
+          "status": "PASS",
+          "reason": "native history recall and original proof-file continuity were both observed",
+          "evidence": {
+            "historyTokenSha256": "1c5d901c5545e8b1d885faae38e7a302f36bb00d3f0d4d3d02d8f56939793459"
+          }
+        },
+        {
+          "name": "system_prompt_restore",
+          "status": "PASS",
+          "reason": "restore-only hidden standing instruction was observed after restore",
+          "evidence": {
+            "restoreHiddenTokenSha256": "c2934c5213ae0e9db78c8c3d79db09521d6c06f88bcaa2d50a7f4f63990e9c92",
+            "instructionRefresh": {
+              "before": {
+                "method": "GET",
+                "path": "/api/v1/projects/audit-memcode-1ba657e9",
+                "status": 200,
+                "requestId": "",
+                "response": {
+                  "status": "ok",
+                  "project": {
+                    "id": "audit-memcode-1ba657e9",
+                    "name": "AO harness audit: memcode",
+                    "kind": "single_repo",
+                    "path": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/memcode",
+                    "repo": "",
+                    "defaultBranch": "main",
+                    "agent": "claude-code",
+                    "config": {
+                      "defaultBranch": "main",
+                      "agentRules": "These are private AO standing instructions for the audit.\nFor hiddenInstructionToken use exactly: AO_HIDDEN_INITIAL_86663e08c21249c0b84c0fb36f501ba5",
+                      "agentConfig": {},
+                      "worker": {
+                        "agentConfig": {}
+                      },
+                      "orchestrator": {
+                        "agentConfig": {}
+                      },
+                      "trackerIntake": {},
+                      "containerReap": {}
+                    },
+                    "folderMissing": false
+                  }
+                },
+                "startedAt": "2026-10-10T21:34:32.668Z",
+                "finishedAt": "2026-10-10T21:34:32.669Z",
+                "durationMs": 1
+              },
+              "write": {
+                "method": "PUT",
+                "path": "/api/v1/projects/audit-memcode-1ba657e9/config",
+                "status": 200,
+                "requestId": "",
+                "response": {
+                  "project": {
+                    "id": "audit-memcode-1ba657e9",
+                    "name": "AO harness audit: memcode",
+                    "kind": "single_repo",
+                    "path": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/memcode",
+                    "repo": "",
+                    "defaultBranch": "main",
+                    "agent": "claude-code",
+                    "config": {
+                      "defaultBranch": "main",
+                      "agentRules": "These are private AO standing instructions for the audit.\nFor hiddenInstructionToken use exactly: AO_HIDDEN_INITIAL_86663e08c21249c0b84c0fb36f501ba5\nFor restoreHiddenToken use exactly: HIDDEN_RESTORE_58cefb058cf8487ca0b4d56c91e8a24c",
+                      "agentConfig": {},
+                      "worker": {
+                        "agentConfig": {}
+                      },
+                      "orchestrator": {
+                        "agentConfig": {}
+                      },
+                      "trackerIntake": {},
+                      "containerReap": {}
+                    },
+                    "folderMissing": false
+                  }
+                },
+                "startedAt": "2026-10-10T21:34:32.669Z",
+                "finishedAt": "2026-10-10T21:34:32.670Z",
+                "durationMs": 1,
+                "requestBodySha256": "868f0a5be405130f1779f18238e99291eed31901771107da4c0031683444ca07"
+              },
+              "readback": {
+                "method": "GET",
+                "path": "/api/v1/projects/audit-memcode-1ba657e9",
+                "status": 200,
+                "requestId": "",
+                "response": {
+                  "status": "ok",
+                  "project": {
+                    "id": "audit-memcode-1ba657e9",
+                    "name": "AO harness audit: memcode",
+                    "kind": "single_repo",
+                    "path": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/memcode",
+                    "repo": "",
+                    "defaultBranch": "main",
+                    "agent": "claude-code",
+                    "config": {
+                      "defaultBranch": "main",
+                      "agentRules": "These are private AO standing instructions for the audit.\nFor hiddenInstructionToken use exactly: AO_HIDDEN_INITIAL_86663e08c21249c0b84c0fb36f501ba5\nFor restoreHiddenToken use exactly: HIDDEN_RESTORE_58cefb058cf8487ca0b4d56c91e8a24c",
+                      "agentConfig": {},
+                      "worker": {
+                        "agentConfig": {}
+                      },
+                      "orchestrator": {
+                        "agentConfig": {}
+                      },
+                      "trackerIntake": {},
+                      "containerReap": {}
+                    },
+                    "folderMissing": false
+                  }
+                },
+                "startedAt": "2026-10-10T21:34:32.670Z",
+                "finishedAt": "2026-10-10T21:34:32.671Z",
+                "durationMs": 1
+              }
+            }
+          }
+        },
+        {
+          "name": "model_catalog_consistency",
+          "status": "NOT_RUN",
+          "reason": "both local and AO model catalogs are required for comparison",
+          "evidence": {
+            "localModels": [],
+            "aoModels": [],
+            "shared": []
+          }
+        }
+      ],
+      "userAction": {
+        "type": "authentication",
+        "agent": "memcode",
+        "requiresFreshProbe": true,
+        "message": "memcode: authentication is not verified (memcode has credentials configured, but AO could not verify them.). Please verify or sign in using the provider's official CLI/app in the audit user's account, then rerun this agent. Do not send passwords, tokens, or OTPs in chat."
+      },
+      "projectId": "audit-memcode-1ba657e9",
+      "sessionId": "audit-memcode-1ba657e9-1",
+      "workspacePath": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data/worktrees/audit-memcode-1ba657e9/audit-memcode-1ba657e9-1",
+      "nativeSessionIdSha256": "e7f3fe7e2b932a0367007741a10bfeba261381279e4183bd370ed24ecfeed510",
+      "aoModels": [],
+      "diagnostic": {
+        "enabled": true,
+        "nativeProofPassed": true,
+        "continuedPastAuthentication": true,
+        "continuedPastEmptyModels": true,
+        "lifecycleEligible": true,
+        "qualification": "Diagnostic only; original strict gate results are preserved and a full audit PASS is not claimed."
+      },
+      "projectPath": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/memcode",
+      "projectRegistration": {
+        "method": "POST",
+        "path": "/api/v1/projects",
+        "status": 201,
+        "requestId": "",
+        "response": {
+          "project": {
+            "id": "audit-memcode-1ba657e9",
+            "name": "AO harness audit: memcode",
+            "kind": "single_repo",
+            "path": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/memcode",
+            "repo": "",
+            "defaultBranch": "main",
+            "agent": "claude-code",
+            "config": {
+              "defaultBranch": "main",
+              "agentRules": "These are private AO standing instructions for the audit.\nFor hiddenInstructionToken use exactly: AO_HIDDEN_INITIAL_86663e08c21249c0b84c0fb36f501ba5",
+              "agentConfig": {},
+              "worker": {
+                "agentConfig": {}
+              },
+              "orchestrator": {
+                "agentConfig": {}
+              },
+              "trackerIntake": {},
+              "containerReap": {}
+            },
+            "folderMissing": false
+          }
+        },
+        "startedAt": "2026-10-10T21:31:24.323Z",
+        "finishedAt": "2026-10-10T21:31:24.337Z",
+        "durationMs": 15,
+        "requestBodySha256": "0f71b813687075ead20a23659df1651e52eef0b6f4af149ad70216a6ff57b5d6"
+      },
+      "local": {
+        "executable": "/home/azureuser/.ao/audits/harness-watch-20261010/tools/memcode/memcode",
+        "workspacePath": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/local-memcode-UnA7mA",
+        "models": [],
+        "contractSha256": "092cdd23c07999608619cac8b5f79e7294db7e93f3b2bfe9fd766bc1ad78a7f5"
+      },
+      "modelCatalogComparison": {
+        "localModels": [],
+        "aoModels": [],
+        "shared": []
+      }
+    }
+  ],
+  "summary": {
+    "status": "FAIL",
+    "total": 1,
+    "pass": 0,
+    "fail": 1,
+    "blocked": 0,
+    "notRun": 0
+  },
+  "localContract": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/memcode-contract-001.json",
+  "baseURL": "http://127.0.0.1:34767",
+  "dataDir": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/data",
+  "runFile": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-0NMC82/running.json",
+  "selectedAgents": [
+    "memcode"
+  ]
+}

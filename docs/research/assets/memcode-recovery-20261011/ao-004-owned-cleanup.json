@@ -1,0 +1,40 @@
+{
+  "utc": "2026-10-10T22:23:25.903690+00:00",
+  "ownedSessions": [
+    {
+      "session": "audit-memcode-21bee11c-1",
+      "terminated": true
+    },
+    {
+      "session": "audit-memcode-21bee11c-2",
+      "terminated": true
+    },
+    {
+      "session": "audit-memcode-21bee11c-3",
+      "terminated": true
+    },
+    {
+      "session": "audit-memcode-21bee11c-4",
+      "terminated": true
+    },
+    {
+      "session": "audit-memcode-21bee11c-5",
+      "terminated": true
+    }
+  ],
+  "daemonPID": 810376,
+  "daemonBinarySha256": "b07471106c3d27a9043ea9297e9e5384a10482035b6ce40aaa5a96017a572b9f",
+  "daemonGone": true,
+  "runFileRemoved": true,
+  "electronPID": 810283,
+  "ownedCmdlineChildDataDirVerified": true,
+  "killAndShutdownHttpReturnedWithoutError": true,
+  "receiptGap": "Final HTTP calls returned successfully but their numeric statuses were not persisted: post-shutdown Electron environment assertion failed because AO_DATA_DIR was absent. Durable all-session termination/daemon absence/runfile removal and exact GUI child-data ownership subsequently verified. No blanket status receipt inferred.",
+  "finalControlIdentity": {
+    "utc": "2026-10-10T22:19:57.523255+00:00",
+    "session": "audit-memcode-21bee11c-1",
+    "nativeDigest": "592d5f9268d6a16d0ae0cc6c39190324b0914ce73c9e6495fb4b93ddb1b3453f",
+    "generation": "445cabf9-4e81-45a7-a816-0e2335f1bd35",
+    "status": "idle"
+  }
+}

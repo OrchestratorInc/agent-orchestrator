@@ -1,0 +1,9 @@
+{
+  "originalVerdict": "FAIL",
+  "ownedGroupReaping": "PASS 253ms, exact PID/start identities disappeared",
+  "noLateArtifact": "PASS 32sec",
+  "controlIsolation": "PASS",
+  "settleWithinChosen15Sec": "FAIL",
+  "laterAt32Sec": "same native/generation idle observed",
+  "nextAttempt": "new basename; use already qualified memcode audit45sec confirmation window; preserve original report and no runner changes"
+}

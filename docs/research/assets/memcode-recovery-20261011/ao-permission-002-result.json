@@ -1,0 +1,57 @@
+{
+  "utc": "2026-10-10T22:06:03.060348+00:00",
+  "source": "35a8a3d5debc3e02ae10c59d8dd6775b62b1a8cb",
+  "result": "PASS",
+  "pending": {
+    "session": "audit-memcode-21bee11c-2",
+    "generation": "486bbc2b-262a-4d30-aeab-1a32b5929a13",
+    "nativeDigest": "02152774702bdb79bcc52f8e13a96dc46c6b9dc07d76dcb9d6ad75775dfb387d",
+    "state": "blocked",
+    "terminated": false,
+    "permissions": "default"
+  },
+  "changedSelection": {
+    "session": "audit-memcode-21bee11c-2",
+    "generation": "486bbc2b-262a-4d30-aeab-1a32b5929a13",
+    "nativeDigest": "02152774702bdb79bcc52f8e13a96dc46c6b9dc07d76dcb9d6ad75775dfb387d",
+    "state": "blocked",
+    "terminated": false,
+    "permissions": "default"
+  },
+  "ordinarySend": {
+    "httpStatus": 409,
+    "response": {
+      "error": "conflict",
+      "code": "SESSION_AWAITING_DECISION",
+      "message": "Session is paused on a permission decision; answer it in the session terminal first",
+      "requestId": "vps-linux/V5MO62ANPf-000400",
+      "reporting_owner": "http"
+    }
+  },
+  "oneTimeNativeApproval": true,
+  "proof": "approved",
+  "settled": {
+    "session": "audit-memcode-21bee11c-2",
+    "generation": "486bbc2b-262a-4d30-aeab-1a32b5929a13",
+    "nativeDigest": "02152774702bdb79bcc52f8e13a96dc46c6b9dc07d76dcb9d6ad75775dfb387d",
+    "state": "idle",
+    "terminated": false,
+    "permissions": "default"
+  },
+  "controlBefore": {
+    "session": "audit-memcode-21bee11c-1",
+    "generation": "445cabf9-4e81-45a7-a816-0e2335f1bd35",
+    "nativeDigest": "592d5f9268d6a16d0ae0cc6c39190324b0914ce73c9e6495fb4b93ddb1b3453f",
+    "state": "idle",
+    "terminated": false,
+    "permissions": "bypass-permissions"
+  },
+  "controlAfter": {
+    "session": "audit-memcode-21bee11c-1",
+    "generation": "445cabf9-4e81-45a7-a816-0e2335f1bd35",
+    "nativeDigest": "592d5f9268d6a16d0ae0cc6c39190324b0914ce73c9e6495fb4b93ddb1b3453f",
+    "state": "idle",
+    "terminated": false,
+    "permissions": "bypass-permissions"
+  }
+}
