@@ -257,14 +257,12 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
 	case TargetZCode:
-		// ZCode is distributed by Z.ai directly — desktop app or the CLI
-		// release package from the official open repo (github.com/zai-org/ZCode).
-		// There is no official npm package (the npm names are unrelated
-		// placeholders / community clients), so AO surfaces a manual plan
-		// pointing at the official docs instead of a package install.
+		// The official desktop release bundles only the protocol runtime, not
+		// the interactive TUI. The TUI currently requires a source checkout;
+		// there is no official published npm package or standalone CLI asset.
 		plans = []Plan{manualPlan(
 			target,
-			"ZCode is distributed by Z.ai: install the desktop app from https://zcode.z.ai or the CLI from the official repo releases (github.com/zai-org/ZCode), which provides the `zcode` binary (TUI; `zcode --web`).",
+			"Build the interactive CLI from the official source at https://github.com/zai-org/ZCode/tree/v3.14.3/apps/zcode-cli and expose it as `zcode` on PATH. The desktop release does not include the TUI, and similarly named npm packages are not official ZCode distributions.",
 			agentDocumentationURLs[target],
 		)}
 	default:

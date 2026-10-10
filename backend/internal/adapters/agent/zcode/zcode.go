@@ -2,8 +2,8 @@
 //
 // ZCode is Z.AI's official coding agent (binary "zcode", official open repo
 // github.com/zai-org/ZCode — source for the Agent CLI and runtime, Apache-2.0;
-// distributed via the desktop app at zcode.z.ai and the repo's CLI release
-// packages). With no arguments it opens an interactive TUI, which is how AO
+// its interactive CLI currently requires a source build, because desktop
+// release bundles omit the TUI). With no arguments it opens an interactive TUI, which is how AO
 // launches it; the initial task is delivered through the terminal after the
 // TUI is ready because both --prompt and -p/--print run a single headless
 // turn and exit, and a bare positional argument is parsed as a subcommand.
@@ -38,10 +38,10 @@ var zcodeBinarySpec = binaryutil.BinarySpec{
 	Names:     []string{"zcode"},
 	WinNames:  []string{"zcode.cmd", "zcode.exe", "zcode"},
 	UnixPaths: []string{"/usr/local/bin/zcode", "/opt/homebrew/bin/zcode"},
-	// ZCode is distributed by Z.ai (official open repo github.com/zai-org/ZCode:
-	// CLI release package + desktop app; no official npm package). It is a
+	// ZCode's interactive CLI is built from the official source repository
+	// github.com/zai-org/ZCode; there is no official npm package. It is a
 	// Node-based binary, so version-manager shims (nvm/Volta/fnm) and the
-	// Node-managed home paths remain valid resolution targets for a manually installed official CLI.
+	// Node-managed home paths remain valid resolution targets for a manually built CLI.
 	UnixHomePaths: binaryutil.NodeManagedUnixHomePaths("zcode"),
 	NodeManaged:   true,
 	WinPaths: []binaryutil.WinPath{
