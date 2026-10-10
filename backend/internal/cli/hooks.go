@@ -20,6 +20,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
@@ -586,8 +587,20 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		// without a piped payload can't block on EOF.
 		return nil
 	}
+	if agent == "memcode" && event == "session-start" {
+		if err := memcode.EmitStartWitness(c.deps.Out); err != nil {
+			c.reportHookFailure(agent, event, sessionID, err)
+			return nil
+		}
+		if os.Getenv("AO_MEMCODE_INTERACTIVE_RESTORE") == "1" {
+			return nil
+		}
+	}
+	if agent == "memcode" && event == "session-end" {
+		return nil
+	}
 	var payload []byte
-	if hookReadsStdin(agent, event) {
+	if agent == "memcode" || hookReadsStdin(agent, event) {
 		var err error
 		payload, err = io.ReadAll(c.deps.In)
 		if err != nil {

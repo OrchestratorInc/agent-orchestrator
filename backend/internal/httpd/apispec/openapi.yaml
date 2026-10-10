@@ -14947,6 +14947,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - memcode
           - fake
           type: string
         approvalMode:
@@ -15644,6 +15645,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - memcode
           - cloudflared
           type: string
         updatedAt:
@@ -18801,6 +18803,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - memcode
           type: string
         issueId:
           type: string

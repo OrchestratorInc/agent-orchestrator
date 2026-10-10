@@ -3432,9 +3432,19 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
 	}
 	var argv []string
+	var initialization ports.NativeRestoreInitialization
 	var delivery ports.PromptDeliveryStrategy
 	var mode RestoreMode
-	if forceFresh {
+	if restorer, ok := agent.(ports.AgentInteractiveNativeRestorer); ok && !forceFresh {
+		initialization, err = restorer.PrepareNativeRestore(ctx, ports.RestoreConfig{Session: ports.SessionRef{ID: string(rec.ID), WorkspacePath: ws.Path, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID}}, DataDir: m.dataDir, Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile})
+		if err == nil {
+			argv = initialization.Argv()
+			for key, value := range initialization.LaunchEnv() {
+				env[key] = value
+			}
+			delivery, mode = ports.PromptDeliveryInCommand, RestoreModeNative
+		}
+	} else if forceFresh {
 		argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
 			systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true)
 	} else {
@@ -3534,13 +3544,21 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	// still require current-generation identity proof from their hooks.
 	bindNativeIdentity := mode == RestoreModeNative &&
 		(rec.Harness == domain.HarnessCodex || rec.Harness == domain.HarnessClaudeCode || rec.Harness == domain.HarnessAgy)
-	if (bindNativeIdentity || (requireNativeHistory && !forceFresh)) && strings.TrimSpace(metadata.AgentSessionID) != "" {
+	if initialization == nil && (bindNativeIdentity || (requireNativeHistory && !forceFresh)) && strings.TrimSpace(metadata.AgentSessionID) != "" {
 		metadata.AgentSessionIDLaunchID = launchID
 	}
 	if err := m.lcm.MarkSpawned(ctx, rec.ID, metadata); err != nil {
 		m.destroySpawnRuntimeAfterFailure(ctx, handle)
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, fmt.Errorf("%s %s: completed: %w", operation, rec.ID, err)
+	}
+	if initialization != nil {
+		if err := m.initializeNativeRestore(ctx, rec, handle, launchID, initialization); err != nil {
+			cleanupCtx, cancel := spawnRollbackContext(ctx)
+			cleanupErr := m.rollbackNativeInitialization(cleanupCtx, rec, handle, launchID)
+			cancel()
+			return RestoreResult{}, fmt.Errorf("%s %s: native initialization: %w", operation, rec.ID, errors.Join(err, cleanupErr))
+		}
 	}
 	if delivery == ports.PromptDeliveryAfterStart && afterStartPrompt != "" {
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, rec.ID, afterStartPrompt); err != nil {
@@ -3766,6 +3784,12 @@ func (m *Manager) reconcileLive(ctx context.Context, rec domain.SessionRecord) e
 				return fmt.Errorf("reconcile %s: probe: %w", rec.ID, err)
 			}
 			if alive {
+				agent, agentFound := m.agents.Agent(rec.Harness)
+				if agentFound {
+					if _, interactive := agent.(ports.AgentInteractiveNativeRestorer); interactive && rec.Metadata.AgentSessionIDLaunchID != rec.Metadata.RuntimeLaunchID {
+						return errors.Join(errors.New("unverified interactive native startup cannot be adopted"), m.rollbackNativeInitialization(ctx, rec, handle, rec.Metadata.RuntimeLaunchID))
+					}
+				}
 				return nil // adopt: the session survived the crash.
 			}
 		}
