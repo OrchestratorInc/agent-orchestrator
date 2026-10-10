@@ -1,0 +1,14 @@
+{
+  "utc": "2026-10-10T21:43:03.062295+00:00",
+  "result": "FAIL",
+  "reason": "Real native approval card visible but AO remains active; old idle scrollback suppresses current decision detection. Do not test ordinary send against unsafe state. Owned session killed without approval; fixes queued.",
+  "source": "77c36a288be84379511b67fc9a8ea26ac4c1475d",
+  "session": "audit-memcode-1ba657e9-2",
+  "generation": "8b1bcc69-167e-464a-845b-9f818d0736cd",
+  "nativeDigest": "ee58a06af237f37af4e8adc1053cb5cb415268fbb92e5e3a3b53ba409ba79ca4",
+  "activity": {
+    "state": "active",
+    "lastActivityAt": "2026-10-10T21:41:22.235705532Z"
+  },
+  "pngSha256": "3203b6042d9c54c6b5830767567c3985b295b6ee4bb59335ddde2fb7c87d414d"
+}

@@ -1,0 +1,10 @@
+{
+  "utc": "2026-10-10T22:21:32.762305+00:00",
+  "auditDeclaredPID": 808572,
+  "desktopDaemonPID": 810376,
+  "desktopDaemonStartedAt": "2026-10-10T22:04:03.396326033Z",
+  "sameBinarySha256": "b07471106c3d27a9043ea9297e9e5384a10482035b6ce40aaa5a96017a572b9f",
+  "sameDataDirAndRunFileVerified": true,
+  "sameLoopbackPort": 35049,
+  "note": "Electron launcher started a new supervisor daemon using same proof binary/data/runfile/port before capture; native identity/generation independently matched at capture and controls. Original audit subprocess PID not assumed current."
+}

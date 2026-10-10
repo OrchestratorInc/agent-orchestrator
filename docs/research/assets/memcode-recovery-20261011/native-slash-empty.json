@@ -1,0 +1,46 @@
+{
+  "scope": "native slash-resume safety control; no AO session or provider turn",
+  "started_at": "2026-10-10T20:31:01.243235+00:00",
+  "version": "0.38.1",
+  "binary_sha256": "89cd4375fce660d6c365163745ef83d78e76ad36e803fe4cebb952644fe4ddff",
+  "fixture": "synthetic two-message native transcript; no provider turns",
+  "gates": {
+    "preflight_control": "PASS",
+    "fresh_initialized_identity": "PASS",
+    "observed_native_control": "PASS",
+    "guarded_identity_decision": "PASS",
+    "seeded_transcript_unchanged": "PASS"
+  },
+  "screenshots": [],
+  "control": "empty",
+  "generation": "6df362e811c846c6b6137849da19730a",
+  "hook_contract": "local generation-scoped witness; no synchronous AO API callback",
+  "transcript_sha256_before": "1a5b0a1e5737b0e489dd3b0e62e372ce5aaa94f562212a494fb2df6a851f204b",
+  "preflight": {
+    "accepted": false,
+    "reason": "empty native transcript"
+  },
+  "fresh_readiness": {
+    "status": "PASS",
+    "native_id": ""
+  },
+  "fresh_witness": {
+    "generation": "6df362e811c846c6b6137849da19730a",
+    "sequence": 1,
+    "native_id": "sess_f72972fa"
+  },
+  "diagnostic_preflight_bypass": true,
+  "native_resume_command_sent": "/resume sess_a0a0a0a0",
+  "resumed_witness": {
+    "generation": "6df362e811c846c6b6137849da19730a",
+    "sequence": 2,
+    "native_id": "sess_4c779635"
+  },
+  "native_ready_with_exact_identity": false,
+  "guarded_restore_accepted": false,
+  "frontend_claimed_requested_id": true,
+  "transcript_sha256_after": "1a5b0a1e5737b0e489dd3b0e62e372ce5aaa94f562212a494fb2df6a851f204b",
+  "cleanup": "owned tmux server stopped",
+  "finished_at": "2026-10-10T20:31:01.985958+00:00",
+  "verdict": "PASS"
+}

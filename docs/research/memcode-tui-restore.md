@@ -1,3 +1,5 @@
+> Recovery: [actual registered AO TUI restore, decision protection, executing-shell controls and real Electron proof](memcode-tui-recovery-2026-10-11.md). Original native-only blockers below remain preserved.
+
 # memcode TUI: historical mount-time restore failure
 
 This section records the original unregistered candidate. Recovery now uses the supported interactive `/resume` route through strict AO initialization; the original mount-time failure below remains unchanged evidence.
