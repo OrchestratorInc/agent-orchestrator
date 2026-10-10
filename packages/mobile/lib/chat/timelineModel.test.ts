@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, conversationMarkers, countActivityNodes, groupConversationByTurn, latestFirstConversationGroups, readableConversationItems } from "./timelineModel";
+import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, conversationMarkers, countActivityNodes, groupConversationByTurn, latestFirstConversationGroups, partitionTurnItems, readableConversationItems } from "./timelineModel";
 import * as timelineModel from "./timelineModel";
-import type { ConversationActivity, ConversationSnapshot } from "./types";
+import type { ConversationActivity, ConversationItem, ConversationSnapshot, ConversationTurn } from "./types";
 
 function snapshot(): ConversationSnapshot {
 	return {
@@ -146,3 +146,51 @@ describe("mobile Chat timeline model", () => {
 function activity(kind: ConversationActivity["activityKind"], sequence: number, turnId?: string): ConversationActivity {
 	return { kind: "activity", id: `${kind}-${sequence}`, turnId, sequence, revision: 1, activityKind: kind, status: "completed", summary: kind, createdAt: "" };
 }
+
+describe("partitionTurnItems", () => {
+	const message = (id: string, sequence: number, role: "user" | "assistant", text: string): ConversationItem => ({ kind: "message", id, turnId: "t", sequence, revision: 1, role, origin: role === "user" ? "human" : "provider", text, streaming: false, createdAt: "" });
+	const activity = (id: string, sequence: number, extra: Partial<ConversationActivity> = {}): ConversationItem => ({ kind: "activity", id, turnId: "t", sequence, revision: 1, activityKind: "command", status: "completed", summary: id, createdAt: "", ...extra } as ConversationActivity);
+	const turn = (state: ConversationTurn["state"]): ConversationTurn => ({ id: "t", state, requestedAt: "2026-08-05T00:00:00Z" });
+	const ids = (items: ConversationItem[]) => items.map((item) => item.id);
+
+	it("folds work behind the final reply once the turn settles", () => {
+		const items = [message("u", 1, "user", "go"), activity("ls", 2), message("note", 3, "assistant", "Looking"), activity("cat", 4), message("done", 5, "assistant", "All done")];
+		const part = partitionTurnItems(items, turn("completed"))!;
+		expect(part.settled).toBe(true);
+		expect(ids(part.prompt)).toEqual(["u"]);
+		expect(ids(part.work)).toEqual(["ls", "note", "cat"]);
+		expect(ids(part.final)).toEqual(["done"]);
+	});
+
+	it("keeps a running turn's work inline with no final reply", () => {
+		const items = [message("u", 1, "user", "go"), activity("ls", 2), message("note", 3, "assistant", "Looking")];
+		const part = partitionTurnItems(items, turn("running"))!;
+		expect(part.settled).toBe(false);
+		expect(ids(part.work)).toEqual(["ls", "note"]);
+		expect(part.final).toEqual([]);
+	});
+
+	it("keeps errors and warnings out of the fold, and leaves later steers inside it", () => {
+		const items = [message("u", 1, "user", "go"), activity("ls", 2), activity("steer", 3, { activityKind: "system", detail: { event: "steer" } }), activity("err", 4, { activityKind: "error" }), activity("warn", 5, { activityKind: "system", detail: { event: "model.rerouted" } }), message("done", 6, "assistant", "ok")];
+		const part = partitionTurnItems(items, turn("failed"))!;
+		expect(ids(part.work)).toEqual(["ls", "steer"]);
+		expect(ids(part.notices)).toEqual(["err", "warn"]);
+	});
+
+	it("drops blank assistant messages so the accordion is never empty", () => {
+		const items = [message("u", 1, "user", "go"), message("blank", 2, "assistant", "  "), message("done", 4, "assistant", "ok")];
+		expect(partitionTurnItems(items, turn("completed"))!.work).toEqual([]);
+	});
+
+	it("folds approval and user-input cards with the work instead of dropping them", () => {
+		const approval = activity("ask", 2, { activityKind: "approval", status: "pending" });
+		const input = activity("question", 3, { activityKind: "user_input", status: "completed" });
+		const items = [message("u", 1, "user", "go"), approval, input, message("done", 4, "assistant", "ok")];
+		expect(partitionTurnItems(items, turn("interrupted"))!.work).toEqual([approval, input]);
+	});
+
+	it("leaves queued and unrecorded turns flat", () => {
+		expect(partitionTurnItems([message("u", 1, "user", "go")], turn("queued"))).toBeUndefined();
+		expect(partitionTurnItems([message("u", 1, "user", "go")], undefined)).toBeUndefined();
+	});
+});
