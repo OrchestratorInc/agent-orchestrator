@@ -25,11 +25,12 @@ var managedHooks = []struct{ event, eventArg string }{
 	{"PostToolUse", "post-tool-use"}, {"PostToolUseFailure", "post-tool-use-failure"}, {"Stop", "stop"},
 }
 
-// ZCode places matcher groups under hooks.events, unlike the flat hooks map
-// used by Claude. Preserve unrelated settings and native hooks at every level.
+// GetAgentHooks merges native hooks.events while preserving user settings.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	return updateHooks(ctx, cfg.WorkspacePath, true)
 }
+
+// UninstallHooks removes only AO commands from the workspace configuration.
 func (p *Plugin) UninstallHooks(ctx context.Context, workspace string) error {
 	return updateHooks(ctx, workspace, false)
 }

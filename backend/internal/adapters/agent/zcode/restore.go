@@ -32,7 +32,7 @@ func validateNativeRestore(ctx context.Context, workspace, id string, env map[st
 	if err != nil {
 		return fmt.Errorf("zcode: open native session store: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	var directory string
