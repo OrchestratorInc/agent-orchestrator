@@ -1004,8 +1004,9 @@ export function SessionPaneTab({
 	const connected = appearance === "connected";
 	// A session object supplies the tab presentation; refresh wiring explicitly
 	// opts the owning surface into rename so shared preview/cloud tabs cannot
-	// persist a title without updating their query cache.
-	const renameSession = onRenamed ? session : undefined;
+	// persist a title without updating their query cache. The project
+	// orchestrator's tab shows its role, not a name, so it is never renamable.
+	const renameSession = onRenamed && session && !isOrchestratorSession(session) ? session : undefined;
 	const rename = useSessionRename(renameSession, onRenamed);
 	const editingContent = renameSession && rename.isEditing ? (
 		<div className="flex h-full min-w-0 flex-1 items-center gap-2 px-2">

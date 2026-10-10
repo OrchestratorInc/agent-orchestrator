@@ -886,6 +886,11 @@ func (s *Service) SendWithOptions(ctx context.Context, id domain.SessionID, mess
 }
 
 // Rename updates the user-facing session display name.
+//
+// The project orchestrator is refused: the app labels it "Orchestrator" rather
+// than by its display name, so a rename looked like it did nothing. The check is
+// on the target's kind because the request carries no caller, which also stops
+// the orchestrator agent from renaming itself through `ao session rename`.
 func (s *Service) Rename(ctx context.Context, id domain.SessionID, displayName string) error {
 	displayName = strings.TrimSpace(displayName)
 	if displayName == "" {
@@ -894,19 +899,28 @@ func (s *Service) Rename(ctx context.Context, id domain.SessionID, displayName s
 	if utf8.RuneCountInString(displayName) > maxDisplayNameLen {
 		return apierr.Invalid("DISPLAY_NAME_TOO_LONG", fmt.Sprintf("Display name must be %d characters or fewer", maxDisplayNameLen), nil)
 	}
-	before, _, _ := s.store.GetSession(ctx, id)
-	renamed, err := s.store.RenameSession(ctx, id, displayName, time.Now().UTC())
+	rec, ok, err := s.store.GetSession(ctx, id)
+	if err != nil {
+		return fmt.Errorf("rename %s: %w", id, err)
+	}
+	if !ok {
+		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	if rec.Kind == domain.KindOrchestrator {
+		return apierr.Invalid("ORCHESTRATOR_RENAME_UNSUPPORTED", "The project orchestrator cannot be renamed", nil)
+	}
+	renamed, err := s.store.RenameSession(ctx, id, displayName, s.now())
 	if err != nil {
 		wrapped := fmt.Errorf("rename %s: %w", id, err)
-		s.recordRenamed(ctx, id, before.DisplayName, displayName, domain.ActivityStatusFailed, wrapped)
+		s.recordRenamed(ctx, id, rec.DisplayName, displayName, domain.ActivityStatusFailed, wrapped)
 		return wrapped
 	}
 	if !renamed {
 		missing := apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
-		s.recordRenamed(ctx, id, before.DisplayName, displayName, domain.ActivityStatusFailed, missing)
+		s.recordRenamed(ctx, id, rec.DisplayName, displayName, domain.ActivityStatusFailed, missing)
 		return missing
 	}
-	s.recordRenamed(ctx, id, before.DisplayName, displayName, domain.ActivityStatusCompleted, nil)
+	s.recordRenamed(ctx, id, rec.DisplayName, displayName, domain.ActivityStatusCompleted, nil)
 	return nil
 }
 
