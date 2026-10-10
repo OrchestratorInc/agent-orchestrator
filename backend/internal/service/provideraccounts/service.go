@@ -35,6 +35,7 @@ type Service struct {
 	starting sync.Mutex // one sign-in start or import at a time
 	memo     sync.Mutex // guards the fields below
 	usage    map[string]domain.ProviderAccountUsage
+	moved    map[string]domain.ProviderAccountMove // by the account the sessions left
 	failed   map[string]bool
 	stamps   map[string]time.Time
 	logins   map[string]*attempt
@@ -67,6 +68,11 @@ func (s *Service) Run(ctx context.Context, log *slog.Logger, migrate func(contex
 		}
 		if failing = err != nil; !failing && n == 0 {
 			_, _ = s.Accounts(ctx, true, false)
+		}
+		if !failing && n%6 == 5 { // once a minute
+			if err = s.switchOnLimit(ctx); err != nil && ctx.Err() == nil {
+				log.Warn("moving sessions off an account that reached its limit", "error", err)
+			}
 		}
 		// 20 seconds after start, then every 30, while sessions remain.
 		if !failing && migrate != nil && left > 0 && n%3 == 2 {
@@ -162,14 +168,20 @@ func (s *Service) push(ctx context.Context, st domain.ProviderAccountState) erro
 	}
 	routes := make([]ports.ProviderRoute, 0, len(st.Routes))
 	for _, r := range st.Routes {
-		token, err := s.ticket(r.SessionID)
+		hash, err := s.ticketHash(r.SessionID)
 		if err != nil {
 			return err
 		}
-		sum := sha256.Sum256([]byte(token))
-		routes = append(routes, ports.ProviderRoute{TicketHash: hex.EncodeToString(sum[:]), Provider: r.Provider, AuthID: auth[r.AccountID]})
+		routes = append(routes, ports.ProviderRoute{TicketHash: hash, Provider: r.Provider, AuthID: auth[r.AccountID]})
 	}
 	return s.helper.ApplyRoutes(ctx, routes, ids)
+}
+
+// ticketHash is the name the helper knows a session by.
+func (s *Service) ticketHash(id domain.SessionID) (string, error) {
+	token, err := s.ticket(id)
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:]), err
 }
 func (s *Service) ticket(id domain.SessionID) (string, error) {
 	key, err := s.helper.TicketKey()
@@ -363,7 +375,22 @@ func (s *Service) Act(ctx context.Context, id string, in ports.ProviderAccountAc
 			return "", nil
 		case "primary":
 			makeDefault(st, a.Provider, id)
+			a.Reserved = false
 			return "", s.usable(ctx, *st, id, a.Provider)
+		case "settings":
+			if in.Reserved != nil { // The default is what new sessions use, so it cannot be held back.
+				a.Reserved = *in.Reserved && st.Defaults[a.Provider] != id
+			}
+			if in.OnLimit != nil {
+				if j := index(*st, *in.OnLimit); *in.OnLimit != "" && (j < 0 || *in.OnLimit == id || st.Accounts[j].Provider != a.Provider) {
+					return "", ports.ErrProviderAccountIncompatible
+				}
+				a.OnLimit = *in.OnLimit
+			}
+			if in.WarnAt != nil {
+				a.WarnAt = min(max(*in.WarnAt, 0), 90)
+			}
+			return "", nil
 		case "assign-session":
 			j := routed(*st, domain.SessionID(in.SessionID))
 			if j < 0 {
@@ -403,8 +430,61 @@ func (s *Service) remove(ctx context.Context, st *domain.ProviderAccountState, i
 		st.Accounts[i].CredentialRef, st.Accounts[i].AuthID = "", ""
 	} else {
 		st.Accounts = slices.Delete(st.Accounts, i, i+1)
+		for j := range st.Accounts {
+			if st.Accounts[j].OnLimit == a.ID {
+				st.Accounts[j].OnLimit = ""
+			}
+		}
 	}
 	return a.CredentialRef, nil
+}
+
+// spent reports a reading whose general limit has nothing left.
+func spent(u domain.ProviderAccountUsage) bool {
+	return slices.ContainsFunc(u.Windows, func(w domain.ProviderAccountUsageWindow) bool { return w.Scope == "" && w.RemainingFraction <= 0 })
+}
+
+// switchOnLimit moves the sessions of each account that has run out onto the
+// account it names, when that one is signed in and has something left. A default
+// that ran out hands the default on as well, so new sessions follow.
+func (s *Service) switchOnLimit(ctx context.Context) error {
+	st, err := s.store.LoadProviderAccounts(ctx)
+	if err != nil || !slices.ContainsFunc(st.Accounts, func(a domain.ProviderAccount) bool { return a.OnLimit != "" }) {
+		return err
+	}
+	used := s.usages(ctx, st.Accounts)
+	var failures []error
+	for _, from := range st.Accounts {
+		next, known := used[from.OnLimit]
+		if from.OnLimit == "" || !spent(used[from.ID]) || !known || next.Status != "available" || spent(next) {
+			continue
+		}
+		sessions := 0
+		err := s.change(ctx, func(st *domain.ProviderAccountState) (string, error) {
+			to := index(*st, from.OnLimit)
+			if err := s.usable(ctx, *st, from.OnLimit, from.Provider); err != nil {
+				return "", err
+			}
+			for i, r := range st.Routes {
+				if r.AccountID == from.ID {
+					st.Routes[i].AccountID, sessions = from.OnLimit, sessions+1
+				}
+			}
+			if st.Defaults[from.Provider] == from.ID {
+				st.Defaults[from.Provider], st.Accounts[to].Reserved = from.OnLimit, false
+			}
+			return "", nil
+		})
+		if failures = append(failures, err); err == nil && sessions > 0 {
+			s.memo.Lock()
+			if s.moved == nil {
+				s.moved = map[string]domain.ProviderAccountMove{}
+			}
+			s.moved[from.ID] = domain.ProviderAccountMove{To: from.OnLimit, At: s.now().UTC().Format(time.RFC3339), Sessions: sessions}
+			s.memo.Unlock()
+		}
+	}
+	return errors.Join(failures...)
 }
 
 func (s *Service) helperAction(ctx context.Context, id, action string) (string, error) {
@@ -574,6 +654,10 @@ func (s *Service) usages(ctx context.Context, accounts []domain.ProviderAccount)
 			ttl := 2 * time.Minute
 			if err != nil {
 				usage.Status, ttl = "unavailable", 15*time.Second
+			} else if models, err := s.helper.AccountModels(ctx, a); err == nil {
+				for _, m := range models {
+					usage.Models = append(usage.Models, cmp.Or(m.Label, m.ID))
+				}
 			}
 			s.memo.Lock()
 			defer s.memo.Unlock()
@@ -607,16 +691,32 @@ func (s *Service) Accounts(ctx context.Context, usage, refresh bool) ([]domain.P
 	s.check(ctx, st, refresh)
 	views := make([]domain.ProviderAccountView, 0, len(st.Accounts))
 	for _, a := range st.Accounts {
-		login := cmp.Or(st.NativeImports[a.Provider].Email, "\x00") // This computer's own login, if it has one.
+		own := st.NativeImports[a.Provider] // This computer's own login, if it has one: the account it became, or one under the same email.
 		view := domain.ProviderAccountView{ID: a.ID, Provider: a.Provider, DisplayName: a.DisplayName, Email: a.Email, Kind: a.Kind,
-			Global:   st.NativeKeyImports[a.Provider].AccountID == a.ID || !a.APIKey() && strings.EqualFold(a.Email, login),
-			SignedIn: a.SignedIn() && !s.dead(a.AuthID, false), Primary: st.Defaults[a.Provider] == a.ID, Sessions: []string{}}
-		if reading, ok := used[a.ID]; ok {
+			Global:   st.NativeKeyImports[a.Provider].AccountID == a.ID || !a.APIKey() && (own.AccountID == a.ID || strings.EqualFold(a.Email, cmp.Or(own.Email, "\x00"))),
+			SignedIn: a.SignedIn() && !s.dead(a.AuthID, false), Primary: st.Defaults[a.Provider] == a.ID, Sessions: []string{},
+			Reserved: a.Reserved, OnLimit: a.OnLimit, WarnAt: a.WarnAt}
+		s.memo.Lock()
+		if move, ok := s.moved[a.ID]; ok {
+			view.Moved = &move
+		}
+		s.memo.Unlock()
+		reading, read := used[a.ID]
+		if read {
 			view.Usage = &reading
 		}
+		byHash := map[string]int64(nil)
+		if read && reading.Activity != nil { // The helper knows a session by its ticket; the page knows it by its id.
+			activity := *reading.Activity
+			byHash, activity.Sessions, reading.Activity = activity.Sessions, map[string]int64{}, &activity
+		}
 		for _, r := range st.Routes {
-			if r.AccountID == a.ID {
-				view.Sessions = append(view.Sessions, string(r.SessionID))
+			if r.AccountID != a.ID {
+				continue
+			}
+			view.Sessions = append(view.Sessions, string(r.SessionID))
+			if hash, err := s.ticketHash(r.SessionID); err == nil && byHash[hash] > 0 {
+				reading.Activity.Sessions[string(r.SessionID)] = byHash[hash]
 			}
 		}
 		views = append(views, view)

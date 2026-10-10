@@ -139,10 +139,14 @@ type ManagedProvider interface {
 
 // ProviderAccountAction is one change to an account, as the API receives it.
 type ProviderAccountAction struct {
-	Action               string `json:"action" enum:"primary,sign-out,remove,rename,resume,refresh-sign-in,reset,assign-session"`
+	Action               string `json:"action" enum:"primary,sign-out,remove,rename,resume,refresh-sign-in,reset,assign-session,settings"`
 	ReplacementPrimaryID string `json:"replacementPrimaryId,omitempty" description:"For sign-out and remove of the default account."`
 	DisplayName          string `json:"displayName,omitempty" description:"For rename."`
 	SessionID            string `json:"sessionId,omitempty" description:"For assign-session: the session to move onto this account."`
+	// For settings: each one given replaces what is stored.
+	Reserved *bool   `json:"reserved,omitempty" description:"Keep the account out of new sessions."`
+	OnLimit  *string `json:"onLimit,omitempty" description:"The account to move sessions to when a limit is reached; empty for none."`
+	WarnAt   *int    `json:"warnAt,omitempty" description:"Percent left at which to warn; zero for never."`
 }
 
 // ProviderAccountAdmin is what the HTTP API needs from Account Manager.

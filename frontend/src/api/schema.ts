@@ -4495,17 +4495,52 @@ export interface components {
         };
         ProviderAccountAction: {
             /** @enum {string} */
-            action: "primary" | "sign-out" | "remove" | "rename" | "resume" | "refresh-sign-in" | "reset" | "assign-session";
+            action: "primary" | "sign-out" | "remove" | "rename" | "resume" | "refresh-sign-in" | "reset" | "assign-session" | "settings";
             /** @description For rename. */
             displayName?: string;
+            /** @description The account to move sessions to when a limit is reached; empty for none. */
+            onLimit?: null | string;
             /** @description For sign-out and remove of the default account. */
             replacementPrimaryId?: string;
+            /** @description Keep the account out of new sessions. */
+            reserved?: null | boolean;
             /** @description For assign-session: the session to move onto this account. */
             sessionId?: string;
+            /** @description Percent left at which to warn; zero for never. */
+            warnAt?: null | number;
+        };
+        ProviderAccountActivity: {
+            /** @description The last fourteen days, oldest first. */
+            days?: components["schemas"]["ProviderAccountDay"][];
+            /** @description The last seven days by model, largest first. */
+            models?: components["schemas"]["ProviderAccountModelUse"][];
+            /** @description Today's tokens by session. */
+            sessions?: {
+                [key: string]: number;
+            };
+            /** @description The first day counted. */
+            since?: string;
+            /** Format: int64 */
+            today: number;
+            /**
+             * Format: int64
+             * @description Since the helper began counting.
+             */
+            total: number;
+            /**
+             * Format: int64
+             * @description The last seven days, today included.
+             */
+            week: number;
         };
         ProviderAccountCredits: {
             balance?: string;
             unlimited?: boolean;
+        };
+        ProviderAccountDay: {
+            date: string;
+            /** Format: int64 */
+            tokens: number;
         };
         ProviderAccountExtraUsage: {
             /**
@@ -4515,6 +4550,34 @@ export interface components {
             limitCents: number;
             /** Format: int64 */
             usedCents: number;
+        };
+        ProviderAccountFailure: {
+            at: string;
+            /** @enum {string} */
+            kind: "limit" | "sign-in" | "server" | "other";
+            status?: number;
+        };
+        ProviderAccountHealth: {
+            /** @description Failed requests in the last three hours by kind: limit, signIn, server, other. */
+            failures?: {
+                [key: string]: number;
+            };
+            /**
+             * Format: int64
+             * @description Typical time to the first token over the last hour.
+             */
+            firstWordMs?: number;
+            lastFailure?: components["schemas"]["ProviderAccountFailure"];
+        };
+        ProviderAccountModelUse: {
+            model: string;
+            /** Format: int64 */
+            tokens: number;
+        };
+        ProviderAccountMove: {
+            at: string;
+            sessions: number;
+            to: string;
         };
         ProviderAccountRequests: {
             /** Format: int64 */
@@ -4541,10 +4604,15 @@ export interface components {
             peakDaily?: null | number;
         };
         ProviderAccountUsage: {
+            /** @description What the account helper counted passing through this account. */
+            activity?: components["schemas"]["ProviderAccountActivity"];
             addedAt?: string;
             credits?: components["schemas"]["ProviderAccountCredits"];
             /** @description Present only when pay-as-you-go spending is switched on. */
             extraUsage?: components["schemas"]["ProviderAccountExtraUsage"];
+            health?: components["schemas"]["ProviderAccountHealth"];
+            /** @description The models this account can use. */
+            models?: string[];
             organization?: string;
             pausedReason?: string;
             /** @description Set while the account helper holds the account back after a provider refusal. */
@@ -4599,13 +4667,21 @@ export interface components {
             id: string;
             /** @enum {string} */
             kind?: "oauth" | "imported" | "api_key";
+            /** @description The last time a reached limit moved this account's sessions away. */
+            moved?: components["schemas"]["ProviderAccountMove"];
+            /** @description The account this one's sessions move to when a limit is reached. */
+            onLimit?: string;
             primary: boolean;
             /** @enum {string} */
             provider: "codex" | "claude";
+            /** @description Kept out of new sessions. */
+            reserved?: boolean;
             sessions: string[];
             /** @description False when signed out or when the provider no longer accepts the saved sign-in. */
             signedIn: boolean;
             usage?: components["schemas"]["ProviderAccountUsage"];
+            /** @description Percent left at which the user is warned. Absent for never. */
+            warnAt?: number;
         };
         ProviderAccountsResponse: {
             accounts: components["schemas"]["ProviderAccountView"][];

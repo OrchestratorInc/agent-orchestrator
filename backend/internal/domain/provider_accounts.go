@@ -30,6 +30,12 @@ type ProviderAccount struct {
 	Kind          string `json:"kind"`
 	CredentialRef string `json:"credential_ref"`
 	AuthID        string `json:"auth_id"`
+	// Reserved keeps the account out of new sessions. OnLimit names the account
+	// its sessions move to when a limit is reached, and WarnAt the percent left
+	// at which the user is warned; zero is never.
+	Reserved bool   `json:"reserved,omitempty"`
+	OnLimit  string `json:"on_limit,omitempty"`
+	WarnAt   int    `json:"warn_at,omitempty"`
 }
 
 // APIKey reports an account that is an API key and not a sign-in.
@@ -90,6 +96,17 @@ type ProviderAccountView struct {
 	// Sessions lists the sessions routed to this account.
 	Sessions []string              `json:"sessions"`
 	Usage    *ProviderAccountUsage `json:"usage,omitempty"`
+	Reserved bool                  `json:"reserved,omitempty" description:"Kept out of new sessions."`
+	OnLimit  string                `json:"onLimit,omitempty" description:"The account this one's sessions move to when a limit is reached."`
+	WarnAt   int                   `json:"warnAt,omitempty" description:"Percent left at which the user is warned. Absent for never."`
+	Moved    *ProviderAccountMove  `json:"moved,omitempty" description:"The last time a reached limit moved this account's sessions away."`
+}
+
+// ProviderAccountMove is one automatic move of an account's sessions.
+type ProviderAccountMove struct {
+	To       string `json:"to"`
+	At       string `json:"at"`
+	Sessions int    `json:"sessions"`
 }
 
 // ProviderAccountUsage is what the provider and the account helper report
@@ -115,6 +132,46 @@ type ProviderAccountUsage struct {
 	SignInEndsAt      string                       `json:"signInEndsAt,omitempty" description:"When a sign-in that has stopped renewing stops working, if known."`
 	Requests          []ProviderAccountRequests    `json:"requests,omitempty" description:"Requests in the last twenty ten-minute slices, oldest first."`
 	Tokens            *ProviderAccountTokens       `json:"tokens,omitempty"`
+	Activity          *ProviderAccountActivity     `json:"activity,omitempty" description:"What the account helper counted passing through this account."`
+	Health            *ProviderAccountHealth       `json:"health,omitempty"`
+	Models            []string                     `json:"models,omitempty" description:"The models this account can use."`
+}
+
+// ProviderAccountActivity is the account helper's own count of an account's tokens.
+type ProviderAccountActivity struct {
+	Today    int64                     `json:"today"`
+	Week     int64                     `json:"week" description:"The last seven days, today included."`
+	Total    int64                     `json:"total" description:"Since the helper began counting."`
+	Since    string                    `json:"since,omitempty" description:"The first day counted."`
+	Days     []ProviderAccountDay      `json:"days,omitempty" description:"The last fourteen days, oldest first."`
+	Models   []ProviderAccountModelUse `json:"models,omitempty" description:"The last seven days by model, largest first."`
+	Sessions map[string]int64          `json:"sessions,omitempty" description:"Today's tokens by session."`
+}
+
+// ProviderAccountDay is one day's tokens.
+type ProviderAccountDay struct {
+	Date   string `json:"date"`
+	Tokens int64  `json:"tokens"`
+}
+
+// ProviderAccountModelUse is one model's share of an account's tokens.
+type ProviderAccountModelUse struct {
+	Model  string `json:"model"`
+	Tokens int64  `json:"tokens"`
+}
+
+// ProviderAccountHealth is how an account's recent requests went.
+type ProviderAccountHealth struct {
+	LastFailure *ProviderAccountFailure `json:"lastFailure,omitempty"`
+	Failures    map[string]int64        `json:"failures,omitempty" description:"Failed requests in the last three hours by kind: limit, signIn, server, other."`
+	FirstWordMs int64                   `json:"firstWordMs,omitempty" description:"Typical time to the first token over the last hour."`
+}
+
+// ProviderAccountFailure is the last request a provider refused.
+type ProviderAccountFailure struct {
+	Kind   string `json:"kind" enum:"limit,sign-in,server,other"`
+	At     string `json:"at"`
+	Status int    `json:"status,omitempty"`
 }
 
 // ProviderAccountUsageWindow is one limit and how much of it is left.

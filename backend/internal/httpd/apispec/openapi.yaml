@@ -13229,18 +13229,72 @@ components:
           - refresh-sign-in
           - reset
           - assign-session
+          - settings
           type: string
         displayName:
           description: For rename.
           type: string
+        onLimit:
+          description: The account to move sessions to when a limit is reached; empty
+            for none.
+          type:
+          - "null"
+          - string
         replacementPrimaryId:
           description: For sign-out and remove of the default account.
           type: string
+        reserved:
+          description: Keep the account out of new sessions.
+          type:
+          - "null"
+          - boolean
         sessionId:
           description: 'For assign-session: the session to move onto this account.'
           type: string
+        warnAt:
+          description: Percent left at which to warn; zero for never.
+          type:
+          - "null"
+          - integer
       required:
       - action
+      type: object
+    ProviderAccountActivity:
+      properties:
+        days:
+          description: The last fourteen days, oldest first.
+          items:
+            $ref: '#/components/schemas/ProviderAccountDay'
+          type: array
+        models:
+          description: The last seven days by model, largest first.
+          items:
+            $ref: '#/components/schemas/ProviderAccountModelUse'
+          type: array
+        sessions:
+          additionalProperties:
+            format: int64
+            type: integer
+          description: Today's tokens by session.
+          type: object
+        since:
+          description: The first day counted.
+          type: string
+        today:
+          format: int64
+          type: integer
+        total:
+          description: Since the helper began counting.
+          format: int64
+          type: integer
+        week:
+          description: The last seven days, today included.
+          format: int64
+          type: integer
+      required:
+      - today
+      - week
+      - total
       type: object
     ProviderAccountCredits:
       properties:
@@ -13248,6 +13302,17 @@ components:
           type: string
         unlimited:
           type: boolean
+      type: object
+    ProviderAccountDay:
+      properties:
+        date:
+          type: string
+        tokens:
+          format: int64
+          type: integer
+      required:
+      - date
+      - tokens
       type: object
     ProviderAccountExtraUsage:
       properties:
@@ -13261,6 +13326,63 @@ components:
       required:
       - usedCents
       - limitCents
+      type: object
+    ProviderAccountFailure:
+      properties:
+        at:
+          type: string
+        kind:
+          enum:
+          - limit
+          - sign-in
+          - server
+          - other
+          type: string
+        status:
+          type: integer
+      required:
+      - kind
+      - at
+      type: object
+    ProviderAccountHealth:
+      properties:
+        failures:
+          additionalProperties:
+            format: int64
+            type: integer
+          description: 'Failed requests in the last three hours by kind: limit, signIn,
+            server, other.'
+          type: object
+        firstWordMs:
+          description: Typical time to the first token over the last hour.
+          format: int64
+          type: integer
+        lastFailure:
+          $ref: '#/components/schemas/ProviderAccountFailure'
+      type: object
+    ProviderAccountModelUse:
+      properties:
+        model:
+          type: string
+        tokens:
+          format: int64
+          type: integer
+      required:
+      - model
+      - tokens
+      type: object
+    ProviderAccountMove:
+      properties:
+        at:
+          type: string
+        sessions:
+          type: integer
+        to:
+          type: string
+      required:
+      - to
+      - at
+      - sessions
       type: object
     ProviderAccountRequests:
       properties:
@@ -13322,6 +13444,9 @@ components:
       type: object
     ProviderAccountUsage:
       properties:
+        activity:
+          $ref: '#/components/schemas/ProviderAccountActivity'
+          description: What the account helper counted passing through this account.
         addedAt:
           type: string
         credits:
@@ -13329,6 +13454,13 @@ components:
         extraUsage:
           $ref: '#/components/schemas/ProviderAccountExtraUsage'
           description: Present only when pay-as-you-go spending is switched on.
+        health:
+          $ref: '#/components/schemas/ProviderAccountHealth'
+        models:
+          description: The models this account can use.
+          items:
+            type: string
+          type: array
         organization:
           type: string
         pausedReason:
@@ -13435,6 +13567,13 @@ components:
           - imported
           - api_key
           type: string
+        moved:
+          $ref: '#/components/schemas/ProviderAccountMove'
+          description: The last time a reached limit moved this account's sessions
+            away.
+        onLimit:
+          description: The account this one's sessions move to when a limit is reached.
+          type: string
         primary:
           type: boolean
         provider:
@@ -13442,6 +13581,9 @@ components:
           - codex
           - claude
           type: string
+        reserved:
+          description: Kept out of new sessions.
+          type: boolean
         sessions:
           items:
             type: string
@@ -13452,6 +13594,9 @@ components:
           type: boolean
         usage:
           $ref: '#/components/schemas/ProviderAccountUsage'
+        warnAt:
+          description: Percent left at which the user is warned. Absent for never.
+          type: integer
       required:
       - id
       - provider
