@@ -543,7 +543,7 @@ type Manager struct {
 
 	terminalInputGateMu sync.Mutex
 	terminalInputGate   TerminalInputGate
-	// Moves onto Account Manager: free slots, sessions in flight, terminals left exited.
+	// Moves onto Account Manager: free slots, sessions in flight, sessions stopped and not yet started.
 	legacySlots                *semaphore.Weighted
 	legacyMoving, legacyExited sync.Map
 

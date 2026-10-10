@@ -82,6 +82,8 @@ type restartingLauncher struct {
 	busy     map[domain.SessionID]bool
 	restarts []domain.SessionID
 	wakeErr  error
+	// wakeStops is a start that got as far as taking the chat out of its sleep.
+	wakeStops bool
 }
 
 func (l *restartingLauncher) HasLiveChatController(id domain.SessionID) bool { return l.running[id] }
@@ -97,10 +99,14 @@ func (l *restartingLauncher) HibernateChatForRestart(_ context.Context, id domai
 }
 
 func (l *restartingLauncher) WakeChat(ctx context.Context, id domain.SessionID) error {
+	rec := l.store.sessions[id]
 	if l.wakeErr != nil {
+		if l.wakeStops {
+			rec.HibernatedAt = nil
+			l.store.sessions[id] = rec
+		}
 		return l.wakeErr
 	}
-	rec := l.store.sessions[id]
 	rec.HibernatedAt = nil
 	l.store.sessions[id], l.running[id] = rec, true
 	l.restarts = append(l.restarts, id)
@@ -164,6 +170,32 @@ func TestMigrateLegacySessionsLeavesAChatAsleepWhenItCannotBeStartedAgain(t *tes
 	// It is asleep now, with nothing left to stop. It is adopted when it wakes.
 	if remaining, err := m.MigrateLegacySessions(context.Background()); err != nil || remaining != 0 {
 		t.Fatalf("next pass: remaining=%d err=%v", remaining, err)
+	}
+}
+
+func TestALegacyChatWhoseStartFailedIsStartedAgainAtTheNextCheck(t *testing.T) {
+	failure := errors.New("provider did not start in time")
+	accounts := &accountRoutingFake{env: managedLaunch}
+	launcher := &restartingLauncher{recordingLauncher: &recordingLauncher{}, accounts: accounts, running: map[domain.SessionID]bool{"quiet": true}, wakeErr: failure, wakeStops: true}
+	m, st, _ := newChatManager(launcher)
+	launcher.store, m.accounts = st, accounts
+	rec := legacyChat("quiet")
+	rec.Activity.State = domain.ActivityIdle
+	st.sessions[rec.ID] = rec
+	if remaining, err := m.MigrateLegacySessions(context.Background()); !errors.Is(err, failure) || remaining != 1 {
+		t.Fatalf("remaining=%d err=%v", remaining, err)
+	}
+	// It is neither asleep nor running: nothing but this move would start it.
+	if remaining, err := m.MigrateLegacySessions(context.Background()); err != nil || remaining != 0 {
+		t.Fatalf("next check: remaining=%d err=%v", remaining, err)
+	}
+	if len(launcher.started) != 1 || launcher.started[0].SessionID != "quiet" {
+		t.Fatalf("started=%+v, want the chat started once more", launcher.started)
+	}
+	// Once it is up it is left alone.
+	launcher.running["quiet"], accounts.has = true, map[domain.SessionID]bool{"quiet": true}
+	if remaining, err := m.MigrateLegacySessions(context.Background()); err != nil || remaining != 0 || len(launcher.started) != 1 {
+		t.Fatalf("later check: remaining=%d err=%v started=%d", remaining, err, len(launcher.started))
 	}
 }
 

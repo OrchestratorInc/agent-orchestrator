@@ -164,10 +164,21 @@ func (m *Manager) moveLegacySession(ctx context.Context, id domain.SessionID) (b
 		_, err = m.ResumeAgentWithMode(ctx, id)
 		return err != nil, err
 	}
+	chatMode := domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat
+	if _, down := m.legacyExited.Load(id); down && chatMode {
+		// A chat this move stopped and could not start is started again at each check.
+		if !m.chat.HasLiveChatController(id) {
+			if _, err = m.ResumeAgentWithMode(ctx, id); err != nil {
+				return true, err
+			}
+		}
+		m.legacyExited.Delete(id)
+		return false, nil
+	}
 	if managed, err := m.accountManaged(ctx, id); err != nil || managed {
 		return err != nil, err
 	}
-	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+	if chatMode {
 		chat, ok := m.chat.(chatRestarter)
 		if !ok || !m.chat.HasLiveChatController(id) {
 			return true, nil
@@ -191,13 +202,14 @@ func (m *Manager) moveLegacySession(ctx context.Context, id domain.SessionID) (b
 }
 
 // restartLegacyChat restarts one chat if it is doing nothing, and reports
-// whether it now has an account. A failed start leaves it asleep.
+// whether it now has an account. A failed start is tried again at each check.
 func (m *Manager) restartLegacyChat(ctx context.Context, chat chatRestarter, id domain.SessionID) (bool, error) {
 	stop := func(ctx context.Context) (bool, error) { return chat.HibernateChatForRestart(ctx, id) }
 	if stopped, err := m.stopLegacySession(ctx, id, stop); err != nil || !stopped {
 		return false, err
 	}
 	if err := chat.WakeChat(ctx, id); err != nil {
+		m.legacyExited.Store(id, true)
 		return false, err
 	}
 	return m.accountManaged(ctx, id)
