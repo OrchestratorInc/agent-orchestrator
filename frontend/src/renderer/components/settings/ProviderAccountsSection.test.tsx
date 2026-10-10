@@ -60,7 +60,8 @@ function renderAccounts(cache = new QueryClient({ defaultOptions: { queries: { r
 const listItem = (account: ProviderAccount) => screen.getByTestId(`provider-account-${account.id}`);
 const detail = () => screen.getByTestId("provider-account-detail");
 const status = () => screen.findByRole("status");
-const addButtons = () => screen.getAllByRole("button", { name: "Add account" }) as HTMLButtonElement[];
+// One per provider, always the last row of its list.
+const addButtons = () => screen.getAllByRole("button", { name: /^New \w+ account/ }) as HTMLButtonElement[];
 const actions = (action: string) => mock.post.mock.calls.filter(([path, options]) => path === ACTIONS && options.body.action === action).map(([, options]) => [options.params.path.accountId, options.body]);
 async function start() {
 	const user = userEvent.setup();
@@ -339,7 +340,8 @@ describe("adding an account", () => {
 		const group = await startAdding(user, 0, "Browser");
 		expect(mock.post).toHaveBeenCalledWith(LOGIN, { body: { provider: "codex", mode: "browser" } });
 		expect(await within(group).findByText("Complete sign-in in your browser.")).toBeInTheDocument();
-		expect(addButtons().every(button => button.disabled)).toBe(true);
+		// The sign-in under way keeps its own row; no other can be started.
+		expect(addButtons().map(button => button.disabled)).toEqual([false, true]);
 		expect(mock.open).not.toHaveBeenCalled();
 		await user.click(within(group).getByRole("button", { name: "Copy link" }));
 		expect(mock.clipboard).toHaveBeenCalledWith("https://provider.test/login");
@@ -419,7 +421,8 @@ describe("a sign-in that is waiting", () => {
 		view.unmount();
 		renderAccounts(cache);
 		expect(screen.getByText("Complete sign-in in your browser.")).toBeInTheDocument();
-		expect(addButtons().every(button => button.disabled)).toBe(true);
+		// The sign-in under way keeps its own row; no other can be started.
+		expect(addButtons().map(button => button.disabled)).toEqual([false, true]);
 		// A cancellation that is refused keeps the attempt.
 		mock.remove.mockResolvedValueOnce({ error: { message: "Unable to cancel login. Try again." } });
 		await user.click(screen.getByRole("button", { name: "Cancel sign-in" }));

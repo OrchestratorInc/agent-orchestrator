@@ -230,46 +230,41 @@ export function ProviderAccountsSection({ titleHidden }: { titleHidden?: boolean
 	const newLoginProvider = signIn.waiting && !signIn.login?.accountId ? signIn.login?.provider : null;
 	return (
 		<SettingsSection title={t("providerAccounts.title")} sectionId="accountManager" titleHidden={titleHidden}>
-			<div className="@container mx-auto w-full max-w-[1280px]">
-				<div className="mb-3 flex min-h-8 items-center gap-2">
-					<h3 className="text-[15px] font-medium text-foreground">{t("providerAccounts.title")}</h3>
-					<span className="flex-1" />
-					{page.checkedAt ? <span className="text-xs text-muted-foreground">{t("providerAccounts.checkedAt", { when: formatAgo(page.checkedAt, i18n.language, t("time.justNow")) })}</span> : null}
-					<IconAction name={t("startup.checkAgain")} disabled={page.checking} onClick={() => void page.recheck()}><RefreshCw aria-hidden="true" className={cn("size-3.5", page.checking ? "animate-spin" : "")} /></IconAction>
-				</div>
-				{query.isLoading ? <p className="mb-3 text-xs text-muted-foreground">{t("providerAccounts.loading")}</p> : null}
-				{query.error ? <p role="alert" className="mb-3 flex items-center gap-2 text-xs text-destructive"><AlertCircle aria-hidden="true" className="size-3.5 shrink-0" />{query.error.message}</p> : null}
-				<div className="grid min-h-[640px] grid-cols-[288px_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card/45 @max-3xl:min-h-0 @max-3xl:grid-cols-1">
-					<nav aria-label={t("providerAccounts.title")} className="border-r border-border p-2 @max-3xl:border-b @max-3xl:border-r-0">
+			{/* The list and the detail sit on the page itself, one hairline between them; each scrolls on its own. */}
+			<div className="@container h-full overflow-y-auto">
+				<div className="grid h-full min-h-0 grid-cols-[288px_minmax(0,1fr)] @max-3xl:h-auto @max-3xl:grid-cols-1">
+					<nav aria-label={t("providerAccounts.title")} className="settings-thin-scrollbar min-h-0 overflow-y-auto border-r border-border px-2 pb-3 pt-1 @max-3xl:overflow-visible @max-3xl:border-b @max-3xl:border-r-0">
 						{PROVIDERS.map(({ id: provider, name }) => (
 							<section key={provider} data-testid={`provider-section-${provider}`}>
-								<div className="flex items-center justify-between pb-1 pl-3 pr-1.5 pt-3">
-									<h4 className="text-xs font-normal text-muted-foreground">{name}</h4>
-									<IconAction name={t("providerAccounts.addAccount")} icon={Plus} title={t("providerAccounts.addAccountTitle", { provider: name })} aria-expanded={adding === provider} disabled={busy} onClick={() => page.show(null, provider)} />
-								</div>
+								<h4 className="px-3 pb-1.5 pt-3 text-xs font-normal text-muted-foreground">{name}</h4>
 								<div className="flex flex-col gap-0.5">
 									{accounts.filter((account) => account.provider === provider).map((account) => <AccountListItem key={account.id} account={account} current={selected?.id === account.id} onSelect={() => page.show(account.id)} />)}
-									{adding === provider || newLoginProvider === provider ? (
-										<button type="button" aria-current={adding === provider ? "true" : undefined} className={cn("flex w-full items-center gap-3 rounded-[10px] px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring", adding === provider ? "bg-interactive-active" : "hover:bg-interactive-hover")} onClick={() => page.show(null, provider)}>
-											<span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-lg border border-dashed border-border text-muted-foreground"><Plus className="size-3.5" /></span>
-											<span className="min-w-0 flex-1">
-												<span className="block truncate text-sm font-medium text-foreground">{t("providerAccounts.newAccount", { provider: name })}</span>
-												<span className="mt-px block text-xs text-muted-foreground">{newLoginProvider === provider ? t("providerAccounts.signingIn") : t("providerAccounts.chooseSignIn")}</span>
-											</span>
-										</button>
-									) : null}
+									{/* Adding an account is always the last row of its provider; a sign-in under way keeps its own row open. */}
+									<button type="button" aria-current={adding === provider ? "true" : undefined} disabled={busy && adding !== provider && newLoginProvider !== provider} className={cn("flex w-full items-center gap-3 rounded-[10px] px-3 py-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50", adding === provider ? "bg-interactive-active" : "enabled:hover:bg-interactive-hover")} onClick={() => page.show(null, provider)}>
+										<span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-lg border border-dashed border-border text-muted-foreground"><Plus className="size-3.5" /></span>
+										<span className="min-w-0 flex-1">
+											<span className="block truncate text-sm font-medium text-foreground">{t("providerAccounts.newAccount", { provider: name })}</span>
+											<span className="mt-px block text-xs text-muted-foreground">{newLoginProvider === provider ? t("providerAccounts.signingIn") : t("providerAccounts.chooseSignIn")}</span>
+										</span>
+									</button>
 								</div>
 								{query.data && !accounts.some((account) => account.provider === provider && account.signedIn) ? (
 									<div className="px-3 pb-2 pt-1.5">
 										<p className="text-xs text-foreground">{t("providerAccounts.emptyAccounts", { provider: name })}</p>
 										<p className="mt-0.5 text-xs text-muted-foreground">{t("providerAccounts.managedNeedsLogin")}</p>
-										{adding === provider ? null : <Button size="sm" className="mt-2" disabled={busy} onClick={() => page.show(null, provider)}>{t("shell.signIn")}</Button>}
 									</div>
 								) : null}
 							</section>
 						))}
+						<div className="mt-3.5 flex min-h-8 items-center border-t border-border pl-3 pr-1.5 pt-2 text-xs text-muted-foreground">
+							<span className="min-w-0 flex-1 truncate">{page.checkedAt ? t("providerAccounts.checkedAt", { when: formatAgo(page.checkedAt, i18n.language, t("time.justNow")) }) : null}</span>
+							<IconAction name={t("startup.checkAgain")} disabled={page.checking} onClick={() => void page.recheck()}><RefreshCw aria-hidden="true" className={cn("size-3.5", page.checking ? "animate-spin" : "")} /></IconAction>
+						</div>
 					</nav>
-					<div className="min-w-0 px-7 pb-7 pt-6 @max-3xl:px-4">
+					<div className="settings-thin-scrollbar min-h-0 min-w-0 overflow-y-auto px-7 pb-8 pt-5 @max-3xl:overflow-visible @max-3xl:px-4">
+						<div className="max-w-[1040px]">
+						{query.isLoading ? <p className="mb-3 text-xs text-muted-foreground">{t("providerAccounts.loading")}</p> : null}
+						{query.error ? <p role="alert" className="mb-3 flex items-center gap-2 text-xs text-destructive"><AlertCircle aria-hidden="true" className="size-3.5 shrink-0" />{query.error.message}</p> : null}
 						{adding ? <AddAccountView key={adding} provider={adding} page={page} /> : null}
 						{selected ? <AccountDetail key={selected.id} account={selected} page={page} /> : null}
 						{!adding && !selected && query.data ? (
@@ -279,6 +274,7 @@ export function ProviderAccountsSection({ titleHidden }: { titleHidden?: boolean
 							</div>
 						) : null}
 						{page.message ? <p role="status" className="mt-3.5 text-xs text-muted-foreground">{page.message}</p> : null}
+						</div>
 					</div>
 				</div>
 			</div>
