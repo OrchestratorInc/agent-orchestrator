@@ -157,7 +157,8 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 	const count = account.sessions.length;
 	// An API key has no limits to report, but the helper still knows its activity.
 	const usage = account.usage?.status === "available" || apiKey ? account.usage : undefined;
-	const plan = usage?.plan ? [usage.plan.charAt(0).toUpperCase() + usage.plan.slice(1), usage.planTier].filter(Boolean).join(" ") : "";
+	const known = account.usage; // The plan is shown whenever it is known, even while the limits are not.
+	const plan = known?.plan ? [known.plan.charAt(0).toUpperCase() + known.plan.slice(1), known.planTier].filter(Boolean).join(" ") : "";
 	const others = page.accounts.filter((other) => other.provider === account.provider && other.signedIn && other.id !== account.id);
 	const currentDefault = page.accounts.find((other) => other.provider === account.provider && other.primary);
 	const offerFrom = page.moveOffer?.toId === account.id && account.primary ? page.accounts.find((other) => other.id === page.moveOffer?.fromId) : undefined;

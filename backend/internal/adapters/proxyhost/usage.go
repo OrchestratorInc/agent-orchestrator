@@ -134,7 +134,8 @@ func (c *Client) AccountUsage(ctx context.Context, a domain.ProviderAccount) (do
 	} else {
 		codexUsage(&usage, answers[0], answers[1], answers[2], time.Now())
 	}
-	if len(usage.Windows) == 0 && usage.Plan == "" {
+	// A Claude sign-in always has limits: none means its usage reading did not arrive, though its plan may have.
+	if len(usage.Windows) == 0 && (usage.Plan == "" || a.Provider == "claude") {
 		return usage, errors.New("the provider reported no usage")
 	}
 	usage.Status = "available"
@@ -238,6 +239,26 @@ func claudeUsage(u *domain.ProviderAccountUsage, doc, grants, profile any, now t
 			u.Windows = append(u.Windows, domain.ProviderAccountUsageWindow{Name: name, Scope: scope, DurationSeconds: seconds, RemainingFraction: 1 - used/100, ResetTime: text(limit, "resets_at")})
 		}
 	}
+	// The plan comes from the profile, so it is known even when the usage reading is not.
+	org := at(profile, "organization")
+	kind, name := text(org, "organization_type"), text(org, "name")
+	isMax, saysMax := at(profile, "account", "has_claude_max").(bool)
+	isPro, saysPro := at(profile, "account", "has_claude_pro").(bool)
+	switch {
+	case kind == "claude_team" && text(org, "subscription_status") == "active":
+		u.Plan = "team"
+	case isMax:
+		u.Plan = "max"
+	case isPro:
+		u.Plan = "pro"
+	case saysMax && saysPro:
+		u.Plan = "free"
+	}
+	u.PlanTier = planTier.FindString(text(org, "rate_limit_tier"))
+	// Only a shared organization is named: a personal one carries its owner's email.
+	if (kind == "claude_team" || kind == "claude_enterprise") && !strings.Contains(name, "@") {
+		u.Organization = name
+	}
 	add(fiveHours, "", "", at(doc, "five_hour"), "utilization")
 	add(week, "", "", at(doc, "seven_day"), "utilization")
 	if len(u.Windows) == 0 {
@@ -263,25 +284,6 @@ func claudeUsage(u *domain.ProviderAccountUsage, doc, grants, profile any, now t
 		used, _ := number(extra, "used_credits")
 		limit, _ := number(extra, "monthly_limit")
 		u.ExtraUsage = &domain.ProviderAccountExtraUsage{UsedCents: int64(max(used, 0)), LimitCents: int64(max(limit, 0))}
-	}
-	org := at(profile, "organization")
-	kind, name := text(org, "organization_type"), text(org, "name")
-	isMax, saysMax := at(profile, "account", "has_claude_max").(bool)
-	isPro, saysPro := at(profile, "account", "has_claude_pro").(bool)
-	switch {
-	case kind == "claude_team" && text(org, "subscription_status") == "active":
-		u.Plan = "team"
-	case isMax:
-		u.Plan = "max"
-	case isPro:
-		u.Plan = "pro"
-	case saysMax && saysPro:
-		u.Plan = "free"
-	}
-	u.PlanTier = planTier.FindString(text(org, "rate_limit_tier"))
-	// Only a shared organization is named: a personal one carries its owner's email.
-	if (kind == "claude_team" || kind == "claude_enterprise") && !strings.Contains(name, "@") {
-		u.Organization = name
 	}
 	status := at(grants, "cedar_ember")
 	if at(status, "eligible") != true {

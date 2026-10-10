@@ -652,15 +652,26 @@ func (s *Service) usages(ctx context.Context, accounts []domain.ProviderAccount)
 			defer cancel()
 			usage, err := s.helper.AccountUsage(ctx, a)
 			ttl := 2 * time.Minute
-			if err != nil {
-				usage.Status, ttl = "unavailable", 15*time.Second
-			} else if models, err := s.helper.AccountModels(ctx, a); err == nil {
-				for _, m := range models {
-					usage.Models = append(usage.Models, cmp.Or(m.Label, m.ID))
+			if err == nil {
+				if models, err := s.helper.AccountModels(ctx, a); err == nil {
+					for _, m := range models {
+						usage.Models = append(usage.Models, cmp.Or(m.Label, m.ID))
+					}
 				}
 			}
 			s.memo.Lock()
 			defer s.memo.Unlock()
+			last, good := s.usage[a.AuthID], "good "+a.AuthID
+			switch {
+			case err == nil:
+				s.stamps[good] = s.now()
+			case last.Status == "available" && s.now().Sub(s.stamps[good]) < 30*time.Minute:
+				// A provider that did not answer this time: its last reading stands for half an hour, with what the helper knows now.
+				last.Activity, last.Health, last.Requests = usage.Activity, usage.Health, usage.Requests
+				usage, ttl = last, time.Minute
+			default:
+				usage.Status, ttl = "unavailable", time.Minute
+			}
 			s.usage[a.AuthID], s.stamps["usage "+a.AuthID] = usage, s.now().Add(ttl)
 		})
 	}
