@@ -100,6 +100,8 @@ type CenterPaneProps = {
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** Stop forwarding the agent pane's keystrokes while its controller drains. */
 	agentInputDisabled?: boolean;
+	/** The agent terminal is coming up after an interface switch. */
+	terminalBooting?: boolean;
 	/** Reports attachment of the session's own agent terminal. */
 	onSessionTerminalAttached?: (attached: boolean) => void;
 };
@@ -175,6 +177,7 @@ export function CenterPane({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	agentInputDisabled = false,
+	terminalBooting = false,
 	onSessionTerminalAttached,
 }: CenterPaneProps) {
 	const { t } = useTranslation();
@@ -769,6 +772,7 @@ export function CenterPane({
 							focusRequested={target.kind !== "worker" || !workerInputDisabled}
 							isFullscreen={isFullscreen}
 							inputDisabled={workerInputDisabled}
+							booting={terminalBooting && target.kind === "worker"}
 							onChangeFontSize={updateFontSize}
 							onTerminalContentReadyChange={target.kind === "worker" && session?.cloud ? onSessionTerminalAttached : undefined}
 							onToggleFullscreen={toggleFullscreen}
@@ -1000,8 +1004,9 @@ export function SessionPaneTab({
 	const connected = appearance === "connected";
 	// A session object supplies the tab presentation; refresh wiring explicitly
 	// opts the owning surface into rename so shared preview/cloud tabs cannot
-	// persist a title without updating their query cache.
-	const renameSession = onRenamed ? session : undefined;
+	// persist a title without updating their query cache. The project
+	// orchestrator's tab shows its role, not a name, so it is never renamable.
+	const renameSession = onRenamed && session && !isOrchestratorSession(session) ? session : undefined;
 	const rename = useSessionRename(renameSession, onRenamed);
 	const editingContent = renameSession && rename.isEditing ? (
 		<div className="flex h-full min-w-0 flex-1 items-center gap-2 px-2">

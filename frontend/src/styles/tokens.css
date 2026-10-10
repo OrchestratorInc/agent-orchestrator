@@ -797,7 +797,7 @@
 	--color-text-agents-sheet-description: var(--muted-foreground);
 	--color-text-agents-sheet-label: var(--foreground);
 
-	--color-bg-settings-row: var(--card);
+	--color-bg-settings-row: transparent;
 	--color-bg-settings-menu: var(--popover);
 	--color-bg-settings-menu-selected: color-mix(in oklch, var(--popover) 96%, var(--foreground) 4%);
 	--color-bg-settings-dialog: var(--card);

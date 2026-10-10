@@ -875,14 +875,26 @@ describe("XtermTerminal", () => {
 		expect(container.querySelector(".terminal-scrollbar")).not.toBeNull();
 	});
 
-	it("fades the macOS scrollbar after scrolling goes idle", () => {
+	function renderScrollableMacTerminal() {
 		setNavigatorPlatform("MacIntel");
+		vi.useFakeTimers();
 		const { container } = render(<XtermTerminal theme="dark" />);
 		const scrollbar = container.querySelector<HTMLElement>(".terminal-scrollbar")!;
-		scrollbar.dataset.scrollable = "true";
-		vi.useFakeTimers();
+		Object.defineProperty(scrollbar, "clientHeight", { configurable: true, value: 400 });
+		state.lastTerminal!.buffer.active.baseY = 100;
+		// Settle mount-time frames and timers so the test starts idle.
+		act(() => vi.runOnlyPendingTimers());
+		// The scrollbar follows scrolling once per frame, not once per line feed.
+		const scroll = () => act(() => state.lastTerminal!.scrollListeners.forEach((listener) => listener()));
+		const nextFrame = () => act(() => vi.advanceTimersToNextFrame());
+		return { scrollbar, scroll, nextFrame };
+	}
 
-		act(() => state.lastTerminal!.scrollListeners.forEach((listener) => listener()));
+	it("fades the macOS scrollbar after scrolling goes idle", () => {
+		const { scrollbar, scroll, nextFrame } = renderScrollableMacTerminal();
+
+		scroll();
+		nextFrame();
 		expect(scrollbar.dataset.active).toBe("true");
 
 		act(() => vi.advanceTimersByTime(699));
@@ -894,21 +906,25 @@ describe("XtermTerminal", () => {
 	});
 
 	// Streaming output scrolls continuously; the scrollbar stays up until the
-	// last scroll goes idle, and per-scroll work stays cheap (one pending timer).
+	// last scroll goes idle, and per-scroll work stays cheap (one frame, then
+	// one pending timer).
 	it("keeps the macOS scrollbar up through continuous scrolling with one pending timer", () => {
-		setNavigatorPlatform("MacIntel");
-		const { container } = render(<XtermTerminal theme="dark" />);
-		const scrollbar = container.querySelector<HTMLElement>(".terminal-scrollbar")!;
-		scrollbar.dataset.scrollable = "true";
-		vi.useFakeTimers();
-		const scroll = () => act(() => state.lastTerminal!.scrollListeners.forEach((listener) => listener()));
+		const { scrollbar, scroll, nextFrame } = renderScrollableMacTerminal();
 
+		const idleTimers = vi.getTimerCount();
 		for (let i = 0; i < 50; i++) scroll();
-		expect(vi.getTimerCount()).toBe(1);
+		expect(vi.getTimerCount()).toBe(idleTimers + 1);
+		nextFrame();
+		expect(scrollbar.dataset.active).toBe("true");
+		for (let i = 0; i < 50; i++) scroll();
+		nextFrame();
+		expect(vi.getTimerCount()).toBe(idleTimers + 1);
 		act(() => vi.advanceTimersByTime(400));
 		scroll();
+		nextFrame();
 		act(() => vi.advanceTimersByTime(400));
 		scroll();
+		nextFrame();
 		act(() => vi.advanceTimersByTime(699));
 		expect(scrollbar.dataset.active).toBe("true");
 		act(() => vi.advanceTimersByTime(1));

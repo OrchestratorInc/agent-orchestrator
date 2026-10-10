@@ -1460,8 +1460,13 @@ const ProjectItem = memo(function ProjectItem({
 			if (canResumeOrchestrator && workspace.kind !== "cloud") {
 				setIsSpawning(true);
 				try {
-					await resumeOrchestrator(orchestrator.id);
+					// Start the resume, then open the chat while it runs; its
+					// composer shows the startup shimmer in the meantime.
+					const resume = resumeOrchestrator(orchestrator.id);
+					selection.goSession(workspace.id, orchestrator.id);
+					await resume;
 					await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+					return;
 				} catch (err) {
 					console.error("Failed to resume orchestrator:", err);
 					showGlobalToast(
@@ -1509,7 +1514,6 @@ const ProjectItem = memo(function ProjectItem({
 		}
 	};
 
-	// Projects without worker sessions open their orchestrator.
 	// Expanded + already on the project board → collapse. Expanded + on a
 	// session (orchestrator or worker) → board. Collapsed → expand + board.
 	// Do not treat orchestratorActive like the board: the project row is the
@@ -1518,10 +1522,6 @@ const ProjectItem = memo(function ProjectItem({
 		if (consumeDragClick(workspace.id)) return;
 		if (isStandalone) {
 			toggleDisclosure();
-			return;
-		}
-		if (workerSessions(workspace.sessions).length === 0) {
-			void openOrchestrator();
 			return;
 		}
 		if (!expanded) {

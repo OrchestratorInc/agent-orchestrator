@@ -3149,6 +3149,22 @@ html.sidebar-reordering * {
 	vertical-align: -0.06em;
 }
 
+.chat-transcript-reveal {
+	animation: chat-transcript-reveal 360ms ease-out both;
+}
+
+@keyframes chat-transcript-reveal {
+	from {
+		opacity: 0;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-transcript-reveal {
+		animation: none;
+	}
+}
+
 .chat-scroll-viewport {
 	scrollbar-width: none;
 	/* Spacer-driven prompt pinning fights the browser's own scroll anchoring. */

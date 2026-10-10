@@ -523,6 +523,7 @@ export function useSessionInterfaceTransition(
 		},
 		starting: startState.isPending,
 		startingPolicy: startState.pendingInput?.policy,
+		startingTarget: startState.pendingInput?.targetMode,
 		startError: startErrorSuperseded ? undefined : startState.error,
 		resetStartError: () => {
 			clearInterfaceTransitionMutationState(
