@@ -343,3 +343,35 @@ func TestRandomAccountJourneysKeepTheHelperAndTheStoreInStep(t *testing.T) {
 		}
 	}
 }
+
+func TestSyncRemovesALeftoverAPIKeyOnlyWhenNothingCouldBeHoldingIt(t *testing.T) {
+	key := func(index string) ports.VerifiedProviderLogin {
+		return ports.VerifiedProviderLogin{Provider: "codex", Email: "key " + index, Kind: "api_key", CredentialRef: "config-index:codex:" + index, AuthID: index + "-auth"}
+	}
+	leftover, mine := ports.ProviderCredential{Name: "config-index:codex:leftover", Provider: "codex"}, ports.ProviderCredential{Name: "config-index:codex:mine", Provider: "codex"}
+	for name, tc := range map[string]struct {
+		held    []ports.ProviderCredential
+		signIn  bool
+		deleted []string
+	}{
+		"a key no account names goes, the account's own key stays": {held: []ports.ProviderCredential{mine, leftover}, deleted: []string{leftover.Name}},
+		"nothing goes once a sign-in has begun":                    {held: []ports.ProviderCredential{mine, leftover}, signIn: true},
+		"nothing goes when the account's own key is not listed":    {held: []ports.ProviderCredential{leftover}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := setup(t)
+			if _, err := h.svc.record(h.ctx, "codex", key("mine"), ""); err != nil {
+				t.Fatal(err)
+			}
+			if tc.signIn {
+				if _, err := h.svc.StartLogin(h.ctx, ports.ProviderLoginRequest{Provider: "claude", Mode: "browser"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h.helper.held = tc.held
+			if err := h.svc.Sync(h.ctx); err != nil || !reflect.DeepEqual(h.helper.deleted, tc.deleted) {
+				t.Fatalf("err=%v deleted=%v, want %v", err, h.helper.deleted, tc.deleted)
+			}
+		})
+	}
+}

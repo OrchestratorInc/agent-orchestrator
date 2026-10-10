@@ -182,6 +182,22 @@ func TestAccountModelsKeepsReasoningLevelsAndOffersOnlyChatModels(t *testing.T) 
 	}
 }
 
+func TestCredentialsAlsoListsAPIKeysByTheirIndex(t *testing.T) {
+	c, _ := helperClient(t, func(request call) (int, string) {
+		switch request.Path {
+		case "/v0/management/codex-api-key":
+			return http.StatusOK, `{"codex-api-key":[{"api-key":"k1","auth-index":"abc"},{"api-key":"no-index-yet"}]}`
+		case "/v0/management/claude-api-key":
+			return http.StatusInternalServerError, ``
+		}
+		return http.StatusOK, `{"files":[]}`
+	})
+	credentials, err := c.Credentials(ctx)
+	if want := []ports.ProviderCredential{{Name: "config-index:codex:abc", Provider: "codex"}}; err != nil || !reflect.DeepEqual(credentials, want) {
+		t.Fatalf("credentials=%+v err=%v", credentials, err)
+	}
+}
+
 func TestCredentialsListsFileSignInsWithTheHelpersVerdict(t *testing.T) {
 	c, _ := helperClient(t, func(call) (int, string) {
 		return http.StatusOK, `{"files":[

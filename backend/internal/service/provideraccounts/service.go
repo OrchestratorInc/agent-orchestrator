@@ -129,12 +129,29 @@ func (s *Service) Sync(ctx context.Context) error {
 	if err = s.push(ctx, st); err != nil || !s.due("sweep", 10*time.Minute, false) {
 		return err
 	}
-	for _, c := range s.credentials(ctx) {
-		if !c.ModifiedAt.IsZero() && s.now().Sub(c.ModifiedAt) >= 15*time.Minute && !uses(st, c.Name) && slices.Contains(domain.AccountProviders, c.Provider) {
+	held := s.credentials(ctx)
+	keys := s.keysSweepable(st, held)
+	for _, c := range held {
+		old := !c.ModifiedAt.IsZero() && s.now().Sub(c.ModifiedAt) >= 15*time.Minute
+		if (old || keys && strings.HasPrefix(c.Name, "config-index:")) && !uses(st, c.Name) && slices.Contains(domain.AccountProviders, c.Provider) {
 			_ = s.helper.DeleteCredential(ctx, c.Name)
 		}
 	}
 	return nil
+}
+
+// keysSweepable reports whether an API key no account names can only be a leftover: no sign-in
+// or import has begun since the daemon started, and every key account's key is in the listing.
+func (s *Service) keysSweepable(st domain.ProviderAccountState, held []ports.ProviderCredential) bool {
+	if !s.starting.TryLock() {
+		return false
+	}
+	defer s.starting.Unlock()
+	s.memo.Lock()
+	defer s.memo.Unlock()
+	return len(s.logins) == 0 && !slices.ContainsFunc(st.Accounts, func(a domain.ProviderAccount) bool {
+		return a.APIKey() && a.SignedIn() && !slices.ContainsFunc(held, func(c ports.ProviderCredential) bool { return c.Name == a.CredentialRef })
+	})
 }
 func (s *Service) push(ctx context.Context, st domain.ProviderAccountState) error {
 	auth, ids := map[string]string{}, make([]string, 0, len(st.Accounts))

@@ -228,6 +228,14 @@ func (c *Client) Credentials(ctx context.Context) (credentials []ports.ProviderC
 		}
 		credentials = append(credentials, credential)
 	}
+	for _, provider := range domain.AccountProviders {
+		keys, _ := c.apiKeys(ctx, provider)
+		for _, key := range keys {
+			if index := text(key, "auth-index"); index != "" {
+				credentials = append(credentials, ports.ProviderCredential{Name: "config-index:" + provider + ":" + index, Provider: provider})
+			}
+		}
+	}
 	return credentials, nil
 }
 
