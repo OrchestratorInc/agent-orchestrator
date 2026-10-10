@@ -12,9 +12,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/klauspost/compress/zstd"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/klauspost/compress/zstd"
 )
 
 // ContinuationCapabilities reports provider-assigned native UUIDs.
@@ -103,18 +104,19 @@ func readSessionMetadata(path string) (sessionMetadata, error) {
 	if err != nil {
 		return sessionMetadata{}, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var reader io.Reader = file
 	if strings.HasSuffix(path, ".zst") {
-		decoder, err := zstd.NewReader(io.LimitReader(file, 2<<20), zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(16<<20), zstd.WithDecoderMaxWindow(16<<20))
+		decoder, err := zstd.NewReader(io.LimitReader(file, 32<<20), zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(16<<20), zstd.WithDecoderMaxWindow(16<<20))
 		if err != nil {
 			return sessionMetadata{}, err
 		}
 		defer decoder.Close()
 		reader = decoder
 	}
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 4096), 256<<10)
+	bounded := &io.LimitedReader{R: reader, N: (64 << 20) + 1}
+	scanner := bufio.NewScanner(bounded)
+	scanner.Buffer(make([]byte, 4096), 8<<20)
 	if !scanner.Scan() {
 		if err := scanner.Err(); err != nil {
 			return sessionMetadata{}, err
@@ -125,11 +127,41 @@ func readSessionMetadata(path string) (sessionMetadata, error) {
 		Type    string          `json:"type"`
 		Payload sessionMetadata `json:"payload"`
 	}
+	if len(scanner.Bytes()) > 256<<10 {
+		return sessionMetadata{}, fmt.Errorf("open-interpreter: native metadata exceeds size limit")
+	}
 	if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
 		return sessionMetadata{}, err
 	}
 	if record.Type != "session_meta" {
 		return sessionMetadata{}, fmt.Errorf("open-interpreter: missing native session metadata")
+	}
+	// Native resume tolerates malformed records and metadata-only files. Those
+	// cannot prove preserved conversation history, so AO refuses them.
+	hasUser := false
+	for scanner.Scan() {
+		var item struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Type string `json:"type"`
+				Role string `json:"role"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &item); err != nil {
+			return sessionMetadata{}, fmt.Errorf("open-interpreter: malformed native history: %w", err)
+		}
+		if item.Type == "response_item" && item.Payload.Type == "message" && item.Payload.Role == "user" {
+			hasUser = true
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return sessionMetadata{}, err
+	}
+	if bounded.N == 0 {
+		return sessionMetadata{}, fmt.Errorf("open-interpreter: native history exceeds size limit")
+	}
+	if !hasUser {
+		return sessionMetadata{}, fmt.Errorf("open-interpreter: native history has no user conversation")
 	}
 	return record.Payload, nil
 }

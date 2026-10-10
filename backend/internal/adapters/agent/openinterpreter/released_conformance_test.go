@@ -18,8 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/creack/pty"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 const privateCanary = "AO_PRIVATE_CONTEXT_8fd23b"
@@ -58,6 +59,7 @@ func TestReleasedCLIConformance(t *testing.T) {
 	const prompt = "--AO_DASH_TASK_428ea1"
 	const reply = "AO_FAKE_REPLY_9c3421"
 	requests := make(chan []byte, 8)
+	cancelled := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/chat/completions") {
 			http.NotFound(w, r)
@@ -66,6 +68,13 @@ func TestReleasedCLIConformance(t *testing.T) {
 		body, _ := io.ReadAll(io.LimitReader(r.Body, 4<<20))
 		requests <- body
 		w.Header().Set("Content-Type", "text/event-stream")
+		if bytes.Contains(body, []byte("AO_CANCEL_TASK_67ac12")) && !bytes.Contains(body, []byte("AO_AFTER_CANCEL_02d871")) {
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			cancelled <- struct{}{}
+			return
+		}
 		fmt.Fprintf(w, "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.1-codex\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":null}]}\n\n", reply)
 		fmt.Fprint(w, "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.1-codex\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 	}))
@@ -94,6 +103,15 @@ func TestReleasedCLIConformance(t *testing.T) {
 		t.Fatal(err)
 	}
 	fresh := startNativeTUI(t, cmd, env)
+	// Native setup must retain its own trust choice, without receiving task
+	// keystrokes. Decline the one unrelated project hook in the test fixture.
+	fresh.waitFor(t, "Hooks need review")
+	select {
+	case <-requests:
+		t.Fatal("initial task ran before native hook review completed")
+	default:
+	}
+	fresh.terminal.Write([]byte("3"))
 	first := awaitModelRequest(t, requests, fresh)
 	for _, canary := range []string{privateCanary, projectCanary, prompt} {
 		if !bytes.Contains(first, []byte(canary)) {
@@ -103,6 +121,7 @@ func TestReleasedCLIConformance(t *testing.T) {
 	if bytes.Count(first, []byte(prompt)) != 1 {
 		t.Fatalf("initial task delivered more than once: %s", first)
 	}
+	assertPrivateModelContext(t, first)
 	fresh.waitFor(t, reply)
 	if strings.Contains(fresh.output(), privateCanary) {
 		t.Fatal("private SessionStart context rendered in the TUI")
@@ -129,10 +148,13 @@ func TestReleasedCLIConformance(t *testing.T) {
 		t.Fatalf("exact native restore: %v, %v", ok, err)
 	}
 	restored := startNativeTUI(t, resume, env)
+	restored.waitFor(t, "Hooks need review")
+	restored.terminal.Write([]byte("3"))
 	second := awaitModelRequest(t, requests, restored)
 	if !bytes.Contains(second, []byte(prompt)) || !bytes.Contains(second, []byte("AO_RESUME_TASK_325bd1")) || !bytes.Contains(second, []byte(privateCanary)) {
 		t.Fatalf("resume lost native history or private context: %s", second)
 	}
+	assertPrivateModelContext(t, second)
 	restored.waitFor(t, reply)
 	data, err = os.ReadFile(hookPath)
 	if err != nil {
@@ -147,7 +169,53 @@ func TestReleasedCLIConformance(t *testing.T) {
 	if strings.Contains(restored.output(), privateCanary) {
 		t.Fatal("private context rendered on restore")
 	}
+	// Interrupt a native active request, then deliver one follow-up through the
+	// same composer. This covers the terminal cancellation path used by AO.
+	restored.terminal.Write([]byte("AO_CANCEL_TASK_67ac12\r"))
+	active := awaitModelRequest(t, requests, restored)
+	if !bytes.Contains(active, []byte("AO_CANCEL_TASK_67ac12")) {
+		t.Fatalf("cancel test did not start its intended turn: %s", active)
+	}
+	restored.terminal.Write([]byte{3})
+	select {
+	case <-cancelled:
+	case <-time.After(15 * time.Second):
+		t.Fatalf("Ctrl-C did not cancel native provider request: %s", restored.output())
+	}
+	restored.terminal.Write([]byte("AO_AFTER_CANCEL_02d871\r"))
+	followup := awaitModelRequest(t, requests, restored)
+	if bytes.Count(followup, []byte("AO_AFTER_CANCEL_02d871")) != 1 {
+		t.Fatalf("follow-up after cancellation was lost or duplicated: %s", followup)
+	}
 	restored.stop()
+}
+
+func assertPrivateModelContext(t *testing.T, body []byte) {
+	t.Helper()
+	var request struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	privateRole, nativeDefault := false, false
+	for _, message := range request.Messages {
+		if bytes.Contains(message.Content, []byte(privateCanary)) {
+			if message.Role != "system" && message.Role != "developer" {
+				t.Fatalf("private hook context became %s content", message.Role)
+			}
+			privateRole = true
+		}
+		if (message.Role == "system" || message.Role == "developer") && bytes.Contains(message.Content, []byte("You are")) && len(message.Content) > 1000 {
+			nativeDefault = true
+		}
+	}
+	if !privateRole || !nativeDefault {
+		t.Fatalf("native default instructions/private context missing: %s", body)
+	}
 }
 
 type nativeTUI struct {

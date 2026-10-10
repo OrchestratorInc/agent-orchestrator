@@ -1,8 +1,9 @@
 package registry
 
 import (
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 func TestOpenInterpreterHasOneProductionAdapter(t *testing.T) {

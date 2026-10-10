@@ -10,12 +10,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
-	"github.com/google/uuid"
 )
 
 // InspectedRelease identifies the released Rust CLI used for this contract.
@@ -171,7 +172,9 @@ func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	output, err := aoprocess.CommandContext(probeCtx, binary, "--help").CombinedOutput()
+	probe := aoprocess.CommandContext(probeCtx, binary, "--help")
+	probe.WaitDelay = 2 * time.Second
+	output, err := probe.CombinedOutput()
 	if err != nil || !isRustCLIHelp(string(output)) {
 		return "", fmt.Errorf("open-interpreter: install the Rust terminal CLI (%s); the Python interpreter command is incompatible", InspectedRelease)
 	}

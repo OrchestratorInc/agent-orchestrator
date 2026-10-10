@@ -9,11 +9,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+const nativeUserRecord = `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"existing task"}]}}` + "\n"
 
 func TestLaunchPreservesNativeConfigurationAndPromptBoundary(t *testing.T) {
 	p := &Plugin{resolvedBinary: "/bin/interpreter"}
@@ -107,7 +110,7 @@ func writeNativeHistory(t *testing.T, id, workspace string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, "sessions", "rollout-now-"+id+".jsonl"), append(data, '\n'), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "sessions", "rollout-now-"+id+".jsonl"), []byte(string(data)+"\n"+nativeUserRecord), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return home
@@ -232,7 +235,7 @@ func TestTranscriptIdentityMustMatchContent(t *testing.T) {
 		{`{"type":"session_meta","payload":{"id":"wrong"}}`, ports.NativeSessionAvailabilityUnavailable},
 		{`{"type":"session_meta","payload":{"id":"` + id + `"}}`, ports.NativeSessionAvailabilityAvailable},
 	} {
-		if err := os.WriteFile(path, []byte(tc.metadata+"\n"), 0o600); err != nil {
+		if err := os.WriteFile(path, []byte(tc.metadata+"\n"+nativeUserRecord), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		got, err := p.ProbeNativeSession(context.Background(), ref)
@@ -246,6 +249,28 @@ func TestTranscriptIdentityMustMatchContent(t *testing.T) {
 	got, err := p.ProbeNativeSession(context.Background(), ref)
 	if err != nil || got != ports.NativeSessionAvailabilityUnavailable {
 		t.Fatalf("archived = %q, %v", got, err)
+	}
+}
+
+func TestRestoreRejectsCorruptOrEmptyNativeConversation(t *testing.T) {
+	const id = "019f706d-1234-7123-8123-123456789abc"
+	workspace := t.TempDir()
+	home := writeNativeHistory(t, id, workspace)
+	path := filepath.Join(home, "sessions", "rollout-now-"+id+".jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadataOnly := strings.SplitN(string(data), "\n", 2)[0] + "\n"
+	for _, content := range []string{metadataOnly, string(data) + "malformed tail\n"} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		p := &Plugin{resolvedBinary: "/bin/interpreter"}
+		_, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{Env: map[string]string{"INTERPRETER_HOME": home}, Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}})
+		if err == nil || ok {
+			t.Fatal("restored corrupt or empty native conversation")
+		}
 	}
 }
 

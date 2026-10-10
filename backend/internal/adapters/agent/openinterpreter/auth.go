@@ -18,7 +18,9 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	output, _ := aoprocess.CommandContext(probeCtx, binary, "login", "status").CombinedOutput()
+	probe := aoprocess.CommandContext(probeCtx, binary, "login", "status")
+	probe.WaitDelay = 2 * time.Second
+	output, _ := probe.CombinedOutput()
 	if probeCtx.Err() != nil {
 		return ports.AgentAuthStatusUnknown, probeCtx.Err()
 	}
