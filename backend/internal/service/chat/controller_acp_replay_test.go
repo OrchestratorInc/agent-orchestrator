@@ -86,7 +86,8 @@ func TestACPReplayProviderHelper(t *testing.T) {
 }
 
 func TestACPReplayProjectsExactlyOnceAcrossDaemonRestarts(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// Instrumented SQLite projection must drain the full burst under -race too.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	st := openStore(t)
 	dataDir, workspace := t.TempDir(), t.TempDir()
@@ -189,26 +190,45 @@ func TestACPReplayProjectsExactlyOnceAcrossDaemonRestarts(t *testing.T) {
 		t.Fatal("reconnect replaced the native provider")
 	}
 	// The real SQLite projector consumes immediately; replay naturally outruns it.
+	replayStarted := time.Now()
+	lastProgress := replayStarted
 	awaitACPReplay(ctx, t, "replay completion committed", func() bool {
 		logs, _ := os.ReadFile(logPath)
 		if bytes.Contains(logs, []byte("notification queue overflow")) {
 			t.Fatal("ACP replay overflowed while the real SQLite projector was consuming")
 		}
-		rows, readErr := st.LoadConversationSnapshot(ctx, second.ConversationID())
+		// Poll one indexed row; reserve full snapshots for sparse diagnostics and final assertions.
+		replayTurn, readErr := st.TurnByID(ctx, turn.ID)
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
 		if second.State() == ports.ChatControllerStopped {
-			t.Fatalf("replay stopped before completion: %+v", rows.Turns)
+			t.Fatalf("replay stopped before completion: %+v", replayTurn)
 		}
-		return len(rows.Turns) == 1 && rows.Turns[0].State == domain.TurnStateCompleted
+		if time.Since(lastProgress) >= 5*time.Second {
+			lastProgress = time.Now()
+			rows, readErr := st.LoadConversationSnapshot(ctx, second.ConversationID())
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			textBytes := 0
+			if len(rows.Messages) > 1 {
+				textBytes = len(rows.Messages[1].Text)
+			}
+			t.Logf("replay progress elapsed=%s assistant_bytes=%d/%d turn=%s controller=%s", time.Since(replayStarted).Round(time.Millisecond), textBytes, acpReplayFrames+1, replayTurn.State, second.State())
+		}
+		complete := replayTurn.State == domain.TurnStateCompleted
+		if complete {
+			t.Logf("replay completed after %s", time.Since(replayStarted).Round(time.Millisecond))
+		}
+		return complete
 	})
 	rows, err := st.LoadConversationSnapshot(ctx, second.ConversationID())
 	if err != nil {
 		t.Fatal(err)
 	}
 	expected := "~" + strings.Repeat("x", acpReplayFrames)
-	if rows.Turns[0].ProviderTurnID != turn.ProviderTurnID || len(rows.Messages) != 2 ||
+	if len(rows.Turns) != 1 || rows.Turns[0].ProviderTurnID != turn.ProviderTurnID || len(rows.Messages) != 2 ||
 		rows.Messages[1].Text != expected || rows.Messages[1].Streaming {
 		t.Fatal("replay changed the turn or lost/duplicated content")
 	}
