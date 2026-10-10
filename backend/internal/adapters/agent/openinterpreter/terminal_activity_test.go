@@ -27,7 +27,7 @@ func TestTerminalActivityUsesCurrentNativeChrome(t *testing.T) {
 		{"native model picker", "Choose a model\n\x1b[1m›\x1b[22m 1. model\n  tab / ↑ ↓ move · enter select · esc close", domain.ActivityWaitingInput, true},
 		{"native hooks browser", "Hooks\n  SessionStart\n  UserPromptSubmit\n\x1b[1m›\x1b[22m Interrupt\n\n  enter details · esc close", domain.ActivityWaitingInput, true},
 		{"native keymap picker", "Keymap\n  All  Chat  App\n\x1b[1m›\x1b[22m Action\n\n  left/right group · enter edit · esc close", domain.ActivityWaitingInput, true},
-		{"native status settings", "Configure status line\n\x1b[1m›\x1b[22m [✓] Model name\n\n  space toggle · ←/→ reorder · enter save · esc cancel", domain.ActivityWaitingInput, true},
+		{"native status settings preview", "Configure Status Line\n\x1b[1m›\x1b[22m [x] Use theme colors\n  [x] model\n  [x] current-dir\n\n  gpt-5-codex · ~/codex-rs · jif/statusline-preview\n  space toggle · ←/→ reorder · enter save · esc cancel", domain.ActivityWaitingInput, true},
 		{"native custom prompt", "Custom prompt\n\x1b[1m›\x1b[22m prompt text\n\n  enter submit · esc back", domain.ActivityWaitingInput, true},
 		{"question", "Pick an option\n› 1. Choice\n  tab to add notes | enter to submit answer | esc to interrupt", domain.ActivityWaitingInput, true},
 		{"auth", "Sign in to Open Interpreter", "", false},

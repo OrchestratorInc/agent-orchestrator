@@ -51,14 +51,21 @@ func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObse
 	if prompt < 0 {
 		return observation
 	}
+	// Native settings can show a dot-separated status preview above their
+	// dismiss footer. Check all visible modal chrome before accepting a preview
+	// as the live composer's status line.
+	for i := prompt + 1; i < len(raw); i++ {
+		line := strings.ToLower(strings.TrimSpace(terminalui.PlainTerminalText(raw[i])))
+		modalFooter := strings.Contains(line, " · ") && (strings.Contains(line, "esc close") || strings.Contains(line, "esc back") || strings.Contains(line, "esc cancel") || strings.Contains(line, "esc skip") || strings.Contains(line, "esc save/close") || strings.Contains(line, "esc normal mode"))
+		if modalFooter || strings.Contains(line, "enter to confirm") || strings.Contains(line, "enter to select") || strings.Contains(line, "enter to submit answer") || strings.Contains(line, "enter to submit all") || strings.Contains(line, "esc to go back") {
+			observation.Work = ports.TerminalSurfaceWorkWaitingInput
+			return observation
+		}
+	}
 	foot := -1
 	running := false
 	for i := prompt + 1; i < len(raw); i++ {
 		line := strings.ToLower(strings.TrimSpace(terminalui.PlainTerminalText(raw[i])))
-		if strings.Contains(line, "enter to confirm") || strings.Contains(line, "enter to select") || strings.Contains(line, "enter to submit answer") || strings.Contains(line, "enter to submit all") || strings.Contains(line, "esc to go back") || (strings.Contains(line, "esc") && (strings.Contains(line, "enter confirm") || strings.Contains(line, "enter select") || strings.Contains(line, "enter details") || strings.Contains(line, "enter edit") || strings.Contains(line, "enter save") || strings.Contains(line, "enter submit"))) {
-			observation.Work = ports.TerminalSurfaceWorkWaitingInput
-			return observation
-		}
 		if strings.Contains(line, "tab to queue") {
 			foot = i
 			running = true
