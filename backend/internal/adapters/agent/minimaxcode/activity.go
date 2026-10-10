@@ -24,7 +24,11 @@ func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 
 var ansiRE = regexp.MustCompile(`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b\][^\x07]*(?:\x07|\x1b\\)`)
 var footerRE = regexp.MustCompile(`(?m)^.*(?:│|\|).*(?:Ask|Auto|Full access).*(?:│|\|).*✦ [^\n]+\s*$`)
-var emptyRE = regexp.MustCompile(`(?s)Message · Enter send · Ctrl\+J newline[^\n]*\n\s*─+\s*\n\s*›\s+Ask Mcode to do anything\s*\n\s*─+\s*\n\s*[^\n]+(?:│|\|)[^\n]+✦ [^\n]+\s*$`)
+var emptyRE = regexp.MustCompile(`(?s)(?:Message · Enter send · Ctrl\+J newline[^\n]*|Draft cleared · Ctrl\+- restore · Ctrl\+C exit)\s*\n\s*─+\s*\n\s*›\s+Ask Mcode to do anything\s*\n\s*─+\s*\n(?:\s*[^\n]+(?:│|\|)[^\n]+✦ [^\n]+)+\s*\z`)
+
+// MiniMax's composerLabels returns working/follow-up modes before Long draft.
+// This complete composer therefore proves settled input, but never empty input.
+var longDraftRE = regexp.MustCompile(`(?m)^[ \t]*Long draft · Ctrl\+G edit · Enter send[ \t]*\n[ \t]*─+[ \t]*\n[ \t]*›[^\n]*(?:\n[ \t]+[^│|─\n]*)*\n[ \t]*─+[ \t]*\n(?:\s*[^\n]+(?:│|\|)[^\n]+✦ [^\n]+)+\s*\z`)
 
 func terminalTail(output string) string {
 	clean := strings.ReplaceAll(ansiRE.ReplaceAllString(output, ""), "\r", "")
@@ -51,7 +55,7 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 	if strings.Contains(tail, "Stopped · message restored to the Composer.") {
 		return domain.ActivityIdle, true
 	}
-	if emptyRE.MatchString(tail) {
+	if emptyRE.MatchString(tail) || longDraftRE.MatchString(tail) {
 		return domain.ActivityIdle, true
 	}
 	return "", false

@@ -7,6 +7,7 @@ import (
 )
 
 const footer = "  workspace │ Full access │ ✦ glm-5.3-flash · Thinking On\n"
+const longDraft = "Long draft · Ctrl+G edit · Enter send\n───\n› cancelled audit request\n  with another line\n───\n\n" + footer
 const composer = "    ─────────────────────\n  ›  Ask Mcode to do anything\n    ─────────────────────\n\n" + footer
 
 func TestTerminalActivity(t *testing.T) {
@@ -19,6 +20,15 @@ func TestTerminalActivity(t *testing.T) {
 		{"settled", "Message · Enter send · Ctrl+J newline    Tip: help\n" + composer, domain.ActivityIdle, true},
 		{"active empty composer", "Loading 2s · Alt+Enter queue · Enter steer · Esc stop\n" + composer, domain.ActivityActive, false},
 		{"cancelled draft", "Stopped · message restored to the Composer.\n───\n› cancelled prompt\n" + footer, domain.ActivityIdle, false},
+		{"cleared empty composer", "Draft cleared · Ctrl+- restore · Ctrl+C exit\n" + composer, domain.ActivityIdle, true},
+		{"cleared footer repaint", "Draft cleared · Ctrl+- restore · Ctrl+C exit\n" + composer + footer, domain.ActivityIdle, true},
+		{"cleared hint with nonempty draft", "Draft cleared · Ctrl+- restore · Ctrl+C exit\n───\n› user draft\n───\n" + footer, "", false},
+		{"old cleared empty before draft", "Draft cleared · Ctrl+- restore · Ctrl+C exit\n" + composer + longDraft, domain.ActivityIdle, false},
+		{"settled long draft", longDraft, domain.ActivityIdle, false},
+		{"settled long draft footer repaint", longDraft + footer, domain.ActivityIdle, false},
+		{"long draft history while working", longDraft + "Loading · Esc stop\n" + composer, domain.ActivityActive, false},
+		{"old long draft before unknown screen", longDraft + "Approval required\n───\nAllow tool?\n" + footer, "", false},
+		{"unconfigured long draft", "Long draft · Ctrl+G edit · Enter send\n───\n› draft\n───\nworkspace │ loading\n", "", false},
 		{"typed draft", "Prompt · Enter send · Ctrl+J newline\n───\n› user draft\n" + footer, "", false},
 		{"loading", "Message · Enter send · Ctrl+J newline\n───\n› Ask Mcode to do anything\n───\nworkspace │ loading\n", "", false},
 	} {

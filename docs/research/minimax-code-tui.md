@@ -34,6 +34,12 @@ The VPS qualification used Linux x64 and Node 24.21.0.
   for idle expiry; AO does not interpret SessionEnd as process exit.
 - Escape cancellation restores cancelled text into the composer. Terminal
   detection observes the settled state separately from an empty composer.
+  In v0.6.5 `composerLabels` returns working/follow-up states before the
+  `Long draft · Ctrl+G edit · Enter send` header; that complete draft composer
+  is settled but remains nonempty. The `Draft cleared · Ctrl+- restore · Ctrl+C exit`
+  header is emitted after the editor is cleared and can persist until another
+  interaction. It proves empty input only together with the empty placeholder,
+  separators, and configured footer. Old headers above newer screens do not qualify.
 - Auth probes return `configured` for saved selected-provider credentials, never
   `authorized` from cached connectivity. Models come from configured provider
   model entries, not provider names or an invented catalog.
@@ -77,3 +83,37 @@ configured auth, model parsing, terminal activity, and migration reversal.
 Native logs are not screenshots and do not prove AO's UI. AO lifecycle audit,
 real AO screenshots, complete backend/CI checks, and other OS coverage must be
 reported separately with the final integration evidence.
+
+## Preserved AO failure history
+
+Attempt 001 failed before provider work because the original cached hook could
+not find its profile. This is the actual AO Electron session, captured from the
+retained failure after the hook fix was developed; the original binary and
+native state were retained for this capture.
+
+![AO attempt 001: native hook refusal](assets/minimax/minimax-ao-001-retained-failure.png)
+
+[Capture record and caption](assets/minimax/minimax-ao-001-retained-failure.md) ·
+[Machine-readable provenance](assets/minimax/minimax-ao-001-retained-failure.provenance.json)
+
+Attempt 002 on `ca75d9e` passed the initial proof and second-message checks but
+remains **FAIL**: cancellation did not become settled in AO within 45 seconds,
+and the restored empty-composer gate was **BLOCKED**. MiniMax retained the
+cancelled audit prompt as a long draft. The screenshot shows the real restored
+AO session and its earlier file creation/edit output; it does not turn those
+failed gates into passes.
+
+![AO attempt 002: retained draft after restore](assets/minimax/minimax-ao-002-retained-draft.png)
+
+[Gate summary and capture record](assets/minimax/minimax-ao-002-retained-draft.md) ·
+[Machine-readable provenance](assets/minimax/minimax-ao-002-retained-draft.provenance.json)
+
+A separate manual control on 2026-10-10 at 13:51 UTC verified the same retained
+AO session, terminal generation, idle state, and exact audit-owned draft before
+sending one documented Ctrl+C. MiniMax cleared the draft and kept the process
+alive. Its persistent cleared-draft header and empty composer were recorded
+separately under `minimax-ao-002/later-clear-control-2026-10-10T13-51-29-687Z`.
+This control does not rewrite attempt 002 or establish its cancellation gate.
+Future audits may explicitly opt into clearing their own cancellation draft;
+product behavior never clears a user's draft automatically. Authentication
+remains configured/unverified in all of these observations.
