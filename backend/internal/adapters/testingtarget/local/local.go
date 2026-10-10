@@ -46,6 +46,8 @@ type operations struct {
 	tmuxBinary   func(string) (string, error)
 	run          func(context.Context, string, []string, []string) ([]byte, error)
 	client       *http.Client
+	prepare      func(context.Context, string, string, string) error
+	build        func(context.Context, string, string) error
 }
 
 type launch struct {
@@ -53,6 +55,9 @@ type launch struct {
 	target    domain.TestTargetIdentity
 	root      string
 	frontend  string
+	daemon    string
+	revision  string
+	preflight json.RawMessage
 	tmux      string
 	env       []string
 	port      int
@@ -82,6 +87,7 @@ func New() *Adapter {
 	return &Adapter{
 		launches: make(map[string]*launch),
 		ops: operations{
+			prepare: prepareTarget, build: buildOwnedDaemon,
 			home: os.UserHomeDir, start: startElectron, startTime: nativeStartTime,
 			processes: processSnapshot, signal: signalProcess, windows: nativeWindows,
 			freePort: unusedPort, listenerGone: listenerGone,
@@ -119,7 +125,12 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 	if err != nil {
 		return empty, err
 	}
-	if err := prepared(ctx, frontend, spec.CommitSHA); err != nil {
+	if a.ops.prepare == nil {
+		if err := prepared(ctx, frontend, spec.CommitSHA); err != nil {
+			return empty, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
 		return empty, err
 	}
 	tmux, err := a.ops.tmuxBinary(frontend)
@@ -142,6 +153,16 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 	if err != nil {
 		return empty, err
 	}
+	if a.ops.prepare != nil {
+		if err := a.ops.prepare(ctx, frontend, spec.CommitSHA, root); err != nil {
+			cleanupErr := removePrivateState(&launch{root: root, rootInfo: rootInfo})
+			return empty, errors.Join(err, cleanupErr)
+		}
+		if err := prepared(ctx, frontend, spec.CommitSHA); err != nil {
+			cleanupErr := removePrivateState(&launch{root: root, rootInfo: rootInfo})
+			return empty, errors.Join(err, cleanupErr)
+		}
+	}
 	if err := os.Mkdir(filepath.Join(root, "fixtures"), 0o700); err != nil {
 		return empty, err
 	}
@@ -158,7 +179,7 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 		_ = log.Close()
 		return empty, err
 	}
-	s := &launch{root: root, rootInfo: rootInfo, frontend: frontend, tmux: tmux, port: port, log: log, owned: make(map[int]time.Time),
+	s := &launch{root: root, rootInfo: rootInfo, frontend: frontend, daemon: filepath.Join(root, "daemon", "ao"), revision: spec.CommitSHA, tmux: tmux, port: port, log: log, owned: make(map[int]time.Time),
 		target: domain.TestTargetIdentity{ID: id, LaunchID: "target-" + id, Generation: spec.Generation,
 			DataDir: filepath.Join(root, "data")}}
 	a.mu.Lock()
@@ -192,6 +213,14 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 	}
 	// A preparation could have completed between admission and reservation.
 	if err := prepared(ctx, frontend, spec.CommitSHA); err != nil {
+		s.stopped = true
+		_ = log.Close()
+		s.log = nil
+		cleanupErr := removePrivateState(s)
+		s.mu.Unlock()
+		return s.target, errors.Join(err, cleanupErr)
+	}
+	if err := a.prepareOwnedDaemon(ctx, s); err != nil {
 		s.stopped = true
 		_ = log.Close()
 		s.log = nil
@@ -290,7 +319,7 @@ func prepared(ctx context.Context, frontend, commit string) error {
 	if err != nil || strings.TrimSpace(string(head)) != commit {
 		return errors.New("target checkout HEAD differs from its prepared revision")
 	}
-	for _, name := range []string{".vite/build/main.js", ".vite/build/ao-main.cjs", ".vite/build/preload.js", ".vite/build/annotate-preload.js", ".vite/renderer/main_window/index.html", "daemon/ao"} {
+	for _, name := range []string{".vite/build/main.js", ".vite/build/ao-main.cjs", ".vite/build/preload.js", ".vite/build/annotate-preload.js", ".vite/renderer/main_window/index.html"} {
 		data, err := os.ReadFile(filepath.Join(frontend, name))
 		if err != nil {
 			return err
@@ -337,13 +366,14 @@ func targetEnv(inherited []string, s *launch, marker, realProviders bool) []stri
 	}
 	env := strippedEnv(inherited)
 	env = append(env, "AO_DATA_DIR="+s.target.DataDir,
+		"AO_DAEMON_COMMAND="+daemonCommand(s.daemon),
 		"AO_RUN_FILE="+filepath.Join(s.root, "running.json"), "AO_PORT="+strconv.Itoa(s.port),
 		"AO_DEV_ELECTRON_DIR="+filepath.Join(s.root, "electron"), "AO_APP_RUN_ID="+s.target.LaunchID,
 		"AO_FAKE_HARNESS="+fake, "AO_TMUX_SOCKET_NAME=testing-"+s.target.ID,
 		"AO_TMUX_BINARY="+s.tmux,
 		// Node URL reports an opaque origin for the privileged app:// scheme.
 		// An explicit valid origin prevents the dev helper adding "null".
-		"AO_ALLOWED_ORIGINS=app://renderer",
+		"AO_ALLOWED_ORIGINS=app://renderer,http://127.0.0.1:"+strconv.Itoa(s.port),
 		"AO_TELEMETRY_REMOTE=off", "AO_TELEMETRY_EVENTS=off", "AO_SENTRY_DSN=",
 		"ELECTRON_ENABLE_LOGGING=1")
 	if marker {
@@ -439,7 +469,19 @@ func (a *Adapter) WorkerContext(ctx context.Context, target domain.TestTargetIde
 	if err := a.probe(ctx, s); err != nil {
 		return ports.TestingWorkerContext{}, err
 	}
-	return ports.TestingWorkerContext{CheckoutPath: filepath.Dir(s.frontend), CLIPath: filepath.Join(s.root, "target-ao"), RunFilePath: filepath.Join(s.root, "running.json"), DataDir: s.target.DataDir, FixtureDir: filepath.Join(s.root, "fixtures")}, nil
+	facts, err := json.Marshal(struct {
+		Revision  string          `json:"revision"`
+		Command   string          `json:"launchCommand"`
+		Daemon    string          `json:"daemonExecutable"`
+		Port      int             `json:"port"`
+		DataDir   string          `json:"dataDir"`
+		Profile   string          `json:"electronProfile"`
+		Preflight json.RawMessage `json:"preflight"`
+	}{s.revision, daemonCommand(s.daemon), s.daemon, s.port, s.target.DataDir, filepath.Join(s.root, "electron"), s.preflight})
+	if err != nil {
+		return ports.TestingWorkerContext{}, err
+	}
+	return ports.TestingWorkerContext{CheckoutPath: filepath.Dir(s.frontend), CLIPath: filepath.Join(s.root, "target-ao"), RunFilePath: filepath.Join(s.root, "running.json"), DataDir: s.target.DataDir, FixtureDir: filepath.Join(s.root, "fixtures"), LaunchContext: string(facts)}, nil
 }
 
 func writeTargetCLI(s *launch) error {
@@ -455,7 +497,7 @@ env["AO_DATA_DIR"] = %q
 os.chdir(%q)
 executable = %q
 os.execve(executable, [executable, *sys.argv[1:]], env)
-`, filepath.Join(s.root, "running.json"), s.target.DataDir, filepath.Dir(s.frontend), filepath.Join(s.frontend, "daemon", "ao"))
+`, filepath.Join(s.root, "running.json"), s.target.DataDir, filepath.Dir(s.frontend), s.daemon)
 	return os.WriteFile(filepath.Join(s.root, "target-ao"), []byte(script), 0o600)
 }
 
@@ -484,7 +526,7 @@ func (a *Adapter) probe(ctx context.Context, s *launch) error {
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return err
 	}
-	if probe.Status != "ready" || probe.PID != s.target.DaemonPID || probe.ExecutablePath != filepath.Join(s.frontend, "daemon", "ao") || probe.StartupWorkingDirectory != s.frontend || probe.WorkingDirectory != s.target.DataDir {
+	if probe.Status != "ready" || probe.PID != s.target.DaemonPID || probe.ExecutablePath != s.daemon || probe.StartupWorkingDirectory != s.frontend || probe.WorkingDirectory != s.target.DataDir {
 		return errors.New("target readiness identity mismatch")
 	}
 	for _, route := range []string{"/api/v1/projects", "/api/v1/sessions"} {

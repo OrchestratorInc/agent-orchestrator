@@ -46,6 +46,14 @@ func TestingDir(dataDir string) string {
 	return filepath.Join(dataDir, "skills", TestingSkillName)
 }
 
+// TestingScript reads a controller-owned setup script from the daemon build.
+func TestingScript(name string) ([]byte, error) {
+	if !fs.ValidPath(name) || strings.Contains(name, "/") {
+		return nil, fmt.Errorf("invalid testing script name %q", name)
+	}
+	return files.ReadFile("testing/scripts/" + name)
+}
+
 // Install writes both embedded skills into <dataDir>/skills,
 // replacing any existing copies. It runs once at daemon boot, before any session
 // spawns, so a plain clobber-and-write needs no locking: there are no

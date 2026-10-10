@@ -277,7 +277,7 @@ func removePrivateState(s *launch) error {
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	for _, name := range []string{"data", "electron", "fixtures"} {
+	for _, name := range []string{"data", "electron", "fixtures", "daemon", "setup"} {
 		if err := root.RemoveAll(name); err != nil {
 			return err
 		}

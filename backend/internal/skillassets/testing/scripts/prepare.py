@@ -5,15 +5,23 @@ import argparse
 from contextlib import contextmanager
 import fcntl
 import hashlib
+import json
 import os
 from pathlib import Path
+import re
 import subprocess
+import sys
 
 
 def run(arguments, cwd):
     env = {key: value for key, value in os.environ.items() if not key.startswith("AO_")}
-    return subprocess.run(arguments, cwd=cwd, env=env, check=True,
-                          text=True, stdout=subprocess.PIPE).stdout.strip()
+    try:
+        return subprocess.run(arguments, cwd=cwd, env=env, check=True,
+                              text=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT).stdout.strip()
+    except subprocess.CalledProcessError as error:
+        print(error.stdout or "", file=sys.stderr, end="")
+        raise
 
 
 @contextmanager
@@ -29,12 +37,59 @@ def reserve(checkout):
 
 
 def install(directory, stamp):
+    if (directory / "node_modules").is_symlink():
+        raise RuntimeError("Target node_modules must belong to its checkout, not a symlink")
     lockfile = directory / "package-lock.json"
     digest = hashlib.sha256(lockfile.read_bytes()).hexdigest()
-    if stamp.exists() and stamp.read_text().strip() == digest:
+    if stamp.exists() and stamp.read_text().strip() == digest and (directory / "node_modules").is_dir():
         return
-    run(["npm", "install", "--prefer-offline", "--no-save", "--no-audit", "--no-fund"], directory)
+    run(["npm", "ci", "--prefer-offline", "--no-audit", "--no-fund"], directory)
     stamp.write_text(hashlib.sha256(lockfile.read_bytes()).hexdigest() + "\n")
+
+
+def preflight(checkout):
+    backend, frontend = checkout / "backend", checkout / "frontend"
+    main = frontend / "src/main.ts"
+    launcher = frontend / "src/shared/daemon-launch.ts"
+    if (not main.is_file() or not launcher.is_file() or
+            '"./shared/daemon-launch"' not in main.read_text() or
+            not re.search(r"resolveDaemonLaunch\s*\(", main.read_text())):
+        raise RuntimeError("unsupported_revision: frontend/src/main.ts does not honor AO_DAEMON_COMMAND")
+    match = re.search(r"^go (\d+)\.(\d+)(?:\.(\d+))?\s*$", (backend / "go.mod").read_text(), re.M)
+    if not match:
+        raise RuntimeError("unsupported_revision: backend/go.mod has no supported Go version directive")
+    required_go = tuple(int(n or 0) for n in match.groups())
+    try:
+        go_version = run(["go", "env", "GOVERSION"], backend)
+        node_version = run(["node", "--version"], frontend)
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(f"unsupported_revision: runtime probe failed: {error}") from error
+    actual_go = re.fullmatch(r"go(\d+)\.(\d+)(?:\.(\d+))?", go_version)
+    if not actual_go or tuple(int(n or 0) for n in actual_go.groups()) < required_go:
+        raise RuntimeError(f"unsupported_revision: Go {go_version} does not satisfy go {match.group(0)[3:]}")
+    package = json.loads((frontend / "package.json").read_text())
+    if not re.fullmatch(r"v\d+\.\d+\.\d+", node_version):
+        raise RuntimeError(f"unsupported_revision: unrecognized Node version {node_version}")
+    required_node = package.get("engines", {}).get("node")
+    if required_node:
+        npm_root = run(["npm", "root", "--global"], frontend)
+        script = ("const r=require('node:module').createRequire(process.argv[1]+'/npm/package.json');"
+                  "console.log(r('semver').satisfies(process.argv[2],process.argv[3]));")
+        if run(["node", "-e", script, npm_root, node_version, required_node], frontend) != "true":
+            raise RuntimeError(f"unsupported_revision: Node {node_version} does not satisfy {required_node}")
+    script = ("const m=await import(process.argv[1]);"
+              "const command='AO_PREFLIGHT_COMMAND';"
+              "const r=m.resolveDaemonLaunch({AO_DAEMON_COMMAND:command},false,'/unused',process.argv[2],'/unused','darwin');"
+              "if(!r||r.command!==command||r.cwd!==process.argv[2]||r.source!=='configured'||r.shell!==true)"
+              "throw new Error('daemon launcher does not honor AO_DAEMON_COMMAND');")
+    try:
+        run(["node", "--experimental-strip-types", "--input-type=module", "-e", script,
+             launcher.as_uri(), str(frontend)], frontend)
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(f"unsupported_revision: configured daemon launch probe failed: {error}") from error
+    return {"goVersion": go_version, "requiredGo": ".".join(map(str, required_go)),
+            "nodeVersion": node_version, "requiredNode": required_node,
+            "daemonCommandOverride": True}
 
 
 def prepare(repository, commit, cache):
@@ -66,14 +121,18 @@ def prepare(repository, commit, cache):
             source = "origin" if repository == checkout else str(repository)
             run(["git", "fetch", "--no-tags", source, commit], checkout)
             run(["git", "checkout", "--detach", commit], checkout)
+            facts = preflight(checkout)
             for directory in ["frontend", "packages/product-ui"]:
                 install(checkout / directory, root / (directory.replace("/", "-") + ".sha256"))
             frontend = checkout / "frontend"
             adapter = Path(__file__).resolve().parent
             # The existing runtime builder skips unchanged source signatures.
             run(["node", "scripts/build-acp-runtime.mjs"], frontend)
-            run(["node", "scripts/build-daemon.mjs", "--dev"], frontend)
             run(["node", str(adapter / "prepare.cjs"), str(frontend)], frontend)
+            manifest_path = frontend / ".vite/testing-target.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["preflight"] = facts
+            manifest_path.write_text(json.dumps(manifest) + "\n")
     return checkout
 
 

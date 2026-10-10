@@ -37,7 +37,7 @@ for (const key of Object.keys(process.env)) {
   const hash = (file) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
   const files = ['.vite/build/main.js', '.vite/build/ao-main.cjs',
     '.vite/build/preload.js', '.vite/build/annotate-preload.js',
-    '.vite/renderer/main_window/index.html', 'daemon/ao'];
+    '.vite/renderer/main_window/index.html'];
   fs.writeFileSync(path.join(frontend, '.vite/testing-target.json'), JSON.stringify({
     commitSHA: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: frontend, encoding: 'utf8' }).trim(),
     electronVersion: localRequire('electron/package.json').version,

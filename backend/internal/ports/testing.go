@@ -28,11 +28,12 @@ type TestingTargetWorkerContext interface {
 
 // TestingWorkerContext contains adapter-resolved paths, never worker input.
 type TestingWorkerContext struct {
-	CheckoutPath string
-	CLIPath      string
-	RunFilePath  string
-	DataDir      string
-	FixtureDir   string
+	CheckoutPath  string
+	CLIPath       string
+	RunFilePath   string
+	DataDir       string
+	FixtureDir    string
+	LaunchContext string // JSON facts checked by the target adapter.
 }
 
 // TestingTargetSpec is daemon-resolved launch input. StateRoot must be beneath
