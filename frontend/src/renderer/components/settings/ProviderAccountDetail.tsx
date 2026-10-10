@@ -1,12 +1,13 @@
 import { useState, type ComponentProps, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, Check, ChevronDown, CirclePause, Copy, ExternalLink, Link2, LoaderCircle, X, type LucideIcon } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, CirclePause, Copy, ExternalLink, Laptop, Link2, LoaderCircle, X, type LucideIcon } from "lucide-react";
 import { PROVIDERS, percentLeft, type ProviderAccount, type ProviderLogin } from "../../hooks/useProviderAccounts";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
 import { AccountMenu } from "../AccountMenu";
 import { AgentAvatar } from "../AgentAvatar";
 import { Button } from "../ui/button";
+import { AccountHealth, AccountModelMix, AccountRules, AccountSessions, AccountThroughput, ManagePlan } from "./ProviderAccountInsights";
 import type { AccountsPage } from "./ProviderAccountsSection";
 
 const DAY = 24 * 60 * 60;
@@ -33,7 +34,7 @@ export function formatAgo(time: number, language: string, justNow: string): stri
 	if (minutes < 60) return relative.format(-minutes, "minute");
 	return minutes < 1440 ? relative.format(-Math.floor(minutes / 60), "hour") : relative.format(-Math.floor(minutes / 1440), "day");
 }
-const formatCount = (value: number, language: string) => new Intl.NumberFormat(language, { notation: "compact", maximumFractionDigits: 1 }).format(value);
+export const formatCount = (value: number, language: string) => new Intl.NumberFormat(language, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 const formatSpan = (value: number, unit: "day" | "hour" | "minute", language: string) => new Intl.NumberFormat(language, { style: "unit", unit, unitDisplay: unit === "day" ? "long" : "short" }).format(value);
 function formatTurn(seconds: number, language: string): string {
 	const minutes = Math.max(1, Math.round(seconds / 60));
@@ -44,6 +45,15 @@ function formatTurn(seconds: number, language: string): string {
 const isToday = (day: string) => [new Date().toISOString().slice(0, 10), new Date().toLocaleDateString("sv")].includes(day);
 // A time that has not passed yet, or "".
 export const upcoming = (value?: string) => (value && new Date(value).getTime() > Date.now() ? value : "");
+// This computer's own login or key, marked beside the account's name wherever it is listed.
+export function DeviceTag({ apiKey, testId }: { apiKey: boolean; testId?: string }) {
+	const { t } = useTranslation();
+	return (
+		<span data-testid={testId} title={t(apiKey ? "providerAccounts.globalKeyHint" : "providerAccounts.globalHint")} className="inline-flex shrink-0 items-center gap-1 rounded-full bg-status-working/15 px-2 py-0.5 text-2xs font-medium text-status-working">
+			<Laptop aria-hidden="true" className="size-3" />{t("providerAccounts.global")}
+		</span>
+	);
+}
 export const Dot = () => <span aria-hidden="true" className="text-passive">·</span>;
 // A group of settings rows under its title: one softly filled surface with hairlines between its rows.
 export function Rows({ title, className, ...props }: Omit<ComponentProps<"div">, "title"> & { title?: string }) {
@@ -57,7 +67,7 @@ export function Rows({ title, className, ...props }: Omit<ComponentProps<"div">,
 export function IconAction({ name, icon: Icon, className, children, ...props }: ComponentProps<typeof Button> & { name: string; icon?: LucideIcon }) {
 	return <Button type="button" size="icon-sm" variant="ghost" className={cn("text-muted-foreground", className)} aria-label={name} title={name} {...props}>{Icon ? <Icon aria-hidden="true" className="size-3.5" /> : children}</Button>;
 }
-function Row({ title, hint, children, label, icon }: { title: ReactNode; hint?: ReactNode; children?: ReactNode; label?: string; icon?: ReactNode }) {
+export function Row({ title, hint, children, label, icon }: { title: ReactNode; hint?: ReactNode; children?: ReactNode; label?: string; icon?: ReactNode }) {
 	return (
 		<div role={label ? "group" : undefined} aria-label={label} className="flex min-h-15 flex-wrap items-center justify-between gap-x-5 gap-y-2 px-4 py-3">
 			<div className="flex min-w-0 items-center gap-3">
@@ -71,7 +81,7 @@ function Row({ title, hint, children, label, icon }: { title: ReactNode; hint?: 
 		</div>
 	);
 }
-function Fact({ label, children }: { label: ReactNode; children: ReactNode }) {
+export function Fact({ label, children }: { label: ReactNode; children: ReactNode }) {
 	return (
 		<div className="flex min-h-11 items-center justify-between gap-4 px-4 py-2 text-[13px]">
 			<span className="min-w-0 truncate text-muted-foreground">{label}</span>
@@ -201,6 +211,12 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 		[t("providerAccounts.factRenews"), usage?.renewsAt ? formatWhen(usage.renewsAt, "day") : null],
 		[t("providerAccounts.factOrganization"), usage?.organization ? <span className="max-w-36 truncate" title={usage.organization}>{usage.organization}</span> : null],
 		[t("providerAccounts.factAdded"), usage?.addedAt ? formatWhen(usage.addedAt, "day") : null],
+		[t("providerAccounts.factModels"), usage?.models?.length ? (
+			<span className="flex max-w-44 flex-wrap justify-end gap-1">
+				{usage.models.slice(0, 6).map((model) => <span key={model} className="rounded-[5px] bg-muted px-1.5 py-px text-2xs">{model}</span>)}
+				{usage.models.length > 6 ? <span title={usage.models.slice(6).join(", ")} className="rounded-[5px] bg-muted px-1.5 py-px text-2xs text-muted-foreground">+{usage.models.length - 6}</span> : null}
+			</span>
+		) : null],
 	]);
 	const tokenFacts = tokens ? facts([
 		[tokens.latestDay && isToday(tokens.latestDay) ? t("providerAccounts.tokensToday") : t("providerAccounts.tokensOnDay", { date: formatWhen(`${tokens.latestDay}T12:00:00`, "day") }), tokens.latestDay ? figure(tokens.latestDayTokens) : null],
@@ -210,7 +226,8 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 		[t("providerAccounts.currentStreak"), figure(tokens.currentStreakDays, days)],
 		[t("providerAccounts.longestStreak"), figure(tokens.longestStreakDays, days)],
 	]) : [];
-	const activity = requests.length > 0 || tokenFacts.length > 0;
+	// What the helper counted is known even while the provider is not answering.
+	const activity = requests.length > 0 || tokenFacts.length > 0 || Boolean(account.usage?.activity);
 	const signInHint = !signedIn ? (count ? t("providerAccounts.sessionsWaitingFor", { count }) : t("providerAccounts.signInToUse"))
 		: account.usage?.signInEndsAt ? t("providerAccounts.signInEndsAt", { time: formatWhen(account.usage.signInEndsAt, "soon") }) : t("providerAccounts.signInEndsSoon");
 	const twoColumns = signedIn && (planFacts.length > 0 || activity);
@@ -221,14 +238,17 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 			<div className="flex min-h-11 items-center gap-3.5">
 				<AgentAvatar className="size-10 shrink-0" decorative provider={info.agent} />
 				<div className="min-w-0 flex-1">
-					<h3 className="truncate text-lg font-semibold tracking-tight text-foreground">{name}</h3>
+					<div className="flex items-center gap-2.5">
+						<h3 className="truncate text-lg font-semibold tracking-tight text-foreground">{name}</h3>
+						{account.global ? <DeviceTag apiKey={apiKey} testId="provider-account-global" /> : null}
+					</div>
 					<p className="flex flex-wrap items-center gap-x-1.5 text-sm text-muted-foreground">
 						<span>{info.name}</span>
 						{apiKey || plan ? <><Dot /><span>{apiKey ? t("providerAccounts.apiKeyLabel") : plan}</span></> : null}
 						{signedIn ? null : <><Dot /><span className="text-status-needs-you">{t("providerAccounts.signedOut")}</span></>}
 					</p>
 				</div>
-				{account.global ? <span data-testid="provider-account-global" title={t(apiKey ? "providerAccounts.globalKeyHint" : "providerAccounts.globalHint")} className={pill}>{t("providerAccounts.global")}</span> : null}
+				{signedIn && !apiKey ? <ManagePlan account={account} page={page} /> : null}
 				{account.primary && signedIn ? <span className={pill}>{t("providerAccounts.default")}</span> : null}
 			</div>
 			<div className={cn("grid items-start gap-x-7", twoColumns ? "grid-cols-[minmax(0,1fr)_288px] @max-5xl:grid-cols-1" : "")}>
@@ -279,20 +299,20 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 									</Row>
 								) : null}
 							</Rows>
-							{typeof resetCount === "number" ? (
+							{typeof resetCount === "number" || (!apiKey && usage) ? (
 								<Rows title={t("providerAccounts.resetsHeading")}>
-									{resetCount <= 0 ? <Row title={t("providerAccounts.noResets")} /> : resetting ? (
+									{!resetCount || resetCount <= 0 ? <Row title={t("providerAccounts.noResets")} /> : resetting ? (
 										<Row label={t("providerAccounts.useReset")} title={t("providerAccounts.confirmUseReset", { name })} hint={t("providerAccounts.confirmUseResetHint")}>
 											<Button type="button" variant="ghost" className="text-muted-foreground" disabled={page.pending} onClick={() => setResetting(false)}>{t("confirm.cancel")}</Button>
 											<Button type="button" disabled={page.pending} onClick={() => void spendReset()}>{t("providerAccounts.useReset")}</Button>
 										</Row>
 									) : (
 										<Row title={t("providerAccounts.limitResets")} hint={usage?.resetUsable ? t("providerAccounts.resetUsableHint") : resetBlocked ? t("providerAccounts.resetBlockedHint", { time: formatWhen(resetBlocked, "soon") }) : t("providerAccounts.resetIdleHint")}>
-											<span className="text-sm tabular-nums text-foreground">{t("providerAccounts.resetsAvailableShort", { count: resetCount })}</span>
+											<span className="text-sm tabular-nums text-foreground">{t("providerAccounts.resetsAvailableShort", { count: resetCount ?? 0 })}</span>
 											<Button type="button" variant={usage?.resetUsable ? "primary" : "secondary"} disabled={page.pending || !usage?.resetUsable} onClick={() => setResetting(true)}>{t("providerAccounts.useReset")}</Button>
 										</Row>
 									)}
-									{(resetCount > 0 ? usage?.resets ?? [] : []).map((reset, index) => (
+									{(resetCount && resetCount > 0 ? usage?.resets ?? [] : []).map((reset, index) => (
 										<Fact key={index} label={[reset.label || t("providerAccounts.resetItem", { number: index + 1 }), reset.total > 1 ? t("providerAccounts.resetLeftOf", { left: reset.left, total: reset.total }) : ""].filter(Boolean).join(" · ")}>
 											{reset.expiresAt ? t("providerAccounts.resetExpires", { date: formatWhen(reset.expiresAt, "day") }) : null}
 										</Fact>
@@ -318,7 +338,10 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 										</AccountMenu>
 									) : null}
 								</Row>
+								<AccountRules account={account} page={page} others={others} />
 							</Rows>
+							<AccountSessions account={account} page={page} others={others} language={language} />
+							<AccountHealth health={account.usage?.health} language={language} />
 						</>
 					) : null}
 					<Rows title={t("providerAccounts.account")}>
@@ -360,6 +383,7 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 						{planFacts.length ? <Rows title={t(apiKey ? "providerAccounts.apiKeyLabel" : "providerAccounts.planHeading")}>{planFacts}</Rows> : null}
 						{activity ? (
 							<Rows title={t("providerAccounts.activityHeading")}>
+								<AccountThroughput account={account} language={language} />
 								{requests.length ? (
 									<Row title={t("providerAccounts.requests")} hint={t("providerAccounts.requestsWindow")}>
 										<div className="text-right">
@@ -371,6 +395,7 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 								{tokenFacts}
 							</Rows>
 						) : null}
+						<AccountModelMix activity={account.usage?.activity} />
 					</aside>
 				) : null}
 			</div>

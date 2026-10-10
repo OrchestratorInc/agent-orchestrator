@@ -7,7 +7,7 @@ import { apiErrorMessage } from "../../lib/api-client";
 import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
 import { Button } from "../ui/button";
-import { AccountDetail, Dot, IconAction, LoginProgress, Rows, upcoming } from "./ProviderAccountDetail";
+import { AccountDetail, DeviceTag, Dot, IconAction, LoginProgress, Rows, upcoming } from "./ProviderAccountDetail";
 import { SettingsSection } from "./SettingsSection";
 
 type Provider = ProviderAccount["provider"];
@@ -195,22 +195,24 @@ function AddAccountView({ provider, page }: { provider: Provider; page: Accounts
 function AccountListItem({ account, current, onSelect }: { account: ProviderAccount; current: boolean; onSelect: () => void }) {
 	const { t } = useTranslation();
 	const headroom = accountHeadroom(account);
-	const global = account.global ? <span title={t(account.kind === "api_key" ? "providerAccounts.globalKeyHint" : "providerAccounts.globalHint")}>{t("providerAccounts.global")}</span> : null;
 	const marks = (account.signedIn ? [
 		account.primary ? <span>{t("providerAccounts.default")}</span> : null,
-		global,
+		account.reserved ? <span>{t("providerAccounts.inReserve")}</span> : null,
 		upcoming(account.usage?.pausedUntil) ? <span className="text-warning">{t("providerAccounts.paused")}</span> : null,
 		account.usage?.signInEnding ? <span className="text-warning">{t("providerAccounts.signInEndingMark")}</span> : null,
 		account.kind === "api_key" ? <span>{t("providerAccounts.apiKeyLabel")}</span>
 			: headroom === null ? null
 				: headroom === 0 ? <span className="text-status-needs-you">{t("providerAccounts.limitReached")}</span>
 					: <span className={cn("tabular-nums", headroom <= 20 ? "text-warning" : "")}>{t("providerAccounts.usageRemaining", { percent: headroom })}</span>,
-	] : [global, <span className="text-status-needs-you">{t("providerAccounts.signedOut")}</span>]).filter(Boolean);
+	] : [<span className="text-status-needs-you">{t("providerAccounts.signedOut")}</span>]).filter(Boolean);
 	return (
 		<button type="button" data-testid={`provider-account-${account.id}`} aria-current={current ? "true" : undefined} className={cn("flex w-full items-center gap-3 rounded-[10px] px-3 py-2.5 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring", current ? "bg-interactive-active" : "hover:bg-interactive-hover")} onClick={onSelect}>
 			<AgentAvatar className="size-7 shrink-0" decorative provider={PROVIDERS.find((provider) => provider.id === account.provider)!.agent} />
 			<span className="min-w-0 flex-1">
-				<span className="block truncate text-sm font-medium text-foreground">{account.displayName}</span>
+				<span className="flex items-center gap-2">
+					<span className="truncate text-sm font-medium text-foreground">{account.displayName}</span>
+					{account.global ? <DeviceTag apiKey={account.kind === "api_key"} /> : null}
+				</span>
 				<span className="mt-px flex items-center gap-1.5 truncate text-xs text-muted-foreground">
 					{marks.map((mark, index) => <Fragment key={index}>{index ? <Dot /> : null}{mark}</Fragment>)}
 				</span>
