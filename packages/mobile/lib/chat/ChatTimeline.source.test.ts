@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const source = readFileSync(new URL("./ChatTimeline.tsx", import.meta.url), "utf8");
 const turnSummarySource = source.slice(
-	source.indexOf("function TurnSummary"),
+	source.indexOf("function TurnStatusRow"),
 	source.indexOf("function TurnPlan"),
 );
 
@@ -11,6 +11,12 @@ describe("chat turn summary styling", () => {
 	it("shows the duration without a trailing divider line", () => {
 		expect(turnSummarySource).toContain("Worked for ${duration}");
 		expect(turnSummarySource).not.toContain("<View style={styles.ruleHalf} />");
+	});
+
+	it("folds a settled turn's work behind the Worked for row and keeps its state above the list", () => {
+		expect(source).toContain("partitionTurnItems(items, group.turn)");
+		expect(source).toContain("extraData={openWorked}");
+		expect(turnSummarySource).toContain("accessibilityState={foldable ? { expanded: open } : undefined}");
 	});
 });
 

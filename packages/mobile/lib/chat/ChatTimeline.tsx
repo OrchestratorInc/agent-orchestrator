@@ -1,7 +1,7 @@
 import { Feather } from "../icons";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActivityIndicator,
 	FlatList,
@@ -23,6 +23,7 @@ import { useApp } from "../store";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { MascotLamp } from "../ui";
+import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { caretNotation, commandOutputText } from "./ansi";
@@ -60,6 +61,7 @@ import {
 	canRollbackTurn,
 	conversationTimelineRenderPlan,
 	countActivityNodes,
+	partitionTurnItems,
 	readableConversationItems,
 	type ActivityNode,
 	type ConversationGroup,
@@ -106,6 +108,15 @@ export const ChatTimeline = memo(function ChatTimeline({
 	const listRef = useRef<FlatList<ConversationGroup>>(null);
 	const followsTail = useRef(true);
 	const [showJump, setShowJump] = useState(false);
+	// Held above the virtualized list so a "Worked for" fold keeps its state when its row scrolls away and back.
+	const [openWorked, setOpenWorked] = useState<ReadonlySet<string>>(() => new Set());
+	const toggleWorked = useCallback((key: string) => {
+		setOpenWorked((current) => {
+			const next = new Set(current);
+			if (!next.delete(key)) next.add(key);
+			return next;
+		});
+	}, []);
 	// Usage is snapshot state, not conversation. Reasoning stays available in the
 	// durable record but hidden on mobile: prose and work are the primary surface.
 	const items = useMemo(() => readableConversationItems(snapshot), [snapshot]);
@@ -141,6 +152,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 			<FlatList<ConversationGroup>
 				ref={listRef}
 				data={groups}
+				extraData={openWorked}
 				inverted={plan.inverted}
 				keyExtractor={(group) => group.key}
 				style={styles.list}
@@ -186,6 +198,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 					onResolveInput={onResolveInput}
 					onRollback={onRollback}
 					answeredBelow={answeredBelow}
+					workedOpen={openWorked.has(group.key)}
+					onToggleWorked={toggleWorked}
 				/>}
 			/>
 			{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); listRef.current?.scrollToOffset({ offset: 0, animated: true }); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}
@@ -193,7 +207,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 	);
 });
 
-function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, answeredBelow }: {
+function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, answeredBelow, workedOpen, onToggleWorked }: {
 	group: ConversationGroup;
 	snapshot: ConversationSnapshot;
 	approvalPending: boolean;
@@ -202,6 +216,8 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	onResolveInput(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>): Promise<void>;
 	onRollback?(turnId: string): Promise<number>;
 	answeredBelow?: number;
+	workedOpen: boolean;
+	onToggleWorked(key: string): void;
 }) {
 	// A provider failure arrives twice: as an error activity, and again as the
 	// turn's errorMessage below it. The turn keeps it — that line carries the
@@ -210,11 +226,20 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	const items = turnError
 		? group.items.filter((item) => !(item.kind === "activity" && errorActivityDuplicatesTurn(item, turnError)))
 		: group.items;
-	const rows = activityRuns(items);
-	return <View>{rows.map((row) => row.kind === "activities"
+	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
-		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} answeredBelow={answeredBelow} />)}
-		{group.turn ? <TurnSummary turn={group.turn} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null}
+		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} answeredBelow={answeredBelow} />);
+	const partition = partitionTurnItems(items, group.turn);
+	const summary = group.turn ? <TurnSummary turn={group.turn} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
+	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
+	// Running: the prompt, a live Working row, then the work as it streams in.
+	// Settled: the same row becomes "Worked for", folding the work away and
+	// leaving the notices and the final reply in view.
+	return <View>
+		{renderRows(partition.prompt)}
+		<TurnStatusRow turn={group.turn} foldable={partition.settled && partition.work.length > 0} open={workedOpen} onToggle={() => onToggleWorked(group.key)} />
+		{partition.settled ? (workedOpen ? <FoldBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</FoldBody> : null) : renderRows(partition.work)}
+		<FoldLayout>{renderRows(partition.notices)}{renderRows(partition.final)}{summary}</FoldLayout>
 	</View>;
 }
 
@@ -628,12 +653,14 @@ function commandCategory(text: string): "read" | "search" | "vcs" | "run" {
 const READ_COMMANDS = new Set(["cat", "sed", "nl", "head", "tail", "bat", "less", "more", "wc", "jq"]);
 const SEARCH_COMMANDS = new Set(["rg", "grep", "find", "fd", "ls", "tree", "glob", "ag"]);
 
-function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?(turnId: string): Promise<number> }) {
+/**
+ * The turn's status row, which sits between the prompt and the work: a ticking
+ * "Working · 12s" while the turn runs, then "Worked for 20s" once it settles. When
+ * there is folded work the settled row is the toggle that reveals it.
+ */
+function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationTurn; foldable: boolean; open: boolean; onToggle(): void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const [confirming, setConfirming] = useState(false);
-	const [rollingBack, setRollingBack] = useState(false);
-	const [rollbackError, setRollbackError] = useState<string>();
 	const running = turn.state === "running";
 	const [nowMs, setNowMs] = useState(() => Date.now());
 	useEffect(() => {
@@ -644,8 +671,7 @@ function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?
 	}, [running, turn.id]);
 	const duration = elapsed(turn.startedAt ?? turn.requestedAt, turn.completedAt);
 	const workingDuration = running ? workingElapsedLabel(turn.startedAt ?? turn.requestedAt, nowMs) : undefined;
-	const settled = turn.state !== "running" && turn.state !== "queued";
-	const summary = turn.rolledBack
+	const label = turn.rolledBack
 		? "Rolled back"
 		: turn.state === "completed"
 			? duration ? `Worked for ${duration}` : "Work completed"
@@ -653,19 +679,40 @@ function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?
 				? duration ? `Failed after ${duration}` : "Turn failed"
 				: turn.state === "interrupted"
 					? duration ? `Stopped after ${duration}` : "Turn stopped"
-					: turn.state === "queued" ? "Queued" : workingDuration ? `Working · ${workingDuration}` : "Working";
+					: workingDuration ? `Working · ${workingDuration}` : "Working";
+	const text = <Text style={[styles.turnState, turn.state === "failed" && { color: t.red }]}>{label}</Text>;
+	// One element throughout, so the spinner can leave and the label slide into
+	// its place when the turn settles instead of the whole row remounting.
+	return <Pressable
+		accessibilityRole={foldable ? "button" : undefined}
+		accessibilityState={foldable ? { expanded: open } : undefined}
+		disabled={!foldable}
+		onPress={() => { haptics.tap(); onToggle(); }}
+		style={styles.statusRow}
+	>
+		{running ? <StatusSpinner><ActivityIndicator size="small" color={t.textTertiary} /></StatusSpinner> : null}
+		<StatusLabel>{text}</StatusLabel>
+		{foldable ? <FoldChevron open={open} color={t.textFaint} /> : null}
+	</Pressable>;
+}
+
+function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?(turnId: string): Promise<number> }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const [confirming, setConfirming] = useState(false);
+	const [rollingBack, setRollingBack] = useState(false);
+	const [rollbackError, setRollbackError] = useState<string>();
+	const settled = turn.state !== "running" && turn.state !== "queued";
+	const canRollBack = Boolean(onRollback && settled && turn.providerTurnId && !turn.rolledBack);
 	return (
 		<View style={styles.turnWrap}>
 			{turn.plan?.steps.length ? <TurnPlan turn={turn} /> : null}
 			{turn.diff?.files.length ? <ChangedFiles turn={turn} /> : null}
-			<View style={styles.turnLine}>
-				<Text style={[styles.turnState, turn.state === "failed" && { color: t.red }]}>{summary}</Text>
-				{onRollback && settled && turn.providerTurnId && !turn.rolledBack ? (
-					<Pressable accessibilityLabel="Roll back to before this turn" hitSlop={8} onPress={() => { haptics.warning(); setConfirming(true); }}>
-						<Feather name="rotate-ccw" size={12} color={t.textTertiary} />
-					</Pressable>
-				) : null}
-			</View>
+			{canRollBack ? <View style={styles.turnLine}>
+				<Pressable accessibilityLabel="Roll back to before this turn" hitSlop={8} onPress={() => { haptics.warning(); setConfirming(true); }}>
+					<Feather name="rotate-ccw" size={12} color={t.textTertiary} />
+				</Pressable>
+			</View> : null}
 			{turn.errorMessage ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
 			{confirming ? (
 				<View style={styles.rollbackConfirm}>
@@ -1034,7 +1081,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	output: { color: t.textSecondary, backgroundColor: t.bgColumn, borderRadius: 8, padding: space.sm, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
 	partial: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize },
 	turnWrap: { paddingTop: space.sm, paddingBottom: space.lg, gap: space.sm },
-	turnLine: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
+	turnLine: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.sm },
+	statusRow: { alignSelf: "flex-start", minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs },
 	turnState: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "500" },
 	turnError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, textAlign: "right" },
 	rollbackConfirm: { marginTop: space.xxs, backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderDefault, borderRadius: 12, padding: space.md, gap: space.xs },

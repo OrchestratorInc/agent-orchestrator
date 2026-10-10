@@ -92,6 +92,67 @@ export function groupConversationByTurn(
 	return groups.sort((left, right) => left.anchor - right.anchor);
 }
 
+export type TurnItemPartition = {
+	/** Settled turns fold their work behind a "Worked for" header; a running turn shows it inline. */
+	settled: boolean;
+	/** Only the prompt that opened the turn sits above the status row. */
+	prompt: ConversationItem[];
+	/** The work between prompt and answer: tool calls, interim prose, later steers. */
+	work: ConversationItem[];
+	/** Errors and system warnings, which stay readable after the work folds away. */
+	notices: ConversationItem[];
+	/** The agent's last non-empty reply, shown below the folded work. */
+	final: ConversationItem[];
+};
+
+function isSteerItem(item: ConversationItem): boolean {
+	return item.kind === "activity" && item.activityKind === "system" && item.detail?.event === "steer";
+}
+
+function isHumanItem(item: ConversationItem): boolean {
+	return (item.kind === "message" && item.role === "user") || isSteerItem(item);
+}
+
+function isNoticeItem(item: ConversationItem): boolean {
+	if (item.kind !== "activity") return false;
+	if (item.activityKind === "error") return true;
+	return item.detail?.event !== undefined && !isSteerItem(item) && item.detail.event !== "compaction" && item.activityKind !== "plan";
+}
+
+/** Mirrors the items the timeline draws nothing for, so they cannot fill an empty accordion. */
+function rendersNothing(item: ConversationItem): boolean {
+	if (item.kind === "message") return item.role === "assistant" && item.text.trim() === "";
+	return item.activityKind === "user_input" || (item.activityKind === "approval" && item.status === "pending");
+}
+
+/**
+ * Split one turn's items for the Working / Worked presentation, matching desktop.
+ * A running turn keeps its work inline under a live "Working" row; once the turn
+ * settles the work folds behind "Worked for", leaving the final reply and any
+ * notices visible. Queued turns (and turns with no daemon record) stay flat.
+ */
+export function partitionTurnItems(items: ConversationItem[], turn: ConversationTurn | undefined): TurnItemPartition | undefined {
+	if (!turn || turn.state === "queued") return undefined;
+	const settled = turn.state !== "running";
+	const firstWork = items.findIndex((item) => !isHumanItem(item));
+	const leading = firstWork < 0 ? items.length : firstWork;
+	const prompt = items.slice(0, leading);
+	let rest = items.slice(leading);
+	if (!settled) return { settled, prompt, work: rest, notices: [], final: [] };
+	let final: ConversationItem[] = [];
+	for (let index = rest.length - 1; index >= 0; index -= 1) {
+		const item = rest[index];
+		if (item.kind === "message" && item.role === "assistant" && item.text.trim() !== "") {
+			final = [item];
+			rest = rest.filter((_, i) => i !== index);
+			break;
+		}
+	}
+	const notices = rest.filter(isNoticeItem);
+	const work = rest.filter((item) => !isNoticeItem(item) && !rendersNothing(item));
+	return { settled, prompt, work, notices, final };
+}
+
 /** Latest-first data lets an inverted virtualized list paint the live edge first. */
 export function latestFirstConversationGroups(
 	snapshot: ConversationSnapshot,
