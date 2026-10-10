@@ -2253,6 +2253,13 @@ describe("new task provider account selection", () => {
 		await chooseAccount(user, /Cedar Codex/);
 		await waitForTaskReady();
 	});
+	it("still renders when the account list answers without accounts", async () => {
+		h.providerInventory = { status: "ok" } as never;
+		const { cache } = show();
+		await waitFor(() => expect(cache.getQueryData(["provider-accounts", "catalogue"])).toBeDefined());
+		expect(await screen.findByRole("textbox", { name: "Task" })).toBeVisible();
+	});
+
 	it("shows the account button only for a managed agent on this machine, where the host asks", async () => {
 		const first = render(<Wrap><TaskComposer projectId="__standalone__" accountControlContainer={slot} onCreated={vi.fn()} /></Wrap>);
 		const control = await accountControl();

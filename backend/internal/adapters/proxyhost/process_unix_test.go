@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // TestHelperProcessFixture is the helper the tests below start: the test
@@ -33,7 +35,7 @@ func TestHelperProcessFixture(t *testing.T) {
 	if err != nil {
 		os.Exit(3)
 	}
-	session, _ := syscall.Getsid(0)
+	session, _ := unix.Getsid(0)
 	record, _ := json.Marshal(map[string]any{"args": os.Args, "pid": os.Getpid(), "session": session, "writable": os.Getenv("WRITABLE_PATH")})
 	if os.WriteFile(filepath.Join(root, "fixture.json"), record, 0o600) != nil {
 		os.Exit(4)

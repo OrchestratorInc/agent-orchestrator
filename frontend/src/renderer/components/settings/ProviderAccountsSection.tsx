@@ -49,7 +49,7 @@ function useAccountsPage() {
 	const cache = useQueryClient();
 	const query = useProviderAccounts(true, false);
 	const usageQuery = useProviderAccounts(true, true);
-	const accounts = query.data?.accounts.map((account) => ({ ...account, usage: usageQuery.data?.accounts.find((entry) => entry.id === account.id)?.usage })) ?? [];
+	const accounts = query.data?.accounts?.map((account) => ({ ...account, usage: usageQuery.data?.accounts.find((entry) => entry.id === account.id)?.usage })) ?? [];
 	const [pending, setPending] = useState(false);
 	const [message, setMessage] = useState("");
 	// After the default changes, the sessions still on the old default can follow.

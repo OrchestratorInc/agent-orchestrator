@@ -188,7 +188,7 @@ func resolveFirstParty(ctx context.Context, opts ResolveOptions) (Credential, bo
 	}
 	// Source 5: the subscription login, stored in the keychain on macOS and in
 	// a plain file everywhere else.
-	if stored, source, ok := loadOAuth(ctx, opts); ok {
+	if stored, source, ok := loadOAuth(ctx, opts, false); ok {
 		return Credential{
 			Kind: stored.kind, Secret: stored.token, Source: source, Provider: ProviderFirstParty,
 			ExpiresAt: stored.expiresAt, Renewable: stored.renewable,
@@ -199,7 +199,7 @@ func resolveFirstParty(ctx context.Context, opts ResolveOptions) (Credential, bo
 
 // storedOAuth is the subscription login Claude Code persisted: the access
 // token plus the expiry metadata stored next to it. The refresh token itself
-// reaches only LocalOAuth; a Credential records no more than its presence.
+// is kept only when LocalOAuth asks for it; a Credential records only its presence.
 type storedOAuth struct {
 	token     string
 	refresh   string
@@ -216,7 +216,12 @@ type storedOAuth struct {
 // third storage backend to implement. The macOS path falls through to the file
 // on any failure, which is the path the other two platforms always take, so
 // non-Mac platforms exercise strictly less code rather than different code.
-func loadOAuth(ctx context.Context, opts ResolveOptions) (stored storedOAuth, source string, ok bool) {
+func loadOAuth(ctx context.Context, opts ResolveOptions, keepRefresh bool) (stored storedOAuth, source string, ok bool) {
+	defer func() {
+		if !keepRefresh {
+			stored.refresh = ""
+		}
+	}()
 	if opts.goos() == "darwin" && opts.AllowKeychain {
 		if stored, ok := readKeychain(ctx, opts); ok {
 			return stored, "keychain", true
@@ -323,7 +328,7 @@ func LocalOAuth(ctx context.Context, opts ResolveOptions) (access, refresh strin
 	if opts.env("ANTHROPIC_API_KEY") != "" || opts.env("ANTHROPIC_AUTH_TOKEN") != "" {
 		return "", ""
 	}
-	stored, _, ok := loadOAuth(ctx, opts)
+	stored, _, ok := loadOAuth(ctx, opts, true)
 	if !ok || stored.kind != KindOAuthToken {
 		return "", ""
 	}

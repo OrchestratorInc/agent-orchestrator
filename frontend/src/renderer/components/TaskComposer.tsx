@@ -549,7 +549,7 @@ export function TaskComposer({
 		settings?.defaultSessionMode === "chat" &&
 		!settings.chatHarnesses.includes(selectedAgent);
 	const providerAccounts = useProviderAccounts(Boolean(accountProviderId), false);
-	const accountChoices = providerAccounts.data?.accounts.filter((account) => account.provider === accountProviderId && account.signedIn) ?? [];
+	const accountChoices = providerAccounts.data?.accounts?.filter((account) => account.provider === accountProviderId && account.signedIn) ?? [];
 	// The default is left to the daemon, so it only has to exist; an explicit choice has to be usable still.
 	const managedAccountReady = !accountProviderId || (!providerAccounts.isError && accountChoices.some((account) => (chosenAccountId ? account.id === chosenAccountId : account.primary)));
 	const showAccountControl = Boolean(accountProviderId) && Boolean(providerAccounts.data);
