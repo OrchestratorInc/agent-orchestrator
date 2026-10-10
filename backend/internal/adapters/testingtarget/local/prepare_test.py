@@ -51,6 +51,19 @@ class WarmPreparationTest(unittest.TestCase):
                 self.assertEqual((first / "frontend/node_modules/kept").read_text(), "cached")
                 self.assertFalse(any("clean" in args for args, _ in calls))
 
+    def test_controller_reservation_is_validated_and_left_to_its_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = Path(tmp)
+            lease = checkout / ".ao-testing-active"
+            lease.write_text("owned-attempt")
+            with prepare.reserve(checkout, "owned-attempt"):
+                self.assertEqual(lease.read_text(), "owned-attempt")
+            self.assertEqual(lease.read_text(), "owned-attempt")
+            with self.assertRaisesRegex(RuntimeError, "not owned by this preparation"):
+                with prepare.reserve(checkout, "other-attempt"):
+                    self.fail("foreign reservation admitted")
+            self.assertEqual(lease.read_text(), "owned-attempt")
+
     def test_failed_install_does_not_stamp_or_override_caches(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

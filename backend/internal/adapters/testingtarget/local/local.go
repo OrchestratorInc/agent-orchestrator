@@ -69,6 +69,8 @@ type launch struct {
 	closing   bool
 	rootInfo  os.FileInfo
 	leaseInfo os.FileInfo
+
+	setupGroup int
 }
 
 // Adapter retains launch ownership in memory. It never attaches to an existing
@@ -154,7 +156,7 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (resu
 	if err != nil {
 		return empty, err
 	}
-	// Until Electron starts, failures still own preparation files but no PIDs.
+	// Preparation and build commands verify their own process-group shutdown.
 	pending := &launch{root: root, rootInfo: rootInfo}
 	launched := false
 	defer func() {
@@ -166,6 +168,11 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (resu
 		if pending.log != nil {
 			err = errors.Join(err, pending.log.Close())
 			pending.log = nil
+		}
+		var groupErr *setupGroupError
+		if errors.As(err, &groupErr) {
+			pending.setupGroup = groupErr.group
+			return // Retain state and reservation until process absence is proved.
 		}
 		cleanupErr := removePrivateState(pending)
 		pending.stopped = cleanupErr == nil

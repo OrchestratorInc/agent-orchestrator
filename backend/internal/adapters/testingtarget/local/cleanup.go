@@ -127,12 +127,19 @@ func (a *Adapter) Stop(ctx context.Context, target domain.TestTargetIdentity) (p
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if s.setupGroup != 0 {
+		if err := waitSetupGroup(ctx, s.setupGroup); err != nil {
+			failed.Leftovers = []string{err.Error()}
+			return failed, err
+		}
+		s.setupGroup = 0
+	}
 	if s.stopped && s.leaseInfo == nil {
 		return ports.TestingCleanupResult{State: domain.TestCleanupComplete}, nil
 	}
 	s.closing = true
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
 	var problems []error
 	if err := a.captureTree(ctx, s); err != nil {
 		problems = append(problems, err)

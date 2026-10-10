@@ -25,8 +25,15 @@ def run(arguments, cwd):
 
 
 @contextmanager
-def reserve(checkout):
+def reserve(checkout, owner=None):
     path = checkout / ".ao-testing-active"
+    if owner is not None:
+        with path.open("r") as lease:
+            if (lease.read() != owner or
+                    not os.path.samestat(os.fstat(lease.fileno()), path.lstat())):
+                raise RuntimeError("Target checkout reservation is not owned by this preparation")
+            yield
+        return
     with path.open("x") as lease:
         try:
             yield
@@ -92,7 +99,7 @@ def preflight(checkout):
             "daemonCommandOverride": True}
 
 
-def prepare(repository, commit, cache):
+def prepare(repository, commit, cache, reservation_owner=None):
     repository = repository.resolve()
     try:
         origin = run(["git", "remote", "get-url", "origin"], repository)
@@ -116,7 +123,7 @@ def prepare(repository, commit, cache):
                 raise RuntimeError("Target checkout belongs to a different repository")
             if run(["git", "status", "--porcelain", "--untracked-files=no"], checkout):
                 raise RuntimeError("Target checkout has tracked edits; preserve them before preparing")
-        with reserve(checkout):
+        with reserve(checkout, reservation_owner):
             run(["git", "fetch", "--no-tags", "origin"], checkout)
             # Admit local, unpushed revisions without changing the cached remote.
             source = "origin" if repository == checkout else str(repository)
@@ -145,12 +152,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", type=Path, default=Path(__file__).resolve().parents[5])
     parser.add_argument("--commit", help="Exact base or head commit; defaults to repository HEAD")
+    parser.add_argument("--reservation-owner", help="Controller-owned checkout reservation")
     args = parser.parse_args()
     commit = args.commit or run(["git", "rev-parse", "HEAD"], args.repository)
     if len(commit) not in (40, 64) or any(c not in "0123456789abcdef" for c in commit):
         parser.error("--commit must be a full lowercase commit SHA")
     checkout = prepare(args.repository, commit,
-                       Path.home() / ".ao/dev/agentic-target/repos")
+                       Path.home() / ".ao/dev/agentic-target/repos", args.reservation_owner)
     print(f"Prepared target checkout: {checkout}")
 
 
