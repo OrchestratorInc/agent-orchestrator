@@ -35,7 +35,7 @@ const (
 
 // ansiPattern matches CSI, OSC, and a single-character escape so color codes
 // never reach the caller's terminal or spend tokens.
-var ansiPattern = regexp.MustCompile(`\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|.)`)
+var ansiPattern = regexp.MustCompile(`\x1b(?:\[[0-?]*[\x20-\x2f]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|.)`)
 
 type transcriptRequest struct {
 	enabled bool
@@ -131,17 +131,18 @@ func transcriptRequestFrom(cmd *cobra.Command) (transcriptRequest, error) {
 		req.before = before
 	}
 	if flags.Changed("cap") {
-		cap, capErr := strconv.Atoi(strings.TrimSpace(flags.Lookup("cap").Value.String()))
-		if capErr != nil || (cap != 0 && (cap < transcriptCapMin || cap > transcriptCapMax)) {
+		fieldCap, capErr := strconv.Atoi(strings.TrimSpace(flags.Lookup("cap").Value.String()))
+		if capErr != nil || (fieldCap != 0 && (fieldCap < transcriptCapMin || fieldCap > transcriptCapMax)) {
 			return req, usageError{errors.New("--cap must be 0 or an integer from 80 to 1000000")}
 		}
-		req.cap = cap
+		req.cap = fieldCap
 	}
 	return req, nil
 }
 
 func transcriptUnavailable(id string) error {
-	return fmt.Errorf("session %s runs in Terminal UI mode; AO keeps no durable transcript for it. Use \"ao session get %s\" for status, or open its terminal.", id, id)
+	// The closing period is the sentence from the transcript design.
+	return fmt.Errorf("session %s runs in Terminal UI mode; AO keeps no durable transcript for it. Use \"ao session get %s\" for status, or open its terminal.", id, id) //nolint:revive // user-facing sentence ends with a period
 }
 
 func (c *commandContext) fetchConversationSnapshot(ctx context.Context, id string, req transcriptRequest) (conversationSnapshotWire, error) {
@@ -386,12 +387,12 @@ var cappedKeys = map[string]bool{
 // (the entry or turn) so a nested detail map is not given its own list.
 // force caps every string, which is how tool arguments and results stay bounded
 // without a fixed key list. Returns the number of fields cut.
-func capTree(v any, path string, cap int, fullCmd string, record map[string]any) int {
-	if cap == 0 || v == nil {
+func capTree(v any, path string, maxChars int, fullCmd string, record map[string]any) int {
+	if maxChars == 0 || v == nil {
 		return 0
 	}
 	sink := make([]fieldTruncation, 0)
-	walkCap(v, path, cap, fullCmd, false, &sink)
+	walkCap(v, path, maxChars, fullCmd, false, &sink)
 	if len(sink) == 0 {
 		return 0
 	}
@@ -402,7 +403,7 @@ func capTree(v any, path string, cap int, fullCmd string, record map[string]any)
 	return len(sink)
 }
 
-func walkCap(v any, path string, cap int, fullCmd string, force bool, sink *[]fieldTruncation) {
+func walkCap(v any, path string, maxChars int, fullCmd string, force bool, sink *[]fieldTruncation) {
 	node, ok := v.(map[string]any)
 	if !ok {
 		items, ok := v.([]any)
@@ -410,7 +411,7 @@ func walkCap(v any, path string, cap int, fullCmd string, force bool, sink *[]fi
 			return
 		}
 		for i, item := range items {
-			walkCap(item, fmt.Sprintf("%s.%d", path, i), cap, fullCmd, force, sink)
+			walkCap(item, fmt.Sprintf("%s.%d", path, i), maxChars, fullCmd, force, sink)
 		}
 		return
 	}
@@ -428,14 +429,14 @@ func walkCap(v any, path string, cap int, fullCmd string, force bool, sink *[]fi
 			if !force && !cappedKeys[key] && key != "arguments" && key != "result" {
 				continue
 			}
-			next, trunc := elideField(typed, cap, childPath, fullCmd)
+			next, trunc := elideField(typed, maxChars, childPath, fullCmd)
 			if trunc == nil {
 				continue
 			}
 			node[key] = next
 			*sink = append(*sink, *trunc)
 		case map[string]any:
-			walkCap(typed, childPath, cap, fullCmd, childForce, sink)
+			walkCap(typed, childPath, maxChars, fullCmd, childForce, sink)
 		case []any:
 			for i, item := range typed {
 				itemPath := fmt.Sprintf("%s.%d", childPath, i)
@@ -444,26 +445,26 @@ func walkCap(v any, path string, cap int, fullCmd string, force bool, sink *[]fi
 					if !childForce {
 						continue
 					}
-					next, trunc := elideField(itemTyped, cap, itemPath, fullCmd)
+					next, trunc := elideField(itemTyped, maxChars, itemPath, fullCmd)
 					if trunc == nil {
 						continue
 					}
 					typed[i] = next
 					*sink = append(*sink, *trunc)
 				default:
-					walkCap(itemTyped, itemPath, cap, fullCmd, childForce, sink)
+					walkCap(itemTyped, itemPath, maxChars, fullCmd, childForce, sink)
 				}
 			}
 		}
 	}
 }
 
-func elideField(text string, cap int, field, fullCmd string) (string, *fieldTruncation) {
+func elideField(text string, maxChars int, field, fullCmd string) (string, *fieldTruncation) {
 	original := utf8.RuneCountInString(text)
-	if cap == 0 || original <= cap {
+	if maxChars == 0 || original <= maxChars {
 		return text, nil
 	}
-	next := elideWithCommand(text, cap, fullCmd)
+	next := elideWithCommand(text, maxChars, fullCmd)
 	return next, &fieldTruncation{
 		Field:         field,
 		OriginalChars: original,
@@ -472,24 +473,24 @@ func elideField(text string, cap int, field, fullCmd string) (string, *fieldTrun
 	}
 }
 
-func elideWithCommand(text string, cap int, fullCmd string) string {
+func elideWithCommand(text string, maxChars int, fullCmd string) string {
 	runes := []rune(text)
 	original := len(runes)
-	if cap == 0 || original <= cap {
+	if maxChars == 0 || original <= maxChars {
 		return text
 	}
-	omitted := original - cap
+	omitted := original - maxChars
 	if omitted < 1 {
 		omitted = 1
 	}
 	for attempt := 0; attempt < 8; attempt++ {
 		marker := truncationMarker(omitted, fullCmd)
 		markerRunes := []rune(marker)
-		if len(markerRunes) >= cap {
+		if len(markerRunes) >= maxChars {
 			return marker
 		}
-		head := (cap - len(markerRunes)) / 2
-		tail := cap - len(markerRunes) - head
+		head := (maxChars - len(markerRunes)) / 2
+		tail := maxChars - len(markerRunes) - head
 		if head < 0 {
 			head = 0
 		}
@@ -526,14 +527,14 @@ func truncationMarker(omitted int, fullCmd string) string {
 	return fmt.Sprintf("[... %d chars omitted; full entry: %s ...]", omitted, fullCmd)
 }
 
-func transcriptCommand(id string, n int, before int64, cap *int, project string) string {
+func transcriptCommand(id string, n int, before int64, fieldCap *int, project string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "ao session get %s --transcript %d", id, n)
 	if before > 0 {
 		fmt.Fprintf(&b, " --before %d", before)
 	}
-	if cap != nil {
-		fmt.Fprintf(&b, " --cap %d", *cap)
+	if fieldCap != nil {
+		fmt.Fprintf(&b, " --cap %d", *fieldCap)
 	}
 	if project != "" {
 		fmt.Fprintf(&b, " -p %s", project)
@@ -541,7 +542,7 @@ func transcriptCommand(id string, n int, before int64, cap *int, project string)
 	return b.String()
 }
 
-func incompleteItems(turns []map[string]any, entries []map[string]any) []any {
+func incompleteItems(turns, entries []map[string]any) []any {
 	items := make([]any, 0)
 	for _, turn := range turns {
 		state, _ := turn["state"].(string)
@@ -613,10 +614,14 @@ func writeTranscriptSummary(b *strings.Builder, doc *transcriptDocument) {
 	switch {
 	case doc.Returned == 0:
 		fmt.Fprintf(b, "transcript: 0 entries, oldest first\n")
-	case doc.LatestSequence > 0:
-		newest := entrySequence(doc.Entries[len(doc.Entries)-1].(map[string]any))
-		oldest := entrySequence(doc.Entries[0].(map[string]any))
-		fmt.Fprintf(b, "transcript: %d of %d entries (sequence %d to %d), oldest first\n", doc.Returned, doc.LatestSequence, oldest, newest)
+	case doc.LatestSequence > 0 && len(doc.Entries) > 0:
+		newestEntry, newestOK := doc.Entries[len(doc.Entries)-1].(map[string]any)
+		oldestEntry, oldestOK := doc.Entries[0].(map[string]any)
+		if !newestOK || !oldestOK {
+			fmt.Fprintf(b, "transcript: %d entries, oldest first\n", doc.Returned)
+			break
+		}
+		fmt.Fprintf(b, "transcript: %d of %d entries (sequence %d to %d), oldest first\n", doc.Returned, doc.LatestSequence, entrySequence(oldestEntry), entrySequence(newestEntry))
 	default:
 		fmt.Fprintf(b, "transcript: %d entries, oldest first\n", doc.Returned)
 	}
