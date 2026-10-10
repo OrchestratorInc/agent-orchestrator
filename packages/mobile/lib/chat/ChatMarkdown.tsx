@@ -1,7 +1,8 @@
 import { Feather } from "../icons";
+import { UITextView as Text } from "@bsky.app/react-native-uitextview";
 import * as Clipboard from "expo-clipboard";
-import { createContext, Fragment, memo, useContext, useState, type ReactNode } from "react";
-import { Image, Pressable, ScrollView, StyleSheet, Text, View, type StyleProp, type TextStyle } from "react-native";
+import { createContext, memo, useContext, useState, type ReactNode } from "react";
+import { Image, Platform, Pressable, ScrollView, StyleSheet, View, type StyleProp, type TextStyle } from "react-native";
 import { haptics } from "../haptics";
 import { openGitHub } from "../openGitHub";
 import type { Theme } from "../theme";
@@ -41,18 +42,20 @@ export function ChatLinkProvider({ onLinkOpen, children }: { onLinkOpen: (url: s
  * Small native CommonMark renderer for the conversation surface.
  *
  * It deliberately covers the structures coding agents emit constantly (code,
- * headings, lists, quotes, links and inline emphasis) without putting a WebView
- * inside every message. Unknown Markdown remains readable text; the renderer
- * never hides content because a provider used syntax it does not know.
+ * headings, lists, quotes, links and inline emphasis). Unknown Markdown remains
+ * readable text; the renderer never hides content because a provider used
+ * syntax it does not know.
  */
 export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
+	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const selectionColor = Platform.OS === "android" ? t.accentBorder : t.accent;
 	return (
 		<View style={styles.root}>
 			{parseBlocks(text).map((block, index) => {
 				if (block.kind === "code") return <CodeBlock key={index} {...block} streaming={streaming} />;
-				if (block.kind === "image") return <MarkdownImage key={index} alt={block.alt} url={block.url} />;
-				if (block.kind === "table") return <MarkdownTable key={index} headers={block.headers} rows={block.rows} />;
+				if (block.kind === "image") return <MarkdownImage key={index} alt={block.alt} url={block.url} selectionColor={selectionColor} />;
+				if (block.kind === "table") return <MarkdownTable key={index} headers={block.headers} rows={block.rows} selectionColor={selectionColor} />;
 				if (block.kind === "rule") return <View key={index} style={styles.rule} />;
 				if (block.kind === "list") {
 					return (
@@ -60,7 +63,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 							{block.items.map((item, itemIndex) => (
 								<View key={itemIndex} style={styles.listRow}>
 									<Text style={styles.marker}>{item.checked !== undefined ? (item.checked ? "☑" : "☐") : block.ordered ? `${itemIndex + 1}.` : "•"}</Text>
-									<Text style={[styles.body, styles.listBody, item.checked && styles.taskDone]}>{inline(item.text, styles)}</Text>
+									<Text selectable uiTextView selectionColor={selectionColor} style={[styles.body, styles.listBody, item.checked && styles.taskDone]}>{inline(item.text, styles)}</Text>
 								</View>
 							))}
 						</View>
@@ -68,7 +71,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 				}
 				if (block.kind === "heading") {
 					return (
-						<Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>
+						<Text key={index} selectable uiTextView selectionColor={selectionColor} style={[styles.heading, block.level > 2 && styles.smallHeading]}>
 							{inline(block.text, styles)}
 						</Text>
 					);
@@ -76,12 +79,12 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 				if (block.kind === "quote") {
 					return (
 						<View key={index} style={styles.quote}>
-							<Text style={styles.quoteText}>{inline(block.text, styles)}</Text>
+							<Text selectable uiTextView selectionColor={selectionColor} style={styles.quoteText}>{inline(block.text, styles)}</Text>
 						</View>
 					);
 				}
 				return (
-					<Text key={index} selectable style={styles.body}>
+					<Text key={index} selectable uiTextView selectionColor={selectionColor} style={styles.body}>
 						{inline(block.text, styles)}
 					</Text>
 				);
@@ -92,16 +95,16 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 
 let preferredCodeWrap = false;
 
-function MarkdownImage({ alt, url }: { alt: string; url: string }) {
+function MarkdownImage({ alt, url, selectionColor }: { alt: string; url: string; selectionColor: string }) {
 	const styles = useThemedStyles(makeStyles);
 	const [failed, setFailed] = useState(false);
-	if (failed) return <Text style={styles.imageFallback}>Image unavailable: {alt || url}</Text>;
-	return <View style={styles.imageCard}><Image accessibilityLabel={alt || "Conversation image"} accessibilityIgnoresInvertColors source={{ uri: url }} resizeMode="contain" onError={() => setFailed(true)} style={styles.image} />{alt ? <Text style={styles.imageCaption}>{alt}</Text> : null}</View>;
+	if (failed) return <Text selectable uiTextView selectionColor={selectionColor} style={styles.imageFallback}>Image unavailable: {alt || url}</Text>;
+	return <View style={styles.imageCard}><Image accessibilityLabel={alt || "Conversation image"} accessibilityIgnoresInvertColors source={{ uri: url }} resizeMode="contain" onError={() => setFailed(true)} style={styles.image} />{alt ? <Text selectable uiTextView selectionColor={selectionColor} style={styles.imageCaption}>{alt}</Text> : null}</View>;
 }
 
-function MarkdownTable({ headers, rows }: { headers: string[]; rows: string[][] }) {
+function MarkdownTable({ headers, rows, selectionColor }: { headers: string[]; rows: string[][]; selectionColor: string }) {
 	const styles = useThemedStyles(makeStyles);
-	return <ScrollView horizontal showsHorizontalScrollIndicator><View style={styles.table}><View style={[styles.tableRow, styles.tableHeader]}>{headers.map((cell, index) => <Text key={index} style={[styles.tableCell, styles.tableHeaderText]}>{cell}</Text>)}</View>{rows.map((row, rowIndex) => <View key={rowIndex} style={styles.tableRow}>{headers.map((_, cellIndex) => <Text key={cellIndex} style={styles.tableCell}>{row[cellIndex] ?? ""}</Text>)}</View>)}</View></ScrollView>;
+	return <ScrollView horizontal showsHorizontalScrollIndicator><View style={styles.table}><View style={[styles.tableRow, styles.tableHeader]}>{headers.map((cell, index) => <Text key={index} selectable uiTextView selectionColor={selectionColor} style={[styles.tableCell, styles.tableHeaderText]}>{cell}</Text>)}</View>{rows.map((row, rowIndex) => <View key={rowIndex} style={styles.tableRow}>{headers.map((_, cellIndex) => <Text key={cellIndex} selectable uiTextView selectionColor={selectionColor} style={styles.tableCell}>{row[cellIndex] ?? ""}</Text>)}</View>)}</View></ScrollView>;
 }
 
 function CodeBlock({ text, language, streaming }: { text: string; language?: string; streaming?: boolean }) {
@@ -165,7 +168,7 @@ function inline(text: string, styles: ReturnType<typeof makeStyles>): ReactNode[
 		}
 		at = match.index + match[0].length;
 	}
-	if (at < text.length) nodes.push(<Fragment key={`${at}-tail`}>{text.slice(at)}</Fragment>);
+	if (at < text.length) nodes.push(text.slice(at));
 	return nodes;
 }
 

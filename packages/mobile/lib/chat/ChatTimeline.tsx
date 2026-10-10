@@ -7,6 +7,7 @@ import {
 	FlatList,
 	Image,
 	Modal,
+	Platform,
 	Pressable,
 	ScrollView,
 	StyleSheet,
@@ -109,8 +110,14 @@ export const ChatTimeline = memo(function ChatTimeline({
 	// Usage is snapshot state, not conversation. Reasoning stays available in the
 	// durable record but hidden on mobile: prose and work are the primary surface.
 	const items = useMemo(() => readableConversationItems(snapshot), [snapshot]);
-	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items), [items, snapshot.turns]);
+	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items, Platform.OS === "android" ? "android" : "ios"), [items, snapshot.turns]);
 	const groups = plan.groups;
+	const inverted = plan.inverted;
+	const jumpViewPosition = inverted ? 0.82 : 0.18;
+	const scrollToLatest = (animated: boolean) => {
+		if (inverted) listRef.current?.scrollToOffset({ offset: 0, animated });
+		else listRef.current?.scrollToEnd({ animated });
+	};
 
 	useEffect(() => {
 		if (jumpToSequence === undefined) return;
@@ -119,12 +126,12 @@ export const ChatTimeline = memo(function ChatTimeline({
 		// turn never matched and the jump silently did nothing.
 		const index = groups.findIndex((group) => group.anchor === jumpToSequence || group.items.some((item) => item.sequence === jumpToSequence));
 		if (index >= 0) {
-			followsTail.current = index === 0;
+			followsTail.current = index === (inverted ? 0 : groups.length - 1);
 			setShowJump(!followsTail.current);
-			requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.82 }));
+			requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }));
 		}
 		onJumpHandled?.();
-	}, [groups, jumpToSequence, onJumpHandled]);
+	}, [groups, inverted, jumpToSequence, jumpViewPosition, onJumpHandled]);
 
 	if (plan.kind === "empty") {
 		return (
@@ -135,6 +142,17 @@ export const ChatTimeline = memo(function ChatTimeline({
 			</View>
 		);
 	}
+	const olderControl = snapshot.hasMoreBefore ? (
+		<Pressable
+			accessibilityRole="button"
+			disabled={loadingOlder}
+			onPress={() => { haptics.tap(); void onLoadOlder(); }}
+			style={styles.older}
+		>
+			{loadingOlder ? <ActivityIndicator size="small" /> : <Feather name="clock" size={12} />}
+			<Text style={styles.olderText}>{loadingOlder ? "Loading history…" : "Load earlier messages"}</Text>
+		</Pressable>
+	) : null;
 
 	return (
 		<View style={styles.timelineWrap}>
@@ -150,33 +168,24 @@ export const ChatTimeline = memo(function ChatTimeline({
 				maxToRenderPerBatch={4}
 				updateCellsBatchingPeriod={32}
 				windowSize={5}
-				maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+				maintainVisibleContentPosition={inverted ? { minIndexForVisible: 0 } : undefined}
 				onScroll={(event) => {
-					const { contentOffset } = event.nativeEvent;
-					followsTail.current = Math.abs(contentOffset.y) < 120;
+					const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+					followsTail.current = inverted
+						? Math.abs(contentOffset.y) < 120
+						: contentSize.height - layoutMeasurement.height - contentOffset.y < 120;
 					setShowJump(!followsTail.current);
 				}}
 				scrollEventThrottle={100}
 				onContentSizeChange={() => {
-					if (followsTail.current) requestAnimationFrame(() => listRef.current?.scrollToOffset({ offset: 0, animated: false }));
+					if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
 				}}
 				onScrollToIndexFailed={({ index, averageItemLength }) => {
 					listRef.current?.scrollToOffset({ offset: Math.max(0, index * averageItemLength), animated: true });
-					setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.82 }), 120);
+					setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }), 120);
 				}}
-				ListFooterComponent={
-					snapshot.hasMoreBefore ? (
-						<Pressable
-							accessibilityRole="button"
-							disabled={loadingOlder}
-							onPress={() => { haptics.tap(); void onLoadOlder(); }}
-							style={styles.older}
-						>
-							{loadingOlder ? <ActivityIndicator size="small" /> : <Feather name="clock" size={12} />}
-							<Text style={styles.olderText}>{loadingOlder ? "Loading history…" : "Load earlier messages"}</Text>
-						</Pressable>
-					) : null
-				}
+				ListHeaderComponent={inverted ? null : olderControl}
+				ListFooterComponent={inverted ? olderControl : null}
 				renderItem={({ item: group }) => <ConversationTurnGroup
 					group={group}
 					snapshot={snapshot}
@@ -188,7 +197,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 					answeredBelow={answeredBelow}
 				/>}
 			/>
-			{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); listRef.current?.scrollToOffset({ offset: 0, animated: true }); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}
+			{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); scrollToLatest(true); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}
 		</View>
 	);
 });
