@@ -168,7 +168,7 @@ func (p *Plugin) command(ctx context.Context, dataDir, id string, mode ports.Per
 	if err != nil {
 		return nil, err
 	}
-	cmd = append(cmd, "--set", "plugins="+string(pluginJSON), "--set", "backgroundTasks=false")
+	cmd = append(cmd, "--set", "plugins="+string(pluginJSON), "--set", "agentConfig.backgroundTasks=false")
 	// AO supports foreground invocations only: native fire-and-forget tools
 	// can outlive AfterInvocation and would falsely mark the session settled.
 	agentbase.AppendModelFlag(&cmd, config, "--model")

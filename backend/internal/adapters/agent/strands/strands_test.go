@@ -56,6 +56,9 @@ func TestLaunchPreservesDomainInstructionsAndDefaults(t *testing.T) {
 	if argValue(cmd, "--session-id") != "native-1" {
 		t.Fatal(cmd)
 	}
+	if !strings.Contains(strings.Join(cmd, " "), "agentConfig.backgroundTasks=false") {
+		t.Fatal("foreground dispatch is not enforced")
+	}
 	if strings.Contains(strings.Join(cmd, " "), "--print") {
 		t.Fatal("must remain interactive")
 	}
