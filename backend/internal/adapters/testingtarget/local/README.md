@@ -108,11 +108,7 @@ from changing live code. No kill-by-name or kill-by-port is used. A stale owned
 run file is removed only after other absence checks pass.
 
 Default tests use injected process operations and HTTP transports. The live
-proof is opt-in, macOS only, and needs the previously installed Cua Driver.
-Before running it, acquire `~/.ao/dev/live-launch.lock` with `mkdir` and write
-your AO session ID to its `owner` file. If held, defer this live proof. Keep the
-lock until its cleanup is verified, then remove only your matching owner file
-and lock directory. Run:
+proof is opt-in, macOS only, and needs the previously installed Cua Driver. Run:
 
 ```sh
 python3 - <<'PY'
