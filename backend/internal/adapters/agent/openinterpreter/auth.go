@@ -50,7 +50,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, maxConfigBytes+1))
 	if err != nil || len(data) > maxConfigBytes {
 		return ports.AgentAuthStatusUnknown, nil
