@@ -325,10 +325,12 @@ let browserQuitCleanupPromise: Promise<void> | null = null;
 let browserCleanupComplete = false;
 let browserQuitRequested = false;
 let createWindowPromise: Promise<void> | null = null;
+let windowCreationReady = false;
 const desktopQuit = createDesktopQuitController({
 	platform: process.platform,
 	hasTray: () => trayController !== null && !browserQuitRequested,
 	isUpdateRestartRequested,
+	dock: app.dock,
 	closeWindow: () => {
 		if (mainWindow) mainWindow.close();
 		else if (createWindowPromise) {
@@ -520,13 +522,17 @@ function applyRuntimeAppIcon(): void {
 }
 
 function focusMainWindow(): void {
+	if (!windowCreationReady || browserQuitRequested) return;
 	if (!mainWindow) {
-		createWindow();
+		void createWindow().catch((error) => console.error("failed to recreate main window:", error));
 		return;
 	}
-	if (mainWindow.isMinimized()) mainWindow.restore();
-	mainWindow.show();
-	mainWindow.focus();
+	void desktopQuit.beforeWindowShow().then(() => {
+		if (browserQuitRequested || !mainWindow || mainWindow.isDestroyed()) return;
+		if (mainWindow.isMinimized()) mainWindow.restore();
+		mainWindow.show();
+		mainWindow.focus();
+	}).catch((error) => console.error("failed to focus main window:", error));
 }
 
 function setDaemonStatus(nextStatus: DaemonStatus): void {
@@ -670,6 +676,11 @@ async function createWindowInternal(): Promise<void> {
 						trafficLightPosition: { x: MAC_WINDOW_BUTTON_X, y: MAC_TITLEBAR_HEIGHT / 2 - MAC_WINDOW_BUTTON_RADIUS },
 					}),
 	};
+	await desktopQuit.beforeWindowShow();
+	if (browserQuitRequested) {
+		await agentBrowserRuntime.dispose();
+		return;
+	}
 	mainWindow = new BaseWindow(windowOptions);
 	const composition = createWindowComposition({
 		mainWindow,
@@ -955,6 +966,7 @@ async function createWindowInternal(): Promise<void> {
 		// the next bounce skip attaching one to the replacement window.
 		cancelDockBounce();
 		trayLifecycle.clearPendingTarget();
+		desktopQuit.handleWindowClosed();
 	});
 }
 
@@ -2606,9 +2618,7 @@ ipcMain.handle(
 			});
 			toast.on("click", () => {
 				if (!mainWindow) return;
-				if (mainWindow.isMinimized()) mainWindow.restore();
-				mainWindow.show();
-				mainWindow.focus();
+				focusMainWindow();
 				getShellWebContents()?.send("notifications:click", notification.id);
 			});
 			toast.show();
@@ -2755,16 +2765,8 @@ installCloudLocalAuthIPC(cloudDataDir, notifyRenderersOfCloudSession);
 // CP calls go through main so the WorkOS bearer token never reaches a renderer.
 installCloudCpProxy(cloudDataDir);
 
-function focusCloudWindow(): void {
-	const window = BaseWindow.getAllWindows()[0];
-	if (!window) return;
-	if (window.isMinimized()) window.restore();
-	window.show();
-	window.focus();
-}
-
 async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
-	focusCloudWindow();
+	focusMainWindow();
 	try {
 		const session = await handleCloudDeepLink(url, cloudDataDir());
 		if (!session) return;
@@ -2797,12 +2799,7 @@ app.on("second-instance", (_event, argv) => {
 	// path uses rather than silently dropping it.
 	const folderPath = parseOpenFolderPathArg(argv);
 	if (folderPath) {
-		const window = BaseWindow.getAllWindows()[0];
-		if (window) {
-			if (window.isMinimized()) window.restore();
-			window.show();
-			window.focus();
-		}
+		focusMainWindow();
 		const contents = getShellWebContents();
 		if (contents) {
 			contents.send(OPEN_FOLDER_PATH_CHANNEL, folderPath);
@@ -2811,11 +2808,7 @@ app.on("second-instance", (_event, argv) => {
 		}
 		return;
 	}
-	const window = BaseWindow.getAllWindows()[0];
-	if (!window) return;
-	if (window.isMinimized()) window.restore();
-	window.show();
-	window.focus();
+	focusMainWindow();
 });
 // (see forge.config.ts publishers). In dev there is no feed, so it is skipped.
 // A live updater additionally requires a signed + notarized build — see
@@ -3029,6 +3022,7 @@ app.whenReady().then(async () => {
 	if (process.platform === "darwin") {
 		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());
 	}
+	windowCreationReady = true;
 	await createWindow();
 	if (browserQuitRequested) return;
 	void startDaemon();
@@ -3050,9 +3044,7 @@ app.whenReady().then(async () => {
 	}
 
 	app.on("activate", () => {
-		if (BaseWindow.getAllWindows().length === 0) {
-			void createWindow().catch((error) => console.error("failed to recreate main window:", error));
-		}
+		focusMainWindow();
 	});
 });
 
