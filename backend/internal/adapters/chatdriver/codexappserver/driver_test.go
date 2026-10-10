@@ -1723,3 +1723,30 @@ func TestStartAndResumePassAOToolServersInThreadConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestParseApprovalMarksOnlyCompleteCommandScope(t *testing.T) {
+	const base = `"threadId":"t","turnId":"u","itemId":"i","startedAtMs":1,"command":"git status","cwd":"/repo","commandActions":[],"approvalId":null,"availableDecisions":["accept","decline"]`
+	for name, tc := range map[string]struct {
+		method, params string
+		complete       bool
+	}{
+		"plain command":       {"item/commandExecution/requestApproval", `{` + base + `}`, true},
+		"network context":     {"item/commandExecution/requestApproval", `{` + base + `,"networkApprovalContext":{"host":"example.com","protocol":"https"}}`, false},
+		"environment":         {"item/commandExecution/requestApproval", `{` + base + `,"environmentId":"remote"}`, false},
+		"network amendments":  {"item/commandExecution/requestApproval", `{` + base + `,"proposedNetworkPolicyAmendments":[{"host":"example.com","action":"allow"}]}`, false},
+		"approval callback":   {"item/commandExecution/requestApproval", `{` + base + `,"approvalId":"a1"}`, false},
+		"unknown field":       {"item/commandExecution/requestApproval", `{` + base + `,"sandbox":"off"}`, false},
+		"file change request": {"item/fileChange/requestApproval", `{"itemId":"i"}`, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, encoded, _ := parseApproval(tc.method, json.RawMessage(tc.params))
+			var detail map[string]any
+			if err := json.Unmarshal(encoded, &detail); err != nil {
+				t.Fatal(err)
+			}
+			if got := detail["scopeComplete"] == true; got != tc.complete {
+				t.Fatalf("scopeComplete = %v, want %v (detail %v)", got, tc.complete, detail)
+			}
+		})
+	}
+}

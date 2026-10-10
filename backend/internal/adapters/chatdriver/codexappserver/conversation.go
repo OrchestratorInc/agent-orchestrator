@@ -1041,11 +1041,41 @@ func parseApproval(method string, params json.RawMessage) ([]ports.ChatDecisionO
 	if len(p.Questions) > 0 {
 		detail["questions"] = p.Questions
 	}
+	if method == "item/commandExecution/requestApproval" && commandScopeComplete(params) {
+		detail["scopeComplete"] = true
+	}
 	encoded, err := json.Marshal(detail)
 	if err != nil {
 		encoded = nil
 	}
 	return options, summary, encoded, p.TurnID
+}
+
+// commandScopeFields are the CommandExecutionRequestApprovalParams fields the
+// detail above shows in full, or that cannot widen an allow-once/decline
+// decision (commandActions is derived from command; the execpolicy amendment
+// applies only to its own decision). Anything else that is non-null, such as
+// networkApprovalContext, environmentId, network policy amendments, a non-null
+// approvalId or a field from a newer provider, means the detail is partial.
+var commandScopeFields = map[string]bool{
+	"threadId": true, "turnId": true, "itemId": true, "startedAtMs": true,
+	"command": true, "cwd": true, "reason": true, "availableDecisions": true,
+	"commandActions": true, "proposedExecpolicyAmendment": true,
+}
+
+// commandScopeComplete reports whether the projected detail is the request's
+// whole scope, so clients with no room for the full request can fail closed.
+func commandScopeComplete(params json.RawMessage) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(params, &fields) != nil {
+		return false
+	}
+	for key, value := range fields {
+		if !commandScopeFields[key] && strings.TrimSpace(string(value)) != "null" {
+			return false
+		}
+	}
+	return true
 }
 
 // decisionOption reads one entry of availableDecisions, which is either a plain

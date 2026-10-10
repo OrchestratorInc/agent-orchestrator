@@ -507,7 +507,10 @@ function readDecisions(detail: ActivityDetail): DecisionOption[] | undefined {
 	if (!Array.isArray(detail.decisions)) return undefined;
 	const decisions = detail.decisions.flatMap((option): DecisionOption[] => {
 		if (!option || typeof option !== "object" || typeof option.id !== "string" || !option.id) return [];
-		return [{ id: option.id, label: typeof option.label === "string" && option.label ? option.label : option.id }];
+		const kind = option.kind;
+		return [{ id: option.id, label: typeof option.label === "string" && option.label ? option.label : option.id,
+			...(kind === "allow_once" || kind === "allow_always" || kind === "reject_once" || kind === "reject_always" ? { kind } : {}),
+		}];
 	});
 	return decisions.length > 0 ? decisions : undefined;
 }

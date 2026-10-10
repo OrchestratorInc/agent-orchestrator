@@ -27,6 +27,31 @@ describe("mobile Chat API boundaries", () => {
 	beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
 	afterEach(() => vi.unstubAllGlobals());
 
+	it("keeps Watch actions on existing authenticated Chat routes and preserves message dedup IDs", async () => {
+		vi.mocked(fetch).mockResolvedValue(response({ duplicate: false }));
+		const hostConfig = { ...cfg, hostId: "host-alpha" };
+		await chatApi.resolveApproval(hostConfig, "worker/one", "request/one", "provider-choice");
+		await chatApi.resolveInput(hostConfig, "worker/one", "input/one", "accept", { answer: "Please summarize." });
+		await chatApi.sendConversationMessage(hostConfig, "worker/one", { text: "Please summarize.", clientMessageId: "watch-stable-id" });
+		const calls = vi.mocked(fetch).mock.calls;
+		expect(calls.map(([url]) => url)).toEqual([
+			"http://ao.test:3011/api/v1/sessions/worker%2Fone/conversation/approvals/request%2Fone/resolve",
+			"http://ao.test:3011/api/v1/sessions/worker%2Fone/conversation/inputs/input%2Fone/resolve",
+			"http://ao.test:3011/api/v1/sessions/worker%2Fone/conversation/messages",
+		]);
+		expect(calls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+			{ decisionId: "provider-choice" }, { action: "accept", content: { answer: "Please summarize." } },
+			{ text: "Please summarize.", clientMessageId: "watch-stable-id" },
+		]);
+		for (const [, init] of calls) expect(init?.headers).toMatchObject({ Authorization: "Bearer secret12", "X-AO-Expected-Host-ID": "host-alpha" });
+	});
+
+	it("preserves provider consent kinds instead of inferring meaning from labels", async () => {
+		vi.mocked(fetch).mockResolvedValue(response({ sessionId: "s", controller: "ready", latestSequence: 1, activities: [{ id: "a", activityKind: "approval", status: "pending", detail: { decisions: [{ id: "opaque", label: "Allow once", kind: "allow_always" }] } }] }));
+		const page = await getConversationPage(cfg, "s");
+		expect(page.items[0]).toMatchObject({ decisions: [{ id: "opaque", label: "Allow once", kind: "allow_always" }] });
+	});
+
 	it("explicitly creates workers in Chat mode by default", async () => {
 		vi.mocked(fetch).mockResolvedValue(response({ session: { id: "w-1", projectId: "p-1", mode: "chat" } }, 201));
 		const session = await spawnSession(cfg, { projectId: "p-1", harness: "codex" });

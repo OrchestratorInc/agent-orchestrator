@@ -15,6 +15,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@bacons/apple-targets": "5.0.0",
     "@expo-google-fonts/geist": "^0.4.2",
     "@expo-google-fonts/geist-mono": "^0.4.3",
     "@expo/ui": "~57.0.14",

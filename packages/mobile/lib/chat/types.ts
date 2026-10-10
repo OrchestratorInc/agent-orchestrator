@@ -59,7 +59,7 @@ export type ConversationMessage = {
 	createdAt: string;
 };
 
-export type DecisionOption = { id: string; label: string };
+export type DecisionOption = { id: string; label: string; kind?: "allow_once" | "allow_always" | "reject_once" | "reject_always" };
 export type FileChange = DiffFile & { patch?: string; patchTruncated?: boolean };
 export type InputProperty = {
 	type?: "string" | "number" | "integer" | "boolean" | "array";
@@ -96,6 +96,8 @@ export type ActivityDetail = {
 	exitCode?: number;
 	durationMs?: number;
 	reason?: string;
+	/** Set by the Codex adapter only when the approval detail is the request's whole scope. */
+	scopeComplete?: boolean;
 	terminalInput?: string;
 	terminalInputTruncated?: boolean;
 	processId?: number;

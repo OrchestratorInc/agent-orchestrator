@@ -1,0 +1,1 @@
+../../watch-model/Sources/WatchModel/WatchSnapshot.swift
