@@ -1396,6 +1396,7 @@ func TestHooks_CommandCodeSessionStartInjectsSystemPromptContext(t *testing.T) {
 	}
 	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
 	writeRunFileFor(t, cfg, srv)
+
 	out, _, err := executeCLI(t, Deps{
 		In:           strings.NewReader(`{"session_id":"command-code-native-1","source":"startup"}`),
 		ProcessAlive: func(int) bool { return true },

@@ -170,6 +170,7 @@ type chatSpawn struct {
 	workspaceProject *ports.WorkspaceProjectInfo
 	prompt           string
 	systemPrompt     string
+	systemPromptFile string
 	// promptQueued means the opening prompt is already a durable queued turn
 	// (asynchronous spawn). The controller drains it; sending it again here
 	// would deliver the user's brief twice.
@@ -205,6 +206,15 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 	env := m.runtimeEnv(id, in.record.ProjectID, in.record.IssueID, in.project.Config.Env)
 	if agent, ok := m.agents.Agent(in.cfg.Harness); ok {
 		m.augmentAgentRuntimeEnv(agent, env)
+		// Chat launches go through the same workspace preparation as terminal
+		// launches: without the adapter's hooks (e.g. Command Code's
+		// SessionStart hook, which injects the standing instructions from the
+		// prompt file) a fresh chat session would start with no AO role or
+		// coordination context.
+		if err := m.prepareWorkspace(ctx, agent, id, in.workspace.Path, in.systemPrompt, in.systemPromptFile, agentConfig, env); err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
+			return domain.SessionRecord{}, wrapSpawnStage(id, ErrSpawnPrepare, err)
+		}
 	}
 
 	var (

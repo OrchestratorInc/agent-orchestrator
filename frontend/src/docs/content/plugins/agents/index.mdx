@@ -54,7 +54,7 @@ The current daemon registers the following capabilities. Availability still depe
 | `mimo-code` | Yes | — | — |
 | `deepseek-harness` | Yes | Yes | — |
 | `openhands` | Yes | — | — |
-| `command-code` | Yes | — | — |
+| `command-code` | Yes | Yes | — |
 
 The table shows shipped capabilities, not whether an agent is ready on your machine. Run the catalog for current readiness or when scripting:
 
@@ -94,6 +94,7 @@ Unreal Agent is Chat-only; the other worker adapters provide a terminal interfac
 | `qwen` | Native ACP |
 | `unreal-agent` | Built into Orchestrator |
 | `deepseek-harness` | Native ACP (`dsh --profile acp`) |
+| `command-code` | Native ACP (`cmd acp`) |
 
 Every other harness is Terminal UI-only. Choose the initial interface with `ao spawn --mode chat|tui`. Compatible Claude Code and Codex sessions can hand off between Chat and Terminal UI while retaining the Orchestrator session and worktree.
 

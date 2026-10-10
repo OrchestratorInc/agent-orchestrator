@@ -2459,6 +2459,19 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 	out := append([]ports.ChatConfigOption(nil), options...)
 	for i := range out {
 		out[i].Choices = append([]ports.ChatConfigOptionChoice(nil), out[i].Choices...)
+		if harness == domain.HarnessCommandCode && out[i].ID == "mode" {
+			choices := out[i].Choices[:0]
+			for _, choice := range out[i].Choices {
+				mode, ok := commandCodeApprovalMode(choice.Value)
+				if !ok {
+					continue
+				}
+				choice.PermissionMode = mode
+				choices = append(choices, choice)
+			}
+			out[i].Choices = choices
+			continue
+		}
 		for j := range out[i].Choices {
 			choice := &out[i].Choices[j]
 			choice.PermissionMode = ""
@@ -2490,6 +2503,19 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 		}
 	}
 	return out
+}
+
+func commandCodeApprovalMode(value string) (domain.PermissionMode, bool) {
+	switch value {
+	case "default":
+		return domain.PermissionModeDefault, true
+	case "auto-accept":
+		return domain.PermissionModeAuto, true
+	case "bypass":
+		return domain.PermissionModeBypassPermissions, true
+	default:
+		return "", false
+	}
 }
 
 func openCodeApprovalTier(value string) (domain.PermissionMode, string, bool) {

@@ -1212,6 +1212,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			branch:            branch,
 			prompt:            appendAttachmentReferences(prompt, spawnAttachmentRefs(cfg.Attachments)),
 			systemPrompt:      systemPrompt,
+			systemPromptFile:  systemPromptFile,
 			promptBytes:       promptBytes,
 			systemPromptBytes: systemPromptBytes,
 			preparation:       prep,
@@ -1292,6 +1293,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			workspaceProject: workspaceProject,
 			prompt:           prompt,
 			systemPrompt:     systemPrompt,
+			systemPromptFile: systemPromptFile,
 		})
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, err
