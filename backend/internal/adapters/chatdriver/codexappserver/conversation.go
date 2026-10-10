@@ -48,6 +48,10 @@ type conversation struct {
 	proc *process
 	log  *slog.Logger
 
+	// modelProvider is the provider this process was launched to use when that
+	// is AO's account helper, and empty otherwise.
+	modelProvider string
+
 	threadID        string
 	historyParentID string
 	providerScopeID string

@@ -398,6 +398,13 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	if cfg.Model != "" {
 		params["model"] = cfg.Model
 	}
+	// Codex resumes a thread on the provider it was created with, whatever this
+	// process was launched to use. A conversation started before its session
+	// had an account would keep using this computer's own sign-in, so the
+	// account helper is named here.
+	if conv.modelProvider != "" {
+		params["modelProvider"] = conv.modelProvider
+	}
 	// thread/resume has no top-level effort field. Codex exposes persistent
 	// reasoning effort as a config override, so carry the durable AO choice into
 	// the resumed thread instead of silently falling back to the provider default.
@@ -513,6 +520,9 @@ func (d *Driver) connectSession(
 			}
 		}
 		conv, err := d.connect(ctx, workdir, env, providerScopeID)
+		if conv != nil {
+			conv.modelProvider = agentlaunch.CodexProxyProviderFor(env)
+		}
 		return conv, false, err
 	}
 	var bin string
@@ -529,16 +539,20 @@ func (d *Driver) connectSession(
 		DataDir:       dataDir,
 		Workdir:       workdir,
 		Env:           envSlice(env),
-		Argv:          []string{bin, "app-server"},
+		Argv:          agentlaunch.CodexProxyArgv([]string{bin, "app-server"}, env),
 	}
+	// The environment the process is launched with decides its provider. It is
+	// only prepared when a process is launched, so it is read at that moment.
+	launchProvider := agentlaunch.CodexProxyProviderFor(env)
 	if prepareEnv != nil {
 		hostConfig.Prepare = func(prepareCtx context.Context) (persistenthost.PreparedProvider, error) {
 			preparedEnv, prepareErr := prepareEnv(prepareCtx)
 			if prepareErr != nil {
 				return persistenthost.PreparedProvider{}, prepareErr
 			}
+			launchProvider = agentlaunch.CodexProxyProviderFor(preparedEnv)
 			return persistenthost.PreparedProvider{
-				Env: envSlice(preparedEnv), Argv: []string{bin, "app-server"},
+				Env: envSlice(preparedEnv), Argv: agentlaunch.CodexProxyArgv([]string{bin, "app-server"}, preparedEnv),
 			}, nil
 		}
 	}
@@ -572,6 +586,7 @@ func (d *Driver) connectSession(
 	if transport.Reconnected {
 		return conv, true, nil
 	}
+	conv.modelProvider = launchProvider
 	if err := d.initialize(ctx, conv); err != nil {
 		_ = conv.Terminate()
 		return nil, false, err
@@ -651,8 +666,8 @@ func launchApprovalSettings(mode ports.PermissionMode, readOnly bool) (policy, s
 
 // spawnAppServer is the real launcher.
 func spawnAppServer(ctx context.Context, bin, workdir string, env []string) (*process, error) {
-	args := []string{"app-server"}
-	cmd := aoprocess.Command(bin, args...)
+	argv := agentlaunch.CodexProxyArgvFromEnv([]string{bin, "app-server"}, env)
+	cmd := aoprocess.Command(argv[0], argv[1:]...)
 	cmd.Dir = workdir
 	if len(env) > 0 {
 		cmd.Env = env

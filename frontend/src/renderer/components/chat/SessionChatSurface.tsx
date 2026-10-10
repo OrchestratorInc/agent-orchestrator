@@ -20,6 +20,8 @@ import { useObservedAgentSwitchLifecycle } from "../../hooks/useObservedAgentSwi
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../../hooks/useAgentSwitchVisibility";
 import { useQuery } from "@tanstack/react-query";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
+import { accountModelScope, sessionAccountQueryOptions } from "../../hooks/useProviderAccounts";
+import { accountChatModels, claudeAccountChoices } from "../../lib/agent-model-choices";
 import { useSwitchAgentState } from "../../hooks/useSwitchAgent";
 import {
 	useConversation,
@@ -359,19 +361,50 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot) && !hasProviderModel,
 		hostId,
 	);
-	// Claude's live list is family aliases; the new-task picker's catalog carries the versions.
+	// A session on a managed account offers that account's models, the same
+	// list every other picker shows for it. The agent process is only told which
+	// one to run: Codex keeps a list of its own, and Claude Code adds rows of its
+	// own to the one it was given.
 	const isClaude = snapshot?.harness === "claude-code";
-	const claudeCatalog = useQuery({ ...agentModelsQueryOptions("claude-code", "", hostId), enabled: isClaude }).data;
+	const isCodex = snapshot?.harness === "codex";
+	const accountAsked = (isClaude || isCodex) && !hostId;
+	const sessionAccountQuery = useQuery({ ...sessionAccountQueryOptions(session.id), enabled: accountAsked });
+	const sessionAccount = sessionAccountQuery.data;
+	// Until the answer is in, no list is read: the default account's would be the wrong one.
+	const accountSettled = !accountAsked || sessionAccountQuery.isSuccess || sessionAccountQuery.isError;
+	const accountScope = sessionAccount?.managed && sessionAccount.accountId ? accountModelScope(sessionAccount.accountId) : "";
+	const accountCatalog = useQuery({
+		...agentModelsQueryOptions(snapshot?.harness ?? "", accountScope, hostId),
+		enabled: accountScope !== "",
+	}).data;
+	const accountModels = accountScope ? accountCatalog?.models : undefined;
+	// Claude's live list is family aliases; the new-task picker's catalog carries the versions.
+	const nativeClaudeCatalog = useQuery({ ...agentModelsQueryOptions("claude-code", "", hostId), enabled: isClaude && accountSettled && !accountScope }).data;
+	const claudeModels = accountModels ?? nativeClaudeCatalog?.models;
 	const models = useMemo(() => {
-		if (!isClaude || !claudeCatalog?.models.length) return controllerModels;
-		return claudeCatalog.models
+		if (isCodex && accountModels?.length) return accountChatModels(accountModels, controllerModels);
+		if (!isClaude || !claudeModels?.length) return controllerModels;
+		return claudeModels
 			.filter((model) => model.id.toLowerCase() !== "default")
 			.map((model) => ({
 				id: model.id,
 				displayName: model.label || model.id,
 				default: Boolean(model.isDefault),
 			}));
-	}, [isClaude, claudeCatalog, controllerModels]);
+	}, [isClaude, isCodex, accountModels, claudeModels, controllerModels]);
+	// Claude Code only switches to a row it reported, so the account's models are
+	// offered as the rows that run them, and no other row is.
+	const chatConfigOptions = useMemo(() => {
+		if (!isClaude || !accountModels?.length) return configOptions.options;
+		const offered = accountModels
+			.filter((model) => model.id.toLowerCase() !== "default")
+			.map((model) => ({ id: model.id, label: model.label || model.id }));
+		return configOptions.options?.map((option) =>
+			option.category === "model" || option.id === "model"
+				? { ...option, choices: claudeAccountChoices(option.choices, offered, option.currentValue) }
+				: option,
+		);
+	}, [isClaude, accountModels, configOptions.options]);
 	const { skills } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot),
@@ -606,7 +639,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				rememberPermissionsPending={projectPermissions.pending}
 				rememberPermissionsError={projectPermissions.error}
 				rememberedPermissionMode={projectPermissions.savedMode}
-				configOptions={configOptions.options}
+				configOptions={chatConfigOptions}
 				onChooseConfigOption={configOptions.setOption}
 				configOptionPending={configOptions.pending || commands.choosingSettings}
 				configOptionError={controllerCatalogsEnabled ? configOptions.error : undefined}

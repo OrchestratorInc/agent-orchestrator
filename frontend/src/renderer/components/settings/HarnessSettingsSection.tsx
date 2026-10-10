@@ -19,6 +19,7 @@ import { CLOUD_AGENT_PROVIDERS, isCloudHarnessConnected } from "../../lib/cloud-
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
 import { providerConnectionsQueryKey, useProviderConnections } from "../../hooks/useProviderConnections";
+import { accountProvider, providerAccountName, providerAccountsKey, useProviderAccounts } from "../../hooks/useProviderAccounts";
 import { GitHubTokenField } from "../onboarding/GitHubTokenField";
 import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPanel";
 import { SettingsRow } from "./SettingsRow";
@@ -30,7 +31,7 @@ import { LOCAL_HOST } from "../../lib/hosts";
 import { createTerminalMux, muxUrlFromApiBase } from "../../lib/terminal-mux";
 import { cn } from "../../lib/utils";
 import { useShellMaybe } from "../../lib/shell-context";
-import { useResolvedTheme } from "../../stores/ui-store";
+import { useResolvedTheme, useUiStore } from "../../stores/ui-store";
 import { AgentAvatar } from "../AgentAvatar";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
@@ -286,6 +287,24 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 	const jobs = useQuery({ queryKey: jobsKey, queryFn: () => fetchInstallJobs(hostId), retry: false });
 	const authPlans = useAgentAuthPlans(hostId);
 	const startAgentAuth = useStartAgentAuth(hostId);
+	// Accounts belong to this machine's daemon. A remote host lists its own
+	// agent logins, exactly as before.
+	const providerAccounts = useProviderAccounts(!hostId, false);
+	const managedProviderFor = useCallback((agentId: string) => hostId ? "" : accountProvider(agentId), [hostId]);
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	// Per managed provider: how many accounts can be used, and which one new
+	// sessions run on.
+	const managedAccountProviders = useMemo(() => {
+		const result = new Map<string, { name: string; count: number }>();
+		for (const account of providerAccounts.data?.accounts ?? []) {
+			if (!account.signedIn || account.signInRequired) continue;
+			const entry = result.get(account.provider) ?? { name: "", count: 0 };
+			entry.count += 1;
+			if (account.primary || !entry.name) entry.name = providerAccountName(account);
+			result.set(account.provider, entry);
+		}
+		return result;
+	}, [providerAccounts.data?.accounts]);
 	const [authStates, setAuthStates] = useState<AgentAuthStates>({});
 	const [actionErrors, setActionErrors] = useState<Partial<Record<AgentId, string>>>({});
 	const [selectedMethods, setSelectedMethods] = useState<Partial<Record<AgentId, string>>>({});
@@ -360,6 +379,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 		let active = true;
 		const invalidateHarnessQueries = () => Promise.all([
 			queryClient.invalidateQueries({ queryKey: readinessKey }),
+			...(hostId ? [] : [queryClient.invalidateQueries({ queryKey: providerAccountsKey })]),
 			queryClient.invalidateQueries({ queryKey: installerKey }),
 			queryClient.invalidateQueries({ queryKey: jobsKey }),
 			queryClient.invalidateQueries({ queryKey: authPlansKey }),
@@ -389,7 +409,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 	}, [authPlansKey, client, hostId, installerKey, jobsKey, queryClient, readinessKey]);
 	useEffect(() => {
 		if (focusHandledRef.current || !targetAgentId) return;
-		if (agents.isPending || installers.isPending || jobs.isPending || authPlans.isPending) return;
+		if (agents.isPending || installers.isPending || jobs.isPending || authPlans.isPending || (targetAgentId && managedProviderFor(targetAgentId) && providerAccounts.isPending)) return;
 		const row = Array.from(rowsRef.current?.querySelectorAll<HTMLElement>("[data-agent]") ?? [])
 			.find((candidate) => candidate.dataset.agent === targetAgentId);
 		if (!row) return;
@@ -400,7 +420,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 		(primaryAction ?? row).focus({ preventScroll: true });
 		setHighlightedAgentId(targetAgentId);
 		highlightTimerRef.current = window.setTimeout(() => setHighlightedAgentId(null), FOCUS_HIGHLIGHT_MS);
-	}, [agents.isPending, authPlans.isPending, installers.isPending, jobs.isPending, targetAgentId]);
+	}, [agents.isPending, authPlans.isPending, installers.isPending, jobs.isPending, targetAgentId, managedProviderFor, providerAccounts.isPending]);
 
 	useEffect(() => () => {
 		if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
@@ -412,12 +432,14 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 	const autoLoginHandledRef = useRef(false);
 	useEffect(() => {
 		if (!startLogin || autoLoginHandledRef.current || !targetAgentId) return;
+		// A managed agent signs in on the Accounts page, not through its own login.
+		if (managedProviderFor(targetAgentId)) return;
 		if (agents.isPending || authPlans.isPending) return;
 		autoLoginHandledRef.current = true;
 		const plan = agentAuthPlans.get(targetAgentId);
 		if (!plan || !plan.available || plan.action === "instructions") return;
 		void startAuthRef.current(targetAgentId);
-	}, [agentAuthPlans, agents.isPending, authPlans.isPending, startLogin, targetAgentId]);
+	}, [agentAuthPlans, agents.isPending, authPlans.isPending, managedProviderFor, startLogin, targetAgentId]);
 
 	useEffect(() => {
 		if (!activeKey) return;
@@ -672,7 +694,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 
 	return (
 		<>
-			{installers.error || authPlans.error || agents.error || jobs.error ? (
+			{installers.error || authPlans.error || agents.error || jobs.error || providerAccounts.error ? (
 				<div className="flex items-center gap-2 rounded-md border border-error/30 bg-error/10 px-3 py-2 text-xs text-error">
 					<TriangleAlert className="size-4" aria-hidden="true" />
 					{jobs.error instanceof Error ? jobs.error.message : t("settings.harness.loadFailed")}
@@ -710,7 +732,13 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						const showInstallationStatus = connectedCredential
 							|| authStatus === "not_applicable"
 							|| (!authPlans.isPending && (!authPlan || authPlan.action === "instructions"));
-						const rowHasError = failed || Boolean(authState?.error);
+						const managedProviderID = managedProviderFor(agentId);
+						const managedProvider = managedProviderID !== "";
+						const managedAccounts = managedProvider ? managedAccountProviders.get(managedProviderID) : undefined;
+						const managedSignedIn = Boolean(managedAccounts);
+						const managedAccountLoading = managedProvider && providerAccounts.isPending;
+						const managedAccountError = managedProvider && providerAccounts.isError;
+						const rowHasError = failed || Boolean(authState?.error) || Boolean(managedAccountError);
 						const rowAuthWorkflow = authWorkflow?.agentId === agentId ? authWorkflow : null;
 						const hasDiagnostics = Boolean(
 							job &&
@@ -718,7 +746,15 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 							(job.error || job.output || job.method || job.expectedDestination),
 						);
 
-						const authSummary = authState?.error
+						const authSummary = managedProvider
+							? managedAccountLoading
+								? t("providerAccounts.loading")
+								: managedAccountError
+									? t("providerAccounts.loginStatusFailed")
+									: managedAccounts
+										? t("providerAccounts.accountSummary", { name: managedAccounts.name, count: managedAccounts.count })
+										: t("providerAccounts.managedNeedsLogin")
+							: authState?.error
 							? authState.error
 							: authStatus === "configured"
 								? (isSetupAction ? t("settings.harness.configured") : t("settings.harness.loggedIn"))
@@ -759,13 +795,26 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 								{t("settings.harness.refreshLogin")}
 							</Button>
 						) : null;
+						const managedControls = managedProvider ? (
+							<Button
+								data-harness-primary-action=""
+								type="button"
+								size="sm"
+								variant={managedSignedIn ? "outline" : "primary"}
+								disabled={managedAccountLoading}
+								onClick={() => openGlobalSettings("accountManager")}
+							>
+								{managedSignedIn ? t("providerAccounts.title") : t("providerAccounts.openSignIn")}
+							</Button>
+						) : null;
 					const localControls = active ? (
 				<span className="inline-flex items-center gap-1.5 text-xs text-settings-muted" role="status"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{job?.status === "installing" ? t("settings.harness.installing") : t("settings.harness.verifying")}</span>
 							) : isInstalled ? (
 								<div className="flex shrink-0 items-center gap-2">
+								{managedProvider ? managedControls : null}
 								{/* The subtitle already states a login ("Connected", "Configured"); the
 								    chip is only for installed harnesses whose subtitle doesn't say so. */}
-								{showInstallationStatus && !connectedCredential ? (
+								{!managedProvider && showInstallationStatus && !connectedCredential ? (
 									<Button
 										type="button"
 										size="none"
@@ -777,8 +826,8 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 										{installationStatusLabel}
 									</Button>
 								) : null}
-								{authControls}
-								{refreshLocal}
+								{!managedProvider ? authControls : null}
+								{!managedProvider ? refreshLocal : null}
 								</div>
 							) : failed ? (
 								<div className="flex items-center gap-1.5">

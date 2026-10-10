@@ -179,7 +179,15 @@ vi.mock("../hooks/useSessionInterfaceTransition", async (importOriginal) => ({
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: {
-		GET: reviewGetMock,
+		GET: (path: string, options?: unknown) => {
+			if (path === "/api/v1/provider-accounts") {
+				return Promise.resolve({ data: { accounts: [], defaults: [], recoveryRequired: false } });
+			}
+			if (path === "/api/v1/sessions/{sessionId}/provider-account") {
+				return Promise.resolve({ data: { managed: false, provider: "", accountId: "", loginRequired: false } });
+			}
+			return reviewGetMock(path, options);
+		},
 		POST: vi.fn((path: string, ...args: unknown[]) =>
 			path.endsWith("/resume-agent")
 				? resumeAgentPostMock(path, ...args)

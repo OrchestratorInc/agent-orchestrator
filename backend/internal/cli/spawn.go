@@ -20,36 +20,38 @@ import (
 const maxDisplayNameLen = 100
 
 type spawnOptions struct {
-	project         string
-	standalone      bool
-	harness         string
-	kind            string
-	mode            string
-	branch          string
-	prompt          string
-	issue           string
-	name            string
-	model           string
-	claimPR         string
-	noTakeover      bool
-	skipAgentCheck  bool
-	trackerProvider string
+	providerAccountID string
+	project           string
+	standalone        bool
+	harness           string
+	kind              string
+	mode              string
+	branch            string
+	prompt            string
+	issue             string
+	name              string
+	model             string
+	claimPR           string
+	noTakeover        bool
+	skipAgentCheck    bool
+	trackerProvider   string
 }
 
 // spawnRequest mirrors the daemon's SpawnSessionRequest body for
 // POST /api/v1/sessions. The CLI keeps its own copy so it need not import httpd.
 type spawnRequest struct {
-	ProjectID       string `json:"projectId,omitempty"`
-	IssueID         string `json:"issueId,omitempty"`
-	ParentSessionID string `json:"parentSessionId,omitempty"`
-	TrackerProvider string `json:"trackerProvider,omitempty"`
-	Kind            string `json:"kind,omitempty"`
-	Mode            string `json:"mode,omitempty"`
-	Harness         string `json:"harness,omitempty"`
-	Branch          string `json:"branch,omitempty"`
-	Prompt          string `json:"prompt,omitempty"`
-	Model           string `json:"model,omitempty"`
-	DisplayName     string `json:"displayName"`
+	ProviderAccountID string `json:"providerAccountId,omitempty"`
+	ProjectID         string `json:"projectId,omitempty"`
+	IssueID           string `json:"issueId,omitempty"`
+	ParentSessionID   string `json:"parentSessionId,omitempty"`
+	TrackerProvider   string `json:"trackerProvider,omitempty"`
+	Kind              string `json:"kind,omitempty"`
+	Mode              string `json:"mode,omitempty"`
+	Harness           string `json:"harness,omitempty"`
+	Branch            string `json:"branch,omitempty"`
+	Prompt            string `json:"prompt,omitempty"`
+	Model             string `json:"model,omitempty"`
+	DisplayName       string `json:"displayName"`
 }
 
 type spawnResult struct {
@@ -154,17 +156,18 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				}
 			}
 			req := spawnRequest{
-				ProjectID:       opts.project,
-				IssueID:         opts.issue,
-				ParentSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID")),
-				TrackerProvider: opts.trackerProvider,
-				Kind:            opts.kind,
-				Harness:         opts.harness,
-				Mode:            opts.mode,
-				Branch:          opts.branch,
-				Prompt:          opts.prompt,
-				Model:           strings.TrimSpace(opts.model),
-				DisplayName:     name,
+				ProviderAccountID: strings.TrimSpace(opts.providerAccountID),
+				ProjectID:         opts.project,
+				IssueID:           opts.issue,
+				ParentSessionID:   strings.TrimSpace(os.Getenv("AO_SESSION_ID")),
+				TrackerProvider:   opts.trackerProvider,
+				Kind:              opts.kind,
+				Harness:           opts.harness,
+				Mode:              opts.mode,
+				Branch:            opts.branch,
+				Prompt:            opts.prompt,
+				Model:             strings.TrimSpace(opts.model),
+				DisplayName:       name,
 			}
 			var res spawnResult
 			if err := ctx.postJSON(cmd.Context(), "sessions", req, &res); err != nil {
@@ -224,6 +227,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.mode, "mode", "", "Initial session interface: chat (structured agent connection) or tui (the agent's native terminal). Omitted uses the daemon default; compatible sessions can switch later.")
 	f.StringVar(&opts.branch, "branch", "", "Branch for git project sessions (default: ao/<session-id>/root; unsupported for standalone or Scratch sessions)")
 	f.StringVar(&opts.prompt, "prompt", "", "Initial prompt for the agent")
+	f.StringVar(&opts.providerAccountID, "account", "", "Managed account for this session (defaults to the provider primary)")
 	f.StringVar(&opts.model, "model", "", "Agent model override for this session only (e.g. sonnet, gpt-5.6-sol); overrides project/role config without changing it")
 	f.StringVar(&opts.issue, "issue", "", "Issue id to associate with the session")
 	f.StringVar(&opts.trackerProvider, "tracker-provider", "github", "Issue tracker provider: github or gitlab (default: github)")

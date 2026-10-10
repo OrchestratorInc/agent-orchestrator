@@ -7,8 +7,9 @@ import {
 	type TaskComposerModelControl,
 } from "@aoagents/product-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
+import { AlertCircle, Check, Loader2, SlidersHorizontal, UserRound } from "lucide-react";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
@@ -45,7 +46,6 @@ import {
 	revalidateAgentModels,
 } from "../hooks/useAgentModelsQuery";
 import { useModelCatalogAuthRecovery } from "../hooks/useModelCatalogAuthRecovery";
-import { useUiStore } from "../stores/ui-store";
 import { ModelCatalogNotice } from "./ModelCatalogNotice";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
@@ -57,6 +57,12 @@ import {
 	rememberTaskComposerPreference,
 	type TaskComposerAgentPreference,
 } from "../lib/task-composer-preferences";
+
+import { accountModelScope, accountProvider, useProviderAccounts, type ProviderAccount } from "../hooks/useProviderAccounts";
+import { useUiStore } from "../stores/ui-store";
+import { AccountChoiceLabel } from "./AccountChoiceLabel";
+import { Button } from "./ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
 type Project = components["schemas"]["Project"];
 type DelegateAgent = components["schemas"]["DelegateTaskRequest"]["agent"];
@@ -70,6 +76,7 @@ type CreateTaskInput = {
 	effort?: string;
 	mode?: "chat" | "tui";
 	approvalMode?: "bypass-permissions";
+	providerAccountId?: string;
 	attachments?: FileAttachmentPayload[];
 	taskPreparation?: string;
 };
@@ -119,6 +126,10 @@ export type TaskComposerProps = {
 	onDirtyChange?: (dirty: boolean) => void;
 	onSubmittingChange?: (submitting: boolean) => void;
 	autoFocusTitle?: boolean;
+	// Where the host wants the account button: an element in its own header, so
+	// the button sits at the surface's top right. Leave it out and the button
+	// sits above the composer instead; pass null while the element mounts.
+	accountControlContainer?: HTMLElement | null;
 	createLabel?: string;
 };
 
@@ -129,6 +140,7 @@ export function TaskComposer({
 	onDirtyChange,
 	onSubmittingChange,
 	autoFocusTitle,
+	accountControlContainer,
 	createLabel,
 }: TaskComposerProps) {
 	const { t } = useTranslation();
@@ -227,6 +239,7 @@ export function TaskComposer({
 						...(input.model ? { model: input.model } : {}),
 						...(input.effort !== undefined ? { effort: input.effort } : {}),
 						...(input.mode ? { mode: input.mode } : {}),
+					...(input.providerAccountId ? { providerAccountId: input.providerAccountId } : {}),
 						...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 						...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
 						...(input.taskPreparation ? { taskPreparation: input.taskPreparation } : {}),
@@ -277,6 +290,7 @@ export function TaskComposer({
 					model: input.model,
 					...(input.effort ? { effort: input.effort } : {}),
 					...(input.mode ? { mode: input.mode } : {}),
+					...(input.providerAccountId ? { providerAccountId: input.providerAccountId } : {}),
 					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 					...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
 				},
@@ -387,6 +401,11 @@ export function TaskComposer({
 	);
 	const defaultWorkerAgent = rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent;
 	const selectedAgent = agent || defaultWorkerAgent;
+	const [chosenAccount, setChosenAccount] = useState({ provider: "", id: "" });
+	// Accounts belong to this machine's daemon: a task on a remote host or in a
+	// cloud project runs on that side's own sign-in.
+	const accountProviderId = isCloudProject || hostId ? "" : accountProvider(selectedAgent);
+	const chosenAccountId = chosenAccount.provider === accountProviderId ? chosenAccount.id : "";
 	// A cloud project is unknown to the local daemon, so its model catalog is
 	// queried agent-level (no project scope); otherwise the request 404s and the
 	// dropdown spins forever. opencode is the exception: its catalog depends on
@@ -394,13 +413,16 @@ export function TaskComposer({
 	// (credentialModelScope) to show the models the cloud VM will actually run.
 	// Local projects keep their real project scope.
 	const modelsProjectId = useMemo(() => {
+		// An explicitly chosen managed account shows its own models; the default
+		// option keeps the provider default's list.
+		if (!isCloudProject && chosenAccountId) return accountModelScope(chosenAccountId);
 		if (!isCloudProject && !isStandalone) return projectId ?? "";
 		if (isCloudProject && selectedAgent === "opencode") {
 			const credentialType = connectedCredentialType(cloudConnectionsQuery.data, "opencode");
 			if (credentialType !== "") return credentialModelScope(credentialType);
 		}
 		return "";
-	}, [isCloudProject, isStandalone, projectId, selectedAgent, cloudConnectionsQuery.data]);
+	}, [isCloudProject, isStandalone, projectId, selectedAgent, cloudConnectionsQuery.data, chosenAccountId]);
 	const defaultWorkerModel =
 		projectConfig?.worker?.agentConfig?.model ?? projectConfig?.agentConfig?.model ?? "";
 	const defaultWorkerMode = projectConfig?.worker?.agentConfig?.mode ?? projectConfig?.agentConfig?.mode ?? "";
@@ -534,6 +556,14 @@ export function TaskComposer({
 		selectedAgent !== "" &&
 		settings?.defaultSessionMode === "chat" &&
 		!settings.chatHarnesses.includes(selectedAgent);
+	const providerAccounts = useProviderAccounts(!isCloudProject && !hostId, false);
+	const accountDefault = providerAccounts.data?.defaults.find(p => p.provider === accountProviderId);
+	const accountChoices = providerAccounts.data?.accounts.filter(a => a.provider === accountProviderId && a.signedIn && !a.signInRequired) ?? [];
+	const managedAccountReady = !accountProviderId || (!providerAccounts.isError && accountChoices.some(a => a.id === (chosenAccountId || accountDefault?.primaryId)));
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	// The account button belongs only to an agent whose accounts AO manages.
+	const showAccountControl = !isCloudProject && Boolean(accountProviderId) && Boolean(providerAccounts.data) && (Boolean(accountDefault?.managed) || accountChoices.length > 0);
+	const needsAccountSignIn = !isCloudProject && Boolean(accountProviderId) && Boolean(providerAccounts.data) && accountChoices.length === 0;
 	// With no provider default for the reported levels AO picks one, shows it as
 	// selected, and sends it, so the picker matches what the task runs with.
 	const aoDefaultEffort = requiresTuiFallback ? undefined : fallbackEffort(effortOptions, implicitEffort);
@@ -553,6 +583,7 @@ export function TaskComposer({
 	const canSubmit =
 		hostConnected &&
 		Boolean(projectId) &&
+		(isCloudProject || managedAccountReady) &&
 		(!isStandalone || selectedAgent !== "") &&
 		(!hostId || Boolean(agentCatalog?.agents.some((candidate) => candidate.id === selectedAgent && isLaunchableAgent(candidate)))) &&
 		(isCloudProject || isStandalone || projectQuery.data !== undefined) &&
@@ -564,8 +595,12 @@ export function TaskComposer({
 		const refreshed = await refreshAgentModels(selectedAgent, modelsProjectId, hostId);
 		queryClient.setQueryData(agentModelsQueryKey(selectedAgent, modelsProjectId, hostId), refreshed);
 	}, [hostId, modelsProjectId, queryClient, selectedAgent]);
-	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const startAgentLogin = useCallback(() => {
+		// An agent whose accounts AO manages signs in on the Accounts page.
+		if (showAccountControl) {
+			openGlobalSettings("accountManager");
+			return;
+		}
 		openGlobalSettings("harness", {
 			focusAgentId: selectedAgent,
 			...(hostId ? { hostId } : {}),
@@ -573,8 +608,10 @@ export function TaskComposer({
 			startLogin: true,
 			preserveProject: true,
 		});
-	}, [hostId, openGlobalSettings, selectedAgent]);
-	const modelWarning = modelAuthIssue ? (
+	}, [hostId, openGlobalSettings, selectedAgent, showAccountControl]);
+	// With no account signed in, the account notice below already says why the
+	// models cannot load and offers the fix.
+	const modelWarning = needsAccountSignIn ? undefined : modelAuthIssue ? (
 		<ModelCatalogNotice
 			agentLabel={selectedAgentLabel}
 			issue={modelAuthIssue}
@@ -639,6 +676,7 @@ export function TaskComposer({
 				brief,
 				agent: selectedAgent ? (selectedAgent as CreateTaskInput["agent"]) : undefined,
 				model: requestedModel,
+				providerAccountId: !isCloudProject ? chosenAccountId || undefined : undefined,
 				// Only explicit Codex picks set this; agent changes reset it, and TUI retries preserve it.
 				effort: requestedEffort,
 				mode: interfaceMode,
@@ -690,7 +728,24 @@ export function TaskComposer({
 		}
 	};
 
+	const accountControl = showAccountControl ? (
+		<TaskAccountPicker
+			accounts={accountChoices}
+			defaultId={accountDefault?.primaryId ?? ""}
+			value={chosenAccountId}
+			providerName={accountProviderId === "codex" ? "Codex" : "Claude"}
+			disabled={isSubmitting}
+			onChange={(id) => setChosenAccount({ provider: accountProviderId, id })}
+		/>
+	) : null;
+
 	return (
+		<>
+		{accountControl
+			? accountControlContainer === undefined
+				? <div className="flex justify-end px-3 pt-2">{accountControl}</div>
+				: accountControlContainer ? createPortal(accountControl, accountControlContainer) : null
+			: null}
 		<TaskComposerView
 			autoFocusPrompt={autoFocusTitle}
 			canSubmit={canSubmit}
@@ -796,6 +851,13 @@ export function TaskComposer({
 				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
 			showEffort={!requiresTuiFallback && (effortOptions.length > 0 || Boolean(effort && effort !== "default"))}
 		/>
+		{needsAccountSignIn ? (
+			<div className="flex items-center justify-between gap-3 px-1 pt-2.5 text-sm text-muted-foreground" role="status">
+				<span className="flex min-w-0 items-center gap-2"><AlertCircle aria-hidden="true" className="size-4 shrink-0 text-status-needs-you" />{t("providerAccounts.emptyAccounts", { provider: accountProviderId === "codex" ? "Codex" : "Claude" })}</span>
+				<Button type="button" size="sm" variant="secondary" onClick={() => openGlobalSettings("accountManager")}>{t("providerAccounts.signIn")}</Button>
+			</div>
+		) : null}
+		</>
 	);
 }
 
@@ -823,6 +885,54 @@ function TaskEffortPicker({
 			triggerClassName="composer-chip composer-toolbar-option w-fit"
 			menuClassName={COMPOSER_MENU_WIDTH}
 		/>
+	);
+}
+
+// The account a new session runs on: one icon button at the top right of the
+// surface, with the same account rows as every other account menu. The default
+// account is the empty value, so the daemon keeps resolving it.
+function TaskAccountPicker({ accounts, defaultId, value, providerName, disabled, onChange }: {
+	accounts: ProviderAccount[];
+	defaultId: string;
+	value: string;
+	providerName: string;
+	disabled: boolean;
+	onChange: (accountId: string) => void;
+}) {
+	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	// Usage is only read here, where the headroom figure helps the choice.
+	const usage = useProviderAccounts(true, true);
+	const selectedId = value || defaultId;
+	const selected = accounts.find((account) => account.id === selectedId);
+	const name = selected
+		? t("providerAccounts.accountFor", { name: selected.displayName || selected.email })
+		: accounts.length ? t("providerAccounts.chooseAccount") : t("providerAccounts.emptyAccounts", { provider: providerName });
+	// The icon cannot name the account, so a dot marks the two cases worth
+	// noticing: no account that can be used, or a choice other than the default.
+	const dot = !selected ? "bg-status-needs-you" : value ? "bg-foreground" : "";
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<Button type="button" size="icon-sm" variant="ghost" className="relative text-muted-foreground" aria-label={name} title={name} disabled={disabled}>
+					<UserRound aria-hidden="true" className="size-4" />
+					{dot ? <span aria-hidden="true" data-testid="task-account-dot" className={`absolute right-1 top-1 size-1.5 rounded-full ${dot}`} /> : null}
+				</Button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end" className="min-w-64 text-xs">
+				{accounts.length ? accounts.map((account) => (
+					<DropdownMenuItem key={account.id} onSelect={() => onChange(account.id === defaultId ? "" : account.id)}>
+						<Check aria-hidden="true" className={account.id === selectedId ? "size-3.5" : "invisible size-3.5"} />
+						<AccountChoiceLabel account={usage.data?.accounts.find((entry) => entry.id === account.id) ?? account} isDefault={account.id === defaultId} />
+					</DropdownMenuItem>
+				)) : <DropdownMenuItem disabled>{t("providerAccounts.noAccountsAvailable")}</DropdownMenuItem>}
+				<DropdownMenuSeparator />
+				<DropdownMenuItem onSelect={() => openGlobalSettings("accountManager")}>
+					<SlidersHorizontal aria-hidden="true" className="size-3.5 text-muted-foreground" />
+					<span>{t("providerAccounts.manageAccounts")}</span>
+				</DropdownMenuItem>
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }
 

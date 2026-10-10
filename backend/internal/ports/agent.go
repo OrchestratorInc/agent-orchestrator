@@ -3,6 +3,7 @@ package ports
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -293,6 +294,26 @@ const (
 	ModelCatalogWarningAuthRequired = "auth_required"
 	ModelCatalogWarningAuthExpired  = "auth_expired"
 )
+
+// ModelCatalogSourceManagedAccount marks a catalogue read from AO's account
+// helper for a managed provider instead of from a native agent discovery.
+const ModelCatalogSourceManagedAccount = "cliproxy-account"
+
+// modelCatalogAccountScopePrefix marks a model-catalogue scope that names a
+// managed provider account instead of a project, so an explicitly chosen
+// account gets its own catalogue. '@' and ':' cannot appear in a project ID.
+const modelCatalogAccountScopePrefix = "@account:"
+
+// ModelCatalogAccountScope is the catalogue scope for one managed account.
+func ModelCatalogAccountScope(accountID string) string {
+	return modelCatalogAccountScopePrefix + accountID
+}
+
+// AccountFromModelCatalogScope returns the account a scope names, if any.
+func AccountFromModelCatalogScope(scope string) (string, bool) {
+	id, ok := strings.CutPrefix(scope, modelCatalogAccountScopePrefix)
+	return id, ok && strings.TrimSpace(id) != ""
+}
 
 // CachedAgentModelCatalog is the persistence record used by the model-catalog
 // service. CatalogJSON contains a serialized AgentModelCatalog.

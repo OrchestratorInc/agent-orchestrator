@@ -2,9 +2,11 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import type { components } from "../../api/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
+	providerInventory: { accounts: [], defaults: [], recoveryRequired: false } as components["schemas"]["ProviderAccountsResponse"],
 	delete: vi.fn(),
 	get: vi.fn(),
 	post: vi.fn(),
@@ -65,7 +67,7 @@ vi.mock("./CreateProjectAgentSheet", () => ({
 vi.mock("../lib/api-client", () => ({
 	apiClient: {
 		DELETE: h.delete,
-		GET: h.get,
+		GET: (path: string, ...args: unknown[]) => path === "/api/v1/provider-accounts" ? Promise.resolve({ data: h.providerInventory }) : h.get(path, ...args),
 		POST: h.post,
 	},
 	apiErrorCode: (error: { code?: string }) => error?.code,
@@ -122,6 +124,17 @@ async function waitForTaskReady() {
 
 beforeEach(() => {
 	useUiStore.setState({ developerMode: true, remoteHosts: true });
+	h.providerInventory = {
+		accounts: [
+			{ id: "test-codex", provider: "codex", email: "codex@example.test", signedIn: true, primary: true, sessions: [] },
+			{ id: "test-claude", provider: "claude", email: "claude@example.test", signedIn: true, primary: true, sessions: [] },
+		],
+		defaults: [
+			{ provider: "codex", primaryId: "test-codex", managed: true },
+			{ provider: "claude", primaryId: "test-claude", managed: true },
+		],
+		recoveryRequired: false,
+	};
 	h.get.mockImplementation(async (path: string) => {
 		if (path.includes("/models")) {
 			return {
@@ -2045,9 +2058,11 @@ describe("TaskComposer", () => {
 			await userEvent.click(screen.getByRole("button", { name: "Details" }));
 			expect(screen.getByText(expiredDetail)).toBeInTheDocument();
 
+			// Claude Code's accounts are managed by AO here, so logging in means the
+			// Accounts page, not the agent's own login flow.
 			await userEvent.click(screen.getByRole("button", { name: "Log in" }));
 			expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({
-				scope: "global", section: "harness", focusAgentId: "claude-code", harnessView: "local", startLogin: true,
+				scope: "global", section: "accountManager",
 			}));
 
 			await userEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -2122,5 +2137,250 @@ describe("TaskComposer", () => {
 			act(() => { window.dispatchEvent(new Event("focus")); });
 			await waitFor(() => expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument());
 		});
+	});
+});
+
+describe("new task provider account selection", () => {
+	function managedInventory(): components["schemas"]["ProviderAccountsResponse"] {
+		return { accounts: [
+			{ id: "codex-primary", provider: "codex", email: "alice@example.test", signedIn: true, primary: true, sessions: [] },
+			{ id: "codex-secondary", provider: "codex", email: "bob@example.test", signedIn: true, primary: false, sessions: [] },
+			{ id: "codex-signed-out", provider: "codex", email: "signed-out@example.test", signedIn: false, primary: false, sessions: [] },
+			{ id: "claude-primary", provider: "claude", email: "clara@example.test", signedIn: true, primary: true, sessions: [] },
+		], defaults: [
+			{ provider: "codex", primaryId: "codex-primary", managed: true },
+			{ provider: "claude", primaryId: "claude-primary", managed: true },
+		], recoveryRequired: false };
+	}
+	function prepareStandalone() {
+		h.providerInventory = managedInventory();
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex", { usageCount: 5 }), agentReadiness("claude-code", "Claude")] };
+		h.ensureTargetedReadiness.mockResolvedValue({ agents: [agentReadiness("codex", "Codex")] });
+		h.post.mockResolvedValue({ data: { session: { id: "new-session" } } });
+	}
+	// The account is one icon button, named after the account it will use. Its
+	// menu lists the provider's usable accounts and a route to Accounts.
+	const accountControl = () => screen.findByRole("button", { name: /^(Account: |Choose an account|No signed-in )/ });
+	const accountDot = () => screen.queryByTestId("task-account-dot");
+	async function accountOptions(user: ReturnType<typeof userEvent.setup>): Promise<string[]> {
+		await user.click(await accountControl());
+		const names = (await screen.findAllByRole("menuitem")).map(item => item.textContent ?? "");
+		await user.keyboard("{Escape}");
+		return names;
+	}
+	async function chooseAccount(user: ReturnType<typeof userEvent.setup>, name: RegExp) {
+		await user.click(await accountControl());
+		await user.click(await screen.findByRole("menuitem", { name }));
+	}
+	it("shows the default account and only matching signed-in choices", async () => {
+		prepareStandalone();
+		const user = userEvent.setup();
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		const control = await accountControl();
+		expect(control).toHaveAccessibleName("Account: alice@example.test");
+		// Icon only: the name is its label and tooltip, and the default needs no mark.
+		expect(control).toHaveTextContent("");
+		expect(control).toHaveAttribute("title", "Account: alice@example.test");
+		expect(accountDot()).toBeNull();
+		expect(await accountOptions(user)).toEqual(["alice@example.testDefault", "bob@example.test", "Manage accounts"]);
+		expect(h.post).not.toHaveBeenCalled();
+	});
+	it("shows the chosen account's models instead of the default account's", async () => {
+		prepareStandalone();
+		const user = userEvent.setup();
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await accountControl();
+		const modelRequests = () => h.get.mock.calls.filter(([path]) => String(path).includes("/models")).map(([, options]) => (options as { params: { query: { projectId?: string } } }).params.query.projectId);
+		await waitFor(() => expect(modelRequests().length).toBeGreaterThan(0));
+		expect(modelRequests()).not.toContain("@account:codex-secondary");
+		await chooseAccount(user, /bob@example\.test/);
+		await waitFor(() => expect(modelRequests()).toContain("@account:codex-secondary"));
+		expect(await accountControl()).toHaveAccessibleName("Account: bob@example.test");
+		// A choice other than the default is marked on the icon.
+		expect(accountDot()).toHaveClass("bg-foreground");
+	});
+	it("leaves the standalone default to the daemon instead of pinning a cached primary", async () => {
+		prepareStandalone();
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={onCreated} /></Wrap>);
+		await accountControl();
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Try the selected account" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("new-session"));
+		expect(h.post).toHaveBeenCalledWith("/api/v1/sessions", expect.objectContaining({ body: expect.objectContaining({ harness: "codex", prompt: "Try the selected account" }) }));
+		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("providerAccountId");
+		expect(h.post).toHaveBeenCalledTimes(1);
+	});
+	it("choosing the default account again leaves resolution to the daemon", async () => {
+		prepareStandalone();
+		const user = userEvent.setup();
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={onCreated} /></Wrap>);
+		await chooseAccount(user, /bob@example\.test/);
+		await chooseAccount(user, /alice@example\.test/);
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Back to the default" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("new-session"));
+		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("providerAccountId");
+	});
+	it("preserves an explicit secondary for the submitted session", async () => {
+		prepareStandalone();
+		const user = userEvent.setup();
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={onCreated} /></Wrap>);
+		await chooseAccount(user, /bob@example\.test/);
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Use Bob" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("new-session"));
+		expect(h.post).toHaveBeenCalledWith("/api/v1/sessions", expect.objectContaining({ body: expect.objectContaining({ providerAccountId: "codex-secondary" }) }));
+		expect(h.providerInventory.defaults[0].primaryId).toBe("codex-primary");
+	});
+	it("uses the other provider's default after changing the chosen agent", async () => {
+		prepareStandalone();
+		const user = userEvent.setup();
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={onCreated} /></Wrap>);
+		await chooseAccount(user, /bob@example\.test/);
+		fireEvent.click(screen.getByLabelText("Agent"));
+		// Claude is managed too, so the button stays and names Claude's default, unmarked.
+		expect(await screen.findByRole("button", { name: "Account: clara@example.test" })).toBeInTheDocument();
+		expect(accountDot()).toBeNull();
+		h.ensureTargetedReadiness.mockResolvedValue({ agents: [agentReadiness("claude-code", "Claude")] });
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Use Claude" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("new-session"));
+		expect(h.post).toHaveBeenCalledWith("/api/v1/sessions", expect.objectContaining({ body: expect.objectContaining({ harness: "claude-code" }) }));
+		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("providerAccountId");
+	});
+	it("blocks spawning and offers sign-in after all accounts for the selected provider are signed out", async () => {
+		prepareStandalone();
+		h.providerInventory.accounts = h.providerInventory.accounts.filter(account => account.provider !== "codex");
+		h.providerInventory.defaults[0].primaryId = "";
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		expect(await screen.findByText("No signed-in Codex account.")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Sign in" })).toBeEnabled();
+		// The button stays for a managed agent and is marked as needing attention.
+		expect(screen.getByRole("button", { name: "No signed-in Codex account." })).toBeInTheDocument();
+		expect(accountDot()).toHaveClass("bg-status-needs-you");
+		expect(startTask()).toBeDisabled();
+		fireEvent.click(startTask());
+		expect(h.post).not.toHaveBeenCalled();
+		expect(h.ensureTargetedReadiness).not.toHaveBeenCalled();
+	});
+	it("re-enables new session spawning after a new matching login becomes primary", async () => {
+		prepareStandalone();
+		const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		h.providerInventory.accounts = h.providerInventory.accounts.filter(account => account.provider !== "codex");
+		h.providerInventory.defaults[0].primaryId = "";
+		render(<Wrap queryClient={cache}><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await screen.findByText("No signed-in Codex account.");
+		expect(startTask()).toBeDisabled();
+		act(() => cache.setQueryData(["provider-accounts", "catalogue"], managedInventory()));
+		await waitForTaskReady();
+		expect(screen.queryByText("No signed-in Codex account.")).toBeNull();
+		expect(await accountControl()).toHaveAccessibleName("Account: alice@example.test");
+		expect(h.post).not.toHaveBeenCalled();
+	});
+	it("shows no account button for an agent Accounts does not manage", async () => {
+		prepareStandalone();
+		h.providerInventory.accounts = h.providerInventory.accounts.filter(account => account.provider !== "claude");
+		h.providerInventory.defaults[1] = { provider: "claude", primaryId: "", managed: false };
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await accountControl();
+		fireEvent.click(screen.getByLabelText("Agent"));
+		// Claude runs on this machine's own sign-in here, so there is no account to pick.
+		await waitFor(() => expect(screen.queryByRole("button", { name: /^(Account: |Choose an account|No signed-in )/ })).toBeNull());
+	});
+	it("puts the account button where the host asks, outside the row of choices", async () => {
+		prepareStandalone();
+		const slot = document.createElement("div");
+		document.body.append(slot);
+		try {
+			render(<Wrap><TaskComposer projectId="__standalone__" accountControlContainer={slot} onCreated={vi.fn()} /></Wrap>);
+			const control = await accountControl();
+			expect(slot).toContainElement(control);
+			expect(screen.getByRole("group", { name: "Runs with" })).not.toContainElement(control);
+		} finally {
+			slot.remove();
+		}
+	});
+	it("blocks a stale explicit selection after that account is removed", async () => {
+		prepareStandalone();
+		const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const user = userEvent.setup();
+		render(<Wrap queryClient={cache}><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await chooseAccount(user, /bob@example\.test/);
+		await waitForTaskReady();
+		const changed = managedInventory();
+		changed.accounts = changed.accounts.filter(account => account.id !== "codex-secondary");
+		act(() => cache.setQueryData(["provider-accounts", "catalogue"], changed));
+		await waitFor(() => expect(startTask()).toBeDisabled());
+		fireEvent.click(startTask());
+		expect(h.post).not.toHaveBeenCalled();
+		// The control stays while the stale choice is in effect, so it can be changed.
+		await chooseAccount(user, /alice@example\.test/);
+		await waitForTaskReady();
+	});
+	it("follows a changed default while leaving default resolution to the daemon", async () => {
+		prepareStandalone();
+		const cache = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const onCreated = vi.fn();
+		render(<Wrap queryClient={cache}><TaskComposer projectId="__standalone__" onCreated={onCreated} /></Wrap>);
+		expect(await accountControl()).toHaveAccessibleName("Account: alice@example.test");
+		const changed = managedInventory();
+		changed.defaults[0].primaryId = "codex-secondary";
+		changed.accounts[0].primary = false;
+		changed.accounts[1].primary = true;
+		act(() => cache.setQueryData(["provider-accounts", "catalogue"], changed));
+		await waitFor(async () => expect(await accountControl()).toHaveAccessibleName("Account: bob@example.test"));
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "New primary" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("new-session"));
+		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("providerAccountId");
+	});
+	it("does not freeze the primary while readiness delays submission", async () => {
+		prepareStandalone();
+		let ready!: (result: { agents: ReturnType<typeof agentReadiness>[] }) => void;
+		h.ensureTargetedReadiness.mockReturnValue(new Promise(resolve => { ready = resolve; }));
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={onCreated} /></Wrap>);
+		await accountControl();
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Use the primary when admitted" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.ensureTargetedReadiness).toHaveBeenCalled());
+		// Another client changes the durable primary before the catalogue polls.
+		h.providerInventory = { ...managedInventory(), defaults: [
+			{ provider: "codex", primaryId: "codex-secondary", managed: true },
+			{ provider: "claude", primaryId: "claude-primary", managed: true },
+		] };
+		expect(await accountControl()).toHaveAccessibleName("Account: alice@example.test");
+		expect(h.post).not.toHaveBeenCalled();
+		await act(async () => ready({ agents: [agentReadiness("codex", "Codex")] }));
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("new-session"));
+		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("providerAccountId");
+		expect(h.post.mock.calls[0][1].body.prompt).toBe("Use the primary when admitted");
+	});
+
+	it("passes the choice through project delegation too", async () => {
+		prepareStandalone();
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agent: "codex", selectionMode: "text", models: [], allowCustom: true } }
+			: { data: { status: "ok", project: { config: { worker: { agent: "codex" } } } } });
+		h.post.mockResolvedValue({ data: { workerId: "delegated-worker" } });
+		const user = userEvent.setup();
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="project" onCreated={onCreated} /></Wrap>);
+		await chooseAccount(user, /bob@example\.test/);
+		await waitForTaskReady();
+		fireEvent.change(task(), { target: { value: "Delegate through Bob" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("delegated-worker"));
+		expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({ body: expect.objectContaining({ projectId: "project", providerAccountId: "codex-secondary", brief: "Delegate through Bob" }) }));
 	});
 });

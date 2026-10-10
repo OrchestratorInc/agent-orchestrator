@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -307,4 +308,47 @@ func claudeConfigDir(opts ResolveOptions) (string, error) {
 		dir = filepath.Join(strings.TrimSpace(opts.WorkingDir), dir)
 	}
 	return filepath.Abs(dir)
+}
+
+// ReadLocalOAuthCredentials returns native Claude OAuth material for adoption
+// into this computer's private account store. Never expose it to the renderer,
+// logs, or cloud provisioning. API keys and non-first-party routing are excluded.
+func ReadLocalOAuthCredentials(ctx context.Context, opts ResolveOptions) ([]byte, error) {
+	provider, ok := ResolveProvider("", opts)
+	if !ok || provider != ProviderFirstParty {
+		return nil, nil
+	}
+	if token := opts.env("CLAUDE_CODE_OAUTH_TOKEN"); token != "" {
+		return json.Marshal(map[string]string{"accessToken": token})
+	}
+	if opts.env("ANTHROPIC_API_KEY") != "" || opts.env("ANTHROPIC_AUTH_TOKEN") != "" {
+		return nil, nil
+	}
+	if opts.goos() == "darwin" && opts.AllowKeychain {
+		if data, ok := readKeychainCredentials(ctx, opts); ok {
+			if strings.HasPrefix(strings.TrimSpace(string(data)), "{") {
+				return data, nil
+			}
+			if kindForToken(string(data)) != KindOAuthToken {
+				return nil, nil
+			}
+			return json.Marshal(map[string]string{"accessToken": string(data)})
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	dir, err := claudeConfigDir(opts)
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.Open(filepath.Join(dir, ".credentials.json"))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(io.LimitReader(file, (1<<20)+1))
 }

@@ -548,6 +548,13 @@ type Project struct {
 	Kind          string
 }
 
+type ProviderAccountState struct {
+	ID       int64
+	Revision int64
+	Facts    string
+	Pending  sql.NullString
+}
+
 type Report struct {
 	ID                 string
 	SessionID          string

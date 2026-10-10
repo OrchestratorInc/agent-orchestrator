@@ -141,210 +141,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/agents/codex/account-switches": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Start a global AO Codex account switch */
-        post: operations["startCodexAccountSwitch"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/agents/codex/account-switches/{switchId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read one durable Codex account switch */
-        get: operations["getCodexAccountSwitch"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/agents/codex/accounts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Return cached AO Codex accounts and active-account state */
-        get: operations["getCodexAccounts"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/agents/codex/accounts/{accountId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Delete one inactive signed-out Codex account */
-        delete: operations["deleteCodexAccount"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/agents/codex/accounts/{accountId}/login-terminal": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Open native Codex sign-in for one retained account */
-        post: operations["openCodexAccountReauthenticationTerminal"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/agents/codex/accounts/{accountId}/logout": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Log out one retained Codex account */
-        post: operations["logoutCodexAccount"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/agents/codex/accounts/{accountId}/reset-credit/consume": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Consume one provider-reported Codex usage-limit reset credit */
-        post: operations["consumeCodexAccountResetCredit"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/agents/codex/accounts/ensure": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Discover Codex accounts and ensure authentication, capacity, and optional usage */
-        post: operations["ensureCodexAccounts"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/agents/codex/accounts/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Stream cached and live Codex account state */
-        get: operations["streamCodexAccounts"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/agents/codex/accounts/login-operations/{operationId}/cancel": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Cancel one native Codex account login operation */
-        post: operations["cancelCodexAccountLogin"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/agents/codex/accounts/login-operations/{operationId}/verify": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Verify one native Codex account login operation */
-        post: operations["verifyCodexAccountLogin"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/agents/codex/accounts/login-terminal": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Open an inline native login terminal for a new AO Codex account */
-        post: operations["openCodexAccountLoginTerminal"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/agents/install-jobs": {
         parameters: {
             query?: never;
@@ -1256,6 +1052,161 @@ export interface paths {
         /** Initialize a selected folder as a Git repository with an initial commit */
         post: operations["initializeProjectRepository"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List local managed accounts and separate provider primaries */
+        get: operations["listProviderAccounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-accounts/{accountId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove an account and reassign idle managed sessions */
+        delete: operations["removeProviderAccount"];
+        options?: never;
+        head?: never;
+        /** Rename a local managed account */
+        patch: operations["renameProviderAccount"];
+        trace?: never;
+    };
+    "/api/v1/provider-accounts/{accountId}/primary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set the default and optionally move existing provider sessions */
+        put: operations["setProviderPrimary"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-accounts/{accountId}/refresh-sign-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Renew an account's saved sign-in now */
+        post: operations["refreshProviderAccountSignIn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-accounts/{accountId}/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Spend one of the account's usage-limit resets */
+        post: operations["useProviderAccountReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-accounts/{accountId}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop holding an account back after a provider refusal */
+        post: operations["resumeProviderAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-accounts/{accountId}/sign-out": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sign out and reassign idle managed sessions */
+        post: operations["signOutProviderAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-accounts/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a local managed account sign-in */
+        post: operations["startProviderAccountLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-accounts/login/{loginId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Verify login and register its account */
+        get: operations["getProviderAccountLogin"];
+        put?: never;
+        post?: never;
+        /** Cancel a pending managed login */
+        delete: operations["cancelProviderAccountLogin"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2393,6 +2344,24 @@ export interface paths {
         post: operations["startSessionPreviewServer"];
         /** Stop the managed preview server for a session */
         delete: operations["stopSessionPreviewServer"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/provider-account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a managed session's account */
+        get: operations["getSessionProviderAccount"];
+        /** Switch an idle managed session's account */
+        put: operations["setSessionProviderAccount"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3537,168 +3506,6 @@ export interface components {
             at?: string;
             event: components["schemas"]["CodewhaleLifecycleEvent"];
         };
-        CodexAccountCapabilitiesResponse: {
-            globalSwitch: components["schemas"]["CodexCapabilityObservationResponse"];
-            nativeLogin: components["schemas"]["CodexCapabilityObservationResponse"];
-            resetCreditConsume: components["schemas"]["CodexCapabilityObservationResponse"];
-        };
-        CodexAccountCapacityResponse: {
-            additionalBuckets: components["schemas"]["CodexCapacityBucketResponse"][];
-            /** Format: date-time */
-            attemptedAt?: null | string;
-            /** Format: date-time */
-            checkedAt?: null | string;
-            /** @enum {string} */
-            freshness: "fresh" | "stale" | "checking";
-            /** Format: date-time */
-            observedAt?: null | string;
-            overall?: components["schemas"]["CodexCapacityBucketResponse"];
-            plan?: null | string;
-            reason: string;
-            reasonCode: string;
-            remainingPercent?: null | number;
-            resetCredits?: components["schemas"]["CodexResetCreditsSummaryResponse"];
-            /** Format: date-time */
-            resetsAt?: null | string;
-            /** @enum {string} */
-            state: "available" | "near_limit" | "exhausted" | "unknown" | "unsupported";
-            usedPercent?: null | number;
-        };
-        CodexAccountLoginResponse: {
-            account?: components["schemas"]["CodexAccountResponse"];
-            accountId?: string;
-            /** Format: date-time */
-            expiresAt: string;
-            operationId: string;
-            reason: string;
-            reasonCode: string;
-            /** @enum {string} */
-            status: "pending" | "verifying" | "unauthorized" | "retryable" | "completed" | "cancelled" | "failed" | "expired";
-        };
-        CodexAccountLoginTerminalResponse: {
-            /** Format: date-time */
-            createdAt: string;
-            handleId: string;
-            title: string;
-        };
-        CodexAccountResponse: {
-            accountEmail?: null | string;
-            active: boolean;
-            /** @enum {string} */
-            authMethod: "chatgpt" | "api_key" | "other" | "unknown";
-            authentication: components["schemas"]["CodexAuthenticationResponse"];
-            capacity: components["schemas"]["CodexAccountCapacityResponse"];
-            /** Format: date-time */
-            createdAt: string;
-            id: string;
-            label: string;
-            reason: string;
-            reasonCode: string;
-            /** @enum {string} */
-            status: "valid" | "signed_out" | "broken";
-            usageSummary?: components["schemas"]["CodexAccountUsageSummaryResponse"];
-        };
-        CodexAccountSwitchResponse: {
-            /** Format: date-time */
-            completedAt?: null | string;
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            credentialsCommittedAt?: null | string;
-            failureCode?: string;
-            id: string;
-            /** @enum {string} */
-            phase: "requested" | "checkpointing_source" | "activating_target" | "recovery_required" | "completed" | "failed";
-            sourceAccountId?: string;
-            /** @enum {string} */
-            sourceKind: "managed" | "device" | "none";
-            targetAccountId: string;
-            /** Format: date-time */
-            updatedAt: string;
-        };
-        CodexAccountUsageSummaryResponse: {
-            currentStreakDays?: null | number;
-            latestDayStartDate?: null | string;
-            latestDayTokens?: null | number;
-            lifetimeTokens?: null | number;
-            longestRunningTurnSeconds?: null | number;
-            longestStreakDays?: null | number;
-            /** Format: date-time */
-            observedAt: string;
-            peakDailyTokens?: null | number;
-        };
-        CodexAccountsResponse: {
-            /** Format: int64 */
-            accountRevision: number;
-            accounts: components["schemas"]["CodexAccountResponse"][];
-            activeAccountId?: string;
-            activeLogin?: components["schemas"]["CodexActiveLoginResponse"];
-            capabilities: components["schemas"]["CodexAccountCapabilitiesResponse"];
-            currentSwitch?: components["schemas"]["CodexAccountSwitchResponse"];
-            deviceReconciliation: components["schemas"]["CodexDeviceReconciliationResponse"];
-        };
-        CodexActiveLoginResponse: {
-            accountId?: string;
-            /** Format: date-time */
-            expiresAt: string;
-            operationId: string;
-            reason: string;
-            reasonCode: string;
-            shellTerminal: components["schemas"]["CodexAccountLoginTerminalResponse"];
-            /** @enum {string} */
-            status: "pending" | "verifying" | "unauthorized" | "retryable" | "completed" | "cancelled" | "failed" | "expired";
-        };
-        CodexAuthenticationResponse: {
-            /** Format: date-time */
-            attemptedAt: null | string;
-            /** Format: date-time */
-            checkedAt: null | string;
-            /** @enum {string} */
-            freshness: "fresh" | "stale" | "checking";
-            reason: string;
-            reasonCode: string;
-            /** @enum {string} */
-            state: "authorized" | "unauthorized" | "unknown" | "not_applicable";
-        };
-        CodexCapabilityObservationResponse: {
-            reason: string;
-            reasonCode: string;
-            /** @enum {string} */
-            state: "supported" | "unsupported" | "unknown";
-        };
-        CodexCapacityBucketResponse: {
-            displayName?: null | string;
-            primary?: components["schemas"]["CodexCapacityWindowResponse"];
-            /** @enum {string} */
-            reached: "not_reached" | "reached" | "unknown";
-            secondary?: components["schemas"]["CodexCapacityWindowResponse"];
-        };
-        CodexCapacityWindowResponse: {
-            /** Format: date-time */
-            resetsAt?: null | string;
-            /** Format: double */
-            usedPercent: number;
-            windowDurationMinutes?: null | number;
-        };
-        CodexDeviceReconciliationResponse: {
-            activeAccountVerified: boolean;
-            /** Format: date-time */
-            attemptedAt?: null | string;
-            /** Format: date-time */
-            nextRetryAt?: null | string;
-            reasonCode: string;
-            retryable: boolean;
-            /** @enum {string} */
-            status: "not_checked" | "checking" | "verified" | "temporarily_unavailable" | "blocked";
-            /** Format: date-time */
-            verifiedAt?: null | string;
-        };
-        CodexResetCreditsSummaryResponse: {
-            /** Format: int64 */
-            availableCount: number;
-            /** Format: date-time */
-            nearestExpiresAt?: null | string;
-        };
         CompactConversationResponse: {
             /** Format: int64 */
             tokensAfter?: number;
@@ -3716,9 +3523,6 @@ export interface components {
              * @description Deprecated compatibility alias for processedTokens.
              */
             totalTokens: number;
-        };
-        ConsumeCodexAccountResetCreditRequest: {
-            idempotencyKey: string;
         };
         ContainerReapConfig: {
             disabled?: boolean;
@@ -4175,6 +3979,7 @@ export interface components {
             mode?: "tui" | "chat";
             model?: string;
             projectId: string;
+            providerAccountId?: string;
             taskPreparation?: string;
         };
         DelegateTaskResponse: {
@@ -4251,12 +4056,6 @@ export interface components {
             agentIds?: string[];
             /** @enum {string} */
             purpose: "display" | "launch";
-        };
-        EnsureCodexAccountsRequest: {
-            accountIds?: string[];
-            forceAuthentication?: boolean;
-            forceDeviceReconciliation?: boolean;
-            includeUsage?: boolean;
         };
         EstimatedCostResponse: {
             /** Format: int64 */
@@ -4667,10 +4466,6 @@ export interface components {
             prUrl?: string;
             sessionId: string;
         };
-        OpenCodexAccountLoginTerminalResponse: {
-            operation: components["schemas"]["CodexAccountLoginResponse"];
-            shellTerminal: components["schemas"]["CodexAccountLoginTerminalResponse"];
-        };
         OpenShellTerminalRequest: {
             /** @description Project whose root the shell starts in. Omitted opens the shell in the daemon data dir. */
             projectId?: string;
@@ -4784,6 +4579,159 @@ export interface components {
             activityId: string;
             providerTurnId: string;
             sourceTurnId: string;
+        };
+        ProviderAccountChangeRequest: {
+            accountId?: string;
+            moveExisting?: null | boolean;
+            replacementPrimaryId?: string;
+        };
+        ProviderAccountCreditsView: {
+            balance?: string;
+            unlimited?: boolean;
+        };
+        ProviderAccountExtraUsageView: {
+            /**
+             * Format: int64
+             * @description The monthly cap in cents; zero when the provider reports none.
+             */
+            limitCents: number;
+            /** Format: int64 */
+            usedCents: number;
+        };
+        ProviderAccountNameRequest: {
+            displayName: string;
+        };
+        ProviderAccountRequestsView: {
+            /** Format: int64 */
+            failed: number;
+            /** Format: int64 */
+            succeeded: number;
+        };
+        ProviderAccountResetResponse: {
+            /**
+             * @description Only reset means one was spent. unknown means the provider never confirmed either way.
+             * @enum {string}
+             */
+            outcome: "reset" | "nothing_to_reset" | "none_available" | "wait" | "failed" | "unknown";
+        };
+        ProviderAccountResetView: {
+            expiresAt?: string;
+            label?: string;
+            /** Format: int64 */
+            left: number;
+            /** Format: int64 */
+            total: number;
+        };
+        ProviderAccountTokensView: {
+            currentStreakDays?: null | number;
+            /** @description The most recent day the provider has counted, as YYYY-MM-DD. */
+            latestDay?: string;
+            latestDayTokens?: null | number;
+            lifetime?: null | number;
+            longestStreakDays?: null | number;
+            longestTurnSeconds?: null | number;
+            peakDaily?: null | number;
+        };
+        ProviderAccountUsageView: {
+            addedAt?: string;
+            /** Format: date-time */
+            checkedAt?: string;
+            credits?: components["schemas"]["ProviderAccountCreditsView"];
+            extraUsage?: components["schemas"]["ProviderAccountExtraUsageView"];
+            message?: string;
+            organization?: string;
+            pausedReason?: string;
+            /** @description Set while the account helper holds the account back after a provider refusal. */
+            pausedUntil?: string;
+            plan?: string;
+            /** @description The size of the plan where the provider sells several, such as 20x. */
+            planTier?: string;
+            /** @description When the saved sign-in was last renewed. */
+            refreshedAt?: string;
+            renewsAt?: string;
+            /** @description Requests in the last twenty ten-minute slices, oldest first. */
+            requests?: components["schemas"]["ProviderAccountRequestsView"][];
+            resetBlockedUntil?: string;
+            /** @description Unused usage-limit resets, when the provider reports them. */
+            resetCredits?: null | number;
+            /** @description True when the provider would accept a reset right now. */
+            resetUsable?: boolean;
+            /** @description Each unused reset, soonest to expire first, when the provider itemizes them. */
+            resets?: components["schemas"]["ProviderAccountResetView"][];
+            /** @description The saved sign-in still works but has stopped renewing, so it will stop working. */
+            signInEnding?: boolean;
+            /** @description When a sign-in that has stopped renewing stops working, if known. */
+            signInEndsAt?: string;
+            /** @enum {string} */
+            status: "available" | "unavailable";
+            tokens?: components["schemas"]["ProviderAccountTokensView"];
+            /** @description The two general limits first, then every scoped limit. */
+            windows?: components["schemas"]["ProviderAccountUsageWindowView"][];
+        };
+        ProviderAccountUsageWindowView: {
+            /**
+             * Format: int64
+             * @description Length of the limit window in seconds, when the provider reports it.
+             */
+            durationSeconds?: number;
+            /** @description The provider's name for a model-scoped limit. */
+            name?: string;
+            /** Format: double */
+            remainingFraction: number;
+            resetTime?: string;
+            /**
+             * @description What the limit covers. Absent for the account's general limits.
+             * @enum {string}
+             */
+            scope?: "code_review" | "model" | "oauth_apps" | "cowork";
+        };
+        ProviderAccountView: {
+            displayName?: string;
+            email: string;
+            global?: boolean;
+            id: string;
+            /** @enum {string} */
+            kind?: "oauth" | "imported" | "api_key";
+            primary: boolean;
+            /** @enum {string} */
+            provider: "codex" | "claude";
+            sessions: string[];
+            signInRequired?: boolean;
+            signedIn: boolean;
+            usage?: components["schemas"]["ProviderAccountUsageView"];
+        };
+        ProviderAccountsResponse: {
+            accounts: components["schemas"]["ProviderAccountView"][];
+            defaults: components["schemas"]["ProviderPrimaryView"][];
+            recoveryRequired: boolean;
+        };
+        ProviderLoginRequest: {
+            accountId?: string;
+            apiKey?: string;
+            baseUrl?: string;
+            credentialJson?: string;
+            label?: string;
+            /** @enum {string} */
+            mode?: "browser" | "device" | "import" | "api_key";
+            /** @enum {string} */
+            provider: "codex" | "claude";
+        };
+        ProviderLoginResponse: {
+            accountId: string;
+            code?: string;
+            expiresIn?: number;
+            id: string;
+            mode?: string;
+            provider: string;
+            /** @enum {string} */
+            status: "waiting" | "complete" | "failed" | "cancelled";
+            url?: string;
+        };
+        ProviderPrimaryView: {
+            managed: boolean;
+            primaryId: string;
+            /** @enum {string} */
+            provider: "codex" | "claude";
         };
         PublishRenderRequest: {
             /** @description Also keep the page as a session artifact, a deliverable the user keeps. */
@@ -5237,6 +5185,12 @@ export interface components {
             previewUrl?: string;
             sessionId: string;
         };
+        SessionProviderAccountResponse: {
+            accountId: string;
+            loginRequired: boolean;
+            managed: boolean;
+            provider: string;
+        };
         SessionProvisionStep: {
             /** Format: date-time */
             endedAt?: null | string;
@@ -5448,6 +5402,7 @@ export interface components {
             parentSessionId?: string;
             projectId?: string;
             prompt?: string;
+            providerAccountId?: string;
             /** @enum {string} */
             trackerProvider?: "github" | "gitlab";
         };
@@ -5478,12 +5433,6 @@ export interface components {
              * @enum {string}
              */
             operation?: "install" | "reinstall";
-        };
-        StartCodexAccountSwitchRequest: {
-            /** @deprecated */
-            expectedAccountRevision?: null | number;
-            idempotencyKey: string;
-            targetAccountId: string;
         };
         StartPreviewServerRequest: {
             /** @description Named preview configuration. Optional when exactly one configuration exists. */
@@ -6335,603 +6284,6 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    startCodexAccountSwitch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["StartCodexAccountSwitchRequest"];
-            };
-        };
-        responses: {
-            /** @description Accepted */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CodexAccountSwitchResponse"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    getCodexAccountSwitch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Durable Codex account switch identifier. */
-                switchId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CodexAccountSwitchResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    getCodexAccounts: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CodexAccountsResponse"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    deleteCodexAccount: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description AO Codex account identifier. */
-                accountId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CodexAccountsResponse"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    openCodexAccountReauthenticationTerminal: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description AO Codex account identifier. */
-                accountId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Accepted */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OpenCodexAccountLoginTerminalResponse"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    logoutCodexAccount: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description AO Codex account identifier. */
-                accountId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CodexAccountsResponse"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    consumeCodexAccountResetCredit: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description AO Codex account identifier. */
-                accountId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ConsumeCodexAccountResetCreditRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CodexAccountsResponse"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    ensureCodexAccounts: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EnsureCodexAccountsRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CodexAccountsResponse"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    streamCodexAccounts: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/event-stream": components["schemas"]["CodexAccountsResponse"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    cancelCodexAccountLogin: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description In-memory Codex account login operation identifier. */
-                operationId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CodexAccountLoginResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    verifyCodexAccountLogin: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description In-memory Codex account login operation identifier. */
-                operationId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CodexAccountLoginResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    openCodexAccountLoginTerminal: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Accepted */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OpenCodexAccountLoginTerminalResponse"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10300,6 +9652,627 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listProviderAccounts: {
+        parameters: {
+            query?: {
+                /** @description When false, return the account catalogue without waiting for provider usage checks. */
+                includeUsage?: null | boolean;
+                /** @description When true, re-read native logins and the sign-in state of every account now. */
+                refresh?: null | boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccountsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    removeProviderAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ProviderAccountChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccountsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    renameProviderAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderAccountNameRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccountsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setProviderPrimary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ProviderAccountChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccountsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    refreshProviderAccountSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccountsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    useProviderAccountReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccountResetResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    resumeProviderAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccountsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    signOutProviderAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ProviderAccountChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccountsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    startProviderAccountLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderLoginRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderLoginResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getProviderAccountLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                loginId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderLoginResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    cancelProviderAccountLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                loginId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -15199,6 +15172,128 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionProviderAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionProviderAccountResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setSessionProviderAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderAccountChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionProviderAccountResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

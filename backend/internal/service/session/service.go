@@ -187,6 +187,7 @@ type outputTypeReconciler interface {
 // session operations to the internal sessionmanager.Manager and owns read-model
 // assembly, including user-facing display status derivation.
 type Service struct {
+	providerAccounts    ports.ProviderAccountRouting
 	manager             commander
 	store               Store
 	prClaimer           ports.PRClaimer
@@ -360,6 +361,14 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.Session{}, 0, 0, apierr.Invalid("HARNESS_REQUIRED", "harness is required for a standalone session", nil)
 		}
 	}
+	managedAccount := false
+	if s.providerAccounts != nil && cfg.Harness != "" {
+		_, managed, routeErr := s.providerAccounts.ResolveAccount(ctx, cfg.Harness, cfg.ProviderAccountID)
+		if routeErr != nil {
+			return domain.Session{}, 0, 0, toAPIError(routeErr)
+		}
+		managedAccount = managed
+	}
 	if s.agentReadiness != nil && cfg.Harness != "" {
 		readiness, err := s.agentReadiness.EnsureAgentReadiness(ctx, string(cfg.Harness), domain.AgentReadinessPurposeLaunch)
 		if err != nil {
@@ -368,7 +377,7 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		if readiness.Installation.State == domain.AgentInstallationNotInstalled {
 			return domain.Session{}, 0, 0, apierr.Invalid("AGENT_BINARY_NOT_FOUND", "The selected agent harness is not installed", map[string]any{"agentId": cfg.Harness})
 		}
-		if cfg.Harness == domain.HarnessCodex &&
+		if !managedAccount && cfg.Harness == domain.HarnessCodex &&
 			readiness.Authentication.State == domain.AgentAuthenticationUnauthorized &&
 			readiness.Authentication.Freshness == domain.AgentReadinessFresh {
 			return domain.Session{}, 0, 0, apierr.Conflict("CODEX_ACCOUNT_AUTH_UNVERIFIED", "Add or sign in to a Codex account in Settings before starting a Codex session", nil)
@@ -1276,6 +1285,16 @@ func toAPIError(err error) error {
 
 func mapSessionError(err error) error {
 	switch {
+	case errors.Is(err, ports.ErrProviderLoginRequired):
+		return apierr.Conflict("PROVIDER_LOGIN_REQUIRED", err.Error(), nil)
+	case errors.Is(err, ports.ErrProviderAccountRecovery):
+		return apierr.Conflict("PROVIDER_ACCOUNT_RECOVERY_REQUIRED", err.Error(), nil)
+	case errors.Is(err, ports.ErrProviderAccountUnknown):
+		return apierr.NotFound("PROVIDER_ACCOUNT_NOT_FOUND", err.Error())
+	case errors.Is(err, ports.ErrProviderAccountIncompatible):
+		return apierr.Invalid("PROVIDER_ACCOUNT_INCOMPATIBLE", err.Error(), nil)
+	case errors.Is(err, ports.ErrProviderAccountBusy):
+		return apierr.Conflict("PROVIDER_ACCOUNT_IN_USE", err.Error(), nil)
 	case err == nil:
 		return nil
 	case errors.Is(err, sessionmanager.ErrNotFound):
@@ -1573,4 +1592,9 @@ func (s *Service) harnessSignals(h domain.AgentHarness) bool {
 		return false
 	}
 	return s.signalCapable(h)
+}
+
+// SetProviderAccounts connects managed account routing to session launches.
+func (s *Service) SetProviderAccounts(accounts ports.ProviderAccountRouting) {
+	s.providerAccounts = accounts
 }

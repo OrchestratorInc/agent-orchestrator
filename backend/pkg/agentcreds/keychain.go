@@ -80,6 +80,34 @@ func readKeychain(ctx context.Context, opts ResolveOptions) (storedOAuth, bool) 
 	return storedOAuth{}, false
 }
 
+// readKeychainCredentials retains the refresh token for local account adoption.
+// Existing auth probes still receive only the access token from readKeychain.
+func readKeychainCredentials(ctx context.Context, opts ResolveOptions) ([]byte, bool) {
+	runner := opts.Runner
+	if runner == nil {
+		runner = execCommand
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, keychainTimeout)
+	defer cancel()
+	for _, service := range []string{keychainServiceCredentials, keychainServiceManagedKey} {
+		out, err := runner(probeCtx, "security", "find-generic-password", "-s", service, "-w")
+		if probeCtx.Err() != nil {
+			return nil, false
+		}
+		if err != nil {
+			continue
+		}
+		if _, ok := oauthTokenFromCredentialsJSON(out); ok {
+			return out, true
+		}
+		raw := strings.TrimSpace(string(out))
+		if raw != "" && !strings.HasPrefix(raw, "{") {
+			return []byte(raw), true
+		}
+	}
+	return nil, false
+}
+
 // kindForToken selects the auth header from the token prefix. Claude Code
 // console keys are sk-ant-api* (x-api-key); setup tokens and subscription
 // logins are sk-ant-oat* (Bearer). Anything unrecognised defaults to API key

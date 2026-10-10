@@ -244,9 +244,6 @@ describe("normalizeApiOperation", () => {
 		expect(normalizeApiOperation("POST", "/api/v1/agents/codex/models/refresh")).toBe(
 			"POST /api/v1/agents/:id/models/refresh",
 		);
-		expect(normalizeApiOperation("POST", "/api/v1/agents/codex/accounts/login-operations/72d4db6e-da2c-414c-a6a9-fdbd09a006b6/verify")).toBe(
-			"POST /api/v1/agents/codex/accounts/login-operations/:id/verify",
-		);
 	});
 
 	it("leaves collection and non-resource paths untouched", () => {
@@ -290,8 +287,12 @@ describe("normalizeApiOperation", () => {
 		expect(normalizeApiOperation("GET", "/api/v1/orchestrators/orch-abc")).toBe("GET /api/v1/orchestrators/:id");
 		expect(normalizeApiOperation("POST", "/api/v1/prs/pr-1/merge")).toBe("POST /api/v1/prs/:id/merge");
 		expect(normalizeApiOperation("POST", "/api/v1/sessions/ao-42/renders/r-1/artifact")).toBe("POST /api/v1/sessions/:id/renders/:id/artifact");
-		expect(normalizeApiOperation("POST", "/api/v1/agents/codex/accounts/ensure")).toBe("POST /api/v1/agents/codex/accounts/ensure");
-		expect(normalizeApiOperation("DELETE", "/api/v1/agents/codex/accounts/private-account-id")).toBe("DELETE /api/v1/agents/codex/accounts/:id");
+	});
+
+	it("normalizes provider-account and session routes without exposing ids", () => {
+		expect(normalizeApiOperation("DELETE", "/api/v1/provider-accounts/account-42")).toBe("DELETE /api/v1/provider-accounts/:id");
+		expect(normalizeApiOperation("PUT", "/api/v1/provider-accounts/account-42/primary")).toBe("PUT /api/v1/provider-accounts/:id/primary");
+		expect(normalizeApiOperation("GET", "/api/v1/sessions/session-42/provider-account")).toBe("GET /api/v1/sessions/:id/provider-account");
 	});
 });
 

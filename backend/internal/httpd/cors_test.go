@@ -148,7 +148,7 @@ func TestCORS(t *testing.T) {
 	}
 }
 
-func TestCodexAccountOriginBoundaryBlocksPreviewAndAllowsRenderers(t *testing.T) {
+func TestManagedAccountOriginBoundaryBlocksPreviewAndAllowsRenderers(t *testing.T) {
 	cfg := config.Config{AllowedOrigins: []string{"app://renderer", "http://localhost:5173"}}
 	router := newTestRouter(cfg, discardLogger(), nil)
 
@@ -163,14 +163,14 @@ func TestCodexAccountOriginBoundaryBlocksPreviewAndAllowsRenderers(t *testing.T)
 		{
 			name:       "preview cannot delete an account",
 			method:     http.MethodDelete,
-			path:       "/api/v1/agents/codex/accounts/account-1",
+			path:       "/api/v1/provider-accounts/account-1",
 			origin:     "http://ao-preview.hostile.localhost:5181",
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:       "packaged renderer can read accounts",
 			method:     http.MethodGet,
-			path:       "/api/v1/agents/codex/accounts",
+			path:       "/api/v1/provider-accounts",
 			origin:     "app://renderer",
 			wantStatus: http.StatusNotImplemented,
 			wantACAO:   "app://renderer",
@@ -178,7 +178,7 @@ func TestCodexAccountOriginBoundaryBlocksPreviewAndAllowsRenderers(t *testing.T)
 		{
 			name:       "configured development renderer can mutate accounts",
 			method:     http.MethodDelete,
-			path:       "/api/v1/agents/codex/accounts/account-1",
+			path:       "/api/v1/provider-accounts/account-1",
 			origin:     "http://localhost:5173",
 			wantStatus: http.StatusNotImplemented,
 			wantACAO:   "http://localhost:5173",
@@ -186,7 +186,7 @@ func TestCodexAccountOriginBoundaryBlocksPreviewAndAllowsRenderers(t *testing.T)
 		{
 			name:       "native caller without origin can mutate accounts",
 			method:     http.MethodDelete,
-			path:       "/api/v1/agents/codex/accounts/account-1",
+			path:       "/api/v1/provider-accounts/account-1",
 			wantStatus: http.StatusNotImplemented,
 		},
 	}

@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -28,13 +29,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	chatdriverregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/proxyhost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/autoreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
-	"github.com/aoagents/agent-orchestrator/backend/internal/codexops"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -64,6 +65,7 @@ import (
 	notificationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/notification"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	provideraccountsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/provideraccounts"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
@@ -81,6 +83,18 @@ import (
 const usageReconcileTick = 3 * time.Minute
 
 const chatHibernateSweepTick = 30 * time.Second
+
+// legacyChatMigrationDelay lets startup settle (chats found again, the helper
+// answering) before any chat is restarted; legacyChatMigrationTick spaces the
+// later tries for chats that were busy.
+const (
+	legacyChatMigrationDelay = 20 * time.Second
+	legacyChatMigrationTick  = 30 * time.Second
+)
+
+// legacyChatMigrationOffEnv keeps chats started before Account Manager on this
+// computer's own sign-in when set to 1.
+const legacyChatMigrationOffEnv = "AO_LEGACY_CHAT_MIGRATION_OFF"
 
 // sentryEnvironment maps the daemon's app version to a Sentry environment so a
 // nightly/edge build's issues do not mix with stable release health.
@@ -459,25 +473,6 @@ func Run() error {
 		Activity: lcStack.LCM,
 		Log:      log,
 		NewID:    uuid.NewString,
-		OnAccountChanged: func(sessionID domain.SessionID, generation string, harness domain.AgentHarness) {
-			if harness != domain.HarnessCodex || agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
-				return
-			}
-			rec, ok, readErr := store.GetSession(ctx, sessionID)
-			if readErr == nil && ok && rec.Harness == domain.HarnessCodex && rec.Metadata.ControllerGeneration == generation {
-				agentSvc.InvalidateCodexAccountAuthentication()
-			}
-		},
-		OnCodexCapacityChanged: func(sessionID domain.SessionID, generation string, observation ports.CodexCapacityObservation) {
-			if agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
-				return
-			}
-			rec, ok, readErr := store.GetSession(ctx, sessionID)
-			if readErr != nil || !ok || rec.Harness != domain.HarnessCodex || rec.Metadata.ControllerGeneration != generation {
-				return
-			}
-			agentSvc.ObserveActiveCodexAccountCapacity(observation)
-		},
 		// Sync ChatUI's model choice, including clearing its override, before a
 		// later TUI rebuild reads the session metadata.
 		OnModelChanged: func(sessionID domain.SessionID, model string) {
@@ -540,36 +535,16 @@ func Run() error {
 	// nil-guard and the intake resolver's backoff both tolerate that
 	// (issue #2685).
 	tracker := newMultiTracker(cfg.GitLab, log)
-	codexPlugin := codexagent.New()
-	codexHome, err := codexPlugin.NativeSessionConfigDir(ctx, nil)
-	if err != nil {
-		stop()
-		lcStack.Stop()
-		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
-			log.Error("cdc pipeline shutdown", "err", cdcErr)
-		}
-		return fmt.Errorf("resolve device-global Codex home: %w", err)
-	}
-	codexOperationGate := codexops.NewGate()
 	agentDeps := agentsvc.Deps{
 		Cache: store, Discoverer: modelDiscoverer, Projects: store, Sessions: store, Context: ctx, Logger: log,
-		ModelDiscoveryDir:      filepath.Join(cfg.DataDir, "model-discovery"),
-		CodexAccountRoot:       filepath.Join(cfg.StateDir, "harnesses", "codex", "accounts"),
-		CodexPendingRoot:       filepath.Join(cfg.StateDir, "harnesses", "codex", "pending-accounts"),
-		CodexSwitchStagingRoot: filepath.Join(cfg.StateDir, "harnesses", "codex", "switch-staging"),
-		CodexGlobalHome:        codexHome,
-		CodexAccountSwitches:   store,
-		CodexAccounts: codexappserver.NewAccountFactoryWithResolver(func(resolveCtx context.Context) (string, error) {
-			return codexagent.New().ResolveBinary(resolveCtx)
-		}, log),
-		CodexOperationGate: codexOperationGate,
+		ModelDiscoveryDir: filepath.Join(cfg.DataDir, "model-discovery"),
 	}
 	agentSvc = agentsvc.NewWithDeps(agentDeps)
 	agentSvc.WarmModelCatalogs(ctx)
 
 	persistentHostsReconciled := make(chan struct{})
 	reviewerChatsRecovered := make(chan struct{})
-	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
+	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, log)
 	if err != nil {
 		stop()
 		lcStack.Stop()
@@ -616,6 +591,51 @@ func Run() error {
 			return wake.WakeHibernatedChat(wakeCtx, id)
 		})
 	}
+	proxyBinaryName := "ao-proxy-host"
+	if runtime.GOOS == "windows" {
+		proxyBinaryName += ".exe"
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate account helper: %w", err)
+	}
+	proxyBinary := cfg.ProxyHostBinary
+	if proxyBinary == "" {
+		proxyBinary = filepath.Join(filepath.Dir(executable), proxyBinaryName)
+	}
+	client, err := proxyhost.New(filepath.Join(cfg.DataDir, "proxy"), proxyBinary)
+	if err != nil {
+		return fmt.Errorf("load managed account identity: %w", err)
+	}
+	key, err := client.TicketKey()
+	if err != nil {
+		return fmt.Errorf("load managed account ticket key: %w", err)
+	}
+	guard, guardOK := sessMgr.(ports.ProviderAccountSessionGuard)
+	routing, routingOK := sessMgr.(interface {
+		SetProviderAccounts(ports.ProviderAccountRouting)
+	})
+	if !guardOK || !routingOK {
+		return errors.New("session manager lacks managed account boundaries")
+	}
+	providerAccounts := provideraccountsvc.New(store, client, guard, key, client.Endpoint(), uuid.NewString)
+	providerAccounts.SetNativeAccountSource(client)
+	providerLogin := provideraccountsvc.NewLoginCoordinator(providerAccounts, client, uuid.NewString)
+	agentSvc.SetManagedProviderReadiness(providerAccounts)
+	agentSvc.SetManagedProviderModels(providerAccounts)
+	providerAccounts.SetReadinessInvalidator(func(provider string) {
+		switch provider {
+		case "codex":
+			agentSvc.InvalidateAgentAuthentication(string(domain.HarnessCodex))
+			agentSvc.InvalidateModelCatalogs(string(domain.HarnessCodex))
+		case "claude":
+			agentSvc.InvalidateAgentAuthentication(string(domain.HarnessClaudeCode))
+			agentSvc.InvalidateModelCatalogs(string(domain.HarnessClaudeCode))
+		}
+	})
+	routing.SetProviderAccounts(providerAccounts)
+	sessionSvc.SetProviderAccounts(providerAccounts)
+
 	if tunable, ok := sessMgr.(interface {
 		SetModelCatalog(interface {
 			Models(context.Context, string, string, bool) (ports.AgentModelCatalog, error)
@@ -632,6 +652,78 @@ func Run() error {
 	lcStack.LCM.SetSessionInputLease(sessMgr)
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
+	restoreErr := providerAccounts.RestoreHost(ctx)
+	if restoreErr != nil {
+		log.Warn("managed account recovery requires attention", "error", restoreErr)
+	}
+	// Whether the account helper took the last route update. Nothing is moved
+	// onto an account while it cannot be reached.
+	var helperReady atomic.Bool
+	helperReady.Store(restoreErr == nil)
+	go providerAccounts.WarmAccounts(ctx)
+	if migrator, ok := sessMgr.(interface {
+		SetLegacyChatMigration(bool)
+		MigrateLegacyChats(context.Context) (int, error)
+	}); ok && os.Getenv(legacyChatMigrationOffEnv) != "1" {
+		migrator.SetLegacyChatMigration(true)
+		go func() {
+			wait := legacyChatMigrationDelay
+			announced := -1
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(wait):
+				}
+				wait = legacyChatMigrationTick
+				if !helperReady.Load() {
+					continue
+				}
+				// This computer's own sign-in becomes an account before any chat
+				// is restarted to use it.
+				_ = providerAccounts.RefreshNativeAccountsIfDue(ctx)
+				remaining, err := migrator.MigrateLegacyChats(ctx)
+				if err != nil && ctx.Err() == nil {
+					log.Warn("moving chats onto Account Manager", "error", err)
+				}
+				if remaining != announced && (remaining > 0 || announced > 0) {
+					log.Info("chats still running without an account", "count", remaining)
+				}
+				announced = remaining
+				// No chat is running without an account. One that is asleep or
+				// stopped, or restored later, is adopted as it starts.
+				if remaining == 0 && err == nil {
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		reported := false
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				failure := providerAccounts.RestoreHost(ctx)
+				if failure != nil && ctx.Err() == nil && !reported {
+					log.Warn("managed account helper requires attention", "error", failure)
+				}
+				reported = failure != nil
+				helperReady.Store(failure == nil)
+				if failure == nil {
+					// Paces itself; most ticks return at once.
+					if removed, err := providerAccounts.RemoveLeftoverCredentials(ctx, false); removed > 0 {
+						log.Info("removed sign-ins no account uses", "count", removed)
+					} else if err != nil && ctx.Err() == nil {
+						log.Debug("leftover sign-in check failed", "error", err)
+					}
+				}
+			}
+		}
+	}()
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log, OnModelScopeChanged: agentSvc.InvalidateProjectModelCatalogs})
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
@@ -706,7 +798,6 @@ func Run() error {
 	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, log)
 	systemChecks.SetGitHubAuthTerminalOpener(shellTermSvc)
 	agentAuthSvc := agentauth.NewWithAgentResolver(hostCommands, agentSvc, shellTermSvc, cfg.DataDir)
-	agentSvc.SetCodexAccountLoginTerminalOpener(shellTermSvc)
 	// Late-bound so Kill/Cleanup close a session's scoped shells before its
 	// worktree is torn down (shellTermSvc cannot exist before sessMgr does; see
 	// SetShellTerminalCloser).
@@ -802,12 +893,6 @@ func Run() error {
 		log.Warn("pr action service disabled: no usable SCM provider")
 	}
 
-	// Codex switch recovery is best effort and never blocks unrelated daemon
-	// startup. Its own credential gate still protects any local mutation.
-	if reconcileErr := agentSvc.ReconcileCodexAccountSwitches(ctx); reconcileErr != nil {
-		log.Warn("Codex account switch recovery deferred", "err", reconcileErr)
-	}
-
 	// Durable agent-switch and interface-transition recovery is the startup
 	// safety boundary. The in-memory input fence disappeared with the previous
 	// daemon; every active saga must be closed or explicitly quarantined before
@@ -822,7 +907,6 @@ func Run() error {
 		}
 		return fmt.Errorf("reconcile sessions on boot: %w", reconcileErr)
 	}
-	agentSvc.WarmCodexAccounts()
 	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, log)
 	lcStack.automationDone = automationDone
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
@@ -914,43 +998,44 @@ func Run() error {
 	}
 
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
-		Projects:           projectSvc,
-		HostID:             hostIdentity.HostID,
-		Endpoints:          bs,
-		Agents:             agentSvc,
-		CodexAccounts:      agentSvc,
-		SystemChecks:       systemChecks,
-		Installer:          systemInstall,
-		Sessions:           sessionSvc,
-		Automations:        automationSvc,
-		DesktopWorkspaces:  sessionSvc,
-		PRs:                prActions,
-		Reviews:            reviewSvc,
-		Notifications:      notifier,
-		Reports:            reportSvc,
-		NotificationStream: notificationHub,
-		Push:               pushRegistry,
-		Presence:           presenceTracker,
-		DeviceRoster:       deviceRoster,
-		DeviceLive:         presenceTracker,
-		Import:             importsvc.New(importsvc.Deps{Store: store}),
-		Directories:        fsbrowsersvc.New(),
-		ShellTerminals:     shellTermSvc,
-		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
-		AgentAuth:          agentAuthSvc,
-		GitHub:             githubpat.New(cfg.DataDir),
-		Conversations:      chatSvc,
-		Settings:           settingsSvc,
-		CDC:                store,
-		Events:             cdcPipe.Broadcaster,
-		Activity:           lcStack.LCM,
-		NativeSessions:     nativeSessions,
-		UsageHooks:         usageCollector,
-		UsageSummary:       usagesvc.NewSummaryReader(store),
-		SessionMemory:      memoryReader,
-		SessionSteps:       lcStack.LCM,
-		Telemetry:          telemetrySink,
-		Mobile:             mc,
+		Projects:             projectSvc,
+		HostID:               hostIdentity.HostID,
+		Endpoints:            bs,
+		Agents:               agentSvc,
+		ProviderAccounts:     providerAccounts,
+		ProviderAccountLogin: providerLogin,
+		SystemChecks:         systemChecks,
+		Installer:            systemInstall,
+		Sessions:             sessionSvc,
+		Automations:          automationSvc,
+		DesktopWorkspaces:    sessionSvc,
+		PRs:                  prActions,
+		Reviews:              reviewSvc,
+		Notifications:        notifier,
+		Reports:              reportSvc,
+		NotificationStream:   notificationHub,
+		Push:                 pushRegistry,
+		Presence:             presenceTracker,
+		DeviceRoster:         deviceRoster,
+		DeviceLive:           presenceTracker,
+		Import:               importsvc.New(importsvc.Deps{Store: store}),
+		Directories:          fsbrowsersvc.New(),
+		ShellTerminals:       shellTermSvc,
+		Cues:                 cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
+		AgentAuth:            agentAuthSvc,
+		GitHub:               githubpat.New(cfg.DataDir),
+		Conversations:        chatSvc,
+		Settings:             settingsSvc,
+		CDC:                  store,
+		Events:               cdcPipe.Broadcaster,
+		Activity:             lcStack.LCM,
+		NativeSessions:       nativeSessions,
+		UsageHooks:           usageCollector,
+		UsageSummary:         usagesvc.NewSummaryReader(store),
+		SessionMemory:        memoryReader,
+		SessionSteps:         lcStack.LCM,
+		Telemetry:            telemetrySink,
+		Mobile:               mc,
 		DevImport: devimportsvc.New(devimportsvc.Deps{
 			Store:         store,
 			TargetDataDir: cfg.DataDir,
@@ -1121,11 +1206,6 @@ func Run() error {
 		log.Error("agent switch worker shutdown", "err", err)
 	}
 	switchCancel()
-	codexSwitchStopCtx, codexSwitchCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-	if err := agentSvc.WaitCodexAccountSwitchWorkers(codexSwitchStopCtx); err != nil {
-		log.Error("Codex account switch worker shutdown", "err", err)
-	}
-	codexSwitchCancel()
 	managedPreview.Close()
 	<-previewDone
 	// Detach chat controllers before stopping the lifecycle stack. Persistent

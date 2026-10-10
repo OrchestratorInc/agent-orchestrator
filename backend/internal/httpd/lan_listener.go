@@ -55,10 +55,8 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 // prefixes that must never be reachable through the LAN listener: /shutdown,
 // the telemetry routes under /internal/, and the Connect Mobile control
 // surface under /api/v1/mobile, developer maintenance routes under /api/v1/dev,
-// host-mutating installer routes under /api/v1/system/install, and personal
-// Codex account-management routes under /api/v1/agents/codex/accounts and
-// /api/v1/agents/codex/account-switches (the harmless read-only Codex model
-// routes stay reachable so mobile can pick a model). Some routes
+// host-mutating installer routes under /api/v1/system/install, and managed
+// provider-account routes under /api/v1/provider-accounts. Some routes
 // are gated in the shared router by localControlRequest, which trusts the
 // client-supplied Host header. That header is spoofable by any LAN client. The
 // LAN listener is the one thing a caller cannot spoof: it is the physical socket
@@ -72,8 +70,7 @@ var lanControlBlockedPrefixes = []string{
 	"/api/v1/browser",
 	"/api/v1/desktop",
 	"/api/v1/system/install",
-	"/api/v1/agents/codex/accounts",
-	"/api/v1/agents/codex/account-switches",
+	"/api/v1/provider-accounts",
 }
 
 // lanControlBlock returns 404 for any request whose path is, or is nested
@@ -104,6 +101,9 @@ func isLANControlBlockedRequest(method, path string) bool {
 // beneath it ("/api/v1/mobile/status") but must not catch unrelated siblings
 // such as "/api/v1/mobileapp".
 func isLANControlBlockedPath(path string) bool {
+	if strings.HasPrefix(path, "/api/v1/sessions/") && strings.HasSuffix(strings.TrimSuffix(path, "/"), "/provider-account") {
+		return true
+	}
 	if strings.HasPrefix(path, "/api/v1/sessions/") && strings.HasSuffix(strings.TrimSuffix(path, "/"), "/preview/server") {
 		return true
 	}

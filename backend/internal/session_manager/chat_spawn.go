@@ -118,6 +118,12 @@ func (m *Manager) RunBackgroundTask(
 			m.augmentAgentRuntimeEnv(agent, env)
 		}
 	}
+	// The task runs for this session, so it runs on this session's account.
+	// Without it the provider call falls back to the computer's own login, which
+	// may be a different account, or none.
+	if err := m.applyAccountEnv(ctx, rec, env); err != nil {
+		return "", fmt.Errorf("background task account: %w", err)
+	}
 	// This provider call is not the worker session. Suppress session-scoped hooks
 	// so its prompt and response cannot be projected into the worker's history.
 	deleteProtectedEnv(env, EnvSessionID, envKeysCaseInsensitive)
@@ -494,6 +500,12 @@ func (m *Manager) resumeChatController(
 		MCPServers:              m.aoMCPServers(rec.Harness, env),
 		ExpectedControllerOwner: rec.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
+			// This runs only when a provider process is about to be launched,
+			// never when a running one is found again. That makes it the one
+			// moment a chat without an account can be given one.
+			if adoptErr := m.adoptLegacyChat(launchCtx, rec); adoptErr != nil {
+				return nil, adoptErr
+			}
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
 				launchCtx, rec, project.Config.Env, expected,
 			)

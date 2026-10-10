@@ -7,7 +7,8 @@ import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { SettingsDialog } from "./SettingsPageTestHarness";
 import { globalSettingsItemsFor, visibleGlobalSettings } from "./settings/settingsCatalog";
 
-const { postMock, cloudProjectsState, localWorkspacesState } = vi.hoisted(() => ({
+const { getMock, postMock, cloudProjectsState, localWorkspacesState } = vi.hoisted(() => ({
+	getMock: vi.fn(),
 	postMock: vi.fn(),
 	cloudProjectsState: {
 		data: [] as Array<{ id: string; orgId?: string; displayName: string }> | undefined,
@@ -19,15 +20,8 @@ const { postMock, cloudProjectsState, localWorkspacesState } = vi.hoisted(() => 
 	localWorkspacesState: { ids: [] as string[] },
 }));
 
-const accountsResponse = {
-	accountRevision: 0,
-	accounts: [],
-	capabilities: {},
-	deviceReconciliation: { status: "verified", activeAccountVerified: false, reasonCode: "verified", retryable: false },
-};
-
 vi.mock("../lib/api-client", () => ({
-	apiClient: { POST: postMock },
+	apiClient: { GET: getMock, POST: postMock },
 	apiErrorCode: (error: { code?: string }) => error?.code,
 	apiErrorMessage: () => "request failed",
 	hasTrustedApiBaseUrl: () => true,
@@ -109,9 +103,8 @@ vi.mock("../lib/cloud-session", () => ({
 
 describe("SettingsDialog", () => {
 	beforeEach(() => {
-		postMock.mockReset().mockImplementation((path: string) => path === "/api/v1/agents/codex/accounts/ensure"
-			? Promise.resolve({ data: accountsResponse })
-			: Promise.resolve({ data: { operationId: "login-1", status: "cancelled" } }));
+		getMock.mockReset().mockResolvedValue({ data: { accounts: [], defaults: [], recoveryRequired: false } });
+		postMock.mockReset().mockResolvedValue({ data: { operationId: "login-1", status: "cancelled" } });
 		useUiStore.setState({ developerMode: false, settingsModal: null });
 		cloudProjectsState.data = [];
 		cloudProjectsState.isLoading = false;
@@ -242,9 +235,10 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("mobile");
 		expect(screen.getByRole("button", { name: "Mobile" })).toHaveAttribute("data-active", "true");
-		await vi.waitFor(() => expect(postMock).toHaveBeenCalledWith(
-			"/api/v1/agents/codex/accounts/ensure",
-			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
+		// Opening settings re-checks every account, whichever page is shown.
+		await vi.waitFor(() => expect(getMock).toHaveBeenCalledWith(
+			"/api/v1/provider-accounts",
+			{ params: { query: { refresh: true } } },
 		));
 	});
 
@@ -274,7 +268,7 @@ describe("SettingsDialog", () => {
 		expect(form).toHaveTextContent("harness");
 		expect(form).toHaveAttribute("data-focus-agent", "claude-code");
 		expect(screen.getByRole("button", { name: "Harness" })).toHaveAttribute("data-active", "true");
-		expect(screen.getByRole("button", { name: "Subscriptions" })).not.toHaveAttribute("data-active", "true");
+		expect(screen.getByRole("button", { name: "Accounts" })).not.toHaveAttribute("data-active", "true");
 	});
 
 	it("forwards the remote host from a Manage agents action to Harness", async () => {
@@ -296,13 +290,12 @@ describe("SettingsDialog", () => {
 		expect(screen.getByTestId("global-settings-section")).not.toHaveAttribute("data-focus-agent");
 	});
 
-	it("refreshes accounts once when global Settings opens, not when its pages change", async () => {
+	it("does not start native account work when global Settings opens", async () => {
 		useUiStore.getState().openGlobalSettings();
 		renderSettingsDialog();
 
-		await vi.waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		await screen.findByTestId("global-settings-section");
 		await userEvent.click(screen.getByRole("button", { name: "Harness" }));
-		expect(postMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("mounts dialog chrome before the selected settings form", async () => {
@@ -361,16 +354,15 @@ describe("SettingsDialog", () => {
 		expect(screen.queryByRole("button", { name: "Coder" })).not.toBeInTheDocument();
 	});
 
-	it("closes Settings without cancelling daemon-owned account login work", async () => {
-		useUiStore.getState().openGlobalSettings("agents");
+	it("opens Account Manager without starting native account work", async () => {
+		useUiStore.getState().openGlobalSettings("accountManager");
 		renderSettingsDialog();
 
-		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("agents");
+		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("accountManager");
 		expect(screen.getByRole("button", { name: "General" })).toBeEnabled();
 		await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
-		expect(postMock.mock.calls.map(([path]) => path)).toEqual(["/api/v1/agents/codex/accounts/ensure"]);
 	});
 
 	it("renders inside the page and closes from Escape or Back", async () => {
