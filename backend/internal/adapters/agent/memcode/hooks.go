@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -49,6 +48,8 @@ func readWitness(data, session, generation string) (witness, error) {
 	err = json.Unmarshal(b, &w)
 	return w, err
 }
+
+// AugmentRuntimeLaunchEnv implements the native TUI adapter contract.
 func (*Plugin) AugmentRuntimeLaunchEnv(env map[string]string, data string, id domain.SessionID, generation string) {
 	env["AO_MEMCODE_DATA_DIR"] = data
 	env["AO_MEMCODE_GENERATION"] = generation
@@ -77,14 +78,16 @@ func EmitStartWitness(out io.Writer) error {
 		sequence = old.Sequence + 1
 	}
 	b, _ := json.Marshal(witness{Generation: generation, NativeID: id, Sequence: sequence})
-	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	if err = hookutil.AtomicWriteFile(path, b, 0600); err != nil {
+	if err := hookutil.AtomicWriteFile(path, b, 0o600); err != nil {
 		return err
 	}
 	return EmitInstructionChunk(out, "context-chunk-0")
 }
+
+// GetAgentHooks implements the native TUI adapter contract.
 func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -103,16 +106,19 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if len(instructions) > 512<<10 {
 		return errors.New("memcode standing instructions exceed bounded private context limit")
 	}
-	chunks := instructionChunks(instructions)
+	chunks, err := instructionChunks(instructions)
+	if err != nil {
+		return err
+	}
 	if len(chunks) > 64 {
 		return errors.New("memcode private instruction chunk count exceeds bounded limit")
 	}
 	private := filepath.Join(cfg.DataDir, "agent-launches", "memcode", cfg.SessionID)
-	if err := os.MkdirAll(private, 0700); err != nil {
+	if err := os.MkdirAll(private, 0o700); err != nil {
 		return err
 	}
 	for i, chunk := range chunks {
-		if err := hookutil.AtomicWriteFile(filepath.Join(private, fmt.Sprintf("instructions-%d.txt", i)), chunk, 0600); err != nil {
+		if err := hookutil.AtomicWriteFile(filepath.Join(private, fmt.Sprintf("instructions-%d.txt", i)), chunk, 0o600); err != nil {
 			return err
 		}
 	}
@@ -121,7 +127,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	var config map[string]json.RawMessage
 	b, err := os.ReadFile(path)
 	if err == nil {
-		if err = json.Unmarshal(b, &config); err != nil {
+		if err := json.Unmarshal(b, &config); err != nil {
 			return err
 		}
 	} else if !os.IsNotExist(err) {
@@ -132,7 +138,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	}
 	hooks := map[string][]map[string]json.RawMessage{}
 	if b := config["hooks"]; len(b) > 0 {
-		if err = json.Unmarshal(b, &hooks); err != nil {
+		if err := json.Unmarshal(b, &hooks); err != nil {
 			return err
 		}
 	}
@@ -163,14 +169,16 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if err != nil {
 		return err
 	}
-	if err = os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	if err = hookutil.AtomicWriteFile(path, b, 0600); err != nil {
+	if err := hookutil.AtomicWriteFile(path, b, 0o600); err != nil {
 		return fmt.Errorf("memcode hooks: %w", err)
 	}
 	return hookutil.EnsureWorkspaceGitignore(dir, "hooks.json")
 }
+
+// DeriveActivityState maps supported native tool activity hooks.
 func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	switch event {
 	case "pre-tool-use":
@@ -180,29 +188,36 @@ func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	}
 }
 
-// Each official native hook has an 8192-byte stdout cap. Split at UTF-8/newline
-// boundaries and preserve all context across ordered additive native hooks.
-func instructionChunks(data []byte) [][]byte {
+// Native trims each hook output and joins outputs with two newlines. Only
+// paragraph boundaries that reproduce that exact combination may be split.
+func instructionChunks(data []byte) ([][]byte, error) {
+	data = bytes.TrimSpace(data)
 	if len(data) == 0 {
-		return [][]byte{{}}
+		return [][]byte{{}}, nil
 	}
 	var chunks [][]byte
-	for len(data) > 0 {
-		end := min(len(data), 8192)
-		if end < len(data) {
-			if newline := bytes.LastIndexByte(data[:end], '\n'); newline > 0 {
-				end = newline + 1
-			} else {
-				for end > 0 && !utf8.RuneStart(data[end]) {
-					end--
-				}
-			}
+	remaining := data
+	for len(remaining) > 8192 {
+		end := bytes.LastIndex(remaining[:8192], []byte("\n\n"))
+		if end <= 0 {
+			return nil, errors.New("memcode private instruction paragraph exceeds native hook output limit")
 		}
-		chunks = append(chunks, append([]byte(nil), data[:end]...))
-		data = data[end:]
+		chunk := append([]byte(nil), remaining[:end]...)
+		chunks = append(chunks, chunk)
+		remaining = remaining[end+2:]
 	}
-	return chunks
+	chunks = append(chunks, append([]byte(nil), remaining...))
+	trimmed := make([][]byte, len(chunks))
+	for i, chunk := range chunks {
+		trimmed[i] = bytes.TrimSpace(chunk)
+	}
+	if !bytes.Equal(bytes.Join(trimmed, []byte("\n\n")), data) {
+		return nil, errors.New("memcode native hook combination would alter standing instructions")
+	}
+	return chunks, nil
 }
+
+// EmitInstructionChunk emits one bounded private native context hook.
 func EmitInstructionChunk(out io.Writer, event string) error {
 	index, err := strconv.Atoi(strings.TrimPrefix(event, "context-chunk-"))
 	if err != nil || index < 0 || index > 63 {
@@ -216,14 +231,14 @@ func EmitInstructionChunk(out io.Writer, event string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	context, err := io.ReadAll(io.LimitReader(file, 8193))
+	defer func() { _ = file.Close() }()
+	content, err := io.ReadAll(io.LimitReader(file, 8193))
 	if err != nil {
 		return err
 	}
-	if len(context) > 8192 {
+	if len(content) > 8192 {
 		return errors.New("memcode native hook chunk exceeds output limit")
 	}
-	_, err = out.Write(context)
+	_, err = out.Write(content)
 	return err
 }
