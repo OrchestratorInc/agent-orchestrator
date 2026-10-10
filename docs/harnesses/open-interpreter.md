@@ -2,7 +2,7 @@
 
 AO integrates the Rust terminal release [`rust-v0.0.56`](https://github.com/openinterpreter/openinterpreter/releases/tag/rust-v0.0.56), inspected at [`cc054cf52fa3585a3de50e0d4e0be6f9ee6677e8`](https://github.com/openinterpreter/openinterpreter/tree/cc054cf52fa3585a3de50e0d4e0be6f9ee6677e8). This is a TUI integration. Chat, reviewer, interface handoff, provider usage accounting, and semantic prompt acknowledgements are intentionally unavailable.
 
-The executable is `interpreter`, never the ambiguous `i` alias. Runtime discovery checks Rust-specific help features to reject the older Python executable. Models are native free-form IDs. `login status` only proves local credential configuration, so AO reports `configured`, never `authorized`; other outputs remain unknown because custom providers can obtain credentials separately.
+The executable is `interpreter`, never the ambiguous `i` alias. Runtime discovery checks Rust-specific help features to reject the older Python executable. Models are native free-form IDs. `login status` only proves local credential configuration, so AO reports `configured`, never `authorized`. AO also reports `configured` when the user configuration explicitly selects a custom provider whose `env_key` names a non-empty variable in the daemon environment. This observation honors `INTERPRETER_HOME`, does not resolve named-profile or project overrides, and never validates the credential with the provider. Missing or ambiguous configuration remains unknown.
 
 ## Launch and native configuration
 
