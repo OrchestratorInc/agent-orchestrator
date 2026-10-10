@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,7 +123,7 @@ func TestTestingProviderComposition(t *testing.T) {
 	}
 }
 
-func TestTestingProviderCompositionRejectsInvalidModeAndFactoryError(t *testing.T) {
+func TestTestingProviderCompositionDefersFactoryError(t *testing.T) {
 	_, err := testingProvidersFromEnv(config.Config{}, func(string) string { return "auto" }, nil, func(cua.Config) (testingDesktopAdapter, error) {
 		t.Fatal("invalid mode reached desktop factory")
 		return nil, nil
@@ -129,16 +131,28 @@ func TestTestingProviderCompositionRejectsInvalidModeAndFactoryError(t *testing.
 	if err == nil {
 		t.Fatal("invalid mode accepted")
 	}
-	_, err = testingProvidersFromEnv(config.Config{}, func(key string) string {
+	factoryErr := errors.New("provider configuration failed")
+	calls := 0
+	providers, err := testingProvidersFromEnv(config.Config{}, func(key string) string {
 		if key == "AO_TESTING_TARGET_CHECKOUT" {
 			return "/isolated/checkout"
 		}
 		return ""
 	}, nil, func(cua.Config) (testingDesktopAdapter, error) {
-		return nil, errors.New("provider configuration failed")
+		calls++
+		return nil, factoryErr
 	})
-	if err == nil {
-		t.Fatal("provider construction failure hidden")
+	if err != nil || calls != 0 {
+		t.Fatal("native factory blocked normal daemon composition", err, calls)
+	}
+	for range 2 {
+		_, err := providers.Desktop.BindWindow(context.Background(), domain.TestTargetIdentity{})
+		if !errors.Is(err, factoryErr) || calls != 1 {
+			t.Fatal("desktop use lost or retried factory failure", err, calls)
+		}
+	}
+	if err := providers.Close(context.Background()); err != nil {
+		t.Fatal("failed construction broke shutdown", err)
 	}
 }
 
@@ -146,7 +160,7 @@ func TestTestingProductionCompositionConstructsAdaptersWithoutLaunching(t *testi
 	t.Setenv("AO_TESTING_TARGET_CHECKOUT", "/prepared/isolated-checkout")
 	t.Setenv("AO_TESTING_DESKTOP_DELIVERY", "foreground")
 	// Construction neither creates this directory nor launches native processes.
-	providers, err := configuredTestingProviders(config.Config{DataDir: "/tmp/ao-wiring-construction"})
+	providers, err := configuredTestingProviders(config.Config{DataDir: filepath.Join(t.TempDir(), strings.Repeat("x", 120))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,5 +188,21 @@ func TestTestingInputRefusalBridge(t *testing.T) {
 	}
 	if errors.Is(testingInputError(cua.ErrProvider), ports.ErrTestingInputRefused) {
 		t.Fatal("uncertain delivery was reported as no input")
+	}
+}
+
+func TestTestingShutdownDoesNotConstructUnusedDesktop(t *testing.T) {
+	providers, err := testingProvidersFromEnv(config.Config{}, func(string) string { return "" }, nil, func(cua.Config) (testingDesktopAdapter, error) {
+		t.Fatal("unused native desktop was constructed")
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := providers.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := providers.Desktop.BindWindow(context.Background(), domain.TestTargetIdentity{}); err == nil {
+		t.Fatal("desktop bound after supervisor shutdown")
 	}
 }
