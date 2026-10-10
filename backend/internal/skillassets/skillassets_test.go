@@ -193,9 +193,10 @@ func TestEmbeddedReportGuidanceDistinguishesDeliverablesFromDiagnostics(t *testi
 	}
 	guidance := strings.Join(strings.Fields(string(body)), " ")
 	for _, want := range []string{
-		"working material, not deliverables",
-		"Do not attach them unless requested or needed to explain an actionable failure",
-		"Summarize validation in the report note",
+		"Most tasks have no artifact.",
+		"Never attach screenshots, test logs, command output, scratch notes, or intermediate diagnostics unless the user requested them.",
+		"Findings, investigation results, verification, and progress belong in the report note.",
+		"One deliverable is one file.",
 		"not external publishing authorization",
 		"In a chat session, an HTML file from the artifact directory that you attach with `--artifact` also shows in the thread.",
 	} {

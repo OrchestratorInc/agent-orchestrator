@@ -5613,12 +5613,13 @@ func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
 		inThread = "In a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory. "
 	}
 	return "## Session Artifacts\n\n" +
-		"Any deliverable that is not part of a pull request — a one-pager, analysis, plan, design doc, report, or other generated file — must be written to `" + dir + "`, never into the git workspace, even temporarily. " +
-		"This applies even when a workspace-relative path like `docs/`, `docs/plans/`, or `notes/` would otherwise feel like the natural place for it: if it is not shipping in a PR, it does not belong in the workspace at all. " +
+		"Every file you write to `" + dir + "`, including files in subdirectories, appears to the user as an artifact in the AO app and changes how this session's output is shown on the board. Treat each file there as something you are handing to the user. " +
+		"The default is no artifact. Create one only when the user asks for a document or file, or when the task's main output is a non-code document such as a plan, design doc, one-pager, or written analysis that the user asked for. " +
+		"Investigations, triage, root-cause findings, verification results, progress updates, and final answers belong in chat, AO report notes, the issue, or the pull request, not in artifact files. " +
 		inThread +
-		"Keep the workspace limited to code changes that will ship in a PR. Preserve any relative asset links between files you place in the artifact directory. " +
-		"Create a separate document when the user requests a durable document or when the task needs a reviewable deliverable. Ordinary progress updates, concise final answers, and validation summaries can stay in chat or AO report notes; do not create files solely because a response is a summary, plan, analysis, or report. " +
-		"Routine test logs, command output, scratch notes, and intermediate diagnostics are working material, not deliverables. Keep them out of report attachments unless requested or needed to explain an actionable failure. Prefer one consolidated deliverable over many diagnostic files. " +
+		"Write one file per deliverable. Put supporting evidence inside it as text, numbers, or short excerpts; do not place screenshots, logs, crops, probe output, or other supporting files next to it unless the user asked for a multi-file deliverable. " +
+		"Keep scratch and diagnostic files (screenshots, test logs, command output, intermediate data) in a temporary directory outside both the git workspace and the artifact directory. " +
+		"A deliverable that is not part of a pull request must never be written into the git workspace, even temporarily, even when a path like `docs/`, `docs/plans/`, or `notes/` would feel natural; keep the workspace limited to code changes that will ship in a PR. " +
 		"This directory is local storage. Saving a file here or attaching its reference to an AO report does not authorize external publishing; follow the user's publishing scope."
 }
 
