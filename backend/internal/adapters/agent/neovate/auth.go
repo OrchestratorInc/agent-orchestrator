@@ -3,6 +3,7 @@ package neovate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,11 +25,14 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ports.AgentAuthStatusUnknown, nil
+		return ports.AgentAuthStatusUnknown, err
 	}
 	data, err := os.ReadFile(filepath.Join(home, ".neovate", "config.json")) //nolint:gosec // official local provider config
-	if err != nil {
+	if errors.Is(err, os.ErrNotExist) {
 		return ports.AgentAuthStatusUnknown, nil
+	}
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, err
 	}
 	var config struct {
 		Provider map[string]struct {
@@ -38,7 +42,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		} `json:"provider"`
 	}
 	if json.Unmarshal(data, &config) != nil {
-		return ports.AgentAuthStatusUnknown, nil
+		return ports.AgentAuthStatusUnknown, nil //nolint:nilerr // malformed local config does not establish provider authorization
 	}
 	for _, provider := range config.Provider {
 		if strings.TrimSpace(provider.Options.APIKey) != "" {
