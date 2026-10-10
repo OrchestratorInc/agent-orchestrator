@@ -133,7 +133,16 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		session.Activity.State != domain.ActivityWaitingInput {
 		return
 	}
-	output, err := o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	readOutput := o.runtime.GetOutput
+	if _, inspectsSurface := agent.(ports.TerminalSurfaceInspector); inspectsSurface {
+		if styled, available := o.runtime.(ports.StyledTerminalOutputReader); available {
+			// Current-screen adapters need the rendered footer and composer, not
+			// raw history (which can omit the current non-newline fragment).
+			// Capture failures must not fall back to stale raw output.
+			readOutput = styled.GetStyledOutput
+		}
+	}
+	output, err := readOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
 	if err != nil {
 		o.logger.Debug("activity observer: terminal output unavailable", "session", session.ID, "err", err)
 		return

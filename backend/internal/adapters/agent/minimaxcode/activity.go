@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // DeriveActivityState maps native hooks. SessionEnd is intentionally omitted:
@@ -28,7 +29,7 @@ var emptyRE = regexp.MustCompile(`(?s)(?:Message · Enter send · Ctrl\+J newlin
 
 // MiniMax's composerLabels returns working/follow-up modes before Long draft.
 // This complete composer therefore proves settled input, but never empty input.
-var longDraftRE = regexp.MustCompile(`(?m)^[ \t]*Long draft · Ctrl\+G edit · Enter send[ \t]*\n[ \t]*─+[ \t]*\n[ \t]*›[^\n]*(?:\n[ \t]+[^│|─\n]*)*\n[ \t]*─+[ \t]*\n(?:\s*[^\n]+(?:│|\|)[^\n]+✦ [^\n]+)+\s*\z`)
+var draftRE = regexp.MustCompile(`(?m)^[ \t]*(?:Long draft · Ctrl\+G edit · Enter send|Stopped · message restored to the Composer\.)[ \t]*\n[ \t]*─+[ \t]*\n[ \t]*›[^\n]*(?:\n[ \t]+[^│|─\n]*)*\n[ \t]*─+[ \t]*\n(?:\s*[^\n]+(?:│|\|)[^\n]+✦ [^\n]+)+\s*\z`)
 
 func terminalTail(output string) string {
 	clean := strings.ReplaceAll(ansiRE.ReplaceAllString(output, ""), "\r", "")
@@ -50,14 +51,11 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 		return "", false
 	}
 	// A complete current composer takes precedence over historical active output.
-	if emptyRE.MatchString(tail) || longDraftRE.MatchString(tail) {
+	if emptyRE.MatchString(tail) || draftRE.MatchString(tail) {
 		return domain.ActivityIdle, true
 	}
 	if strings.Contains(tail, "Esc stop") || strings.Contains(tail, "Stopping response") {
 		return domain.ActivityActive, true
-	}
-	if strings.Contains(tail, "Stopped · message restored to the Composer.") {
-		return domain.ActivityIdle, true
 	}
 	return "", false
 }
@@ -65,4 +63,25 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 // ComposerIsEmpty requires the initialized, draft-free native composer.
 func (p *Plugin) ComposerIsEmpty(output string) bool {
 	return emptyRE.MatchString(terminalTail(output))
+}
+
+// InspectTerminalSurface opts into current-screen capture for activity.
+// A positively identified cancellation draft is separate from settled work.
+// Empty-placeholder text alone does not prove a style-qualified empty editor.
+func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObservation {
+	state, ok := p.DetectTerminalActivity(output)
+	if !ok {
+		return ports.TerminalSurfaceObservation{}
+	}
+	observation := ports.TerminalSurfaceObservation{}
+	switch state {
+	case domain.ActivityIdle:
+		observation.Work = ports.TerminalSurfaceWorkIdle
+	case domain.ActivityActive:
+		observation.Work = ports.TerminalSurfaceWorkActive
+	}
+	if draftRE.MatchString(terminalTail(output)) {
+		observation.Composer = ports.TerminalComposerDraft
+	}
+	return observation
 }
