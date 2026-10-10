@@ -134,7 +134,18 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		session.Activity.State != domain.ActivityWaitingInput && (!nativeDecisionCards || session.Activity.State != domain.ActivityBlocked) {
 		return
 	}
-	output, err := o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	var output string
+	var err error
+	handle := ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}
+	if nativeDecisionCards {
+		rendered, ok := o.runtime.(ports.StyledTerminalOutputReader)
+		if !ok {
+			return
+		}
+		output, err = rendered.GetStyledOutput(ctx, handle, o.outputLines)
+	} else {
+		output, err = o.runtime.GetOutput(ctx, handle, o.outputLines)
+	}
 	if err != nil {
 		o.logger.Debug("activity observer: terminal output unavailable", "session", session.ID, "err", err)
 		return

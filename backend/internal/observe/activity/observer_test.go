@@ -333,6 +333,18 @@ func TestPollReturnsSessionListFailure(t *testing.T) {
 		t.Fatalf("error = %v, want %v", err, want)
 	}
 }
+
+type renderedMemcodeRuntime struct {
+	*fakeRuntime
+	rendered    string
+	styledCalls int
+}
+
+func (r *renderedMemcodeRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+	r.styledCalls++
+	return r.rendered, r.err
+}
+
 func TestMemcodeDecisionObservationBlocksAndResolvesOnlyOnCurrentChrome(t *testing.T) {
 	now := time.Unix(500, 0).UTC()
 	card := "Do you want to proceed?\n❯ 1. Yes\n→  Ask memcode…   ·   $ = shell\nmemcode · model · ask"
@@ -348,7 +360,7 @@ func TestMemcodeDecisionObservationBlocksAndResolvesOnlyOnCurrentChrome(t *testi
 			session := activeSession(now, domain.HarnessMemcode)
 			session.Activity.State = tc.current
 			sink := &fakeSink{}
-			observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &fakeRuntime{output: tc.output}, fakeAgents{domain.HarnessMemcode: memcode.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+			observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &renderedMemcodeRuntime{fakeRuntime: &fakeRuntime{output: "stale raw history"}, rendered: tc.output}, fakeAgents{domain.HarnessMemcode: memcode.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
 			if err := observer.Poll(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -362,5 +374,27 @@ func TestMemcodeDecisionObservationBlocksAndResolvesOnlyOnCurrentChrome(t *testi
 				t.Fatal(sink.signals)
 			}
 		})
+	}
+}
+
+func TestMemcodeObservationUsesCurrentRenderedScreen(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessMemcode)
+	sink := &fakeSink{}
+	rt := &renderedMemcodeRuntime{fakeRuntime: &fakeRuntime{output: "⠋ Thinking… (1s · esc to interrupt)"}, rendered: "○ idle\n→  Ask memcode…   ·   $ = shell\nmemcode · model · ask"}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, rt, fakeAgents{domain.HarnessMemcode: memcode.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rt.calls != 0 || rt.styledCalls != 1 || len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityIdle {
+		t.Fatal(rt.calls, rt.styledCalls, sink.signals)
+	}
+	rawSink := &fakeSink{}
+	observer = New(fakeSessions{rows: []domain.SessionRecord{session}}, rawSink, &fakeRuntime{output: rt.rendered}, fakeAgents{domain.HarnessMemcode: memcode.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(rawSink.signals) != 0 {
+		t.Fatal("raw history substituted for current screen")
 	}
 }
