@@ -35,6 +35,7 @@ const state = vi.hoisted(() => ({
 	lastTerminal: null as null | {
 		write(data: Uint8Array, done?: () => void): void;
 		cols: number;
+		screenElement: HTMLElement;
 		keyHandler?: (event: KeyboardEvent) => boolean;
 		wheelHandler?: (event: WheelEvent) => boolean;
 		selection: string;
@@ -112,6 +113,9 @@ vi.mock("@xterm/xterm", () => ({
 	Terminal: class FakeTerminal {
 		options: Record<string, unknown>;
 		cols = 80;
+		screenElement = Object.assign(document.createElement("div"), {
+			getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 240 }) as DOMRect,
+		});
 		rows = 24;
 		dimensions?: { css: { cell: { width: number; height: number } } };
 		resize = vi.fn((cols: number, rows: number) => { this.cols = cols; this.rows = rows; });
@@ -2542,10 +2546,36 @@ describe("XtermTerminal", () => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 		// rowHeight = fontSize(12) * lineHeight(1.35) = 16.2px; -50px => 3 lines up.
-		const suppressed = state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent);
+		const suppressed = state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent);
 
 		expect(suppressed).toBe(false);
 		expect(onInput).toHaveBeenCalledWith("\x1b[<64;1;1M\x1b[<64;1;1M\x1b[<64;1;1M", "wheel");
+	});
+
+	it.each([
+		["transcript body", 180, 70, 5, 2],
+		["pinned header", 180, 50, 5, 1],
+		["outside top-left", 90, 40, 1, 1],
+		["outside bottom-right", 2000, 2000, 80, 24],
+	])("reports actual one-based wheel coordinates over %s", (_name, clientX, clientY, column, row) => {
+		const onInput = vi.fn();
+		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+		// Offset grid with 20px cells: models a moved and CSS-scaled terminal.
+		vi.spyOn(state.lastTerminal!.screenElement, "getBoundingClientRect").mockReturnValue({
+			left: 100, top: 50, width: 1600, height: 480,
+		} as DOMRect);
+		for (const [deltaY, button] of [[-1, 64], [1, 65]]) {
+			state.lastTerminal!.wheelHandler!({ clientX, clientY, deltaY, deltaMode: 1 } as WheelEvent);
+			expect(onInput).toHaveBeenLastCalledWith(`\x1b[<${button};${column};${row}M`, "wheel");
+		}
+	});
+
+	it("does not invent mouse coordinates for an unmeasured terminal", () => {
+		const onInput = vi.fn();
+		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+		vi.spyOn(state.lastTerminal!.screenElement, "getBoundingClientRect").mockReturnValue({ width: 0, height: 0 } as DOMRect);
+		state.lastTerminal!.wheelHandler!({ clientX: 100, clientY: 100, deltaY: -1, deltaMode: 1 } as WheelEvent);
+		expect(onInput).not.toHaveBeenCalled();
 	});
 
 	it("handles line- and page-mode wheels (Linux/Windows mice), not just pixel deltas", () => {
@@ -2553,12 +2583,12 @@ describe("XtermTerminal", () => {
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 
 		// DOM_DELTA_LINE: deltaY is already in lines, so one notch up => one report.
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -1, deltaMode: 1 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -1, deltaMode: 1 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[<64;1;1M", "wheel");
 
 		// DOM_DELTA_PAGE: one page down => rows (24) line reports down.
 		onInput.mockClear();
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: 1, deltaMode: 2 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 1, deltaMode: 2 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[<65;1;1M".repeat(24), "wheel");
 	});
 
@@ -2566,11 +2596,11 @@ describe("XtermTerminal", () => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: 20 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 20 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenCalledWith("\x1b[<65;1;1M", "wheel");
 
 		onInput.mockClear();
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50, ctrlKey: true } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50, ctrlKey: true } as WheelEvent)).toBe(false);
 		expect(onInput).not.toHaveBeenCalled();
 	});
 
@@ -2582,11 +2612,11 @@ describe("XtermTerminal", () => {
 
 		// rowHeight = 16.2px; -50px => 3 lines up. The pane never sees these bytes;
 		// we scroll the terminal's retained scrollback locally instead.
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(state.lastTerminal!.scrollLines).toHaveBeenLastCalledWith(-3);
 		expect(onInput).not.toHaveBeenCalled();
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: 20 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 20 } as WheelEvent)).toBe(false);
 		expect(state.lastTerminal!.scrollLines).toHaveBeenLastCalledWith(1);
 		expect(onInput).not.toHaveBeenCalled();
 	});
@@ -2599,11 +2629,11 @@ describe("XtermTerminal", () => {
 		// page key per notch is the best fallback.
 		state.lastTerminal!.buffer.active.type = "alternate";
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[5~", "wheel");
 		expect(state.lastTerminal!.scrollLines).not.toHaveBeenCalled();
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: 20 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 20 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[6~", "wheel");
 	});
 
@@ -2616,7 +2646,7 @@ describe("XtermTerminal", () => {
 		// via the paneScrollsByKeyboard hint, tested separately.
 		state.lastTerminal!.modes.mouseTrackingMode = "any";
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[<64;1;1M".repeat(3), "wheel");
 	});
 
@@ -2627,7 +2657,7 @@ describe("XtermTerminal", () => {
 		// hint this would send SGR reports; the hint forces page keys.
 		state.lastTerminal!.modes.mouseTrackingMode = "any";
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[5~", "wheel");
 	});
 

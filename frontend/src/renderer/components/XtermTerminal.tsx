@@ -330,12 +330,12 @@ type TerminalContextMenuActions = Record<TerminalContextMenuAction, () => void>;
 // and scrolls its scrollback via copy-mode. Left to itself xterm would convert
 // the wheel into cursor-arrow keys (its alt-buffer fallback), which move the
 // agent's cursor rather than scrolling. SGR button 64 = wheel up, 65 = down;
-// reports are 1-based and a single cell is enough for a borderless single pane.
+// reports are 1-based; coordinates must identify the actual transcript cell.
 const SGR_WHEEL_UP = 64;
 const SGR_WHEEL_DOWN = 65;
 
-function sgrWheelReport(button: number, count: number): string {
-	return `\x1b[<${button};1;1M`.repeat(count);
+function sgrWheelReport(button: number, count: number, column: number, row: number): string {
+	return `\x1b[<${button};${column};${row}M`.repeat(count);
 }
 
 // PageUp (CSI 5~) / PageDown (CSI 6~) for pane apps that scroll their transcript
@@ -1521,7 +1521,16 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			// reaches the app directly; under a mux it drives copy-mode.
 			if (term.modes.mouseTrackingMode !== "none") {
 				const button = lines < 0 ? SGR_WHEEL_UP : SGR_WHEEL_DOWN;
-				emitUserInput(sgrWheelReport(button, Math.abs(lines)), "wheel");
+				const screen = term.screenElement?.getBoundingClientRect();
+				if (!screen || screen.width <= 0 || screen.height <= 0
+					|| !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return false;
+				// Measure the grid itself, excluding host padding and the scrollbar.
+				// Dividing its rendered size also accounts for CSS scaling and zoom.
+				const column = Math.max(1, Math.min(term.cols,
+					Math.floor((event.clientX - screen.left) * term.cols / screen.width) + 1));
+				const row = Math.max(1, Math.min(term.rows,
+					Math.floor((event.clientY - screen.top) * term.rows / screen.height) + 1));
+				emitUserInput(sgrWheelReport(button, Math.abs(lines), column, row), "wheel");
 				return false;
 			}
 			// Alt-buffer pane with mouse tracking off and no keyboard-scroll hint:
