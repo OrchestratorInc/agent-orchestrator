@@ -66,7 +66,11 @@ func TestReleasedCLIConformance(t *testing.T) {
 			return
 		}
 		body, _ := io.ReadAll(io.LimitReader(r.Body, 4<<20))
-		requests <- body
+		// Native title generation uses the same provider asynchronously. Serve
+		// it, but do not mistake its source-defined prompt for a root turn.
+		if !bytes.Contains(body, []byte("Generate a concise, single-line task title of at most")) {
+			requests <- body
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		if bytes.Contains(body, []byte("AO_CANCEL_TASK_67ac12")) && !bytes.Contains(body, []byte("AO_AFTER_CANCEL_02d871")) {
 			w.WriteHeader(http.StatusOK)
