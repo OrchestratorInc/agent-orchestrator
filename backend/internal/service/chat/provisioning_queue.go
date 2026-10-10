@@ -128,8 +128,13 @@ func (s *Service) ensureConversation(
 	if !errors.Is(err, domain.ErrNoConversation) {
 		return domain.ConversationRecord{}, fmt.Errorf("read conversation for %s: %w", record.ID, err)
 	}
+	// Match Start so the queued prompt and the controller share one narrative.
+	scope := domain.ConversationScopeSession
+	if record.Kind == domain.KindOrchestrator {
+		scope = domain.ConversationScopeProject
+	}
 	conversation, err = s.store.CreateConversation(
-		ctx, s.newID(), domain.ConversationScopeSession, record.ProjectID, record.ID, s.now())
+		ctx, s.newID(), scope, record.ProjectID, record.ID, s.now())
 	if err != nil {
 		return domain.ConversationRecord{}, fmt.Errorf("open conversation for %s: %w", record.ID, err)
 	}
