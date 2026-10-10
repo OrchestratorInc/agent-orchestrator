@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
@@ -6279,6 +6280,8 @@ func promptReadinessWaitTimeout(configured time.Duration, callerDeadline time.Ti
 }
 
 func promptOutputContains(output string, patterns []string) bool {
+	// Cursor and text styling can split a visible readiness marker across SGR sequences.
+	output = ansi.Strip(output)
 	for _, pattern := range patterns {
 		if pattern != "" && strings.Contains(output, pattern) {
 			return true
