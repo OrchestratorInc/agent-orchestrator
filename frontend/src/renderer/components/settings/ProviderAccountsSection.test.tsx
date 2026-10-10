@@ -778,4 +778,26 @@ describe("what an account does on its own", () => {
 		expect(detail()).not.toHaveTextContent("When a limit is reached");
 		expect(detail()).toHaveTextContent("Warn me when little is leftNever");
 	});
+	it("leaves the rest of the page alone while a light change is on its way", async () => {
+		const user = await start();
+		await open(user, bob);
+		// The daemon has not answered yet: the change shows, and nothing else waits for it.
+		let answer = () => {};
+		mock.post.mockImplementationOnce((_path: string, options: { params: { path: { accountId: string } }; body: AccountAction }) => new Promise(resolve => {
+			answer = () => resolve(act(options.params.path.accountId, options.body));
+		}));
+		await user.click(within(detail()).getByRole("switch", { name: "Use for new sessions" }));
+		expect(within(detail()).getByRole("switch", { name: "Use for new sessions" })).not.toBeChecked();
+		expect(listItem(bob)).toHaveTextContent("In reserve");
+		expect(addButtons().every(button => !button.disabled)).toBe(true);
+		expect(within(detail()).getByRole("button", { name: "Make default" })).toBeEnabled();
+		expect(within(detail()).getByRole("button", { name: "Sign out" })).toBeEnabled();
+		answer();
+		await waitFor(() => expect(setting()).toEqual(["b", { action: "settings", reserved: true }]));
+		// A refusal puts it back and says why.
+		refusal = "The account helper is not running.";
+		await user.click(within(detail()).getByRole("switch", { name: "Use for new sessions" }));
+		expect(await status()).toHaveTextContent("The account helper is not running.");
+		expect(within(detail()).getByRole("switch", { name: "Use for new sessions" })).not.toBeChecked();
+	});
 });

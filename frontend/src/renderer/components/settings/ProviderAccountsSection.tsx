@@ -69,8 +69,9 @@ function useAccountsPage() {
 		window.addEventListener("focus", recheck);
 		return () => window.removeEventListener("focus", recheck);
 	}, [recheck]);
-	async function run<T>(action: () => Promise<T>): Promise<T | undefined> {
-		setPending(true);
+	// run reports a failure in the status line. Only a change that must not overlap another holds the page while it runs.
+	async function run<T>(action: () => Promise<T>, hold = true): Promise<T | undefined> {
+		if (hold) setPending(true);
 		setMessage("");
 		try {
 			return await action();
@@ -78,7 +79,7 @@ function useAccountsPage() {
 			setMessage(apiErrorMessage(error));
 			return undefined;
 		} finally {
-			setPending(false);
+			if (hold) setPending(false);
 		}
 	}
 	function show(accountId: string | null, provider: Provider | null = null) {
@@ -86,13 +87,13 @@ function useAccountsPage() {
 		setAdding(provider);
 		setMessage("");
 	}
-	const act = (accountId: string, body: AccountAction, done = "") => run(async () => {
+	const act = (accountId: string, body: AccountAction, done = "", hold = true) => run(async () => {
 		const next = await accountAction(accountId, body);
 		cache.setQueryData(providerAccountsCatalogueKey, next);
 		void cache.invalidateQueries({ queryKey: providerAccountsKey, exact: true });
 		setMessage(done);
 		return next;
-	});
+	}, hold);
 	// A light change shows at once and is put back if the daemon refuses it. Nothing else on the page waits for it.
 	const actNow = (accountId: string, body: AccountAction, change: (account: ProviderAccount) => Partial<ProviderAccount>) => {
 		type List = Awaited<ReturnType<typeof accountAction>>;
@@ -109,16 +110,22 @@ function useAccountsPage() {
 		});
 	};
 	// The same switch a session's own menu makes, one session at a time.
-	const moveSessions = (from: ProviderAccount, to: ProviderAccount) => void run(async () => {
-		try {
-			for (const sessionId of from.sessions) await accountAction(to.id, { action: "assign-session", sessionId });
-			setMoveOffer(null);
-			setMessage(t("providerAccounts.sessionsMoved", { count: from.sessions.length, name: to.displayName }));
-		} finally {
-			void cache.invalidateQueries({ queryKey: providerAccountsKey });
-			void cache.invalidateQueries({ queryKey: ["session-provider-account"] });
-		}
-	});
+	// Sessions show under their new account at once; the list is read again afterwards in case one was refused.
+	const moveSessions = async (ids: string[], to: ProviderAccount, done: string) => {
+		type List = Awaited<ReturnType<typeof accountAction>>;
+		const sessions = (account: ProviderAccount) => (account.id === to.id ? [...account.sessions, ...ids.filter((id) => !account.sessions.includes(id))] : account.sessions.filter((id) => !ids.includes(id)));
+		cache.setQueryData<List>(providerAccountsCatalogueKey, (list) => list && { ...list, accounts: list.accounts.map((account) => ({ ...account, sessions: sessions(account) })) });
+		await run(async () => {
+			try {
+				for (const sessionId of ids) await accountAction(to.id, { action: "assign-session", sessionId });
+				setMoveOffer(null);
+				setMessage(done);
+			} finally {
+				void cache.invalidateQueries({ queryKey: providerAccountsCatalogueKey });
+				void cache.invalidateQueries({ queryKey: ["session-provider-account"] });
+			}
+		}, false);
+	};
 	return {
 		query, accounts, pending, message, moveOffer, setMoveOffer, signIn, selectedId, adding,
 		run, say: setMessage, show, act, actNow, moveSessions, recheck,

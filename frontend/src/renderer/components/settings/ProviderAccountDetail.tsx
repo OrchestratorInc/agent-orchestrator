@@ -152,7 +152,7 @@ export function LoginProgress({ login, page }: { login: ProviderLogin; page: Acc
 				<LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-status-working" />
 				<span className="min-w-0 flex-1">{t(WAITING[login.mode], { provider: PROVIDERS.find((provider) => provider.id === login.provider)?.name })}</span>
 				<span className="flex shrink-0 items-center gap-0.5">
-					{login.url ? <IconAction name={t("providerAccounts.openSignInPage")} icon={ExternalLink} onClick={() => void page.run(() => aoBridge.app.openExternal(login.url!))} /> : null}
+					{login.url ? <IconAction name={t("providerAccounts.openSignInPage")} icon={ExternalLink} onClick={() => void page.run(() => aoBridge.app.openExternal(login.url!), false)} /> : null}
 					{login.url ? <CopyIcon value={login.url} label={t("link.copy")} icon={Link2} page={page} /> : null}
 					<IconAction name={t("providerAccounts.cancelSignIn")} icon={X} disabled={page.pending} onClick={() => void page.run(page.signIn.cancel)} />
 				</span>
@@ -184,7 +184,7 @@ function AccountSessions({ account, page, others, language }: { account: Provide
 					<span className="min-w-0 flex-1 truncate text-foreground" title={session.title}>{session.title || session.id}</span>
 					{today[session.id] ? <span className="shrink-0 tabular-nums text-muted-foreground">{t("providerAccounts.tokensTodayShort", { tokens: formatCount(today[session.id], language) })}</span> : null}
 					{others.length ? (
-						<AccountMenu accounts={others} onSelect={(target) => void page.act(target.id, { action: "assign-session", sessionId: session.id }, t("providerAccounts.sessionMoved", { name: target.displayName }))}>
+						<AccountMenu accounts={others} onSelect={(target) => void page.moveSessions([session.id], target, t("providerAccounts.sessionMoved", { name: target.displayName }))}>
 							<IconAction name={t("providerAccounts.moveSession")} icon={ChevronDown} disabled={page.pending} />
 						</AccountMenu>
 					) : null}
@@ -274,7 +274,7 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 	}
 	function rename(value: string) {
 		const displayName = value.trim();
-		if (displayName && displayName !== name) void page.act(account.id, { action: "rename", displayName }, t("providerAccounts.nameUpdated"));
+		if (displayName && displayName !== name) void page.actNow(account.id, { action: "rename", displayName }, (other) => (other.id === account.id ? { displayName } : {})).then((ok) => ok && page.say(t("providerAccounts.nameUpdated")));
 	}
 	function nameKey(event: KeyboardEvent<HTMLInputElement>) {
 		if (event.key === "Escape") event.currentTarget.value = name;
@@ -341,7 +341,7 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 						{signedIn ? null : <><Dot /><span className="text-status-needs-you">{t("settings.harness.notLoggedIn")}</span></>}
 					</p>
 				</div>
-				{signedIn && !apiKey ? <Button type="button" variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={() => void page.run(() => aoBridge.app.openExternal(PLAN_PAGES[account.provider]))}>{t("providerAccounts.managePlan")}<ExternalLink aria-hidden="true" className="size-3.5" /></Button> : null}
+				{signedIn && !apiKey ? <Button type="button" variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={() => void page.run(() => aoBridge.app.openExternal(PLAN_PAGES[account.provider]), false)}>{t("providerAccounts.managePlan")}<ExternalLink aria-hidden="true" className="size-3.5" /></Button> : null}
 				{account.primary && signedIn ? <span className="shrink-0 rounded-full bg-interactive-active px-2.5 py-0.5 text-xs text-muted-foreground">{t("providerAccounts.default")}</span> : null}
 			</div>
 			<div className={cn("grid items-start gap-x-7", twoColumns ? "grid-cols-[minmax(0,1fr)_288px] @max-5xl:grid-cols-1" : "")}>
@@ -361,7 +361,7 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 							<Rows title={t("providerAccounts.limitsHeading")}>
 								{paused ? (
 									<Row icon={<CirclePause aria-hidden="true" className="size-4 shrink-0 text-warning" />} title={t("providerAccounts.pausedUntil", { time: formatWhen(paused, "soon") })} hint={t(usage?.pausedReason === "quota" || usage?.pausedReason === "credential_quota" ? "providerAccounts.pausedRateLimited" : "providerAccounts.pausedRefused")}>
-										<Button type="button" variant="secondary" disabled={page.pending} onClick={() => void page.act(account.id, { action: "resume" }, t("providerAccounts.accountResumed", { name }))}>{t("providerAccounts.resumeNow")}</Button>
+										<Button type="button" variant="secondary" disabled={page.pending} onClick={() => void page.act(account.id, { action: "resume" }, t("providerAccounts.accountResumed", { name }), false)}>{t("providerAccounts.resumeNow")}</Button>
 									</Row>
 								) : null}
 								{windows.map((window, index) => {
@@ -418,13 +418,13 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 								</Row>
 								{offerFrom?.sessions.length ? (
 									<Row label={t("providerAccounts.moveSessions")} title={t("providerAccounts.sessionsStillUse", { count: offerFrom.sessions.length, name: offerFrom.displayName })} hint={t("providerAccounts.offerHint")}>
-										<Button type="button" variant="secondary" disabled={page.pending} onClick={() => page.moveSessions(offerFrom, account)}>{t("providerAccounts.moveSessionsHere", { count: offerFrom.sessions.length })}</Button>
+										<Button type="button" variant="secondary" disabled={page.pending} onClick={() => void page.moveSessions(offerFrom.sessions, account, t("providerAccounts.sessionsMoved", { count: offerFrom.sessions.length, name: account.displayName }))}>{t("providerAccounts.moveSessionsHere", { count: offerFrom.sessions.length })}</Button>
 										<IconAction name={t("providerAccounts.leaveSessions", { count: offerFrom.sessions.length })} icon={X} disabled={page.pending} onClick={() => page.setMoveOffer(null)} />
 									</Row>
 								) : null}
 								<Row title={t("providerAccounts.runningSessions")} hint={count ? t("providerAccounts.sessionsUsing", { count }) : t("providerAccounts.noSessionsUsing")}>
 									{count && others.length ? (
-										<AccountMenu accounts={others} onSelect={(target) => page.moveSessions(account, target)}>
+										<AccountMenu accounts={others} onSelect={(target) => void page.moveSessions(account.sessions, target, t("providerAccounts.sessionsMoved", { count: account.sessions.length, name: target.displayName }))}>
 											<Button type="button" variant="secondary" className="gap-1.5" disabled={page.pending}>{t("providerAccounts.moveSessions")}<ChevronDown aria-hidden="true" className="size-3.5 text-muted-foreground" /></Button>
 										</AccountMenu>
 									) : null}
@@ -478,7 +478,7 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 						</Row>
 						{renewable ? (
 							<Row title={t("providerAccounts.renewSignIn")} hint={[t("providerAccounts.renewSignInHint", { provider: info.name }), usage?.refreshedAt ? t("providerAccounts.lastRenewed", { when: formatAgo(new Date(usage.refreshedAt).getTime(), language, t("time.justNow")) }) : null].filter(Boolean).join(" ")}>
-								<Button type="button" variant="secondary" disabled={page.pending} onClick={() => void page.act(account.id, { action: "refresh-sign-in" }, t("providerAccounts.signInRenewed"))}>{t("providerAccounts.renew")}</Button>
+								<Button type="button" variant="secondary" disabled={page.pending} onClick={() => void page.act(account.id, { action: "refresh-sign-in" }, t("providerAccounts.signInRenewed"), false)}>{t("providerAccounts.renew")}</Button>
 							</Row>
 						) : null}
 						{removing ? (
