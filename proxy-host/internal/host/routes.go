@@ -3,171 +3,80 @@ package host
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"log"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 )
 
-var ErrBusy = errors.New("session has an in-flight model request")
-var ErrRevision = errors.New("routing revision conflict")
+var ErrBusy = errors.New("a dropped account has a model request in flight")
 
 // Route carries a hashed capability, never a provider credential.
 type Route struct {
-	SessionID  string `json:"session_id"`
 	TicketHash string `json:"ticket_hash"`
 	Provider   string `json:"provider"`
 	AuthID     string `json:"auth_id"`
 }
-type Snapshot struct {
-	Revision        uint64   `json:"revision"`
-	Routes          []Route  `json:"routes"`
-	AuthIDs         []string `json:"auth_ids,omitempty"`
-	RequestBoundary bool     `json:"request_boundary,omitempty"`
-}
 
-// Routes serializes AO's routing snapshots with request admission. AO's database
-// owns routing; the file here is only a restart cache that AO can always refill.
-// In-flight requests retain their selected account; provider rebinds may apply at
-// the next request.
+// Routes admits session tickets and counts the requests in flight per account.
 type Routes struct {
-	mu         sync.Mutex
-	path       string
-	snapshot   Snapshot
-	byTicket   map[string]Route
-	active     map[string]int
-	activeAuth map[string]int
+	mu       sync.Mutex
+	path     string
+	byTicket map[string]Route
+	inflight map[string]int
 }
 
-func OpenRoutes(path string) (*Routes, error) {
-	r := &Routes{snapshot: Snapshot{Routes: []Route{}}, path: path, byTicket: make(map[string]Route), active: make(map[string]int), activeAuth: make(map[string]int)}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		data = nil
-	} else if err != nil {
-		return nil, err
-	}
-	if len(data) == 0 {
-		return r, nil
-	}
-	// Unusable cache content is discarded, never served: every ticket is denied
-	// until AO's next push refills the routes.
-	if err = json.Unmarshal(data, &r.snapshot); err == nil {
-		r.byTicket, err = validateSnapshot(r.snapshot)
-	}
-	if err != nil {
-		log.Printf("discarding unusable routing cache %s: %v", path, err)
-		r.snapshot, r.byTicket = Snapshot{Routes: []Route{}}, make(map[string]Route)
-	}
-	return r, nil
+// OpenRoutes starts from the restart cache when it is readable; AO's next push replaces it either way.
+func OpenRoutes(path string) *Routes {
+	r := &Routes{path: path, byTicket: map[string]Route{}, inflight: map[string]int{}}
+	data, _ := os.ReadFile(path)
+	_ = json.Unmarshal(data, &r.byTicket)
+	return r
 }
 func TicketHash(ticket string) string {
-	sum := sha256.Sum256([]byte(ticket))
-	return hex.EncodeToString(sum[:])
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(ticket)))
 }
-func validateSnapshot(s Snapshot) (map[string]Route, error) {
-	index := make(map[string]Route, len(s.Routes))
-	sessions := make(map[string]bool, len(s.Routes))
-	for _, route := range s.Routes {
-		if s.AuthIDs != nil && route.AuthID != "" && !slices.Contains(s.AuthIDs, route.AuthID) {
-			return nil, errors.New("route account absent from signed-in inventory")
-		}
-		hash, err := hex.DecodeString(route.TicketHash)
-		if err != nil || len(hash) != 32 || strings.ToLower(route.TicketHash) != route.TicketHash || route.SessionID == "" || (route.Provider != "codex" && route.Provider != "claude") {
-			return nil, errors.New("invalid session route")
-		}
-		if _, ok := index[route.TicketHash]; ok || sessions[route.SessionID] {
-			return nil, errors.New("duplicate session route")
-		}
-		index[route.TicketHash] = route
-		sessions[route.SessionID] = true
-	}
-	return index, nil
-}
-func (r *Routes) Apply(s Snapshot) error {
-	requestBoundary := s.RequestBoundary
-	s.RequestBoundary = false // Admission instruction, not an effective routing fact.
-	index, err := validateSnapshot(s)
-	if err != nil {
-		return err
+
+// Apply replaces the table unless it drops an account that has a request in flight.
+func (r *Routes) Apply(routes []Route, authIDs []string) error {
+	next := make(map[string]Route, len(routes))
+	for _, route := range routes {
+		next[route.TicketHash] = route
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	// Exact replay is safe after a lost acknowledgement; mismatched replay is not.
-	old, _ := json.Marshal(r.snapshot)
-	next, _ := json.Marshal(s)
-	if s.Revision == r.snapshot.Revision && string(old) == string(next) {
-		return nil
-	}
-	// Any newer revision from AO replaces this cache, so a lost or stale file
-	// heals on AO's next push. An older or mismatched same-revision snapshot is
-	// still refused.
-	if s.Revision <= r.snapshot.Revision {
-		return ErrRevision
-	}
-	for _, authID := range r.snapshot.AuthIDs {
-		if !slices.Contains(s.AuthIDs, authID) && r.activeAuth[authID] > 0 {
+	for id := range r.inflight {
+		if !slices.Contains(authIDs, id) {
 			return ErrBusy
 		}
 	}
-	for hash, route := range r.byTicket {
-		if index[hash] != route && r.active[route.SessionID] > 0 {
-			next := index[hash]
-			if requestBoundary && slices.Contains(s.AuthIDs, route.AuthID) && slices.Contains(s.AuthIDs, next.AuthID) && (route.Provider == "codex" || route.Provider == "claude") && next.Provider == route.Provider && next.SessionID == route.SessionID && next.TicketHash == route.TicketHash {
-				continue
-			}
-			return ErrBusy
-		}
-	}
-	if err = writePrivate(r.path, next); err != nil {
+	data, _ := json.Marshal(next)
+	if err := writePrivate(r.path, data); err != nil {
 		return err
 	}
-	r.snapshot = s
-	r.snapshot.Routes = slices.Clone(s.Routes)
-	r.snapshot.AuthIDs = slices.Clone(s.AuthIDs)
-	r.byTicket = index
+	r.byTicket = next
 	return nil
 }
-func (r *Routes) Snapshot() Snapshot {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	result := r.snapshot
-	result.Routes = slices.Clone(result.Routes)
-	result.AuthIDs = slices.Clone(result.AuthIDs)
-	return result
-}
-func (r *Routes) Acquire(ticket string) (Route, func(), error) {
+
+// Acquire admits one request; the caller runs the returned release exactly once.
+func (r *Routes) Acquire(ticket string) (Route, func(), bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	route, ok := r.byTicket[TicketHash(ticket)]
-	if !ok || ticket == "" {
-		return Route{}, nil, errors.New("unknown session ticket")
+	if !ok || ticket == "" || route.AuthID == "" {
+		return Route{}, nil, false
 	}
-	if route.AuthID == "" {
-		return Route{}, nil, errors.New("login required")
-	}
-	r.active[route.SessionID]++
-	r.activeAuth[route.AuthID]++
-	var once sync.Once
+	r.inflight[route.AuthID]++
 	return route, func() {
-		once.Do(func() {
-			r.mu.Lock()
-			defer r.mu.Unlock()
-			r.active[route.SessionID]--
-			r.activeAuth[route.AuthID]--
-			if r.activeAuth[route.AuthID] == 0 {
-				delete(r.activeAuth, route.AuthID)
-			}
-			if r.active[route.SessionID] == 0 {
-				delete(r.active, route.SessionID)
-			}
-		})
-	}, nil
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.inflight[route.AuthID]--; r.inflight[route.AuthID] == 0 {
+			delete(r.inflight, route.AuthID)
+		}
+	}, true
 }
 func writePrivate(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -178,18 +87,9 @@ func writePrivate(path string, data []byte) error {
 		return err
 	}
 	defer os.Remove(f.Name())
-	if err = f.Chmod(0600); err == nil {
-		_, err = f.Write(data)
-	}
-	if err == nil {
-		err = f.Sync()
-	}
-	closeErr := f.Close()
-	if err != nil {
+	_, err = f.Write(data)
+	if err = errors.Join(err, f.Sync(), f.Close()); err != nil {
 		return err
-	}
-	if closeErr != nil {
-		return closeErr
 	}
 	return os.Rename(f.Name(), path)
 }

@@ -5,320 +5,220 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	proxycore "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
-	"github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 )
 
-func boundaryRouter(t *testing.T) (*gin.Engine, *Routes) {
+// echoFixture puts a stand-in behind the boundary that reports what reached it.
+func echoFixture(t *testing.T) *fixture {
 	t.Helper()
-	gin.SetMode(gin.TestMode)
-	routes := testRoutes(t)
-	applyRoutes(t, routes, 1, testRoute("s1", "codex-ticket", "codex", "alice"), testRoute("s2", "claude-ticket", "claude", "bob"))
-	b := Boundary{Routes: routes, ControlKey: strings.Repeat("c", 32), InferenceKey: strings.Repeat("i", 32)}
-	engine := gin.New()
-	engine.Use(b.Middleware)
-	b.Configure(engine, handlers.NewBaseAPIHandlers(&config.SDKConfig{}, coreauth.NewManager(nil, nil, nil)), &config.Config{})
-	for _, path := range []string{"/v1/responses", "/v1/responses/compact", "/v1/messages", "/v1/messages/count_tokens", "/v1/models"} {
-		engine.Any(path, func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"auth": c.GetHeader(accountHeader), "provider": c.GetHeader(providerHeader), "authorization": c.GetHeader("Authorization"), "api_key": c.GetHeader("X-Api-Key")})
-		})
+	f, _ := bareFixture(t)
+	f.route("codex-ticket codex alice", "claude-ticket claude bob")
+	echo := func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"auth": c.GetHeader(accountHeader), "provider": c.GetHeader(providerHeader), "authorization": c.GetHeader("Authorization"), "api_key": c.GetHeader("X-Api-Key"), "query": c.Request.URL.RawQuery})
 	}
-	engine.Any("/v8/management/*path", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"query": c.Request.URL.RawQuery}) })
-	return engine, routes
-}
-func boundaryRequest(engine *gin.Engine, method, path, token, body string, extra map[string]string) *httptest.ResponseRecorder {
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	for path := range sessionPaths {
+		f.engine.Any(path, echo)
 	}
-	for key, value := range extra {
-		req.Header.Set(key, value)
-	}
-	engine.ServeHTTP(w, req)
-	return w
+	f.engine.Any("/v8/management/*path", echo)
+	f.engine.Any("/v0/management/*path", echo)
+	return f
 }
 
-func TestBoundaryAcknowledgesAnEmptyRouteListAndItsExactReplay(t *testing.T) {
-	engine, routes := boundaryRouter(t)
-	for attempt := 0; attempt < 3; attempt++ {
-		response := boundaryRequest(engine, "PUT", "/ao/routes", strings.Repeat("c", 32), `{"revision":2,"routes":[]}`, nil)
-		if response.Code != http.StatusOK {
-			t.Fatalf("empty routing acknowledgement=%d %s", response.Code, response.Body.String())
-		}
-		var acknowledged Snapshot
-		if err := json.Unmarshal(response.Body.Bytes(), &acknowledged); err != nil {
-			t.Fatal(err)
-		}
-		if acknowledged.Revision != 2 || acknowledged.Routes == nil || len(acknowledged.Routes) != 0 {
-			t.Fatal("empty routing acknowledgement changed its list representation")
-		}
-		for _, ticket := range []string{"codex-ticket", "claude-ticket"} {
-			if _, done, err := routes.Acquire(ticket); err == nil || done != nil {
-				t.Fatal("cleared routing admitted a removed session ticket")
+func TestControlKeyAndSessionTicketsOpenDifferentDoors(t *testing.T) {
+	f := echoFixture(t)
+	private := []string{"GET /ao/status", "PUT /ao/routes", "POST /ao/account-models", "POST /ao/account-state", "POST /ao/provider-call", "POST /ao/account-resume",
+		"POST /ao/account-refresh", "GET /ao/login-result/attempt", "POST /ao/login/device/start", "GET /ao/login/status", "DELETE /ao/login/status", "POST /ao/tag-api-key",
+		"GET /v8/management/credentials", "GET /v8/management/oauth/status", "GET /v0/management/codex-api-key", "GET /v0/management/config"}
+	for _, token := range []string{"", "unknown", "codex-ticket", "claude-ticket", inference, control + "x", control[1:]} {
+		for _, call := range private {
+			method, path, _ := strings.Cut(call, " ")
+			response := f.send(method, path, token, `{"routes":[],"auth_ids":[]}`, "X-Api-Key: "+control)
+			if response.Code != http.StatusUnauthorized || response.Body.Len() != 0 {
+				t.Fatalf("%s with token %q: %d %s", call, token, response.Code, response.Body.String())
 			}
 		}
 	}
-	restored, err := OpenRoutes(routes.path)
-	if err != nil || restored.Snapshot().Routes == nil {
-		t.Fatalf("empty routing lost its list representation on reopen: %v", err)
+	if admitted(f.routes, "codex-ticket") != "alice" {
+		t.Fatal("a caller without the control key changed the routes")
+	}
+	for _, token := range []string{"", "unknown", control, inference} {
+		for path := range sessionPaths {
+			if response := f.send(http.MethodPost, path, token, ""); response.Code != http.StatusUnauthorized {
+				t.Fatalf("%s with token %q: %d", path, token, response.Code)
+			}
+		}
+	}
+	if response := f.send(http.MethodGet, "/ao/status", control, ""); response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"protocol_version":3}` {
+		t.Fatalf("status: %d %s", response.Code, response.Body.String())
 	}
 }
-func TestBoundaryOverwritesAccountAndProviderSpoofs(t *testing.T) {
-	engine, _ := boundaryRouter(t)
+
+func TestManagementAllowlist(t *testing.T) {
+	f := echoFixture(t)
+	allowed := map[string]bool{}
+	for _, call := range []string{"GET /v8/management/credentials", "POST /v8/management/credentials", "DELETE /v8/management/credentials", "GET /v8/management/oauth/auth-url",
+		"GET /v8/management/oauth/status", "POST /v8/management/oauth/callback", "DELETE /v8/management/oauth/session", "GET /v0/management/codex-api-key",
+		"PUT /v0/management/codex-api-key", "DELETE /v0/management/codex-api-key", "GET /v0/management/claude-api-key", "PUT /v0/management/claude-api-key", "DELETE /v0/management/claude-api-key"} {
+		allowed[call] = true
+	}
+	if len(allowed) != len(management) {
+		t.Fatalf("the allowlist has %d entries, want %d", len(management), len(allowed))
+	}
+	paths := []string{"credentials", "credentials/status", "credentials/refresh", "oauth/auth-url", "oauth/status", "oauth/callback", "oauth/session", "config", "auth-files", "api-keys",
+		"routing/strategy", "routing/cooldown/reset", "quota/fetch", "quota/reset", "api-call", "codex-api-key", "claude-api-key", "gemini-api-key"}
+	for _, version := range []string{"/v8/management/", "/v0/management/"} {
+		for _, path := range paths {
+			for _, method := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
+				want := http.StatusNotFound
+				if allowed[method+" "+version+path] {
+					want = http.StatusOK
+				}
+				if response := f.send(method, version+path+"?name=account.json", control, "{}"); response.Code != want {
+					t.Fatalf("%s %s%s: %d, want %d", method, version, path, response.Code, want)
+				}
+			}
+		}
+	}
+	// The SDK's own OAuth forwarder would bind every interface; AO never lets it be asked for.
+	response := f.send(http.MethodGet, "/v8/management/oauth/auth-url?provider=codex&is_webui=true", control, "")
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "is_webui") || !strings.Contains(response.Body.String(), "provider=codex") {
+		t.Fatalf("auth-url query reached the SDK as %s", response.Body.String())
+	}
+}
+
+func TestBoundaryPinsTheSessionAccountOverSpoofedHeaders(t *testing.T) {
+	f := echoFixture(t)
 	for _, tc := range []struct{ path, ticket, account, provider string }{
 		{"/v1/responses", "codex-ticket", "alice", "codex"},
 		{"/v1/responses/compact", "codex-ticket", "alice", "codex"},
 		{"/v1/messages", "claude-ticket", "bob", "claude"},
 		{"/v1/messages/count_tokens", "claude-ticket", "bob", "claude"},
-		{"/v1/models", "codex-ticket", "alice", "codex"},
+		{"/v1/models?client_version=1", "codex-ticket", "alice", "codex"},
+		{"/v1/models?client_version=1", "claude-ticket", "bob", "claude"},
 	} {
-		t.Run(tc.path, func(t *testing.T) {
-			w := boundaryRequest(engine, "POST", tc.path, tc.ticket, "", map[string]string{accountHeader: "spoof", providerHeader: "spoof", "X-Api-Key": "spoof"})
-			if w.Code != 200 {
-				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+		for _, viaAPIKey := range []bool{false, true} {
+			headers := []string{accountHeader + ": spoof", providerHeader + ": spoof", "X-Api-Key: spoof"}
+			token := tc.ticket
+			if viaAPIKey {
+				token, headers[2] = "", "X-Api-Key: "+tc.ticket
 			}
+			response := f.send(http.MethodPost, tc.path, token, "", headers...)
 			var got map[string]string
-			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-				t.Fatal(err)
+			if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil || response.Code != http.StatusOK {
+				t.Fatalf("%s: %d %s", tc.path, response.Code, response.Body.String())
 			}
-			if got["auth"] != tc.account || got["provider"] != tc.provider || got["authorization"] != "Bearer "+strings.Repeat("i", 32) || got["api_key"] != "" {
-				t.Fatalf("headers=%v", got)
-			}
-		})
-	}
-}
-func TestBoundaryClaudeApiKeyTicket(t *testing.T) {
-	engine, _ := boundaryRouter(t)
-	w := boundaryRequest(engine, "POST", "/v1/messages", "", "", map[string]string{"X-Api-Key": "claude-ticket"})
-	if w.Code != 200 {
-		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
-	}
-}
-func TestBoundaryRejectsWrongProvider(t *testing.T) {
-	engine, _ := boundaryRouter(t)
-	for _, tc := range []struct{ path, ticket string }{{"/v1/responses", "claude-ticket"}, {"/v1/messages", "codex-ticket"}, {"/v1/messages/count_tokens", "codex-ticket"}} {
-		w := boundaryRequest(engine, "POST", tc.path, tc.ticket, "", nil)
-		if w.Code != 400 {
-			t.Fatalf("path=%s status=%d", tc.path, w.Code)
-		}
-	}
-}
-func TestSessionAndManagementKeysAreSeparated(t *testing.T) {
-	engine, _ := boundaryRouter(t)
-	for _, token := range []string{"", "unknown", "codex-ticket", strings.Repeat("i", 32)} {
-		for _, path := range []string{"/ao/status", "/ao/routes", "/v8/management/credentials"} {
-			w := boundaryRequest(engine, "GET", path, token, "", nil)
-			if w.Code != 401 {
-				t.Fatalf("path=%s token=%q status=%d", path, token, w.Code)
-			}
-		}
-	}
-	for _, token := range []string{"", strings.Repeat("c", 32), strings.Repeat("i", 32), "unknown"} {
-		w := boundaryRequest(engine, "POST", "/v1/responses", token, "", nil)
-		if w.Code != 401 {
-			t.Fatalf("inference key=%q status=%d", token, w.Code)
-		}
-	}
-}
-func TestBoundaryManagementAllowlist(t *testing.T) {
-	engine, _ := boundaryRouter(t)
-	for _, tc := range []struct {
-		method, path string
-		allowed      bool
-	}{
-		{"GET", "credentials", true}, {"POST", "credentials", true}, {"DELETE", "credentials?name=account.json", true},
-		{"GET", "oauth/auth-url?provider=codex", true}, {"GET", "oauth/status?state=s", true},
-		{"POST", "oauth/callback", true}, {"DELETE", "oauth/session?state=s", true},
-		{"PATCH", "credentials/status", false}, {"GET", "config", false}, {"PUT", "config", false},
-		{"GET", "auth-files", false}, {"GET", "api-keys", false}, {"PUT", "routing/strategy", false},
-		{"DELETE", "oauth/auth-url", false},
-	} {
-		t.Run(tc.method+tc.path, func(t *testing.T) {
-			w := boundaryRequest(engine, tc.method, "/v8/management/"+tc.path, strings.Repeat("c", 32), "", nil)
-			expected := 404
-			if tc.allowed {
-				expected = 200
-			}
-			if w.Code != expected {
-				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
-			}
-		})
-	}
-}
-
-func TestBoundaryLegacyQuotaFetchIsPrivateAndOnlyReadOperationAllowed(t *testing.T) {
-	engine, _ := boundaryRouter(t)
-	engine.Any("/v0/management/*path", func(c *gin.Context) { c.Status(http.StatusOK) })
-	for _, token := range []string{"", "codex-ticket", "claude-ticket", strings.Repeat("i", 32)} {
-		response := boundaryRequest(engine, http.MethodPost, "/v0/management/quota/fetch", token, "{}", nil)
-		if response.Code != http.StatusUnauthorized {
-			t.Fatalf("non-management token admitted quota fetch: %d", response.Code)
-		}
-	}
-	control := strings.Repeat("c", 32)
-	if response := boundaryRequest(engine, http.MethodPost, "/v0/management/quota/fetch", control, "{}", nil); response.Code != http.StatusOK {
-		t.Fatalf("private quota fetch status=%d", response.Code)
-	}
-	for _, path := range []string{"/v0/management/config", "/v0/management/quota/reset", "/v0/management/api-call", "/v8/management/quota/fetch"} {
-		if response := boundaryRequest(engine, http.MethodPost, path, control, "{}", nil); response.Code != http.StatusNotFound {
-			t.Fatalf("unexpected management path allowed: %s status=%d", path, response.Code)
-		}
-	}
-	if response := boundaryRequest(engine, http.MethodGet, "/v0/management/quota/fetch", control, "", nil); response.Code != http.StatusNotFound {
-		t.Fatalf("unexpected quota method allowed: %d", response.Code)
-	}
-	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
-		for _, provider := range []string{"codex", "claude"} {
-			path := "/v0/management/" + provider + "-api-key"
-			if response := boundaryRequest(engine, method, path, control, "[]", nil); response.Code != http.StatusOK {
-				t.Fatalf("native %s %s status=%d", method, path, response.Code)
+			if got["auth"] != tc.account || got["provider"] != tc.provider || got["authorization"] != "Bearer "+inference || got["api_key"] != "" {
+				t.Fatalf("%s reached the SDK with %v", tc.path, got)
 			}
 		}
 	}
 }
 
-func TestTagAPIKeyAssociatesNativeCredentialWithLogin(t *testing.T) {
-	manager := coreauth.NewManager(nil, nil, nil)
-	if _, err := manager.Register(context.Background(), &coreauth.Auth{ID: "key-auth", Provider: "codex", Status: coreauth.StatusActive, Attributes: map[string]string{"api_key": "secret", "base_url": "https://api.example"}}); err != nil {
-		t.Fatal(err)
+func TestSessionsReachOnlyTheirOwnProvidersInferencePaths(t *testing.T) {
+	f := echoFixture(t)
+	for _, tc := range []struct{ path, ticket string }{{"/v1/responses", "claude-ticket"}, {"/v1/responses/compact", "claude-ticket"}, {"/v1/messages", "codex-ticket"}, {"/v1/messages/count_tokens", "codex-ticket"}} {
+		if response := f.send(http.MethodPost, tc.path, tc.ticket, ""); response.Code != http.StatusBadRequest {
+			t.Fatalf("%s with %s: %d", tc.path, tc.ticket, response.Code)
+		}
 	}
-	routes := testRoutes(t)
-	engine := gin.New()
-	b := Boundary{Routes: routes, ControlKey: strings.Repeat("c", 32), InferenceKey: strings.Repeat("i", 32)}
-	b.Configure(engine, handlers.NewBaseAPIHandlers(&config.SDKConfig{}, manager), &config.Config{})
-	response := boundaryRequest(engine, http.MethodPost, "/ao/tag-api-key", strings.Repeat("c", 32), `{"id":"login-1","provider":"codex","api_key":"secret","base_url":"https://api.example"}`, nil)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	if response := f.send(http.MethodGet, "/v1/responses", "codex-ticket", "", "Upgrade: websocket"); response.Code != http.StatusNotImplemented {
+		t.Fatalf("websocket: %d", response.Code)
 	}
-	auth, _ := manager.GetByID("key-auth")
-	if auth.Metadata["ao_login_id"] != "login-1" {
-		t.Fatalf("metadata=%v", auth.Metadata)
+	for _, path := range []string{"/", "/management.html", "/oauth/callback", "/v1/chat/completions", "/v1/images/generations", "/v1/models/gpt", "/redis", "/v1/../ao/status"} {
+		if response := f.send(http.MethodGet, path, "codex-ticket", ""); response.Code != http.StatusNotFound {
+			t.Fatalf("%s: %d", path, response.Code)
+		}
 	}
-	// What the sign-in produced is reported as an API key, not as a sign-in:
-	// AO treats the two differently and has nothing else to tell them apart by.
-	result := boundaryRequest(engine, http.MethodGet, "/ao/login-result/login-1", strings.Repeat("c", 32), "", nil)
-	var verified struct {
-		Kind          string `json:"kind"`
-		CredentialRef string `json:"credential_ref"`
-		AuthID        string `json:"auth_id"`
-	}
-	if err := json.Unmarshal(result.Body.Bytes(), &verified); err != nil || result.Code != http.StatusOK {
-		t.Fatalf("status=%d err=%v body=%s", result.Code, err, result.Body.String())
-	}
-	if verified.Kind != "api_key" || !strings.HasPrefix(verified.CredentialRef, "config-index:codex:") || verified.AuthID != "key-auth" {
-		t.Fatalf("verified=%+v", verified)
+	// A session ticket is not the control key, so the private surface does not say what exists.
+	if response := f.send(http.MethodGet, "/v0/management/auth-files", "codex-ticket", ""); response.Code != http.StatusUnauthorized {
+		t.Fatalf("management path with a ticket: %d", response.Code)
 	}
 }
 
-func TestAccountModelsReturnsOnlyTheRequestedCredentialCatalogue(t *testing.T) {
-	manager := coreauth.NewManager(nil, nil, nil)
-	if _, err := manager.Register(context.Background(), &coreauth.Auth{ID: "model-auth", Provider: "codex", Status: coreauth.StatusActive}); err != nil {
-		t.Fatal(err)
+func TestRoutesAPIReplacesTheTableOrRefusesWhole(t *testing.T) {
+	f := echoFixture(t)
+	push := func(routes, ids string) (int, string) {
+		response := f.send(http.MethodPut, "/ao/routes", control, `{"routes":[`+routes+`],"auth_ids":[`+ids+`]}`)
+		return response.Code, response.Body.String()
 	}
-	registry := proxycore.GlobalModelRegistry()
-	// Decoded rather than built, because the reasoning metadata type is internal to the SDK.
-	var withLevels proxycore.ModelInfo
-	if err := json.Unmarshal([]byte(`{"id":"account-gpt","display_name":"Account GPT","type":"codex","thinking":{"levels":["low","medium","high"]}}`), &withLevels); err != nil {
-		t.Fatal(err)
+	entry := func(ticket, account string) string {
+		return fmt.Sprintf(`{"ticket_hash":%q,"provider":"codex","auth_id":%q}`, TicketHash(ticket), account)
 	}
-	registry.RegisterClient("model-auth", "codex", []*proxycore.ModelInfo{&withLevels, {ID: "account-plain", DisplayName: "Account Plain", Type: "codex"}})
-	defer registry.UnregisterClient("model-auth")
-
-	routes := testRoutes(t)
-	engine := gin.New()
-	b := Boundary{Routes: routes, ControlKey: strings.Repeat("c", 32), InferenceKey: strings.Repeat("i", 32)}
-	b.Configure(engine, handlers.NewBaseAPIHandlers(&config.SDKConfig{}, manager), &config.Config{})
-	response := boundaryRequest(engine, http.MethodPost, "/ao/account-models", strings.Repeat("c", 32), `{"auth_id":"model-auth","provider":"codex"}`, nil)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	for attempt := 0; attempt < 2; attempt++ {
+		if code, body := push(entry("codex-ticket", "carol")+","+entry("new-ticket", "alice"), `"alice","carol"`); code != http.StatusNoContent || body != "" {
+			t.Fatalf("push %d: %d %s", attempt, code, body)
+		}
 	}
-	var body struct {
-		Models []struct {
-			ID      string   `json:"id"`
-			Efforts []string `json:"efforts"`
-			Default *bool    `json:"is_default"`
-		} `json:"models"`
+	if admitted(f.routes, "codex-ticket") != "carol" || admitted(f.routes, "new-ticket") != "alice" || admitted(f.routes, "claude-ticket") != "" {
+		t.Fatal("the push did not replace the table")
 	}
-	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
+	_, release, _ := f.routes.Acquire("codex-ticket")
+	if code, body := push(entry("codex-ticket", "alice"), `"alice"`); code != http.StatusConflict || strings.TrimSpace(body) != `{"code":"SESSION_BUSY"}` {
+		t.Fatalf("busy push: %d %s", code, body)
 	}
-	if len(body.Models) != 2 || body.Models[0].ID != "account-gpt" || body.Models[1].ID != "account-plain" {
-		t.Fatalf("models=%+v", body.Models)
+	if admitted(f.routes, "codex-ticket") != "carol" {
+		t.Fatal("a refused push changed the table")
 	}
-	// A model's reasoning levels travel with it; a model without any reports none.
-	if strings.Join(body.Models[0].Efforts, ",") != "low,medium,high" || len(body.Models[1].Efforts) != 0 {
-		t.Fatalf("efforts=%+v", body.Models)
+	release()
+	if code, _ := push("", ""); code != http.StatusNoContent || admitted(f.routes, "codex-ticket") != "" {
+		t.Fatalf("empty push: %d", code)
 	}
-	// Being first in the catalogue does not make a model the default.
-	if body.Models[0].Default != nil || body.Models[1].Default != nil {
-		t.Fatalf("a model was called the default: %s", response.Body.String())
+	// An empty table may arrive as null lists or with the lists left out.
+	for _, body := range []string{`{"routes":null,"auth_ids":null}`, `{}`} {
+		f.route("codex-ticket codex alice")
+		if response := f.send(http.MethodPut, "/ao/routes", control, body); response.Code != http.StatusNoContent || admitted(f.routes, "codex-ticket") != "" {
+			t.Fatalf("body %s: %d", body, response.Code)
+		}
+	}
+	for _, body := range []string{"{invalid", "", `{"routes":"all"}`} {
+		if response := f.send(http.MethodPut, "/ao/routes", control, body); response.Code != http.StatusBadRequest {
+			t.Fatalf("body %q: %d", body, response.Code)
+		}
 	}
 }
 
-// sessionModelsRouter is a gate in front of a stand-in for CLIProxyAPI's model
-// list, which names every account's models and disguises other providers' ones.
-func sessionModelsRouter(t *testing.T, status int, answer string) *gin.Engine {
+// modelsFixture answers /v1/models as the SDK does: every account's models,
+// with other providers' ones under disguised names.
+func modelsFixture(t *testing.T, status int, answer string) *fixture {
 	t.Helper()
-	gin.SetMode(gin.TestMode)
-	routes := testRoutes(t)
-	applyRoutes(t, routes, 1, testRoute("s1", "codex-ticket", "codex", "alice"), testRoute("s2", "claude-ticket", "claude", "bob"))
+	f, _ := bareFixture(t)
+	f.route("codex-ticket codex alice", "claude-ticket claude bob")
 	registry := proxycore.GlobalModelRegistry()
 	registry.RegisterClient("bob", "claude", []*proxycore.ModelInfo{{ID: "claude-one"}, {ID: "claude-two"}})
 	registry.RegisterClient("alice", "codex", []*proxycore.ModelInfo{{ID: "gpt-one"}})
 	t.Cleanup(func() { registry.UnregisterClient("bob"); registry.UnregisterClient("alice") })
-	b := Boundary{Routes: routes, ControlKey: strings.Repeat("c", 32), InferenceKey: strings.Repeat("i", 32)}
-	engine := gin.New()
-	engine.Use(b.Middleware)
-	engine.GET("/v1/models", func(c *gin.Context) { c.Data(status, "application/json", []byte(answer)) })
-	return engine
+	f.engine.GET("/v1/models", func(c *gin.Context) { c.Data(status, "application/json", []byte(answer)) })
+	return f
 }
 
 func TestSessionModelListNamesOnlyTheSessionAccountsModels(t *testing.T) {
-	everything := `{"data":[{"type":"model","id":"claude-one","display_name":"One"},{"type":"model","id":"claude-fable-5-dd-eno-tpg","display_name":"Disguised"},{"type":"model","id":"claude-two","display_name":"Two"},{"type":"model","id":"gpt-one"},{"type":"model","id":"claude-other-account"}],"first_id":"claude-one","has_more":false,"last_id":"claude-other-account"}`
-	engine := sessionModelsRouter(t, http.StatusOK, everything)
-	list := func(ticket string) (ids []string, first, last any) {
-		t.Helper()
-		response := boundaryRequest(engine, http.MethodGet, "/v1/models?limit=1000", ticket, "", nil)
-		if response.Code != http.StatusOK {
-			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-		}
+	everything := `{"data":[{"type":"model","id":"claude-one","display_name":"One"},{"type":"model","id":"claude-fable-5-dd-eno-tpg"},{"type":"model","id":"claude-two"},{"type":"model","id":"gpt-one"},{"type":"model","id":"claude-other-account"}],"has_more":false}`
+	f := modelsFixture(t, http.StatusOK, everything)
+	for ticket, want := range map[string]string{"claude-ticket": "claude-one,claude-two", "codex-ticket": "gpt-one"} {
+		response := f.send(http.MethodGet, "/v1/models?limit=1000", ticket, "")
 		var body struct {
 			Data []struct {
 				ID          string `json:"id"`
 				DisplayName string `json:"display_name"`
 			} `json:"data"`
-			First   any   `json:"first_id"`
-			Last    any   `json:"last_id"`
 			HasMore *bool `json:"has_more"`
 		}
-		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
-			t.Fatal(err)
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || response.Code != http.StatusOK || body.HasMore == nil {
+			t.Fatalf("%s: %d %s", ticket, response.Code, response.Body.String())
 		}
-		if body.HasMore == nil {
-			t.Fatalf("the list lost a field it did not need to change: %s", response.Body.String())
-		}
+		ids := []string{}
 		for _, model := range body.Data {
 			ids = append(ids, model.ID)
 		}
-		return ids, body.First, body.Last
-	}
-
-	ids, first, last := list("claude-ticket")
-	if strings.Join(ids, ",") != "claude-one,claude-two" || first != "claude-one" || last != "claude-two" {
-		t.Fatalf("a Claude session was offered %v (first %v, last %v)", ids, first, last)
-	}
-	ids, first, last = list("codex-ticket")
-	if strings.Join(ids, ",") != "gpt-one" || first != "gpt-one" || last != "gpt-one" {
-		t.Fatalf("a Codex session was offered %v (first %v, last %v)", ids, first, last)
+		if strings.Join(ids, ",") != want || (ticket == "claude-ticket" && body.Data[0].DisplayName != "One") {
+			t.Fatalf("%s was offered %v, want %s", ticket, body.Data, want)
+		}
 	}
 }
 
@@ -330,105 +230,112 @@ func TestSessionModelListLeavesOtherAnswersAlone(t *testing.T) {
 		"Codex's own catalogue": {http.StatusOK, `{"models":[{"slug":"gpt-other-account"}],"data":[{"id":"gpt-other-account"}]}`, "/v1/models?client_version=1.2.3"},
 		"an error":              {http.StatusServiceUnavailable, `{"data":[{"id":"gpt-other-account"}]}`, "/v1/models"},
 		"not a model list":      {http.StatusOK, `{"object":"list"}`, "/v1/models"},
+		"not JSON":              {http.StatusOK, `plain text`, "/v1/models"},
 	} {
-		t.Run(name, func(t *testing.T) {
-			engine := sessionModelsRouter(t, tc.status, tc.answer)
-			response := boundaryRequest(engine, http.MethodGet, tc.path, "codex-ticket", "", nil)
-			if response.Code != tc.status || response.Body.String() != tc.answer {
-				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
-			}
-		})
+		f := modelsFixture(t, tc.status, tc.answer)
+		if response := f.send(http.MethodGet, tc.path, "codex-ticket", ""); response.Code != tc.status || response.Body.String() != tc.answer {
+			t.Fatalf("%s: %d %s", name, response.Code, response.Body.String())
+		}
 	}
 }
 
-func TestBoundaryDisablesAllInterfaceOAuthForwarder(t *testing.T) {
-	engine, _ := boundaryRouter(t)
-	w := boundaryRequest(engine, "GET", "/v8/management/oauth/auth-url?provider=codex&is_webui=true", strings.Repeat("c", 32), "", nil)
-	if w.Code != 200 {
-		t.Fatal(w.Code)
-	}
-	if strings.Contains(w.Body.String(), "is_webui") {
-		t.Fatal("upstream all-interface forwarder flag preserved")
-	}
-	if !strings.Contains(w.Body.String(), "provider=codex") {
-		t.Fatal("provider query lost")
-	}
-}
-func TestBoundaryBlocksWebsocketAndUnusedEndpoints(t *testing.T) {
-	engine, _ := boundaryRouter(t)
-	w := boundaryRequest(engine, "GET", "/v1/responses", "codex-ticket", "", map[string]string{"Upgrade": "websocket"})
-	if w.Code != 501 {
-		t.Fatalf("websocket=%d", w.Code)
-	}
-	for _, path := range []string{"/", "/management.html", "/v0/management/auth-files", "/oauth/callback", "/v1/chat/completions", "/redis", "/v1/images/generations"} {
-		w = boundaryRequest(engine, "GET", path, "codex-ticket", "", nil)
-		if w.Code != 404 {
-			t.Fatalf("path=%s status=%d", path, w.Code)
+func TestAccountModelsListsTheRequestedAccountsModelsWithEfforts(t *testing.T) {
+	f, _ := bareFixture(t)
+	for _, id := range []string{"model-auth", "empty-auth"} {
+		if _, err := f.manager.Register(coreauth.WithSkipPersist(t.Context()), &coreauth.Auth{ID: id, Provider: "codex", Status: coreauth.StatusActive}); err != nil {
+			t.Fatal(err)
 		}
 	}
-}
-func TestPrivateRouteAPIConflictsAndLostAckReplay(t *testing.T) {
-	engine, routes := boundaryRouter(t)
-	state := routes.Snapshot()
-	state.Revision++
-	state.Routes[0].AuthID = "replacement"
-	body, err := json.Marshal(state)
-	if err != nil {
+	// Decoded rather than built, because the reasoning metadata type is internal to the SDK.
+	var withLevels proxycore.ModelInfo
+	if err := json.Unmarshal([]byte(`{"id":"account-gpt","display_name":" Account GPT ","type":"codex","thinking":{"levels":["low","medium","high"]}}`), &withLevels); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 2; i++ {
-		w := boundaryRequest(engine, "PUT", "/ao/routes", strings.Repeat("c", 32), string(body), nil)
-		if w.Code != 200 {
-			t.Fatalf("attempt=%d status=%d body=%s", i, w.Code, w.Body.String())
-		}
+	registry := proxycore.GlobalModelRegistry()
+	registry.RegisterClient("model-auth", "codex", []*proxycore.ModelInfo{&withLevels, {ID: "account-plain", Type: "codex"}})
+	registry.RegisterClient("other-auth", "codex", []*proxycore.ModelInfo{{ID: "other-accounts-model"}})
+	t.Cleanup(func() { registry.UnregisterClient("model-auth"); registry.UnregisterClient("other-auth") })
+
+	response := f.send(http.MethodPost, "/ao/account-models", control, `{"auth_id":"model-auth","provider":"codex"}`)
+	want := `{"models":[{"efforts":["low","medium","high"],"id":"account-gpt","label":"Account GPT","provider":"codex"},{"id":"account-plain","label":"account-plain","provider":"codex"}]}`
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != want {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	state.Routes[0].AuthID = "other"
-	body, _ = json.Marshal(state)
-	w := boundaryRequest(engine, "PUT", "/ao/routes", strings.Repeat("c", 32), string(body), nil)
-	if w.Code != 409 {
-		t.Fatalf("conflict status=%d", w.Code)
-	}
-	w = boundaryRequest(engine, "PUT", "/ao/routes", strings.Repeat("c", 32), "{invalid", nil)
-	if w.Code != 400 {
-		t.Fatalf("invalid json status=%d", w.Code)
-	}
-	got, done, err := routes.Acquire("codex-ticket")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer done()
-	if got.AuthID != "replacement" {
-		t.Fatalf("account=%s", got.AuthID)
-	}
-}
-func TestPrivateRouteAPIRunningRequestBlocksUpdate(t *testing.T) {
-	engine, routes := boundaryRouter(t)
-	_, done, err := routes.Acquire("codex-ticket")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer done()
-	state := routes.Snapshot()
-	state.Revision++
-	state.Routes[0].AuthID = "replacement"
-	body, err := json.Marshal(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	w := boundaryRequest(engine, "PUT", "/ao/routes", strings.Repeat("c", 32), string(body), nil)
-	if w.Code != 409 {
-		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
-	}
-}
-func TestConstantTimeKeyComparisonRequiresNonEmptySecret(t *testing.T) {
-	for _, tc := range []struct {
-		actual, expected string
-		want             bool
-	}{
-		{"", "", false}, {"Bearer ", "Bearer ", false}, {"Bearer a", "Bearer a", true}, {"Bearer a", "Bearer b", false}, {"Bearer aa", "Bearer a", false},
+	for body, status := range map[string]int{
+		`{"auth_id":"empty-auth","provider":"codex"}`:  http.StatusServiceUnavailable,
+		`{"auth_id":"model-auth","provider":"claude"}`: http.StatusNotFound,
+		`{"auth_id":"missing","provider":"codex"}`:     http.StatusNotFound,
+		`{"provider":"codex"}`:                         http.StatusNotFound,
+		`not json`:                                     http.StatusBadRequest,
 	} {
-		if got := equalKey(tc.actual, tc.expected); got != tc.want {
-			t.Fatal(fmt.Sprintf("actual=%q expected=%q got=%t", tc.actual, tc.expected, got))
+		if response := f.send(http.MethodPost, "/ao/account-models", control, body); response.Code != status {
+			t.Fatalf("%s: %d, want %d", body, response.Code, status)
 		}
+	}
+}
+
+func TestLoginResultNamesTheCredentialOfOneLoginAndNothingSecret(t *testing.T) {
+	f, _ := bareFixture(t)
+	for _, auth := range []*coreauth.Auth{
+		{ID: "other", FileName: "other.json", Provider: "codex", Metadata: map[string]any{"ao_login_id": "other-attempt", "email": "other@example.test", "access_token": "PRIVATE-OTHER"}},
+		{ID: "wanted", FileName: "wanted.json", Provider: "claude", Metadata: map[string]any{"ao_login_id": "wanted-attempt", "email": "wanted@example.test", "access_token": "PRIVATE-ACCESS", "refresh_token": "PRIVATE-REFRESH"}},
+		{ID: "ao-import-attempt.json", FileName: "ao-import-attempt.json", Provider: "codex", Metadata: map[string]any{"email": "imported@example.test"}},
+	} {
+		f.account(auth)
+	}
+	for id, want := range map[string]string{
+		"wanted-attempt": `{"auth_id":"wanted","credential_ref":"wanted.json","email":"wanted@example.test","kind":"oauth","provider":"claude"}`,
+		"import-attempt": `{"auth_id":"ao-import-attempt.json","credential_ref":"ao-import-attempt.json","email":"imported@example.test","kind":"oauth","provider":"codex"}`,
+	} {
+		if response := f.send(http.MethodGet, "/ao/login-result/"+id, control, ""); response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != want {
+			t.Fatalf("%s: %d %s", id, response.Code, response.Body.String())
+		}
+	}
+	for _, id := range []string{"unknown", "wanted", "wanted.json", "attempt"} {
+		if response := f.send(http.MethodGet, "/ao/login-result/"+id, control, ""); response.Code != http.StatusNotFound {
+			t.Fatalf("%s: %d", id, response.Code)
+		}
+	}
+}
+
+func TestTaggedAPIKeyIsReportedAsAnAPIKey(t *testing.T) {
+	f, _ := bareFixture(t)
+	f.account(&coreauth.Auth{ID: "key-auth", Provider: "codex", Attributes: map[string]string{"api_key": "secret", "base_url": "https://api.example/"}})
+	f.account(&coreauth.Auth{ID: "signed-in", Provider: "codex", Metadata: map[string]any{"email": "person@example.test"}})
+	tag := func(body string) (int, string) {
+		response := f.send(http.MethodPost, "/ao/tag-api-key", control, body)
+		return response.Code, strings.TrimSpace(response.Body.String())
+	}
+	if code, body := tag(`{"id":"login-1","provider":"codex","api_key":"secret","base_url":"https://api.example","label":" Work key "}`); code != http.StatusOK || body != `{"auth_id":"key-auth"}` {
+		t.Fatalf("tag: %d %s", code, body)
+	}
+	response := f.send(http.MethodGet, "/ao/login-result/login-1", control, "")
+	var verified struct {
+		Provider, Email, Kind string
+		CredentialRef         string `json:"credential_ref"`
+		AuthID                string `json:"auth_id"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &verified); err != nil || response.Code != http.StatusOK {
+		t.Fatalf("login result: %d %s", response.Code, response.Body.String())
+	}
+	if verified.Kind != "api_key" || verified.Email != "Work key" || verified.AuthID != "key-auth" || verified.Provider != "codex" || !strings.HasPrefix(verified.CredentialRef, "config-index:codex:") || len(verified.CredentialRef) == len("config-index:codex:") {
+		t.Fatalf("verified=%+v", verified)
+	}
+	if strings.Contains(response.Body.String(), "secret") {
+		t.Fatal("the login result carries the key")
+	}
+	// A key the helper does not hold is not found, and an empty key never matches a sign-in.
+	short := func(body string) int {
+		ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+		defer cancel()
+		return sendContext(ctx, f.engine, http.MethodPost, "/ao/tag-api-key", control, body).Code
+	}
+	for _, body := range []string{`{"id":"login-2","provider":"codex","api_key":"other"}`, `{"id":"login-2","provider":"claude","api_key":"secret","base_url":"https://api.example"}`, `{"id":"login-2","provider":"codex","api_key":""}`} {
+		if code := short(body); code != http.StatusNotFound {
+			t.Fatalf("%s: %d", body, code)
+		}
+	}
+	if signedIn, _ := f.manager.GetByID("signed-in"); signedIn.Metadata["ao_login_id"] != nil {
+		t.Fatal("an empty key tagged a sign-in")
 	}
 }
