@@ -526,6 +526,9 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ProjectRemoveResult":               "RemoveProjectResult",
 	"ProjectSetPermissionsInput":        "SetProjectPermissionsInput",
 	"ProjectSetConfigInput":             "SetProjectConfigInput",
+	"ProjectUpdateConfigInput":          "UpdateProjectConfigInput",
+	"ProjectConfigChange":               "ProjectConfigChange",
+	"ProjectUpdateConfigResult":         "UpdateProjectConfigResult",
 	"ProjectUpdateSettingsInput":        "UpdateProjectSettingsInput",
 	"ProjectWorkspaceRepo":              "WorkspaceRepo",
 	"SessionWorkspaceFileStatus":        "WorkspaceFileStatus",
@@ -2261,6 +2264,18 @@ func projectOperations() []operation {
 			reqBody:    projectsvc.SetConfigInput{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.ProjectResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/projects/{id}/config", id: "updateProjectConfig", tag: "projects",
+			summary:    "Update selected project config fields",
+			pathParams: []any{controllers.ProjectIDParam{}},
+			reqBody:    projectsvc.UpdateConfigInput{},
+			resps: []respUnit{
+				{http.StatusOK, projectsvc.UpdateConfigResult{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},

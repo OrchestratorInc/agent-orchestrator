@@ -158,6 +158,14 @@ type projectSetConfigOptions struct {
 	json              bool
 }
 
+type projectUpdateOptions struct {
+	canonicalRepoURL string
+	defaultBranch    string
+	dryRun           bool
+	yes              bool
+	json             bool
+}
+
 type projectListResult struct {
 	Projects []projectSummary `json:"projects"`
 }
@@ -169,6 +177,24 @@ type projectGetResult struct {
 
 type projectResult struct {
 	Project projectDetails `json:"project"`
+}
+
+type projectConfigChange struct {
+	Path string `json:"path"`
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type projectUpdateRequest struct {
+	CanonicalRepoURL *string `json:"canonicalRepoURL,omitempty"`
+	DefaultBranch    *string `json:"defaultBranch,omitempty"`
+	DryRun           bool    `json:"dryRun,omitempty"`
+}
+
+type projectUpdateResult struct {
+	Project projectDetails        `json:"project"`
+	Changes []projectConfigChange `json:"changes"`
+	DryRun  bool                  `json:"dryRun"`
 }
 
 type projectRemoveResult struct {
@@ -187,7 +213,73 @@ func newProjectCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(newProjectGetCommand(ctx))
 	cmd.AddCommand(newProjectAddCommand(ctx))
 	cmd.AddCommand(newProjectSetConfigCommand(ctx))
+	cmd.AddCommand(newProjectUpdateCommand(ctx))
 	cmd.AddCommand(newProjectRemoveCommand(ctx))
+	return cmd
+}
+
+func newProjectUpdateCommand(ctx *commandContext) *cobra.Command {
+	var opts projectUpdateOptions
+	cmd := &cobra.Command{
+		Use:   "update <id>",
+		Short: "Update selected project settings",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if err := cobra.ExactArgs(1)(cmd, args); err != nil {
+				return usageError{err}
+			}
+			if strings.TrimSpace(args[0]) == "" {
+				return usageError{errors.New("usage: project id is required")}
+			}
+			if !cmd.Flags().Changed("canonical-repo-url") && !cmd.Flags().Changed("default-branch") {
+				return usageError{errors.New("at least one setting flag is required")}
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id := strings.TrimSpace(args[0])
+			req := projectUpdateRequest{DryRun: opts.dryRun}
+			if cmd.Flags().Changed("canonical-repo-url") {
+				value := opts.canonicalRepoURL
+				req.CanonicalRepoURL = &value
+			}
+			if cmd.Flags().Changed("default-branch") {
+				value := opts.defaultBranch
+				req.DefaultBranch = &value
+			}
+			if !opts.dryRun && !opts.yes {
+				confirmed, err := confirmProjectUpdate(cmd, id)
+				if err != nil {
+					return err
+				}
+				if !confirmed {
+					_, err := fmt.Fprintln(cmd.OutOrStdout(), "aborted")
+					return err
+				}
+			}
+			var res projectUpdateResult
+			if err := ctx.patchJSON(cmd.Context(), "projects/"+url.PathEscape(id)+"/config", req, &res); err != nil {
+				return err
+			}
+			if opts.json {
+				return writeJSON(cmd.OutOrStdout(), res)
+			}
+			for _, change := range res.Changes {
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s: %q -> %q\n", change.Path, change.From, change.To); err != nil {
+					return err
+				}
+			}
+			if len(res.Changes) == 0 {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "no changes")
+			}
+			return nil
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&opts.canonicalRepoURL, "canonical-repo-url", "", "Explicit upstream HTTPS repository URL for PR claims; empty clears it")
+	f.StringVar(&opts.defaultBranch, "default-branch", "", "Base branch for new worktrees; empty restores automatic inference")
+	f.BoolVar(&opts.dryRun, "dry-run", false, "Validate and show changes without writing")
+	f.BoolVarP(&opts.yes, "yes", "y", false, "Skip confirmation prompt")
+	f.BoolVar(&opts.json, "json", false, "Output the change result as JSON")
 	return cmd
 }
 
@@ -574,6 +666,18 @@ func formatProjectConfig(config *projectConfig) string {
 
 func confirmProjectRemoval(cmd *cobra.Command, id string) (bool, error) {
 	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Remove project %q? Type the project id to confirm: ", id); err != nil {
+		return false, err
+	}
+	reader := bufio.NewReader(cmd.InOrStdin())
+	line, err := reader.ReadString('\n')
+	if err != nil && line == "" {
+		return false, err
+	}
+	return strings.TrimSpace(line) == id, nil
+}
+
+func confirmProjectUpdate(cmd *cobra.Command, id string) (bool, error) {
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Update project %q? Type the project id to confirm: ", id); err != nil {
 		return false, err
 	}
 	reader := bufio.NewReader(cmd.InOrStdin())

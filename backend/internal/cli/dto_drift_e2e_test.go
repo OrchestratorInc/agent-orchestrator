@@ -168,6 +168,10 @@ func (f *fakeProjectManager) SetConfig(_ context.Context, id domain.ProjectID, i
 	return projectsvc.Project{ID: id, Config: &cfg}, nil
 }
 
+func (f *fakeProjectManager) UpdateConfig(_ context.Context, id domain.ProjectID, in projectsvc.UpdateConfigInput) (projectsvc.UpdateConfigResult, error) {
+	return projectsvc.UpdateConfigResult{Project: &projectsvc.Project{ID: id}, DryRun: in.DryRun}, nil
+}
+
 func (f *fakeProjectManager) Remove(context.Context, domain.ProjectID) (projectsvc.RemoveResult, error) {
 	return projectsvc.RemoveResult{}, nil
 }

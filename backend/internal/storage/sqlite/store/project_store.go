@@ -349,3 +349,36 @@ func (s *Store) SetProjectPermissions(ctx context.Context, id string, permission
 	})
 	return row, updated, err
 }
+
+// UpdateProjectConfig serializes a focused config update with other project
+// writes and returns the stored row.
+func (s *Store) UpdateProjectConfig(ctx context.Context, id string, config domain.ProjectConfig) (domain.ProjectRecord, bool, error) {
+	serialized, err := marshalProjectConfig(config)
+	if err != nil {
+		return domain.ProjectRecord{}, false, err
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	var row domain.ProjectRecord
+	var updated bool
+	err = s.inTx(ctx, "update project config", func(q *gen.Queries) error {
+		stored, err := q.GetProject(ctx, domain.ProjectID(id))
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		row = projectRowFromGen(stored)
+		if !row.ArchivedAt.IsZero() {
+			return nil
+		}
+		row.Config = config
+		rows, err := q.UpdateProjectSettings(ctx, gen.UpdateProjectSettingsParams{
+			ID: domain.ProjectID(id), DisplayName: row.DisplayName, Config: serialized,
+		})
+		updated = rows > 0
+		return err
+	})
+	return row, updated, err
+}

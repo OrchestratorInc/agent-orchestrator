@@ -67,6 +67,28 @@ type SetConfigInput struct {
 	Config domain.ProjectConfig `json:"config"`
 }
 
+// UpdateConfigInput changes only fields present in the request. A nil pointer
+// leaves the current value unchanged, while a non-nil empty string clears it.
+type UpdateConfigInput struct {
+	CanonicalRepoURL *string `json:"canonicalRepoURL,omitempty"`
+	DefaultBranch    *string `json:"defaultBranch,omitempty"`
+	DryRun           bool    `json:"dryRun,omitempty"`
+}
+
+// ConfigChange describes one changed project config field.
+type ConfigChange struct {
+	Path string `json:"path"`
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// UpdateConfigResult reports a focused config update and its resulting project.
+type UpdateConfigResult struct {
+	Project *Project       `json:"project"`
+	Changes []ConfigChange `json:"changes"`
+	DryRun  bool           `json:"dryRun"`
+}
+
 // RemoveResult reports what DELETE /api/v1/projects/{id} actually did.
 type RemoveResult struct {
 	ProjectID         domain.ProjectID `json:"projectId"`
