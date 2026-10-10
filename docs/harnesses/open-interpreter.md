@@ -1,0 +1,36 @@
+# Open Interpreter terminal contract
+
+AO integrates the Rust terminal release [`rust-v0.0.56`](https://github.com/openinterpreter/openinterpreter/releases/tag/rust-v0.0.56), inspected at [`cc054cf52fa3585a3de50e0d4e0be6f9ee6677e8`](https://github.com/openinterpreter/openinterpreter/tree/cc054cf52fa3585a3de50e0d4e0be6f9ee6677e8). This is a TUI integration. Chat, reviewer, interface handoff, provider usage accounting, and semantic prompt acknowledgements are intentionally unavailable.
+
+The executable is `interpreter`, never the ambiguous `i` alias. Runtime discovery checks Rust-specific help features to reject the older Python executable. Models are native free-form IDs. `login status` only proves local credential configuration, so AO reports `configured`, never `authorized`. AO also reports `configured` when the user configuration explicitly selects a custom provider whose `env_key` names a non-empty variable in the daemon environment. This observation honors `INTERPRETER_HOME`, does not resolve named-profile or project overrides, and never validates the credential with the provider. Providers requiring native OpenAI auth, helper/AWS auth, and reserved Bedrock overrides are excluded from this fallback. Missing or ambiguous configuration remains unknown.
+
+## Launch and native configuration
+
+- `--no-daemon` disables shared background-server reuse and auto-start. AO supervises the terminal process. See `codex-rs/tui/src/daemon_startup.rs` and `startup_orchestration.rs` in the pinned source.
+- The exact initial task follows `--` as a positional argument. Native startup queues it until setup completes; AO never types the task into auth or trust dialogs. See `tui/src/chatwidget/input_restore.rs`.
+- `INTERPRETER_HOME`, native user/project configuration, AGENTS.md discovery, MCP configuration, provider credentials, and native project trust remain owned by Open Interpreter. Default permission mode emits no policy override. Accept edits selects workspace-write/on-request; auto selects native auto-review; bypass requires AO's explicit bypass mode. Unsupported tool allow/deny lists are rejected.
+- Standing AO instructions travel through SessionStart `hookSpecificOutput.additionalContext`, not the visible task or `developer_instructions` replacement. The native implementation adds a developer-role message and filters Context entries from terminal hook cells (`core/src/context/hook_additional_context.rs`, `tui/src/history_cell/hook_cell.rs`).
+- Native Chat Completions compatibility maps all developer messages to wire `user` roles (`chat-wire-compat/src/request.rs:506`). This includes native permission/context messages and AO's tagged hook context. AO preserves this provider behavior: its native record remains developer context, but Chat Completions providers do not receive developer-role precedence for these messages. AO does not render the hook payload in the terminal; the model can echo context it consumes, as observed in the live provider audit.
+- AO enables native hooks for the invocation and installs three SessionFlags definitions: SessionStart, UserPromptSubmit, PostToolUse. Exact canonical definition hashes authorize only these definitions. It never uses `--dangerously-bypass-hook-trust`, and it neither rewrites native files nor grants trust to unrelated hooks. See `hooks/src/engine/discovery.rs`, `hooks/src/config_rules.rs`, and `config/src/fingerprint.rs`.
+
+## Identity, activity, and restore
+
+SessionStart records the provider UUID without declaring work active. Child markers are rejected before metadata capture. UserPromptSubmit is not semantic acceptance because later hooks can still block it. Stop is not idle because native continuation/compaction may still run. PermissionRequest is not blocked because the native guardian can handle it without user input. PostToolUse can report active work; native terminal chrome supplies continuous active/idle/waiting-input observations through AO's existing observer.
+
+The observer recognizes the current composer, queue/status area, and permission/question footers. It fails closed when native chrome is missing or customized beyond the inspected forms. It does not infer death from unknown output. Process exit belongs to the existing supervisor.
+
+Ctrl-C cancels the native turn; it does not guarantee immediate provider connection teardown. The native Chat Completions compatibility layer uses a detached stream reader that can remain open until the next chunk or timeout (`chat-wire-compat/src/stream.rs`). Conformance checks a durable `turn_aborted` event for the interrupted turn, current-screen idle, exclusion of late cancelled output from the terminal/history, and completion of a subsequent turn.
+
+Restore requires an exact nonzero native UUID and a matching active rollout's `session_meta.id` and `session_meta.cwd`. AO compares filesystem identity with the current workspace before passing `--cd`; the native flag otherwise bypasses historical-directory checks. Names, latest-session selection, missing history, foreign workspaces, malformed metadata, and archived-only sessions are rejected rather than starting a fresh conversation.
+
+Open Interpreter compresses cold rollouts after seven days. AO validates `.jsonl` and `.jsonl.zst` without modifying native state: at most 50,000 directory entries, 256 KiB metadata, 8 MiB per history record, 64 MiB decoded history, 32 MiB compressed input, and a 16 MiB decoder memory/window bound. Malformed records and histories without a user message are rejected. Compressed native history is eligible for restore; the native append path materializes it. Shared transcript consumers only receive plain JSONL paths.
+
+## Validation scope
+
+Unit tests cover launch/restore boundaries, permissions, config preservation, private context, exact trust hashes, child identity guards, activity frames, and compressed-history limits. `.github/workflows/open-interpreter-conformance.yml` downloads the checksum-pinned Linux x86_64 release and exercises production-generated argv and hook trust under a PTY against a local fake Chat Completions provider. It checks a dash-leading task held until native setup completes, private-context delivery without terminal disclosure, native default instructions, preserved AGENTS.md, untrusted-hook isolation, exact UUID/history resume, and cancellation followed by another turn. Native macOS and Windows execution are not covered by this conformance job.
+
+The initial implementation was prepared without local tests, checks, builds, or provider execution, at the user's request. API artifacts were regenerated. Remote CI results in the draft PR are the executable validation record.
+
+## Asset attribution
+
+The avatar is the upstream `logo/light.svg` from the pinned source, distributed under the upstream Apache-2.0 license.

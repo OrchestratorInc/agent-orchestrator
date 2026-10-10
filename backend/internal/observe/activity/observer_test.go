@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/crush"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -46,6 +48,16 @@ type fakeRuntime struct {
 func (f *fakeRuntime) GetOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
 	f.calls++
 	return f.output, f.err
+}
+
+type fakeStyledRuntime struct {
+	fakeRuntime
+	styled string
+	err    error
+}
+
+func (f *fakeStyledRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+	return f.styled, f.err
 }
 
 type fakeAgents map[domain.AgentHarness]ports.Agent
@@ -117,6 +129,66 @@ func TestPollKeepsGenuineLongCodexTurnActive(t *testing.T) {
 	}
 	if len(sink.signals) != 0 {
 		t.Fatalf("long active turn emitted reconciliation: %+v", sink.signals)
+	}
+}
+
+func TestPollUsesCurrentStyledSurfaceForInspectors(t *testing.T) {
+	// Released Open Interpreter's idle footer, captured from its real PTY and
+	// reduced to the current composer with a neutral workspace path.
+	const idle = "\x1b[1m›\x1b[m \x1b[2mAsk Codex to do anything\x1b[m\n\n" +
+		"  \x1b[38;2;246;226;183mGLM-5.3-Flash default\x1b[m · \x1b[38;2;171;223;167m/audit/workspace\x1b[m · \x1b[1mf2\x1b[m to view"
+	const plainIdle = "› \n ? for shortcuts"
+	if state, ok := openinterpreter.New().DetectTerminalActivity(idle); !ok || state != domain.ActivityIdle {
+		t.Fatalf("captured styled composer was not recognized: %q, %v", state, ok)
+	}
+	for _, tc := range []struct {
+		name, plain, styled string
+		styledErr           error
+		want                domain.ActivityState
+	}{
+		{"empty plain output", "", idle, nil, domain.ActivityIdle},
+		{"raw redraw fragments", "\x1b[2J\x1b[1;1HWorking\rspinner", idle, nil, domain.ActivityIdle},
+		{"active screen overrides old idle output", plainIdle, "• Working (3s • esc to interrupt)\n\n" + idle, nil, ""},
+		{"unknown screen ignores old idle output", plainIdle, "Loading", nil, ""},
+		{"screen read error ignores old idle output", plainIdle, "", errors.New("screen read failed"), ""},
+		{"legacy host falls back to output", plainIdle, "", ports.ErrStyledTerminalOutputUnavailable, domain.ActivityIdle},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Unix(500, 0).UTC()
+			session := activeSession(now, domain.HarnessOpenInterpreter)
+			sink := &fakeSink{}
+			runtime := &fakeStyledRuntime{fakeRuntime: fakeRuntime{output: tc.plain}, styled: tc.styled, err: tc.styledErr}
+			observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, runtime,
+				fakeAgents{domain.HarnessOpenInterpreter: openinterpreter.New()},
+				Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+			if err := observer.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == "" {
+				if len(sink.signals) != 0 {
+					t.Fatalf("unproven idle emitted reconciliation: %+v", sink.signals)
+				}
+			} else if len(sink.signals) != 1 || sink.signals[0].State != tc.want {
+				t.Fatalf("signals = %+v; want one %q reconciliation", sink.signals, tc.want)
+			}
+		})
+	}
+}
+
+func TestPollKeepsLegacyDetectorOnPlainOutput(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	sink := &fakeSink{}
+	runtime := &fakeStyledRuntime{
+		fakeRuntime: fakeRuntime{output: "◇ Finishing up (25s · esc to interrupt)\n"},
+		styled:      "◆ Request user input AO Muse Fix  1m 02s)\n",
+	}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{activeSession(now, domain.HarnessMuse)}}, sink, runtime,
+		fakeAgents{domain.HarnessMuse: muse.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 0 {
+		t.Fatalf("legacy detector unexpectedly consumed styled output: %+v", sink.signals)
 	}
 }
 
@@ -296,6 +368,32 @@ func TestPollKeepsGenuineLongClaudeTurnActive(t *testing.T) {
 	}
 	if len(sink.signals) != 0 {
 		t.Fatalf("long active turn emitted reconciliation: %+v", sink.signals)
+	}
+}
+
+func TestPollReconcilesStyledClaudeLoginPrompt(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessClaudeCode)
+	sink := &fakeSink{}
+	runtime := &fakeStyledRuntime{
+		fakeRuntime: fakeRuntime{output: "stale raw terminal redraws"},
+		styled: strings.Replace(claudeStuckActiveScreen, "Login expired · Please run /login",
+			"Login \x1b[31mexpired\x1b[0m · Please run \x1b[1m/login\x1b[0m", 1),
+	}
+	observer := New(
+		fakeSessions{rows: []domain.SessionRecord{session}},
+		sink,
+		runtime,
+		fakeAgents{domain.HarnessClaudeCode: claudecode.New()},
+		Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+	)
+
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityWaitingInput ||
+		sink.signals[0].Event != "terminal-waiting-input" {
+		t.Fatalf("styled login prompt reconciliation = %+v, want waiting_input", sink.signals)
 	}
 }
 
