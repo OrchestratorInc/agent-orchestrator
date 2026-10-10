@@ -35,7 +35,7 @@ const (
 
 // ansiPattern matches CSI, OSC, and a single-character escape so color codes
 // never reach the caller's terminal or spend tokens.
-var ansiPattern = regexp.MustCompile(`\x1b(?:\[[0-?]*[\x20-\x2f]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|.)`)
+var ansiPattern = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07]*(?:\x07|\x1b\\)|.)`)
 
 type transcriptRequest struct {
 	enabled bool
@@ -141,8 +141,7 @@ func transcriptRequestFrom(cmd *cobra.Command) (transcriptRequest, error) {
 }
 
 func transcriptUnavailable(id string) error {
-	// The closing period is the sentence from the transcript design.
-	return fmt.Errorf("session %s runs in Terminal UI mode; AO keeps no durable transcript for it. Use \"ao session get %s\" for status, or open its terminal.", id, id) //nolint:revive // user-facing sentence ends with a period
+	return fmt.Errorf("session %s runs in Terminal UI mode; AO keeps no durable transcript for it. Use \"ao session get %s\" for status, or open its terminal", id, id)
 }
 
 func (c *commandContext) fetchConversationSnapshot(ctx context.Context, id string, req transcriptRequest) (conversationSnapshotWire, error) {
