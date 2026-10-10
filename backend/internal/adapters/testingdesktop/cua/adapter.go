@@ -147,10 +147,9 @@ type Adapter struct {
 	launchIssued  bool
 	closed        bool
 	now           func() time.Time
-	startRecorder func(args, env []string, stdout, stderr string) (*recordingProcess, error)
+	startRecorder func(ctx context.Context, args, env []string, stdout, stderr string) (*recordingProcess, error)
 	interruptWait time.Duration
 	terminateWait time.Duration
-	stagingDir    string
 }
 
 var _ ports.TestingDesktopControl = (*Adapter)(nil)
@@ -204,14 +203,9 @@ func New(cfg Config) (*Adapter, error) {
 			return nil, refuse("invalid_config", "private Unix socket path exceeds the macOS limit")
 		}
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
 	return &Adapter{cfg: cfg, runner: runner, started: started, root: root, controlRoot: controlRoot,
 		bindings: make(map[string]*binding), released: make(map[string]*binding), now: time.Now, startRecorder: startScreencapture,
-		interruptWait: 15 * time.Second, terminateWait: 3 * time.Second,
-		stagingDir: filepath.Join(home, "Library", "Group Containers", "group.com.apple.screencapture", "ScreenRecordings")}, nil
+		interruptWait: 15 * time.Second, terminateWait: 3 * time.Second}, nil
 }
 
 // DeliveryMode lets the service journal the configured policy before dispatch.

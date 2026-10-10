@@ -14,7 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-const validMovieInfo = "Duration: 3.368 seconds (2021/600)\nTrack count: 1\nTrack 1: Video 'vide'\n\tDimensions: 1280 x 800\n\tSystem support for decoding this track: Yes\nMovie analyzed with 0 error.\n"
+const validMovieInfo = "Duration: 3.368 seconds (2021/600)\nTrack count: 1\nTrack 1: Video 'vide'\n\tDimensions: 1280 x 800\n\tSystem support for decoding this track: Yes\nChunks\n  1  1  [1]  0x24  64  00:00:00.000  SDF\nMovie analyzed with 0 error.\n"
 
 type fakeRecording struct {
 	process *recordingProcess
@@ -30,12 +30,8 @@ type fakeRecording struct {
 func prepareRecording(t *testing.T, f *fixture) *fakeRecording {
 	t.Helper()
 	r := &fakeRecording{process: &recordingProcess{pid: 42, done: make(chan struct{})}, info: validMovieInfo, finish: true}
-	f.adapter.stagingDir = filepath.Join(f.adapter.cfg.DataDir, "native-staging")
-	if err := os.MkdirAll(f.adapter.stagingDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	r.staged = filepath.Join(f.adapter.stagingDir, "b97e0c9f-1aac-4fe5-bd3e-18c05c7db732.mov")
-	f.adapter.startRecorder = func(args, env []string, _, _ string) (*recordingProcess, error) {
+	r.staged = filepath.Join(f.adapter.cfg.DataDir, "fake-encoder.mov")
+	f.adapter.startRecorder = func(_ context.Context, args, env []string, _, _ string) (*recordingProcess, error) {
 		r.args, r.env = args, env
 		r.path = args[len(args)-1]
 		if err := os.WriteFile(r.staged, []byte("native movie staging"), 0o600); err != nil {
@@ -56,7 +52,7 @@ func prepareRecording(t *testing.T, f *fixture) *fakeRecording {
 	provider := f.runner.hook
 	f.runner.hook = func(executable string, args []string) (Output, error) {
 		if executable == "/usr/bin/avmediainfo" {
-			if !reflect.DeepEqual(args, []string{r.path}) && !reflect.DeepEqual(args, []string{strings.TrimSuffix(r.path, ".mov") + "-recovered.mov"}) {
+			if !reflect.DeepEqual(args, []string{r.path, "--chunks", "--mediatype", "video"}) {
 				t.Fatalf("analyzed wrong movie: %v", args)
 			}
 			return Output{Stdout: []byte(r.info)}, nil
@@ -89,7 +85,7 @@ func TestRecordingWindowOnlyAndSIGINTFinalization(t *testing.T) {
 		}
 	}
 	root, err := filepath.EvalSymlinks(filepath.Join(f.adapter.cfg.DataDir, "evidence"))
-	if err != nil || filepath.Dir(start.Path) != root {
+	if err != nil || filepath.Dir(filepath.Dir(start.Path)) != root {
 		t.Fatalf("movie escaped evidence dir: %s", start.Path)
 	}
 	final, err := f.adapter.StopRecording(context.Background(), f.target)
@@ -99,7 +95,7 @@ func TestRecordingWindowOnlyAndSIGINTFinalization(t *testing.T) {
 	if !reflect.DeepEqual(r.signals, []os.Signal{os.Interrupt}) {
 		t.Fatalf("expected owned recorder SIGINT, got %v", r.signals)
 	}
-	if final.StagingPath != r.staged || final.StagingCleanup != "verified absent after final move" {
+	if final.StagingPath != "" || final.StagingCleanup != "provider-managed staging; AO does not inspect external storage" {
 		t.Fatalf("staging UUID not verified: %+v", final)
 	}
 	again, err := f.adapter.StopRecording(context.Background(), f.target)
@@ -126,7 +122,7 @@ func TestRecordingKeepsOriginalDimensionsAfterPreviewResize(t *testing.T) {
 
 func TestRecordingStopAfterTargetClosed(t *testing.T) {
 	f := newFixture(t)
-	r := prepareRecording(t, f)
+	prepareRecording(t, f)
 	startFakeRecording(t, f)
 	f.adapter.started = func(_ context.Context, pid int) (time.Time, error) {
 		if pid == f.target.ElectronPID || pid == f.adapter.driver.pid {
@@ -134,10 +130,24 @@ func TestRecordingStopAfterTargetClosed(t *testing.T) {
 		}
 		return f.born, nil
 	}
-	r.process.err = errors.New("stream ended when window closed")
 	result, err := f.adapter.StopRecording(context.Background(), f.target)
 	if err != nil || result.Duration <= 0 || result.Gap != "" {
 		t.Fatalf("closed target prevented movie finalization: %+v %v", result, err)
+	}
+}
+
+func TestRecordingPreservesProviderFailureWithPlayableMovie(t *testing.T) {
+	f := newFixture(t)
+	r := prepareRecording(t, f)
+	startFakeRecording(t, f)
+	r.process.err = errors.New("recorder failed")
+	result, err := f.adapter.StopRecording(context.Background(), f.target)
+	if err == nil || result.Duration <= 0 || !strings.Contains(result.Gap, "recorder failed") {
+		t.Fatalf("recorder failure was hidden: %+v %v", result, err)
+	}
+	again, err := f.adapter.StopRecording(context.Background(), f.target)
+	if err == nil || again.Gap != result.Gap || len(r.signals) != 1 {
+		t.Fatalf("retry erased recorder failure: %+v %v", again, err)
 	}
 }
 
@@ -171,7 +181,7 @@ func TestRecordingEscalatesIgnoredSIGINTAfterTargetClosed(t *testing.T) {
 	if !reflect.DeepEqual(r.signals, []os.Signal{os.Interrupt, syscall.SIGTERM}) || !reflect.DeepEqual(probed, []int{42, 42}) {
 		t.Fatalf("signals lacked exact recorder probes: signals=%v probes=%v", r.signals, probed)
 	}
-	if result.StagingPath != r.staged || result.StagingCleanup != "verified absent after final move" {
+	if result.StagingPath != "" || result.StagingCleanup != "provider-managed staging; AO does not inspect external storage" {
 		t.Fatalf("forced stop changed staging audit: %+v", result)
 	}
 	again, err := f.adapter.StopRecording(context.Background(), f.target)
@@ -277,7 +287,7 @@ func TestRecordingRejectsInvalidMovieAndForeignStop(t *testing.T) {
 	if !errors.Is(err, ErrRefused) || result.Gap == "" || result.Duration != 0 {
 		t.Fatalf("display dimensions accepted as window video: %+v %v", result, err)
 	}
-	for _, info := range []string{"", strings.ReplaceAll(validMovieInfo, "3.368", "0"), strings.ReplaceAll(validMovieInfo, "Track count: 1", "Track count: 2"), strings.ReplaceAll(validMovieInfo, "0 error", "1 error"), strings.ReplaceAll(validMovieInfo, "track: Yes", "track: No")} {
+	for _, info := range []string{"", strings.ReplaceAll(validMovieInfo, "  1  1  [1]", "  1  0  [0]"), strings.ReplaceAll(validMovieInfo, "3.368", "0"), strings.ReplaceAll(validMovieInfo, "Track count: 1", "Track count: 2"), strings.ReplaceAll(validMovieInfo, "0 error", "1 error"), strings.ReplaceAll(validMovieInfo, "track: Yes", "track: No")} {
 		if _, _, _, err := parseMovieInfo(info); err == nil {
 			t.Fatalf("invalid movie metadata accepted: %q", info)
 		}
@@ -319,5 +329,27 @@ func TestCloseStopsRecorderAndDriverEvenForInvalidMovie(t *testing.T) {
 				t.Fatalf("Close left recorder/Driver behind: invalid=%t err=%v driver=%+v signals=%v", invalid, err, f.adapter.driver, r.signals)
 			}
 		})
+	}
+}
+
+func TestRecordingStartCancellationRetainsOwnership(t *testing.T) {
+	f := newFixture(t)
+	prepareRecording(t, f)
+	ctx, cancel := context.WithCancel(context.Background())
+	start := f.adapter.startRecorder
+	f.adapter.startRecorder = func(ctx context.Context, args, env []string, stdout, stderr string) (*recordingProcess, error) {
+		p, err := start(ctx, args, env, stdout, stderr)
+		cancel()
+		return p, err
+	}
+	result, err := f.adapter.StartRecording(ctx, f.target, filepath.Join(f.adapter.cfg.DataDir, "evidence"))
+	if !errors.Is(err, context.Canceled) || result.RecorderPID != 42 {
+		t.Fatalf("canceled launch lost its process receipt: %+v %v", result, err)
+	}
+	if f.adapter.bindings[f.target.ID].recording == nil {
+		t.Fatal("startup cancellation lost cleanup ownership")
+	}
+	if _, err := f.adapter.StopRecording(context.Background(), f.target); err != nil {
+		t.Fatal(err)
 	}
 }
