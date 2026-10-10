@@ -217,3 +217,37 @@ func TestProviderPreservationReportRequiresLiveController(t *testing.T) {
 		t.Fatal("ordinary conversation advertised persistent ownership")
 	}
 }
+
+func TestPersistentTransportFailureRetainsWorkForReconnect(t *testing.T) {
+	provider := &terminatingConversation{fakeConversation: newFakeConversation()}
+	h := newHarnessWithConversation(t, provider)
+	ctx := context.Background()
+	turn, err := h.ctrl.Send(ctx, ports.ChatUserMessage{Text: "running"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: turn.ProviderTurnID})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateRunning
+	})
+	if _, err := h.ctrl.Send(ctx, ports.ChatUserMessage{Text: "queued"}); err != nil {
+		t.Fatal(err)
+	}
+	provider.emit(ports.ChatEvent{
+		Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped,
+		Err: ports.ErrChatRecoveryInconclusive,
+	})
+	_ = provider.Close()
+	h.ctrl.Wait()
+	snapshot, err := h.st.LoadConversationSnapshot(ctx, h.ctrl.ConversationID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := turnStateByText(t, snapshot)
+	if states["running"] != domain.TurnStateRunning || states["queued"] != domain.TurnStateQueued {
+		t.Fatalf("transport failure settled surviving provider work: %v", states)
+	}
+	if h.ctrl.State() != ports.ChatControllerStopped || provider.terminated.Load() {
+		t.Fatal("lost controller remained live or terminated its persistent provider")
+	}
+}

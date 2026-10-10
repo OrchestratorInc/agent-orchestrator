@@ -2688,6 +2688,20 @@ func (c *Controller) project() {
 	acknowledger, persistent := c.conv.(ports.ChatProviderEventAcknowledger)
 
 	for event := range c.conv.Events() {
+		if event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped &&
+			errors.Is(event.Err, ports.ErrChatRecoveryInconclusive) {
+			// A lost attachment is not proof the persistent provider stopped. Keep
+			// its turn/request correlation and queued intake for a replacement.
+			c.mu.Lock()
+			c.preserveProviderOnStop = true
+			c.state = ports.ChatControllerStopped
+			suppressStoppedActivity := c.suppressStoppedActivity
+			c.mu.Unlock()
+			if !suppressStoppedActivity {
+				c.reportActivity(ctx, domain.ActivityExited, "chat.controller.disconnected", c.now())
+			}
+			continue
+		}
 		c.mu.Lock()
 		preserveWork := c.preserveProviderOnStop || c.handoff == controllerHandoffHibernate
 		c.mu.Unlock()
