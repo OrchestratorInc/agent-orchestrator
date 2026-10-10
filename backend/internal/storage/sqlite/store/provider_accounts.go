@@ -14,7 +14,8 @@ func (s *Store) LoadProviderAccounts(ctx context.Context) (domain.ProviderAccoun
 	if err != nil {
 		return state, err
 	}
-	return state, json.Unmarshal([]byte(facts), &state)
+	err = json.Unmarshal([]byte(facts), &state)
+	return state, err
 }
 
 // SaveProviderAccounts replaces that document.

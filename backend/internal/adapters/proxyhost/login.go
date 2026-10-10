@@ -62,7 +62,7 @@ func (c *Client) addAPIKey(ctx context.Context, id string, request ports.Provide
 		}
 	}
 	path := "/v0/management/" + request.Provider + "-api-key"
-	if err = c.call(ctx, http.MethodPut, path, append(keys, map[string]any{"api-key": request.APIKey, "base-url": base}), nil, id); err != nil {
+	if err := c.call(ctx, http.MethodPut, path, append(keys, map[string]any{"api-key": request.APIKey, "base-url": base}), nil, id); err != nil {
 		return err
 	}
 	tag := map[string]string{"id": id, "provider": request.Provider, "api_key": request.APIKey, "base_url": base, "label": request.Label}
@@ -111,8 +111,9 @@ func (c *Client) browserLogin(ctx context.Context, login ports.ProviderLogin) (p
 }
 
 func (c *Client) closeRelay(id string) {
-	if stop, ok := c.relays.LoadAndDelete(id); ok {
-		stop.(func())()
+	stop, _ := c.relays.LoadAndDelete(id)
+	if stop, ok := stop.(func()); ok {
+		stop()
 	}
 }
 

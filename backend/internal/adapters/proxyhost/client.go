@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -26,6 +25,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 var errDown = errors.New("account helper is not running")
@@ -92,7 +92,8 @@ func newIdentity(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	id := identity{Port: listener.Addr().(*net.TCPAddr).Port}
+	address, _ := listener.Addr().(*net.TCPAddr)
+	id := identity{Port: address.Port}
 	_ = listener.Close()
 	for _, key := range []*string{&id.ControlKey, &id.InferenceKey, &id.TicketKey} {
 		var raw [32]byte
@@ -174,7 +175,7 @@ func (c *Client) start(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = log.Close() }()
-	cmd := exec.Command(c.binary, "--data-dir", c.root, "--port", strconv.Itoa(c.id.Port))
+	cmd := process.Command(c.binary, "--data-dir", c.root, "--port", strconv.Itoa(c.id.Port))
 	cmd.Dir, cmd.Stdout, cmd.Stderr = c.root, log, log
 	cmd.Env = append(os.Environ(), "AO_PROXY_CONTROL_KEY="+c.id.ControlKey, "AO_PROXY_INFERENCE_KEY="+c.id.InferenceKey, "WRITABLE_PATH="+c.root, "MANAGEMENT_PASSWORD=")
 	cmd.SysProcAttr = detached
@@ -212,7 +213,7 @@ func (c *Client) AccountModels(ctx context.Context, a domain.ProviderAccount) ([
 // Credentials lists the sign-ins held as files, with the helper's verdict on a refused one.
 func (c *Client) Credentials(ctx context.Context) (credentials []ports.ProviderCredential, err error) {
 	var listing any
-	if err = c.call(ctx, http.MethodGet, "/v8/management/credentials", nil, &listing); err != nil {
+	if err := c.call(ctx, http.MethodGet, "/v8/management/credentials", nil, &listing); err != nil {
 		return nil, err
 	}
 	files, _ := at(listing, "files").([]any)

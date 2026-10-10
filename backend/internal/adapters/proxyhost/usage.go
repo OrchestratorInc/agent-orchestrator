@@ -290,13 +290,14 @@ func claudeUsage(u *domain.ProviderAccountUsage, doc, grants, profile any, now t
 	list, _ := at(status, "grants").([]any)
 	u.ResetCredits = new(int64)
 	for _, grant := range list {
-		if unused(grant, now) {
-			left, _ := number(grant, "resets_left")
-			total, _ := number(grant, "resets_total")
-			*u.ResetCredits += int64(left)
-			u.ResetUsable = u.ResetUsable || spendable(grant, at(status, "at_limit") == true, now)
-			u.Resets = append(u.Resets, domain.ProviderAccountReset{Label: text(grant, "label"), Left: int64(left), Total: int64(total), ExpiresAt: instant(at(grant, "ends_at"))})
+		if !unused(grant, now) {
+			continue
 		}
+		left, _ := number(grant, "resets_left")
+		total, _ := number(grant, "resets_total")
+		*u.ResetCredits += int64(left)
+		u.ResetUsable = u.ResetUsable || spendable(grant, at(status, "at_limit") == true, now)
+		u.Resets = append(u.Resets, domain.ProviderAccountReset{Label: text(grant, "label"), Left: int64(left), Total: int64(total), ExpiresAt: instant(at(grant, "ends_at"))})
 	}
 	if cooldown := text(status, "cooldown_until"); after(cooldown, now) {
 		u.ResetBlockedUntil, u.ResetUsable = instant(cooldown), false

@@ -26,10 +26,6 @@ var (
 	controlKey = strings.Repeat("c", 64)
 )
 
-type transportFunc func(*http.Request) (*http.Response, error)
-
-func (f transportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-
 // call is one request a fake helper received.
 type call struct {
 	Method, Path, Query, Body, LoginID string

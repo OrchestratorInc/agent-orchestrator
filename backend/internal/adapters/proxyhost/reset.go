@@ -81,14 +81,14 @@ func (c *Client) reset(ctx context.Context, a domain.ProviderAccount, requestID 
 }
 
 // spend sends one claim; an answer that does not rule it out leaves it unknown.
-func (c *Client) spend(ctx context.Context, a domain.ProviderAccount, url, key string, claim map[string]string) (string, error) {
-	status, answer, err := c.provider(ctx, a, http.MethodPost, url, claim)
+func (c *Client) spend(ctx context.Context, a domain.ProviderAccount, address, key string, claim map[string]string) (string, error) {
+	status, answer, err := c.provider(ctx, a, http.MethodPost, address, claim)
 	claude := a.Provider == "claude"
 	switch {
 	case code(err) == http.StatusBadRequest || code(err) == http.StatusNotFound:
 		return "", err
 	case err != nil:
-		return domain.ProviderResetUnknown, nil
+		return domain.ProviderResetUnknown, nil //nolint:nilerr // an unconfirmed claim is unknown, not failed
 	case status == http.StatusTooManyRequests:
 		return domain.ProviderResetWait, nil
 	case claude && (status == http.StatusUnauthorized || status == http.StatusForbidden):

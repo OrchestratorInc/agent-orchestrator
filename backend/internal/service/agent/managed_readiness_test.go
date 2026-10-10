@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 // managedProviderFake is an Account Manager owning Codex and Claude, except in
 // cloud credential scopes.
 type managedProviderFake struct {
+	mu             sync.Mutex // a background revalidation reads while a test edits
 	auth           domain.AgentAuthenticationState
 	catalog        ports.AgentModelCatalog
 	fingerprintErr error
@@ -34,11 +36,15 @@ func (f *managedProviderFake) AuthenticationReadiness(_ context.Context, harness
 		return domain.AgentAuthenticationObservation{}, false
 	}
 	f.checks.Add(1)
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.harness, f.purpose = harness, purpose
 	return successfulAuthentication(time.Now(), f.auth, domain.AgentReadinessReasonAuthorized, "managed"), true
 }
 
 func (f *managedProviderFake) ModelsFingerprint(_ context.Context, harness domain.AgentHarness, scope string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	ids := ""
 	for _, model := range f.catalog.Models {
 		ids += model.ID + ","
@@ -51,8 +57,17 @@ func (f *managedProviderFake) DiscoverModels(_ context.Context, harness domain.A
 		return ports.AgentModelCatalog{}, false, nil
 	}
 	f.calls.Add(1)
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.harness, f.scope = harness, scope
 	return f.catalog, true, nil
+}
+
+// change edits or reads the fake while nothing in the background can touch it.
+func (f *managedProviderFake) change(edit func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	edit()
 }
 
 func managedReadinessService(id string, native *readinessTestAgent, managed ports.ManagedProvider) *Service {
@@ -119,9 +134,12 @@ func TestManagedModelCatalogueServesDefaultAndAccountScopesSeparately(t *testing
 			t.Fatalf("scope %q: catalog=%+v err=%v", scope, got, err)
 		}
 		// A cached read of an unchanged list discovers nothing again.
-		if _, err := svc.Models(context.Background(), "codex", scope, false); err != nil || managed.calls.Load() != int32(i+1) || managed.harness != domain.HarnessCodex || managed.scope != scope {
-			t.Fatalf("scope %q: calls=%d asked %s %q err=%v", scope, managed.calls.Load(), managed.harness, managed.scope, err)
-		}
+		_, err = svc.Models(context.Background(), "codex", scope, false)
+		managed.change(func() {
+			if err != nil || managed.calls.Load() != int32(i+1) || managed.harness != domain.HarnessCodex || managed.scope != scope {
+				t.Fatalf("scope %q: calls=%d asked %s %q err=%v", scope, managed.calls.Load(), managed.harness, managed.scope, err)
+			}
+		})
 	}
 	if native.discoverCalls.Load() != 0 || native.fingerprintRequests.Load() != 0 {
 		t.Fatalf("native discovery was consulted: discover=%d fingerprint=%d", native.discoverCalls.Load(), native.fingerprintRequests.Load())
@@ -134,13 +152,14 @@ func TestManagedModelCatalogueRefreshesWhenItsFingerprintChanges(t *testing.T) {
 	if _, err := svc.Models(context.Background(), "claude-code", "", true); err != nil {
 		t.Fatal(err)
 	}
-	managed.catalog.Models = []ports.AgentModelInfo{{ID: "new-model"}}
 	// While the helper cannot say, the cached catalogue stands.
-	managed.fingerprintErr = errors.New("helper unavailable")
+	managed.change(func() {
+		managed.catalog.Models, managed.fingerprintErr = []ports.AgentModelInfo{{ID: "new-model"}}, errors.New("helper unavailable")
+	})
 	if got, err := svc.Models(context.Background(), "claude-code", "", false); err != nil || got.Models[0].ID != "old-model" || managed.calls.Load() != 1 {
 		t.Fatalf("during an outage: catalog=%+v calls=%d err=%v", got.Models, managed.calls.Load(), err)
 	}
-	managed.fingerprintErr = nil
+	managed.change(func() { managed.fingerprintErr = nil })
 	if got, err := svc.Models(context.Background(), "claude-code", "", false); err != nil || len(got.Models) != 1 || got.Models[0].ID != "new-model" {
 		t.Fatalf("after the change: catalog=%+v err=%v", got.Models, err)
 	}
