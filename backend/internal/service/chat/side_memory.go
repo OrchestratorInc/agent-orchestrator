@@ -30,20 +30,24 @@ var (
 // memorySideStore is deliberately process-local. Electron owns recovery across
 // supervised daemon restarts; AO never writes side transcripts or drafts to DB.
 type memorySideStore struct {
-	mu         sync.Mutex
-	runID      string
-	closed     map[string]bool
-	sides      map[string]domain.SideConversation
-	turns      map[string][]domain.SideTurn
-	messages   map[string][]domain.SideMessage
-	activities map[string][]domain.SideActivity
-	drafts     map[string]string
-	cleanup    map[string]domain.SideProviderCleanup
+	mu          sync.Mutex
+	runID       string
+	closed      map[string]bool
+	sides       map[string]domain.SideConversation
+	turns       map[string][]domain.SideTurn
+	messages    map[string][]domain.SideMessage
+	activities  map[string][]domain.SideActivity
+	drafts      map[string]string
+	hostCleanup map[string]domain.SideConversation
+	hostStopped map[string]bool
+	cleanup     map[string]domain.SideProviderCleanup
 }
 
 // SideRecoveryRecord travels only between the daemon and Electron main process.
 // Electron holds it in RAM for this desktop launch and never writes it to disk.
 type SideRecoveryRecord struct {
+	CleanupOnly         bool                    `json:"cleanupOnly,omitempty"`
+	HostStopped         bool                    `json:"hostStopped,omitempty"`
 	PolicyVersion       int                     `json:"policyVersion"`
 	BoundaryTurnID      string                  `json:"boundaryTurnId,omitempty"`
 	BoundaryState       string                  `json:"boundaryState,omitempty"`
@@ -107,6 +111,11 @@ func (m *memorySideStore) export(runID string) []SideRecoveryRecord {
 			Messages:   append([]domain.SideMessage(nil), m.messages[id]...),
 			Activities: append([]domain.SideActivity(nil), m.activities[id]...), Draft: m.drafts[id]})
 	}
+	for _, side := range m.hostCleanup {
+		if side.AppRunID == runID {
+			out = append(out, SideRecoveryRecord{CleanupOnly: true, HostStopped: m.hostStopped[side.ID], Side: side, ProviderHostID: side.ProviderHostID, ProviderForkID: side.ProviderForkID})
+		}
+	}
 	return out
 }
 
@@ -121,13 +130,13 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 	created := []domain.SideConversation{}
 	for _, record := range records {
 		side := record.Side
-		if m.closed[side.ID] {
-			continue
-		}
 		if side.ID == "" || side.MainConversationID == "" || record.ProviderHostID != "btw-"+runID+"-"+side.ID || (record.ProviderForkID == "" && side.State == "ready") || seenIDs[side.ID] {
 			return nil, ErrSideUnavailable
 		}
 		seenIDs[side.ID] = true
+		if m.closed[side.ID] {
+			continue
+		}
 		for _, existing := range m.sides {
 			if existing.ID == side.ID && existing.ClosedAt == nil {
 				if existing.ID != side.ID || existing.Generation != record.Generation ||
@@ -140,6 +149,20 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 	}
 	for _, record := range records {
 		side := record.Side
+		if record.CleanupOnly {
+			if alreadyRestored[side.ID] {
+				return nil, ErrSideUnavailable
+			}
+			side.AppRunID = runID
+			side.ProviderHostID, side.ProviderForkID = record.ProviderHostID, record.ProviderForkID
+			m.hostCleanup[side.ID] = side
+			m.hostStopped[side.ID] = record.HostStopped
+			m.closed[side.ID] = true
+			if side.ProviderForkID != "" {
+				m.cleanup[side.ProviderForkID] = domain.SideProviderCleanup{ForkID: side.ProviderForkID, SessionID: side.SessionID}
+			}
+			continue
+		}
 		if m.closed[side.ID] || alreadyRestored[side.ID] {
 			continue
 		}
@@ -215,7 +238,7 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 }
 
 func newMemorySideStore() *memorySideStore {
-	return &memorySideStore{closed: map[string]bool{}, sides: map[string]domain.SideConversation{}, turns: map[string][]domain.SideTurn{}, messages: map[string][]domain.SideMessage{}, activities: map[string][]domain.SideActivity{}, drafts: map[string]string{}, cleanup: map[string]domain.SideProviderCleanup{}}
+	return &memorySideStore{hostCleanup: map[string]domain.SideConversation{}, hostStopped: map[string]bool{}, closed: map[string]bool{}, sides: map[string]domain.SideConversation{}, turns: map[string][]domain.SideTurn{}, messages: map[string][]domain.SideMessage{}, activities: map[string][]domain.SideActivity{}, drafts: map[string]string{}, cleanup: map[string]domain.SideProviderCleanup{}}
 }
 
 func (m *memorySideStore) ClaimSideLaunch(_ context.Context, runID string, _ time.Time) ([]domain.SideConversation, error) {
@@ -397,6 +420,7 @@ func (m *memorySideStore) CloseSideConversation(_ context.Context, id string, no
 		return side, ErrSideClosed
 	}
 	m.closed[id] = true
+	m.hostCleanup[id] = side
 	side.ClosedAt = &now
 	side.Generation = ""
 	delete(m.sides, id)
@@ -406,9 +430,35 @@ func (m *memorySideStore) CloseSideConversation(_ context.Context, id string, no
 	delete(m.drafts, id)
 	return side, nil
 }
+func (m *memorySideStore) SideHostCleanupPending(context.Context) []domain.SideConversation {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]domain.SideConversation, 0, len(m.hostCleanup))
+	for _, side := range m.hostCleanup {
+		if !m.hostStopped[side.ID] {
+			out = append(out, side)
+		}
+	}
+	return out
+}
+func (m *memorySideStore) CompleteSideHostCleanup(_ context.Context, id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.hostStopped[id] = true
+	if side, ok := m.hostCleanup[id]; ok && side.ProviderForkID == "" {
+		delete(m.hostCleanup, id)
+		delete(m.hostStopped, id)
+	}
+}
 func (m *memorySideStore) CompleteSideProviderCleanup(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for sideID, side := range m.hostCleanup {
+		if side.ProviderForkID == id {
+			delete(m.hostCleanup, sideID)
+			delete(m.hostStopped, sideID)
+		}
+	}
 	delete(m.cleanup, id)
 	return nil
 }
@@ -423,7 +473,13 @@ func (m *memorySideStore) SideProviderCleanupPending(_ context.Context) ([]domai
 	}
 	out := make([]domain.SideProviderCleanup, 0, len(m.cleanup))
 	for _, item := range m.cleanup {
-		if !openForks[item.ForkID] {
+		hostPending := false
+		for _, side := range m.hostCleanup {
+			if side.ProviderForkID == item.ForkID && !m.hostStopped[side.ID] {
+				hostPending = true
+			}
+		}
+		if !openForks[item.ForkID] && !hostPending {
 			out = append(out, item)
 		}
 	}

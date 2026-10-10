@@ -2659,6 +2659,11 @@
 	"cues.commandAndOutput": "Command and output: {{name}}",
 	"cues.noCommandOutput": "No command output."
 ,
+	"chat.workedFor": "Worked for",
+	"sideChat.deleteConfirm": "Delete side chat?",
+	"sideChat.deleteExplanation": "This will remove this side chat and its messages.",
+	"sideChat.delete": "Delete",
+	"sideChat.nextMessageQueued": "Next message you send will be queued",
 	"sideChat.stagedFiles": "Staged files",
 	"sideChat.remove": "Remove {{value1}}",
 	"sideChat.attachedFiles": "Attached files",

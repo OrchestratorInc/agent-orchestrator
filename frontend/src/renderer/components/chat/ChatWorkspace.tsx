@@ -1,3 +1,4 @@
+import { TurnWorkSummary } from "./TurnWorkSummary";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 /**
@@ -32,7 +33,7 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
-import { ArrowDown, ChevronRight, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "lucide-react";
+import { ArrowDown, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "lucide-react";
 import { Reorder, useDragControls } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
@@ -101,7 +102,6 @@ import {
 import { AgentAvatar } from "../AgentAvatar";
 import { SessionPaneTab } from "../CenterPane";
 import { Button } from "../ui/button";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "../ui/accordion";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
 import { ShellTerminalTab } from "../ShellTerminalTab";
@@ -115,7 +115,6 @@ import {
 	OriginMessage,
 	SteerMessage,
 	TurnChangedFiles,
-	TurnDuration,
 	TurnOutcome,
 	LiveResponseStatus,
 	type TurnOutcomeRetryControl,
@@ -4198,46 +4197,17 @@ const TurnGroup = memo(function TurnGroup({
 	const outcome = showSettledStatus ? group.outcome : undefined;
 	if (!outcome) {
 		body.push(...workedRuns.map(renderRun));
-	} else if (foldedRuns.length > 0) {
+	} else {
 		const disclosureKey = `${group.key}:worked`;
 		body.push(
-			<Accordion
+			<TurnWorkSummary
 				key="turn-worked"
-				type="single"
-				collapsible
-				className="-mx-1 border-b border-border"
-				// Held above the virtualizer, so the accordion stays open when its row scrolls away and back.
-				value={activityDisclosureOverrides[disclosureKey] ? "worked" : ""}
-				onValueChange={(value) => onActivityDisclosureChange(disclosureKey, value === "worked")}
+				durationMs={outcome.durationMs}
+				open={Boolean(activityDisclosureOverrides[disclosureKey])}
+				onOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
 			>
-				<AccordionItem value="worked" className="border-0">
-					<AccordionTrigger
-						className="chat-worked-trigger h-7 select-none gap-1 px-1 py-0 text-sm font-normal text-muted-foreground transition-colors hover:text-foreground active:transform-none"
-						headerClassName="hover:bg-transparent data-[state=open]:bg-transparent"
-						trailing={null}
-					>
-						<span className="inline-flex w-fit items-center gap-1">
-							Worked for
-							{outcome.durationMs !== undefined ? <TurnDuration durationMs={outcome.durationMs} inline /> : null}
-							<ChevronRight aria-hidden="true" className="size-3.5 shrink-0 transition-transform duration-200 group-data-[state=open]/row:rotate-90" />
-						</span>
-					</AccordionTrigger>
-					{/* Padding lives on the inner div: the content element's height is what animates,
-					    so any padding on it itself would stay put while it opens and closes. */}
-					<AccordionContent className="chat-worked-accordion-content">
-						<div className="space-y-2 px-1 pb-2 pt-1">{foldedRuns.map(renderRun)}</div>
-					</AccordionContent>
-				</AccordionItem>
-			</Accordion>,
-		);
-	} else {
-		body.push(
-			<div key="turn-worked-plain" className="-mx-1 flex h-7 select-none items-center border-b border-border px-1 py-0 text-sm font-normal text-muted-foreground">
-				<span className="inline-flex w-fit items-center gap-1">
-					Worked for
-					{outcome.durationMs !== undefined ? <TurnDuration durationMs={outcome.durationMs} inline /> : null}
-				</span>
-			</div>,
+				{foldedRuns.length > 0 ? foldedRuns.map(renderRun) : undefined}
+			</TurnWorkSummary>,
 		);
 	}
 	if (outcome) body.push(...noticeRuns.map(renderRun));

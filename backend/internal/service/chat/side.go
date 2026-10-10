@@ -50,6 +50,8 @@ type SideStore interface {
 	RegisterSideFork(context.Context, string, string, string, time.Time) error
 	SetSideFailed(context.Context, string, string, string, time.Time) error
 	CloseSideConversation(context.Context, string, time.Time) (domain.SideConversation, error)
+	SideHostCleanupPending(context.Context) []domain.SideConversation
+	CompleteSideHostCleanup(context.Context, string)
 	CompleteSideProviderCleanup(context.Context, string) error
 	SideProviderCleanupPending(context.Context) ([]domain.SideProviderCleanup, error)
 	ReserveSideTurn(context.Context, domain.SideTurn, string) (domain.SideTurn, bool, error)
@@ -186,6 +188,9 @@ func (s *Service) RecoverSideChatLaunch(ctx context.Context, runID string, recor
 		return ErrSideLaunchUnclaimed
 	}
 	for _, record := range records {
+		if record.CleanupOnly {
+			continue
+		}
 		if session, err := s.requireChatSession(ctx, record.Side.SessionID); err != nil {
 			return err
 		} else if session.IsTerminated {
@@ -798,6 +803,12 @@ func (m *sideManager) restore(ctx context.Context, side domain.SideConversation)
 		m.service.log.Warn("side restore failed", "side", side.ID, "error", err)
 		return
 	}
+	if err := m.reconcileRestoredTurns(ctx, side, conv); err != nil {
+		_ = conv.Close()
+		m.failOpen(side, err)
+		connected = true
+		return
+	}
 	if activator, ok := conv.(ports.ChatLiveReconnectActivator); ok {
 		activeProviderID := ""
 		turns, _, _ := m.store.SideTurns(ctx, side.ID, time.Time{}, 0)
@@ -820,6 +831,87 @@ func (m *sideManager) restore(ctx context.Context, side domain.SideConversation)
 	if connected {
 		m.announce(side.ID)
 	}
+}
+
+// Reconcile against a fresh native observation; an ID alone is not live ownership.
+func (m *sideManager) reconcileRestoredTurns(ctx context.Context, side domain.SideConversation, conv ports.ChatConversation) error {
+	turns, _, err := m.store.SideTurns(ctx, side.ID, time.Time{}, 0)
+	if err != nil {
+		return err
+	}
+	for _, turn := range turns {
+		if turn.State != "running" {
+			continue
+		}
+		// Codex performs a fresh thread/read. ACP ReadHistory is cached replay
+		// from session/load and cannot verify the current native outcome.
+		if side.Harness != domain.HarnessCodex {
+			return errors.New("could not verify the interrupted side turn; close and reopen the side chat; queued messages have not been sent")
+		}
+		history, ok := conv.(ports.ChatHistoryReader)
+		if !ok {
+			return errors.New("could not verify the interrupted side turn; close and reopen the side chat; queued messages have not been sent")
+		}
+		readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		events, readErr := history.ReadHistory(readCtx)
+		cancel()
+		if readErr != nil {
+			return fmt.Errorf("could not verify the interrupted side turn; close and reopen the side chat: %w", readErr)
+		}
+		var completion *ports.ChatEvent
+		for i := range events {
+			if events[i].ProviderTurnID == turn.ProviderTurnID && events[i].Kind == ports.ChatEventTurnCompleted {
+				completion = &events[i]
+			}
+		}
+		if completion == nil {
+			return errors.New("the interrupted side turn has no verified outcome; close and reopen the side chat; queued messages have not been sent")
+		}
+		runtime := &sideRuntime{side: side, activeTurnID: turn.ID, providerTurnID: turn.ProviderTurnID, messageIDs: map[string]string{}, messageText: map[string]string{}, activityIDs: map[string]string{}, activityText: map[string]string{}}
+		messages, err := m.store.SideMessages(ctx, side.ID, []string{turn.ID})
+		if err != nil {
+			return err
+		}
+		for _, message := range messages {
+			if message.ProviderItemID != "" {
+				runtime.messageIDs[message.ProviderItemID] = message.ID
+			}
+		}
+		for _, activity := range m.store.SideActivities(side.ID, []string{turn.ID}) {
+			key := activity.ProviderItemID
+			if activity.RequestID != "" {
+				key = "request:" + activity.RequestID
+			}
+			if key != "" {
+				runtime.activityIDs[key] = activity.ID
+			}
+		}
+		for _, event := range events {
+			if event.ProviderTurnID != turn.ProviderTurnID {
+				continue
+			}
+			switch event.Kind {
+			case ports.ChatEventMessageCompleted:
+				m.projectSideMessage(runtime, event)
+			case ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted, ports.ChatEventApprovalResolved, ports.ChatEventInputResolved:
+				m.projectSideActivity(runtime, event)
+			}
+		}
+		state, message := "completed", ""
+		if completion.TurnState != domain.TurnStateCompleted {
+			state = "failed"
+			if completion.Err != nil {
+				message = completion.Err.Error()
+			}
+		}
+		if err := m.store.SettleSideTurn(ctx, side.ID, turn.ID, side.Generation, state, turn.ProviderTurnID, message, m.service.now()); err != nil {
+			return err
+		}
+		if state != "completed" {
+			return errors.New("the interrupted side turn failed; retry the connection before sending queued messages")
+		}
+	}
+	return nil
 }
 
 func (m *sideManager) attach(side domain.SideConversation, conv ports.ChatConversation) bool {
@@ -1682,6 +1774,7 @@ func (s *Service) closeSide(ctx context.Context, owned domain.SideConversation) 
 			return fmt.Errorf("stop side provider host: %w", err)
 		}
 	}
+	s.sides.store.CompleteSideHostCleanup(ctx, sideID)
 	s.sides.announce(sideID)
 	s.sides.deleteRegisteredFork(ctx, side, side.ProviderForkID)
 	s.sides.signal()
@@ -1732,6 +1825,14 @@ func (m *sideManager) retryCleanup() {
 				_ = m.service.closeSide(ctx, side)
 			}
 		}
+	}
+	for _, side := range m.store.SideHostCleanupPending(ctx) {
+		if m.service.stopProviderHost != nil {
+			if err := m.service.stopProviderHost(ctx, domain.SessionID(side.ProviderHostID)); err != nil {
+				continue
+			}
+		}
+		m.store.CompleteSideHostCleanup(ctx, side.ID)
 	}
 	items, err := m.store.SideProviderCleanupPending(ctx)
 	if err != nil {

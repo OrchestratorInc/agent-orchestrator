@@ -622,14 +622,14 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				busy={commands.busy}
 				excerptsEnabled
 				onSend={async (text, attachments, clientMessageId, excerpts) => {
-					const btw = /^\/btw(?:\s+|$)/i.exec(text);
+					const btw = /^\/(?:btw|side)(?:\s+|$)/i.exec(text);
 					if (btw) {
 						openSideInspector();
-						const side = await sideChats.create();
+						const side = await sideChats.create(undefined, true, clientMessageId);
 						const question = text.slice(btw[0].length).trim();
 						if (question || excerpts?.length || attachments?.length) {
 							// Retain the main draft if handing the request to the side fails.
-							await sideChats.send(side.id, question, attachments, excerpts, true);
+							await sideChats.send(side.id, question, attachments, excerpts, true, clientMessageId);
 						}
 						return;
 					}
@@ -683,7 +683,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onActivateBranch={commands.activateBranch}
 				activateBranchPending={commands.activateBranchPending}
 				activateBranchError={commands.activateBranchError}
-				skills={sideEnabled ? [{ name: "btw", displayName: "btw", description: "Open a side chat", source: "AO" }, ...skills.filter((skill) => skill.name !== "btw")] : skills}
+				skills={sideEnabled ? [...(["btw", "side"].map((name) => ({ name, displayName: name, description: "Open a new side chat", source: "AO" }))), ...skills.filter((skill) => skill.name !== "btw" && skill.name !== "side")] : skills}
 				filePaths={paths}
 				filePathsTruncated={truncated}
 				localEchos={localEchos}

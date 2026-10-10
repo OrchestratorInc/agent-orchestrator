@@ -543,7 +543,7 @@ function rememberSideLaunchState(state: { appRunId: string; sides: unknown[]; nu
 		...state,
 		sides: state.sides.filter((record) => {
 			const id = (record as { side?: { id?: string } })?.side?.id;
-			return typeof id === "string" && !closedSideChats.has(id);
+			return typeof id === "string" && ((record as { cleanupOnly?: boolean }).cleanupOnly || !closedSideChats.has(id));
 		}),
 	};
 }

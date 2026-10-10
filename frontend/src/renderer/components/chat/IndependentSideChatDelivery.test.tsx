@@ -28,6 +28,7 @@ describe("side delivery draft ownership", () => {
 	let reject: (error: Error) => void;
 	beforeEach(() => {
 		vi.clearAllMocks();
+ HTMLElement.prototype.scrollTo = vi.fn();
 		get.mockImplementation(async (path: string) => {
 			if (path.endsWith("/side-chats"))
 				return {
@@ -118,16 +119,19 @@ describe("side delivery draft ownership", () => {
 		);
 	});
 
-	it("clears a submitted /btw question without sending the command", async () => {
-		const hook = await beginSend("/btw first");
-		expect(post.mock.calls[0][1].body.text).toBe("first");
+	it.each(["btw", "side"])("/%s opens a fresh side", async (command) => {
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		post.mockResolvedValue({ data: { side: { id: "new-side", state: "ready" } } });
 		await act(async () => {
-			accept({});
-			await hook.sending;
+			await hook.result.current.send("side", `/${command} first`);
 		});
-		await waitFor(() =>
-			expect(put.mock.calls.some(([, options]) => JSON.parse(options.body.contentJson).text === "")).toBe(true),
-		);
+		const creates = post.mock.calls.filter(([path]) => path.endsWith("/side-chats"));
+		expect(creates).toHaveLength(1);
+		expect(creates[0][1].body.forceNew).toBe(true);
+		const delivery = post.mock.calls.find(([path]) => path.endsWith("/messages"));
+		expect(delivery?.[1].params.path.sideId).toBe("new-side");
+		expect(delivery?.[1].body.text).toBe("first");
 	});
 	it("reuses an uncertain receipt and preserves a newer draft", async () => {
 		const hook = await beginSend("original");
@@ -269,6 +273,7 @@ function SidePanelHarness() {
 describe("side panel navigation and recovery", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+ HTMLElement.prototype.scrollTo = vi.fn();
 		get.mockImplementation(async (path: string, options?: { params?: { path?: { sideId?: string } } }) => {
 			if (path.endsWith("/side-chats")) return { data: { sides: panelSides } };
 			const side = panelSides.find((item) => item.id === options?.params?.path?.sideId) ?? panelSides[0];
@@ -300,6 +305,53 @@ describe("side panel navigation and recovery", () => {
 		remove.mockResolvedValue({});
 	});
 
+	it("ignores older-page results from a tab that is no longer active", async () => {
+		const normalGet = get.getMockImplementation()!;
+		const pending = new Map<string, (value: object) => void>();
+		const page = (id: string, older = false) => ({
+			data: {
+				snapshot: {
+					side: panelSides.find((side) => side.id === id),
+					turns: [{ id: `${id}-${older ? "old" : "latest"}`, state: "completed", createdAt: "2026-01-01T00:00:00Z" }],
+					messages: older
+						? [
+								{
+									id: `${id}-message`,
+									turnId: `${id}-old`,
+									role: "assistant",
+									text: `Old answer ${id}`,
+									revision: 1,
+									sequence: 1,
+									createdAt: "2026-01-01T00:00:00Z",
+								},
+							]
+						: [],
+					activities: [],
+					hasMore: !older,
+				},
+			},
+		});
+		get.mockImplementation((path, options) => {
+			if (!path.endsWith("/{sideId}")) return normalGet(path, options);
+			const id = options.params.path.sideId;
+			if (options.params.query?.before) return new Promise((resolve) => pending.set(id, resolve));
+			return Promise.resolve(page(id));
+		});
+		render(<SidePanelHarness />);
+		await screen.findByRole("button", { name: "Load earlier messages" });
+		await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
+		await waitFor(() => expect(pending.has("side")).toBe(true));
+		await userEvent.click(screen.getByRole("tab", { name: "Second question" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
+		await waitFor(() => expect(pending.has("other")).toBe(true));
+		await act(async () => pending.get("side")!(page("side", true)));
+		expect(screen.queryByText("Old answer side")).not.toBeInTheDocument();
+		const count = get.mock.calls.filter(([, opts]) => opts?.params?.query?.before).length;
+		await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
+		expect(get.mock.calls.filter(([, opts]) => opts?.params?.query?.before)).toHaveLength(count);
+		await act(async () => pending.get("other")!(page("other", true)));
+		expect(await screen.findByText("Old answer other")).toBeInTheDocument();
+	});
 	it.each([false, true])("retains the page boundary as new turns arrive (older history loaded: %s)", async (loadBeforeRefresh) => {
 		const normalGet = get.getMockImplementation()!;
 		let latest = 100;
@@ -555,12 +607,12 @@ describe("side panel navigation and recovery", () => {
 		render(<SidePanelHarness />);
 		await screen.findByLabelText("Side chat question");
 		await userEvent.click(screen.getByRole("button", { name: "Close Second question" }));
-		expect(await screen.findByRole("dialog", { name: "Close Second question?" })).toBeInTheDocument();
+		expect(await screen.findByRole("dialog", { name: "Delete side chat?" })).toBeInTheDocument();
 		expect(remove).not.toHaveBeenCalled();
-		await userEvent.click(screen.getByRole("button", { name: "Keep side chat" }));
+		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(remove).not.toHaveBeenCalled();
 		await userEvent.click(screen.getByRole("button", { name: "Close Second question" }));
-		await userEvent.click(screen.getByRole("button", { name: "Close side chat" }));
+		await userEvent.click(screen.getByRole("button", { name: "Delete" }));
 		await waitFor(() => expect(screen.queryByRole("tab", { name: "Second question" })).not.toBeInTheDocument());
 		expect(screen.getByRole("tab", { name: "First question" })).toHaveAttribute("aria-selected", "true");
 		expect(lexicalEditorText(screen.getByLabelText("Side chat question"))).toBe("First draft");
@@ -570,9 +622,9 @@ describe("side panel navigation and recovery", () => {
 		render(<SidePanelHarness />);
 		await screen.findByLabelText("Side chat question");
 		await userEvent.click(screen.getByRole("button", { name: "Close First question" }));
-		await userEvent.click(screen.getByRole("button", { name: "Close side chat" }));
+		await userEvent.click(screen.getByRole("button", { name: "Delete" }));
 		await waitFor(() => expect(screen.getByRole("dialog")).toHaveTextContent("Send failed"));
-		await userEvent.click(screen.getByRole("button", { name: "Keep side chat" }));
+		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(screen.getByRole("tab", { name: "First question" })).toBeInTheDocument();
 	});
 
@@ -643,6 +695,7 @@ describe("side panel navigation and recovery", () => {
 
 it("does not call the local daemon for a remote session", async () => {
 	vi.clearAllMocks();
+ HTMLElement.prototype.scrollTo = vi.fn();
 	const hook = renderHook(() => useIndependentSideChats("remote-session", [], [], async () => [], false, false));
 	await act(async () => {
 		await Promise.resolve();

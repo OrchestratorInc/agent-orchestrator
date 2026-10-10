@@ -1,22 +1,14 @@
+import { TurnWorkSummary } from "./TurnWorkSummary";
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import {
-	ArrowUp,
-	Loader2,
-	MessageSquare,
-	MessageSquarePlus,
-	Pencil,
-	Plus,
-	Square,
-	X,
-} from "lucide-react";
+import { ArrowUp, Loader2, MessageSquare, MessageSquarePlus, Pencil, Plus, Square, X } from "lucide-react";
 import type { components } from "../../../api/schema";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import type { ChatSkill } from "../../types/conversation";
 import type { ChatModel, ConversationActivity, ConversationMessage } from "../../types/conversation";
 import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
-import { ActivityRow, ApprovalCard, AssistantMessage, HumanMessage } from "./ChatTimelineItems";
+import { ActivityRow, ApprovalCard, AssistantMessage, HumanMessage, LiveResponseStatus } from "./ChatTimelineItems";
 import { ComposerEditor, type ComposerEditorHandle, type ComposerTrigger } from "./ComposerEditor";
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import { rankSkills, moveHighlight } from "./composerSuggest";
@@ -28,6 +20,8 @@ import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem } from "../ui/context-menu";
 import { handleTabListKeyDown } from "../../lib/terminal-tabs";
+import { saveSideChatDraft, readSideChatDraft } from "./sideChatDraftWriter";
+import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
 import { annotationBody, annotationTextRange, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
 import { actionMenuContentClass, actionMenuItemClass } from "../ui/menu-styles";
@@ -84,6 +78,15 @@ export function SideComposer({
 }) {
 	const { t } = useTranslation();
 	const editor = useRef<ComposerEditorHandle>(null);
+	const [concealExpired, setConcealExpired] = useState(false);
+	useEffect(() => {
+		if (!sending) {
+			setConcealExpired(false);
+			return;
+		}
+		const timer = window.setTimeout(() => setConcealExpired(true), 3000);
+		return () => window.clearTimeout(timer);
+	}, [sending]);
 	const filePicker = useRef<HTMLInputElement>(null);
 	const btwHandled = useRef(false);
 	const compactHandled = useRef(false);
@@ -99,18 +102,24 @@ export function SideComposer({
 				source: "AO",
 			},
 			{
+				name: "side",
+				displayName: "side",
+				description: "Opens a side chat",
+				source: "AO",
+			},
+			{
 				name: "compact",
 				displayName: "compact",
 				description: "Compacts this side chat",
 				source: "AO",
 			},
-			...skills.filter((skill) => skill.name !== "btw" && skill.name !== "compact"),
+			...skills.filter((skill) => skill.name !== "btw" && skill.name !== "side" && skill.name !== "compact"),
 		],
 		[skills],
 	);
 	const suggestions = trigger?.kind === "skill" && trigger.key !== dismissed ? rankSkills(commands, trigger.query) : [];
 	const choose = (value: string) => {
-		if (value === "btw") {
+		if (value === "btw" || value === "side") {
 			onChange((editor.current?.getSnapshot().text ?? draft.text).replace(/\/[^\s]*$/, "").trim());
 			onFocusSide();
 			setDismissed(trigger?.key);
@@ -205,11 +214,12 @@ export function SideComposer({
 					) : null}
 					<ComposerEditor
 						ref={editor}
+						concealed={sending && !concealExpired}
 						label="Side chat question"
 						placeholder={
 							ready
 								? running
-									? t("sideChat.agentIsWorkingThisSendsWhenItFinishes")
+									? t("sideChat.nextMessageQueued")
 									: t("sideChat.messageTheAgent")
 								: t("sideChat.theControllerIsNotConnected")
 						}
@@ -225,7 +235,7 @@ export function SideComposer({
 						onComplete={(next, key) => {
 							const matches = next.trigger?.kind === "skill" ? rankSkills(commands, next.trigger.query) : [];
 							const chosen = matches[Math.min(highlighted, matches.length - 1)];
-							if (chosen?.value === "btw" && key === "Enter") {
+							if ((chosen?.value === "btw" || chosen?.value === "side") && key === "Enter") {
 								btwHandled.current = true;
 								onChange(next.text.replace(/\/[^\s]*$/, "").trim());
 								onFocusSide();
@@ -249,7 +259,7 @@ export function SideComposer({
 								compactHandled.current = false;
 								return true;
 							}
-							if (/^\/btw$/i.test(next.text.trim())) {
+							if (/^\/(?:btw|side)$/i.test(next.text.trim())) {
 								onChange("");
 								onFocusSide();
 								return true;
@@ -395,6 +405,14 @@ export function useIndependentSideChats(
 	activeIdRef.current = activeId;
 	const closedSidesRef = useRef(new Set<string>());
 	const loadingOlderRef = useRef(false);
+	const olderGeneration = useRef(0);
+	const olderScope = useRef("");
+	const nextOlderScope = JSON.stringify([sessionId, activeId, enabled]);
+	if (olderScope.current !== nextOlderScope) {
+		olderScope.current = nextOlderScope;
+		olderGeneration.current++;
+		loadingOlderRef.current = false;
+	}
 	const timelineRef = useRef<HTMLDivElement>(null);
 	const timelineContentRef = useRef<HTMLDivElement>(null);
 	const selectionPosition = useChatSelectionPosition(
@@ -503,10 +521,14 @@ export function useIndependentSideChats(
 							...new Map([...(current.turns ?? []), ...(next.turns ?? [])].map((turn) => [turn.id, turn])).values(),
 						].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
 						messages: [
-							...new Map([...(current.messages ?? []), ...(next.messages ?? [])].map((message) => [message.id, message])).values(),
+							...new Map(
+								[...(current.messages ?? []), ...(next.messages ?? [])].map((message) => [message.id, message]),
+							).values(),
 						],
 						activities: [
-							...new Map([...(current.activities ?? []), ...(next.activities ?? [])].map((activity) => [activity.id, activity])).values(),
+							...new Map(
+								[...(current.activities ?? []), ...(next.activities ?? [])].map((activity) => [activity.id, activity]),
+							).values(),
 						],
 					};
 				});
@@ -539,6 +561,10 @@ export function useIndependentSideChats(
 		const oldest = olderPages.at(-1)?.turns?.[0]?.createdAt ?? snapshot.turns?.[0]?.createdAt;
 		if (!oldest) return;
 		loadingOlderRef.current = true;
+		const generation = ++olderGeneration.current;
+		const scope = olderScope.current;
+		const current = () =>
+			olderGeneration.current === generation && olderScope.current === scope && !closedSidesRef.current.has(activeId);
 		try {
 			const { data, error: requestError } = await apiClient.GET(
 				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}",
@@ -549,22 +575,22 @@ export function useIndependentSideChats(
 					},
 				},
 			);
+			if (!current()) return;
 			if (requestError) {
 				setError(apiErrorMessage(requestError));
 				return;
 			}
-			if (data?.snapshot) setOlderPages((current) => [...current, data.snapshot]);
+			if (data?.snapshot && current()) setOlderPages((pages) => [...pages, data.snapshot]);
+		} catch (cause) {
+			if (current()) setError(apiErrorMessage(cause));
 		} finally {
-			loadingOlderRef.current = false;
+			if (current()) loadingOlderRef.current = false;
 		}
 	}, [sessionId, activeId, snapshot, olderPages]);
 
 	useEffect(() => {
 		if (!activeId || drafts[activeId] !== undefined) return;
-		void apiClient
-			.GET("/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/draft", {
-				params: { path: { sessionId, sideId: activeId } },
-			})
+		void readSideChatDraft(sessionId, activeId)
 			.then(({ data }) => {
 				if (sessionRef.current !== sessionId) return;
 				if (data)
@@ -579,7 +605,7 @@ export function useIndependentSideChats(
 	}, [sessionId, activeId, drafts]);
 
 	const create = useCallback(
-		async (excerpt?: ChatDraftExcerptReference, forceNew = false) => {
+		async (excerpt?: ChatDraftExcerptReference, forceNew = false, idempotencyKey: string = crypto.randomUUID()) => {
 			if (!enabled) throw new Error("Side chats are currently available only for local AO sessions.");
 			setPending(true);
 			setError(undefined);
@@ -589,7 +615,7 @@ export function useIndependentSideChats(
 					{
 						params: { path: { sessionId } },
 						body: {
-							idempotencyKey: crypto.randomUUID(),
+							idempotencyKey,
 							forceNew,
 
 							reference: excerpt
@@ -635,33 +661,23 @@ export function useIndependentSideChats(
 	}, []);
 	const replaceDraft = useCallback(
 		async (sideId: string, draft: SideChatDraft) => {
-			draft = {
+			const next = {
 				...draft,
 				pendingDelivery: draftsRef.current[sideId]?.pendingDelivery,
+				lastHandoffDelivery: draftsRef.current[sideId]?.lastHandoffDelivery,
 			};
-			const { error: requestError } = await apiClient.PUT(
-				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/draft",
-				{
-					params: { path: { sessionId, sideId } },
-					body: { contentJson: JSON.stringify(draft) },
-				},
-			);
-			if (requestError) throw requestError;
-			await aoBridge.sideChats.capture();
-			if (sessionRef.current !== sessionId || closedSidesRef.current.has(sideId)) return;
-			draftsRef.current = { ...draftsRef.current, [sideId]: draft };
-			setDrafts((current) => ({
-				...current,
-				[sideId]: {
-					...draft,
-					pendingDelivery: current[sideId]?.pendingDelivery,
-				},
-			}));
+			// Apply the edit before awaiting I/O so its response cannot overwrite a newer receipt.
+			draftsRef.current = { ...draftsRef.current, [sideId]: next };
+			setDrafts((current) => ({ ...current, [sideId]: next }));
 			setAttachments((current) => ({ ...current, [sideId]: [] }));
 			setFocusKey((key) => key + 1);
+			const { error: requestError } = await saveSideChatDraft(sessionId, sideId, JSON.stringify(next));
+			if (requestError) throw requestError;
+			await aoBridge.sideChats.capture();
 		},
 		[sessionId],
 	);
+
 	const addReference = useCallback((sideId: string, excerpt: ChatDraftExcerptReference) => {
 		setDrafts((current) => {
 			const draft = current[sideId] ?? emptySideChatDraft();
@@ -723,24 +739,19 @@ export function useIndependentSideChats(
 	useEffect(() => {
 		if (!activeId || drafts[activeId] === undefined) return;
 		const draft = drafts[activeId];
-		const save = () =>
-			void apiClient
-				.PUT("/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/draft", {
-					params: { path: { sessionId, sideId: activeId } },
-					body: { contentJson: JSON.stringify(draft) },
-				})
+		const save = () => {
+			if (closedSidesRef.current.has(activeId)) return;
+			const currentDraft = draftsRef.current[activeId] ?? draft;
+			void saveSideChatDraft(sessionId, activeId, JSON.stringify(currentDraft))
 				.then(({ error: requestError }) => {
-					if (requestError) {
-						setError(apiErrorMessage(requestError));
-						return;
-					}
-					return aoBridge.sideChats
-						.capture()
-						.catch(() => setError("Could not save the side draft for daemon recovery."));
+					if (requestError) throw requestError;
+					return aoBridge.sideChats.capture();
 				})
-				.catch((error) => {
-					if (sessionRef.current === sessionId) setError(apiErrorMessage(error));
+				.catch((cause) => {
+					if (sessionRef.current === sessionId && !closedSidesRef.current.has(activeId))
+						setError(apiErrorMessage(cause));
 				});
+		};
 		const timer = window.setTimeout(() => {
 			save();
 		}, 350);
@@ -761,16 +772,18 @@ export function useIndependentSideChats(
 			extraAttachments: { mimeType: string; data: string }[] = [],
 			overrideReferences?: ChatDraftExcerptReference[],
 			propagateError = false,
-		) => {
-			const btw = /^\/btw(?:\s+|$)/i.exec(text);
+			handoffClientMessageId?: string,
+		): Promise<void> => {
+			const btw = /^\/(?:btw|side)(?:\s+|$)/i.exec(text);
 			if (btw) {
-				text = text.slice(btw[0].length).trim();
-				if (!text) {
-					updateDraft(sideId, text);
-					setFocusKey((key) => key + 1);
-					return;
-				}
+				const created = await create(undefined, true);
+				const question = text.slice(btw[0].length).trim();
+				if (question || extraAttachments.length || overrideReferences?.length)
+					await send(created.id, question, extraAttachments, overrideReferences, true);
+				updateDraft(sideId, "");
+				return;
 			}
+
 			if (sendingRef.current.has(sideId)) {
 				if (propagateError) throw new Error("Side chat delivery is still in progress. Try again after it finishes.");
 				return;
@@ -780,7 +793,19 @@ export function useIndependentSideChats(
 			setError(undefined);
 			let receipt = draftsRef.current[sideId]?.pendingDelivery;
 			try {
+				if (!Object.hasOwn(draftsRef.current, sideId)) {
+					const { data, error } = await readSideChatDraft(sessionId, sideId);
+					if (error) throw error;
+					const loaded = parseSideChatDraft(data?.contentJson ?? "");
+					const current = draftsRef.current[sideId] ?? loaded;
+					draftsRef.current = { ...draftsRef.current, [sideId]: current };
+					receipt = current.pendingDelivery;
+				}
 				const draft = draftsRef.current[sideId] ?? emptySideChatDraft();
+				if (!receipt && handoffClientMessageId && draft.lastHandoffDelivery?.clientMessageId === handoffClientMessageId)
+					receipt = draft.lastHandoffDelivery;
+				if (receipt && handoffClientMessageId && receipt.clientMessageId !== handoffClientMessageId)
+					throw new Error("This side chat has a different pending delivery.");
 				const files = attachments[sideId] ?? [];
 				if (!receipt) {
 					const imagePayloads = [
@@ -794,7 +819,7 @@ export function useIndependentSideChats(
 					const paths = extraAttachments.length ? await stageAttachments(extraAttachments) : [];
 					const allPaths = [...draft.attachments.map((file) => file.path), ...paths];
 
-					const clientMessageId = crypto.randomUUID();
+					const clientMessageId = handoffClientMessageId ?? crypto.randomUUID();
 					receipt = {
 						clientMessageId,
 						submitted: {
@@ -830,10 +855,7 @@ export function useIndependentSideChats(
 					[sideId]: { ...(current[sideId] ?? draft), pendingDelivery: frozen },
 				}));
 				// Persist the receipt before dispatch so reconnect can retry the exact request.
-				const saved = await apiClient.PUT("/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/draft", {
-					params: { path: { sessionId, sideId } },
-					body: { contentJson: JSON.stringify(pending) },
-				});
+				const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(pending));
 				if (saved.error) throw saved.error;
 				await aoBridge.sideChats.capture();
 				if (sessionRef.current !== sessionId || closedSidesRef.current.has(sideId)) return;
@@ -857,19 +879,24 @@ export function useIndependentSideChats(
 				}
 				await aoBridge.sideChats.capture().catch(() => undefined);
 				if (sessionRef.current !== sessionId || closedSidesRef.current.has(sideId)) return;
-				setDrafts((current) => {
-					const d = current[sideId];
-					if (!d || d.pendingDelivery !== frozen) return current;
+				const d = draftsRef.current[sideId];
+				if (d?.pendingDelivery === frozen) {
 					const { pendingDelivery: _, ...rest } = d;
 					const unchanged =
 						d.text === frozen.submitted.text &&
 						JSON.stringify(d.attachments) === JSON.stringify(frozen.submitted.attachments) &&
 						JSON.stringify(d.references) === JSON.stringify(frozen.submitted.references);
-					return {
-						...current,
-						[sideId]: unchanged ? emptySideChatDraft() : rest,
+					const next: SideChatDraft = {
+						...(unchanged ? emptySideChatDraft() : rest),
+						lastHandoffDelivery: handoffClientMessageId ? frozen : d.lastHandoffDelivery,
 					};
-				});
+					draftsRef.current = { ...draftsRef.current, [sideId]: next };
+					setDrafts((current) => ({ ...current, [sideId]: next }));
+					const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(next));
+					if (saved.error) throw saved.error;
+					await aoBridge.sideChats.capture().catch(() => undefined);
+				}
+
 				setAttachments((current) => (current[sideId] === files ? { ...current, [sideId]: [] } : current));
 			} catch (cause) {
 				if (sessionRef.current === sessionId && !closedSidesRef.current.has(sideId)) setError(apiErrorMessage(cause));
@@ -879,7 +906,7 @@ export function useIndependentSideChats(
 				setSendingRevision((version) => version + 1);
 			}
 		},
-		[sessionId, updateDraft, attachments, stageAttachments, nativeImages],
+		[sessionId, updateDraft, attachments, stageAttachments, nativeImages, create],
 	);
 
 	const close = useCallback(
@@ -1168,7 +1195,35 @@ export function useIndependentSideChats(
 		highlightTimer.current = window.setTimeout(() => highlightCleanup.current?.(), 2200);
 		setNavigationTarget(undefined);
 	}, [navigationTarget, activeId, snapshot, olderPages, loadOlder]);
-	const tabStripRef = useRef<HTMLDivElement>(null);
+	const {
+		scrollRef: tabStripRef,
+		showLeftFade,
+		showRightFade,
+		scrollToEnd,
+	} = useTabScrollEdges([sides.length, visible]);
+	const previousTabCount = useRef(sides.length);
+	useEffect(() => {
+		if (sides.length > previousTabCount.current) scrollToEnd();
+		previousTabCount.current = sides.length;
+	}, [sides.length, scrollToEnd]);
+	useEffect(() => {
+		const strip = tabStripRef.current;
+		if (!strip) return;
+		const wheel = (event: WheelEvent) => {
+			if (
+				event.ctrlKey ||
+				event.metaKey ||
+				Math.abs(event.deltaX) >= Math.abs(event.deltaY) ||
+				!event.deltaY ||
+				strip.scrollWidth <= strip.clientWidth
+			)
+				return;
+			event.preventDefault();
+			strip.scrollBy({ left: event.deltaY });
+		};
+		strip.addEventListener("wheel", wheel, { passive: false });
+		return () => strip.removeEventListener("wheel", wheel);
+	}, [tabStripRef, visible]);
 	useEffect(() => {
 		const strip = tabStripRef.current;
 		const selected = strip?.querySelector<HTMLElement>('[aria-selected="true"]');
@@ -1185,7 +1240,8 @@ export function useIndependentSideChats(
 	};
 	const saveRename = async () => {
 		if (renameCancelled.current || !renameId) return;
-		const id = renameId, label = renameText?.trim();
+		const id = renameId,
+			label = renameText?.trim();
 		setRenameId(undefined);
 		setRenameText(undefined);
 		if (!label || label === sides.find((side) => side.id === id)?.label) return;
@@ -1201,17 +1257,21 @@ export function useIndependentSideChats(
 	};
 
 	const tabBar = enabled ? (
-		<header className="flex shrink-0 min-w-0 items-center border-b border-border bg-background">
-			<div
-				ref={tabStripRef}
-				role="tablist"
-				aria-label={t("sideChat.tabs")}
-				onKeyDown={handleTabListKeyDown}
-				className="flex min-w-0 flex-1 overflow-x-auto"
-			>
-				{sides.map((side) => {
-					const tab = (
-						<div key={side.id} className={cn("browser-panel__tab", side.id === currentActiveId && "browser-panel__tab--active")}>
+		<header className="browser-panel__tab-row">
+			<div className="browser-panel__tab-region">
+				<div
+					ref={tabStripRef}
+					role="tablist"
+					aria-label={t("sideChat.tabs")}
+					onKeyDown={handleTabListKeyDown}
+					className="browser-panel__tab-strip"
+				>
+					{sides.map((side) => {
+						const tab = (
+							<div
+								key={side.id}
+								className={cn("browser-panel__tab", side.id === currentActiveId && "browser-panel__tab--active")}
+							>
 								{renameId === side.id ? (
 									<input
 										autoFocus
@@ -1248,7 +1308,10 @@ export function useIndependentSideChats(
 											setFocusKey(0);
 										}}
 										aria-keyshortcuts="F2"
-										onDoubleClick={(event) => { event.preventDefault(); beginRename(side); }}
+										onDoubleClick={(event) => {
+											event.preventDefault();
+											beginRename(side);
+										}}
 										onKeyDown={(event) => {
 											if (event.key === "F2") {
 												event.preventDefault();
@@ -1258,9 +1321,7 @@ export function useIndependentSideChats(
 										title={side.label}
 									>
 										<MessageSquare className="browser-panel__tab-icon" aria-hidden="true" />
-										<span className="browser-panel__tab-title">
-											{side.label?.trim() || "Side Chat"}
-										</span>
+										<span className="browser-panel__tab-title">{side.label?.trim() || "Side Chat"}</span>
 									</button>
 								)}
 								<button
@@ -1276,26 +1337,31 @@ export function useIndependentSideChats(
 									<X className="size-3.5" aria-hidden="true" />
 								</button>
 							</div>
-					);
-					if (renameId === side.id) return tab;
-					return (
-						<ContextMenu key={side.id}>
-							<ContextMenuTrigger asChild>{tab}</ContextMenuTrigger>
-							<ContextMenuContent className="min-w-44">
-								<ContextMenuItem onSelect={() => beginRename(side)}>
-									<Pencil aria-hidden="true" />
-									{t("sideChat.rename")}
-								</ContextMenuItem>
-							</ContextMenuContent>
-						</ContextMenu>
-					);
-				})}
+						);
+						if (renameId === side.id) return tab;
+						return (
+							<ContextMenu key={side.id}>
+								<ContextMenuTrigger asChild>{tab}</ContextMenuTrigger>
+								<ContextMenuContent className="min-w-44">
+									<ContextMenuItem onSelect={() => beginRename(side)}>
+										<Pencil aria-hidden="true" />
+										{t("sideChat.rename")}
+									</ContextMenuItem>
+								</ContextMenuContent>
+							</ContextMenu>
+						);
+					})}
+				</div>
+				{showLeftFade ? (
+					<div aria-hidden="true" className="browser-panel__tab-fade browser-panel__tab-fade--left" />
+				) : null}
+				{showRightFade ? <div aria-hidden="true" className="browser-panel__tab-fade" /> : null}
 			</div>
 			<Button
 				type="button"
 				variant="ghost"
 				size="icon-sm"
-				className="shrink-0"
+				className="browser-panel__tab-new"
 				disabled={pending}
 				aria-label={t("sideChat.newSideChat")}
 				onClick={() => void create(undefined, true).catch(() => undefined)}
@@ -1307,11 +1373,10 @@ export function useIndependentSideChats(
 	const closeDialog = (
 		<ConfirmDialog
 			open={Boolean(confirmClose)}
-			title={t("sideChat.closeNamedConfirm", { name: sides.find((side) => side.id === confirmClose)?.label ?? t("inspector.sideChat") })}
-			description={t("sideChat.closeExplanation")}
-			confirmLabel={t("sideChat.closeSideChat")}
-			cancelLabel={t("sideChat.keepSideChat")}
-			destructive
+			title={t("sideChat.deleteConfirm")}
+			description={t("sideChat.deleteExplanation")}
+			confirmLabel={t("sideChat.delete")}
+			cancelLabel={t("confirm.cancel")}
 			busy={closing}
 			error={closeError}
 			onOpenChange={(open) => {
@@ -1327,6 +1392,160 @@ export function useIndependentSideChats(
 			}}
 		/>
 	);
+	const renderTimelineItem = (item: (typeof timeline)[number]) => {
+		if (!snapshot || !activeId) return null;
+		return item.kind === "message"
+			? (() => {
+					const message: ConversationMessage = {
+						kind: "message",
+						id: item.message.id,
+						turnId: item.message.turnId,
+						sequence: item.message.sequence,
+						revision: item.message.revision,
+						role: item.message.role === "user" ? "user" : "assistant",
+						origin: item.message.role === "user" ? "human" : "provider",
+						text: item.message.text,
+						streaming: item.message.streaming,
+						createdAt: item.message.createdAt,
+						content: (
+							[...(snapshot.turns ?? []), ...olderPages.flatMap((page) => page.turns ?? [])].find(
+								(turn) => turn.id === item.message.turnId,
+							)?.references ?? []
+						).map((ref) => ({
+							type: "excerpt",
+							text: ref.selection,
+							sourceConversationId: ref.conversationId,
+							sourceMessageId: ref.messageId,
+							sourceRevision: ref.revision,
+						})),
+					};
+					return message.role === "user" ? (
+						<HumanMessage
+							key={message.id}
+							message={message}
+							sessionId={sessionId}
+							onSelectAnnotation={navigateAnnotation}
+						/>
+					) : (
+						<AssistantMessage key={message.id} message={message} showCopy={!message.streaming} />
+					);
+				})()
+			: (() => {
+					const activity = item.activity;
+					const conversationActivity: ConversationActivity = {
+						kind: "activity",
+						id: activity.id,
+						turnId: activity.turnId,
+						sequence: 0,
+						revision: 1,
+						activityKind:
+							activity.kind === "input"
+								? "user_input"
+								: [
+											"command",
+											"file_change",
+											"plan",
+											"reasoning",
+											"approval",
+											"usage",
+											"error",
+											"system",
+											"mcp_tool",
+											"auto_review",
+											"user_input",
+									  ].includes(activity.kind)
+									? (activity.kind as ConversationActivity["activityKind"])
+									: "system",
+						status: activity.status as ConversationActivity["status"],
+						summary: activity.summary || activity.kind,
+						detail: (activity.kind === "command" && activity.text
+							? {
+									...(activity.detail && typeof activity.detail === "object" && !Array.isArray(activity.detail)
+										? activity.detail
+										: {}),
+									output: activity.text,
+								}
+							: activity.detail) as ConversationActivity["detail"],
+						requestId: activity.requestId,
+						decisions: activity.decisions?.map((decision) => ({
+							id: decision.id,
+							label: decision.label,
+							kind: decision.kind as NonNullable<ConversationActivity["decisions"]>[number]["kind"],
+						})),
+						createdAt: activity.createdAt,
+					};
+					return (
+						<div key={activity.id}>
+							{activity.kind === "approval" ? (
+								<ApprovalCard
+									activity={conversationActivity}
+									onDecide={(requestId, decisionId) => void resolveApproval(activeId, requestId, decisionId)}
+								/>
+							) : activity.kind === "user_input" || activity.kind === "input" ? null : (
+								<ActivityRow activity={conversationActivity} />
+							)}
+							{(activity.kind === "user_input" || activity.kind === "input") &&
+							activity.status === "pending" &&
+							activity.requestId &&
+							activity.input ? (
+								<div className="space-y-2 pt-2">
+									<p>{activity.input.message}</p>
+									{activity.input.url && /^https?:\/\//i.test(activity.input.url) ? (
+										<a className="underline" href={activity.input.url} target="_blank" rel="noreferrer">
+											{t("sideChat.openRequestedUrl")}
+										</a>
+									) : null}
+									{Object.keys((activity.input.schema?.properties ?? {}) as Record<string, unknown>).map((key) => (
+										<label key={key} className="block">
+											{key}
+											<input
+												className="ml-2 rounded border border-border bg-background p-1"
+												value={inputAnswers[activity.requestId!]?.[key] ?? ""}
+												onChange={(event) =>
+													setInputAnswers((current) => ({
+														...current,
+														[activity.requestId!]: {
+															...current[activity.requestId!],
+															[key]: event.target.value,
+														},
+													}))
+												}
+											/>
+										</label>
+									))}
+									<div className="flex gap-2">
+										<Button
+											type="button"
+											size="sm"
+											onClick={() => void resolveInput(activeId, activity.requestId!, "accept")}
+										>
+											{t("sideChat.submit")}
+										</Button>
+										<Button
+											type="button"
+											size="sm"
+											variant="outline"
+											onClick={() => void resolveInput(activeId, activity.requestId!, "decline")}
+										>
+											{t("sideChat.decline")}
+										</Button>
+									</div>
+								</div>
+							) : null}
+						</div>
+					);
+				})();
+	};
+	const allTurns = [...(snapshot?.turns ?? []), ...olderPages.flatMap((page) => page.turns ?? [])];
+	const turnGroups = allTurns
+		.filter((turn, index) => allTurns.findIndex((other) => other.id === turn.id) === index)
+		.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+		.map((turn) => ({
+			turn,
+			items: timeline.filter(
+				(item) => (item.kind === "message" ? item.message.turnId : item.activity.turnId) === turn.id,
+			),
+		}));
 	const panel =
 		enabled && currentActiveId && visible ? (
 			<aside
@@ -1393,13 +1612,17 @@ export function useIndependentSideChats(
 									value1: activeNumber,
 								})}
 							>
-								<div ref={timelineContentRef} className={cn("mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-5", timeline.length === 0 && !(snapshot.turns ?? []).length && "min-h-full justify-center")}>
+								<div
+									ref={timelineContentRef}
+									className={cn(
+										"mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-5",
+										timeline.length === 0 && !(snapshot.turns ?? []).length && "min-h-full justify-center",
+									)}
+								>
 									{timeline.length === 0 && !(snapshot.turns ?? []).length ? (
 										<div className="mx-auto flex max-w-sm flex-col items-center gap-2 py-8 text-center text-sm">
 											<h3 className="font-medium">{t("sideChat.askASideQuestion")}</h3>
-											<p className="text-xs leading-relaxed text-muted-foreground">
-												{t("sideChat.isolationPolicy")}
-											</p>
+											<p className="text-xs leading-relaxed text-muted-foreground">{t("sideChat.isolationPolicy")}</p>
 										</div>
 									) : null}
 									{(olderPages.at(-1)?.hasMore ?? snapshot.hasMore) ? (
@@ -1411,163 +1634,49 @@ export function useIndependentSideChats(
 											{t("sideChat.loadEarlierMessages")}
 										</button>
 									) : null}
-									{timeline.map((item) =>
-										item.kind === "message"
-											? (() => {
-													const message: ConversationMessage = {
-														kind: "message",
-														id: item.message.id,
-														turnId: item.message.turnId,
-														sequence: item.message.sequence,
-														revision: item.message.revision,
-														role: item.message.role === "user" ? "user" : "assistant",
-														origin: item.message.role === "user" ? "human" : "provider",
-														text: item.message.text,
-														streaming: item.message.streaming,
-														createdAt: item.message.createdAt,
-														content: (
-															[...(snapshot.turns ?? []), ...olderPages.flatMap((page) => page.turns ?? [])].find(
-																(turn) => turn.id === item.message.turnId,
-															)?.references ?? []
-														).map((ref) => ({
-															type: "excerpt",
-															text: ref.selection,
-															sourceConversationId: ref.conversationId,
-															sourceMessageId: ref.messageId,
-															sourceRevision: ref.revision,
-														})),
-													};
-													return message.role === "user" ? (
-														<HumanMessage
-															key={message.id}
-															message={message}
-															sessionId={sessionId}
-															onSelectAnnotation={navigateAnnotation}
-														/>
-													) : (
-														<AssistantMessage key={message.id} message={message} showCopy={!message.streaming} />
-													);
-												})()
-											: (() => {
-													const activity = item.activity;
-													const conversationActivity: ConversationActivity = {
-														kind: "activity",
-														id: activity.id,
-														turnId: activity.turnId,
-														sequence: 0,
-														revision: 1,
-														activityKind:
-															activity.kind === "input"
-																? "user_input"
-																: [
-																			"command",
-																			"file_change",
-																			"plan",
-																			"reasoning",
-																			"approval",
-																			"usage",
-																			"error",
-																			"system",
-																			"mcp_tool",
-																			"auto_review",
-																			"user_input",
-																	  ].includes(activity.kind)
-																	? (activity.kind as ConversationActivity["activityKind"])
-																	: "system",
-														status: activity.status as ConversationActivity["status"],
-														summary: activity.summary || activity.kind,
-														detail: (activity.kind === "command" && activity.text
-															? {
-																	...(activity.detail &&
-																	typeof activity.detail === "object" &&
-																	!Array.isArray(activity.detail)
-																		? activity.detail
-																		: {}),
-																	output: activity.text,
-																}
-															: activity.detail) as ConversationActivity["detail"],
-														requestId: activity.requestId,
-														decisions: activity.decisions?.map((decision) => ({
-															id: decision.id,
-															label: decision.label,
-															kind: decision.kind as NonNullable<ConversationActivity["decisions"]>[number]["kind"],
-														})),
-														createdAt: activity.createdAt,
-													};
-													return (
-														<div key={activity.id}>
-															{activity.kind === "approval" ? (
-																<ApprovalCard
-																	activity={conversationActivity}
-																	onDecide={(requestId, decisionId) =>
-																		void resolveApproval(activeId, requestId, decisionId)
-																	}
-																/>
-															) : activity.kind === "user_input" || activity.kind === "input" ? null : (
-																<ActivityRow activity={conversationActivity} />
-															)}
-															{(activity.kind === "user_input" || activity.kind === "input") &&
-															activity.status === "pending" &&
-															activity.requestId &&
-															activity.input ? (
-																<div className="space-y-2 pt-2">
-																	<p>{activity.input.message}</p>
-																	{activity.input.url && /^https?:\/\//i.test(activity.input.url) ? (
-																		<a className="underline" href={activity.input.url} target="_blank" rel="noreferrer">
-																			{t("sideChat.openRequestedUrl")}
-																		</a>
-																	) : null}
-																	{Object.keys(
-																		(activity.input.schema?.properties ?? {}) as Record<string, unknown>,
-																	).map((key) => (
-																		<label key={key} className="block">
-																			{key}
-																			<input
-																				className="ml-2 rounded border border-border bg-background p-1"
-																				value={inputAnswers[activity.requestId!]?.[key] ?? ""}
-																				onChange={(event) =>
-																					setInputAnswers((current) => ({
-																						...current,
-																						[activity.requestId!]: {
-																							...current[activity.requestId!],
-																							[key]: event.target.value,
-																						},
-																					}))
-																				}
-																			/>
-																		</label>
-																	))}
-																	<div className="flex gap-2">
-																		<Button
-																			type="button"
-																			size="sm"
-																			onClick={() => void resolveInput(activeId, activity.requestId!, "accept")}
-																		>
-																			{t("sideChat.submit")}
-																		</Button>
-																		<Button
-																			type="button"
-																			size="sm"
-																			variant="outline"
-																			onClick={() => void resolveInput(activeId, activity.requestId!, "decline")}
-																		>
-																			{t("sideChat.decline")}
-																		</Button>
-																	</div>
-																</div>
-															) : null}
-														</div>
-													);
-												})(),
-									)}
-									{(snapshot.turns ?? []).some((turn) => turn.state === "running") ? (
-										<div className="flex min-h-6 items-center gap-2 px-1 py-0.5" data-testid="side-live-turn-status">
-											<Loader2 aria-hidden="true" className="size-3 shrink-0 animate-spin text-status-working" />
-											<span role="status" aria-live="polite" className="text-xs font-medium text-muted-foreground">
-												{t("sideChat.working")}
-											</span>
-										</div>
-									) : null}
+									{turnGroups.map(({ turn, items }) => {
+										const humans = items.filter((item) => item.kind === "message" && item.message.role === "user");
+										const work = items.filter((item) => !humans.includes(item));
+										const final = [...work]
+											.reverse()
+											.find((item) => item.kind === "message" && item.message.role !== "user");
+										const folded = work.filter((item) => item !== final);
+										const durationMs = turn.completedAt
+											? Math.max(0, Date.parse(turn.completedAt) - Date.parse(turn.startedAt ?? turn.createdAt))
+											: undefined;
+										const body = humans.map(renderTimelineItem);
+										if (turn.state === "running") {
+											body.push(
+												<div key="working" data-testid="side-live-turn-status">
+													<LiveResponseStatus startedAt={turn.startedAt ?? turn.createdAt} />
+												</div>,
+											);
+											body.push(...work.map(renderTimelineItem));
+										} else {
+											if (turn.completedAt)
+												body.push(
+													<TurnWorkSummary key="worked" durationMs={durationMs}>
+														{folded.length ? folded.map(renderTimelineItem) : undefined}
+													</TurnWorkSummary>,
+												);
+											else body.push(...folded.map(renderTimelineItem));
+											if (final) body.push(renderTimelineItem(final));
+										}
+										return (
+											<div key={turn.id} className="flex min-w-0 flex-col gap-2.5">
+												{body}
+											</div>
+										);
+									})}
+									{timeline
+										.filter(
+											(item) =>
+												!turnGroups.some(
+													({ turn }) =>
+														turn.id === (item.kind === "message" ? item.message.turnId : item.activity.turnId),
+												),
+										)
+										.map(renderTimelineItem)}
 									{(snapshot.turns ?? [])
 										.filter((turn) => turn.state === "failed")
 										.map((turn) => (
@@ -1654,7 +1763,7 @@ export function useIndependentSideChats(
 							deliveryPending={Boolean(drafts[activeId]?.pendingDelivery)}
 							skills={skills}
 							focusKey={focusKey}
-							onFocusSide={() => setFocusKey((key) => key + 1)}
+							onFocusSide={() => void create(undefined, true).catch(() => undefined)}
 							onRemoveReference={(id) =>
 								setDrafts((current) => ({
 									...current,

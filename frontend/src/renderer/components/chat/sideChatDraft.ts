@@ -18,6 +18,8 @@ export type SideChatDraft = {
 	attachments: ChatDraftAttachment[];
 	references: ChatDraftExcerptReference[];
 	pendingDelivery?: SideDeliveryReceipt;
+ // Keep the last acknowledged main-composer handoff for retries after remount.
+ lastHandoffDelivery?: SideDeliveryReceipt;
 };
 
 export function emptySideChatDraft(): SideChatDraft {
