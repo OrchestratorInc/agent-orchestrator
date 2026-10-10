@@ -33,6 +33,9 @@ func (p *Plugin) ComposerIsEmpty(output string) bool {
 func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObservation {
 	var observation ports.TerminalSurfaceObservation
 	raw := strings.Split(strings.ReplaceAll(output, "\r", "\n"), "\n")
+	for len(raw) > 0 && strings.TrimSpace(terminalui.PlainTerminalText(raw[len(raw)-1])) == "" {
+		raw = raw[:len(raw)-1]
+	}
 	start := len(raw) - 18
 	if start < 0 {
 		start = 0
@@ -62,6 +65,14 @@ func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObse
 			break
 		}
 		if strings.HasPrefix(line, "? for shortcuts") || strings.HasPrefix(line, "← for agents · ? for shortcuts") {
+			foot = i
+			break
+		}
+		// The released default status line contains model/effort, directory,
+		// and thread name separated by middle dots. Require the non-dim bold
+		// live marker so a quoted task and dot-separated transcript cannot
+		// become current chrome merely by resembling that text.
+		if strings.Contains(line, " · ") && terminalui.LastPromptHasBoldMarker(raw[prompt], "›") {
 			foot = i
 			break
 		}

@@ -19,7 +19,9 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	vt "github.com/unixshells/vt-go"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -174,20 +176,23 @@ func TestReleasedCLIConformance(t *testing.T) {
 	if strings.Contains(restored.output(), privateCanary) {
 		t.Fatal("private context rendered on restore")
 	}
+	restored.waitForActivity(t, domain.ActivityIdle)
 	// Interrupt a native active request, then deliver one follow-up through the
 	// same composer. This covers the terminal cancellation path used by AO.
-	restored.terminal.Write([]byte("AO_CANCEL_TASK_67ac12\r"))
+	restored.submit("AO_CANCEL_TASK_67ac12")
 	active := awaitModelRequest(t, requests, restored)
 	if !bytes.Contains(active, []byte("AO_CANCEL_TASK_67ac12")) {
 		t.Fatalf("cancel test did not start its intended turn: %s", active)
 	}
+	restored.waitForActivity(t, domain.ActivityActive)
 	restored.terminal.Write([]byte{3})
 	select {
 	case <-cancelled:
 	case <-time.After(15 * time.Second):
 		t.Fatalf("Ctrl-C did not cancel native provider request: %s", restored.output())
 	}
-	restored.terminal.Write([]byte("AO_AFTER_CANCEL_02d871\r"))
+	restored.waitForActivity(t, domain.ActivityIdle)
+	restored.submit("AO_AFTER_CANCEL_02d871")
 	followup := awaitModelRequest(t, requests, restored)
 	if bytes.Count(followup, []byte("AO_AFTER_CANCEL_02d871")) != 1 {
 		t.Fatalf("follow-up after cancellation was lost or duplicated: %s", followup)
@@ -277,6 +282,7 @@ type nativeTUI struct {
 	mu       sync.Mutex
 	buf      bytes.Buffer
 	once     sync.Once
+	emulator *vt.SafeEmulator
 }
 
 func startNativeTUI(t *testing.T, argv, env []string) *nativeTUI {
@@ -290,13 +296,16 @@ func startNativeTUI(t *testing.T, argv, env []string) *nativeTUI {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run := &nativeTUI{cmd: cmd, terminal: terminal}
+	emulator := vt.NewSafeEmulator(160, 40)
+	go func() { _, _ = io.Copy(io.Discard, emulator) }()
+	run := &nativeTUI{cmd: cmd, terminal: terminal, emulator: emulator}
 	t.Cleanup(run.stop)
 	go func() {
 		buffer := make([]byte, 8192)
 		for {
 			n, err := terminal.Read(buffer)
 			if n > 0 {
+				_, _ = emulator.Write(buffer[:n])
 				run.mu.Lock()
 				run.buf.Write(buffer[:n])
 				run.mu.Unlock()
@@ -310,6 +319,26 @@ func startNativeTUI(t *testing.T, argv, env []string) *nativeTUI {
 		}
 	}()
 	return run
+}
+
+func (run *nativeTUI) submit(value string) {
+	run.terminal.Write([]byte("\x1b[200~" + value + "\x1b[201~"))
+	// Native paste-burst protection treats immediate Enter as pasted newline.
+	time.Sleep(200 * time.Millisecond)
+	run.terminal.Write([]byte("\r"))
+}
+
+func (run *nativeTUI) waitForActivity(t *testing.T, want domain.ActivityState) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		frame := run.emulator.Render()
+		if state, ok := New().DetectTerminalActivity(frame); ok && state == want {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("native current screen did not become %s: %s", want, run.emulator.Render())
 }
 
 func (run *nativeTUI) output() string {
