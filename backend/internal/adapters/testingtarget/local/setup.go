@@ -49,6 +49,12 @@ func prepareTarget(ctx context.Context, frontend, commit, root string) (err erro
 	cmd := processutil.CommandContext(ctx, "python3", filepath.Join(dir, "prepare.py"), "--repository", filepath.Dir(frontend), "--commit", commit, "--reservation-owner", root)
 	cmd.Env = strippedEnv(os.Environ())
 	output, shutdownVerified, err := runSetupCommand(ctx, cmd)
+	var groupErr *setupGroupError
+	if errors.As(err, &groupErr) {
+		var statErr error
+		groupErr.leaseInfo, statErr = lease.Stat()
+		err = errors.Join(err, statErr)
+	}
 	if err != nil {
 		return fmt.Errorf("prepare target: %w: %s", err, strings.TrimSpace(string(output)))
 	}
@@ -71,8 +77,9 @@ func buildOwnedDaemon(ctx context.Context, frontend, executable string) error {
 // Commands inherit one private process group, including npm, Git and compiler
 // children. Keep the checkout reservation until that group has stopped.
 type setupGroupError struct {
-	group int
-	cause error
+	group     int
+	cause     error
+	leaseInfo os.FileInfo
 }
 
 func (e *setupGroupError) Error() string { return e.cause.Error() }

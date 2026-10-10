@@ -154,7 +154,7 @@ func writeInfo(t *testing.T, s *launch) {
 
 func TestTargetEnvironmentStripsInheritedAO(t *testing.T) {
 	f := fixture(t)
-	inherited := []string{"PATH=/bin", "HOME=/private/home", "AO_DATA_DIR=/real/data", "AO_RUN_FILE=/real/run", "AO_TMUX_BINARY=/real/tmux", "AO_TMUX_SOCKET_NAME=ao", "AO_BROWSER_TOKEN=secret-sentinel", "AO_TELEMETRY_TOKEN=secret-sentinel", "AO_FUTURE_VARIABLE=secret-sentinel", "NODE_OPTIONS=--require unsafe", "ELECTRON_RUN_AS_NODE=1", "ELECTRON_ENABLE_LOGGING=0"}
+	inherited := []string{"PATH=/bin", "HOME=/private/home", "AO_PORT=0", "AO_DATA_DIR=/real/data", "AO_RUN_FILE=/real/run", "AO_TMUX_BINARY=/real/tmux", "AO_TMUX_SOCKET_NAME=ao", "AO_BROWSER_TOKEN=secret-sentinel", "AO_TELEMETRY_TOKEN=secret-sentinel", "AO_FUTURE_VARIABLE=secret-sentinel", "NODE_OPTIONS=--require unsafe", "ELECTRON_RUN_AS_NODE=1", "ELECTRON_ENABLE_LOGGING=0"}
 	env := targetEnv(inherited, f.s, true, false)
 	values := make(map[string]string)
 	for _, entry := range env {

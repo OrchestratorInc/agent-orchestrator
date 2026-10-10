@@ -139,6 +139,19 @@ func (a *Adapter) Stop(ctx context.Context, target domain.TestTargetIdentity) (p
 	if s.stopped && s.leaseInfo == nil {
 		return ports.TestingCleanupResult{State: domain.TestCleanupComplete}, nil
 	}
+	if s.target.ElectronPID == 0 {
+		if s.leaseInfo == nil {
+			err := errors.New("preparation checkout reservation identity unavailable")
+			failed.Leftovers = []string{err.Error()}
+			return failed, err
+		}
+		if err := removePrivateState(s); err != nil {
+			failed.Leftovers = []string{err.Error()}
+			return failed, err
+		}
+		s.stopped = true
+		return ports.TestingCleanupResult{State: domain.TestCleanupComplete}, nil
+	}
 	s.closing = true
 	var problems []error
 	if err := a.captureTree(ctx, s); err != nil {
