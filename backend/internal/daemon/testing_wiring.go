@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/testingdesktop/cua"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/testingevidence"
@@ -19,15 +20,17 @@ import (
 )
 
 // testingProviders is the single composition point for slices A, D and E.
-// Empty providers deliberately keep creation/dispatch unavailable. Management
-// cancellation and saved evidence use durable state independently of providers.
+// The local recipe resolves its checkout at URL intake. Construction starts no
+// target, desktop driver or worker. Cancellation and saved evidence use durable
+// state independently of providers.
 type testingProviders struct {
-	Target  ports.TestingTargetEnvironment
-	Desktop ports.TestingDesktopControl
-	Workers testingsvc.WorkerLauncher
-	Recipes map[string]testingsvc.Recipe
-	Close   func(context.Context) error
-	Log     *slog.Logger
+	PullRequests ports.TestingPullRequestIntake
+	Target       ports.TestingTargetEnvironment
+	Desktop      ports.TestingDesktopControl
+	Workers      testingsvc.WorkerLauncher
+	Recipes      map[string]testingsvc.Recipe
+	Close        func(context.Context) error
+	Log          *slog.Logger
 }
 
 // Provider-specific recording and policy types are translated here; the
@@ -41,7 +44,67 @@ type testingDesktopAdapter interface {
 	Close(context.Context) error
 }
 
-type testingDesktopBridge struct{ testingDesktopAdapter }
+type testingDesktopBridge struct {
+	resolve func() (testingDesktopAdapter, error)
+	close   func(context.Context) error
+	mode    cua.DeliveryMode
+}
+
+// Native provider validation belongs to desktop use, not ordinary daemon startup.
+// Close fences future use without constructing a provider that was never used.
+func newTestingDesktopBridge(cfg cua.Config, factory func(cua.Config) (testingDesktopAdapter, error)) testingDesktopBridge {
+	var once sync.Once
+	var desktop testingDesktopAdapter
+	var constructionErr error
+	return testingDesktopBridge{
+		mode: cfg.DeliveryMode,
+		resolve: func() (testingDesktopAdapter, error) {
+			once.Do(func() {
+				desktop, constructionErr = factory(cfg)
+				if constructionErr != nil {
+					constructionErr = fmt.Errorf("configure testing desktop: %w", constructionErr)
+				}
+			})
+			return desktop, constructionErr
+		},
+		close: func(ctx context.Context) error {
+			once.Do(func() { constructionErr = errors.New("testing desktop closed before first use") })
+			if desktop == nil {
+				return nil
+			}
+			return desktop.Close(ctx)
+		},
+	}
+}
+
+func (d testingDesktopBridge) BindWindow(ctx context.Context, target domain.TestTargetIdentity) (domain.TestTargetIdentity, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.TestTargetIdentity{}, err
+	}
+	desktop, err := d.resolve()
+	if err != nil {
+		return domain.TestTargetIdentity{}, err
+	}
+	return desktop.BindWindow(ctx, target)
+}
+
+func (d testingDesktopBridge) Screenshot(ctx context.Context, target domain.TestTargetIdentity) (domain.TestScreenshot, error) {
+	desktop, err := d.resolve()
+	if err != nil {
+		return domain.TestScreenshot{}, err
+	}
+	return desktop.Screenshot(ctx, target)
+}
+
+func (d testingDesktopBridge) Release(ctx context.Context, target domain.TestTargetIdentity) error {
+	desktop, err := d.resolve()
+	if err != nil {
+		return err
+	}
+	return desktop.Release(ctx, target)
+}
+
+func (d testingDesktopBridge) Close(ctx context.Context) error { return d.close(ctx) }
 
 func testingInputError(err error) error {
 	if errors.Is(err, cua.ErrRefused) {
@@ -50,30 +113,50 @@ func testingInputError(err error) error {
 	return err
 }
 func (d testingDesktopBridge) Click(ctx context.Context, target domain.TestTargetIdentity, frame domain.TestDesktopFrame, request domain.TestClickRequest) (domain.TestActionResult, error) {
-	result, err := d.testingDesktopAdapter.Click(ctx, target, frame, request)
+	desktop, err := d.resolve()
+	if err != nil {
+		return domain.TestActionResult{}, err
+	}
+	result, err := desktop.Click(ctx, target, frame, request)
 	return result, testingInputError(err)
 }
 func (d testingDesktopBridge) Type(ctx context.Context, target domain.TestTargetIdentity, frame domain.TestDesktopFrame, request domain.TestTypeRequest) (domain.TestActionResult, error) {
-	result, err := d.testingDesktopAdapter.Type(ctx, target, frame, request)
+	desktop, err := d.resolve()
+	if err != nil {
+		return domain.TestActionResult{}, err
+	}
+	result, err := desktop.Type(ctx, target, frame, request)
 	return result, testingInputError(err)
 }
 func (d testingDesktopBridge) Key(ctx context.Context, target domain.TestTargetIdentity, frame domain.TestDesktopFrame, request domain.TestKeyRequest) (domain.TestActionResult, error) {
-	result, err := d.testingDesktopAdapter.Key(ctx, target, frame, request)
+	desktop, err := d.resolve()
+	if err != nil {
+		return domain.TestActionResult{}, err
+	}
+	result, err := desktop.Key(ctx, target, frame, request)
 	return result, testingInputError(err)
 }
 
 func (d testingDesktopBridge) DeliveryMode() string {
-	return string(d.testingDesktopAdapter.DeliveryMode())
+	return string(d.mode)
 }
 func (d testingDesktopBridge) InputDeliveryMode(string) string {
 	return d.DeliveryMode()
 }
 func (d testingDesktopBridge) StartRecording(ctx context.Context, target domain.TestTargetIdentity, dir string) (ports.TestingRecordingResult, error) {
-	result, err := d.testingDesktopAdapter.StartRecording(ctx, target, dir)
+	desktop, err := d.resolve()
+	if err != nil {
+		return ports.TestingRecordingResult{}, err
+	}
+	result, err := desktop.StartRecording(ctx, target, dir)
 	return recordingResult(result), err
 }
 func (d testingDesktopBridge) StopRecording(ctx context.Context, target domain.TestTargetIdentity) (ports.TestingRecordingResult, error) {
-	result, err := d.testingDesktopAdapter.StopRecording(ctx, target)
+	desktop, err := d.resolve()
+	if err != nil {
+		return ports.TestingRecordingResult{}, err
+	}
+	result, err := desktop.StopRecording(ctx, target)
 	return recordingResult(result), err
 }
 func recordingResult(result cua.RecordingResult) ports.TestingRecordingResult {
@@ -89,27 +172,21 @@ func configuredTestingProviders(cfg config.Config) (testingProviders, error) {
 func testingProvidersFromEnv(cfg config.Config, getenv func(string) string, target ports.TestingTargetEnvironment, makeDesktop func(cua.Config) (testingDesktopAdapter, error)) (testingProviders, error) {
 	mode := cua.DeliveryMode(getenv("AO_TESTING_DESKTOP_DELIVERY"))
 	if mode == "" {
-		mode = cua.Background
+		mode = cua.Foreground
 	}
-	if mode != cua.Background && mode != cua.Foreground {
-		return testingProviders{}, fmt.Errorf("AO_TESTING_DESKTOP_DELIVERY must be background or foreground")
+	if mode != cua.Foreground {
+		return testingProviders{}, fmt.Errorf("AO_TESTING_DESKTOP_DELIVERY must be foreground; background input is unsupported")
 	}
 	checkout := getenv("AO_TESTING_TARGET_CHECKOUT")
-	if checkout == "" {
-		return testingProviders{}, nil
-	}
-	desktop, err := makeDesktop(cua.Config{DataDir: cfg.DataDir, DeliveryMode: mode})
-	if err != nil {
-		return testingProviders{}, fmt.Errorf("configure testing desktop: %w", err)
-	}
-	providers := testingProviders{Target: target, Desktop: testingDesktopBridge{desktop}, Close: desktop.Close,
+	desktop := newTestingDesktopBridge(cua.Config{DataDir: cfg.DataDir, DeliveryMode: mode}, makeDesktop)
+	providers := testingProviders{PullRequests: localtarget.NewPullRequestIntake(), Target: target, Desktop: desktop, Close: desktop.Close,
 		Recipes: map[string]testingsvc.Recipe{"local-ao": {ID: "local-ao", CheckoutPath: checkout, Snapshot: "isolated local AO checkout", DeliveryMode: string(mode), VisualMarker: getenv("AO_TESTING_REAL_PROVIDERS") != "1", RealProviders: getenv("AO_TESTING_REAL_PROVIDERS") == "1"}}}
 	return providers, nil
 }
 
 func newTestingService(cfg config.Config, store testingsvc.Store, providers testingProviders) *testingsvc.Service {
 	home, _ := os.UserHomeDir()
-	return testingsvc.New(testingsvc.Deps{Store: store, Target: providers.Target, Desktop: providers.Desktop, Workers: providers.Workers, Recipes: providers.Recipes, Evidence: testingevidence.New(cfg.DataDir, store), EvidenceRoot: filepath.Join(cfg.DataDir, "testing"), TargetStateRoot: filepath.Join(home, ".ao", "dev", "agentic-target"), Log: providers.Log, CloseDesktop: providers.Close})
+	return testingsvc.New(testingsvc.Deps{PullRequests: providers.PullRequests, Store: store, Target: providers.Target, Desktop: providers.Desktop, Workers: providers.Workers, Recipes: providers.Recipes, Evidence: testingevidence.New(cfg.DataDir, store), EvidenceRoot: filepath.Join(cfg.DataDir, "testing"), TargetStateRoot: filepath.Join(home, ".ao", "dev", "agentic-target"), Log: providers.Log, CloseDesktop: providers.Close})
 }
 
 // wireTestingService binds both sides before startup recovery can restore workers.
