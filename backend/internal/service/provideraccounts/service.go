@@ -651,7 +651,7 @@ func (s *Service) usages(ctx context.Context, accounts []domain.ProviderAccount)
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 			usage, err := s.helper.AccountUsage(ctx, a)
-			ttl := 2 * time.Minute
+			ttl := 5 * time.Minute // A provider asked more often than this starts to refuse.
 			if err == nil {
 				if models, err := s.helper.AccountModels(ctx, a); err == nil {
 					for _, m := range models {
