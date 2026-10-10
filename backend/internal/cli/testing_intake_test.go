@@ -18,7 +18,7 @@ func TestTestingPRStartInfersAOProjectAndStartsOneComparison(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/internal/telemetry/cli-invoked" {
-			w.WriteHeader(202)
+			w.WriteHeader(http.StatusAccepted)
 			return
 		}
 		calls = append(calls, r.Method+" "+r.URL.Path)
@@ -36,7 +36,7 @@ func TestTestingPRStartInfersAOProjectAndStartsOneComparison(t *testing.T) {
 			if _, found := input["issueSnapshot"]; found {
 				t.Error("manual snapshot sent for URL intake")
 			}
-			w.WriteHeader(201)
+			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w, `{"runId":"base","headRunId":"head"}`)
 		case "/api/v1/testing/comparisons":
 			var input map[string]any
@@ -46,11 +46,11 @@ func TestTestingPRStartInfersAOProjectAndStartsOneComparison(t *testing.T) {
 			if input["runId"] != "base" || input["headRunId"] != "head" || input["timeoutSeconds"] != float64(1800) || input["workerPrompt"] == "" {
 				t.Error("wrong comparison body", input)
 			}
-			w.WriteHeader(201)
+			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w, `{"runId":"base","attemptId":"pending-base","workerSessionId":"one-worker"}`)
 		default:
 			t.Errorf("unexpected endpoint %s", r.URL.Path)
-			w.WriteHeader(404)
+			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	t.Cleanup(server.Close)

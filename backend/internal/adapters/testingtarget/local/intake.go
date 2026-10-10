@@ -83,6 +83,7 @@ func sameRepository(a, b domain.RepositoryIdentity) bool {
 
 var pinnedCommit = regexp.MustCompile(`^[a-f0-9]{40}$`)
 
+// Snapshot resolves immutable PR metadata, fetches pinned objects and retains the patch.
 func (p *PullRequestIntake) Snapshot(ctx context.Context, project domain.ProjectRecord, prURL string) (snapshot domain.TestPullRequestSnapshot, checkout string, err error) {
 	_, number, err := githubPR(prURL)
 	if err != nil {
@@ -108,7 +109,7 @@ func (p *PullRequestIntake) Snapshot(ctx context.Context, project domain.Project
 	var canonical struct {
 		URL string `json:"url"`
 	}
-	if err = json.Unmarshal(data, &canonical); err != nil {
+	if err := json.Unmarshal(data, &canonical); err != nil {
 		return snapshot, "", err
 	}
 	allowedRepo, err = domain.ParseRepositoryIdentity(canonical.URL)
@@ -124,7 +125,7 @@ func (p *PullRequestIntake) Snapshot(ctx context.Context, project domain.Project
 		HeadRepository                           struct{ Name string }
 		HeadRepositoryOwner                      struct{ Login string }
 	}
-	if err = json.Unmarshal(data, &pr); err != nil {
+	if err := json.Unmarshal(data, &pr); err != nil {
 		return snapshot, "", err
 	}
 	resolved, resolvedNumber, err := githubPR(pr.URL)
@@ -144,10 +145,10 @@ func (p *PullRequestIntake) Snapshot(ctx context.Context, project domain.Project
 	}
 	key := sha256.Sum256([]byte(origin))
 	root := filepath.Join(home, ".ao", "dev", "agentic-target", "repos", hex.EncodeToString(key[:])[:16])
-	if err = os.MkdirAll(root, 0o700); err != nil {
+	if err := os.MkdirAll(root, 0o700); err != nil {
 		return snapshot, "", err
 	}
-	if real, e := filepath.EvalSymlinks(root); e != nil || real != root {
+	if resolved, e := filepath.EvalSymlinks(root); e != nil || resolved != root {
 		return snapshot, "", errors.New("PR cache must not contain symlinks")
 	}
 	lock, err := os.OpenFile(filepath.Join(root, "intake.lock"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -163,7 +164,7 @@ func (p *PullRequestIntake) Snapshot(ctx context.Context, project domain.Project
 	} else if err != nil {
 		return snapshot, "", err
 	}
-	if real, e := filepath.EvalSymlinks(checkout); e != nil || real != checkout {
+	if resolved, e := filepath.EvalSymlinks(checkout); e != nil || resolved != checkout {
 		return snapshot, "", errors.New("PR checkout must not contain symlinks")
 	}
 	gitInfo, err := os.Lstat(filepath.Join(checkout, ".git"))
@@ -207,14 +208,14 @@ func (p *PullRequestIntake) Snapshot(ctx context.Context, project domain.Project
 	hash := sha256.Sum256(diff)
 	diffHash := hex.EncodeToString(hash[:])
 	snapshots := filepath.Join(root, "snapshots")
-	if err = os.MkdirAll(snapshots, 0o700); err != nil {
+	if err := os.MkdirAll(snapshots, 0o700); err != nil {
 		return snapshot, "", err
 	}
-	if real, e := filepath.EvalSymlinks(snapshots); e != nil || real != snapshots {
+	if resolved, e := filepath.EvalSymlinks(snapshots); e != nil || resolved != snapshots {
 		return snapshot, "", errors.New("PR snapshot directory must not contain symlinks")
 	}
 	diffPath := filepath.Join(snapshots, diffHash+".diff")
-	if err = writeImmutableSnapshot(diffPath, diff); err != nil {
+	if err := writeImmutableSnapshot(diffPath, diff); err != nil {
 		return snapshot, "", err
 	}
 	snapshot = domain.TestPullRequestSnapshot{URL: pr.URL, CheckoutPath: checkout, RepositoryURL: repositoryURL(allowedRepo), HeadRepositoryURL: repositoryURL(headRepo), Title: pr.Title, Body: pr.Body, BaseSHA: pr.BaseRefOid, HeadSHA: pr.HeadRefOid, DiffPath: diffPath, DiffSHA256: diffHash}
@@ -223,7 +224,7 @@ func (p *PullRequestIntake) Snapshot(ctx context.Context, project domain.Project
 		return snapshot, "", err
 	}
 	metadataHash := sha256.Sum256(metadata)
-	if err = writeImmutableSnapshot(filepath.Join(snapshots, hex.EncodeToString(metadataHash[:])+".json"), metadata); err != nil {
+	if err := writeImmutableSnapshot(filepath.Join(snapshots, hex.EncodeToString(metadataHash[:])+".json"), metadata); err != nil {
 		return snapshot, "", err
 	}
 	return snapshot, checkout, nil
@@ -248,7 +249,7 @@ func writeImmutableSnapshot(path string, data []byte) error {
 			return errors.New("PR snapshot path is not a regular owned file")
 		}
 		previous, e := os.ReadFile(path)
-		if e != nil || string(previous) != string(data) {
+		if e != nil || !bytes.Equal(previous, data) {
 			return errors.Join(errors.New("saved PR snapshot differs from pinned content"), e)
 		}
 		return nil
