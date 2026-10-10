@@ -257,16 +257,13 @@ func (m *Manager) admitAgentSwitch(ctx context.Context, id domain.SessionID, cfg
 	if !switchHarnessSupported(rec.Harness) || !switchHarnessSupported(cfg.TargetHarness) {
 		return domain.AgentSwitch{}, nil, fmt.Errorf("switch agent %s: %w: supported harnesses are claude-code, codex, and fx", id, ErrUnsupportedSwitchHarness)
 	}
-
 	if rec.Harness == cfg.TargetHarness {
 		return domain.AgentSwitch{}, nil, fmt.Errorf("switch agent %s: %w: %s", id, ErrAlreadyUsingHarness, cfg.TargetHarness)
 	}
-	if m.providerAccounts != nil {
-		if _, managed, routeErr := m.providerAccounts.SessionAccount(ctx, id); routeErr != nil {
-			return domain.AgentSwitch{}, nil, routeErr
-		} else if managed {
-			return domain.AgentSwitch{}, nil, fmt.Errorf("managed sessions keep their provider; create a new session for another provider: %w", ports.ErrProviderAccountIncompatible)
-		}
+	if managed, accountErr := m.accountManaged(ctx, id); accountErr != nil {
+		return domain.AgentSwitch{}, nil, accountErr
+	} else if managed {
+		return domain.AgentSwitch{}, nil, fmt.Errorf("managed sessions keep their provider; create a new session for another provider: %w", ports.ErrProviderAccountIncompatible)
 	}
 	if mode == domain.SessionModeChat {
 		if m.chat == nil || !m.chat.SupportsChat(rec.Harness) || !m.chat.SupportsChat(cfg.TargetHarness) {
@@ -793,11 +790,6 @@ func (m *Manager) executeAgentSwitch(ctx context.Context, admitted *admittedAgen
 	// finalized. Controller admission belongs to the durable switch worker, not
 	// that short-lived child context, so target launch and acknowledgement retain
 	// their independent delivery window.
-	releaseCodexAdmission, admissionErr := m.acquireCodexControllerAdmission(workerCtx, target.harness)
-	if admissionErr != nil {
-		return result, fmt.Errorf("switch agent %s: %w", id, admissionErr)
-	}
-	defer releaseCodexAdmission()
 	handle, createErr := m.runtime.Create(ctx, runtimeCfg)
 	var effectErr ports.RuntimeEffectError
 	hasEffectEvidence := createErr != nil && errors.As(createErr, &effectErr)

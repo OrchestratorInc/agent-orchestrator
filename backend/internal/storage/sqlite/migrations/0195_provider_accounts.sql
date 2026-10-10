@@ -1,18 +1,9 @@
--- Summary: keep the small managed-account catalogue, routes and crash-recovery
--- intent separate from reconstructed session metadata. No credentials are stored.
--- Account-manager previews recorded this schema at 171/172, and later
--- development builds at 173, before main assigned those numbers. This version
--- preserves state such a build already created.
+-- Summary: the accounts AO manages and their session routes, as one document. No credentials.
 -- +goose Up
 -- +goose StatementBegin
-CREATE TABLE IF NOT EXISTS provider_account_state (
- id INTEGER PRIMARY KEY CHECK (id = 1),
- revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
- facts TEXT NOT NULL CHECK (json_valid(facts)),
- pending TEXT CHECK (pending IS NULL OR json_valid(pending))
-);
-INSERT INTO provider_account_state (id, facts) VALUES (1, '{"revision":0,"accounts":[],"primaries":[],"routes":[]}') ON CONFLICT(id) DO NOTHING;
-CREATE TRIGGER IF NOT EXISTS provider_account_routes_cdc
+CREATE TABLE provider_account_state (id INTEGER PRIMARY KEY CHECK (id = 1), facts TEXT NOT NULL);
+INSERT INTO provider_account_state (id, facts) VALUES (1, '{"accounts":[],"routes":[]}');
+CREATE TRIGGER provider_account_routes_cdc
 AFTER UPDATE OF facts ON provider_account_state
 WHEN NEW.facts <> OLD.facts
 BEGIN
@@ -25,4 +16,4 @@ BEGIN
 END;
 -- +goose StatementEnd
 -- +goose Down
--- Preserve routing facts and pending cleanup across preview rollbacks.
+DROP TABLE provider_account_state;

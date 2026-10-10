@@ -149,7 +149,7 @@ func New(d Deps) *Engine {
 // The per-worker mutex is created on first use and kept for the lifetime of the
 // engine; the entry is a single pointer, so the unbounded-by-session-count map
 // is a negligible, bounded-in-practice cost.
-func (e *Engine) workerMutex(id domain.SessionID) *sync.Mutex {
+func (e *Engine) lockWorker(id domain.SessionID) func() {
 	e.triggerMu.Lock()
 	mu, ok := e.triggerLocks[id]
 	if !ok {
@@ -157,68 +157,8 @@ func (e *Engine) workerMutex(id domain.SessionID) *sync.Mutex {
 		e.triggerLocks[id] = mu
 	}
 	e.triggerMu.Unlock()
-	return mu
-}
-
-func (e *Engine) lockWorker(id domain.SessionID) func() {
-	mu := e.workerMutex(id)
 	mu.Lock()
 	return mu.Unlock
-}
-
-// AcquireAccountRoutingPause excludes new reviewer launches while proving that
-// existing related review work is idle. It never interrupts a reviewer.
-func (e *Engine) AcquireAccountRoutingPause(ctx stdctx.Context, id domain.SessionID) (func(), error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	mu := e.workerMutex(id)
-	if !mu.TryLock() {
-		return nil, ports.ErrProviderAccountBusy
-	}
-	runs, err := e.store.ListRunningReviewRunsBySession(ctx, id)
-	if err != nil {
-		mu.Unlock()
-		return nil, err
-	}
-	if len(runs) > 0 {
-		mu.Unlock()
-		return nil, ports.ErrProviderAccountBusy
-	}
-	reviews, err := e.store.ListReviewsBySession(ctx, id)
-	if err != nil {
-		mu.Unlock()
-		return nil, err
-	}
-	cleanup := []func(){mu.Unlock}
-	release := func() {
-		for i := len(cleanup) - 1; i >= 0; i-- {
-			cleanup[i]()
-		}
-	}
-	for _, review := range reviews {
-		if review.ReviewerActivityState == domain.ActivityActive || (review.ReviewerHandleID != "" && review.ReviewerActivityState != domain.ActivityIdle && review.ReviewerActivityState != domain.ActivityWaitingInput) {
-			release()
-			return nil, ports.ErrProviderAccountBusy
-		}
-		if review.InterfaceMode == domain.ReviewerInterfaceChat {
-			guard, ok := e.launcher.(interface {
-				AcquireReviewAccountPause(stdctx.Context, string) (func(), error)
-			})
-			if !ok {
-				release()
-				return nil, ports.ErrProviderAccountBusy
-			}
-			done, err := guard.AcquireReviewAccountPause(ctx, review.ID)
-			if err != nil {
-				release()
-				return nil, err
-			}
-			cleanup = append(cleanup, done)
-		}
-	}
-	var once sync.Once
-	return func() { once.Do(release) }, nil
 }
 
 // waitForChatRecovery keeps a missing startup controller from being treated as
@@ -673,7 +613,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	if handleID == "" {
 		// Each pass gets a fresh reviewer process on the same stable terminal
 		// handle when there is no resumable live agent session to notify.
-		if err := e.launcher.Preflight(stdctx.WithValue(ctx, reviewerAccountWorkerKey{}, workerID), harness, worker.Metadata.WorkspacePath, selectedMode); err != nil {
+		if err := e.launcher.Preflight(ctx, harness, worker.Metadata.WorkspacePath, selectedMode); err != nil {
 			return TriggerResult{}, failRuns(0, fmt.Errorf("reviewer preflight: %w", err))
 		}
 		// A review owns one Chat controller. Stop it while its durable fence

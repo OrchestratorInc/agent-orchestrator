@@ -295,23 +295,15 @@ const (
 	ModelCatalogWarningAuthExpired  = "auth_expired"
 )
 
-// ModelCatalogSourceManagedAccount marks a catalogue read from AO's account
-// helper for a managed provider instead of from a native agent discovery.
+// ModelCatalogSourceManagedAccount marks a catalogue read from the account helper.
 const ModelCatalogSourceManagedAccount = "cliproxy-account"
 
-// modelCatalogAccountScopePrefix marks a model-catalogue scope that names a
-// managed provider account instead of a project, so an explicitly chosen
-// account gets its own catalogue. '@' and ':' cannot appear in a project ID.
-const modelCatalogAccountScopePrefix = "@account:"
-
-// ModelCatalogAccountScope is the catalogue scope for one managed account.
-func ModelCatalogAccountScope(accountID string) string {
-	return modelCatalogAccountScopePrefix + accountID
-}
+// ModelCatalogAccountScope is the catalogue scope of one managed account.
+func ModelCatalogAccountScope(accountID string) string { return "@account:" + accountID }
 
 // AccountFromModelCatalogScope returns the account a scope names, if any.
 func AccountFromModelCatalogScope(scope string) (string, bool) {
-	id, ok := strings.CutPrefix(scope, modelCatalogAccountScopePrefix)
+	id, ok := strings.CutPrefix(scope, "@account:")
 	return id, ok && strings.TrimSpace(id) != ""
 }
 

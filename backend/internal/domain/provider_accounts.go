@@ -3,108 +3,127 @@ package domain
 import (
 	"hash/fnv"
 	"strings"
-	"time"
 )
 
-// ProviderAccount is AO's safe identity plus a private upstream credential
-// reference. Empty CredentialRef is the durable signed-out fact.
+// AccountProviders are the providers whose accounts AO manages.
+var AccountProviders = []string{"codex", "claude"}
+
+// AccountProvider names the managed provider behind a harness, or "" for none.
+func AccountProvider(h AgentHarness) string {
+	switch h {
+	case HarnessCodex:
+		return "codex"
+	case HarnessClaudeCode:
+		return "claude"
+	}
+	return ""
+}
+
+// ProviderAccount is one saved account. CredentialRef and AuthID name its
+// sign-in inside the account helper and never leave the daemon; both are empty
+// once the account is signed out.
 type ProviderAccount struct {
-	ID          string `json:"id"`
-	Provider    string `json:"provider"`
-	DisplayName string `json:"display_name,omitempty"`
-	Email       string `json:"email"`
-	Kind        string `json:"kind,omitempty"`
-	// Global marks the account currently discovered from the provider's native
-	// login. It is informational; routing still follows the saved primary.
-	Global        bool   `json:"global,omitempty"`
+	ID            string `json:"id"`
+	Provider      string `json:"provider"`
+	DisplayName   string `json:"display_name"`
+	Email         string `json:"email"`
+	Kind          string `json:"kind"`
 	CredentialRef string `json:"credential_ref"`
 	AuthID        string `json:"auth_id"`
 }
 
-// APIKey reports an account that is an API key and not a sign-in. The
-// credential itself says so: the account helper keeps API keys in its
-// configuration and sign-ins as files. Accounts recorded before the helper
-// named the kind carry no kind at all.
-func (a ProviderAccount) APIKey() bool {
-	return a.Kind == "api_key" || strings.HasPrefix(a.CredentialRef, "config-index:") || strings.HasPrefix(a.CredentialRef, "config:")
-}
+// APIKey reports an account that is an API key and not a sign-in.
+func (a ProviderAccount) APIKey() bool { return a.Kind == "api_key" }
 
-// GeneratedProviderAccountName gives older accounts a stable friendly label
-// without depending on provider profile APIs.
+// SignedIn reports an account that holds a saved sign-in or key.
+func (a ProviderAccount) SignedIn() bool { return a.CredentialRef != "" && a.AuthID != "" }
+
+// GeneratedProviderAccountName is the friendly label a new account starts with.
 func GeneratedProviderAccountName(provider, id string) string {
 	words := []string{"Cedar", "Maple", "Willow", "River", "Summit", "Harbor", "Meadow", "Pine", "Juniper", "Clover", "Ember", "Atlas"}
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(strings.ToLower(provider + ":" + id)))
-	word := words[int(h.Sum32())%len(words)]
-	name := "Account"
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "codex":
-		name = "Codex"
-	case "claude":
+	name := "Codex"
+	if provider == "claude" {
 		name = "Claude"
 	}
-	return word + " " + name
+	return words[int(h.Sum32())%len(words)] + " " + name
 }
 
-// ProviderAccountUsage is a safe, short-lived view of what the provider and
-// the account helper report about one account: its limits, its resets, its
-// plan, and its recent activity. It deliberately contains no credential or
-// provider-private response data.
+// ProviderSessionRoute sends one session's requests to one account. An empty
+// AccountID is a session waiting for its provider's first sign-in.
+type ProviderSessionRoute struct {
+	SessionID SessionID `json:"session_id"`
+	Provider  string    `json:"provider"`
+	AccountID string    `json:"account_id"`
+}
+
+// NativeProviderImport remembers which of this computer's own logins or keys
+// was imported, so a later removal is not undone by the next check.
+type NativeProviderImport struct {
+	Fingerprint string `json:"fingerprint"`
+	AccountID   string `json:"account_id"`
+	Email       string `json:"email,omitempty"`
+}
+
+// ProviderAccountState is everything Account Manager stores. Defaults maps a
+// provider to its default account; a provider present with an empty value has
+// had every account signed out.
+type ProviderAccountState struct {
+	Accounts         []ProviderAccount               `json:"accounts"`
+	Defaults         map[string]string               `json:"defaults,omitempty"`
+	Routes           []ProviderSessionRoute          `json:"routes"`
+	NativeImports    map[string]NativeProviderImport `json:"native_imports,omitempty"`
+	NativeKeyImports map[string]NativeProviderImport `json:"native_key_imports,omitempty"`
+}
+
+// ProviderAccountView is one account as the API shows it.
+type ProviderAccountView struct {
+	ID          string `json:"id"`
+	Provider    string `json:"provider" enum:"codex,claude"`
+	DisplayName string `json:"displayName"`
+	Email       string `json:"email"`
+	Kind        string `json:"kind,omitempty" enum:"oauth,imported,api_key"`
+	Global      bool   `json:"global,omitempty" description:"This computer's own login or API key."`
+	SignedIn    bool   `json:"signedIn" description:"False when signed out or when the provider no longer accepts the saved sign-in."`
+	Primary     bool   `json:"primary"`
+	// Sessions lists the sessions routed to this account.
+	Sessions []string              `json:"sessions"`
+	Usage    *ProviderAccountUsage `json:"usage,omitempty"`
+}
+
+// ProviderAccountUsage is what the provider and the account helper report
+// about one account. It never carries a credential.
 type ProviderAccountUsage struct {
-	Status string `json:"status"`
-	Plan   string `json:"plan,omitempty"`
-	// PlanTier is the size of the plan where the provider sells several, such as "20x".
-	PlanTier string `json:"plan_tier,omitempty"`
-	// Windows lists the two general limits first, then every scoped limit.
-	Windows []ProviderAccountUsageWindow `json:"windows,omitempty"`
-	// ResetCredits counts unused usage-limit resets; nil when not reported.
-	ResetCredits *int64 `json:"reset_credits,omitempty"`
-	// Resets describes each unused reset when the provider itemizes them.
-	Resets []ProviderAccountReset `json:"resets,omitempty"`
-	// ResetUsable is true when the provider would accept a reset right now.
-	ResetUsable bool `json:"reset_usable,omitempty"`
-	// ResetBlockedUntil is when the provider next allows a reset, when it says.
-	ResetBlockedUntil string                     `json:"reset_blocked_until,omitempty"`
-	Credits           *ProviderAccountCredits    `json:"credits,omitempty"`
-	ExtraUsage        *ProviderAccountExtraUsage `json:"extra_usage,omitempty"`
-	RenewsAt          string                     `json:"renews_at,omitempty"`
-	Organization      string                     `json:"organization,omitempty"`
-	AddedAt           string                     `json:"added_at,omitempty"`
-	RefreshedAt       string                     `json:"refreshed_at,omitempty"`
-	// PausedUntil is set while the helper holds the account back after a
-	// provider refusal; PausedReason is the helper's short code for why.
-	PausedUntil  string `json:"paused_until,omitempty"`
-	PausedReason string `json:"paused_reason,omitempty"`
-	// SignInEnding is set when the saved sign-in still works but has stopped
-	// renewing, so it will stop working; SignInEndsAt is when, if known.
-	SignInEnding bool   `json:"sign_in_ending,omitempty"`
-	SignInEndsAt string `json:"sign_in_ends_at,omitempty"`
-	// Requests counts recent requests in fixed slices of time, oldest first.
-	Requests []ProviderAccountRequests `json:"requests,omitempty"`
-	// Tokens is the provider's own tally of the account's token use.
-	Tokens    *ProviderAccountTokens `json:"tokens,omitempty"`
-	CheckedAt time.Time              `json:"checked_at,omitempty"`
-	Message   string                 `json:"message,omitempty"`
+	Status            string                       `json:"status" enum:"available,unavailable"`
+	Plan              string                       `json:"plan,omitempty"`
+	PlanTier          string                       `json:"planTier,omitempty" description:"The size of the plan where the provider sells several, such as 20x."`
+	Windows           []ProviderAccountUsageWindow `json:"windows,omitempty" description:"The two general limits first, then every scoped limit."`
+	ResetCredits      *int64                       `json:"resetCredits,omitempty" description:"Unused usage-limit resets, when the provider reports them."`
+	Resets            []ProviderAccountReset       `json:"resets,omitempty" description:"Each unused reset, soonest to expire first, when the provider itemizes them."`
+	ResetUsable       bool                         `json:"resetUsable,omitempty" description:"True when the provider would accept a reset right now."`
+	ResetBlockedUntil string                       `json:"resetBlockedUntil,omitempty"`
+	Credits           *ProviderAccountCredits      `json:"credits,omitempty"`
+	ExtraUsage        *ProviderAccountExtraUsage   `json:"extraUsage,omitempty" description:"Present only when pay-as-you-go spending is switched on."`
+	RenewsAt          string                       `json:"renewsAt,omitempty"`
+	Organization      string                       `json:"organization,omitempty"`
+	AddedAt           string                       `json:"addedAt,omitempty"`
+	RefreshedAt       string                       `json:"refreshedAt,omitempty" description:"When the saved sign-in was last renewed."`
+	PausedUntil       string                       `json:"pausedUntil,omitempty" description:"Set while the account helper holds the account back after a provider refusal."`
+	PausedReason      string                       `json:"pausedReason,omitempty"`
+	SignInEnding      bool                         `json:"signInEnding,omitempty" description:"The saved sign-in still works but has stopped renewing, so it will stop working."`
+	SignInEndsAt      string                       `json:"signInEndsAt,omitempty" description:"When a sign-in that has stopped renewing stops working, if known."`
+	Requests          []ProviderAccountRequests    `json:"requests,omitempty" description:"Requests in the last twenty ten-minute slices, oldest first."`
+	Tokens            *ProviderAccountTokens       `json:"tokens,omitempty"`
 }
 
-// Scopes of a usage window. The general limits have no scope.
-const (
-	ProviderUsageScopeCodeReview = "code_review"
-	ProviderUsageScopeModel      = "model"
-	ProviderUsageScopeApps       = "oauth_apps"
-	ProviderUsageScopeCowork     = "cowork"
-)
-
-// ProviderAccountUsageWindow is one normalized quota window returned by the
-// proxy's management API.
+// ProviderAccountUsageWindow is one limit and how much of it is left.
 type ProviderAccountUsageWindow struct {
-	// Name is the provider's name for a model-scoped limit.
-	Name string `json:"name,omitempty"`
-	// Scope says what the limit covers; empty for the account's general limits.
-	Scope             string  `json:"scope,omitempty"`
-	DurationSeconds   int64   `json:"duration_seconds,omitempty"`
-	RemainingFraction float64 `json:"remaining_fraction"`
-	ResetTime         string  `json:"reset_time,omitempty"`
+	Name              string  `json:"name,omitempty" description:"The provider's name for a model-scoped limit."`
+	Scope             string  `json:"scope,omitempty" enum:"code_review,model,oauth_apps,cowork" description:"What the limit covers. Absent for the account's general limits."`
+	DurationSeconds   int64   `json:"durationSeconds,omitempty" description:"Length of the limit window in seconds, when the provider reports it."`
+	RemainingFraction float64 `json:"remainingFraction"`
+	ResetTime         string  `json:"resetTime,omitempty"`
 }
 
 // ProviderAccountReset is one unused allowance to clear the usage limits.
@@ -112,7 +131,7 @@ type ProviderAccountReset struct {
 	Label     string `json:"label,omitempty"`
 	Left      int64  `json:"left"`
 	Total     int64  `json:"total"`
-	ExpiresAt string `json:"expires_at,omitempty"`
+	ExpiresAt string `json:"expiresAt,omitempty"`
 }
 
 // ProviderAccountCredits is a prepaid balance spent after the plan's limits.
@@ -121,14 +140,13 @@ type ProviderAccountCredits struct {
 	Unlimited bool   `json:"unlimited,omitempty"`
 }
 
-// ProviderAccountExtraUsage is pay-as-you-go spending beyond the plan, in cents.
+// ProviderAccountExtraUsage is pay-as-you-go spending beyond the plan.
 type ProviderAccountExtraUsage struct {
-	Enabled    bool  `json:"enabled"`
-	UsedCents  int64 `json:"used_cents"`
-	LimitCents int64 `json:"limit_cents"`
+	UsedCents  int64 `json:"usedCents"`
+	LimitCents int64 `json:"limitCents" description:"The monthly cap in cents; zero when the provider reports none."`
 }
 
-// ProviderAccountRequests counts the requests of one slice of time.
+// ProviderAccountRequests counts the requests of one ten-minute slice.
 type ProviderAccountRequests struct {
 	Succeeded int64 `json:"succeeded"`
 	Failed    int64 `json:"failed"`
@@ -137,19 +155,23 @@ type ProviderAccountRequests struct {
 // ProviderAccountTokens is the provider's own tally of an account's token use.
 // A nil figure is one the provider did not report.
 type ProviderAccountTokens struct {
-	// LatestDay is the most recent day the provider has counted, as YYYY-MM-DD.
-	LatestDay          string `json:"latest_day,omitempty"`
-	LatestDayTokens    *int64 `json:"latest_day_tokens,omitempty"`
+	LatestDay          string `json:"latestDay,omitempty" description:"The most recent day the provider has counted, as YYYY-MM-DD."`
+	LatestDayTokens    *int64 `json:"latestDayTokens,omitempty"`
 	Lifetime           *int64 `json:"lifetime,omitempty"`
-	PeakDaily          *int64 `json:"peak_daily,omitempty"`
-	LongestTurnSeconds *int64 `json:"longest_turn_seconds,omitempty"`
-	CurrentStreakDays  *int64 `json:"current_streak_days,omitempty"`
-	LongestStreakDays  *int64 `json:"longest_streak_days,omitempty"`
+	PeakDaily          *int64 `json:"peakDaily,omitempty"`
+	LongestTurnSeconds *int64 `json:"longestTurnSeconds,omitempty"`
+	CurrentStreakDays  *int64 `json:"currentStreakDays,omitempty"`
+	LongestStreakDays  *int64 `json:"longestStreakDays,omitempty"`
 }
 
-// Outcomes of using a reset. Only ProviderResetDone means one was spent;
-// ProviderResetUnknown means the provider never confirmed either way.
+// Scopes of a usage window, and outcomes of using a reset. Only
+// ProviderResetDone means a reset was spent.
 const (
+	ProviderUsageScopeCodeReview = "code_review"
+	ProviderUsageScopeModel      = "model"
+	ProviderUsageScopeApps       = "oauth_apps"
+	ProviderUsageScopeCowork     = "cowork"
+
 	ProviderResetDone    = "reset"
 	ProviderResetNothing = "nothing_to_reset"
 	ProviderResetNone    = "none_available"
@@ -157,50 +179,3 @@ const (
 	ProviderResetFailed  = "failed"
 	ProviderResetUnknown = "unknown"
 )
-
-// ProviderPrimary records a provider default, including an empty default after its last logout.
-type ProviderPrimary struct {
-	Provider  string `json:"provider"`
-	PrimaryID string `json:"primary_id"`
-}
-
-// ProviderSessionRoute binds one session ticket to a provider and account.
-type ProviderSessionRoute struct {
-	SessionID  SessionID `json:"session_id"`
-	Provider   string    `json:"provider"`
-	AccountID  string    `json:"account_id"`
-	TicketHash string    `json:"ticket_hash"`
-}
-
-// ProviderAccountState contains only durable routing facts. A primary entry,
-// even when empty, records deliberate adoption of managed routing.
-// NativeProviderImport remembers an observed source even after local sign-out
-// or removal, so refresh cannot undo an explicit account-manager action.
-type NativeProviderImport struct {
-	Fingerprint string `json:"fingerprint"`
-	AccountID   string `json:"account_id"`
-	// Email is whose login the source held. It decides which accounts are
-	// marked Global, however and whenever they were added.
-	Email string `json:"email,omitempty"`
-}
-
-type ProviderAccountState struct {
-	NativeImports map[string]NativeProviderImport `json:"native_imports,omitempty"`
-	// NativeKeyImports is the same record for the API key this computer's agent
-	// is set up to use, kept apart because one provider can have both a
-	// sign-in and a key.
-	NativeKeyImports map[string]NativeProviderImport `json:"native_key_imports,omitempty"`
-	Revision         int64                           `json:"revision"`
-	Accounts         []ProviderAccount               `json:"accounts"`
-	Primaries        []ProviderPrimary               `json:"primaries"`
-	Routes           []ProviderSessionRoute          `json:"routes"`
-}
-
-// ProviderAccountIntent survives a lost helper acknowledgement or daemon exit.
-// Effective facts commit after acknowledgement; credential cleanup completes
-// before the intent is cleared and the operation reports success.
-type ProviderAccountIntent struct {
-	Next             ProviderAccountState `json:"next"`
-	DeleteCredential string               `json:"delete_credential"`
-	RequestBoundary  bool                 `json:"request_boundary,omitempty"`
-}

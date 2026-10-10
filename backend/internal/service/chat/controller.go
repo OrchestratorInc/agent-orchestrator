@@ -2808,8 +2808,10 @@ func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (b
 		"mcpServers":             event.MCPServers,
 	}
 	if c.harness == domain.HarnessCodex {
-		// Managed Codex account identity and provider limits are owned by the
-		// account manager. Conversation archives must not persist those details.
+		// Codex account identity and subscription capacity are daemon-memory
+		// account state. Conversation provider archives must not become a second
+		// persistence path for email, plan, percentages, reset times, or raw
+		// account payloads.
 		if event.Kind == ports.ChatEventAccountChanged {
 			record["account"] = nil
 		}

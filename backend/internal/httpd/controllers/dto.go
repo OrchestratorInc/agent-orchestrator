@@ -388,8 +388,8 @@ type ListSessionsResponse struct {
 
 // SpawnSessionRequest is the body of POST /api/v1/sessions.
 type SpawnSessionRequest struct {
-	ClientRequestID   string `json:"clientRequestId,omitempty" maxLength:"128"`
-	ProviderAccountID string `json:"providerAccountId,omitempty"`
+	ClientRequestID string `json:"clientRequestId,omitempty" maxLength:"128"`
+	AccountID       string `json:"providerAccountId,omitempty"`
 	// ProjectID is omitted for a standalone worker session.
 	ProjectID domain.ProjectID `json:"projectId,omitempty"`
 	IssueID   domain.IssueID   `json:"issueId,omitempty"`
@@ -1036,12 +1036,12 @@ type SendSessionMessageResponse struct {
 // DelegateTaskRequest is the body of POST /api/v1/orchestrators/delegate.
 // An omitted agent tells the orchestrator to use the project's worker default.
 type DelegateTaskRequest struct {
-	ClientRequestID   string              `json:"clientRequestId,omitempty" maxLength:"128"`
-	ProviderAccountID string              `json:"providerAccountId,omitempty"`
-	ProjectID         domain.ProjectID    `json:"projectId"`
-	Brief             string              `json:"brief" maxLength:"16384"`
-	Agent             domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,fake"`
-	Model             string              `json:"model,omitempty" maxLength:"256"`
+	ClientRequestID string              `json:"clientRequestId,omitempty" maxLength:"128"`
+	AccountID       string              `json:"providerAccountId,omitempty"`
+	ProjectID       domain.ProjectID    `json:"projectId"`
+	Brief           string              `json:"brief" maxLength:"16384"`
+	Agent           domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,fake"`
+	Model           string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
 	// inherits the project default; an empty string selects the provider default.
 	Effort *string `json:"effort,omitempty" maxLength:"64"`
@@ -3099,175 +3099,44 @@ type InstallIDParam struct {
 	InstallID string `path:"installId" description:"The device's stable install id."`
 }
 
-// ProviderAccountUsageWindowView exposes one safe, normalized quota window.
-type ProviderAccountUsageWindowView struct {
-	Name              string  `json:"name,omitempty" description:"The provider's name for a model-scoped limit."`
-	Scope             string  `json:"scope,omitempty" enum:"code_review,model,oauth_apps,cowork" description:"What the limit covers. Absent for the account's general limits."`
-	DurationSeconds   int64   `json:"durationSeconds,omitempty" description:"Length of the limit window in seconds, when the provider reports it."`
-	RemainingFraction float64 `json:"remainingFraction"`
-	ResetTime         string  `json:"resetTime,omitempty"`
-}
-
-// ProviderAccountResetView is one unused allowance to clear the usage limits.
-type ProviderAccountResetView struct {
-	Label     string `json:"label,omitempty"`
-	Left      int64  `json:"left"`
-	Total     int64  `json:"total"`
-	ExpiresAt string `json:"expiresAt,omitempty"`
-}
-
-// ProviderAccountCreditsView is a prepaid balance spent after the plan's limits.
-type ProviderAccountCreditsView struct {
-	Balance   string `json:"balance,omitempty"`
-	Unlimited bool   `json:"unlimited,omitempty"`
-}
-
-// ProviderAccountExtraUsageView is pay-as-you-go spending beyond the plan.
-type ProviderAccountExtraUsageView struct {
-	UsedCents  int64 `json:"usedCents"`
-	LimitCents int64 `json:"limitCents" description:"The monthly cap in cents; zero when the provider reports none."`
-}
-
-// ProviderAccountRequestsView counts the requests of one ten-minute slice.
-type ProviderAccountRequestsView struct {
-	Succeeded int64 `json:"succeeded"`
-	Failed    int64 `json:"failed"`
-}
-
-// ProviderAccountTokensView is the provider's own tally of an account's token
-// use. A missing figure is one the provider did not report.
-type ProviderAccountTokensView struct {
-	LatestDay          string `json:"latestDay,omitempty" description:"The most recent day the provider has counted, as YYYY-MM-DD."`
-	LatestDayTokens    *int64 `json:"latestDayTokens,omitempty"`
-	Lifetime           *int64 `json:"lifetime,omitempty"`
-	PeakDaily          *int64 `json:"peakDaily,omitempty"`
-	LongestTurnSeconds *int64 `json:"longestTurnSeconds,omitempty"`
-	CurrentStreakDays  *int64 `json:"currentStreakDays,omitempty"`
-	LongestStreakDays  *int64 `json:"longestStreakDays,omitempty"`
-}
-
-// ProviderAccountUsageView exposes best-effort quota information without
-// private credential references or raw provider responses.
-type ProviderAccountUsageView struct {
-	Status            string                           `json:"status" enum:"available,unavailable"`
-	Plan              string                           `json:"plan,omitempty"`
-	PlanTier          string                           `json:"planTier,omitempty" description:"The size of the plan where the provider sells several, such as 20x."`
-	Windows           []ProviderAccountUsageWindowView `json:"windows,omitempty" description:"The two general limits first, then every scoped limit."`
-	ResetCredits      *int64                           `json:"resetCredits,omitempty" description:"Unused usage-limit resets, when the provider reports them."`
-	Resets            []ProviderAccountResetView       `json:"resets,omitempty" description:"Each unused reset, soonest to expire first, when the provider itemizes them."`
-	ResetUsable       bool                             `json:"resetUsable,omitempty" description:"True when the provider would accept a reset right now."`
-	ResetBlockedUntil string                           `json:"resetBlockedUntil,omitempty"`
-	Credits           *ProviderAccountCreditsView      `json:"credits,omitempty"`
-	ExtraUsage        *ProviderAccountExtraUsageView   `json:"extraUsage,omitempty"`
-	RenewsAt          string                           `json:"renewsAt,omitempty"`
-	Organization      string                           `json:"organization,omitempty"`
-	AddedAt           string                           `json:"addedAt,omitempty"`
-	RefreshedAt       string                           `json:"refreshedAt,omitempty" description:"When the saved sign-in was last renewed."`
-	PausedUntil       string                           `json:"pausedUntil,omitempty" description:"Set while the account helper holds the account back after a provider refusal."`
-	PausedReason      string                           `json:"pausedReason,omitempty"`
-	SignInEnding      bool                             `json:"signInEnding,omitempty" description:"The saved sign-in still works but has stopped renewing, so it will stop working."`
-	SignInEndsAt      string                           `json:"signInEndsAt,omitempty" description:"When a sign-in that has stopped renewing stops working, if known."`
-	Requests          []ProviderAccountRequestsView    `json:"requests,omitempty" description:"Requests in the last twenty ten-minute slices, oldest first."`
-	Tokens            *ProviderAccountTokensView       `json:"tokens,omitempty"`
-	CheckedAt         time.Time                        `json:"checkedAt,omitempty"`
-	Message           string                           `json:"message,omitempty"`
-}
-
-// ProviderAccountResetResponse reports what happened to one attempt to use a reset.
-type ProviderAccountResetResponse struct {
-	Outcome string `json:"outcome" enum:"reset,nothing_to_reset,none_available,wait,failed,unknown" description:"Only reset means one was spent. unknown means the provider never confirmed either way."`
-}
-
-// ProviderAccountsQuery controls whether the account list waits for fresh
-// provider quota checks. The default keeps the existing complete response.
+// ProviderAccountsQuery selects what the account list reads: includeUsage=false
+// skips provider usage; refresh=true re-reads this computer's own logins and
+// every account's sign-in state first.
 type ProviderAccountsQuery struct {
-	IncludeUsage *bool `query:"includeUsage,omitempty" description:"When false, return the account catalogue without waiting for provider usage checks."`
-	Refresh      *bool `query:"refresh,omitempty" description:"When true, re-read native logins and the sign-in state of every account now."`
+	IncludeUsage bool `query:"includeUsage"`
+	Refresh      bool `query:"refresh"`
 }
 
-// ProviderAccountView exposes account identity and usage without private credential references.
-type ProviderAccountView struct {
-	ID          string `json:"id"`
-	Provider    string `json:"provider" enum:"codex,claude"`
-	DisplayName string `json:"displayName,omitempty"`
-	Email       string `json:"email"`
-	Kind        string `json:"kind,omitempty" enum:"oauth,imported,api_key"`
-	Global      bool   `json:"global,omitempty"`
-	SignedIn    bool   `json:"signedIn"`
-	// SignInRequired is true when a credential is saved but the account helper
-	// reports the provider no longer accepts it.
-	SignInRequired bool                      `json:"signInRequired,omitempty"`
-	Primary        bool                      `json:"primary"`
-	Sessions       []string                  `json:"sessions"`
-	Usage          *ProviderAccountUsageView `json:"usage,omitempty"`
-}
-
-// ProviderAccountNameRequest changes only the local display label.
-type ProviderAccountNameRequest struct {
-	DisplayName string `json:"displayName"`
-}
-
-// ProviderPrimaryView describes the default account for new sessions of one provider.
-type ProviderPrimaryView struct {
-	Provider  string `json:"provider" enum:"codex,claude"`
-	PrimaryID string `json:"primaryId"`
-	Managed   bool   `json:"managed"`
-}
-
-// ProviderAccountsResponse contains the account catalogue, defaults, and recovery state.
+// ProviderAccountsResponse is the account list and, after a reset, its outcome.
 type ProviderAccountsResponse struct {
-	Accounts         []ProviderAccountView `json:"accounts"`
-	Defaults         []ProviderPrimaryView `json:"defaults"`
-	RecoveryRequired bool                  `json:"recoveryRequired"`
+	Accounts     []domain.ProviderAccountView `json:"accounts"`
+	ResetOutcome string                       `json:"resetOutcome,omitempty" enum:"reset,nothing_to_reset,none_available,wait,failed,unknown"`
 }
 
-// ProviderAccountChangeRequest selects an account or a replacement primary for an account operation.
-type ProviderAccountChangeRequest struct {
-	AccountID            string `json:"accountId,omitempty"`
-	ReplacementPrimaryID string `json:"replacementPrimaryId,omitempty"`
-	MoveExisting         *bool  `json:"moveExisting,omitempty"`
-}
-
-// ForceRequestBody preserves the optional replacement-primary JSON body on DELETE in OpenAPI.
-func (ProviderAccountChangeRequest) ForceRequestBody() {}
-
-// ProviderLoginRequest starts a new login or signs an existing entry in again.
-type ProviderLoginRequest struct {
-	Provider       string `json:"provider" enum:"codex,claude"`
-	AccountID      string `json:"accountId,omitempty"`
-	Mode           string `json:"mode,omitempty" enum:"browser,device,import,api_key"`
-	APIKey         string `json:"apiKey,omitempty"`
-	BaseURL        string `json:"baseUrl,omitempty"`
-	Label          string `json:"label,omitempty"`
-	CredentialJSON string `json:"credentialJson,omitempty"`
-}
-
-// ProviderLoginResponse exposes login progress and its browser link without OAuth state.
+// ProviderLoginResponse is a sign-in attempt without its private OAuth state.
 type ProviderLoginResponse struct {
 	ID        string `json:"id"`
-	Provider  string `json:"provider"`
-	Mode      string `json:"mode,omitempty"`
+	Provider  string `json:"provider" enum:"codex,claude"`
+	Mode      string `json:"mode" enum:"browser,device,import,api_key"`
 	URL       string `json:"url,omitempty"`
 	Code      string `json:"code,omitempty"`
-	ExpiresIn int    `json:"expiresIn,omitempty"`
 	Status    string `json:"status" enum:"waiting,complete,failed,cancelled"`
 	AccountID string `json:"accountId"`
 }
 
-// SessionProviderAccountResponse describes whether a session has a managed account assignment.
+// SessionProviderAccountResponse is a session's account; an empty accountId on
+// a managed session means it waits for a sign-in.
 type SessionProviderAccountResponse struct {
-	Managed       bool   `json:"managed"`
-	Provider      string `json:"provider"`
-	AccountID     string `json:"accountId"`
-	LoginRequired bool   `json:"loginRequired"`
+	Managed   bool   `json:"managed"`
+	AccountID string `json:"accountId"`
 }
 
-// ProviderAccountIDParam identifies an account in a route.
+// ProviderAccountIDParam is the {accountId} path parameter.
 type ProviderAccountIDParam struct {
 	ID string `path:"accountId"`
 }
 
-// ProviderLoginIDParam identifies a login attempt in a route.
+// ProviderLoginIDParam is the {loginId} path parameter.
 type ProviderLoginIDParam struct {
 	ID string `path:"loginId"`
 }

@@ -70,9 +70,7 @@ type modelCatalogCall struct {
 type Service struct {
 	agents            []agentregistry.HarnessAgent
 	readiness         *readinessCoordinator
-	managedMu         sync.RWMutex
-	managedReadiness  ports.ManagedProviderReadiness
-	managedModels     ports.ManagedProviderModelDiscovery
+	managed           ports.ManagedProvider
 	cache             ports.AgentModelCatalogCache
 	discoverer        ports.AgentModelDiscoverer
 	modelDiscoveryDir string
@@ -90,13 +88,14 @@ type Service struct {
 
 // Deps contains optional durable dependencies for the agent catalog service.
 type Deps struct {
-	Cache             ports.AgentModelCatalogCache
-	Discoverer        ports.AgentModelDiscoverer
-	ModelDiscoveryDir string
-	Projects          ProjectLookup
-	Sessions          SessionUsageLookup
-	Context           context.Context
-	Logger            *slog.Logger
+	Cache                  ports.AgentModelCatalogCache
+	Discoverer             ports.AgentModelDiscoverer
+	ModelDiscoveryDir      string
+	Projects               ProjectLookup
+	Sessions               SessionUsageLookup
+	Context                context.Context
+	Logger                 *slog.Logger
+	ManagedAccountProvider ports.ManagedProvider // Account Manager; nil leaves every agent native
 	// Clock overrides time.Now for deterministic catalog tests.
 	Clock func() time.Time
 }
@@ -124,6 +123,7 @@ func NewWithDeps(deps Deps) *Service {
 	agents := agentregistry.Harnessed()
 	svc := newService(agents, deps.Cache, deps.Projects, deps.Discoverer)
 	svc.modelDiscoveryDir = deps.ModelDiscoveryDir
+	svc.managed = deps.ManagedAccountProvider
 	if deps.Logger != nil {
 		svc.logger = deps.Logger
 	}
@@ -149,7 +149,7 @@ func NewWithDeps(deps Deps) *Service {
 // It is used by focused tests.
 func NewWithAgents(agents []agentregistry.HarnessAgent) *Service {
 	svc := newService(agents, nil, nil, nil)
-	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{Agents: agents, AuthenticationCheck: svc.managedAuthenticationCheck})
+	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{Agents: agents})
 	return svc
 }
 
@@ -161,38 +161,11 @@ func newService(agents []agentregistry.HarnessAgent, cache ports.AgentModelCatal
 	return &Service{agents: agents, readiness: newReadinessCoordinator(readinessCoordinatorConfig{Agents: agents}), cache: cache, discoverer: discoverer, projects: projects, resolverMu: resolverMu, modelCalls: map[string]*modelCatalogCall{}, modelGeneration: map[string]int64{}, discoverySlots: make(chan struct{}, 2), ctx: context.Background(), now: time.Now, logger: slog.Default()}
 }
 
-// SetManagedProviderReadiness makes AO-managed providers use Account Manager
-// authentication in every readiness consumer. Other providers keep native
-// adapter checks.
-func (s *Service) SetManagedProviderReadiness(source ports.ManagedProviderReadiness) {
-	s.managedMu.Lock()
-	s.managedReadiness = source
-	s.managedMu.Unlock()
-	for _, agentID := range []string{string(domain.HarnessCodex), string(domain.HarnessClaudeCode)} {
-		s.InvalidateAgentAuthentication(agentID)
-	}
-}
-
-// SetManagedProviderModels makes local Codex and Claude catalogues come from
-// the selected Account Manager credential. Cloud credential scopes remain on
-// their existing discovery path.
-func (s *Service) SetManagedProviderModels(source ports.ManagedProviderModelDiscovery) {
-	s.managedMu.Lock()
-	s.managedModels = source
-	s.managedMu.Unlock()
-}
-
 func (s *Service) managedAuthenticationCheck(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
-	if agentID != string(domain.HarnessCodex) && agentID != string(domain.HarnessClaudeCode) {
+	if s.managed == nil {
 		return domain.AgentAuthenticationObservation{}, false
 	}
-	s.managedMu.RLock()
-	source := s.managedReadiness
-	s.managedMu.RUnlock()
-	if source == nil {
-		return domain.AgentAuthenticationObservation{}, false
-	}
-	return source.AuthenticationReadiness(ctx, domain.AgentHarness(agentID), purpose)
+	return s.managed.AuthenticationReadiness(ctx, domain.AgentHarness(agentID), purpose)
 }
 
 // WarmModelCatalogs starts the bounded cache scheduler. Readiness is never held
@@ -406,33 +379,31 @@ func (s *Service) revalidateChangedInputs(agentID, projectID, cachedFingerprint 
 	}
 }
 
-// managedModelFingerprint is the discovery fingerprint for a scope whose
-// catalogue Account Manager supplies: the account's current model list, not the
-// native executable, configuration, or credentials. handled is false for every
-// other scope. When the account helper cannot answer, the cached fingerprint is
-// kept so an outage never looks like changed inputs.
-func (s *Service) managedModelFingerprint(ctx context.Context, agentID, projectID, cachedFingerprint string) (string, bool) {
-	if agentID != string(domain.HarnessCodex) && agentID != string(domain.HarnessClaudeCode) {
+// managedFingerprint is the catalogue fingerprint of a scope Account Manager
+// owns. A failed read keeps the cached one, so an outage is not a change.
+func (s *Service) managedFingerprint(ctx context.Context, agentID, scope, cached string) (string, bool) {
+	if s.managed == nil {
 		return "", false
 	}
-	s.managedMu.RLock()
-	managedModels := s.managedModels
-	s.managedMu.RUnlock()
-	if managedModels == nil {
-		return "", false
-	}
-	fingerprint, handled, err := managedModels.ModelsFingerprint(ctx, domain.AgentHarness(agentID), projectID)
-	if !handled {
-		return "", false
-	}
+	fingerprint, managed, err := s.managed.ModelsFingerprint(ctx, domain.AgentHarness(agentID), scope)
 	if err != nil {
-		return cachedFingerprint, true
+		return cached, managed
 	}
-	return fingerprint, true
+	return fingerprint, managed
+}
+
+// discoverModels asks Account Manager first and the native agent otherwise.
+func (s *Service) discoverModels(ctx context.Context, agentID, scope string, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
+	if s.managed != nil {
+		if catalog, managed, err := s.managed.DiscoverModels(ctx, domain.AgentHarness(agentID), scope); managed {
+			return catalog, err
+		}
+	}
+	return s.discoverer.Discover(ctx, request)
 }
 
 func (s *Service) modelCatalogInputsChanged(ctx context.Context, agentID, projectID, cachedFingerprint string) bool {
-	if fingerprint, managed := s.managedModelFingerprint(ctx, agentID, projectID, cachedFingerprint); managed {
+	if fingerprint, managed := s.managedFingerprint(ctx, agentID, projectID, cachedFingerprint); managed {
 		return fingerprint != cachedFingerprint
 	}
 	item, ok := s.agent(agentID)
@@ -480,8 +451,6 @@ func (s *Service) modelCatalogScope(ctx context.Context, projectID string) (stri
 	if _, ok := credentialTypeFromScope(projectID); ok {
 		return projectID, nil
 	}
-	// An account scope likewise has no project: it caches one managed account's
-	// catalogue under its own key.
 	if _, ok := ports.AccountFromModelCatalogScope(projectID); ok {
 		return projectID, nil
 	}
@@ -727,7 +696,7 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	}
 	// Fingerprints the same inputs the discovery run would read, so a change to
 	// either the executable or the configuration behind it invalidates the cache.
-	version, managed := s.managedModelFingerprint(ctx, agentID, projectID, cached.BinaryVersion)
+	version, managed := s.managedFingerprint(ctx, agentID, projectID, cached.BinaryVersion)
 	if !managed {
 		version = s.discoverer.CatalogFingerprint(ctx, request)
 	}
@@ -766,22 +735,7 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	if mode == modelLoadRefresh {
 		_ = s.persistCatalogState(ctx, cached, hasCached, "refreshing", "", time.Time{}, generation)
 	}
-	var discovered ports.AgentModelCatalog
-	var discoverErr error
-	s.managedMu.RLock()
-	managedModels := s.managedModels
-	s.managedMu.RUnlock()
-	if managedModels != nil {
-		var handled bool
-		discovered, handled, discoverErr = managedModels.DiscoverModels(ctx, domain.AgentHarness(agentID), projectID)
-		if handled {
-			// The managed source owns the error and its account-aware fallback.
-		} else {
-			discovered, discoverErr = s.discoverer.Discover(ctx, request)
-		}
-	} else {
-		discovered, discoverErr = s.discoverer.Discover(ctx, request)
-	}
+	discovered, discoverErr := s.discoverModels(ctx, agentID, projectID, request)
 	discovered = applyCustomModelEntryPolicy(discovered, policy)
 	discovered.BinaryVersion = version
 	persistCtx := s.ctx

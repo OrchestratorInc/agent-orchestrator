@@ -2891,26 +2891,14 @@ paths:
     get:
       operationId: listProviderAccounts
       parameters:
-      - description: When false, return the account catalogue without waiting for
-          provider usage checks.
-        in: query
+      - in: query
         name: includeUsage
         schema:
-          description: When false, return the account catalogue without waiting for
-            provider usage checks.
-          type:
-          - "null"
-          - boolean
-      - description: When true, re-read native logins and the sign-in state of every
-          account now.
-        in: query
+          type: boolean
+      - in: query
         name: refresh
         schema:
-          description: When true, re-read native logins and the sign-in state of every
-            account now.
-          type:
-          - "null"
-          - boolean
+          type: boolean
       responses:
         "200":
           content:
@@ -2918,36 +2906,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProviderAccountsResponse'
           description: OK
-        "400":
+        "500":
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: List local managed accounts and separate provider primaries
+          description: Internal Server Error
+      summary: List managed provider accounts
       tags:
       - agents
-  /api/v1/provider-accounts/{accountId}:
-    delete:
-      operationId: removeProviderAccount
+  /api/v1/provider-accounts/{accountId}/actions:
+    post:
+      operationId: providerAccountAction
       parameters:
       - in: path
         name: accountId
@@ -2958,54 +2928,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ProviderAccountChangeRequest'
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProviderAccountsResponse'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Remove an account and reassign idle managed sessions
-      tags:
-      - agents
-    patch:
-      operationId: renameProviderAccount
-      parameters:
-      - in: path
-        name: accountId
-        required: true
-        schema:
-          type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ProviderAccountNameRequest'
+              $ref: '#/components/schemas/ProviderAccountAction'
         required: true
       responses:
         "200":
@@ -3032,232 +2955,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Conflict
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Rename a local managed account
-      tags:
-      - agents
-  /api/v1/provider-accounts/{accountId}/primary:
-    put:
-      operationId: setProviderPrimary
-      parameters:
-      - in: path
-        name: accountId
-        required: true
-        schema:
-          type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ProviderAccountChangeRequest'
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProviderAccountsResponse'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Set the default and optionally move existing provider sessions
-      tags:
-      - agents
-  /api/v1/provider-accounts/{accountId}/refresh-sign-in:
-    post:
-      operationId: refreshProviderAccountSignIn
-      parameters:
-      - in: path
-        name: accountId
-        required: true
-        schema:
-          type: string
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProviderAccountsResponse'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Renew an account's saved sign-in now
-      tags:
-      - agents
-  /api/v1/provider-accounts/{accountId}/reset:
-    post:
-      operationId: useProviderAccountReset
-      parameters:
-      - in: path
-        name: accountId
-        required: true
-        schema:
-          type: string
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProviderAccountResetResponse'
-          description: OK
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Spend one of the account's usage-limit resets
-      tags:
-      - agents
-  /api/v1/provider-accounts/{accountId}/resume:
-    post:
-      operationId: resumeProviderAccount
-      parameters:
-      - in: path
-        name: accountId
-        required: true
-        schema:
-          type: string
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProviderAccountsResponse'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Stop holding an account back after a provider refusal
-      tags:
-      - agents
-  /api/v1/provider-accounts/{accountId}/sign-out:
-    post:
-      operationId: signOutProviderAccount
-      parameters:
-      - in: path
-        name: accountId
-        required: true
-        schema:
-          type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ProviderAccountChangeRequest'
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProviderAccountsResponse'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Sign out and reassign idle managed sessions
+      summary: Change one managed account or move a session onto it
       tags:
       - agents
   /api/v1/provider-accounts/login:
@@ -3294,13 +2992,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Conflict
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Start a local managed account sign-in
+      summary: Start a managed account sign-in
       tags:
       - agents
   /api/v1/provider-accounts/login/{loginId}:
@@ -3315,13 +3007,13 @@ paths:
       responses:
         "204":
           description: No Content
-        "503":
+        "404":
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Cancel a pending managed login
+          description: Not Found
+      summary: Cancel a sign-in attempt
       tags:
       - agents
     get:
@@ -3339,33 +3031,42 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProviderLoginResponse'
           description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
         "404":
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Verify login and register its account
+      summary: Read a sign-in attempt and record its account once it finishes
       tags:
       - agents
+  /api/v1/provider-accounts/sessions/{sessionId}:
+    get:
+      operationId: getSessionProviderAccount
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionProviderAccountResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Read a session's managed account
+      tags:
+      - sessions
   /api/v1/prs/{id}/merge:
     post:
       operationId: mergePR
@@ -7417,101 +7118,6 @@ paths:
           description: Gateway Timeout
       summary: Start a session-owned server from .ao/launch.json and open its application
         preview
-      tags:
-      - sessions
-  /api/v1/sessions/{sessionId}/provider-account:
-    get:
-      operationId: getSessionProviderAccount
-      parameters:
-      - description: Session identifier, e.g. project-1.
-        in: path
-        name: sessionId
-        required: true
-        schema:
-          description: Session identifier, e.g. project-1.
-          type: string
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SessionProviderAccountResponse'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Read a managed session's account
-      tags:
-      - sessions
-    put:
-      operationId: setSessionProviderAccount
-      parameters:
-      - description: Session identifier, e.g. project-1.
-        in: path
-        name: sessionId
-        required: true
-        schema:
-          description: Session identifier, e.g. project-1.
-          type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ProviderAccountChangeRequest'
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SessionProviderAccountResponse'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Switch an idle managed session's account
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/renders:
@@ -13611,25 +13217,39 @@ components:
       - providerTurnId
       - activityId
       type: object
-    ProviderAccountChangeRequest:
+    ProviderAccountAction:
       properties:
-        accountId:
+        action:
+          enum:
+          - primary
+          - sign-out
+          - remove
+          - rename
+          - resume
+          - refresh-sign-in
+          - reset
+          - assign-session
           type: string
-        moveExisting:
-          type:
-          - "null"
-          - boolean
+        displayName:
+          description: For rename.
+          type: string
         replacementPrimaryId:
+          description: For sign-out and remove of the default account.
           type: string
+        sessionId:
+          description: 'For assign-session: the session to move onto this account.'
+          type: string
+      required:
+      - action
       type: object
-    ProviderAccountCreditsView:
+    ProviderAccountCredits:
       properties:
         balance:
           type: string
         unlimited:
           type: boolean
       type: object
-    ProviderAccountExtraUsageView:
+    ProviderAccountExtraUsage:
       properties:
         limitCents:
           description: The monthly cap in cents; zero when the provider reports none.
@@ -13642,14 +13262,7 @@ components:
       - usedCents
       - limitCents
       type: object
-    ProviderAccountNameRequest:
-      properties:
-        displayName:
-          type: string
-      required:
-      - displayName
-      type: object
-    ProviderAccountRequestsView:
+    ProviderAccountRequests:
       properties:
         failed:
           format: int64
@@ -13661,23 +13274,7 @@ components:
       - succeeded
       - failed
       type: object
-    ProviderAccountResetResponse:
-      properties:
-        outcome:
-          description: Only reset means one was spent. unknown means the provider
-            never confirmed either way.
-          enum:
-          - reset
-          - nothing_to_reset
-          - none_available
-          - wait
-          - failed
-          - unknown
-          type: string
-      required:
-      - outcome
-      type: object
-    ProviderAccountResetView:
+    ProviderAccountReset:
       properties:
         expiresAt:
           type: string
@@ -13693,7 +13290,7 @@ components:
       - left
       - total
       type: object
-    ProviderAccountTokensView:
+    ProviderAccountTokens:
       properties:
         currentStreakDays:
           type:
@@ -13723,19 +13320,15 @@ components:
           - "null"
           - integer
       type: object
-    ProviderAccountUsageView:
+    ProviderAccountUsage:
       properties:
         addedAt:
           type: string
-        checkedAt:
-          format: date-time
-          type: string
         credits:
-          $ref: '#/components/schemas/ProviderAccountCreditsView'
+          $ref: '#/components/schemas/ProviderAccountCredits'
         extraUsage:
-          $ref: '#/components/schemas/ProviderAccountExtraUsageView'
-        message:
-          type: string
+          $ref: '#/components/schemas/ProviderAccountExtraUsage'
+          description: Present only when pay-as-you-go spending is switched on.
         organization:
           type: string
         pausedReason:
@@ -13758,7 +13351,7 @@ components:
         requests:
           description: Requests in the last twenty ten-minute slices, oldest first.
           items:
-            $ref: '#/components/schemas/ProviderAccountRequestsView'
+            $ref: '#/components/schemas/ProviderAccountRequests'
           type: array
         resetBlockedUntil:
           type: string
@@ -13774,7 +13367,7 @@ components:
           description: Each unused reset, soonest to expire first, when the provider
             itemizes them.
           items:
-            $ref: '#/components/schemas/ProviderAccountResetView'
+            $ref: '#/components/schemas/ProviderAccountReset'
           type: array
         signInEnding:
           description: The saved sign-in still works but has stopped renewing, so
@@ -13790,16 +13383,16 @@ components:
           - unavailable
           type: string
         tokens:
-          $ref: '#/components/schemas/ProviderAccountTokensView'
+          $ref: '#/components/schemas/ProviderAccountTokens'
         windows:
           description: The two general limits first, then every scoped limit.
           items:
-            $ref: '#/components/schemas/ProviderAccountUsageWindowView'
+            $ref: '#/components/schemas/ProviderAccountUsageWindow'
           type: array
       required:
       - status
       type: object
-    ProviderAccountUsageWindowView:
+    ProviderAccountUsageWindow:
       properties:
         durationSeconds:
           description: Length of the limit window in seconds, when the provider reports
@@ -13832,6 +13425,7 @@ components:
         email:
           type: string
         global:
+          description: This computer's own login or API key.
           type: boolean
         id:
           type: string
@@ -13852,15 +13446,16 @@ components:
           items:
             type: string
           type: array
-        signInRequired:
-          type: boolean
         signedIn:
+          description: False when signed out or when the provider no longer accepts
+            the saved sign-in.
           type: boolean
         usage:
-          $ref: '#/components/schemas/ProviderAccountUsageView'
+          $ref: '#/components/schemas/ProviderAccountUsage'
       required:
       - id
       - provider
+      - displayName
       - email
       - signedIn
       - primary
@@ -13872,16 +13467,17 @@ components:
           items:
             $ref: '#/components/schemas/ProviderAccountView'
           type: array
-        defaults:
-          items:
-            $ref: '#/components/schemas/ProviderPrimaryView'
-          type: array
-        recoveryRequired:
-          type: boolean
+        resetOutcome:
+          enum:
+          - reset
+          - nothing_to_reset
+          - none_available
+          - wait
+          - failed
+          - unknown
+          type: string
       required:
       - accounts
-      - defaults
-      - recoveryRequired
       type: object
     ProviderLoginRequest:
       properties:
@@ -13916,13 +13512,19 @@ components:
           type: string
         code:
           type: string
-        expiresIn:
-          type: integer
         id:
           type: string
         mode:
+          enum:
+          - browser
+          - device
+          - import
+          - api_key
           type: string
         provider:
+          enum:
+          - codex
+          - claude
           type: string
         status:
           enum:
@@ -13936,24 +13538,9 @@ components:
       required:
       - id
       - provider
+      - mode
       - status
       - accountId
-      type: object
-    ProviderPrimaryView:
-      properties:
-        managed:
-          type: boolean
-        primaryId:
-          type: string
-        provider:
-          enum:
-          - codex
-          - claude
-          type: string
-      required:
-      - provider
-      - primaryId
-      - managed
       type: object
     PublishRenderRequest:
       properties:
@@ -15114,17 +14701,11 @@ components:
       properties:
         accountId:
           type: string
-        loginRequired:
-          type: boolean
         managed:
           type: boolean
-        provider:
-          type: string
       required:
       - managed
-      - provider
       - accountId
-      - loginRequired
       type: object
     SessionProvisionStep:
       properties:

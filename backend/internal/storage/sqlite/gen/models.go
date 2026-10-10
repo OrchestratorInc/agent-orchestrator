@@ -549,10 +549,8 @@ type Project struct {
 }
 
 type ProviderAccountState struct {
-	ID       int64
-	Revision int64
-	Facts    string
-	Pending  sql.NullString
+	ID    int64
+	Facts string
 }
 
 type Report struct {

@@ -826,15 +826,9 @@ func (m *Manager) preflightInterfaceTarget(
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
 	pinRuntimePermissionEnv(env, config.Permissions)
 	m.augmentAgentRuntimeEnv(agent, env)
-	managedAccount := false
-	if m.providerAccounts != nil {
-		_, managedAccount, err = m.providerAccounts.SessionAccount(ctx, rec.ID)
-		if err != nil {
-			return err
-		}
-		if err := m.applyAccountEnv(ctx, rec, env); err != nil {
-			return err
-		}
+	managedAccount, err := m.accountManaged(ctx, rec.ID)
+	if err != nil {
+		return err
 	}
 	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok && !managedAccount {
 		status, authErr := validator.ValidateLaunchAuth(ctx, rec.Metadata.WorkspacePath, env)

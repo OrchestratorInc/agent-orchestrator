@@ -331,7 +331,7 @@ func TestResolveAgentConfigValidatesAgainstTheChosenAccountsCatalogue(t *testing
 	m := &Manager{modelCatalog: scopedCatalog{scopes: &scopes, catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "claude-x"}}}}}
 	for _, account := range []string{"", "account-2"} {
 		if _, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
-			Harness: domain.HarnessClaudeCode, ProjectID: "project-1", ProviderAccountID: account,
+			Harness: domain.HarnessClaudeCode, ProjectID: "project-1", AccountID: account,
 			AgentConfig: ports.AgentConfig{Model: "claude-x"},
 		}, domain.ProjectConfig{}); err != nil {
 			t.Fatal(err)

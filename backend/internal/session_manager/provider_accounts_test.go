@@ -4,390 +4,234 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"sync"
+	"slices"
 	"testing"
-	"time"
-
-	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// accountRoutingFake is an Account Manager: every session is managed when
+// managed is set, and otherwise only the ones it has adopted.
 type accountRoutingFake struct {
-	route     domain.ProviderSessionRoute
-	env       map[string]string
-	managed   bool
-	id        string
-	err       error
-	assigned  []domain.SessionID
-	forgotten []domain.SessionID
-	resolved  []string
-	launches  []domain.SessionID
+	route                                  domain.ProviderSessionRoute
+	env                                    map[string]string
+	managed                                bool
+	id                                     string
+	err                                    error
+	has                                    map[domain.SessionID]bool
+	assigned, forgotten, launches, adopted []domain.SessionID
+	resolved                               []string
 }
 
 func (f *accountRoutingFake) ResolveAccount(_ context.Context, h domain.AgentHarness, id string) (string, bool, error) {
 	f.resolved = append(f.resolved, string(h)+":"+id)
 	return f.id, f.managed, f.err
 }
+
 func (f *accountRoutingFake) AssignAccount(_ context.Context, id domain.SessionID, _ domain.AgentHarness, _ string) error {
 	f.assigned = append(f.assigned, id)
 	return f.err
 }
-func (f *accountRoutingFake) SessionAccount(context.Context, domain.SessionID) (domain.ProviderSessionRoute, bool, error) {
-	return f.route, f.managed, f.err
+
+func (f *accountRoutingFake) SessionAccount(_ context.Context, id domain.SessionID) (domain.ProviderSessionRoute, bool, error) {
+	return f.route, f.managed || f.has[id], f.err
 }
+
 func (f *accountRoutingFake) LaunchAccountEnv(_ context.Context, id domain.SessionID) (map[string]string, error) {
+	if f.err != nil || (!f.managed && !f.has[id]) {
+		return nil, f.err
+	}
 	f.launches = append(f.launches, id)
-	return f.env, f.err
+	return f.env, nil
 }
+
 func (f *accountRoutingFake) ForgetAccount(_ context.Context, id domain.SessionID) error {
 	f.forgotten = append(f.forgotten, id)
-	return f.err
+	return nil
 }
 
-type accountPauseLauncher struct {
-	recordingLauncher
-	paused, released []domain.SessionID
-	pauseErr         error
+func (f *accountRoutingFake) AdoptSession(_ context.Context, id domain.SessionID, _ domain.AgentHarness) (bool, error) {
+	if f.err != nil || f.managed || f.has[id] {
+		return false, f.err
+	}
+	if f.has == nil {
+		f.has = map[domain.SessionID]bool{}
+	}
+	f.has[id] = true
+	f.adopted = append(f.adopted, id)
+	return true, nil
 }
 
-func (l *accountPauseLauncher) AcquireAccountRoutingPause(_ context.Context, id domain.SessionID) (func(), error) {
-	l.paused = append(l.paused, id)
-	if l.pauseErr != nil {
-		return nil, l.pauseErr
-	}
-	var once sync.Once
-	return func() { once.Do(func() { l.released = append(l.released, id) }) }, nil
-}
-func TestProviderAccountLaunchEnvOnlyChangesManagedSessions(t *testing.T) {
-	cases := []struct {
-		name    string
-		h       domain.AgentHarness
-		p       string
-		managed bool
-		want    error
-	}{
-		{"managed-codex", domain.HarnessCodex, "codex", true, nil},
-		{"managed-claude", domain.HarnessClaudeCode, "claude", true, nil},
-		{"native-codex", domain.HarnessCodex, "", false, nil},
-		{"native-claude", domain.HarnessClaudeCode, "", false, nil},
-		{"provider-mismatch", domain.HarnessClaudeCode, "codex", true, ports.ErrProviderAccountIncompatible},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			m, _, _, _ := newManager()
-			f := &accountRoutingFake{managed: tc.managed, route: domain.ProviderSessionRoute{Provider: tc.p}, env: map[string]string{"AO_PROXY_TICKET": "private", "ANTHROPIC_API_KEY": ""}}
-			m.SetProviderAccounts(f)
-			env := map[string]string{"PATH": "/agent-bin", "ANTHROPIC_API_KEY": "ambient"}
-			err := m.applyAccountEnv(context.Background(), domain.SessionRecord{ID: "s", Harness: tc.h}, env)
-			if !errors.Is(err, tc.want) {
-				t.Fatalf("err=%v want=%v", err, tc.want)
-			}
-			if env["PATH"] != "/agent-bin" {
-				t.Fatal("account route overwrote PATH")
-			}
-			if tc.managed && tc.want == nil {
-				if env["AO_PROXY_TICKET"] != "private" || env["ANTHROPIC_API_KEY"] != "" || !reflect.DeepEqual(f.launches, []domain.SessionID{"s"}) {
-					t.Fatalf("env=%v launches=%v", env, f.launches)
-				}
-			} else {
-				if env["ANTHROPIC_API_KEY"] != "ambient" || len(f.launches) != 0 {
-					t.Fatalf("native/mismatched env changed=%v launches=%v", env, f.launches)
-				}
-			}
-		})
-	}
-}
-func TestProviderAccountLaunchFailuresLeaveEnvironmentUntouched(t *testing.T) {
-	m, _, _, _ := newManager()
+var managedLaunch = map[string]string{"AO_PROXY_ENDPOINT": "http://127.0.0.1:4567", "AO_PROXY_TICKET": "session-ticket"}
+
+func TestAccountEnvIsAddedOnlyToManagedLaunches(t *testing.T) {
 	failure := errors.New("routing database unavailable")
-	m.SetProviderAccounts(&accountRoutingFake{managed: true, err: failure})
-	env := map[string]string{"PATH": "/agent-bin", "AO_PROXY_TICKET": "previous"}
-	before := map[string]string{"PATH": "/agent-bin", "AO_PROXY_TICKET": "previous"}
-	err := m.applyAccountEnv(context.Background(), domain.SessionRecord{ID: "s", Harness: domain.HarnessCodex}, env)
-	if !errors.Is(err, failure) || !reflect.DeepEqual(env, before) {
-		t.Fatalf("env=%v err=%v", env, err)
+	ticket := map[string]string{"AO_PROXY_TICKET": "private", "ANTHROPIC_API_KEY": ""}
+	for name, tc := range map[string]struct {
+		accounts ports.ProviderAccountRouting
+		key      string
+		err      error
+	}{
+		"managed":            {&accountRoutingFake{managed: true, env: ticket}, "", nil},
+		"native":             {&accountRoutingFake{env: ticket}, "ambient", nil},
+		"failure":            {&accountRoutingFake{managed: true, env: ticket, err: failure}, "ambient", failure},
+		"no Account Manager": {nil, "ambient", nil},
+	} {
+		m, _, _, _ := newManager()
+		m.accounts = tc.accounts
+		env := map[string]string{"PATH": "/agent-bin", "ANTHROPIC_API_KEY": "ambient"}
+		err := m.applyAccountEnv(context.Background(), "s", env)
+		if !errors.Is(err, tc.err) || env["PATH"] != "/agent-bin" || env["ANTHROPIC_API_KEY"] != tc.key || (tc.key == "") != (env["AO_PROXY_TICKET"] == "private") {
+			t.Errorf("%s: env=%v err=%v", name, env, err)
+		}
+		if managed, err := m.accountManaged(context.Background(), "s"); managed != (name == "managed") && err == nil {
+			t.Errorf("%s: managed=%v", name, managed)
+		}
 	}
 }
-func TestProviderAccountMutationRefusesActiveAndUnknownSessions(t *testing.T) {
-	for _, state := range []domain.ActivityState{domain.ActivityActive, "unknown", ""} {
-		t.Run(string(state), func(t *testing.T) {
-			m, st, _, _ := newManager()
-			st.sessions["s"] = domain.SessionRecord{ID: "s", Mode: domain.SessionModeChat, Activity: domain.Activity{State: state}}
-			release, err := m.AcquireAccountMutation(context.Background(), []domain.SessionID{"s"})
-			if release != nil || !errors.Is(err, ports.ErrProviderAccountBusy) {
-				t.Fatalf("release=%v err=%v", release != nil, err)
-			}
-			done, allowed := m.AcquireSessionInput("s")
-			if !allowed {
-				t.Fatal("busy refusal left input fenced")
-			}
-			done()
-		})
+
+func TestRelatedWorkUsesTheOwnersAccountOnlyWhenTheProviderMatches(t *testing.T) {
+	for name, tc := range map[string]struct {
+		harness  domain.AgentHarness
+		provider string
+		managed  bool
+		account  string
+		calls    int
+		want     error
+	}{
+		"codex owner":        {domain.HarnessCodex, "codex", true, "a", 1, nil},
+		"claude owner":       {domain.HarnessClaudeCode, "claude", true, "c", 1, nil},
+		"different provider": {domain.HarnessClaudeCode, "codex", true, "a", 0, nil},
+		"unmanaged harness":  {domain.HarnessCursor, "codex", true, "a", 0, nil},
+		"native owner":       {domain.HarnessCodex, "", false, "", 0, nil},
+		"waiting owner":      {domain.HarnessCodex, "codex", true, "", 0, ports.ErrProviderLoginRequired},
+	} {
+		m, _, _, _ := newManager()
+		f := &accountRoutingFake{managed: tc.managed, route: domain.ProviderSessionRoute{Provider: tc.provider, AccountID: tc.account}, env: map[string]string{"ticket": "owner"}}
+		m.accounts = f
+		env, err := m.RelatedAccountEnv(context.Background(), "worker", tc.harness)
+		if !errors.Is(err, tc.want) || len(f.launches) != tc.calls || (tc.calls == 1) != (env["ticket"] == "owner") {
+			t.Errorf("%s: env=%v launches=%v err=%v", name, env, f.launches, err)
+		}
 	}
 }
-func TestProviderAccountMutationFencesInputUntilIdempotentRelease(t *testing.T) {
-	for _, state := range []domain.ActivityState{domain.ActivityIdle, domain.ActivityWaitingInput} {
-		t.Run(string(state), func(t *testing.T) {
-			l := &accountPauseLauncher{}
-			m, st, _ := newChatManager(l)
-			st.sessions["s"] = domain.SessionRecord{ID: "s", Mode: domain.SessionModeChat, Activity: domain.Activity{State: state}}
-			release, err := m.AcquireAccountMutation(context.Background(), []domain.SessionID{"s"})
+
+func TestSpawnRoutesTheDefaultOrChosenAccountIntoTheTerminalLaunch(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessCodex, domain.HarnessClaudeCode} {
+		for _, choice := range []string{"", "explicit-account"} {
+			m, st, rt, _ := newManager()
+			f := &accountRoutingFake{managed: true, id: "resolved-account", env: managedLaunch}
+			m.accounts = f
+			rec, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: harness, RequestedMode: domain.SessionModeTUI, AccountID: choice})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(l.paused, []domain.SessionID{"s"}) {
-				t.Fatalf("chat not fenced=%v", l.paused)
+			if !reflect.DeepEqual(f.resolved, []string{string(harness) + ":" + choice}) || !reflect.DeepEqual(f.assigned, []domain.SessionID{rec.ID}) || !reflect.DeepEqual(f.launches, []domain.SessionID{rec.ID}) {
+				t.Fatalf("resolve=%v assign=%v launch=%v", f.resolved, f.assigned, f.launches)
 			}
-			if _, allowed := m.AcquireSessionInput("s"); allowed {
-				t.Fatal("input admitted during account mutation")
+			if _, saved := st.sessions[rec.ID]; !saved || rt.created != 1 || rt.lastCfg.Env["AO_PROXY_TICKET"] != "session-ticket" {
+				t.Fatalf("saved=%v created=%d env=%v", saved, rt.created, rt.lastCfg.Env)
 			}
-			if _, err = m.AcquireAccountMutation(context.Background(), []domain.SessionID{"s"}); !errors.Is(err, ports.ErrProviderAccountBusy) {
-				t.Fatalf("second mutation=%v", err)
+			// Codex is pointed at the helper by argument; the ticket stays in the environment.
+			if !slices.Contains(rt.lastCfg.Argv, `model_provider="ao-managed"`) || slices.ContainsFunc(rt.lastCfg.Argv, func(arg string) bool { return arg == "session-ticket" }) {
+				t.Fatalf("argv=%v", rt.lastCfg.Argv)
 			}
-			release()
-			release()
-			if !reflect.DeepEqual(l.released, []domain.SessionID{"s"}) {
-				t.Fatalf("pause release=%v", l.released)
-			}
-			done, allowed := m.AcquireSessionInput("s")
-			if !allowed {
-				t.Fatal("input remains fenced")
-			}
-			done()
-		})
-	}
-}
-func TestProviderAccountMutationRollsBackEveryEarlierSessionOnBatchRefusal(t *testing.T) {
-	l := &accountPauseLauncher{}
-	m, st, _ := newChatManager(l)
-	st.sessions["idle"] = domain.SessionRecord{ID: "idle", Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
-	st.sessions["busy"] = domain.SessionRecord{ID: "busy", Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityActive}}
-	release, err := m.AcquireAccountMutation(context.Background(), []domain.SessionID{"idle", "busy"})
-	if release != nil || !errors.Is(err, ports.ErrProviderAccountBusy) {
-		t.Fatalf("release=%v err=%v", release != nil, err)
-	}
-	if !reflect.DeepEqual(l.released, []domain.SessionID{"idle"}) {
-		t.Fatalf("earlier chat remains paused=%v", l.released)
-	}
-	for _, id := range []domain.SessionID{"idle", "busy"} {
-		done, allowed := m.AcquireSessionInput(id)
-		if !allowed {
-			t.Fatalf("%s fenced after failed batch", id)
 		}
-		done()
 	}
 }
-func TestProviderAccountMutationPropagatesControllerRefusalAndReleasesInput(t *testing.T) {
-	l := &accountPauseLauncher{pauseErr: ports.ErrProviderAccountBusy}
-	m, st, _ := newChatManager(l)
-	st.sessions["s"] = domain.SessionRecord{ID: "s", Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
-	release, err := m.AcquireAccountMutation(context.Background(), []domain.SessionID{"s"})
-	if release != nil || !errors.Is(err, ports.ErrProviderAccountBusy) {
-		t.Fatalf("release=%v err=%v", release != nil, err)
-	}
-	done, allowed := m.AcquireSessionInput("s")
-	if !allowed {
-		t.Fatal("controller refusal left input fenced")
-	}
-	done()
-	if len(l.released) != 0 {
-		t.Fatal("released a pause never acquired")
+
+func TestSpawnWithoutAUsableAccountLeavesNoSession(t *testing.T) {
+	for _, assignOnly := range []bool{false, true} {
+		m, st, rt, _ := newManager()
+		f := &failingAssign{accountRoutingFake: accountRoutingFake{managed: true, err: ports.ErrProviderLoginRequired}, assignOnly: assignOnly}
+		m.accounts = f
+		_, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, AccountID: "signed-out"})
+		if !errors.Is(err, ports.ErrProviderLoginRequired) || len(st.sessions) != 0 || rt.created != 0 {
+			t.Fatalf("assignOnly=%v err=%v sessions=%d runtimes=%d", assignOnly, err, len(st.sessions), rt.created)
+		}
+		if assignOnly != (len(f.forgotten) == 1) {
+			t.Fatalf("assignOnly=%v forgotten=%v", assignOnly, f.forgotten)
+		}
 	}
 }
-func TestProviderAccountMutationRequiresChatAdmissionBoundary(t *testing.T) {
-	m, st, _ := newChatManager(&recordingLauncher{})
-	st.sessions["s"] = domain.SessionRecord{ID: "s", Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}}
-	if _, err := m.AcquireAccountMutation(context.Background(), []domain.SessionID{"s"}); !errors.Is(err, ports.ErrProviderAccountBusy) {
-		t.Fatalf("unguarded chat mutation=%v", err)
-	}
+
+// failingAssign resolves an account and then cannot give it to the session.
+type failingAssign struct {
+	accountRoutingFake
+	assignOnly bool
 }
-func TestProviderAccountMutationAllowsExitedTerminatedAndRemovedSessions(t *testing.T) {
-	m, st, _, _ := newManager()
-	st.sessions["terminated"] = domain.SessionRecord{ID: "terminated", IsTerminated: true}
-	st.sessions["exited"] = domain.SessionRecord{ID: "exited", Activity: domain.Activity{State: domain.ActivityExited}}
-	ids := []domain.SessionID{"terminated", "exited", "absent"}
-	release, err := m.AcquireAccountMutation(context.Background(), ids)
+
+func (f *failingAssign) ResolveAccount(ctx context.Context, h domain.AgentHarness, id string) (string, bool, error) {
+	if f.assignOnly {
+		return "a", true, nil
+	}
+	return f.accountRoutingFake.ResolveAccount(ctx, h, id)
+}
+
+func TestManagedChatLaunchAndRestoreCarryTheSameTicket(t *testing.T) {
+	launcher := &recordingLauncher{}
+	m, sessions, runtime := newChatManager(launcher)
+	f := &accountRoutingFake{managed: true, id: "a", route: domain.ProviderSessionRoute{Provider: "codex", AccountID: "a"}, env: managedLaunch}
+	m.accounts = f
+	rec, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex, RequestedMode: domain.SessionModeChat})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range ids {
-		if _, allowed := m.AcquireSessionInput(id); allowed {
-			t.Fatalf("%s not fenced", id)
+	if _, err = m.Kill(context.Background(), rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	native := sessions.sessions[rec.ID].Metadata.ProviderConversationID
+	if result, err := m.RestoreWithMode(context.Background(), rec.ID); err != nil || result.Mode != RestoreModeNative {
+		t.Fatalf("restore=%+v err=%v", result, err)
+	}
+	if len(launcher.started) != 2 || runtime.created != 0 || native == "" || launcher.started[1].ProviderConversationID != native {
+		t.Fatalf("started=%d terminals=%d conversation=%q", len(launcher.started), runtime.created, native)
+	}
+	for _, start := range launcher.started {
+		if start.SessionID != rec.ID || start.Env["AO_PROXY_TICKET"] != "session-ticket" || start.Env["AO_PROXY_ENDPOINT"] != managedLaunch["AO_PROXY_ENDPOINT"] {
+			t.Fatalf("launch env=%v", start.Env)
 		}
 	}
-	release()
-	for _, id := range ids {
-		done, allowed := m.AcquireSessionInput(id)
-		if !allowed {
-			t.Fatalf("%s remains fenced", id)
-		}
-		done()
-	}
-}
-func TestProviderAccountMutationStorageFailureLeavesNoFence(t *testing.T) {
-	m, st, _, _ := newManager()
-	st.getSessionErr = errors.New("sqlite busy")
-	release, err := m.AcquireAccountMutation(context.Background(), []domain.SessionID{"s"})
-	if release != nil || !errors.Is(err, st.getSessionErr) {
-		t.Fatalf("release=%v err=%v", release != nil, err)
-	}
-	done, allowed := m.AcquireSessionInput("s")
-	if !allowed {
-		t.Fatal("database failure left input fenced")
-	}
-	done()
-}
-func TestProviderRelatedWorkUsesOwnerOnlyWhenProviderMatches(t *testing.T) {
-	cases := []struct {
-		name      string
-		h         domain.AgentHarness
-		p         string
-		managed   bool
-		account   string
-		wantCalls int
-		want      error
-	}{
-		{"codex-owner", domain.HarnessCodex, "codex", true, "a", 1, nil},
-		{"claude-owner", domain.HarnessClaudeCode, "claude", true, "c", 1, nil},
-		{"different-provider", domain.HarnessClaudeCode, "codex", true, "a", 0, nil},
-		{"unrelated-harness", domain.HarnessCodex, "claude", true, "c", 0, nil},
-		{"native-owner", domain.HarnessCodex, "", false, "", 0, nil},
-		{"waiting-owner", domain.HarnessCodex, "codex", true, "", 0, ports.ErrProviderLoginRequired},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			m, _, _, _ := newManager()
-			f := &accountRoutingFake{managed: tc.managed, route: domain.ProviderSessionRoute{Provider: tc.p, AccountID: tc.account}, env: map[string]string{"ticket": "owner"}}
-			m.SetProviderAccounts(f)
-			env, err := m.RelatedAccountEnv(context.Background(), "worker", tc.h)
-			if !errors.Is(err, tc.want) || len(f.launches) != tc.wantCalls {
-				t.Fatalf("env=%v calls=%v err=%v", env, f.launches, err)
-			}
-			if tc.wantCalls == 1 && (env["ticket"] != "owner" || f.launches[0] != "worker") {
-				t.Fatalf("reviewer did not inherit owner=%v %v", env, f.launches)
-			}
-		})
+	if !reflect.DeepEqual(f.assigned, []domain.SessionID{rec.ID}) || len(f.resolved) != 1 {
+		t.Fatalf("restore chose an account again: resolved=%v assigned=%v", f.resolved, f.assigned)
 	}
 }
 
-func TestProviderAccountSpawnRoutesPrimaryAndExplicitSelections(t *testing.T) {
-	for _, provider := range []string{"codex", "claude"} {
-		for _, choice := range []string{"", "explicit-account"} {
-			t.Run(provider+choice, func(t *testing.T) {
-				m, st, rt, _ := newManager()
-				harness := domain.HarnessCodex
-				if provider == "claude" {
-					harness = domain.HarnessClaudeCode
-				}
-				env := map[string]string{"AO_PROXY_ENDPOINT": "http://127.0.0.1:4567", "AO_PROXY_TICKET": "session-ticket"}
-				if provider == "claude" {
-					env = map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:4567", "ANTHROPIC_AUTH_TOKEN": "session-ticket", "ANTHROPIC_API_KEY": ""}
-				}
-				f := &accountRoutingFake{managed: true, id: "resolved-account", route: domain.ProviderSessionRoute{Provider: provider, AccountID: "resolved-account"}, env: env}
-				m.SetProviderAccounts(f)
-				rec, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: harness, RequestedMode: domain.SessionModeTUI, ProviderAccountID: choice})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !reflect.DeepEqual(f.resolved, []string{string(harness) + ":" + choice}) || !reflect.DeepEqual(f.assigned, []domain.SessionID{rec.ID}) || !reflect.DeepEqual(f.launches, []domain.SessionID{rec.ID}) {
-					t.Fatalf("resolve=%v assign=%v launch=%v", f.resolved, f.assigned, f.launches)
-				}
-				if _, exists := st.sessions[rec.ID]; !exists {
-					t.Fatal("routed session was not persisted")
-				}
-				if rt.created == 0 {
-					t.Fatal("routed session never launched")
-				}
-			})
+func TestManagedSessionCannotChangeProvider(t *testing.T) {
+	for _, mode := range []domain.SessionMode{domain.SessionModeTUI, domain.SessionModeChat} {
+		runtime := &fakeRestartRuntime{fakeRuntime: &fakeRuntime{}}
+		m, sessions, _ := newSwitchTestManager(t, runtime)
+		rec := sessions.sessions["proj-1"]
+		rec.Mode = mode
+		sessions.sessions[rec.ID] = rec
+		routes := &accountRoutingFake{managed: true, route: domain.ProviderSessionRoute{Provider: "claude", AccountID: "alice"}}
+		m.accounts = routes
+		_, err := m.SwitchAgent(context.Background(), rec.ID, SwitchAgentConfig{TargetHarness: domain.HarnessCodex, IdempotencyKey: "managed-harness-switch"})
+		if !errors.Is(err, ports.ErrProviderAccountIncompatible) || !reflect.DeepEqual(sessions.sessions[rec.ID], rec) {
+			t.Fatalf("%s: err=%v", mode, err)
+		}
+		if len(runtime.destroyedIDs) != 0 || runtime.created != 0 || len(routes.assigned)+len(routes.launches)+len(routes.forgotten) != 0 {
+			t.Fatalf("%s: a refused change touched the session's process or account", mode)
 		}
 	}
 }
-func TestProviderAccountSpawnLoginFailureCreatesNoDurableSession(t *testing.T) {
-	m, st, rt, _ := newManager()
-	m.SetProviderAccounts(&accountRoutingFake{managed: true, err: ports.ErrProviderLoginRequired})
-	_, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, ProviderAccountID: "signed-out"})
-	if !errors.Is(err, ports.ErrProviderLoginRequired) {
-		t.Fatalf("spawn error=%v", err)
-	}
-	if len(st.sessions) != 0 || rt.created != 0 {
-		t.Fatalf("failed auth created session=%d runtimes=%d", len(st.sessions), rt.created)
-	}
-}
 
-func TestProviderAccountMutationWithCodexWarningFooter(t *testing.T) {
-	for _, tc := range []struct {
-		name, prompt, work string
-		busy               bool
-	}{
-		{"idle", "\x1b[1m›\x1b[m \x1b[2mAsk Codex to do anything\x1b[m", "• Completed", false},
-		// Unsent text is not a request in flight. The idle proof shared with
-		// interface switches no longer stops for it (#6366), and an account change
-		// leaves the terminal and its composer untouched, so it is admitted.
-		{"unsent draft", "\x1b[1m›\x1b[m Keep this draft", "• Completed", false},
-		{"active screen despite idle row", "\x1b[1m›\x1b[m", "• Working (4s • esc to interrupt)", true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m, st, runtime, _, events := newTransitionManager(t, domain.SessionModeTUI)
-			useFastInterfaceTransitionTimings(m)
-			m.agents = singleAgent{agent: &codexagent.Plugin{}}
-			rec := st.sessions["session-1"]
-			rec.Harness = domain.HarnessCodex
-			st.sessions[rec.ID] = rec
-			runtime.aliveByHandle = map[string]bool{"runtime-1": true}
-			output := tc.work + "\n\n" + tc.prompt + "\n\n  GPT-5.5 low · ~/project · Task title\n  ? for shortcuts     ⚠ 3 warnings · f2 to view"
-			runtime.outputForCall = func(int) string { return output }
-			gate := &transitionInputGate{acquired: make(chan string, 1), released: make(chan string, 1)}
-			m.SetTerminalInputGate(gate)
-			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-			defer cancel()
-			release, err := m.AcquireAccountMutation(ctx, []domain.SessionID{rec.ID})
-			if tc.busy {
-				if release != nil || !errors.Is(err, ports.ErrProviderAccountBusy) {
-					t.Fatalf("unsafe account change admitted: %v", err)
-				}
-			} else {
-				if err != nil || release == nil {
-					t.Fatalf("idle warnings blocked account change: %v", err)
-				}
-				if _, allowed := m.AcquireSessionInput(rec.ID); allowed {
-					t.Fatal("input bypassed account fence")
-				}
-				select {
-				case <-gate.released:
-					t.Fatal("terminal intake released before routing change")
-				default:
-				}
-				release()
-				release()
+func TestManagedSessionsSkipTheNativeSignInProbe(t *testing.T) {
+	for _, managed := range []bool{false, true} {
+		m, _, _, _ := newManager()
+		m.agents = singleAgent{agent: &launchAuthAgent{recordingAgent: &recordingAgent{}, status: ports.AgentAuthStatusUnauthorized}}
+		m.accounts = &accountRoutingFake{managed: managed, id: "a"}
+		_, _, _, spawnErr := m.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, RequestedMode: domain.SessionModeTUI})
+
+		switching, store, _, _, _ := newTransitionManager(t, domain.SessionModeChat)
+		switching.agents = singleAgent{agent: &transitionLaunchAuthAgent{status: ports.AgentAuthStatusUnauthorized}}
+		switching.accounts = &accountRoutingFake{managed: managed}
+		switchErr := switching.preflightInterfaceTarget(context.Background(), store.sessions["session-1"], domain.SessionInterfaceTransition{TargetMode: domain.SessionModeTUI, NativeConversationID: "native-1"})
+		for name, err := range map[string]error{"spawn": spawnErr, "interface switch": switchErr} {
+			if managed == errors.Is(err, ports.ErrAgentAuthRequired) {
+				t.Errorf("%s managed=%v: err=%v", name, managed, err)
 			}
-			select {
-			case id := <-gate.acquired:
-				if id != "runtime-1" {
-					t.Fatal(id)
-				}
-			default:
-				t.Fatal("terminal input not fenced")
-			}
-			select {
-			case <-gate.released:
-			default:
-				t.Fatal("terminal input fence leaked")
-			}
-			select {
-			case <-gate.released:
-				t.Fatal("terminal input released twice")
-			default:
-			}
-			done, allowed := m.AcquireSessionInput(rec.ID)
-			if !allowed {
-				t.Fatal("session input remains fenced")
-			}
-			done()
-			if runtime.styledOutputCalls < 3 || len(*events) != 0 || !reflect.DeepEqual(rec, st.sessions[rec.ID]) {
-				t.Fatal("account admission lacked repeated proof or changed session lifecycle/history")
-			}
-		})
+		}
 	}
 }

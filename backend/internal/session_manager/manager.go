@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -396,11 +395,11 @@ type conversationSettingsStore interface {
 // Manager coordinates internal session spawn, restore, kill, and cleanup over
 // the outbound ports. User-facing read-model assembly lives in the service package.
 type Manager struct {
-	providerAccounts ports.ProviderAccountRouting
-	runtime          runtimeController
-	agents           ports.AgentResolver
-	workspace        ports.Workspace
-	store            Store
+	runtime   runtimeController
+	agents    ports.AgentResolver
+	workspace ports.Workspace
+	store     Store
+	accounts  ports.ProviderAccountRouting
 	// agentSwitchReporting supplies the exact authorization snapshot immediately
 	// before each failure-aware store transaction. Nil is fail-closed.
 	agentSwitchReporting ports.AgentSwitchReportingPolicy
@@ -532,8 +531,6 @@ type Manager struct {
 	// user-paced waits reported through the activity boundary remain unbounded.
 	interfaceTransition interfaceTransitionConfig
 	logger              *slog.Logger
-	// legacyChatMigration moves chats that predate Account Manager onto it.
-	legacyChatMigration atomic.Bool
 
 	// shellTerminalsMu guards shellTerminals: it is late-bound (see
 	// ShellTerminalCloser) after Manager already exists, so a setter mutates it
@@ -802,6 +799,8 @@ type Deps struct {
 	Executable func() (string, error)
 	// NewLaunchID overrides supervised-process generation for deterministic tests.
 	NewLaunchID func() string
+	// Accounts is Account Manager; nil leaves every session on its native sign-in.
+	Accounts ports.ProviderAccountRouting
 	// ReconcileWorkers bounds concurrent live-session recovery during daemon
 	// startup. Values below one preserve the serial default for embedders/tests;
 	// production explicitly opts into a small worker pool.
@@ -844,6 +843,7 @@ func New(d Deps) *Manager {
 		lookPath:                       d.LookPath,
 		executable:                     d.Executable,
 		newLaunchID:                    d.NewLaunchID,
+		accounts:                       d.Accounts,
 		backgroundContext:              d.BackgroundContext,
 		startupBackgroundReconcileDone: make(chan struct{}),
 		agentOperations:                make(map[domain.SessionID]agentOperationKind),
@@ -982,12 +982,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// Resolve the effective agent config (project base + role override + spawn
 	// override) and validate the model before any durable state is created. A
 	// model the harness cannot honor should not leave a seed row behind.
-	managedAccountID, managedAccount := "", false
-	if m.providerAccounts != nil {
-		var routeErr error
-		managedAccountID, managedAccount, routeErr = m.providerAccounts.ResolveAccount(ctx, cfg.Harness, cfg.ProviderAccountID)
-		if routeErr != nil {
-			return domain.SessionRecord{}, 0, 0, routeErr
+	accountID, managedAccount := "", false
+	if m.accounts != nil {
+		if accountID, managedAccount, err = m.accounts.ResolveAccount(ctx, cfg.Harness, cfg.AccountID); err != nil {
+			return domain.SessionRecord{}, 0, 0, err
 		}
 	}
 	agentConfig := applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config), cfg.AgentConfig)
@@ -1103,7 +1101,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 	id := rec.ID
 	if managedAccount {
-		if err := m.providerAccounts.AssignAccount(ctx, id, cfg.Harness, managedAccountID); err != nil {
+		if err := m.accounts.AssignAccount(ctx, id, cfg.Harness, accountID); err != nil {
 			m.rollbackSpawnSeedRowAfterFailure(ctx, id)
 			return domain.SessionRecord{}, 0, 0, err
 		}
@@ -1407,12 +1405,6 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepareLaunch, err)
 	}
 	defer m.lcm.CancelLaunch(id, launchID)
-	releaseCodexAdmission, err := m.acquireCodexControllerAdmission(ctx, cfg.Harness)
-	if err != nil {
-		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, err)
-	}
-	defer releaseCodexAdmission()
 	handle, err := m.runtime.Create(ctx, ports.RuntimeConfig{
 		SessionID:     id,
 		WorkspacePath: ws.Path,
@@ -1545,11 +1537,9 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		}
 		return resolved, nil
 	}
-	// An explicitly chosen account is validated against its own catalogue, the
-	// same one the task composer showed for it.
 	scope := string(cfg.ProjectID)
-	if accountID := strings.TrimSpace(cfg.ProviderAccountID); accountID != "" {
-		scope = ports.ModelCatalogAccountScope(accountID)
+	if cfg.AccountID != "" {
+		scope = ports.ModelCatalogAccountScope(cfg.AccountID)
 	}
 	catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), scope, true)
 	if err != nil {
@@ -1570,9 +1560,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		}
 	}
 	if modelID == "" && catalog.Source == ports.ModelCatalogSourceManagedAccount {
-		// An account's catalogue names no default, so the agent picks its own
-		// model and AO cannot tell which. The effort goes to the agent as chosen.
-		return resolved, nil
+		return resolved, nil // an account's catalogue names no default model
 	}
 	if catalog.Stale && validateClaudeModel {
 		return ports.AgentConfig{}, fmt.Errorf("%w for model %q: catalog is stale", ports.ErrModelCapabilitiesUnavailable, modelID)
@@ -2322,9 +2310,7 @@ func (m *Manager) markSpawnFailedTerminatedWithoutWorkspace(ctx context.Context,
 // fails, fall back to parking it terminated so a phantom row never looks live.
 func (m *Manager) rollbackSpawnSeedRow(ctx context.Context, id domain.SessionID) {
 	if deleted, err := m.store.DeleteSession(ctx, id); err == nil && deleted {
-		if err := m.forgetAccount(ctx, id); err != nil {
-			m.logger.Warn("revoke deleted session account ticket", "sessionID", id, "error", err)
-		}
+		_ = m.forgetAccount(ctx, id)
 		m.cleanupSystemPromptDir(id)
 		m.cleanupAttachments(ctx, id)
 		return
@@ -3303,13 +3289,9 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, agentConfig.Permissions)
-	managedAccount := false
-	if m.providerAccounts != nil {
-		_, managed, accountErr := m.providerAccounts.SessionAccount(ctx, rec.ID)
-		if accountErr != nil {
-			return RestoreResult{}, accountErr
-		}
-		managedAccount = managed
+	managedAccount, err := m.accountManaged(ctx, rec.ID)
+	if err != nil {
+		return RestoreResult{}, err
 	}
 	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok && !managedAccount {
 		status, authErr := validator.ValidateLaunchAuth(ctx, ws.Path, env)
@@ -3384,12 +3366,6 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		return RestoreResult{}, fmt.Errorf("%s %s: prepare launch: %w", operation, rec.ID, err)
 	}
 	defer m.lcm.CancelLaunch(rec.ID, launchID)
-	releaseCodexAdmission, err := m.acquireCodexControllerAdmission(ctx, rec.Harness)
-	if err != nil {
-		m.cleanupSystemPromptDir(rec.ID)
-		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
-	}
-	defer releaseCodexAdmission()
 	runtimeCfg := ports.RuntimeConfig{
 		SessionID:     rec.ID,
 		WorkspacePath: ws.Path,
@@ -5838,7 +5814,7 @@ func (m *Manager) prepareWorkerLaunchEnv(
 	if err != nil {
 		return rec, nil, err
 	}
-	if err := m.applyAccountEnv(ctx, rec, env); err != nil {
+	if err := m.applyAccountEnv(ctx, rec.ID, env); err != nil {
 		return rec, nil, err
 	}
 	rec, err = m.persistBrowserCapabilityVerifier(ctx, rec, rec.ControllerOwner(), verifier)
@@ -5861,7 +5837,7 @@ func (m *Manager) prepareChatControllerEnv(
 	if err != nil {
 		return rec, nil, err
 	}
-	if err := m.applyAccountEnv(ctx, rec, env); err != nil {
+	if err := m.applyAccountEnv(ctx, rec.ID, env); err != nil {
 		return rec, nil, err
 	}
 	rec, err = m.persistBrowserCapabilityVerifier(ctx, rec, expected, verifier)
@@ -6514,9 +6490,7 @@ func (m *Manager) wrapAgentProcessWithLaunchID(agent ports.Agent, id domain.Sess
 	// process exit through native hooks and therefore do not need the wrapper.
 	// Without this env value an old source hook can overwrite the target's
 	// native session id after an in-place switch.
-	if env["AO_PROXY_ENDPOINT"] != "" {
-		argv = agentlaunch.CodexProxyArgv(argv, env)
-	}
+	argv = agentlaunch.CodexProxyArgv(argv, env)
 	env[EnvRuntimeLaunchID] = launchID
 	if augmenter, ok := agent.(ports.AgentRuntimeLaunchEnv); ok {
 		augmenter.AugmentRuntimeLaunchEnv(env, m.dataDir, id, launchID)

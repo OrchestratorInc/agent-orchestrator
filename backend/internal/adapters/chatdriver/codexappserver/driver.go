@@ -398,10 +398,8 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	if cfg.Model != "" {
 		params["model"] = cfg.Model
 	}
-	// Codex resumes a thread on the provider it was created with, whatever this
-	// process was launched to use. A conversation started before its session
-	// had an account would keep using this computer's own sign-in, so the
-	// account helper is named here.
+	// Codex resumes a thread on the provider it was created with, so a routed
+	// process names the account helper again.
 	if conv.modelProvider != "" {
 		params["modelProvider"] = conv.modelProvider
 	}
@@ -541,8 +539,6 @@ func (d *Driver) connectSession(
 		Env:           envSlice(env),
 		Argv:          agentlaunch.CodexProxyArgv([]string{bin, "app-server"}, env),
 	}
-	// The environment the process is launched with decides its provider. It is
-	// only prepared when a process is launched, so it is read at that moment.
 	launchProvider := agentlaunch.CodexProxyProviderFor(env)
 	if prepareEnv != nil {
 		hostConfig.Prepare = func(prepareCtx context.Context) (persistenthost.PreparedProvider, error) {
@@ -666,8 +662,8 @@ func launchApprovalSettings(mode ports.PermissionMode, readOnly bool) (policy, s
 
 // spawnAppServer is the real launcher.
 func spawnAppServer(ctx context.Context, bin, workdir string, env []string) (*process, error) {
-	argv := agentlaunch.CodexProxyArgvFromEnv([]string{bin, "app-server"}, env)
-	cmd := aoprocess.Command(argv[0], argv[1:]...)
+	args := []string{"app-server"}
+	cmd := aoprocess.Command(bin, args...)
 	cmd.Dir = workdir
 	if len(env) > 0 {
 		cmd.Env = env

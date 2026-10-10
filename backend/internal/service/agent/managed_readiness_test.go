@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,131 +13,149 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-type managedReadinessTestSource func(context.Context, domain.AgentHarness, domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool)
-
-func (f managedReadinessTestSource) AuthenticationReadiness(ctx context.Context, harness domain.AgentHarness, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
-	return f(ctx, harness, purpose)
+// managedProviderFake is an Account Manager owning Codex and Claude, except in
+// cloud credential scopes.
+type managedProviderFake struct {
+	auth           domain.AgentAuthenticationState
+	catalog        ports.AgentModelCatalog
+	fingerprintErr error
+	harness        domain.AgentHarness
+	purpose        domain.AgentReadinessPurpose
+	scope          string
+	checks, calls  atomic.Int32
 }
 
-func TestManagedProviderReadinessReplacesNativeAuthCheck(t *testing.T) {
-	for _, harness := range []domain.AgentHarness{domain.HarnessCodex, domain.HarnessClaudeCode} {
+func (f *managedProviderFake) owns(harness domain.AgentHarness, scope string) bool {
+	return domain.AccountProvider(harness) != "" && !strings.HasPrefix(scope, "@cred:")
+}
+
+func (f *managedProviderFake) AuthenticationReadiness(_ context.Context, harness domain.AgentHarness, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
+	if !f.owns(harness, "") {
+		return domain.AgentAuthenticationObservation{}, false
+	}
+	f.checks.Add(1)
+	f.harness, f.purpose = harness, purpose
+	return successfulAuthentication(time.Now(), f.auth, domain.AgentReadinessReasonAuthorized, "managed"), true
+}
+
+func (f *managedProviderFake) ModelsFingerprint(_ context.Context, harness domain.AgentHarness, scope string) (string, bool, error) {
+	ids := ""
+	for _, model := range f.catalog.Models {
+		ids += model.ID + ","
+	}
+	return ids, f.owns(harness, scope), f.fingerprintErr
+}
+
+func (f *managedProviderFake) DiscoverModels(_ context.Context, harness domain.AgentHarness, scope string) (ports.AgentModelCatalog, bool, error) {
+	if !f.owns(harness, scope) {
+		return ports.AgentModelCatalog{}, false, nil
+	}
+	f.calls.Add(1)
+	f.harness, f.scope = harness, scope
+	return f.catalog, true, nil
+}
+
+func managedReadinessService(id string, native *readinessTestAgent, managed ports.ManagedProvider) *Service {
+	agents := []agentregistry.HarnessAgent{readinessHarness(id, id, native)}
+	svc := newService(agents, nil, nil, nil)
+	svc.managed = managed
+	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{Agents: agents, AuthenticationCheck: svc.managedAuthenticationCheck})
+	return svc
+}
+
+func TestManagedProviderReadinessReplacesTheNativeAuthCheckForCodexAndClaudeOnly(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessCodex, domain.HarnessClaudeCode, domain.HarnessCursor} {
 		for _, purpose := range []domain.AgentReadinessPurpose{domain.AgentReadinessPurposeDisplay, domain.AgentReadinessPurposeLaunch} {
 			for _, authorized := range []bool{false, true} {
-				name := string(harness) + "/" + string(purpose)
+				// Native state deliberately contradicts managed state.
+				nativeStatus, managed := ports.AgentAuthStatusAuthorized, &managedProviderFake{auth: domain.AgentAuthenticationUnauthorized}
 				if authorized {
-					name += "/signed-in"
-				} else {
-					name += "/signed-out"
+					nativeStatus, managed.auth = ports.AgentAuthStatusUnauthorized, domain.AgentAuthenticationAuthorized
 				}
-				t.Run(name, func(t *testing.T) {
-					native := &readinessTestAgent{
-						resolve: func(context.Context) (string, error) { return "/fake/agent", nil },
-						auth: func(context.Context) (ports.AgentAuthStatus, error) {
-							// Native state deliberately contradicts managed state.
-							if authorized {
-								return ports.AgentAuthStatusUnauthorized, nil
-							}
-							return ports.AgentAuthStatusAuthorized, nil
-						},
-					}
-					svc := NewWithAgents([]agentregistry.HarnessAgent{readinessHarness(string(harness), string(harness), native)})
-					var checks atomic.Int32
-					want := domain.AgentAuthenticationUnauthorized
-					if authorized {
-						want = domain.AgentAuthenticationAuthorized
-					}
-					svc.SetManagedProviderReadiness(managedReadinessTestSource(func(ctx context.Context, got domain.AgentHarness, gotPurpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
-						checks.Add(1)
-						if got != harness || gotPurpose != purpose {
-							t.Errorf("managed check = %s/%s, want %s/%s", got, gotPurpose, harness, purpose)
-						}
-						if _, ok := ctx.Deadline(); !ok {
-							t.Error("managed check must have a bounded context")
-						}
-						return successfulAuthentication(time.Now(), want, domain.AgentReadinessReasonAuthorized, "managed"), true
-					}))
-					got, err := svc.EnsureAgentReadiness(context.Background(), string(harness), purpose)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if got.Authentication.State != want || (got.EffectiveReadiness == domain.AgentReadinessReady) != authorized {
-						t.Fatalf("readiness = %+v, want auth=%s", got, want)
-					}
-					if native.authCalls.Load() != 0 || checks.Load() != 1 {
-						t.Fatalf("checks: native=%d managed=%d", native.authCalls.Load(), checks.Load())
-					}
-				})
-			}
-		}
-	}
-}
-
-func TestManagedReadinessPreservesNativeProviders(t *testing.T) {
-	for _, authorized := range []bool{true, false} {
-		native := &readinessTestAgent{
-			resolve: func(context.Context) (string, error) { return "/fake/cursor", nil },
-			auth: func(context.Context) (ports.AgentAuthStatus, error) {
-				if authorized {
-					return ports.AgentAuthStatusAuthorized, nil
+				native := &readinessTestAgent{
+					resolve: func(context.Context) (string, error) { return "/fake/agent", nil },
+					auth:    func(context.Context) (ports.AgentAuthStatus, error) { return nativeStatus, nil },
 				}
-				return ports.AgentAuthStatusUnauthorized, nil
-			},
+				got, err := managedReadinessService(string(harness), native, managed).EnsureAgentReadiness(context.Background(), string(harness), purpose)
+				if err != nil {
+					t.Fatal(err)
+				}
+				owned := harness != domain.HarnessCursor
+				if owned != (got.Authentication.State == managed.auth) || owned != (managed.checks.Load() == 1) || owned == (native.authCalls.Load() == 1) {
+					t.Fatalf("%s/%s authorized=%v: readiness=%+v managed=%d native=%d", harness, purpose, authorized, got.Authentication, managed.checks.Load(), native.authCalls.Load())
+				}
+				if owned && (managed.harness != harness || managed.purpose != purpose || (got.EffectiveReadiness == domain.AgentReadinessReady) != authorized) {
+					t.Fatalf("%s/%s authorized=%v: asked %s/%s, readiness=%s", harness, purpose, authorized, managed.harness, managed.purpose, got.EffectiveReadiness)
+				}
+			}
 		}
-		svc := NewWithAgents([]agentregistry.HarnessAgent{readinessHarness("cursor", "Cursor", native)})
-		svc.SetManagedProviderReadiness(managedReadinessTestSource(func(context.Context, domain.AgentHarness, domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
-			t.Error("unmanaged provider must not consult Account Manager")
-			return domain.AgentAuthenticationObservation{}, true
-		}))
-		got, err := svc.EnsureAgentReadiness(context.Background(), "cursor", domain.AgentReadinessPurposeLaunch)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if (got.Authentication.State == domain.AgentAuthenticationAuthorized) != authorized || native.authCalls.Load() != 1 {
-			t.Fatalf("native readiness changed: %+v, checks=%d", got, native.authCalls.Load())
-		}
-	}
-}
-
-func TestManagedReadinessInvalidatesPreviouslyCachedNativeAuthentication(t *testing.T) {
-	for _, harness := range []domain.AgentHarness{domain.HarnessCodex, domain.HarnessClaudeCode} {
-		t.Run(string(harness), func(t *testing.T) {
-			native := &readinessTestAgent{
-				resolve: func(context.Context) (string, error) { return "/fake/agent", nil },
-				auth:    func(context.Context) (ports.AgentAuthStatus, error) { return ports.AgentAuthStatusAuthorized, nil },
-			}
-			svc := NewWithAgents([]agentregistry.HarnessAgent{readinessHarness(string(harness), string(harness), native)})
-			before, err := svc.EnsureAgentReadiness(context.Background(), string(harness), domain.AgentReadinessPurposeDisplay)
-			if err != nil || before.Authentication.State != domain.AgentAuthenticationAuthorized {
-				t.Fatalf("native initial state=%+v error=%v", before, err)
-			}
-			svc.SetManagedProviderReadiness(managedReadinessTestSource(func(context.Context, domain.AgentHarness, domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
-				return successfulAuthentication(time.Now(), domain.AgentAuthenticationUnauthorized, domain.AgentReadinessReasonUnauthorized, "managed sign-in required"), true
-			}))
-			after, err := svc.EnsureAgentReadiness(context.Background(), string(harness), domain.AgentReadinessPurposeDisplay)
-			if err != nil || after.Authentication.State != domain.AgentAuthenticationUnauthorized {
-				t.Fatalf("cached native status survived managed wiring: %+v error=%v", after, err)
-			}
-			if native.authCalls.Load() != 1 || native.resolveCalls.Load() != 1 {
-				t.Fatalf("installation/native unnecessarily rechecked: auth=%d resolve=%d", native.authCalls.Load(), native.resolveCalls.Load())
-			}
-		})
 	}
 }
 
 func TestManagedAccountDoesNotBypassMissingInstallation(t *testing.T) {
-	native := &readinessTestAgent{resolve: func(context.Context) (string, error) {
-		return "", errors.New("binary missing")
-	}}
-	svc := NewWithAgents([]agentregistry.HarnessAgent{readinessHarness("claude-code", "Claude Code", native)})
-	svc.SetManagedProviderReadiness(managedReadinessTestSource(func(context.Context, domain.AgentHarness, domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
-		t.Error("authentication should be skipped when installation fails")
-		return successfulAuthentication(time.Now(), domain.AgentAuthenticationAuthorized, domain.AgentReadinessReasonAuthorized, "managed"), true
-	}))
-	got, err := svc.EnsureAgentReadiness(context.Background(), "claude-code", domain.AgentReadinessPurposeLaunch)
-	if err != nil {
+	native := &readinessTestAgent{resolve: func(context.Context) (string, error) { return "", errors.New("binary missing") }}
+	managed := &managedProviderFake{auth: domain.AgentAuthenticationAuthorized}
+	got, err := managedReadinessService("claude-code", native, managed).EnsureAgentReadiness(context.Background(), "claude-code", domain.AgentReadinessPurposeLaunch)
+	if err != nil || got.EffectiveReadiness == domain.AgentReadinessReady || managed.checks.Load() != 0 {
+		t.Fatalf("readiness=%+v checks=%d err=%v", got, managed.checks.Load(), err)
+	}
+}
+
+func managedCatalogService(managed *managedProviderFake, agentID string, models ...string) (*Service, *fakeModelDiscoverer) {
+	managed.catalog = ports.AgentModelCatalog{AgentID: agentID, SelectionMode: ports.ModelSelectionCatalog, Source: ports.ModelCatalogSourceManagedAccount}
+	for _, id := range models {
+		managed.catalog.Models = append(managed.catalog.Models, ports.AgentModelInfo{ID: id, Label: id})
+	}
+	native := successfulModelDiscoverer()
+	return NewWithDeps(Deps{Cache: &fakeModelCache{}, Discoverer: native, Context: context.Background(), ManagedAccountProvider: managed}), native
+}
+
+func TestManagedModelCatalogueServesDefaultAndAccountScopesSeparately(t *testing.T) {
+	managed := &managedProviderFake{}
+	svc, native := managedCatalogService(managed, "codex", "account-model")
+	for i, scope := range []string{"", ports.ModelCatalogAccountScope("account-2")} {
+		got, err := svc.Models(context.Background(), "codex", scope, true)
+		if err != nil || len(got.Models) != 1 || got.Models[0].ID != "account-model" || got.Source != ports.ModelCatalogSourceManagedAccount {
+			t.Fatalf("scope %q: catalog=%+v err=%v", scope, got, err)
+		}
+		// A cached read of an unchanged list discovers nothing again.
+		if _, err := svc.Models(context.Background(), "codex", scope, false); err != nil || managed.calls.Load() != int32(i+1) || managed.harness != domain.HarnessCodex || managed.scope != scope {
+			t.Fatalf("scope %q: calls=%d asked %s %q err=%v", scope, managed.calls.Load(), managed.harness, managed.scope, err)
+		}
+	}
+	if native.discoverCalls.Load() != 0 || native.fingerprintRequests.Load() != 0 {
+		t.Fatalf("native discovery was consulted: discover=%d fingerprint=%d", native.discoverCalls.Load(), native.fingerprintRequests.Load())
+	}
+}
+
+func TestManagedModelCatalogueRefreshesWhenItsFingerprintChanges(t *testing.T) {
+	managed := &managedProviderFake{}
+	svc, native := managedCatalogService(managed, "claude-code", "old-model")
+	if _, err := svc.Models(context.Background(), "claude-code", "", true); err != nil {
 		t.Fatal(err)
 	}
-	if got.EffectiveReadiness == domain.AgentReadinessReady {
-		t.Fatalf("missing binary incorrectly became ready: %+v", got)
+	managed.catalog.Models = []ports.AgentModelInfo{{ID: "new-model"}}
+	// While the helper cannot say, the cached catalogue stands.
+	managed.fingerprintErr = errors.New("helper unavailable")
+	if got, err := svc.Models(context.Background(), "claude-code", "", false); err != nil || got.Models[0].ID != "old-model" || managed.calls.Load() != 1 {
+		t.Fatalf("during an outage: catalog=%+v calls=%d err=%v", got.Models, managed.calls.Load(), err)
+	}
+	managed.fingerprintErr = nil
+	if got, err := svc.Models(context.Background(), "claude-code", "", false); err != nil || len(got.Models) != 1 || got.Models[0].ID != "new-model" {
+		t.Fatalf("after the change: catalog=%+v err=%v", got.Models, err)
+	}
+	if native.discoverCalls.Load() != 0 || native.fingerprintRequests.Load() != 0 {
+		t.Fatalf("native discovery was consulted: discover=%d fingerprint=%d", native.discoverCalls.Load(), native.fingerprintRequests.Load())
+	}
+}
+
+func TestManagedModelDiscoveryLeavesCloudCredentialScopesAlone(t *testing.T) {
+	managed := &managedProviderFake{}
+	svc, native := managedCatalogService(managed, "claude-code", "managed")
+	if _, err := svc.Models(context.Background(), "claude-code", "@cred:anthropic_api_key", true); err != nil {
+		t.Fatal(err)
+	}
+	if managed.calls.Load() != 0 || native.discoverCalls.Load() != 1 {
+		t.Fatalf("managed=%d native=%d, want the native discovery for a cloud scope", managed.calls.Load(), native.discoverCalls.Load())
 	}
 }

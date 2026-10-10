@@ -7,64 +7,24 @@ package gen
 
 import (
 	"context"
-	"database/sql"
 )
 
-const commitProviderAccountIntent = `-- name: CommitProviderAccountIntent :execrows
-UPDATE provider_account_state SET facts = json_extract(pending,'$.next'), revision = json_extract(pending,'$.next.revision')
-WHERE id = 1 AND revision = ? AND pending IS NOT NULL
+const loadProviderAccounts = `-- name: LoadProviderAccounts :one
+SELECT facts FROM provider_account_state WHERE id = 1
 `
 
-func (q *Queries) CommitProviderAccountIntent(ctx context.Context, revision int64) (int64, error) {
-	result, err := q.db.ExecContext(ctx, commitProviderAccountIntent, revision)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+func (q *Queries) LoadProviderAccounts(ctx context.Context) (string, error) {
+	row := q.db.QueryRowContext(ctx, loadProviderAccounts)
+	var facts string
+	err := row.Scan(&facts)
+	return facts, err
 }
 
-const finishProviderAccountIntent = `-- name: FinishProviderAccountIntent :execrows
-UPDATE provider_account_state SET pending = NULL WHERE id = 1 AND revision = ? AND pending IS NOT NULL
+const saveProviderAccounts = `-- name: SaveProviderAccounts :exec
+UPDATE provider_account_state SET facts = ? WHERE id = 1
 `
 
-func (q *Queries) FinishProviderAccountIntent(ctx context.Context, revision int64) (int64, error) {
-	result, err := q.db.ExecContext(ctx, finishProviderAccountIntent, revision)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const loadProviderAccountState = `-- name: LoadProviderAccountState :one
-SELECT revision, facts, pending FROM provider_account_state WHERE id = 1
-`
-
-type LoadProviderAccountStateRow struct {
-	Revision int64
-	Facts    string
-	Pending  sql.NullString
-}
-
-func (q *Queries) LoadProviderAccountState(ctx context.Context) (LoadProviderAccountStateRow, error) {
-	row := q.db.QueryRowContext(ctx, loadProviderAccountState)
-	var i LoadProviderAccountStateRow
-	err := row.Scan(&i.Revision, &i.Facts, &i.Pending)
-	return i, err
-}
-
-const saveProviderAccountIntent = `-- name: SaveProviderAccountIntent :execrows
-UPDATE provider_account_state SET pending = ? WHERE id = 1 AND revision = ? AND pending IS NULL
-`
-
-type SaveProviderAccountIntentParams struct {
-	Pending  sql.NullString
-	Revision int64
-}
-
-func (q *Queries) SaveProviderAccountIntent(ctx context.Context, arg SaveProviderAccountIntentParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, saveProviderAccountIntent, arg.Pending, arg.Revision)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+func (q *Queries) SaveProviderAccounts(ctx context.Context, facts string) error {
+	_, err := q.db.ExecContext(ctx, saveProviderAccounts, facts)
+	return err
 }

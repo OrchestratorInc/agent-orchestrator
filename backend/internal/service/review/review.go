@@ -863,11 +863,6 @@ func (s *Service) List(ctx context.Context, workerID domain.SessionID) (reviewco
 	return s.engine.List(ctx, workerID)
 }
 
-// AcquireAccountRoutingPause fences related reviewer work for a worker account change.
-func (s *Service) AcquireAccountRoutingPause(ctx context.Context, id domain.SessionID) (func(), error) {
-	return s.engine.AcquireAccountRoutingPause(ctx, id)
-}
-
 // ArchiveReviewer retires the reviewer surface while preserving its history.
 func (s *Service) ArchiveReviewer(ctx context.Context, workerID domain.SessionID) error {
 	return s.engine.ArchiveReviewer(ctx, workerID)

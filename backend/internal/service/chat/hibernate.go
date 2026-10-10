@@ -155,34 +155,27 @@ func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool,
 	return s.hibernateChat(ctx, id, false)
 }
 
-// HibernateChatForRestart stops a quiet Chat provider so the caller can start
-// it again at once, and reports whether it did. It is for a restart the user
-// did not ask for, such as moving a session onto an account, so it does not
-// wait for the chat to be closed or to have been idle for a while, and it works
-// whether or not idle hibernation is switched on. Every check that the chat is
-// doing nothing still applies: a turn, a queued message, a pending question or
-// background work leaves the provider running.
+// HibernateChatForRestart does the same for a chat about to be started again:
+// at once, watched or not, and whatever the idle setting. Work still stops it.
 func (s *Service) HibernateChatForRestart(ctx context.Context, id domain.SessionID) (bool, error) {
 	return s.hibernateChat(ctx, id, true)
+}
+
+// chatResting reports a chat quiet for long enough to stop its provider.
+func (s *Service) chatResting(rec domain.SessionRecord, restart bool) bool {
+	if restart {
+		return rec.EligibleForChatRestart()
+	}
+	return s.hibernationEnabled != nil && s.hibernationEnabled() && rec.EligibleForChatHibernation() &&
+		!rec.Activity.LastActivityAt.Add(chatHibernateGrace).After(s.now())
 }
 
 func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, restart bool) (bool, error) {
 	// Skip eligibility and queue reads while the feature is off. Recheck before
 	// stopping the provider in case the setting changes during those reads.
-	idleHibernationOn := func() bool { return s.hibernationEnabled != nil && s.hibernationEnabled() }
-	if !restart && !idleHibernationOn() {
+	if !restart && (s.hibernationEnabled == nil || !s.hibernationEnabled()) {
 		return false, nil
 	}
-	// An idle chat is put to sleep only once it has been quiet for a while and
-	// nobody is looking at it. A restart brings it straight back, so neither
-	// matters, and an orchestrator may be restarted too.
-	resting := func(rec domain.SessionRecord) bool {
-		if restart {
-			return rec.EligibleForChatRestart()
-		}
-		return rec.EligibleForChatHibernation() && !rec.Activity.LastActivityAt.Add(chatHibernateGrace).After(s.now())
-	}
-	watched := func() bool { return !restart && s.hasChatView(id) }
 	marker, ok := s.sessions.(hibernationStore)
 	if !ok {
 		return false, errors.New("chat hibernation store is unavailable")
@@ -201,7 +194,7 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, restar
 		gate.unlock()
 		return false, err
 	}
-	if !resting(rec) || watched() {
+	if !s.chatResting(rec, restart) || (!restart && s.hasChatView(id)) {
 		gate.unlock()
 		return false, nil
 	}
@@ -233,7 +226,7 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, restar
 	}
 	defer gate.unlock()
 	current, err := s.Controller(id)
-	if err != nil || current != controller || watched() {
+	if err != nil || current != controller || (!restart && s.hasChatView(id)) {
 		return false, nil
 	}
 	// Send and provider lifecycle projection use the same dispatch lock. Fence
@@ -288,7 +281,7 @@ func (s *Service) hibernateChat(ctx context.Context, id domain.SessionID, restar
 		controller.sendMu.Unlock()
 		return false, err
 	}
-	if !resting(fresh) || (!restart && !idleHibernationOn()) {
+	if !s.chatResting(fresh, restart) {
 		controller.sendMu.Unlock()
 		return false, nil
 	}
@@ -447,9 +440,7 @@ func (s *Service) workingController(ctx context.Context, id domain.SessionID) (*
 	}
 }
 
-// WakeChat starts a sleeping Chat provider again and delivers anything sent to
-// it while it was stopped. It is the second half of a restart; a chat that is
-// opened or written to wakes without it.
+// WakeChat starts a sleeping Chat provider again and delivers what was queued.
 func (s *Service) WakeChat(ctx context.Context, id domain.SessionID) error {
 	if err := s.wakeHibernated(ctx, id); err != nil {
 		return err

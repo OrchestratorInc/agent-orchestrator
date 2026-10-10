@@ -175,8 +175,7 @@ func codexComposerFrame(output string) string {
 	}
 	for footer := len(raw) - 1; footer >= start; footer-- {
 		plainFooter := strings.TrimSpace(terminalui.PlainTerminalText(raw[footer]))
-		// Codex can put warnings on a second footer row. Its middle dot is
-		// not the composer boundary; keep looking for the model/directory row.
+		// A warning row below the footer has a middle dot too; it is not the boundary.
 		warningHelpRow := (strings.HasPrefix(plainFooter, "? for shortcuts") || strings.HasPrefix(plainFooter, "⚠")) && strings.HasSuffix(plainFooter, " · f2 to view")
 		if !strings.Contains(plainFooter, " · ") || warningHelpRow {
 			continue
@@ -195,8 +194,7 @@ func codexComposerFrame(output string) string {
 	return output
 }
 
-// Codex versions render either prompt glyph. Select the current row's glyph
-// without rewriting draft text or discarding styling used for idle proof.
+// codexLastPromptMarker is the glyph of the current prompt row; Codex versions differ.
 func codexLastPromptMarker(output string) string {
 	lines := terminalui.PlainTerminalLines(output)
 	for i := len(lines) - 1; i >= 0; i-- {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
 	importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
@@ -153,27 +154,7 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // schemaNames is the exhaustive default→clean mapping for every type reflected
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
-//
-//nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
-var schemaNames = map[string]string{
-	"ControllersProviderAccountView":                       "ProviderAccountView",
-	"ControllersProviderAccountNameRequest":                "ProviderAccountNameRequest",
-	"ControllersProviderAccountUsageWindowView":            "ProviderAccountUsageWindowView",
-	"ControllersProviderAccountUsageView":                  "ProviderAccountUsageView",
-	"ControllersProviderAccountResetView":                  "ProviderAccountResetView",
-	"ControllersProviderAccountCreditsView":                "ProviderAccountCreditsView",
-	"ControllersProviderAccountExtraUsageView":             "ProviderAccountExtraUsageView",
-	"ControllersProviderAccountRequestsView":               "ProviderAccountRequestsView",
-	"ControllersProviderAccountTokensView":                 "ProviderAccountTokensView",
-	"ControllersProviderAccountResetResponse":              "ProviderAccountResetResponse",
-	"ControllersProviderPrimaryView":                       "ProviderPrimaryView",
-	"ControllersProviderAccountsResponse":                  "ProviderAccountsResponse",
-	"ControllersProviderAccountChangeRequest":              "ProviderAccountChangeRequest",
-	"ControllersProviderLoginRequest":                      "ProviderLoginRequest",
-	"ControllersProviderLoginResponse":                     "ProviderLoginResponse",
-	"ControllersSessionProviderAccountResponse":            "SessionProviderAccountResponse",
-	"ControllersProviderAccountIDParam":                    "ProviderAccountIDParam",
-	"ControllersProviderLoginIDParam":                      "ProviderLoginIDParam",
+var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
 	"ControllersSettingsResponse":                          "SettingsResponse",
 	"ControllersDesktopWorkspaceLocationResponse":          "DesktopWorkspaceLocationResponse",
 	"ControllersUpdateSessionInterfaceRequest":             "UpdateSessionInterfaceRequest",
@@ -528,6 +509,20 @@ var schemaNames = map[string]string{
 	// httpd/controllers: GitHub PAT wire envelopes
 	"ControllersPutGitHubPATRequest": "PutGitHubPATRequest",
 	"GithubpatRepo":                  "GitHubRepo",
+	// managed provider accounts
+	"DomainProviderAccountView":                 "ProviderAccountView",
+	"DomainProviderAccountUsage":                "ProviderAccountUsage",
+	"DomainProviderAccountUsageWindow":          "ProviderAccountUsageWindow",
+	"DomainProviderAccountReset":                "ProviderAccountReset",
+	"DomainProviderAccountCredits":              "ProviderAccountCredits",
+	"DomainProviderAccountExtraUsage":           "ProviderAccountExtraUsage",
+	"DomainProviderAccountRequests":             "ProviderAccountRequests",
+	"DomainProviderAccountTokens":               "ProviderAccountTokens",
+	"ControllersProviderAccountsResponse":       "ProviderAccountsResponse",
+	"PortsProviderAccountAction":                "ProviderAccountAction",
+	"PortsProviderLoginRequest":                 "ProviderLoginRequest",
+	"ControllersProviderLoginResponse":          "ProviderLoginResponse",
+	"ControllersSessionProviderAccountResponse": "SessionProviderAccountResponse",
 }
 
 // markRequestBodyRequired sets requestBody.required: true on the operation's
@@ -1527,7 +1522,6 @@ func agentOperations() []operation {
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
-
 		{
 			method: http.MethodPost, path: "/api/v1/agents/refresh", id: "refreshAgents", tag: "agents",
 			summary: "Refresh the cached local agent adapter catalog",
@@ -3068,25 +3062,14 @@ func prOperations() []operation {
 }
 
 func providerAccountOperations() []operation {
-	account := []any{controllers.ProviderAccountIDParam{}}
-	login := []any{controllers.ProviderLoginIDParam{}}
-	session := []any{controllers.SessionIDParam{}}
-	success := []respUnit{{http.StatusOK, controllers.ProviderAccountsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}}
-	loginResponses := []respUnit{{http.StatusOK, controllers.ProviderLoginResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}}
-	routeResponses := []respUnit{{http.StatusOK, controllers.SessionProviderAccountResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}}
+	apiErr := envelope.APIError{}
+	account, login := []any{controllers.ProviderAccountIDParam{}}, []any{controllers.ProviderLoginIDParam{}}
 	return []operation{
-		{method: http.MethodGet, path: "/api/v1/provider-accounts", id: "listProviderAccounts", tag: "agents", summary: "List local managed accounts and separate provider primaries", pathParams: []any{controllers.ProviderAccountsQuery{}}, resps: success},
-		{method: http.MethodPost, path: "/api/v1/provider-accounts/login", id: "startProviderAccountLogin", tag: "agents", summary: "Start a local managed account sign-in", reqBody: controllers.ProviderLoginRequest{}, resps: loginResponses},
-		{method: http.MethodGet, path: "/api/v1/provider-accounts/login/{loginId}", id: "getProviderAccountLogin", tag: "agents", summary: "Verify login and register its account", pathParams: login, resps: loginResponses},
-		{method: http.MethodDelete, path: "/api/v1/provider-accounts/login/{loginId}", id: "cancelProviderAccountLogin", tag: "agents", summary: "Cancel a pending managed login", pathParams: login, resps: []respUnit{{http.StatusNoContent, nil}, {http.StatusServiceUnavailable, envelope.APIError{}}}},
-		{method: http.MethodPut, path: "/api/v1/provider-accounts/{accountId}/primary", id: "setProviderPrimary", tag: "agents", summary: "Set the default and optionally move existing provider sessions", pathParams: account, reqBody: controllers.ProviderAccountChangeRequest{}, optionalReqBody: true, resps: success},
-		{method: http.MethodPatch, path: "/api/v1/provider-accounts/{accountId}", id: "renameProviderAccount", tag: "agents", summary: "Rename a local managed account", pathParams: account, reqBody: controllers.ProviderAccountNameRequest{}, resps: success},
-		{method: http.MethodPost, path: "/api/v1/provider-accounts/{accountId}/sign-out", id: "signOutProviderAccount", tag: "agents", summary: "Sign out and reassign idle managed sessions", pathParams: account, reqBody: controllers.ProviderAccountChangeRequest{}, optionalReqBody: true, resps: success},
-		{method: http.MethodPost, path: "/api/v1/provider-accounts/{accountId}/reset", id: "useProviderAccountReset", tag: "agents", summary: "Spend one of the account's usage-limit resets", pathParams: account, resps: []respUnit{{http.StatusOK, controllers.ProviderAccountResetResponse{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}}},
-		{method: http.MethodPost, path: "/api/v1/provider-accounts/{accountId}/resume", id: "resumeProviderAccount", tag: "agents", summary: "Stop holding an account back after a provider refusal", pathParams: account, resps: success},
-		{method: http.MethodPost, path: "/api/v1/provider-accounts/{accountId}/refresh-sign-in", id: "refreshProviderAccountSignIn", tag: "agents", summary: "Renew an account's saved sign-in now", pathParams: account, resps: success},
-		{method: http.MethodDelete, path: "/api/v1/provider-accounts/{accountId}", id: "removeProviderAccount", tag: "agents", summary: "Remove an account and reassign idle managed sessions", pathParams: account, reqBody: controllers.ProviderAccountChangeRequest{}, optionalReqBody: true, resps: success},
-		{method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/provider-account", id: "getSessionProviderAccount", tag: "sessions", summary: "Read a managed session's account", pathParams: session, resps: routeResponses},
-		{method: http.MethodPut, path: "/api/v1/sessions/{sessionId}/provider-account", id: "setSessionProviderAccount", tag: "sessions", summary: "Switch an idle managed session's account", pathParams: session, reqBody: controllers.ProviderAccountChangeRequest{}, resps: routeResponses},
+		{method: http.MethodGet, path: "/api/v1/provider-accounts", id: "listProviderAccounts", tag: "agents", summary: "List managed provider accounts", pathParams: []any{controllers.ProviderAccountsQuery{}}, resps: []respUnit{{http.StatusOK, controllers.ProviderAccountsResponse{}}, {http.StatusInternalServerError, apiErr}}},
+		{method: http.MethodPost, path: "/api/v1/provider-accounts/{accountId}/actions", id: "providerAccountAction", tag: "agents", summary: "Change one managed account or move a session onto it", pathParams: account, reqBody: ports.ProviderAccountAction{}, resps: []respUnit{{http.StatusOK, controllers.ProviderAccountsResponse{}}, {http.StatusBadRequest, apiErr}, {http.StatusNotFound, apiErr}, {http.StatusConflict, apiErr}}},
+		{method: http.MethodPost, path: "/api/v1/provider-accounts/login", id: "startProviderAccountLogin", tag: "agents", summary: "Start a managed account sign-in", reqBody: ports.ProviderLoginRequest{}, resps: []respUnit{{http.StatusOK, controllers.ProviderLoginResponse{}}, {http.StatusBadRequest, apiErr}, {http.StatusNotFound, apiErr}, {http.StatusConflict, apiErr}}},
+		{method: http.MethodGet, path: "/api/v1/provider-accounts/login/{loginId}", id: "getProviderAccountLogin", tag: "agents", summary: "Read a sign-in attempt and record its account once it finishes", pathParams: login, resps: []respUnit{{http.StatusOK, controllers.ProviderLoginResponse{}}, {http.StatusNotFound, apiErr}}},
+		{method: http.MethodDelete, path: "/api/v1/provider-accounts/login/{loginId}", id: "cancelProviderAccountLogin", tag: "agents", summary: "Cancel a sign-in attempt", pathParams: login, resps: []respUnit{{http.StatusNoContent, nil}, {http.StatusNotFound, apiErr}}},
+		{method: http.MethodGet, path: "/api/v1/provider-accounts/sessions/{sessionId}", id: "getSessionProviderAccount", tag: "sessions", summary: "Read a session's managed account", pathParams: []any{controllers.SessionIDParam{}}, resps: []respUnit{{http.StatusOK, controllers.SessionProviderAccountResponse{}}, {http.StatusInternalServerError, apiErr}}},
 	}
 }

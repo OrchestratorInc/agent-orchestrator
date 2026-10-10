@@ -153,14 +153,14 @@ type reviewerRuntime interface {
 // runtime. The reviewer reuses the worker's worktree (a fresh session worktree
 // would branch off the default branch and so would not contain the PR changes).
 type agentLauncher struct {
-	reviewers         ports.ReviewerResolver
-	runtime           reviewerRuntime
-	dataDir           string
-	runFile           string
-	auth              agentAuthResolver
-	executable        func() (string, error)
-	chat              ReviewerChatController
-	relatedAccountEnv func(context.Context, domain.SessionID, domain.AgentHarness) (map[string]string, error)
+	reviewers  ports.ReviewerResolver
+	runtime    reviewerRuntime
+	dataDir    string
+	runFile    string
+	auth       agentAuthResolver
+	executable func() (string, error)
+	chat       ReviewerChatController
+	accountEnv func(context.Context, domain.SessionID, domain.AgentHarness) (map[string]string, error)
 }
 
 type preLaunchReviewer interface {
@@ -175,15 +175,13 @@ type agentAuthResolver interface {
 	AuthStatus(ctx context.Context, harness domain.ReviewerHarness) (ports.AgentAuthStatus, bool, error)
 }
 
-type reviewerAccountWorkerKey struct{}
-
-// WithRelatedAccountEnv routes same-provider reviewer requests through the owner.
-func WithRelatedAccountEnv(resolve func(context.Context, domain.SessionID, domain.AgentHarness) (map[string]string, error)) LauncherOption {
-	return func(l *agentLauncher) { l.relatedAccountEnv = resolve }
-}
-
 // LauncherOption configures reviewer launcher behavior.
 type LauncherOption func(*agentLauncher)
+
+// WithRelatedAccountEnv gives a same-provider reviewer its worker's account ticket.
+func WithRelatedAccountEnv(resolve func(context.Context, domain.SessionID, domain.AgentHarness) (map[string]string, error)) LauncherOption {
+	return func(l *agentLauncher) { l.accountEnv = resolve }
+}
 
 // WithReviewerChat enables typed reviewer conversations for supporting
 // adapters. A nil controller intentionally keeps every reviewer on TUI.
@@ -261,15 +259,6 @@ func (l *agentLauncher) Preflight(ctx context.Context, harness domain.ReviewerHa
 	}
 	if _, err := exec.LookPath(bin); err != nil {
 		return fmt.Errorf("reviewer binary %q not found: %w", bin, err)
-	}
-	if workerID, ok := ctx.Value(reviewerAccountWorkerKey{}).(domain.SessionID); ok && l.relatedAccountEnv != nil {
-		env, err := l.relatedAccountEnv(ctx, workerID, domain.AgentHarness(harness))
-		if err != nil {
-			return err
-		}
-		if len(env) > 0 {
-			return nil
-		}
 	}
 	authStatus, authKnown, err := l.agentAuthStatus(ctx, harness)
 	if err != nil {
@@ -510,7 +499,7 @@ func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, 
 		providerID = strings.TrimSpace(spec.AgentSessionID)
 	}
 	env := l.runtimeEnv(ctx, spec, nil, nil)
-	if err := l.applyRelatedAccountEnv(ctx, spec, env); err != nil {
+	if err := l.applyAccountEnv(ctx, spec, env); err != nil {
 		return LaunchResult{}, err
 	}
 	prompt := inv.Prompt
@@ -569,7 +558,7 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 		}
 	}
 	env := l.runtimeEnv(ctx, spec, cmd.Argv, cmd.Env)
-	if err := l.applyRelatedAccountEnv(ctx, spec, env); err != nil {
+	if err := l.applyAccountEnv(ctx, spec, env); err != nil {
 		return LaunchResult{}, err
 	}
 	handleID := reviewerHandleID(spec.WorkerID)
@@ -586,10 +575,7 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 	if workingDirectory == "" {
 		workingDirectory = spec.WorkspacePath
 	}
-	argv := cmd.Argv
-	if spec.Harness == domain.ReviewerCodex {
-		argv = agentlaunch.CodexProxyArgv(argv, env)
-	}
+	argv := agentlaunch.CodexProxyArgv(cmd.Argv, env)
 	if strings.TrimSpace(spec.LaunchID) != "" {
 		executable, resolveErr := l.executable()
 		if resolveErr != nil {
@@ -923,29 +909,15 @@ func reviewerChatID(handleID string) (string, bool) {
 	return id, ok && strings.TrimSpace(id) != ""
 }
 
-func (l *agentLauncher) applyRelatedAccountEnv(ctx context.Context, spec LaunchSpec, env map[string]string) error {
-	if l.relatedAccountEnv == nil {
+func (l *agentLauncher) applyAccountEnv(ctx context.Context, spec LaunchSpec, env map[string]string) error {
+	if l.accountEnv == nil {
 		return nil
 	}
-	values, err := l.relatedAccountEnv(ctx, spec.WorkerID, domain.AgentHarness(spec.Harness))
-	if err != nil {
-		return err
+	values, err := l.accountEnv(ctx, spec.WorkerID, domain.AgentHarness(spec.Harness))
+	for key, value := range values {
+		env[key] = value
 	}
-	for k, v := range values {
-		env[k] = v
-	}
-	return nil
-}
-
-// AcquireReviewAccountPause fences an existing reviewer chat without replacing its conversation.
-func (l *agentLauncher) AcquireReviewAccountPause(ctx context.Context, id string) (func(), error) {
-	guard, ok := l.chat.(interface {
-		AcquireReviewAccountPause(context.Context, string) (func(), error)
-	})
-	if !ok {
-		return nil, ports.ErrProviderAccountBusy
-	}
-	return guard.AcquireReviewAccountPause(ctx, id)
+	return err
 }
 
 // BatchMessageID ties a dispatched reviewer Chat turn to its durable review runs.

@@ -80,18 +80,18 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	}
 }
 
-// managedAccountOriginMiddleware gives managed credential routes a stricter
+// accountOriginMiddleware gives credential-management routes a stricter
 // browser boundary than the rest of the loopback API. Workspace previews are
 // intentionally accepted by corsMiddleware so they can use ordinary daemon
 // APIs, but they must never read account metadata or execute account
 // mutations. Native clients do not send Origin and remain unauthenticated;
 // browser clients must present one of the exact configured renderer origins.
-func managedAccountOriginMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
+func accountOriginMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	allowed := exactAllowedOrigins(allowedOrigins)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
-			if origin != "" && isManagedAccountPath(r.URL.Path) {
+			if origin != "" && isAccountPath(r.URL.Path) {
 				w.Header().Add("Vary", "Origin")
 				if _, ok := allowed[origin]; !ok {
 					envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "ORIGIN_FORBIDDEN",
@@ -116,11 +116,10 @@ func exactAllowedOrigins(origins []string) map[string]struct{} {
 	return allowed
 }
 
-func isManagedAccountPath(path string) bool {
-	if strings.HasPrefix(path, "/api/v1/sessions/") && strings.HasSuffix(path, "/provider-account") {
-		return true
-	}
-	for _, prefix := range []string{"/api/v1/provider-accounts"} {
+func isAccountPath(path string) bool {
+	for _, prefix := range []string{
+		"/api/v1/provider-accounts",
+	} {
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
 			return true
 		}

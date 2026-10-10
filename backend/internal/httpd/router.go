@@ -66,7 +66,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	// Account-management routes do not inherit the general localhost preview
 	// exception. This guard must wrap corsMiddleware so hostile preflights are
 	// rejected before the general CORS layer can answer them.
-	r.Use(managedAccountOriginMiddleware(cfg.AllowedOrigins))
+	r.Use(accountOriginMiddleware(cfg.AllowedOrigins))
 	r.Use(corsMiddleware(cfg.AllowedOrigins))
 	r.Use(previewOriginMiddleware(api.sessions))
 

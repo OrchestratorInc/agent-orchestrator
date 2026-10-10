@@ -1,14 +1,13 @@
 package proxyhost
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,150 +17,123 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
-// ReadNativeAccount only reads the provider's local OAuth material. The source
-// remains untouched and no token is persisted in AO's account database.
-func (c *Client) ReadNativeAccount(ctx context.Context, provider string) (ports.NativeProviderCredential, error) {
-	var data []byte
+// ImportNative imports this computer's login or API key unless seen names it; never twice.
+func (c *Client) ImportNative(ctx context.Context, provider string, apiKey bool, seen string) (ports.VerifiedProviderLogin, string, error) {
+	request := ports.ProviderLoginRequest{Provider: provider, Mode: "import"}
+	id, secret := "native-"+provider+"-", ""
 	var err error
-	switch provider {
-	case "codex":
-		home := os.Getenv("CODEX_HOME")
-		if home == "" {
-			home, err = os.UserHomeDir()
-			home = filepath.Join(home, ".codex")
-		}
-		if err == nil {
-			var f *os.File
-			f, err = os.Open(filepath.Join(home, "auth.json"))
-			if os.IsNotExist(err) {
-				return ports.NativeProviderCredential{}, nil
-			}
-			if err == nil {
-				defer f.Close()
-				data, err = io.ReadAll(io.LimitReader(f, (1<<20)+1))
-			}
-		}
-	case "claude":
-		data, err = agentcreds.ReadLocalOAuthCredentials(ctx, agentcreds.ResolveOptions{AllowKeychain: true})
-	default:
-		return ports.NativeProviderCredential{}, ports.ErrProviderAccountIncompatible
-	}
-	if err != nil {
-		return ports.NativeProviderCredential{}, errors.New("native credential could not be read")
-	}
-	if len(data) == 0 {
-		return ports.NativeProviderCredential{}, nil
-	}
-	return normalizeNative(provider, data)
-}
-
-// ImportNativeAccount is idempotent for a native snapshot, including after a
-// daemon crash before the database commit. Never overwrite a file: CLIProxy
-// may already have rotated its tokens since the original import.
-func (c *Client) ImportNativeAccount(ctx context.Context, provider string, native ports.NativeProviderCredential) (ports.VerifiedProviderLogin, error) {
-	sum, err := hex.DecodeString(native.Fingerprint)
-	if err != nil || len(sum) != sha256.Size || (provider != "codex" && provider != "claude") {
-		return ports.VerifiedProviderLogin{}, ports.ErrProviderAccountIncompatible
-	}
-	if err = c.Ensure(ctx); err != nil {
-		return ports.VerifiedProviderLogin{}, err
-	}
-	id := "native-" + provider + "-" + native.Fingerprint
-	verified, err := c.VerifiedAccountLogin(ctx, id)
-	if err == nil {
-		return verified, nil
-	}
-	var status statusError
-	if !errors.As(err, &status) || status.status != http.StatusNotFound {
-		return verified, err
-	}
-	if _, err = c.StartAccountLoginMode(ctx, provider, id, "import", ports.ProviderLoginInput{CredentialJSON: native.CredentialJSON}); err != nil {
-		return verified, err
-	}
-	// Upload may be acknowledged before the file watcher registers the auth.
-	for {
-		verified, err = c.VerifiedAccountLogin(ctx, id)
-		if err == nil {
-			return verified, nil
-		}
-		if !errors.As(err, &status) || status.status != http.StatusNotFound {
-			return verified, err
-		}
-		select {
-		case <-ctx.Done():
-			return verified, ctx.Err()
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-}
-
-func normalizeNative(provider string, data []byte) (ports.NativeProviderCredential, error) {
-	if len(data) > 1<<20 {
-		return ports.NativeProviderCredential{}, errors.New("native credential exceeds size limit")
-	}
-	var root map[string]any
-	if json.Unmarshal(data, &root) != nil || root == nil {
-		return ports.NativeProviderCredential{}, errors.New("native credential is malformed")
-	}
-	tokens := root
-	key := "tokens"
-	if provider == "claude" {
-		key = "claudeAiOauth"
-	}
-	if nested, ok := root[key].(map[string]any); ok {
-		tokens = nested
-	}
-	get := func(keys ...string) string {
-		for _, key := range keys {
-			if value, ok := tokens[key].(string); ok && strings.TrimSpace(value) != "" {
-				return strings.TrimSpace(value)
-			}
-		}
-		return ""
-	}
-	access, refresh := get("access_token", "accessToken"), get("refresh_token", "refreshToken")
-	if access == "" {
-		return ports.NativeProviderCredential{}, nil
-	} // API-key-only native logins are not OAuth accounts.
-	value := map[string]any{"type": provider, "access_token": access, "refresh_token": refresh}
-	if provider == "codex" {
-		idToken := get("id_token")
-		claims := jwtClaims(idToken)
-		scope, _ := claims["https://api.openai.com/auth"].(map[string]any)
-		value["id_token"], value["email"] = idToken, claims["email"]
-		value["account_id"], value["plan_type"] = scope["chatgpt_account_id"], scope["chatgpt_plan_type"]
-		if id := get("account_id"); id != "" {
-			value["account_id"] = id
-		}
-		if email := get("email"); email != "" {
-			value["email"] = email
-		}
-		if exp, ok := jwtClaims(access)["exp"].(float64); ok {
-			value["expired"] = time.Unix(int64(exp), 0).UTC().Format(time.RFC3339)
+	if apiKey {
+		id, request.Mode, request.Label = "native-key-"+provider+"-", "api_key", "Global API key"
+		if request.APIKey, request.BaseURL, err = nativeAPIKey(ctx, provider, c.Endpoint()); request.APIKey != "" {
+			secret = provider + "\x00" + request.APIKey + "\x00" + request.BaseURL
 		}
 	} else {
-		// Claude OAuth tokens are opaque, not JWTs. CLIProxy resolves their identity
-		// through the authenticated profile endpoint when reading the import result.
+		request.CredentialJSON, err = nativeLogin(ctx, provider)
+		secret = request.CredentialJSON
 	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return ports.NativeProviderCredential{}, errors.New("native credential could not be normalized")
+	// A read that was cut short must not pass for a computer with no login.
+	if err = cmp.Or(err, ctx.Err()); err != nil || secret == "" {
+		return ports.VerifiedProviderLogin{}, "", err
 	}
-	sum := sha256.Sum256(encoded)
-	email, _ := value["email"].(string)
-	return ports.NativeProviderCredential{Fingerprint: hex.EncodeToString(sum[:]), CredentialJSON: string(encoded), Email: strings.TrimSpace(email)}, nil
+	sum := sha256.Sum256([]byte(secret))
+	fingerprint := hex.EncodeToString(sum[:])
+	if fingerprint == seen {
+		return ports.VerifiedProviderLogin{}, fingerprint, nil
+	}
+	id += fingerprint
+	verified, err := c.LoginResult(ctx, id)
+	if notFound(err) {
+		_, err = c.StartLogin(ctx, id, request)
+		// The helper may acknowledge a sign-in before it has loaded it.
+		for ; err == nil; time.Sleep(100 * time.Millisecond) {
+			if verified, err = c.LoginResult(ctx, id); !notFound(err) {
+				break
+			}
+			err = ctx.Err()
+		}
+	}
+	return verified, fingerprint, err
 }
 
-func jwtClaims(token string) map[string]any {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return nil
+// readCodexAuth reads Codex's own auth file; none is a computer not signed in.
+func readCodexAuth() (auth any, err error) {
+	home := os.Getenv("CODEX_HOME")
+	if home == "" {
+		user, _ := os.UserHomeDir()
+		home = filepath.Join(user, ".codex")
 	}
-	data, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil
+	data, err := os.ReadFile(filepath.Join(home, "auth.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
 	}
-	var claims map[string]any
-	_ = json.Unmarshal(data, &claims)
+	if err == nil {
+		err = json.Unmarshal(data, &auth)
+	}
+	return auth, err
+}
+
+// nativeLogin is this computer's sign-in as a helper file; its bytes feed the fingerprint.
+func nativeLogin(ctx context.Context, provider string) (string, error) {
+	value := map[string]any{"type": provider}
+	if provider == "claude" {
+		value["access_token"], value["refresh_token"], _ = agentcreds.LocalOAuth(ctx, agentcreds.ResolveOptions{AllowKeychain: true})
+	} else {
+		auth, err := readCodexAuth()
+		if err != nil {
+			return "", err
+		}
+		tokens := at(auth, "tokens")
+		access, idToken := text(tokens, "access_token"), text(tokens, "id_token")
+		claims := jwtClaims(idToken)
+		value["access_token"], value["refresh_token"], value["id_token"] = access, text(tokens, "refresh_token"), idToken
+		scope := at(claims, "https://api.openai.com/auth")
+		value["email"], value["account_id"], value["plan_type"] = claims["email"], at(scope, "chatgpt_account_id"), at(scope, "chatgpt_plan_type")
+		if account := text(tokens, "account_id"); account != "" {
+			value["account_id"] = account
+		}
+		if expiry, ok := jwtClaims(access)["exp"].(float64); ok {
+			value["expired"] = time.Unix(int64(expiry), 0).UTC().Format(time.RFC3339)
+		}
+	}
+	if value["access_token"] == "" {
+		return "", nil
+	}
+	encoded, err := json.Marshal(value)
+	return string(encoded), err
+}
+
+func jwtClaims(token string) (claims map[string]any) {
+	if parts := strings.Split(token, "."); len(parts) == 3 {
+		data, _ := base64.RawURLEncoding.DecodeString(parts[1])
+		_ = json.Unmarshal(data, &claims)
+	}
 	return claims
+}
+
+// nativeAPIKey finds the key the agent really uses and its address, never AO's own helper.
+func nativeAPIKey(ctx context.Context, provider, helper string) (key, base string, err error) {
+	if provider == "claude" {
+		// Stored sign-ins are imported as sign-ins; only a key is wanted here.
+		opts := (agentcreds.ResolveOptions{DisableStoredCredentials: true}).WithClaudeSettings(ctx)
+		route, _ := agentcreds.ResolveProvider("", opts)
+		found, _ := agentcreds.ResolveLocal(ctx, route, opts)
+		if found.Kind == agentcreds.KindAPIKey || found.Kind == agentcreds.KindAuthToken {
+			key, base = found.Secret, cmp.Or(found.BaseURL, claudeAPI)
+		}
+	} else {
+		auth, err := readCodexAuth()
+		if err != nil {
+			return "", "", err
+		}
+		// Older files do not say which sign-in is in use; there ChatGPT wins.
+		mode := strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(text(auth, "auth_mode")))
+		if mode == "apikey" || mode == "" && text(auth, "tokens", "access_token") == "" {
+			key, base = text(auth, "OPENAI_API_KEY"), cmp.Or(os.Getenv("OPENAI_BASE_URL"), "https://api.openai.com/v1")
+		}
+	}
+	key, base = strings.TrimSpace(key), strings.TrimRight(strings.TrimSpace(base), "/")
+	if host := baseHost(base); key == "" || host == "" || "http://"+host == helper {
+		return "", "", nil
+	}
+	return key, base, nil
 }

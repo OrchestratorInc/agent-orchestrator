@@ -1,447 +1,316 @@
 package provideraccounts
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"reflect"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-type loginProxyFake struct {
-	mu                               sync.Mutex
-	status                           string
-	verified                         ports.VerifiedProviderLogin
-	fail                             string
-	starts, polls, verifies, cancels []string
+func (h *harness) start(provider, accountID string) ports.ProviderLogin {
+	h.t.Helper()
+	login, err := h.svc.StartLogin(h.ctx, ports.ProviderLoginRequest{Provider: provider, AccountID: accountID})
+	if err != nil || login.ID == "" || login.Status != "waiting" || login.Mode != "browser" || login.URL == "" || login.Provider != provider || login.AccountID != accountID {
+		h.t.Fatalf("start %s: login=%+v err=%v", provider, login, err)
+	}
+	return login
 }
 
-func (p *loginProxyFake) StartAccountLogin(_ context.Context, provider, id string) (ports.ProviderLogin, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.starts = append(p.starts, provider+":"+id)
-	if p.fail == "start" {
-		return ports.ProviderLogin{}, errTestFailure
-	}
-	return ports.ProviderLogin{ID: id, Provider: provider, State: "private-state", URL: "https://example.test/login", Status: "waiting"}, nil
+func (h *harness) status(id string) (ports.ProviderLogin, error) {
+	return h.svc.LoginStatus(h.ctx, id)
 }
-func (p *loginProxyFake) AccountLoginStatus(_ context.Context, l ports.ProviderLogin) (string, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.polls = append(p.polls, l.ID)
-	if p.fail == "status" {
-		return "", errTestFailure
+
+func TestLoginRecordsTheVerifiedAccountExactlyOnce(t *testing.T) {
+	h := setup(t)
+	login := h.start("codex", "")
+	if got, err := h.status(login.ID); err != nil || got.Status != "waiting" || len(h.store.get().Accounts) != 0 {
+		t.Fatalf("while waiting: login=%+v err=%v", got, err)
 	}
-	return p.status, nil
-}
-func (p *loginProxyFake) CancelAccountLogin(_ context.Context, l ports.ProviderLogin) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.cancels = append(p.cancels, l.ID)
-	if p.fail == "cancel" {
-		return errTestFailure
+	h.helper.complete(login.ID, signIn("codex", "alice@example.com"))
+	done, err := h.status(login.ID)
+	if err != nil || done.Status != "complete" || done.AccountID == "" {
+		t.Fatalf("login=%+v err=%v", done, err)
 	}
-	return nil
-}
-func (p *loginProxyFake) VerifiedAccountLogin(_ context.Context, id string) (ports.VerifiedProviderLogin, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.verifies = append(p.verifies, id)
-	// The helper has a credential to report only once the provider granted one.
-	if p.fail == "verify" || p.status != "complete" {
-		return ports.VerifiedProviderLogin{}, errTestFailure
+	pushes := h.helper.applies
+	if again, err := h.status(login.ID); err != nil || again != done || h.helper.applies != pushes {
+		t.Fatalf("a second poll: login=%+v err=%v", again, err)
 	}
-	return p.verified, nil
-}
-func loginCoordinatorHarness(t *testing.T) (accountHarness, *LoginCoordinator, *loginProxyFake) {
-	t.Helper()
-	h := setupAccounts(t)
-	p := &loginProxyFake{status: "waiting", verified: ports.VerifiedProviderLogin{Provider: "codex", Email: "alice@example.test", CredentialRef: "alice.json", AuthID: "auth-alice"}}
-	n := 0
-	l := NewLoginCoordinator(h.svc, p, func() string { n++; return fmt.Sprintf("login-%d", n) })
-	return h, l, p
-}
-func TestProviderLoginAddsVerifiedAccountExactlyOnce(t *testing.T) {
-	h, l, p := loginCoordinatorHarness(t)
-	login, err := l.Start(h.ctx, "codex", "")
-	if err != nil {
-		t.Fatal(err)
+	state := h.store.get()
+	if len(state.Accounts) != 1 || state.Accounts[0].ID != done.AccountID || state.Defaults["codex"] != done.AccountID || !state.Accounts[0].SignedIn() {
+		t.Fatalf("state=%+v", state)
 	}
-	if login.ID != "login-1" || login.Status != "waiting" || login.URL == "" {
-		t.Fatalf("login=%+v", login)
+	if _, err := h.status("unknown"); !errors.Is(err, ports.ErrProviderLoginUnknown) {
+		t.Fatalf("unknown attempt: %v", err)
 	}
-	state, err := h.svc.State(h.ctx)
-	if err != nil || len(state.Accounts) != 0 {
-		t.Fatalf("premature account=%+v err=%v", state, err)
-	}
-	waiting, err := l.Status(h.ctx, login.ID)
-	if err != nil || waiting.Status != "waiting" || len(p.verifies) != 0 {
-		t.Fatalf("waiting=%+v verifies=%v err=%v", waiting, p.verifies, err)
-	}
-	p.status = "complete"
-	complete, err := l.Status(h.ctx, login.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if complete.Status != "complete" || complete.AccountID == "" {
-		t.Fatalf("complete=%+v", complete)
-	}
-	state, err = h.svc.State(h.ctx)
-	if err != nil || len(state.Accounts) != 1 || state.Accounts[0].ID != complete.AccountID || state.Accounts[0].Email != p.verified.Email {
-		t.Fatalf("state=%+v err=%v", state, err)
-	}
-	if primaryID, managed := primary(state, "codex"); !managed || primaryID != complete.AccountID {
-		t.Fatalf("primary=%s managed=%v", primaryID, managed)
-	}
-	again, err := l.Status(h.ctx, login.ID)
-	if err != nil || !reflect.DeepEqual(again, complete) || len(p.verifies) != 1 {
-		t.Fatalf("repeat=%+v verifies=%v err=%v", again, p.verifies, err)
-	}
-	if err = l.Cancel(h.ctx, login.ID); err != nil || len(p.cancels) != 0 {
-		t.Fatalf("completed cancellation=%v calls=%v", err, p.cancels)
-	}
-}
-func TestProviderLoginAllowsIndependentProvidersButOneAttemptEach(t *testing.T) {
-	h, l, p := loginCoordinatorHarness(t)
-	codex, err := l.Start(h.ctx, "codex", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resumed, err := l.Start(h.ctx, "codex", ""); err != nil || resumed.ID != codex.ID {
-		t.Fatalf("same-provider attempt was not resumed: %+v %v", resumed, err)
-	}
-	claude, err := l.Start(h.ctx, "claude", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if claude.ID == codex.ID || len(p.starts) != 2 {
-		t.Fatalf("starts=%v", p.starts)
-	}
-	if err = l.Cancel(h.ctx, codex.ID); err != nil {
-		t.Fatal(err)
-	}
-	next, err := l.Start(h.ctx, "codex", "")
-	if err != nil || next.ID == codex.ID {
-		t.Fatalf("new=%+v err=%v", next, err)
-	}
-	if resumed, err := l.Start(h.ctx, "claude", ""); err != nil || resumed.ID != claude.ID {
-		t.Fatalf("codex cancellation changed Claude login: %+v %v", resumed, err)
+	if next := h.start("codex", ""); next.ID == login.ID {
+		t.Fatal("a finished attempt was handed out again")
 	}
 }
 
-func TestProviderLoginStatusFailureAfterDeadlineBecomesTerminal(t *testing.T) {
-	h, l, p := loginCoordinatorHarness(t)
-	login, err := l.Start(h.ctx, "codex", "")
-	if err != nil {
-		t.Fatal(err)
+func TestLoginRequestsAreValidatedBeforeTheHelperIsAsked(t *testing.T) {
+	h := setup(t)
+	for name, attempt := range map[string]struct {
+		request       ports.ProviderLoginRequest
+		code, message string
+	}{
+		"no provider":     {ports.ProviderLoginRequest{}, "PROVIDER_REQUIRED", "Choose Codex or Claude"},
+		"other provider":  {ports.ProviderLoginRequest{Provider: "gemini"}, "PROVIDER_REQUIRED", "Choose Codex or Claude"},
+		"claude device":   {ports.ProviderLoginRequest{Provider: "claude", Mode: "device"}, "LOGIN_MODE_UNSUPPORTED", "Device login is available for Codex only"},
+		"empty import":    {ports.ProviderLoginRequest{Provider: "codex", Mode: "import", CredentialJSON: "  "}, "CREDENTIAL_JSON_REQUIRED", "Paste or choose a credential JSON file"},
+		"key without URL": {ports.ProviderLoginRequest{Provider: "codex", Mode: "api_key", APIKey: "sk-test"}, "API_KEY_FIELDS_REQUIRED", "API key and base URL are required"},
+		"URL without key": {ports.ProviderLoginRequest{Provider: "claude", Mode: "api_key", BaseURL: "https://api.example"}, "API_KEY_FIELDS_REQUIRED", "API key and base URL are required"},
+		"unknown mode":    {ports.ProviderLoginRequest{Provider: "codex", Mode: "pigeon"}, "LOGIN_MODE_UNSUPPORTED", "Choose browser, device, API key, or JSON import"},
+	} {
+		var invalid *apierr.Error
+		if _, err := h.svc.StartLogin(h.ctx, attempt.request); !errors.As(err, &invalid) || invalid.Kind != apierr.KindInvalid || invalid.Code != attempt.code || invalid.Message != attempt.message {
+			t.Fatalf("%s: err=%#v", name, err)
+		}
 	}
-	p.fail = "status"
-	l.now = func() time.Time { return time.Now().Add(7 * time.Minute) }
-	result, err := l.Status(h.ctx, login.ID)
-	if err != nil {
-		t.Fatal(err)
+	if len(h.helper.started) != 0 {
+		t.Fatalf("an invalid request reached the helper: %+v", h.helper.started)
 	}
-	if result.Status != "failed" {
-		t.Fatalf("expired login remained active: %+v", result)
-	}
-	if len(p.cancels) != 1 {
-		t.Fatalf("expired login was not cancelled: %v", p.cancels)
+	for _, request := range []ports.ProviderLoginRequest{
+		{Provider: "codex", Mode: "device"},
+		{Provider: "claude", Mode: "import", CredentialJSON: `{"type":"claude"}`},
+	} {
+		login, err := h.svc.StartLogin(h.ctx, request)
+		if err != nil || login.Mode != request.Mode || h.helper.started[len(h.helper.started)-1] != request {
+			t.Fatalf("%s: login=%+v err=%v", request.Mode, login, err)
+		}
 	}
 }
-func TestProviderLoginCancellationIsIdempotentAndKeepsInventory(t *testing.T) {
-	h, l, p := loginCoordinatorHarness(t)
-	existing := h.login(t, "codex", "existing@example.test")
-	login, err := l.Start(h.ctx, "codex", "")
-	if err != nil {
+
+func TestAProviderHasOneWaitingAttemptAndProvidersAreIndependent(t *testing.T) {
+	h := setup(t)
+	alice := h.signIn("codex", "alice@example.com")
+	if err := h.act(alice, "sign-out"); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 3; i++ {
-		if err = l.Cancel(h.ctx, login.ID); err != nil {
+	codex := h.start("codex", "")
+	claude := h.start("claude", "")
+	if codex.ID == claude.ID || len(h.helper.started) != 2 {
+		t.Fatalf("codex=%s claude=%s started=%d", codex.ID, claude.ID, len(h.helper.started))
+	}
+	// A renderer that lost its state asks again and gets the same attempt.
+	if resumed := h.start("codex", ""); resumed != codex || len(h.helper.started) != 2 {
+		t.Fatalf("resumed=%+v started=%d", resumed, len(h.helper.started))
+	}
+	for _, other := range []ports.ProviderLoginRequest{{Provider: "codex", AccountID: alice}, {Provider: "codex", Mode: "device"}} {
+		if _, err := h.svc.StartLogin(h.ctx, other); !errors.Is(err, ports.ErrProviderAccountConflict) {
+			t.Fatalf("another sign-in while one waits: %v", err)
+		}
+	}
+	for range 2 {
+		if err := h.svc.CancelLogin(h.ctx, codex.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
-	cancelled, err := l.Status(h.ctx, login.ID)
-	if err != nil || cancelled.Status != "cancelled" || len(p.cancels) != 1 || len(p.polls) != 0 {
-		t.Fatalf("cancelled=%+v cancel=%v polls=%v err=%v", cancelled, p.cancels, p.polls, err)
+	if err := h.svc.CancelLogin(h.ctx, "unknown"); err != nil {
+		t.Fatalf("cancelling nothing: %v", err)
 	}
-	state, err := h.svc.State(h.ctx)
-	if err != nil || len(state.Accounts) != 1 || state.Accounts[0].ID != existing {
-		t.Fatalf("state=%+v err=%v", state, err)
+	if got, _ := h.status(codex.ID); got.Status != "cancelled" || !reflect.DeepEqual(h.helper.cancelled, []string{codex.ID}) {
+		t.Fatalf("login=%+v cancelled=%v", got, h.helper.cancelled)
 	}
-	if err = l.Cancel(h.ctx, "unknown-attempt"); err != nil {
-		t.Fatal(err)
+	if got, _ := h.status(claude.ID); got.Status != "waiting" {
+		t.Fatalf("cancelling Codex ended Claude's attempt: %+v", got)
+	}
+	if relogin := h.start("codex", alice); relogin.ID == codex.ID {
+		t.Fatal("a cancelled attempt was handed out again")
 	}
 }
 
-// The provider can grant a sign-in a moment before its attempt is cancelled or
-// runs out of time. Nothing records that credential afterwards, so it must not
-// be left in the helper.
-func TestProviderLoginEndedAttemptRemovesTheSignInItHadAlreadySaved(t *testing.T) {
-	for name, end := range map[string]func(*testing.T, accountHarness, *LoginCoordinator, ports.ProviderLogin){
-		"cancelled": func(t *testing.T, h accountHarness, l *LoginCoordinator, login ports.ProviderLogin) {
-			if err := l.Cancel(h.ctx, login.ID); err != nil {
-				t.Fatal(err)
-			}
-		},
-		"out of time": func(t *testing.T, h accountHarness, l *LoginCoordinator, login ports.ProviderLogin) {
-			l.now = func() time.Time { return time.Now().Add(7 * time.Minute) }
-			if result, err := l.Status(h.ctx, login.ID); err != nil || result.Status != "failed" {
-				t.Fatalf("result=%+v err=%v", result, err)
-			}
-		},
+func TestConcurrentStartsShareOneAttempt(t *testing.T) {
+	h := setup(t)
+	var wg sync.WaitGroup
+	ids := make([]string, 8)
+	for i := range ids {
+		wg.Go(func() { ids[i] = h.start("claude", "").ID })
+	}
+	wg.Wait()
+	for _, id := range ids {
+		if id != ids[0] {
+			t.Fatalf("attempts=%v", ids)
+		}
+	}
+	if len(h.helper.started) != 1 {
+		t.Fatalf("the helper opened %d sign-ins", len(h.helper.started))
+	}
+}
+
+func TestSigningInAgainIsRefusedBeforeTheBrowserOpensWhenItCannotWork(t *testing.T) {
+	h := setup(t)
+	alice := h.signIn("codex", "alice@example.com")
+	for name, request := range map[string]ports.ProviderLoginRequest{
+		"already signed in": {Provider: "codex", AccountID: alice},
+		"removed entry":     {Provider: "codex", AccountID: "gone"},
+		"another provider":  {Provider: "claude", AccountID: alice},
 	} {
-		t.Run(name, func(t *testing.T) {
-			h, l, p := loginCoordinatorHarness(t)
-			login, err := l.Start(h.ctx, "codex", "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if name == "out of time" {
-				// The helper cannot be asked how the attempt went, but has saved the sign-in.
-				p.fail = "status"
-			}
-			p.status = "complete"
-			end(t, h, l, login)
-			if !reflect.DeepEqual(h.proxy.deleted, []string{"alice.json"}) {
-				t.Fatalf("deleted=%v, want the saved sign-in removed", h.proxy.deleted)
-			}
-			if state, err := h.svc.State(h.ctx); err != nil || len(state.Accounts) != 0 {
-				t.Fatalf("state=%+v err=%v", state, err)
-			}
-		})
+		if _, err := h.svc.StartLogin(h.ctx, request); !errors.Is(err, ports.ErrProviderAccountConflict) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if len(h.helper.started) != 0 {
+		t.Fatal("a sign-in that cannot be recorded was opened")
 	}
 }
 
-func TestProviderLoginEndedAttemptKeepsASignInAnAccountUses(t *testing.T) {
-	h, l, p := loginCoordinatorHarness(t)
-	login, err := l.Start(h.ctx, "codex", "")
-	if err != nil {
-		t.Fatal(err)
+func TestAnExpiredAttemptEndsEvenWhenTheHelperCannotBeReached(t *testing.T) {
+	h := setup(t)
+	login := h.start("codex", "")
+	h.helper.statusErr = errInjected
+	if got, err := h.status(login.ID); !errors.Is(err, errInjected) || got.Status != "waiting" {
+		t.Fatalf("an outage before the deadline: login=%+v err=%v", got, err)
 	}
-	// Another path recorded the very credential this attempt produced.
-	if _, err := h.svc.RecordCredential(h.ctx, p.verified, ""); err != nil {
-		t.Fatal(err)
+	h.advance(6 * time.Minute)
+	h.helper.cancelErr = errInjected
+	if got, err := h.status(login.ID); !errors.Is(err, errInjected) || got.Status != "waiting" {
+		t.Fatalf("a refused cancel must stay retryable: login=%+v err=%v", got, err)
 	}
-	p.status = "complete"
-	if err := l.Cancel(h.ctx, login.ID); err != nil {
-		t.Fatal(err)
+	h.helper.cancelErr = nil
+	if got, err := h.status(login.ID); err != nil || got.Status != "failed" || !reflect.DeepEqual(h.helper.cancelled, []string{login.ID}) {
+		t.Fatalf("login=%+v err=%v cancelled=%v", got, err, h.helper.cancelled)
 	}
-	if len(h.proxy.deleted) != 0 {
-		t.Fatalf("deleted=%v, want the account's sign-in kept", h.proxy.deleted)
+	h.helper.statusErr = nil
+	slow := h.start("codex", "")
+	h.advance(6 * time.Minute)
+	if got, err := h.status(slow.ID); err != nil || got.Status != "failed" || len(h.store.get().Accounts) != 0 {
+		t.Fatalf("still waiting at the deadline: login=%+v err=%v", got, err)
+	}
+	// A sign-in that completed in time is still recorded when it is asked about late.
+	late := h.start("codex", "")
+	h.helper.complete(late.ID, signIn("codex", "alice@example.com"))
+	h.advance(time.Hour)
+	if got, err := h.status(late.ID); err != nil || got.Status != "complete" || len(h.store.get().Accounts) != 1 {
+		t.Fatalf("login=%+v err=%v", got, err)
 	}
 }
 
-func TestProviderLoginFailedStatusNeverCreatesAccount(t *testing.T) {
-	h, l, p := loginCoordinatorHarness(t)
-	login, err := l.Start(h.ctx, "claude", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.status = "failed"
-	failed, err := l.Status(h.ctx, login.ID)
-	if err != nil || failed.Status != "failed" {
-		t.Fatalf("failed=%+v err=%v", failed, err)
-	}
-	state, err := h.svc.State(h.ctx)
-	if err != nil || len(state.Accounts) != 0 || len(state.Primaries) != 0 || len(p.verifies) != 0 {
-		t.Fatalf("state=%+v verifies=%v err=%v", state, p.verifies, err)
-	}
-	if _, err = l.Start(h.ctx, "claude", ""); err != nil {
-		t.Fatalf("retry after failure=%v", err)
-	}
-}
-func TestProviderLoginReloginPreservesSavedEntryAndRecoversWaitingSessions(t *testing.T) {
-	for _, provider := range []string{"codex", "claude"} {
-		t.Run(provider, func(t *testing.T) {
-			h, l, p := loginCoordinatorHarness(t)
-			id := h.login(t, provider, "alice@example.test")
-			harness := domain.HarnessCodex
-			if provider == "claude" {
-				harness = domain.HarnessClaudeCode
-			}
-			h.assign(t, "existing", harness, id)
-			if err := h.svc.Remove(h.ctx, id, "", true); err != nil {
-				t.Fatal(err)
-			}
-			login, err := l.Start(h.ctx, provider, id)
-			if err != nil {
-				t.Fatal(err)
-			}
-			p.status = "complete"
-			p.verified = ports.VerifiedProviderLogin{Provider: provider, Email: "ALICE@example.test", CredentialRef: "renewed.json", AuthID: "renewed-auth"}
-			complete, err := l.Status(h.ctx, login.ID)
-			if err != nil || complete.AccountID != id {
-				t.Fatalf("complete=%+v err=%v", complete, err)
-			}
-			h.route(t, "existing", id)
-			state, err := h.svc.State(h.ctx)
-			if err != nil || len(state.Accounts) != 1 || state.Accounts[0].CredentialRef != "renewed.json" {
-				t.Fatalf("state=%+v err=%v", state, err)
-			}
-		})
-	}
-}
-func TestProviderLoginRefusesInvalidReloginBeforeOpeningBrowser(t *testing.T) {
-	cases := []struct {
-		name, provider, kind string
-		want                 error
-	}{
-		{"unsupported", "gemini", "new", nil},
-		{"unknown", "codex", "unknown", ports.ErrProviderAccountUnknown},
-		{"different-provider", "claude", "signed-out", ports.ErrProviderAccountIncompatible},
-		{"already-signed-in", "codex", "signed-in", nil},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			h, l, p := loginCoordinatorHarness(t)
-			id := ""
-			switch tc.kind {
-			case "unknown":
-				id = "unknown"
-			case "signed-in", "signed-out":
-				id = h.login(t, "codex", "a@example.test")
-				if tc.kind == "signed-out" {
-					if err := h.svc.Remove(h.ctx, id, "", true); err != nil {
+func TestAnEndedAttemptDiscardsASignInGrantedAMomentBefore(t *testing.T) {
+	for _, ending := range []string{"cancel", "expiry"} {
+		t.Run(ending, func(t *testing.T) {
+			h := setup(t)
+			alice := h.signIn("codex", "alice@example.com")
+			end := func(id string) {
+				t.Helper()
+				if ending == "cancel" {
+					if err := h.svc.CancelLogin(h.ctx, id); err != nil {
 						t.Fatal(err)
 					}
+					return
+				}
+				h.advance(6 * time.Minute)
+				if got, err := h.status(id); err != nil || got.Status != "failed" {
+					t.Fatalf("login=%+v err=%v", got, err)
 				}
 			}
-			_, err := l.Start(h.ctx, tc.provider, id)
-			if err == nil || (tc.want != nil && !errors.Is(err, tc.want)) {
-				t.Fatalf("err=%v want=%v", err, tc.want)
+			login := h.start("codex", "")
+			h.helper.results[login.ID] = signIn("codex", "late@example.com")
+			end(login.ID)
+			if !reflect.DeepEqual(h.helper.deleted, []string{"late@example.com.json"}) || len(h.store.get().Accounts) != 1 {
+				t.Fatalf("deleted=%v accounts=%d", h.helper.deleted, len(h.store.get().Accounts))
 			}
-			if len(p.starts) != 0 {
-				t.Fatalf("unacceptable login reached provider: %v", p.starts)
+			// The same person signing in twice yields the credential their account uses.
+			again := h.start("codex", "")
+			h.helper.results[again.ID] = signIn("codex", "alice@example.com")
+			end(again.ID)
+			if len(h.helper.deleted) != 1 || !h.view(alice).SignedIn {
+				t.Fatalf("an account's own credential was deleted: %v", h.helper.deleted)
 			}
 		})
 	}
 }
-func TestProviderLoginVerifiedIdentityMustMatchChosenEntry(t *testing.T) {
-	cases := []struct{ name, provider, email, ref, auth string }{
-		{"wrong-provider", "claude", "alice@example.test", "fresh.json", "fresh-auth"},
-		{"wrong-email", "codex", "mallory@example.test", "fresh.json", "fresh-auth"},
-		{"empty-email", "codex", "", "fresh.json", "fresh-auth"},
-		{"empty-reference", "codex", "alice@example.test", "", "fresh-auth"},
-		{"empty-auth-id", "codex", "alice@example.test", "fresh.json", ""},
+
+func TestAVerifiedIdentityThatDoesNotMatchFailsTheAttemptAndIsDiscarded(t *testing.T) {
+	h := setup(t)
+	alice := h.signIn("codex", "alice@example.com")
+	bob := h.signIn("codex", "bob@example.com")
+	if err := h.act(bob, "sign-out"); err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			h, l, p := loginCoordinatorHarness(t)
-			id := h.login(t, "codex", "alice@example.test")
-			if err := h.svc.Remove(h.ctx, id, "", true); err != nil {
-				t.Fatal(err)
-			}
-			login, err := l.Start(h.ctx, "codex", id)
-			if err != nil {
-				t.Fatal(err)
-			}
-			p.status = "complete"
-			p.verified = ports.VerifiedProviderLogin{Provider: tc.provider, Email: tc.email, CredentialRef: tc.ref, AuthID: tc.auth}
-			if _, err = l.Status(h.ctx, login.ID); err == nil {
-				t.Fatal("unverified identity admitted")
-			}
-			state, err := h.svc.State(h.ctx)
-			if err != nil || len(state.Accounts) != 1 || state.Accounts[0].CredentialRef != "" || state.Accounts[0].AuthID != "" {
-				t.Fatalf("saved signed-out entry changed=%+v err=%v", state, err)
-			}
-			if primaryID, _ := primary(state, "codex"); primaryID != "" {
-				t.Fatalf("wrong login became primary=%s", primaryID)
-			}
-		})
+	h.helper.deleted = nil
+	eve := signIn("codex", "eve@example.com")
+	wrongProvider := signIn("claude", "bob@example.com")
+	wrongProvider.CredentialRef = "claude-bob.json"
+	taken := signIn("codex", "alice@example.com")
+	taken.CredentialRef, taken.AuthID = "second-alice.json", "second-alice-auth"
+	for i, attempt := range []struct {
+		accountID string
+		result    ports.VerifiedProviderLogin
+		want      error
+	}{
+		{bob, eve, ports.ErrProviderAccountIncompatible},
+		{bob, wrongProvider, ports.ErrProviderAccountIncompatible},
+		{"", taken, ports.ErrProviderAccountConflict},
+	} {
+		before := h.store.get()
+		login := h.start("codex", attempt.accountID)
+		h.helper.complete(login.ID, attempt.result)
+		got, err := h.status(login.ID)
+		if !errors.Is(err, attempt.want) || got.Status != "failed" {
+			t.Fatalf("attempt %d: login=%+v err=%v", i, got, err)
+		}
+		if encode(h.store.get()) != encode(before) || len(h.helper.deleted) != i+1 || h.helper.deleted[i] != attempt.result.CredentialRef {
+			t.Fatalf("attempt %d: deleted=%v", i, h.helper.deleted)
+		}
+		if again, err := h.status(login.ID); err != nil || again.Status != "failed" {
+			t.Fatalf("attempt %d stays failed: login=%+v err=%v", i, again, err)
+		}
+		h.helper.status = "waiting"
+	}
+	if !h.view(alice).SignedIn || h.view(bob).SignedIn {
+		t.Fatal("a rejected sign-in changed an account")
+	}
+	// A rejected sign-in that is the credential of an account is never deleted.
+	login := h.start("codex", bob)
+	h.helper.complete(login.ID, signIn("codex", "alice@example.com"))
+	if _, err := h.status(login.ID); !errors.Is(err, ports.ErrProviderAccountIncompatible) || len(h.helper.deleted) != 3 {
+		t.Fatalf("err=%v deleted=%v", err, h.helper.deleted)
 	}
 }
-func TestProviderLoginProxyFailuresRemainRetryable(t *testing.T) {
-	for _, stage := range []string{"start", "status", "verify", "cancel"} {
-		t.Run(stage, func(t *testing.T) {
-			h, l, p := loginCoordinatorHarness(t)
-			if stage == "start" {
-				p.fail = stage
-				if _, err := l.Start(h.ctx, "codex", ""); !errors.Is(err, errTestFailure) {
-					t.Fatalf("start error=%v", err)
-				}
-				p.fail = ""
-			}
-			login, err := l.Start(h.ctx, "codex", "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			switch stage {
-			case "status":
-				p.fail = stage
-				if _, err = l.Status(h.ctx, login.ID); !errors.Is(err, errTestFailure) {
-					t.Fatalf("status error=%v", err)
-				}
-			case "verify":
-				p.status = "complete"
-				p.fail = stage
-				if _, err = l.Status(h.ctx, login.ID); !errors.Is(err, errTestFailure) {
-					t.Fatalf("verify error=%v", err)
-				}
-			case "cancel":
-				p.fail = stage
-				if err = l.Cancel(h.ctx, login.ID); !errors.Is(err, errTestFailure) {
-					t.Fatalf("cancel error=%v", err)
-				}
-			}
-			p.fail = ""
-			p.status = "complete"
-			complete, err := l.Status(h.ctx, login.ID)
-			if err != nil || complete.Status != "complete" {
-				t.Fatalf("retry=%+v err=%v", complete, err)
-			}
-		})
+
+func TestHelperAndStorageFailuresLeaveTheAttemptWaiting(t *testing.T) {
+	h := setup(t)
+	h.helper.startErr = errInjected
+	if login, err := h.svc.StartLogin(h.ctx, ports.ProviderLoginRequest{Provider: "codex"}); !errors.Is(err, errInjected) || login.ID != "" {
+		t.Fatalf("login=%+v err=%v", login, err)
+	}
+	h.helper.startErr = nil
+	login := h.start("codex", "")
+	h.helper.complete(login.ID, signIn("codex", "alice@example.com"))
+	for name, breakIt := range map[string]func(error){
+		"status":       func(err error) { h.helper.statusErr = err },
+		"result":       func(err error) { h.helper.resultErr = err },
+		"route push":   func(err error) { h.helper.applyErr = err },
+		"account save": func(err error) { h.store.saveErr = err },
+	} {
+		breakIt(errInjected)
+		if got, err := h.status(login.ID); !errors.Is(err, errInjected) || got.Status != "waiting" || got.AccountID != "" {
+			t.Fatalf("%s failure: login=%+v err=%v", name, got, err)
+		}
+		if len(h.store.get().Accounts) != 0 || len(h.helper.deleted) != 0 {
+			t.Fatalf("%s failure recorded an account or deleted the sign-in", name)
+		}
+		breakIt(nil)
+	}
+	got, err := h.status(login.ID)
+	if err != nil || got.Status != "complete" || len(h.store.get().Accounts) != 1 || h.store.get().Accounts[0].ID != got.AccountID {
+		t.Fatalf("login=%+v err=%v accounts=%+v", got, err, h.store.get().Accounts)
 	}
 }
-func TestProviderLoginRecordCommitFailureRecoversWithoutDuplicateAccount(t *testing.T) {
-	h, l, p := loginCoordinatorHarness(t)
-	login, err := l.Start(h.ctx, "codex", "")
-	if err != nil {
-		t.Fatal(err)
+
+func TestAFailedSignInAtTheProviderNeverCreatesAnAccount(t *testing.T) {
+	h := setup(t)
+	login := h.start("claude", "")
+	h.helper.status = "failed"
+	if got, err := h.status(login.ID); err != nil || got.Status != "failed" || len(h.store.get().Accounts) != 0 {
+		t.Fatalf("login=%+v err=%v", got, err)
 	}
-	p.status = "complete"
-	h.store.fail = "commit"
-	if _, err = l.Status(h.ctx, login.ID); err == nil {
-		t.Fatal("expected durable commit failure")
-	}
-	if h.store.pending == nil {
-		t.Fatal("verified login lost recovery intent")
-	}
-	h.store.fail = ""
-	if err = h.svc.Recover(h.ctx); err != nil {
-		t.Fatal(err)
-	}
-	// After a lost acknowledgement the coordinator must recognize this verified
-	// login as its own previously committed account, rather than attempt a second
-	// inventory entry with the same email.
-	complete, err := l.Status(h.ctx, login.ID)
-	if err != nil || complete.Status != "complete" {
-		t.Fatalf("coordinator failed after recovery: %+v %v", complete, err)
-	}
-	state, err := h.svc.State(h.ctx)
-	if err != nil || len(state.Accounts) != 1 {
-		t.Fatalf("duplicates=%+v err=%v", state, err)
-	}
-}
-func TestProviderLoginRestartRequiresFreshAttempt(t *testing.T) {
-	h, l, p := loginCoordinatorHarness(t)
-	login, err := l.Start(h.ctx, "codex", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	restarted := NewLoginCoordinator(h.svc, p, func() string { return "fresh" })
-	if _, err = restarted.Status(h.ctx, login.ID); err == nil || !strings.Contains(err.Error(), "sign in again") {
-		t.Fatalf("old browser attempt err=%v", err)
-	}
-	if err = restarted.Cancel(h.ctx, login.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = restarted.Start(h.ctx, "codex", ""); err != nil {
-		t.Fatal(err)
+	h.helper.status = "waiting"
+	if next := h.start("claude", ""); next.ID == login.ID {
+		t.Fatal("a failed attempt was handed out again")
 	}
 }

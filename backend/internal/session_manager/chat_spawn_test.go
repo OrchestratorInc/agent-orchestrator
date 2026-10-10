@@ -292,59 +292,26 @@ func TestRunBackgroundTaskUsesResolvedWorkerHarnessAndConfig(t *testing.T) {
 }
 
 func TestRunBackgroundTaskRunsOnTheSessionsAccount(t *testing.T) {
-	session := func(st *fakeStore) domain.SessionRecord {
+	ticket := map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:4000", "ANTHROPIC_AUTH_TOKEN": "ticket"}
+	for name, accounts := range map[string]*accountRoutingFake{
+		"managed":       {managed: true, env: ticket},
+		"needs sign-in": {managed: true, err: ports.ErrProviderLoginRequired},
+		"not managed":   {env: ticket},
+	} {
+		launcher := &recordingLauncher{}
+		m, st, _ := newChatManager(launcher)
+		m.dataDir, m.accounts = t.TempDir(), accounts
 		rec := domain.SessionRecord{ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}
 		st.sessions[rec.ID] = rec
-		return rec
+		_, err := m.RunBackgroundTask(context.Background(), rec.ID, "title only", "Fix the renderer")
+		// A task that cannot use the session's account must not run on this computer's own login.
+		if !errors.Is(err, accounts.err) || (err == nil) != (len(launcher.background) == 1) {
+			t.Fatalf("%s: err=%v launches=%d", name, err, len(launcher.background))
+		}
+		if err == nil && (launcher.background[0].Env["ANTHROPIC_AUTH_TOKEN"] == "ticket") != accounts.managed {
+			t.Fatalf("%s: env=%v", name, launcher.background[0].Env)
+		}
 	}
-	t.Run("a managed session", func(t *testing.T) {
-		launcher := &recordingLauncher{}
-		m, st, _ := newChatManager(launcher)
-		m.dataDir = t.TempDir()
-		accounts := &accountRoutingFake{
-			managed: true, route: domain.ProviderSessionRoute{Provider: "claude", AccountID: "account-1"},
-			env: map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:4000", "ANTHROPIC_AUTH_TOKEN": "ticket"},
-		}
-		m.SetProviderAccounts(accounts)
-		rec := session(st)
-		if _, err := m.RunBackgroundTask(context.Background(), rec.ID, "title only", "Fix the renderer"); err != nil {
-			t.Fatal(err)
-		}
-		env := launcher.background[0].Env
-		if env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:4000" || env["ANTHROPIC_AUTH_TOKEN"] != "ticket" {
-			t.Fatalf("the task was not sent through the session's account: %#v", env)
-		}
-		if len(accounts.launches) != 1 || accounts.launches[0] != rec.ID {
-			t.Fatalf("account asked for %v, want the session's", accounts.launches)
-		}
-	})
-	t.Run("a session whose account needs a sign-in", func(t *testing.T) {
-		launcher := &recordingLauncher{}
-		m, st, _ := newChatManager(launcher)
-		m.dataDir = t.TempDir()
-		m.SetProviderAccounts(&accountRoutingFake{managed: true, err: ports.ErrProviderLoginRequired})
-		rec := session(st)
-		// It must not run on the computer's own login instead.
-		if _, err := m.RunBackgroundTask(context.Background(), rec.ID, "title only", "Fix the renderer"); !errors.Is(err, ports.ErrProviderLoginRequired) {
-			t.Fatalf("err = %v, want a sign-in to be required", err)
-		}
-		if len(launcher.background) != 0 {
-			t.Fatalf("the task ran without the session's account: %#v", launcher.background)
-		}
-	})
-	t.Run("a session AO does not manage", func(t *testing.T) {
-		launcher := &recordingLauncher{}
-		m, st, _ := newChatManager(launcher)
-		m.dataDir = t.TempDir()
-		m.SetProviderAccounts(&accountRoutingFake{})
-		rec := session(st)
-		if _, err := m.RunBackgroundTask(context.Background(), rec.ID, "title only", "Fix the renderer"); err != nil {
-			t.Fatal(err)
-		}
-		if _, set := launcher.background[0].Env["ANTHROPIC_BASE_URL"]; set {
-			t.Fatalf("an unmanaged session's task was redirected: %#v", launcher.background[0].Env)
-		}
-	})
 }
 
 func TestBackgroundTaskPermissionsKeepKimiCompatible(t *testing.T) {
