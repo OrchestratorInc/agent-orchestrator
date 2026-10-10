@@ -155,7 +155,10 @@ exec "$AO_ZCODE_NODE" "$AO_ZCODE_ENTRY" "$@"
 	launch := ports.LaunchConfig{WorkspacePath: workspace, SessionID: "ao-zcode-conformance", Prompt: initialTask, SystemPrompt: "AO_HIDDEN_FIRST", Env: envMap}
 	argv, err := plugin.GetLaunchCommand(context.Background(), launch)
 	if err != nil {
-		t.Fatal(err)
+		probe := exec.Command(binary, "hooks", "trust", "status", "--workspace", workspace, "--json")
+		probe.Dir, probe.Env = workspace, env
+		output, probeErr := probe.CombinedOutput()
+		t.Fatalf("launch: %v; native trust status (%v):\n%s", err, probeErr, output)
 	}
 	first := startConformanceTUI(t, workspace, env, argv)
 	// SessionStart is lazy until a real turn; the native composer is readiness.
