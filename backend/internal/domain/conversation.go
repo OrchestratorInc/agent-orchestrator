@@ -616,6 +616,7 @@ type QueuedTurn struct {
 // be dispatched again. Unlike QueuedTurn, its source was already sent and
 // settled; ActiveLineage says whether it still belongs to the visible branch.
 type RetryPrompt struct {
+	Continuation        bool
 	Text                string
 	Origin              MessageOrigin
 	DeliveryContentJSON string
@@ -636,6 +637,10 @@ type ConversationMessage struct {
 	Role     MessageRole   `json:"role"`
 	Origin   MessageOrigin `json:"origin"`
 	Text     string        `json:"text"`
+	// Continuation marks the user's one-click "continue" after stopping a turn.
+	// The agent receives Text like any message; the timeline shows a marker
+	// instead of a message bubble.
+	Continuation bool `json:"continuation,omitempty"`
 	// AuthoredByUser is an intake-only fact used to project user activity when
 	// AO delivered the message as automation. It is not part of the persisted
 	// delivery origin or the conversation API representation.

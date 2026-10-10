@@ -113,6 +113,7 @@ type Store interface {
 	UpdateQueuedTurnMessage(ctx context.Context, conversationID, turnID, text, contentJSON string, revision int64, now time.Time, delivery domain.ConversationQueuedEditDelivery) error
 	ReorderQueuedTurns(ctx context.Context, conversationID string, turnIDs []string) error
 
+	ContinuationPrompt(ctx context.Context, conversationID, turnID string) (domain.ConversationMessage, error)
 	RetryPrompt(ctx context.Context, conversationID, turnID string) (domain.RetryPrompt, error)
 	RetryTurnIDForSource(ctx context.Context, conversationID, sourceTurnID string) (string, bool, error)
 
@@ -202,6 +203,8 @@ type Controller struct {
 
 	conv                   ports.ChatConversation
 	store                  Store
+	continuationReader     SnapshotReader
+	continuationPageReader SnapshotPageReader
 	activity               ActivityRecorder
 	log                    *slog.Logger
 	newID                  IDFactory
@@ -554,7 +557,7 @@ func (p *nativeHistoryCheckpoint) captureAOHighWater(
 		}
 		if !message.Streaming && kind != "" && message.Sequence > turnEvidence[message.TurnID].sequence {
 			turnEvidence[message.TurnID] = nativeHistoryHighWater{
-				sequence: message.Sequence, providerItemID: message.ProviderItemID, kind: kind, text: message.Text,
+				sequence: message.Sequence, providerItemID: message.ProviderItemID, kind: kind, text: nativeHistoryMessageText(message),
 			}
 		}
 		if message.Role == domain.MessageRoleUser && message.Sequence > 0 &&
@@ -1038,6 +1041,26 @@ type nativeHistoryTurnIndex struct {
 	ordered          []*nativeHistoryTurn
 }
 
+// nativeHistoryMessageText restores AO-owned text context for native transcript
+// matching. Public message text stays short; opaque provider IDs can change on
+// load, so reconciliation must compare the exact prompt that was dispatched.
+func nativeHistoryMessageText(message domain.ConversationMessage) string {
+	if message.Role != domain.MessageRoleUser || !message.Continuation || message.DeliveryContentJSON == "" {
+		return message.Text
+	}
+	var content []ports.ChatContent
+	if json.Unmarshal([]byte(message.DeliveryContentJSON), &content) != nil {
+		return message.Text
+	}
+	internal := make([]ports.ChatContent, 0, len(content))
+	for _, block := range content {
+		if block.Internal && block.Type == "text" {
+			internal = append(internal, block)
+		}
+	}
+	return excerptDeliveryMessage(ports.ChatUserMessage{Text: message.Text, Content: internal}).Text
+}
+
 func indexNativeHistoryTurns(
 	existingTurns []domain.ConversationTurn,
 	existingMessages []domain.ConversationMessage,
@@ -1088,10 +1111,10 @@ func indexNativeHistoryTurns(
 		if candidate == nil {
 			continue
 		}
-		candidate.messages[nativeHistoryMessageFingerprint(message.Role, message.Text)]++
+		candidate.messages[nativeHistoryMessageFingerprint(message.Role, nativeHistoryMessageText(message))]++
 		rememberProviderItem(message.ProviderItemID, candidate)
 		if message.Role == domain.MessageRoleUser && candidate.text == "" {
-			candidate.text = message.Text
+			candidate.text = nativeHistoryMessageText(message)
 			candidate.clientMessage = message.ClientMessageID
 			candidate.providerItem = message.ProviderItemID
 		}
@@ -1423,6 +1446,13 @@ func (c *Controller) sendLocked(
 		return domain.ConversationTurn{}, ErrControllerHandoff
 	}
 
+	// Bind retries to the client request before adding durable continuation context.
+	var err error
+	msg, err = c.prepareContinuation(ctx, msg)
+	if err != nil {
+		return domain.ConversationTurn{}, err
+	}
+
 	now := c.now()
 	turnID := c.newID()
 	markedSending := false
@@ -1458,13 +1488,11 @@ func (c *Controller) sendLocked(
 		SenderProjectID:     msg.SenderProjectID,
 		SenderDisplayName:   msg.SenderDisplayName,
 		AuthoredByUser:      msg.AuthoredByUser,
+		Continuation:        msg.Continuation,
 		InteractionAt:       msg.InteractionAt,
 	}
 
-	var (
-		created bool
-		err     error
-	)
+	var created bool
 	if c.reviewID == "" {
 		created, err = c.store.AppendUserMessage(ctx, c.conversation.ID, c.sessionID, c.generation, record, turnID, now)
 	} else {
@@ -1584,6 +1612,7 @@ func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.Conve
 		Origin:              prompt.Origin,
 		ClientMessageID:     key,
 		DeliveryContentJSON: prompt.DeliveryContentJSON,
+		Continuation:        prompt.Continuation,
 	}
 	var created bool
 	if c.reviewID == "" {
@@ -1607,6 +1636,7 @@ func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.Conve
 
 	return c.dispatch(ctx, newTurnID, ports.ChatUserMessage{
 		Text:            prompt.Text,
+		Continuation:    prompt.Continuation,
 		Content:         content,
 		Origin:          prompt.Origin,
 		ClientMessageID: key,
@@ -1629,6 +1659,10 @@ func retryPromptContent(raw string, capabilities ports.ChatCapabilities) ([]port
 	}
 	for _, item := range content {
 		switch item.Type {
+		case "text":
+			if !item.Internal || strings.TrimSpace(item.Text) == "" {
+				return nil, fmt.Errorf("%w: text context must be AO-owned and nonempty", ErrRetryContentInvalid)
+			}
 		case "image":
 			if item.Data == "" || !strings.HasPrefix(strings.ToLower(item.MIMEType), "image/") {
 				return nil, fmt.Errorf("%w: image attachments require data and an image MIME type", ErrRetryContentInvalid)
@@ -1867,6 +1901,10 @@ func excerptDeliveryMessage(msg ports.ChatUserMessage) ports.ChatUserMessage {
 	content := make([]ports.ChatContent, 0, len(msg.Content))
 	var fallback strings.Builder
 	for _, item := range msg.Content {
+		if item.Internal && item.Type == "text" {
+			fallback.WriteString("\n\n" + item.Text)
+			continue
+		}
 		if item.Type != "excerpt" || item.Excerpt == nil {
 			content = append(content, item)
 			continue

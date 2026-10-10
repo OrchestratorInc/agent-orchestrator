@@ -53,6 +53,7 @@ const {
 	agentSwitchState: { data: [] as AgentSwitchSummary[] },
 	conversationCommandState: {
 		busy: false,
+		send: vi.fn(),
 		chooseSettings: vi.fn(),
 		pendingAcceptedTurnId: undefined as string | undefined,
 		acknowledgeAcceptedTurn: vi.fn(),
@@ -114,6 +115,8 @@ vi.mock("../../hooks/useAgentSwitchVisibility", () => ({
 vi.mock("./ChatWorkspace", async () => {
 	const { useState } = await vi.importActual<typeof import("react")>("react");
 	return {
+		CONTINUE_STOPPED_TURN_PROMPT: "Continue from where you stopped.",
+		continuableTurnId: (snapshot: ConversationSnapshot) => snapshot.continueTurnId ?? "",
 		ChatWorkspace: ({
 			agentInputDisabled,
 			headerActions,
@@ -122,6 +125,7 @@ vi.mock("./ChatWorkspace", async () => {
 			onLinkOpen,
 			onRememberPermissions,
 			onChooseSettings,
+			onContinueTurn,
 			configOptionError,
 			snapshot,
 			shellTarget,
@@ -133,6 +137,7 @@ vi.mock("./ChatWorkspace", async () => {
 			onLinkOpen?: (url: string) => void;
 			onRememberPermissions?: unknown;
 			onChooseSettings?: unknown;
+			onContinueTurn?: () => Promise<unknown> | void;
 			configOptionError?: string;
 			snapshot: { sessionId?: string };
 			shellTarget?: { handleId: string };
@@ -153,6 +158,7 @@ vi.mock("./ChatWorkspace", async () => {
 					<div data-testid="remember-available">{String(Boolean(onRememberPermissions))}</div>
 					<div data-testid="turn-settings-available">{String(Boolean(onChooseSettings))}</div>
 					<div data-testid="config-option-error">{configOptionError}</div>
+					<button type="button" onClick={() => { void Promise.resolve(onContinueTurn?.()).catch(() => {}); }}>Continue test turn</button>
 					{headerActions}
 					{sessionTabAction}
 					<button type="button" onClick={() => onLinkOpen?.(LINK)}>
@@ -207,6 +213,7 @@ beforeEach(() => {
 	conversationState.hasOlder = false;
 	conversationState.isLoadingOlder = false;
 	conversationState.loadOlder = vi.fn();
+	conversationCommandState.send.mockReset().mockResolvedValue({});
 	conversationCommandState.busy = false;
 	conversationCommandState.pendingAcceptedTurnId = undefined;
 	conversationCommandState.acknowledgeAcceptedTurn.mockReset();
@@ -1172,5 +1179,40 @@ describe("project remembering waits for provider permissions", () => {
 		// session identity to model that notification through the memo boundary.
 		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
 		expect(screen.getByTestId("remember-available")).toHaveTextContent("true");
+	});
+});
+
+
+describe("SessionChatSurface continuation identity", () => {
+	it("starts a fresh intent when undo makes a previously continued stop eligible again", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		conversationState.snapshot = { ...snapshotFor(session.id), continueTurnId: "stopped-1", latestSequence: 1 };
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		const originalId = conversationCommandState.send.mock.calls[0]![0].clientMessageId;
+		conversationState.snapshot = { ...snapshotFor(session.id), continueTurnId: "", latestSequence: 2 };
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+		conversationState.snapshot = { ...snapshotFor(session.id), continueTurnId: "stopped-1", latestSequence: 2 };
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		expect(conversationCommandState.send.mock.calls[1]![0].clientMessageId).not.toBe(originalId);
+	});
+
+	it("reuses an intent id after an ambiguous failure and changes it for a new stopped turn", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		conversationState.snapshot = { ...snapshotFor(session.id), continueTurnId: "stopped-1" };
+		conversationCommandState.send.mockRejectedValueOnce(new Error("response lost"));
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		const first = conversationCommandState.send.mock.calls[0]![0];
+		const second = conversationCommandState.send.mock.calls[1]![0];
+		expect(first.clientMessageId).toBeTruthy();
+		expect(second.clientMessageId).toBe(first.clientMessageId);
+		expect(first).toMatchObject({ text: "Continue from where you stopped.", continuation: true });
+		conversationState.snapshot = { ...snapshotFor(session.id), continueTurnId: "stopped-2" };
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
+		expect(conversationCommandState.send.mock.calls[2]![0].clientMessageId).not.toBe(first.clientMessageId);
 	});
 });

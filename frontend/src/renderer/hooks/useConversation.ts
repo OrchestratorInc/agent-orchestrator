@@ -71,6 +71,8 @@ export interface ConversationSendInput {
 	excerpts?: WireExcerptReference[];
 	/** Caller-owned durable idempotency key used for crash-safe retries. */
 	clientMessageId?: string;
+	/** The user's one-click "continue" after stopping a turn. */
+	continuation?: boolean;
 }
 
 interface ConversationSendMutationInput {
@@ -127,6 +129,8 @@ type ConversationDispatchTrackingBySession = Record<string, ConversationDispatch
 export type ConversationLocalEcho = {
 	clientMessageId: string;
 	text: string;
+	/** A continue after a stop, drawn as a marker while it is sent. */
+	continuation?: boolean;
 	createdAt: string;
 	/** A hibernated send is acknowledged locally while the provider wakes. */
 	backgroundWake?: boolean;
@@ -488,6 +492,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			addConversationLocalEcho(queryClient, stateKey(variables.targetSessionId), {
 				clientMessageId: variables.clientMessageId,
 				text: variables.input.text,
+				continuation: variables.input.continuation,
 				excerpts: variables.input.excerpts?.map((excerpt) => ({
 					text: excerpt.text,
 					messageId: excerpt.messageId,
@@ -1479,6 +1484,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 	].sort((a, b) => a.sequence - b.sequence);
 
 	return {
+		continueTurnId: wire.continueTurnId,
 		conversationId: wire.conversationId,
 		sessionId: wire.sessionId,
 		harness: wire.harness ?? "",
@@ -1691,6 +1697,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 			sourceRevision: item.sourceRevision ?? undefined,
 		})),
 		editAvailable: wire.editAvailable ?? undefined,
+		continuation: wire.continuation || undefined,
 		streaming: wire.streaming,
 		senderSessionId: wire.senderSessionId,
 		senderProjectId: wire.senderProjectId,

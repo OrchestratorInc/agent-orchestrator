@@ -50,7 +50,7 @@ import type { TerminalTarget } from "../../types/terminal";
 import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace";
 import { AgentSwitchProgressTrack } from "../AgentSwitchProgressTrack";
 import { useUiStore } from "../../stores/ui-store";
-import { ChatWorkspace } from "./ChatWorkspace";
+import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, continuableTurnId } from "./ChatWorkspace";
 import { startingConversationSnapshot } from "./OrchestratorStartingChat";
 import { hasProviderPermissionMode } from "./TurnSettingsBar";
 
@@ -467,6 +467,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// in instead of flashing, hiding, and reappearing as the controller restarts.
 	const optimisticArrival = Boolean(arriving) && !renderShellFallback;
 	const optimisticChat = (session.kind === "orchestrator" && isLoading && !renderShellFallback) || optimisticArrival;
+	const continueIntent = useRef<{ turnId: string; clientMessageId: string; sequence: number } | null>(null);
 	const renderSnapshot =
 		(optimisticArrival
 			? { ...startingConversationSnapshot(session.id, session.provider), controller: { state: "stopped" as const } }
@@ -475,6 +476,15 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		(renderShellFallback
 			? unavailableConversationSnapshot(session)
 			: undefined);
+	const stoppedTurnId = renderSnapshot ? continuableTurnId(renderSnapshot) : "";
+	useEffect(() => {
+		// Keep an ambiguous request's identity until durable progress confirms
+		// that intent ended. An undo can later make the same stop eligible again.
+		if (!stoppedTurnId && renderSnapshot && continueIntent.current &&
+			renderSnapshot.latestSequence > continueIntent.current.sequence) {
+			continueIntent.current = null;
+		}
+	}, [stoppedTurnId, renderSnapshot?.latestSequence]);
 	// Keep the project marked as starting until its controller is ready, so
 	// sidebar actions cannot launch a duplicate orchestrator.
 	useEffect(() => {
@@ -601,6 +611,17 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onDecide={commands.resolve}
 				onResolveInput={commands.resolveInput}
 				onInterrupt={commands.interrupt}
+				onContinueTurn={() => {
+					const turnId = `${renderSnapshot.conversationId}:${renderSnapshot.activeBranchId ?? ""}:${stoppedTurnId}`;
+					if (continueIntent.current?.turnId !== turnId) {
+						continueIntent.current = { turnId, clientMessageId: crypto.randomUUID(), sequence: renderSnapshot.latestSequence };
+					}
+					return commands.send({
+						text: CONTINUE_STOPPED_TURN_PROMPT,
+						continuation: true,
+						clientMessageId: continueIntent.current.clientMessageId,
+					});
+				}}
 				onResumeAgent={() => {
 					void commands.resumeAgent().catch(() => {});
 				}}

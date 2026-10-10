@@ -49,6 +49,11 @@ func (s *Service) queueWithoutController(
 		return domain.ConversationTurn{}, err
 	}
 
+	msg, err = prepareContinuation(ctx, s.store, s.reader, s.pageReader, conversation.ID, msg)
+	if err != nil {
+		return domain.ConversationTurn{}, err
+	}
+
 	now := s.now()
 	turnID := s.newID()
 	deliveryContent := ""
@@ -89,6 +94,7 @@ func (s *Service) queueWithoutController(
 		ClientPayloadHash:   msg.ClientPayloadHash,
 		DeliveryContentJSON: deliveryContent,
 		AuthoredByUser:      msg.AuthoredByUser,
+		Continuation:        msg.Continuation,
 	}, turnID, now)
 	if err != nil {
 		return domain.ConversationTurn{}, fmt.Errorf("queue message for %s: %w", record.ID, err)

@@ -971,9 +971,9 @@ const insertConversationMessage = `-- name: InsertConversationMessage :exec
 INSERT INTO conversation_messages (
     id, conversation_id, turn_id, sequence, revision, role, origin,
     text, streaming, provider_item_id, client_message_id, client_payload_hash,
-    delivery_content_json, sender_session_id, sender_project_id, sender_display_name,
+    delivery_content_json, continuation, sender_session_id, sender_project_id, sender_display_name,
     created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertConversationMessageParams struct {
@@ -990,6 +990,7 @@ type InsertConversationMessageParams struct {
 	ClientMessageID     string
 	ClientPayloadHash   sql.NullString
 	DeliveryContentJson string
+	Continuation        int64
 	SenderSessionID     string
 	SenderProjectID     string
 	SenderDisplayName   string
@@ -1012,6 +1013,7 @@ func (q *Queries) InsertConversationMessage(ctx context.Context, arg InsertConve
 		arg.ClientMessageID,
 		arg.ClientPayloadHash,
 		arg.DeliveryContentJson,
+		arg.Continuation,
 		arg.SenderSessionID,
 		arg.SenderProjectID,
 		arg.SenderDisplayName,
@@ -1752,6 +1754,73 @@ func (q *Queries) SelectCompletedEditReplacement(ctx context.Context, arg Select
 		&i.ConversationTurn.RetryOfTurnID,
 		&i.ConversationTurn.HandledByReviewID,
 		&i.ParentBranchID,
+	)
+	return i, err
+}
+
+const selectContinuationConversationPrompt = `-- name: SelectContinuationConversationPrompt :one
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = ?2
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation
+FROM conversation_messages
+JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
+WHERE conversation_turns.id = ?1
+  AND conversation_turns.conversation_id = ?2
+  AND conversation_turns.state = 'interrupted'
+  AND conversation_turns.rolled_back_at IS NULL
+  AND conversation_messages.role = 'user'
+  AND EXISTS (
+      SELECT 1 FROM active_path AS path
+      WHERE path.branch_id = conversation_messages.branch_id
+        AND (path.max_sequence IS NULL OR conversation_messages.sequence <= path.max_sequence)
+  )
+LIMIT 1
+`
+
+type SelectContinuationConversationPromptParams struct {
+	ID             string
+	ConversationID string
+}
+
+// A stopped prompt can precede hundreds of tool activities. Recover that one
+// visible request without reading tool output or scanning the conversation.
+func (q *Queries) SelectContinuationConversationPrompt(ctx context.Context, arg SelectContinuationConversationPromptParams) (ConversationMessage, error) {
+	row := q.db.QueryRowContext(ctx, selectContinuationConversationPrompt, arg.ID, arg.ConversationID)
+	var i ConversationMessage
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.TurnID,
+		&i.Sequence,
+		&i.Revision,
+		&i.Role,
+		&i.Origin,
+		&i.Text,
+		&i.Streaming,
+		&i.ProviderItemID,
+		&i.ClientMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeliveryContentJson,
+		&i.BranchID,
+		&i.ClientPayloadHash,
+		&i.SenderSessionID,
+		&i.SenderProjectID,
+		&i.SenderDisplayName,
+		&i.Continuation,
 	)
 	return i, err
 }
@@ -2507,7 +2576,7 @@ func (q *Queries) SelectConversationEditDelivery(ctx context.Context, arg Select
 }
 
 const selectConversationMessageByClientID = `-- name: SelectConversationMessageByClientID :one
-SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name FROM conversation_messages
+SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name, continuation FROM conversation_messages
 WHERE conversation_id = ? AND client_message_id = ?
 LIMIT 1
 `
@@ -2540,12 +2609,13 @@ func (q *Queries) SelectConversationMessageByClientID(ctx context.Context, arg S
 		&i.SenderSessionID,
 		&i.SenderProjectID,
 		&i.SenderDisplayName,
+		&i.Continuation,
 	)
 	return i, err
 }
 
 const selectConversationMessageByProviderItem = `-- name: SelectConversationMessageByProviderItem :one
-SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name FROM conversation_messages
+SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name, continuation FROM conversation_messages
 WHERE conversation_id = ? AND provider_item_id = ?
 LIMIT 1
 `
@@ -2578,6 +2648,7 @@ func (q *Queries) SelectConversationMessageByProviderItem(ctx context.Context, a
 		&i.SenderSessionID,
 		&i.SenderProjectID,
 		&i.SenderDisplayName,
+		&i.Continuation,
 	)
 	return i, err
 }
@@ -2598,7 +2669,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NOT NULL
 )
-SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name FROM conversation_messages
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation FROM conversation_messages
 JOIN active_path AS path ON path.branch_id = conversation_messages.branch_id
 WHERE conversation_messages.conversation_id = ?1
   AND (path.max_sequence IS NULL OR conversation_messages.sequence <= path.max_sequence)
@@ -2655,6 +2726,7 @@ func (q *Queries) SelectConversationMessages(ctx context.Context, conversationID
 			&i.SenderSessionID,
 			&i.SenderProjectID,
 			&i.SenderDisplayName,
+			&i.Continuation,
 		); err != nil {
 			return nil, err
 		}
@@ -2685,7 +2757,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NOT NULL
 )
-SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name FROM conversation_messages
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation FROM conversation_messages
 JOIN active_path AS path ON path.branch_id = conversation_messages.branch_id
 WHERE conversation_messages.conversation_id = ?1
   AND conversation_messages.sequence < ?2
@@ -2738,6 +2810,7 @@ func (q *Queries) SelectConversationMessagesPage(ctx context.Context, arg Select
 			&i.SenderSessionID,
 			&i.SenderProjectID,
 			&i.SenderDisplayName,
+			&i.Continuation,
 		); err != nil {
 			return nil, err
 		}
@@ -3146,18 +3219,41 @@ WHERE conversation_turns.conversation_id = ?1
   ))
   AND (
     conversation_turns.state IN ('queued', 'running')
+    -- Keep the authoritative latest relevant turn at the live edge even if
+    -- swept queued messages have crowded its prompt out of the bounded page.
+    OR (
+      ?2 > (SELECT live.latest_sequence FROM conversations AS live WHERE live.id = ?1)
+      AND conversation_turns.id = (
+        SELECT latest.id FROM conversation_turns AS latest
+        JOIN active_path AS latest_path ON latest_path.branch_id = latest.branch_id
+        WHERE latest.conversation_id = ?1
+          AND latest.promoted_to_turn_id IS NULL
+          AND latest.rolled_back_at IS NULL
+          AND latest.state <> 'cancelled'
+          AND (latest.state <> 'interrupted' OR latest.started_at IS NOT NULL OR latest.provider_turn_id <> '')
+          AND (latest_path.max_sequence IS NULL OR EXISTS (
+            SELECT 1 FROM conversation_messages AS lineage_message
+            WHERE lineage_message.turn_id = latest.id AND lineage_message.sequence <= latest_path.max_sequence
+            UNION ALL
+            SELECT 1 FROM conversation_activities AS lineage_activity
+            WHERE lineage_activity.turn_id = latest.id AND lineage_activity.sequence <= latest_path.max_sequence
+          ))
+        ORDER BY latest.requested_at DESC, latest.rowid DESC
+        LIMIT 1
+      )
+    )
     OR conversation_turns.id IN (
       SELECT turn_id FROM conversation_messages
       WHERE conversation_messages.conversation_id = ?1
         AND turn_id IS NOT NULL
-        AND conversation_messages.sequence >= ?2
-        AND conversation_messages.sequence < ?3
+        AND conversation_messages.sequence >= ?3
+        AND conversation_messages.sequence < ?2
       UNION
       SELECT turn_id FROM conversation_activities
       WHERE conversation_activities.conversation_id = ?1
         AND turn_id IS NOT NULL
-        AND conversation_activities.sequence >= ?2
-        AND conversation_activities.sequence < ?3
+        AND conversation_activities.sequence >= ?3
+        AND conversation_activities.sequence < ?2
     )
   )
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid
@@ -3165,14 +3261,14 @@ ORDER BY conversation_turns.requested_at, conversation_turns.rowid
 
 type SelectConversationTurnsPageParams struct {
 	ConversationID string
-	OldestSequence int64
 	BeforeSequence int64
+	OldestSequence int64
 }
 
 // Turns represented by one bounded timeline page. Active turns are included
 // even before their first item arrives, so the live-turn controls never vanish.
 func (q *Queries) SelectConversationTurnsPage(ctx context.Context, arg SelectConversationTurnsPageParams) ([]ConversationTurn, error) {
-	rows, err := q.db.QueryContext(ctx, selectConversationTurnsPage, arg.ConversationID, arg.OldestSequence, arg.BeforeSequence)
+	rows, err := q.db.QueryContext(ctx, selectConversationTurnsPage, arg.ConversationID, arg.BeforeSequence, arg.OldestSequence)
 	if err != nil {
 		return nil, err
 	}
@@ -3214,7 +3310,7 @@ func (q *Queries) SelectConversationTurnsPage(ctx context.Context, arg SelectCon
 }
 
 const selectConversationUserMessageByTurn = `-- name: SelectConversationUserMessageByTurn :one
-SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation
 FROM conversation_messages
 JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
 WHERE conversation_messages.conversation_id = ?
@@ -3254,6 +3350,7 @@ func (q *Queries) SelectConversationUserMessageByTurn(ctx context.Context, arg S
 		&i.SenderSessionID,
 		&i.SenderProjectID,
 		&i.SenderDisplayName,
+		&i.Continuation,
 	)
 	return i, err
 }
@@ -3381,7 +3478,7 @@ func (q *Queries) SelectProjectConversation(ctx context.Context, projectID *doma
 }
 
 const selectQueuedConversationMessage = `-- name: SelectQueuedConversationMessage :one
-SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation
 FROM conversation_messages
 JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
 WHERE conversation_messages.conversation_id = ?
@@ -3421,6 +3518,7 @@ func (q *Queries) SelectQueuedConversationMessage(ctx context.Context, arg Selec
 		&i.SenderSessionID,
 		&i.SenderProjectID,
 		&i.SenderDisplayName,
+		&i.Continuation,
 	)
 	return i, err
 }
@@ -3526,6 +3624,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
 )
 SELECT conversation_messages.text,
        conversation_messages.origin,
+       conversation_messages.continuation,
        conversation_messages.delivery_content_json,
        EXISTS (
            SELECT 1
@@ -3551,6 +3650,7 @@ type SelectRetryableConversationPromptParams struct {
 type SelectRetryableConversationPromptRow struct {
 	Text                string
 	Origin              domain.MessageOrigin
+	Continuation        int64
 	DeliveryContentJson string
 	ActiveLineage       bool
 }
@@ -3564,6 +3664,7 @@ func (q *Queries) SelectRetryableConversationPrompt(ctx context.Context, arg Sel
 	err := row.Scan(
 		&i.Text,
 		&i.Origin,
+		&i.Continuation,
 		&i.DeliveryContentJson,
 		&i.ActiveLineage,
 	)

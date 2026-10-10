@@ -1437,3 +1437,31 @@ func TestCleanupOwnedControllerWorkOnlySettlesReboundSessionWork(t *testing.T) {
 		}
 	}
 }
+
+func TestAppendUserMessagePersistsContinuation(t *testing.T) {
+	s, sessionID, conversationID := conversationFixture(t)
+	ctx := context.Background()
+
+	if created, err := s.AppendUserMessage(ctx, conversationID, sessionID, "gen-1", domain.ConversationMessage{
+		ID: "asked", Text: "write the migration", Origin: domain.MessageOriginHuman,
+	}, "turn-asked", histClock.Add(time.Minute)); err != nil || !created {
+		t.Fatalf("append question: created=%v err=%v", created, err)
+	}
+	if created, err := s.AppendUserMessage(ctx, conversationID, sessionID, "gen-1", domain.ConversationMessage{
+		ID: "continued", Text: "Continue from where you stopped.", Origin: domain.MessageOriginHuman, Continuation: true,
+	}, "turn-continued", histClock.Add(2*time.Minute)); err != nil || !created {
+		t.Fatalf("append continuation: created=%v err=%v", created, err)
+	}
+
+	snapshot, err := s.LoadConversationSnapshot(ctx, conversationID)
+	if err != nil {
+		t.Fatalf("load conversation snapshot: %v", err)
+	}
+	continuation := map[string]bool{}
+	for _, message := range snapshot.Messages {
+		continuation[message.ID] = message.Continuation
+	}
+	if continuation["asked"] || !continuation["continued"] {
+		t.Fatalf("continuation by message = %v, want only the continue marked", continuation)
+	}
+}

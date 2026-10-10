@@ -1083,6 +1083,7 @@ func (s *Store) appendUserMessage(
 			ClientMessageID:     msg.ClientMessageID,
 			ClientPayloadHash:   sql.NullString{String: msg.ClientPayloadHash, Valid: msg.ClientPayloadHash != ""},
 			DeliveryContentJson: msg.DeliveryContentJSON,
+			Continuation:        boolInt(msg.Continuation),
 			SenderSessionID:     msg.SenderSessionID,
 			SenderProjectID:     msg.SenderProjectID,
 			SenderDisplayName:   msg.SenderDisplayName,
@@ -3690,6 +3691,7 @@ func messageToDomain(row gen.ConversationMessage) domain.ConversationMessage {
 		ClientMessageID:     row.ClientMessageID,
 		ClientPayloadHash:   row.ClientPayloadHash.String,
 		DeliveryContentJSON: row.DeliveryContentJson,
+		Continuation:        row.Continuation != 0,
 		SenderSessionID:     row.SenderSessionID,
 		SenderProjectID:     row.SenderProjectID,
 		SenderDisplayName:   row.SenderDisplayName,
@@ -3761,6 +3763,7 @@ func (s *Store) RetryPrompt(ctx context.Context, conversationID, turnID string) 
 		return domain.RetryPrompt{}, err
 	}
 	return domain.RetryPrompt{
+		Continuation:        row.Continuation != 0,
 		Text:                row.Text,
 		Origin:              row.Origin,
 		DeliveryContentJSON: row.DeliveryContentJson,
@@ -4132,4 +4135,16 @@ func (s *Store) SettleReviewChatWork(ctx context.Context, reviewID string, now t
 		_, err = q.ClearReviewChatController(ctx, gen.ClearReviewChatControllerParams{ID: reviewID, UpdatedAt: now})
 		return err
 	})
+}
+
+// ContinuationPrompt reads only the stopped turn's human request in the active lineage.
+func (s *Store) ContinuationPrompt(ctx context.Context, conversationID, turnID string) (domain.ConversationMessage, error) {
+	row, err := s.qr.SelectContinuationConversationPrompt(ctx, gen.SelectContinuationConversationPromptParams{ID: turnID, ConversationID: conversationID})
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ConversationMessage{}, domain.ErrNoConversationTurn
+	}
+	if err != nil {
+		return domain.ConversationMessage{}, err
+	}
+	return messageToDomain(row), nil
 }

@@ -592,7 +592,7 @@ func buildApproximateReplayContext(rows []domain.ConversationMessage, floor, cut
 func withoutInternalReplayContent(content []ports.ChatContent) []ports.ChatContent {
 	filtered := make([]ports.ChatContent, 0, len(content))
 	for _, item := range content {
-		if ports.IsInternalReplayContent(item) {
+		if item.Internal {
 			continue
 		}
 		filtered = append(filtered, item)

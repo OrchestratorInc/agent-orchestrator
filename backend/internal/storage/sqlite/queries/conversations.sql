@@ -792,6 +792,29 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   ))
   AND (
     conversation_turns.state IN ('queued', 'running')
+    -- Keep the authoritative latest relevant turn at the live edge even if
+    -- swept queued messages have crowded its prompt out of the bounded page.
+    OR (
+      sqlc.arg(before_sequence) > (SELECT live.latest_sequence FROM conversations AS live WHERE live.id = sqlc.arg(conversation_id))
+      AND conversation_turns.id = (
+        SELECT latest.id FROM conversation_turns AS latest
+        JOIN active_path AS latest_path ON latest_path.branch_id = latest.branch_id
+        WHERE latest.conversation_id = sqlc.arg(conversation_id)
+          AND latest.promoted_to_turn_id IS NULL
+          AND latest.rolled_back_at IS NULL
+          AND latest.state <> 'cancelled'
+          AND (latest.state <> 'interrupted' OR latest.started_at IS NOT NULL OR latest.provider_turn_id <> '')
+          AND (latest_path.max_sequence IS NULL OR EXISTS (
+            SELECT 1 FROM conversation_messages AS lineage_message
+            WHERE lineage_message.turn_id = latest.id AND lineage_message.sequence <= latest_path.max_sequence
+            UNION ALL
+            SELECT 1 FROM conversation_activities AS lineage_activity
+            WHERE lineage_activity.turn_id = latest.id AND lineage_activity.sequence <= latest_path.max_sequence
+          ))
+        ORDER BY latest.requested_at DESC, latest.rowid DESC
+        LIMIT 1
+      )
+    )
     OR conversation_turns.id IN (
       SELECT turn_id FROM conversation_messages
       WHERE conversation_messages.conversation_id = sqlc.arg(conversation_id)
@@ -1046,9 +1069,9 @@ WHERE id = ?
 INSERT INTO conversation_messages (
     id, conversation_id, turn_id, sequence, revision, role, origin,
     text, streaming, provider_item_id, client_message_id, client_payload_hash,
-    delivery_content_json, sender_session_id, sender_project_id, sender_display_name,
+    delivery_content_json, continuation, sender_session_id, sender_project_id, sender_display_name,
     created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- Folding a streaming delta: append to the existing text and bump the revision
 -- so a client can detect a gap. The provider item id is the correlation key
@@ -1470,6 +1493,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
 )
 SELECT conversation_messages.text,
        conversation_messages.origin,
+       conversation_messages.continuation,
        conversation_messages.delivery_content_json,
        EXISTS (
            SELECT 1
@@ -1639,3 +1663,36 @@ WHERE t.conversation_id = sqlc.arg(conversation_id)
   AND t.started_at > sqlc.arg(after_at)
   AND t.completed_at > sqlc.arg(after_at)
 ORDER BY t.completed_at DESC LIMIT 1;
+
+-- A stopped prompt can precede hundreds of tool activities. Recover that one
+-- visible request without reading tool output or scanning the conversation.
+-- name: SelectContinuationConversationPrompt :one
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = sqlc.arg(conversation_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT conversation_messages.*
+FROM conversation_messages
+JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
+WHERE conversation_turns.id = sqlc.arg(id)
+  AND conversation_turns.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_turns.state = 'interrupted'
+  AND conversation_turns.rolled_back_at IS NULL
+  AND conversation_messages.role = 'user'
+  AND EXISTS (
+      SELECT 1 FROM active_path AS path
+      WHERE path.branch_id = conversation_messages.branch_id
+        AND (path.max_sequence IS NULL OR conversation_messages.sequence <= path.max_sequence)
+  )
+LIMIT 1;
