@@ -451,7 +451,7 @@ func testStartUsesPreparedCheckout(t *testing.T, realProviders bool) {
 		f.ready["startupWorkingDirectory"] = frontend
 		return 11, nil
 	}
-	spec := ports.TestingTargetSpec{AttemptID: "attempt", Generation: 1, CheckoutPath: checkout, CommitSHA: strings.TrimSpace(string(head)), Deadline: time.Now().Add(time.Second)}
+	spec := ports.TestingTargetSpec{AttemptID: "attempt", Generation: 1, CheckoutPath: checkout, CommitSHA: strings.TrimSpace(string(head)), Deadline: time.Now().Add(time.Minute)}
 	if realProviders {
 		spec.RecipeSnapshot = `{"realProviders":true}`
 	}

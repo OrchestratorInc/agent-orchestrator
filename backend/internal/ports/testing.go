@@ -133,3 +133,8 @@ type TestingEvidenceArtifact struct {
 	MIMEType string
 	Frame    *domain.TestDesktopFrame
 }
+
+// TestingPullRequestIntake resolves one provider snapshot into a warm checkout.
+type TestingPullRequestIntake interface {
+	Snapshot(ctx context.Context, project domain.ProjectRecord, prURL string) (domain.TestPullRequestSnapshot, string, error)
+}

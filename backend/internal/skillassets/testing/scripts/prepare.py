@@ -98,7 +98,8 @@ def prepare(repository, commit, cache):
         origin = run(["git", "remote", "get-url", "origin"], repository)
     except subprocess.CalledProcessError:
         origin = run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], repository)
-    root = cache / hashlib.sha256(origin.encode()).hexdigest()[:16]
+    root = (repository.parent if repository.name == "checkout" and repository.parent.parent == cache
+            else cache / hashlib.sha256(origin.encode()).hexdigest()[:16])
     root.mkdir(parents=True, exist_ok=True)
     if root.resolve() != root:
         raise RuntimeError("Target cache must not contain symlinks")
@@ -119,7 +120,11 @@ def prepare(repository, commit, cache):
             run(["git", "fetch", "--no-tags", "origin"], checkout)
             # Admit local, unpushed revisions without changing the cached remote.
             source = "origin" if repository == checkout else str(repository)
-            run(["git", "fetch", "--no-tags", source, commit], checkout)
+            if repository != checkout:
+                run(["git", "fetch", "--no-tags", source, commit], checkout)
+            else:
+                # PR intake may have fetched this commit from a fork, not origin.
+                run(["git", "cat-file", "-e", commit + "^{commit}"], checkout)
             run(["git", "checkout", "--detach", commit], checkout)
             facts = preflight(checkout)
             for directory in ["frontend", "packages/product-ui"]:

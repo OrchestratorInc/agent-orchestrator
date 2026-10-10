@@ -57,7 +57,7 @@ func TestTestingProviderComposition(t *testing.T) {
 		wantMode             cua.DeliveryMode
 		configured           bool
 	}{
-		{name: "unset recipe", wantMode: cua.Background},
+		{name: "URL intake without manual checkout", wantMode: cua.Background, configured: true},
 		{name: "configured background", checkout: "/isolated/checkout", wantMode: cua.Background, configured: true},
 		{name: "real providers", checkout: "/isolated/checkout", wantMode: cua.Background, configured: true, real: true},
 		{name: "explicit foreground", checkout: "/isolated/checkout", mode: "foreground", wantMode: cua.Foreground, configured: true},

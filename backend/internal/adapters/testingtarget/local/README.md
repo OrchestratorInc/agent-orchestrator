@@ -6,6 +6,16 @@ private attempt directory and passes its exact path through `AO_DAEMON_COMMAND`.
 Electron manages that owned daemon. Static Forge/Vite assets avoid
 extra Vite and HMR listeners. This is not an Electron package or installed app.
 
+## Start from a PR URL
+
+From an AO worker, run `ao testing start --pr <https://github.com/owner/repo/pull/number>`.
+AO infers the project, snapshots metadata with `gh`, fetches the exact base and
+fork-head SHAs into the warm cache, and saves the full pinned PR patch plus its
+SHA-256 outside the repository. Intake does not launch a target or change HEAD.
+One comparison worker starts base and head with `ao testing leg start base|head`.
+The `local-ao` recipe is available without a manual checkout environment setting.
+Manual issue/run setup still accepts `AO_TESTING_TARGET_CHECKOUT`.
+
 ## Reuse a warm target
 
 The controller runs preparation automatically before launch. For manual setup
@@ -30,9 +40,11 @@ packaging. Workers may run checks in the owned checkout. Do not symlink dependen
 Preflight checks the effective Go version against `go.mod`, the Node version
 against any `package.json` engine constraint, and the revision's actual launch
 resolver with an explicit daemon command. Unsupported revisions retain the
-exact reason before Electron starts. The manifest pins the revision, hashes
-the frontend launch artifacts and records those runtime facts. Set
-`AO_TESTING_TARGET_CHECKOUT` to the printed checkout path for both attempts.
+exact reason before Electron starts. The launcher requires an explicit private
+port other than 3001 and checks the live daemon's recorded and kernel identity
+before startup, after readiness and after cleanup. The manifest pins the revision, hashes
+the frontend launch artifacts and records those runtime facts. For manual
+issue/run setup, set `AO_TESTING_TARGET_CHECKOUT` to the printed checkout path.
 
 ## Slice B wiring
 
@@ -96,7 +108,11 @@ from changing live code. No kill-by-name or kill-by-port is used. A stale owned
 run file is removed only after other absence checks pass.
 
 Default tests use injected process operations and HTTP transports. The live
-proof is opt-in, macOS only, and needs the previously installed Cua Driver:
+proof is opt-in, macOS only, and needs the previously installed Cua Driver.
+Before running it, acquire `~/.ao/dev/live-launch.lock` with `mkdir` and write
+your AO session ID to its `owner` file. If held, defer this live proof. Keep the
+lock until its cleanup is verified, then remove only your matching owner file
+and lock directory. Run:
 
 ```sh
 python3 - <<'PY'

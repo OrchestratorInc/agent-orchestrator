@@ -19,15 +19,17 @@ import (
 )
 
 // testingProviders is the single composition point for slices A, D and E.
-// Empty providers deliberately keep creation/dispatch unavailable. Management
-// cancellation and saved evidence use durable state independently of providers.
+// The local recipe resolves its checkout at URL intake. Construction starts no
+// target, desktop driver or worker. Cancellation and saved evidence use durable
+// state independently of providers.
 type testingProviders struct {
-	Target  ports.TestingTargetEnvironment
-	Desktop ports.TestingDesktopControl
-	Workers testingsvc.WorkerLauncher
-	Recipes map[string]testingsvc.Recipe
-	Close   func(context.Context) error
-	Log     *slog.Logger
+	PullRequests ports.TestingPullRequestIntake
+	Target       ports.TestingTargetEnvironment
+	Desktop      ports.TestingDesktopControl
+	Workers      testingsvc.WorkerLauncher
+	Recipes      map[string]testingsvc.Recipe
+	Close        func(context.Context) error
+	Log          *slog.Logger
 }
 
 // Provider-specific recording and policy types are translated here; the
@@ -95,21 +97,18 @@ func testingProvidersFromEnv(cfg config.Config, getenv func(string) string, targ
 		return testingProviders{}, fmt.Errorf("AO_TESTING_DESKTOP_DELIVERY must be background or foreground")
 	}
 	checkout := getenv("AO_TESTING_TARGET_CHECKOUT")
-	if checkout == "" {
-		return testingProviders{}, nil
-	}
 	desktop, err := makeDesktop(cua.Config{DataDir: cfg.DataDir, DeliveryMode: mode})
 	if err != nil {
 		return testingProviders{}, fmt.Errorf("configure testing desktop: %w", err)
 	}
-	providers := testingProviders{Target: target, Desktop: testingDesktopBridge{desktop}, Close: desktop.Close,
+	providers := testingProviders{PullRequests: localtarget.NewPullRequestIntake(), Target: target, Desktop: testingDesktopBridge{desktop}, Close: desktop.Close,
 		Recipes: map[string]testingsvc.Recipe{"local-ao": {ID: "local-ao", CheckoutPath: checkout, Snapshot: "isolated local AO checkout", DeliveryMode: string(mode), VisualMarker: getenv("AO_TESTING_REAL_PROVIDERS") != "1", RealProviders: getenv("AO_TESTING_REAL_PROVIDERS") == "1"}}}
 	return providers, nil
 }
 
 func newTestingService(cfg config.Config, store testingsvc.Store, providers testingProviders) *testingsvc.Service {
 	home, _ := os.UserHomeDir()
-	return testingsvc.New(testingsvc.Deps{Store: store, Target: providers.Target, Desktop: providers.Desktop, Workers: providers.Workers, Recipes: providers.Recipes, Evidence: testingevidence.New(cfg.DataDir, store), EvidenceRoot: filepath.Join(cfg.DataDir, "testing"), TargetStateRoot: filepath.Join(home, ".ao", "dev", "agentic-target"), Log: providers.Log, CloseDesktop: providers.Close})
+	return testingsvc.New(testingsvc.Deps{PullRequests: providers.PullRequests, Store: store, Target: providers.Target, Desktop: providers.Desktop, Workers: providers.Workers, Recipes: providers.Recipes, Evidence: testingevidence.New(cfg.DataDir, store), EvidenceRoot: filepath.Join(cfg.DataDir, "testing"), TargetStateRoot: filepath.Join(home, ".ao", "dev", "agentic-target"), Log: providers.Log, CloseDesktop: providers.Close})
 }
 
 // wireTestingService binds both sides before startup recovery can restore workers.

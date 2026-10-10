@@ -126,6 +126,9 @@ func (s *Service) CreateRun(ctx context.Context, in CreateRunInput) (domain.Test
 		return domain.TestRunRecord{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
 	}
 	recipe, ok := s.deps.Recipes[in.RecipeID]
+	if in.recipeOverride != nil {
+		recipe, ok = *in.recipeOverride, true
+	}
 	if !ok {
 		return domain.TestRunRecord{}, invalid("Unknown configured testing recipe")
 	}

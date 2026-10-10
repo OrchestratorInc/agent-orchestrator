@@ -3320,21 +3320,23 @@ type TestingAttemptIDParam struct {
 	AttemptID string `path:"attemptId"`
 }
 
-// CreateTestingRunRequest snapshots the selected issue and configured recipe.
+// CreateTestingRunRequest snapshots a PR URL pair or a manual single run.
 type CreateTestingRunRequest struct {
 	_             struct{} `additionalProperties:"false"`
+	PRURL         string   `json:"prUrl,omitempty" description:"GitHub PR URL; resolves and snapshots exact base/head revisions instead of manual issue and commit fields."`
 	LinkedRunID   string   `json:"linkedRunId,omitempty"`
 	ProjectID     string   `json:"projectId" minLength:"1"`
 	IssueURL      string   `json:"issueUrl"`
-	IssueSnapshot string   `json:"issueSnapshot" minLength:"1" maxLength:"262144"`
-	CommitSHA     string   `json:"commitSha" minLength:"1"`
-	RecipeID      string   `json:"recipeId" minLength:"1"`
+	IssueSnapshot string   `json:"issueSnapshot,omitempty" minLength:"1" maxLength:"262144"`
+	CommitSHA     string   `json:"commitSha,omitempty" minLength:"1"`
+	RecipeID      string   `json:"recipeId,omitempty" minLength:"1" description:"Defaults to local-ao for PR URL intake."`
 	Requester     string   `json:"requester" minLength:"1"`
 }
 
-// TestingRunResponse identifies the newly created run.
+// TestingRunResponse identifies a single run or the base/head PR pair.
 type TestingRunResponse struct {
 	RunID     string    `json:"runId"`
+	HeadRunID string    `json:"headRunId,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 

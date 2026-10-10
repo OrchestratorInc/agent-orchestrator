@@ -73,16 +73,18 @@ type Timer interface{ Stop() bool }
 
 // Recipe is server-configured target setup, snapshotted at run creation.
 type Recipe struct {
-	ID            string `json:"id"`
-	CheckoutPath  string `json:"checkoutPath"`
-	Snapshot      string `json:"snapshot"`
-	DeliveryMode  string `json:"deliveryMode,omitempty"`
-	VisualMarker  bool   `json:"visualMarker,omitempty"`
-	RealProviders bool   `json:"realProviders,omitempty"`
+	PullRequest   *domain.TestPullRequestSnapshot `json:"pullRequest,omitempty"`
+	ID            string                          `json:"id"`
+	CheckoutPath  string                          `json:"checkoutPath"`
+	Snapshot      string                          `json:"snapshot"`
+	DeliveryMode  string                          `json:"deliveryMode,omitempty"`
+	VisualMarker  bool                            `json:"visualMarker,omitempty"`
+	RealProviders bool                            `json:"realProviders,omitempty"`
 }
 
 // Deps supplies persistence, providers and target recipes.
 type Deps struct {
+	PullRequests    ports.TestingPullRequestIntake
 	Store           Store
 	Target          ports.TestingTargetEnvironment
 	Desktop         ports.TestingDesktopControl
@@ -100,13 +102,14 @@ type Deps struct {
 
 // CreateRunInput selects an issue, revision and configured recipe.
 type CreateRunInput struct {
-	LinkedRunID   domain.TestRunID
-	ProjectID     domain.ProjectID
-	IssueURL      string
-	IssueSnapshot string
-	CommitSHA     string
-	RecipeID      string
-	Requester     string
+	recipeOverride *Recipe
+	LinkedRunID    domain.TestRunID
+	ProjectID      domain.ProjectID
+	IssueURL       string
+	IssueSnapshot  string
+	CommitSHA      string
+	RecipeID       string
+	Requester      string
 }
 
 // StartAttemptInput selects the worker and attempt deadline.

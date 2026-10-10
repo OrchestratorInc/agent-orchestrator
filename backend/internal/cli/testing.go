@@ -18,16 +18,18 @@ import (
 
 // These DTOs mirror the daemon's testing API without importing controllers.
 type testingRunCreateDTO struct {
+	PRURL         string `json:"prUrl,omitempty"`
 	ProjectID     string `json:"projectId"`
 	IssueURL      string `json:"issueUrl"`
-	IssueSnapshot string `json:"issueSnapshot"`
-	CommitSHA     string `json:"commitSha"`
+	IssueSnapshot string `json:"issueSnapshot,omitempty"`
+	CommitSHA     string `json:"commitSha,omitempty"`
 	RecipeID      string `json:"recipeId"`
 	Requester     string `json:"requester"`
 }
 
 type testingRunDTO struct {
 	RunID     string    `json:"runId"`
+	HeadRunID string    `json:"headRunId,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -78,15 +80,22 @@ func newTestingCommand(ctx *commandContext) *cobra.Command {
 }
 
 func newTestingStartCommand(ctx *commandContext) *cobra.Command {
-	var project, issueFile, issueURL, commit, recipe, promptFile, agent, model, effort string
+	var prURL, project, issueFile, issueURL, commit, recipe, promptFile, agent, model, effort string
 	var timeout int
 	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use: "start", Short: "Create a test run and start its investigator attempt", Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			for _, flag := range []struct{ name, value string }{
+			required := []struct{ name, value string }{
 				{"project", project}, {"issue-file", issueFile}, {"commit", commit}, {"recipe", recipe},
-			} {
+			}
+			if prURL != "" {
+				if issueFile != "" || issueURL != "" || commit != "" {
+					return usageError{errors.New("--pr cannot be combined with --issue-file, --issue-url or --commit")}
+				}
+				required = required[3:]
+			}
+			for _, flag := range required {
 				if strings.TrimSpace(flag.value) == "" {
 					return usageError{fmt.Errorf("--%s is required", flag.name)}
 				}
@@ -98,9 +107,19 @@ func newTestingStartCommand(ctx *commandContext) *cobra.Command {
 			if requester == "" {
 				return usageError{errors.New("USER is required to identify the requester")}
 			}
-			issue, err := readTestingTextFile(issueFile, 256<<10)
-			if err != nil {
-				return usageError{fmt.Errorf("issue snapshot: %w", err)}
+			var issue string
+			var err error
+			if prURL != "" {
+				resolved, e := ctx.resolveSpawnProject(cmd.Context(), project)
+				if e != nil {
+					return e
+				}
+				project = resolved.ID
+			} else {
+				issue, err = readTestingTextFile(issueFile, 256<<10)
+				if err != nil {
+					return usageError{fmt.Errorf("issue snapshot: %w", err)}
+				}
 			}
 			prompt := "Investigate the supplied issue or pull request."
 			if promptFile != "" {
@@ -111,7 +130,7 @@ func newTestingStartCommand(ctx *commandContext) *cobra.Command {
 			}
 			var run testingRunDTO
 			if err := ctx.postJSON(cmd.Context(), "testing/runs", testingRunCreateDTO{
-				ProjectID: project, IssueURL: issueURL, IssueSnapshot: issue, CommitSHA: commit, RecipeID: recipe, Requester: requester,
+				PRURL: prURL, ProjectID: project, IssueURL: issueURL, IssueSnapshot: issue, CommitSHA: commit, RecipeID: recipe, Requester: requester,
 			}, &run); err != nil {
 				return err
 			}
@@ -119,9 +138,21 @@ func newTestingStartCommand(ctx *commandContext) *cobra.Command {
 				return errors.New("daemon returned a testing run without its ID")
 			}
 			var attempt testingAttemptStartedDTO
-			if err := ctx.postJSON(cmd.Context(), "testing/runs/"+url.PathEscape(run.RunID)+"/attempts", testingAttemptStartDTO{
-				Harness: agent, Model: model, Effort: effort, WorkerPrompt: prompt, TimeoutSeconds: timeout,
-			}, &attempt); err != nil {
+			start := testingAttemptStartDTO{Harness: agent, Model: model, Effort: effort, WorkerPrompt: prompt, TimeoutSeconds: timeout}
+			endpoint := "testing/runs/" + url.PathEscape(run.RunID) + "/attempts"
+			var body any = start
+			if prURL != "" {
+				if run.HeadRunID == "" || run.HeadRunID == run.RunID {
+					return errors.New("daemon returned a PR comparison without distinct base and head run IDs")
+				}
+				endpoint = "testing/comparisons"
+				body = struct {
+					testingAttemptStartDTO
+					RunID     string `json:"runId"`
+					HeadRunID string `json:"headRunId"`
+				}{start, run.RunID, run.HeadRunID}
+			}
+			if err := ctx.postJSON(cmd.Context(), endpoint, body, &attempt); err != nil {
 				return fmt.Errorf("run %s created; start attempt: %w", run.RunID, err)
 			}
 			if attempt.RunID != run.RunID || attempt.AttemptID == "" || attempt.WorkerSessionID == "" {
@@ -134,7 +165,8 @@ func newTestingStartCommand(ctx *commandContext) *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&project, "project", "", "Project ID")
+	cmd.Flags().StringVar(&prURL, "pr", "", "GitHub pull request URL; snapshot base and head and start one comparison worker")
+	cmd.Flags().StringVar(&project, "project", "", "Project ID; inferred inside AO for --pr")
 	cmd.Flags().StringVar(&issueFile, "issue-file", "", "File containing the issue text snapshot, up to 256 KiB")
 	cmd.Flags().StringVar(&issueURL, "issue-url", "", "Issue URL")
 	cmd.Flags().StringVar(&commit, "commit", "", "Commit SHA under test")
