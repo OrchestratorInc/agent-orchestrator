@@ -24,6 +24,7 @@ func TestTerminalActivityUsesCurrentNativeChrome(t *testing.T) {
 		{"dim transcript marker", "\x1b[1;2m› old task\x1b[0m\nresult · /tmp/workspace", "", false},
 		{"permission", "Would you like to run the following command?\n› 1. Yes\n  2. No\nPress enter to confirm", domain.ActivityWaitingInput, true},
 		{"hook trust", "Hooks need review\n› 1. Review hooks\n2. Trust all and continue\n3. Continue without trusting (hooks won't run)\nenter confirm · esc skip", domain.ActivityWaitingInput, true},
+		{"native model picker", "Choose a model\n\x1b[1m›\x1b[22m 1. model\n  tab / ↑ ↓ move · enter select · esc close", domain.ActivityWaitingInput, true},
 		{"question", "Pick an option\n› 1. Choice\n  tab to add notes | enter to submit answer | esc to interrupt", domain.ActivityWaitingInput, true},
 		{"auth", "Sign in to Open Interpreter", "", false},
 		{"history", "› old task\nAnswer includes ? for shortcuts", "", false},

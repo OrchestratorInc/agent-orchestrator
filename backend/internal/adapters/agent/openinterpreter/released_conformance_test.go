@@ -60,8 +60,13 @@ func TestReleasedCLIConformance(t *testing.T) {
 	const projectCanary = "PROJECT_AGENTS_34ea51"
 	const prompt = "--AO_DASH_TASK_428ea1"
 	const reply = "AO_FAKE_REPLY_9c3421"
+	const lateReply = "AO_CANCELLED_LATE_OUTPUT_f193c2"
+	const followupReply = "AO_FOLLOWUP_COMPLETED_b2a534"
 	requests := make(chan []byte, 8)
-	cancelled := make(chan struct{}, 1)
+	releaseOld := make(chan struct{})
+	oldFinished := make(chan struct{}, 1)
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseOld) }) }
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/chat/completions") {
 			http.NotFound(w, r)
@@ -70,21 +75,38 @@ func TestReleasedCLIConformance(t *testing.T) {
 		body, _ := io.ReadAll(io.LimitReader(r.Body, 4<<20))
 		// Native title generation uses the same provider asynchronously. Serve
 		// it, but do not mistake its source-defined prompt for a root turn.
-		if !bytes.Contains(body, []byte("Generate a concise, single-line task title of at most")) {
+		isTitle := bytes.Contains(body, []byte("Generate a concise, single-line task title of at most"))
+		if !isTitle {
 			requests <- body
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		if bytes.Contains(body, []byte("AO_CANCEL_TASK_67ac12")) && !bytes.Contains(body, []byte("AO_AFTER_CANCEL_02d871")) {
+		responseText := reply
+		if !isTitle && bytes.Contains(body, []byte("AO_CANCEL_TASK_67ac12")) && !bytes.Contains(body, []byte("AO_AFTER_CANCEL_02d871")) {
 			w.WriteHeader(http.StatusOK)
 			w.(http.Flusher).Flush()
-			<-r.Context().Done()
-			cancelled <- struct{}{}
-			return
+			defer func() {
+				select {
+				case oldFinished <- struct{}{}:
+				default:
+				}
+			}()
+			select {
+			case <-releaseOld:
+				responseText = lateReply
+			case <-r.Context().Done():
+				return
+			case <-time.After(60 * time.Second):
+				return
+			}
 		}
-		fmt.Fprintf(w, "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.1-codex\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":null}]}\n\n", reply)
+		if !isTitle && bytes.Contains(body, []byte("AO_AFTER_CANCEL_02d871")) {
+			responseText = followupReply
+		}
+		fmt.Fprintf(w, "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.1-codex\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":null}]}\n\n", responseText)
 		fmt.Fprint(w, "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.1-codex\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
+	t.Cleanup(release)
 	config := fmt.Sprintf("model_provider = \"mock\"\nmodel = \"gpt-5.1-codex\"\n[model_providers.mock]\nname = \"CI local mock\"\nbase_url = %q\nwire_api = \"chat\"\nrequires_openai_auth = false\n[projects.%q]\ntrust_level = \"trusted\"\n", server.URL+"/v1", workspace)
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
@@ -177,6 +199,10 @@ func TestReleasedCLIConformance(t *testing.T) {
 		t.Fatal("private context rendered on restore")
 	}
 	restored.waitForActivity(t, domain.ActivityIdle)
+	transcript, ok, err := p.LocateTranscript(context.Background(), ports.NativeSessionRef{ConfigDir: home, NativeSessionID: hook.SessionID})
+	if err != nil || !ok {
+		t.Fatalf("restored transcript unavailable: %v, %v", ok, err)
+	}
 	// Interrupt a native active request, then deliver one follow-up through the
 	// same composer. This covers the terminal cancellation path used by AO.
 	restored.submit("AO_CANCEL_TASK_67ac12")
@@ -185,19 +211,65 @@ func TestReleasedCLIConformance(t *testing.T) {
 		t.Fatalf("cancel test did not start its intended turn: %s", active)
 	}
 	restored.waitForActivity(t, domain.ActivityActive)
+	cancelTurn := waitNativeEvent(t, transcript, "task_started", "")
 	restored.terminal.Write([]byte{3})
-	select {
-	case <-cancelled:
-	case <-time.After(15 * time.Second):
-		t.Fatalf("Ctrl-C did not cancel native provider request: %s", restored.output())
-	}
+	waitNativeEvent(t, transcript, "turn_aborted", cancelTurn)
 	restored.waitForActivity(t, domain.ActivityIdle)
+	// Chat compatibility owns a detached SSE reader until another chunk or
+	// timeout. Late provider bytes must not reappear in the aborted native turn.
+	release()
+	select {
+	case <-oldFinished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fake provider did not release the old stream")
+	}
 	restored.submit("AO_AFTER_CANCEL_02d871")
 	followup := awaitModelRequest(t, requests, restored)
 	if bytes.Count(followup, []byte("AO_AFTER_CANCEL_02d871")) != 1 {
 		t.Fatalf("follow-up after cancellation was lost or duplicated: %s", followup)
 	}
+	followupTurn := waitNativeEvent(t, transcript, "task_started", "")
+	restored.waitFor(t, followupReply)
+	waitNativeEvent(t, transcript, "task_complete", followupTurn)
+	restored.waitForActivity(t, domain.ActivityIdle)
+	if strings.Contains(restored.output(), lateReply) {
+		t.Fatal("cancelled provider output leaked into the terminal")
+	}
+	if data, err := os.ReadFile(transcript); err != nil || bytes.Contains(data, []byte(lateReply)) {
+		t.Fatalf("cancelled provider output entered native history: %v", err)
+	}
 	restored.stop()
+}
+
+func waitNativeEvent(t *testing.T, path, event, turnID string) string {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		matched := ""
+		for _, line := range bytes.Split(data, []byte{'\n'}) {
+			var record struct {
+				Type    string `json:"type"`
+				Payload struct {
+					Type   string `json:"type"`
+					TurnID string `json:"turn_id"`
+					Reason string `json:"reason"`
+				} `json:"payload"`
+			}
+			if json.Unmarshal(line, &record) == nil && record.Type == "event_msg" && record.Payload.Type == event && record.Payload.TurnID != "" && (turnID == "" || record.Payload.TurnID == turnID) && (event != "turn_aborted" || record.Payload.Reason == "interrupted") {
+				matched = record.Payload.TurnID
+			}
+		}
+		if matched != "" {
+			return matched
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("native event %s for turn %s was not persisted", event, turnID)
+	return ""
 }
 
 func assertPrivateModelContext(t *testing.T, body []byte) {
