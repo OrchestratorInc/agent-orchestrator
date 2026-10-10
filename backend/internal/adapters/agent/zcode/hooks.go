@@ -67,8 +67,17 @@ func updateHooks(ctx context.Context, workspace string, install bool) error {
 			return fmt.Errorf("zcode: hooks must be an object")
 		}
 	}
-	if install && string(hooks["enabled"]) == "false" {
-		return fmt.Errorf("zcode: workspace hooks are disabled; enable them in native settings before launching an AO session")
+	if install {
+		if raw, ok := hooks["enabled"]; ok {
+			var enabled bool
+			if err := json.Unmarshal(raw, &enabled); err != nil || !enabled {
+				return fmt.Errorf("zcode: workspace hooks are disabled or invalid; enable them in native settings before launching an AO session")
+			}
+		} else {
+			// Native hooks default to disabled even when events are present.
+			// Declaration-specific trust is still required before execution.
+			hooks["enabled"] = json.RawMessage("true")
+		}
 	}
 	events := map[string]json.RawMessage{}
 	if raw, ok := hooks["events"]; ok {

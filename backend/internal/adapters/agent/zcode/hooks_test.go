@@ -66,7 +66,7 @@ func TestHooksPreserveUserConfiguration(t *testing.T) {
 }
 
 func TestHooksRefuseDisabledOrMalformedConfiguration(t *testing.T) {
-	for _, input := range []string{`{"hooks":{"enabled":false}}`, `{"hooks":{"events":{"Stop":"invalid"}}}`, `{"hooks":null}`, `null`} {
+	for _, input := range []string{`{"hooks":{"enabled":false}}`, `{"hooks":{"enabled":null}}`, `{"hooks":{"enabled":"true"}}`, `{"hooks":{"events":{"Stop":"invalid"}}}`, `{"hooks":null}`, `null`} {
 		t.Run(input, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, ".zcode", "config.json")
@@ -87,6 +87,29 @@ func TestHooksRefuseDisabledOrMalformedConfiguration(t *testing.T) {
 				t.Fatal("failed installation changed configuration")
 			}
 		})
+	}
+}
+
+func TestHooksEnableNativeDefaultWithoutTrustingUserCommands(t *testing.T) {
+	dir := t.TempDir()
+	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: dir}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".zcode", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Hooks struct {
+			Enabled bool                       `json:"enabled"`
+			Events  map[string]json.RawMessage `json:"events"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	if !config.Hooks.Enabled || len(config.Hooks.Events) != len(managedHooks) {
+		t.Fatalf("AO hooks not enabled under native disabled default: %s", data)
 	}
 }
 
