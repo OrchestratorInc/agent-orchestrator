@@ -2475,6 +2475,9 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 	if !ok {
 		return KillResult{}, nil // already gone: benign race
 	}
+	if err := m.cancelTestingWorker(ctx, id); err != nil {
+		return KillResult{}, fmt.Errorf("kill %s: testing target cleanup: %w", id, err)
+	}
 	m.stopPreviewBestEffort(ctx, id)
 	m.destroyBrowserBestEffort(ctx, id)
 	handle := runtimeHandle(rec.Metadata)
