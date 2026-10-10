@@ -17,14 +17,18 @@ import (
 const validMovieInfo = "Duration: 3.368 seconds (2021/600)\nTrack count: 1\nTrack 1: Video 'vide'\n\tDimensions: 1280 x 800\n\tSystem support for decoding this track: Yes\nChunks\n  1  1  [1]  0x24  64  00:00:00.000  SDF\nMovie analyzed with 0 error.\n"
 
 type fakeRecording struct {
-	process *recordingProcess
-	args    []string
-	env     []string
-	signals []os.Signal
-	path    string
-	info    string
-	finish  bool
-	staged  string
+	process    *recordingProcess
+	args       []string
+	env        []string
+	signals    []os.Signal
+	path       string
+	info       string
+	finish     bool
+	staged     string
+	remuxErr   error
+	remuxInfo  string
+	remuxCalls int
+	analyzed   []string
 }
 
 func prepareRecording(t *testing.T, f *fixture) *fakeRecording {
@@ -51,9 +55,28 @@ func prepareRecording(t *testing.T, f *fixture) *fakeRecording {
 	}
 	provider := f.runner.hook
 	f.runner.hook = func(executable string, args []string) (Output, error) {
+		mp4 := filepath.Join(filepath.Dir(r.path), "window.mp4")
+		if executable == "/usr/bin/avconvert" {
+			if !reflect.DeepEqual(args, []string{"--preset", "PresetPassthrough", "--source", r.path, "--output", mp4}) {
+				t.Fatalf("remux escaped the owned files or changed codec preset: %v", args)
+			}
+			r.remuxCalls++
+			if r.remuxErr != nil {
+				return Output{Stderr: []byte("owned MP4 output denied")}, r.remuxErr
+			}
+			data, err := os.ReadFile(r.path)
+			if err != nil {
+				return Output{}, err
+			}
+			return Output{}, os.WriteFile(mp4, data, 0o600)
+		}
 		if executable == "/usr/bin/avmediainfo" {
-			if !reflect.DeepEqual(args, []string{r.path, "--chunks", "--mediatype", "video"}) {
+			if len(args) != 4 || args[0] != r.path && args[0] != mp4 || !reflect.DeepEqual(args[1:], []string{"--chunks", "--mediatype", "video"}) {
 				t.Fatalf("analyzed wrong movie: %v", args)
+			}
+			r.analyzed = append(r.analyzed, args[0])
+			if args[0] == mp4 && r.remuxInfo != "" {
+				return Output{Stdout: []byte(r.remuxInfo)}, nil
 			}
 			return Output{Stdout: []byte(r.info)}, nil
 		}
@@ -73,34 +96,64 @@ func startFakeRecording(t *testing.T, f *fixture) RecordingResult {
 
 func TestRecordingWindowOnlyAndSIGINTFinalization(t *testing.T) {
 	t.Setenv("AO_FORBIDDEN", "secret")
-	f := newFixture(t)
-	r := prepareRecording(t, f)
-	start := startFakeRecording(t, f)
-	if !reflect.DeepEqual(r.args, []string{"-v", "-o", "-x", "-l456", start.Path}) || start.Duration != 0 || start.Gap != "" {
-		t.Fatalf("wrong window recorder receipt or arguments: %+v %v", start, r.args)
-	}
-	for _, entry := range r.env {
-		if strings.HasPrefix(entry, "AO_") {
-			t.Fatal("inherited AO setting reached recorder")
-		}
-	}
-	root, err := filepath.EvalSymlinks(filepath.Join(f.adapter.cfg.DataDir, "evidence"))
-	if err != nil || filepath.Dir(filepath.Dir(start.Path)) != root {
-		t.Fatalf("movie escaped evidence dir: %s", start.Path)
-	}
-	final, err := f.adapter.StopRecording(context.Background(), f.target)
-	if err != nil || final.Duration != 3368*time.Millisecond || final.Width != 1280 || final.Height != 800 || final.Gap != "" {
-		t.Fatalf("movie was not validated: %+v %v", final, err)
-	}
-	if !reflect.DeepEqual(r.signals, []os.Signal{os.Interrupt}) {
-		t.Fatalf("expected owned recorder SIGINT, got %v", r.signals)
-	}
-	if final.StagingPath != "" || final.StagingCleanup != "provider-managed staging; AO does not inspect external storage" {
-		t.Fatalf("staging UUID not verified: %+v", final)
-	}
-	again, err := f.adapter.StopRecording(context.Background(), f.target)
-	if err != nil || again != final || len(r.signals) != 1 {
-		t.Fatalf("stop was not idempotent: %+v %v", again, err)
+	cause := errors.New("passthrough failed")
+	for _, tc := range []struct {
+		name, remuxInfo, reason string
+		remuxErr                error
+	}{
+		{name: "validated MP4"},
+		{name: "remux failed", remuxErr: cause, reason: "owned MP4 output denied"},
+		{name: "invalid MP4", remuxInfo: "invalid MP4", reason: "validate remuxed MP4"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			r := prepareRecording(t, f)
+			r.remuxErr, r.remuxInfo = tc.remuxErr, tc.remuxInfo
+			start := startFakeRecording(t, f)
+			if !reflect.DeepEqual(r.args, []string{"-v", "-o", "-x", "-l456", filepath.Join(filepath.Dir(start.Path), "window.mov")}) || start.Duration != 0 || start.Gap != "" || start.MIMEType != "video/mp4" {
+				t.Fatalf("wrong window recorder receipt or arguments: %+v %v", start, r.args)
+			}
+			for _, entry := range r.env {
+				if strings.HasPrefix(entry, "AO_") {
+					t.Fatal("inherited AO setting reached recorder")
+				}
+			}
+			root, err := filepath.EvalSymlinks(filepath.Join(f.adapter.cfg.DataDir, "evidence"))
+			if err != nil || filepath.Dir(filepath.Dir(start.Path)) != root {
+				t.Fatalf("movie escaped evidence dir: %s", start.Path)
+			}
+			final, err := f.adapter.StopRecording(context.Background(), f.target)
+			if !reflect.DeepEqual(r.signals, []os.Signal{os.Interrupt}) || r.remuxCalls != 1 {
+				t.Fatalf("wrong recorder shutdown or remux count: signals=%v remux=%d", r.signals, r.remuxCalls)
+			}
+			wantAnalyzed := []string{r.path}
+			if tc.remuxErr == nil {
+				wantAnalyzed = append(wantAnalyzed, start.Path)
+			}
+			if !reflect.DeepEqual(r.analyzed, wantAnalyzed) {
+				t.Fatalf("MOV and MP4 validation order changed: %v", r.analyzed)
+			}
+			if tc.reason != "" {
+				var remuxErr *Error
+				if !errors.As(err, &remuxErr) || remuxErr.Code != "recording_remux_failed" || !strings.Contains(final.Gap, tc.reason) || final.Duration != 0 || tc.remuxErr != nil && !errors.Is(err, tc.remuxErr) {
+					t.Fatalf("remux failure lost its exact reason: %+v %v", final, err)
+				}
+				return
+			}
+			if err != nil || final.Duration != 3368*time.Millisecond || final.Width != 1280 || final.Height != 800 || final.Gap != "" || final.Path != start.Path || final.MIMEType != "video/mp4" || filepath.Ext(final.Path) != ".mp4" {
+				t.Fatalf("MP4 was not validated: %+v %v", final, err)
+			}
+			if _, err := os.Lstat(r.path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("owned MOV remained after successful remux: %v", err)
+			}
+			if final.StagingPath != "" || final.StagingCleanup != "provider-managed staging; AO does not inspect external storage" {
+				t.Fatalf("staging UUID not verified: %+v", final)
+			}
+			again, err := f.adapter.StopRecording(context.Background(), f.target)
+			if err != nil || again != final || len(r.signals) != 1 || r.remuxCalls != 1 {
+				t.Fatalf("stop was not idempotent: %+v %v", again, err)
+			}
+		})
 	}
 }
 

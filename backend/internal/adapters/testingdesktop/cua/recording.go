@@ -91,12 +91,12 @@ func (a *Adapter) StartRecording(ctx context.Context, target domain.TestTargetId
 	if shot.Original != nil {
 		original = shot.Original.Frame
 	}
-	result := RecordingResult{Path: filepath.Join(stem, "window.mov"), MIMEType: "video/quicktime", Width: original.Width,
+	result := RecordingResult{Path: filepath.Join(stem, "window.mp4"), MIMEType: "video/mp4", Width: original.Width,
 		Height: original.Height, StartedAt: a.now().UTC(), StagingCleanup: "provider-managed staging; AO does not inspect external storage"}
 	if err := os.Mkdir(stem, 0o700); err != nil {
 		return recordingGap(result, err)
 	}
-	args := []string{"-v", "-o", "-x", "-l" + target.WindowID, result.Path}
+	args := []string{"-v", "-o", "-x", "-l" + target.WindowID, filepath.Join(stem, "window.mov")}
 	if err := ctx.Err(); err != nil {
 		return recordingGap(result, err)
 	}
@@ -166,27 +166,21 @@ func (a *Adapter) stopRecording(ctx context.Context, b *binding) (result Recordi
 		}
 	}
 	r.result.StoppedAt = a.now().UTC()
-	info, err := os.Lstat(r.result.Path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
-		detail := fmt.Sprintf("recorder exited without a finalized movie: %v", err)
-		if err == nil {
-			detail = fmt.Sprintf("recorder output is not a positive regular movie: mode=%s size=%d", info.Mode(), info.Size())
-		}
-		return recordingGap(r.result, errors.Join(refuse("recording_empty", detail), err, p.err))
+	source := filepath.Join(filepath.Dir(r.result.Path), "window.mov")
+	if _, err := a.validateMovie(ctx, source, r.result.Width, r.result.Height); err != nil {
+		return recordingGap(r.result, errors.Join(err, p.err))
 	}
-	if err := os.Chmod(r.result.Path, 0o600); err != nil {
-		return recordingGap(r.result, err)
-	}
-	metadata, err := a.run(ctx, "/usr/bin/avmediainfo", r.result.Path, "--chunks", "--mediatype", "video")
+	converted, err := a.run(ctx, "/usr/bin/avconvert", "--preset", "PresetPassthrough", "--source", source, "--output", r.result.Path)
 	if err != nil {
-		return recordingGap(r.result, &Error{Code: "recording_invalid", Detail: fmt.Sprintf("analyze finalized movie: %v: %s", err, strings.TrimSpace(string(metadata.Stderr))), cause: errors.Join(ErrRefused, err)})
+		detail := providerDiagnosticText(string(converted.Stderr)+string(converted.Stdout), nil, providerDiagnosticLimit)
+		return recordingGap(r.result, &Error{Code: "recording_remux_failed", Detail: fmt.Sprintf("avconvert PresetPassthrough: %v: %s", err, detail), cause: errors.Join(ErrRefused, err, ctx.Err())})
 	}
-	duration, width, height, err := parseMovieInfo(string(metadata.Stdout))
-	if err != nil || width != r.result.Width || height != r.result.Height {
-		if err == nil {
-			err = refuse("recording_invalid", fmt.Sprintf("video dimensions %dx%d do not match the captured window %dx%d", width, height, r.result.Width, r.result.Height))
-		}
-		return recordingGap(r.result, err)
+	duration, err := a.validateMovie(ctx, r.result.Path, r.result.Width, r.result.Height)
+	if err != nil {
+		return recordingGap(r.result, &Error{Code: "recording_remux_failed", Detail: fmt.Sprintf("validate remuxed MP4: %v", err), cause: errors.Join(ErrRefused, err)})
+	}
+	if err := os.Remove(source); err != nil {
+		return recordingGap(r.result, &Error{Code: "recording_remux_failed", Detail: fmt.Sprintf("remove owned MOV source: %v", err), cause: errors.Join(ErrRefused, err)})
 	}
 	r.result.Duration, r.stopped = duration, true
 	if p.err != nil {
@@ -194,6 +188,32 @@ func (a *Adapter) stopRecording(ctx context.Context, b *binding) (result Recordi
 		return r.result, nil // deferred gap handling preserves the same result on retry
 	}
 	return r.result, nil
+}
+
+func (a *Adapter) validateMovie(ctx context.Context, path string, expectedWidth, expectedHeight int) (time.Duration, error) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+		detail := fmt.Sprintf("recorder exited without a finalized movie: %v", err)
+		if err == nil {
+			detail = fmt.Sprintf("recorder output is not a positive regular movie: mode=%s size=%d", info.Mode(), info.Size())
+		}
+		return 0, errors.Join(refuse("recording_empty", detail), err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return 0, err
+	}
+	metadata, err := a.run(ctx, "/usr/bin/avmediainfo", path, "--chunks", "--mediatype", "video")
+	if err != nil {
+		return 0, &Error{Code: "recording_invalid", Detail: fmt.Sprintf("analyze finalized movie: %v: %s", err, strings.TrimSpace(string(metadata.Stderr))), cause: errors.Join(ErrRefused, err)}
+	}
+	duration, width, height, err := parseMovieInfo(string(metadata.Stdout))
+	if err != nil || width != expectedWidth || height != expectedHeight {
+		if err == nil {
+			err = refuse("recording_invalid", fmt.Sprintf("video dimensions %dx%d do not match the captured window %dx%d", width, height, expectedWidth, expectedHeight))
+		}
+		return 0, err
+	}
+	return duration, nil
 }
 
 func (a *Adapter) signalRecorder(ctx context.Context, r *windowRecording, signal os.Signal) (bool, error) {
