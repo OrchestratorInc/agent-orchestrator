@@ -1,8 +1,10 @@
-import { apiClient, apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId } from "./api-client";
+import { apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId } from "./api-client";
 import { appI18n } from "../i18n";
 import { aoBridge } from "./bridge";
+import { resumeOnce } from "../hooks/useCanResumeAgent";
 import type { OrchestratorSpawnSource } from "./orchestrator-spawn-sources";
 import { captureRendererEvent } from "./telemetry";
+import { clientForSessionHost } from "./host-clients";
 import type { SessionMode } from "../types/conversation";
 
 // Every UI entry point that spawns an orchestrator: the board CTA, the topbar
@@ -61,10 +63,11 @@ export async function spawnOrchestrator(
 	clean = false,
 	mode?: SessionMode,
 	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions",
+	hostId?: string,
 ): Promise<string> {
 	void captureRendererEvent("ao.renderer.orchestrator_spawn_requested", { project_id: projectId, source });
 	try {
-		const { data, error, response } = await apiClient.POST("/api/v1/orchestrators", {
+		const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/orchestrators", {
 			body: { projectId, clean, ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) },
 		});
 
@@ -102,8 +105,13 @@ export async function spawnOrchestrator(
  * A 409 AGENT_NOT_EXITED means it is already running — the caller asked for a
  * working orchestrator and that is this one, so it resolves rather than throws.
  */
-export async function resumeOrchestrator(sessionId: string): Promise<void> {
-	const { data, error, response } = await apiClient.POST("/api/v1/sessions/{sessionId}/resume-agent", {
+export function resumeOrchestrator(sessionId: string, hostId?: string): Promise<void> {
+	// A local resume joins the one SessionView starts when it opens the session.
+	return hostId ? requestOrchestratorResume(sessionId, hostId) : resumeOnce(sessionId, () => requestOrchestratorResume(sessionId));
+}
+
+async function requestOrchestratorResume(sessionId: string, hostId?: string): Promise<void> {
+	const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/resume-agent", {
 		params: { path: { sessionId } },
 	});
 	if (error && apiErrorCode(error) !== "AGENT_NOT_EXITED") {

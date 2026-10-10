@@ -34,7 +34,7 @@ import {
 	type TerminalMuxPool,
 } from "../lib/terminal-mux";
 import { cn } from "../lib/utils";
-import { useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useShellTerminals } from "../hooks/useShellTerminals";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -58,6 +58,8 @@ type TerminalPaneProps = {
 	onToggleFullscreen?: () => void | Promise<void>;
 	/** Refuse agent PTY input while a controller transition owns the source. */
 	inputDisabled?: boolean;
+	/** The agent terminal is coming up after an interface switch; show the boot spinner instead of ended/empty chrome. */
+	booting?: boolean;
 	/** Focus the terminal when an in-flight controller asks for human input. */
 	focusRequested?: boolean;
 	/** Observe attachment state without taking ownership of the terminal lifecycle. */
@@ -99,6 +101,8 @@ type TerminalCacheController = {
 	activate: (descriptor: TerminalCacheDescriptor, props: TerminalPaneProps, slot: HTMLDivElement) => void;
 	deactivate: (cacheKey: string, slot: HTMLDivElement) => void;
 	update: (cacheKey: string, props: TerminalPaneProps) => void;
+	/** The stable transport factory for a pane: the control plane for Cloud, else the local daemon pool. */
+	resolveCreateMux: (session?: WorkspaceSession, terminalTarget?: TerminalTarget) => () => TerminalMux;
 };
 
 const TerminalCacheContext = createContext<TerminalCacheController | null>(null);
@@ -130,6 +134,7 @@ function terminalPropsMatch(left: TerminalPaneProps, right: TerminalPaneProps): 
 		left.isFullscreen === right.isFullscreen &&
 		left.onToggleFullscreen === right.onToggleFullscreen &&
 		left.inputDisabled === right.inputDisabled &&
+		left.booting === right.booting &&
 		left.focusRequested === right.focusRequested &&
 		left.onTerminalStateChange === right.onTerminalStateChange &&
 		left.onTerminalContentReadyChange === right.onTerminalContentReadyChange &&
@@ -273,6 +278,10 @@ function CachedTerminalPortal({
 		// Fit and scroll after the host is visible. This retains the cache's
 		// settled viewport behavior without putting a blank frame in front of it.
 		void terminal.prepareForActivation();
+		// Returning to a tab is a focus handoff: the terminal was blurred when it
+		// was parked, so ask it to take the caret back (issue #6140). The guard
+		// inside keeps this from stealing focus from dialogs or other controls.
+		terminal.requestActivationFocus();
 	}, [
 		active,
 		entry,
@@ -338,7 +347,11 @@ export function TerminalCacheProvider({
 			const cloud = paneSession?.cloud;
 			if (!cloud) return muxPool.acquire;
 			const kind = cloudTerminalKind(terminalTarget);
-			const identity = terminalTarget?.kind === "shell" ? terminalTarget.handleId : "agent";
+			// A reviewer shares the agent mux kind but is its own terminal: key it by
+			// handle so it never reuses the agent's or an earlier review's factory.
+			const identity = terminalTarget?.kind === "shell"
+				? terminalTarget.handleId
+				: terminalTarget?.kind === "reviewer" ? `reviewer:${terminalTarget.handleId}` : "agent";
 			// Include the reset nonce so a restored session (new worker epoch) gets a
 			// brand-new factory closure — and therefore a fresh cursor at 0 — instead
 			// of the cached one whose cursor still points at the dead epoch's replay
@@ -349,6 +362,7 @@ export function TerminalCacheProvider({
 			if (cached) return cached;
 			const sessionId = paneSession.id;
 			const orgId = cloud.orgId;
+			const reviewerTerminalID = terminalTarget?.kind === "reviewer" ? terminalTarget.handleId : undefined;
 			// One replay cursor per pane, shared across every mux the hook rebuilds
 			// on reconnect (the factory closure captures it and is itself cached
 			// per factoryKey). A rebuilt mux resumes from the last sequence it
@@ -360,6 +374,7 @@ export function TerminalCacheProvider({
 				createCloudTerminalMux({
 					wsBaseUrl: `${cloudCpRef.current.baseUrl.replace(/^http/i, "ws").replace(/\/+$/, "")}/api/cloud/v1`,
 					kind,
+					terminalId: reviewerTerminalID,
 					cursor,
 					// Both kinds open their socket directly; the CP's find-or-create
 					// OpenTerminal + starting/ready messages drive readiness. There is
@@ -370,6 +385,7 @@ export function TerminalCacheProvider({
 					mintTicket: async (ticketKind) => {
 						const response = await cloudCpRef.current.client.createTerminalTicket(orgId, sessionId, {
 							kind: ticketKind,
+							...(reviewerTerminalID ? { terminalId: reviewerTerminalID } : {}),
 						});
 						return response.ticket;
 					},
@@ -625,8 +641,8 @@ export function TerminalCacheProvider({
 	);
 
 	const controller = useMemo<TerminalCacheController>(
-		() => ({ activate, deactivate, update }),
-		[activate, deactivate, update],
+		() => ({ activate, deactivate, update, resolveCreateMux }),
+		[activate, deactivate, update, resolveCreateMux],
 	);
 
 	return (
@@ -678,6 +694,32 @@ function CachedTerminalSlot({
 	return <div className="h-full min-h-0 w-full" data-testid="session-terminal-slot" ref={slotRef} />;
 }
 
+const BOOT_SPINNER_FRAMES = ["|", "/", "-", "\\"];
+const BOOT_STATUS_STEPS = [
+	"Preparing the {subject}",
+	"Clearing a workspace",
+	"Warming up the agent",
+	"Untangling worktrees",
+	"Sharpening pencils",
+	"Waking the {subject}",
+	"Almost there",
+];
+
+function TerminalBootStatus({ subject }: { subject: string }) {
+	const [tick, setTick] = useState(0);
+	useEffect(() => {
+		const id = window.setInterval(() => setTick((value) => value + 1), 120);
+		return () => window.clearInterval(id);
+	}, []);
+	const step = Math.min(Math.floor(tick / 15), BOOT_STATUS_STEPS.length - 1);
+	return (
+		<div className="flex items-center gap-2.5 text-terminal-dim" role="status" aria-live="polite">
+			<span aria-hidden="true" className="inline-block w-[1ch] shrink-0 text-center font-mono">{BOOT_SPINNER_FRAMES[tick % BOOT_SPINNER_FRAMES.length]}</span>
+			<span>{BOOT_STATUS_STEPS[step].replace("{subject}", subject)}</span>
+		</div>
+	);
+}
+
 export function TerminalPane({
 	session,
 	terminalGeneration,
@@ -689,11 +731,13 @@ export function TerminalPane({
 	isFullscreen,
 	onToggleFullscreen,
 	inputDisabled,
+	booting,
 	focusRequested,
 	onTerminalStateChange,
 	onTerminalContentReadyChange,
 	inputRequest,
 	onInputRequestResult,
+	createMux,
 }: TerminalPaneProps) {
 	const { t } = useTranslation();
 	const terminalTarget =
@@ -790,16 +834,27 @@ export function TerminalPane({
 		isFullscreen,
 		onToggleFullscreen,
 		inputDisabled,
+		booting,
 		focusRequested,
 		onTerminalStateChange,
 		onTerminalContentReadyChange,
 		inputRequest,
 		onInputRequestResult,
+		createMux,
 	};
 	const descriptor = cacheDescriptor(session, terminalTarget, terminalGeneration);
-	if (cache && descriptor) {
+	// The retained cache validates shells against the local daemon's shell list.
+	// A caller-owned transport may belong to another host.
+	if (cache && descriptor && !createMux) {
 		return <CachedTerminalSlot descriptor={descriptor} props={props} />;
 	}
+	// Reviewers mount fresh rather than through the cache, but a Cloud reviewer
+	// still runs in the sandbox: dial it through the control plane by its
+	// terminal ID. Without this it would reach the local daemon, which has no
+	// such terminal and reports it finished.
+	const attachedCreateMux = createMux ?? (cache && session?.cloud && terminalTarget.kind === "reviewer"
+		? cache.resolveCreateMux(session, terminalTarget)
+		: undefined);
 
 	return (
 		<AttachedTerminal
@@ -810,6 +865,7 @@ export function TerminalPane({
 			fontSize={fontSize}
 			isFullscreen={isFullscreen}
 			inputDisabled={inputDisabled}
+			booting={booting}
 			onChangeFontSize={onChangeFontSize}
 			onToggleFullscreen={onToggleFullscreen}
 			focusRequested={focusRequested}
@@ -817,6 +873,7 @@ export function TerminalPane({
 			onTerminalContentReadyChange={onTerminalContentReadyChange}
 			inputRequest={inputRequest}
 			onInputRequestResult={onInputRequestResult}
+			createMux={attachedCreateMux}
 			terminalTarget={terminalTarget}
 		/>
 	);
@@ -975,6 +1032,7 @@ function AttachedTerminal({
 	isFullscreen,
 	onToggleFullscreen,
 	inputDisabled,
+	booting,
 	focusRequested,
 	onTerminalStateChange,
 	onTerminalContentReadyChange,
@@ -1018,6 +1076,10 @@ function AttachedTerminal({
 		waitForInitialOutput: Boolean(attachSession?.cloud),
 		createMux,
 		daemonReady,
+		exitNotice:
+			terminalTarget?.kind === "reviewer"
+				? "\r\n\x1b[2m[reviewer terminal finished]\x1b[0m"
+				: undefined,
 		inputDisabled,
 		isVisible,
 		shellTerminalHandleId,
@@ -1025,6 +1087,21 @@ function AttachedTerminal({
 	useEffect(() => {
 		onTerminalStateChange?.(state);
 	}, [onTerminalStateChange, state]);
+	const cloudReviewExitAwaitingStatus = Boolean(
+		state === "exited" &&
+			session?.cloud &&
+			terminalTarget?.kind === "reviewer" &&
+			(!terminalTarget.reviewStatus ||
+				terminalTarget.reviewStatus === "running" ||
+				terminalTarget.reviewStatus === "complete"),
+	);
+	useEffect(() => {
+		if (!cloudReviewExitAwaitingStatus) return;
+		// A successful Cloud reviewer submits its result immediately before the
+		// dedicated PTY closes. Refresh the durable run state now so the transport
+		// exit is not mistaken for a failed review while the normal poll catches up.
+		void queryClient.invalidateQueries({ queryKey: ["cloud-session-reviews"] });
+	}, [cloudReviewExitAwaitingStatus, queryClient]);
 	// The immediate reconnecting signal a restore/resume sets (terminal-reset
 	// store). Reactive so the "Connecting…" surface shows the instant restore is
 	// clicked, before the polled runtimeConnected catches up; cleared once the
@@ -1091,7 +1168,12 @@ function AttachedTerminal({
 		// fresh connection attempt once the user has fixed their network policy.
 		if (terminal) attach(terminal);
 	}, [attach, terminal]);
-	const provider = terminalTarget?.kind === "reviewer" ? terminalTarget.harness : session?.provider;
+	const provider =
+		terminalTarget?.kind === "reviewer"
+			? terminalTarget.harness
+			: terminalTarget?.kind === "shell"
+				? undefined
+				: session?.provider;
 	const isSessionActive = session ? sessionIsActive(session) : false;
 	// A standalone shell is never restorable: there is no session row to restore.
 	const canRestoreSession =
@@ -1118,13 +1200,13 @@ function AttachedTerminal({
 		}
 	}, [initFailed, onFatal, onTerminalStateChange]);
 	const handleLinkOpen = useSessionBrowserLink(session);
-	const handleSessionLinkOpen = useSessionLinkNavigation();
+	const handleSessionLinkOpen = useSessionLinkNavigation(session?.hostId);
 	const restoreSession = useCallback(async () => {
 		if (!session?.id || !canRestoreSession || isRestoring) return;
 		setIsRestoring(true);
 		setRestoreError(undefined);
 		try {
-			const result = await restoreSessionById(session.id);
+			const result = await restoreSessionById(session.id, session.hostId);
 			if (result.status === "not_resumable") {
 				setRestoreUnavailable(true);
 				return;
@@ -1137,7 +1219,7 @@ function AttachedTerminal({
 		} finally {
 			setIsRestoring(false);
 		}
-	}, [canRestoreSession, isRestoring, restoreSessionById, session?.id, t]);
+	}, [canRestoreSession, isRestoring, restoreSessionById, session?.hostId, session?.id, t]);
 
 	useEffect(() => {
 		if (!terminal) return;
@@ -1238,13 +1320,7 @@ function AttachedTerminal({
 		!showEmptyState &&
 		!showEndedStatePreview &&
 		!cloudRevealedRef.current;
-	const showEndedState = showEndedStatePreview && !isBoxComingUp && !session?.cloud;
-	const emptyStateTitle = session ? t("terminal.startingSession") : "Agent Orchestrator";
-	const emptyStateMessage = session
-		? session.kind === "orchestrator"
-			? t("terminal.preparingOrchestrator")
-			: t("terminal.preparingWorker")
-		: t("terminal.noSessionSelected");
+	const showEndedState = showEndedStatePreview && !isBoxComingUp && !session?.cloud && !booting;
 
 	return (
 		<div className="terminal-surface flex h-full min-h-0 flex-col" data-testid="session-terminal">
@@ -1258,6 +1334,7 @@ function AttachedTerminal({
 					variant={
 						terminalTarget?.kind === "reviewer" ? "reviewer" : terminalTarget?.kind === "shell" ? "shell" : "session"
 					}
+					reviewStatus={terminalTarget?.kind === "reviewer" ? terminalTarget.reviewStatus : undefined}
 				/>
 			)}
 			{/* Keep a small gutter where terminal output starts, but let xterm use the
@@ -1283,12 +1360,16 @@ function AttachedTerminal({
 					supportsCursorColorScheme={provider === "cursor"}
 					theme={theme}
 				/>
-				{showEmptyState && (
+				{(showEmptyState || booting) && (
 					<div className="terminal-surface absolute inset-0 grid place-items-center font-mono text-control">
-						<div className="text-center">
-							<div className="text-terminal">{emptyStateTitle}</div>
-							<div className="mt-2 text-terminal-dim">{emptyStateMessage}</div>
-						</div>
+						{session ? (
+							<TerminalBootStatus subject={session.kind === "orchestrator" ? "orchestrator" : "agent"} />
+						) : (
+							<div className="text-center">
+								<div className="text-terminal">{"Agent Orchestrator"}</div>
+								<div className="mt-2 text-terminal-dim">{t("terminal.noSessionSelected")}</div>
+							</div>
+						)}
 					</div>
 				)}
 				{isCloudConnecting && (
@@ -1315,7 +1396,7 @@ function AttachedTerminal({
 					session={session}
 					onOpenChange={setRestoreUnavailable}
 					onRecreated={async () => {
-						await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+						await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
 					}}
 				/>
 			)}
@@ -1368,13 +1449,17 @@ type TerminalEndedStripProps = {
 	error?: string;
 	isRestoring: boolean;
 	onRestore: () => void;
+	reviewStatus?: "running" | "complete" | "delivered" | "failed" | "cancelled";
 	session?: WorkspaceSession;
 	variant: "reviewer" | "session" | "shell";
 };
 
-function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, session, variant }: TerminalEndedStripProps) {
+function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewStatus, session, variant }: TerminalEndedStripProps) {
 	const { t } = useTranslation();
-	const message = canRestore
+	const reviewDelivered = variant === "reviewer" && reviewStatus === "delivered";
+	const message = reviewDelivered
+		? t("terminal.reviewerCompleted")
+		: canRestore
 		? t("terminal.restoreToContinue")
 		: variant === "reviewer"
 			? t("terminal.reviewerEnded")
@@ -1387,7 +1472,7 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, session
 			<div className="flex min-h-control-board items-center gap-3">
 				<div className="min-w-0 flex-1">
 					<div className="font-mono text-caption font-medium uppercase tracking-wide-md text-muted-foreground">
-						{t("terminal.ended")}
+						{reviewDelivered ? t("terminal.reviewCompleted") : t("terminal.ended")}
 					</div>
 					<div className="mt-0.5 truncate text-xs text-muted-foreground">{message}</div>
 				</div>

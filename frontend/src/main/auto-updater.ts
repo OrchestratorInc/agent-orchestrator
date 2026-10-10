@@ -1550,12 +1550,7 @@ function genericUpdateFailure(phase: UpdateErrorPhase): string {
  * through unchanged.
  */
 function userFacingUpdateError(raw: string, phase: UpdateErrorPhase): string {
-  if (
-    /HttpError:\s*5\d\d/i.test(raw) ||
-    /Gateway Time-?out/i.test(raw) ||
-    /Unable to find latest version on GitHub/i.test(raw) ||
-    /Cannot parse releases feed/i.test(raw)
-  ) {
+  if (/HttpError:\s*5\d\d/i.test(raw) || /Gateway Time-?out/i.test(raw)) {
     if (phase === "download") return UPDATE_DOWNLOAD_SERVER_UNAVAILABLE;
     if (phase === "check") return UPDATE_CHECK_SERVER_UNAVAILABLE;
     return genericUpdateFailure(phase);
@@ -1563,6 +1558,14 @@ function userFacingUpdateError(raw: string, phase: UpdateErrorPhase): string {
   if (/HttpError:\s*\d{3}/i.test(raw)) {
     if (phase === "download") return UPDATE_DOWNLOAD_SERVER_ERROR;
     if (phase === "check") return UPDATE_CHECK_SERVER_ERROR;
+    return genericUpdateFailure(phase);
+  }
+  if (
+    /Unable to find latest version on GitHub/i.test(raw) ||
+    /Cannot parse releases feed/i.test(raw)
+  ) {
+    if (phase === "download") return UPDATE_DOWNLOAD_SERVER_UNAVAILABLE;
+    if (phase === "check") return UPDATE_CHECK_SERVER_UNAVAILABLE;
     return genericUpdateFailure(phase);
   }
   if (looksLikeTechnicalUpdateDump(raw)) {
@@ -2972,6 +2975,8 @@ async function prepareRememberedNonDarwinUpdate(): Promise<void> {
     const token = new CancellationToken();
     activeDownloadCancellation = token;
     await autoUpdater.downloadUpdate(token);
+  } catch (err) {
+    throw new Error(errorMessage(err, "install"));
   } finally {
     restoreFeed?.();
   }

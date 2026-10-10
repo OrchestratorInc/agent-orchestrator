@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -44,19 +45,26 @@ func TestSeedRecordPreservesAutomationRunIdentity(t *testing.T) {
 }
 
 type fakeStore struct {
-	sessions         map[domain.SessionID]domain.SessionRecord
-	pr               map[domain.SessionID]domain.PRFacts
-	projects         map[string]domain.ProjectRecord
-	conversations    map[domain.SessionID]domain.ConversationRecord
-	workspaceRepo    map[string][]domain.WorkspaceRepoRecord
-	num              int
-	deleteErr        error
-	upsertWTErr      error
-	listAllErr       error
-	getProjectErr    error
-	getSessionErr    error
-	updateSessionErr error
-	deletePrepErr    error
+	cleanupMu                          sync.Mutex
+	cleanupFacts                       map[domain.SessionID]domain.SessionCleanupRecord
+	sessions                           map[domain.SessionID]domain.SessionRecord
+	pr                                 map[domain.SessionID]domain.PRFacts
+	projects                           map[string]domain.ProjectRecord
+	conversations                      map[domain.SessionID]domain.ConversationRecord
+	workspaceRepo                      map[string][]domain.WorkspaceRepoRecord
+	num                                int
+	deleteErr                          error
+	upsertWTErr                        error
+	listAllErr                         error
+	getProjectErr                      error
+	getSessionErr                      error
+	updateSessionErr                   error
+	hibernationCASConflicts            int
+	updateBrowserCapabilityVerifierErr error
+	deletePrepErr                      error
+
+	createClientRequestErr error
+	promoteTaskErr         error
 	// agentSwitchStore is wired only by agent-switch tests so fakeLCM can model
 	// Lifecycle Manager's atomic ownership-boundary commands.
 	agentSwitchStore any
@@ -106,12 +114,73 @@ func (f *fakeStore) CreateAutomationSession(ctx context.Context, rec domain.Sess
 	created, err := f.CreateSession(ctx, rec)
 	return created, err == nil, err
 }
+func (f *fakeStore) CreateClientRequestSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error) {
+	if f.createClientRequestErr != nil {
+		err := f.createClientRequestErr
+		f.createClientRequestErr = nil
+		return domain.SessionRecord{}, false, err
+	}
+	if existing, found, err := f.GetSessionByClientRequestID(ctx, rec.ClientRequestID); err != nil || found {
+		return existing, false, err
+	}
+	created, err := f.CreateSession(ctx, rec)
+	return created, err == nil, err
+}
+func (f *fakeStore) GetSessionByClientRequestID(_ context.Context, id string) (domain.SessionRecord, bool, error) {
+	for _, rec := range f.sessions {
+		if id != "" && rec.ClientRequestID == id {
+			return rec, true, nil
+		}
+	}
+	return domain.SessionRecord{}, false, nil
+}
+func (f *fakeStore) CommitClientRequestSession(_ context.Context, id domain.SessionID) error {
+	rec := f.sessions[id]
+	rec.ClientRequestCommitted = true
+	f.sessions[id] = rec
+	return nil
+}
 func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) error {
 	if f.updateSessionErr != nil {
 		return f.updateSessionErr
 	}
+	// Like the real store, a full-row update never writes artifact_dir or
+	// session_output_type; only UpdateSessionArtifactOutput does.
+	if existing, ok := f.sessions[rec.ID]; ok {
+		rec.Metadata.ArtifactDir = existing.Metadata.ArtifactDir
+		rec.OutputType = existing.OutputType
+	}
 	f.sessions[rec.ID] = rec
 	return nil
+}
+func (f *fakeStore) SetSessionHibernated(_ context.Context, id domain.SessionID, revision int64, at *time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok || rec.Revision != revision || rec.IsTerminated {
+		return false, nil
+	}
+	if f.hibernationCASConflicts > 0 {
+		f.hibernationCASConflicts--
+		rec.Revision++
+		f.sessions[id] = rec
+		return false, nil
+	}
+	rec.HibernatedAt = at
+	rec.Revision++
+	f.sessions[id] = rec
+	return true, nil
+}
+func (f *fakeStore) UpdateSessionArtifactOutput(_ context.Context, id domain.SessionID, artifactDir string, outputType domain.SessionOutputType) (bool, error) {
+	if f.updateSessionErr != nil {
+		return false, f.updateSessionErr
+	}
+	rec, ok := f.sessions[id]
+	if !ok {
+		return false, nil
+	}
+	rec.Metadata.ArtifactDir = artifactDir
+	rec.OutputType = outputType
+	f.sessions[id] = rec
+	return true, nil
 }
 func (f *fakeStore) UpdateSessionModel(_ context.Context, id domain.SessionID, model string) (bool, error) {
 	if f.updateSessionErr != nil {
@@ -164,7 +233,23 @@ func (f *fakeStore) SetSessionProvisionState(_ context.Context, id domain.Sessio
 	return true, nil
 }
 
+func (f *fakeStore) SetSessionProvisionSteps(_ context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error {
+	rec, ok := f.sessions[id]
+	if !ok {
+		return nil
+	}
+	rec.ProvisionSteps = append([]domain.SessionProvisionStep(nil), steps...)
+	rec.UpdatedAt = now
+	f.sessions[id] = rec
+	return nil
+}
+
 func (f *fakeStore) PromoteTaskPreparation(_ context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error) {
+	if f.promoteTaskErr != nil {
+		err := f.promoteTaskErr
+		f.promoteTaskErr = nil
+		return false, err
+	}
 	current, ok := f.sessions[id]
 	if !ok || !current.IsTaskPreparation {
 		return false, nil
@@ -191,8 +276,8 @@ func (f *fakeStore) DeleteTaskPreparation(_ context.Context, id domain.SessionID
 }
 
 func (f *fakeStore) UpdateBrowserCapabilityVerifier(_ context.Context, id domain.SessionID, expected domain.SessionControllerOwner, verifier string) (bool, error) {
-	if f.updateSessionErr != nil {
-		return false, f.updateSessionErr
+	if f.updateBrowserCapabilityVerifierErr != nil {
+		return false, f.updateBrowserCapabilityVerifierErr
 	}
 	rec, ok := f.sessions[id]
 	if !ok || rec.ControllerOwner() != expected {
@@ -249,6 +334,19 @@ func (f *fakeStore) ListAllSessions(context.Context) ([]domain.SessionRecord, er
 		out = append(out, r)
 	}
 	return out, nil
+}
+func (f *fakeStore) ListChatHibernationCandidates(ctx context.Context) ([]domain.SessionID, error) {
+	records, err := f.ListAllSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var ids []domain.SessionID
+	for _, rec := range records {
+		if rec.EligibleForChatHibernation() {
+			ids = append(ids, rec.ID)
+		}
+	}
+	return ids, nil
 }
 func (f *fakeStore) DeleteSession(_ context.Context, id domain.SessionID) (bool, error) {
 	if f.deleteErr != nil {
@@ -778,6 +876,19 @@ func (a *nativeTerminatingAgent) TerminateNativeSession(_ context.Context, sessi
 type launchArgvAgent struct {
 	fakeAgent
 	argv []string
+}
+
+type runtimePreparingAgent struct {
+	launchArgvAgent
+	got ports.WorkspaceHookConfig
+}
+
+func (a *runtimePreparingAgent) PrepareRuntimeLaunch(_ context.Context, cfg ports.WorkspaceHookConfig) error {
+	a.got = cfg
+	if cfg.Env != nil {
+		cfg.Env["PROVIDER_RUNTIME_PREPARED"] = "1"
+	}
+	return nil
 }
 
 func (a launchArgvAgent) GetLaunchCommand(context.Context, ports.LaunchConfig) ([]string, error) {
@@ -1321,7 +1432,7 @@ func TestSend_WrapsCopilotOrchestratorMessageWithDelegationDirective(t *testing.
 	msg := &fakeMessenger{}
 	m := New(Deps{Store: st, Messenger: msg})
 
-	if err := m.Send(ctx, "mer-1", "make the button red", nil); err != nil {
+	if err := m.SendWithOptions(ctx, "mer-1", "make the button red", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatal(err)
 	}
 	if len(msg.msgs) != 1 {
@@ -1352,7 +1463,7 @@ func TestSend_DoesNotWrapCopilotWorkerMessage(t *testing.T) {
 	msg := &fakeMessenger{}
 	m := New(Deps{Store: st, Messenger: msg})
 
-	if err := m.Send(ctx, "mer-2", "make the button red", nil); err != nil {
+	if err := m.SendWithOptions(ctx, "mer-2", "make the button red", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatal(err)
 	}
 	if got := msg.msgs[0]; got != "make the button red" {
@@ -1371,7 +1482,7 @@ func TestSend_DoesNotWrapNonCopilotOrchestratorMessage(t *testing.T) {
 	msg := &fakeMessenger{}
 	m := New(Deps{Store: st, Messenger: msg})
 
-	if err := m.Send(ctx, "mer-1", "make the button red", nil); err != nil {
+	if err := m.SendWithOptions(ctx, "mer-1", "make the button red", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatal(err)
 	}
 	if got := msg.msgs[0]; got != "make the button red" {
@@ -1394,7 +1505,7 @@ func TestSend_WritesAttachmentAndAppendsReference(t *testing.T) {
 	m := New(Deps{Store: st, Messenger: msg, Workspace: ws, DataDir: t.TempDir()})
 
 	attachment := &ports.SpawnAttachment{Ext: ".png", Data: []byte("snapshot-bytes")}
-	if err := m.Send(ctx, "mer-1", "Make the button blue.", attachment); err != nil {
+	if err := m.SendWithOptions(ctx, "mer-1", "Make the button blue.", attachment, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1440,7 +1551,7 @@ func TestSend_WithoutAttachmentSkipsWorkspaceWrite(t *testing.T) {
 	ws := &fakeWorkspace{}
 	m := New(Deps{Store: st, Messenger: msg, Workspace: ws})
 
-	if err := m.Send(ctx, "mer-1", "make the button red", nil); err != nil {
+	if err := m.SendWithOptions(ctx, "mer-1", "make the button red", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1994,6 +2105,30 @@ func TestSpawn_WrapsSupervisedAgentAndPersistsGeneration(t *testing.T) {
 	}
 }
 
+func TestSpawn_PreparesProviderRuntimeAfterAssigningGeneration(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &fakeRuntime{}
+	agent := &runtimePreparingAgent{launchArgvAgent: launchArgvAgent{argv: []string{"agent"}}}
+	m := New(Deps{
+		Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: "/ao-data", RunFilePath: "/ao-data/running.json",
+		LookPath: func(string) (string, error) { return "/bin/true", nil }, NewLaunchID: func() string { return "launch-7" },
+	})
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
+		t.Fatal(err)
+	}
+	if got := agent.got.Env[EnvRuntimeLaunchID]; got != "launch-7" {
+		t.Fatalf("preparer launch id = %q, want launch-7", got)
+	}
+	if agent.got.DataDir != "/ao-data" || agent.got.SessionID != "mer-1" {
+		t.Fatalf("preparer config = %+v", agent.got)
+	}
+	if rt.lastCfg.Env["PROVIDER_RUNTIME_PREPARED"] != "1" {
+		t.Fatalf("runtime did not receive preparer environment: %+v", rt.lastCfg.Env)
+	}
+}
+
 func TestRestore_RotatesSupervisedAgentGeneration(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
@@ -2362,6 +2497,80 @@ func TestSpawnAutomationAdoptsOnlyCompletedLaunch(t *testing.T) {
 	}
 }
 
+func TestSpawnClientRequestReplaysCommittedWorkerAndRejectsConflictOrIncomplete(t *testing.T) {
+	m, st, rt, _ := newManager()
+	cfg := ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "do it", ClientRequestID: "draft-1", ClientRequestHash: "v1:first"}
+	first, _, _, err := m.Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, _, _, err := m.Spawn(ctx, cfg)
+	if err != nil || replay.ID != first.ID || rt.created != 1 {
+		t.Fatalf("replay = %q, runtime creates = %d, err = %v", replay.ID, rt.created, err)
+	}
+	cfg.ClientRequestHash = "v1:changed"
+	if _, _, _, err := m.Spawn(ctx, cfg); !errors.Is(err, ErrClientRequestConflict) || rt.created != 1 {
+		t.Fatalf("changed payload: runtime creates = %d, err = %v", rt.created, err)
+	}
+	cfg.ClientRequestHash = "v1:first"
+	rec := st.sessions[first.ID]
+	rec.ClientRequestCommitted = false
+	st.sessions[first.ID] = rec
+	if _, _, _, err := m.Spawn(ctx, cfg); !errors.Is(err, ErrClientRequestIncomplete) || rt.created != 1 {
+		t.Fatalf("incomplete retry: runtime creates = %d, err = %v", rt.created, err)
+	}
+}
+
+func TestSpawnClientRequestRetriesAfterStorageFullWithoutDuplicateWorker(t *testing.T) {
+	m, st, rt, ws := newManager()
+	st.createClientRequestErr = syscall.ENOSPC
+	cfg := ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "do it", ClientRequestID: "draft-1", ClientRequestHash: "v1:first"}
+	if _, _, _, err := m.Spawn(ctx, cfg); !errors.Is(err, syscall.ENOSPC) {
+		t.Fatalf("full-storage spawn error = %v, want ENOSPC", err)
+	}
+	if len(st.sessions) != 0 || ws.createCount != 0 || rt.created != 0 {
+		t.Fatalf("failed write left sessions=%d workspaces=%d runtimes=%d", len(st.sessions), ws.createCount, rt.created)
+	}
+	created, _, _, err := m.Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, _, _, err := m.Spawn(ctx, cfg)
+	if err != nil || replayed.ID != created.ID || len(st.sessions) != 1 || ws.createCount != 1 || rt.created != 1 {
+		t.Fatalf("retry/replay: created=%q replayed=%q sessions=%d workspaces=%d runtimes=%d err=%v", created.ID, replayed.ID, len(st.sessions), ws.createCount, rt.created, err)
+	}
+}
+
+func TestSpawnPreparedClientRequestRetriesAfterStorageFullWithoutDuplicateWorker(t *testing.T) {
+	m, st, rt, ws := newManager()
+	m.runBackground = func(work func()) { work() }
+	token, err := m.PrepareTaskWorkspace(ctx, st.projects["mer"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.promoteTaskErr = syscall.ENOSPC
+	st.deletePrepErr = syscall.ENOSPC
+	cfg := ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "do it", TaskPreparation: token, ClientRequestID: "draft-1", ClientRequestHash: "v1:first"}
+	if _, _, _, err := m.Spawn(ctx, cfg); !errors.Is(err, syscall.ENOSPC) {
+		t.Fatalf("full-storage promotion error = %v, want ENOSPC", err)
+	}
+	if len(st.sessions) != 1 || ws.createCount != 1 || ws.destroyed != 1 || rt.created != 0 {
+		t.Fatalf("failed promotion left sessions=%d workspaces=%d destroyed=%d runtimes=%d", len(st.sessions), ws.createCount, ws.destroyed, rt.created)
+	}
+	st.deletePrepErr = nil // storage recovered; retry must not reclaim the failed preparation
+	created, _, _, err := m.Spawn(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, _, _, err := m.Spawn(ctx, cfg)
+	if err != nil || replayed.ID != created.ID || len(st.sessions) != 2 || !st.sessions[domain.SessionID(token)].IsTaskPreparation || ws.createCount != 2 || rt.created != 1 {
+		t.Fatalf("retry/replay: created=%q replayed=%q sessions=%d workspaces=%d runtimes=%d err=%v", created.ID, replayed.ID, len(st.sessions), ws.createCount, rt.created, err)
+	}
+	if err := m.CancelTaskPreparation(ctx, token); err != nil || len(st.sessions) != 1 {
+		t.Fatalf("recovered cleanup: sessions=%d err=%v", len(st.sessions), err)
+	}
+}
+
 func TestSpawnAutomationRejectsIncompletePriorLaunch(t *testing.T) {
 	m, st, rt, ws := newManager()
 	runID := domain.AutomationRunID("run-1")
@@ -2489,7 +2698,7 @@ func TestSpawnWorkspaceRecordFailurePreservesDirtyWorkspace(t *testing.T) {
 func TestSpawn_ReturnsFinalPromptByteMetrics(t *testing.T) {
 	m, _, _, _ := newManager()
 	cfg := ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}
-	wantPrompt, wantSystemPrompt, err := m.buildSpawnTexts(ctx, cfg)
+	wantPrompt, wantSystemPrompt, err := m.buildSpawnTexts(ctx, cfg, "mer-1")
 	if err != nil {
 		t.Fatalf("buildSpawnTexts: %v", err)
 	}
@@ -3036,9 +3245,12 @@ func TestWrapSpawnStagePreservesInnerSentinel(t *testing.T) {
 
 func TestSpawn_RollsBackOnRuntimeFailure(t *testing.T) {
 	m, st, _, ws := newManager()
-	m.runtime = &fakeRuntime{createErr: errors.New("boom")}
-	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer"}); err == nil {
-		t.Fatal("expected failure")
+	project := st.projects["mer"]
+	project.Config.Env = map[string]string{"PROJECT_TOKEN": "runtime-secret"}
+	st.projects["mer"] = project
+	m.runtime = &fakeRuntime{createErr: errors.New("boom with runtime-secret")}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer"}); err == nil || strings.Contains(err.Error(), "runtime-secret") || !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("Spawn error = %v, want redacted runtime failure", err)
 	}
 	if ws.destroyed != 1 {
 		t.Fatal("workspace should roll back")
@@ -3358,6 +3570,68 @@ func TestKill_TearsDownRuntimeAndWorkspace(t *testing.T) {
 		t.Fatalf("reviewer terminate bodies = %v", reviewer.bodies)
 	}
 	requireNoPromptDir(t, dataDir, "mer-1")
+}
+
+func TestKillCleanupScriptHasNoTimeLimit(t *testing.T) {
+	m, st, _, ws := newManager()
+	m.killTeardown = 2 * time.Second
+	m.dataDir = t.TempDir()
+	workspace := filepath.Join(m.dataDir, "worktrees", "mer", "mer-1")
+	if err := os.MkdirAll(workspace, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	rec := mkLive("mer-1")
+	rec.Metadata.WorkspacePath = workspace
+	st.sessions[rec.ID] = rec
+	project := st.projects["mer"]
+	command := "sleep 3 && echo finished > cleanup-marker"
+	if runtime.GOOS == "windows" {
+		command = "powershell -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 3\" && echo finished > cleanup-marker"
+	}
+	project.Config.PreRemove = []string{command}
+	st.projects["mer"] = project
+
+	freed, err := m.Kill(ctx, rec.ID)
+	if err != nil || !freed || ws.destroyCtxErr != nil || !st.sessions[rec.ID].IsTerminated {
+		t.Fatalf("long cleanup must finish before workspace removal: freed=%v err=%v workspaceCtx=%v terminated=%v", freed, err, ws.destroyCtxErr, st.sessions[rec.ID].IsTerminated)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "cleanup-marker")); err != nil {
+		t.Fatalf("cleanup command did not finish: %v", err)
+	}
+}
+
+func TestKillCleanupScriptFailurePreservesWorkspaceForRetry(t *testing.T) {
+	m, st, rt, ws := newManager()
+	m.dataDir = t.TempDir()
+	workspace := filepath.Join(m.dataDir, "worktrees", "mer", "mer-1")
+	if err := os.MkdirAll(workspace, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	rec := mkLive("mer-1")
+	rec.Metadata.WorkspacePath = workspace
+	st.sessions[rec.ID] = rec
+	project := st.projects["mer"]
+	project.Path = t.TempDir()
+	project.Config.PreRemove = []string{"echo project-secret && exit 7"}
+	project.Config.Env = map[string]string{"PROJECT_TOKEN": "project-secret"}
+	st.projects["mer"] = project
+
+	freed, err := m.Kill(ctx, rec.ID)
+	if freed || !errors.Is(err, ErrCleanupScript) || strings.Contains(err.Error(), "project-secret") {
+		t.Fatalf("kill freed=%v err=%v", freed, err)
+	}
+	if rt.destroyed != 1 || ws.destroyed != 0 || !st.sessions[rec.ID].IsTerminated {
+		t.Fatalf("failed cleanup must stop runtime, preserve workspace, and terminate session: runtime=%d workspace=%d rec=%+v", rt.destroyed, ws.destroyed, st.sessions[rec.ID])
+	}
+	project.Config.PreRemove = []string{"echo cleaned > cleanup-marker"}
+	st.projects["mer"] = project
+	result, err := m.Cleanup(ctx, "mer")
+	if err != nil || len(result.Cleaned) != 1 || ws.destroyed != 1 {
+		t.Fatalf("retry cleanup result=%+v err=%v destroyed=%d", result, err, ws.destroyed)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "cleanup-marker")); err != nil {
+		t.Fatalf("cleanup script did not run in workspace: %v", err)
+	}
 }
 
 // A caller that gives up must not take the teardown down with it. The REST
@@ -4100,6 +4374,28 @@ func TestRestore_ScratchAllowsEmptyBranch(t *testing.T) {
 	}
 	if rt.created != 1 {
 		t.Fatalf("runtime created = %d, want 1", rt.created)
+	}
+}
+
+func TestRestoreRecreatedWorkspaceRunsSetupOnce(t *testing.T) {
+	m, _, _, _ := newManager()
+	managed := filepath.Join(t.TempDir(), "workspaces")
+	adapter, err := scratch.New(scratch.Options{ManagedRoot: managed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.workspace = adapter
+	workspace := filepath.Join(managed, "scratch", "workers", "scratch-1")
+	project := domain.ProjectRecord{ID: "scratch", Kind: domain.ProjectKindScratch, Path: t.TempDir(), Config: domain.ProjectConfig{PostCreate: []string{"echo setup >> setup-runs"}}}
+	rec := domain.SessionRecord{ID: "scratch-1", ProjectID: "scratch", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: workspace}}
+	for i := 0; i < 2; i++ {
+		if _, err := m.restoreSessionWorkspace(context.Background(), project, rec); err != nil {
+			t.Fatalf("restore %d: %v", i+1, err)
+		}
+	}
+	output, err := os.ReadFile(filepath.Join(workspace, "setup-runs"))
+	if err != nil || strings.Count(string(output), "setup") != 1 {
+		t.Fatalf("setup runs = %q, err = %v", output, err)
 	}
 }
 
@@ -5428,6 +5724,34 @@ func TestSpawnWorker_PromptFileFailureBlocksFileOnlyHarness(t *testing.T) {
 	}
 }
 
+func TestSpawnWorker_PromptFileFailureBlocksCommandCode(t *testing.T) {
+	st := newFakeStore()
+	agent := &recordingAgent{}
+	dataDir := blockedDataDir(t)
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{
+		Runtime:   &fakeRuntime{},
+		Agents:    singleAgent{agent: agent},
+		Workspace: &fakeWorkspace{},
+		Store:     st,
+		Messenger: &fakeMessenger{},
+		Lifecycle: &fakeLCM{store: st},
+		DataDir:   dataDir,
+		LookPath:  lookPath,
+	})
+
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCommandCode, Prompt: "do it"})
+	if err == nil {
+		t.Fatal("Spawn succeeded, want prompt-file error for Command Code")
+	}
+	if !strings.Contains(err.Error(), "system prompt file") {
+		t.Fatalf("Spawn err = %v, want system prompt file error", err)
+	}
+	if _, ok := st.sessions["mer-1"]; ok {
+		t.Fatal("seed row still exists after prompt-file failure")
+	}
+}
+
 func TestSpawnWorker_SkipsTerminatedOrchestratorContact(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
@@ -5491,8 +5815,22 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
 		}
 	}
-	if words := len(strings.Fields(m.aoSkillPointer())); words > 220 {
-		t.Fatalf("always-on AO skill pointer grew to %d words; keep details in routed command guides:\n%s", words, m.aoSkillPointer())
+	// This orchestrator runs in a terminal, where the html tools and ao render
+	// do not exist, so its prompt does not send it looking for them.
+	if strings.Contains(systemPrompt, "## Showing pages in chat") {
+		t.Fatalf("terminal session prompt names the chat-only html tools:\n%s", systemPrompt)
+	}
+	chatPointer := m.aoSkillPointer(true)
+	for _, want := range []string{
+		"When a chart, table, diagram, or mockup is clearer than text, call `html_preview`, then `html_render`. If you cannot see them, search your tools for them. If you find nothing, read `",
+		"` and use `ao render`. Do not use a built-in visualize skill.",
+	} {
+		if !strings.Contains(chatPointer, want) {
+			t.Fatalf("chat pointer missing %q:\n%s", want, chatPointer)
+		}
+	}
+	if words := len(strings.Fields(chatPointer)); words > 260 {
+		t.Fatalf("always-on AO skill pointer grew to %d words; keep details in routed command guides:\n%s", words, chatPointer)
 	}
 	if strings.Contains(agent.lastLaunch.Prompt, "You are the human-facing orchestrator") {
 		t.Fatalf("coordinator role must not be in the user prompt:\n%s", agent.lastLaunch.Prompt)
@@ -5619,7 +5957,7 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 			lookPath := func(string) (string, error) { return "/bin/true", nil }
 			m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 
-			sp, err := m.buildSystemPrompt(ctx, tc.kind, "mer")
+			sp, err := m.buildSystemPrompt(ctx, tc.kind, "mer", "mer-1", false)
 			if err != nil {
 				t.Fatalf("buildSystemPrompt: %v", err)
 			}
@@ -5653,6 +5991,58 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 				t.Fatalf("%s: system prompt missing automatic artifact handoff guidance:\n%s", tc.name, sp)
 			}
 		})
+	}
+}
+
+func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{
+		Runtime:   &fakeRuntime{},
+		Agents:    singleAgent{agent: &recordingAgent{}},
+		Workspace: &fakeWorkspace{},
+		Store:     st,
+		Messenger: &fakeMessenger{},
+		Lifecycle: &fakeLCM{store: st},
+		DataDir:   t.TempDir(),
+		LookPath:  lookPath,
+	})
+
+	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", false)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt: %v", err)
+	}
+	wantDir := filepath.ToSlash(filepath.Join(m.dataDir, "artifacts", "mer-7"))
+	if !strings.Contains(sp, "## Session Artifacts") {
+		t.Fatalf("system prompt missing artifacts section:\n%s", sp)
+	}
+	if !strings.Contains(sp, wantDir) {
+		t.Fatalf("system prompt missing artifact dir %q:\n%s", wantDir, sp)
+	}
+	for _, want := range []string{
+		"Ordinary progress updates, concise final answers, and validation summaries can stay in chat or AO report notes",
+		"working material, not deliverables",
+		"does not authorize external publishing",
+	} {
+		if !strings.Contains(sp, want) {
+			t.Fatalf("system prompt missing artifact boundary %q", want)
+		}
+	}
+	if strings.Contains(sp, "naturally document-shaped") {
+		t.Fatal("system prompt must not require files for ordinary summaries")
+	}
+	// Only a chat session has a thread to show a page in.
+	const inThread = "it does not belong in the workspace at all. In a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory."
+	if strings.Contains(sp, "html_render") {
+		t.Fatalf("terminal session prompt names html_render:\n%s", sp)
+	}
+	chatPrompt, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", true)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt chat: %v", err)
+	}
+	if !strings.Contains(chatPrompt, inThread) {
+		t.Fatalf("chat session prompt missing %q", inThread)
 	}
 }
 
@@ -7759,8 +8149,8 @@ func TestRetireForReplacementCapturesAndReleasesWorkspace(t *testing.T) {
 	if stashIdx == -1 || deleteIdx == -1 || forceIdx == -1 {
 		t.Fatalf("missing expected calls in shared log: %v", sharedLog)
 	}
-	if stashIdx >= forceIdx || forceIdx >= deleteIdx {
-		t.Fatalf("replacement retire must capture, force release, then clear restore marker; log=%v", sharedLog)
+	if stashIdx >= deleteIdx || deleteIdx >= forceIdx {
+		t.Fatalf("replacement retire must capture and clear restore intent before workspace release; log=%v", sharedLog)
 	}
 	if len(browser.destroyed) != 1 || browser.destroyed[0] != "mer-orch" {
 		t.Fatalf("browser targets destroyed = %v, want mer-orch", browser.destroyed)
@@ -8030,8 +8420,8 @@ func TestRetireForReplacementStaleWorkspaceSkipsPreserveAndTerminates(t *testing
 	}
 	wantOrder := []string{
 		"StashUncommitted:mer-orch",
-		"ForceDestroy:mer-orch",
 		"DeleteSessionWorktrees:mer-orch",
+		"ForceDestroy:mer-orch",
 	}
 	next := 0
 	for _, call := range sharedLog {
@@ -8044,7 +8434,7 @@ func TestRetireForReplacementStaleWorkspaceSkipsPreserveAndTerminates(t *testing
 	}
 }
 
-func TestRetireForReplacementStaleWorkspaceCleanupFailureLeavesSessionActive(t *testing.T) {
+func TestRetireForReplacementStaleWorkspaceCleanupFailureTerminatesSession(t *testing.T) {
 	m, st, rt, ws := newLifecycleManager()
 	ws.stashErr = ports.ErrWorkspaceStale
 	ws.forceDestroyErr = errors.New("stale cleanup failed")
@@ -8067,11 +8457,11 @@ func TestRetireForReplacementStaleWorkspaceCleanupFailureLeavesSessionActive(t *
 	if err == nil || !strings.Contains(err.Error(), "force destroy") {
 		t.Fatalf("RetireForReplacement err = %v, want force destroy failure", err)
 	}
-	if st.sessions["mer-orch"].IsTerminated {
-		t.Fatal("session must remain active when stale cleanup fails")
+	if !st.sessions["mer-orch"].IsTerminated {
+		t.Fatal("stopped orchestrator must be terminated for cleanup retry")
 	}
-	if rows := st.worktrees["mer-orch"]; len(rows) != 1 {
-		t.Fatalf("restore markers after stale cleanup failure = %v, want retained", rows)
+	if rows := st.worktrees["mer-orch"]; len(rows) != 0 {
+		t.Fatalf("restore markers must be cleared before cleanup: %v", rows)
 	}
 	if rt.destroyed != 1 || rt.destroyedIDs[0] != "orch-handle" {
 		t.Fatalf("runtime destroyed = %d ids=%v, want orch-handle", rt.destroyed, rt.destroyedIDs)
@@ -8251,8 +8641,8 @@ func TestRetireForReplacementWorkspaceProjectForceDestroyFailureKeepsRepoInvento
 	if err == nil || !strings.Contains(err.Error(), "force destroy") {
 		t.Fatalf("RetireForReplacement err = %v, want force destroy failure", err)
 	}
-	if st.sessions["mer-orch"].IsTerminated {
-		t.Fatal("session must remain active when force destroy fails")
+	if !st.sessions["mer-orch"].IsTerminated {
+		t.Fatal("stopped orchestrator must be terminated for cleanup retry")
 	}
 	if rows := st.worktrees["mer-orch"]; len(rows) != 2 {
 		t.Fatalf("workspace repo inventory after force destroy failure = %v, want root and child retained", rows)
@@ -8285,15 +8675,15 @@ func TestRetireForReplacementWorkspaceProjectStaleCleanupFailureKeepsRepoInvento
 	if err == nil || !strings.Contains(err.Error(), "force destroy") {
 		t.Fatalf("RetireForReplacement err = %v, want force destroy failure", err)
 	}
-	if st.sessions["mer-orch"].IsTerminated {
-		t.Fatal("session must remain active when stale repo cleanup fails")
+	if !st.sessions["mer-orch"].IsTerminated {
+		t.Fatal("stopped orchestrator must be terminated for cleanup retry")
 	}
 	if rows := st.worktrees["mer-orch"]; len(rows) != 2 {
 		t.Fatalf("workspace repo inventory after stale cleanup failure = %v, want root and child retained", rows)
 	}
 }
 
-func TestRetireForReplacementForceDestroyFailureLeavesSessionActive(t *testing.T) {
+func TestRetireForReplacementForceDestroyFailureTerminatesSession(t *testing.T) {
 	m, st, rt, ws := newLifecycleManager()
 	ws.forceDestroyErr = errors.New("worktree still registered")
 	ws.stashRef = "refs/ao/preserved/mer-orch"
@@ -8316,8 +8706,8 @@ func TestRetireForReplacementForceDestroyFailureLeavesSessionActive(t *testing.T
 	if err == nil || !strings.Contains(err.Error(), "force destroy") {
 		t.Fatalf("RetireForReplacement err = %v, want force destroy failure", err)
 	}
-	if st.sessions["mer-orch"].IsTerminated {
-		t.Fatal("session must remain active so retry can retire it again")
+	if !st.sessions["mer-orch"].IsTerminated {
+		t.Fatal("stopped orchestrator must be terminated for cleanup retry")
 	}
 	if rt.destroyed != 1 {
 		t.Fatalf("runtime destroyed = %d, want 1 before workspace release", rt.destroyed)
@@ -9686,16 +10076,18 @@ func TestReconcile_AdoptAcrossDaemonRestart(t *testing.T) {
 	if rt.destroyed != 0 {
 		t.Fatalf("adopted sessions must not be destroyed; Destroy called %d times", rt.destroyed)
 	}
-	// Dead worker relaunched under its original id on this same boot without an
-	// intermediate durable termination or worktree capture cycle.
+	// A dead worker stays stopped until an explicit Resume request.
 	if lcm.terminated["mer-3"] != 0 {
 		t.Fatalf("dead worker must not be marked terminated before relaunch; got %d", lcm.terminated["mer-3"])
 	}
 	if st.sessions["mer-3"].IsTerminated {
-		t.Fatal("dead worker must be relaunched (not terminated) after Reconcile")
+		t.Fatal("dead worker must remain resumable after Reconcile")
 	}
-	if rt.created != 1 {
-		t.Fatalf("exactly one runtime relaunch expected (the dead worker); got %d", rt.created)
+	if rt.created != 0 {
+		t.Fatalf("health checks must not create runtimes; got %d", rt.created)
+	}
+	if st.sessions["mer-3"].Activity.State != domain.ActivityExited {
+		t.Fatal("dead worker must be recorded as exited")
 	}
 	if ws.stashCalls != 0 {
 		t.Fatalf("dead worker must reuse its worktree without stashing; got %d stash calls", ws.stashCalls)
@@ -9913,10 +10305,14 @@ func TestSendSemanticTUIRejectsAdapterWithoutAcceptanceSignal(t *testing.T) {
 func TestSend_RecordsDeliveredUserInput(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code"})
-	m := newSendTestManager(t, fakeAgent{}, &fakeMessenger{}, st)
+	messenger := &fakeMessenger{}
+	m := newSendTestManager(t, fakeAgent{}, messenger, st)
 
-	if err := m.Send(context.Background(), "s1", "continue with the migration", nil); err != nil {
+	if err := m.SendWithOptions(context.Background(), "s1", "continue with the migration", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatalf("Send: %v", err)
+	}
+	if len(messenger.msgs) != 1 || messenger.msgs[0] != "continue with the migration" {
+		t.Fatalf("human send was wrapped as coordination: %+v", messenger.msgs)
 	}
 	if got := st.sessions["s1"].Metadata.LatestUserPrompt; got != "continue with the migration" {
 		t.Fatalf("LatestUserPrompt = %q, want delivered user input", got)
@@ -9968,7 +10364,7 @@ func TestSend_PaneFallbackCannotPairLostPromptHookWithPriorTrustedAssistant(t *t
 		Runtime: &fakeRuntime{}, Agents: singleAgent{agent: fakeAgent{}}, Workspace: &fakeWorkspace{},
 		Store: st, Messenger: &fakeMessenger{}, Lifecycle: lcm,
 	})
-	if err := manager.Send(ctx, created.ID, "new prompt whose UserPromptSubmit hook is lost", nil); err != nil {
+	if err := manager.SendWithOptions(ctx, created.ID, "new prompt whose UserPromptSubmit hook is lost", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatalf("send pane prompt: %v", err)
 	}
 	afterFallback, ok, err := st.GetSession(ctx, created.ID)
@@ -10233,7 +10629,7 @@ func TestSend_PaneFallbackWinsAgainstStaleLifecycleProjection(t *testing.T) {
 		t.Fatal("lifecycle projection did not reach the storage barrier")
 	}
 
-	if err := manager.Send(ctx, created.ID, "pane prompt whose hook is lost", nil); err != nil {
+	if err := manager.SendWithOptions(ctx, created.ID, "pane prompt whose hook is lost", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatalf("send pane prompt: %v", err)
 	}
 	afterPane, ok, err := st.GetSession(ctx, created.ID)
@@ -10303,7 +10699,7 @@ func TestSend_ConfirmsAndNudgesUntilActive(t *testing.T) {
 	msg := &flipOnNudgeMessenger{sessionID: "s1", store: st}
 	m := newSendTestManager(t, signalingAgent{}, msg, st)
 
-	if err := m.Send(context.Background(), "s1", "do the thing", nil); err != nil {
+	if err := m.SendWithOptions(context.Background(), "s1", "do the thing", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if len(msg.msgs) != 2 {
@@ -10676,5 +11072,230 @@ func TestKill_TerminatesEvenWhenTeardownBudgetExpires(t *testing.T) {
 	}
 	if !st.sessions["mer-1"].IsTerminated {
 		t.Fatal("session must be marked terminated even though the teardown budget expired")
+	}
+}
+
+func TestSpawn_ArtifactDirWriteFailureRollsBackSeedRowAndDir(t *testing.T) {
+	m, st, _, _ := newManager()
+	dataDir := t.TempDir()
+	m.dataDir = dataDir
+	st.updateSessionErr = errors.New("persist artifact dir failed")
+
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode})
+	if !errors.Is(err, ErrSpawnArtifactDir) {
+		t.Fatalf("spawn = %v, want ErrSpawnArtifactDir", err)
+	}
+	if _, ok := st.sessions["mer-1"]; ok {
+		t.Fatal("seed row survived a failed artifact dir write")
+	}
+	if _, statErr := os.Stat(filepath.Join(dataDir, "artifacts", "mer-1")); !os.IsNotExist(statErr) {
+		t.Fatalf("artifact dir not cleaned up: stat err = %v", statErr)
+	}
+}
+
+func TestSpawn_WorkspaceCreateFailureRemovesReservedArtifactDir(t *testing.T) {
+	m, st, _, ws := newManager()
+	dataDir := t.TempDir()
+	m.dataDir = dataDir
+	ws.createErr = errors.New("create worktree failed")
+
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode})
+	if !errors.Is(err, ErrWorkspaceCreate) {
+		t.Fatalf("spawn = %v, want ErrWorkspaceCreate", err)
+	}
+	if _, ok := st.sessions["mer-1"]; ok {
+		t.Fatal("seed row survived a failed workspace create")
+	}
+	if _, statErr := os.Stat(filepath.Join(dataDir, "artifacts", "mer-1")); !os.IsNotExist(statErr) {
+		t.Fatalf("artifact dir orphaned after workspace create failure: stat err = %v", statErr)
+	}
+}
+
+func TestSpawn_PersistsArtifactDirOnSessionRow(t *testing.T) {
+	m, st, _, _ := newManager()
+	dataDir := t.TempDir()
+	m.dataDir = dataDir
+
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "go"})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	want := filepath.Join(dataDir, "artifacts", string(rec.ID))
+	if got := st.sessions[rec.ID].Metadata.ArtifactDir; got != want {
+		t.Fatalf("persisted ArtifactDir = %q, want %q", got, want)
+	}
+}
+
+func TestSpawn_PreparedSessionPersistsArtifactDir(t *testing.T) {
+	m, st, _, _ := newManager()
+	m.runBackground = func(work func()) { work() }
+	dataDir := t.TempDir()
+	m.dataDir = dataDir
+	token, err := m.PrepareTaskWorkspace(ctx, st.projects["mer"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Prompt: "go", TaskPreparation: token})
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	want := filepath.Join(dataDir, "artifacts", string(rec.ID))
+	if got := st.sessions[rec.ID].Metadata.ArtifactDir; got != want {
+		t.Fatalf("persisted ArtifactDir = %q, want %q", got, want)
+	}
+}
+
+func TestSendAutomationDoesNotRecordHumanDirection(t *testing.T) {
+	for _, sender := range []string{"", "orchestrator-1", "worker-1", "unknown"} {
+		t.Run("sender="+sender, func(t *testing.T) {
+			st := newFakeStore()
+			st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code", Metadata: domain.SessionMetadata{LatestUserPrompt: "human task", LatestUserPromptAt: time.Unix(10, 0)}})
+			messenger := &fakeMessenger{}
+			m := newSendTestManager(t, fakeAgent{}, messenger, st)
+			if err := m.SendWithOptions(context.Background(), "s1", "automation direction", nil, ports.MessageDeliveryOptions{SenderSessionID: sender}); err != nil {
+				t.Fatal(err)
+			}
+			got := st.sessions["s1"].Metadata
+			if got.LatestUserPrompt != "human task" || !got.LatestUserPromptAt.Equal(time.Unix(10, 0)) {
+				t.Fatalf("human facts=%+v", got)
+			}
+			if len(messenger.msgs) != 1 {
+				t.Fatalf("messages=%v", messenger.msgs)
+			}
+			if _, ok := domain.CoordinationDeliveryID(messenger.msgs[0]); !ok {
+				t.Fatal("terminal delivery lacks coordination provenance for hooks")
+			}
+		})
+	}
+}
+
+func TestSendEmptyNudgeDoesNotBecomeCoordinationPrompt(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code"})
+	messenger := &fakeMessenger{}
+	m := newSendTestManager(t, fakeAgent{}, messenger, st)
+	if err := m.Send(context.Background(), "s1", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(messenger.msgs) != 1 || messenger.msgs[0] != "" {
+		t.Fatalf("empty nudge=%v", messenger.msgs)
+	}
+	if !st.sessions["s1"].Metadata.LatestUserPromptAt.IsZero() {
+		t.Fatal("nudge counted as human direction")
+	}
+}
+
+type interactionCountingStore struct {
+	*fakeStore
+	calls int
+}
+
+func (s *interactionCountingStore) RecordSessionInteraction(context.Context, domain.SessionID, string, time.Time) error {
+	s.calls++
+	return nil
+}
+
+func TestSendRecordsInteractionOnlyForDirectTerminalSender(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		chat, human, replay bool
+		sender              string
+		want                int
+	}{
+		{name: "terminal orchestrator", sender: "orchestrator-1", want: 1},
+		{name: "terminal human", human: true},
+		{name: "terminal queued replay", sender: "orchestrator-1", replay: true},
+		{name: "chat orchestrator", sender: "orchestrator-1", chat: true},
+		{name: "chat human", human: true, chat: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			rec := pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code"})
+			if tc.chat {
+				rec.Mode = domain.SessionModeChat
+			}
+			st.sessions["s1"] = rec
+			m := newSendTestManager(t, fakeAgent{}, &fakeMessenger{}, st)
+			counter := &interactionCountingStore{fakeStore: st}
+			m.store = counter
+			m.chat = &recordingLauncher{}
+			key := ""
+			if tc.replay {
+				key = "outbox-1"
+			}
+			if err := m.send(context.Background(), "s1", "direction", key, ports.MessageDeliveryOptions{SenderSessionID: tc.sender, AuthoredByUser: tc.human}); err != nil {
+				t.Fatal(err)
+			}
+			if counter.calls != tc.want {
+				t.Fatalf("interaction writes=%d want=%d", counter.calls, tc.want)
+			}
+		})
+	}
+}
+
+func (f *fakeStore) UpsertSessionCleanupFacts(_ context.Context, rec domain.SessionCleanupRecord) error {
+	f.cleanupMu.Lock()
+	defer f.cleanupMu.Unlock()
+	if f.cleanupFacts == nil {
+		f.cleanupFacts = make(map[domain.SessionID]domain.SessionCleanupRecord)
+	}
+	f.cleanupFacts[rec.SessionID] = rec
+	return nil
+}
+func (f *fakeStore) GetSessionCleanupFacts(_ context.Context, id domain.SessionID) (domain.SessionCleanupRecord, bool, error) {
+	f.cleanupMu.Lock()
+	defer f.cleanupMu.Unlock()
+	rec, ok := f.cleanupFacts[id]
+	return rec, ok, nil
+}
+
+func TestOrchestratorWorkspaceBranchCollision(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		kind         domain.SessionKind
+		explicit     bool
+		wantFallback bool
+	}{
+		{name: "generated orchestrator branch", kind: domain.KindOrchestrator, wantFallback: true},
+		{name: "explicit orchestrator branch", kind: domain.KindOrchestrator, explicit: true},
+		{name: "worker branch", kind: domain.KindWorker},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _, repo := newGitTaskPreparationManager(t)
+			project := st.projects["mer"]
+			branch := "ao/mer-orchestrator"
+			occupied := filepath.Join(t.TempDir(), "occupied")
+			runManagerGit(t, repo, "worktree", "add", "-b", branch, occupied, "main")
+			runManagerGit(t, repo, "branch", branch+"-2", "main")
+			dirtyPath := filepath.Join(occupied, "README.md")
+			if err := os.WriteFile(dirtyPath, []byte("existing agent work\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg := ports.SpawnConfig{ProjectID: "mer", Kind: tc.kind}
+			if tc.explicit {
+				cfg.Branch = branch
+			}
+			ws, _, err := m.createSessionWorkspace(ctx, project, cfg, "mer-1", branch, nil)
+			if tc.wantFallback {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ws.Branch != branch+"-3" || ws.Path == occupied {
+					t.Fatalf("new workspace = %+v", ws)
+				}
+				reused, _, err := m.createSessionWorkspace(ctx, project, cfg, "mer-2", branch, nil)
+				if err != nil || reused.Path != ws.Path || reused.Branch != ws.Branch {
+					t.Fatalf("reuse workspace = %+v, err = %v", reused, err)
+				}
+			} else if !errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) {
+				t.Fatalf("error = %v, want branch conflict", err)
+			}
+			if got := strings.TrimSpace(runManagerGit(t, occupied, "branch", "--show-current")); got != branch {
+				t.Fatalf("occupied branch changed to %q", got)
+			}
+			if content, err := os.ReadFile(dirtyPath); err != nil || string(content) != "existing agent work\n" {
+				t.Fatalf("existing work changed: %q, %v", content, err)
+			}
+		})
 	}
 }

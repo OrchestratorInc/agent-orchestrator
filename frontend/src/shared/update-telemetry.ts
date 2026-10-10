@@ -63,6 +63,11 @@ export function isNetErrorMessage(message: string | undefined): boolean {
  * than a technical dump. A typical electron-updater HttpError (body + headers +
  * stack) is far longer; the hand-written messages the updater broadcasts are
  * comfortably shorter.
+ *
+ * In the renderer this cap now applies to our own status copy as well, since
+ * every status.message goes through it. The longest hand-written line today is
+ * the 242-char "failed verification twice" one, so nothing trips yet, but a
+ * longer hand-written message would quietly render as "Update failed.".
  */
 export const USER_FACING_UPDATE_ERROR_MAX_CHARS = 280;
 

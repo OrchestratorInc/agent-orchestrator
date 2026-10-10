@@ -32,16 +32,17 @@ type darwinPTYConn struct {
 
 const darwinPTYCloseGrace = 500 * time.Millisecond
 
-func newConPTY(cwd, shellCmd string, shellArgs []string) (ptyConn, error) {
+func newConPTY(cwd, shellCmd string, shellArgs []string, cols, rows uint16) (ptyConn, error) {
 	// shellCmd and shellArgs are the runtime launch argv assembled by AO's
 	// trusted agent adapter, not input interpreted by a shell.
+	//nolint:forbidigo // Interactive ConPTY children require direct process control.
 	cmd := exec.Command(shellCmd, shellArgs...) // #nosec G702 -- intentional direct argv execution
 	cmd.Dir = cwd
 	cmd.Env = os.Environ()
 
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{
-		Cols: initialConPTYColumns,
-		Rows: initialConPTYRows,
+		Cols: cols,
+		Rows: rows,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("darwin pty: start command: %w", err)
@@ -86,7 +87,11 @@ func (c *darwinPTYConn) Close() error {
 			default:
 				// The PTY child is a session leader. Signal its process group so
 				// descendants cannot outlive a terminal AO explicitly destroys.
+				// SIGHUP first, as a closing terminal would: an interactive shell
+				// ignores SIGTERM, so without it every close waited out the full
+				// grace before SIGKILL.
 				pgid := c.cmd.Process.Pid
+				_ = syscall.Kill(-pgid, syscall.SIGHUP)
 				_ = syscall.Kill(-pgid, syscall.SIGTERM)
 				if !waitForDarwinProcessGroupExit(pgid, darwinPTYCloseGrace) {
 					_ = syscall.Kill(-pgid, syscall.SIGKILL)

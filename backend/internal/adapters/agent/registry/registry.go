@@ -14,7 +14,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/autohand"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cline"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codewhale"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/commandcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/continueagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/crush"
@@ -35,6 +37,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/omp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openhands"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/qwen"
@@ -71,6 +74,8 @@ func Constructors() []adapters.Adapter {
 		continueagent.New(),
 		devin.New(),
 		omp.New(),
+		codewhale.New(),
+		openhands.New(),
 		cline.New(),
 		kiro.New(),
 		kilocode.New(),
@@ -80,6 +85,7 @@ func Constructors() []adapters.Adapter {
 		primeagent.New(),
 		autohand.New(),
 		fx.New(),
+		commandcode.New(),
 		unrealagent.New(),
 		mimocode.New(),
 		deepseekharness.New(),

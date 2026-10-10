@@ -297,6 +297,34 @@ describe("agent-browser runtime lifecycle", () => {
 		}
 	});
 
+	it("bounds screenshot capture below the default command timeout", async () => {
+		const timeouts: unknown[] = [];
+		const { dataDir, runtime } = await fixture({
+			processRunner: async (...args) => {
+				const command = args[1] as string[];
+				if (command[0] === "screenshot") {
+					timeouts.push(args[4]);
+					await writeFile(
+						command[1],
+						Buffer.from(
+							"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+							"base64",
+						),
+					);
+				}
+				return { stdout: "", stderr: "", exitCode: 0 };
+			},
+		});
+		try {
+			const screenshot = await runtime.screenshot("session-1", provider);
+			expect(screenshot).toMatchObject({ width: 1, height: 1 });
+			expect(timeouts).toEqual([30_000]);
+		} finally {
+			await runtime.dispose();
+			await cleanup(dataDir);
+		}
+	});
+
 	it("runs tab new when streaming is already disabled", async () => {
 		const calls: string[][] = [];
 		const { dataDir, runtime } = await fixture({
@@ -536,6 +564,16 @@ describe("agent-browser structured output", () => {
 			thrown = error;
 		}
 		expect(thrown).toMatchObject({ code: "STALE_REFERENCE", message: "Reference expired" });
+	});
+
+	it("preserves the native wait-timeout distinction for postcondition observation", () => {
+		let thrown: unknown;
+		try {
+			parseAgentBrowserJSON(JSON.stringify({ success: false, error: "Wait timed out after 2500ms" }));
+		} catch (error) {
+			thrown = error;
+		}
+		expect(thrown).toMatchObject({ code: "AGENT_BROWSER_WAIT_TIMEOUT", message: "Wait timed out after 2500ms" });
 	});
 
 	it.each([

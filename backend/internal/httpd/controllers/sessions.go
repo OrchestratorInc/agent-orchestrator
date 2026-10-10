@@ -3,7 +3,9 @@ package controllers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +13,9 @@ import (
 	"io/fs"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"path"
@@ -19,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -30,8 +35,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/workspacewatch"
 )
 
@@ -91,7 +98,7 @@ type SessionService interface {
 	RecoverAgentSwitch(ctx context.Context, id domain.SessionID, switchID domain.AgentSwitchID) (domain.AgentSwitch, error)
 	ListAgentSwitches(ctx context.Context, id domain.SessionID) ([]domain.AgentSwitch, error)
 	SubmitAgentHandoff(ctx context.Context, id domain.SessionID, switchID domain.AgentSwitchID, sourceGenerationID domain.AgentGenerationID, handoff json.RawMessage) (domain.AgentSwitch, error)
-	Kill(ctx context.Context, id domain.SessionID) (bool, error)
+	RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error)
 	RollbackSpawn(ctx context.Context, id domain.SessionID) (sessionsvc.RollbackOutcome, error)
 	Cleanup(ctx context.Context, project domain.ProjectID) (sessionsvc.CleanupOutcome, error)
 	Rename(ctx context.Context, id domain.SessionID, displayName string) error
@@ -109,6 +116,10 @@ type SessionService interface {
 	ClaimPR(ctx context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error)
 	StageAttachments(ctx context.Context, id domain.SessionID, attachments []ports.SpawnAttachment) ([]string, error)
 	WorkspaceWatchPaths(ctx context.Context, id domain.SessionID) ([]string, error)
+	GetWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
+	RefreshWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
+	ReconcileWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
+	GetWorkspaceHistory(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceHistory, error)
 	ListWorkspaceFiles(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFiles, error)
 	GetWorkspaceFile(ctx context.Context, id domain.SessionID, path string, section sessionsvc.WorkspaceFileSection) (sessionsvc.WorkspaceFileDetail, error)
 	GetWorkspaceFileAtCommit(ctx context.Context, id domain.SessionID, path, commitSHA string) (sessionsvc.WorkspaceFileDetail, error)
@@ -145,7 +156,7 @@ type ActivityRecorder interface {
 // ManagedPreviewServer is the deterministic server lifecycle attached to a
 // worker. It is separate from static file rendering and browser automation.
 type ManagedPreviewServer interface {
-	Start(ctx context.Context, sessionID domain.SessionID, workspacePath, configurationName string) (previewserver.Status, error)
+	Start(ctx context.Context, sessionID domain.SessionID, workspacePath, configurationName string, projectEnv map[string]string) (previewserver.Status, error)
 	Stop(ctx context.Context, sessionID domain.SessionID) (previewserver.Status, error)
 	Status(sessionID domain.SessionID) previewserver.Status
 }
@@ -154,6 +165,12 @@ type ManagedPreviewServer interface {
 // into the owning worker session.
 type SessionCapabilityValidator interface {
 	Valid(sessionID domain.SessionID, token, verifier string) bool
+}
+
+// ShellPreviewCapabilityValidator checks the separate, preview-only bearer
+// held by a live session-scoped user shell.
+type ShellPreviewCapabilityValidator interface {
+	ValidPreviewCapability(ctx context.Context, sessionID domain.SessionID, token string) (bool, error)
 }
 
 // UsageHookRecorder consumes transcript metadata from the same native hook
@@ -165,12 +182,18 @@ type UsageHookRecorder interface {
 // SessionsController owns the session routes. Nil keeps routes registered but
 // returns OpenAPI-backed 501s.
 type SessionsController struct {
-	Svc           SessionService
-	Activity      ActivityRecorder
-	Usage         UsageHookRecorder
-	Attachments   *attachmentstore.Store
-	PreviewServer ManagedPreviewServer
-	Capabilities  SessionCapabilityValidator
+	Svc      SessionService
+	Projects interface {
+		Get(context.Context, domain.ProjectID) (projectsvc.GetResult, error)
+	}
+	Activity                 ActivityRecorder
+	NativeSessions           ports.AgentNativeSessionResolver
+	DataDir                  string
+	Usage                    UsageHookRecorder
+	Attachments              *attachmentstore.Store
+	PreviewServer            ManagedPreviewServer
+	Capabilities             SessionCapabilityValidator
+	ShellPreviewCapabilities ShellPreviewCapabilityValidator
 }
 
 // Register mounts the session routes on the supplied router.
@@ -186,7 +209,13 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/preview/server", c.startPreviewServer)
 	r.Delete("/sessions/{sessionId}/preview/server", c.stopPreviewServer)
 	r.Get("/sessions/{sessionId}/preview/files/*", c.previewFile)
+	r.Get("/sessions/{sessionId}/artifact-files/*", c.artifactFile)
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		r.Method(method, "/sessions/{sessionId}/preview/app/*", http.HandlerFunc(c.previewApp))
+	}
 	r.Post("/sessions/{sessionId}/attachments", c.stageAttachments)
+	r.Get("/sessions/{sessionId}/workspace/manifest", c.getWorkspaceManifest)
+	r.Get("/sessions/{sessionId}/workspace/history", c.getWorkspaceHistory)
 	r.Get("/sessions/{sessionId}/workspace/files", c.listWorkspaceFiles)
 	r.Get("/sessions/{sessionId}/workspace/file", c.getWorkspaceFile)
 	r.Put("/sessions/{sessionId}/workspace/file", c.updateWorkspaceFile)
@@ -221,6 +250,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/rollback", c.rollback)
 	r.Post("/sessions/{sessionId}/send", c.send)
 	r.Post("/sessions/{sessionId}/activity", c.activity)
+	r.Post("/sessions/{sessionId}/activity/codewhale", c.codewhaleActivity)
 	r.Post("/sessions/{sessionId}/pin", c.pin)
 	r.Delete("/sessions/{sessionId}/pin", c.unpin)
 	r.Get("/orchestrators", c.listOrchestrators)
@@ -253,7 +283,7 @@ func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, ListSessionsResponse{Sessions: sessionViews(sessions)})
+	envelope.WriteJSON(w, http.StatusOK, ListSessionsResponse{Sessions: sessionViews(r, sessions)})
 }
 
 func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
@@ -269,6 +299,10 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 	var in SpawnSessionRequest
 	if err := decodeJSON(r, &in); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if !validClientRequestID(in.ClientRequestID) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "INVALID_CLIENT_REQUEST_ID", "clientRequestId must be 1-128 visible characters", nil)
 		return
 	}
 	mode, err := domain.ParseSessionMode(string(in.Mode))
@@ -302,12 +336,19 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", attachErr.code, attachErr.message, nil)
 		return
 	}
-	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}})
+	requestHash := ""
+	if in.ClientRequestID != "" {
+		keyless := in
+		keyless.ClientRequestID = ""
+		keyless.Attachments = nil
+		requestHash = clientRequestFingerprint("session", keyless, attachments)
+	}
+	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusCreated, SpawnSessionResponse{Session: sessionView(sess), PromptBytes: promptBytes, SystemPromptBytes: systemPromptBytes})
+	envelope.WriteJSON(w, http.StatusCreated, SpawnSessionResponse{Session: sessionView(r, sess), PromptBytes: promptBytes, SystemPromptBytes: systemPromptBytes})
 }
 
 // attachmentError carries a client-facing API error code + message for a
@@ -427,7 +468,7 @@ func (c *SessionsController) get(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(sess)})
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, sess)})
 }
 
 func (c *SessionsController) preview(w http.ResponseWriter, r *http.Request) {
@@ -464,6 +505,10 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	assetPath := chi.URLParam(r, "*")
+	if r.URL.Query().Get("source") == "artifact" {
+		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
+		return
+	}
 	if name, ok := attachmentstore.NameFromWorkspacePath(assetPath); ok && c.Attachments != nil {
 		file, info, openErr := c.Attachments.Open(r.Context(), sess.ID, name)
 		if openErr == nil {
@@ -472,7 +517,121 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	c.serveWorkspacePreviewFile(w, r, sess.Metadata.WorkspacePath, assetPath)
+	// __ao_artifacts__/ is a reserved marker AO itself prepends when it builds
+	// an artifact preview link (see ArtifactEntryPath), but it was a valid
+	// workspace-relative path before artifact previews existed. A real
+	// workspace file at that exact path must keep winning, so only route to
+	// the artifact directory when no such workspace file actually exists.
+	if rel, ok := previewutil.ArtifactEntryRelative(assetPath); ok {
+		if _, existsInWorkspace := previewutil.EntryAtPath(sess.Metadata.WorkspacePath, assetPath); !existsInWorkspace {
+			c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, rel)
+			return
+		}
+	}
+	c.serveRootedPreviewFile(w, r, sess.Metadata.WorkspacePath, assetPath)
+}
+
+// previewApp reaches only the running, session-owned managed preview process.
+// The selected URL comes from the manager, never from a caller-supplied port.
+func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil || c.PreviewServer == nil {
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_NOT_FOUND", "Preview not found", nil)
+		return
+	}
+	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	status := c.PreviewServer.Status(sess.ID)
+	target, err := url.Parse(status.URL)
+	if err != nil || status.State != previewserver.StateReady || status.TargetKind != previewserver.TargetApp ||
+		status.URL != sess.Metadata.PreviewURL || target == nil || target.Scheme != "http" ||
+		!isPreviewLoopback(target.Hostname()) || target.User != nil || target.Port() == "" ||
+		strconv.Itoa(status.Port) != target.Port() || sess.IsTerminated {
+		w.Header().Set("X-AO-Preview-Managed-Required", "1")
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "PREVIEW_MANAGED_REQUIRED", "Run ao preview start in this session to open a remote live preview", nil)
+		return
+	}
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(req *httputil.ProxyRequest) {
+			appAuthorization := req.Out.Header.Get("X-AO-Preview-App-Authorization")
+			hadPreviewOrigin := req.Out.Header.Get("X-AO-Preview-App-Origin") != ""
+			req.SetURL(target)
+			req.Out.Host = target.Host
+			req.Out.URL.Path = "/" + strings.TrimPrefix(chi.URLParam(r, "*"), "/")
+			req.Out.URL.RawPath = ""
+			req.Out.URL.RawQuery = req.In.URL.RawQuery
+			// AO credentials authenticate the tunnel, not the agent-run web app.
+			req.Out.Header.Del("Authorization")
+			req.Out.Header.Del("Proxy-Authorization")
+			req.Out.Header.Del("X-AO-Preview-App-Authorization")
+			req.Out.Header.Del("X-AO-Preview-App-Origin")
+			req.Out.Header.Del("Origin")
+			if appAuthorization != "" {
+				req.Out.Header.Set("Authorization", appAuthorization)
+			}
+			if hadPreviewOrigin {
+				req.Out.Header.Set("Origin", target.Scheme+"://"+target.Host)
+			}
+			req.Out.Header.Del(browserCapabilityHeader)
+			cookies := req.Out.Cookies()
+			req.Out.Header.Del("Cookie")
+			for _, cookie := range cookies {
+				if cookie.Name != "ao_conn" {
+					req.Out.AddCookie(cookie)
+				}
+			}
+		},
+		ModifyResponse: func(res *http.Response) error {
+			if location := res.Header.Get("Location"); location != "" {
+				if redirect, parseErr := url.Parse(location); parseErr == nil && redirect.IsAbs() && isPreviewLoopback(redirect.Hostname()) {
+					if redirect.Port() != target.Port() {
+						return errors.New("preview redirect to another local port")
+					}
+					res.Header.Set("Location", redirect.RequestURI())
+				}
+			}
+			return nil
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
+			http.Error(w, "Preview target unavailable or redirected to another local port", http.StatusBadGateway)
+		},
+	}
+	proxy.ServeHTTP(w, r)
+}
+
+// inlineArtifactOrigin serves the session's artifact directory on its inline
+// origin, the one the chat thread frames an HTML artifact from: the request
+// path is the artifact path, files only, read-only, in the inline sandbox.
+func (c *SessionsController) inlineArtifactOrigin(w http.ResponseWriter, r *http.Request, id domain.SessionID) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		envelope.WriteAPIError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "METHOD_NOT_ALLOWED",
+			r.Method+" not allowed on an artifact origin", nil)
+		return
+	}
+	if c.Svc == nil {
+		writeArtifactFileNotFound(w, r)
+		return
+	}
+	// The session read fills in the default artifact directory for a row
+	// stored without one.
+	sess, err := c.Svc.Get(r.Context(), id)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	asset := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+	serveArtifactFile(w, r, inlineArtifactContentSecurityPolicy, sess.Metadata.ArtifactDir, asset)
+}
+
+func isPreviewLoopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // PreviewOrigin serves a workspace preview from its isolated *.localhost
@@ -484,9 +643,17 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 // /assets/app.css maps to dist/assets/app.css. This mirrors a production static
 // server and fixes root-relative URLs without rewriting user-generated files.
 func (c *SessionsController) PreviewOrigin(w http.ResponseWriter, r *http.Request) bool {
-	id, ok := previewutil.SessionIDFromHost(r.Host)
-	if !ok {
-		return false
+	if id, ok := previewutil.SessionIDFromInlineArtifactHost(r.Host); ok {
+		c.inlineArtifactOrigin(w, r, id)
+		return true
+	}
+	id, artifactOrigin := previewutil.SessionIDFromArtifactHost(r.Host)
+	if !artifactOrigin {
+		var ok bool
+		id, ok = previewutil.SessionIDFromHost(r.Host)
+		if !ok {
+			return false
+		}
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
@@ -503,23 +670,74 @@ func (c *SessionsController) PreviewOrigin(w http.ResponseWriter, r *http.Reques
 		envelope.WriteError(w, r, err)
 		return true
 	}
-	entry, ok := previewOriginEntry(sess)
+	if artifactOrigin {
+		// The host alone declares scope on this origin, so the request path
+		// is served verbatim from ArtifactDir: there is no marker to strip
+		// and nothing a real workspace path could collide with.
+		asset := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, asset)
+		return true
+	}
+	entry, ok := previewOriginEntry(sess, r.URL.Path)
 	if !ok {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "NO_PREVIEW_ENTRY", "No preview entry point found in session workspace", nil)
 		return true
 	}
-	asset := previewOriginAssetPath(entry, r.URL.Path)
-	c.serveWorkspacePreviewFile(w, r, sess.Metadata.WorkspacePath, asset)
+	switch entry.Scope {
+	case previewutil.StoredEntryScopeArtifact:
+		asset := previewOriginArtifactAssetPath(entry.Path, r.URL.Path)
+		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, asset)
+	default:
+		asset := previewOriginAssetPath(entry.Path, r.URL.Path)
+		c.serveRootedPreviewFile(w, r, sess.Metadata.WorkspacePath, asset)
+	}
 	return true
 }
 
-func previewOriginEntry(sess domain.Session) (string, bool) {
-	if entry, ok := previewutil.StoredWorkspaceEntry(sess.Metadata.PreviewURL, sess.ID); ok {
-		if stored, exists := previewutil.EntryAtPath(sess.Metadata.WorkspacePath, entry); exists {
-			return stored.Path, true
+func previewOriginEntry(sess domain.Session, requestPath string) (previewutil.StoredEntry, bool) {
+	requested := strings.TrimPrefix(path.Clean("/"+requestPath), "/")
+	if rel, ok := previewutil.ArtifactEntryRelative(requested); ok {
+		// __ao_artifacts__/ is a reserved marker AO itself prepends when it
+		// builds an artifact preview link (see ArtifactEntryPath), but it was
+		// a valid workspace-relative path before artifact previews existed.
+		// A real workspace file at that exact literal request path must keep
+		// winning over the artifact directory, mirroring the same collision
+		// guard below for the stored-PreviewURL path and previewFile's guard
+		// for the legacy /preview/files route.
+		if _, existsInWorkspace := previewutil.EntryAtPath(sess.Metadata.WorkspacePath, requested); existsInWorkspace {
+			return previewutil.StoredEntry{Scope: previewutil.StoredEntryScopeWorkspace, Path: requested}, true
+		}
+		if _, exists := previewutil.EntryAtPath(sess.Metadata.ArtifactDir, rel); exists {
+			return previewutil.StoredEntry{Scope: previewutil.StoredEntryScopeArtifact, Path: rel}, true
 		}
 	}
-	return discoverPreviewEntry(sess.Metadata.WorkspacePath)
+	if entry, ok := previewutil.StoredEntryFromPreview(sess.Metadata.PreviewURL, sess.ID); ok {
+		switch entry.Scope {
+		case previewutil.StoredEntryScopeArtifact:
+			// __ao_artifacts__/ is a reserved marker AO itself prepends when
+			// it builds an artifact preview link, but it was a valid
+			// workspace-relative path before artifact previews existed. A
+			// real workspace file at that exact literal path must keep
+			// winning over the artifact directory, mirroring previewFile's
+			// same collision guard for the legacy /preview/files route.
+			if literal, ok := previewutil.ArtifactEntryPath(entry.Path); ok {
+				if _, existsInWorkspace := previewutil.EntryAtPath(sess.Metadata.WorkspacePath, literal); existsInWorkspace {
+					return previewutil.StoredEntry{Scope: previewutil.StoredEntryScopeWorkspace, Path: literal}, true
+				}
+			}
+			if _, exists := previewutil.EntryAtPath(sess.Metadata.ArtifactDir, entry.Path); exists {
+				return entry, true
+			}
+		default:
+			if _, exists := previewutil.EntryAtPath(sess.Metadata.WorkspacePath, entry.Path); exists {
+				return entry, true
+			}
+		}
+	}
+	if entry, ok := discoverPreviewEntry(sess.Metadata.WorkspacePath); ok {
+		return previewutil.StoredEntry{Scope: previewutil.StoredEntryScopeWorkspace, Path: entry}, true
+	}
+	return previewutil.StoredEntry{}, false
 }
 
 func previewOriginAssetPath(entry, requestPath string) string {
@@ -538,11 +756,19 @@ func previewOriginAssetPath(entry, requestPath string) string {
 	return path.Join(root, requested)
 }
 
+func previewOriginArtifactAssetPath(entry, requestPath string) string {
+	requested := strings.TrimPrefix(path.Clean("/"+requestPath), "/")
+	if rel, ok := previewutil.ArtifactEntryRelative(requested); ok {
+		return previewOriginAssetPath(entry, rel)
+	}
+	return previewOriginAssetPath(entry, requestPath)
+}
+
 // serveWorkspacePreviewFile is the single serving path for both the legacy API
 // route and isolated preview origins. OpenRoot keeps symlink traversal and the
 // subsequent read on the same workspace-confined file handle.
-func (c *SessionsController) serveWorkspacePreviewFile(w http.ResponseWriter, r *http.Request, workspacePath, assetPath string) {
-	file, info, clean, err := previewutil.OpenWorkspaceFile(workspacePath, assetPath)
+func (c *SessionsController) serveRootedPreviewFile(w http.ResponseWriter, r *http.Request, rootPath, assetPath string) {
+	file, info, clean, err := previewutil.OpenWorkspaceFile(rootPath, assetPath)
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_FILE_NOT_FOUND", "Preview file not found", nil)
 		return
@@ -552,7 +778,7 @@ func (c *SessionsController) serveWorkspacePreviewFile(w http.ResponseWriter, r 
 }
 
 func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.File, info fs.FileInfo, clean string) {
-	if !previewutil.IsMarkdownPath(clean) {
+	if !previewutil.IsMarkdownPath(clean) || previewRawRequested(r) {
 		http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 		return
 	}
@@ -573,6 +799,15 @@ func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.Fil
 	}
 }
 
+func previewRawRequested(r *http.Request) bool {
+	raw := r.URL.Query().Get("raw")
+	if raw == "" {
+		return false
+	}
+	enabled, err := strconv.ParseBool(raw)
+	return err == nil && enabled
+}
+
 func (c *SessionsController) listWorkspaceFiles(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/files")
@@ -584,6 +819,32 @@ func (c *SessionsController) listWorkspaceFiles(w http.ResponseWriter, r *http.R
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, workspaceFilesResponse(files))
+}
+
+func (c *SessionsController) getWorkspaceManifest(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/manifest")
+		return
+	}
+	manifest, err := c.Svc.GetWorkspaceManifest(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, workspaceManifestResponse(manifest))
+}
+
+func (c *SessionsController) getWorkspaceHistory(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/history")
+		return
+	}
+	history, err := c.Svc.GetWorkspaceHistory(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, workspaceHistoryResponse(history))
 }
 
 func (c *SessionsController) getWorkspaceFile(w http.ResponseWriter, r *http.Request) {
@@ -856,6 +1117,11 @@ func (c *SessionsController) getWorkspaceFileBlob(w http.ResponseWriter, r *http
 	_, _ = w.Write(blob.Data)
 }
 
+// branchStateReconciler refreshes a session's persisted branch facts.
+type branchStateReconciler interface {
+	ReconcileSessionBranchState(ctx context.Context, id domain.SessionID) error
+}
+
 func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/events")
@@ -876,6 +1142,13 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 		envelope.WriteError(w, r, err)
 		return
 	}
+	// The watcher cannot report edits made before it existed. Reconcile both
+	// workspace caches after the watch is installed and before telling the client
+	// it can stop fallback polling.
+	if _, err := c.Svc.ReconcileWorkspaceManifest(r.Context(), sessionID(r)); err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
 
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream; charset=utf-8")
@@ -883,6 +1156,9 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 	h.Set("Connection", "keep-alive")
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
+	if _, err := fmt.Fprint(w, "event: ready\ndata: {}\n\n"); err != nil {
+		return
+	}
 	flusher.Flush()
 
 	keepAlive := time.NewTicker(15 * time.Second)
@@ -897,19 +1173,34 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 			}
 			c.Svc.InvalidateWorkspaceCache(sessionID(r))
 			payload := struct {
+				Kind             string `json:"kind"`
 				WorkspaceVersion string `json:"workspaceVersion,omitempty"`
+				Refreshing       bool   `json:"refreshing"`
 				Overflow         bool   `json:"overflow"`
-			}{Overflow: true}
-			if files, listErr := c.Svc.ListWorkspaceFiles(r.Context(), sessionID(r)); listErr == nil {
-				payload.WorkspaceVersion = files.WorkspaceVersion
-			}
+			}{Kind: "dirty", Refreshing: true, Overflow: true}
 			data, _ := json.Marshal(payload)
 			if _, err := fmt.Fprintf(w, "event: workspace_changed\ndata: %s\n\n", data); err != nil {
 				return
 			}
 			flusher.Flush()
+			if manifest, refreshErr := c.Svc.RefreshWorkspaceManifest(r.Context(), sessionID(r)); refreshErr == nil {
+				payload.Kind = "version"
+				payload.WorkspaceVersion = manifest.WorkspaceVersion
+				payload.Refreshing = false
+				data, _ = json.Marshal(payload)
+				if _, err := fmt.Fprintf(w, "event: workspace_changed\ndata: %s\n\n", data); err != nil {
+					return
+				}
+				flusher.Flush()
+			}
+			// The same watch sees commits and pushes. Branch facts refresh after
+			// the file list so a commit never delays it, and their change
+			// streams to every client as session_updated.
+			if reconciler, ok := c.Svc.(branchStateReconciler); ok {
+				_ = reconciler.ReconcileSessionBranchState(r.Context(), sessionID(r))
+			}
 		case <-keepAlive.C:
-			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+			if _, err := fmt.Fprint(w, "event: heartbeat\ndata: {}\n\n"); err != nil {
 				return
 			}
 			flusher.Flush()
@@ -987,7 +1278,7 @@ func (c *SessionsController) setPreview(w http.ResponseWriter, r *http.Request) 
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(updated)})
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, updated)})
 }
 
 // clearPreview resets a session's browser preview to empty (`ao preview
@@ -1005,7 +1296,7 @@ func (c *SessionsController) clearPreview(w http.ResponseWriter, r *http.Request
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(updated)})
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, updated)})
 }
 
 func (c *SessionsController) previewServerStatus(w http.ResponseWriter, r *http.Request) {
@@ -1037,12 +1328,24 @@ func (c *SessionsController) startPreviewServer(w http.ResponseWriter, r *http.R
 		envelope.WriteError(w, r, err)
 		return
 	}
+	var projectEnv map[string]string
+	if sess.ProjectID != "" && c.Projects != nil {
+		project, err := c.Projects.Get(r.Context(), sess.ProjectID)
+		if err != nil {
+			envelope.WriteError(w, r, err)
+			return
+		}
+		if project.Project != nil && project.Project.Config != nil {
+			projectEnv = project.Project.Config.Env
+		}
+	}
 	previous := c.PreviewServer.Status(sessionID(r))
 	status, err := c.PreviewServer.Start(
 		r.Context(),
 		sessionID(r),
 		sess.Metadata.WorkspacePath,
 		strings.TrimSpace(in.Configuration),
+		projectEnv,
 	)
 	if err != nil {
 		currentStatus := c.PreviewServer.Status(sessionID(r))
@@ -1107,23 +1410,35 @@ func (c *SessionsController) authorizePreviewServer(w http.ResponseWriter, r *ht
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "SESSION_TERMINATED", "Session is terminated", nil)
 		return false
 	}
-	if !c.Capabilities.Valid(
+	if c.Capabilities.Valid(
 		id,
 		strings.TrimSpace(r.Header.Get(browserCapabilityHeader)),
 		sess.Metadata.BrowserCapabilityVerifier,
 	) {
-		envelope.WriteAPIError(
-			w,
-			r,
-			http.StatusForbidden,
-			"forbidden",
-			"PREVIEW_CAPABILITY_INVALID",
-			"Preview capability is invalid",
-			nil,
-		)
-		return false
+		return true
 	}
-	return true
+	if c.ShellPreviewCapabilities != nil {
+		valid, err := c.ShellPreviewCapabilities.ValidPreviewCapability(
+			r.Context(), id, strings.TrimSpace(r.Header.Get("X-AO-Preview-Capability")),
+		)
+		if err != nil {
+			envelope.WriteError(w, r, err)
+			return false
+		}
+		if valid {
+			return true
+		}
+	}
+	envelope.WriteAPIError(
+		w,
+		r,
+		http.StatusForbidden,
+		"forbidden",
+		"PREVIEW_CAPABILITY_INVALID",
+		"Preview capability is invalid",
+		nil,
+	)
+	return false
 }
 
 func previewServerStatusResponse(status previewserver.Status) PreviewServerStatusResponse {
@@ -1260,7 +1575,7 @@ func (c *SessionsController) setMergePolicy(w http.ResponseWriter, r *http.Reque
 		OK:                 true,
 		SessionID:          sessionID(r),
 		TerminateOnPRMerge: in.TerminateOnPRMerge,
-		Session:            sessionView(sess),
+		Session:            sessionView(r, sess),
 	})
 }
 
@@ -1283,7 +1598,7 @@ func (c *SessionsController) setAutoInjectReviewPolicy(w http.ResponseWriter, r 
 		OK:               true,
 		SessionID:        sessionID(r),
 		AutoInjectReview: in.AutoInjectReview,
-		Session:          sessionView(sess),
+		Session:          sessionView(r, sess),
 	})
 }
 
@@ -1317,7 +1632,7 @@ func (c *SessionsController) setAutoInjectCIPolicy(w http.ResponseWriter, r *htt
 		OK:           true,
 		SessionID:    sessionID(r),
 		AutoInjectCI: autoInjectCI,
-		Session:      sessionView(sess),
+		Session:      sessionView(r, sess),
 	})
 }
 
@@ -1336,7 +1651,7 @@ func (c *SessionsController) setReviewer(w http.ResponseWriter, r *http.Request)
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(sess)})
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, sess)})
 }
 
 func (c *SessionsController) setAutoReview(w http.ResponseWriter, r *http.Request) {
@@ -1358,7 +1673,7 @@ func (c *SessionsController) setAutoReview(w http.ResponseWriter, r *http.Reques
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(sess)})
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, sess)})
 }
 
 func (c *SessionsController) restore(w http.ResponseWriter, r *http.Request) {
@@ -1371,7 +1686,7 @@ func (c *SessionsController) restore(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, RestoreSessionResponse{OK: true, SessionID: sessionID(r), RestoreMode: out.Mode, Session: sessionView(out.Session)})
+	envelope.WriteJSON(w, http.StatusOK, RestoreSessionResponse{OK: true, SessionID: sessionID(r), RestoreMode: out.Mode, Session: sessionView(r, out.Session)})
 }
 
 func (c *SessionsController) pin(w http.ResponseWriter, r *http.Request) {
@@ -1384,7 +1699,7 @@ func (c *SessionsController) pin(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(sess)})
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, sess)})
 }
 
 func (c *SessionsController) unpin(w http.ResponseWriter, r *http.Request) {
@@ -1397,7 +1712,7 @@ func (c *SessionsController) unpin(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(sess)})
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, sess)})
 }
 
 func (c *SessionsController) resumeAgent(w http.ResponseWriter, r *http.Request) {
@@ -1414,7 +1729,7 @@ func (c *SessionsController) resumeAgent(w http.ResponseWriter, r *http.Request)
 		OK:         true,
 		SessionID:  sessionID(r),
 		ResumeMode: out.Mode,
-		Session:    sessionView(out.Session),
+		Session:    sessionView(r, out.Session),
 	})
 }
 
@@ -1431,7 +1746,7 @@ func (c *SessionsController) exitAgent(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, ExitAgentResponse{
 		OK:        true,
 		SessionID: sessionID(r),
-		Session:   sessionView(out.Session),
+		Session:   sessionView(r, out.Session),
 	})
 }
 
@@ -1537,12 +1852,12 @@ func (c *SessionsController) kill(w http.ResponseWriter, r *http.Request) {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/kill")
 		return
 	}
-	freed, err := c.Svc.Kill(r.Context(), sessionID(r))
+	result, err := c.Svc.RequestKill(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, KillSessionResponse{OK: true, SessionID: sessionID(r), Freed: freed})
+	envelope.WriteJSON(w, http.StatusOK, KillSessionResponse{OK: true, SessionID: sessionID(r), Freed: result.Freed, CleanupPending: result.CleanupPending})
 }
 
 // rollback undoes a partially-completed spawn: if the session row is still in
@@ -1613,13 +1928,13 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	}
 	message := domain.SanitizeControlChars(in.Message)
 	var err error
-	if in.UserAuthored {
+	if in.UserAuthored || in.SenderSessionID != "" {
 		sender, ok := c.Svc.(sessionMessageOptionsSender)
 		if !ok {
 			apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/send")
 			return
 		}
-		err = sender.SendWithOptions(r.Context(), sessionID(r), message, attachment, ports.MessageDeliveryOptions{AuthoredByUser: true})
+		err = sender.SendWithOptions(r.Context(), sessionID(r), message, attachment, ports.MessageDeliveryOptions{AuthoredByUser: in.UserAuthored, SenderSessionID: in.SenderSessionID})
 	} else {
 		err = c.Svc.Send(r.Context(), sessionID(r), message, attachment)
 	}
@@ -1639,6 +1954,10 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 	var in DelegateTaskRequest
 	if err := decodeJSON(r, &in); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if !validClientRequestID(in.ClientRequestID) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "INVALID_CLIENT_REQUEST_ID", "clientRequestId must be 1-128 visible characters", nil)
 		return
 	}
 	if in.ProjectID == "" {
@@ -1670,23 +1989,50 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", attachErr.code, attachErr.message, nil)
 		return
 	}
+	requestHash := ""
+	if in.ClientRequestID != "" {
+		keyless := in
+		keyless.ClientRequestID = ""
+		keyless.TaskPreparation = ""
+		keyless.Attachments = nil
+		requestHash = clientRequestFingerprint("delegate", keyless, attachments)
+	}
 
 	out, err := c.Svc.DelegateTask(r.Context(), sessionsvc.DelegateTaskInput{
-		ProjectID:       in.ProjectID,
-		Brief:           domain.SanitizeControlChars(in.Brief),
-		RequestedAgent:  in.Agent,
-		Model:           domain.SanitizeControlChars(strings.TrimSpace(in.Model)),
-		Effort:          sanitizedOptionalString(in.Effort),
-		ApprovalMode:    in.ApprovalMode,
-		RequestedMode:   in.Mode,
-		Attachments:     attachments,
-		TaskPreparation: domain.TaskPreparationToken(strings.TrimSpace(in.TaskPreparation)),
+		ClientRequestID:   in.ClientRequestID,
+		ClientRequestHash: requestHash,
+		ProjectID:         in.ProjectID,
+		Brief:             domain.SanitizeControlChars(in.Brief),
+		RequestedAgent:    in.Agent,
+		Model:             domain.SanitizeControlChars(strings.TrimSpace(in.Model)),
+		Effort:            sanitizedOptionalString(in.Effort),
+		ApprovalMode:      in.ApprovalMode,
+		RequestedMode:     in.Mode,
+		Attachments:       attachments,
+		TaskPreparation:   domain.TaskPreparationToken(strings.TrimSpace(in.TaskPreparation)),
 	})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusAccepted, DelegateTaskResponse{OK: true, WorkerID: out.WorkerID, OrchestratorID: out.OrchestratorID})
+}
+
+func validClientRequestID(id string) bool {
+	return id == "" || len(id) <= maxIdempotencyKey && strings.TrimSpace(id) == id && strings.IndexFunc(id, unicode.IsControl) < 0
+}
+
+func clientRequestFingerprint(route string, request any, attachments []ports.SpawnAttachment) string {
+	h := sha256.New()
+	_ = json.NewEncoder(h).Encode(struct {
+		Route   string
+		Request any
+	}{route, request})
+	for _, attachment := range attachments {
+		_, _ = fmt.Fprintf(h, "%d:%s:%d:", len(attachment.Ext), attachment.Ext, len(attachment.Data))
+		_, _ = h.Write(attachment.Data)
+	}
+	return "v1:" + hex.EncodeToString(h.Sum(nil))
 }
 
 func (c *SessionsController) prepareTask(w http.ResponseWriter, r *http.Request) {
@@ -1751,8 +2097,8 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_CONVERSATION_CHECKPOINT_ORIGIN", "Conversation checkpoint origin must be human or coordination", nil)
 		return
 	}
-	if state == "" && agentSessionID == "" && in.Usage == nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ACTIVITY_OR_SESSION_ID_REQUIRED", "Activity state or agent session ID is required", nil)
+	if state == "" && agentSessionID == "" && in.Usage == nil && in.SubagentID == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ACTIVITY_OR_SESSION_ID_REQUIRED", "Activity state, agent session ID, or subagent ID is required", nil)
 		return
 	}
 	// The correlation fields ride the same lenient decode: absent on old CLIs.
@@ -1767,6 +2113,7 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		Event:                        capActivityMeta(domain.SanitizeControlChars(in.Event)),
 		ToolName:                     capActivityMeta(domain.SanitizeControlChars(in.ToolName)),
 		ToolUseID:                    capActivityMeta(domain.SanitizeControlChars(in.ToolUseID)),
+		SubagentID:                   capActivityMeta(domain.SanitizeControlChars(in.SubagentID)),
 		AgentSessionID:               agentSessionID,
 		LatestUserPrompt:             capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.LatestUserPrompt)), 16<<10),
 		LatestAssistantUpdate:        capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.LatestAssistantUpdate)), 16<<10),
@@ -1777,8 +2124,22 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		TranscriptPath:               capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.TranscriptPath)), 4096),
 		LaunchID:                     capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.LaunchID))),
 	}
+	if in.RunningSubagentIDs != nil && len(*in.RunningSubagentIDs) <= 128 {
+		running := make([]string, 0, len(*in.RunningSubagentIDs))
+		for _, id := range *in.RunningSubagentIDs {
+			clean := capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(id)))
+			if clean == "" {
+				running = nil
+				break
+			}
+			running = append(running, clean)
+		}
+		if running != nil {
+			sig.RunningSubagentIDs = &running
+		}
+	}
 	var activityErr error
-	if c.Activity != nil && (sig.Valid || sig.AgentSessionID != "") {
+	if c.Activity != nil && (sig.Valid || sig.AgentSessionID != "" || sig.SubagentID != "") {
 		activityErr = c.Activity.ApplyActivitySignal(r.Context(), sessionID(r), sig)
 		if err := activityErr; err != nil && !errors.Is(err, ports.ErrActivityProjectionContention) {
 			if errors.Is(err, ports.ErrSessionNotFound) {
@@ -1824,6 +2185,101 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, SetActivityResponse{OK: true, SessionID: sessionID(r), State: in.State})
+}
+
+// codewhaleActivity translates Codewhale's v0.10 lifecycle outbox webhook into
+// AO's provider-neutral activity signal. The launch id lives in the callback
+// URL because Codewhale's event envelope has no supervisor-generation field.
+func (c *SessionsController) codewhaleActivity(w http.ResponseWriter, r *http.Request) {
+	if c.Activity == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/activity/codewhale")
+		return
+	}
+	launchID := capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(r.URL.Query().Get("launchId"))))
+	if launchID == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "LAUNCH_ID_REQUIRED", "Codewhale lifecycle callbacks require a launchId", nil)
+		return
+	}
+	var in CodewhaleLifecycleWebhookRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if in.Event.SchemaVersion != 1 {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "UNSUPPORTED_CODEWHALE_LIFECYCLE_SCHEMA", "Unsupported Codewhale lifecycle schema", nil)
+		return
+	}
+
+	hookThreadID := capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.Event.ThreadID)))
+	if hookThreadID == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "CODEWHALE_THREAD_ID_REQUIRED", "Codewhale lifecycle callbacks require a thread_id", nil)
+		return
+	}
+	signal := ports.ActivitySignal{
+		Timestamp:      in.Event.Timestamp,
+		Event:          capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.Event.Event))),
+		ProviderTurnID: capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.Event.TurnID))),
+		LaunchID:       launchID,
+	}
+	if signal.Timestamp.IsZero() {
+		signal.Timestamp = in.At
+	}
+	switch strings.TrimSpace(in.Event.Kind) {
+	case "session.started":
+		signal.Event = "session-start"
+	case "turn.started":
+		signal.Valid = true
+		signal.State = domain.ActivityActive
+		signal.Event = "user-prompt-submit"
+	case "turn.completed", "turn.failed", "turn.interrupted", "turn.stalled":
+		signal.Valid = true
+		signal.State = domain.ActivityWaitingInput
+		signal.Event = "stop"
+	case "session.ended":
+		signal.Valid = true
+		signal.State = domain.ActivityExited
+		signal.Event = "session-end"
+	case "subagent.spawned", "subagent.completed":
+		// Provider-internal subagents remain opaque activity inside this AO
+		// session until AO has a provider-neutral nested-session model.
+		envelope.WriteJSON(w, http.StatusOK, SetActivityResponse{OK: true, SessionID: sessionID(r)})
+		return
+	default:
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "UNKNOWN_CODEWHALE_LIFECYCLE_EVENT", "Unknown Codewhale lifecycle event", nil)
+		return
+	}
+	// Codewhale's thread_id is a per-process HookExecutor id (sess_*), not the
+	// durable UUID accepted by --resume. Terminal turn/session events run after
+	// Codewhale saves the conversation, so resolve that UUID from the launch's
+	// isolated Runtime store before lifecycle persists a native resume handle.
+	if c.NativeSessions != nil && (signal.Event == "stop" || signal.Event == "session-end") {
+		nativeID, ok, err := c.NativeSessions.ResolveNativeSessionID(r.Context(), ports.NativeSessionResolveConfig{
+			DataDir:   c.DataDir,
+			SessionID: sessionID(r),
+			LaunchID:  launchID,
+		})
+		if err != nil {
+			envelope.WriteError(w, r, err)
+			return
+		}
+		if ok {
+			signal.AgentSessionID = capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(nativeID)))
+		}
+	}
+	if err := c.Activity.ApplyActivitySignal(r.Context(), sessionID(r), signal); err != nil {
+		if errors.Is(err, ports.ErrActivityProjectionContention) {
+			w.Header().Set("Retry-After", "1")
+			envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "ACTIVITY_PROJECTION_BUSY", "Concurrent session updates prevented this activity signal from committing", nil)
+			return
+		}
+		if errors.Is(err, ports.ErrSessionNotFound) {
+			envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "SESSION_NOT_FOUND", "Unknown session", nil)
+			return
+		}
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, SetActivityResponse{OK: true, SessionID: sessionID(r), State: string(signal.State)})
 }
 
 // capActivityMeta bounds an optional activity correlation string; overlong
@@ -1902,7 +2358,7 @@ func (c *SessionsController) listOrchestrators(w http.ResponseWriter, r *http.Re
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, ListSessionsResponse{Sessions: sessionViews(sessions)})
+	envelope.WriteJSON(w, http.StatusOK, ListSessionsResponse{Sessions: sessionViews(r, sessions)})
 }
 
 func (c *SessionsController) getOrchestrator(w http.ResponseWriter, r *http.Request) {
@@ -1919,7 +2375,7 @@ func (c *SessionsController) getOrchestrator(w http.ResponseWriter, r *http.Requ
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "SESSION_NOT_FOUND", "Unknown session", nil)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(sess)})
+	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, sess)})
 }
 
 func sessionID(r *http.Request) domain.SessionID {
@@ -2151,7 +2607,7 @@ func previewFileURL(r *http.Request, id domain.SessionID, entry string) (string,
 	return previewutil.FileURL("http://"+r.Host, id, entry)
 }
 
-func sessionView(s domain.Session) SessionView {
+func sessionView(r *http.Request, s domain.Session) SessionView {
 	terminalGeneration := s.Metadata.RuntimeLaunchID
 	view := SessionView{
 		Session:            s,
@@ -2167,7 +2623,19 @@ func sessionView(s domain.Session) SessionView {
 			at := s.Metadata.LatestUserPromptAt
 			return &at
 		}(),
-		PRs: sessionPRFacts(s.PRs),
+		LastInteractionAt: func() *time.Time {
+			at := s.Metadata.LatestUserPromptAt
+			if s.Metadata.LatestInteractionAt.After(at) {
+				at = s.Metadata.LatestInteractionAt
+			}
+			if at.IsZero() {
+				return nil
+			}
+			return &at
+		}(),
+		LastEventAt:   s.LastEventAt(),
+		PRs:           sessionPRFacts(s.PRs),
+		ArtifactFiles: sessionArtifactFiles(r, s),
 	}
 	if s.ActiveAgentSwitch != nil {
 		active := agentSwitchView(*s.ActiveAgentSwitch)
@@ -2201,12 +2669,58 @@ func agentSwitchViews(switches []domain.AgentSwitch) []AgentSwitchView {
 	return out
 }
 
-func sessionViews(sessions []domain.Session) []SessionView {
+func sessionViews(r *http.Request, sessions []domain.Session) []SessionView {
 	out := make([]SessionView, 0, len(sessions))
 	for _, s := range sessions {
-		out = append(out, sessionView(s))
+		out = append(out, sessionView(r, s))
 	}
 	return out
+}
+
+func sessionArtifactFiles(r *http.Request, s domain.Session) []SessionArtifactView {
+	out := make([]SessionArtifactView, 0, len(s.ArtifactFiles))
+	for _, artifact := range s.ArtifactFiles {
+		view := SessionArtifactView{
+			Path:      artifact.Path,
+			Name:      artifact.Name,
+			Kind:      artifact.Kind,
+			Size:      artifact.Size,
+			UpdatedAt: artifact.UpdatedAt,
+		}
+		// A distinct host (not a shared path-prefix marker) gives every
+		// artifact link an unambiguous source identity: it can never collide
+		// with a real workspace file, unlike the legacy __ao_artifacts__/
+		// path-prefix form previewFile/previewOriginEntry still accept for
+		// backward compatibility.
+		if rawURL, ok := artifactRawURL(r, s.ID, artifact.Path); ok {
+			view.RawURL = rawURL
+		}
+		if artifact.Kind == domain.SessionArtifactHTML {
+			view.PreviewURL, _ = previewutil.ArtifactFileURL("http://"+r.Host, s.ID, artifact.Path)
+			view.InlineURL, _ = previewutil.InlineArtifactFileURL("http://"+r.Host, s.ID, artifact.Path)
+		}
+		out = append(out, view)
+	}
+	return out
+}
+
+// artifactRawURL builds the raw-bytes fetch URL for one artifact file on the
+// artifact preview origin, with ?raw=true so a markdown artifact returns its
+// source text rather than server-rendered HTML (matching the ?raw=true
+// behavior serveOpenedPreviewFile already applies on every preview route).
+func artifactRawURL(r *http.Request, id domain.SessionID, filePath string) (string, bool) {
+	raw, err := previewutil.ArtifactFileURL("http://"+r.Host, id, filePath)
+	if err != nil {
+		return "", false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", false
+	}
+	q := u.Query()
+	q.Set("raw", "true")
+	u.RawQuery = q.Encode()
+	return u.String(), true
 }
 
 func sessionPRFacts(prs []domain.PRFacts) []SessionPRFacts {
@@ -2242,6 +2756,31 @@ func workspaceFilesResponse(files sessionsvc.WorkspaceFiles) ListWorkspaceFilesR
 		DegradedCode:     files.DegradedCode,
 		Ahead:            files.Ahead,
 		Behind:           files.Behind,
+	}
+}
+
+func workspaceManifestResponse(manifest sessionsvc.WorkspaceManifest) WorkspaceManifestResponse {
+	return WorkspaceManifestResponse{
+		SessionID:        manifest.SessionID,
+		WorkspaceVersion: manifest.WorkspaceVersion,
+		CompareBaseSHA:   manifest.CompareBaseSHA,
+		CompareBaseRef:   manifest.CompareBaseRef,
+		CompareMode:      manifest.CompareMode,
+		Files:            workspaceFileSummariesResponse(manifest.Files),
+		Sections:         workspaceFileSectionsResponse(manifest.Sections),
+		Summary:          WorkspaceSummary(manifest.Summary),
+		Truncated:        manifest.Truncated,
+		Stale:            manifest.Stale,
+		Refreshing:       manifest.Refreshing,
+		Degraded:         manifest.Degraded,
+		DegradedCode:     manifest.DegradedCode,
+	}
+}
+
+func workspaceHistoryResponse(history sessionsvc.WorkspaceHistory) WorkspaceHistoryResponse {
+	return WorkspaceHistoryResponse{
+		SessionID: history.SessionID, Commits: workspaceCommitsResponse(history.Commits),
+		CommitsTruncated: history.CommitsTruncated, Ahead: history.Ahead, Behind: history.Behind,
 	}
 }
 

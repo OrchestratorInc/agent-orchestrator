@@ -9,6 +9,7 @@ func TestValidateSendMessageRequestSettings(t *testing.T) {
 		valid bool
 	}{
 		{"valid codex selection", sendMessageRequest{Text: "hello", Model: "gpt-5.6-codex", ReasoningEffort: "high"}, true},
+		{"Claude ACP default effort", sendMessageRequest{Text: "hello", Model: "default", ReasoningEffort: "default"}, true},
 		{"maximum effort", sendMessageRequest{Text: "hello", ReasoningEffort: "max"}, true},
 		{"ultra effort", sendMessageRequest{Text: "hello", ReasoningEffort: "ultra"}, true},
 		{"read-only mode", sendMessageRequest{Text: "hello", Mode: "read-only"}, true},

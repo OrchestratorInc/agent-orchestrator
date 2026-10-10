@@ -3,8 +3,10 @@ import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef, useState
 import { useTranslation } from "react-i18next";
 import type { AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useSuppressStrayFocusRing } from "../../hooks/useSuppressStrayFocusRing";
-import { isConcreteModelID, modelChoiceLabel } from "../../lib/agent-model-choices";
+import { isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../../lib/agent-model-choices";
+import { fallbackEffort, useApplyEffortDefault } from "../../lib/effort";
 import { cn } from "../../lib/utils";
+import { formatEffortLabel } from "./EffortPicker";
 import { useModelTuning, type ModelTuningControlsProps } from "./ModelTuningControls";
 import { OptionMenuItem, OptionMenuSub, OptionMenuSubContent, OptionMenuSubTrigger } from "../ui/option-menu";
 import {
@@ -17,18 +19,14 @@ import {
 } from "../ui/dropdown-menu";
 
 const MAX_VISIBLE_MODELS = 50;
-const MODEL_SEARCH_THRESHOLD = 8;
+const MODEL_SEARCH_THRESHOLD = 5;
 const MAX_RECENT_MODELS = 3;
 const RECENT_MODELS_STORAGE_KEY = "ao.recentModels.v1";
 const ignoreEffortChange = () => {};
 
 export type ModelEffortSelection = Pick<ModelTuningControlsProps,
-	"effort" | "onEffortChange" | "onEffortReset" | "onValidityChange" | "roleLabel"
+	"effort" | "effortsWithoutModel" | "onEffortChange" | "onEffortReset" | "onValidityChange" | "roleLabel"
 >;
-
-function effortLabel(value: string) {
-	return value === "xhigh" ? "Extra high" : value.charAt(0).toUpperCase() + value.slice(1);
-}
 
 type AgentModel = NonNullable<AgentModelCatalog["models"]>[number];
 
@@ -72,10 +70,12 @@ export function AgentModelCombobox({
 	triggerLabel,
 	triggerClassName,
 	menuAlign = "end",
+	menuClassName,
 	renderTrigger,
 	recentScope,
 	compact = false,
-	showFollowAgentAction = true,
+	showEffortInTrigger = true,
+	agentId,
 	tuning,
 	disabled = false,
 	"aria-label": ariaLabel,
@@ -90,13 +90,15 @@ export function AgentModelCombobox({
 	refreshError?: string;
 	retryAt?: string | null;
 	onChange: (value: string) => void;
-	onCustom: (value: string) => void;
+	onCustom?: (value: string) => void;
 	/** Shown when the agent does not report a concrete model. */
 	emptyLabel?: string;
-	showFollowAgentAction?: boolean;
+	/** Claude Code lists its newest model per family and folds the rest under "Other models". */
+	agentId?: string;
 	triggerLabel?: string;
 	triggerClassName?: string;
 	menuAlign?: "start" | "center" | "end";
+	menuClassName?: string;
 	renderTrigger?: (label: string) => ReactNode;
 	/** Persists explicit model choices for this agent and pins them below the current model. */
 	recentScope?: string;
@@ -106,6 +108,8 @@ export function AgentModelCombobox({
 	 *  contexts where the menu should read like a simple choice, not a
 	 *  model-management surface. */
 	compact?: boolean;
+	/** Keep the effort level inside the menu only, off the trigger label. */
+	showEffortInTrigger?: boolean;
 	/** Callers opt into a combined model and reasoning-effort menu. */
 	tuning?: ModelEffortSelection;
 	disabled?: boolean;
@@ -121,6 +125,7 @@ export function AgentModelCombobox({
 		models: concreteModels,
 		model: explicitModel,
 		effort: tuning?.effort ?? "",
+		effortsWithoutModel: tuning?.effortsWithoutModel,
 		onEffortChange: tuning?.onEffortChange ?? ignoreEffortChange,
 		onEffortReset: tuning?.onEffortReset,
 		onValidityChange: tuning?.onValidityChange,
@@ -130,8 +135,17 @@ export function AgentModelCombobox({
 	const showEffort = Boolean(tuning && (effortOptions.length || explicitEffort));
 	const providerEffort = effortModel?.defaultEffort;
 	const defaultEffort = providerEffort && effortOptions.includes(providerEffort) ? providerEffort : "";
-	const effectiveEffort = explicitEffort || defaultEffort;
-	const currentEffortLabel = effectiveEffort ? effortLabel(effectiveEffort) : t("settings.models.effortNotReported");
+	// No provider default for these levels: AO picks one and saves it when the
+	// model is chosen, so the control never reads as unset.
+	const aoDefaultEffort = fallbackEffort(effortOptions, providerEffort);
+	const effectiveEffort = explicitEffort || defaultEffort || aoDefaultEffort || "";
+	useApplyEffortDefault(
+		explicitModel,
+		tuning && !explicitEffort ? aoDefaultEffort : undefined,
+		tuning?.onEffortChange ?? ignoreEffortChange,
+		{ disabled: disabled || !tuning },
+	);
+	const currentEffortLabel = effectiveEffort ? formatEffortLabel(effectiveEffort, t) : t("settings.models.effortNotReported");
 	const entryMode = customModelEntry ?? (allowCustom ? "direct" : "none");
 	const allowDirectCustom = entryMode === "direct";
 	const [search, setSearch] = useState("");
@@ -149,7 +163,6 @@ export function AgentModelCombobox({
 	const defaultModel = concreteModels.find((model) => model.isDefault)?.id || "";
 	const effectiveModel = explicitModel || defaultModel;
 	const selected = searchIndex.byID.get(normalizeSearch(effectiveModel));
-	const showSearch = allowDirectCustom || concreteModels.length >= MODEL_SEARCH_THRESHOLD;
 	const hasMultipleProviders = useMemo(
 		() =>
 			new Set(
@@ -160,14 +173,27 @@ export function AgentModelCombobox({
 		[concreteModels],
 	);
 
+	const claude = useMemo(
+		() => (agentId === "claude-code" ? splitClaudeModels(searchIndex.models) : undefined),
+		[agentId, searchIndex],
+	);
+	const [otherOpen, setOtherOpen] = useState(false);
+	const selectedIsOther = Boolean(claude?.other.some((item) => item.id === selected?.id));
+	const showOther = otherOpen || selectedIsOther;
+	// Count what the menu lists up front: Claude's folded "Other models" don't
+	// count until expanded, so four visible models never get a search box.
+	const listedModelCount = claude && !showOther ? claude.current.length : concreteModels.length;
+	const showSearch = allowDirectCustom || listedModelCount >= MODEL_SEARCH_THRESHOLD;
+
 	const rankedModels = useMemo(() => {
 		if (!normalizedSearch) {
+			const base = claude ? (showOther ? [...claude.current, ...claude.other] : claude.current) : searchIndex.models;
 			// Compact mode reads as a plain, stable list — picking a model
 			// shouldn't reorder it to the top on the next open.
-			return compact ? searchIndex.models : rankInitialModels(searchIndex.models, effectiveModel, recentModelIDs);
+			return compact ? base : rankInitialModels(base, effectiveModel, recentModelIDs);
 		}
 		return searchModelIndex(searchIndex, normalizedSearch).models;
-	}, [compact, effectiveModel, normalizedSearch, recentModelIDs, searchIndex]);
+	}, [claude, compact, effectiveModel, normalizedSearch, recentModelIDs, searchIndex, showOther]);
 
 	const visibleModels = rankedModels.slice(0, MAX_VISIBLE_MODELS);
 	const groups = useMemo(
@@ -185,6 +211,7 @@ export function AgentModelCombobox({
 	// With no identified model, nothing is selected and the menu just lists models.
 	const currentLabel = (triggerLabel ?? selected?.label ?? explicitModel) || emptyLabel || t("settings.models.selectModel");
 	const scrollRef = useRef<HTMLDivElement>(null);
+	const searchInputRef = useRef<HTMLInputElement>(null);
 	const effortTriggerRef = useRef<HTMLDivElement>(null);
 	const [canScrollDown, setCanScrollDown] = useState(false);
 	const updateScrollCue = useCallback(() => {
@@ -215,7 +242,6 @@ export function AgentModelCombobox({
 		const openEffort = Boolean(tuning && item.model.efforts?.some((effort) => effort && effort.toLowerCase() !== "default"));
 		if (openEffort) event.preventDefault();
 		selectModel(item.id);
-		setSearch("");
 		setEffortMenuOpen(openEffort);
 		setAwaitingEffort(openEffort);
 		if (!openEffort) setMenuOpen(false);
@@ -236,8 +262,10 @@ export function AgentModelCombobox({
 			open={menuOpen}
 			onOpenChange={(open) => {
 				setMenuOpen(open);
-				if (!open) {
+				if (open) {
 					setSearch("");
+					setOtherOpen(false);
+				} else {
 					setRefreshFailed(false);
 					setEffortMenuOpen(false);
 					setAwaitingEffort(false);
@@ -260,7 +288,7 @@ export function AgentModelCombobox({
 					) : (
 						<span className="min-w-0 truncate">{currentLabel}</span>
 					)}
-					{showEffort && <span className="shrink-0 text-settings-muted"> · {currentEffortLabel}</span>}
+					{showEffort && showEffortInTrigger && <span className="shrink-0 text-settings-muted"> · {currentEffortLabel}</span>}
 					<ChevronDown
 						className="size-icon-sm shrink-0 opacity-70 transition-transform duration-300 ease-out group-data-[state=open]/agent-model-trigger:rotate-180"
 						aria-hidden="true"
@@ -270,10 +298,26 @@ export function AgentModelCombobox({
 			<DropdownMenuContent
 				align={menuAlign}
 				onCloseAutoFocus={onCloseAutoFocus}
-				className="settings-menu-surface max-h-select-menu-max! w-[min(22rem,calc(100vw-2rem))] overflow-hidden! rounded-(--radius-settings-panel) border-settings-menu bg-settings-menu"
+				onKeyDownCapture={(event) => {
+					if (!showSearch || !menuOpen || event.target === searchInputRef.current) return;
+					if (event.target instanceof HTMLElement && (event.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName))) return;
+
+					if (event.key === "Backspace") {
+						event.preventDefault();
+						event.stopPropagation();
+						searchInputRef.current?.focus();
+						setSearch((current) => Array.from(current).slice(0, -1).join(""));
+					} else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+						event.preventDefault();
+						event.stopPropagation();
+						searchInputRef.current?.focus();
+						setSearch((current) => current + event.key);
+					}
+				}}
+				className={cn("settings-menu-surface max-h-select-menu-max! w-[min(22rem,calc(100vw-2rem))] overflow-hidden! rounded-(--radius-settings-panel) border-settings-menu bg-settings-menu", menuClassName)}
 			>
 				{(showSearch || showManualRefresh) && (
-					<div className="flex shrink-0 items-center gap-1 p-1" onKeyDown={(event) => event.stopPropagation()}>
+					<div className="flex shrink-0 items-center gap-1">
 						{showSearch && (
 							<div className="relative min-w-0 flex-1">
 								<Search
@@ -281,10 +325,24 @@ export function AgentModelCombobox({
 									aria-hidden="true"
 								/>
 								<input
+									ref={searchInputRef}
 									type="search"
 									aria-label={t("settings.models.searchAria", { label: ariaLabel.toLocaleLowerCase() })}
 									value={search}
 									onChange={(event) => setSearch(event.target.value)}
+									onKeyDown={(event) => {
+										if (event.key === "ArrowDown") {
+											event.preventDefault();
+											event.stopPropagation();
+											scrollRef.current?.querySelector<HTMLElement>("[role='menuitem']")?.focus();
+										} else if (event.key === "Enter") {
+											event.preventDefault();
+											event.stopPropagation();
+											scrollRef.current?.querySelector<HTMLElement>("[role='menuitem']")?.click();
+										} else if (event.key !== "Escape") {
+											event.stopPropagation();
+										}
+									}}
 									placeholder={t(
 										hasMultipleProviders
 											? "settings.models.searchModelsOrProvidersPlaceholder"
@@ -340,11 +398,6 @@ export function AgentModelCombobox({
 						className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
 						onScroll={updateScrollCue}
 					>
-						{normalizedSearch === "" && showFollowAgentAction && explicitModel && !defaultModel && (
-							<DropdownMenuItem onSelect={() => onChange("")} className={modelItemClass(false)}>
-								{t("settings.models.useAgentModel")}
-							</DropdownMenuItem>
-						)}
 						{groups.map((group, groupIndex) => (
 							<div key={group.key}>
 								{!compact && (groupIndex > 0 || normalizedSearch === "") && <DropdownMenuSeparator />}
@@ -383,15 +436,29 @@ export function AgentModelCombobox({
 							</div>
 						))}
 
+						{claude?.other.length && normalizedSearch === "" && !selectedIsOther ? (
+							<DropdownMenuItem
+								onSelect={(event) => {
+									event.preventDefault();
+									setOtherOpen((open) => !open);
+								}}
+								className={cn(modelItemClass(false), "[&_svg]:size-icon-sm")}
+								aria-expanded={otherOpen}
+							>
+								<span className="truncate text-settings-muted">{t("settings.models.otherModels")}</span>
+								<ChevronDown className={cn("ml-auto opacity-70 transition-transform", otherOpen && "rotate-180")} aria-hidden="true" />
+							</DropdownMenuItem>
+						) : null}
+
 						{showCustomSearchAction && (
-							<DropdownMenuItem onSelect={() => onCustom(customSearchValue)} className={modelItemClass(false)}>
+							<DropdownMenuItem onSelect={() => onCustom?.(customSearchValue)} className={modelItemClass(false)}>
 								{t("settings.models.useCustom", { model: customSearchValue })}
 							</DropdownMenuItem>
 						)}
 						{normalizedSearch !== "" && rankedModels.length === 0 && !allowDirectCustom && (
 							<p className="px-2 py-1.5 text-xs text-settings-muted">{t("settings.models.noMatches")}</p>
 						)}
-						{normalizedSearch === "" && entryMode !== "direct" && (
+						{normalizedSearch === "" && entryMode !== "direct" && !(compact && entryMode === "none") && (
 							<>
 								<DropdownMenuSeparator />
 								<div className="space-y-1 px-2 py-1.5 text-xs text-settings-muted">
@@ -419,7 +486,7 @@ export function AgentModelCombobox({
 								</div>
 							</>
 						)}
-						{showSearch && (
+						{showSearch && !compact && (
 							<p className="px-2 py-1.5 text-xs text-settings-muted" aria-live="polite">
 								{t("settings.models.matchingCount", {
 									visible: visibleModels.length.toLocaleString(),
@@ -450,11 +517,6 @@ export function AgentModelCombobox({
 								setEffortMenuOpen(false);
 								effortTriggerRef.current?.focus();
 							}}>
-								{explicitEffort && !defaultEffort && (
-									<OptionMenuItem onSelect={() => tuning.onEffortChange("")} className="gap-3 text-xs">
-										{t("settings.models.useAgentEffort")}
-									</OptionMenuItem>
-								)}
 								{effortOptions.map((effort) => (
 									<OptionMenuItem key={effort} role="menuitemradio" aria-checked={effort === effectiveEffort}
 										active={effort === effectiveEffort} onSelect={() => {
@@ -463,7 +525,7 @@ export function AgentModelCombobox({
 											setAwaitingEffort(false);
 											setMenuOpen(false);
 										}} className="gap-3 text-xs">
-										{effortLabel(effort)}
+										{formatEffortLabel(effort, t)}
 										{effort === effectiveEffort && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
 									</OptionMenuItem>
 								))}

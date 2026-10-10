@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -33,7 +34,14 @@ func (s *Service) queueWithoutController(
 	record domain.SessionRecord,
 	msg ports.ChatUserMessage,
 ) (domain.ConversationTurn, error) {
-	if !record.ProvisionState.IsProvisioning() {
+	if msg.ClientPayloadHash == "" {
+		var err error
+		msg.ClientPayloadHash, err = clientPayloadHash(msg)
+		if err != nil {
+			return domain.ConversationTurn{}, err
+		}
+	}
+	if !record.ProvisionState.IsProvisioning() && record.HibernatedAt == nil {
 		return domain.ConversationTurn{}, ErrNotProvisioning
 	}
 	conversation, err := s.ensureConversation(ctx, record)
@@ -51,6 +59,26 @@ func (s *Service) queueWithoutController(
 		}
 		deliveryContent = string(encoded)
 	}
+	if len(msg.Excerpts) > 0 {
+		// The transcript is verified when the controller drains this turn; bound
+		// the stored references now so the queue cannot hold oversized payloads.
+		if err := validateExcerptReferences(msg.Excerpts, conversation.ID); err != nil {
+			return domain.ConversationTurn{}, err
+		}
+		queuedContent := append([]ports.ChatContent(nil), msg.Content...)
+		for _, excerpt := range msg.Excerpts {
+			// SelectedText keeps the timeline chip and a later retry meaningful;
+			// the paired turn is only resolved at drain time.
+			queuedContent = append(queuedContent, ports.ChatContent{Type: "excerpt", Excerpt: &ports.ChatExcerptContext{
+				Reference: excerpt, SelectedText: strings.TrimSpace(excerpt.Text),
+			}})
+		}
+		encoded, marshalErr := json.Marshal(queuedContent)
+		if marshalErr != nil {
+			return domain.ConversationTurn{}, fmt.Errorf("encode queued excerpts: %w", marshalErr)
+		}
+		deliveryContent = string(encoded)
+	}
 	// The generation is empty on purpose: no controller has claimed this turn.
 	// Drain selects by conversation, so the controller that starts next owns it.
 	created, err := s.store.AppendUserMessage(ctx, conversation.ID, record.ID, "", domain.ConversationMessage{
@@ -58,6 +86,7 @@ func (s *Service) queueWithoutController(
 		Text:                msg.Text,
 		Origin:              normalizeOrigin(msg.Origin),
 		ClientMessageID:     msg.ClientMessageID,
+		ClientPayloadHash:   msg.ClientPayloadHash,
 		DeliveryContentJSON: deliveryContent,
 		AuthoredByUser:      msg.AuthoredByUser,
 	}, turnID, now)
@@ -78,7 +107,7 @@ func (s *Service) queueWithoutController(
 	// The controller may have appeared after Send read the provisioning row, or
 	// after a prior drain found the queue empty. Kicking the same serialized drain
 	// here closes both races; NextQueuedTurn still owns ordering.
-	if controller, controllerErr := s.Controller(record.ID); controllerErr == nil {
+	if controller, controllerErr := s.Controller(record.ID); controllerErr == nil && controller.State() != ports.ChatControllerStopped {
 		_ = controller.drain(ctx) // The message is already accepted; drain logs failures.
 	}
 	return turn, nil

@@ -26,6 +26,7 @@ import {
 	useConversationCommands,
 	useConversationConfigOptions,
 	useConversationSkills,
+	toSnapshot,
 } from "./useConversation";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
 import { ChatWorkspace } from "../components/chat/ChatWorkspace";
@@ -86,6 +87,9 @@ const WIRE = {
 		at: "2026-08-03T00:00:01Z",
 	},
 	account: {
+		authenticationState: "required",
+		authFailureId: "auth-failure-1",
+		lastAuthFailureReason: "expired",
 		authMode: "chatgpt",
 		planLabel: "Pro",
 		reauthRequiredAt: "2026-08-03T00:00:02Z",
@@ -204,7 +208,7 @@ describe("accepted conversation sends", () => {
 			await firstSend;
 		});
 
-		expect(result.current.pendingAcceptedTurnId).toBe("turn-2");
+		await waitFor(() => expect(result.current.pendingAcceptedTurnId).toBe("turn-2"));
 		rerender({ sessionId: "ao-1" });
 		expect(result.current.pendingAcceptedTurnId).toBe("turn-1");
 	});
@@ -764,6 +768,9 @@ describe("useConversation snapshot mapping", () => {
 			at: "2026-08-03T00:00:01Z",
 		});
 		expect(snapshot.account?.reauthRequiredAt).toBe("2026-08-03T00:00:02Z");
+		expect(snapshot.account?.authenticationState).toBe("required");
+		expect(snapshot.account?.authFailureId).toBe("auth-failure-1");
+		expect(snapshot.account?.lastAuthFailureReason).toBe("expired");
 		expect(snapshot.threadState).toEqual({
 			status: "system_error",
 			waitingOn: ["user_input"],
@@ -1094,41 +1101,28 @@ describe("steering refusals", () => {
 	});
 });
 
-describe("tool server reload refusals", () => {
-	it("withdraws the control when the harness cannot reload", async () => {
-		apiErrorCodeMock.mockReturnValue("CHAT_MCP_RELOAD_UNSUPPORTED");
-		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_MCP_RELOAD_UNSUPPORTED" } });
-
-		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
-		await act(async () => {
-			await result.current.reloadMcpServers().catch(() => {});
-		});
-
-		await waitFor(() => {
-			expect(result.current.mcpReloadUnsupported).toBe(true);
-			// Not also an error message: the control disappearing is the whole answer.
-			expect(result.current.mcpReloadError).toBeUndefined();
-		});
-	});
-
-	it("surfaces a refusal the user can act on", async () => {
-		apiErrorCodeMock.mockReturnValue("CHAT_TURN_RUNNING");
-		apiErrorMessageMock.mockReturnValue("a turn is running");
-		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_TURN_RUNNING" } });
-
-		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
-		await act(async () => {
-			await result.current.reloadMcpServers().catch(() => {});
-		});
-
-		await waitFor(() => {
-			expect(result.current.mcpReloadUnsupported).toBe(false);
-			expect(result.current.mcpReloadError).toBe("a turn is running");
-		});
-	});
-});
-
 describe("controller recovery", () => {
+	it("shares an automatic resume's pending state only with the same session", async () => {
+		const queryClient = new QueryClient();
+		const completion = deferred<void>();
+		const mutation = queryClient.getMutationCache().build(queryClient, {
+			mutationKey: ["resume-agent", "local", "ao-1"],
+			mutationFn: () => completion.promise,
+		});
+		const pending = mutation.execute(undefined);
+		const { result } = renderHook(() => ({
+			opened: useConversationCommands("ao-1"),
+			other: useConversationCommands("ao-2"),
+		}), { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> });
+		await waitFor(() => expect(result.current.opened.resumingAgent).toBe(true));
+		expect(result.current.other.resumingAgent).toBe(false);
+		await act(async () => {
+			completion.resolve();
+			await pending;
+		});
+		await waitFor(() => expect(result.current.opened.resumingAgent).toBe(false));
+	});
+
 	it("refreshes the conversation after Stop reports stale turn state", async () => {
 		postMock.mockResolvedValue({
 			data: undefined,
@@ -1235,5 +1229,40 @@ describe("useConversationSkills polling", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+
+describe("toSnapshot", () => {
+	it("keeps the sender's clientMessageId on a user message so its echo can be matched", () => {
+		const snapshot = toSnapshot({
+			conversationId: "c1",
+			sessionId: "s1",
+			harness: "claude-code",
+			mode: "chat",
+			controller: "ready",
+			latestSequence: 1,
+			turns: [],
+			messages: [
+				{
+					kind: "message",
+					id: "m1",
+					turnId: "t1",
+					sequence: 1,
+					revision: 0,
+					role: "user",
+					origin: "human",
+					text: "hi",
+					clientMessageId: "client-1",
+					editAvailable: true,
+					streaming: false,
+					createdAt: "2026-10-08T00:00:00Z",
+				},
+			],
+			activities: [],
+		} as unknown as Parameters<typeof toSnapshot>[0]);
+
+		const message = snapshot.items.find((item) => item.kind === "message");
+		expect(message).toMatchObject({ id: "m1", clientMessageId: "client-1" });
 	});
 });

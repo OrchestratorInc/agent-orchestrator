@@ -77,7 +77,9 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 			// guard below cannot recover the generic once it has been stringified
 			// (e.g. "[object Object]"), so fall back here. Error messages are
 			// guarded where they render, alongside status.message / checkError.
-			setManualCheckFailure(error instanceof Error ? error.message : t("settings.updates.updateFailed"));
+			// Use a check-specific fallback (not the generic "Update failed.") since
+			// this is only reached from a check operation.
+			setManualCheckFailure(error instanceof Error ? error.message : t("shell.updateCheckFailed"));
 		}
 		clearManualCheckWatchdog();
 		if (manualCheckFinishTimerRef.current !== null) clearTimeout(manualCheckFinishTimerRef.current);
@@ -476,8 +478,8 @@ function UpdateActions({
 	};
 
 	// Deliberately no border or accent fill on this block. --primary is
-	// oklch(0.92 0.004 286.32) in dark and near-black in light: both are
-	// effectively neutral, so tinting drew a grey frame that carried no meaning
+	// The neutral primary in dark and near-black in light: both are effectively
+	// neutral, so tinting drew a grey frame that carried no meaning
 	// and competed with the row backgrounds around it. The primary button and
 	// the status line already carry the emphasis.
 	return (
@@ -603,7 +605,7 @@ function UpdateActions({
 					</p>
 					<DesktopReleaseNotes
 						notes={status.releaseNotes}
-						textClassName="mt-1.5 max-h-40 overflow-y-auto text-pretty text-sm leading-5 text-settings-label"
+						textClassName="settings-thin-scrollbar mt-1.5 max-h-40 overflow-y-auto overscroll-contain text-pretty text-sm leading-5 text-settings-label"
 					/>
 				</div>
 			) : null}

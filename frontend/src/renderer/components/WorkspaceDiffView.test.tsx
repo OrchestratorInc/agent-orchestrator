@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FileAnnotationComposer, ReviewDiffBody, type FileAnnotationModel } from "./WorkspaceDiffView";
+import { FileAnnotationComposer, FileAnnotationSendBar, ReviewDiffBody, type FileAnnotationModel } from "./WorkspaceDiffView";
 import type { WorkspaceFileDetail } from "../hooks/useSessionWorkspaceFiles";
 
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
@@ -49,11 +49,11 @@ function findTextNode(node: Node): Text | null {
 
 function noopAnnotation(): FileAnnotationModel {
 	return {
-		target: null,
-		draft: "",
+		targets: [],
 		status: "idle",
 		error: "",
 		begin: vi.fn(),
+		draftFor: () => "", statusFor: () => "idle",
 		setDraft: vi.fn(),
 		cancel: vi.fn(),
 		submit: vi.fn(),
@@ -227,8 +227,8 @@ describe("ReviewDiffBody", () => {
 
 	it("focuses the feedback textarea when an inline composer opens", async () => {
 		const model = noopAnnotation();
-		model.target = { path: "src/App.tsx", side: "new", line: 12, surface: "focused" };
-		render(<FileAnnotationComposer annotation={model} />);
+		model.targets = [{ path: "src/App.tsx", side: "new", line: 12, surface: "focused" }];
+		render(<FileAnnotationComposer annotation={model} target={model.targets[0]} />);
 
 		const textarea = screen.getByRole("textbox", { name: /Feedback for src\/App\.tsx/ });
 		await waitFor(() => expect(textarea).toHaveFocus());
@@ -236,25 +236,33 @@ describe("ReviewDiffBody", () => {
 
 	it("keeps typing local to the box; ⌘/Ctrl+Enter sends, as its hint says, and plain Enter doesn't", () => {
 		const model = noopAnnotation();
-		model.target = { path: "src/App.tsx", side: "file", surface: "review" };
-		render(<FileAnnotationComposer annotation={model} />);
+		model.targets = [{ path: "src/App.tsx", side: "file", surface: "review" }];
+		render(<FileAnnotationComposer annotation={model} target={model.targets[0]} />);
 
 		expect(screen.getByText("⌘/Ctrl + Enter to send")).toBeInTheDocument();
 		const textarea = screen.getByRole("textbox", { name: /Feedback for src\/App\.tsx/ });
 		fireEvent.change(textarea, { target: { value: "Rename this" } });
-		expect(model.setDraft).not.toHaveBeenCalled();
+		// The model hears that the box now has text, then nothing per keystroke.
+		expect(model.setDraft).toHaveBeenCalledTimes(1);
+		fireEvent.change(textarea, { target: { value: "Rename this prop" } });
+		expect(model.setDraft).toHaveBeenCalledTimes(1);
+		fireEvent.change(textarea, { target: { value: "Rename this" } });
+		const draftCalls = vi.mocked(model.setDraft).mock.calls.length;
 		fireEvent.keyDown(textarea, { key: "Enter" });
+		expect(model.setDraft).toHaveBeenCalledTimes(draftCalls);
 		expect(model.submit).not.toHaveBeenCalled();
+		// The shortcut hands over this box's text, then sends every written comment.
 		fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
-		expect(model.submit).toHaveBeenCalledWith("Rename this");
+		expect(model.setDraft).toHaveBeenLastCalledWith(model.targets[0], "Rename this");
+		expect(model.submit).toHaveBeenCalledWith();
 		fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
 		expect(model.submit).toHaveBeenCalledTimes(2);
 	});
 
 	it("puts Send beside Cancel below the field and sends the typed text on click", () => {
 		const model = noopAnnotation();
-		model.target = { path: "src/App.tsx", side: "file", surface: "review" };
-		render(<FileAnnotationComposer annotation={model} />);
+		model.targets = [{ path: "src/App.tsx", side: "file", surface: "review" }];
+		render(<FileAnnotationComposer annotation={model} target={model.targets[0]} />);
 
 		const textarea = screen.getByRole("textbox", { name: /Feedback for src\/App\.tsx/ });
 		const send = screen.getByRole("button", { name: "Send feedback" });
@@ -264,18 +272,19 @@ describe("ReviewDiffBody", () => {
 
 		fireEvent.change(textarea, { target: { value: "Add a test" } });
 		fireEvent.click(send);
-		expect(model.submit).toHaveBeenCalledWith("Add a test");
+		expect(model.submit).toHaveBeenCalledWith(model.targets[0], "Add a test");
 	});
 
 	it("cancels on Escape or the Cancel button below the field and hands an unsent draft back to the model", () => {
 		const model = noopAnnotation();
-		model.target = { path: "src/App.tsx", side: "new", line: 3, surface: "review" };
-		const { unmount } = render(<FileAnnotationComposer annotation={model} />);
+		model.targets = [{ path: "src/App.tsx", side: "new", line: 3, surface: "review" }];
+		const { unmount } = render(<FileAnnotationComposer annotation={model} target={model.targets[0]} />);
 
 		const textarea = screen.getByRole("textbox", { name: /Feedback for src\/App\.tsx/ });
 		fireEvent.change(textarea, { target: { value: "draft" } });
 		fireEvent.keyDown(textarea, { key: "Escape" });
 		expect(model.cancel).toHaveBeenCalledTimes(1);
+		expect(model.cancel).toHaveBeenCalledWith(model.targets[0]);
 		const cancel = screen.getByRole("button", { name: "Cancel" });
 		// A labelled text button under the field, not an icon beside it.
 		expect(cancel).toHaveTextContent("Cancel");
@@ -283,7 +292,72 @@ describe("ReviewDiffBody", () => {
 		fireEvent.click(cancel);
 		expect(model.cancel).toHaveBeenCalledTimes(2);
 		unmount();
-		expect(model.setDraft).toHaveBeenCalledWith("draft");
+		expect(model.setDraft).toHaveBeenCalledWith(model.targets[0], "draft");
+	});
+
+	it("keeps a box per open comment, each sending only its own text", () => {
+		const model = noopAnnotation();
+		const first = { path: "src/App.tsx", side: "new" as const, line: 3, surface: "review" as const };
+		const second = { path: "src/lib/api.ts", side: "old" as const, line: 9, surface: "review" as const };
+		model.targets = [first, second];
+		model.draftFor = (target) => (target === first ? "Rename this" : "");
+		render(<><FileAnnotationComposer annotation={model} target={first} /><FileAnnotationComposer annotation={model} target={second} /></>);
+
+		const [firstBox, secondBox] = screen.getAllByRole("textbox");
+		expect(firstBox).toHaveValue("Rename this");
+		expect(secondBox).toHaveValue("");
+
+		fireEvent.change(secondBox, { target: { value: "Keep this guard" } });
+		// Leaving a box hands its text to the model, so the bar's send includes it.
+		fireEvent.blur(secondBox);
+		expect(model.setDraft).toHaveBeenCalledWith(second, "Keep this guard");
+		// With several comments written, the hint says the shortcut sends them all.
+		expect(screen.getByText("⌘/Ctrl + Enter to send all")).toBeInTheDocument();
+		const [, secondSend] = screen.getAllByRole("button", { name: "Send feedback" });
+		fireEvent.click(secondSend);
+		expect(model.submit).toHaveBeenCalledWith(second, "Keep this guard");
+		fireEvent.keyDown(secondBox, { key: "Enter", metaKey: true });
+		expect(model.submit).toHaveBeenLastCalledWith();
+	});
+
+	it("shows a send's progress only on the box it covers", () => {
+		const model = noopAnnotation();
+		const first = { path: "src/App.tsx", side: "new" as const, line: 3, surface: "review" as const };
+		const second = { path: "src/lib/api.ts", side: "old" as const, line: 9, surface: "review" as const };
+		model.targets = [first, second];
+		model.draftFor = () => "Some feedback";
+		model.status = "sending";
+		model.statusFor = (target) => (target === first ? "sending" : "idle");
+		render(<><FileAnnotationComposer annotation={model} target={first} /><FileAnnotationComposer annotation={model} target={second} /></>);
+
+		const [firstBox, secondBox] = screen.getAllByRole("textbox");
+		expect(firstBox).toBeDisabled();
+		expect(secondBox).toBeEnabled();
+	});
+
+	it("offers one bar to send or discard every written comment once there are several", () => {
+		const model = noopAnnotation();
+		const first = { path: "src/App.tsx", side: "new" as const, line: 3, surface: "review" as const };
+		const second = { path: "src/lib/api.ts", side: "file" as const, surface: "review" as const };
+		const empty = { path: "README.md", side: "new" as const, line: 1, surface: "review" as const };
+		model.targets = [first, second, empty];
+		model.draftFor = (target) => (target === empty ? "" : "Some feedback");
+		const { rerender } = render(<FileAnnotationSendBar annotation={model} surface="review" />);
+
+		expect(screen.getByRole("status")).toBeEmptyDOMElement();
+		fireEvent.click(screen.getByRole("button", { name: "Send all 2" }));
+		expect(model.submit).toHaveBeenCalledWith();
+		fireEvent.click(screen.getByRole("button", { name: "Discard all" }));
+		expect(model.cancel).toHaveBeenCalledWith();
+
+		// A pane with no written comment of its own stays clear of the bar.
+		rerender(<FileAnnotationSendBar annotation={model} surface="focused" />);
+		expect(screen.queryByTestId("file-feedback-bar")).not.toBeInTheDocument();
+
+		// One comment needs no bar: its own box sends it.
+		model.targets = [first];
+		rerender(<FileAnnotationSendBar annotation={{ ...model }} surface="review" />);
+		expect(screen.queryByTestId("file-feedback-bar")).not.toBeInTheDocument();
 	});
 
 	describe("large diff virtualization", () => {

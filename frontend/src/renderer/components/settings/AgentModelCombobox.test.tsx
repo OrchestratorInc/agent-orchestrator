@@ -121,6 +121,32 @@ describe("AgentModelCombobox", () => {
 		expect(screen.getByRole("menuitem", { name: "GPT-5.6 Sol" })).toBeInTheDocument();
 	});
 
+	it("applies menuClassName to the menu", async () => {
+		renderCombobox([{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], { menuClassName: "w-56!" });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		const menu = screen.getByRole("menu");
+		expect(menu).toHaveClass("w-56!");
+	});
+
+	it("hides the can't-find footer in compact menus without custom entry", async () => {
+		renderCombobox([{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], {
+			compact: true,
+			allowCustom: false,
+			customModelEntry: "none",
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.queryByText("Can’t find your model?")).not.toBeInTheDocument();
+	});
+
+	it("keeps the can't-find footer in non-compact menus without custom entry", async () => {
+		renderCombobox([{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], {
+			allowCustom: false,
+			customModelEntry: "none",
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getByText("Can’t find your model?")).toBeInTheDocument();
+	});
+
 	it("clears an override when the reported agent model is selected", async () => {
 		const { onChange } = renderCombobox([
 			{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol", isDefault: true },
@@ -128,16 +154,6 @@ describe("AgentModelCombobox", () => {
 		], { value: "gpt-5.6-luna" });
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.6 Sol" }));
-		expect(onChange).toHaveBeenCalledWith("");
-	});
-
-	it("can clear an override when the agent does not report its model", async () => {
-		const { onChange } = renderCombobox([
-			{ id: "default", label: "Default (recommended)", isDefault: true },
-			{ id: "sonnet", label: "Sonnet" },
-		], { value: "sonnet" });
-		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		await userEvent.click(screen.getByRole("menuitem", { name: "Use agent model" }));
 		expect(onChange).toHaveBeenCalledWith("");
 	});
 
@@ -176,6 +192,59 @@ describe("AgentModelCombobox", () => {
 		expect(trigger).toBeDisabled();
 		await userEvent.click(trigger);
 		expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
+	});
+
+	describe("Claude Code models", () => {
+		const claudeModels = ["Opus 4.5", "Opus 5.5", "Opus 4.8", "Haiku 4.5", "Sonnet 4.6", "Sonnet 5", "Fable 5", "Fable 5.1"]
+			.map((label) => ({ id: label.toLowerCase().replace(" ", "-"), label }));
+		const menuLabels = () => screen.getAllByRole("menuitem").map((item) => item.textContent);
+		const open = async (overrides: Parameters<typeof renderCombobox>[1] = {}) => {
+			renderCombobox(claudeModels, { compact: true, agentId: "claude-code", ...overrides });
+			await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		};
+
+		it("lists the newest model per family, then folds the rest under Other models", async () => {
+			await open();
+			expect(menuLabels()).toEqual(["Fable 5.1", "Opus 5.5", "Sonnet 5", "Haiku 4.5", "Other models"]);
+			await userEvent.click(screen.getByRole("menuitem", { name: "Other models" }));
+			expect(menuLabels()).toEqual([
+				"Fable 5.1", "Opus 5.5", "Sonnet 5", "Haiku 4.5",
+				"Fable 5", "Opus 4.8", "Opus 4.5", "Sonnet 4.6",
+				"Other models",
+			]);
+		});
+
+		it("collapses again the next time the menu opens", async () => {
+			await open({ value: "opus-5.5" });
+			await userEvent.click(screen.getByRole("menuitem", { name: "Other models" }));
+			expect(menuLabels()).toHaveLength(9);
+			await userEvent.keyboard("{Escape}");
+			await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+			expect(menuLabels()).toHaveLength(5);
+		});
+
+		it("opens expanded, without the toggle, when the selected model is older", async () => {
+			await open({ value: "opus-4.5" });
+			expect(screen.getByRole("menuitem", { name: "Opus 4.5" })).toBeInTheDocument();
+			expect(screen.queryByRole("menuitem", { name: "Other models" })).not.toBeInTheDocument();
+		});
+
+		it("hides search while only the newest models are listed", async () => {
+			await open({ allowCustom: false, customModelEntry: "none" });
+			expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		});
+
+		it("still finds other models by search once they are expanded", async () => {
+			await open();
+			await userEvent.click(screen.getByRole("menuitem", { name: "Other models" }));
+			await userEvent.keyboard("opus 4.5");
+			expect(menuLabels()).toContain("Opus 4.5");
+		});
+
+		it("leaves other agents in their reported order", async () => {
+			await open({ agentId: "codex" });
+			expect(menuLabels()).toEqual(claudeModels.map((model) => model.label));
+		});
 	});
 
 	it("uses direct lookup and provider buckets instead of scanning the complete catalog", () => {
@@ -218,9 +287,9 @@ describe("AgentModelCombobox", () => {
 
 	it("keeps compact catalogs free of search and result-count chrome", async () => {
 		renderCombobox(
-			Array.from({ length: 7 }, (_, index) => ({
+			Array.from({ length: 4 }, (_, index) => ({
 				id: `gpt-${index}`,
-				label: index === 6 ? "GPT Luna" : `GPT ${index}`,
+				label: index === 3 ? "GPT Luna" : `GPT ${index}`,
 				provider: "OpenAI",
 			})),
 			{ allowCustom: false, customModelEntry: "none" },
@@ -248,11 +317,11 @@ describe("AgentModelCombobox", () => {
 		expect(onCustom).toHaveBeenCalledWith("private/model-id");
 	});
 
-	it("adds simple model search at eight models", async () => {
+	it("adds simple model search at five models", async () => {
 		renderCombobox(
-			Array.from({ length: 8 }, (_, index) => ({
-				id: index === 6 ? "gpt-luna" : index === 7 ? "claude-fable" : `model-${index}`,
-				label: index === 6 ? "Luna" : index === 7 ? "Fable" : `Model ${index}`,
+			Array.from({ length: 5 }, (_, index) => ({
+				id: index === 3 ? "gpt-luna" : index === 4 ? "claude-fable" : `model-${index}`,
+				label: index === 3 ? "Luna" : index === 4 ? "Fable" : `Model ${index}`,
 				provider: "OpenAI",
 			})),
 			{ allowCustom: false },

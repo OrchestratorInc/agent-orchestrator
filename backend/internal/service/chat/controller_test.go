@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -77,6 +78,10 @@ func fullSnapshotReader(st *sqlite.Store) chatsvc.SnapshotReader {
 /* ---- a fake conversation the controller can drive ---------------------- */
 
 type fakeConversation struct {
+	// noNetwork makes SandboxAllowsNetwork report a sandbox with no network.
+	noNetwork bool
+	// networkMode, when set, is the one approval mode whose sandbox has network.
+	networkMode            ports.PermissionMode
 	events                 chan ports.ChatEvent
 	providerConversationID string
 
@@ -255,6 +260,15 @@ func newFakeConversation() *fakeConversation {
 }
 
 func (f *fakeConversation) ProviderConversationID() string { return f.providerConversationID }
+
+// SandboxAllowsNetwork is the agent sandbox's network, as Codex reports it;
+// noNetwork plays a Codex thread in accept-edits or auto.
+func (f *fakeConversation) SandboxAllowsNetwork(mode ports.PermissionMode) bool {
+	if f.networkMode != "" {
+		return mode == f.networkMode
+	}
+	return !f.noNetwork
+}
 func (f *fakeConversation) Capabilities() ports.ChatCapabilities {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -746,6 +760,69 @@ func TestServicePersistsAndPassesInitialModelTuningBeforeProviderStart(t *testin
 	}
 	if started.Model != "gpt-test" || started.Effort != "high" {
 		t.Fatalf("provider start config = %#v", started)
+	}
+}
+
+type reviewerModelConversation struct{ *fakeConversation }
+
+func (c reviewerModelConversation) ListModels(context.Context) ([]ports.ChatModel, error) {
+	return []ports.ChatModel{{ID: "review-model", DisplayName: "Review model", Efforts: []string{"high"}}}, nil
+}
+
+func TestReviewerModelSettingsStayWithReviewOwner(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	worker, err := st.CreateConversation(ctx, "worker-conversation", domain.ConversationScopeProject, testProject, testSession, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerSettings := domain.ConversationSettings{Model: "worker-model", ApprovalMode: domain.PermissionModeAuto}
+	if err := st.SetConversationSettings(ctx, worker.ID, workerSettings, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertReview(ctx, domain.Review{ID: "review-models", SessionID: testSession, ProjectID: testProject, Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	provider := reviewerModelConversation{newFakeConversation()}
+	var synced bool
+	var ids atomic.Uint64
+	svc := chatsvc.New(chatsvc.Options{Store: st, Sessions: st, Drivers: fakeRegistry{driver: fakeDriver{conv: provider}}, Log: slog.New(slog.DiscardHandler), NewID: func() string { return fmt.Sprintf("review-model-%d", ids.Add(1)) }, OnModelChanged: func(domain.SessionID, string) { synced = true }})
+	owner := domain.ReviewConversationOwner("review-models")
+	t.Cleanup(func() { _ = svc.StopForOwner(context.Background(), owner) })
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{Owner: owner, SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto}); err != nil {
+		t.Fatal(err)
+	}
+	models, settings, err := svc.ModelsForOwner(ctx, owner)
+	if err != nil || len(models) != 1 || models[0].ID != "review-model" {
+		t.Fatalf("models=%+v err=%v", models, err)
+	}
+	settings.Model = "review-model"
+	settings.ReasoningEffort = "high"
+	if _, err := svc.SetTurnSettingsForOwner(ctx, owner, settings); err != nil {
+		t.Fatal(err)
+	}
+	reviewConversation, err := st.ConversationForReview(ctx, owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reviewConversation.Settings.Model != "review-model" || reviewConversation.Settings.ReasoningEffort != "high" {
+		t.Fatalf("review settings=%+v", reviewConversation.Settings)
+	}
+	workerAfter, err := st.LoadConversationSnapshot(ctx, worker.ID)
+	if err != nil || workerAfter.Conversation.Settings != workerSettings || synced {
+		t.Fatalf("worker settings=%+v synced=%v err=%v", workerAfter.Conversation.Settings, synced, err)
+	}
+	if _, err := svc.SendForOwner(ctx, owner, ports.ChatUserMessage{Text: "verify reviewer settings"}); err != nil {
+		t.Fatal(err)
+	}
+	sent := provider.sentMessages()
+	if len(sent) != 1 || sent[0].Settings.Model != "review-model" || sent[0].Settings.Effort != "high" {
+		t.Fatalf("provider turn settings = %+v", sent)
+	}
+	settings.ApprovalMode = domain.PermissionModeBypassPermissions
+	if _, err := svc.SetTurnSettingsForOwner(ctx, owner, settings); !errors.Is(err, chatsvc.ErrReviewerPermissionsFixed) {
+		t.Fatalf("changed fixed reviewer permissions: %v", err)
 	}
 }
 
@@ -3036,12 +3113,18 @@ func TestFreshProjectControllerStartFailureKeepsPreviousHistoryHidden(t *testing
 /* ---- harness ----------------------------------------------------------- */
 
 type harness struct {
-	svc       *chatsvc.Service
-	st        *sqlite.Store
-	conv      *fakeConversation
-	ctrl      *chatsvc.Controller
-	activity  *recordingActivity
-	hostStops atomic.Int32
+	svc        *chatsvc.Service
+	st         *sqlite.Store
+	conv       *fakeConversation
+	ctrl       *chatsvc.Controller
+	activity   *recordingActivity
+	hostStops  atomic.Int32
+	renders    *attachmentstore.Store
+	rendersDir string
+	// reconciled lists the sessions whose output type a save asked to update;
+	// reconcileErr is what that update returns.
+	reconciled   []domain.SessionID
+	reconcileErr error
 
 	clockMu sync.Mutex
 	clock   time.Time
@@ -3108,6 +3191,8 @@ func newHarnessWithConversationAndStoreForHarness(
 		activity: &recordingActivity{},
 		clock:    time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC),
 	}
+	h.rendersDir = t.TempDir()
+	h.renders = attachmentstore.New(h.rendersDir)
 
 	// Guarded because the id factory is called from both the projection goroutine and
 	// whichever goroutine a test drives commands from, and an unsynchronized counter
@@ -3133,7 +3218,13 @@ func newHarnessWithConversationAndStoreForHarness(
 			counter++
 			return fmt.Sprintf("id-%03d", counter)
 		},
-		Now: h.now,
+		Now:     h.now,
+		Renders: h.renders,
+		DataDir: h.rendersDir,
+		ReconcileOutputType: func(_ context.Context, id domain.SessionID) error {
+			h.reconciled = append(h.reconciled, id)
+			return h.reconcileErr
+		},
 	})
 
 	ctrl, err := svc.Start(context.Background(), chatsvc.StartConfig{
@@ -3201,6 +3292,67 @@ func TestStaleControllerEventsDoNotReachTheTimeline(t *testing.T) {
 }
 
 /* ---- tests ------------------------------------------------------------- */
+
+func TestSendVerifiesExcerptAndFallsBackToTextForProvider(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	seed, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "seed", ClientMessageID: "excerpt-seed", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatalf("send seed: %v", err)
+	}
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: seed.ProviderTurnID},
+		ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: seed.ProviderTurnID,
+			ProviderItemID: "excerpt-source", Delta: "Keep this exact sentence."},
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: seed.ProviderTurnID,
+			ProviderItemID: "excerpt-source", Text: "Keep this exact sentence."},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: seed.ProviderTurnID,
+			TurnState: domain.TurnStateCompleted},
+	)
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Messages) == 2 && len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateCompleted
+	})
+	source := snapshot.Messages[1]
+
+	_, err = h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "Use it", ClientMessageID: "excerpt-followup", Origin: domain.MessageOriginHuman,
+		Excerpts: []ports.ChatExcerptReference{{
+			ConversationID: h.ctrl.ConversationID(), MessageID: source.ID,
+			Revision: source.Revision, Text: "exact sentence",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("send with excerpt: %v", err)
+	}
+	sent := h.conv.sentMessages()
+	if len(sent) != 2 || !strings.Contains(sent[1].Text, "Referenced chat excerpt") ||
+		!strings.Contains(sent[1].Text, "exact sentence") || len(sent[1].Content) != 0 {
+		t.Fatalf("provider delivery = %#v", sent)
+	}
+	duplicate, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "Use it", ClientMessageID: "excerpt-followup", Origin: domain.MessageOriginHuman,
+		Excerpts: []ports.ChatExcerptReference{{
+			ConversationID: h.ctrl.ConversationID(), MessageID: source.ID,
+			Revision: source.Revision + 1, Text: "no longer relevant to the accepted retry",
+		}},
+	})
+	if err != nil || duplicate.ID != "" {
+		t.Fatalf("idempotent excerpt retry = (%+v, %v), want duplicate success", duplicate, err)
+	}
+
+	_, err = h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "stale", Origin: domain.MessageOriginHuman,
+		Excerpts: []ports.ChatExcerptReference{{
+			ConversationID: h.ctrl.ConversationID(), MessageID: source.ID,
+			Revision: source.Revision + 1, Text: "exact sentence",
+		}},
+	})
+	if !errors.Is(err, chatsvc.ErrExcerptStale) {
+		t.Fatalf("stale excerpt error = %v, want ErrExcerptStale", err)
+	}
+}
 
 func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 	h := newHarness(t)
@@ -6193,6 +6345,14 @@ func TestInterruptReconciliationCancelsQueuedTurns(t *testing.T) {
 // claims a turn is running and a queued message is waiting to be sent behind a
 // controller that no longer exists.
 func TestStartSettlesWorkLeftByAKilledController(t *testing.T) {
+	testStartSettlesWorkLeftByAKilledController(t, false)
+}
+
+func TestStartSettlesQueuedWorkLeftByAKilledController(t *testing.T) {
+	testStartSettlesWorkLeftByAKilledController(t, true)
+}
+
+func testStartSettlesWorkLeftByAKilledController(t *testing.T, queuedOnly bool) {
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -6213,6 +6373,11 @@ func TestStartSettlesWorkLeftByAKilledController(t *testing.T) {
 		ActivityStatus: domain.ActivityStatusPending, Summary: "Run something",
 	})
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Activities) == 1 })
+	if queuedOnly {
+		if err := h.st.SettleTurn(ctx, h.ctrl.ConversationID(), "provider-turn-1", domain.TurnStateFailed, "crash", h.now()); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	// A killed daemon leaves the rows mid-flight and takes its service with it, so
 	// the next controller comes up in a NEW service over the SAME store. Building
@@ -6229,8 +6394,10 @@ func TestStartSettlesWorkLeftByAKilledController(t *testing.T) {
 	t.Cleanup(func() { _ = next.Stop(context.Background(), testSession) })
 	// Retry moves an interrupted async start back to provisioning. That state
 	// must not hide the running turn left by its previous controller.
-	if _, err := h.st.SetSessionProvisionState(ctx, testSession, domain.SessionProvisionProvisioning, "", h.now()); err != nil {
-		t.Fatal(err)
+	if !queuedOnly {
+		if _, err := h.st.SetSessionProvisionState(ctx, testSession, domain.SessionProvisionProvisioning, "", h.now()); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	if _, err := next.Start(ctx, chatsvc.StartConfig{
@@ -6607,6 +6774,29 @@ func TestCompactReportsWhatIsAboutToBeReclaimed(t *testing.T) {
 	}
 	if conv.compactCalls() != 1 {
 		t.Errorf("provider called %d times, want 1", conv.compactCalls())
+	}
+}
+
+func TestCompactionSettlementWithoutStartDrainsQueue(t *testing.T) {
+	for _, kind := range []ports.ChatEventKind{ports.ChatEventTurnCompleted, ports.ChatEventCompacted} {
+		t.Run(string(kind), func(t *testing.T) {
+			conv := newCompactingConversation()
+			h := newHarnessWithConversation(t, conv)
+			ctx := context.Background()
+			if _, err := h.svc.Compact(ctx, testSession); err != nil {
+				t.Fatal(err)
+			}
+			if turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "after compact"}); err != nil || turn.State != domain.TurnStateQueued {
+				t.Fatalf("Send while compacting = %+v, %v", turn, err)
+			}
+			conv.emit(ports.ChatEvent{Kind: kind, ProviderTurnID: "compact-turn", TurnState: domain.TurnStateCompleted})
+			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+				return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateRunning
+			})
+			if got := conv.sentTexts(); len(got) != 1 || got[0] != "after compact" {
+				t.Fatalf("provider messages = %v", got)
+			}
+		})
 	}
 }
 
