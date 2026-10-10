@@ -157,7 +157,9 @@ test("typed chat composer text is visibly selected with a pointer drag @T0", asy
 		const firstRect = firstRange.getBoundingClientRect();
 		const lastRect = lastRange.getBoundingClientRect();
 		return {
-			startX: lastRect.right - 1,
+			// Start inside the glyph, away from the existing end-of-text caret.
+			// Dragging the caret itself moves it instead of selecting a range.
+			startX: lastRect.left + 1,
 			startY: lastRect.top + lastRect.height / 2,
 			endX: firstRect.left + 1,
 			endY: firstRect.top + firstRect.height / 2,

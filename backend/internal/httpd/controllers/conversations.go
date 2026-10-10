@@ -1002,6 +1002,11 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 			"SESSION_MODE_MISMATCH",
 			"this session was created in Terminal UI mode and has no chat conversation", nil)
 
+	case errors.Is(err, ports.ErrChatControllerRestore):
+		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable",
+			"CHAT_CONTROLLER_RESTORE_FAILED",
+			"the agent could not be restored; retry your message", nil)
+
 	case errors.Is(err, chatsvc.ErrNoController), errors.Is(err, chatsvc.ErrNotProvisioning):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_CONTROLLER_NOT_READY",

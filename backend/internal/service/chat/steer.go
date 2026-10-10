@@ -160,6 +160,11 @@ func (s *Service) SteerOrSend(
 	msg ports.ChatUserMessage,
 	recoverOnly bool,
 ) (SteerOrSendResult, error) {
+	gate := s.inputGate(id)
+	if err := gate.lock(ctx); err != nil {
+		return SteerOrSendResult{}, err
+	}
+	defer gate.unlock()
 	if strings.TrimSpace(msg.Text) == "" && !recoverOnly {
 		return SteerOrSendResult{}, ErrSteerTextRequired
 	}

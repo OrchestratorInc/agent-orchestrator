@@ -947,6 +947,38 @@ func TestProbeAcceptsNewerCodexVersion(t *testing.T) {
 	}
 }
 
+// AO still supports Codex at its tested floor, where thread/rollback works (see
+// history.go). Probe and an open conversation must both keep offering Undo
+// there, whatever a newer provider schema declares.
+func TestSupportedMinimumCodexKeepsRollback(t *testing.T) {
+	d, _ := newTestDriver(t)
+	d.versionProbe = func(context.Context, string) (string, error) {
+		return "codex-cli " + minimumCodexVersion, nil
+	}
+
+	caps, err := d.Probe(context.Background())
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if !caps.Has(ports.ChatCapabilityRollback) {
+		t.Errorf("Probe capabilities for Codex %s = %v, want rollback", minimumCodexVersion, caps)
+	}
+
+	// The scripted server serves one connection, which Probe has closed.
+	d, _ = newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+	if !conv.Capabilities().Has(ports.ChatCapabilityRollback) {
+		t.Errorf("conversation capabilities for Codex %s = %v, want rollback", minimumCodexVersion, conv.Capabilities())
+	}
+	if _, ok := conv.(ports.ChatRollbacker); !ok {
+		t.Error("conversation does not implement ChatRollbacker")
+	}
+}
+
 func TestInstalledCodexVersionAugmentsNodePATHForNPMLauncher(t *testing.T) {
 	launcher, _ := npmCodexLauncherWithNodeOutsidePATH(t)
 

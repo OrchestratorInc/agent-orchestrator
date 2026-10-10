@@ -3647,6 +3647,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 			ports.ErrChatRecoveryInconclusive, fmt.Errorf("chat host ownership is inconclusive: %w", context.DeadlineExceeded)),
 			apierr.KindConflict, "CHAT_RECOVERY_INCONCLUSIVE"},
 		{"chat driver unavailable", fmt.Errorf("spawn: %w", ports.ErrChatDriverUnavailable), apierr.KindConflict, "CHAT_DRIVER_UNAVAILABLE"},
+		{"lazy chat restore", fmt.Errorf("send: %w", ports.ErrChatControllerRestore), apierr.KindUnavailable, "CHAT_CONTROLLER_RESTORE_FAILED"},
 		{"chat driver incompatible", fmt.Errorf("spawn: %w", ports.ErrChatDriverIncompatible), apierr.KindConflict, "CHAT_DRIVER_INCOMPATIBLE"},
 		{"chat auth required", fmt.Errorf("spawn: %w", ports.ErrChatAuthRequired), apierr.KindConflict, "CHAT_AUTH_REQUIRED"},
 		{"agent auth required", fmt.Errorf("spawn: %w", ports.ErrAgentAuthRequired), apierr.KindConflict, "AGENT_AUTH_REQUIRED"},

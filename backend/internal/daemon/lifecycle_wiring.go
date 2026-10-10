@@ -695,6 +695,10 @@ func (c chatLauncher) HasLiveChatController(id domain.SessionID) bool {
 	return c.svc.HasLiveChatController(id)
 }
 
+func (c chatLauncher) ChatNeedsController(ctx context.Context, id domain.SessionID) (bool, error) {
+	return c.svc.ChatNeedsController(ctx, id)
+}
+
 func (c chatLauncher) HibernateChat(ctx context.Context, id domain.SessionID) (bool, error) {
 	return c.svc.HibernateChat(ctx, id)
 }

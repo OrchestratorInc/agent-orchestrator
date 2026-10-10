@@ -602,6 +602,11 @@ func Run() error {
 		},
 	})
 	sessMgr = wiredSessMgr
+	if restorer, ok := sessMgr.(interface {
+		EnsureChatController(context.Context, domain.SessionID) error
+	}); ok {
+		chatSvc.SetControllerRestorer(restorer.EnsureChatController)
+	}
 	if fenced, ok := sessMgr.(interface{ SetPersistentHostReconcileDone(<-chan struct{}) }); ok {
 		fenced.SetPersistentHostReconcileDone(persistentHostsReconciled)
 	}

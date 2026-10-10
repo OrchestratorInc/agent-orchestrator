@@ -149,6 +149,7 @@ type Store interface {
 	MarkCompacted(ctx context.Context, conversationID string, at time.Time) error
 	ResolveApproval(ctx context.Context, conversationID, requestID, detailJSON string, now time.Time) error
 	HasPendingConversationInteractions(ctx context.Context, conversationID string) (bool, error)
+	HasUnsettledConversationTurns(ctx context.Context, conversationID string) (bool, error)
 	FailPendingApprovals(ctx context.Context, conversationID string, now time.Time) error
 	FailPendingInputs(ctx context.Context, conversationID string, now time.Time) error
 

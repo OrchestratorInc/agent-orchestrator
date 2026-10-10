@@ -8,6 +8,9 @@ const port = Number(process.env.AO_E2E_PORT ?? 5173);
 
 export default defineConfig({
 	testDir: "e2e",
+	// dev:web loads lazy route modules in each fresh browser context. Allow
+	// startup to settle before asserting the rendered state on shared runners.
+	expect: { timeout: 15_000 },
 	use: {
 		baseURL: `http://127.0.0.1:${port}`,
 	},

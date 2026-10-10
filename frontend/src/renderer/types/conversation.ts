@@ -663,7 +663,7 @@ export interface ChatSkill {
 }
 
 /** State of the daemon's connection to the provider. */
-export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped" | "hibernated";
+export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped" | "hibernated" | "cold";
 
 /**
  * How full this conversation is.

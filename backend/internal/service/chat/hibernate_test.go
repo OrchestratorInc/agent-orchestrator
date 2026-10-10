@@ -1108,6 +1108,10 @@ func TestSendDuringHibernationAcceptsThenWakesNativeConversation(t *testing.T) {
 		HibernationEnabled: func() bool { return true },
 	})
 	h.svc = svc
+	svc.SetControllerRestorer(func(context.Context, domain.SessionID) error {
+		t.Error("hibernated delivery bypassed its durable background wake path")
+		return errors.New("unexpected startup-cold restore")
+	})
 	start := chatsvc.StartConfig{SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex, WorkspacePath: t.TempDir()}
 	ctrl, err := svc.Start(ctx, start)
 	if err != nil {

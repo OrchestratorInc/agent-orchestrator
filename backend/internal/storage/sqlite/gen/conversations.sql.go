@@ -805,6 +805,24 @@ func (q *Queries) HasPendingConversationInteractions(ctx context.Context, conver
 	return exists, err
 }
 
+const hasUnsettledConversationTurns = `-- name: HasUnsettledConversationTurns :one
+SELECT EXISTS (
+    SELECT 1 FROM conversation_turns
+    WHERE conversation_id = ? AND state IN ('queued', 'running')
+)
+`
+
+// Recovery needs a provider for queued work and for running turns, including
+// dispatches whose provider id has not yet been committed. Inspect durable
+// work without loading the conversation's lifetime transcript. Checking all
+// branches is conservative when an interrupted branch edit left work behind.
+func (q *Queries) HasUnsettledConversationTurns(ctx context.Context, conversationID string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasUnsettledConversationTurns, conversationID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const insertConversation = `-- name: InsertConversation :exec
 
 INSERT INTO conversations (

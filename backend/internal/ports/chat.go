@@ -974,7 +974,13 @@ const (
 	ChatControllerRecovering ChatControllerState = "recovering"
 	ChatControllerHibernated ChatControllerState = "hibernated"
 	ChatControllerStopped    ChatControllerState = "stopped"
+	// Cold sessions retain their durable conversation and restore on first input.
+	ChatControllerCold ChatControllerState = "cold"
 )
+
+// ErrChatControllerRestore is a retryable failure before lazy input delivery.
+// The durable conversation and workspace remain available for another attempt.
+var ErrChatControllerRestore = errors.New("chat controller restoration failed; retry the message")
 
 type chatProviderFailure struct {
 	message string

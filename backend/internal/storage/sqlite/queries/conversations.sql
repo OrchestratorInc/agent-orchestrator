@@ -1195,6 +1195,16 @@ SELECT EXISTS (
       AND status = 'pending'
 );
 
+-- Recovery needs a provider for queued work and for running turns, including
+-- dispatches whose provider id has not yet been committed. Inspect durable
+-- work without loading the conversation's lifetime transcript. Checking all
+-- branches is conservative when an interrupted branch edit left work behind.
+-- name: HasUnsettledConversationTurns :one
+SELECT EXISTS (
+    SELECT 1 FROM conversation_turns
+    WHERE conversation_id = ? AND state IN ('queued', 'running')
+);
+
 -- Any approval still pending when a controller dies can never be answered: the
 -- provider call it was blocking is gone.
 -- name: FailPendingConversationApprovals :exec

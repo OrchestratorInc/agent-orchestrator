@@ -60,6 +60,10 @@ func (l integrationChatLauncher) HasLiveChatController(id domain.SessionID) bool
 	return l.service.HasLiveChatController(id)
 }
 
+func (l integrationChatLauncher) ChatNeedsController(ctx context.Context, id domain.SessionID) (bool, error) {
+	return l.service.ChatNeedsController(ctx, id)
+}
+
 func (l integrationChatLauncher) ArmChatHandoff(
 	ctx context.Context,
 	id domain.SessionID,
