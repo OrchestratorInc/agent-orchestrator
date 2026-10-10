@@ -2,12 +2,14 @@ import type { Terminal } from "@xterm/xterm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const addons = vi.hoisted(() => [] as Array<{ disposed: boolean; loseContext: () => void }>);
+const webgl = vi.hoisted(() => ({ unavailable: false }));
 
 vi.mock("@xterm/addon-webgl", () => ({
 	WebglAddon: class FakeWebglAddon {
 		disposed = false;
 		private lossListener: (() => void) | null = null;
 		constructor() {
+			if (webgl.unavailable) throw new Error("WebGL2 not supported");
 			addons.push(this as never);
 		}
 		onContextLoss(listener: () => void) {
@@ -41,7 +43,8 @@ function liveAddons() {
 afterEach(() => {
 	for (const item of leases.splice(0)) item.release();
 	addons.length = 0;
-	vi.spyOn(console, "warn").mockRestore();
+	webgl.unavailable = false;
+	vi.restoreAllMocks();
 });
 
 describe("terminal WebGL pool", () => {
@@ -102,6 +105,24 @@ describe("terminal WebGL pool", () => {
 		const { term, lease: item } = lease({ value: true });
 		item.release();
 		item.activate();
+		expect(term.loadAddon).not.toHaveBeenCalled();
+	});
+
+	it("stops trying once WebGL is unavailable", async () => {
+		// The failure is remembered for the module's lifetime, so use a fresh copy.
+		vi.resetModules();
+		const pool = await import("./terminal-webgl-pool");
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		webgl.unavailable = true;
+		const term = { loadAddon: vi.fn() } as unknown as Terminal;
+		const item = pool.leaseWebglRenderer(term, () => true);
+		leases.push(item);
+
+		item.activate();
+		item.activate();
+		pool.leaseWebglRenderer(term, () => true).activate();
+
+		expect(warn).toHaveBeenCalledTimes(1);
 		expect(term.loadAddon).not.toHaveBeenCalled();
 	});
 });

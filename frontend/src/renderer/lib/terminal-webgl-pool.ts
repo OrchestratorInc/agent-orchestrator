@@ -27,6 +27,9 @@ type Entry = {
 // Map order is recency: activate() re-inserts, so the first entry is the
 // least recently shown terminal.
 const entries = new Map<WebglLease, Entry>();
+// Set once creating a WebGL renderer fails; later activations stay on the DOM
+// renderer instead of failing and warning on every tab switch.
+let webglUnavailable = false;
 
 function detach(entry: Entry): void {
 	const addon = entry.addon;
@@ -42,6 +45,7 @@ function detach(entry: Entry): void {
 }
 
 function attach(entry: Entry): void {
+	if (webglUnavailable) return;
 	try {
 		const addon = new WebglAddon();
 		addon.onContextLoss(() => {
@@ -54,6 +58,7 @@ function attach(entry: Entry): void {
 		entry.term.loadAddon(addon);
 		entry.addon = addon;
 	} catch (error) {
+		webglUnavailable = true;
 		// WebGL keeps box-drawing glyphs on the cell grid. The canvas addon has no
 		// xterm 6 build, so unavailable WebGL falls back to the DOM renderer.
 		console.warn("xterm: WebGL renderer unavailable; box-drawing may drift", error);

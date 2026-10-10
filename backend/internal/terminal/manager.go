@@ -353,7 +353,7 @@ func (m *Manager) Serve(ctx context.Context, conn wsConn) {
 	}
 	defer c.cleanup()
 
-	go c.writeLoop(ctx)
+	go c.writeLoop(ctx, burstFlushInterval)
 	go c.heartbeatLoop(ctx, m.heartbeat)
 
 	for {
@@ -574,6 +574,12 @@ func (q *outQueue) push(msg serverMsg) {
 	}
 }
 
+func (q *outQueue) empty() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.frames) == 0
+}
+
 func (q *outQueue) full() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -613,7 +619,7 @@ func (c *connState) enqueue(msg serverMsg) {
 	c.out.push(msg)
 }
 
-func (c *connState) writeLoop(ctx context.Context) {
+func (c *connState) writeLoop(ctx context.Context, flushInterval time.Duration) {
 	var lastWrite time.Time
 	var pace *time.Timer
 	defer func() {
@@ -627,7 +633,12 @@ func (c *connState) writeLoop(ctx context.Context) {
 			return
 		case <-c.out.wake:
 		}
-		if wait := burstFlushInterval - time.Since(lastWrite); wait > 0 {
+		// A wake left over from frames an earlier drain already took has nothing
+		// to pace or send.
+		if c.out.empty() {
+			continue
+		}
+		if wait := flushInterval - time.Since(lastWrite); wait > 0 {
 			if pace == nil {
 				pace = time.NewTimer(wait)
 			} else {
@@ -639,7 +650,12 @@ func (c *connState) writeLoop(ctx context.Context) {
 			case <-pace.C:
 			}
 		}
-		for _, msg := range c.out.drain() {
+		msgs := c.out.drain()
+		if len(msgs) == 0 {
+			// Not a write; counting it would hold back the next isolated frame.
+			continue
+		}
+		for _, msg := range msgs {
 			if err := c.conn.WriteJSON(ctx, msg); err != nil {
 				c.cancel()
 				return

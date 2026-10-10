@@ -108,6 +108,11 @@ describe("apiClient runtime base URL", () => {
 		expect(seen[0].url).toBe("http://127.0.0.1:3037/api/v1/sessions");
 		expect(seen[0].method).toBe("POST");
 		expect(await seen[0].json()).toEqual({ projectId: "p1", prompt: "hello" });
+
+		const viaRequest = apiClient.request("post", "/api/v1/sessions", { body: { projectId: "p1", prompt: "again" } });
+		expect(seen).toHaveLength(2);
+		await viaRequest;
+		expect(seen[1].url).toBe("http://127.0.0.1:3037/api/v1/sessions");
 	});
 
 	it("skips the rebase when the request already targets the runtime base URL", async () => {
