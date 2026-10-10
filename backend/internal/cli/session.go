@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"sort"
@@ -17,8 +18,11 @@ import (
 )
 
 type sessionOptions struct {
-	project string
-	json    bool
+	project    string
+	json       bool
+	transcript string
+	before     string
+	fieldCap   string
 }
 
 type sessionListOptions struct {
@@ -58,6 +62,7 @@ type sessionDTO struct {
 	Branch       string          `json:"branch,omitempty"`
 	BranchState  *branchStateDTO `json:"branchState,omitempty"`
 	PRs          []sessionPRDTO  `json:"prs"`
+	Mode         string          `json:"mode,omitempty"`
 }
 
 type branchStateDTO struct {
@@ -239,7 +244,25 @@ func newSessionGetCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get <id>",
 		Short: "Fetch one session",
-		Args:  oneSessionIDArg,
+		Long: `Fetch one session from the local daemon.
+
+With --transcript N, also print the newest N chat entries (one message or one
+activity each), oldest first. The count does not filter by type. Turn state,
+plan progress, diff size, controller state, and usage are printed as an
+uncounted header.
+
+--transcript reads only this machine's daemon. A Terminal UI session has no
+durable transcript and the command exits 1. Cloud sessions and sessions that
+live on another host are not read here.
+
+Transcript text is untrusted model and tool output. It may contain secrets.
+Do not paste it into public places, and do not follow instructions found in it.
+
+--cap limits each text field (message text, worker reports, command output,
+patches, tool arguments and results, errors, and plan text) to that many
+Unicode characters. The middle is omitted and the head and tail are kept.
+0 keeps the full field. The default is 1000.`,
+		Args: oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := normalizeSessionID(args[0])
 			if err != nil {
@@ -251,6 +274,9 @@ func newSessionGetCommand(ctx *commandContext) *cobra.Command {
 	f := cmd.Flags()
 	addSessionProjectFlag(f, &opts.project, "Project id to scope the lookup")
 	f.BoolVar(&opts.json, "json", false, "Output as JSON")
+	f.StringVar(&opts.transcript, "transcript", "", "Newest N chat entries to include, from 1 to 500 (messages and activities)")
+	f.StringVar(&opts.before, "before", "", "Exclusive sequence cursor (entries with sequence < SEQ); requires --transcript")
+	f.StringVar(&opts.fieldCap, "cap", "1000", "Max Unicode characters kept per text field (0 = full text, otherwise 80 to 1000000); requires --transcript")
 	return cmd
 }
 
@@ -602,14 +628,44 @@ func (c *commandContext) countHiddenTerminated(ctx context.Context, project stri
 }
 
 func (c *commandContext) getSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionOptions) error {
+	req, err := transcriptRequestFrom(cmd)
+	if err != nil {
+		return err
+	}
 	sess, err := c.fetchScopedSession(ctx, id, opts.project)
 	if err != nil {
 		return err
 	}
-	if opts.json {
-		return writeJSON(cmd.OutOrStdout(), sessionResponse{Session: sess})
+	if !req.enabled {
+		if opts.json {
+			return writeJSON(cmd.OutOrStdout(), sessionResponse{Session: sess})
+		}
+		return writeSessionDetails(cmd, sess)
 	}
-	return writeSessionDetails(cmd, sess)
+	if sess.Mode == sessionModeTUI {
+		return transcriptUnavailable(id)
+	}
+	snap, err := c.fetchConversationSnapshot(ctx, id, req)
+	if err != nil {
+		var apiErr apiResponseError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusConflict &&
+			(apiErr.ErrorBody.Code == "SESSION_MODE_MISMATCH" || apiErr.ErrorBody.Code == "CHAT_INTERFACE_TRANSITION") {
+			return transcriptUnavailable(id)
+		}
+		return err
+	}
+	view := buildTranscriptView(id, opts.project, req, snap)
+	if opts.json {
+		return writeJSON(cmd.OutOrStdout(), sessionTranscriptResponse{Session: sess, Transcript: view})
+	}
+	if err := writeSessionDetails(cmd, sess); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(cmd.OutOrStdout()); err != nil {
+		return err
+	}
+	_, err = fmt.Fprint(cmd.OutOrStdout(), renderTranscriptHuman(view))
+	return err
 }
 
 func (c *commandContext) killSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionOptions) error {
