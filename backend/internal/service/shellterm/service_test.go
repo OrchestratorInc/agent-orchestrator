@@ -2253,3 +2253,54 @@ func TestShellReconciliationPreservesUncertainChildOrHost(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenCommandTerminalSkipsInitialInputWhenReadyStateAlreadyShowsAction(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "Select authentication method: / for commands"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:         []string{"kimchi"},
+		Title:        "Log in to Kimchi",
+		InitialInput: "/login",
+		InitialInputReadyStates: []InitialInputReadyState{
+			{Text: "Select authentication method:", SkipInput: true},
+			{Text: "/ for commands"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("initial input sent while authentication picker is already open: %#v", got)
+	case <-time.After(2 * initialInputPollInterval):
+	}
+}
+
+func TestOpenCommandTerminalRenderedSkipStateOverridesStaleRawMarker(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "/ for commands"
+	rt.styledOutput = "Select authentication method:"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:         []string{"kimchi"},
+		Title:        "Log in to Kimchi",
+		InitialInput: "/login",
+		InitialInputReadyStates: []InitialInputReadyState{
+			{Text: "Select authentication method:", SkipInput: true},
+			{Text: "/ for commands"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("initial input sent while rendered authentication picker is open: %#v", got)
+	case <-time.After(2 * initialInputPollInterval):
+	}
+}
