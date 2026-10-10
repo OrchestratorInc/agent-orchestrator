@@ -16,6 +16,10 @@ const nativeRestoreTimeout = 30 * time.Second
 func (m *Manager) initializeNativeRestore(parent context.Context, original domain.SessionRecord, handle ports.RuntimeHandle, launchID string, plan ports.NativeRestoreInitialization) error {
 	ctx, cancel := context.WithTimeout(parent, nativeRestoreTimeout)
 	defer cancel()
+	rendered, ok := m.runtime.(ports.StyledTerminalOutputReader)
+	if !ok {
+		return errors.New("native restore requires current rendered terminal output")
+	}
 	poll := func(check func(context.Context, string, string) (bool, error)) error {
 		for {
 			rec, err := m.getRecord(ctx, original.ID)
@@ -32,7 +36,7 @@ func (m *Manager) initializeNativeRestore(parent context.Context, original domai
 			if !alive {
 				return errors.New("native restore process exited")
 			}
-			output, err := m.runtime.GetOutput(ctx, handle, 200)
+			output, err := rendered.GetStyledOutput(ctx, handle, 200)
 			if err != nil {
 				return fmt.Errorf("native restore terminal: %w", err)
 			}
@@ -56,7 +60,7 @@ func (m *Manager) initializeNativeRestore(parent context.Context, original domai
 		if err := fence(writeCtx, current); err != nil {
 			return err
 		}
-		output, err := m.runtime.GetOutput(writeCtx, handle, 200)
+		output, err := rendered.GetStyledOutput(writeCtx, handle, 200)
 		if err != nil {
 			return err
 		}

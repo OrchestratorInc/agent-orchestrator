@@ -700,7 +700,9 @@ type AgentInteractiveNativeRestorer interface {
 	PrepareNativeRestore(context.Context, RestoreConfig) (NativeRestoreInitialization, error)
 }
 
-// NativeRestoreInitialization is private to one restore attempt. The adapter
+// NativeRestoreInitialization is private to one restore attempt. The manager
+// requires StyledTerminalOutputReader current viewport evidence, never raw history.
+// The adapter
 // validates native history and interprets current terminal/witness evidence;
 // the manager alone owns runtime I/O, deadlines, publication and cleanup.
 type NativeRestoreInitialization interface {

@@ -71,10 +71,23 @@ func (l *nativeBindingLCM) ApplyActivitySignal(ctx context.Context, id domain.Se
 	l.store.sessions[id] = r
 	return nil
 }
+
+type renderedRestoreRuntime struct {
+	*fakeRuntime
+	calls int
+	err   error
+}
+
+func (r *renderedRestoreRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+	r.calls++
+	return "CURRENT RENDERED SCREEN", r.err
+}
+
 func interactiveManager(t *testing.T, terminated bool, a *interactiveTestAgent) (*Manager, *fakeStore, *fakeRuntime, *fakeMessenger) {
 	t.Helper()
 	rt := &fakeRuntime{}
 	m, st, _ := newExitedResumeManager(t, rt, a)
+	m.runtime = &renderedRestoreRuntime{fakeRuntime: rt}
 	r := st.sessions["mer-1"]
 	r.IsTerminated = terminated
 	r.Harness = domain.HarnessMemcode
@@ -117,6 +130,9 @@ func TestInteractiveNativeRestoreAndResume(t *testing.T) {
 			}
 			if result.Mode != RestoreModeNative || result.Session.Metadata.AgentSessionIDLaunchID != "launch-new" {
 				t.Fatal(result)
+			}
+			if rt.outputCalls != 0 || m.runtime.(*renderedRestoreRuntime).calls < 3 {
+				t.Fatal("restore used raw history instead of current viewport")
 			}
 			if a.directCalls != 0 || len(msg.msgs) != 1 || msg.msgs[0] != "/resume agent-x" {
 				t.Fatal(a.directCalls, msg.msgs)
@@ -232,5 +248,20 @@ func TestNativeMemcodeDecisionRefusesOrdinarySend(t *testing.T) {
 	err := m.SendWithOptions(ctx, r.ID, "another task", nil, ports.MessageDeliveryOptions{AuthoredByUser: true})
 	if !errors.Is(err, ErrAwaitingDecision) || len(msg.msgs) != 0 {
 		t.Fatal("pending decision received task input", err, msg.msgs)
+	}
+}
+
+func TestInteractiveRestoreRequiresRenderedScreen(t *testing.T) {
+	a := &interactiveTestAgent{plan: &interactiveTestPlan{}}
+	m, _, raw, _ := interactiveManager(t, true, a)
+	m.runtime = &renderedRestoreRuntime{fakeRuntime: raw, err: errors.New("current rendered screen unavailable")}
+	if _, err := m.RestoreWithMode(ctx, "mer-1"); err == nil || !strings.Contains(err.Error(), "current rendered") {
+		t.Fatal(err)
+	}
+	if raw.outputCalls != 0 {
+		t.Fatal("raw output substituted for unavailable rendered screen")
+	}
+	if raw.destroyed != 1 {
+		t.Fatal("unsupported runtime not rolled back", raw.destroyed)
 	}
 }
