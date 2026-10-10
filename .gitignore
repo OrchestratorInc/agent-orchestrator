@@ -89,6 +89,8 @@ frontend/agent-browser/
 .agents/skills/*
 !.agents/skills/ao-desktop-dev/
 !.agents/skills/ao-desktop-dev/**
+!.agents/skills/ao-agent-harness/
+!.agents/skills/ao-agent-harness/**
 !.agents/skills/bug-triage/
 !.agents/skills/bug-triage/**
 !.agents/skills/pr-description/

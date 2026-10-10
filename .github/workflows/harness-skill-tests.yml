@@ -1,0 +1,45 @@
+name: Harness skill tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".agents/skills/ao-agent-harness/**"
+      - ".github/workflows/harness-skill-tests.yml"
+  pull_request:
+    paths:
+      - ".agents/skills/ao-agent-harness/**"
+      - ".github/workflows/harness-skill-tests.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-skill-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+      # Fixtures use fake executables and loopback servers, with no native-agent
+      # installation, model-provider calls, or provider secrets.
+      - name: Run the complete audit fixture suite
+        shell: bash
+        run: |
+          set -o pipefail
+          node --test .agents/skills/ao-agent-harness/scripts/*.test.mjs \
+            | tee "$RUNNER_TEMP/harness-skill-tests.tap"
+      - name: Preserve fixture results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-skill-fixture-results
+          path: ${{ runner.temp }}/harness-skill-tests.tap
+          if-no-files-found: warn
+          retention-days: 14
