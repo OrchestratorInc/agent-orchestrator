@@ -265,9 +265,13 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 	// not just IPC rejections: the main process rewrites most dumps, but a raw
 	// one that slips through status.message or status.checkError must never reach
 	// the UI. Guarding here (rather than in finishManualCheck) also covers the
-	// pushed statuses, which updates:check never rejects with.
-	const guardUpdateText = (text: string | undefined): string | undefined =>
-		text !== undefined && looksLikeTechnicalUpdateDump(text) ? t("settings.updates.updateFailed") : text;
+	// pushed statuses, which updates:check never rejects with. The fallback is
+	// kind-specific so a failed check surfaced via checkError reads as a check
+	// failure, not "Update failed.".
+	const guardUpdateText = (text: string | undefined, kind: "message" | "checkError"): string | undefined =>
+		text !== undefined && looksLikeTechnicalUpdateDump(text)
+			? t(kind === "checkError" ? "shell.updateCheckFailed" : "settings.updates.updateFailed")
+			: text;
 	const effectiveStatus: UpdateStatus = manualCheckFailure
 		? { ...status, state: "error", message: manualCheckFailure }
 		: status;
@@ -276,8 +280,8 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 	// dumps both rewrite to the same generic line and render twice.
 	const displayStatus: UpdateStatus = {
 		...effectiveStatus,
-		message: guardUpdateText(effectiveStatus.message),
-		checkError: guardUpdateText(effectiveStatus.checkError),
+		message: guardUpdateText(effectiveStatus.message, "message"),
+		checkError: guardUpdateText(effectiveStatus.checkError, "checkError"),
 	};
 
 	return (

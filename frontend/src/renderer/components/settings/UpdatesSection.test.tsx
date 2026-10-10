@@ -110,10 +110,10 @@ it("hides a raw dump arriving as status.checkError", async () => {
 		state: "downloaded",
 		version: "2.1.0",
 		checkError: RAW_DUMP,
-	} satisfies UpdateStatus);
+} satisfies UpdateStatus);
 	renderUpdates();
 
-	expect(await screen.findByText("Update failed.")).toBeVisible();
+	expect(await screen.findByText("Update check failed")).toBeVisible();
 	expect(screen.queryByText(/Gateway Time-out/)).not.toBeInTheDocument();
 });
 
