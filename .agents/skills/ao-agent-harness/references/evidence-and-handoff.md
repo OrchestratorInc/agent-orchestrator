@@ -131,8 +131,9 @@ node <skill>/scripts/audit_ao.mjs --agent example --repo /path/to/ao \
 The runner invokes the argv array directly without shell expansion, appending:
 
 1. The issue JSON path. Read `agent`, `sessionId`, `baseURL`, `gate`, and evidence
-   to find the correct audit UI or terminal. The JSON initially records capture
-   as unavailable; it is updated after the helper finishes.
+   to find the correct AO session UI. A separate terminal is supplemental
+   evidence. The JSON initially records capture as unavailable; it is updated
+   after the helper finishes.
 2. The destination PNG path. Write a real screenshot here and exit zero.
 
 The hook runs at failed/blocked gates before subsequent lifecycle actions and
@@ -174,13 +175,61 @@ interface only. Real UI screenshots and real provider lifecycle conformance
 require a separately authorized live audit in the eventual host environment.
 
 
+## Required AO UI evidence
+
+Before claiming any harness runs inside AO, attach at least one real screenshot
+for that harness and each AO interface claimed as running (TUI or Chat). Capture
+the actual AO desktop or web UI connected to the tested isolated daemon, with
+the target session selected. Show enough AO navigation/session context to
+identify the application and harness, plus the native TUI or Chat turn/output
+inside it. A provider CLI in an external terminal, a terminal mirror, a log
+rendered into a PNG, a mockup, or a synthetic UI cannot establish this claim.
+
+Plan capture before the live run. The runner is API-first: it does not launch an
+AO UI, capture successful gates, upload images, or enforce this publication gate.
+Its `--capture-command` hook only handles failed/blocked gates. Provision a real
+AO UI and capture successful session evidence separately before cleanup, or use
+`--keep-daemon` and then clean up the exact owned sessions/daemon after capture.
+Use isolated AO data on the authorized host; a VPS-only run requires the UI and
+capture there too. If the UI cannot run or capture fails, keep the functional
+results and report `AO UI evidence: BLOCKED`; do not claim the integration is
+fully verified or convert missing screenshots into a pass.
+
+Include this capture record beside each image in the report/PR comment:
+
+| Required field | Contents |
+| --- | --- |
+| Harness and interface | Registered harness ID, TUI/Chat, provider/model, native CLI version |
+| Session identity | AO session ID and native session ID, or its SHA-256 digest when redacted; correlate with the functional audit |
+| Tested build | Exact AO source SHA, executable hash, and UI source SHA if different |
+| Capture | UTC timestamp, actual screenshot tool/command, AO desktop/web surface, local artifact path, and image SHA-256 |
+| Observed state | Running/output, original failure, or later reproduction; name the gate and state exactly what is visible |
+| Attachment | Durable GitHub-renderable image URL embedded with Markdown image syntax, plus the associated functional evidence link |
+
+Preserve enough application context after masking sensitive information. If a
+safe real screenshot is unavailable, record that fact and the capture reason.
+Never create substitute pixels or replace an unavailable original with a later
+reproduction. Screenshots prove a visible state only: cancellation, native-ID
+continuity, refreshed instructions, and restore still need their independent
+functional assertions and logs.
+
+Label failures explicitly as `FAIL`, `BLOCKED`, or `NOT_RUN`, with the gate,
+reason, timestamp, and AO session when one exists. Capture the actual relevant
+AO error/failure state before cleanup when possible. A preflight/startup failure
+may have no AO session or screen; use `screenshot: unavailable` and explain why.
+A later reproduction gets its own timestamp and label and does not erase the
+original missing capture or failure. Screenshot availability never upgrades a
+failed functional gate.
+
 ## Capture provenance and sharing
 
 A headless VPS may use a live terminal attached to the owned audit session and
 an actual screenshot utility under a virtual display. Such a terminal mirror
-must be labeled as a live mirror, not as the AO Electron UI. Save capture time,
-source session/terminal generation, source/binary versions, and whether it is
-the original failure or a new reproduction. An archived ANSI stream replayed
+must be labeled as a live mirror, not as the AO Electron UI, and does not satisfy
+the required AO UI evidence above. Existing historical terminal-mirror images
+retain that label; do not retroactively claim they prove execution inside AO.
+Save capture time, source session/terminal generation, source/binary versions,
+and whether it is the original failure or a new reproduction. An archived ANSI stream replayed
 into a terminal is playback and must not be presented as the original screen.
 
 The capture hook is not a built-in terminal viewer: host provisioning, live
@@ -193,8 +242,14 @@ terminal output, or a whole profile directory with a report.
 For a PR report, record the tested commit and binary hash, native version,
 provider/model (without credentials), fixture/live/CI scope, gate summary,
 failed attempts and fixes, unresolved limitations, screenshot provenance, and
-cleanup result. Use actual repository or published URLs; workstation paths
-are not public GitHub attachments. Do not create reports on other services
+cleanup result. Every claimed running harness must have its real AO UI image
+embedded in the PR report/comment using `![descriptive caption](image-url)`.
+Use a durable GitHub attachment or a committed, revision-pinned image URL that
+renders on GitHub. A local/VPS path, expiring CI artifact, or plain text link to
+an unavailable image is not an attachment. Verify the published image URL is
+accessible and renders, and read back the report/comment after publication.
+If upload/rendering fails, label the attachment unavailable and the AO UI
+evidence `BLOCKED` until corrected. Do not create reports on other services
 unless the user requested that publication.
 
 

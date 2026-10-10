@@ -206,6 +206,13 @@ execution host. After pushing, inspect all required GitHub checks on the current
 PR head and report failures or unavailable OS/authenticated-provider coverage
 precisely. Do not publish or deploy as validation.
 
+For every harness claimed as running inside AO, capture the actual AO session
+UI on the tested build, even when the integration changes only backend code.
+Follow the [required AO UI evidence](evidence-and-handoff.md#required-ao-ui-evidence)
+contract: attach real screenshots for each claimed interface, correlate them
+with session/native identity and functional logs, and retain clearly labelled
+failures. Native CLI and terminal-mirror captures do not fulfill this gate.
+
 For UI changes, use `ao preview` from the session or the isolated real-Electron
 desktop lab described in `AGENTS.md`. Never use the invoking checkout with real AO
 data for desktop-lab verification.
@@ -230,7 +237,15 @@ A useful report separates:
 - adapter defects from fixture/launcher defects and upstream limitations;
 - native provider response from AO observation latency;
 - stored/configured credentials from verified provider authorization;
-- real current screenshots from historical text captures or later reproductions.
+- actual AO UI screenshots from native-only terminals, mirrors, and later reproductions.
+
+For each claimed running harness, embed its real AO UI screenshot in the PR
+report/comment with the required capture record and durable GitHub-renderable
+URL. A passing fixture suite or runner result cannot fill this slot. Missing
+AO UI capture or attachment means `AO UI evidence: BLOCKED` and an incomplete
+integration handoff. List every non-pass gate separately with its actual failure
+screenshot, or `screenshot: unavailable` and the reason; keep the first failed
+attempt visible even after a successful fix.
 
 Publish the PR/report when requested or already authorized. Do not send reports
 to unrelated channels or merge/publish releases as part of integration testing.

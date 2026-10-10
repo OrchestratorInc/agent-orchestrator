@@ -71,11 +71,22 @@ consumption proves delivery, not confidentiality against model echo. The runner
 introduces a fresh restore token only after confirmed kill and verifies its
 project-config write before restore, so initial history cannot supply it.
 
-Preserve the first failure, later fixes, and controls separately. Screenshots
-need an actual capture helper; text logs are not screenshots. Inspect artifacts
-for secrets before sharing. Report the verdict, non-pass gates, tested source
-and binary, evidence links, and cleanup state. Publish detailed PR reports only
-when requested or already authorized; otherwise summarize and link artifacts.
+Every claim that a harness runs **inside AO** requires an attached real screenshot
+of that harness session in the actual AO UI, with AO context and live native
+output visible. Native CLI success, terminal mirrors, text/log PNGs, and synthetic
+UI do not satisfy this requirement. Follow the required capture record and
+publication gate in [Evidence and handoff](references/evidence-and-handoff.md#required-ao-ui-evidence).
+A runner `PASS` alone is insufficient: missing AO UI screenshots leave
+`AO UI evidence: BLOCKED` and the integration handoff incomplete.
+
+Preserve the first failure, later fixes, and controls separately. Label every
+failed/blocked/not-run gate and attach its actual failure screen when available;
+otherwise report `screenshot: unavailable` with the reason. Screenshots show
+visual state; retain functional logs/assertions for cancellation and exact
+restore. Inspect artifacts for secrets before sharing. Report the verdict,
+non-pass gates, tested source and binary, evidence links, and cleanup state.
+Publish detailed PR reports only when requested or already authorized; otherwise
+summarize and attach the same evidence in the authorized handoff.
 
 ## Validate changes
 
