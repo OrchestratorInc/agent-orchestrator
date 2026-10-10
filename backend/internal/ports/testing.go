@@ -28,11 +28,12 @@ type TestingTargetWorkerContext interface {
 
 // TestingWorkerContext contains adapter-resolved paths, never worker input.
 type TestingWorkerContext struct {
-	CheckoutPath string
-	CLIPath      string
-	RunFilePath  string
-	DataDir      string
-	FixtureDir   string
+	CheckoutPath  string `json:"checkoutPath"`
+	CLIPath       string `json:"cliPath"`
+	RunFilePath   string `json:"runFilePath"`
+	DataDir       string `json:"dataDir"`
+	FixtureDir    string `json:"fixtureDir"`
+	LaunchContext string `json:"launchContext,omitempty"` // JSON facts checked by the target adapter.
 }
 
 // TestingTargetSpec is daemon-resolved launch input. StateRoot must be beneath
@@ -51,8 +52,9 @@ type TestingTargetSpec struct {
 // TestingCleanupResult retains leftover identities even when Stop returns an
 // error. A failed probe alone must never be reported as successful cleanup.
 type TestingCleanupResult struct {
-	State     domain.TestCleanupState
-	Leftovers []string
+	State     domain.TestCleanupState `json:"state"`
+	Leftovers []string                `json:"leftovers"`
+	Error     string                  `json:"error,omitempty"`
 }
 
 // TestingDesktopControl captures and operates only an explicitly bound window.
@@ -101,7 +103,8 @@ type TestingRecordingResult struct {
 	StagingCleanup string        `json:"stagingCleanup,omitempty"`
 }
 
-// TestingDesktopReleaser revokes one attempt's desktop session at cleanup.
+// TestingDesktopReleaser revokes one attempt's desktop session at cleanup,
+// including a partial BindWindow whose target still has an empty WindowID.
 type TestingDesktopReleaser interface {
 	Release(ctx context.Context, target domain.TestTargetIdentity) error
 }

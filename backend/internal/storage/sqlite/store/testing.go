@@ -139,3 +139,22 @@ func (s *Store) GetTestToolBinding(ctx context.Context, id domain.SessionID) (do
 	}
 	return domain.TestToolProfileLink{SessionID: domain.SessionID(r.SessionID), AttemptID: domain.TestAttemptID(r.AttemptID), ProfileID: domain.TestToolProfileID(r.ProfileID)}, true, nil
 }
+
+// CreateTestWorkerLegs stores the immutable revision pair before Chat starts.
+func (s *Store) CreateTestWorkerLegs(ctx context.Context, r domain.TestWorkerLegs) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.qw.CreateTestWorkerLegs(ctx, gen.CreateTestWorkerLegsParams{SessionID: string(r.SessionID), BaseRunID: string(r.BaseRunID), HeadRunID: string(r.HeadRunID), TimeoutSeconds: r.TimeoutSeconds})
+}
+
+// GetTestWorkerLegs resolves a comparison without relying on provider state.
+func (s *Store) GetTestWorkerLegs(ctx context.Context, id domain.SessionID) (domain.TestWorkerLegs, bool, error) {
+	r, err := s.qr.GetTestWorkerLegs(ctx, string(id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.TestWorkerLegs{}, false, nil
+	}
+	if err != nil {
+		return domain.TestWorkerLegs{}, false, err
+	}
+	return domain.TestWorkerLegs{SessionID: domain.SessionID(r.SessionID), BaseRunID: domain.TestRunID(r.BaseRunID), HeadRunID: domain.TestRunID(r.HeadRunID), TimeoutSeconds: r.TimeoutSeconds}, true, nil
+}

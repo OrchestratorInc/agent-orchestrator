@@ -25,6 +25,8 @@ type Store interface {
 	UpdateTestAttempt(context.Context, domain.TestAttemptRecord) error
 	BindTestTools(context.Context, domain.TestToolProfileLink) error
 	GetTestToolBinding(context.Context, domain.SessionID) (domain.TestToolProfileLink, bool, error)
+	CreateTestWorkerLegs(context.Context, domain.TestWorkerLegs) error
+	GetTestWorkerLegs(context.Context, domain.SessionID) (domain.TestWorkerLegs, bool, error)
 }
 
 // WorkerLauncher uses the ordinary session manager. After creating the session
@@ -52,6 +54,7 @@ type WorkerLaunchRequest struct {
 	Timeout     time.Duration
 	Context     ports.TestingWorkerContext
 	Prepare     func(context.Context, domain.SessionID) (WorkerBinding, error)
+	Comparison  bool
 }
 
 // WorkerBinding is launch-only data. Never persist or log Capability.
@@ -123,6 +126,15 @@ type StartAttemptResult struct {
 	RunID           domain.TestRunID     `json:"runId"`
 	AttemptID       domain.TestAttemptID `json:"attemptId"`
 	WorkerSessionID domain.SessionID     `json:"workerSessionId"`
+}
+
+// StartLegResult supplies the new target's checked paths to the same worker.
+type StartLegResult struct {
+	StartAttemptResult
+	Leg           string                     `json:"leg"`
+	CommitSHA     string                     `json:"commitSha"`
+	EvidenceDir   string                     `json:"evidenceDir"`
+	TargetContext ports.TestingWorkerContext `json:"targetContext"`
 }
 
 // ToolResult retains input delivery even if its post-action observation fails.

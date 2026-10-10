@@ -35,30 +35,32 @@ type capability struct {
 	cancel context.CancelFunc
 }
 type attemptState struct {
-	record          domain.TestAttemptRecord
-	ctx             context.Context
-	cancel          context.CancelFunc
-	gate            chan struct{}
-	timer           Timer
-	seen            map[string]bool
-	frames          map[string]domain.TestDesktopFrame
-	cleanupDone     chan struct{}
-	cleanupErr      error
-	finishErr       error
-	recording       bool
-	desktopReleased bool
-	cleanupRunning  bool
+	record                  domain.TestAttemptRecord
+	ctx                     context.Context
+	cancel                  context.CancelFunc
+	gate                    chan struct{}
+	timer                   Timer
+	seen                    map[string]bool
+	frames                  map[string]domain.TestDesktopFrame
+	cleanupDone             chan struct{}
+	cleanupErr              error
+	finishErr               error
+	recording               bool
+	desktopBindingAttempted bool
+	desktopReleased         bool
+	cleanupRunning          bool
 }
 
-// Service owns target-bound tool dispatch and in-memory capabilities.
+// Service resolves session-owned targets and keeps credentials in memory.
 type Service struct {
-	deps      Deps
-	mu        sync.Mutex
-	attempts  map[domain.TestAttemptID]*attemptState
-	caps      map[domain.SessionID]capability
-	closed    bool
-	closeDone chan struct{}
-	closeErr  error
+	deps        Deps
+	mu          sync.Mutex
+	attempts    map[domain.TestAttemptID]*attemptState
+	caps        map[domain.SessionID]capability
+	legSwitches map[domain.SessionID]chan struct{}
+	closed      bool
+	closeDone   chan struct{}
+	closeErr    error
 }
 
 // New constructs a testing service without starting any target.
@@ -72,7 +74,7 @@ func New(deps Deps) *Service {
 	if deps.PostActionCaptureTimeout <= 0 {
 		deps.PostActionCaptureTimeout = 20 * time.Second
 	}
-	return &Service{deps: deps, attempts: map[domain.TestAttemptID]*attemptState{}, caps: map[domain.SessionID]capability{}}
+	return &Service{deps: deps, attempts: map[domain.TestAttemptID]*attemptState{}, caps: map[domain.SessionID]capability{}, legSwitches: map[domain.SessionID]chan struct{}{}}
 }
 
 // ProviderNotConfigured returns the explicit unavailable-provider API error.
@@ -90,10 +92,9 @@ func inactive() error {
 	return apierr.Conflict("TEST_ATTEMPT_INACTIVE", "Test attempt is cancelled, finished or past its deadline", nil)
 }
 
-// WorkerNotRunning is a 409 for a bound investigator without a live controller
-// or capability after supervisor shutdown. A cancelled attempt needs a new attempt.
+// WorkerNotRunning is a 409 for a bound investigator without session access.
 func WorkerNotRunning() error {
-	return apierr.Conflict("TEST_WORKER_NOT_RUNNING", "Testing worker is not running. Restore it while its attempt is active, or start a new attempt after supervisor shutdown.", nil)
+	return apierr.Conflict("TEST_WORKER_NOT_RUNNING", "Testing worker access is unavailable after supervisor shutdown or revocation", nil)
 }
 
 var launchSecret = regexp.MustCompile(`(?i)(?:AO_TEST_CAPABILITY|api[_-]?key|access[_-]?token|token|password|secret)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s"',;]+)|\bBearer\s+[^\s"',;]+|[A-Za-z0-9_-]{43,}`)
@@ -165,7 +166,12 @@ func (s *Service) stateLocked(r domain.TestAttemptRecord) *attemptState {
 	st := &attemptState{record: r, ctx: ctx, cancel: cancel, gate: make(chan struct{}, 1), seen: map[string]bool{}, frames: map[string]domain.TestDesktopFrame{}, cleanupDone: make(chan struct{})}
 	st.gate <- struct{}{}
 	s.attempts[r.ID] = st
-	if r.Phase != domain.TestAttemptFinished {
+	if r.Phase == domain.TestAttemptFinished {
+		cancel()
+		if r.CleanupState == domain.TestCleanupComplete {
+			close(st.cleanupDone)
+		}
+	} else {
 		st.timer = s.deps.Clock.AfterFunc(r.Deadline.Sub(s.deps.Clock.Now()), func() { _, _ = s.finish(context.Background(), r.ID, domain.TestOutcomePartial, false) })
 	}
 	return st
@@ -176,14 +182,8 @@ func (s *Service) StartAttempt(ctx context.Context, id domain.TestRunID, in Star
 	if err := s.configured(); err != nil {
 		return StartAttemptResult{}, err
 	}
-	if in.Timeout == 0 {
-		in.Timeout = 30 * time.Minute
-	}
-	if in.Timeout < time.Second || in.Timeout > 2*time.Hour || strings.TrimSpace(in.WorkerPrompt) == "" || len(in.WorkerPrompt) > 64*1024 {
-		return StartAttemptResult{}, invalid("Prompt and timeout between 1 second and 2 hours are required")
-	}
-	if in.Harness != "" && !in.Harness.IsKnown() {
-		return StartAttemptResult{}, invalid("Unknown harness")
+	if err := validateWorkerInput(&in); err != nil {
+		return StartAttemptResult{}, err
 	}
 	run, ok, err := s.deps.Store.GetTestRun(ctx, id)
 	if err != nil {
@@ -221,49 +221,11 @@ func (s *Service) StartAttempt(ctx context.Context, id domain.TestRunID, in Star
 		_, _ = s.finish(context.Background(), rec.ID, domain.TestOutcomeEnvironmentBlocked, false)
 		return StartAttemptResult{RunID: id, AttemptID: rec.ID}, e
 	}
-	target, err := s.deps.Target.Start(startCtx, ports.TestingTargetSpec{AttemptID: rec.ID, Generation: rec.LeaseGeneration, CheckoutPath: recipe.CheckoutPath, CommitSHA: run.CommitSHA, RecipeSnapshot: run.RecipeSnapshot, StateRoot: filepath.Join(s.deps.TargetStateRoot, string(rec.ID)), Deadline: rec.Deadline})
-	// Preserve even a partially started target for scoped cleanup.
-	s.mu.Lock()
-	st.record.Target = target
-	s.mu.Unlock()
-	if err != nil {
-		return fail(apierr.Unavailable("TEST_TARGET_START_FAILED", "Target start failed"))
-	}
-	if !validTarget(target, rec.LeaseGeneration) {
-		return fail(targetChanged())
-	}
-	bound, err := s.deps.Desktop.BindWindow(startCtx, target)
-	if err != nil {
-		return fail(targetChanged())
-	}
-	expected := target
-	expected.WindowID = bound.WindowID
-	if bound.WindowID == "" || !sameTarget(expected, bound) {
-		return fail(targetChanged())
-	}
-	s.mu.Lock()
-	if st.ctx.Err() != nil {
-		s.mu.Unlock()
-		return fail(inactive())
-	}
-	st.record.Target = bound
-	st.record.Phase = domain.TestAttemptActive
-	err = s.deps.Store.UpdateTestAttempt(startCtx, st.record)
-	s.mu.Unlock()
+	workerContext, err := s.activateTarget(startCtx, st, run, recipe)
 	if err != nil {
 		return fail(err)
-	}
-	if err := s.startRecording(startCtx, st, bound); err != nil {
-		return fail(err)
-	}
-	if !json.Valid([]byte(run.IssueSnapshot)) {
-		return fail(invalid("Stored issue snapshot is not valid JSON"))
 	}
 	quoted := []byte(run.IssueSnapshot)
-	workerContext, err := s.workerContext(startCtx, bound)
-	if err != nil {
-		return fail(err)
-	}
 	request := WorkerLaunchRequest{
 		ProjectID: run.ProjectID, Harness: in.Harness, Model: in.Model, Effort: in.Effort,
 		RunID: id, AttemptID: rec.ID, IssueJSON: string(quoted), IssueURL: run.IssueURL,
@@ -318,8 +280,8 @@ func (s *Service) BindWorker(ctx context.Context, session domain.SessionID, id d
 	return s.IssueCapability(ctx, session)
 }
 
-// IssueCapability is called at BOTH spawn and restore. It validates the stored
-// target, revokes the previous token and returns fresh launch-only data. A new
+// IssueCapability is called at spawn and restore. It validates the current
+// binding, revokes the previous token and returns a session credential. A new
 // Service has no capabilities, so restart fails closed until this is called.
 func (s *Service) IssueCapability(ctx context.Context, session domain.SessionID) (WorkerBinding, error) {
 	if err := s.configured(); err != nil {
@@ -342,22 +304,35 @@ func (s *Service) IssueCapability(ctx context.Context, session domain.SessionID)
 	if err != nil {
 		return WorkerBinding{}, err
 	}
-	if !ok || link.ProfileID != domain.TestToolProfileNativeV1 || r.Phase != domain.TestAttemptActive || r.CancelledAt != nil || !s.deps.Clock.Now().Before(r.Deadline) {
-		return WorkerBinding{}, inactive()
-	}
-	if !validTarget(r.Target, r.LeaseGeneration) || r.Target.WindowID == "" {
-		return WorkerBinding{}, targetChanged()
-	}
-	if err = s.deps.Target.Probe(ctx, r.Target); err != nil {
-		return WorkerBinding{}, targetChanged()
-	}
-	bound, err := s.deps.Desktop.BindWindow(ctx, r.Target)
-	if err != nil || !sameTarget(bound, r.Target) {
-		return WorkerBinding{}, targetChanged()
-	}
-	workerContext, err := s.workerContext(ctx, r.Target)
+	legs, comparison, err := s.deps.Store.GetTestWorkerLegs(ctx, session)
 	if err != nil {
 		return WorkerBinding{}, err
+	}
+	if !ok || link.ProfileID != domain.TestToolProfileNativeV1 || r.CancelledAt != nil ||
+		(!comparison && r.Phase != domain.TestAttemptActive) ||
+		(r.Phase == domain.TestAttemptFinished && r.Outcome == domain.TestOutcomePartial && !s.deps.Clock.Now().Before(r.Deadline)) ||
+		(r.Phase != domain.TestAttemptFinished && !s.deps.Clock.Now().Before(r.Deadline)) {
+		return WorkerBinding{}, inactive()
+	}
+	if comparison && r.RunID != legs.BaseRunID && r.RunID != legs.HeadRunID {
+		return WorkerBinding{}, targetChanged()
+	}
+	var workerContext ports.TestingWorkerContext
+	if r.Phase == domain.TestAttemptActive {
+		if !validTarget(r.Target, r.LeaseGeneration) || r.Target.WindowID == "" {
+			return WorkerBinding{}, targetChanged()
+		}
+		if err = s.deps.Target.Probe(ctx, r.Target); err != nil {
+			return WorkerBinding{}, targetChanged()
+		}
+		bound, err := s.deps.Desktop.BindWindow(ctx, r.Target)
+		if err != nil || !sameTarget(bound, r.Target) {
+			return WorkerBinding{}, targetChanged()
+		}
+		workerContext, err = s.workerContext(ctx, r.Target)
+		if err != nil {
+			return WorkerBinding{}, err
+		}
 	}
 	var secret [32]byte
 	if _, err = rand.Read(secret[:]); err != nil {
@@ -370,16 +345,80 @@ func (s *Service) IssueCapability(ctx context.Context, session domain.SessionID)
 		return WorkerBinding{}, inactive()
 	}
 	st := s.stateLocked(r)
-	if st.record.Phase != domain.TestAttemptActive || st.ctx.Err() != nil || !s.deps.Clock.Now().Before(st.record.Deadline) || !sameTarget(st.record.Target, r.Target) {
+	current, found, err := s.deps.Store.GetTestToolBinding(ctx, session)
+	if err != nil {
+		return WorkerBinding{}, err
+	}
+	if !found || current != link || st.record.CancelledAt != nil ||
+		(st.record.Phase != domain.TestAttemptFinished && (st.ctx.Err() != nil || !s.deps.Clock.Now().Before(st.record.Deadline))) ||
+		(st.record.Phase == domain.TestAttemptActive && !sameTarget(st.record.Target, r.Target)) {
 		return WorkerBinding{}, inactive()
 	}
-	// A replacement binding cannot revive capabilities from the previous attempt.
+	// Only explicit provider launch/restore rotates the session credential.
 	if old, ok := s.caps[session]; ok {
 		old.cancel()
 	}
-	capCtx, capCancel := context.WithCancel(st.ctx)
+	capCtx, capCancel := context.WithCancel(context.Background())
 	s.caps[session] = capability{hash: sha256.Sum256([]byte(token)), link: link, target: r.Target, ctx: capCtx, cancel: capCancel}
 	return WorkerBinding{Link: link, Attempt: st.record, Capability: token, Context: workerContext}, nil
+}
+
+// activateTarget is called with the attempt dispatch gate held. Both launch
+// paths preserve partial identities before reporting setup failure.
+func (s *Service) activateTarget(ctx context.Context, st *attemptState, run domain.TestRunRecord, recipe Recipe) (ports.TestingWorkerContext, error) {
+	s.mu.Lock()
+	rec := st.record
+	s.mu.Unlock()
+	target, err := s.deps.Target.Start(ctx, ports.TestingTargetSpec{AttemptID: rec.ID, Generation: rec.LeaseGeneration, CheckoutPath: recipe.CheckoutPath, CommitSHA: run.CommitSHA, RecipeSnapshot: run.RecipeSnapshot, StateRoot: filepath.Join(s.deps.TargetStateRoot, string(rec.ID)), Deadline: rec.Deadline})
+	s.mu.Lock()
+	st.record.Target = target
+	s.mu.Unlock()
+	if err != nil {
+		return ports.TestingWorkerContext{}, apierr.Unavailable("TEST_TARGET_START_FAILED", "Target start failed: "+workerLaunchCause(err))
+	}
+	if !validTarget(target, rec.LeaseGeneration) {
+		return ports.TestingWorkerContext{}, targetChanged()
+	}
+	s.mu.Lock()
+	st.desktopBindingAttempted = true
+	s.mu.Unlock()
+	bound, err := s.deps.Desktop.BindWindow(ctx, target)
+	expected := target
+	expected.WindowID = bound.WindowID
+	s.mu.Lock()
+	if sameTarget(expected, bound) {
+		// Preserve a verified binding even if cancellation won before activation.
+		st.record.Target = bound
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return ports.TestingWorkerContext{}, apierr.Conflict("TEST_TARGET_CHANGED", "Target window binding failed: "+workerLaunchCause(err), nil)
+	}
+	if bound.WindowID == "" || !sameTarget(expected, bound) {
+		return ports.TestingWorkerContext{}, targetChanged()
+	}
+	s.mu.Lock()
+	if st.ctx.Err() != nil || ctx.Err() != nil {
+		s.mu.Unlock()
+		return ports.TestingWorkerContext{}, inactive()
+	}
+	st.record.Target, st.record.Phase = bound, domain.TestAttemptActive
+	err = s.deps.Store.UpdateTestAttempt(ctx, st.record)
+	s.mu.Unlock()
+	if err != nil {
+		return ports.TestingWorkerContext{}, err
+	}
+	if err := s.startRecording(ctx, st, bound); err != nil {
+		return ports.TestingWorkerContext{}, err
+	}
+	if !json.Valid([]byte(run.IssueSnapshot)) {
+		return ports.TestingWorkerContext{}, invalid("Stored issue snapshot is not valid JSON")
+	}
+	workerContext, err := s.workerContext(ctx, bound)
+	if err != nil {
+		return ports.TestingWorkerContext{}, err
+	}
+	return workerContext, ctx.Err()
 }
 
 func (s *Service) workerContext(ctx context.Context, target domain.TestTargetIdentity) (ports.TestingWorkerContext, error) {
@@ -397,6 +436,8 @@ func (s *Service) finish(ctx context.Context, id domain.TestAttemptID, outcome d
 	if s.deps.Store == nil {
 		return domain.TestAttemptRecord{}, ProviderNotConfigured()
 	}
+	durableCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st := s.attempts[id]
@@ -408,14 +449,26 @@ func (s *Service) finish(ctx context.Context, id domain.TestAttemptID, outcome d
 		if !ok {
 			return r, apierr.NotFound("TEST_ATTEMPT_NOT_FOUND", "Unknown test attempt")
 		}
-		if r.Phase == domain.TestAttemptFinished && r.CleanupState == domain.TestCleanupComplete {
+		if r.Phase == domain.TestAttemptFinished && r.CleanupState == domain.TestCleanupComplete && !cancelled {
 			return r, nil
 		}
 		st = s.stateLocked(r)
 	}
 	if st.record.Phase == domain.TestAttemptFinished {
+		if cancelled {
+			now := s.deps.Clock.Now().UTC()
+			st.record.CancelledAt = &now
+			for session, grant := range s.caps {
+				link, found, err := s.deps.Store.GetTestToolBinding(durableCtx, session)
+				if err != nil || found && link.AttemptID == id {
+					grant.cancel()
+					delete(s.caps, session)
+				}
+			}
+			st.finishErr = s.deps.Store.UpdateTestAttempt(durableCtx, st.record)
+		}
 		if st.finishErr != nil {
-			st.finishErr = s.deps.Store.UpdateTestAttempt(ctx, st.record)
+			st.finishErr = s.deps.Store.UpdateTestAttempt(durableCtx, st.record)
 		}
 		if st.record.CleanupState != domain.TestCleanupComplete && !st.cleanupRunning {
 			st.cleanupDone = make(chan struct{})
@@ -437,14 +490,14 @@ func (s *Service) finish(ctx context.Context, id domain.TestAttemptID, outcome d
 		st.timer.Stop()
 	}
 	for session, grant := range s.caps {
-		if grant.link.AttemptID == id {
+		link, bound, bindingErr := s.deps.Store.GetTestToolBinding(durableCtx, session)
+		_, comparison, legsErr := s.deps.Store.GetTestWorkerLegs(durableCtx, session)
+		if bindingErr != nil || legsErr != nil || (bound && link.AttemptID == id && (cancelled || !comparison || !s.deps.Clock.Now().Before(st.record.Deadline))) {
 			grant.cancel()
 			delete(s.caps, session)
 		}
 	}
 	// Local revocation occurs even if durable storage fails.
-	durableCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancel()
 	err := s.deps.Store.UpdateTestAttempt(durableCtx, st.record)
 	st.finishErr = err
 	st.cleanupRunning = true
@@ -484,7 +537,7 @@ func (s *Service) cleanup(ctx context.Context, st *attemptState, done chan struc
 		recordingCtx, recordingCancel := context.WithTimeout(ctx, 20*time.Second)
 		cleanupErr = errors.Join(cleanupErr, s.stopRecording(recordingCtx, st, rec.Target))
 		recordingCancel()
-		if desktop, ok := s.deps.Desktop.(ports.TestingDesktopReleaser); ok && rec.Target.WindowID != "" && !st.desktopReleased {
+		if desktop, ok := s.deps.Desktop.(ports.TestingDesktopReleaser); ok && (st.desktopBindingAttempted || rec.Target.WindowID != "") && !st.desktopReleased {
 			releaseCtx, releaseCancel := context.WithTimeout(ctx, 5*time.Second)
 			if e := desktop.Release(releaseCtx, rec.Target); e != nil {
 				cleanupErr = errors.Join(cleanupErr, e)
@@ -514,6 +567,7 @@ func (s *Service) cleanup(ctx context.Context, st *attemptState, done chan struc
 	}
 	if cleanupErr != nil {
 		result.State = domain.TestCleanupFailed
+		result.Error = workerLaunchCause(cleanupErr)
 	}
 	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer persistCancel()

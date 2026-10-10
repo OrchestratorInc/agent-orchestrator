@@ -103,6 +103,27 @@ func (q *Queries) CreateTestRun(ctx context.Context, arg CreateTestRunParams) er
 	return err
 }
 
+const createTestWorkerLegs = `-- name: CreateTestWorkerLegs :exec
+INSERT INTO test_worker_legs(session_id, base_run_id, head_run_id, timeout_seconds) VALUES (?, ?, ?, ?)
+`
+
+type CreateTestWorkerLegsParams struct {
+	SessionID      string
+	BaseRunID      string
+	HeadRunID      string
+	TimeoutSeconds int64
+}
+
+func (q *Queries) CreateTestWorkerLegs(ctx context.Context, arg CreateTestWorkerLegsParams) error {
+	_, err := q.db.ExecContext(ctx, createTestWorkerLegs,
+		arg.SessionID,
+		arg.BaseRunID,
+		arg.HeadRunID,
+		arg.TimeoutSeconds,
+	)
+	return err
+}
+
 const getTestAttempt = `-- name: GetTestAttempt :one
 SELECT id, run_id, number, target_identity, lease_generation, phase, deadline, outcome, cleanup_state, recording_gap, cancelled_at, created_at, finished_at FROM test_attempts WHERE id = ?
 `
@@ -159,6 +180,22 @@ func (q *Queries) GetTestToolBinding(ctx context.Context, sessionID string) (Ses
 	row := q.db.QueryRowContext(ctx, getTestToolBinding, sessionID)
 	var i SessionTestTool
 	err := row.Scan(&i.SessionID, &i.AttemptID, &i.ProfileID)
+	return i, err
+}
+
+const getTestWorkerLegs = `-- name: GetTestWorkerLegs :one
+SELECT session_id, base_run_id, head_run_id, timeout_seconds FROM test_worker_legs WHERE session_id = ?
+`
+
+func (q *Queries) GetTestWorkerLegs(ctx context.Context, sessionID string) (TestWorkerLeg, error) {
+	row := q.db.QueryRowContext(ctx, getTestWorkerLegs, sessionID)
+	var i TestWorkerLeg
+	err := row.Scan(
+		&i.SessionID,
+		&i.BaseRunID,
+		&i.HeadRunID,
+		&i.TimeoutSeconds,
+	)
 	return i, err
 }
 

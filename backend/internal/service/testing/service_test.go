@@ -485,7 +485,11 @@ func TestCapabilitiesWrongSessionAttemptReissueAndRestart(t *testing.T) {
 		token   string
 	}{{f.start.WorkerSessionID, f.start.AttemptID, "wrong"}, {"other", f.start.AttemptID, old}, {f.start.WorkerSessionID, "other", old}} {
 		_, err := f.svc.Execute(context.Background(), test.attempt, test.session, test.token, "wrong", "screenshot", json.RawMessage(`{}`))
-		if code(err) != "INVALID_TEST_CAPABILITY" {
+		want := "INVALID_TEST_CAPABILITY"
+		if test.attempt != f.start.AttemptID {
+			want = "TEST_TARGET_CHANGED"
+		}
+		if code(err) != want {
 			t.Fatal("ownership check failed", err)
 		}
 	}
