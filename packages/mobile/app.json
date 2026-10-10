@@ -67,6 +67,7 @@
 		},
 		"plugins": [
 			"expo-router",
+			"@bacons/apple-targets",
 			"./plugins/withCircleDashedCheck",
 			[
 				"expo-navigation-bar",

@@ -15,6 +15,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { OnboardingGate } from "../lib/OnboardingGate";
 import { TelemetryManager } from "../lib/TelemetryManager";
+import { WatchManager } from "../lib/watch/WatchManager";
 import { PushManager } from "../lib/PushManager";
 import { UpdatesManager } from "../lib/UpdatesManager";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
@@ -139,6 +140,7 @@ function Shell() {
 			<StatusBar style={scheme === "dark" ? "light" : "dark"} />
 			<TelemetryManager />
 			<PushManager />
+			<WatchManager />
 			<UpdatesManager />
 			<StoreUpdateManager />
 			<OnboardingGate />

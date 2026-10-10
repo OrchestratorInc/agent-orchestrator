@@ -27,6 +27,11 @@
 // or between the build state and the publish state.
 /** @type {import('@expo/fingerprint').Config} */
 module.exports = {
+	extraSources: [
+		{ type: "dir", filePath: "targets", reasons: ["watch-native-targets"] },
+		{ type: "dir", filePath: "watch-model/Sources", reasons: ["watch-shared-model"] },
+		{ type: "dir", filePath: "modules/ao-watch", reasons: ["watch-phone-bridge"] },
+	],
 	ignorePaths: [
 		"google-services.json",
 		"node_modules/@react-native-masked-view/masked-view/android/src/main/AndroidManifest.xml",
