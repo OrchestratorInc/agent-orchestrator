@@ -66,8 +66,10 @@ test("public replacement preserves shell selection and rejects user replacement"
   ] });
   const make = (tools, plugins = options.plugins) => new Agent({model: new class extends Model {}, tools, plugins, printer: false});
   const original = makeShell();
-  const parent = make([original]);
+  const configTool = tool({name:"strands_config", description:"native configuration", callback: () => "reloaded"});
+  const parent = make([original, configTool]);
   await parent.initialize();
+  assert.equal(parent.toolRegistry.get("strands_config"), undefined, "model-driven native reload must be unavailable");
   assert.notEqual(parent.toolRegistry.get("shell"), original);
   assert.deepEqual(parent.toolRegistry.get("shell").toolSpec, original.toolSpec);
   const child = make([]);
@@ -94,7 +96,7 @@ test("activity rebinds same native root and fences session/workspace changes", {
     const initialize = (id, cwd = process.cwd(), durable = true) => {
       const hooks = [];
       const agent = {sessionId: id, sandbox: {cwd}, sessionManager: durable ? {} : undefined,
-        toolRegistry: {get: () => undefined}, addHook: (event, callback) => hooks.push([event, callback])};
+        toolRegistry: {get: () => undefined, remove: () => {}}, addHook: (event, callback) => hooks.push([event, callback])};
       options.plugins[0].initAgent(agent);
       options.plugins[1].initAgent(agent);
       return hooks;
@@ -105,4 +107,26 @@ test("activity rebinds same native root and fences session/workspace changes", {
     assert.throws(() => initialize("other-root"), /changing native session/);
     assert.throws(() => initialize("root-identity", "/different"), /changing native session/);
   } finally { process.argv.splice(0, process.argv.length, ...saved); }
+});
+
+
+test("native configuration rebuild cannot reenable background dispatch", { skip: !modules }, async () => {
+  const root = resolve(modules, "@strands-agents");
+  const { Agent, Model, SessionManager, FileStorage } = await import(pathToFileURL(join(root, "sdk/dist/src/index.node.js")));
+  const { harnessAgentOptionsFromConfig } = await import(pathToFileURL(join(root, "harness/dist/src/index.js")));
+  const options = await harnessAgentOptionsFromConfig({plugins: [
+    {kind: "plugin", module: new URL("../assets/ao-activity.mjs", import.meta.url).pathname, export: "shellGuard"},
+    {kind: "plugin", module: new URL("../assets/ao-activity.mjs", import.meta.url).pathname},
+  ]});
+  const saved=[...process.argv];process.argv.push("--session-id", "managed-root");
+  const workspace=await mkdtemp(join(tmpdir(), "strands-background-"));
+  try {
+    const { WorkspaceSandbox } = await import(pathToFileURL(join(root, "cli/dist/src/tui/workspace/sandbox.js")));
+    const sandbox=new WorkspaceSandbox(process.cwd());
+    const make = backgroundTasks => new Agent({model:new class extends Model {},plugins:options.plugins,
+      sandbox,backgroundTasks,sessionManager:new SessionManager({sessionId:"managed-root",storage:{snapshot:new FileStorage(workspace)}}),printer:false});
+    await make(false).initialize();
+    await assert.rejects(make(true).initialize(), /background dispatch inside AO/);
+    await assert.rejects(make({waitForCompletion:false}).initialize(), /background dispatch inside AO/);
+  } finally {process.argv.splice(0,process.argv.length,...saved);await rm(workspace,{recursive:true,force:true});}
 });
