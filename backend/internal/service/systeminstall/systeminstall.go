@@ -75,6 +75,7 @@ const (
 	TargetUnreal      Target = "unreal-agent"
 	TargetCodewhale   Target = "codewhale"
 	TargetMiMoCode    Target = "mimo-code"
+	TargetMiniMaxCode Target = "minimax-code"
 	TargetDeepSeek    Target = "deepseek-harness"
 	TargetOpenHands   Target = "openhands"
 	TargetCommandCode Target = "command-code"
@@ -90,7 +91,7 @@ var agentTargets = []Target{
 	TargetDroid, TargetCrush, TargetCline, TargetGoose, TargetQwen, TargetGemini,
 	TargetContinue, TargetDevin, TargetKiro, TargetKilocode, TargetVibe,
 	TargetMuse, TargetAgy, TargetAutohand, TargetKimchi, TargetPrimeAgent,
-	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetDeepSeek, TargetOpenHands,
+	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetMiniMaxCode, TargetDeepSeek, TargetOpenHands,
 	TargetCommandCode,
 }
 
@@ -266,7 +267,7 @@ var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/de
 
 // Job is the tracked state of one install run for a Target.
 type Job struct {
-	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,cloudflared" description:"Fixed install target this job ran (or is running) for."`
+	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,cloudflared" description:"Fixed install target this job ran (or is running) for."`
 	Status              Status `json:"status" enum:"idle,running,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job."`
 	Method              string `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
 	Command             string `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
