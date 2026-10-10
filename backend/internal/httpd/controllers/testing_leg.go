@@ -57,7 +57,7 @@ func (c *TestingController) startLeg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in TestingLegStartRequest
-	if !testingJSON(w, r, &in) {
+	if r.Body != nil && r.Body != http.NoBody && !testingJSON(w, r, &in) {
 		return
 	}
 	result, err := svc.StartLeg(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), chi.URLParam(r, "leg"))

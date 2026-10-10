@@ -37,6 +37,12 @@ func legRouter(f TestingService) http.Handler {
 func TestTestingLegAndSessionToolRoutes(t *testing.T) {
 	f := &testingLegFake{}
 	router := legRouter(f)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/testing/sessions/worker/legs/head/start", nil)
+	empty := httptest.NewRecorder()
+	router.ServeHTTP(empty, req)
+	if empty.Code != http.StatusCreated || f.calls != 1 || f.session != "worker" || f.leg != "head" {
+		t.Fatal("bodyless leg request failed", empty.Code, empty.Body.String())
+	}
 	w := testingRequest(router, http.MethodPost, "/api/v1/testing/sessions/worker/legs/head/start", `{}`, "")
 	if w.Code != 201 || f.session != "worker" || f.leg != "head" || !strings.Contains(w.Body.String(), `"commitSha":"pinned-sha"`) {
 		t.Fatal(w.Code, w.Body.String())
