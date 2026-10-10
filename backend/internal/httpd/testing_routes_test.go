@@ -27,8 +27,9 @@ func TestTestingOriginBoundary(t *testing.T) {
 	svc := &testingOriginService{}
 	router := NewRouterWithControl(config.Config{AllowedOrigins: []string{"app://renderer", "http://localhost:5173"}}, nil, nil, APIDeps{Testing: svc}, ControlDeps{})
 	paths := []string{"/api/v1/testing", "/api/v1/testing/runs", "/api/v1/testing/runs/run/attempts", "/api/v1/testing/attempts/attempt/cancel", "/api/v1/testing/attempts/attempt/evidence"}
+	paths = append(paths, "/api/v1/testing/comparisons", "/api/v1/testing/sessions/worker/legs/base/start")
 	for _, name := range testingsvc.ToolNames {
-		paths = append(paths, "/api/v1/testing/attempts/attempt/tools/"+name)
+		paths = append(paths, "/api/v1/testing/attempts/attempt/tools/"+name, "/api/v1/testing/sessions/worker/tools/"+name)
 	}
 	for _, path := range paths {
 		for _, origin := range []string{"https://hostile.example", "http://ao-preview.hostile.localhost:5181", "null"} {
@@ -66,8 +67,9 @@ func TestTestingOriginBoundary(t *testing.T) {
 func TestTestingRoutesOnLoopbackButBlockedOnLAN(t *testing.T) {
 	router := NewRouterWithControl(config.Config{}, nil, nil, APIDeps{}, ControlDeps{})
 	paths := []string{"/api/v1/testing/runs", "/api/v1/testing/runs/run/attempts", "/api/v1/testing/attempts/attempt/cancel", "/api/v1/testing/attempts/attempt/evidence"}
+	paths = append(paths, "/api/v1/testing/comparisons", "/api/v1/testing/sessions/worker/legs/base/start")
 	for _, name := range testingsvc.ToolNames {
-		paths = append(paths, "/api/v1/testing/attempts/attempt/tools/"+name)
+		paths = append(paths, "/api/v1/testing/attempts/attempt/tools/"+name, "/api/v1/testing/sessions/worker/tools/"+name)
 	}
 	for _, path := range paths {
 		method := http.MethodPost

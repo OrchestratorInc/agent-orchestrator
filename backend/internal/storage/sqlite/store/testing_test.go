@@ -146,3 +146,57 @@ func TestTestingForeignKeysAndConcurrentAttemptCreation(t *testing.T) {
 		t.Fatal("multiple live attempts", success)
 	}
 }
+
+func TestTestingWorkerLegsSurviveReopenAndBindingSwitch(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedProject(t, s, "ao")
+	session, err := s.CreateSession(ctx, sampleRecord("ao"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for _, id := range []domain.TestRunID{"base", "head"} {
+		if err := s.CreateTestRun(ctx, domain.TestRunRecord{ID: id, ProjectID: "ao", IssueSnapshot: `"PR"`, RecipeSnapshot: `{}`, CommitSHA: string(id), Requester: "tester", CreatedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.CreateTestAttempt(ctx, domain.TestAttemptRecord{ID: domain.TestAttemptID(id), RunID: id, Deadline: now.Add(time.Hour), CreatedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pair := domain.TestWorkerLegs{SessionID: session.ID, BaseRunID: "base", HeadRunID: "head", TimeoutSeconds: 1800}
+	if err := s.CreateTestWorkerLegs(ctx, pair); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateTestWorkerLegs(ctx, pair); err == nil {
+		t.Fatal("revision pair was overwritten")
+	}
+	for _, id := range []domain.TestAttemptID{"base", "head"} {
+		if err := s.BindTestTools(ctx, domain.TestToolProfileLink{SessionID: session.ID, AttemptID: id, ProfileID: domain.TestToolProfileNativeV1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got, found, err := s.GetTestWorkerLegs(ctx, session.ID)
+	if err != nil || !found || got != pair {
+		t.Fatal("pair lost after reopen", got, err)
+	}
+	binding, found, err := s.GetTestToolBinding(ctx, session.ID)
+	if err != nil || !found || binding.AttemptID != "head" {
+		t.Fatal("current head binding lost", binding, err)
+	}
+	if _, found, err := s.GetTestWorkerLegs(ctx, "ordinary"); err != nil || found {
+		t.Fatal("ordinary session has comparison", err)
+	}
+}

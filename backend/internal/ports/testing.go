@@ -52,14 +52,17 @@ type TestingTargetSpec struct {
 // TestingCleanupResult retains leftover identities even when Stop returns an
 // error. A failed probe alone must never be reported as successful cleanup.
 type TestingCleanupResult struct {
-	State     domain.TestCleanupState
-	Leftovers []string
+	State     domain.TestCleanupState `json:"state"`
+	Leftovers []string                `json:"leftovers"`
+	Error     string                  `json:"error,omitempty"`
 }
 
 // TestingDesktopControl captures and operates only an explicitly bound window.
 // BindWindow returns the supplied launch identity with its WindowID filled in.
 // Input validates that frame and request refer to that same live window, maps
 // screenshot pixels to native points, and refuses input outside its bounds.
+// Input activates the owned window and refuses delivery if another window is
+// topmost at the input point. Only foreground delivery is supported.
 // It must never fall back to full-desktop input or expose a provider MCP server.
 // Screenshot returns pixels and bounded AX rows from the same capture. Element
 // IDs belong to that capture and binding, and input consumes the capture.
@@ -102,7 +105,8 @@ type TestingRecordingResult struct {
 	StagingCleanup string        `json:"stagingCleanup,omitempty"`
 }
 
-// TestingDesktopReleaser revokes one attempt's desktop session at cleanup.
+// TestingDesktopReleaser revokes one attempt's desktop session at cleanup,
+// including a partial BindWindow whose target still has an empty WindowID.
 type TestingDesktopReleaser interface {
 	Release(ctx context.Context, target domain.TestTargetIdentity) error
 }

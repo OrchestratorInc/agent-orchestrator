@@ -25,7 +25,6 @@ const testingTestCapability = "test-capability-must-not-appear"
 func testingMCPPipe(t *testing.T, version string) (*mcp.ClientSession, func() string) {
 	t.Helper()
 	t.Setenv("AO_TEST_CAPABILITY", testingTestCapability)
-	t.Setenv("AO_TEST_ATTEMPT_ID", "attempt-1")
 	t.Setenv("AO_SESSION_ID", "worker-1")
 	serverIn, clientOut := io.Pipe()
 	clientIn, serverOut := io.Pipe()
@@ -160,7 +159,7 @@ func TestTestingMCPForwardsToolsAndScreenshot(t *testing.T) {
 		"submit_report":       `{"report":{"outcome":"partial","evidenceId":"report-1"},"evidence":[]}`,
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		name := strings.TrimPrefix(r.URL.Path, "/api/v1/testing/attempts/attempt-1/tools/")
+		name := strings.TrimPrefix(r.URL.Path, "/api/v1/testing/sessions/worker-1/tools/")
 		calls = append(calls, name)
 		if r.Method != http.MethodPost || name == r.URL.Path || r.URL.RawQuery != "" || r.Header.Get(testingCapabilityHeader) != testingTestCapability {
 			t.Errorf("wrong tool request: %s %s or missing capability", r.Method, r.URL.Path)
@@ -344,11 +343,10 @@ func TestTestingMCPCancellationReachesDaemon(t *testing.T) {
 }
 
 func TestTestingMCPRequiresLaunchEnvironment(t *testing.T) {
-	for _, missing := range []string{"AO_TEST_CAPABILITY", "AO_TEST_ATTEMPT_ID", "AO_SESSION_ID", "AO_RUN_FILE"} {
+	for _, missing := range []string{"AO_TEST_CAPABILITY", "AO_SESSION_ID", "AO_RUN_FILE"} {
 		t.Run(missing, func(t *testing.T) {
 			setConfigEnv(t)
 			t.Setenv("AO_TEST_CAPABILITY", testingTestCapability)
-			t.Setenv("AO_TEST_ATTEMPT_ID", "attempt-1")
 			t.Setenv("AO_SESSION_ID", "worker-1")
 			t.Setenv(missing, "")
 			out, stderr, err := executeCLI(t, Deps{}, "testing", "mcp")

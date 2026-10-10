@@ -175,6 +175,13 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"DomainTestDaemonQueryResult":   "TestDaemonQueryResult",
 	"DomainTestSubmitReportResult":  "TestSubmitReportResult",
 
+	"ControllersTestingLegStartResponse":       "TestingLegStartResponse",
+	"ControllersTestingLegStartRequest":        "TestingLegStartRequest",
+	"ControllersStartTestingComparisonRequest": "StartTestingComparisonRequest",
+	"ControllersTestingLegParam":               "TestingLegParam",
+	"ControllersTestingWorkerIDParam":          "TestingWorkerIDParam",
+	"PortsTestingWorkerContext":                "TestingWorkerContext",
+
 	"ControllersTestingCapabilityHeader":                   "TestingCapabilityHeader",
 	"ControllersTestingRunIDParam":                         "TestingRunIDParam",
 	"ControllersTestingAttemptIDParam":                     "TestingAttemptIDParam",
@@ -691,6 +698,7 @@ func operations() []operation {
 	ops = append(ops, sessionOperations()...)
 	ops = append(ops, automationOperations()...)
 	ops = append(ops, testingOperations()...)
+	ops = append(ops, testingLegOperations()...)
 	ops = append(ops, prOperations()...)
 	ops = append(ops, reviewOperations()...)
 	ops = append(ops, notificationOperations()...)
