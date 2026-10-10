@@ -149,6 +149,10 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (resu
 			return empty, fmt.Errorf("target recipe: %w", err)
 		}
 	}
+	id, err := randomID()
+	if err != nil {
+		return empty, err
+	}
 	if err := os.Mkdir(root, 0o700); err != nil {
 		return empty, fmt.Errorf("create fresh target root: %w", err)
 	}
@@ -157,11 +161,20 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (resu
 		return empty, err
 	}
 	// Preparation and build commands verify their own process-group shutdown.
-	pending := &launch{root: root, rootInfo: rootInfo}
+	pending := &launch{root: root, rootInfo: rootInfo, frontend: frontend,
+		target: domain.TestTargetIdentity{ID: id, LaunchID: "target-" + id, Generation: spec.Generation, DataDir: filepath.Join(root, "data")}}
 	launched := false
 	defer func() {
 		if err == nil || launched {
 			return
+		}
+		var groupErr *setupGroupError
+		if errors.As(err, &groupErr) {
+			a.mu.Lock()
+			if a.launches[id] == nil {
+				a.launches[id] = pending
+			}
+			a.mu.Unlock()
 		}
 		pending.mu.Lock()
 		defer pending.mu.Unlock()
@@ -169,10 +182,14 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (resu
 			err = errors.Join(err, pending.log.Close())
 			pending.log = nil
 		}
-		var groupErr *setupGroupError
-		if errors.As(err, &groupErr) {
+		if groupErr != nil {
 			pending.setupGroup = groupErr.group
-			return // Retain state and reservation until process absence is proved.
+			if pending.leaseInfo == nil {
+				pending.leaseInfo = groupErr.leaseInfo
+			}
+			pending.stopped = false
+			result = pending.target
+			return // Retain state and cleanup identity until absence is proved.
 		}
 		cleanupErr := removePrivateState(pending)
 		pending.stopped = cleanupErr == nil
@@ -198,11 +215,6 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (resu
 	}
 	log, err := os.OpenFile(filepath.Join(root, "target.log"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
-		return empty, err
-	}
-	id, err := randomID()
-	if err != nil {
-		_ = log.Close()
 		return empty, err
 	}
 	s := &launch{root: root, rootInfo: rootInfo, frontend: frontend, daemon: filepath.Join(root, "daemon", "ao"), revision: spec.CommitSHA, tmux: tmux, port: port, log: log, owned: make(map[int]time.Time),
@@ -695,7 +707,8 @@ func (a *Adapter) ReadLogs(ctx context.Context, target domain.TestTargetIdentity
 			return result, err
 		}
 		info, err := os.Lstat(path)
-		if i > 0 && errors.Is(err, os.ErrNotExist) {
+		// Preparation can fail before the captured Electron stream is created.
+		if (i > 0 || s.target.ElectronPID == 0) && errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {

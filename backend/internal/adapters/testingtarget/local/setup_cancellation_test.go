@@ -226,3 +226,89 @@ func TestBuildCancellationStopsChildrenAndReusesCheckout(t *testing.T) {
 		t.Fatalf("resumed attempt cleanup failed: %v %v", receipt, err)
 	}
 }
+
+// An unreadable process inventory retains ownership instead of declaring cleanup.
+func TestFailedPreparationObservationRetainsCleanupIdentity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("local desktop preparation uses POSIX process groups")
+	}
+	for _, stage := range []string{"prepare", "build"} {
+		t.Run(stage, func(t *testing.T) {
+			f, spec := preparedStartFixture(t, false)
+			observationErr := errors.New("OS process inventory unavailable")
+			leasePath := filepath.Join(spec.CheckoutPath, ".ao-testing-active")
+			var privateData string
+			failObservation := func(root string) error {
+				privateData = filepath.Join(root, "data")
+				if err := os.Mkdir(privateData, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if stage == "prepare" {
+					lease, err := os.OpenFile(leasePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := lease.WriteString(root); err != nil {
+						t.Fatal(err)
+					}
+					if err := lease.Close(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				info, err := os.Lstat(leasePath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return &setupGroupError{group: 1 << 30, cause: observationErr, leaseInfo: info}
+			}
+			if stage == "prepare" {
+				f.a.ops.prepare = func(_ context.Context, _, _, root string) error { return failObservation(root) }
+			} else {
+				f.a.ops.build = func(_ context.Context, _, executable string) error {
+					return failObservation(filepath.Dir(filepath.Dir(executable)))
+				}
+			}
+			f.a.ops.start = func(string, string, []string, *os.File) (int, error) {
+				t.Fatal("unverified setup launched Electron")
+				return 0, nil
+			}
+			target, err := f.a.Start(t.Context(), spec)
+			if !errors.Is(err, observationErr) || target.ID == "" || target.ElectronPID != 0 {
+				t.Fatalf("failed setup lost its cleanup identity/cause: %+v %v", target, err)
+			}
+			logs, err := f.a.ReadLogs(t.Context(), target, domain.TestReadLogsRequest{MaxBytes: 1})
+			if err != nil || logs.Text != "" || logs.NextCursor != "0" || logs.Truncated {
+				t.Fatalf("failed setup could not return bounded final logs: %+v %v", logs, err)
+			}
+			for _, path := range []string{privateData, leasePath} {
+				if _, err := os.Lstat(path); err != nil {
+					t.Fatalf("unverified shutdown removed %s: %v", path, err)
+				}
+			}
+			cleanupCtx, cancel := context.WithCancel(t.Context())
+			cancel()
+			failed, err := f.a.Stop(cleanupCtx, target)
+			if failed.State != domain.TestCleanupFailed || !errors.Is(err, context.Canceled) {
+				t.Fatalf("unobserved preparation falsely completed cleanup: %v %v", failed, err)
+			}
+			for _, path := range []string{privateData, leasePath} {
+				if _, err := os.Lstat(path); err != nil {
+					t.Fatalf("failed cleanup removed %s: %v", path, err)
+				}
+			}
+			f.a.ops.processes = func(context.Context) ([]processInfo, error) {
+				t.Fatal("unlaunched target requested an application process inventory")
+				return nil, nil
+			}
+			receipt, err := f.a.Stop(t.Context(), target)
+			if err != nil || receipt.State != domain.TestCleanupComplete {
+				t.Fatalf("known-absent preparation group could not finish cleanup: %v %v", receipt, err)
+			}
+			for _, path := range []string{privateData, leasePath} {
+				if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("setup state remained at %s: %v", path, err)
+				}
+			}
+		})
+	}
+}
