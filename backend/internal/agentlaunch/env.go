@@ -68,7 +68,7 @@ func RedactError(err error, configured map[string]string) error {
 	return errors.New(message)
 }
 
-// PinnedPATH prepends an AO-only directory to the supplied
+// PinnedPATH prepends AO-owned ao and gh executables to the supplied
 // PATH. It rejects executables not named ao because their directory cannot
 // guarantee the identity of a bare ao command.
 func PinnedPATH(executable func() (string, error), getenv func(string) string, configured map[string]string, dataDir string) (string, error) {

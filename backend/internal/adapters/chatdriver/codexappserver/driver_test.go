@@ -20,6 +20,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -979,13 +980,26 @@ func TestCodexProcessEnvPreservesDaemonPATH(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		dir := filepath.Dir(exe)
+		dataDir := t.TempDir()
+		pinned, err := agentlaunch.PinnedPATH(func() (string, error) { return exe, nil }, os.Getenv, nil, dataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := strings.Split(pinned, string(os.PathListSeparator))[0]
 		launcher := filepath.Join(t.TempDir(), "codex")
 		env := codexProcessEnv(context.Background(), launcher, map[string]string{
-			"PATH": dir + string(os.PathListSeparator) + os.Getenv("PATH"),
+			"PATH":        pinned,
+			"AO_DATA_DIR": dataDir,
 		})
 		if got := strings.Split(envValue(env, "PATH"), string(os.PathListSeparator))[0]; got != dir {
-			t.Fatalf("first PATH directory = %q, want daemon directory %q", got, dir)
+			t.Fatalf("first PATH directory = %q, want AO wrapper directory %q", got, dir)
+		}
+		ghName := "gh"
+		if runtime.GOOS == "windows" {
+			ghName += ".exe"
+		}
+		if _, err := os.Stat(filepath.Join(dir, ghName)); err != nil {
+			t.Fatalf("missing shared gh wrapper: %v", err)
 		}
 		return
 	}
