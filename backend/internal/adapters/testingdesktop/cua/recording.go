@@ -170,7 +170,7 @@ func (a *Adapter) stopRecording(ctx context.Context, b *binding) (result Recordi
 	if _, err := a.validateMovie(ctx, source, r.result.Width, r.result.Height); err != nil {
 		return recordingGap(r.result, errors.Join(err, p.err))
 	}
-	converted, err := a.run(ctx, "/usr/bin/avconvert", "--preset", "PresetPassthrough", "--source", source, "--output", r.result.Path)
+	converted, err := a.run(ctx, "/usr/bin/avconvert", "--preset", "PresetPassthrough", "--source", source, "--output", r.result.Path, "--replace")
 	if err != nil {
 		detail := providerDiagnosticText(string(converted.Stderr)+string(converted.Stdout), nil, providerDiagnosticLimit)
 		return recordingGap(r.result, &Error{Code: "recording_remux_failed", Detail: fmt.Sprintf("avconvert PresetPassthrough: %v: %s", err, detail), cause: errors.Join(ErrRefused, err, ctx.Err())})

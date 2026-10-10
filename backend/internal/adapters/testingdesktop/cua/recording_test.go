@@ -57,10 +57,19 @@ func prepareRecording(t *testing.T, f *fixture) *fakeRecording {
 	f.runner.hook = func(executable string, args []string) (Output, error) {
 		mp4 := filepath.Join(filepath.Dir(r.path), "window.mp4")
 		if executable == "/usr/bin/avconvert" {
-			if !reflect.DeepEqual(args, []string{"--preset", "PresetPassthrough", "--source", r.path, "--output", mp4}) {
+			want := []string{"--preset", "PresetPassthrough", "--source", r.path, "--output", mp4}
+			replace := len(args) == len(want)+1 && args[len(want)] == "--replace"
+			actual := args
+			if replace {
+				actual = args[:len(want)]
+			}
+			if !reflect.DeepEqual(actual, want) {
 				t.Fatalf("remux escaped the owned files or changed codec preset: %v", args)
 			}
 			r.remuxCalls++
+			if _, err := os.Lstat(mp4); err == nil && !replace {
+				return Output{Stderr: []byte("output file already exists; use --replace")}, os.ErrExist
+			}
 			if r.remuxErr != nil {
 				return Output{Stderr: []byte("owned MP4 output denied")}, r.remuxErr
 			}
@@ -306,23 +315,50 @@ func TestRecordingRefusesHiddenTargetAndChangedRecorder(t *testing.T) {
 }
 
 func TestRecordingCancellationRetainsOwnership(t *testing.T) {
-	f := newFixture(t)
-	r := prepareRecording(t, f)
-	r.finish = false
-	startFakeRecording(t, f)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	result, err := f.adapter.StopRecording(ctx, f.target)
-	if !errors.Is(err, context.Canceled) || result.Gap == "" || len(r.signals) != 1 {
-		t.Fatalf("cancellation lost recorder cleanup: %+v %v", result, err)
-	}
-	if err := os.Rename(r.staged, r.path); err != nil {
-		t.Fatal(err)
-	}
-	close(r.process.done)
-	result, err = f.adapter.StopRecording(context.Background(), f.target)
-	if err != nil || result.Duration <= 0 {
-		t.Fatalf("retry lost movie: %+v %v", result, err)
+	for _, stage := range []string{"recorder finalization", "MP4 validation"} {
+		t.Run(stage, func(t *testing.T) {
+			f := newFixture(t)
+			r := prepareRecording(t, f)
+			r.finish = stage != "recorder finalization"
+			start := startFakeRecording(t, f)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if stage == "recorder finalization" {
+				cancel()
+			} else {
+				provider := f.runner.hook
+				f.runner.hook = func(executable string, args []string) (Output, error) {
+					if executable == "/usr/bin/avmediainfo" && args[0] == start.Path && ctx.Err() == nil {
+						cancel()
+						return Output{}, ctx.Err()
+					}
+					return provider(executable, args)
+				}
+			}
+			result, err := f.adapter.StopRecording(ctx, f.target)
+			if !errors.Is(err, context.Canceled) || result.Gap == "" || len(r.signals) != 1 {
+				t.Fatalf("cancellation lost recorder cleanup: %+v %v", result, err)
+			}
+			if stage == "recorder finalization" {
+				if err := os.Rename(r.staged, r.path); err != nil {
+					t.Fatal(err)
+				}
+				close(r.process.done)
+			} else {
+				for _, path := range []string{r.path, start.Path} {
+					if _, err := os.Stat(path); err != nil {
+						t.Fatalf("cancelled validation did not leave owned MOV and MP4: %v", err)
+					}
+				}
+			}
+			result, err = f.adapter.StopRecording(context.Background(), f.target)
+			if err != nil || result.Duration <= 0 || len(r.signals) != 1 {
+				t.Fatalf("retry lost movie or signaled recorder twice: %+v %v", result, err)
+			}
+			if _, err := os.Stat(r.path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("retry left owned MOV: %v", err)
+			}
+		})
 	}
 }
 
