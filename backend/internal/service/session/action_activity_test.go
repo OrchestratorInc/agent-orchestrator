@@ -6,10 +6,11 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/go-chi/chi/v5/middleware"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
-	"github.com/go-chi/chi/v5/middleware"
 )
 
 func actionFixture(t *testing.T) (*Service, *fakeStore, *fakeCommander) {

@@ -166,7 +166,7 @@ func (s *Service) recordSpawnOutcome(ctx context.Context, cfg ports.SpawnConfig,
 }
 
 func (s *Service) recordTerminated(ctx context.Context, id domain.SessionID, status domain.ActivityStatus, err error) {
-	rec, _, _ := s.lookupActionSession(ctx, id)
+	rec := s.lookupActionSession(ctx, id)
 	operationID := string(id) + ":generation:" + itoa(rec.CleanupGeneration)
 	if status != domain.ActivityStatusCompleted {
 		failed := failureOperationID(ctx, "terminate")
@@ -190,7 +190,7 @@ func (s *Service) recordRenamed(ctx context.Context, id domain.SessionID, previo
 	if status == domain.ActivityStatusCompleted && previous == next {
 		return
 	}
-	rec, _, _ := s.lookupActionSession(ctx, id)
+	rec := s.lookupActionSession(ctx, id)
 	operationID := string(id) + ":" + previous + "->" + next
 	if status != domain.ActivityStatusCompleted {
 		failed := failureOperationID(ctx, "rename")
@@ -212,7 +212,7 @@ func (s *Service) recordRenamed(ctx context.Context, id domain.SessionID, previo
 
 func (s *Service) recordRestored(ctx context.Context, id domain.SessionID, rec domain.SessionRecord, status domain.ActivityStatus, err error) {
 	if rec.ID == "" {
-		loaded, _, _ := s.lookupActionSession(ctx, id)
+		loaded := s.lookupActionSession(ctx, id)
 		rec = loaded
 	}
 	operationID := string(id) + ":generation:" + itoa(rec.CleanupGeneration)
@@ -245,7 +245,7 @@ func (s *Service) recordAgentSwitched(ctx context.Context, id domain.SessionID, 
 	if operationID == "" {
 		return
 	}
-	rec, _, _ := s.lookupActionSession(ctx, id)
+	rec := s.lookupActionSession(ctx, id)
 	s.recordAction(ctx, id, actionDetail{
 		Action:          actionSessionAgentSwitched,
 		OperationID:     operationID,
@@ -266,7 +266,7 @@ func (s *Service) recordClaimed(ctx context.Context, id domain.SessionID, pr dom
 	if operationID == "" || operationID == string(id)+":" {
 		return
 	}
-	rec, _, _ := s.lookupActionSession(ctx, id)
+	rec := s.lookupActionSession(ctx, id)
 	s.recordAction(ctx, id, actionDetail{
 		Action:          actionPullRequestClaimed,
 		OperationID:     operationID,
@@ -279,11 +279,12 @@ func (s *Service) recordClaimed(ctx context.Context, id domain.SessionID, pr dom
 	}, status)
 }
 
-func (s *Service) lookupActionSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
+func (s *Service) lookupActionSession(ctx context.Context, id domain.SessionID) domain.SessionRecord {
 	if s == nil || s.store == nil || id == "" {
-		return domain.SessionRecord{}, false, nil
+		return domain.SessionRecord{}
 	}
-	return s.store.GetSession(ctx, id)
+	rec, _, _ := s.store.GetSession(ctx, id)
+	return rec
 }
 
 func failureOperationID(ctx context.Context, kind string) string {
