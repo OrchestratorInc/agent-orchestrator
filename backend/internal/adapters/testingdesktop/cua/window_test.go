@@ -82,7 +82,7 @@ func TestRecordingControlOnlyBlocksItsCoveredPoint(t *testing.T) {
 					if covering {
 						bounds.Y = 130
 					}
-					return jsonOutput([]screenWindow{{ID: 999, PID: 123, Owner: "Electron recording control", Layer: 27, Alpha: &alpha, Bounds: &bounds}, {ID: 456, PID: 123, Owner: "Electron", Alpha: &alpha, Bounds: &f.bounds}}), nil
+					return jsonOutput(windowSnapshot{Windows: []screenWindow{{ID: 999, PID: 123, Owner: "Electron recording control", Layer: 27, Alpha: &alpha, Bounds: &bounds}, {ID: 456, PID: 123, Owner: "Electron", Alpha: &alpha, Bounds: &f.bounds}}}), nil
 				}
 				out, err := provider(executable, args)
 				if len(args) == 5 && args[3] == "bring_to_front" {
@@ -129,7 +129,7 @@ func TestPointGuardRejectsRecordedLockScreenAndUnknownMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := newFixture(t)
-	if err := ownedPoint(recorded, f.target, f.bounds, 120, 140); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "loginwindow PID 412") || !strings.Contains(err.Error(), "layer 2004 bounds (0,0,1440,900)") {
+	if err := ownedPoint(recorded, nil, f.target, f.bounds, 120, 140); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "loginwindow PID 412") || !strings.Contains(err.Error(), "layer 2004 bounds (0,0,1440,900)") {
 		t.Fatal("high-layer locked screen admitted", err)
 	}
 	for _, data := range []string{`[]`, `[{"kCGWindowAlpha":1}]`, `[{"kCGWindowBounds":{"X":0,"Y":0,"Width":1440,"Height":900}}]`} {
@@ -137,18 +137,18 @@ func TestPointGuardRejectsRecordedLockScreenAndUnknownMetadata(t *testing.T) {
 		if err := json.Unmarshal([]byte(data), &windows); err != nil {
 			t.Fatal(err)
 		}
-		if err := ownedPoint(windows, f.target, f.bounds, 120, 140); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "window_hit_test_unknown") {
+		if err := ownedPoint(windows, nil, f.target, f.bounds, 120, 140); !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "window_hit_test_unknown") {
 			t.Fatal("unknown metadata admitted", err)
 		}
 	}
 	alpha, zero := 1.0, 0.0
 	transparent := screenWindow{ID: 999, PID: 999, Layer: 1000, Alpha: &zero, Bounds: &f.bounds}
 	owned := screenWindow{ID: 456, PID: 123, Alpha: &alpha, Bounds: &f.bounds}
-	if err := ownedPoint([]screenWindow{transparent, owned}, f.target, f.bounds, 120, 140); err != nil {
+	if err := ownedPoint([]screenWindow{transparent, owned}, nil, f.target, f.bounds, 120, 140); err != nil {
 		t.Fatal("transparent overlay blocked target", err)
 	}
 	elsewhere := domain.TestWindowBounds{X: 70, Y: 60, Width: 66, Height: 20}
-	if err := ownedPoint([]screenWindow{{Bounds: &elsewhere}, owned}, f.target, f.bounds, 120, 140); err != nil {
+	if err := ownedPoint([]screenWindow{{Bounds: &elsewhere}, owned}, nil, f.target, f.bounds, 120, 140); err != nil {
 		t.Fatal("opacity outside the click point blocked target", err)
 	}
 }
@@ -161,6 +161,35 @@ func TestBackgroundInputIsRefused(t *testing.T) {
 	_, err := f.adapter.Click(context.Background(), f.target, frame, domain.TestClickRequest{ScreenshotID: frame.ScreenshotID, X: 100, Y: 100})
 	if !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "foreground_required") || len(f.runner.calls) != before {
 		t.Fatal("background input was attempted", err)
+	}
+}
+
+func TestRecordedDockWindowOnlyCoversReservedDisplayArea(t *testing.T) {
+	data, err := os.ReadFile("testdata/window-list-dock.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot windowSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	target := domain.TestTargetIdentity{ElectronPID: 31838, WindowID: "8461"}
+	bounds := *snapshot.Windows[2].Bounds
+	for _, point := range []struct {
+		name string
+		y    float64
+		want bool
+	}{{"Settings in usable area", 784, true}, {"Dock area", 840, false}, {"menu area", 10, false}} {
+		t.Run(point.name, func(t *testing.T) {
+			err := ownedPoint(snapshot.Windows, snapshot.Displays, target, bounds, 179.5, point.y)
+			if point.want {
+				if err != nil {
+					t.Fatal("full-display Dock window blocked the usable area", err)
+				}
+			} else if !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "Dock PID 612 window 7 layer 20 bounds (0,0,1440,900)") {
+				t.Fatal("reserved-area refusal lost the exact covering window", err)
+			}
+		})
 	}
 }
 

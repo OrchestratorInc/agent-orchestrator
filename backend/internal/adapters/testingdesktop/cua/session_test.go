@@ -45,7 +45,7 @@ func strictSessionProvider(t *testing.T, f *fixture) *sessionProvider {
 		switch executable {
 		case "/usr/bin/osascript":
 			alpha := 1.0
-			return jsonOutput([]screenWindow{{ID: focusedWindow, PID: focusedPID, Owner: "Electron", Alpha: &alpha, Bounds: &f.bounds}}), nil
+			return jsonOutput(windowSnapshot{Windows: []screenWindow{{ID: focusedWindow, PID: focusedPID, Owner: "Electron", Alpha: &alpha, Bounds: &f.bounds}}}), nil
 		case "/usr/bin/codesign":
 			return Output{Stderr: []byte("Identifier=com.trycua.driver\nTeamIdentifier=YCK386LBJ7\n")}, nil
 		case "/bin/launchctl":

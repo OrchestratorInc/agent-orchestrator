@@ -88,7 +88,7 @@ func newFixture(t *testing.T) *fixture {
 		}
 		if executable == "/usr/bin/osascript" {
 			alpha := 1.0
-			return jsonOutput([]screenWindow{{ID: 456, PID: 123, Owner: "Electron", Alpha: &alpha, Bounds: &f.bounds}}), nil
+			return jsonOutput(windowSnapshot{Windows: []screenWindow{{ID: 456, PID: 123, Owner: "Electron", Alpha: &alpha, Bounds: &f.bounds}}}), nil
 		}
 		if len(args) < 5 || args[2] != "call" {
 			t.Fatalf("unexpected command %v", args)

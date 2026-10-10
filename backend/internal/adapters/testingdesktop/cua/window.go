@@ -107,7 +107,24 @@ func (a *Adapter) focusWindow(ctx context.Context, b *binding) error {
 
 // CGWindowListCopyWindowInfo returns all layers in front-to-back order. JXA is
 // built into macOS; no compiler, helper binary, display capture or AX walk runs.
-const windowListScript = `ObjC.import("CoreGraphics"); JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(1, 0))))`
+const windowListScript = `ObjC.import("CoreGraphics"); ObjC.import("AppKit");
+var screens=$.NSScreen.screens, displays=[];
+for(var i=0;i<screens.count;i++) {
+  var screen=screens.objectAtIndex(i), frame=screen.frame, visible=screen.visibleFrame;
+  displays.push({frame:{x:frame.origin.x,y:frame.origin.y,width:frame.size.width,height:frame.size.height},
+    visibleFrame:{x:visible.origin.x,y:visible.origin.y,width:visible.size.width,height:visible.size.height}});
+}
+JSON.stringify({windows:ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(1, 0))), displays:displays})`
+
+type screenDisplay struct {
+	Frame        domain.TestWindowBounds `json:"frame"`
+	VisibleFrame domain.TestWindowBounds `json:"visibleFrame"`
+}
+
+type windowSnapshot struct {
+	Windows  []screenWindow  `json:"windows"`
+	Displays []screenDisplay `json:"displays"`
+}
 
 type screenWindow struct {
 	ID     int                      `json:"kCGWindowNumber"`
@@ -126,17 +143,17 @@ func (a *Adapter) checkClickPoint(ctx context.Context, b *binding, r *captureRec
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	var windows []screenWindow
-	if err := json.Unmarshal(out.Stdout, &windows); err != nil {
+	var snapshot windowSnapshot
+	if err := json.Unmarshal(out.Stdout, &snapshot); err != nil {
 		return &Error{Code: "window_hit_test_unknown", Detail: providerCallDiagnostic(ctx, "WindowServer window list", nil, "invalid all-layer window list", nil, err), cause: errors.Join(ErrRefused, err)}
 	}
 	// Convert original capture pixels to global native display points once.
 	x := r.frame.Bounds.X + float64(point.x)/r.frame.Scale
 	y := r.frame.Bounds.Y + float64(point.y)/r.frame.Scale
-	return ownedPoint(windows, b.target, r.frame.Bounds, x, y)
+	return ownedPoint(snapshot.Windows, snapshot.Displays, b.target, r.frame.Bounds, x, y)
 }
 
-func ownedPoint(windows []screenWindow, target domain.TestTargetIdentity, bounds domain.TestWindowBounds, x, y float64) error {
+func ownedPoint(windows []screenWindow, displays []screenDisplay, target domain.TestTargetIdentity, bounds domain.TestWindowBounds, x, y float64) error {
 	for _, w := range windows {
 		if w.Alpha != nil && *w.Alpha == 0 {
 			continue
@@ -157,6 +174,9 @@ func ownedPoint(windows []screenWindow, target domain.TestTargetIdentity, bounds
 		if w.Alpha == nil || *w.Alpha < 0 || *w.Alpha > 1 {
 			return refuse("window_hit_test_unknown", "WindowServer did not prove the containing window's opacity")
 		}
+		if dockUsablePoint(w, displays, x, y) {
+			continue
+		}
 		if w.PID != target.ElectronPID || strconv.Itoa(w.ID) != target.WindowID {
 			return refuse("window_point_covered", fmt.Sprintf("point (%g,%g) is covered by %s PID %d window %d layer %d bounds (%g,%g,%g,%g)", x, y, providerDiagnosticText(w.Owner, nil, 128), w.PID, w.ID, w.Layer, f.X, f.Y, f.Width, f.Height))
 		}
@@ -166,6 +186,27 @@ func ownedPoint(windows []screenWindow, target domain.TestTargetIdentity, bounds
 		return nil
 	}
 	return refuse("window_hit_test_unknown", "no on-screen window contains the input point")
+}
+
+// Dock paints its bar inside a full-display window. Only that exact shape may
+// pass input through the usable area. Cocoa screen frames use bottom-left Y;
+// WindowServer uses the primary display's top-left global origin.
+func dockUsablePoint(w screenWindow, displays []screenDisplay, x, y float64) bool {
+	if w.Owner != "Dock" || w.Layer != 20 || len(displays) == 0 || !validBounds(displays[0].Frame) {
+		return false
+	}
+	top := displays[0].Frame.Y + displays[0].Frame.Height
+	for _, display := range displays {
+		frame, usable := display.Frame, display.VisibleFrame
+		frame.Y = top - frame.Y - frame.Height
+		usable.Y = top - usable.Y - usable.Height
+		if frame != *w.Bounds || !validBounds(usable) || usable.X < frame.X || usable.Y < frame.Y ||
+			usable.X+usable.Width > frame.X+frame.Width || usable.Y+usable.Height > frame.Y+frame.Height {
+			continue
+		}
+		return x >= usable.X && x < usable.X+usable.Width && y >= usable.Y && y < usable.Y+usable.Height
+	}
+	return false
 }
 
 // For an off-screen frame, move only this window into the primary display's

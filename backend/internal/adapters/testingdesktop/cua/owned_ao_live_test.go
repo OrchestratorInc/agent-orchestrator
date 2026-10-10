@@ -210,12 +210,12 @@ type liveDiagnosticRunner struct {
 func (r liveDiagnosticRunner) Run(ctx context.Context, executable string, args, env []string) (Output, error) {
 	out, err := r.Runner.Run(ctx, executable, args, env)
 	if executable == "/usr/bin/osascript" && err == nil && r.windowListPath != "" {
-		var windows []screenWindow
-		if decodeErr := json.Unmarshal(out.Stdout, &windows); decodeErr != nil {
+		var snapshot windowSnapshot
+		if decodeErr := json.Unmarshal(out.Stdout, &snapshot); decodeErr != nil {
 			r.t.Fatal(decodeErr)
 		}
 		// Retain the admission's actual order and bounds, without window titles.
-		data, writeErr := json.MarshalIndent(windows, "", "  ")
+		data, writeErr := json.MarshalIndent(snapshot, "", "  ")
 		if writeErr == nil {
 			writeErr = os.WriteFile(r.windowListPath, data, 0o600)
 		}
