@@ -191,7 +191,7 @@ vi.mock("../hooks/useDaemonStatus", () => ({
 
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../lib/api-client")>()),
-	apiClient: { GET: vi.fn(async () => ({ data: { hostId: "local-host", apiVersion: 1 } })), POST: vi.fn(), DELETE: vi.fn(), PATCH: vi.fn() },
+	apiClient: { POST: vi.fn(), DELETE: vi.fn(), PATCH: vi.fn() },
 	apiErrorCode: (error: { code?: string } | undefined) => error?.code,
 	apiErrorMessage: (error: { message?: string } | undefined) => error?.message ?? "request failed",
 	hasTrustedApiBaseUrl: () => true,

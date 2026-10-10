@@ -7,18 +7,17 @@ const mocks = vi.hoisted(() => {
 	const self = { hostId: "this-mac", label: "Macbook Air M1", url: "https://this-mac.test" };
 	const other = { hostId: "other-mac", label: "Other Mac", url: "https://other-mac.test" };
 	const saved = [self, other];
-	const identity = vi.fn();
 	const workspaceResponse = (local: boolean, path: string) => {
 		const projectId = local ? "local-project" : "other-project";
 		if (path === "/api/v1/projects") return { data: { projects: [{ id: projectId, name: local ? "agent-orchestrator" : "other-repo", path: "/fixture/repo" }] } };
 		if (path === "/api/v1/sessions") return { data: { sessions: [{ id: local ? "local-session" : "other-session", projectId, displayName: "Continue work", harness: "codex", status: "working", statusReadiness: "ready", activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" }, prs: [] }] } };
 		throw new Error(`unexpected request ${path}`);
 	};
-	return { self, other, saved, identity, cloudBaseUrl: "https://cloud.fixture.test",
-		localGet: vi.fn(async (path: string) => path === "/api/v1/identity" ? identity() : workspaceResponse(true, path)),
+	return { self, other, saved, cloudBaseUrl: "https://cloud.fixture.test",
+		localGet: vi.fn(async (path: string) => workspaceResponse(true, path)),
 		remoteGet: vi.fn(async (base: string, path: string) => workspaceResponse(base.endsWith("4000"), path)),
 		remotes: {
-			list: vi.fn(async () => [...saved]),
+			list: vi.fn(async () => saved.filter((host) => host.hostId !== self.hostId)),
 			importAccountHost: vi.fn(async (_account: string, host: typeof self) => {
 				const index = saved.findIndex((entry) => entry.hostId === host.hostId);
 				if (index < 0) saved.push(host);
@@ -49,7 +48,7 @@ import { useUiStore } from "../stores/ui-store";
 
 beforeEach(() => {
 	vi.clearAllMocks();
-	mocks.identity.mockReset().mockResolvedValue({ data: { hostId: mocks.self.hostId, apiVersion: 1 } });
+	mocks.remotes.list.mockReset().mockImplementation(async () => mocks.saved.filter((host) => host.hostId !== mocks.self.hostId));
 	mocks.saved.splice(0, mocks.saved.length, mocks.self, mocks.other);
 	mocks.cloudBaseUrl = "https://cloud.fixture.test";
 	useUiStore.setState({ developerMode: true, remoteHosts: true });
@@ -93,31 +92,15 @@ it.each([true, false])("excludes this daemon from remote sidebar data while pres
 	expect.soft(sidebarWorkspaces.filter((workspace) => workspace.id === "local-project")).toHaveLength(1);
 	expect.soft(sidebarWorkspaces.flatMap((workspace) => workspace.sessions).filter((session) => session.id === "local-session")).toHaveLength(1);
 	expect(sidebarWorkspaces.find((workspace) => workspace.id === "other-project")?.hostId).toBe(mocks.other.hostId);
-	mocks.identity.mockRejectedValueOnce(new Error("local daemon restarting"));
 	await act(async () => result.current.hosts.refresh());
 	expect(result.current.hosts.hosts.map((host) => host.hostId)).toEqual([mocks.other.hostId]);
 	expect(mocks.remotes.connect).not.toHaveBeenCalledWith(mocks.self.url, mocks.self.hostId);
 });
 
-it.each(["request fails", "response has no host ID"])("preserves paired hosts when identity %s and removes a self connection when identity recovers", async (failure) => {
-	if (failure === "request fails") mocks.identity.mockRejectedValueOnce(new Error("local daemon restarting"));
-	else mocks.identity.mockResolvedValueOnce({ data: { apiVersion: 1 } });
-	const { result } = renderWorkspaceSources();
-	await waitFor(() => expect(result.current.hosts.hosts.map((host) => [host.hostId, host.status])).toEqual([
-		[mocks.self.hostId, "connected"], [mocks.other.hostId, "connected"],
-	]));
-	await act(async () => result.current.hosts.refresh());
-	expect(result.current.hosts.hosts.map((host) => host.hostId)).toEqual([mocks.other.hostId]);
-	expect(connectedHosts()).toEqual([mocks.other.hostId]);
-	expect(mocks.remotes.disconnect).toHaveBeenCalledWith(mocks.self.url);
-	expect(mocks.saved.map((host) => host.hostId)).toEqual([mocks.self.hostId, mocks.other.hostId]);
-});
-
-it("keeps a legacy host visible for re-pairing when the first local identity request fails", async () => {
+it("keeps a legacy host visible for re-pairing without a renderer identity probe", async () => {
 	const legacy = { hostId: "", label: "Old Mac", url: "https://old-mac.test" };
 	mocks.cloudBaseUrl = "";
 	mocks.saved.splice(0, mocks.saved.length, legacy);
-	mocks.identity.mockRejectedValueOnce(new Error("local daemon restarting"));
 	mocks.remotes.connect.mockRejectedValueOnce(new Error("remote host must be paired again to record its identity"));
 	const { result } = renderHook(() => useRemoteHosts());
 	await waitFor(() => expect(result.current.hosts).toEqual([{ ...legacy, status: "offline" }]));
