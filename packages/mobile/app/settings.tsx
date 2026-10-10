@@ -509,7 +509,8 @@ function NotificationsRow() {
 	const [snapshot, setSnapshot] = useState<{ config: ServerConfig | null; status: PushStatus } | null>(null);
 	const status = snapshot?.config === config ? snapshot.status : null;
 	const refreshId = useRef(0);
-	const [busy, setBusy] = useState(false);
+	// The position the user just picked, shown while the change is applied.
+	const [pending, setPending] = useState<boolean | null>(null);
 	const refresh = useCallback(() => {
 		const id = ++refreshId.current;
 		getPushStatus(config).then((status) => {
@@ -529,22 +530,27 @@ function NotificationsRow() {
 			]);
 			return;
 		}
-		setBusy(true);
+		setPending(next);
+		let registered = false;
 		try {
 			if (!next) {
 				await unregisterFromPush(config);
 				haptics.tap();
 			} else if (config) {
-				const registered = await registerForPush(config, { ask: true });
-				if (registered.ok) haptics.success();
+				const result = await registerForPush(config, { ask: true });
+				registered = result.ok;
+				if (result.ok) haptics.success();
 				else {
 					haptics.error();
-					const { title, message } = describeRegisterFailure(registered.reason, Platform.OS, registered.status);
+					const { title, message } = describeRegisterFailure(result.reason, Platform.OS, result.status);
 					Alert.alert(title, message);
 				}
 			}
+			// Show the outcome now. A status read queues behind the connected
+			// machines' push refresh, which can take seconds; it still runs below.
+			if (status) setSnapshot({ config, status: { ...status, registered, granted: status.granted || registered } });
 		} finally {
-			setBusy(false);
+			setPending(null);
 			refresh();
 		}
 	}
@@ -552,14 +558,12 @@ function NotificationsRow() {
 	return (
 		<CardRow
 			icon="bell"
-			label="Agent notifications"
+			label="Notifications"
 			disabled={toggle.disabled}
 			right={
-				busy ? <ActivityIndicator size="small" color={t.textTertiary} /> : (
-					<Host style={{ width: 54, height: 34 }} colorScheme={scheme} seedColor={t.accent}>
-						<Switch value={toggle.value} disabled={toggle.disabled} onValueChange={onToggle} />
-					</Host>
-				)
+				<Host style={{ width: 54, height: 34 }} colorScheme={scheme} seedColor={t.accent}>
+					<Switch value={pending ?? toggle.value} disabled={toggle.disabled || pending !== null} onValueChange={onToggle} />
+				</Host>
 			}
 		/>
 	);

@@ -36,6 +36,10 @@ const { registerPushDevice, unpairFromDaemon, unregisterPushDevice } = await imp
 const { forgetServer } = await import("./disconnect");
 const { loadHosts, saveHost, setActiveHost } = await import("./hosts");
 
+// Status reads queue behind every storage mutation, including the cleanup
+// that register and unregister leave running after they resolve.
+const settled = () => getPushStatus(config("h_settle"));
+
 function config(hostId: string, host = "192.168.1.42"): ServerConfig {
 	return { hostId, host, httpPort: "3011", muxPort: "", secure: false, password: `token-${hostId}` };
 }
@@ -143,10 +147,12 @@ describe("push registration across machines", () => {
 		secure.set("ao.pushPendingUnregister", JSON.stringify([{ ...old, hostId: "h_a" }, old]));
 
 		await registerForPush(config("h_b"));
+		await settled();
 		expect(unregisterPushDevice).not.toHaveBeenCalled();
 
 		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_a", apiVersion: 1 }) })));
 		await registerForPush(config("h_b"));
+		await settled();
 		expect(unregisterPushDevice).toHaveBeenCalledExactlyOnceWith(
 			expect.objectContaining({ hostId: "h_a", host: old.host, password: old.password }),
 			"ExponentPushToken[old]",
@@ -162,6 +168,7 @@ describe("push registration across machines", () => {
 		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hostId: "h_a", apiVersion: 1 }) })));
 
 		await registerForPush(config("h_b"));
+		await settled();
 
 		expect(unregisterPushDevice).not.toHaveBeenCalled();
 		expect(secure.has("ao.pushPendingUnregister")).toBe(false);
@@ -180,10 +187,41 @@ describe("push registration across machines", () => {
 		expect(unregisterPushDevice).toHaveBeenCalledExactlyOnceWith(config("h_b", "100.101.102.103"), "ExponentPushToken[test]");
 	});
 
+	it("turns the switch off without waiting on the daemon", async () => {
+		await registerForPush(config("h_b"));
+		let releaseProbe!: () => void;
+		const probeCanFinish = new Promise<void>((resolve) => { releaseProbe = resolve; });
+		vi.stubGlobal("fetch", vi.fn(async () => {
+			await probeCanFinish;
+			return { ok: true, json: async () => ({ hostId: "h_b", apiVersion: 1 }) };
+		}));
+
+		await unregisterFromPush(config("h_b"));
+		expect(unregisterPushDevice).not.toHaveBeenCalled();
+
+		releaseProbe();
+		expect((await getPushStatus(config("h_b"))).registered).toBe(false);
+		expect(unregisterPushDevice).toHaveBeenCalledExactlyOnceWith(config("h_b"), "ExponentPushToken[test]");
+	});
+
+	it("sends the off request before a quick re-enable registers again", async () => {
+		await registerForPush(config("h_b"));
+		vi.mocked(registerPushDevice).mockClear();
+
+		void unregisterFromPush(config("h_b"));
+		await registerForPush(config("h_b"));
+		await settled();
+
+		expect(vi.mocked(unregisterPushDevice).mock.invocationCallOrder[0])
+			.toBeLessThan(vi.mocked(registerPushDevice).mock.invocationCallOrder[0]);
+		expect((await getPushStatus(config("h_b"))).registered).toBe(true);
+	});
+
 	it("turns A's local switch off without sending A's bearer to a replacement host", async () => {
 		await registerForPush(config("h_a"));
 
 		await unregisterFromPush(config("h_a"));
+		await settled();
 
 		expect(unregisterPushDevice).not.toHaveBeenCalled();
 		expect((await getPushStatus(config("h_a"))).registered).toBe(false);

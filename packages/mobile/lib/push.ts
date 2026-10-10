@@ -236,9 +236,6 @@ async function registerForPushNow(
 		return { ok: false, reason: "no-project-id" };
 	}
 
-	// Retry any unregisters we still owe from a previous failure.
-	await flushPendingUnregisters();
-
 	// Step 1 — mint the token. This throws when the build itself can't do push:
 	// most commonly an iOS build with no APNs `aps-environment` entitlement, or a
 	// simulator. Kept in its own try so it is never confused with a server error.
@@ -283,11 +280,16 @@ export function registerForPush(
 	cfg: ServerConfig,
 	options: { ask: boolean } = { ask: true },
 ): Promise<PushRegisterResult> {
-	return orderedMutation(async () => {
+	const result = orderedMutation(async () => {
 		const result = await registerForPushNow(cfg, options);
 		if (result.ok && options.ask) refreshConnectedPush?.();
 		return result;
 	});
+	// Retry unregisters still owed from an earlier failure. Each probe of a dead
+	// host costs up to PROBE_TIMEOUT_MS, so it runs after this call resolves
+	// rather than inside it, where the Settings switch would wait on it.
+	void orderedMutation(flushPendingUnregisters).catch(() => {});
+	return result;
 }
 
 // Reads the live permission + registration state without prompting.
@@ -353,17 +355,26 @@ export function unpairFromServer(target: HostMetadata | null): Promise<void> {
 	return orderedMutation(() => unpairFromServerNow(target));
 }
 
-async function unregisterFromPushNow(cfg: ServerConfig | null): Promise<void> {
-	if (!cfg) return;
-	const reg = await loadRegistration(cfg);
-	if (!reg) return;
-	// Turning off push for this machine clears its local status even if the
-	// daemon is offline; the pending queue retries the network call later.
-	await clearRegistration(reg);
+async function unregisterFromDaemon(reg: Registration): Promise<void> {
 	await flushPendingUnregisters();
 	if (reg.hostId && !(await unregisterIfVerified(reg))) await queuePendingUnregister(reg);
 }
 
+// Resolves once this machine's local status is cleared. The daemon call (an
+// identity probe plus a DELETE) follows in the same queue, so a later
+// register still runs after it, but the caller does not wait on the network.
+// It can't change the outcome: an offline daemon is retried later anyway.
 export function unregisterFromPush(cfg: ServerConfig | null): Promise<void> {
-	return orderedMutation(() => unregisterFromPushNow(cfg));
+	const cleared = orderedMutation(async () => {
+		const reg = cfg ? await loadRegistration(cfg) : null;
+		if (reg) await clearRegistration(reg);
+		return reg;
+	});
+	// Queued now, not from inside the step above, so nothing queued in between
+	// (a re-register) can run before this DELETE.
+	void orderedMutation(async () => {
+		const reg = await cleared;
+		if (reg) await unregisterFromDaemon(reg);
+	}).catch(() => {});
+	return cleared.then(() => undefined);
 }
