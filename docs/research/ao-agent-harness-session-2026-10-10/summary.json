@@ -1,0 +1,1339 @@
+{
+  "schemaVersion": 1,
+  "kind": "curated-historical-session-evidence",
+  "sessionDate": "2026-10-10",
+  "scope": "Results at the exact integration PR revisions only; not validation of main, the new skill PR, other versions, or a combined integration branch.",
+  "historicalSummaryAt": "2026-10-10T07:26:28.608581+00:00",
+  "ciVerifiedAt": "2026-10-10 07:22:03 UTC",
+  "outcome": "Historical reports recorded 17/17 lifecycle PASS labels per agent and 24/24 CI successes per exact integration PR head. Packaging review found instruction-refresh evidence unproven for every agent; no full strict audit PASS is claimed.",
+  "laterReproductionCaveat": "At final Open Interpreter head, an ordinary raw send during native initialization returned HTTP 200 but started no new native task in 60 seconds. Readiness-aware passing runs do not fix this path.",
+  "environment": {
+    "os": "Ubuntu 24.04 x86_64",
+    "node": "24.21.0",
+    "provider": "Existing Z.ai coding-plan credential",
+    "model": "glm-5.3-flash",
+    "localMacChecksRun": false,
+    "unusedCredentials": [
+      "Existing Codex login",
+      "Supplied DeepSeek key"
+    ],
+    "newLoginOrAccountSwitch": false,
+    "isolatedStateUnder": "~/.ao",
+    "permissionScope": "Disposable native bypass where required; other permission modes not established"
+  },
+  "lifecycleGates": [
+    "tui_spawn",
+    "proof_file_creation",
+    "correct_working_directory",
+    "initial_prompt_exactly_once",
+    "hidden_ao_instructions",
+    "project_agents_md",
+    "activity_status",
+    "second_message",
+    "native_session_id",
+    "cancellation",
+    "termination",
+    "native_restore",
+    "same_ao_session_workspace",
+    "post_restore_terminal_ready",
+    "post_restore_message",
+    "history_file_continuity",
+    "system_prompt_restore"
+  ],
+  "agents": [
+    {
+      "agent": "tau",
+      "label": "Tau",
+      "nativeVersion": "0.4.7",
+      "pr": 6493,
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/pull/6493",
+      "initialHead": "49f421f4548f26242c18b9d7d231b3b02ae5c530",
+      "head": "189ca905dee3264ba5c682590ae04bcd8da88adf",
+      "binarySha256": "ba1d3a51bd48bdf9d89d4e59dcdfa33449f86b72bf3bd0de6923888870187515",
+      "finalAttempt": "tau-diagnostic-attempt6",
+      "originalReportSha256": "d4a17a7476d3f66c4db32fb731309695c2377d4cb93e479fa01f608ce611c17e",
+      "runnerSha256": "09070c3086b73d8a5d54b28ab07697dda06b67b23bc3c1ddea4555f7144ec741",
+      "lifecyclePassed": 17,
+      "lifecycleTotal": 17,
+      "gateCounts": {
+        "PASS": 25,
+        "NOT_RUN": 2,
+        "BLOCKED": 1
+      },
+      "overallAuditStatus": "BLOCKED",
+      "nonPassGates": [
+        {
+          "name": "local_models_list",
+          "status": "NOT_RUN",
+          "reason": "local model-list command is not defined"
+        },
+        {
+          "name": "authentication",
+          "status": "BLOCKED",
+          "reason": "Tau has credentials configured, but AO could not verify them."
+        },
+        {
+          "name": "model_catalog_consistency",
+          "status": "NOT_RUN",
+          "reason": "both local and AO model catalogs are required for comparison"
+        }
+      ],
+      "ciPassed": 24,
+      "ciTotal": 24,
+      "sessionTerminationConfirmed": true,
+      "daemonStopped": true,
+      "ciChecks": [
+        {
+          "name": "native (ubuntu-latest)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489705/job/114150201893"
+        },
+        {
+          "name": "mac-update-helper",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489677/job/114150201839"
+        },
+        {
+          "name": "backend-core (0)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489808/job/114150202587"
+        },
+        {
+          "name": "released-tui",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489703/job/114150201949"
+        },
+        {
+          "name": "scan",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489689/job/114150201571"
+        },
+        {
+          "name": "native (macos-latest)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489705/job/114150201736"
+        },
+        {
+          "name": "backend-core (1)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489808/job/114150202772"
+        },
+        {
+          "name": "native (windows-latest)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489705/job/114150201921"
+        },
+        {
+          "name": "container",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489705/job/114150201971"
+        },
+        {
+          "name": "test",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489677/job/114150201873"
+        },
+        {
+          "name": "chat-race (0)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489808/job/114150202594"
+        },
+        {
+          "name": "chat-race (1)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489808/job/114150202641"
+        },
+        {
+          "name": "renderer-smoke",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489677/job/114150201697"
+        },
+        {
+          "name": "session-store-race",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489808/job/114150202445"
+        },
+        {
+          "name": "sqlite-race (0)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489808/job/114150202642"
+        },
+        {
+          "name": "sqlite-race (1)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489808/job/114150202671"
+        },
+        {
+          "name": "sqlite-race (2)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489808/job/114150202653"
+        },
+        {
+          "name": "sqlite-race (3)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489808/job/114150202672"
+        },
+        {
+          "name": "windows-workspace",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489808/job/114150202700"
+        },
+        {
+          "name": "cloud-build-test",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489808/job/114150202616"
+        },
+        {
+          "name": "lint",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489808/job/114150202543"
+        },
+        {
+          "name": "sqlc-drift",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489808/job/114150202555"
+        },
+        {
+          "name": "api-drift",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489808/job/114150202601"
+        },
+        {
+          "name": "build-test",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38030489808/job/114151528982"
+        }
+      ],
+      "reportComments": [
+        "https://github.com/OrchestratorInc/agent-orchestrator/pull/6493#issuecomment-6095292928",
+        "https://github.com/OrchestratorInc/agent-orchestrator/pull/6493#issuecomment-6095921916"
+      ],
+      "recordedLifecycleCountsAreHistorical": true,
+      "systemPromptRestoreInterpretation": "UNPROVEN for refreshed delivery; initial token availability only"
+    },
+    {
+      "agent": "neovate",
+      "label": "Neovate Code",
+      "nativeVersion": "0.28.5",
+      "pr": 6494,
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/pull/6494",
+      "initialHead": "e82a48fa09c07e7d70cdd19a26aea0ae1bed7e1f",
+      "head": "e82a48fa09c07e7d70cdd19a26aea0ae1bed7e1f",
+      "binarySha256": "e32b841daefa160e2ac4c4129035af2fdded197ddf6e42abb782aba97561c3f2",
+      "finalAttempt": "neovate-diagnostic-attempt3",
+      "originalReportSha256": "f38efeda3f3fa5ad1c82bf1e3644fbaac553ac71f2adc3bf67205779415d3c7e",
+      "runnerSha256": "09070c3086b73d8a5d54b28ab07697dda06b67b23bc3c1ddea4555f7144ec741",
+      "lifecyclePassed": 17,
+      "lifecycleTotal": 17,
+      "gateCounts": {
+        "PASS": 25,
+        "NOT_RUN": 2,
+        "BLOCKED": 1
+      },
+      "overallAuditStatus": "BLOCKED",
+      "nonPassGates": [
+        {
+          "name": "local_models_list",
+          "status": "NOT_RUN",
+          "reason": "local model-list command is not defined"
+        },
+        {
+          "name": "authentication",
+          "status": "BLOCKED",
+          "reason": "Neovate Code has credentials configured, but AO could not verify them."
+        },
+        {
+          "name": "model_catalog_consistency",
+          "status": "NOT_RUN",
+          "reason": "both local and AO model catalogs are required for comparison"
+        }
+      ],
+      "ciPassed": 24,
+      "ciTotal": 24,
+      "sessionTerminationConfirmed": true,
+      "daemonStopped": true,
+      "ciChecks": [
+        {
+          "name": "native (ubuntu-latest)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941165/job/114080980047"
+        },
+        {
+          "name": "mac-update-helper",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941175/job/114080979722"
+        },
+        {
+          "name": "backend-core (0)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980098"
+        },
+        {
+          "name": "released-tui",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941142/job/114080979529"
+        },
+        {
+          "name": "scan",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941145/job/114080979632"
+        },
+        {
+          "name": "native (macos-latest)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941165/job/114080980280"
+        },
+        {
+          "name": "backend-core (1)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980104"
+        },
+        {
+          "name": "native (windows-latest)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941165/job/114080980159"
+        },
+        {
+          "name": "container",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941165/job/114080979775"
+        },
+        {
+          "name": "test",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941175/job/114080979721"
+        },
+        {
+          "name": "chat-race (0)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980217"
+        },
+        {
+          "name": "chat-race (1)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980115"
+        },
+        {
+          "name": "renderer-smoke",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941175/job/114080979573"
+        },
+        {
+          "name": "session-store-race",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080979811"
+        },
+        {
+          "name": "sqlite-race (0)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980080"
+        },
+        {
+          "name": "sqlite-race (1)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980090"
+        },
+        {
+          "name": "sqlite-race (2)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980167"
+        },
+        {
+          "name": "sqlite-race (3)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980016"
+        },
+        {
+          "name": "windows-workspace",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980057"
+        },
+        {
+          "name": "cloud-build-test",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980103"
+        },
+        {
+          "name": "lint",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980185"
+        },
+        {
+          "name": "sqlc-drift",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980058"
+        },
+        {
+          "name": "api-drift",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114080980079"
+        },
+        {
+          "name": "build-test",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38007941136/job/114082900315"
+        }
+      ],
+      "reportComments": [
+        "https://github.com/OrchestratorInc/agent-orchestrator/pull/6494#issuecomment-6095293549",
+        "https://github.com/OrchestratorInc/agent-orchestrator/pull/6494#issuecomment-6095922325"
+      ],
+      "recordedLifecycleCountsAreHistorical": true,
+      "systemPromptRestoreInterpretation": "UNPROVEN for refreshed delivery; initial token availability only"
+    },
+    {
+      "agent": "open-interpreter",
+      "label": "Open Interpreter Rust",
+      "nativeVersion": "0.0.56",
+      "pr": 6496,
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/pull/6496",
+      "initialHead": "6f4f686aa94aca5e8f4977fca49be649fe4e4fb9",
+      "head": "88c7431c427dda8c08802e9612042545a4febaf3",
+      "binarySha256": "7cc271c14bd98521a1f3d04bd09ec044ba8f46e94cdabf2d1882e7c82cf3c51a",
+      "finalAttempt": "open-interpreter-diagnostic-attempt5",
+      "originalReportSha256": "32acbfde9baf2655d2b1f62dce080ed918f3a0f622bc0ae268418cdf2fc3bbad",
+      "runnerSha256": "37e6d6f8901ba080ec1a41cc36d6a253a56abad8003f753a4357fedc7f0170d7",
+      "lifecyclePassed": 17,
+      "lifecycleTotal": 17,
+      "gateCounts": {
+        "PASS": 24,
+        "NOT_RUN": 2,
+        "BLOCKED": 1,
+        "FAIL": 1
+      },
+      "overallAuditStatus": "FAIL",
+      "nonPassGates": [
+        {
+          "name": "local_models_list",
+          "status": "NOT_RUN",
+          "reason": "local model-list command is not defined"
+        },
+        {
+          "name": "authentication",
+          "status": "BLOCKED",
+          "reason": "Open Interpreter has credentials configured, but AO could not verify them."
+        },
+        {
+          "name": "ao_models_api",
+          "status": "FAIL",
+          "reason": "AO model API failed or returned no models"
+        },
+        {
+          "name": "model_catalog_consistency",
+          "status": "NOT_RUN",
+          "reason": "both local and AO model catalogs are required for comparison"
+        }
+      ],
+      "ciPassed": 24,
+      "ciTotal": 24,
+      "sessionTerminationConfirmed": true,
+      "daemonStopped": true,
+      "ciChecks": [
+        {
+          "name": "native (ubuntu-latest)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652379/job/114156637973"
+        },
+        {
+          "name": "mac-update-helper",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652431/job/114156638253"
+        },
+        {
+          "name": "backend-core (0)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652348/job/114156638043"
+        },
+        {
+          "name": "released-native-tui",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652321/job/114156637528"
+        },
+        {
+          "name": "scan",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652349/job/114156637731"
+        },
+        {
+          "name": "native (macos-latest)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652379/job/114156637951"
+        },
+        {
+          "name": "backend-core (1)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652348/job/114156638014"
+        },
+        {
+          "name": "native (windows-latest)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652379/job/114156638082"
+        },
+        {
+          "name": "container",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652379/job/114156637809"
+        },
+        {
+          "name": "test",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652431/job/114156638315"
+        },
+        {
+          "name": "chat-race (0)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652348/job/114156638013"
+        },
+        {
+          "name": "chat-race (1)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652348/job/114156638122"
+        },
+        {
+          "name": "renderer-smoke",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652431/job/114156638190"
+        },
+        {
+          "name": "session-store-race",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652348/job/114156638121"
+        },
+        {
+          "name": "sqlite-race (0)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652348/job/114156638073"
+        },
+        {
+          "name": "sqlite-race (1)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652348/job/114156638061"
+        },
+        {
+          "name": "sqlite-race (2)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652348/job/114156638173"
+        },
+        {
+          "name": "sqlite-race (3)",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652348/job/114156638167"
+        },
+        {
+          "name": "windows-workspace",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652348/job/114156638012"
+        },
+        {
+          "name": "cloud-build-test",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652348/job/114156637836"
+        },
+        {
+          "name": "lint",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652348/job/114156638005"
+        },
+        {
+          "name": "sqlc-drift",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652348/job/114156637995"
+        },
+        {
+          "name": "api-drift",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652348/job/114156638171"
+        },
+        {
+          "name": "build-test",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38032652348/job/114157920762"
+        }
+      ],
+      "reportComments": [
+        "https://github.com/OrchestratorInc/agent-orchestrator/pull/6496#issuecomment-6095294120",
+        "https://github.com/OrchestratorInc/agent-orchestrator/pull/6496#issuecomment-6095922723"
+      ],
+      "recordedLifecycleCountsAreHistorical": true,
+      "systemPromptRestoreInterpretation": "UNPROVEN for refreshed delivery; initial token availability only"
+    }
+  ],
+  "strictAuditLimits": [
+    "All AO credential probes remain configured-only, despite independent successful real-provider calls.",
+    "Tau native provider TSV cannot be treated as a list of model IDs; exact local catalog comparison is NOT_RUN.",
+    "Neovate has no supported native model-list command; exact local catalog comparison is NOT_RUN.",
+    "Open Interpreter uses free-form models: its empty AO catalog leaves ao_models_api FAIL; native listing and exact comparison are NOT_RUN."
+  ],
+  "openInterpreterTiming": {
+    "nativeCancellationMs": 22,
+    "aoIdleConfirmationMs": 29928,
+    "restoredNativeTaskOnsetAfterAPIResponseMs": 14
+  },
+  "historicalRunnerFixtures": {
+    "passed": 91,
+    "total": 91,
+    "finalRunnerSha256": "37e6d6f8901ba080ec1a41cc36d6a253a56abad8003f753a4357fedc7f0170d7",
+    "originalStrictRunnerSha256": "66271ceb4a9fdd5b9db23edec4ee8505730f6723b8802306862b09b1fed4c297"
+  },
+  "attemptPolicy": "Original failed and partial attempts are preserved, not overwritten or promoted. Final summaries use corrected evidence and exact source attribution.",
+  "attempts": [
+    {
+      "attempt": "neovate-diagnostic-attempt1",
+      "startedAt": "2026-10-10T05:53:51.176Z",
+      "finishedAt": "2026-10-10T05:58:09.678Z",
+      "reportedState": "finished",
+      "note": "Runner used nonexistent interrupt HTTP endpoint. Initial work and exact restore passed; continuation unproven."
+    },
+    {
+      "attempt": "neovate-diagnostic-attempt2",
+      "startedAt": "2026-10-10T06:13:49.845Z",
+      "finishedAt": "2026-10-10T06:18:49.070Z",
+      "reportedState": "finished",
+      "note": "Actual mux Escape canceled the native turn. Continuation was sent before native composer mounted and remained draft."
+    },
+    {
+      "attempt": "neovate-diagnostic-attempt3",
+      "startedAt": "2026-10-10T06:38:48.041Z",
+      "finishedAt": "2026-10-10T06:40:13.253Z",
+      "reportedState": "finished",
+      "note": "Final Neovate lifecycle gates pass with readiness-aware diagnostic runner."
+    },
+    {
+      "attempt": "neovate-postrestore-control",
+      "startedAt": "2026-10-10T06:26:24.316312+00:00",
+      "finishedAt": "2026-10-10T06:26:26.812971+00:00",
+      "reportedState": null,
+      "note": "Control stopped before sending: initially searched old PTY registry location. Cleanup confirmed.",
+      "controlledResult": false
+    },
+    {
+      "attempt": "neovate-postrestore-control-attempt2",
+      "startedAt": "2026-10-10T06:27:55.920332+00:00",
+      "finishedAt": "2026-10-10T06:28:31.929014+00:00",
+      "reportedState": null,
+      "note": "Same-session control waited for actual composer then sent identical API message; history and refreshed instructions verified.",
+      "controlledResult": true
+    },
+    {
+      "attempt": "neovate-strict-attempt1",
+      "startedAt": "2026-10-10T05:47:08.740Z",
+      "finishedAt": "2026-10-10T05:47:58.551Z",
+      "reportedState": "finished",
+      "note": "Original strict gates retained; configured metadata is not an expired-login claim."
+    },
+    {
+      "attempt": "open-interpreter-control-bracketed",
+      "startedAt": "2026-10-10T07:06:59.345Z",
+      "finishedAt": "2026-10-10T07:07:37.289Z",
+      "reportedState": null,
+      "note": "Separate exact-ID restore control: explicit bracketed paste plus1500ms post-cue stabilization succeeded; stabilization is a confound, not proof that bracketed paste alone fixed readiness."
+    },
+    {
+      "attempt": "open-interpreter-control-raw-settled",
+      "startedAt": "2026-10-10T07:08:37.952Z",
+      "finishedAt": "2026-10-10T07:09:04.202Z",
+      "reportedState": null,
+      "note": "Separate same-ID raw API control with same1500ms stabilization succeeded; confirms normal raw API input works after native initialization."
+    },
+    {
+      "attempt": "open-interpreter-diagnostic-attempt1",
+      "startedAt": "2026-10-10T06:16:38.288Z",
+      "finishedAt": "2026-10-10T06:23:36.863Z",
+      "reportedState": "finished",
+      "note": "Fixture blockers: renamed executable omitted ao from child PATH and native scratch-folder trust was not yet configured."
+    },
+    {
+      "attempt": "open-interpreter-diagnostic-attempt2",
+      "startedAt": "2026-10-10T06:26:07.261Z",
+      "finishedAt": null,
+      "reportedState": "running",
+      "note": "Symlink alias still resolved to renamed AO binary. Owned run deliberately stopped after API kill and process cleanup; partial original report retained."
+    },
+    {
+      "attempt": "open-interpreter-diagnostic-attempt3",
+      "startedAt": "2026-10-10T06:28:25.879Z",
+      "finishedAt": "2026-10-10T06:37:52.846Z",
+      "reportedState": "finished",
+      "note": "Real activity observer defect: plain terminal output could not identify styled current idle. Raw runner activity PASS active-to-active is invalid; supplemental finding overrides it. Postrestore request stayed draft. Model echoed audit marker in tool output."
+    },
+    {
+      "attempt": "open-interpreter-diagnostic-attempt4",
+      "startedAt": "2026-10-10T06:56:26.558Z",
+      "finishedAt": "2026-10-10T07:02:32.565Z",
+      "reportedState": "finished",
+      "note": "Styled observation fixed real active-to-idle and cancellation. Native cancellation took 24ms, visible interrupted capture 113ms; AO idle confirmed after 29928ms. Postrestore request still stayed draft despite observed composer; continuity gates fail and controlled diagnosis follows."
+    },
+    {
+      "attempt": "open-interpreter-diagnostic-attempt5",
+      "startedAt": "2026-10-10T07:16:28.742Z",
+      "finishedAt": "2026-10-10T07:20:32.075Z",
+      "reportedState": "finished",
+      "note": "Final OI: all17 functional lifecycle gates PASS with initialized model/workspace footer cue; actual postrestore native task and history/instruction proof verified. Exact pre-send styled snapshot is unavailable; sampling gap is explicit. Strict auth/catalog gaps remain."
+    },
+    {
+      "attempt": "open-interpreter-strict-attempt1",
+      "startedAt": "2026-10-10T05:52:10.328Z",
+      "finishedAt": "2026-10-10T05:53:05.656Z",
+      "reportedState": "finished",
+      "note": "Original strict gates retained; configured metadata is not an expired-login claim."
+    },
+    {
+      "attempt": "open-interpreter-strict-attempt2",
+      "startedAt": "2026-10-10T06:05:18.057Z",
+      "finishedAt": "2026-10-10T06:05:30.097Z",
+      "reportedState": "finished",
+      "note": "Original strict gates retained; configured metadata is not an expired-login claim."
+    },
+    {
+      "attempt": "tau-diagnostic-attempt1",
+      "startedAt": "2026-10-10T05:53:03.340Z",
+      "finishedAt": "2026-10-10T05:53:45.207Z",
+      "reportedState": "finished",
+      "note": "Real startup timeout from ANSI-split native composer; reproduced with captures in attempt 2."
+    },
+    {
+      "attempt": "tau-diagnostic-attempt2",
+      "startedAt": "2026-10-10T06:01:58.837Z",
+      "finishedAt": "2026-10-10T06:02:50.447Z",
+      "reportedState": "finished",
+      "note": "Proved ANSI readiness defect; fixed in 189ca905. Earlier Ring.Tail suspicion was disproved."
+    },
+    {
+      "attempt": "tau-diagnostic-attempt3",
+      "startedAt": "2026-10-10T06:20:35.608Z",
+      "finishedAt": "2026-10-10T06:21:15.915Z",
+      "reportedState": "finished",
+      "note": "Invalid test launch: renamed AO executable did not put canonical ao on child PATH."
+    },
+    {
+      "attempt": "tau-diagnostic-attempt4",
+      "startedAt": "2026-10-10T06:24:54.536Z",
+      "finishedAt": "2026-10-10T06:25:28.019Z",
+      "reportedState": "finished",
+      "note": "Child environment proved missing ao hook executable caused startup pending; not a product startup-race finding."
+    },
+    {
+      "attempt": "tau-diagnostic-attempt5",
+      "startedAt": "2026-10-10T06:27:00.259Z",
+      "finishedAt": "2026-10-10T06:28:10.321Z",
+      "reportedState": "finished",
+      "note": "Canonical binary fixed launch; runner sent restored input before startup hook and received 409 SESSION_STARTUP_PENDING."
+    },
+    {
+      "attempt": "tau-diagnostic-attempt6",
+      "startedAt": "2026-10-10T06:39:13.971Z",
+      "finishedAt": "2026-10-10T06:42:34.568Z",
+      "reportedState": "finished",
+      "note": "Final Tau lifecycle gates pass. Invalid provider-TSV model parsing removed from runtime contract; exact catalog comparison remains NOT_RUN."
+    },
+    {
+      "attempt": "tau-strict-attempt1",
+      "startedAt": "2026-10-10T05:44:26.244Z",
+      "finishedAt": "2026-10-10T05:46:45.542Z",
+      "reportedState": "finished",
+      "note": "Original strict gates retained; configured metadata is not an expired-login claim."
+    }
+  ],
+  "reviewFindings": {
+    "reviewedAt": "2026-10-10T06:59:14.227950+00:00",
+    "mode": "Independent read-only source review; no development-Mac tests or edits",
+    "tau": {
+      "base": "49f421f4548f26242c18b9d7d231b3b02ae5c530",
+      "head": "189ca905dee3264ba5c682590ae04bcd8da88adf",
+      "verdict": "No concrete defects found in ANSI readiness fix"
+    },
+    "open-interpreter": {
+      "reviewedBase": "6f4f686aa94aca5e8f4977fca49be649fe4e4fb9",
+      "firstReviewHead": "0eceedc6a203680fff41389091881988b383dae4",
+      "closureHead": "88c7431c427dda8c08802e9612042545a4febaf3",
+      "findings": [
+        {
+          "severity": "P2",
+          "issue": "Styled output could split Claude expired-login phrases and incorrectly permit idle classification",
+          "resolution": "Normalize only the login-phrase guard; preserve styled composer inspection; behavioral regression included",
+          "status": "resolved"
+        },
+        {
+          "severity": "P2",
+          "issue": "Configured env_key could be reported despite conflicting native auth mechanisms or reserved Bedrock provider restrictions",
+          "resolution": "Conservatively exclude competing auth/aws, requires_openai_auth and unsupported Bedrock paths; negative regressions included",
+          "status": "resolved"
+        }
+      ],
+      "additionalCIInvestigation": "Pinned native hook review draws the menu before draining pending input for up to one second. The fixture now waits the complete menu and documented quarantine, rechecks it, sends one checked decline shortcut and retains no-provider/untrusted-hook assertions.",
+      "documentation": "Direct hidden hook delivery is distinguished from a model choosing to echo consumed context.",
+      "verdict": "Both findings resolved; no remaining concrete defects in scoped follow-up"
+    },
+    "scopeExcluded": [
+      "Broader original integration implementation",
+      "Native macOS/Windows harness conformance",
+      "Provider credential validity (separate live evidence)",
+      "Production polling interval changes"
+    ]
+  },
+  "preservedCIFailures": [
+    {
+      "pr": 6496,
+      "head": "b34c3413c2fd75099d98a4e40781f8340a2c9115",
+      "job": 114147744725,
+      "cause": "errcheck required explicit handling of read-only config Close result",
+      "fixedIn": "ca612f7c4ca8f06e327dc6cf11c74fde2664724a"
+    },
+    {
+      "pr": 6496,
+      "head": "0eceedc6a203680fff41389091881988b383dae4",
+      "run": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38031876202",
+      "cause": "Native conformance sent decline shortcut during native post-render typeahead quarantine; prompt remained on hook review",
+      "fixedIn": "88c7431c427dda8c08802e9612042545a4febaf3"
+    }
+  ],
+  "cleanup": {
+    "checkedAt": "2026-10-10T07:25:25.016594+00:00",
+    "selection": "Processes owned by the dedicated isolated audit: audit data directory, scratch projects, or audit executable/helper; scanner excluded",
+    "remainingOwnedProcesses": [],
+    "clean": true,
+    "scope": "No unrelated user processes were terminated"
+  },
+  "screenshots": {
+    "classification": "NEW live reproduction captured on 2026-10-10, not screenshots of the original earlier failure",
+    "outcome": "NEW_REPRODUCTION_MESSAGE_DID_NOT_COMPLETE",
+    "method": "Original weak Ask Codex cue followed immediately by ordinary raw AO API send; 60s observation bound",
+    "sourceCommit": "88c7431c427dda8c08802e9612042545a4febaf3",
+    "nativeReadyAt": "2026-10-10T09:01:23.924Z",
+    "apiSendStartedAt": "2026-10-10T09:01:23.936Z",
+    "apiSendFinishedAt": "2026-10-10T09:01:24.256Z",
+    "newNativeTurnCount": 0,
+    "observation": "No new native task started during the 60s observation; the latest request persisted in the composer.",
+    "surface": "Real xterm window in Xvfb, displaying a read-only live mirror of AO PTY styled frames; not direct-attached native PTY and not old-log rendering",
+    "readOnlyMirror": true,
+    "limitations": [
+      "Read-only live mirror of actual AO PTY styled frames in xterm, not direct-attached native PTY pixels.",
+      "No screenshots existed for original attempts; these PNGs document a new reproduction.",
+      "Monospace bitmap font may lack a few native icon glyphs."
+    ],
+    "securityScan": {
+      "filesScanned": 16,
+      "filesContainingCredential": [],
+      "renderedSourceFramesCredentialAbsent": true,
+      "renderedSourceFramesNativeIdentityAbsent": true
+    },
+    "cleanup": {
+      "sessionTerminated": true,
+      "daemonExitCode": 0,
+      "guiExited": {
+        "controlExited": true,
+        "xtermExited": true,
+        "xvfbExited": true
+      },
+      "allRecordedProcessesAbsent": true
+    },
+    "images": [
+      {
+        "screenshot": "01-provisional-live.png",
+        "sourceFrameCredentialAbsent": true,
+        "nativeIdentityAbsent": true,
+        "captureStartedAt": "2026-10-10T09:01:23.945180+00:00",
+        "frameAgeAtCaptureStartMs": 4.615,
+        "frameBeforeSha256": "fa573a8961dc72d6d2b186e786a00d191b70e193c0f5d2a81fe14b0f28951c03",
+        "frameAfterSha256": "9979000157579c81e9124f1b48369f33f4a7662f99bad0eba446deb1fa3ce77c",
+        "originalPngSha256": "73b4cd76e5a042858d16f8c1a74839c6e10bbd0c7c64cc688aad285d24df1d87",
+        "committedPngSha256": "5f12fd2a881719dbd611bfa35eaea440425bf48a70d5bc7264e5846aebb24776",
+        "redaction": {
+          "method": "Opaque gray rectangles over incidental identifiers/paths; source screenshot unchanged; remaining original pixels retained.",
+          "description": [
+            "Scratch directory value; directory label, model loading indicator and resume state preserved."
+          ],
+          "rectanglesXYXY": [
+            [
+              153,
+              80,
+              568,
+              101
+            ]
+          ],
+          "imagePixels": [
+            2240,
+            1240
+          ]
+        }
+      },
+      {
+        "screenshot": "04-final-live-state.png",
+        "sourceFrameCredentialAbsent": true,
+        "nativeIdentityAbsent": true,
+        "captureStartedAt": "2026-10-10T09:02:24.934602+00:00",
+        "frameAgeAtCaptureStartMs": 23.464,
+        "frameBeforeSha256": "7ef486228168159ce0667cb3efa6b13fd09704e4a00226651cf33f3d6f9e374e",
+        "frameAfterSha256": "7ef486228168159ce0667cb3efa6b13fd09704e4a00226651cf33f3d6f9e374e",
+        "originalPngSha256": "43d8e07cbf82714e840ea986dc5e6cd23a82c1abe8045edf02421ae6348d28f2",
+        "committedPngSha256": "39562e86847e9e7cf57b4682a179ab1e93c7893a197f9b066b155dd3139f1a4d",
+        "redaction": {
+          "method": "Opaque gray rectangles over incidental identifiers/paths; source screenshot unchanged; remaining original pixels retained.",
+          "description": [
+            "Three AO delivery-wrapper UUID values; wrapper/task text preserved.",
+            "Scratch workspace path in footer; model label and warning status preserved."
+          ],
+          "rectanglesXYXY": [
+            [
+              402,
+              180,
+              762,
+              200
+            ],
+            [
+              402,
+              600,
+              762,
+              620
+            ],
+            [
+              402,
+              880,
+              762,
+              900
+            ],
+            [
+              264,
+              984,
+              1843,
+              1004
+            ]
+          ],
+          "imagePixels": [
+            2240,
+            1240
+          ]
+        }
+      }
+    ]
+  },
+  "intake": {
+    "reviewed": 52,
+    "source": "User-supplied unsupported CLI coding-agent inventory",
+    "assessment": "Intake-time decisions; final VPS results supersede the initial unverified-live wording for the three new PRs.",
+    "candidates": [
+      {
+        "name": "Gemini CLI",
+        "repository": "https://github.com/google-gemini/gemini-cli",
+        "decision": "already-supported",
+        "reason": "Canonical HarnessGemini on main"
+      },
+      {
+        "name": "Hermes Agent",
+        "repository": "https://github.com/NousResearch/hermes-agent",
+        "decision": "defer",
+        "reason": "The latest environment reference now documents additive HERMES_AGENT_HELP_GUIDANCE and ephemeral prompt input; the old prompt blocker is partly superseded. An isolated per-process observer loader that loads only AO-owned code remains unproven. Current documented plugin loading uses user/profile or opt-in project directories."
+      },
+      {
+        "name": "OpenHands CLI",
+        "repository": "https://github.com/OpenHands/OpenHands-CLI",
+        "decision": "already-supported",
+        "reason": "Canonical HarnessOpenHands on main"
+      },
+      {
+        "name": "Roo Code CLI",
+        "repository": "https://github.com/RooCodeInc/Roo-Code",
+        "decision": "skip_archived",
+        "reason": "Repository metadata is archived=true. No new adapter proposed for this archived distribution."
+      },
+      {
+        "name": "Reasonix",
+        "repository": "https://github.com/esengine/DeepSeek-Reasonix",
+        "decision": "existing_pr",
+        "reason": "Existing tested fork integration; official v1.39.2 lacks append-system-prompt-file and resume-exact. No duplicate PR.",
+        "pr": "https://github.com/OrchestratorInc/agent-orchestrator/pull/5905"
+      },
+      {
+        "name": "Deep Agents Code",
+        "repository": "https://github.com/langchain-ai/deepagents",
+        "decision": "defer_current_release_contract",
+        "reason": "Latest CLI0.1.83 still lacks isolated per-process additive prompt/hooks input. Experimental --extension also discovers user/config/plugin/entry-point code; disabling discovery disables the explicit extension too. Exact resume still falls back to fresh on missing ID/DB errors. Native identity and TUI cancel exist; ACP cancellation is now session-scoped but not bounded. Existing PR #5735 remains a gate-only audit of0.1.72, not a production integration.",
+        "pr": "https://github.com/OrchestratorInc/agent-orchestrator/pull/5735"
+      },
+      {
+        "name": "Codewhale",
+        "repository": "https://github.com/Hmbown/CodeWhale",
+        "decision": "already-supported",
+        "reason": "Canonical HarnessCodewhale on main"
+      },
+      {
+        "name": "jcode",
+        "repository": "https://github.com/1jehuang/jcode",
+        "decision": "defer",
+        "reason": "No safe additive standing-instruction channel established; TUI lifecycle conformance not performed."
+      },
+      {
+        "name": "MiMo Code",
+        "repository": "https://github.com/XiaomiMiMo/MiMo-Code",
+        "decision": "already-supported",
+        "reason": "Canonical HarnessMiMoCode on main"
+      },
+      {
+        "name": "ZCode",
+        "repository": "https://github.com/zai-org/ZCode",
+        "decision": "existing_pr_incomplete_upstream_blocked",
+        "reason": "Prepared integration fixes and source-built native conformance in existing PR, then marked it draft after conformance proved that official v3.14.3 TUI never enables workspaceHookTrustEnabled. Native trust grants succeed but TUI ignores them and AO hidden instructions never arrive. Desktop releases omit TUI; manual source-build guidance corrected. Await a supported upstream private instruction/hook path. No duplicate PR.",
+        "pr": "https://github.com/OrchestratorInc/agent-orchestrator/pull/6003",
+        "head": "922c642c085af4ca0ecbc7f1c65e330397e0fec5",
+        "ci": "22/24 passed; native hidden-instruction conformance failed; frontend test running at handoff",
+        "conformance": "FAIL (hidden instructions); later native restore/cancel NOT_RUN",
+        "evidence": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38010927686"
+      },
+      {
+        "name": "Trae Agent",
+        "repository": "https://github.com/bytedance/trae-agent",
+        "decision": "defer",
+        "reason": "Official interactive interface lists task/status/help/clear/exit and trajectory recording, without documented exact session restore or private additive standing instructions. Earlier gate-only PR rejected because it had no production consumer."
+      },
+      {
+        "name": "Letta Code",
+        "repository": "https://github.com/letta-ai/letta-code",
+        "decision": "prototype_withdrawn_after_review",
+        "reason": "Draft closed: released hook aggregation can reveal hidden instructions when another hook blocks, and predecision callbacks cannot establish acceptance/completion. No safe isolated additive mod channel found.",
+        "pr": "https://github.com/OrchestratorInc/agent-orchestrator/pull/6492"
+      },
+      {
+        "name": "Open Interpreter",
+        "repository": "https://github.com/OpenInterpreter/open-interpreter",
+        "decision": "new_draft_pr_ci_passed",
+        "reason": "Rust TUI integration with exact per-process hook trust, hidden native developer context, bounded typed native history/workspace restore, and modal-aware terminal observation. All 24 final-head PR checks passed, including native cancellation, idle, subsequent completion and late-output exclusion. Native Chat Completions compatibility maps developer context to wire user role and does not guarantee immediate provider socket closure; both behaviors are documented. Authenticated providers and full AO daemon/Electron lifecycle remain unverified.",
+        "pr": "https://github.com/OrchestratorInc/agent-orchestrator/pull/6496",
+        "head": "6f4f686aa94aca5e8f4977fca49be649fe4e4fb9",
+        "ci": "24/24 passed",
+        "conformance": "remote released TUI passed",
+        "evidence": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38010889994"
+      },
+      {
+        "name": "SWE-agent",
+        "repository": "https://github.com/SWE-agent/SWE-agent",
+        "decision": "skip",
+        "reason": "Documented product is research-oriented autonomous issue/task execution and benchmarking, not a demonstrated persistent interactive worker with native exact conversational restore."
+      },
+      {
+        "name": "Plandex",
+        "repository": "https://github.com/plandex-ai/plandex",
+        "decision": "defer",
+        "reason": "Prior conformance PR found missing private per-process instructions, observer hooks, machine-readable identity/exact resume and compatible cancellation. Cloud is winding down; standalone gate-only PR was explicitly rejected as having no production consumer. No evidence found superseding that contract."
+      },
+      {
+        "name": "Codebuff",
+        "repository": "https://github.com/CodebuffAI/codebuff",
+        "decision": "defer_contract",
+        "reason": "Redirects to same upstream as Freebuff; avoid two adapters for identical source without variant evidence. CLI has --continue ID but hidden additive context preserving default agent remains unproven; custom --agent skips local .agents overrides."
+      },
+      {
+        "name": "Freebuff",
+        "repository": "https://github.com/CodebuffAI/freebuff",
+        "decision": "defer_contract",
+        "reason": "Same upstream as Codebuff. Freebuff variant has --continue ID but no positional task or --agent option; hidden context injection preserving native defaults remains unproven."
+      },
+      {
+        "name": "ForgeCode",
+        "repository": "https://github.com/antinomyhq/forge",
+        "decision": "defer_contract",
+        "reason": "--prompt selects one-shot mode; TUI must use after-start delivery. --conversation-id supports exact identity. Additive custom_rules exists through agent/workflow config, but per-session overlay preserving native defaults/settings needs design."
+      },
+      {
+        "name": "gptme",
+        "repository": "https://github.com/gptme/gptme",
+        "decision": "defer_contract",
+        "reason": "Exact --resume --name identity supported. --system replaces base instructions; hidden additive agent profiles are loaded from native config profiles directory. Isolated per-session profile/config overlay retaining user provider settings not established."
+      },
+      {
+        "name": "OpenSquilla",
+        "repository": "https://github.com/opensquilla/opensquilla",
+        "decision": "defer_incomplete",
+        "reason": "chat --session exact restore checks missing identity explicitly. Hidden additive per-session instructions, readiness, activity, cancellation and gateway lifecycle not fully established; not a proven incompatibility."
+      },
+      {
+        "name": "Kode CLI",
+        "repository": "https://github.com/shareAI-lab/Kode-cli",
+        "decision": "defer_release_tui_contract",
+        "reason": "Exact native UUID preflight is implementable and hidden append-system-prompt-file is sound. The material released-code blocker is TUI flag wiring: --model and --permission-mode/tool restrictions are sent only to runPrintMode, not renderRepl; --settings is parsed but unused. TUI starts native yolo mode even with --safe. A full AO model/permission mapping would be false. Recommend waiting for working TUI wiring/per-session config, rather than making a misleading production registration. A narrower native-default-only terminal would have to reject these overrides and preserve explicit permission disclosures."
+      },
+      {
+        "name": "Amazon Q Developer CLI",
+        "repository": "https://github.com/aws/amazon-q-developer-cli",
+        "decision": "skip",
+        "reason": "Official README says no longer actively maintained, critical security fixes only, and directs users to Kiro CLI. AO already has Kiro; avoid redundant legacy integration."
+      },
+      {
+        "name": "Maki",
+        "repository": "https://github.com/tontinton/maki",
+        "decision": "defer",
+        "reason": "--append-system-prompt is SDK-only, not wired to TUI. Native hooks only load global/project .maki/init.lua with shared plugin.toml run/env trust; no per-process plugin/config channel established."
+      },
+      {
+        "name": "Tau",
+        "repository": "https://github.com/huggingface/tau",
+        "decision": "new_draft_pr_ci_passed",
+        "reason": "Terminal integration supports explicit bypass mode only. All current-head PR checks passed, including the pinned released TUI with localhost fake provider, exact native restore, cancellation, and the session-owned prompt-file fix. Authenticated providers and full AO daemon/Electron lifecycle remain unverified.",
+        "pr": "https://github.com/OrchestratorInc/agent-orchestrator/pull/6493",
+        "head": "49f421f4548f26242c18b9d7d231b3b02ae5c530",
+        "ci": "24/24 passed",
+        "conformance": "remote released TUI passed"
+      },
+      {
+        "name": "Neovate Code",
+        "repository": "https://github.com/neovateai/neovate-code",
+        "decision": "new_draft_pr_ci_passed",
+        "reason": "Terminal integration through an explicit native plugin. All 24 current-head PR checks passed, including pinned released-TUI localhost-provider conformance. Authenticated providers and full AO daemon/Electron lifecycle remain unverified.",
+        "pr": "https://github.com/OrchestratorInc/agent-orchestrator/pull/6494",
+        "head": "e82a48fa09c07e7d70cdd19a26aea0ae1bed7e1f",
+        "ci": "24/24 passed",
+        "conformance": "remote released TUI passed"
+      },
+      {
+        "name": "DeepCode",
+        "repository": "https://github.com/HKUDS/DeepCode",
+        "decision": "defer",
+        "reason": "Current TUI has exact resume, model/access/trust options and native sessions, but runs against a shared background service where closing the client leaves work running. TUI CLI lacks documented additive per-process hidden instruction input. Requires dedicated service lifecycle design; not a simple TUI process adapter."
+      },
+      {
+        "name": "Command Code",
+        "repository": "https://github.com/CommandCodeAI/command-code",
+        "decision": "already-supported",
+        "reason": "Canonical HarnessCommandCode on main"
+      },
+      {
+        "name": "Claw Code",
+        "repository": "https://github.com/ultraworkers/claw-code",
+        "decision": "skip",
+        "reason": "Upstream explicitly calls this an agent-managed museum exhibit rather than a serious production product and says source-build only; the similarly named crate installs a different binary. ACP is expressly a discoverability/status stub."
+      },
+      {
+        "name": "Claude Engineer",
+        "repository": "https://github.com/Doriandarko/claude-engineer",
+        "decision": "defer",
+        "reason": "Source-run ce3.py self-improving assistant with generated tools and history; reviewed docs do not establish bounded native restore, private additive instructions or truthful approval controls. Repository API reports no recognized license."
+      },
+      {
+        "name": "Claurst",
+        "repository": "https://github.com/Kuberwastaken/claurst",
+        "decision": "defer",
+        "reason": "Active Rust TUI and released binaries merit later investigation. README's ACP surface names initialize/new/prompt/cancel but not load; exact TUI restore plus private per-process instructions and permission semantics remain unproven. No claims made from clean-room branding alone."
+      },
+      {
+        "name": "Free Code",
+        "repository": "https://github.com/paoloanzn/free-code",
+        "decision": "skip",
+        "reason": "README expressly describes a fork of exposed proprietary source with guardrail removal; repository API reports no recognized license. Distribution/supportability and trustworthy permission defaults are unresolved; avoid introducing it into AO."
+      },
+      {
+        "name": "Every Code",
+        "repository": "https://github.com/just-every/code",
+        "decision": "defer",
+        "reason": "No modern developer_instructions configuration; experimental instructions file replaces defaults, changing CODE_HOME replaces whole user profile. Safe additive per-process channel not established."
+      },
+      {
+        "name": "Devon",
+        "repository": "https://github.com/entropy-research/Devon",
+        "decision": "defer",
+        "reason": "Documented TUI requires separately installed devon_agent backend and devon-tui client. No demonstrated private instructions/exact native resume contract in the reviewed launch documentation; backend lifecycle must be separately designed."
+      },
+      {
+        "name": "AutoCodeRover",
+        "repository": "https://github.com/AutoCodeRoverSG/auto-code-rover",
+        "decision": "skip",
+        "reason": "Documented product runs github-issue/local-issue patch-generation jobs using source checkout/conda or Docker. No persistent interactive conversation restore contract demonstrated."
+      },
+      {
+        "name": "Atomic Agent",
+        "repository": "https://github.com/AtomicBot-ai/atomic-agent",
+        "decision": "defer_incomplete",
+        "reason": "Native TUI and persisted sessions exist, but CLI/native ID restore and additive hidden instruction surface not fully established. README --system-prompt references delegated Claude adapter, not evidence for Atomic own TUI."
+      },
+      {
+        "name": "Nanocoder",
+        "repository": "https://github.com/Nano-Collective/nanocoder",
+        "decision": "defer_contract",
+        "reason": "Exact --resume UUID, hooks and systemPrompt append configuration exist. TUI initial prompt needs after-start delivery. NANOCODER_CONFIG_DIR/DATA_DIR overlay must preserve native provider settings/trust and prove composer readiness before integration."
+      },
+      {
+        "name": "Codel",
+        "repository": "https://github.com/semanser/codel",
+        "decision": "skip",
+        "reason": "Docker/web application with PostgreSQL history and container task execution. Not a demonstrated terminal-native persisted conversational worker executable."
+      },
+      {
+        "name": "open-codex",
+        "repository": "https://github.com/ymichael/open-codex",
+        "decision": "defer",
+        "reason": "Legacy TypeScript Codex fork using shared ~/.codex instructions and providers; reviewed CLI reference does not expose exact resume or per-process private instructions. Do not inherit capabilities from modern Rust Codex by name."
+      },
+      {
+        "name": "BitFun",
+        "repository": "https://github.com/GCWing/BitFun",
+        "decision": "defer",
+        "reason": "Cross-platform terminal distribution and safe native instruction/session lifecycle contracts not established in this pass."
+      },
+      {
+        "name": "RA.Aid",
+        "repository": "https://github.com/ai-christianson/RA.Aid",
+        "decision": "defer",
+        "reason": "Real CLI with research/planning/implementation and cowboy-mode approval bypass, but reviewed docs do not establish private additive per-process instructions plus exact persisted session resume; not enough for registration."
+      },
+      {
+        "name": "Agentless",
+        "repository": "https://github.com/OpenAutoCoder/Agentless",
+        "decision": "skip",
+        "reason": "Research repair pipeline/benchmark workflow, not a demonstrated persistent interactive worker lifecycle."
+      },
+      {
+        "name": "VT Code",
+        "repository": "https://github.com/vinhnx/vtcode",
+        "decision": "defer",
+        "reason": "Additive hidden instructions preserving defaults and full terminal startup/resume contract not established in this pass; no runtime evidence."
+      },
+      {
+        "name": "hax",
+        "repository": "https://github.com/OleksandrChekhovskyi/hax",
+        "decision": "defer",
+        "reason": "Release binaries found only for Linux. TUI initial-task and native hook contracts not established in this pass; no runtime evidence."
+      },
+      {
+        "name": "Groq Code CLI",
+        "repository": "https://github.com/build-with-groq/groq-code-cli",
+        "decision": "defer_contract",
+        "reason": "CLI parser exposes temperature/system/debug/proxy only; --system supplies replacement custom prompt and exact persisted native restore is not exposed in inspected CLI."
+      },
+      {
+        "name": "Dexto",
+        "repository": "https://github.com/truffle-ai/dexto",
+        "decision": "defer_contract",
+        "reason": "Interactive --prompt and --resume sessionId exist. --agent ID/path selects config; additive hidden instruction overlay preserving selected default agent and exact installable CLI package pin remain unproven."
+      },
+      {
+        "name": "Tura",
+        "repository": "https://github.com/Tura-AI/tura",
+        "decision": "defer",
+        "reason": "Inspected prompt runtime uses replacement instructions; additive hidden per-process instruction and exact resume contracts not established in this pass."
+      },
+      {
+        "name": "agentty",
+        "repository": "https://github.com/1ay1/agentty",
+        "decision": "defer",
+        "reason": "Hidden additive instructions, identity, startup and restore contracts not established in this pass; no runtime evidence."
+      },
+      {
+        "name": "g3",
+        "repository": "https://github.com/dhanji/g3",
+        "decision": "defer",
+        "reason": "No released pin was identified. No runtime conformance or complete source contract established."
+      },
+      {
+        "name": "Orca",
+        "repository": "https://github.com/echoVic/orca-agent",
+        "decision": "defer",
+        "reason": "No per-process additive hidden-instruction channel established in src/cli.rs and crates/orca-runtime/src/instructions.rs; no runtime evidence."
+      },
+      {
+        "name": "Coro Code",
+        "repository": "https://github.com/Blushyes/coro-code",
+        "decision": "defer_contract",
+        "reason": "CLI argument declaration exposes config/model/working-dir/task and Tools/Test subcommands, with no exact native resume selector. Internal restore_from_history is not an exposed TUI resume contract."
+      },
+      {
+        "name": "zot",
+        "repository": "https://github.com/patriceckhart/zot",
+        "decision": "defer",
+        "reason": "Custom parser rejects -- delimiter and unknown leading-dash prompts; --session path silently creates fresh history if missing. Safe exact task delivery and fail-closed native restore need upstream-compatible work."
+      },
+      {
+        "name": "Smol Developer",
+        "repository": "https://github.com/smol-ai/developer",
+        "decision": "skip",
+        "reason": "Prompt-driven whole-program synthesis library/scaffolder; main.py generates code and human edits prompt/runs results. Native interactive restore/activity/permission contract absent from reviewed product interface."
+      }
+    ]
+  },
+  "artifactPolicy": "Curated research evidence only. Raw run logs/state, credentials, native profiles/IDs, connection details and binaries excluded. Original external evidence remains unchanged.",
+  "historicalEvidenceCorrection": {
+    "discoveredDuring": "Skill packaging review after the historical VPS runs",
+    "affectedGate": "system_prompt_restore",
+    "affectedAgents": [
+      "tau",
+      "neovate",
+      "open-interpreter"
+    ],
+    "recordedStatus": "PASS",
+    "correctedInterpretation": "UNPROVEN for refreshed or reinjected instruction delivery; only initial instruction-token availability after restore was shown.",
+    "cause": "setupProject included hiddenRestoreToken in initial agentRules before the first turn and did not change those rules before restore; native history could retain it.",
+    "rawCountsPreserved": true,
+    "newPackagedRunner": "Introduces a fresh instruction token in configuration only after kill and before restore.",
+    "correctedLiveProviderGateRerun": false,
+    "validationBoundary": "New fixture checks do not establish corrected real-provider restore instruction behavior."
+  }
+}

@@ -71,6 +71,10 @@ AO_DATA_DIR=/tmp/ao-lab-data ./node_modules/.bin/electron-forge start
 - `docs/cli/README.md`: Intended CLI shape, a thin Cobra client over daemon HTTP with no direct storage/runtime access.
 - `CLAUDE.md`: Compatibility pointer for Claude Code. It directs agents back to `AGENTS.md`.
 
+For adding or auditing a coding-agent harness, use
+[`.agents/skills/ao-agent-harness/SKILL.md`](.agents/skills/ao-agent-harness/SKILL.md).
+It covers integration intake, native lifecycle evidence, and failure reporting.
+
 For code entry points:
 
 - CLI commands: `backend/internal/cli/*.go`; follow nearby command/test patterns before adding a new style.
