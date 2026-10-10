@@ -46,8 +46,8 @@ Before runtime checks, save a numbered scenario in your session artifacts
 outside the repository. Include exact inputs, fixture contents, preconditions,
 expected results and capture points. Replay the same scenario on both SHAs.
 An empty board can be populated using the target's documented CLI or UI.
-If a required precondition cannot be reached, retain the error and report
-`partial` or `environment_blocked`; ordinary app behavior does not prove a fix.
+If a required precondition cannot be reached, retain the exact reason and use
+`ao report --needs-input`; ordinary app behavior does not prove a fix.
 
 ## Start base, then head in this worker
 
@@ -154,7 +154,8 @@ never in the repository. Show base/head SHAs, numbered steps, expected and
 observed results, test commands and exit statuses, matching screenshots/clips,
 exact errors, and cleanup results. Label base as broken only if reproduced;
 label head as fixed only if the same trigger reached the expected result.
-Otherwise state `partial`, still broken, or the specific environment blocker.
+Otherwise state whether head is still broken or regressed. If a blocked check
+prevents a verdict, label the comparison blocked and retain the exact reason.
 
 Record setup, launch, check and cleanup timings, plus model, tokens and cost
 from available usage facts. Mark missing usage/cost as unknown.
@@ -174,7 +175,14 @@ Do not use `ao session get --json` for this lookup; it omits `artifactFiles`.
 Workspace file previews cannot read external artifact paths. Do not copy
 evidence into the repo or start a server solely to show it.
 
-Finish with `ao report --done --note <verdict>` and `--artifact <comparison>`.
-Include the verdict, comparison artifact and draft review comments for the
-user, with specific changes and supporting evidence. The tester never posts
-to GitHub. The user decides whether to publish the draft comments.
+For a completed comparison, finish with `ao report --done --note <verdict>`
+and `--artifact <comparison>`. Start the note with a one-line verdict:
+`fixed`, `not fixed` or `regressed`, plus confidence based on the observed
+checks. Include the base/head comparison with screenshots and clips, and
+draft review comments stating what to change and the evidence for each.
+
+If blocked, use `ao report --needs-input --note <exact reason>` instead.
+Retain the exact error or missing precondition and the cleanup results; attach
+available evidence. Do not improvise another flow to obtain a verdict.
+The tester never posts a review, comment or other message to GitHub. The user
+decides whether to publish the draft comments later.
