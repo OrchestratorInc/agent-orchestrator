@@ -119,17 +119,16 @@ describe("accounts list and detail", () => {
 		await open(user, bob);
 		expect(within(detail()).getByTestId("provider-account-global")).toHaveAttribute("title", "This machine's own API key");
 	});
-	it("checks every account's sign-in on coming back to the window and on request; opening settings did the first check", async () => {
-		const user = await start();
+	it("checks every account's sign-in on coming back to the window; opening settings did the first check", async () => {
+		await start();
 		const refreshes = () => mock.get.mock.calls.filter(([, options]) => options?.params?.query?.refresh).length;
 		expect(mock.get).toHaveBeenCalledWith(LIST, { params: { query: { includeUsage: true, refresh: false } } });
 		expect(mock.get).toHaveBeenCalledWith(LIST, { params: { query: { includeUsage: false, refresh: false } } });
 		expect(refreshes()).toBe(0);
 		window.dispatchEvent(new Event("focus"));
 		await waitFor(() => expect(refreshes()).toBe(1));
-		expect(screen.getByText("Checked just now")).toBeInTheDocument();
-		await user.click(screen.getByRole("button", { name: "Check again" }));
-		await waitFor(() => expect(refreshes()).toBe(2));
+		// It happens on its own: the page offers no button for it.
+		expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
 	});
 	it("shows a catalogue error without pretending that all accounts were signed out", async () => {
 		mock.get.mockResolvedValue({ error: { message: "Account catalogue unavailable" } });
@@ -581,29 +580,32 @@ describe("plan and activity", () => {
 		const user = await start();
 		expect(within(detail()).queryByRole("complementary")).toBeNull();
 		await open(user, clara);
-		for (const fact of ["PlanTeam", "RenewsNov 14, 2030", "OrganizationAcme", "AddedSep 3, 2030", "Sign-in refreshed12 minutes ago", "RequestsLast 3 hours163 failed"]) expect(aside()).toHaveTextContent(fact);
-		await user.click(within(aside()).getByRole("button", { name: "Refresh sign-in" }));
-		expect(await screen.findByText("Sign-in refreshed.")).toBeInTheDocument();
+		for (const fact of ["PlanTeam", "RenewsNov 14, 2030", "OrganizationAcme", "AddedSep 3, 2030", "RequestsLast 3 hours163 failed"]) expect(aside()).toHaveTextContent(fact);
+		// Renewing the sign-in is an account action that says what it does and when it last happened.
+		expect(detail()).toHaveTextContent(/Renew sign-inGets a fresh login from \w+\. Last renewed 12 minutes ago\./);
+		await user.click(within(detail()).getByRole("button", { name: "Renew" }));
+		expect(await screen.findByText("Sign-in renewed.")).toBeInTheDocument();
 		expect(actions("refresh-sign-in")).toEqual([["c", { action: "refresh-sign-in" }]]);
-		// An API key has no limits and no sign-in to refresh, but its activity is known.
+		// An API key has no limits and no sign-in to renew, but its activity is known.
 		await open(user, bob);
 		expect(aside()).toHaveTextContent("AddedSep 28, 2030");
 		expect(aside()).toHaveTextContent("RequestsLast 3 hours3None failed");
-		expect(within(aside()).queryByRole("button", { name: "Refresh sign-in" })).toBeNull();
+		expect(within(detail()).queryByRole("button", { name: "Renew" })).toBeNull();
 	});
 	it("adds the provider's token tally, leaving out the figures it does not report", async () => {
 		const today = new Date().toISOString().slice(0, 10);
 		inventory.accounts[0].usage = { status: "available", plan: "pro", windows: [], requests: Array.from({ length: 20 }, () => ({ succeeded: 0, failed: 0 })), tokens: { latestDay: today, latestDayTokens: 1_240_000, lifetime: 482_000_000, peakDaily: 9_400_000, longestTurnSeconds: 4_320, currentStreakDays: 6, longestStreakDays: 23 } };
 		inventory.accounts[1].usage = { status: "available", windows: [], tokens: { latestDay: "2030-01-05", latestDayTokens: 3_800, lifetime: 96_000_000 } };
 		const user = await start();
-		// A quiet account says so in figures, and the refresh stays in reach when its last time is not known.
-		for (const fact of ["RequestsLast 3 hours0None failed", "Tokens today1.2M", "Lifetime tokens482M", "Peak day9.4M", "Longest turn1 hr 12 min", "Current streak6 days", "Longest streak23 days", "Sign-in refreshedUnknown"]) expect(aside()).toHaveTextContent(fact);
-		expect(within(aside()).getByRole("button", { name: "Refresh sign-in" })).toBeEnabled();
+		// A quiet account says so in figures, and renewing stays in reach when its last time is not known.
+		for (const fact of ["RequestsLast 3 hours0None failed", "Tokens today1.2M", "Lifetime tokens482M", "Peak day9.4M", "Longest turn1 hr 12 min", "Current streak6 days", "Longest streak23 days"]) expect(aside()).toHaveTextContent(fact);
+		expect(within(detail()).getByRole("button", { name: "Renew" })).toBeEnabled();
+		expect(detail()).not.toHaveTextContent("Last renewed");
 		// A tally whose latest day is not today names the day; with nothing from the helper there is no sign-in row.
 		await open(user, bob);
 		expect(aside()).toHaveTextContent("Tokens on Jan 5, 20303.8K");
 		expect(aside()).toHaveTextContent("Lifetime tokens96M");
 		expect(aside()).not.toHaveTextContent(/Peak day|Requests/);
-		expect(within(aside()).queryByRole("button", { name: "Refresh sign-in" })).toBeNull();
+		expect(within(detail()).queryByRole("button", { name: "Renew" })).toBeNull();
 	});
 });

@@ -1,6 +1,6 @@
 import { useState, type ComponentProps, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, Check, ChevronDown, CirclePause, Copy, ExternalLink, Link2, LoaderCircle, RefreshCw, X, type LucideIcon } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, CirclePause, Copy, ExternalLink, Link2, LoaderCircle, X, type LucideIcon } from "lucide-react";
 import { PROVIDERS, percentLeft, type ProviderAccount, type ProviderLogin } from "../../hooks/useProviderAccounts";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
@@ -201,12 +201,6 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 		[t("providerAccounts.factRenews"), usage?.renewsAt ? formatWhen(usage.renewsAt, "day") : null],
 		[t("providerAccounts.factOrganization"), usage?.organization ? <span className="max-w-36 truncate" title={usage.organization}>{usage.organization}</span> : null],
 		[t("providerAccounts.factAdded"), usage?.addedAt ? formatWhen(usage.addedAt, "day") : null],
-		[t("providerAccounts.factSignInRefreshed"), !apiKey && (usage?.refreshedAt || usage?.addedAt || usage?.requests) ? (
-			<>
-				{usage?.refreshedAt ? formatAgo(new Date(usage.refreshedAt).getTime(), language, t("time.justNow")) : t("activity.unknown")}
-				<IconAction name={t("providerAccounts.refreshSignIn")} icon={RefreshCw} className="-mr-1.5" disabled={page.pending} onClick={() => void page.act(account.id, { action: "refresh-sign-in" }, t("providerAccounts.signInRefreshed"))} />
-			</>
-		) : null],
 	]);
 	const tokenFacts = tokens ? facts([
 		[tokens.latestDay && isToday(tokens.latestDay) ? t("providerAccounts.tokensToday") : t("providerAccounts.tokensOnDay", { date: formatWhen(`${tokens.latestDay}T12:00:00`, "day") }), tokens.latestDay ? figure(tokens.latestDayTokens) : null],
@@ -220,6 +214,8 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 	const signInHint = !signedIn ? (count ? t("providerAccounts.sessionsWaitingFor", { count }) : t("providerAccounts.signInToUse"))
 		: account.usage?.signInEndsAt ? t("providerAccounts.signInEndsAt", { time: formatWhen(account.usage.signInEndsAt, "soon") }) : t("providerAccounts.signInEndsSoon");
 	const twoColumns = signedIn && (planFacts.length > 0 || activity);
+	// A sign-in the helper holds can be replaced by a fresh one from its provider.
+	const renewable = signedIn && !apiKey && Boolean(usage?.refreshedAt || usage?.addedAt || usage?.requests);
 	return (
 		<div data-testid="provider-account-detail">
 			<div className="flex min-h-11 items-center gap-3.5">
@@ -334,6 +330,11 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 							{/* Blurred until pointed at or focused, so a shared screen does not show it. */}
 							<span tabIndex={0} title={account.email} className="max-w-[280px] truncate rounded-sm text-sm text-foreground blur-sm outline-none transition-[filter] hover:blur-none focus:blur-none">{account.email}</span>
 						</Row>
+						{renewable ? (
+							<Row title={t("providerAccounts.renewSignIn")} hint={[t("providerAccounts.renewSignInHint", { provider: info.name }), usage?.refreshedAt ? t("providerAccounts.lastRenewed", { when: formatAgo(new Date(usage.refreshedAt).getTime(), language, t("time.justNow")) }) : null].filter(Boolean).join(" ")}>
+								<Button type="button" variant="secondary" disabled={page.pending} onClick={() => void page.act(account.id, { action: "refresh-sign-in" }, t("providerAccounts.signInRenewed"))}>{t("providerAccounts.renew")}</Button>
+							</Row>
+						) : null}
 						{removing ? (
 							<Row label={t("providerAccounts.confirmChange")} title={t(signedIn ? "providerAccounts.confirmSignOut" : "providerAccounts.confirmRemove", { email: name })} hint={removalFact}>
 								{replacement ? (

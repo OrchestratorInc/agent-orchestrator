@@ -1,13 +1,13 @@
 import { Fragment, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { skipToken, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, ChevronDown, ChevronRight, Eye, EyeOff, FileUp, KeyRound, LogIn, MonitorSmartphone, Plus, RefreshCw, X } from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronRight, Eye, EyeOff, FileUp, KeyRound, LogIn, MonitorSmartphone, Plus, X } from "lucide-react";
 import { accountAction, accountHeadroom, cancelProviderLogin, fetchProviderAccounts, fetchProviderLogin, PROVIDERS, providerAccountsCatalogueKey, providerAccountsKey, startProviderLogin, useProviderAccounts, type AccountAction, type ProviderAccount, type ProviderLogin, type ProviderLoginRequest } from "../../hooks/useProviderAccounts";
 import { apiErrorMessage } from "../../lib/api-client";
 import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
 import { Button } from "../ui/button";
-import { AccountDetail, Dot, formatAgo, IconAction, LoginProgress, Rows, upcoming } from "./ProviderAccountDetail";
+import { AccountDetail, Dot, IconAction, LoginProgress, Rows, upcoming } from "./ProviderAccountDetail";
 import { SettingsSection } from "./SettingsSection";
 
 type Provider = ProviderAccount["provider"];
@@ -63,7 +63,7 @@ function useAccountsPage() {
 	});
 	const [selectedId, setSelectedId] = useState(signIn.login?.accountId || null);
 	const [adding, setAdding] = useState<Provider | null>(signIn.waiting && !signIn.login?.accountId ? signIn.login!.provider : null);
-	// Re-reads every account's sign-in state on request and on coming back to the window; opening settings already did.
+	// Re-reads every account's sign-in state on coming back to the window; opening settings already did.
 	const recheck = useMutation({ mutationFn: () => fetchProviderAccounts(true, true), onSuccess: (next) => cache.setQueryData(providerAccountsKey, next) });
 	useEffect(() => {
 		const check = () => recheck.mutate();
@@ -107,7 +107,7 @@ function useAccountsPage() {
 	});
 	return {
 		query, accounts, pending, message, moveOffer, setMoveOffer, signIn, selectedId, adding,
-		checking: recheck.isPending, checkedAt: usageQuery.dataUpdatedAt, recheck: () => recheck.mutateAsync().catch(() => undefined),
+		recheck: () => recheck.mutateAsync().catch(() => undefined),
 		run, say: setMessage, show, act, moveSessions,
 	};
 }
@@ -221,7 +221,7 @@ function AccountListItem({ account, current, onSelect }: { account: ProviderAcco
 }
 // Accounts is a list and a detail: every account on the left, and the selected one on the right with its actions.
 export function ProviderAccountsSection({ titleHidden }: { titleHidden?: boolean }) {
-	const { t, i18n } = useTranslation();
+	const { t } = useTranslation();
 	const page = useAccountsPage();
 	const { query, accounts, adding, signIn } = page;
 	const busy = page.pending || signIn.waiting;
@@ -256,10 +256,6 @@ export function ProviderAccountsSection({ titleHidden }: { titleHidden?: boolean
 								) : null}
 							</section>
 						))}
-						<div className="mt-3.5 flex min-h-8 items-center border-t border-border pl-3 pr-1.5 pt-2 text-xs text-muted-foreground">
-							<span className="min-w-0 flex-1 truncate">{page.checkedAt ? t("providerAccounts.checkedAt", { when: formatAgo(page.checkedAt, i18n.language, t("time.justNow")) }) : null}</span>
-							<IconAction name={t("startup.checkAgain")} disabled={page.checking} onClick={() => void page.recheck()}><RefreshCw aria-hidden="true" className={cn("size-3.5", page.checking ? "animate-spin" : "")} /></IconAction>
-						</div>
 					</nav>
 					<div className="settings-thin-scrollbar min-h-0 min-w-0 overflow-y-auto px-7 pb-8 pt-5 @max-3xl:overflow-visible @max-3xl:px-4">
 						<div className="max-w-[1040px]">
