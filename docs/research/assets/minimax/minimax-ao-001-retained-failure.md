@@ -1,0 +1,33 @@
+# MiniMax AO-001 retained failure screenshot
+
+This is the same failed AO session retained from attempt 001, captured later in the real AO Electron desktop. It is not a successful integration run or a new failure reproduction.
+
+Visible result: SessionStart/UserPromptSubmit refuses a conversation identity change. The cached hook originally resolved its profile relative to its copied plugin-cache directory, so the initial task could not run.
+
+The original runner was externally interrupted before report finalization. Its JSON still says state=running and summary NOT_RUN with zero rows; that summary is not a completed audit verdict. Preserve the original logs and failing assertions separately.
+
+The UI reports Working, but the visible native turn is refused. Display status alone does not prove a successful task.
+
+## Capture provenance
+
+| Field | Value |
+| --- | --- |
+| harness | minimax-code |
+| interface | TUI |
+| nativeVersion | 0.6.5 |
+| provider | Z.ai |
+| model | glm-5.3-flash |
+| aoSessionId | audit-minimax-code-4d6b195f-1 |
+| nativeSessionIdSha256 | None |
+| aoSourceSha | 8adab41c1f4f7652aa18ae27462b9dc41d42881f |
+| binarySha256 | ead29dbdb9f199f659d2992ef80f6ccf82856548369609c3c073b00038d481f1 |
+| uiSourceSha | 8adab41c1f4f7652aa18ae27462b9dc41d42881f |
+| captureUtc | 2026-10-10T12:54:17.403154+00:00 |
+| captureTool | scrot on owned Xvfb display via tools/ao-ui-x11.py failure-003 capture |
+| artifactPath | /home/azureuser/.ao/audits/harness-watch-20261010/reports/ui-lab/minimax-ao-001-retained-failure.png |
+| imageSha256 | e9f6efdf08876e4ebe2e938c6d405ab65e90785bd46665fc0ec1ca166fbdfd24 |
+| surface | actual AO Electron desktop; native preload bridge verified |
+| daemon | http://127.0.0.1:46591 |
+| uiRoute | #/projects/audit-minimax-code-4d6b195f/sessions/audit-minimax-code-4d6b195f-1 |
+| observedState | FAIL: retained AO-001 session displays SessionStart/UserPromptSubmit identity-change refusal. Captured later from the same live failed session, not at original failure timestamp; not a passing integration. |
+| visualInspection | AO navigation, selected session, MiniMax native TUI, model, prompt and hook refusal visible; only synthetic audit tokens shown; no credential values visible. |

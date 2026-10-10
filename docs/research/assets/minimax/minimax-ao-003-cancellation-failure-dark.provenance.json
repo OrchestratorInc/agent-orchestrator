@@ -1,0 +1,29 @@
+{
+  "harness": "minimax-code",
+  "interface": "TUI",
+  "nativeVersion": "0.6.5",
+  "provider": "Z.ai",
+  "model": "glm-5.3-flash",
+  "aoSessionId": "audit-minimax-code-1e4b822b-1",
+  "nativeSessionIdSha256": "25c1e281353913f6724cffdb5fbbd85472e36f303a22c064316e930eb14bab70",
+  "aoSourceSha": "a15b135cd4dcb7b227a0b95a93ee4162541b3e0d",
+  "binarySha256": "7a20be24b279cd8b09d4f55432aa98d21a31fa66fd81a6291cf8148dde52d2bc",
+  "uiSourceSha": "a15b135cd4dcb7b227a0b95a93ee4162541b3e0d",
+  "captureUtc": "2026-10-10T14:33:22.726970+00:00",
+  "captureTool": "scrot on owned Xvfb display via tools/ao-ui-x11.py failure-005 capture",
+  "artifactPath": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/ui-lab/minimax-ao-003-cancellation-failure-dark.png",
+  "imageSha256": "da6db062f62e80493b6199328f3e115410bb97a5175e18915c32567022bbcff3",
+  "surface": "actual AO Electron desktop; native preload bridge verified",
+  "daemon": "http://127.0.0.1:35913",
+  "uiRoute": "#/projects/audit-minimax-code-1e4b822b/sessions/audit-minimax-code-1e4b822b-1",
+  "observedState": "AO003 FAIL: native Interrupted after 0s / Stopped with restored nonempty cancellation draft is visible inside AO. API continued reporting active through cancellation deadline. Cleanup BLOCKED without input; kill/restore/continuity NOT_RUN. Captured from retained session after finalization; no terminal input or provider turn was sent for capture.",
+  "visualInspection": "AO context, selected MiniMax session, successful second edit, native Stopped and nonempty composer, model visible; no credential values visible. Only audit-generated markers/IDs are displayed.",
+  "displayPreference": "Changed isolated Electron Settings > Theme from System to Dark through actual UI for readability; no pixel alterations or native input.",
+  "originalCapture": {
+    "artifactPath": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/ui-lab/minimax-ao-003-cancellation-failure.png",
+    "captureUtc": "2026-10-10T14:29:05.886309+00:00",
+    "imageSha256": "ab29ad510b3e859a1222f0da40171cfa42c8f7ac2fb124c66bc7e9f579e4547f",
+    "retained": true
+  },
+  "attachment": "pending revision-pinned GitHub asset URL"
+}

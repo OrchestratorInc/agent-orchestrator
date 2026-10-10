@@ -1,0 +1,165 @@
+{
+  "state": "finished",
+  "startedAt": "2026-10-10T14:42:47.217Z",
+  "finishedAt": "2026-10-10T14:47:41.253Z",
+  "auditClassification": "diagnostic-only; full strict audit PASS not claimed",
+  "summary": {
+    "status": "BLOCKED",
+    "total": 1,
+    "pass": 0,
+    "fail": 0,
+    "blocked": 1,
+    "notRun": 0
+  },
+  "functionalSource": "17a1467a404234f34d8bc8824d293993e1703564",
+  "binarySha256": "4b47bd780af069862dffd9ace01bb768fca6e5ae9959956da15fe7e75faabf7e",
+  "runnerSha256": "8887aa2e7101b9e6d3950bfca08ffddf2e1e6c1c3f1d030c8dec2676443aecea",
+  "aoSessionId": "audit-minimax-code-acbea22e-1",
+  "gates": [
+    {
+      "name": "local_binary",
+      "status": "PASS",
+      "reason": "local executable resolved"
+    },
+    {
+      "name": "local_version",
+      "status": "PASS",
+      "reason": "local version command succeeded"
+    },
+    {
+      "name": "local_integration",
+      "status": "PASS",
+      "reason": "local integration probe succeeded"
+    },
+    {
+      "name": "local_session_spawn",
+      "status": "PASS",
+      "reason": "direct local CLI session produced the requested proof"
+    },
+    {
+      "name": "local_models_list",
+      "status": "PASS",
+      "reason": "local CLI listed 1 model(s)"
+    },
+    {
+      "name": "registered",
+      "status": "PASS",
+      "reason": "agent is registered"
+    },
+    {
+      "name": "installed",
+      "status": "PASS",
+      "reason": "AO resolved the installed executable"
+    },
+    {
+      "name": "fresh_probe",
+      "status": "PASS",
+      "reason": "installation and authentication observations are fresh"
+    },
+    {
+      "name": "authentication",
+      "status": "BLOCKED",
+      "reason": "MiniMax Code has credentials configured, but AO could not verify them."
+    },
+    {
+      "name": "ao_models_api",
+      "status": "PASS",
+      "reason": "AO model API listed 1 model(s)"
+    },
+    {
+      "name": "tui_spawn",
+      "status": "PASS",
+      "reason": "AO created the requested TUI session"
+    },
+    {
+      "name": "proof_file_creation",
+      "status": "PASS",
+      "reason": "AO_AUDIT_PROOF.json contains valid JSON"
+    },
+    {
+      "name": "correct_working_directory",
+      "status": "PASS",
+      "reason": "provider reported AO's session workspace"
+    },
+    {
+      "name": "initial_prompt_exactly_once",
+      "status": "PASS",
+      "reason": "unique initial token was handled once"
+    },
+    {
+      "name": "hidden_ao_instructions",
+      "status": "PASS",
+      "reason": "provider consumed hidden AO standing instructions"
+    },
+    {
+      "name": "project_agents_md",
+      "status": "PASS",
+      "reason": "provider consumed project AGENTS.md"
+    },
+    {
+      "name": "activity_status",
+      "status": "PASS",
+      "reason": "AO exposed ready status and an active\u2192idle transition"
+    },
+    {
+      "name": "second_message",
+      "status": "PASS",
+      "reason": "second API message produced the requested provider-authored mutation"
+    },
+    {
+      "name": "native_session_id",
+      "status": "PASS",
+      "reason": "AO persisted a provider-native session identity"
+    },
+    {
+      "name": "cancellation",
+      "status": "PASS",
+      "reason": "AO terminal mux sent configured input to the observed active session and the same terminal settled"
+    },
+    {
+      "name": "post_cancel_draft_cleanup",
+      "status": "PASS",
+      "reason": "one Ctrl+C cleared the audit cancellation draft and the same terminal displayed the empty-composer cue"
+    },
+    {
+      "name": "termination",
+      "status": "PASS",
+      "reason": "kill was acknowledged and termination was confirmed"
+    },
+    {
+      "name": "native_restore",
+      "status": "PASS",
+      "reason": "AO restored in native mode with the exact provider-native ID"
+    },
+    {
+      "name": "same_ao_session_workspace",
+      "status": "PASS",
+      "reason": "restore retained the AO session ID and workspace"
+    },
+    {
+      "name": "post_restore_terminal_ready",
+      "status": "PASS",
+      "reason": "the restored native terminal displayed the configured ready cue on the same terminal generation"
+    },
+    {
+      "name": "post_restore_message",
+      "status": "PASS",
+      "reason": "post-restore message produced a provider-authored mutation"
+    },
+    {
+      "name": "history_file_continuity",
+      "status": "PASS",
+      "reason": "native history recall and original proof-file continuity were both observed"
+    },
+    {
+      "name": "system_prompt_restore",
+      "status": "PASS",
+      "reason": "restore-only hidden standing instruction was observed after restore"
+    },
+    {
+      "name": "model_catalog_consistency",
+      "status": "PASS",
+      "reason": "1 model ID(s) are shared by local CLI and AO"
+    }
+  ]
+}

@@ -128,6 +128,7 @@ var commandSpecs = map[string]commandSpec{
 	"crush":        {args: []string{"models"}, parser: parseIDLines},
 	"fx":           {args: []string{"models", "--json"}, parser: parseFXModels},
 	"mimo-code":    {args: []string{"models"}, parser: parseMiMoModels},
+	"minimax-code": {args: []string{"provider", "list", "--json"}, parser: parseMiniMaxModels},
 	"command-code": {args: []string{"--list-models"}, parser: parseAgyModels},
 }
 
@@ -193,7 +194,7 @@ func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
 		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin":
 		return ports.CustomModelEntryDirect
-	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
+	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent", "minimax-code":
 		return ports.CustomModelEntryConfigured
 	default:
 		return ports.CustomModelEntryNone

@@ -1,0 +1,21 @@
+{
+  "harness": "minimax-code",
+  "interface": "TUI",
+  "nativeVersion": "0.6.5",
+  "provider": "Z.ai",
+  "model": "glm-5.3-flash",
+  "aoSessionId": "audit-minimax-code-b3caf34b-1",
+  "nativeSessionIdSha256": "7de5c2de85a448ff75c42ab2265c0682a84340910b3e5364f4fe024b13294f6f",
+  "aoSourceSha": "ca75d9eaaabff1c8cbcfa167014be965b2517dc6",
+  "binarySha256": "6872faf04df257408cb4407d978ff59e3f59828f17232da8ee4803bc8ded44d2",
+  "uiSourceSha": "ca75d9eaaabff1c8cbcfa167014be965b2517dc6",
+  "captureUtc": "2026-10-10T13:27:03.023392+00:00",
+  "captureTool": "scrot on owned Xvfb display via tools/ao-ui-x11.py failure-004 capture",
+  "artifactPath": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/ui-lab/minimax-ao-002-retained-draft.png",
+  "imageSha256": "e0a690e4c7a274b301f58aebf9965ac923a5e011ba64ff70fc86adaac885991b",
+  "surface": "actual AO Electron desktop; native preload bridge verified",
+  "daemon": "http://127.0.0.1:35833",
+  "uiRoute": "#/projects/audit-minimax-code-b3caf34b/sessions/audit-minimax-code-b3caf34b-1",
+  "observedState": "AO002 FAIL/BLOCKED: retained restored session shows successful initial file creation and second edit, but cancellation prompt remains in native Long draft composer. Runner cancellation settle timed out and restored empty-input readiness was blocked; post-restore continuation was not sent. Captured later from retained session.",
+  "visualInspection": "AO context, selected MiniMax session, file edits, model and Long draft composer visible; no credential values visible."
+}
