@@ -50,6 +50,14 @@ import type { BrowserDownloadManager } from "./browser-download-manager";
 import type { BrowserDownloadActionInput } from "../shared/browser-downloads";
 import { matchInstruction } from "./browser-act-matcher";
 import type { ActCandidate } from "./browser-act-matcher";
+import { BrowserScreencast } from "./browser-screencast";
+import type {
+	BrowserLiveSink,
+	BrowserLiveState,
+	BrowserRemoteInput,
+	BrowserRemoteNavigation,
+	BrowserRemoteTabAction,
+} from "./browser-live-types";
 
 function isValidAnnotationContext(
   value: unknown,
@@ -314,6 +322,7 @@ type BrowserWebContents = Pick<
   | "reload"
   | "removeInsertedCSS"
   | "send"
+  | "sendInputEvent"
   | "setWindowOpenHandler"
   | "stop"
   | "stopFindInPage"
@@ -407,6 +416,8 @@ type BrowserWindowLike = {
   getContentBounds: () => BrowserRect;
   webContents?: WebContents;
   isDestroyed?: () => boolean;
+  isFocused?: () => boolean;
+  isMinimized?: () => boolean;
 };
 
 type ShellLike = {
@@ -474,6 +485,13 @@ export type BrowserViewHost = {
   // tick — a same-turn hide/show can coalesce into a no-op on macOS and leave
   // the page blank for the whole overlay lifetime.
   refreshLastFocusedPanelSurface: () => void;
+	startLiveStream: (sessionId: string, streamId: number, sink: BrowserLiveSink) => Promise<BrowserLiveState>;
+	stopLiveStream: (sessionId: string, streamId: number) => Promise<void>;
+	stopAllLiveStreams: () => Promise<void>;
+	handleRemoteInput: (sessionId: string, input: BrowserRemoteInput) => Promise<void>;
+	handleRemoteNavigation: (sessionId: string, input: BrowserRemoteNavigation) => Promise<void>;
+	handleRemoteTab: (sessionId: string, input: BrowserRemoteTabAction) => Promise<void>;
+	openLivePreview: (sessionId: string, url: string) => Promise<void>;
 };
 
 type BrowserEntry = {
@@ -522,6 +540,9 @@ type BrowserSessionEntry = {
   nextTabNumber: number;
   bounds: BrowserRect;
   rendererBounds: BrowserRect;
+  // Size the desktop panel last showed this session at. A remotely viewed
+  // session keeps laying out at that size while its native view is parked.
+  lastVisibleSize?: { width: number; height: number };
   zoomFactor: number;
   visible: boolean;
   layoutRevision: number;
@@ -544,6 +565,13 @@ type BrowserSessionEntry = {
   };
   nativeOperationQueue: Promise<void>;
   devtoolsPlacement: BrowserDevToolsPlacement;
+	live?: {
+		streamId: number;
+		sink: BrowserLiveSink;
+		screencast?: BrowserScreencast;
+		tabId?: string;
+		lastStateKey?: string;
+	};
   // Bounded browser diagnostics exposed only through an explicit errors query.
   signals: {
     entries: BrowserSignalEntry[];
@@ -840,6 +868,7 @@ export function createBrowserViewHost(
       ...(commandId ? { commandId } : {}),
     } satisfies BrowserAgentActivityState);
   };
+  const liveViewportOverrides = new WeakMap<BrowserEntry, string>();
   const applyBrowserViewBounds = (
     view: BrowserViewLike,
     bounds: BrowserRect,
@@ -932,6 +961,7 @@ export function createBrowserViewHost(
     }
     const view = new options.WebContentsView({
       webPreferences: {
+        backgroundThrottling: false,
         contextIsolation: true,
         nodeIntegration: false,
         partition: session.profilePartition,
@@ -1521,6 +1551,11 @@ export function createBrowserViewHost(
     if (session.devtools && session.devtools.desiredTabId !== tabId) {
       void retargetDevTools(session, tabId).catch(() => undefined);
     }
+		if (session.live && session.live.tabId !== tabId) {
+			void retargetLiveStream(session).catch((error) =>
+				session.live?.sink.error("BROWSER_CAPTURE_UNAVAILABLE", error instanceof Error ? error.message : "Browser capture failed"),
+			);
+		}
     return next;
   }
 
@@ -1999,7 +2034,12 @@ export function createBrowserViewHost(
     session: BrowserSessionEntry,
     entry: BrowserEntry,
   ): void {
+    syncLiveViewport(session, entry);
     if (!session.visible) {
+      // Park hidden even while a phone is watching. A parked native view keeps
+      // its last on-screen frame (only its hidden flag changes), so re-applying
+      // these bounds to a "visible" view un-hides it over whatever the desktop
+      // shows next. The screencast capturer keeps a hidden page painting.
       applyBrowserViewBounds(entry.view, OFFSCREEN_BOUNDS, false);
       return;
     }
@@ -2078,6 +2118,12 @@ export function createBrowserViewHost(
       options.mainWindow.getContentBounds(),
     );
     session.visible = true;
+    if (session.bounds.width > 0 && session.bounds.height > 0) {
+      session.lastVisibleSize = {
+        width: session.bounds.width,
+        height: session.bounds.height,
+      };
+    }
     // A profile replacement may temporarily have no active tab. Keep accepting
     // renderer geometry during that interval; rebuilt tabs receive the latest
     // bounds instead of a stale pre-switch viewport.
@@ -2264,6 +2310,10 @@ export function createBrowserViewHost(
   const destroy = (viewId: string): void => {
     const session = entries.get(viewId);
     if (!session) return;
+		const live = session.live;
+		live?.sink.error("BROWSER_SESSION_CLOSED", "The desktop browser session was closed");
+		session.live = undefined;
+		if (live?.screencast) void live.screencast.stop();
     const partitionToClear =
       session.profileId === null ? session.profilePartition : undefined;
     session.signals.entries.length = 0;
@@ -3205,6 +3255,276 @@ export function createBrowserViewHost(
   );
   on("browser:annotation:discard", (event) => discardAnnotationFromPage(event));
 
+	// CSS-pixel size the streamed page is laid out at. Remote pointer and wheel
+	// input is mapped against this, so it must match what the capture shows.
+	function liveViewport(session: BrowserSessionEntry): { width: number; height: number } {
+		const source = session.visible ? session.bounds : session.lastVisibleSize ?? OFFSCREEN_BOUNDS;
+		return {
+			width: Math.max(1, Math.round(source.width)),
+			height: Math.max(1, Math.round(source.height)),
+		};
+	}
+
+	// A parked native view has no layout of its own: it keeps the size the
+	// desktop last showed, and a session whose panel was never opened has no
+	// size at all, so nothing paints and input lands nowhere. Pin the viewport
+	// while a parked page is streamed, and release it once the desktop shows it.
+	function syncLiveViewport(session: BrowserSessionEntry, entry: BrowserEntry): void {
+		const size = session.live && !session.visible ? liveViewport(session) : undefined;
+		const key = size ? `${size.width}x${size.height}` : undefined;
+		if (liveViewportOverrides.get(entry) === key) return;
+		const debug = entry.view.webContents.debugger;
+		if (!debug?.isAttached()) {
+			if (!key) liveViewportOverrides.delete(entry);
+			return;
+		}
+		if (key) liveViewportOverrides.set(entry, key);
+		else liveViewportOverrides.delete(entry);
+		const pending = size
+			? debug.sendCommand("Emulation.setDeviceMetricsOverride", { ...size, deviceScaleFactor: 0, mobile: false })
+			: debug.sendCommand("Emulation.clearDeviceMetricsOverride");
+		void Promise.resolve(pending).catch(() => {
+			if (liveViewportOverrides.get(entry) === key) liveViewportOverrides.delete(entry);
+		});
+	}
+
+	function browserLiveState(session: BrowserSessionEntry): BrowserLiveState {
+		const current = activeEntry(session);
+		const nav = readNavState(current);
+		const bounds = liveViewport(session);
+		return {
+			url: nav.url,
+			title: nav.title,
+			loading: nav.isLoading,
+			canGoBack: nav.canGoBack,
+			canGoForward: nav.canGoForward,
+			activeTabId: session.activeTabId,
+			tabs: [...session.tabs.values()].map((tab) => {
+				const state = readNavState(tab);
+				return { id: tab.tabId, title: state.title, url: state.url, active: tab.tabId === session.activeTabId };
+			}),
+			width: bounds.width,
+			height: bounds.height,
+		};
+	}
+
+	function emitLiveState(session: BrowserSessionEntry): BrowserLiveState {
+		const state = browserLiveState(session);
+		const key = JSON.stringify(state);
+		if (session.live && session.live.lastStateKey !== key) {
+			session.live.lastStateKey = key;
+			session.live.sink.state(state);
+		}
+		return state;
+	}
+
+	async function stopLiveCapture(session: BrowserSessionEntry): Promise<void> {
+		const live = session.live;
+		if (!live) return;
+		const screencast = live.screencast;
+		live.screencast = undefined;
+		live.tabId = undefined;
+		if (screencast) await screencast.stop();
+		if (!session.visible) applySessionBounds(session, activeEntry(session));
+	}
+
+	async function retargetLiveStream(session: BrowserSessionEntry): Promise<void> {
+		const live = session.live;
+		if (!live) return;
+		const previousScreencast = live.screencast;
+		live.screencast = undefined;
+		if (previousScreencast) await previousScreencast.stop();
+		if (session.live !== live) return;
+		const entry = activeEntry(session);
+		await ensureDebugger(entry);
+		if (session.live !== live || activeEntry(session) !== entry) return;
+		applySessionBounds(session, entry);
+		const cast = new BrowserScreencast(
+			entry.view.webContents.debugger!,
+			(frame) => {
+				if (session.live !== live || live.screencast !== cast || live.tabId !== entry.tabId) return;
+				live.sink.frame(frame);
+				emitLiveState(session);
+			},
+			(code, message) => live.sink.error(code, message),
+		);
+		live.screencast = cast;
+		live.tabId = entry.tabId;
+		await cast.start();
+		if (session.live !== live || live.screencast !== cast) {
+			await cast.stop();
+			return;
+		}
+		emitLiveState(session);
+	}
+
+	async function startLiveStream(sessionId: string, streamId: number, sink: BrowserLiveSink): Promise<BrowserLiveState> {
+		if (!Number.isSafeInteger(streamId) || streamId <= 0) throw browserError("INVALID_ARGUMENT", "streamId is invalid");
+		const session = await ensureSessionReady(sessionId);
+		if (session.live) await stopLiveCapture(session);
+		session.live = { streamId, sink };
+		try {
+			await retargetLiveStream(session);
+			return emitLiveState(session);
+		} catch (error) {
+			session.live = undefined;
+			if (!session.visible) applySessionBounds(session, activeEntry(session));
+			throw error;
+		}
+	}
+
+	function detachLiveStream(session: BrowserSessionEntry): Promise<void> | undefined {
+		if (!session.live) return undefined;
+		const live = session.live;
+		session.live = undefined;
+		live.tabId = undefined;
+		const screencast = live.screencast;
+		live.screencast = undefined;
+		if (!session.visible) applySessionBounds(session, activeEntry(session));
+		return screencast?.stop();
+	}
+
+	async function stopLiveStream(sessionId: string, streamId: number): Promise<void> {
+		const viewId = viewIdsBySessionId.get(sessionId);
+		const session = viewId ? entries.get(viewId) : undefined;
+		if (!session || session.live?.streamId !== streamId) return;
+		await detachLiveStream(session);
+	}
+
+	function stopAllLiveStreams(): Promise<void> {
+		// Detach every sink synchronously before awaiting CDP. A replacement link
+		// can connect immediately, but it must never observe stale ownership from
+		// the link that just disappeared.
+		const stops: Promise<void>[] = [];
+		for (const session of entries.values()) {
+			const stop = detachLiveStream(session);
+			if (stop) stops.push(stop);
+		}
+		return Promise.all(stops).then(() => undefined);
+	}
+
+	function assertRemoteWritable(session: BrowserSessionEntry, scrollOnly = false): void {
+		if (!session.live) throw browserError("BROWSER_REMOTE_NOT_VIEWED", "Remote browser stream is not active");
+		if (session.agentBrowserCommands > 0 || session.profileSwitching) {
+			throw browserError("BROWSER_REMOTE_READ_ONLY", "Browser control is temporarily read-only while the agent is active");
+		}
+		// Scrolling has no target to fight over, so a phone can always scroll the
+		// page it is watching. Everything else yields to an active desktop user.
+		if (
+			!scrollOnly &&
+			session.visible &&
+			options.mainWindow.isFocused?.() !== false &&
+			options.mainWindow.isMinimized?.() !== true &&
+			lastFocusedViewId === session.viewId
+		) {
+			throw browserError("BROWSER_REMOTE_READ_ONLY", "Desktop browser control is active");
+		}
+	}
+
+	async function handleRemoteInput(sessionId: string, input: BrowserRemoteInput): Promise<void> {
+		const session = await ensureSessionReady(sessionId);
+		const scrollOnly = input.kind === "wheel";
+		assertRemoteWritable(session, scrollOnly);
+		await queueNativeOperation(session, async () => {
+			assertRemoteWritable(session, scrollOnly);
+			const entry = activeEntry(session);
+			await entry.ready;
+			const bounds = liveViewport(session);
+			if (input.kind === "pointer") {
+				if (!Number.isFinite(input.x) || !Number.isFinite(input.y) || input.x < 0 || input.x > 1 || input.y < 0 || input.y > 1) {
+					throw browserError("INVALID_ARGUMENT", "Pointer coordinates are invalid");
+				}
+				entry.view.webContents.sendInputEvent({
+					type: input.phase === "move" ? "mouseMove" : input.phase === "down" ? "mouseDown" : "mouseUp",
+					x: Math.round(input.x * Math.max(1, bounds.width - 1)),
+					y: Math.round(input.y * Math.max(1, bounds.height - 1)),
+					button: input.button ?? "left",
+					clickCount: input.phase === "move" ? undefined : 1,
+				} as never);
+				return;
+			}
+			if (input.kind === "wheel") {
+				if (!Number.isFinite(input.deltaX) || !Number.isFinite(input.deltaY)) throw browserError("INVALID_ARGUMENT", "Wheel delta is invalid");
+				entry.view.webContents.sendInputEvent({
+					type: "mouseWheel",
+					x: Math.round(bounds.width / 2),
+					y: Math.round(bounds.height / 2),
+					deltaX: Math.max(-2_000, Math.min(2_000, input.deltaX)),
+					deltaY: Math.max(-2_000, Math.min(2_000, input.deltaY)),
+				} as never);
+				return;
+			}
+			if (input.kind === "text") {
+				if (typeof input.value !== "string" || Buffer.byteLength(input.value, "utf8") > 16 << 10) throw browserError("INVALID_ARGUMENT", "Text input is invalid");
+				await ensureDebugger(entry);
+				await entry.view.webContents.debugger!.sendCommand("Input.insertText", { text: input.value });
+				return;
+			}
+			if (input.key.length > 64 || input.code.length > 64) throw browserError("INVALID_ARGUMENT", "Key input is invalid");
+			const modifiers = (input.modifiers ?? []).filter((value) => ["shift", "control", "alt", "meta"].includes(value));
+			if (modifiers.length !== (input.modifiers ?? []).length || (modifiers.includes("meta") && ["q", "w"].includes(input.key.toLowerCase()))) {
+				throw browserError("INVALID_ARGUMENT", "Key combination is not allowed");
+			}
+			entry.view.webContents.sendInputEvent({
+				type: input.phase === "down" ? "keyDown" : "keyUp",
+				keyCode: input.key,
+				modifiers,
+			} as never);
+		});
+	}
+
+	async function handleRemoteNavigation(sessionId: string, input: BrowserRemoteNavigation): Promise<void> {
+		const session = await ensureSessionReady(sessionId);
+		assertRemoteWritable(session);
+		await withBrowserOperation(session, async () => {
+			const entry = activeEntry(session);
+			switch (input.action) {
+				case "open": {
+					const raw = input.url?.trim();
+					if (!raw) throw browserError("URL_REQUIRED", "url is required");
+					await navigateEntry(entry, normalizeAgentBrowserURL(raw));
+					break;
+				}
+				case "back": entry.view.webContents.goBack(); break;
+				case "forward": entry.view.webContents.goForward(); break;
+				case "reload": entry.view.webContents.reload(); break;
+				case "stop": entry.view.webContents.stop(); break;
+				default: throw browserError("INVALID_ARGUMENT", "Navigation action is unsupported");
+			}
+			emitLiveState(session);
+		});
+	}
+
+	// The desktop panel only opens a session's preview once it is mounted. A
+	// phone that starts watching first would otherwise stream an empty browser,
+	// so open the preview for it, but never over a page that is already there.
+	async function openLivePreview(sessionId: string, url: string): Promise<void> {
+		const viewId = viewIdsBySessionId.get(sessionId);
+		const session = viewId ? entries.get(viewId) : undefined;
+		const target = url.trim();
+		if (!session?.live || !target) return;
+		if (session.agentBrowserCommands > 0 || session.profileSwitching) return;
+		if (!isBlankBrowserEntry(activeEntry(session))) return;
+		await withBrowserOperation(session, async () => {
+			const entry = activeEntry(session);
+			if (!session.live || !isBlankBrowserEntry(entry)) return;
+			await navigateEntry(entry, normalizeAgentBrowserURL(target));
+			emitLiveState(session);
+		});
+	}
+
+	async function handleRemoteTab(sessionId: string, input: BrowserRemoteTabAction): Promise<void> {
+		const session = await ensureSessionReady(sessionId);
+		assertRemoteWritable(session);
+		switch (input.action) {
+			case "new": await openUserTab(session, input.url); break;
+			case "select": activateTab(session, stringArg(input as unknown as Record<string, unknown>, "tabId", "TAB_ID_REQUIRED", "tabId is required")); break;
+			case "close": closeTab(session, input.tabId); break;
+			default: throw browserError("INVALID_ARGUMENT", "Tab action is unsupported");
+		}
+		emitLiveState(session);
+	}
+
   return {
     execute: async (sessionId, action, args = {}, signal) => {
       throwIfAborted(signal);
@@ -3860,6 +4180,13 @@ export function createBrowserViewHost(
         destroy(viewId);
       }
     },
+		startLiveStream,
+		stopLiveStream,
+		stopAllLiveStreams,
+		handleRemoteInput,
+		handleRemoteNavigation,
+		handleRemoteTab,
+		openLivePreview,
     getLastFocusedPanelContents: () => {
       if (lastFocusedViewId === null) return null;
       const session = entries.get(lastFocusedViewId);
