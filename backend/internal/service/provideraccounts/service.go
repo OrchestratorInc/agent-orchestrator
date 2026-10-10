@@ -32,7 +32,7 @@ type Service struct {
 	tick     time.Duration
 	changed  func()
 	mu       sync.Mutex // one account change at a time
-	starting sync.Mutex // one sign-in start at a time
+	starting sync.Mutex // one sign-in start or import at a time
 	memo     sync.Mutex // guards the fields below
 	usage    map[string]domain.ProviderAccountUsage
 	failed   map[string]bool
@@ -53,9 +53,7 @@ func New(store ports.ProviderAccountStore, helper ports.AccountHelper, newID fun
 }
 
 // OnChange sets what is called when the accounts a provider can use change.
-func (s *Service) OnChange(fn func(provider string)) {
-	s.changed = func() { fn("codex"); fn("claude") }
-}
+func (s *Service) OnChange(fn func()) { s.changed = fn }
 
 // Run keeps the helper and the accounts current until ctx ends; migrate reports the chats left to move.
 func (s *Service) Run(ctx context.Context, log *slog.Logger, migrate func(context.Context) (int, error)) {
@@ -424,7 +422,7 @@ func (s *Service) record(ctx context.Context, provider string, v ports.VerifiedP
 		case i < 0 && relogin != "":
 			return "", ports.ErrProviderAccountUnknown
 		case i < 0:
-			id = s.add(st, v.Kind, v)
+			id = s.add(st, v)
 		case st.Accounts[i].Provider != provider || !strings.EqualFold(st.Accounts[i].Email, v.Email):
 			return "", ports.ErrProviderAccountIncompatible
 		case st.Accounts[i].CredentialRef == v.CredentialRef && st.Accounts[i].AuthID == v.AuthID:
@@ -444,8 +442,8 @@ func (s *Service) record(ctx context.Context, provider string, v ports.VerifiedP
 }
 
 // add appends a new account under a generated name no other account has.
-func (s *Service) add(st *domain.ProviderAccountState, kind string, v ports.VerifiedProviderLogin) string {
-	a := domain.ProviderAccount{ID: s.newID(), Provider: v.Provider, Email: v.Email, Kind: kind, CredentialRef: v.CredentialRef, AuthID: v.AuthID}
+func (s *Service) add(st *domain.ProviderAccountState, v ports.VerifiedProviderLogin) string {
+	a := domain.ProviderAccount{ID: s.newID(), Provider: v.Provider, Email: v.Email, Kind: v.Kind, CredentialRef: v.CredentialRef, AuthID: v.AuthID}
 	base := domain.GeneratedProviderAccountName(a.Provider, a.ID)
 	a.DisplayName = base
 	for n := 2; slices.ContainsFunc(st.Accounts, func(o domain.ProviderAccount) bool { return o.DisplayName == a.DisplayName }); n++ {
@@ -462,6 +460,8 @@ func (s *Service) discard(ctx context.Context, ref string) error {
 
 // importNative makes this computer's own logins and API keys accounts, once each.
 func (s *Service) importNative(ctx context.Context, force bool) {
+	s.starting.Lock() // two imports at once would each take the other's key for one added by hand
+	defer s.starting.Unlock()
 	if !s.due("native", 5*time.Minute, force) {
 		return
 	}
@@ -485,13 +485,13 @@ func (s *Service) importOne(ctx context.Context, provider string, key bool) {
 	if err != nil {
 		return
 	}
-	seen, kind := receipts(&stored, key)[provider].Fingerprint, map[bool]string{false: "oauth", true: "api_key"}[key]
+	seen := receipts(&stored, key)[provider].Fingerprint
 	v, found, err := s.helper.ImportNative(ctx, provider, key, seen)
 	byHand := errors.Is(err, ports.ErrProviderAccountConflict)
 	if found == "" || found == seen || !byHand && (err != nil || v.AuthID == "") {
 		return // Nothing new, or nothing readable: the accounts stay as they are.
 	}
-	v.Provider = provider
+	v.Provider, v.Kind = provider, map[bool]string{false: "oauth", true: "api_key"}[key]
 	_ = s.change(ctx, func(st *domain.ProviderAccountState) (string, error) {
 		receipt, id, drop := receipts(st, key)[provider], "", v.CredentialRef
 		i := slices.IndexFunc(st.Accounts, func(a domain.ProviderAccount) bool {
@@ -510,7 +510,7 @@ func (s *Service) importOne(ctx context.Context, provider string, key bool) {
 			}) {
 				return "", ports.ErrProviderAccountConflict
 			}
-			id, drop = s.add(st, kind, v), ""
+			id, drop = s.add(st, v), ""
 		case key || !st.Accounts[i].SignedIn(): // A changed key takes the place of the one before it.
 			a := &st.Accounts[i]
 			id, drop, a.CredentialRef, a.AuthID = a.ID, a.CredentialRef, v.CredentialRef, v.AuthID
@@ -690,7 +690,11 @@ func (s *Service) StartLogin(ctx context.Context, in ports.ProviderLoginRequest)
 		return ports.ProviderLogin{}, err
 	}
 	login.ID, login.Provider, login.Mode, login.Status, login.AccountID = id, in.Provider, in.Mode, "waiting", in.AccountID
-	at := &attempt{login: login, deadline: s.now().Add(6 * time.Minute)}
+	ttl := 6 * time.Minute
+	if in.Mode == "device" {
+		ttl = 15 * time.Minute // as long as the provider keeps the code alive
+	}
+	at := &attempt{login: login, deadline: s.now().Add(ttl)}
 	s.memo.Lock()
 	defer s.memo.Unlock()
 	s.logins[id], s.logins["@"+in.Provider] = at, at

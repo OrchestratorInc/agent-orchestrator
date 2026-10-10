@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -52,6 +53,9 @@ func (r *Routes) Apply(routes []Route, authIDs []string) error {
 		if !slices.Contains(authIDs, id) {
 			return ErrBusy
 		}
+	}
+	if maps.Equal(next, r.byTicket) {
+		return nil
 	}
 	data, _ := json.Marshal(next)
 	if err := writePrivate(r.path, data); err != nil {

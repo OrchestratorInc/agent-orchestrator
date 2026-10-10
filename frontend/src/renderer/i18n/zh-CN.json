@@ -979,6 +979,8 @@
 	"report.titleLabel": "标题",
 	"report.titlePlaceholder": "简短标题",
 	"report.whatHappened": "发生了什么？",
+	"providerAccounts.title": "账号管理",
+	"providerAccounts.account": "切换账户",
 	"settings.close": "关闭设置",
 	"settings.connectMobile": "连接手机",
 	"settings.developerMode": "开发者模式",

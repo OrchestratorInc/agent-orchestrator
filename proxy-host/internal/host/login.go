@@ -40,14 +40,13 @@ type deviceLogin struct {
 type Logins struct {
 	mu      sync.Mutex
 	authDir string
-	origin  string
 	client  *http.Client
 	auth    *coreauth.Manager
 	ops     map[string]deviceLogin
 }
 
 func newLogins(authDir string) *Logins {
-	return &Logins{authDir: authDir, origin: "https://auth.openai.com", client: &http.Client{Timeout: 15 * time.Second}, ops: map[string]deviceLogin{}}
+	return &Logins{authDir: authDir, client: &http.Client{Timeout: 15 * time.Second}, ops: map[string]deviceLogin{}}
 }
 func (l *Logins) status(id string) (int, any) {
 	l.mu.Lock()
@@ -143,7 +142,7 @@ func waitAuth(ctx context.Context, manager *coreauth.Manager, match func(*coreau
 
 // post sends one sign-in request: the provider's JSON object with status 200, or its failing status, or 0 without a usable answer.
 func (l *Logins) post(ctx context.Context, path, contentType string, body []byte) (out map[string]any, status int) {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, l.origin+path, bytes.NewReader(body))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://auth.openai.com"+path, bytes.NewReader(body))
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Accept", "application/json")
 	resp, err := l.client.Do(req)

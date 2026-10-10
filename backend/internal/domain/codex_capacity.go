@@ -6,6 +6,7 @@ import "time"
 // single bucket. Unknown is required for sparse notifications that omit it.
 type CodexCapacityReachedState string
 
+// Codex capacity reached states normalize explicit provider exhaustion signals.
 const (
 	CodexCapacityNotReached   CodexCapacityReachedState = "not_reached"
 	CodexCapacityReached      CodexCapacityReachedState = "reached"
@@ -28,7 +29,9 @@ type CodexCapacityBucket struct {
 	Reached     CodexCapacityReachedState `json:"reached" enum:"not_reached,reached,unknown"`
 }
 
-// CodexResetCreditsSummary is the safe subset of provider-reported reset data.
+// CodexResetCreditsSummary is the safe subset of provider-reported usage-limit
+// reset credits. Opaque credit identifiers and raw provider detail rows remain
+// private to the Codex app-server process.
 type CodexResetCreditsSummary struct {
 	AvailableCount   int64      `json:"availableCount" minimum:"0"`
 	NearestExpiresAt *time.Time `json:"nearestExpiresAt,omitempty"`

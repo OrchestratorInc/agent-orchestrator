@@ -359,15 +359,14 @@ export function TurnSettingsBar({
  * picker names them by version, so the chat does too: an alias is the newest model of
  * its family in the catalog, and an id is its catalog entry.
  */
-export function claudeChoiceLabels(catalog: { id: string; displayName: string }[]) {
+function claudeChoiceLabels(catalog: { id: string; displayName: string }[]) {
 	if (catalog.length === 0) return undefined;
 	const entries = catalog.map((model) => ({ id: model.id, label: model.displayName }));
 	const newest = splitClaudeModels(entries).current;
 	return (value: string): string | undefined => {
 		const id = value.replace(/\[.*?\]$/, "").toLowerCase();
-		const label =
-			entries.find((model) => model.id.toLowerCase() === id)?.label ??
-			newest.find((model) => model.id.toLowerCase().includes(`-${id}-`) || model.label.toLowerCase().startsWith(id))?.label;
+		const exact = entries.find((model) => model.id.toLowerCase() === id);
+		const label = exact?.label ?? newest.find((model) => model.id.toLowerCase().includes(`-${id}-`) || model.label.toLowerCase().startsWith(id))?.label;
 		// A larger-context row runs the same model; without its mark it would
 		// read as a second copy of that model.
 		return label && /\[1m\]$/i.test(value) && !/1m/i.test(label) ? `${label} (1M context)` : label;

@@ -1,9 +1,9 @@
 -- Summary: the accounts AO manages and their session routes, as one document. No credentials.
 -- +goose Up
 -- +goose StatementBegin
-CREATE TABLE provider_account_state (id INTEGER PRIMARY KEY CHECK (id = 1), facts TEXT NOT NULL);
-INSERT INTO provider_account_state (id, facts) VALUES (1, '{"accounts":[],"routes":[]}');
-CREATE TRIGGER provider_account_routes_cdc
+CREATE TABLE IF NOT EXISTS provider_account_state (id INTEGER PRIMARY KEY CHECK (id = 1), facts TEXT NOT NULL);
+INSERT INTO provider_account_state (id, facts) VALUES (1, '{"accounts":[],"routes":[]}') ON CONFLICT DO NOTHING;
+CREATE TRIGGER IF NOT EXISTS provider_account_routes_cdc
 AFTER UPDATE OF facts ON provider_account_state
 WHEN NEW.facts <> OLD.facts
 BEGIN

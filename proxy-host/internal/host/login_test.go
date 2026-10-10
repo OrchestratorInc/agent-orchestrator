@@ -63,7 +63,7 @@ func deviceFixture(t *testing.T, answers map[string][]string) (*fixture, *signIn
 	t.Helper()
 	f, _ := bareFixture(t)
 	provider := &signInProvider{answers: answers}
-	f.logins.client.Transport, f.logins.origin = provider, "https://device.test"
+	f.logins.client.Transport = provider
 	return f, provider
 }
 func (f *fixture) login(method, id string) (int, string) {

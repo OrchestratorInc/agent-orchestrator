@@ -29,6 +29,7 @@ function useProviderLogin(onSettled: (login: ProviderLogin, unreachable: boolean
 		queryFn: () => fetchProviderLogin(login!.id),
 		enabled: waiting,
 		refetchInterval: 1500,
+		refetchIntervalInBackground: true,
 		retry: (failures, error) => failures < 4 && error.code !== "PROVIDER_LOGIN_NOT_FOUND",
 		gcTime: 0,
 	});
@@ -62,11 +63,10 @@ function useAccountsPage() {
 	});
 	const [selectedId, setSelectedId] = useState(signIn.login?.accountId || null);
 	const [adding, setAdding] = useState<Provider | null>(signIn.waiting && !signIn.login?.accountId ? signIn.login!.provider : null);
-	// Re-reads every account's sign-in state: on opening the page, on request, and on coming back to the window.
+	// Re-reads every account's sign-in state on request and on coming back to the window; opening settings already did.
 	const recheck = useMutation({ mutationFn: () => fetchProviderAccounts(true, true), onSuccess: (next) => cache.setQueryData(providerAccountsKey, next) });
 	useEffect(() => {
 		const check = () => recheck.mutate();
-		check();
 		window.addEventListener("focus", check);
 		return () => window.removeEventListener("focus", check);
 	}, [recheck.mutate]);

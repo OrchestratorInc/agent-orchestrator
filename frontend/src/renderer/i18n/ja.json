@@ -997,6 +997,8 @@
 	"report.titleLabel": "タイトル",
 	"report.titlePlaceholder": "簡潔なタイトル",
 	"report.whatHappened": "何が起きましたか？",
+	"providerAccounts.title": "アカウント管理",
+	"providerAccounts.account": "アカウントを切り替える",
 	"settings.close": "設定を閉じる",
 	"settings.connectMobile": "モバイル接続",
 	"settings.developerMode": "開発者モード",

@@ -997,6 +997,8 @@
 	"report.titleLabel": "제목",
 	"report.titlePlaceholder": "간단한 제목",
 	"report.whatHappened": "무슨 일이 있었나요?",
+	"providerAccounts.title": "계정 관리자",
+	"providerAccounts.account": "계정 전환",
 	"settings.close": "설정 닫기",
 	"settings.connectMobile": "모바일 연결",
 	"settings.developerMode": "개발자 모드",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountChatModels, foldClaudeAliasDefault, splitClaudeModels } from "./agent-model-choices";
+import { accountChatModels, claudeRowRunsAccountModel, foldClaudeAliasDefault, splitClaudeModels } from "./agent-model-choices";
 
 type TestModel = { id: string; label: string; isDefault?: boolean };
 const model = (label: string, id = label.toLowerCase().replace(/[ .]/g, "-"), extra: { isDefault?: boolean } = {}): TestModel => ({
@@ -57,6 +57,40 @@ describe("foldClaudeAliasDefault", () => {
 	it("never folds a configured alias into a context variant", () => {
 		const models = [model("Opus 5.5", "opus", { isDefault: true }), model("Opus 5.5 (1M context)", "opus[1m]"), model("Sonnet 5.5", "sonnet")];
 		expect(foldClaudeAliasDefault(models)).toBe(models);
+	});
+});
+
+describe("claudeRowRunsAccountModel", () => {
+	// What Claude Code reported when it was started with the account's models.
+	const rows = [
+		{ value: "default", name: "Default (recommended)", description: "Opus" },
+		{ value: "opus", name: "Opus", description: "Opus 5.5 · Best for everyday, complex tasks · $4/$20 per Mtok" },
+		{ value: "opus[1m]", name: "Opus (1M context)", description: "Opus 5.5 with 1M context" },
+		{ value: "claude-fable-5-1", name: "Fable", description: "Fable 5.1 · Most capable for your hardest and longest-running tasks" },
+		{ value: "claude-fable-5[1m]", name: "Fable", description: "" },
+		{ value: "sonnet", name: "Sonnet", description: "Sonnet 5.5 · Efficient for routine tasks · $2/$10 per Mtok" },
+		{ value: "haiku", name: "Haiku", description: "Haiku 4.5 · Fastest for quick answers · $1/$5 per Mtok" },
+		{ value: "claude-opus-4-7", name: "Opus 4.7", description: "Newer version available · select Opus for Opus 5.5" },
+		{ value: "claude-opus-5", name: "Opus 5", description: "Newer version available · select Opus for Opus 5.5" },
+		{ value: "claude-fable-5-dd-5.5-tpg", name: "claude-fable-5-dd-5.5-tpg", description: "" },
+	];
+	const account = [
+		{ id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
+		{ id: "claude-opus-4-7", label: "Opus 4.7" },
+		{ id: "claude-opus-5", label: "Opus 5" },
+		{ id: "claude-fable-5", label: "Fable 5" },
+		{ id: "claude-fable-5-1", label: "Fable 5.1" },
+		{ id: "claude-opus-5-5", label: "Opus 5.5" },
+		{ id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
+		{ id: "claude-haiku-5-5", label: "Haiku 5.5" },
+	];
+	const kept = (models: typeof account) => rows.filter((row) => claudeRowRunsAccountModel(row, models)).map((row) => row.value);
+
+	it("keeps a row only when the release it runs is one of the account's models", () => {
+		expect(kept(account)).toEqual(["opus", "opus[1m]", "claude-fable-5-1", "claude-fable-5[1m]", "sonnet", "haiku", "claude-opus-4-7", "claude-opus-5"]);
+		// An account without the newest Opus and Sonnet: "opus" would ask for Opus 5.5, which it does not list.
+		const older = account.filter((model) => !/5-5$/.test(model.id) || model.id.includes("haiku"));
+		expect(kept(older)).toEqual(["claude-fable-5-1", "claude-fable-5[1m]", "haiku", "claude-opus-4-7", "claude-opus-5"]);
 	});
 });
 

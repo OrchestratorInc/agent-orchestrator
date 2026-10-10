@@ -21,7 +21,7 @@ import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } f
 import { useQuery } from "@tanstack/react-query";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { accountModelScope, sessionAccountQueryOptions } from "../../hooks/useProviderAccounts";
-import { accountChatModels } from "../../lib/agent-model-choices";
+import { accountChatModels, claudeRowRunsAccountModel } from "../../lib/agent-model-choices";
 import { useSwitchAgentState } from "../../hooks/useSwitchAgent";
 import {
 	useConversation,
@@ -54,7 +54,7 @@ import { AgentSwitchProgressTrack } from "../AgentSwitchProgressTrack";
 import { useUiStore } from "../../stores/ui-store";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { startingConversationSnapshot } from "./OrchestratorStartingChat";
-import { claudeChoiceLabels, hasProviderPermissionMode } from "./TurnSettingsBar";
+import { hasProviderPermissionMode } from "./TurnSettingsBar";
 
 export interface ConversationWorkState {
 	controllerBusy: boolean;
@@ -385,12 +385,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}, [isClaude, isCodex, accountModels, catalog, controllerModels]);
 	// Claude Code only switches to a row it reported: on a managed account the rows that run none of its models go.
 	const chatConfigOptions = useMemo(() => {
-		const runs = isClaude && accountModels?.length ? claudeChoiceLabels(models) : undefined;
-		if (!runs) return configOptions.options;
+		if (!isClaude || !accountModels?.length) return configOptions.options;
 		return configOptions.options?.map((option) => (option.category === "model" || option.id === "model"
-			? { ...option, choices: option.choices.filter((choice) => choice.value === option.currentValue || runs(choice.value)) }
+			? { ...option, choices: option.choices.filter((choice) => choice.value === option.currentValue || claudeRowRunsAccountModel(choice, accountModels)) }
 			: option));
-	}, [isClaude, accountModels, models, configOptions.options]);
+	}, [isClaude, accountModels, configOptions.options]);
 	const { skills } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot),

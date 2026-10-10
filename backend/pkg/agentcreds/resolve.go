@@ -276,7 +276,7 @@ func oauthTokenFromCredentialsJSON(data []byte) (storedOAuth, bool) {
 			stored.expiresAt = time.UnixMilli(int64(candidate.ExpiresAt)).UTC()
 		}
 		stored.refresh = strings.TrimSpace(candidate.RefreshToken)
-		stored.renewable = stored.refresh != ""
+		stored.renewable = strings.TrimSpace(candidate.RefreshToken) != ""
 		return stored, true
 	}
 	return storedOAuth{}, false
@@ -313,19 +313,19 @@ func claudeConfigDir(opts ResolveOptions) (string, error) {
 
 // LocalOAuth returns Claude Code's stored login, refresh token included, for AO's own
 // account helper. It must never reach the renderer, a log or cloud provisioning.
-func LocalOAuth(ctx context.Context, opts ResolveOptions) (access, refresh string, ok bool) {
+func LocalOAuth(ctx context.Context, opts ResolveOptions) (access, refresh string) {
 	if provider, found := ResolveProvider("", opts); !found || provider != ProviderFirstParty {
-		return "", "", false
+		return "", ""
 	}
 	if token := opts.env("CLAUDE_CODE_OAUTH_TOKEN"); token != "" {
-		return token, "", true
+		return token, ""
 	}
 	if opts.env("ANTHROPIC_API_KEY") != "" || opts.env("ANTHROPIC_AUTH_TOKEN") != "" {
-		return "", "", false
+		return "", ""
 	}
 	stored, _, ok := loadOAuth(ctx, opts)
 	if !ok || stored.kind != KindOAuthToken {
-		return "", "", false
+		return "", ""
 	}
-	return stored.token, stored.refresh, true
+	return stored.token, stored.refresh
 }

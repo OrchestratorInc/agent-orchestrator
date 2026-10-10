@@ -979,15 +979,15 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 
-	// Resolve the effective agent config (project base + role override + spawn
-	// override) and validate the model before any durable state is created. A
-	// model the harness cannot honor should not leave a seed row behind.
 	accountID, managedAccount := "", false
 	if m.accounts != nil {
 		if accountID, managedAccount, err = m.accounts.ResolveAccount(ctx, cfg.Harness, cfg.AccountID); err != nil {
 			return domain.SessionRecord{}, 0, 0, err
 		}
 	}
+	// Resolve the effective agent config (project base + role override + spawn
+	// override) and validate the model before any durable state is created. A
+	// model the harness cannot honor should not leave a seed row behind.
 	agentConfig := applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config), cfg.AgentConfig)
 	if err := validateSpawnModel(cfg.Harness, agentConfig.Model); err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %s", ErrUnsupportedModel, err.Error())
@@ -6486,11 +6486,11 @@ func (m *Manager) wrapAgentProcessWithLaunchID(agent ports.Agent, id domain.Sess
 	if strings.TrimSpace(launchID) == "" {
 		return nil, errors.New("empty launch id")
 	}
+	argv = agentlaunch.CodexProxyArgv(argv, env)
 	// Every provider generation is fenced, including providers that report
 	// process exit through native hooks and therefore do not need the wrapper.
 	// Without this env value an old source hook can overwrite the target's
 	// native session id after an in-place switch.
-	argv = agentlaunch.CodexProxyArgv(argv, env)
 	env[EnvRuntimeLaunchID] = launchID
 	if augmenter, ok := agent.(ports.AgentRuntimeLaunchEnv); ok {
 		augmenter.AugmentRuntimeLaunchEnv(env, m.dataDir, id, launchID)

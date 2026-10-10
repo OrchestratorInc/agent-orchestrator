@@ -533,12 +533,9 @@ func Run() error {
 		ManagedAccountProvider: accounts,
 	}
 	agentSvc = agentsvc.NewWithDeps(agentDeps)
-	accounts.OnChange(func(provider string) {
-		for _, harness := range []domain.AgentHarness{domain.HarnessCodex, domain.HarnessClaudeCode} {
-			if domain.AccountProvider(harness) == provider {
-				agentSvc.InvalidateAgentAuthentication(string(harness))
-			}
-		}
+	accounts.OnChange(func() {
+		agentSvc.InvalidateAgentAuthentication(string(domain.HarnessCodex))
+		agentSvc.InvalidateAgentAuthentication(string(domain.HarnessClaudeCode))
 	})
 	agentSvc.WarmModelCatalogs(ctx)
 
@@ -607,6 +604,9 @@ func Run() error {
 	lcStack.LCM.SetSessionInputLease(sessMgr)
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
+	if err := accounts.Sync(ctx); err != nil { // sessions restored below need their routes in the helper
+		log.Warn("managed account helper requires attention", "error", err)
+	}
 	go accounts.Run(ctx, log, sessMgr.MigrateLegacyChats)
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log, OnModelScopeChanged: agentSvc.InvalidateProjectModelCatalogs})
 	reportSessions, ok := sessMgr.(reportSemanticSession)

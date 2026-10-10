@@ -118,17 +118,17 @@ describe("accounts list and detail", () => {
 		await open(user, bob);
 		expect(within(detail()).getByTestId("provider-account-global")).toHaveAttribute("title", "This machine's own API key");
 	});
-	it("checks every account's sign-in on opening, on coming back to the window and on request", async () => {
+	it("checks every account's sign-in on coming back to the window and on request; opening settings did the first check", async () => {
 		const user = await start();
 		const refreshes = () => mock.get.mock.calls.filter(([, options]) => options?.params?.query?.refresh).length;
-		expect(mock.get).toHaveBeenCalledWith(LIST, { params: { query: { includeUsage: true, refresh: true } } });
+		expect(mock.get).toHaveBeenCalledWith(LIST, { params: { query: { includeUsage: true, refresh: false } } });
 		expect(mock.get).toHaveBeenCalledWith(LIST, { params: { query: { includeUsage: false, refresh: false } } });
-		expect(refreshes()).toBe(1);
+		expect(refreshes()).toBe(0);
 		window.dispatchEvent(new Event("focus"));
-		await waitFor(() => expect(refreshes()).toBe(2));
+		await waitFor(() => expect(refreshes()).toBe(1));
 		expect(screen.getByText("Checked just now")).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Check again" }));
-		await waitFor(() => expect(refreshes()).toBe(3));
+		await waitFor(() => expect(refreshes()).toBe(2));
 	});
 	it("shows a catalogue error without pretending that all accounts were signed out", async () => {
 		mock.get.mockResolvedValue({ error: { message: "Account catalogue unavailable" } });

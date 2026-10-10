@@ -1016,6 +1016,8 @@
 	"report.titleLabel": "Título",
 	"report.titlePlaceholder": "Título breve",
 	"report.whatHappened": "O que aconteceu?",
+	"providerAccounts.title": "Gerenciador de contas",
+	"providerAccounts.account": "Mudar conta",
 	"settings.close": "Fechar configurações",
 	"settings.connectMobile": "Conectar mobile",
 	"settings.developerMode": "Modo desenvolvedor",

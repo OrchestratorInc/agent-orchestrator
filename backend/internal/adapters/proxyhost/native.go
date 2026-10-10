@@ -76,7 +76,7 @@ func readCodexAuth() (auth any, err error) {
 func nativeLogin(ctx context.Context, provider string) (string, error) {
 	value := map[string]any{"type": provider}
 	if provider == "claude" {
-		value["access_token"], value["refresh_token"], _ = agentcreds.LocalOAuth(ctx, agentcreds.ResolveOptions{AllowKeychain: true})
+		value["access_token"], value["refresh_token"] = agentcreds.LocalOAuth(ctx, agentcreds.ResolveOptions{AllowKeychain: true})
 	} else {
 		auth, err := readCodexAuth()
 		if err != nil {

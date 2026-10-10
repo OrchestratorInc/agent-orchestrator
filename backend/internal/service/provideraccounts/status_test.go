@@ -140,15 +140,15 @@ func TestAHelperOutageNeverMarksAHealthyAccountSignedOut(t *testing.T) {
 func TestReadinessFollowsTheAccountsAndIsInvalidatedWhenTheyChange(t *testing.T) {
 	h := setup(t)
 	var mu sync.Mutex
-	var changes []string
-	h.svc.OnChange(func(provider string) { mu.Lock(); defer mu.Unlock(); changes = append(changes, provider) })
+	changes := 0
+	h.svc.OnChange(func() { mu.Lock(); defer mu.Unlock(); changes++ })
 	changed := func(wait ...time.Duration) int {
 		t.Helper()
 		deadline := time.Now().Add(append(wait, 2*time.Second)[0])
 		for {
 			mu.Lock()
-			n := len(changes)
-			changes = nil
+			n := changes
+			changes = 0
 			mu.Unlock()
 			if n > 0 || time.Now().After(deadline) {
 				return n
@@ -171,8 +171,8 @@ func TestReadinessFollowsTheAccountsAndIsInvalidatedWhenTheyChange(t *testing.T)
 		t.Fatalf("state=%s reason=%q", state, reason)
 	}
 	alice := h.signIn("codex", "alice@example.com")
-	if n := changed(); n != 2 {
-		t.Fatalf("a sign-in invalidated %d providers", n)
+	if n := changed(); n != 1 {
+		t.Fatalf("a sign-in invalidated readiness %d times", n)
 	}
 	if state, _ := ready(domain.HarnessCodex); state != domain.AgentAuthenticationAuthorized {
 		t.Fatalf("state=%s", state)

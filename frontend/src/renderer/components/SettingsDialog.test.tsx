@@ -7,7 +7,8 @@ import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { SettingsDialog } from "./SettingsPageTestHarness";
 import { globalSettingsItemsFor, visibleGlobalSettings } from "./settings/settingsCatalog";
 
-const { postMock, cloudProjectsState, localWorkspacesState } = vi.hoisted(() => ({
+const { getMock, postMock, cloudProjectsState, localWorkspacesState } = vi.hoisted(() => ({
+	getMock: vi.fn(),
 	postMock: vi.fn(),
 	cloudProjectsState: {
 		data: [] as Array<{ id: string; orgId?: string; displayName: string }> | undefined,
@@ -20,7 +21,7 @@ const { postMock, cloudProjectsState, localWorkspacesState } = vi.hoisted(() => 
 }));
 
 vi.mock("../lib/api-client", () => ({
-	apiClient: { POST: postMock },
+	apiClient: { GET: getMock, POST: postMock },
 	apiErrorCode: (error: { code?: string }) => error?.code,
 	apiErrorMessage: () => "request failed",
 	hasTrustedApiBaseUrl: () => true,
@@ -102,6 +103,7 @@ vi.mock("../lib/cloud-session", () => ({
 
 describe("SettingsDialog", () => {
 	beforeEach(() => {
+		getMock.mockReset().mockResolvedValue({ data: { accounts: [] } });
 		postMock.mockReset().mockResolvedValue({ data: { operationId: "login-1", status: "cancelled" } });
 		useUiStore.setState({ developerMode: false, settingsModal: null });
 		cloudProjectsState.data = [];
@@ -233,6 +235,11 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("mobile");
 		expect(screen.getByRole("button", { name: "Mobile" })).toHaveAttribute("data-active", "true");
+		// Opening settings re-checks every account, whichever page is shown.
+		await vi.waitFor(() => expect(getMock).toHaveBeenCalledWith(
+			"/api/v1/provider-accounts",
+			{ params: { query: { includeUsage: true, refresh: true } } },
+		));
 	});
 
 	it("shows Remote hosts with Developer mode on even while the connection switch is off", async () => {

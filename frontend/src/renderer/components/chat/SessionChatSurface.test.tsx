@@ -1218,10 +1218,11 @@ describe("SessionChatSurface models on a managed account", () => {
 		configState.loaded = true;
 		configState.options = [{
 			id: "model", name: "Model", category: "model", type: "select", currentValue: "default",
-			choices: ["default", "opus", "sonnet", "claude-opus-4-7", "claude-fable-5-dd-5.5-tpg"].map((value) => ({ value, name: value })),
+			// Claude Code says which release an alias row runs in its description.
+			choices: [["default", "Opus"], ["opus", "Opus 5.5 · Best for everyday, complex tasks"], ["sonnet", "Sonnet 5.5 · Efficient for routine tasks"], ["claude-opus-4-7"], ["claude-fable-5-dd-5.5-tpg"]].map(([value, description]) => ({ value, name: value, description })),
 		}];
 		const scopes = show({ managed: true, accountId: "acct-2" }, [{ id: "claude-opus-4-7", label: "Claude Opus 4.7" }, { id: "claude-opus-5-5", label: "Claude Opus 5.5" }, { id: "claude-haiku-5-5", label: "Claude Haiku 5.5" }]);
-		// "opus" runs the account's newest Opus; the account has no Sonnet.
+		// "opus" runs Opus 5.5, which the account has; it has no Sonnet.
 		await waitFor(() => expect(screen.getByTestId("chat-model-rows")).toHaveTextContent("default=default,opus=opus,claude-opus-4-7=claude-opus-4-7"));
 		expect(screen.getByTestId("chat-models")).toHaveTextContent("claude-opus-4-7,claude-opus-5-5,claude-haiku-5-5");
 		// Only the account's catalogue is read, never the default account's.

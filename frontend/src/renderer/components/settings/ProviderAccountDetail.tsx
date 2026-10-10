@@ -161,6 +161,7 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 				: fallback ? t("providerAccounts.sessionsMoveTo", { count, name: fallback.displayName }) : undefined;
 	// The default only decides where a new session starts, so it changes at once; running sessions stay unless moved.
 	async function makeDefault() {
+		setRemoving(false);
 		if (await page.act(account.id, { action: "primary" })) page.setMoveOffer(currentDefault?.sessions.length ? { fromId: currentDefault.id, toId: account.id } : null);
 	}
 	async function remove() {

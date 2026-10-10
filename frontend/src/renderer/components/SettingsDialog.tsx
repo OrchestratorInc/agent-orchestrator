@@ -1,7 +1,7 @@
 import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
@@ -22,6 +22,7 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
+import { fetchProviderAccounts, providerAccountsCatalogueKey, providerAccountsKey } from "../hooks/useProviderAccounts";
 
 // Internal testers who see the Coder (bring-your-own) settings page in addition
 // to @11x.ai users, so the flow can be exercised on non-11x accounts.
@@ -37,6 +38,7 @@ function initialProjectSaveState(): ProjectSettingsSaveState {
 
 function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const { t } = useTranslation();
+	const queryClient = useQueryClient();
 	const closeSettings = useUiStore((state) => state.closeSettings);
 	const developerMode = useUiStore((state) => state.developerMode);
 	// Diagnostics (memory and CPU) is listed only with its toggle on in Developer mode.
@@ -188,6 +190,15 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		setHarnessView(settingsModal?.scope === "global" ? settingsModal.harnessView : undefined);
 		setStartLogin(settingsModal?.scope === "global" && settingsModal.startLogin === true);
 	}, [settingsModal]);
+
+	useEffect(() => {
+		if (settingsModal?.scope !== "global") return;
+		// Warm account management as soon as global Settings opens, regardless of
+		// which page is selected. By the time the user visits Accounts, external
+		// login/logout changes and saved-account observations are already current.
+		void queryClient.prefetchQuery({ queryKey: providerAccountsCatalogueKey, queryFn: () => fetchProviderAccounts(false), staleTime: 0 });
+		void queryClient.prefetchQuery({ queryKey: providerAccountsKey, queryFn: () => fetchProviderAccounts(true, true), staleTime: 0 });
+	}, [queryClient, settingsModal?.scope]);
 
 	const selectProjectSection = (id: ProjectSettingsSection) => {
 		if (projectSaveState.dirty && !projectSaveState.unsaveable && id !== activeProjectSection) {
