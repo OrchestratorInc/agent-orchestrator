@@ -390,12 +390,14 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const status = query.data;
 	const enabled = optimisticEnabled ?? status?.enabled ?? false;
 	const secureActive = mode === "tailscale" && (status?.securePairing?.active ?? false);
-	const activeHost = secureActive
-		? status!.securePairing.host
-		: mode === "tailscale"
-			? (status?.tailscaleHost ?? "")
-			: (status?.host ?? "");
-	const activePort = secureActive ? status!.securePairing.port : (status?.port ?? 0);
+	// Tunnel-only hosts deliberately have no LAN address. Use the same daemon
+	// endpoint list for both the offer and the address shown beside it.
+	const activeEndpoint = status?.endpoints?.[0];
+	const activeHost = activeEndpoint?.host ?? "";
+	const activePort = activeEndpoint?.port ?? 0;
+	const noEndpointAvailable =
+		!activeEndpoint &&
+		(status?.tunnel?.supported === false || Boolean(status?.tunnel?.lastError));
 	// No connector on this machine at all: cloudflared is absent and nothing
 	// installs it. Pairing still works on the local network, so this is a
 	// caveat to state rather than a failure to block on.
@@ -467,11 +469,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 
 	const showRealQR =
 		enabled &&
-		activeHost &&
 		!secureBlocked &&
 		qrIsReady({ enabled, endpoints: status?.endpoints, tunnel: status?.tunnel });
-	// v2 when the daemon advertises endpoints, v1 otherwise. Computed once so
-	// the rendered QR and its data attribute cannot drift apart.
+	// Computed once so the rendered v2 QR and its data attribute cannot drift.
 	const qrValue = showRealQR
 		? qrValueFor({
 				hostId: status?.hostId ?? "",
@@ -657,7 +657,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 							)}
 						>
 							<div className="relative aspect-square w-full overflow-hidden rounded-md">
-								{enabled && !activeHost ? (
+								{enabled && noEndpointAvailable ? (
 									<div className="flex size-full items-center justify-center bg-(--color-bg-settings-input) p-4">
 										<p className="text-center text-caption leading-(--leading-settings-mobile-hint) text-settings-muted">
 											{mode === "tailscale" ? t("mobile.noTailscaleHost") : t("mobile.noPairingHost")}
