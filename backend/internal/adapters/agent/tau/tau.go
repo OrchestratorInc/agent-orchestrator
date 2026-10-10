@@ -25,7 +25,7 @@ const SupportedVersion = "0.4.7"
 const managedSentinel = "agent-orchestrator: managed tau integration"
 
 var nativeIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
-var versionPattern = regexp.MustCompile(`(?m)^tau ([0-9]+\.[0-9]+\.[0-9]+)\s*$`)
+var versionPattern = regexp.MustCompile(`(?m)^tau (\d+\.\d+\.\d+)\s*$`)
 
 type commandRunner func(context.Context, string, map[string]string, ...string) ([]byte, error)
 
@@ -248,10 +248,10 @@ func writeManaged(path, content string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
-	if err := hookutil.AtomicWriteFile(path, []byte(content), 0600); err != nil {
+	if err := hookutil.AtomicWriteFile(path, []byte(content), 0o600); err != nil {
 		return err
 	}
 	return hookutil.EnsureWorkspaceGitignore(filepath.Dir(path), filepath.Base(path))
