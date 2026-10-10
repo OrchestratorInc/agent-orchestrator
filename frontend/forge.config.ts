@@ -1,6 +1,8 @@
 import type { ForgeConfig } from "@electron-forge/shared-types";
 import { AutoUnpackNativesPlugin } from "@electron-forge/plugin-auto-unpack-natives";
 import { VitePlugin } from "@electron-forge/plugin-vite";
+import { FusesPlugin } from "@electron-forge/plugin-fuses";
+import { FuseV1Options, FuseVersion } from "@electron/fuses";
 import { rebuild } from "@electron/rebuild";
 import electronPackage from "electron/package.json";
 import MakerNSIS from "./makers/maker-nsis";
@@ -378,6 +380,22 @@ const config: ForgeConfig = {
 				{ entry: "src/annotate-preload.ts", config: "vite.preload.config.ts", target: "preload" },
 			],
 			renderer: [{ name: "main_window", config: "vite.renderer.config.ts" }],
+		}),
+		// Harden the packaged Electron binary. Flipped at package time, so dev
+		// (electron-forge start) and Playwright e2e, which launch the unfused
+		// node_modules/electron binary, are unaffected.
+		new FusesPlugin({
+			version: FuseVersion.V1,
+			// The app never re-execs itself as Node (no ELECTRON_RUN_AS_NODE /
+			// fork / utilityProcess); acp-runtime ships its own Node binary.
+			[FuseV1Options.RunAsNode]: false,
+			[FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
+			[FuseV1Options.EnableNodeCliInspectArguments]: false,
+			// Enforced on macOS and Windows; Electron does not validate ASAR
+			// integrity on Linux.
+			[FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
+			[FuseV1Options.OnlyLoadAppFromAsar]: true,
+			[FuseV1Options.GrantFileProtocolExtraPrivileges]: false,
 		}),
 	],
 };

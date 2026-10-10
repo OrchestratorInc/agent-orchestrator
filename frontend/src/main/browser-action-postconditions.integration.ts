@@ -104,6 +104,19 @@ async function run(): Promise<void> {
 		return view;
 	} as unknown as typeof WebContentsView;
 
+	async function waitForFirstFrame(contents: WebContentsView["webContents"]): Promise<void> {
+		const deadline = Date.now() + 10_000;
+		for (;;) {
+			try {
+				if (!(await contents.capturePage()).isEmpty()) return;
+			} catch (error) {
+				if (Date.now() >= deadline) throw error;
+			}
+			if (Date.now() >= deadline) throw new Error("browser view did not produce a frame");
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+	}
+
 	function activeWebContents(): WebContentsView["webContents"] {
 		if (!browserView) throw new Error("AO integration fixture has no active browser view");
 		return browserView.webContents;
@@ -124,7 +137,10 @@ async function run(): Promise<void> {
 				case "snapshot":
 					// A real provider snapshot cannot complete before Chromium has produced
 					// a frame. Force the same readiness before dispatching native input.
-					await activeWebContents().capturePage();
+					// Electron 44 rejects capturePage() with UnknownVizError until the
+					// first frame exists (Electron 33 resolved an empty image), so retry
+					// briefly until a non-empty frame is captured.
+					await waitForFirstFrame(activeWebContents());
 					return {
 						snapshot: [
 							'- button "Continue" [ref=e1]',
