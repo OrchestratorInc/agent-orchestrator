@@ -1,0 +1,13 @@
+{
+  "nativeVersion": "0.2.0",
+  "mode": "ctrl-c",
+  "approvalOnce": true,
+  "cancelSentAfterShellStarted": true,
+  "shellExitSeconds": 0.09734456602018327,
+  "nativeSettledSeconds": 0.20982908306177706,
+  "lateSideEffect": false,
+  "ownedToolsStillRunning": 0,
+  "nativeComposerStayedAlive": true,
+  "verdict": "PASS",
+  "scope": "Native CLI with AO-supported plugin only; AO lifecycle and UI not yet tested."
+}

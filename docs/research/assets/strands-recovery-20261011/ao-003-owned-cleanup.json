@@ -1,0 +1,15 @@
+{
+  "utc": "2026-10-10T21:23:40.792150+00:00",
+  "dataDir": "/home/azureuser/.ao/audits/harness-watch-20261010/reports/integration-recovery-20261011/tmp-go/ao-agent-harness-audit-LKnlQz/data",
+  "sessions": [
+    {
+      "session": "audit-strands-daefeaa2-1",
+      "killHTTP": 200
+    },
+    {
+      "session": "audit-strands-daefeaa2-2",
+      "killHTTP": 200
+    }
+  ],
+  "shutdownHTTP": 202
+}

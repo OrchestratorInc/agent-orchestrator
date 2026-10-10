@@ -1,3 +1,5 @@
+> Recovery: [registered AO TUI proof, real Electron captures and preserved diagnostic gaps](strands-tui-recovery-2026-10-11.md). The unregistered status below describes the original checkpoint.
+
 # Strands CLI terminal conformance — blocked candidate
 
 Strands is **not registered in AO**. The candidate adapter remains isolated in
