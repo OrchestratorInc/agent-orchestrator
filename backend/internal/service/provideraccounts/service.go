@@ -55,7 +55,7 @@ func New(store ports.ProviderAccountStore, helper ports.AccountHelper, newID fun
 // OnChange sets what is called when the accounts a provider can use change.
 func (s *Service) OnChange(fn func()) { s.changed = fn }
 
-// Run keeps the helper and the accounts current until ctx ends; migrate reports the chats left to move.
+// Run keeps the helper and the accounts current until ctx ends; migrate reports the sessions left to move.
 func (s *Service) Run(ctx context.Context, log *slog.Logger, migrate func(context.Context) (int, error)) {
 	s.importNative(ctx, false)
 	ticker := time.NewTicker(s.tick)
@@ -68,10 +68,10 @@ func (s *Service) Run(ctx context.Context, log *slog.Logger, migrate func(contex
 		if failing = err != nil; !failing && n == 0 {
 			_, _ = s.Accounts(ctx, true, false)
 		}
-		// 20 seconds after start, then every 30, while chats remain.
+		// 20 seconds after start, then every 30, while sessions remain.
 		if !failing && migrate != nil && left > 0 && n%3 == 2 {
 			if left, err = migrate(ctx); err != nil && ctx.Err() == nil {
-				log.Warn("moving chats onto Account Manager", "error", err)
+				log.Warn("moving sessions onto Account Manager", "error", err)
 				left = 1
 			}
 		}

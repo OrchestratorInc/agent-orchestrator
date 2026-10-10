@@ -197,7 +197,7 @@ type sessionLifecycle interface {
 	ReconcileStartupSafety(ctx context.Context) error
 	ReconcileBackground(ctx context.Context) error
 	HibernateIdleChats(ctx context.Context) error
-	MigrateLegacyChats(ctx context.Context) (int, error)
+	MigrateLegacySessions(ctx context.Context) (int, error)
 	RestoreAll(ctx context.Context) error
 	WaitBackgroundWorkers(ctx context.Context) error
 	WaitAgentSwitchWorkers(ctx context.Context) error
@@ -214,6 +214,7 @@ type sessionLifecycle interface {
 	// SessionMutationInProgress suppresses observation-driven termination while
 	// Session Manager deliberately replaces or relaunches a provider process.
 	SessionMutationInProgress(id domain.SessionID) bool
+	SessionTurnEnded(rec domain.SessionRecord)
 	// SetTerminalInputGate prevents mux input from racing a TUI-to-Chat handoff.
 	SetTerminalInputGate(gate sessionmanager.TerminalInputGate)
 	// SetReviewerTerminator late-binds worker lifecycle teardown to the review

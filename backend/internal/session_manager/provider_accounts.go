@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -82,12 +83,16 @@ func (m *Manager) adoptLegacyChat(ctx context.Context, rec domain.SessionRecord)
 	}
 }
 
-// MigrateLegacyChats restarts, one after another, the idle chats that still run
+// legacyCandidate reports a session whose process may still need an account.
+func legacyCandidate(rec domain.SessionRecord) bool {
+	return !rec.IsTerminated && rec.HibernatedAt == nil && domain.AccountProvider(rec.Harness) != ""
+}
+
+// MigrateLegacySessions restarts, four at a time, the idle sessions that still run
 // without an account, and reports how many keep running without one. A chat
 // that is asleep or stopped is adopted when it next starts and is not counted.
-func (m *Manager) MigrateLegacyChats(ctx context.Context) (int, error) {
-	chat, ok := m.chat.(chatRestarter)
-	if m.accounts == nil || !ok {
+func (m *Manager) MigrateLegacySessions(ctx context.Context) (int, error) {
+	if m.accounts == nil {
 		return 0, nil
 	}
 	sessions, err := m.store.ListAllSessions(ctx)
@@ -96,29 +101,100 @@ func (m *Manager) MigrateLegacyChats(ctx context.Context) (int, error) {
 	}
 	remaining := 0
 	var failures []error
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 	for _, rec := range sessions {
-		if rec.IsTerminated || rec.HibernatedAt != nil || rec.Activity.State == domain.ActivityExited ||
-			domain.AccountProvider(rec.Harness) == "" || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
+		if !legacyCandidate(rec) {
 			continue
 		}
-		moved, err := m.accountManaged(ctx, rec.ID)
-		if err == nil && !moved && m.chat.HasLiveChatController(rec.ID) {
-			moved, err = m.restartLegacyChat(ctx, chat, rec.ID)
-		}
-		if err != nil {
-			failures = append(failures, fmt.Errorf("move chat %s onto its account: %w", rec.ID, err))
-		}
-		if !moved {
-			remaining++
-		}
+		wg.Go(func() {
+			left, err := m.moveLegacySession(ctx, rec.ID)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				failures = append(failures, fmt.Errorf("move session %s onto its account: %w", rec.ID, err))
+			}
+			if left {
+				remaining++
+			}
+		})
 	}
+	wg.Wait()
 	return remaining, errors.Join(failures...)
+}
+
+// SessionTurnEnded moves such a session as its turn ends, ahead of the next check.
+func (m *Manager) SessionTurnEnded(rec domain.SessionRecord) {
+	if m.accounts == nil || !legacyCandidate(rec) || m.beginAgentSwitchAttempt() != nil {
+		return
+	}
+	go func() {
+		defer m.agentSwitchWorkers.Done()
+		ctx, cancel := context.WithTimeout(m.backgroundContext, 2*time.Minute)
+		defer cancel()
+		if managed, err := m.accountManaged(ctx, rec.ID); err != nil || managed {
+			return
+		}
+		if _, err := m.moveLegacySession(ctx, rec.ID); err != nil {
+			m.logger.Warn("moving a session onto Account Manager", "session", rec.ID, "error", err)
+		}
+	}()
+}
+
+// moveLegacySession restarts one session onto an account if it runs without one and
+// is idle now, a terminal also off screen. It reports whether it is still to be moved.
+func (m *Manager) moveLegacySession(ctx context.Context, id domain.SessionID) (bool, error) {
+	if _, moving := m.legacyMoving.LoadOrStore(id, struct{}{}); moving {
+		return true, nil
+	}
+	defer m.legacyMoving.Delete(id)
+	if err := m.legacySlots.Acquire(ctx, 1); err != nil {
+		return true, err
+	}
+	defer m.legacySlots.Release(1)
+	rec, ok, err := m.store.GetSession(ctx, id)
+	if err != nil || !ok || !legacyCandidate(rec) {
+		return err != nil, err
+	}
+	if rec.Activity.State == domain.ActivityExited {
+		// Only a terminal this move exited and could not resume is started again.
+		if launch, _ := m.legacyExited.Load(id); launch != any(rec.Metadata.RuntimeLaunchID) {
+			return false, nil
+		}
+		_, err = m.ResumeAgentWithMode(ctx, id)
+		return err != nil, err
+	}
+	if managed, err := m.accountManaged(ctx, id); err != nil || managed {
+		return err != nil, err
+	}
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+		chat, ok := m.chat.(chatRestarter)
+		if !ok || !m.chat.HasLiveChatController(id) {
+			return true, nil
+		}
+		moved, err := m.restartLegacyChat(ctx, chat, id)
+		return !moved, err
+	}
+	if rec.Activity.State != domain.ActivityIdle || rec.Metadata.RuntimeLaunchID == "" ||
+		rec.Metadata.AgentSessionID == "" || m.terminalOnScreen(rec) {
+		return true, nil
+	}
+	if _, release := m.beginTerminalInputDrain(rec); release != nil {
+		defer release() // keystrokes stay closed until the agent has resumed
+	}
+	exit := func(ctx context.Context) (bool, error) { return m.exitLegacyTerminal(ctx, rec) }
+	if exited, err := m.stopLegacySession(ctx, id, exit); err != nil || !exited {
+		return true, err
+	}
+	_, err = m.ResumeAgentWithMode(ctx, id)
+	return err != nil, err
 }
 
 // restartLegacyChat restarts one chat if it is doing nothing, and reports
 // whether it now has an account. A failed start leaves it asleep.
 func (m *Manager) restartLegacyChat(ctx context.Context, chat chatRestarter, id domain.SessionID) (bool, error) {
-	if stopped, err := m.stopLegacyChat(ctx, chat, id); err != nil || !stopped {
+	stop := func(ctx context.Context) (bool, error) { return chat.HibernateChatForRestart(ctx, id) }
+	if stopped, err := m.stopLegacySession(ctx, id, stop); err != nil || !stopped {
 		return false, err
 	}
 	if err := chat.WakeChat(ctx, id); err != nil {
@@ -127,7 +203,40 @@ func (m *Manager) restartLegacyChat(ctx context.Context, chat chatRestarter, id 
 	return m.accountManaged(ctx, id)
 }
 
-func (m *Manager) stopLegacyChat(ctx context.Context, chat chatRestarter, id domain.SessionID) (bool, error) {
+// exitLegacyTerminal gives a terminal its account and exits its agent, unless a
+// second reading, taken once input is closed, finds that a turn has started.
+func (m *Manager) exitLegacyTerminal(ctx context.Context, rec domain.SessionRecord) (bool, error) {
+	if err := sleepContext(ctx, m.interfaceTransition.idleSettle); err != nil {
+		return false, err
+	}
+	current, err := m.getRecord(ctx, rec.ID)
+	if err != nil || current.IsTerminated || current.Activity.State != domain.ActivityIdle ||
+		current.Metadata.RuntimeLaunchID != rec.Metadata.RuntimeLaunchID {
+		return false, err
+	}
+	if _, err = m.accounts.AdoptSession(ctx, rec.ID, rec.Harness); err != nil {
+		return false, err
+	}
+	if err = m.stopAgentController(ctx, current); err == nil {
+		err = m.recordAgentExited(ctx, current)
+	}
+	if err != nil {
+		_ = m.forgetAccount(context.WithoutCancel(ctx), rec.ID) // its agent keeps its own sign-in
+		return false, err
+	}
+	m.legacyExited.Store(rec.ID, current.Metadata.RuntimeLaunchID)
+	return true, nil
+}
+
+// terminalOnScreen reports a terminal that some client is showing.
+func (m *Manager) terminalOnScreen(rec domain.SessionRecord) bool {
+	m.terminalInputGateMu.Lock()
+	defer m.terminalInputGateMu.Unlock()
+	return m.terminalInputGate != nil && m.terminalInputGate.TerminalOnScreen(rec.Metadata.RuntimeHandleID)
+}
+
+// stopLegacySession runs stop while nothing else may operate on the session.
+func (m *Manager) stopLegacySession(ctx context.Context, id domain.SessionID, stop func(context.Context) (bool, error)) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := m.beginAgentOperation(ctx, id, agentOperationHibernate); err != nil {
@@ -143,5 +252,5 @@ func (m *Manager) stopLegacyChat(ctx context.Context, chat chatRestarter, id dom
 	if switching, err := m.agentSwitching(ctx, id); err != nil || switching {
 		return false, err
 	}
-	return chat.HibernateChatForRestart(ctx, id)
+	return stop(ctx)
 }

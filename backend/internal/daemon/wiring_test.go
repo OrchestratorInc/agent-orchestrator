@@ -978,9 +978,10 @@ func (f *fakeSessionLifecycle) ReconcileBackground(_ context.Context) error {
 }
 
 func (*fakeSessionLifecycle) HibernateIdleChats(context.Context) error { return nil }
-func (*fakeSessionLifecycle) MigrateLegacyChats(context.Context) (int, error) {
+func (*fakeSessionLifecycle) MigrateLegacySessions(context.Context) (int, error) {
 	return 0, nil
 }
+func (*fakeSessionLifecycle) SessionTurnEnded(domain.SessionRecord) {}
 
 func (f *fakeSessionLifecycle) RestoreAll(_ context.Context) error {
 	f.restoreAllCalled = true

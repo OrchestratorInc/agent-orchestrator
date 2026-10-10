@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
@@ -294,6 +295,8 @@ type TerminalInputGate interface {
 	// barrier to avoid trusting an idle hook which predates already-buffered PTY
 	// input.
 	BeginInputDrain(terminalID string) (lastInputAt time.Time, release func())
+	// TerminalOnScreen reports whether a client is showing the terminal.
+	TerminalOnScreen(terminalID string) bool
 }
 
 // ReviewerTerminator tears down a worker's reviewer pane when the worker leaves
@@ -540,6 +543,9 @@ type Manager struct {
 
 	terminalInputGateMu sync.Mutex
 	terminalInputGate   TerminalInputGate
+	// Moves onto Account Manager: free slots, sessions in flight, terminals left exited.
+	legacySlots                *semaphore.Weighted
+	legacyMoving, legacyExited sync.Map
 
 	reviewersMu sync.Mutex
 	reviewers   ReviewerTerminator
@@ -873,6 +879,7 @@ func New(d Deps) *Manager {
 		},
 		logger:         d.Logger,
 		workspaceGates: make(map[domain.ProjectID]*sync.Mutex),
+		legacySlots:    semaphore.NewWeighted(4),
 	}
 	if m.clock == nil {
 		// UTC so spawn-stamped CreatedAt/UpdatedAt match every other session
