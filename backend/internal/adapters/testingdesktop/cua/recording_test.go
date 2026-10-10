@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 const validMovieInfo = "Duration: 3.368 seconds (2021/600)\nTrack count: 1\nTrack 1: Video 'vide'\n\tDimensions: 1280 x 800\n\tSystem support for decoding this track: Yes\nMovie analyzed with 0 error.\n"
@@ -308,7 +310,7 @@ func TestCloseStopsRecorderAndDriverEvenForInvalidMovie(t *testing.T) {
 			}
 			f.adapter.started = func(_ context.Context, pid int) (time.Time, error) {
 				if pid == 99 && stopped {
-					return time.Time{}, errors.New("owned Driver stopped")
+					return time.Time{}, process.ErrNotRunning
 				}
 				return f.born, nil
 			}

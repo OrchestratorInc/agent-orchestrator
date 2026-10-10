@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 type invocation struct {
@@ -539,7 +541,7 @@ func TestLifecycleOwnsOnlyCustomDaemon(t *testing.T) {
 	var err error
 	a, err = New(Config{DataDir: root, Runner: fake, ProcessStartedAt: func(_ context.Context, pid int) (time.Time, error) {
 		if pid != 99 || !alive {
-			return time.Time{}, errors.New("missing")
+			return time.Time{}, process.ErrNotRunning
 		}
 		return born, nil
 	}})

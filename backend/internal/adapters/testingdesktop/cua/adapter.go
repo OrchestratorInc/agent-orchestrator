@@ -75,11 +75,13 @@ type Config struct {
 }
 
 type binding struct {
-	target    domain.TestTargetIdentity
-	session   string
-	receipt   *captureReceipt
-	lastTyped *typedFocus
-	recording *windowRecording
+	ready, sessionIssued bool
+	releaseErr           error
+	target               domain.TestTargetIdentity
+	session              string
+	receipt              *captureReceipt
+	lastTyped            *typedFocus
+	recording            *windowRecording
 }
 
 type typedFocus struct {
@@ -137,9 +139,12 @@ type Adapter struct {
 	runner        Runner
 	started       func(context.Context, int) (time.Time, error)
 	root          string
+	controlRoot   string
 	bindings      map[string]*binding
+	released      map[string]*binding
 	driver        driverIdentity
 	pendingDriver driverIdentity
+	launchIssued  bool
 	closed        bool
 	now           func() time.Time
 	startRecorder func(args, env []string, stdout, stderr string) (*recordingProcess, error)
@@ -186,16 +191,25 @@ func New(cfg Config) (*Adapter, error) {
 			return process.StartTime(pid)
 		}
 	}
-	root := filepath.Join(cfg.DataDir, "testing", "cua")
-	if len(filepath.Join(root, "driver.sock")) > 103 {
-		return nil, refuse("invalid_config", "resolved Unix socket path exceeds the macOS limit")
+	id := uuid.NewString()
+	root := filepath.Join(cfg.DataDir, "testing", "cua", id)
+	controlRoot := root
+	if len(filepath.Join(controlRoot, "driver.sock")) > 103 {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		controlRoot = filepath.Join(home, ".ao", "dev", "cua", id)
+		if len(filepath.Join(controlRoot, "driver.sock")) > 103 {
+			return nil, refuse("invalid_config", "private Unix socket path exceeds the macOS limit")
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
-	return &Adapter{cfg: cfg, runner: runner, started: started, root: root,
-		bindings: make(map[string]*binding), now: time.Now, startRecorder: startScreencapture,
+	return &Adapter{cfg: cfg, runner: runner, started: started, root: root, controlRoot: controlRoot,
+		bindings: make(map[string]*binding), released: make(map[string]*binding), now: time.Now, startRecorder: startScreencapture,
 		interruptWait: 15 * time.Second, terminateWait: 3 * time.Second,
 		stagingDir: filepath.Join(home, "Library", "Group Containers", "group.com.apple.screencapture", "ScreenRecordings")}, nil
 }
@@ -215,14 +229,14 @@ func (a *Adapter) BindWindow(ctx context.Context, target domain.TestTargetIdenti
 	if target.ID == "" || target.LaunchID == "" || target.Generation <= 0 || target.ElectronPID <= 0 || target.ElectronStartedAt.IsZero() {
 		return target, refuse("invalid_target", "target launch identity and Electron birth time are required")
 	}
-	if err := a.checkProcess(ctx, target); err != nil {
-		return target, err
-	}
 	if existing := a.bindings[target.ID]; existing != nil {
 		candidate := target
 		candidate.WindowID = existing.target.WindowID
 		if !sameTarget(candidate, existing.target) || (target.WindowID != "" && target.WindowID != candidate.WindowID) {
 			return target, refuse("target_changed", "a target ID cannot be rebound to a different launch or window")
+		}
+		if !existing.ready {
+			return target, refuse("binding_pending", "partial binding must be released before another bind")
 		}
 		if err := a.startSession(ctx, existing); err != nil {
 			return target, err
@@ -232,10 +246,17 @@ func (a *Adapter) BindWindow(ctx context.Context, target domain.TestTargetIdenti
 		}
 		return existing.target, nil
 	}
+	if prior := a.released[target.ID]; prior != nil && sameTarget(prior.target, target) {
+		return target, refuse("target_released", "released launch identity cannot be bound again")
+	}
+	b := &binding{target: target, session: "ao-" + uuid.NewString()}
+	a.bindings[target.ID] = b // cleanup ownership only; observation requires ready
+	if err := a.checkProcess(ctx, target); err != nil {
+		return target, err
+	}
 	if err := a.ensureDriver(ctx); err != nil {
 		return target, err
 	}
-	b := &binding{target: target, session: "ao-" + uuid.NewString()}
 	if err := a.startSession(ctx, b); err != nil {
 		return target, err
 	}
@@ -256,7 +277,8 @@ func (a *Adapter) BindWindow(ctx context.Context, target domain.TestTargetIdenti
 		return target, err
 	}
 	b.target.WindowID = strconv.Itoa(candidates[0].ID)
-	a.bindings[target.ID] = b
+	b.ready = true
+	delete(a.released, target.ID)
 	return b.target, nil
 }
 
@@ -620,7 +642,7 @@ func (a *Adapter) dispatch(ctx context.Context, name string, args map[string]any
 
 func (a *Adapter) bound(ctx context.Context, target domain.TestTargetIdentity) (*binding, error) {
 	b := a.bindings[target.ID]
-	if a.closed || b == nil || !sameTarget(b.target, target) {
+	if a.closed || b == nil || !b.ready || !sameTarget(b.target, target) {
 		return nil, refuse("target_not_bound", "target does not match a live adapter binding")
 	}
 	if err := a.checkProcess(ctx, target); err != nil {
