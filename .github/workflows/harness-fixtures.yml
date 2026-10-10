@@ -1,0 +1,28 @@
+name: Harness fixture tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "test/harness/**"
+      - ".github/workflows/harness-fixtures.yml"
+  pull_request:
+    paths:
+      - "test/harness/**"
+      - ".github/workflows/harness-fixtures.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  memcode-fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Standard-library fixtures only: no native CLI, provider calls, or secrets.
+      - name: Run credential-free memcode fixture tests
+        run: python -m unittest discover -s test/harness -p test_memcode_conformance.py -v
