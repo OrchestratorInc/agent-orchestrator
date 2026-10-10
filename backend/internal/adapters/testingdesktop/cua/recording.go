@@ -64,7 +64,7 @@ func (a *Adapter) StartRecording(ctx context.Context, target domain.TestTargetId
 	if err := a.startSession(ctx, b); err != nil {
 		return recordingGap(RecordingResult{}, err)
 	}
-	w, err := a.liveWindow(ctx, b)
+	w, err := a.prepareWindow(ctx, b)
 	if err != nil {
 		return recordingGap(RecordingResult{}, err)
 	}

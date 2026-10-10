@@ -26,6 +26,8 @@ func TestEnsureDriverDoesNotAdmitRefusedPermissions(t *testing.T) {
 			fake := &fakeRunner{}
 			fake.hook = func(executable string, args []string) (Output, error) {
 				switch executable {
+				case "/usr/sbin/ioreg":
+					return Output{Stdout: []byte("<plist><dict><key>IOConsoleLocked</key><false/></dict></plist>")}, nil
 				case "/usr/bin/codesign":
 					return Output{Stderr: []byte("Identifier=com.trycua.driver\nTeamIdentifier=YCK386LBJ7\n")}, nil
 				case "/bin/launchctl":

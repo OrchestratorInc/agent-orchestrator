@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
@@ -67,6 +66,7 @@ type fixture struct {
 	changed       bool
 	foreign       bool
 	hidden        bool
+	locked        bool
 	providerError bool
 	elements      []capturedElement
 	width, height int
@@ -78,7 +78,18 @@ func newFixture(t *testing.T) *fixture {
 	f := &fixture{born: time.Date(2026, 10, 6, 1, 2, 3, 456000, time.UTC), bounds: domain.TestWindowBounds{X: 70, Y: 90, Width: 640, Height: 400}, width: 1280, height: 800}
 	f.target = domain.TestTargetIdentity{ID: "target", LaunchID: "launch", Generation: 1, ElectronPID: 123, ElectronStartedAt: f.born, DataDir: "/scratch/target"}
 	f.runner = &fakeRunner{}
-	f.runner.hook = func(_ string, args []string) (Output, error) {
+	f.runner.hook = func(executable string, args []string) (Output, error) {
+		if executable == "/usr/sbin/ioreg" {
+			value := "false"
+			if f.locked {
+				value = "true"
+			}
+			return Output{Stdout: []byte("<plist><dict><key>IOConsoleLocked</key><" + value + "/></dict></plist>")}, nil
+		}
+		if executable == "/usr/bin/osascript" {
+			alpha := 1.0
+			return jsonOutput([]screenWindow{{ID: 456, PID: 123, Owner: "Electron", Alpha: &alpha, Bounds: &f.bounds}}), nil
+		}
 		if len(args) < 5 || args[2] != "call" {
 			t.Fatalf("unexpected command %v", args)
 		}
@@ -94,14 +105,19 @@ func newFixture(t *testing.T) *fixture {
 			if f.foreign {
 				pid = 999
 			}
-			return jsonOutput(map[string]any{"windows": []window{{PID: pid, ID: 456, Layer: 0, Bounds: f.bounds, OnScreen: !f.hidden}}}), nil
+			return jsonOutput(map[string]any{"windows": []window{{PID: pid, ID: 456, Layer: 0, Bounds: f.bounds, OnScreen: !f.hidden, OnCurrentSpace: boolPointer(true), CurrentSpaceID: 1}}}), nil
+		case "get_screen_size":
+			return jsonOutput(map[string]any{}), nil
+		case "bring_to_front":
+			return jsonOutput(map[string]any{"activated": true, "process_activated": true, "request_accepted": true, "status": "activated", "code": "bring_to_front_exact_window_verified", "pid": input["pid"], "window_id": input["window_id"], "exact_window_effect": map[string]bool{"focused": true}, "observed": map[string]any{"focused_window_id": input["window_id"], "workspace_frontmost_pid": input["pid"], "front_process_matches_target": true}}), nil
 		case "get_window_state":
 			path, ok := input["screenshot_out_file"].(string)
 			if !ok {
 				t.Fatal("missing output path")
 			}
 			var data bytes.Buffer
-			if err := png.Encode(&data, image.NewRGBA(image.Rect(0, 0, f.width, f.height))); err != nil {
+			encoder := png.Encoder{CompressionLevel: png.NoCompression}
+			if err := encoder.Encode(&data, image.NewRGBA(image.Rect(0, 0, f.width, f.height))); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(path, data.Bytes(), 0o600); err != nil {
@@ -178,6 +194,9 @@ func TestWindowInjectionAndNativePixels(t *testing.T) {
 	}
 	// Cua's source converts these pixels once: x/2=200 native points.
 	for _, call := range f.runner.calls {
+		if call.executable != f.adapter.binary() || len(call.args) != 5 || call.args[2] != "call" {
+			continue
+		}
 		var args map[string]any
 		if err := json.Unmarshal([]byte(call.args[4]), &args); err != nil {
 			t.Fatal(err)
@@ -293,6 +312,7 @@ func TestPixelTypeAndKeyInjection(t *testing.T) {
 	if last.args[3] != "type_text" || !strings.Contains(last.args[4], `"x":400`) || strings.Contains(last.args[4], "element_token") {
 		t.Fatal("type did not use pixel focus")
 	}
+	f.elements = []capturedElement{{Role: "AXTextField", Token: "fresh-field", Frame: &pixelBounds{X: 100, Y: 100, Width: 500, Height: 200}}}
 	frame = f.screenshot(t)
 	_, err = f.adapter.Key(context.Background(), f.target, frame, domain.TestKeyRequest{ScreenshotID: frame.ScreenshotID, Keys: []string{"command", "a"}})
 	if err != nil {
@@ -380,7 +400,7 @@ func TestScreenshotPreviewAndCoordinateEdges(t *testing.T) {
 					if err := json.Unmarshal([]byte(last.args[4]), &args); err != nil {
 						t.Fatal(err)
 					}
-					if args["x"] != float64(want.x) || args["y"] != float64(want.y) || args["delivery_mode"] != "background" {
+					if args["x"] != float64(want.x) || args["y"] != float64(want.y) || args["delivery_mode"] != "foreground" {
 						t.Fatalf("preview pixels did not map once onto capture edges: %v", args)
 					}
 					if tool == "click" && args["capture_id"] != "private-provider-capture" {
@@ -603,3 +623,5 @@ func TestForeignTargetAndDriverReuse(t *testing.T) {
 		t.Fatalf("foreign daemon reached provider: %v", err)
 	}
 }
+
+func boolPointer(value bool) *bool { return &value }

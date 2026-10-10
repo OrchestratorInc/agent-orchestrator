@@ -40,8 +40,12 @@ func strictSessionProvider(t *testing.T, f *fixture) *sessionProvider {
 	p.sessions[f.adapter.bindings[f.target.ID].session] = &providerSession{last: p.now}
 	f.adapter.now = func() time.Time { return p.now }
 	provider := f.runner.hook
+	focusedPID, focusedWindow := f.target.ElectronPID, 456
 	f.runner.hook = func(executable string, args []string) (Output, error) {
 		switch executable {
+		case "/usr/bin/osascript":
+			alpha := 1.0
+			return jsonOutput([]screenWindow{{ID: focusedWindow, PID: focusedPID, Owner: "Electron", Alpha: &alpha, Bounds: &f.bounds}}), nil
 		case "/usr/bin/codesign":
 			return Output{Stderr: []byte("Identifier=com.trycua.driver\nTeamIdentifier=YCK386LBJ7\n")}, nil
 		case "/bin/launchctl":
@@ -131,12 +135,15 @@ func strictSessionProvider(t *testing.T, f *fixture) *sessionProvider {
 		if pID == 124 {
 			windowID = 777
 		}
+		if args[3] == "bring_to_front" {
+			focusedPID, focusedWindow = int(pID), windowID
+		}
 		if args[3] == "list_windows" {
 			if input["window_id"] != nil {
 				t.Fatal("list_windows received window_id", input)
 			}
 			s.last = p.now
-			return jsonOutput(map[string]any{"windows": []window{{PID: int(pID), ID: windowID, Layer: 0, Bounds: f.bounds, OnScreen: true}}}), nil
+			return jsonOutput(map[string]any{"windows": []window{{PID: int(pID), ID: windowID, Layer: 0, Bounds: f.bounds, OnScreen: true, OnCurrentSpace: boolPointer(true), CurrentSpaceID: 1}}}), nil
 		}
 		if args[3] == "get_window_state" {
 			out, err := provider(executable, args)
