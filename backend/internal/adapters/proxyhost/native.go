@@ -18,9 +18,9 @@ import (
 )
 
 // ImportNative imports this computer's login or API key unless seen names it; never twice.
-func (c *Client) ImportNative(ctx context.Context, provider string, apiKey bool, seen string) (ports.VerifiedProviderLogin, string, error) {
+func (c *Client) ImportNative(ctx context.Context, provider string, apiKey bool, known func(identity string) bool) (ports.VerifiedProviderLogin, string, error) {
 	request := ports.ProviderLoginRequest{Provider: provider, Mode: "import"}
-	id, secret := "native-"+provider+"-", ""
+	id, secret, identity := "native-"+provider+"-", "", ""
 	var err error
 	if apiKey {
 		id, request.Mode, request.Label = "native-key-"+provider+"-", "api_key", "Global API key"
@@ -28,7 +28,7 @@ func (c *Client) ImportNative(ctx context.Context, provider string, apiKey bool,
 			secret = provider + "\x00" + request.APIKey + "\x00" + request.BaseURL
 		}
 	} else {
-		request.CredentialJSON, err = nativeLogin(ctx, provider)
+		request.CredentialJSON, identity, err = nativeLogin(ctx, provider)
 		secret = request.CredentialJSON
 	}
 	// A read that was cut short must not pass for a computer with no login.
@@ -37,8 +37,11 @@ func (c *Client) ImportNative(ctx context.Context, provider string, apiKey bool,
 	}
 	sum := sha256.Sum256([]byte(secret))
 	fingerprint := hex.EncodeToString(sum[:])
-	if fingerprint == seen {
-		return ports.VerifiedProviderLogin{}, fingerprint, nil
+	if apiKey {
+		identity = fingerprint
+	}
+	if known(identity) {
+		return ports.VerifiedProviderLogin{}, identity, nil
 	}
 	id += fingerprint
 	verified, err := c.LoginResult(ctx, id)
@@ -52,7 +55,15 @@ func (c *Client) ImportNative(ctx context.Context, provider string, apiKey bool,
 			err = ctx.Err()
 		}
 	}
-	return verified, fingerprint, err
+	return verified, cmp.Or(identity, signInIdentity(verified.Email)), err
+}
+
+// signInIdentity names whose sign-in a login is, without any of its tokens.
+func signInIdentity(email string) string {
+	if email = strings.ToLower(strings.TrimSpace(email)); email != "" {
+		return "id:" + email
+	}
+	return ""
 }
 
 // readCodexAuth reads Codex's own auth file; none is a computer not signed in.
@@ -73,14 +84,24 @@ func readCodexAuth() (auth any, err error) {
 }
 
 // nativeLogin is this computer's sign-in as a helper file; its bytes feed the fingerprint.
-func nativeLogin(ctx context.Context, provider string) (string, error) {
+func nativeLogin(ctx context.Context, provider string) (login, identity string, err error) {
 	value := map[string]any{"type": provider}
 	if provider == "claude" {
 		value["access_token"], value["refresh_token"] = agentcreds.LocalOAuth(ctx, agentcreds.ResolveOptions{AllowKeychain: true})
+		// Claude Code records whose login it holds beside its settings, not in the login.
+		dir := os.Getenv("CLAUDE_CONFIG_DIR")
+		if dir == "" {
+			dir, _ = os.UserHomeDir()
+		}
+		var settings any
+		if data, errRead := os.ReadFile(filepath.Join(dir, ".claude.json")); errRead == nil {
+			_ = json.Unmarshal(data, &settings)
+		}
+		identity = signInIdentity(text(settings, "oauthAccount", "emailAddress"))
 	} else {
 		auth, err := readCodexAuth()
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		tokens := at(auth, "tokens")
 		access, idToken := text(tokens, "access_token"), text(tokens, "id_token")
@@ -88,6 +109,7 @@ func nativeLogin(ctx context.Context, provider string) (string, error) {
 		value["access_token"], value["refresh_token"], value["id_token"] = access, text(tokens, "refresh_token"), idToken
 		scope := at(claims, "https://api.openai.com/auth")
 		value["email"], value["account_id"], value["plan_type"] = claims["email"], at(scope, "chatgpt_account_id"), at(scope, "chatgpt_plan_type")
+		identity = signInIdentity(text(claims, "email"))
 		if account := text(tokens, "account_id"); account != "" {
 			value["account_id"] = account
 		}
@@ -96,10 +118,10 @@ func nativeLogin(ctx context.Context, provider string) (string, error) {
 		}
 	}
 	if value["access_token"] == "" {
-		return "", nil
+		return "", "", nil
 	}
 	encoded, err := json.Marshal(value)
-	return string(encoded), err
+	return string(encoded), identity, err
 }
 
 func jwtClaims(token string) (claims map[string]any) {

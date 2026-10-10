@@ -2,6 +2,7 @@ package provideraccounts
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -185,4 +186,55 @@ func TestAnAPIKeyAlreadyAddedByHandIsLeftAsItIs(t *testing.T) {
 	if state.NativeKeyImports["claude"] != (domain.NativeProviderImport{Fingerprint: "k1"}) || len(h.helper.imports) != 1 || len(h.helper.deleted) != 0 {
 		t.Fatalf("receipt=%+v imports=%v deleted=%v", state.NativeKeyImports["claude"], h.helper.imports, h.helper.deleted)
 	}
+}
+
+// The helper renews a copied sign-in, which signs the computer's own agent out
+// once. So a login is copied only while AO does not know whose it is.
+func TestALoginAOAlreadyKnowsIsNeverCopiedAgain(t *testing.T) {
+	owned := func(email string) nativeSource {
+		return nativeSource{fingerprint: "id:" + strings.ToLower(email), login: signIn("claude", email)}
+	}
+	t.Run("an account added by hand already has that owner", func(t *testing.T) {
+		h := setup(t)
+		h.signIn("claude", "alice@example.com")
+		h.helper.native["claude"] = owned("Alice@Example.com")
+		before := h.store.get()
+		h.svc.importNative(h.ctx, true)
+		if h.unchanged(before, "a login AO already holds"); len(h.helper.imports) != 0 {
+			t.Fatalf("copied: %v", h.helper.imports)
+		}
+	})
+	t.Run("copied once, then left alone through renewals, sign-out and removal", func(t *testing.T) {
+		h := setup(t)
+		h.helper.native["claude"] = owned("bob@example.com")
+		h.svc.importNative(h.ctx, true)
+		state := h.store.get()
+		if len(h.helper.imports) != 1 || len(state.Accounts) != 1 || state.NativeImports["claude"].Fingerprint != "id:bob@example.com" {
+			t.Fatalf("imports=%v state=%+v", h.helper.imports, state)
+		}
+		for _, action := range []string{"", "sign-out", "remove"} {
+			if action != "" {
+				if err := h.act(state.Accounts[0].ID, action); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if h.svc.importNative(h.ctx, true); len(h.helper.imports) != 1 {
+				t.Fatalf("after %q the login was copied again: %v", action, h.helper.imports)
+			}
+		}
+		// Somebody else signing in to the agent is a login AO does not have.
+		h.helper.native["claude"] = owned("carol@example.com")
+		if h.svc.importNative(h.ctx, true); len(h.helper.imports) != 2 || len(h.store.get().Accounts) != 1 {
+			t.Fatalf("imports=%v accounts=%+v", h.helper.imports, h.store.get().Accounts)
+		}
+	})
+	t.Run("a login that cannot say whose it is is copied the first time only", func(t *testing.T) {
+		h := setup(t)
+		h.helper.native["claude"] = nativeSource{unnamed: true, login: signIn("claude", "dave@example.com")}
+		h.svc.importNative(h.ctx, true)
+		h.svc.importNative(h.ctx, true)
+		if receipt := h.store.get().NativeImports["claude"]; len(h.helper.imports) != 1 || receipt.Fingerprint != "id:dave@example.com" {
+			t.Fatalf("imports=%v receipt=%+v", h.helper.imports, receipt)
+		}
+	})
 }

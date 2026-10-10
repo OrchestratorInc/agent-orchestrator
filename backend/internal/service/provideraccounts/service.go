@@ -502,10 +502,21 @@ func (s *Service) importOne(ctx context.Context, provider string, key bool) {
 	if err != nil {
 		return
 	}
-	seen := receipts(&stored, key)[provider].Fingerprint
-	v, found, err := s.helper.ImportNative(ctx, provider, key, seen)
+	receipt := receipts(&stored, key)[provider]
+	// A copied sign-in is renewed by the helper, which signs the computer's own agent out once.
+	// So one AO has copied before, or whose account it already holds, is never copied again.
+	known := func(identity string) bool {
+		email, signIn := strings.CutPrefix(identity, "id:")
+		if !signIn { // A key, or a sign-in that cannot say whose it is: that one is copied the first time only.
+			return receipt.Fingerprint != "" && (identity == "" || identity == receipt.Fingerprint)
+		}
+		return strings.EqualFold(receipt.Email, email) || slices.ContainsFunc(stored.Accounts, func(a domain.ProviderAccount) bool {
+			return a.Provider == provider && !a.APIKey() && strings.EqualFold(a.Email, email)
+		})
+	}
+	v, found, err := s.helper.ImportNative(ctx, provider, key, known)
 	byHand := errors.Is(err, ports.ErrProviderAccountConflict)
-	if found == "" || found == seen || !byHand && (err != nil || v.AuthID == "") {
+	if found == "" || !byHand && (err != nil || v.AuthID == "") {
 		return // Nothing new, or nothing readable: the accounts stay as they are.
 	}
 	v.Provider, v.Kind = provider, map[bool]string{false: "oauth", true: "api_key"}[key]

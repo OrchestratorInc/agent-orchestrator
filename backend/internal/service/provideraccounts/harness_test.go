@@ -59,6 +59,7 @@ func (m *memoryStore) get() domain.ProviderAccountState {
 
 type nativeSource struct {
 	fingerprint string
+	unnamed     bool // a sign-in that cannot say whose it is until it has been copied
 	login       ports.VerifiedProviderLogin
 	err         error
 }
@@ -193,20 +194,24 @@ func (f *fakeHelper) LoginResult(_ context.Context, id string) (ports.VerifiedPr
 	return result, nil
 }
 
-func (f *fakeHelper) ImportNative(_ context.Context, provider string, apiKey bool, seen string) (ports.VerifiedProviderLogin, string, error) {
+func (f *fakeHelper) ImportNative(_ context.Context, provider string, apiKey bool, known func(string) bool) (ports.VerifiedProviderLogin, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	key := provider
 	if apiKey {
 		key += " key"
 	}
-	source := f.native[key]
+	source, signedIn := f.native[key]
 	f.reads++
-	if source.fingerprint == "" || source.fingerprint == seen {
+	if !signedIn || source.fingerprint == "" && !source.unnamed || known(source.fingerprint) {
 		return ports.VerifiedProviderLogin{}, source.fingerprint, nil
 	}
 	f.imports = append(f.imports, key)
-	return source.login, source.fingerprint, source.err
+	identity := source.fingerprint
+	if source.unnamed {
+		identity = "id:" + strings.ToLower(source.login.Email)
+	}
+	return source.login, identity, source.err
 }
 
 func (f *fakeHelper) complete(id string, result ports.VerifiedProviderLogin) {

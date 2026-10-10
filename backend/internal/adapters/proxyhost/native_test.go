@@ -50,23 +50,26 @@ var (
 	codexFingerprint = "cf607154cc76b791ee4ccdd8f5cbc4547fcaf655abaddb7a434e71e8ff045da4"
 )
 
-// The fingerprints are the ones the first Account Manager build recorded for
-// these logins. A different one makes every computer import its login again.
-func TestNativeLoginKeepsItsFingerprint(t *testing.T) {
+// A login is named by whose it is, never by its tokens, so the same login is
+// recognised after its agent renews it. A known one is not sent to the helper,
+// which would renew the copy and sign the agent out.
+func TestNativeLoginIsNamedByItsOwnerAndLeftAloneWhenKnown(t *testing.T) {
+	claudeFile := `{"claudeAiOauth":{"accessToken":"claude-access","refreshToken":"claude-refresh","expiresAt":1893456000000}}`
 	for name, tc := range map[string]struct {
-		provider, codexFile, claudeFile, claudeToken string
-		fingerprint                                  string
-		fails                                        bool
+		provider, codexFile, claudeFile, claudeToken, claudeSettings string
+		identity                                                     string
+		none, fails                                                  bool
 	}{
-		"Codex signed in with ChatGPT":   {provider: "codex", codexFile: codexAuth, fingerprint: codexFingerprint},
-		"Codex with opaque tokens":       {provider: "codex", codexFile: `{"tokens":{"access_token":"opaque","refresh_token":"r"}}`, fingerprint: "533bd0d7fc80eacb8aba8fc3e0d592630f583420a2135ef443581b404eda01bb"},
-		"Codex signed in with a key":     {provider: "codex", codexFile: `{"auth_mode":"apikey","OPENAI_API_KEY":"sk-one","tokens":null}`},
-		"Codex not signed in":            {provider: "codex"},
-		"Codex with a broken file":       {provider: "codex", codexFile: `{"tokens":`, fails: true},
-		"Claude Code's credentials file": {provider: "claude", claudeFile: `{"claudeAiOauth":{"accessToken":"claude-access","refreshToken":"claude-refresh","expiresAt":1893456000000}}`, fingerprint: "1339e78ae1187fd440b7ae00006d68aa9f96374ace311c92d84a2c09b0393695"},
-		"Claude Code's token variable":   {provider: "claude", claudeToken: "env-token", fingerprint: "4c4c4aa664a24e4661aac97240392c2c7bc3e34833b00e9c1aeca1b6708e9e6d"},
-		"Claude Code not signed in":      {provider: "claude"},
-		"Claude Code using an API key":   {provider: "claude", claudeFile: `{"claudeAiOauth":{"accessToken":"claude-access"}}`, claudeToken: "-"},
+		"Codex signed in with ChatGPT":       {provider: "codex", codexFile: codexAuth, identity: "id:native@example.test"},
+		"Codex with opaque tokens":           {provider: "codex", codexFile: `{"tokens":{"access_token":"opaque","refresh_token":"r"}}`},
+		"Codex signed in with a key":         {provider: "codex", codexFile: `{"auth_mode":"apikey","OPENAI_API_KEY":"sk-one","tokens":null}`, none: true},
+		"Codex not signed in":                {provider: "codex", none: true},
+		"Codex with a broken file":           {provider: "codex", codexFile: `{"tokens":`, none: true, fails: true},
+		"Claude Code, owner in its settings": {provider: "claude", claudeFile: claudeFile, claudeSettings: `{"oauthAccount":{"emailAddress":" Native@Example.test "}}`, identity: "id:native@example.test"},
+		"Claude Code, owner not recorded":    {provider: "claude", claudeFile: claudeFile},
+		"Claude Code's token variable":       {provider: "claude", claudeToken: "env-token"},
+		"Claude Code not signed in":          {provider: "claude", none: true},
+		"Claude Code using an API key":       {provider: "claude", claudeFile: `{"claudeAiOauth":{"accessToken":"claude-access"}}`, claudeToken: "-", none: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			codexHome, claudeHome := onlyThisComputer(t)
@@ -76,16 +79,22 @@ func TestNativeLoginKeepsItsFingerprint(t *testing.T) {
 			if tc.claudeFile != "" {
 				writeFile(t, claudeHome, ".credentials.json", tc.claudeFile)
 			}
+			if tc.claudeSettings != "" {
+				writeFile(t, claudeHome, ".claude.json", tc.claudeSettings)
+			}
 			if tc.claudeToken == "-" {
 				t.Setenv("ANTHROPIC_API_KEY", "sk-ant-one")
 			} else {
 				t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", tc.claudeToken)
 			}
-			// A login already seen is left alone, so the helper is never asked.
 			c, helper := helperClient(t, func(call) (int, string) { return http.StatusInternalServerError, `{}` })
-			verified, fingerprint, err := c.ImportNative(ctx, tc.provider, false, tc.fingerprint)
-			if (err != nil) != tc.fails || fingerprint != tc.fingerprint || verified != (ports.VerifiedProviderLogin{}) || len(helper.calls) != 0 {
-				t.Fatalf("fingerprint=%q err=%v calls=%v", fingerprint, err, helper.lines())
+			asked, askedWith := false, ""
+			verified, identity, err := c.ImportNative(ctx, tc.provider, false, func(identity string) bool {
+				asked, askedWith = true, identity
+				return true
+			})
+			if (err != nil) != tc.fails || asked == tc.none || askedWith != tc.identity || identity != tc.identity || verified != (ports.VerifiedProviderLogin{}) || len(helper.calls) != 0 {
+				t.Fatalf("identity=%q asked=%v with %q err=%v calls=%v", identity, asked, askedWith, err, helper.lines())
 			}
 		})
 	}
@@ -106,8 +115,8 @@ func TestImportNativeLoginUploadsItOnce(t *testing.T) {
 		return http.StatusOK, `{"provider":"codex","email":"native@example.test","kind":"imported","credential_ref":"ao-` + id + `.json","auth_id":"auth-1"}`
 	})
 	want := ports.VerifiedProviderLogin{Provider: "codex", Email: "native@example.test", Kind: "imported", CredentialRef: "ao-" + id + ".json", AuthID: "auth-1"}
-	verified, fingerprint, err := c.ImportNative(ctx, "codex", false, "an-older-login")
-	if err != nil || verified != want || fingerprint != codexFingerprint {
+	verified, fingerprint, err := c.ImportNative(ctx, "codex", false, func(string) bool { return false })
+	if err != nil || verified != want || fingerprint != "id:native@example.test" {
 		t.Fatalf("verified=%+v fingerprint=%q err=%v", verified, fingerprint, err)
 	}
 	result := "GET /ao/login-result/" + id
@@ -120,7 +129,7 @@ func TestImportNativeLoginUploadsItOnce(t *testing.T) {
 	// After a crash before the account was saved, the import is found, not repeated:
 	// the helper may have renewed the tokens since.
 	helper.calls = nil
-	if verified, _, err = c.ImportNative(ctx, "codex", false, ""); err != nil || verified != want || !reflect.DeepEqual(helper.lines(), []string{result}) {
+	if verified, _, err = c.ImportNative(ctx, "codex", false, func(string) bool { return false }); err != nil || verified != want || !reflect.DeepEqual(helper.lines(), []string{result}) {
 		t.Fatalf("verified=%+v err=%v calls=%v", verified, err, helper.lines())
 	}
 }
@@ -194,7 +203,7 @@ func TestImportNativeAPIKeyAddsItOnceAndLeavesAHandAddedKeyAlone(t *testing.T) {
 	})
 	want := ports.VerifiedProviderLogin{Provider: "claude", Email: "Global API key", Kind: "api_key", CredentialRef: "config-index:claude:7", AuthID: "key-auth"}
 	for attempt, seen := range []string{"", "", fingerprint} {
-		verified, found, err := c.ImportNative(ctx, "claude", true, seen)
+		verified, found, err := c.ImportNative(ctx, "claude", true, func(identity string) bool { return identity == seen })
 		if err != nil || found != fingerprint || (seen == "") != (verified == want) {
 			t.Fatalf("attempt %d: verified=%+v fingerprint=%q err=%v", attempt, verified, found, err)
 		}
@@ -210,7 +219,7 @@ func TestImportNativeAPIKeyAddsItOnceAndLeavesAHandAddedKeyAlone(t *testing.T) {
 	}
 	// The same key added by hand is already an account: a conflict, and nothing is written.
 	held, tagged, helper.calls = `[{"api-key":"sk-ant-one","base-url":"https://api.anthropic.com/"}]`, false, nil
-	_, found, err := c.ImportNative(ctx, "claude", true, "")
+	_, found, err := c.ImportNative(ctx, "claude", true, func(string) bool { return false })
 	if !errors.Is(err, ports.ErrProviderAccountConflict) || found != fingerprint || len(helper.calls) != 2 {
 		t.Fatalf("err=%v fingerprint=%q calls=%v", err, found, helper.lines())
 	}

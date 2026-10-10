@@ -108,10 +108,14 @@ type AccountHelper interface {
 	LoginStatus(context.Context, ProviderLogin) (string, error)
 	CancelLogin(context.Context, ProviderLogin) error
 	LoginResult(ctx context.Context, id string) (VerifiedProviderLogin, error)
-	// ImportNative imports this computer's own login, or its API key, unless its
-	// fingerprint is the one already seen. It returns the fingerprint it found
-	// (empty when there is none) and the sign-in only when it imported one.
-	ImportNative(ctx context.Context, provider string, apiKey bool, seen string) (VerifiedProviderLogin, string, error)
+	// ImportNative copies this computer's own login, or its API key, unless known
+	// says to leave it alone. known is asked before anything is copied, with the
+	// login's identity: "id:" and its email for a sign-in (empty when it cannot
+	// be told), a fingerprint for a key. A copied sign-in is renewed by the
+	// helper from then on, which signs the computer's own agent out once, so a
+	// login AO already has must never be copied again. It returns the identity
+	// (empty when there is no login) and the sign-in only when it copied one.
+	ImportNative(ctx context.Context, provider string, apiKey bool, known func(identity string) bool) (VerifiedProviderLogin, string, error)
 }
 
 // ProviderAccountRouting is what launching a session needs from Account Manager.
