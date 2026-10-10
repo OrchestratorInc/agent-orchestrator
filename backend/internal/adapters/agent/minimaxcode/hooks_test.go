@@ -34,7 +34,14 @@ func TestHookPinsIdentityAndRejectsReplacement(t *testing.T) {
 	if err := os.WriteFile(identity, []byte("\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	hook := filepath.Join(profile, "plugins", "ao-activity", "hook.cjs")
+	// MiniMax executes immutable cached copies, not the installed plugin path.
+	hook := filepath.Join(profile, "v2", "plugin-hook-cache", "sha256-tree-v1-fixture", "hook.cjs")
+	if err := os.MkdirAll(filepath.Dir(hook), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hook, hookSource, 0600); err != nil {
+		t.Fatal(err)
+	}
 	first := "mvs_01234567890123456789012345678901"
 	run := func(id string) []byte {
 		t.Helper()

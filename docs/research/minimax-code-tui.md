@@ -45,7 +45,10 @@ and suppresses only the launch prompt (`packages/tui/src/tui/launcher.ts`).
 AO therefore validates the native read-only SQLite identity/workspace and
 bounded message envelopes before launching restore. Its private native plugin
 also pins the first SessionStart ID and rejects missing or mismatched identity
-on later hooks before provider work.
+on later hooks before provider work. MiniMax executes hooks from an immutable
+plugin cache and strips AO-prefixed environment variables. Each launch therefore
+uses its own preserved `TMPDIR` to locate immutable routing and the private profile;
+a cached hook or delayed child from an older launch cannot acquire a newer generation.
 
 A native missing-session reproduction initially confirmed the plugin prevented
 replacement work but its `stopReason` was not displayed. The retained follow-up
@@ -61,6 +64,11 @@ VPS evidence is under
 restore, fresh-instruction proof, continuation, and cancellation logs;
 `minimax-missing-001` preserves the first guard reproduction;
 `minimax-missing-002` preserves visible fail-closed guard evidence.
+`minimax-ao-001` preserves the first failed AO audit: the original hook derived
+its profile from the cached script location, could not read its identity file,
+and visibly refused the initial turn before provider work. The cached-copy
+regression reproduces that failure; the fix locates the profile through the
+validated launch-specific `TMPDIR`. This first attempt remains failed.
 Credentials are retained only in the isolated VPS provider profile.
 
 Unit tests cover argv, unsupported permissions, private profile preservation,
