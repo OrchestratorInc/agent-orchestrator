@@ -29,7 +29,8 @@ func testingMCPPipe(t *testing.T, version string) (*mcp.ClientSession, func() st
 	serverIn, clientOut := io.Pipe()
 	clientIn, serverOut := io.Pipe()
 	var frames, diagnostics bytes.Buffer
-	cmd := NewRootCommand(Deps{In: serverIn, Out: serverOut, Err: &diagnostics, ProcessAlive: func(int) bool { return true }})
+	// Server shutdown joins its writes, but SDK shutdown does not join its decoder.
+	cmd := NewRootCommand(Deps{In: serverIn, Out: io.MultiWriter(serverOut, &frames), Err: &diagnostics, ProcessAlive: func(int) bool { return true }})
 	cmd.SetArgs([]string{"testing", "mcp"})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	cmd.SetContext(ctx)
@@ -37,10 +38,7 @@ func testingMCPPipe(t *testing.T, version string) (*mcp.ClientSession, func() st
 	go func() { done <- cmd.Execute() }()
 	client := mcp.NewClient(&mcp.Implementation{Name: "slice-c-test", Version: "1"}, nil)
 	session, err := client.Connect(ctx, &mcp.IOTransport{
-		Reader: struct {
-			io.Reader
-			io.Closer
-		}{io.TeeReader(clientIn, &frames), clientIn}, Writer: clientOut,
+		Reader: clientIn, Writer: clientOut,
 	}, &mcp.ClientSessionOptions{ProtocolVersion: version})
 	if err != nil {
 		cancel()
