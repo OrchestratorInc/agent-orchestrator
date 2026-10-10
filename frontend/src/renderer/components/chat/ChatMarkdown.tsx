@@ -53,6 +53,9 @@ import {
 	workspaceFilePath,
 } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
+import { isMarkdownPreviewPath } from "../../lib/markdown-frontmatter";
+import type { MarkdownFilePreviewSource } from "../../lib/markdown-file-preview";
+import { MarkdownFrontmatterPreview } from "./MarkdownFrontmatterPreview";
 import { SessionLinkPreviewCard } from "../SessionLinkPreviewCard";
 import {
 	explicitWorkspaceFilePath,
@@ -106,6 +109,7 @@ const OpenChatLink = createContext<{
 	remoteHost?: boolean;
 	sessionLinkHostId?: string;
 	sessionLinkSourceKind?: "cloud";
+	markdownFileSource?: MarkdownFilePreviewSource;
 	openSession?: (url: string) => void;
 	workspacePaths: string[];
 }>({ workspacePaths: [] });
@@ -117,6 +121,7 @@ export function ChatLinkProvider({
 	remoteHost,
 	sessionLinkHostId,
 	sessionLinkSourceKind,
+	markdownFileSource,
 	onSessionLinkOpen,
 	workspacePaths = EMPTY_WORKSPACE_PATHS,
 	children,
@@ -126,13 +131,14 @@ export function ChatLinkProvider({
 	remoteHost?: boolean;
 	sessionLinkHostId?: string;
 	sessionLinkSourceKind?: "cloud";
+	markdownFileSource?: MarkdownFilePreviewSource;
 	onSessionLinkOpen?: (url: string) => void;
 	workspacePaths?: string[];
 	children: ReactNode;
 }) {
 	const value = useMemo(
-		() => ({ open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths }),
-		[onLinkOpen, onFileOpen, onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths],
+		() => ({ open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, markdownFileSource, workspacePaths }),
+		[onLinkOpen, onFileOpen, onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, markdownFileSource, workspacePaths],
 	);
 	return <OpenChatLink.Provider value={value}>{children}</OpenChatLink.Provider>;
 }
@@ -304,7 +310,7 @@ function compactEmoji(children: ReactNode): ReactNode {
 
 function MarkdownLink({ href, children }: { href?: string; children?: ReactNode }) {
 	const safeOriginContent = useContext(SafeOriginContent);
-	const { open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths } = useContext(OpenChatLink);
+	const { open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, markdownFileSource, workspacePaths } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
 		? workspaceFilePath(href, workspacePaths) ?? findWorkspaceFilePath(href, workspacePaths) ?? explicitWorkspaceFilePath(href)
 		: undefined;
@@ -317,6 +323,7 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 		</span>;
 	}
 	const browserLink = href ? !sessionLink && (isWebLink(href) || (!remoteHost && (!!filePath || isPotentialWorkspaceFileLink(href)))) : false;
+	const markdownPreviewPath = !sessionLink && markdownFileSource && openInFiles && isMarkdownPreviewPath(openInFiles) ? openInFiles : undefined;
 	return (
 		<AppLink
 			href={href}
@@ -324,7 +331,11 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 			inAppLink={href ? () => browserLink : undefined}
 			filePath={filePath}
 			onFileOpen={onFileOpen}
-			hoverPreview={sessionLink ? () => <SessionLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} /> : undefined}
+			hoverPreview={sessionLink
+				? () => <SessionLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} />
+				: markdownPreviewPath
+					? () => <MarkdownFrontmatterPreview path={markdownPreviewPath} source={markdownFileSource!} />
+					: undefined}
 			onClick={(event) => {
 				if (href && sessionLink) {
 					event.preventDefault();

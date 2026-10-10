@@ -121,6 +121,7 @@ import {
 	type TurnOutcomeRetryControl,
 } from "./ChatTimelineItems";
 import { HumanMessageEditor } from "./HumanMessageEditor";
+import { markdownFilePreviewSource } from "../../lib/markdown-file-preview";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
@@ -1665,6 +1666,7 @@ function ChatWorkspaceContent({
 							remoteHost={Boolean(activeRemoteHostId)}
 							sessionLinkHostId={activeRemoteHostId}
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
+							markdownFileSource={markdownFilePreviewSource(snapshot.sessionId, activeRemoteHostId, session?.cloud?.orgId)}
 							workspacePaths={filePaths}
 						>
 							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles}>
