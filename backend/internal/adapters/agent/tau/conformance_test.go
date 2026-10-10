@@ -63,11 +63,20 @@ func TestReleasedTauTUIConformance(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		select {
-		case requests <- request:
-		default:
-			http.Error(w, "too many model requests", http.StatusTooManyRequests)
-			return
+		// Tau generates its session title in a separate model request. Service
+		// that native auxiliary call, but assert coding-turn context separately.
+		var firstContent string
+		if len(request.Messages) > 0 {
+			_ = json.Unmarshal(request.Messages[0].Content, &firstContent)
+		}
+		isTitle := len(request.Messages) == 2 && request.Messages[0].Role == "system" && strings.HasPrefix(firstContent, "You write concise coding-agent session names.")
+		if !isTitle {
+			select {
+			case requests <- request:
+			default:
+				http.Error(w, "too many model requests", http.StatusTooManyRequests)
+				return
+			}
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "data: {\"id\":\"ao-response\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"AO fake response\"},\"finish_reason\":null}]}\n\n")
