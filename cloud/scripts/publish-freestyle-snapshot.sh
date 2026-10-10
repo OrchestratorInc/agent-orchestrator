@@ -2,14 +2,13 @@
 set -euo pipefail
 
 # Bakes the Freestyle harness snapshots sessions boot from: one per harness,
-# each the NodeOps template for that harness plus the worker binaries.
+# each the sandbox image for that harness plus the worker binaries.
 #
 # Freestyle cannot import a Docker image, so a snapshot is a booted base VM that
-# was provisioned and then frozen (memory and disk). To keep both providers on
-# the same toolchain, this script runs the RUN steps of the very Dockerfiles the
-# NodeOps template is built from (nodeops/Sandbox.base.Dockerfile plus
-# nodeops/harness/<harness>.Dockerfile), in order, inside the VM. A version bump
-# in those files therefore reaches Freestyle on the next bake with no edit here.
+# was provisioned and then frozen (memory and disk). This script runs the RUN
+# steps of the sandbox image Dockerfiles (sandbox-image/Sandbox.base.Dockerfile
+# plus sandbox-image/harness/<harness>.Dockerfile), in order, inside the VM. A
+# version bump in those files therefore reaches Freestyle on the next bake.
 #
 # The worker binaries come from the control-plane image that will serve these
 # sandboxes, so they hash-match what it advertises and a new session launches
@@ -29,7 +28,7 @@ API_URL="${AO_CLOUD_FREESTYLE_BASE_URL:-https://api.freestyle.sh}"
 # The base fixes the VM's size: freestyle/ubuntu-sm is 2 vCPU / 4 GiB / 16 GB.
 BASE_SNAPSHOT="${AO_CLOUD_FREESTYLE_BASE_SNAPSHOT:-freestyle/ubuntu-sm}"
 HARNESSES="${AO_CLOUD_FREESTYLE_HARNESSES:-claude-code,codex,cursor}"
-BASE_DOCKERFILE="${AO_CLOUD_FREESTYLE_BASE_DOCKERFILE:-nodeops/Sandbox.base.Dockerfile}"
+BASE_DOCKERFILE="${AO_CLOUD_FREESTYLE_BASE_DOCKERFILE:-sandbox-image/Sandbox.base.Dockerfile}"
 ARTIFACTS_BUCKET="${AO_CLOUD_ARTIFACTS_BUCKET:-ao-cloud-staging-artifacts}"
 UPDATE_SECRET="${AO_CLOUD_FREESTYLE_UPDATE_SECRET:-}"
 CP_IMAGE="${AO_CLOUD_CP_IMAGE:-}"
@@ -136,7 +135,7 @@ nohup sh -c 'sh /tmp/ao-step.sh > /tmp/ao-step.log 2>&1; echo \$? > /tmp/ao-step
 
 # run_steps prints each RUN instruction of a Dockerfile, NUL-separated. Anything
 # besides FROM and RUN (ENV, COPY, USER, ...) cannot be replayed faithfully in a
-# VM, so it fails the bake rather than silently diverging from NodeOps.
+# VM, so it fails the bake rather than silently diverging from the Dockerfile.
 run_steps() {
 	python3 - "$1" <<'PY'
 import sys
@@ -206,10 +205,10 @@ echo "apt is still busy" >&2; exit 1'
 
 # Freestyle's Ubuntu base ships its own toolchain: nvm's Node 24 with claude,
 # codex, opencode and bun, plus a Python CLI set, all linked into
-# /usr/local/bin ahead of /usr/bin on PATH. Left in place, the NodeOps steps
+# /usr/local/bin ahead of /usr/bin on PATH. Left in place, the image steps
 # would install into that Node (whose npm 11 also skips install scripts) and
 # sessions would run Freestyle's agent builds instead of the pinned ones. Strip
-# it so the VM matches the NodeOps template; /opt/freestyle itself stays, since
+# it so the VM matches the sandbox image; /opt/freestyle itself stays, since
 # the platform may rely on it.
 strip_base='set -e
 for link in /usr/local/bin/*; do
@@ -220,10 +219,9 @@ for link in /usr/local/bin/*; do
 done
 rm -rf /usr/local/nvm /etc/profile.d/nvm.sh'
 
-# Freestyle-only addition to the NodeOps toolchain: dtach lets the worker keep
+# Freestyle-only addition to the image toolchain: dtach lets the worker keep
 # the coding agent (and everything it started) alive across the worker restart
-# a wake from pause performs. Without it the worker launches the agent directly,
-# as on NodeOps.
+# a wake from pause performs. Without it the worker launches the agent directly.
 freestyle_extras='set -e
 apt-get update
 apt-get install --yes --no-install-recommends dtach
@@ -248,7 +246,7 @@ rm -rf /var/lib/apt/lists/* /root/.npm /tmp/*
 sync'
 
 bake_harness() {
-	local harness="$1" layer="nodeops/harness/$1.Dockerfile" view state="" step index=0
+	local harness="$1" layer="sandbox-image/harness/$1.Dockerfile" view state="" step index=0
 	# Runs in a background subshell. builder_vm is deliberately not local: the
 	# EXIT trap fires after this function returns, when its locals are gone.
 	builder_vm=""
@@ -297,7 +295,7 @@ bake_harness() {
 	vm_exec "$vm" "$finalize" || die "[$harness] finalize failed"
 	# Run each binary once so its pages sit in the memory the snapshot captures:
 	# the first launch in a session then reads them from memory, not disk.
-	# The toolchain must be the NodeOps one: Node from /usr/bin, not a leftover.
+	# The toolchain must be the image's: Node from /usr/bin, not a leftover.
 	vm_exec "$vm" "set -e; test \"\$(command -v node)\" = /usr/bin/node; node --version | grep -q '^v22\\.'
 command -v dtach >/dev/null
 $check; git --version >/dev/null; gh --version >/dev/null; cat /usr/local/bin/ao-worker /usr/local/bin/ao >/dev/null" ||

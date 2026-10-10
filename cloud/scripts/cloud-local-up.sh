@@ -5,8 +5,8 @@ set -euo pipefail
 # plane for local development. Unlike scripts/test-cloud-local.sh (a self-tearing
 # smoke test that uses random loopback ports and tears everything down on exit),
 # this starts the stack on FIXED default ports and LEAVES IT RUNNING so a
-# developer can drive the whole cloud flow from the desktop app with zero
-# NodeOps. Stop it with cloud-local-down.sh (data retained) or wipe local data
+# developer can drive the whole cloud flow from the desktop app with no hosted
+# provider. Stop it with cloud-local-down.sh (data retained) or wipe local data
 # with cloud-local-reset.sh. Re-running this script is safe (idempotent).
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

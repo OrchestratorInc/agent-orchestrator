@@ -8,7 +8,6 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from lib.deployment import (
     CODER_SECRET_ENV,
     FREESTYLE_SECRET_ENV,
-    NODEOPS_SECRET_ENV,
     WORKER_SECRET_ENV,
     build_task_definition,
     resolve_sandbox_providers,
@@ -26,14 +25,6 @@ WORKER_IMAGE = f"registry/ao-cloud-worker@sha256:{'b' * 64}"
 
 def hosted_secret_overrides(environment="production"):
     return secret_environment(
-        f"arn:secret:ao-cloud/{environment}/nodeops", NODEOPS_SECRET_ENV
-    ) | secret_environment(
-        f"arn:secret:ao-cloud/{environment}/worker", WORKER_SECRET_ENV
-    )
-
-
-def coder_secret_overrides(environment="production"):
-    return secret_environment(
         f"arn:secret:ao-cloud/{environment}/coder", CODER_SECRET_ENV
     ) | secret_environment(
         f"arn:secret:ao-cloud/{environment}/worker", WORKER_SECRET_ENV
@@ -43,10 +34,10 @@ def coder_secret_overrides(environment="production"):
 def multi_provider_secret_overrides(environment="staging"):
     return (
         secret_environment(
-            f"arn:secret:ao-cloud/{environment}/nodeops", NODEOPS_SECRET_ENV
+            f"arn:secret:ao-cloud/{environment}/coder", CODER_SECRET_ENV
         )
         | secret_environment(
-            f"arn:secret:ao-cloud/{environment}/coder", CODER_SECRET_ENV
+            f"arn:secret:ao-cloud/{environment}/freestyle", FREESTYLE_SECRET_ENV
         )
         | secret_environment(
             f"arn:secret:ao-cloud/{environment}/worker", WORKER_SECRET_ENV
@@ -54,26 +45,31 @@ def multi_provider_secret_overrides(environment="staging"):
     )
 
 
-def hosted_settings():
-    return (
-        {
-            "base_url": "https://api.sb.createos.sh",
-            "api_key": "nodeops-secret",
-            "default_shape": "s-4vcpu-8gb",
-            "default_rootfs": "devbox:1",
-            "ingress": "disabled",
-            "ssh_key_path": "",
-            "region": "eu-north-1",
-            "worker_token_ttl": "15m",
-        },
-        {
-            "signing_key": "w" * 64,
-            "max_active_sandboxes_per_org": "10",
-            "sandbox_reconcile_interval": "2s",
-            "sandbox_startup_timeout": "3m",
-            "worker_heartbeat_timeout": "1m",
-        },
-    )
+# The settings a task definition from before the NodeOps retirement carries.
+RETIRED_NODEOPS_ENVIRONMENT = {
+    "AO_CLOUD_NODEOPS_ROOTFS_BY_HARNESS": '{"claude-code":"template"}',
+}
+
+
+def retired_nodeops_secrets(environment="staging"):
+    return {
+        name: f"arn:secret:ao-cloud/{environment}/nodeops:{field}::"
+        for name, field in (
+            ("AO_CLOUD_NODEOPS_BASE_URL", "base_url"),
+            ("AO_CLOUD_NODEOPS_API_KEY", "api_key"),
+            ("AO_CLOUD_NODEOPS_WORKER_TOKEN_TTL", "worker_token_ttl"),
+        )
+    }
+
+
+def worker_settings():
+    return {
+        "signing_key": "w" * 64,
+        "max_active_sandboxes_per_org": "10",
+        "sandbox_reconcile_interval": "2s",
+        "sandbox_startup_timeout": "3m",
+        "worker_heartbeat_timeout": "1m",
+    }
 
 
 def coder_settings():
@@ -88,7 +84,7 @@ def coder_settings():
             "durable_root": "/home/coder",
             "worker_token_ttl": "15m",
         },
-        hosted_settings()[1],
+        worker_settings(),
     )
 
 
@@ -110,7 +106,7 @@ def freestyle_settings():
                 '{"claude-code":"snap-claude","codex":"snap-codex","cursor":"snap-cursor"}'
             ),
         },
-        hosted_settings()[1],
+        worker_settings(),
     )
 
 
@@ -193,10 +189,6 @@ class TaskDefinitionTests(unittest.TestCase):
         )
         container = payload["containerDefinitions"][0]
         self.assertEqual(container["image"], CONTROL_IMAGE)
-        self.assertEqual(
-            container["secrets"][0]["valueFrom"],
-            "arn:secret:ao-cloud/production/database-url",
-        )
         environment = {
             item["name"]: item["value"] for item in container["environment"]
         }
@@ -210,11 +202,15 @@ class TaskDefinitionTests(unittest.TestCase):
             item["name"]: item["valueFrom"] for item in container["secrets"]
         }
         self.assertEqual(
+            secrets["AO_CLOUD_DATABASE_URL"],
+            "arn:secret:ao-cloud/production/database-url",
+        )
+        self.assertEqual(
             secrets["AO_CLOUD_GITHUB_APP_ID"],
             "arn:secret:ao-cloud/production/github:app_id::",
         )
-        self.assertNotIn("AO_CLOUD_NODEOPS_AUTO_PAUSE_MINUTES", environment)
-        self.assertNotIn("AO_CLOUD_NODEOPS_AUTO_PAUSE_MINUTES", secrets)
+        self.assertEqual(environment["AO_CLOUD_SANDBOX_PROVIDER"], "coder")
+        self.assertTrue(set(CODER_SECRET_ENV) <= secrets.keys())
         tags = {item["key"]: item["value"] for item in payload["tags"]}
         self.assertEqual(tags["WorkerImage"], WORKER_IMAGE)
 
@@ -256,8 +252,8 @@ class TaskDefinitionTests(unittest.TestCase):
                 secret_overrides=hosted_secret_overrides("staging"),
             )
 
-    def test_rejects_provider_auto_pause_override(self):
-        with self.assertRaisesRegex(ValueError, "auto-pause"):
+    def test_rejects_retired_provider_override(self):
+        with self.assertRaisesRegex(ValueError, "retired provider"):
             build_task_definition(
                 task_source(),
                 family="ao-cloud-production-api",
@@ -269,7 +265,7 @@ class TaskDefinitionTests(unittest.TestCase):
                 log_group="/ao-cloud/production/control-plane",
                 region="eu-north-1",
                 secret_overrides=hosted_secret_overrides()
-                | {"AO_CLOUD_NODEOPS_AUTO_PAUSE_MINUTES": "arn:secret:field::"},
+                | {"AO_CLOUD_NODEOPS_API_KEY": "arn:secret:field::"},
             )
 
     def test_validates_rendered_artifact_contract(self):
@@ -292,18 +288,16 @@ class TaskDefinitionTests(unittest.TestCase):
             worker_image=WORKER_IMAGE,
         )
 
-    def test_switches_from_nodeops_to_coder_without_retaining_credentials(self):
+    def test_prunes_retired_nodeops_settings_from_an_older_task(self):
         source = task_source("staging")
         container = source["taskDefinition"]["containerDefinitions"][0]
-        container["environment"].append(
-            {
-                "name": "AO_CLOUD_NODEOPS_ROOTFS_BY_HARNESS",
-                "value": '{"claude-code":"template"}',
-            }
+        container["environment"].extend(
+            {"name": name, "value": value}
+            for name, value in RETIRED_NODEOPS_ENVIRONMENT.items()
         )
         container["secrets"].extend(
             {"name": name, "valueFrom": value}
-            for name, value in hosted_secret_overrides("staging").items()
+            for name, value in retired_nodeops_secrets("staging").items()
         )
         payload = build_task_definition(
             source,
@@ -316,14 +310,19 @@ class TaskDefinitionTests(unittest.TestCase):
             log_group="/ao-cloud/staging/control-plane",
             region="eu-north-1",
             sandbox_provider="coder",
-            secret_overrides=coder_secret_overrides("staging"),
+            secret_overrides=hosted_secret_overrides("staging"),
         )
         rendered = payload["containerDefinitions"][0]
         environment = {item["name"]: item["value"] for item in rendered["environment"]}
         secrets = {item["name"]: item["valueFrom"] for item in rendered["secrets"]}
         self.assertEqual(environment["AO_CLOUD_SANDBOX_PROVIDER"], "coder")
-        self.assertFalse(set(NODEOPS_SECRET_ENV) & secrets.keys())
-        self.assertNotIn("AO_CLOUD_NODEOPS_ROOTFS_BY_HARNESS", environment)
+        self.assertFalse(
+            [
+                name
+                for name in environment.keys() | secrets.keys()
+                if name.startswith("AO_CLOUD_NODEOPS_")
+            ]
+        )
         self.assertTrue(set(CODER_SECRET_ENV) <= secrets.keys())
         validate_task_artifacts(
             {"taskDefinition": payload, "tags": payload["tags"]},
@@ -332,6 +331,31 @@ class TaskDefinitionTests(unittest.TestCase):
             worker_image=WORKER_IMAGE,
         )
 
+    def test_validate_rejects_retained_retired_settings(self):
+        payload = build_task_definition(
+            task_source("staging"),
+            family="ao-cloud-staging-api",
+            container_name="control-plane",
+            image=CONTROL_IMAGE,
+            worker_image=WORKER_IMAGE,
+            release="abc123",
+            environment="staging",
+            log_group="/ao-cloud/staging/control-plane",
+            region="eu-north-1",
+            secret_overrides=hosted_secret_overrides("staging"),
+        )
+        payload["containerDefinitions"][0]["secrets"].extend(
+            {"name": name, "valueFrom": value}
+            for name, value in retired_nodeops_secrets("staging").items()
+        )
+        with self.assertRaisesRegex(ValueError, "retired provider settings"):
+            validate_task_artifacts(
+                {"taskDefinition": payload, "tags": payload["tags"]},
+                container_name="control-plane",
+                control_image=CONTROL_IMAGE,
+                worker_image=WORKER_IMAGE,
+            )
+
     def test_multi_provider_keeps_both_provider_secrets(self):
         source = task_source("staging")
         container = source["taskDefinition"]["containerDefinitions"][0]
@@ -339,8 +363,8 @@ class TaskDefinitionTests(unittest.TestCase):
         # live multi-provider task) must keep them, not prune one.
         container["environment"].append(
             {
-                "name": "AO_CLOUD_NODEOPS_ROOTFS_BY_HARNESS",
-                "value": '{"claude-code":"template"}',
+                "name": "AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS",
+                "value": '{"claude-code":"snap-claude"}',
             }
         )
         container["secrets"].extend(
@@ -357,20 +381,20 @@ class TaskDefinitionTests(unittest.TestCase):
             environment="staging",
             log_group="/ao-cloud/staging/control-plane",
             region="eu-north-1",
-            sandbox_provider="nodeops",
-            sandbox_providers=["nodeops", "coder"],
+            sandbox_provider="coder",
+            sandbox_providers=["coder", "freestyle"],
             secret_overrides=multi_provider_secret_overrides("staging"),
         )
         rendered = payload["containerDefinitions"][0]
         environment = {item["name"]: item["value"] for item in rendered["environment"]}
         secrets = {item["name"]: item["valueFrom"] for item in rendered["secrets"]}
-        self.assertEqual(environment["AO_CLOUD_SANDBOX_PROVIDER"], "nodeops")
-        self.assertEqual(environment["AO_CLOUD_SANDBOX_PROVIDERS"], "nodeops,coder")
+        self.assertEqual(environment["AO_CLOUD_SANDBOX_PROVIDER"], "coder")
+        self.assertEqual(environment["AO_CLOUD_SANDBOX_PROVIDERS"], "coder,freestyle")
         self.assertEqual(
-            environment["AO_CLOUD_NODEOPS_ROOTFS_BY_HARNESS"],
-            '{"claude-code":"template"}',
+            environment["AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS"],
+            '{"claude-code":"snap-claude"}',
         )
-        self.assertTrue(set(NODEOPS_SECRET_ENV) <= secrets.keys())
+        self.assertTrue(set(FREESTYLE_SECRET_ENV) <= secrets.keys())
         self.assertTrue(set(CODER_SECRET_ENV) <= secrets.keys())
         validate_task_artifacts(
             {"taskDefinition": payload, "tags": payload["tags"]},
@@ -391,8 +415,8 @@ class TaskDefinitionTests(unittest.TestCase):
                 environment="staging",
                 log_group="/ao-cloud/staging/control-plane",
                 region="eu-north-1",
-                sandbox_provider="nodeops",
-                sandbox_providers=["nodeops", "coder"],
+                sandbox_provider="coder",
+                sandbox_providers=["coder", "freestyle"],
                 secret_overrides=hosted_secret_overrides("staging"),
             )
 
@@ -408,9 +432,9 @@ class TaskDefinitionTests(unittest.TestCase):
                 environment="staging",
                 log_group="/ao-cloud/staging/control-plane",
                 region="eu-north-1",
-                sandbox_provider="nodeops",
+                sandbox_provider="freestyle",
                 sandbox_providers=["coder"],
-                secret_overrides=coder_secret_overrides("staging"),
+                secret_overrides=hosted_secret_overrides("staging"),
             )
 
     def test_validate_rejects_secret_outside_available_providers(self):
@@ -424,16 +448,16 @@ class TaskDefinitionTests(unittest.TestCase):
             environment="staging",
             log_group="/ao-cloud/staging/control-plane",
             region="eu-north-1",
-            sandbox_provider="nodeops",
-            sandbox_providers=["nodeops"],
+            sandbox_provider="coder",
+            sandbox_providers=["coder"],
             secret_overrides=hosted_secret_overrides("staging"),
         )
         rendered = payload["containerDefinitions"][0]
-        # A coder secret leaks in although the available set is nodeops-only.
+        # A Freestyle secret leaks in although the available set is coder-only.
         rendered["secrets"].append(
             {
-                "name": "AO_CLOUD_CODER_URL",
-                "valueFrom": "arn:secret:ao-cloud/staging/coder:url::",
+                "name": "AO_CLOUD_FREESTYLE_API_KEY",
+                "valueFrom": "arn:secret:ao-cloud/staging/freestyle:api_key::",
             }
         )
         with self.assertRaisesRegex(
@@ -461,8 +485,8 @@ class TaskDefinitionTests(unittest.TestCase):
             environment="staging",
             log_group="/ao-cloud/staging/control-plane",
             region="eu-north-1",
-            sandbox_provider="nodeops",
-            sandbox_providers=["nodeops"],
+            sandbox_provider="coder",
+            sandbox_providers=["coder"],
             secret_overrides=hosted_secret_overrides("staging"),
         )
         rendered = payload["containerDefinitions"][0]
@@ -480,15 +504,17 @@ class TaskDefinitionTests(unittest.TestCase):
         )
 
     def test_resolve_sandbox_providers_dedups_and_defaults(self):
-        self.assertEqual(resolve_sandbox_providers("nodeops", None), ["nodeops"])
+        self.assertEqual(resolve_sandbox_providers("coder", None), ["coder"])
         self.assertEqual(
-            resolve_sandbox_providers("nodeops", ["nodeops", "coder", "nodeops"]),
-            ["nodeops", "coder"],
+            resolve_sandbox_providers("coder", ["coder", "freestyle", "coder"]),
+            ["coder", "freestyle"],
         )
         with self.assertRaises(ValueError):
-            resolve_sandbox_providers("nodeops", ["coder"])
+            resolve_sandbox_providers("freestyle", ["coder"])
         with self.assertRaises(ValueError):
-            resolve_sandbox_providers("nodeops", ["nodeops", "bogus"])
+            resolve_sandbox_providers("coder", ["coder", "bogus"])
+        with self.assertRaisesRegex(ValueError, "unsupported hosted sandbox provider"):
+            resolve_sandbox_providers("nodeops", None)
 
 
 class FreestyleTaskDefinitionTests(unittest.TestCase):
@@ -504,21 +530,20 @@ class FreestyleTaskDefinitionTests(unittest.TestCase):
             region="eu-north-1",
             worker_image=WORKER_IMAGE,
             sandbox_provider="freestyle",
-            sandbox_providers=["nodeops", "freestyle"],
+            sandbox_providers=["coder", "freestyle"],
             environment_overrides={
                 "AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS": '{"codex":"snap-codex"}'
             },
-            secret_overrides=multi_provider_secret_overrides("staging")
-            | freestyle_secret_overrides("staging"),
+            secret_overrides=multi_provider_secret_overrides("staging"),
         )
         container = payload["containerDefinitions"][0]
         environment = {item["name"]: item["value"] for item in container["environment"]}
         secrets = {item["name"] for item in container["secrets"]}
         self.assertEqual(environment["AO_CLOUD_SANDBOX_PROVIDER"], "freestyle")
-        self.assertEqual(environment["AO_CLOUD_SANDBOX_PROVIDERS"], "nodeops,freestyle")
+        self.assertEqual(environment["AO_CLOUD_SANDBOX_PROVIDERS"], "coder,freestyle")
         self.assertIn("AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS", environment)
         self.assertTrue(set(FREESTYLE_SECRET_ENV) <= secrets)
-        self.assertTrue(set(NODEOPS_SECRET_ENV) <= secrets)
+        self.assertTrue(set(CODER_SECRET_ENV) <= secrets)
 
     def test_prunes_freestyle_settings_when_not_served(self):
         source = task_source("staging")
@@ -587,26 +612,25 @@ class HostedSettingsTests(unittest.TestCase):
             validate_hosted_settings(freestyle, worker, provider="freestyle")
 
     def test_accepts_complete_environment_scoped_settings(self):
-        nodeops, worker = hosted_settings()
-        validate_hosted_settings(nodeops, worker)
+        coder, worker = coder_settings()
+        validate_hosted_settings(coder, worker)
 
     def test_rejects_missing_worker_setting(self):
-        nodeops, worker = hosted_settings()
+        coder, worker = coder_settings()
         del worker["worker_heartbeat_timeout"]
         with self.assertRaisesRegex(ValueError, "worker_heartbeat_timeout"):
-            validate_hosted_settings(nodeops, worker)
+            validate_hosted_settings(coder, worker)
 
-    def test_rejects_provider_auto_pause_setting(self):
-        nodeops, worker = hosted_settings()
-        nodeops["auto_pause_minutes"] = "30"
-        with self.assertRaisesRegex(ValueError, "auto-pause"):
-            validate_hosted_settings(nodeops, worker)
+    def test_rejects_retired_provider(self):
+        coder, worker = coder_settings()
+        with self.assertRaisesRegex(ValueError, "unsupported hosted sandbox provider"):
+            validate_hosted_settings(coder, worker, provider="nodeops")
 
     def test_rejects_invalid_startup_timeout(self):
-        nodeops, worker = hosted_settings()
+        coder, worker = coder_settings()
         worker["sandbox_startup_timeout"] = "10s"
         with self.assertRaisesRegex(ValueError, "at least 30s"):
-            validate_hosted_settings(nodeops, worker)
+            validate_hosted_settings(coder, worker)
 
     def test_accepts_coder_settings(self):
         coder, worker = coder_settings()

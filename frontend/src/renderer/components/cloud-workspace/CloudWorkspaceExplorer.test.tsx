@@ -23,7 +23,7 @@ vi.mock("../../hooks/useCloudWorkspaceReview", async (importOriginal) => {
 	return { ...actual, useCloudWorkspaceReviewEvents: () => undefined };
 });
 const session: WorkspaceSession = {
-	branch: "ao/cloud", cloud: { orgId: "org-1", sandboxProvider: "nodeops" }, id: "session-1", prs: [],
+	branch: "ao/cloud", cloud: { orgId: "org-1", sandboxProvider: "freestyle" }, id: "session-1", prs: [],
 	provider: "codex", status: "working", title: "Cloud", updatedAt: "2026-09-20T00:00:00Z",
 	workspaceId: "workspace-1", workspaceName: "Cloud workspace",
 };

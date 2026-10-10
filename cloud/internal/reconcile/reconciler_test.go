@@ -3,6 +3,7 @@ package reconcile
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -337,7 +338,7 @@ func TestWorkerSpecAdvertisesWorkerBinaryHashes(t *testing.T) {
 		WorkerHelperBinary: helperBin,
 	})
 	spec, err := reconciler.workerSpec(context.Background(), domain.Sandbox{
-		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderNodeOps,
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -357,7 +358,7 @@ func TestWorkerSpecOmitsHashesWithoutBinary(t *testing.T) {
 	t.Parallel()
 	reconciler := New(&workerSpecStore{}, nil, Options{PublicURL: "https://cloud.example.com"})
 	spec, err := reconciler.workerSpec(context.Background(), domain.Sandbox{
-		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderNodeOps,
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -372,7 +373,7 @@ func TestWorkerSpecPreservesOtherProviderWorkspaceLayout(t *testing.T) {
 	store := &workerSpecStore{}
 	reconciler := New(store, nil, Options{PublicURL: "https://cloud.example.com"})
 	spec, err := reconciler.workerSpec(context.Background(), domain.Sandbox{
-		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderNodeOps,
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -465,7 +466,7 @@ func TestRestoredDeletedSandboxReprovisions(t *testing.T) {
 	provider := &restoreProvider{found: true, env: sandbox.Environment{ID: "env-new"}}
 	reconciler := New(store, fixedResolver{provider}, Options{})
 	if err := reconciler.reconcileSandbox(context.Background(), domain.Sandbox{
-		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderNodeOps,
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
 		DesiredState:          domain.SandboxDesiredRunning,
 		ObservedState:         domain.SandboxObservedDeleted,
 		ProviderEnvironmentID: "",
@@ -488,7 +489,7 @@ func TestRestoredTerminatedSandboxReprovisions(t *testing.T) {
 	provider := &restoreProvider{found: true, env: sandbox.Environment{ID: "env-new"}}
 	reconciler := New(store, fixedResolver{provider}, Options{})
 	if err := reconciler.reconcileSandbox(context.Background(), domain.Sandbox{
-		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderNodeOps,
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
 		DesiredState:          domain.SandboxDesiredRunning,
 		ObservedState:         domain.SandboxObservedTerminated,
 		ProviderEnvironmentID: "",
@@ -511,7 +512,7 @@ func TestTerminatedSandboxStaysParkedWhenNotRunning(t *testing.T) {
 	provider := &restoreProvider{env: sandbox.Environment{ID: "env-1"}}
 	reconciler := New(store, fixedResolver{provider}, Options{})
 	if err := reconciler.reconcileSandbox(context.Background(), domain.Sandbox{
-		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderNodeOps,
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
 		DesiredState:          domain.SandboxDesiredPaused,
 		ObservedState:         domain.SandboxObservedTerminated,
 		ProviderEnvironmentID: "env-1",
@@ -558,7 +559,7 @@ func TestReconcilePauseDisconnectsWorker(t *testing.T) {
 	provider := &stopSpyProvider{state: sandbox.StateRunning}
 	reconciler := New(store, fixedResolver{provider}, Options{})
 	if err := reconciler.reconcileSandbox(context.Background(), domain.Sandbox{
-		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderNodeOps,
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
 		DesiredState:          domain.SandboxDesiredPaused,
 		ObservedState:         domain.SandboxObservedRunning,
 		ProviderEnvironmentID: "env-1",
@@ -584,7 +585,7 @@ func TestReconcilePauseAlreadyStoppedSkipsDisconnect(t *testing.T) {
 	provider := &stopSpyProvider{state: sandbox.StateStopped}
 	reconciler := New(store, fixedResolver{provider}, Options{})
 	if err := reconciler.reconcileSandbox(context.Background(), domain.Sandbox{
-		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderNodeOps,
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderFreestyle,
 		DesiredState:          domain.SandboxDesiredPaused,
 		ObservedState:         domain.SandboxObservedStopped,
 		ProviderEnvironmentID: "env-1",
@@ -834,5 +835,106 @@ func TestPausedSandboxFoundRunningRelaunchesWorker(t *testing.T) {
 	}
 	if got := store.observations; len(got) != 1 || got[0] != domain.SandboxObservedBootstrapping {
 		t.Fatalf("observations = %v, want [%s]", got, domain.SandboxObservedBootstrapping)
+	}
+}
+
+// retiredStore records the store calls a retired-provider row may make.
+type retiredStore struct {
+	pausePathStore
+	completed    int
+	startupCode  string
+	startupError string
+	lastError    string
+}
+
+func (s *retiredStore) CompleteSandboxDeletion(context.Context, string, string, string) error {
+	s.completed++
+	return nil
+}
+
+func (s *retiredStore) RecordSandboxStartupError(_ context.Context, _, _, _, code, message string) error {
+	s.startupCode, s.startupError = code, message
+	return nil
+}
+
+func (s *retiredStore) UpdateSandboxObservation(
+	_ context.Context, _, _, _, _, observedState, lastError string, _ time.Time,
+) error {
+	s.observed, s.lastError = observedState, lastError
+	return nil
+}
+
+// failingResolver fails the test if the reconciler asks it for a provider.
+type failingResolver struct{ t *testing.T }
+
+func (r failingResolver) Resolve(context.Context, domain.Sandbox) (sandbox.Provider, error) {
+	r.t.Error("Resolve called for a retired provider")
+	return nil, errors.New("unexpected resolve")
+}
+
+// Deleting a session on a retired provider completes without any provider call,
+// so the row stops retrying and its quota is released.
+func TestRetiredProviderDeletionCompletesWithoutProvider(t *testing.T) {
+	t.Parallel()
+	for _, provider := range []string{"nodeops", "ecs", "lambda-microvms"} {
+		store := &retiredStore{}
+		reconciler := New(store, failingResolver{t}, Options{})
+		if err := reconciler.reconcileSandbox(context.Background(), domain.Sandbox{
+			SessionID: "session-1", OrgID: "org-1", Provider: provider,
+			DesiredState:          domain.SandboxDesiredDeleted,
+			ObservedState:         domain.SandboxObservedRunning,
+			ProviderEnvironmentID: "env-1",
+		}); err != nil {
+			t.Fatalf("%s: reconcileSandbox: %v", provider, err)
+		}
+		if store.completed != 1 {
+			t.Fatalf("%s: CompleteSandboxDeletion called %d times, want 1", provider, store.completed)
+		}
+	}
+}
+
+// A live session on a retired provider is parked as terminated with a reason
+// the session surfaces, instead of failing Resolve every tick forever.
+func TestRetiredProviderSessionIsParkedTerminated(t *testing.T) {
+	t.Parallel()
+	store := &retiredStore{}
+	reconciler := New(store, failingResolver{t}, Options{})
+	if err := reconciler.reconcileSandbox(context.Background(), domain.Sandbox{
+		SessionID: "session-1", OrgID: "org-1", Provider: "nodeops",
+		DesiredState:          domain.SandboxDesiredRunning,
+		ObservedState:         domain.SandboxObservedRunning,
+		ProviderEnvironmentID: "env-1",
+	}); err != nil {
+		t.Fatalf("reconcileSandbox: %v", err)
+	}
+	if store.observed != domain.SandboxObservedTerminated || store.lastError == "" {
+		t.Fatalf("observed = %q lastError = %q, want terminated with a reason", store.observed, store.lastError)
+	}
+	if store.startupCode != sandbox.StartupErrorProviderRetired || store.startupError == "" {
+		t.Fatalf("startup error = %q %q, want %q", store.startupCode, store.startupError, sandbox.StartupErrorProviderRetired)
+	}
+	if store.disconnected != 1 || store.completed != 0 {
+		t.Fatalf("disconnected = %d completed = %d, want 1 and 0", store.disconnected, store.completed)
+	}
+}
+
+// An already parked retired session is not re-disconnected or re-recorded.
+func TestRetiredProviderParkedSessionStaysQuiet(t *testing.T) {
+	t.Parallel()
+	store := &retiredStore{}
+	reconciler := New(store, failingResolver{t}, Options{})
+	if err := reconciler.reconcileSandbox(context.Background(), domain.Sandbox{
+		SessionID: "session-1", OrgID: "org-1", Provider: "nodeops",
+		DesiredState:     domain.SandboxDesiredRunning,
+		ObservedState:    domain.SandboxObservedTerminated,
+		StartupErrorCode: sandbox.StartupErrorProviderRetired,
+	}); err != nil {
+		t.Fatalf("reconcileSandbox: %v", err)
+	}
+	if store.disconnected != 0 || store.startupCode != "" {
+		t.Fatalf("disconnected = %d startup code = %q, want no repeat", store.disconnected, store.startupCode)
+	}
+	if store.observed != domain.SandboxObservedTerminated {
+		t.Fatalf("observed = %q, want terminated", store.observed)
 	}
 }

@@ -6,8 +6,6 @@ alone is not sufficient.
 
 ## Provisioning and lifecycle
 
-- [x] CreateOS responses are decoded through their JSend envelope and list
-  pagination follows the provider's offset/limit contract.
 - [x] Reconciliation remains single-owner while a slow provider operation runs,
   including across multiple control-plane replicas.
 - [x] Repair and recreation launch the replacement worker with the newly issued,
@@ -16,7 +14,11 @@ alone is not sufficient.
   only after provider deletion is observed.
 - [x] Concurrent session creation cannot exceed the organization sandbox quota.
 - [x] The control plane tracks user activity and can pause an idle session. Provider-native idle stops are accepted only with positive evidence and an eligible session; heartbeats alone do not keep a worker active. Local Docker workers do not auto-pause.
-- [x] Local Docker and hosted NodeOps use the same provider lifecycle contract.
+- [x] Local Docker and the hosted providers (Coder, Freestyle) use the same
+  provider lifecycle contract.
+- [x] Sessions left on a retired provider (NodeOps, ECS, Daytona, Lambda
+  MicroVMs) are settled without provider calls: deletions complete and live
+  rows park as terminated with a `provider_retired` startup error.
 
 ## Worker and execution
 
@@ -60,8 +62,8 @@ alone is not sufficient.
   first and follow-up turn dispatch, workspace transport, worker replacement,
   restart recovery, and teardown; cancellation is covered by the fenced worker
   integration suite.
-- [ ] Hosted NodeOps acceptance passes against the live provider.
+- [ ] Hosted acceptance passes against each live hosted provider.
 
-The final item may remain unchecked only when NodeOps credentials are
+The final item may remain unchecked only when hosted provider credentials are
 unavailable. In that case the provider conformance suite, deployment
 configuration, and all local acceptance checks remain mandatory.

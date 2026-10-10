@@ -1,5 +1,5 @@
-# cursor harness layer, appended to Sandbox.base.Dockerfile by
-# publish-nodeops-template.sh. Version kept in step with Sandbox.Dockerfile.
+# cursor harness layer, replayed after Sandbox.base.Dockerfile by
+# publish-freestyle-snapshot.sh.
 
 RUN architecture="$(dpkg --print-architecture)" && \
     case "$architecture" in \

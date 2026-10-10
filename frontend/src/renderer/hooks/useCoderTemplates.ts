@@ -3,7 +3,7 @@
  * (GET /orgs/{orgId}/sandbox/coder/templates). Empty when the deployment does
  * not offer coder or the org is not entitled — the picker then shows only
  * "Default". Enabled only when the caller has already resolved that coder is the
- * active provider, to avoid a needless call on nodeops/docker deployments.
+ * active provider, to avoid a needless call on freestyle/docker deployments.
  */
 
 import { useQuery } from "@tanstack/react-query";

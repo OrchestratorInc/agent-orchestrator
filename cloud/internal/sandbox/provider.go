@@ -38,9 +38,7 @@ type Spec struct {
 	SessionID       string
 	OrgID           string
 	ResourceProfile domain.ResourceProfile
-	Shape           string
 	RootFS          string
-	Ingress         string
 	Environment     map[string]string
 	Labels          map[string]string
 	// DurableRoot is provider-specific persisted workspace storage. It remains
@@ -86,6 +84,7 @@ const (
 	StartupErrorDurableRootUnavailable  = "durable_root_unavailable"
 	StartupErrorWorkerNeverStarted      = "worker_never_started"
 	StartupErrorBootstrapFailed         = "bootstrap_failed"
+	StartupErrorProviderRetired         = "provider_retired"
 )
 
 // StartupError attaches a stable code and a human message to a provider

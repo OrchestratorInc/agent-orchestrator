@@ -17,17 +17,14 @@ def load_secret(path: str) -> dict[str, object]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     provider = parser.add_mutually_exclusive_group(required=True)
-    provider.add_argument("--nodeops")
     provider.add_argument("--coder")
     provider.add_argument("--freestyle")
     parser.add_argument("--worker", required=True)
     args = parser.parse_args()
     if args.freestyle:
         provider_name, provider_path = "freestyle", args.freestyle
-    elif args.coder:
-        provider_name, provider_path = "coder", args.coder
     else:
-        provider_name, provider_path = "nodeops", args.nodeops
+        provider_name, provider_path = "coder", args.coder
     validate_hosted_settings(
         load_secret(provider_path),
         load_secret(args.worker),

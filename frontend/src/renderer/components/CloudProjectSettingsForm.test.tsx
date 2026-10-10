@@ -44,7 +44,7 @@ beforeEach(() => {
 	mocks.connections.mockReset();
 	mocks.connections.mockResolvedValue({ providerConnections: [] });
 	mocks.me.mockReset();
-	mocks.me.mockResolvedValue({ sandboxProviders: { available: ["nodeops"], default: "nodeops" } });
+	mocks.me.mockResolvedValue({ sandboxProviders: { available: ["freestyle"], default: "freestyle" } });
 	mocks.localGet.mockImplementation(async (_path: string, options: { params: { path: { agent: string } } }) => ({ data: {
 		agent: options.params.path.agent, selectionMode: "catalog", allowCustom: true,
 		models: ["worker-model", "orchestrator-model", "reviewer-model", "review-codex"].map((id) => ({ id, label: id, efforts: ["low", "high", "max"] })),

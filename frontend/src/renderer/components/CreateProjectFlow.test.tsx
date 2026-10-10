@@ -110,8 +110,8 @@ const cloudMocks = vi.hoisted(() => ({
 
 vi.mock("../hooks/useCloudSandboxProviders", () => ({
 	useCloudSandboxProviders: () => ({
-		available: cloudMocks.coderAvailable ? ["nodeops", "coder"] : ["nodeops"],
-		default: cloudMocks.coderDefault ? "coder" : "nodeops",
+		available: cloudMocks.coderAvailable ? ["freestyle", "coder"] : ["freestyle"],
+		default: cloudMocks.coderDefault ? "coder" : "freestyle",
 		ready: true,
 		isLoading: false,
 	}),

@@ -1,4 +1,10 @@
-FROM nodeops/sandbox:debian
+# Common base for the per-harness sandbox snapshots: OS tooling, Node (the npm
+# harnesses need it), the GitHub CLI, and the worker user/workspace layout.
+# publish-freestyle-snapshot.sh replays the RUN steps of this file and then of
+# exactly one sandbox-image/harness/*.Dockerfile inside a Freestyle base VM; the
+# FROM line is informational. Keeping one agent per snapshot keeps each one
+# small.
+FROM debian:bookworm
 
 RUN apt-get update && \
     apt-get install --yes --no-install-recommends \
@@ -26,34 +32,11 @@ RUN apt-get update && \
         "https://github.com/cli/cli/releases/download/v${gh_version}/gh_${gh_version}_linux_${architecture}.tar.gz" \
         | tar --strip-components=2 -xzf - -C /usr/bin \
             "gh_${gh_version}_linux_${architecture}/bin/gh" && \
-    npm install --global \
-        @anthropic-ai/claude-code@2.1.228 \
-        @agentclientprotocol/claude-agent-acp@0.70.0 \
-        @openai/codex@0.147.0 && \
-    ln -sfn "$(npm root --global)/@anthropic-ai/claude-code/cli-wrapper.cjs" \
-        /usr/local/bin/claude && \
     groupadd --gid 10001 ao-worker && \
     useradd --uid 10001 --gid ao-worker --home-dir /workspace/.ao/home \
         --shell /bin/bash ao-worker && \
     mkdir -p /workspace/repository /workspace/.ao/home /workspace/.ao/worker && \
     chown -R ao-worker:ao-worker /workspace && \
-    rm -rf /var/lib/apt/lists/* /root/.npm && \
-    claude --version && \
-    test -x "$(command -v claude-agent-acp)" && \
-    codex --version
-
-RUN gh --version
-
-RUN architecture="$(dpkg --print-architecture)" && \
-    case "$architecture" in \
-        amd64) cursor_arch=x64 ;; \
-        arm64) cursor_arch=arm64 ;; \
-        *) echo "unsupported Cursor Agent architecture: $architecture" >&2; exit 1 ;; \
-    esac && \
-    cursor_version=2026.08.11-e8db854 && \
-    mkdir -p "/opt/cursor-agent/$cursor_version" && \
-    curl --fail --location --silent --show-error \
-        "https://downloads.cursor.com/lab/$cursor_version/linux/$cursor_arch/agent-cli-package.tar.gz" \
-        | tar --strip-components=1 -xzf - -C "/opt/cursor-agent/$cursor_version" && \
-    ln -s "/opt/cursor-agent/$cursor_version/cursor-agent" /usr/local/bin/cursor-agent && \
-    cursor-agent --version
+    rm -rf /var/lib/apt/lists/* && \
+    gh --version && \
+    node --version

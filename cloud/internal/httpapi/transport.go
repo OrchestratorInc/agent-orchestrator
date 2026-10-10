@@ -13,6 +13,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/google/uuid"
 )
 
@@ -78,6 +79,11 @@ func (s *Server) writeStoreError(w http.ResponseWriter, r *http.Request, err err
 		writeError(
 			w, r, http.StatusConflict, "SANDBOX_QUOTA_EXCEEDED",
 			"This organization has reached its limit of concurrent sessions. Delete a session and try again.",
+		)
+	case errors.Is(err, sandbox.ErrProviderRetired):
+		writeError(
+			w, r, http.StatusConflict, "provider_retired",
+			"This session ran on a sandbox provider AO no longer supports. Start a new session instead.",
 		)
 	default:
 		s.logger.Error("handle API request", "error", err, "request_id", requestID(r))

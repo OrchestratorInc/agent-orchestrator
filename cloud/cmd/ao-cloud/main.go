@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"slices"
-	"strings"
 	"syscall"
 	"time"
 
@@ -26,32 +25,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/reconcile"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	coderprovider "github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/coder"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/createos"
 	dockerprovider "github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/docker"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/freestyle"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandboxresolve"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
-
-// readSSHPubKeys loads the operator SSH keys authorized on every sandbox. They
-// are a debugging affordance, not part of the worker's trust path.
-func readSSHPubKeys(path string) ([]string, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, nil
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read sandbox SSH public keys %s: %w", path, err)
-	}
-	var keys []string
-	for _, line := range strings.Split(string(raw), "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" && !strings.HasPrefix(trimmed, "#") {
-			keys = append(keys, trimmed)
-		}
-	}
-	return keys, nil
-}
 
 // provisioningDefaults is the plan every new session in this deployment is
 // stamped with. It is resolved once at startup so a request never reads
@@ -61,17 +40,6 @@ func provisioningDefaults(cfg config.Config) sandbox.ProvisioningDefaults {
 	return sandbox.ProvisioningDefaults{
 		Provider: cfg.SandboxProvider,
 		Release:  cfg.Release,
-		NodeOps: sandbox.NodeOpsConfig{
-			BaseURL:          cfg.NodeOpsBaseURL,
-			APIKey:           cfg.NodeOpsAPIKey,
-			DefaultShape:     cfg.NodeOpsDefaultShape,
-			DefaultRootFS:    cfg.NodeOpsDefaultRootFS,
-			RootFSByHarness:  cfg.NodeOpsRootFSByHarness,
-			Ingress:          cfg.NodeOpsIngress,
-			SSHKeyPath:       cfg.NodeOpsSSHKeyPath,
-			WorkerTokenTTL:   cfg.NodeOpsWorkerTokenTTL,
-			AutoPauseSeconds: cfg.NodeOpsAutoPauseSeconds,
-		},
 		Docker: sandbox.DockerConfig{
 			Host:           cfg.DockerHost,
 			WorkerImage:    cfg.DockerWorkerImage,
@@ -114,7 +82,6 @@ func newSandboxReconciler(
 	// session. AvailableSandboxProviders always contains the default, and is
 	// exactly that default for a single-provider deployment.
 	var (
-		nodeOpsProvider   sandbox.Provider
 		dockerProvider    sandbox.Provider
 		coderProvider     sandbox.Provider
 		freestyleProvider sandbox.Provider
@@ -122,7 +89,7 @@ func newSandboxReconciler(
 	)
 	for _, provider := range cfg.AvailableSandboxProviders {
 		switch provider {
-		case sandbox.ProviderNodeOps, sandbox.ProviderDocker, sandbox.ProviderCoder, sandbox.ProviderFreestyle:
+		case sandbox.ProviderDocker, sandbox.ProviderCoder, sandbox.ProviderFreestyle:
 			buildsProvider = true
 		}
 	}
@@ -141,19 +108,6 @@ func newSandboxReconciler(
 				APIKey:          cfg.FreestyleAPIKey,
 				DefaultSnapshot: cfg.FreestyleDefaultSnapshot,
 				Logger:          logger,
-			})
-		case sandbox.ProviderNodeOps:
-			sshPubKeys, err := readSSHPubKeys(cfg.NodeOpsSSHKeyPath)
-			if err != nil {
-				return nil, err
-			}
-			nodeOpsProvider = createos.New(createos.Config{
-				BaseURL:      cfg.NodeOpsBaseURL,
-				APIKey:       cfg.NodeOpsAPIKey,
-				DefaultShape: cfg.NodeOpsDefaultShape,
-				DefaultRoot:  cfg.NodeOpsDefaultRootFS,
-				Region:       cfg.NodeOpsRegion,
-				SSHPubKeys:   sshPubKeys,
 			})
 		case sandbox.ProviderDocker:
 			provider, err := dockerprovider.New(dockerprovider.Config{
@@ -181,7 +135,7 @@ func newSandboxReconciler(
 			coderProvider = provider
 		}
 	}
-	return reconcile.New(store, sandboxresolve.New(nodeOpsProvider, dockerProvider, coderProvider, freestyleProvider, store, providerCipher), reconcile.Options{
+	return reconcile.New(store, sandboxresolve.New(dockerProvider, coderProvider, freestyleProvider, store, providerCipher), reconcile.Options{
 		PublicURL:              cfg.PublicURL,
 		TerminalStreamEnabled:  cfg.TerminalStreamEnabled,
 		WorkerBinary:           workerBinary,
@@ -197,7 +151,7 @@ func newSandboxReconciler(
 }
 
 // loadWorkerBinaries reads the worker and helper binaries once at startup, but
-// only where a provider that runs hosted workers (nodeops, coder, or freestyle) is offered.
+// only where a provider that runs hosted workers (coder or freestyle) is offered.
 // Docker-only deployments bake the worker into their image and need neither.
 // Both the reconciler (to advertise the expected hashes) and the API server (to
 // serve the content-addressed self-update endpoint) read the same bytes.
@@ -214,7 +168,7 @@ func loadWorkerBinaries(cfg config.Config, logger *slog.Logger) (
 ) {
 	needs := false
 	for _, provider := range cfg.AvailableSandboxProviders {
-		if provider == sandbox.ProviderNodeOps || provider == sandbox.ProviderCoder || provider == sandbox.ProviderFreestyle {
+		if provider == sandbox.ProviderCoder || provider == sandbox.ProviderFreestyle {
 			needs = true
 		}
 	}

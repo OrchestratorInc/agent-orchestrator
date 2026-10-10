@@ -2,10 +2,12 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/go-chi/chi/v5"
 )
@@ -203,12 +205,16 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A child always runs on its orchestrator's provider, never the control
-	// plane default: a NodeOps orchestrator spawns NodeOps workers and a Coder
+	// plane default: a Freestyle orchestrator spawns Freestyle workers and a Coder
 	// orchestrator spawns Coder workers, even on a control plane that offers
 	// both. The provider is read from the parent's immutable sandbox row, so it
 	// is unaffected by the client-side provider toggle (which only stamps the
 	// provider for top-level sessions the app creates).
 	plan, err := s.provisioning.SessionPlanForProvider(request.Harness, parentProvider)
+	if errors.Is(err, sandbox.ErrProviderRetired) {
+		s.writeStoreError(w, r, err)
+		return
+	}
 	if err != nil {
 		s.logger.Error("resolve child sandbox provisioning plan", "error", err, "request_id", requestID(r))
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "Sandbox provisioning is misconfigured.")

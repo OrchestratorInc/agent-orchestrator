@@ -2,8 +2,9 @@
 # Deploys the current checkout to the shared DEV control plane
 # (https://dev-api.aoagents.dev). The dev environment is sacrificial: any
 # branch, any provider config, no ancestry checks. It shares nothing with
-# staging or production except the NodeOps account and the WorkOS app —
-# its database, task families, service, secrets, and alarm are all its own.
+# staging or production except the hosted provider connection (the default
+# provider's staging secret unless AO_CLOUD_*_SECRET_ID overrides it) and the
+# WorkOS app — its database, task families, service, and alarm are its own.
 #
 # Usage: AWS_PROFILE=ao-cloud ./cloud/scripts/deploy-dev.sh
 # (run from the cloud/ directory or repo root; requires Docker)

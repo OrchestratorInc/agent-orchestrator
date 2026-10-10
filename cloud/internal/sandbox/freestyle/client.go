@@ -3,10 +3,9 @@
 // from snapshots that capture memory as well as disk, so pause/start keeps the
 // worker's processes. No Freestyle type escapes this package.
 //
-// This is a prototype that stands in for the CreateOS client behind the nodeops
-// provider slot, so the reconciler's NodeOps layout (/workspace, the ao-worker
-// user, baked /usr/local/bin binaries) applies unchanged. The snapshot named by
-// the session's rootfs must provide that layout.
+// The reconciler's non-Coder workspace layout (/workspace, the ao-worker user,
+// baked /usr/local/bin binaries) applies unchanged. The snapshot named by the
+// session's rootfs must provide that layout.
 package freestyle
 
 import (
@@ -231,8 +230,8 @@ func (c *Client) Delete(ctx context.Context, id sandbox.ID) error {
 
 // Recreate replaces a VM that cannot be restored with a fresh one from the
 // session's snapshot. A session's VM is found again by its slug, so the old VM
-// must be gone before the replacement can take the slug. Like a NodeOps
-// recreate, uncommitted work on the old VM is lost.
+// must be gone before the replacement can take the slug. Uncommitted work on
+// the old VM is lost.
 func (c *Client) Recreate(ctx context.Context, id sandbox.ID, spec sandbox.Spec) (sandbox.Environment, error) {
 	if err := c.Delete(ctx, id); err != nil {
 		return sandbox.Environment{}, err
@@ -271,8 +270,8 @@ type execResult struct {
 	Stderr     string `json:"stderr"`
 }
 
-// BootstrapWorker launches the snapshot-baked worker in one exec. Unlike
-// CreateOS there is no upload fallback yet: a snapshot without the worker is a
+// BootstrapWorker launches the snapshot-baked worker in one exec. There is no
+// upload fallback yet: a snapshot without the worker is a
 // mis-baked snapshot, reported as an error. A stale bake is fine, because the
 // worker self-updates from the control plane.
 func (c *Client) BootstrapWorker(

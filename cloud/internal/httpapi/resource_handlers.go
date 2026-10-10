@@ -873,7 +873,7 @@ func (s *Server) listSessionChildren(w http.ResponseWriter, r *http.Request) {
 }
 
 // wakePausedSessions asks the reconciler to resume this user's idle-paused
-// sandboxes. It intentionally does not wait for NodeOps or a worker heartbeat;
+// sandboxes. It intentionally does not wait for the provider or a worker heartbeat;
 // callers continue to use the regular session projection for readiness.
 func (s *Server) wakePausedSessions(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")

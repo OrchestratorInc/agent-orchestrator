@@ -146,7 +146,7 @@ Setup (on top of the base Coder from provision-coder-azure.sh):
    then Docker is removed - so nothing runs in a container. Then
    `az vm deallocate/generalize` + `az image create --hyper-v-generation V2`. All
    three harnesses are baked into the ONE shared image (matching `cloud/Dockerfile`,
-   which is what lets nodeops/ecs sessions switch harness mid-session with zero
+   which is what lets docker sessions switch harness mid-session with zero
    install); the harness chosen at project setup only decides which binary the
    worker launches, not what is installed. To refresh harness versions (or add a
    new harness) without a full rebuild, run

@@ -24,7 +24,7 @@ func TestCreateSessionInitialEffort(t *testing.T) {
 	for _, effort := range []string{"medium", "unsupported"} {
 		t.Run(effort, func(t *testing.T) {
 			store := &stubAutolinkStore{}
-			srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+			srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderFreestyle), sandbox.ProviderFreestyle)
 			req := createSessionRequestHTTP(t, "worker", "")
 			body, err := io.ReadAll(req.Body)
 			if err != nil {
@@ -115,12 +115,12 @@ func TestCreateSessionAutoLinksWorkerToProjectOrchestrator(t *testing.T) {
 		orchProvider:   sandbox.ProviderCoder,
 		orchFound:      true,
 	}
-	// Default provider nodeops, client asks for nodeops; the orchestrator runs
+	// Default provider freestyle, client asks for freestyle; the orchestrator runs
 	// on coder, so the worker must come out coder and parented.
-	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderFreestyle), sandbox.ProviderFreestyle)
 
 	rec := httptest.NewRecorder()
-	srv.createSession(rec, createSessionRequestHTTP(t, "worker", sandbox.ProviderNodeOps))
+	srv.createSession(rec, createSessionRequestHTTP(t, "worker", sandbox.ProviderFreestyle))
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
@@ -141,10 +141,10 @@ func TestCreateSessionAutoLinksWorkerToProjectOrchestrator(t *testing.T) {
 func TestCreateSessionLeavesWorkerStandaloneWithoutOrchestrator(t *testing.T) {
 	t.Parallel()
 	store := &stubAutolinkStore{orchFound: false}
-	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderCoder)
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderFreestyle), sandbox.ProviderCoder)
 
 	rec := httptest.NewRecorder()
-	srv.createSession(rec, createSessionRequestHTTP(t, "worker", sandbox.ProviderNodeOps))
+	srv.createSession(rec, createSessionRequestHTTP(t, "worker", sandbox.ProviderFreestyle))
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
@@ -152,8 +152,8 @@ func TestCreateSessionLeavesWorkerStandaloneWithoutOrchestrator(t *testing.T) {
 	if store.captured.ParentSessionID != "" {
 		t.Fatalf("ParentSessionID = %q, want empty (standalone)", store.captured.ParentSessionID)
 	}
-	if store.captured.Provider != sandbox.ProviderNodeOps {
-		t.Fatalf("worker provider = %q, want %q (client selection)", store.captured.Provider, sandbox.ProviderNodeOps)
+	if store.captured.Provider != sandbox.ProviderFreestyle {
+		t.Fatalf("worker provider = %q, want %q (client selection)", store.captured.Provider, sandbox.ProviderFreestyle)
 	}
 }
 
@@ -168,10 +168,10 @@ func TestCreateSessionDoesNotAutoLinkOrchestrator(t *testing.T) {
 		orchProvider:   sandbox.ProviderCoder,
 		orchFound:      true,
 	}
-	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderFreestyle), sandbox.ProviderFreestyle)
 
 	rec := httptest.NewRecorder()
-	srv.createSession(rec, createSessionRequestHTTP(t, "orchestrator", sandbox.ProviderNodeOps))
+	srv.createSession(rec, createSessionRequestHTTP(t, "orchestrator", sandbox.ProviderFreestyle))
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
@@ -179,8 +179,8 @@ func TestCreateSessionDoesNotAutoLinkOrchestrator(t *testing.T) {
 	if store.captured.ParentSessionID != "" {
 		t.Fatalf("orchestrator ParentSessionID = %q, want empty", store.captured.ParentSessionID)
 	}
-	if store.captured.Provider != sandbox.ProviderNodeOps {
-		t.Fatalf("orchestrator provider = %q, want %q", store.captured.Provider, sandbox.ProviderNodeOps)
+	if store.captured.Provider != sandbox.ProviderFreestyle {
+		t.Fatalf("orchestrator provider = %q, want %q", store.captured.Provider, sandbox.ProviderFreestyle)
 	}
 }
 
@@ -189,12 +189,12 @@ func TestCreateSessionDoesNotAutoLinkOrchestrator(t *testing.T) {
 func TestCreateSessionWakesTheSandboxReconciler(t *testing.T) {
 	t.Parallel()
 	store := &stubAutolinkStore{}
-	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderFreestyle), sandbox.ProviderFreestyle)
 	wakes := 0
 	srv.sandboxWake = func() { wakes++ }
 
 	rec := httptest.NewRecorder()
-	srv.createSession(rec, createSessionRequestHTTP(t, "orchestrator", sandbox.ProviderNodeOps))
+	srv.createSession(rec, createSessionRequestHTTP(t, "orchestrator", sandbox.ProviderFreestyle))
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
@@ -209,10 +209,10 @@ func TestCreateSessionWakesTheSandboxReconciler(t *testing.T) {
 func TestCreateSessionUsesTheProjectSandboxProvider(t *testing.T) {
 	t.Parallel()
 	store := &stubAutolinkStore{projectConfig: json.RawMessage(`{"sandboxProvider":"coder"}`)}
-	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderFreestyle), sandbox.ProviderFreestyle)
 
 	rec := httptest.NewRecorder()
-	srv.createSession(rec, createSessionRequestHTTP(t, "orchestrator", sandbox.ProviderNodeOps))
+	srv.createSession(rec, createSessionRequestHTTP(t, "orchestrator", sandbox.ProviderFreestyle))
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())

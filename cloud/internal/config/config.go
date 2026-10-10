@@ -99,20 +99,6 @@ type Config struct {
 	// durable replay storage.
 	TerminalRelayEnabled bool
 
-	NodeOpsBaseURL       string
-	NodeOpsAPIKey        string
-	NodeOpsDefaultShape  string
-	NodeOpsDefaultRootFS string
-	// NodeOpsRootFSByHarness maps a harness to a slimmer per-harness template
-	// (AO_CLOUD_NODEOPS_ROOTFS_BY_HARNESS, JSON object). Optional; unmapped
-	// harnesses use NodeOpsDefaultRootFS.
-	NodeOpsRootFSByHarness  map[string]string
-	NodeOpsIngress          string
-	NodeOpsSSHKeyPath       string
-	NodeOpsRegion           string
-	NodeOpsWorkerTokenTTL   time.Duration
-	NodeOpsAutoPauseSeconds int
-
 	FreestyleBaseURL         string
 	FreestyleAPIKey          string
 	FreestyleDefaultSnapshot string
@@ -163,10 +149,7 @@ func (c GitHubConfig) Enabled() bool {
 // grant to write onto someone else's session stream.
 const minWorkerSigningKeyLength = 32
 
-// Provider-side auto-pause is opt-in; the control plane tracks real activity.
-const defaultNodeOpsAutoPauseSeconds = 0
-
-// Give background sessions a full hour before their NodeOps VM is paused. A
+// Give background sessions a full hour before their sandbox is paused. A
 // visible workspace terminal still holds its shorter interactive lease, but
 // this default avoids turning an ordinary review break into a cold resume.
 const defaultIdlePauseThreshold = time.Hour
@@ -180,12 +163,6 @@ func Load() (Config, error) {
 	defaultHTTPAddress := ":8080"
 	if environment == "development" || environment == "test" {
 		defaultHTTPAddress = "127.0.0.1:8080"
-	}
-	rootFSByHarnessEnv := map[string]string{}
-	if raw := strings.TrimSpace(os.Getenv("AO_CLOUD_NODEOPS_ROOTFS_BY_HARNESS")); raw != "" {
-		if err := json.Unmarshal([]byte(raw), &rootFSByHarnessEnv); err != nil {
-			return Config{}, fmt.Errorf("invalid AO_CLOUD_NODEOPS_ROOTFS_BY_HARNESS: %w", err)
-		}
 	}
 	freestyleSnapshotByHarnessEnv := map[string]string{}
 	if raw := strings.TrimSpace(os.Getenv("AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS")); raw != "" {
@@ -252,19 +229,6 @@ func Load() (Config, error) {
 		IdlePauseThreshold:       durationEnv("AO_CLOUD_IDLE_PAUSE_THRESHOLD", defaultIdlePauseThreshold),
 		InterfaceHandoffInterval: durationEnv("AO_CLOUD_INTERFACE_HANDOFF_INTERVAL", 500*time.Millisecond),
 
-		NodeOpsBaseURL:         strings.TrimSpace(os.Getenv("AO_CLOUD_NODEOPS_BASE_URL")),
-		NodeOpsAPIKey:          strings.TrimSpace(os.Getenv("AO_CLOUD_NODEOPS_API_KEY")),
-		NodeOpsDefaultShape:    strings.TrimSpace(os.Getenv("AO_CLOUD_NODEOPS_DEFAULT_SHAPE")),
-		NodeOpsDefaultRootFS:   strings.TrimSpace(os.Getenv("AO_CLOUD_NODEOPS_DEFAULT_ROOTFS")),
-		NodeOpsRootFSByHarness: rootFSByHarnessEnv,
-		NodeOpsIngress:         strings.TrimSpace(os.Getenv("AO_CLOUD_NODEOPS_INGRESS")),
-		NodeOpsSSHKeyPath:      strings.TrimSpace(os.Getenv("AO_CLOUD_NODEOPS_SSH_KEY_PATH")),
-		NodeOpsRegion:          strings.TrimSpace(os.Getenv("AO_CLOUD_NODEOPS_REGION")),
-		NodeOpsAutoPauseSeconds: intEnvOrDefault(
-			"AO_CLOUD_NODEOPS_AUTO_PAUSE_SECONDS", defaultNodeOpsAutoPauseSeconds),
-		NodeOpsWorkerTokenTTL: durationEnv(
-			"AO_CLOUD_NODEOPS_WORKER_TOKEN_TTL", sandbox.DefaultWorkerTokenTTL,
-		),
 		FreestyleBaseURL:           strings.TrimSpace(os.Getenv("AO_CLOUD_FREESTYLE_BASE_URL")),
 		FreestyleAPIKey:            strings.TrimSpace(os.Getenv("AO_CLOUD_FREESTYLE_API_KEY")),
 		FreestyleDefaultSnapshot:   strings.TrimSpace(os.Getenv("AO_CLOUD_FREESTYLE_DEFAULT_SNAPSHOT")),
@@ -393,12 +357,12 @@ func Load() (Config, error) {
 		return Config{}, errors.New("AO_CLOUD_LOCAL_SESSION_TTL must be positive")
 	}
 	switch cfg.SandboxProvider {
-	case "ecs", "daytona", "docker", "nodeops", "coder", "freestyle":
+	case "docker", "coder", "freestyle":
 	default:
-		return Config{}, errors.New("AO_CLOUD_SANDBOX_PROVIDER must be coder, daytona, docker, ecs, freestyle, or nodeops")
+		return Config{}, errors.New("AO_CLOUD_SANDBOX_PROVIDER must be coder, docker, or freestyle")
 	}
 	if cfg.Hosted() && !hostedSandboxProvider(cfg.SandboxProvider) {
-		return Config{}, errors.New("AO_CLOUD_SANDBOX_PROVIDER must be coder, freestyle, or nodeops in staging and production")
+		return Config{}, errors.New("AO_CLOUD_SANDBOX_PROVIDER must be coder or freestyle in staging and production")
 	}
 	available, err := resolveAvailableProviders(cfg.SandboxProvider, cfg.Hosted())
 	if err != nil {
@@ -411,9 +375,9 @@ func Load() (Config, error) {
 	// environments (staging/production) keep that fail-fast behavior: a
 	// misconfigured hosted provider must never come up quietly. Local/dev
 	// environments instead drop an unconfigured provider (e.g. Coder or
-	// NodeOps credentials left blank because only Docker is set up locally)
+	// Freestyle credentials left blank because only Docker is set up locally)
 	// and fall back to the remaining providers, so a developer without
-	// Coder/NodeOps access can still boot the control plane against Docker.
+	// Coder/Freestyle access can still boot the control plane against Docker.
 	validated := make([]string, 0, len(cfg.AvailableSandboxProviders))
 	for _, provider := range cfg.AvailableSandboxProviders {
 		var err error
@@ -425,18 +389,6 @@ func Load() (Config, error) {
 				Network:        cfg.DockerNetwork,
 				Namespace:      cfg.DockerNamespace,
 				WorkerTokenTTL: cfg.DockerWorkerTokenTTL,
-			}).Validate()
-		case "nodeops":
-			err = (sandbox.NodeOpsConfig{
-				BaseURL:          cfg.NodeOpsBaseURL,
-				APIKey:           cfg.NodeOpsAPIKey,
-				DefaultShape:     cfg.NodeOpsDefaultShape,
-				DefaultRootFS:    cfg.NodeOpsDefaultRootFS,
-				RootFSByHarness:  cfg.NodeOpsRootFSByHarness,
-				Ingress:          cfg.NodeOpsIngress,
-				SSHKeyPath:       cfg.NodeOpsSSHKeyPath,
-				WorkerTokenTTL:   cfg.NodeOpsWorkerTokenTTL,
-				AutoPauseSeconds: cfg.NodeOpsAutoPauseSeconds,
 			}).Validate()
 		case "freestyle":
 			err = (sandbox.FreestyleConfig{
@@ -492,7 +444,7 @@ func Load() (Config, error) {
 		// be trusted if its token is signed by a key strong enough to matter.
 		if cfg.PublicURL == "" {
 			return Config{}, errors.New(
-				"AO_CLOUD_PUBLIC_URL is required when a nodeops, docker, or coder provider is available",
+				"AO_CLOUD_PUBLIC_URL is required when a docker, coder, or freestyle provider is available",
 			)
 		}
 		// A worker reads this origin out of its environment and dials it with
@@ -513,7 +465,7 @@ func Load() (Config, error) {
 			)
 		}
 	}
-	if cfg.SandboxProvider == "nodeops" || cfg.SandboxProvider == "coder" || cfg.SandboxProvider == "freestyle" {
+	if cfg.SandboxProvider == "coder" || cfg.SandboxProvider == "freestyle" {
 		if cfg.WorkerBinaryPath == "" {
 			return Config{}, fmt.Errorf("AO_CLOUD_WORKER_BINARY_PATH is required when AO_CLOUD_SANDBOX_PROVIDER=%s", cfg.SandboxProvider)
 		}
@@ -654,7 +606,7 @@ func (c Config) WorkerTokenTTL() time.Duration {
 	if c.SandboxProvider == sandbox.ProviderFreestyle {
 		return c.FreestyleWorkerTokenTTL
 	}
-	return c.NodeOpsWorkerTokenTTL
+	return sandbox.DefaultWorkerTokenTTL
 }
 
 func envOrDefault(key, fallback string) string {
@@ -688,25 +640,24 @@ func durationEnv(key string, fallback time.Duration) time.Duration {
 	return parsed
 }
 
-// defaultSandboxProvider picks the provider an unconfigured deployment gets.
-// Hosted environments run on NodeOps, which is also the only provider they are
-// allowed to run on; locally there is no NodeOps account, so the default is the
-// provider a developer can actually reach.
 // hostedSandboxProvider reports whether a provider runs workers on hosted
 // compute and may therefore be offered by a staging or production control
 // plane. Each one's settings are still validated at boot, so a misconfigured
 // hosted provider fails fast.
 func hostedSandboxProvider(provider string) bool {
 	switch provider {
-	case sandbox.ProviderNodeOps, sandbox.ProviderCoder, sandbox.ProviderFreestyle:
+	case sandbox.ProviderCoder, sandbox.ProviderFreestyle:
 		return true
 	}
 	return false
 }
 
+// defaultSandboxProvider picks the provider an unconfigured deployment gets.
+// Hosted environments default to Coder, the AO-operated hosted provider;
+// locally the default is the provider a developer can actually reach.
 func defaultSandboxProvider(hosted bool) string {
 	if hosted {
-		return sandbox.ProviderNodeOps
+		return sandbox.ProviderCoder
 	}
 	return sandbox.DefaultProvider
 }
@@ -731,13 +682,13 @@ func resolveAvailableProviders(defaultProvider string, hosted bool) ([]string, e
 	}
 	for _, provider := range list {
 		switch provider {
-		case "ecs", "daytona", "docker", "nodeops", "coder", "freestyle":
+		case "docker", "coder", "freestyle":
 		default:
 			return nil, fmt.Errorf("AO_CLOUD_SANDBOX_PROVIDERS contains unknown provider %q", provider)
 		}
 		if hosted && !hostedSandboxProvider(provider) {
 			return nil, fmt.Errorf(
-				"AO_CLOUD_SANDBOX_PROVIDERS may only contain coder, freestyle, or nodeops in staging and production, got %q",
+				"AO_CLOUD_SANDBOX_PROVIDERS may only contain coder or freestyle in staging and production, got %q",
 				provider,
 			)
 		}
@@ -766,7 +717,7 @@ func lowerCSVList(raw string) []string {
 func providersRequireWorkerHome(providers []string) bool {
 	for _, provider := range providers {
 		switch provider {
-		case "nodeops", "docker", "coder":
+		case "docker", "coder", "freestyle":
 			return true
 		}
 	}

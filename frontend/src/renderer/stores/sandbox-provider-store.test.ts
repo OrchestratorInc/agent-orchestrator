@@ -23,7 +23,7 @@ describe("sandbox-provider-store", () => {
 	});
 
 	it("clears the preference when set back to null", () => {
-		useSandboxProviderStore.getState().setSelectedProvider("nodeops");
+		useSandboxProviderStore.getState().setSelectedProvider("freestyle");
 		useSandboxProviderStore.getState().setSelectedProvider(null);
 		expect(useSandboxProviderStore.getState().selectedProvider).toBeNull();
 		expect(window.localStorage.getItem(storageKey)).toBeNull();

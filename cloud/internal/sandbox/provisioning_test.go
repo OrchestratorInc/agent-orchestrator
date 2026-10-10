@@ -144,6 +144,21 @@ func TestSessionPlanForProviderOverridesDefault(t *testing.T) {
 	}
 }
 
+// A retired or unknown provider gets no plan: a provider-only plan would stamp a
+// sandbox row no reconciler can provision.
+func TestSessionPlanForProviderRejectsRetiredAndUnknownProviders(t *testing.T) {
+	t.Parallel()
+	defaults := ProvisioningDefaults{Provider: ProviderDocker}
+	for _, provider := range []string{"nodeops", "ECS", "daytona", "lambda-microvms"} {
+		if _, err := defaults.SessionPlanForProvider("codex", provider); !errors.Is(err, ErrProviderRetired) {
+			t.Fatalf("SessionPlanForProvider(%q) error = %v, want ErrProviderRetired", provider, err)
+		}
+	}
+	if _, err := defaults.SessionPlanForProvider("codex", "bogus"); err == nil || errors.Is(err, ErrProviderRetired) {
+		t.Fatalf("SessionPlanForProvider(bogus) error = %v, want an unsupported-provider error", err)
+	}
+}
+
 func TestSessionPlanForProviderWithCoderOptions(t *testing.T) {
 	t.Parallel()
 	const (

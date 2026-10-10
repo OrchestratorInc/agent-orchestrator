@@ -76,7 +76,7 @@ type Options struct {
 	// AllowAnonymousCheckout lets a worker clone a public repository directly,
 	// with no GitHub App grant, when the checkout broker denies a grant. The
 	// docker provider always allows this for local development; this extends it
-	// to real providers (e.g. NodeOps) for public-repo projects that have not
+	// to hosted providers (e.g. Freestyle) for public-repo projects that have not
 	// been connected through the GitHub App yet.
 	AllowAnonymousCheckout bool
 	// Interval is the reconcile tick.
@@ -97,7 +97,7 @@ type Options struct {
 	HeartbeatTimeout time.Duration
 	// DeletionDeadline bounds how long the reconciler keeps re-requesting a
 	// deletion the provider will not converge (an unreclaimable box, e.g. a
-	// NodeOps VM stuck in "failed" that the API refuses to destroy). Past it the
+	// VM stuck in "failed" that the API refuses to destroy). Past it the
 	// reconciler releases the row and logs the orphan rather than looping every
 	// tick forever. Generous on purpose: a healthy deletion converges in
 	// seconds, so anything still churning past this is genuinely stuck.
@@ -148,7 +148,7 @@ const (
 	capacityRetryBackoff           = 15 * time.Second
 	dockerBootCrashWindow          = 20 * time.Second
 	// Inline wait after Create for the sandbox to reach running so the worker
-	// launches within the same reconcile claim (NodeOps takes ~2s). Bounded well
+	// launches within the same reconcile claim (a fast VM takes ~2s). Bounded well
 	// under the claim lease; a slower provider falls back to tick-driven
 	// supervision.
 	inlineRunningWait = 6 * time.Second
@@ -532,6 +532,12 @@ func (r *Reconciler) reconcileClaim(ctx context.Context, record domain.Sandbox) 
 }
 
 func (r *Reconciler) reconcileSandbox(ctx context.Context, record domain.Sandbox) error {
+	// A retired provider has no client to resolve, so settle its rows before
+	// Resolve fails them into an endless retry.
+	if sandbox.IsRetiredProvider(record.Provider) {
+		return r.settleRetired(ctx, record)
+	}
+
 	provider, err := r.providers.Resolve(ctx, record)
 	if err != nil {
 		return r.fail(ctx, record, err)
@@ -697,7 +703,7 @@ func (r *Reconciler) reconcileSandbox(ctx context.Context, record domain.Sandbox
 				return r.refreshRestoredWorker(ctx, record, resumed, provider)
 			}
 		}
-		// A NodeOps resume retains the sandbox filesystem, including the
+		// A VM resume retains the sandbox filesystem, including the
 		// previously uploaded worker binary. Keep the distinct restoring state
 		// until the provider confirms it is running, so that next probe can
 		// refresh the worker in place rather than waiting for the startup timeout
@@ -793,8 +799,8 @@ func (r *Reconciler) reconcileDeletion(
 	}
 
 	// The box has not converged to gone. Bound the attempt: some providers cannot
-	// reclaim a box in certain states (a NodeOps VM stuck in "failed" accepts
-	// DELETE with 200 but never transitions, so Get keeps reporting it), which
+	// reclaim a box in certain states (a VM stuck in "failed" may accept
+	// DELETE with 200 yet never transition, so Get keeps reporting it), which
 	// would otherwise re-request Delete every tick forever. Stamp the first
 	// attempt, then past a deadline release the row and log the orphan for
 	// provider-side cleanup rather than loop indefinitely.
@@ -848,6 +854,42 @@ func (r *Reconciler) reconcileDeletion(
 		"",
 		2*time.Second,
 	)
+}
+
+// settleRetired finishes a sandbox row whose provider AO no longer runs,
+// without any provider call. A deletion completes immediately (any compute left
+// behind is logged for provider-side cleanup); anything else is parked as
+// terminated with a reason the session surfaces, and is never repaired again.
+func (r *Reconciler) settleRetired(ctx context.Context, record domain.Sandbox) error {
+	if record.DesiredState == domain.SandboxDesiredDeleted {
+		if record.ProviderEnvironmentID != "" {
+			r.log.Warn("releasing sandbox on a retired provider without provider cleanup",
+				"session_id", record.SessionID,
+				"provider", record.Provider,
+				"provider_id", record.ProviderEnvironmentID,
+			)
+		}
+		return r.store.CompleteSandboxDeletion(ctx, r.owner, record.OrgID, record.SessionID)
+	}
+	if record.ObservedState != domain.SandboxObservedTerminated ||
+		record.StartupErrorCode != sandbox.StartupErrorProviderRetired {
+		r.log.Warn("parking sandbox on a retired provider",
+			"session_id", record.SessionID,
+			"provider", record.Provider,
+			"provider_id", record.ProviderEnvironmentID,
+		)
+		if err := r.store.DisconnectSessionWorkers(ctx, record.OrgID, record.SessionID); err != nil {
+			r.log.Warn("disconnect retired worker", "session_id", record.SessionID, "err", err)
+		}
+		r.recordStartupError(ctx, record, retiredProviderError)
+	}
+	return r.observe(ctx, record, record.ProviderEnvironmentID,
+		domain.SandboxObservedTerminated, retiredProviderError.Message, 24*time.Hour)
+}
+
+var retiredProviderError = &sandbox.StartupError{
+	Code:    sandbox.StartupErrorProviderRetired,
+	Message: "This session ran on a sandbox provider AO no longer supports. Start a new session to continue.",
 }
 
 func (r *Reconciler) restore(
@@ -963,7 +1005,7 @@ func (r *Reconciler) superviseRunning(
 }
 
 // refreshRestoredWorker installs the release worker into a resumed sandbox
-// exactly once. NodeOps resumes a preserved root filesystem, so without this
+// exactly once. A VM resumes a preserved root filesystem, so without this
 // step a session paused before a deployment can continue running an older
 // worker binary after it wakes.
 func (r *Reconciler) refreshRestoredWorker(
@@ -1302,11 +1344,11 @@ func (r *Reconciler) provision(
 	)
 
 	// The worker is bootstrapped once the sandbox is actually running, not at
-	// create time. A provider like NodeOps accepts Create before the VM's
+	// create time. A VM provider may accept Create before the VM's
 	// network is up, and a worker launched that early cannot reach the control
 	// plane or clone the repository, so it never sends its first heartbeat and
 	// the reconciler would wait out the whole startup deadline before repairing
-	// it. NodeOps reaches running in about two seconds, so a short bounded wait
+	// it. A fast VM reaches running in about two seconds, so a short bounded wait
 	// here lets the worker launch inside this same reconcile claim instead of
 	// paying two more tick round-trips (observe provisioning, re-claim, observe
 	// running) first. A provider slower than the budget falls back to the
@@ -1399,12 +1441,6 @@ func (r *Reconciler) recreate(
 // needs. Reading it from the durable row means a configuration change never
 // moves an in-flight session onto a different template or filesystem root.
 type providerProfile struct {
-	NodeOps struct {
-		DefaultShape     string `json:"defaultShape"`
-		DefaultRootFS    string `json:"defaultRootFs"`
-		Ingress          string `json:"ingress"`
-		AutoPauseSeconds int    `json:"autoPauseSeconds"`
-	} `json:"nodeOps"`
 	Freestyle struct {
 		Snapshot         string `json:"snapshot"`
 		AutoPauseSeconds int    `json:"autoPauseSeconds"`
@@ -1511,20 +1547,14 @@ func (r *Reconciler) workerSpec(ctx context.Context, record domain.Sandbox) (san
 		workerEnvironment["AO_WORKER_HELPER_PATH"] = r.options.WorkerHelperDestination
 	}
 	// Freestyle boots from the snapshot stamped on the session's plan, which
-	// Spec carries as its root filesystem.
-	rootFS, autoPauseSeconds := profile.NodeOps.DefaultRootFS, profile.NodeOps.AutoPauseSeconds
-	if record.Provider == sandbox.ProviderFreestyle {
-		rootFS, autoPauseSeconds = profile.Freestyle.Snapshot, profile.Freestyle.AutoPauseSeconds
-	}
+	// Spec carries as its root filesystem. Other providers' plans carry none.
 	return sandbox.Spec{
 		Name:             "ao-" + record.SessionID,
 		SessionID:        record.SessionID,
 		OrgID:            record.OrgID,
 		ResourceProfile:  domain.ResourceProfile{CPU: 4, Memory: 8, Disk: 10},
-		Shape:            profile.NodeOps.DefaultShape,
-		RootFS:           rootFS,
-		Ingress:          profile.NodeOps.Ingress,
-		AutoPauseSeconds: autoPauseSeconds,
+		RootFS:           profile.Freestyle.Snapshot,
+		AutoPauseSeconds: profile.Freestyle.AutoPauseSeconds,
 		Environment:      workerEnvironment,
 		DurableRoot:      layout.root,
 		Labels: map[string]string{
