@@ -1379,7 +1379,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, err)
 	}
-	m.augmentRuntimePATHForLaunchBinary(ctx, env, argv)
+	argv = m.prepareLaunchArgv(ctx, env, argv)
 	argv, launchID, err := m.superviseAgentProcess(agent, id, env, argv)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
@@ -3326,7 +3326,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
 	}
-	m.augmentRuntimePATHForLaunchBinary(ctx, env, argv)
+	argv = m.prepareLaunchArgv(ctx, env, argv)
 	launchID := strings.TrimSpace(reservedGeneration)
 	if launchID == "" {
 		argv, launchID, err = m.superviseAgentProcess(agent, rec.ID, env, argv)
@@ -6410,6 +6410,28 @@ func PinnedHookDir(executable func() (string, error), dataDir string) string {
 
 func (m *Manager) augmentRuntimePATHForLaunchBinary(ctx context.Context, env map[string]string, argv []string) {
 	AugmentRuntimePATHForLaunchBinary(ctx, env, argv, m.lookPath, PinnedHookDir(m.executable, m.dataDir))
+}
+
+// prepareLaunchArgv finalizes an agent argv immediately before it is handed to
+// the runtime. It augments PATH for the launch binary and then rewrites a
+// Windows npm `.cmd`/`.bat` shim into the program that shim would have run.
+//
+// npm CLIs are installed as batch files, which Windows cannot start directly:
+// CreateProcess hands them to cmd.exe, whose `/c` input line is capped near
+// 8,191 characters. Harnesses that place the generated system prompt in argv
+// exceed that on their own and die with "The command line is too long."
+// (issue #6207). Starting the shim's target instead uses CreateProcess's
+// 32,767-character limit and keeps prompts containing `<`, `>`, `&`, `|`, and
+// newlines out of cmd.exe's parser.
+//
+// PATH is augmented once, for the original binary, so the shim's directory stays
+// discoverable for hooks the agent may invoke. The resolved program runs from
+// an absolute path that already sits inside that directory tree, so a second
+// augmentation would only prepend duplicates. AugmentRuntimePATHForLaunchBinary
+// is idempotent and a native `.exe` harness yields identical argv either way.
+func (m *Manager) prepareLaunchArgv(ctx context.Context, env map[string]string, argv []string) []string {
+	m.augmentRuntimePATHForLaunchBinary(ctx, env, argv)
+	return agentlaunch.ResolveWindowsShimArgv(argv, m.lookPath)
 }
 
 // AugmentRuntimePATHForLaunchBinary is retained at the session-manager boundary
