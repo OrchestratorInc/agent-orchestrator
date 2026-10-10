@@ -49,6 +49,7 @@ func fixture(t *testing.T) *fakeSystem {
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	s := &launch{root: root, frontend: filepath.Join(root, "checkout", "frontend"), tmux: "/fixture/ao/tmux", port: 32100,
+		daemon: filepath.Join(root, "daemon", "ao"), revision: "checked-revision", preflight: json.RawMessage(`{"goVersion":"go1.27.1","nodeVersion":"v22.23.2"}`),
 		target: domain.TestTargetIdentity{ID: "test", LaunchID: "target-test", Generation: 1, ElectronPID: 11, ElectronStartedAt: now, DaemonPID: 12, DaemonStartedAt: now.Add(time.Second), DataDir: filepath.Join(root, "data")},
 		owned:  map[int]time.Time{11: now, 12: now.Add(time.Second)}}
 	s.rootInfo, err = os.Stat(root)
@@ -68,7 +69,7 @@ func fixture(t *testing.T) *fakeSystem {
 	}
 	f := &fakeSystem{s: s, pids: map[int]processInfo{11: {PID: 11, Parent: 1}, 12: {PID: 12, Parent: 11}, 13: {PID: 13, Parent: 11}, 99: {PID: 99, Parent: 1}},
 		times: map[int]time.Time{11: now, 12: now.Add(time.Second), 13: now.Add(time.Second), 99: now}, status: map[string]int{}}
-	f.ready = map[string]any{"status": "ready", "pid": 12, "executablePath": filepath.Join(s.frontend, "daemon", "ao"), "workingDirectory": s.target.DataDir, "startupWorkingDirectory": s.frontend}
+	f.ready = map[string]any{"status": "ready", "pid": 12, "executablePath": s.daemon, "workingDirectory": s.target.DataDir, "startupWorkingDirectory": s.frontend}
 	f.a = &Adapter{launches: map[string]*launch{"test": s}, ops: operations{
 		home: func() (string, error) { return root, nil },
 		startTime: func(pid int) (time.Time, error) {
@@ -96,6 +97,15 @@ func fixture(t *testing.T) *fakeSystem {
 		listenerGone: func(context.Context, int) error { return f.listener },
 		freePort:     func() (int, error) { return s.port, nil },
 		tmuxBinary:   func(string) (string, error) { return "/fixture/ao/tmux", nil },
+		build: func(_ context.Context, frontend, executable string) error {
+			if filepath.Dir(executable) != filepath.Join(filepath.Dir(filepath.Dir(frontend)), "attempt", "daemon") {
+				t.Fatal("daemon build escaped its attempt", executable)
+			}
+			if err := os.Mkdir(filepath.Dir(executable), 0o700); err != nil {
+				return err
+			}
+			return os.WriteFile(executable, []byte("owned daemon"), 0o700)
+		},
 		run: func(ctx context.Context, exe string, args, _ []string) ([]byte, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, err
@@ -157,7 +167,7 @@ func TestTargetEnvironmentStripsInheritedAO(t *testing.T) {
 			t.Fatal("inherited AO state leaked")
 		}
 	}
-	for key, want := range map[string]string{"PATH": "/bin", "HOME": "/private/home", "AO_DATA_DIR": f.s.target.DataDir, "AO_RUN_FILE": filepath.Join(f.s.root, "running.json"), "AO_PORT": "32100", "AO_DEV_ELECTRON_DIR": filepath.Join(f.s.root, "electron"), "AO_FAKE_HARNESS": "1", "AO_APP_RUN_ID": f.s.target.LaunchID, "ELECTRON_ENABLE_LOGGING": "1", "AO_ALLOWED_ORIGINS": "app://renderer", "AO_TMUX_BINARY": f.s.tmux, "AO_TMUX_SOCKET_NAME": "testing-test"} {
+	for key, want := range map[string]string{"PATH": "/bin", "HOME": "/private/home", "AO_DATA_DIR": f.s.target.DataDir, "AO_DAEMON_COMMAND": daemonCommand(f.s.daemon), "AO_RUN_FILE": filepath.Join(f.s.root, "running.json"), "AO_PORT": "32100", "AO_DEV_ELECTRON_DIR": filepath.Join(f.s.root, "electron"), "AO_FAKE_HARNESS": "1", "AO_APP_RUN_ID": f.s.target.LaunchID, "ELECTRON_ENABLE_LOGGING": "1", "AO_ALLOWED_ORIGINS": "app://renderer,http://127.0.0.1:32100", "AO_TMUX_BINARY": f.s.tmux, "AO_TMUX_SOCKET_NAME": "testing-test"} {
 		if values[key] != want {
 			t.Errorf("%s differs", key)
 		}
@@ -353,7 +363,7 @@ func TestStartUsesPreparedCheckoutAndCapturedIdentity(t *testing.T) {
 	}
 }
 
-func testStartUsesPreparedCheckout(t *testing.T, realProviders bool) {
+func preparedStartFixture(t *testing.T, realProviders bool) (*fakeSystem, ports.TestingTargetSpec) {
 	t.Helper()
 	t.Setenv("AO_FAKE_HARNESS", "inherited-sentinel")
 	f := fixture(t)
@@ -395,14 +405,25 @@ func testStartUsesPreparedCheckout(t *testing.T, realProviders bool) {
 	if err := os.WriteFile(electronPath(frontend), []byte("fixture"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := json.Marshal(map[string]any{"commitSHA": strings.TrimSpace(string(head)), "files": files})
+	manifest, err := json.Marshal(map[string]any{"commitSHA": strings.TrimSpace(string(head)), "files": files, "preflight": map[string]string{"goVersion": "go1.27.1", "nodeVersion": "v22.23.2"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(frontend, ".vite", "testing-target.json"), manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	preparedByController := false
+	f.a.ops.prepare = func(_ context.Context, gotFrontend, commit, root string) error {
+		if gotFrontend != frontend || commit != strings.TrimSpace(string(head)) || root != filepath.Join(base, "attempt") {
+			t.Fatal("preparation escaped the pinned checkout or owned attempt")
+		}
+		preparedByController = true
+		return nil
+	}
 	f.a.ops.start = func(exe, cwd string, env []string, _ *os.File) (int, error) {
+		if !preparedByController {
+			t.Fatal("controller did not prepare the revision before launch")
+		}
 		if exe != electronPath(frontend) || cwd != frontend {
 			t.Fatal("wrong checkout")
 		}
@@ -421,19 +442,28 @@ func testStartUsesPreparedCheckout(t *testing.T, realProviders bool) {
 		if values["AO_TMUX_BINARY"] != "/fixture/ao/tmux" {
 			t.Fatal("target did not receive the cleanup tmux binary")
 		}
+		if values["AO_DAEMON_COMMAND"] != daemonCommand(filepath.Join(base, "attempt", "daemon", "ao")) {
+			t.Fatal("Electron did not receive the owned daemon command")
+		}
 		f.s = f.a.launches[strings.TrimPrefix(values["AO_APP_RUN_ID"], "target-")]
 		f.s.target.DaemonPID = 12
 		f.s.target.DaemonStartedAt = f.times[12]
 		writeInfo(t, f.s)
-		f.ready["executablePath"] = filepath.Join(frontend, "daemon", "ao")
+		f.ready["executablePath"] = f.s.daemon
 		f.ready["workingDirectory"] = f.s.target.DataDir
 		f.ready["startupWorkingDirectory"] = frontend
 		return 11, nil
 	}
-	spec := ports.TestingTargetSpec{AttemptID: "attempt", Generation: 1, CheckoutPath: checkout, CommitSHA: strings.TrimSpace(string(head)), Deadline: time.Now().Add(time.Second)}
+	spec := ports.TestingTargetSpec{AttemptID: "attempt", Generation: 1, CheckoutPath: checkout, CommitSHA: strings.TrimSpace(string(head)), Deadline: time.Now().Add(time.Minute)}
 	if realProviders {
 		spec.RecipeSnapshot = `{"realProviders":true}`
 	}
+	return f, spec
+}
+
+func testStartUsesPreparedCheckout(t *testing.T, realProviders bool) {
+	t.Helper()
+	f, spec := preparedStartFixture(t, realProviders)
 	target, err := f.a.Start(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)

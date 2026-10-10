@@ -76,6 +76,26 @@ func (c *TestingController) create(w http.ResponseWriter, r *http.Request) {
 	if !testingJSON(w, r, &in) {
 		return
 	}
+	if in.PRURL != "" {
+		if in.IssueURL != "" || in.IssueSnapshot != "" || in.CommitSHA != "" || in.LinkedRunID != "" {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_TESTING_REQUEST", "prUrl cannot be combined with manual issue, commit or linked-run fields", nil)
+			return
+		}
+		intake, ok := c.Svc.(interface {
+			CreatePullRequestRuns(context.Context, testingsvc.CreatePullRequestRunsInput) (testingsvc.PullRequestRuns, error)
+		})
+		if !ok {
+			envelope.WriteError(w, r, testingsvc.ProviderNotConfigured())
+			return
+		}
+		runs, err := intake.CreatePullRequestRuns(r.Context(), testingsvc.CreatePullRequestRunsInput{ProjectID: domain.ProjectID(in.ProjectID), PRURL: in.PRURL, RecipeID: in.RecipeID, Requester: in.Requester})
+		if err != nil {
+			envelope.WriteError(w, r, err)
+			return
+		}
+		envelope.WriteJSON(w, http.StatusCreated, TestingRunResponse{RunID: string(runs.Base.ID), HeadRunID: string(runs.Head.ID), CreatedAt: runs.Base.CreatedAt})
+		return
+	}
 	run, err := c.Svc.CreateRun(r.Context(), testingsvc.CreateRunInput{LinkedRunID: domain.TestRunID(in.LinkedRunID), ProjectID: domain.ProjectID(in.ProjectID), IssueURL: in.IssueURL, IssueSnapshot: in.IssueSnapshot, CommitSHA: in.CommitSHA, RecipeID: in.RecipeID, Requester: in.Requester})
 	if err != nil {
 		envelope.WriteError(w, r, err)

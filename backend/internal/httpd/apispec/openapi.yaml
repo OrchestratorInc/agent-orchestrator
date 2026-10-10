@@ -13806,10 +13806,15 @@ components:
           type: string
         linkedRunId:
           type: string
+        prUrl:
+          description: GitHub PR URL; resolves and snapshots exact base/head revisions
+            instead of manual issue and commit fields.
+          type: string
         projectId:
           minLength: 1
           type: string
         recipeId:
+          description: Defaults to local-ao for PR URL intake.
           minLength: 1
           type: string
         requester:
@@ -13818,9 +13823,6 @@ components:
       required:
       - projectId
       - issueUrl
-      - issueSnapshot
-      - commitSha
-      - recipeId
       - requester
       type: object
     CueDefinitionRequest:
@@ -18214,6 +18216,8 @@ components:
       properties:
         createdAt:
           format: date-time
+          type: string
+        headRunId:
           type: string
         runId:
           type: string
