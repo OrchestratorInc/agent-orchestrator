@@ -1,9 +1,10 @@
 package minimaxcode
 
 import (
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"regexp"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 // DeriveActivityState maps native hooks. SessionEnd is intentionally omitted:
@@ -21,7 +22,7 @@ func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	}
 }
 
-var ansiRE = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)`)
+var ansiRE = regexp.MustCompile(`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b\][^\x07]*(?:\x07|\x1b\\)`)
 var footerRE = regexp.MustCompile(`(?m)^.*(?:│|\|).*(?:Ask|Auto|Full access).*(?:│|\|).*✦ [^\n]+\s*$`)
 var emptyRE = regexp.MustCompile(`(?s)Message · Enter send · Ctrl\+J newline[^\n]*\n\s*─+\s*\n\s*›\s+Ask Mcode to do anything\s*\n\s*─+\s*\n\s*[^\n]+(?:│|\|)[^\n]+✦ [^\n]+\s*$`)
 
@@ -33,6 +34,8 @@ func terminalTail(output string) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// ContinuouslyDetectTerminalActivity enables native cancellation observation.
 func (p *Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
 
 // DetectTerminalActivity observes cancellation without inventing a missing Stop
@@ -53,6 +56,8 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 	}
 	return "", false
 }
+
+// ComposerIsEmpty requires the initialized, draft-free native composer.
 func (p *Plugin) ComposerIsEmpty(output string) bool {
 	return emptyRE.MatchString(terminalTail(output))
 }

@@ -3,8 +3,9 @@ package modelcatalog
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // parseMiniMaxModels reads configured model IDs, never provider rows or keys.

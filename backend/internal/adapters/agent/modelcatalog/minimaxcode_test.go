@@ -1,8 +1,9 @@
 package modelcatalog
 
 import (
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestMiniMaxConfiguredModels(t *testing.T) {

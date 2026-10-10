@@ -6,14 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"gopkg.in/yaml.v3"
 )
 
 //go:embed assets/hook.cjs
@@ -32,7 +34,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		return err
 	}
 	finalTarget := target
-	if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return err
 	}
 	marker := filepath.Join(target, ".ao-managed")
@@ -51,7 +53,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		if err != nil {
 			return err
 		}
-		defer os.RemoveAll(target)
+		defer func() { _ = os.RemoveAll(target) }()
 		marker = filepath.Join(target, ".ao-managed")
 	} else if string(existing) != profileMarker {
 		return errors.New("MiniMax private profile ownership marker is invalid")
@@ -97,23 +99,23 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err != nil {
 		return errors.New("MiniMax provider config could not be encoded")
 	}
-	if err := hookutil.AtomicWriteFile(filepath.Join(target, "config.yaml"), data, 0600); err != nil {
+	if err := hookutil.AtomicWriteFile(filepath.Join(target, "config.yaml"), data, 0o600); err != nil {
 		return err
 	}
-	if err := hookutil.AtomicWriteFile(marker, []byte(profileMarker), 0600); err != nil {
+	if err := hookutil.AtomicWriteFile(marker, []byte(profileMarker), 0o600); err != nil {
 		return err
 	}
 	for _, dir := range []string{"tmp", "plugins/ao-activity/.claude-plugin", "plugins/ao-activity/hooks"} {
-		if err := os.MkdirAll(filepath.Join(target, dir), 0700); err != nil {
+		if err := os.MkdirAll(filepath.Join(target, dir), 0o700); err != nil {
 			return err
 		}
 	}
 	plugin := filepath.Join(target, "plugins", "ao-activity")
 	manifest := []byte(`{"name":"ao-activity","version":"0.0.1","description":"AO session activity and exact-identity guard"}`)
-	if err := hookutil.AtomicWriteFile(filepath.Join(plugin, ".claude-plugin", "plugin.json"), manifest, 0600); err != nil {
+	if err := hookutil.AtomicWriteFile(filepath.Join(plugin, ".claude-plugin", "plugin.json"), manifest, 0o600); err != nil {
 		return err
 	}
-	if err := hookutil.AtomicWriteFile(filepath.Join(plugin, "hook.cjs"), hookSource, 0600); err != nil {
+	if err := hookutil.AtomicWriteFile(filepath.Join(plugin, "hook.cjs"), hookSource, 0o600); err != nil {
 		return err
 	}
 	if err := writeHookConfig(plugin); err != nil {
@@ -158,6 +160,13 @@ func copyProfileTree(ctx context.Context, source, target string) error {
 	} else if err != nil {
 		return err
 	}
+	// Pin a source root so concurrent directory/symlink replacement cannot make
+	// a snapshot read escape the selected resource's pinned parent directory.
+	sourceRoot, err := os.OpenRoot(filepath.Dir(source))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sourceRoot.Close() }()
 	count := 0
 	var bytes int64
 	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
@@ -176,27 +185,42 @@ func copyProfileTree(ctx context.Context, source, target string) error {
 		}
 		dst := filepath.Join(target, rel)
 		if entry.IsDir() {
-			return os.MkdirAll(dst, 0700)
+			return os.MkdirAll(dst, 0o700)
 		}
 		count++
 		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
-		bytes += info.Size()
-		if bytes > 64<<20 || count > 10000 || !info.Mode().IsRegular() || info.Size() > 16<<20 {
+		if count > 10000 || !info.Mode().IsRegular() || info.Size() > 16<<20 {
 			return errors.New("MiniMax profile snapshot exceeds bounds")
 		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			return err
 		}
-		b, err := os.ReadFile(path)
+		file, err := sourceRoot.Open(filepath.Join(filepath.Base(source), rel))
 		if err != nil {
 			return err
 		}
-		mode := fs.FileMode(0600)
-		if info.Mode()&0100 != 0 {
-			mode = 0700
+		defer func() { _ = file.Close() }()
+		opened, err := file.Stat()
+		if err != nil {
+			return err
+		}
+		if !os.SameFile(info, opened) {
+			return errors.New("MiniMax profile resource changed during snapshot")
+		}
+		b, err := io.ReadAll(io.LimitReader(file, (16<<20)+1))
+		if err != nil {
+			return err
+		}
+		bytes += int64(len(b))
+		if len(b) > 16<<20 || bytes > 64<<20 {
+			return errors.New("MiniMax profile snapshot exceeds bounds")
+		}
+		mode := fs.FileMode(0o600)
+		if info.Mode()&0o100 != 0 {
+			mode = 0o700
 		}
 		return hookutil.AtomicWriteFile(dst, b, mode)
 	})
@@ -257,10 +281,10 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 		return err
 	}
 	launch := filepath.Join(profile, "launches", env["AO_RUNTIME_LAUNCH_ID"])
-	if err := os.MkdirAll(filepath.Join(launch, "tmp"), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Join(launch, "tmp"), 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(filepath.Join(launch, "routing.json"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	f, err := os.OpenFile(filepath.Join(launch, "routing.json"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("MiniMax immutable hook generation: %w", err)
 	}
@@ -284,6 +308,6 @@ func writeHookConfig(plugin string) error {
 	if err != nil {
 		return err
 	}
-	return hookutil.AtomicWriteFile(filepath.Join(plugin, "hooks", "hooks.json"), body, 0600)
+	return hookutil.AtomicWriteFile(filepath.Join(plugin, "hooks", "hooks.json"), body, 0o600)
 
 }

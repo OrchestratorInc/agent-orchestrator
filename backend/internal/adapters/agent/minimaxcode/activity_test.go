@@ -1,8 +1,9 @@
 package minimaxcode
 
 import (
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 const footer = "  workspace │ Full access │ ✦ glm-5.3-flash · Thinking On\n"

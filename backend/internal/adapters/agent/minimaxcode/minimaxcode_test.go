@@ -126,7 +126,7 @@ func TestProfileFailureCanRetryAndPreservesResources(t *testing.T) {
 func TestSnapshotPreservesSubagentsAndExecutableResources(t *testing.T) {
 	source := t.TempDir()
 	t.Setenv("MINIMAX_DATA_DIR", source)
-	for name, mode := range map[string]os.FileMode{"subagents/custom.md": 0600, "plugins/user/hooks/run.sh": 0700} {
+	for name, mode := range map[string]os.FileMode{"subagents/custom.md": 0600, "plugins/user/hooks/run.sh": 0700, "AGENTS.md": 0600, "tui/keybindings.json": 0600} {
 		file := filepath.Join(source, name)
 		if err := os.MkdirAll(filepath.Dir(file), 0700); err != nil {
 			t.Fatal(err)
@@ -141,7 +141,7 @@ func TestSnapshotPreservesSubagentsAndExecutableResources(t *testing.T) {
 		t.Fatal(err)
 	}
 	target, _ := profilePath(cfg.DataDir, cfg.SessionID)
-	for name, mode := range map[string]os.FileMode{"subagents/custom.md": 0600, "plugins/user/hooks/run.sh": 0700} {
+	for name, mode := range map[string]os.FileMode{"subagents/custom.md": 0600, "plugins/user/hooks/run.sh": 0700, "AGENTS.md": 0600, "tui/keybindings.json": 0600} {
 		info, err := os.Stat(filepath.Join(target, name))
 		if err != nil || info.Mode().Perm() != mode {
 			t.Fatalf("resource %s mode mismatch: %v", name, err)
@@ -161,5 +161,47 @@ func TestSnapshotPreservesSubagentsAndExecutableResources(t *testing.T) {
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatalf("cleanup after workspace deletion retained profile: %v", err)
+	}
+}
+
+// snapshotRaceContext replaces the source when the walk enters its callback,
+// after the walker inspected it but before the snapshot opens it.
+type snapshotRaceContext struct {
+	context.Context
+	replace func()
+}
+
+func (c *snapshotRaceContext) Err() error {
+	if c.replace != nil {
+		replace := c.replace
+		c.replace = nil
+		replace()
+	}
+	return c.Context.Err()
+}
+
+func TestSnapshotRefusesConcurrentSourceEscape(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "AGENTS.md")
+	outside := filepath.Join(t.TempDir(), "private.md")
+	target := filepath.Join(t.TempDir(), "AGENTS.md")
+	if err := os.WriteFile(source, []byte("intended resource"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("must not be copied"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := &snapshotRaceContext{Context: context.Background(), replace: func() {
+		if err := os.Remove(source); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, source); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+	}}
+	if err := copyProfileTree(ctx, source, target); err == nil {
+		t.Fatal("snapshot followed a concurrently replaced source outside its root")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("snapshot wrote a replaced source: %v", err)
 	}
 }

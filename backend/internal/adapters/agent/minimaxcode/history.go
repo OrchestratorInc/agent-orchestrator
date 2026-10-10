@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // Register the driver for read-only native session validation.
 )
 
 func validateNativeHistory(ctx context.Context, profile, id, workspace string) error {
@@ -29,7 +29,7 @@ func validateNativeHistory(ctx context.Context, profile, id, workspace string) e
 	if err != nil {
 		return errors.New("native session database could not be opened")
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	db.SetMaxOpenConns(1)
 	var cwd, relative string
 	var archived int
@@ -56,11 +56,11 @@ func validateNativeHistory(ctx context.Context, profile, id, workspace string) e
 		return errors.New("native session root is unavailable")
 	}
 	history := filepath.Join(canonicalProfile, "v2", "sessions", relative)
-	real, err := filepath.EvalSymlinks(history)
+	canonicalHistory, err := filepath.EvalSymlinks(history)
 	if err != nil {
 		return errors.New("native history is unavailable")
 	}
-	if real != history {
+	if canonicalHistory != history {
 		return errors.New("native history must not traverse symlinks")
 	}
 	data, err := os.ReadFile(filepath.Join(history, "manifest.json"))
@@ -82,7 +82,7 @@ func validateNativeHistory(ctx context.Context, profile, id, workspace string) e
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 4096), 16<<20)
 	for scanner.Scan() {
