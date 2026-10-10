@@ -55,14 +55,6 @@ Run the supervisor's `ao` command with the supplied supervisor run file and
 supervisor data directory in that subprocess only. Preserve `AO_SESSION_ID`.
 Do not point these management commands at the target daemon.
 
-On this shared Mac, before base acquire the live-launch lock with
-`mkdir ~/.ao/dev/live-launch.lock` and write `AO_SESSION_ID` into its `owner`
-file. If mkdir fails, read the owner and coordinate; do not launch under
-another session's lock. Hold your matching owner lock across both legs,
-including base cleanup, and skip a second mkdir for head. Verify that the
-owner still matches before head launch. Remove only your matching owner file
-and its directory after both cleanup receipts prove no leftovers.
-
 1. Run `ao testing leg start base --json`. Save the returned `runId`,
    `attemptId`, `workerSessionId`, `leg`, `commitSha`, `evidenceDir` and
    `targetContext`. Check that `commitSha` is the recorded base SHA.
