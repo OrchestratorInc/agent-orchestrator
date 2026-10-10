@@ -55,6 +55,7 @@ const deferredLocalizationFiles = new Set([
 	"components/chat/ActivityRun.tsx",
 	"components/chat/ChatComposer.tsx",
 	"components/chat/ChatMarkdown.tsx",
+	"components/chat/MarkdownFrontmatterPreview.tsx",
 	"components/chat/ChatStatusBanners.tsx",
 	"components/chat/ChatTimelineItems.tsx",
 	"components/chat/ChatWorkspace.tsx",
