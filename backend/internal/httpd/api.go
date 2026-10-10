@@ -49,11 +49,14 @@ type APIDeps struct {
 	// answers 501 rather than panicking, matching the other optional surfaces.
 	Conversations controllers.ConversationService
 	// Settings is the daemon-owned preference surface.
-	Settings                 controllers.SettingsService
-	DevImport                controllers.DevImportService
-	CDC                      cdc.Source
-	Events                   cdcSubscriber
-	Telemetry                ports.EventSink
+	Settings  controllers.SettingsService
+	DevImport controllers.DevImportService
+	CDC       cdc.Source
+	Events    cdcSubscriber
+	Telemetry ports.EventSink
+	// TelemetryIdentity is the live telemetry identity, served to the phone by
+	// GET /api/v1/telemetry/identity and updated by the desktop over loopback.
+	TelemetryIdentity        ports.TelemetryIdentityStore
 	Mobile                   *controllers.MobileController
 	Browser                  controllers.BrowserService
 	PreviewServer            controllers.ManagedPreviewServer
@@ -140,6 +143,7 @@ type API struct {
 	system        *controllers.SystemController
 	identity      *controllers.IdentityController
 	endpoints     *controllers.EndpointsController
+	telemetryID   *controllers.TelemetryIdentityController
 	systemInstall *controllers.SystemInstallController
 	agentAuth     *controllers.AgentAuthController
 	linkPreview   *controllers.LinkPreviewController
@@ -198,6 +202,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
+		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
 		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
@@ -258,6 +263,7 @@ func (a *API) Register(root chi.Router) {
 			a.system.Register(r)
 			a.identity.Register(r)
 			a.endpoints.Register(r)
+			a.telemetryID.Register(r)
 			a.systemInstall.Register(r)
 			a.agentAuth.Register(r)
 			a.linkPreview.Register(r)

@@ -44,6 +44,7 @@ import { initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
 import { TelemetryPolicyAuthority, resolveDesktopDataDir } from "./main/telemetry-policy-file";
 import { DaemonTelemetryPolicyClient } from "./main/daemon-telemetry-policy-client";
 import { DesktopTelemetryController } from "./main/desktop-telemetry-controller";
+import { TelemetryIdentityController } from "./main/telemetry-identity";
 import { AgentSwitchVisibilityController } from "./main/agent-switch-observability";
 import { readUpdateSettings, type UpdateSettings, type UpdateStatus } from "./main/update-settings";
 import { readKeybindingOverrides, writeKeybindingOverrides } from "./main/keybinding-settings";
@@ -256,6 +257,18 @@ app.setPath(
 const desktopLaunchWorkingDirectory = process.cwd();
 const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, app.isPackaged);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
+// PostHog identity: the user-facing analytics opt-out (marker file shared with the
+// daemon) and the loopback hand-off of the signed-in AO Cloud user ID. Distinct
+// from the agent-switch "Event reporting" policy above.
+const ANALYTICS_OPT_OUT_CHANGED_CHANNEL = "telemetry:analyticsOptOutChanged";
+const telemetryIdentity = new TelemetryIdentityController(
+	desktopDataDir,
+	() => (daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null),
+	(url, init) => net.fetch(url, init),
+	(optedOut) => {
+		for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(ANALYTICS_OPT_OUT_CHANGED_CHANNEL, optedOut);
+	},
+);
 let agentSwitchVisibilityController: AgentSwitchVisibilityController | null = null;
 const trustedShellWebContents = new Map<number, WebContents>();
 const pendingRendererQueuePurges = new Map<string, {
@@ -532,6 +545,8 @@ function focusMainWindow(): void {
 function setDaemonStatus(nextStatus: DaemonStatus): void {
 	if (nextStatus.state !== "ready") disposeBrowserRuntimeLink();
 	daemonStatus = nextStatus;
+	if (nextStatus.state === "ready") void telemetryIdentity.flush();
+	else telemetryIdentity.invalidate();
 	getShellWebContents()?.send("daemon:status", daemonStatus);
 	if (nextStatus.state === "ready" && browserViewHost) {
 		establishBrowserRuntimeLink();
@@ -2260,8 +2275,22 @@ ipcMain.handle("menu:action", (_event, action: string) => {
 });
 ipcMain.handle("telemetry:getBootstrap", () => {
 	if (!telemetryPolicyController) return null;
+	// Opted out: no bootstrap, so the renderer never constructs a PostHog client.
+	if (telemetryIdentity.isOptedOut()) return null;
 	return buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot());
 });
+ipcMain.handle("telemetry:getAnalyticsOptOut", () => telemetryIdentity.isOptedOut());
+ipcMain.handle("telemetry:setAnalyticsOptOut", (event, optedOut: unknown) => {
+	const trustedSender = trustedShellWebContents.get(event.sender.id);
+	if (trustedSender !== event.sender || typeof optedOut !== "boolean") throw new Error("invalid analytics opt-out request");
+	return telemetryIdentity.setOptedOut(optedOut);
+});
+ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
+	const trustedSender = trustedShellWebContents.get(event.sender.id);
+	if (trustedSender !== event.sender || (userId !== null && typeof userId !== "string")) throw new Error("invalid cloud user request");
+	return telemetryIdentity.setCloudUser(userId);
+});
+ipcMain.handle("telemetry:getGithubLogin", () => telemetryIdentity.githubLogin());
 ipcMain.handle("telemetry:getPolicy", () => telemetryPolicyController?.snapshot() ?? failClosedTelemetryPolicyView());
 ipcMain.handle("telemetry:setEventsEnabled", (_event, input: { eventsEnabled?: unknown; expectedGeneration?: unknown }) => {
 	if (!telemetryPolicyController || typeof input?.eventsEnabled !== "boolean" || typeof input.expectedGeneration !== "string") throw new Error("invalid telemetry policy request");

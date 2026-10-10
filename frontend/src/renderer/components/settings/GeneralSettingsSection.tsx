@@ -6,6 +6,7 @@ import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
+import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
@@ -241,6 +242,7 @@ export function GeneralSettingsSection({
 
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />
+				<AnalyticsRow />
 			</SettingsSection>
 
 			{/* Advanced */}
@@ -256,6 +258,43 @@ export function GeneralSettingsSection({
 				{developerMode && <DiagnosticsRow />}
 			</SettingsSection>
 		</>
+	);
+}
+
+/**
+ * PostHog usage analytics opt-out. Independent of the error-event row above: it
+ * switches off the renderer, the daemon and a paired phone together.
+ */
+function AnalyticsRow() {
+	const { t } = useTranslation();
+	const optedOut = useAnalyticsOptOutStore((state) => state.optedOut);
+	const loaded = useAnalyticsOptOutStore((state) => state.loaded);
+	const saving = useAnalyticsOptOutStore((state) => state.saving);
+	const saveError = useAnalyticsOptOutStore((state) => state.saveError);
+	const load = useAnalyticsOptOutStore((state) => state.load);
+	const setOptedOut = useAnalyticsOptOutStore((state) => state.setOptedOut);
+	useEffect(() => {
+		void load();
+	}, [load]);
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow label={t("settings.analytics.label")}>
+				<Switch
+					aria-label={t("settings.analytics.label")}
+					checked={!optedOut}
+					disabled={saving || !loaded}
+					onCheckedChange={(share) => {
+						void setOptedOut(!share);
+					}}
+				/>
+			</SettingsRow>
+			<p
+				className={cn("px-3 pb-2 text-xs leading-relaxed", saveError ? "text-destructive" : "text-muted-foreground")}
+				role={saveError ? "alert" : undefined}
+			>
+				{t(saveError ? "settings.analytics.saveFailed" : "settings.analytics.description")}
+			</p>
+		</div>
 	);
 }
 

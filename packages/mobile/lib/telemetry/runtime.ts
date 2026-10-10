@@ -3,7 +3,7 @@ import Constants from "expo-constants";
 import * as Device from "expo-device";
 import { Platform } from "react-native";
 import PostHog from "posthog-react-native";
-import type { SessionMode } from "../api";
+import { getTelemetryIdentity, type SessionMode } from "../api";
 import { buildMobileContext } from "./context";
 import { type ActiveStorage } from "./dailyActive";
 import {
@@ -14,6 +14,7 @@ import {
 } from "./config";
 import { MOBILE_EVENTS } from "./events";
 import { checkRateLimit, mergeRateState, type RateLimitState } from "./rateLimit";
+import { createDesktopIdentitySync } from "./identitySync";
 import { createMobileTelemetry, type MobileTelemetry } from "./telemetry";
 
 // The one file that touches the SDK and the native runtime. Everything else in
@@ -75,10 +76,9 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 		host: MOBILE_POSTHOG_HOST,
 		enableSessionReplay: false,
 		captureAppLifecycleEvents: false,
-		// Anonymous ingestion rate. Identified events bill ~3.3x, and nothing here
-		// calls identify(), so a person profile would only ever cost more for no
-		// signal.
-		personProfiles: "never",
+		// Anonymous ingestion rate until a paired desktop's identity is adopted
+		// (adoptDesktopIdentity); only then does identify() create a profile.
+		personProfiles: "identified_only",
 	});
 
 	const version =
@@ -97,9 +97,37 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 	telemetry = createMobileTelemetry(client, context, {
 		disabledEvents: MOBILE_DISABLED_EVENTS,
 		allow: allowEvent,
+		// Nothing is captured until loadMobileOptOut() has read the saved preference.
+		awaitPreference: true,
+		onOptOutChange: (optedOut) => {
+			void (optedOut
+				? AsyncStorage.setItem(OPT_OUT_STORAGE_KEY, "1")
+				: AsyncStorage.removeItem(OPT_OUT_STORAGE_KEY)
+			).catch(() => {});
+		},
 	});
 	return telemetry;
 }
+
+// The desktop's opt-out is sticky on the phone: it survives unpairing and only a
+// paired desktop that is opted in lifts it.
+const OPT_OUT_STORAGE_KEY = "ao.telemetry.optedOut";
+
+/** Restores the persisted opt-out and releases capture. Awaited before the first heartbeat. */
+export async function loadMobileOptOut(): Promise<void> {
+	let stored = false;
+	try {
+		stored = (await AsyncStorage.getItem(OPT_OUT_STORAGE_KEY)) === "1";
+	} catch {
+		/* unreadable storage: stay opted in rather than guess */
+	}
+	telemetry?.restoreOptOut(stored);
+}
+
+/** Adopts the identity and opt-out of the connected desktops (see identitySync.ts). */
+export const syncDesktopTelemetryIdentity = createDesktopIdentitySync(getTelemetryIdentity, (identity) =>
+	telemetry?.adoptDesktopIdentity(identity),
+);
 
 /** The capture facade, or null before init. Call sites no-op when null. */
 export function mobileTelemetry(): MobileTelemetry | null {

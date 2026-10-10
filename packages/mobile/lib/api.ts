@@ -1,4 +1,5 @@
 import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from "./config";
+import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
 import { cachedInstallId, getInstallId } from "./installId";
 import { captureMobileApiError, httpCategory } from "./sentry";
 import { UnreachableError } from "./connectionError";
@@ -583,6 +584,23 @@ export async function getSettings(cfg: ServerConfig): Promise<AOSettings> {
 	return {
 		defaultSessionMode: data?.defaultSessionMode === "tui" ? "tui" : "chat",
 		chatHarnesses: Array.isArray(data?.chatHarnesses) ? data.chatHarnesses.filter((value: unknown): value is string => typeof value === "string") : [],
+	};
+}
+
+/**
+ * The paired desktop's telemetry identity and opt-out. Older daemons without the
+ * route answer 404 (ApiError); callers treat any failure as "no identity" and
+ * keep the phone anonymous.
+ */
+export async function getTelemetryIdentity(cfg: ServerConfig): Promise<DesktopTelemetryIdentity> {
+	const res = await req(cfg, `${API}/telemetry/identity`);
+	const data = await res.json();
+	const str = (value: unknown) => (typeof value === "string" && value !== "" ? value : undefined);
+	return {
+		distinctId: str(data?.distinctId),
+		cloudUserId: str(data?.cloudUserId),
+		githubLogin: str(data?.githubLogin),
+		optedOut: data?.optedOut === true,
 	};
 }
 

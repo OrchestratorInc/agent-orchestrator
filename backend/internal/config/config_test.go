@@ -251,6 +251,27 @@ func TestLoadTelemetryDisabledEventsBlankIsInert(t *testing.T) {
 	}
 }
 
+// A daemon started without the desktop supervisor falls back to the binary's own
+// stamped version; the supervisor-supplied value still wins.
+func TestLoadAppVersionFallsBackToBuildVersion(t *testing.T) {
+	old := BuildVersion
+	t.Cleanup(func() { BuildVersion = old })
+	BuildVersion = "0.14.0"
+
+	t.Setenv("AO_TELEMETRY_APP_VERSION", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Telemetry.AppVersion != "0.14.0" {
+		t.Fatalf("AppVersion = %q, want build version fallback", cfg.Telemetry.AppVersion)
+	}
+	t.Setenv("AO_TELEMETRY_APP_VERSION", "0.11.2")
+	if cfg, _ = Load(); cfg.Telemetry.AppVersion != "0.11.2" {
+		t.Fatalf("AppVersion = %q, want supervisor value", cfg.Telemetry.AppVersion)
+	}
+}
+
 func TestLoadOfferingDefaults(t *testing.T) {
 	// Clear the offering vars so we observe pure defaults: no client identity,
 	// cloud off, local on.
