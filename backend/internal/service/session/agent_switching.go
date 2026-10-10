@@ -23,7 +23,20 @@ func (s *Service) SwitchAgent(ctx context.Context, id domain.SessionID, in Switc
 		Model:          in.Model,
 		IdempotencyKey: in.IdempotencyKey,
 	})
-	return switchRecord, toAPIError(err)
+	if err != nil {
+		apiErr := toAPIError(err)
+		s.recordAgentSwitched(ctx, id, domain.AgentSwitch{IdempotencyKey: in.IdempotencyKey, TargetHarness: in.TargetHarness}, actionStatusForError(err), apiErr)
+		return domain.AgentSwitch{}, apiErr
+	}
+	status := domain.ActivityStatusRunning
+	switch switchRecord.State {
+	case domain.AgentSwitchCompleted:
+		status = domain.ActivityStatusCompleted
+	case domain.AgentSwitchFailed:
+		status = domain.ActivityStatusFailed
+	}
+	s.recordAgentSwitched(ctx, id, switchRecord, status, nil)
+	return switchRecord, nil
 }
 
 // RecoverAgentSwitch retries a durable source restoration without restarting

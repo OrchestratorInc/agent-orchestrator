@@ -130,6 +130,7 @@ import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
+import { isOrdinaryActivity } from "./activity-action";
 import { TurnPlan } from "./TurnPlan";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 import { ElicitationDock } from "./ElicitationDock";
@@ -1900,21 +1901,9 @@ type TimelineRun =
 function runsOf(items: ConversationItem[]): TimelineRun[] {
 	const runs: TimelineRun[] = [];
 	for (const item of items) {
-		const runnable =
-			item.kind === "activity" &&
-			item.activityKind !== "approval" &&
-			item.activityKind !== "user_input" &&
-			item.activityKind !== "error" &&
-			// Reasoning only reaches the timeline when the reader asked for it, so
-			// folding it into "Explored 4 files" would answer that request with the
-			// summary they were trying to get past.
-			item.activityKind !== "reasoning" &&
-			// A compaction is a boundary in the conversation, not a step in one. Folding
-			// it into a run of tool calls would hide that everything above it is no
-			// longer what the agent sees verbatim. The same holds for every other
-			// stamped system event: a reroute, a credential demand and the user's own
-			// steer are all things a run summary would swallow.
-			item.detail?.event === undefined;
+		// Approvals, user input, errors, reasoning, and stamped system events stay
+		// boundaries. Confirmed AO actions have no event stamp, so they batch.
+		const runnable = isOrdinaryActivity(item);
 		const last = runs.at(-1);
 		if (runnable && last?.kind === "activities") {
 			last.items.push(item);

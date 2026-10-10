@@ -385,9 +385,11 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		s.invalidateAgentReadinessAfterLaunchFailure(cfg.Harness, err)
 		apiErr := toSpawnAPIError(err)
 		s.emitSpawnFailed(ctx, cfg, apiErr, s.now().Sub(start).Milliseconds())
+		s.recordSpawnOutcome(ctx, cfg, domain.SessionRecord{}, actionStatusForError(err), apiErr)
 		return domain.Session{}, 0, 0, apiErr
 	}
 	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds())
+	s.recordSpawnOutcome(ctx, cfg, rec, domain.ActivityStatusCompleted, nil)
 	if firstSession {
 		s.emitFirstSessionSpawned(ctx, rec, project)
 	}
@@ -699,12 +701,15 @@ func (s *Service) lockOrchestratorProject(projectID domain.ProjectID) func() {
 func (s *Service) Restore(ctx context.Context, id domain.SessionID) (RestoreOutcome, error) {
 	res, err := s.manager.RestoreWithMode(ctx, id)
 	if err != nil {
-		return RestoreOutcome{}, toAPIError(err)
+		apiErr := toAPIError(err)
+		s.recordRestored(ctx, id, domain.SessionRecord{}, actionStatusForError(err), apiErr)
+		return RestoreOutcome{}, apiErr
 	}
 	session, err := s.toSession(ctx, res.Session)
 	if err != nil {
 		return RestoreOutcome{}, err
 	}
+	s.recordRestored(ctx, id, res.Session, domain.ActivityStatusCompleted, nil)
 	return RestoreOutcome{Session: session, Mode: restoreModeView(res.Mode)}, nil
 }
 
@@ -833,14 +838,26 @@ func restoreModeView(mode sessionmanager.RestoreMode) RestoreModeView {
 func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	s.cancelTitleRefinement(id)
 	freed, err := s.manager.Kill(ctx, id)
-	return freed, toAPIError(err)
+	if err != nil {
+		apiErr := toAPIError(err)
+		s.recordTerminated(ctx, id, actionStatusForError(err), apiErr)
+		return freed, apiErr
+	}
+	s.recordTerminated(ctx, id, domain.ActivityStatusCompleted, nil)
+	return freed, nil
 }
 
 // RequestKill acknowledges terminal intent without waiting for cleanup scripts.
 func (s *Service) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	s.cancelTitleRefinement(id)
 	result, err := s.manager.RequestKill(ctx, id)
-	return result, toAPIError(err)
+	if err != nil {
+		apiErr := toAPIError(err)
+		s.recordTerminated(ctx, id, actionStatusForError(err), apiErr)
+		return result, apiErr
+	}
+	s.recordTerminated(ctx, id, domain.ActivityStatusCompleted, nil)
+	return result, nil
 }
 
 // RollbackSpawn deletes a seed-state session row, or falls back to a Kill if
@@ -892,13 +909,18 @@ func (s *Service) Rename(ctx context.Context, id domain.SessionID, displayName s
 	if rec.Kind == domain.KindOrchestrator {
 		return apierr.Invalid("ORCHESTRATOR_RENAME_UNSUPPORTED", "The project orchestrator cannot be renamed", nil)
 	}
-	renamed, err := s.store.RenameSession(ctx, id, displayName, time.Now().UTC())
+	renamed, err := s.store.RenameSession(ctx, id, displayName, s.now())
 	if err != nil {
-		return fmt.Errorf("rename %s: %w", id, err)
+		wrapped := fmt.Errorf("rename %s: %w", id, err)
+		s.recordRenamed(ctx, id, rec.DisplayName, displayName, domain.ActivityStatusFailed, wrapped)
+		return wrapped
 	}
 	if !renamed {
-		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+		missing := apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+		s.recordRenamed(ctx, id, rec.DisplayName, displayName, domain.ActivityStatusFailed, missing)
+		return missing
 	}
+	s.recordRenamed(ctx, id, rec.DisplayName, displayName, domain.ActivityStatusCompleted, nil)
 	return nil
 }
 
