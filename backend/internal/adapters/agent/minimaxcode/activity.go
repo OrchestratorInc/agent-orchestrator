@@ -49,13 +49,14 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 	if !footerRE.MatchString(tail) {
 		return "", false
 	}
+	// A complete current composer takes precedence over historical active output.
+	if emptyRE.MatchString(tail) || longDraftRE.MatchString(tail) {
+		return domain.ActivityIdle, true
+	}
 	if strings.Contains(tail, "Esc stop") || strings.Contains(tail, "Stopping response") {
 		return domain.ActivityActive, true
 	}
 	if strings.Contains(tail, "Stopped · message restored to the Composer.") {
-		return domain.ActivityIdle, true
-	}
-	if emptyRE.MatchString(tail) || longDraftRE.MatchString(tail) {
 		return domain.ActivityIdle, true
 	}
 	return "", false
