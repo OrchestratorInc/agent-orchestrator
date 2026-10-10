@@ -119,10 +119,10 @@ function isNoticeItem(item: ConversationItem): boolean {
 	return item.detail?.event !== undefined && !isSteerItem(item) && item.detail.event !== "compaction" && item.activityKind !== "plan";
 }
 
-/** Mirrors the items the timeline draws nothing for, so they cannot fill an empty accordion. */
+/** Blank assistant messages are the only items the timeline draws nothing for;
+ * approval and user-input cards always render, so they fold with the work. */
 function rendersNothing(item: ConversationItem): boolean {
-	if (item.kind === "message") return item.role === "assistant" && item.text.trim() === "";
-	return item.activityKind === "user_input" || (item.activityKind === "approval" && item.status === "pending");
+	return item.kind === "message" && item.role === "assistant" && item.text.trim() === "";
 }
 
 /**

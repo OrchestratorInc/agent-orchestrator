@@ -177,9 +177,16 @@ describe("partitionTurnItems", () => {
 		expect(ids(part.notices)).toEqual(["err", "warn"]);
 	});
 
-	it("drops items that render nothing so the accordion is never empty", () => {
-		const items = [message("u", 1, "user", "go"), message("blank", 2, "assistant", "  "), activity("ask", 3, { activityKind: "approval", status: "pending" }), message("done", 4, "assistant", "ok")];
+	it("drops blank assistant messages so the accordion is never empty", () => {
+		const items = [message("u", 1, "user", "go"), message("blank", 2, "assistant", "  "), message("done", 4, "assistant", "ok")];
 		expect(partitionTurnItems(items, turn("completed"))!.work).toEqual([]);
+	});
+
+	it("folds approval and user-input cards with the work instead of dropping them", () => {
+		const approval = activity("ask", 2, { activityKind: "approval", status: "pending" });
+		const input = activity("question", 3, { activityKind: "user_input", status: "completed" });
+		const items = [message("u", 1, "user", "go"), approval, input, message("done", 4, "assistant", "ok")];
+		expect(partitionTurnItems(items, turn("interrupted"))!.work).toEqual([approval, input]);
 	});
 
 	it("leaves queued and unrecorded turns flat", () => {
