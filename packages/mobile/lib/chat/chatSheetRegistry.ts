@@ -19,6 +19,7 @@ export type ConversationActionsEntry = {
 	interfaceSupported: boolean;
 	interfaceReason?: string;
 	interfaceSwitching: boolean;
+	canRename: boolean;
 	canPin: boolean;
 	pinned: boolean;
 	canDelete: boolean;

@@ -451,6 +451,8 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			interfaceSwitching: interfaceTransitionActive || interfaceSwitch.starting,
 			// Orchestrators are not deleted from here; the board owns their lifecycle.
 			canDelete: !("projectName" in session),
+			// The daemon refuses to rename the project orchestrator.
+			canRename: !("projectName" in session),
 			canPin: !("projectName" in session),
 			pinned: "projectName" in session ? false : Boolean(session.isPinned),
 			onMap: () => router.push(chatSheetRoute({ kind: "conversation-map", markers: conversationMarkers(actionsEntryRef.current?.snapshot ?? current), onSelect: setJumpToSequence })),
