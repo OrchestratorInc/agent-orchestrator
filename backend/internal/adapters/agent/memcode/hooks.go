@@ -1,6 +1,7 @@
 package memcode
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -80,15 +83,7 @@ func EmitStartWitness(out io.Writer) error {
 	if err = hookutil.AtomicWriteFile(path, b, 0600); err != nil {
 		return err
 	}
-	instructions, err := os.ReadFile(filepath.Join(data, "agent-launches", "memcode", session, "instructions.txt"))
-	if err != nil {
-		return err
-	}
-	if len(instructions) > 8192 {
-		return errors.New("memcode standing instructions exceed native hook output limit")
-	}
-	_, err = out.Write(instructions)
-	return err
+	return EmitInstructionChunk(out, "context-chunk-0")
 }
 func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
@@ -105,15 +100,21 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		}
 		instructions = b
 	}
-	if len(instructions) > 8192 {
-		return errors.New("memcode standing instructions exceed native hook output limit")
+	if len(instructions) > 512<<10 {
+		return errors.New("memcode standing instructions exceed bounded private context limit")
+	}
+	chunks := instructionChunks(instructions)
+	if len(chunks) > 64 {
+		return errors.New("memcode private instruction chunk count exceeds bounded limit")
 	}
 	private := filepath.Join(cfg.DataDir, "agent-launches", "memcode", cfg.SessionID)
 	if err := os.MkdirAll(private, 0700); err != nil {
 		return err
 	}
-	if err := hookutil.AtomicWriteFile(filepath.Join(private, "instructions.txt"), instructions, 0600); err != nil {
-		return err
+	for i, chunk := range chunks {
+		if err := hookutil.AtomicWriteFile(filepath.Join(private, fmt.Sprintf("instructions-%d.txt", i)), chunk, 0600); err != nil {
+			return err
+		}
 	}
 	dir := filepath.Join(cfg.WorkspacePath, ".memcode")
 	path := filepath.Join(dir, "hooks.json")
@@ -146,6 +147,12 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		}
 		command, _ := json.Marshal("ao hooks memcode " + event)
 		entries = append(entries, map[string]json.RawMessage{"command": command, "timeout": json.RawMessage("2")})
+		if native == "session_start" {
+			for i := 1; i < len(chunks); i++ {
+				command, _ := json.Marshal(fmt.Sprintf("ao hooks memcode context-chunk-%d", i))
+				entries = append(entries, map[string]json.RawMessage{"command": command, "timeout": json.RawMessage("2")})
+			}
+		}
 		hooks[native] = entries
 	}
 	config["hooks"], err = json.Marshal(hooks)
@@ -171,4 +178,52 @@ func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	default:
 		return "", false
 	}
+}
+
+// Each official native hook has an 8192-byte stdout cap. Split at UTF-8/newline
+// boundaries and preserve all context across ordered additive native hooks.
+func instructionChunks(data []byte) [][]byte {
+	if len(data) == 0 {
+		return [][]byte{{}}
+	}
+	var chunks [][]byte
+	for len(data) > 0 {
+		end := min(len(data), 8192)
+		if end < len(data) {
+			if newline := bytes.LastIndexByte(data[:end], '\n'); newline > 0 {
+				end = newline + 1
+			} else {
+				for end > 0 && !utf8.RuneStart(data[end]) {
+					end--
+				}
+			}
+		}
+		chunks = append(chunks, append([]byte(nil), data[:end]...))
+		data = data[end:]
+	}
+	return chunks
+}
+func EmitInstructionChunk(out io.Writer, event string) error {
+	index, err := strconv.Atoi(strings.TrimPrefix(event, "context-chunk-"))
+	if err != nil || index < 0 || index > 63 {
+		return errors.New("invalid memcode context chunk")
+	}
+	data, session := os.Getenv("AO_MEMCODE_DATA_DIR"), os.Getenv("AO_MEMCODE_SESSION")
+	if !component.MatchString(session) || !filepath.IsAbs(data) {
+		return errors.New("invalid private memcode context location")
+	}
+	file, err := os.Open(filepath.Join(data, "agent-launches", "memcode", session, fmt.Sprintf("instructions-%d.txt", index)))
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	context, err := io.ReadAll(io.LimitReader(file, 8193))
+	if err != nil {
+		return err
+	}
+	if len(context) > 8192 {
+		return errors.New("memcode native hook chunk exceeds output limit")
+	}
+	_, err = out.Write(context)
+	return err
 }

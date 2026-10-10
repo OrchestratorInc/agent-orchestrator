@@ -52,6 +52,12 @@ func (m *Manager) checkSessionHealth(ctx context.Context, rec domain.SessionReco
 		return fmt.Errorf("check session %s: %w", rec.ID, err)
 	}
 	if alive {
+		agent, found := m.agents.Agent(rec.Harness)
+		if found {
+			if _, interactive := agent.(ports.AgentInteractiveNativeRestorer); interactive && rec.Metadata.AgentSessionIDLaunchID != rec.Metadata.RuntimeLaunchID {
+				return errors.Join(errors.New("unverified interactive native startup cannot be adopted"), m.rollbackNativeInitialization(ctx, rec, handle, rec.Metadata.RuntimeLaunchID))
+			}
+		}
 		return nil
 	}
 	return m.recordAgentExited(ctx, rec)

@@ -4,11 +4,9 @@ package memcode
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -62,8 +60,8 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	}
 	return args, nil
 }
-func (*Plugin) GetPromptDeliveryStrategy(context.Context, ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
-	return ports.PromptDeliveryAfterStart, nil
+func (*Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
+	return ports.PromptDeliveryAfterStart, ctx.Err()
 }
 func (*Plugin) GetRestoreCommand(context.Context, ports.RestoreConfig) ([]string, bool, error) {
 	return nil, false, errors.New("memcode interactive native restore initialization required")
@@ -73,7 +71,7 @@ func (*Plugin) SessionInfo(ctx context.Context, s ports.SessionRef) (ports.Sessi
 	return info, ok, ctx.Err()
 }
 func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
-	return agentbase.ModelConfigSpec(ctx, "Must match the selected native endpoint's remembered model; the TUI ignores --model.")
+	return agentbase.ModelConfigSpec(ctx, "AO model overrides are unsupported; configure the native endpoint/account model before launch.")
 }
 func (*Plugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
 	if os.Getenv("MEMCODE_ENDPOINT_URL") != "" {
@@ -81,33 +79,9 @@ func (*Plugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
 	}
 	return ports.AgentAuthStatusUnknown, nil
 }
-func validateModel(workspace, model string) error {
-	if strings.TrimSpace(model) == "" {
-		return nil
+func validateModel(_ string, model string) error {
+	if strings.TrimSpace(model) != "" {
+		return errors.New("memcode AO model overrides are unsupported; select the model in native endpoint/account configuration before launch")
 	}
-	data, err := os.ReadFile(filepath.Join(workspace, ".memcode", "config.json"))
-	if err != nil {
-		return errors.New("memcode model override requires a configured native endpoint")
-	}
-	var config struct {
-		Endpoint  string `json:"endpoint"`
-		Endpoints []struct {
-			Name      string `json:"name"`
-			BaseURL   string `json:"base_url"`
-			LastModel string `json:"last_model"`
-		} `json:"endpoints"`
-	}
-	if err = json.Unmarshal(data, &config); err != nil {
-		return err
-	}
-	url := os.Getenv("MEMCODE_ENDPOINT_URL")
-	for i, e := range config.Endpoints {
-		if (url != "" && strings.TrimRight(e.BaseURL, "/") == strings.TrimRight(url, "/")) || (url == "" && (e.Name == config.Endpoint || config.Endpoint == "" && i == 0)) {
-			if e.LastModel == model {
-				return nil
-			}
-			return errors.New("memcode model must match native endpoint last_model; use native configuration before launch")
-		}
-	}
-	return errors.New("memcode selected endpoint/model cannot be verified")
+	return nil
 }
