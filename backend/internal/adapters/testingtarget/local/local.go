@@ -58,6 +58,7 @@ type launch struct {
 	daemon    string
 	revision  string
 	preflight json.RawMessage
+	liveGuard *liveDaemonGuard
 	tmux      string
 	env       []string
 	port      int
@@ -170,6 +171,9 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 	if err != nil {
 		return empty, err
 	}
+	if port < 1 || port > 65535 || port == 3001 {
+		return empty, errors.New("target requires an explicit private port other than 3001")
+	}
 	log, err := os.OpenFile(filepath.Join(root, "target.log"), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		return empty, err
@@ -228,6 +232,18 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 		s.mu.Unlock()
 		return s.target, errors.Join(err, cleanupErr)
 	}
+	s.liveGuard, err = a.observeLiveDaemon()
+	if err == nil && s.liveGuard.info != nil && s.port == s.liveGuard.info.Port {
+		err = errors.New("target port conflicts with live AO daemon")
+	}
+	if err != nil {
+		s.stopped = true
+		_ = log.Close()
+		s.log = nil
+		cleanupErr := removePrivateState(s)
+		s.mu.Unlock()
+		return s.target, errors.Join(err, cleanupErr)
+	}
 	s.env = targetEnv(os.Environ(), s, recipe.VisualMarker, recipe.RealProviders)
 	if err := writeTargetCLI(s); err != nil {
 		s.stopped = true
@@ -250,6 +266,9 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (doma
 		s.target.ElectronStartedAt = started
 		s.owned[pid] = started
 		err = a.waitReady(ctx, s, spec.Deadline)
+		if err == nil {
+			err = a.checkLiveDaemon(s.liveGuard)
+		}
 	}
 	if err != nil {
 		s.mu.Unlock()

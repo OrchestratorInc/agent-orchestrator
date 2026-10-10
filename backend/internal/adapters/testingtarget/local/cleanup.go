@@ -241,6 +241,10 @@ func (a *Adapter) Stop(ctx context.Context, target domain.TestTargetIdentity) (p
 			leftovers = append(leftovers, "run file")
 		}
 	}
+	if err := a.checkLiveDaemon(s.liveGuard); err != nil {
+		problems = append(problems, err)
+		leftovers = append(leftovers, "live AO daemon identity changed")
+	}
 	if s.log != nil {
 		if err := s.log.Sync(); err != nil {
 			problems = append(problems, err)
