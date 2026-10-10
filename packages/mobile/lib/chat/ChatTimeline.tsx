@@ -113,6 +113,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items, Platform.OS === "android" ? "android" : "ios"), [items, snapshot.turns]);
 	const groups = plan.groups;
 	const inverted = plan.inverted;
+	const jumpViewPosition = inverted ? 0.82 : 0.18;
 	const scrollToLatest = (animated: boolean) => {
 		if (inverted) listRef.current?.scrollToOffset({ offset: 0, animated });
 		else listRef.current?.scrollToEnd({ animated });
@@ -127,10 +128,10 @@ export const ChatTimeline = memo(function ChatTimeline({
 		if (index >= 0) {
 			followsTail.current = index === (inverted ? 0 : groups.length - 1);
 			setShowJump(!followsTail.current);
-			requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.82 }));
+			requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }));
 		}
 		onJumpHandled?.();
-	}, [groups, inverted, jumpToSequence, onJumpHandled]);
+	}, [groups, inverted, jumpToSequence, jumpViewPosition, onJumpHandled]);
 
 	if (plan.kind === "empty") {
 		return (
@@ -181,7 +182,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 				}}
 				onScrollToIndexFailed={({ index, averageItemLength }) => {
 					listRef.current?.scrollToOffset({ offset: Math.max(0, index * averageItemLength), animated: true });
-					setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.82 }), 120);
+					setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }), 120);
 				}}
 				ListHeaderComponent={inverted ? null : olderControl}
 				ListFooterComponent={inverted ? olderControl : null}
