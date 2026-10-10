@@ -641,6 +641,14 @@ const api = {
 		setMigration: (migration: MigrationState) =>
 			ipcRenderer.invoke("appState:setMigration", migration) as Promise<void>,
 	},
+	cliLink: {
+		setEnabled: (enabled: boolean) => ipcRenderer.invoke("cliLink:setEnabled", enabled) as Promise<void>,
+		inspect: () => ipcRenderer.invoke("cliLink:inspect") as Promise<import("./shared/cli-link").CliLinkView>,
+		link: (confirmReplacement: boolean) =>
+			ipcRenderer.invoke("cliLink:link", confirmReplacement) as Promise<import("./shared/cli-link").CliLinkResult>,
+		unlink: (confirmReplacement: boolean) =>
+			ipcRenderer.invoke("cliLink:unlink", confirmReplacement) as Promise<import("./shared/cli-link").CliLinkResult>,
+	},
 	updateSettings: {
 		get: () => ipcRenderer.invoke("updateSettings:get") as Promise<UpdateSettings>,
 		set: (settings: UpdateSettings) => ipcRenderer.invoke("updateSettings:set", settings) as Promise<void>,
