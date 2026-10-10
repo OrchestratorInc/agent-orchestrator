@@ -1,11 +1,38 @@
 // agent-orchestrator: managed Strands activity plugin
 import { spawnSync } from "node:child_process";
-import { BeforeInvocationEvent, AfterInvocationEvent, InitializedEvent } from "@strands-agents/sdk";
+import { BeforeInvocationEvent, AfterInvocationEvent, InitializedEvent, Sandbox, Tool } from "@strands-agents/sdk";
+import { makeShell } from "@strands-agents/sdk/vended-tools/shell";
 
-function report(event) {
+// Preserve the released shell's schema, validation, output and error handling.
+// Only its execution sandbox is scoped to the SDK's current tool cancellation.
+class CancellationSandbox extends Sandbox {
+  constructor(sandbox, signal) {
+    super();
+    this.sandbox = sandbox;
+    this.signal = signal;
+  }
+  execute(command, options) {
+    this.signal.throwIfAborted();
+    return this.sandbox.execute(command, { ...options, signal: this.signal });
+  }
+}
+
+class CancellationShell extends Tool {
+  constructor() {
+    super();
+    const native = makeShell();
+    this.name = native.name;
+    this.description = native.description;
+    this.toolSpec = native.toolSpec;
+  }
+  stream(context) {
+    return makeShell(new CancellationSandbox(context.agent.sandbox, context.cancelSignal)).stream(context);
+  }
+}
+
+function report(event, agent) {
   if (!process.env.AO_SESSION_ID) return;
-  const index = process.argv.indexOf("--session-id");
-  const session_id = index >= 0 ? process.argv[index + 1] : undefined;
+  const session_id = agent.sessionId;
   try {
     spawnSync("ao", ["hooks", "strands", event], {
       cwd: process.cwd(),
@@ -19,15 +46,36 @@ function report(event) {
   }
 }
 
-let rootAgent;
+// Capture the selected built-in before saved user plugins initialize. Reject
+// replacement by a custom plugin rather than silently changing its semantics.
+const selectedShells = new WeakMap();
+export const shellGuard = {
+  name: "agent-orchestrator:strands-shell-guard",
+  initAgent(agent) { selectedShells.set(agent, agent.toolRegistry.get("shell")); },
+};
+
 export default {
   name: "agent-orchestrator:strands-activity",
   initAgent(agent) {
+    const shell = agent.toolRegistry.get("shell");
+    if (!selectedShells.has(agent) || shell !== selectedShells.get(agent)) {
+      throw new Error("strands: custom shell replacement is unsupported by AO cancellation");
+    }
+    if (shell) {
+      const replacement = new CancellationShell();
+      if (JSON.stringify(shell.toolSpec) !== JSON.stringify(replacement.toolSpec)) {
+        throw new Error("strands: custom shell configuration is unsupported by AO cancellation");
+      }
+      agent.toolRegistry.addOrReplace([replacement]);
+    }
     // A propagated plugin must not let a nested agent settle the root turn.
-    if (rootAgent) return;
-    rootAgent = agent;
-    agent.addHook(InitializedEvent, () => report("session-start"));
-    agent.addHook(BeforeInvocationEvent, () => report("active"));
-    agent.addHook(AfterInvocationEvent, () => report("stop"));
+    const index = process.argv.indexOf("--session-id");
+    if (index < 0 || !agent.sessionManager) return;
+    if (agent.sessionId !== process.argv[index + 1] || agent.sandbox.cwd !== process.cwd()) {
+      throw new Error("strands: changing native session or workspace inside AO is unsupported");
+    }
+    agent.addHook(InitializedEvent, () => report("session-start", agent));
+    agent.addHook(BeforeInvocationEvent, () => report("active", agent));
+    agent.addHook(AfterInvocationEvent, () => report("stop", agent));
   },
 };

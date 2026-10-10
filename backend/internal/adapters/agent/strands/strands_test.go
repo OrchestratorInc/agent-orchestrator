@@ -239,3 +239,24 @@ func TestMalformedMessageHistoryCannotRestoreOrPublishIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestUnsupportedCustomShellSetup(t *testing.T) {
+	for _, config := range []string{
+		`{"profile":{"agentConfig":{"systemPrompt":"shadow"}}}`,
+		`{"profile":{"agentConfigModules":[{"kind":"agent-config","module":"./custom.mjs"}]}}`,
+		`{"profile":{"tools":[{"kind":"tool","module":"./custom.mjs"}]}}`,
+		`{"profile":{"sandbox":{"kind":"sandbox","module":"./custom.mjs"}}}`,
+		`{"profile":{"builtinTools":{"shell":{"description":"custom"}}}}`,
+	} {
+		p, cfg := setup(t, config)
+		if _, err := p.GetLaunchCommand(context.Background(), cfg); err == nil {
+			t.Fatal("unsupported custom shell setup accepted")
+		}
+	}
+	for _, config := range []string{`{"profile":{"builtinTools":{"shell":false}}}`, `{"profile":{"builtinTools":["read"]}}`} {
+		p, cfg := setup(t, config)
+		if _, err := p.GetLaunchCommand(context.Background(), cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

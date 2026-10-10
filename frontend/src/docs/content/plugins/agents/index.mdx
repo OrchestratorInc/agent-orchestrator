@@ -119,3 +119,7 @@ To make Codex the default worker, use `ao project set-config my-app --worker-age
 	<Card title="Cursor" description="Terminal UI and native ACP Chat." href="/plugins/agents/cursor" />
 	<Card title="Aider" description="Built-in terminal harness." href="/plugins/agents/aider" />
 </Cards>
+
+### Strands
+
+Strands CLI 0.2.0 supports TUI sessions only. Install `@strands-agents/cli@0.2.0` and configure its native provider/model first. AO preserves saved model, plugins and domain instructions, adds private standing instructions, and restores validated exact native history. AO uses supported SDK plugins to pass cancellation to the native workspace sandbox. Custom tools, sandboxes and shell options are rejected. Ask Permissions requires native default mode without always-allowed tools; bypass requires explicit native bypass configuration. AO runs foreground tools only; native background dispatch is disabled so settled activity reflects completed tools. Native in-TUI session/workspace changes are rejected. Chat and interface handoff are unavailable.

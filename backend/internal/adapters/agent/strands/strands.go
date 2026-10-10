@@ -1,5 +1,4 @@
-// Package strands contains an unregistered Strands CLI terminal-adapter candidate.
-// Native cancellation conformance must pass before production registration.
+// Package strands integrates the Strands CLI terminal interface.
 package strands
 
 import (
@@ -36,7 +35,7 @@ var _ ports.AgentBinaryResolutionInvalidator = (*Plugin)(nil)
 // New constructs the Strands adapter.
 func New() *Plugin { return &Plugin{} }
 
-// Manifest describes the candidate terminal interface; it is not registered.
+// Manifest describes the terminal interface.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{ID: "strands", Name: "Strands", Description: "Run Strands CLI terminal sessions.", Version: "0.0.1", Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
 }
@@ -159,12 +158,19 @@ func (p *Plugin) command(ctx context.Context, dataDir, id string, mode ports.Per
 	if err != nil {
 		return nil, err
 	}
-	plugins := append(append([]json.RawMessage(nil), native.Profile.Plugins...), json.RawMessage(plugin))
+	guard, err := json.Marshal(map[string]string{"kind": "plugin", "module": hookPath(dataDir), "export": "shellGuard"})
+	if err != nil {
+		return nil, err
+	}
+	plugins := append([]json.RawMessage{guard}, native.Profile.Plugins...)
+	plugins = append(plugins, json.RawMessage(plugin))
 	pluginJSON, err := json.Marshal(plugins)
 	if err != nil {
 		return nil, err
 	}
-	cmd = append(cmd, "--set", "plugins="+string(pluginJSON))
+	cmd = append(cmd, "--set", "plugins="+string(pluginJSON), "--set", "backgroundTasks=false")
+	// AO supports foreground invocations only: native fire-and-forget tools
+	// can outlive AfterInvocation and would falsely mark the session settled.
 	agentbase.AppendModelFlag(&cmd, config, "--model")
 	// --instructions replaces profile.instructions, but the harness appends the
 	// result to its built-in contract. Merge the saved domain string ourselves.
@@ -324,10 +330,15 @@ func (p *Plugin) InvalidateBinaryResolution() {
 type nativeConfig struct {
 	AgentProject string `json:"agentProject"`
 	Profile      struct {
-		Instructions string            `json:"instructions"`
-		Model        string            `json:"model"`
-		ModelModule  json.RawMessage   `json:"modelModule"`
-		Plugins      []json.RawMessage `json:"plugins"`
+		Instructions       string            `json:"instructions"`
+		Model              string            `json:"model"`
+		ModelModule        json.RawMessage   `json:"modelModule"`
+		Plugins            []json.RawMessage `json:"plugins"`
+		Tools              []json.RawMessage `json:"tools"`
+		Sandbox            json.RawMessage   `json:"sandbox"`
+		BuiltinTools       json.RawMessage   `json:"builtinTools"`
+		AgentConfig        json.RawMessage   `json:"agentConfig"`
+		AgentConfigModules json.RawMessage   `json:"agentConfigModules"`
 	} `json:"profile"`
 	Permissions struct {
 		Mode  string   `json:"mode"`
@@ -357,6 +368,18 @@ func readNativeConfig(ctx context.Context) (nativeConfig, error) {
 	return cfg, nil
 }
 func (cfg nativeConfig) validate(mode ports.PermissionMode, model string) error {
+	if len(cfg.Profile.AgentConfig) > 0 && string(cfg.Profile.AgentConfig) != "null" && string(cfg.Profile.AgentConfig) != "{}" || len(cfg.Profile.AgentConfigModules) > 0 && string(cfg.Profile.AgentConfigModules) != "null" && string(cfg.Profile.AgentConfigModules) != "[]" && string(cfg.Profile.AgentConfigModules) != "{}" {
+		return errors.New("strands: custom agent configuration is unsupported by AO instructions and native identity")
+	}
+	if len(cfg.Profile.Tools) > 0 || len(cfg.Profile.Sandbox) > 0 && string(cfg.Profile.Sandbox) != "null" {
+		return errors.New("strands: custom tools and sandboxes are unsupported by AO cancellation")
+	}
+	var builtins map[string]json.RawMessage
+	if json.Unmarshal(cfg.Profile.BuiltinTools, &builtins) == nil {
+		if shell := builtins["shell"]; len(shell) > 0 && string(shell) != "true" && string(shell) != "false" {
+			return errors.New("strands: custom built-in shell options are unsupported by AO cancellation")
+		}
+	}
 	if cfg.AgentProject != "" {
 		return errors.New("strands: authored agent projects are not supported by the terminal adapter")
 	}

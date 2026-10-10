@@ -30,6 +30,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/strands"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/vibe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -41,6 +42,7 @@ type DeriveFunc func(event string, payload []byte) (domain.ActivityState, bool)
 // Derivers maps the agent token in `ao hooks <agent> <event>` to its deriver.
 // Per-adapter PRs add their tokens here as they land.
 var Derivers = map[string]DeriveFunc{
+	"strands": strands.DeriveActivityState,
 	// Adapters that parse hook payloads for finer-grained state keep their own
 	// deriver; the rest share the name-only StandardDeriveActivityState.
 	"claude-code":  claudecode.DeriveActivityState,

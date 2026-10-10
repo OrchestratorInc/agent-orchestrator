@@ -19,6 +19,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		action                                               Action
 		argv                                                 []string
 	}{
+		{"strands", "Set up Strands", "", "Configure native provider credentials and model in Strands before launching AO", "https://github.com/strands-agents/strands", "", ActionSetup, nil},
 		{"claude-code", "Log in to Claude Code", "claude", "Choose Claude subscription, Anthropic Console, or SSO", "https://code.claude.com/docs/en/installation", "", ActionLogin, []string{"claude", "auth", "login"}},
 		{"codex", "Log in to Codex", "codex", "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex", "", ActionLogin, []string{"codex", "login"}},
 		{"cursor", "Log in to Cursor", "cursor-agent", "Native browser flow", "https://docs.cursor.com/en/cli/installation", "", ActionLogin, []string{"cursor-agent", "login"}},
@@ -70,7 +71,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		// with no command to drive. DeepSeek Harness has no login subcommand either,
 		// but its web profile serves the Models page that writes the credential, so
 		// its setup is a terminal plan.
-		case "aider", "unreal-agent":
+		case "aider", "unreal-agent", "strands":
 			wantLaunchMode = LaunchDocumentation
 		}
 		if seen[got.AgentID] {

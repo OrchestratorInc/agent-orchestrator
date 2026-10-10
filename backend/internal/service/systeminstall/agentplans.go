@@ -8,6 +8,7 @@ import (
 )
 
 var agentDocumentationURLs = map[Target]string{
+	TargetStrands:     "https://github.com/strands-agents/strands",
 	TargetClaudeCode:  "https://code.claude.com/docs/en/installation",
 	TargetCodex:       "https://github.com/openai/codex",
 	TargetCursor:      "https://docs.cursor.com/en/cli/installation",
@@ -253,6 +254,8 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
+	case TargetStrands:
+		plans = []Plan{s.planNPM(target, "@strands-agents/cli@0.2.0")}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
 	default:
