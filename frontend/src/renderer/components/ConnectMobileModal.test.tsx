@@ -120,9 +120,76 @@ test("QR payload carries host, port, and password for one-scan connect", () => {
 test("encodes the LAN address by default", async () => {
 	renderMobileSettings();
 	await waitFor(() => expect(qrPayload()).not.toBeNull());
-	expect(decodeQr(qrPayload()!).endpoints).toContainEqual(
+	const offer = decodeQr(qrPayload()!);
+	expect(offer.endpoints).toContainEqual(
 		expect.objectContaining({ kind: "lan", host: "192.168.1.42" }),
 	);
+	expect(offer.token).toBe("fake-password-for-testing");
+	expect(offer.hostId).toBe("h_fixture");
+	expect(screen.getByTestId("mobile-pairing-address")).toHaveTextContent("192.168.1.42:3011");
+});
+
+test("uses advertised LAN addresses instead of the legacy host and port", async () => {
+	mobileStatus.endpoints = [{ kind: "lan", host: "192.168.1.43", port: 4011, secure: false }];
+	renderMobileSettings();
+
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+	expect(decodeQr(qrPayload()!).endpoints).toEqual(mobileStatus.endpoints);
+	expect(screen.getByTestId("mobile-pairing-address")).toHaveTextContent("192.168.1.43:4011");
+});
+
+test("shows the tunnel-only QR without a LAN address and preserves pairing credentials", async () => {
+	mobileStatus.host = "";
+	mobileStatus.tailscaleHost = "";
+	mobileStatus.endpoints = [{ kind: "tunnel", host: "host.example.net", port: 443, secure: true }];
+	mobileStatus.tunnel = {
+		supported: true, running: true, ready: true, hostname: "host.example.net", location: "", lastError: "",
+	};
+	vi.mocked(apiClient.POST).mockClear();
+	renderMobileSettings();
+
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+	expect(decodeQr(qrPayload()!)).toEqual({
+		v: 2,
+		hostId: "h_fixture",
+		name: "host.example.net",
+		platform: "",
+		endpoints: mobileStatus.endpoints,
+		token: "fake-password-for-testing",
+	});
+	expect(await screen.findByTestId("mobile-pairing-address")).toHaveTextContent("host.example.net:443");
+	expect(screen.queryByText(/No network address found/i)).not.toBeInTheDocument();
+	expect(apiClient.POST).not.toHaveBeenCalled();
+});
+
+test("waits for a tunnel-only endpoint instead of reporting a missing LAN address", async () => {
+	mobileStatus.host = "";
+	mobileStatus.tailscaleHost = "";
+	mobileStatus.endpoints = [];
+	mobileStatus.tunnel = {
+		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
+	};
+	renderMobileSettings();
+
+	expect(await screen.findByTestId("mobile-pairing-preparing")).toBeVisible();
+	expect(qrPayload()).toBeNull();
+	expect(screen.queryByText(/No network address found/i)).not.toBeInTheDocument();
+	expect(screen.queryByTestId("mobile-pairing-address")).not.toBeInTheDocument();
+});
+
+test("withholds the QR when tunnel startup fails without advertising an endpoint", async () => {
+	mobileStatus.host = "";
+	mobileStatus.tailscaleHost = "";
+	mobileStatus.endpoints = [];
+	mobileStatus.tunnel = {
+		supported: true, running: false, ready: false, hostname: "", location: "", lastError: "connector exited",
+	};
+	renderMobileSettings();
+
+	expect(await screen.findByText(/No network address found/i)).toBeVisible();
+	expect(qrPayload()).toBeNull();
+	expect(screen.queryByTestId("mobile-pairing-preparing")).not.toBeInTheDocument();
+	expect(screen.queryByTestId("mobile-pairing-address")).not.toBeInTheDocument();
 });
 
 test("vertically aligns the regenerate control with the password row", async () => {
@@ -295,14 +362,17 @@ test.skip("shows a hint instead of a QR when Tailscale is not running", async ()
 	expect(qrPayload()).toBeNull();
 });
 
-// Regression: an empty host used to encode {"v":1,"host":"",...}, which the
-// phone rejects as "not an AO pairing code" — an incoherent error for a QR AO
-// generated itself.
-test("shows a hint instead of an unscannable QR when there is no LAN address", async () => {
+test("shows a hint instead of an unscannable QR when no endpoint is available", async () => {
 	mobileStatus.host = "";
+	mobileStatus.tailscaleHost = "";
+	mobileStatus.endpoints = [];
+	mobileStatus.tunnel = {
+		supported: false, running: false, ready: false, hostname: "", location: "", lastError: "",
+	};
 	renderMobileSettings();
 	await waitFor(() => expect(screen.getByText(/No network address found/i)).toBeInTheDocument());
 	expect(qrPayload()).toBeNull();
+	expect(screen.queryByTestId("mobile-pairing-preparing")).not.toBeInTheDocument();
 });
 
 // SKIPPED: drives the connection picker, which is commented out in
