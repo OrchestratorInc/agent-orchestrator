@@ -21,6 +21,7 @@ import (
 	"github.com/creack/pty"
 	vt "github.com/unixshells/vt-go"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -133,13 +134,15 @@ func TestReleasedCLIConformance(t *testing.T) {
 	fresh := startNativeTUI(t, cmd, env)
 	// Native setup must retain its own trust choice, without receiving task
 	// keystrokes. Decline the one unrelated project hook in the test fixture.
-	fresh.waitFor(t, "Hooks need review")
+	fresh.waitForHookReview(t)
 	select {
 	case <-requests:
 		t.Fatal("initial task ran before native hook review completed")
 	default:
 	}
-	fresh.terminal.Write([]byte("3"))
+	if _, err := fresh.terminal.Write([]byte("3")); err != nil {
+		t.Fatal(err)
+	}
 	first := awaitModelRequest(t, requests, fresh)
 	for _, canary := range []string{privateCanary, projectCanary, prompt} {
 		if !bytes.Contains(first, []byte(canary)) {
@@ -177,8 +180,10 @@ func TestReleasedCLIConformance(t *testing.T) {
 		t.Fatalf("exact native restore: %v, %v", ok, err)
 	}
 	restored := startNativeTUI(t, resume, env)
-	restored.waitFor(t, "Hooks need review")
-	restored.terminal.Write([]byte("3"))
+	restored.waitForHookReview(t)
+	if _, err := restored.terminal.Write([]byte("3")); err != nil {
+		t.Fatal(err)
+	}
 	second := awaitModelRequest(t, requests, restored)
 	if !bytes.Contains(second, []byte(prompt)) || !bytes.Contains(second, []byte("AO_RESUME_TASK_325bd1")) || !bytes.Contains(second, []byte(privateCanary)) {
 		t.Fatalf("resume lost native history or private context: %s", second)
@@ -437,6 +442,28 @@ func (run *nativeTUI) waitFor(t *testing.T, value string) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("native TUI did not render %q: %s", value, run.output())
+}
+
+func (run *nativeTUI) waitForHookReview(t *testing.T) {
+	t.Helper()
+	menuVisible := func() bool {
+		frame := terminalui.PlainTerminalText(run.emulator.Render())
+		return strings.Contains(frame, "Hooks need review") && strings.Contains(frame, "Continue without trusting")
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for !menuVisible() {
+		if time.Now().After(deadline) {
+			t.Fatalf("native hook review menu did not render: %s", run.emulator.Render())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// rust-v0.0.56 startup_hooks_review draws before input_boundary drains
+	// typeahead for up to one second. A shortcut sent during that quarantine
+	// can be discarded, even though the complete menu is already visible.
+	time.Sleep(1100 * time.Millisecond)
+	if !menuVisible() {
+		t.Fatalf("native hook review changed before the fixture decision: %s", run.emulator.Render())
+	}
 }
 
 func awaitModelRequest(t *testing.T, requests <-chan []byte, run *nativeTUI) []byte {

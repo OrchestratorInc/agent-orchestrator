@@ -59,13 +59,22 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		Profile        string `toml:"profile"`
 		ModelProvider  string `toml:"model_provider"`
 		ModelProviders map[string]struct {
-			EnvKey string `toml:"env_key"`
+			EnvKey             string `toml:"env_key"`
+			RequiresOpenAIAuth bool   `toml:"requires_openai_auth"`
+			Auth               any    `toml:"auth"`
+			AWS                any    `toml:"aws"`
 		} `toml:"model_providers"`
 	}
 	if toml.Unmarshal(data, &config) != nil || config.Profile != "" || config.ModelProvider == "" {
 		return ports.AgentAuthStatusUnknown, nil
 	}
 	provider := config.ModelProviders[config.ModelProvider]
+	// Native rejects env_key combined with helper/AWS auth or reserved Bedrock
+	// overrides. requires_openai_auth selects native login credentials instead.
+	if provider.RequiresOpenAIAuth || provider.Auth != nil || provider.AWS != nil ||
+		config.ModelProvider == "amazon-bedrock" || config.ModelProvider == "amazon-bedrock-runtime" {
+		return ports.AgentAuthStatusUnknown, nil
+	}
 	if provider.EnvKey != "" && strings.TrimSpace(os.Getenv(provider.EnvKey)) != "" {
 		return ports.AgentAuthStatusConfigured, nil
 	}

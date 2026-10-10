@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -367,6 +368,32 @@ func TestPollKeepsGenuineLongClaudeTurnActive(t *testing.T) {
 	}
 	if len(sink.signals) != 0 {
 		t.Fatalf("long active turn emitted reconciliation: %+v", sink.signals)
+	}
+}
+
+func TestPollReconcilesStyledClaudeLoginPrompt(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessClaudeCode)
+	sink := &fakeSink{}
+	runtime := &fakeStyledRuntime{
+		fakeRuntime: fakeRuntime{output: "stale raw terminal redraws"},
+		styled: strings.Replace(claudeStuckActiveScreen, "Login expired · Please run /login",
+			"Login \x1b[31mexpired\x1b[0m · Please run \x1b[1m/login\x1b[0m", 1),
+	}
+	observer := New(
+		fakeSessions{rows: []domain.SessionRecord{session}},
+		sink,
+		runtime,
+		fakeAgents{domain.HarnessClaudeCode: claudecode.New()},
+		Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+	)
+
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityWaitingInput ||
+		sink.signals[0].Event != "terminal-waiting-input" {
+		t.Fatalf("styled login prompt reconciliation = %+v, want waiting_input", sink.signals)
 	}
 }
 

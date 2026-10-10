@@ -29,6 +29,11 @@ env_key = "AO_INTERPRETER_TEST_KEY"
 		{"selected credential", configured, "fixture-key", "", ports.AgentAuthStatusConfigured},
 		{"missing credential", configured, "", "", ports.AgentAuthStatusUnknown},
 		{"whitespace credential", configured, " \t\n", "", ports.AgentAuthStatusUnknown},
+		{"native auth required", configured + "requires_openai_auth = true\n", "fixture-key", "", ports.AgentAuthStatusUnknown},
+		{"conflicting auth helper", configured + "[model_providers.custom.auth]\ncommand = \"credential-helper\"\n", "fixture-key", "", ports.AgentAuthStatusUnknown},
+		{"conflicting AWS auth", configured + "[model_providers.custom.aws]\nregion = \"us-east-1\"\n", "fixture-key", "", ports.AgentAuthStatusUnknown},
+		{"reserved Bedrock override", strings.ReplaceAll(configured, "custom", "amazon-bedrock"), "fixture-key", "", ports.AgentAuthStatusUnknown},
+		{"reserved Bedrock runtime override", strings.ReplaceAll(configured, "custom", "amazon-bedrock-runtime"), "fixture-key", "", ports.AgentAuthStatusUnknown},
 		{"unrelated credential", `model_provider = "other"
 [model_providers.custom]
 env_key = "AO_INTERPRETER_TEST_KEY"
