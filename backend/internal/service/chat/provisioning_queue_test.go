@@ -253,41 +253,64 @@ func TestFirstControllerAfterQueuedPromptIsNotFencedAsResume(t *testing.T) {
 }
 
 func TestDrainWithoutControllerKeepsOpeningPromptForLaterStart(t *testing.T) {
-	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
-	ctx := context.Background()
-	svc := provisioningService(t, st)
-	if _, err := svc.Send(ctx, id, ports.ChatUserMessage{Text: "opening brief", Origin: domain.MessageOriginHuman}); err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.DrainQueued(ctx, id); !errors.Is(err, chatsvc.ErrNoController) {
-		t.Fatalf("drain before controller = %v, want ErrNoController", err)
-	}
-	snapshot, err := svc.Snapshot(ctx, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(snapshot.Turns) != 1 || snapshot.Turns[0].State != domain.TurnStateQueued {
-		t.Fatalf("opening brief after failed drain = %+v, want queued", snapshot.Turns)
-	}
-	if _, err := svc.Start(ctx, chatsvc.StartConfig{
-		SessionID: id, ProjectID: testProject, Kind: domain.KindWorker,
-		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
-		ControllerReady: func(chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
-			return chatsvc.ControllerCommit{}, nil
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = svc.Stop(context.Background(), id) })
-	if err := svc.DrainQueued(ctx, id); err != nil {
-		t.Fatalf("drain after controller start: %v", err)
-	}
-	snapshot, err = svc.Snapshot(ctx, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(snapshot.Turns) != 1 || snapshot.Turns[0].State != domain.TurnStateRunning {
-		t.Fatalf("opening brief after retry = %+v, want running", snapshot.Turns)
+	for _, kind := range []domain.SessionKind{domain.KindWorker, domain.KindOrchestrator} {
+		t.Run(string(kind), func(t *testing.T) {
+			st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+			ctx := context.Background()
+			record, found, err := st.GetSession(ctx, id)
+			if err != nil || !found {
+				t.Fatalf("read session: found=%v err=%v", found, err)
+			}
+			record.Kind = kind
+			if err := st.UpdateSession(ctx, record); err != nil {
+				t.Fatal(err)
+			}
+			svc := provisioningService(t, st)
+			if _, err := svc.Send(ctx, id, ports.ChatUserMessage{Text: "opening brief", Origin: domain.MessageOriginHuman}); err != nil {
+				t.Fatal(err)
+			}
+			if err := svc.DrainQueued(ctx, id); !errors.Is(err, chatsvc.ErrNoController) {
+				t.Fatalf("drain before controller = %v, want ErrNoController", err)
+			}
+			snapshot, err := svc.Snapshot(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(snapshot.Turns) != 1 || snapshot.Turns[0].State != domain.TurnStateQueued {
+				t.Fatalf("opening brief after failed drain = %+v, want queued", snapshot.Turns)
+			}
+			queuedConversationID := snapshot.Conversation.ID
+			if _, err := svc.Start(ctx, chatsvc.StartConfig{
+				SessionID: id, ProjectID: testProject, Kind: kind,
+				Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+				ControllerReady: func(chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
+					return chatsvc.ControllerCommit{}, nil
+				},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = svc.Stop(context.Background(), id) })
+			if err := svc.DrainQueued(ctx, id); err != nil {
+				t.Fatalf("drain after controller start: %v", err)
+			}
+			snapshot, err = svc.Snapshot(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(snapshot.Turns) != 1 || snapshot.Turns[0].State != domain.TurnStateRunning {
+				t.Fatalf("opening brief after retry = %+v, want running", snapshot.Turns)
+			}
+			if snapshot.Conversation.ID != queuedConversationID {
+				t.Fatalf("conversation changed after start: %s -> %s", queuedConversationID, snapshot.Conversation.ID)
+			}
+			wantScope := domain.ConversationScopeSession
+			if kind == domain.KindOrchestrator {
+				wantScope = domain.ConversationScopeProject
+			}
+			if snapshot.Conversation.Scope != wantScope {
+				t.Fatalf("conversation scope = %q, want %q", snapshot.Conversation.Scope, wantScope)
+			}
+		})
 	}
 }
 
