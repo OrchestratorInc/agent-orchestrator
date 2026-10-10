@@ -181,6 +181,7 @@ import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenu
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
 import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
+import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
 import { AGENT_SWITCH_VISIBILITY_IPC_CHANNEL } from "./shared/agent-switch-observability";
@@ -315,6 +316,7 @@ let daemonRestartAfterExitProcess: ChildProcess | null = null;
 let daemonStartPromise: Promise<DaemonStatus> | null = null;
 let daemonStartEpoch = 0;
 let daemonStatus: DaemonStatus = { state: "stopped" };
+let daemonAttachmentGeneration = 0;
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
 let browserProfileIpc: BrowserProfileIpc | null = null;
@@ -530,6 +532,7 @@ function focusMainWindow(): void {
 }
 
 function setDaemonStatus(nextStatus: DaemonStatus): void {
+	if (nextStatus.state !== "ready" || daemonStatus.state !== "ready" || nextStatus.port !== daemonStatus.port || nextStatus.pid !== daemonStatus.pid) daemonAttachmentGeneration++;
 	if (nextStatus.state !== "ready") disposeBrowserRuntimeLink();
 	daemonStatus = nextStatus;
 	getShellWebContents()?.send("daemon:status", daemonStatus);
@@ -1864,7 +1867,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 		if (portConfirmed || daemonProcess !== child || daemonStoppingProcess === child) return;
 		portConfirmed = true;
 		stopDiscovery();
-		setDaemonStatus({ state: "ready", port });
+		setDaemonStatus({ state: "ready", port, pid: child.pid });
 
 		// Establish the OS-native liveness link on the spawn path (we own this
 		// daemon). Holding the connection keeps the daemon alive; when Electron
@@ -2321,6 +2324,9 @@ registerRemotesIpc(ipcMain, {
 		if (!await getCloudSession(cloudDataDir())) throw new Error("Sign in to AO Cloud to use remote hosts.");
 	},
 	getAccountId: async () => (await getCloudSession(cloudDataDir()))?.user.id ?? "",
+	localIdentity: createLocalHostIdentity(() => daemonStatus.state === "ready" && daemonStatus.port
+		? { port: daemonStatus.port, pid: daemonStatus.pid, generation: daemonAttachmentGeneration }
+		: null),
 });
 
 ipcMain.handle("app:chooseDirectory", async (_event, input?: string | { title?: string; defaultPath?: string }) => {

@@ -19,6 +19,11 @@ export class RemoteRegistry {
 
 	constructor(private readonly start: StartProxy) {}
 
+	connected(entry: RemoteEntry): ConnectedHostView | undefined {
+		const existing = this.live.get(entry.url);
+		return existing && existing.view.hostId === entry.hostId && existing.password === entry.password ? existing.view : undefined;
+	}
+
 	private enqueue<T>(action: () => Promise<T>): Promise<T> {
 		const result = this.tail.then(action, action);
 		this.tail = result.then(() => undefined, () => undefined);
@@ -29,8 +34,8 @@ export class RemoteRegistry {
 		if (this.closing) return Promise.reject(new Error("remote connections are closing"));
 		return this.enqueue(async () => {
 			if (!entry.hostId) throw new Error("remote host must be paired again to record its identity");
-			const existing = this.live.get(entry.url);
-			if (existing?.view.hostId === entry.hostId && existing.password === entry.password) return existing.view;
+			const existing = this.connected(entry);
+			if (existing) return existing;
 			for (const [url, connected] of this.live) {
 				if (url !== entry.url && connected.view.hostId !== entry.hostId) continue;
 				this.live.delete(url);
