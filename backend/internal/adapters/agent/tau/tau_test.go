@@ -90,6 +90,48 @@ func TestVersionGateRejectsUninspectedBinary(t *testing.T) {
 	}
 }
 
+func TestSharedWorkspaceInstructionsStaySessionScoped(t *testing.T) {
+	workspace := t.TempDir()
+	file := filepath.Join(t.TempDir(), "system.md")
+	if err := os.WriteFile(file, []byte("core-owned instructions"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := fixturePlugin()
+	launch := ports.LaunchConfig{WorkspacePath: workspace, SystemPrompt: "inline copy", SystemPromptFile: file, Permissions: ports.PermissionModeBypassPermissions}
+	argv, err := p.GetLaunchCommand(context.Background(), launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(argv, "\n"), "--append-system-prompt\n"+file) {
+		t.Fatalf("ignored core-owned session file: %#v", argv)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".tau")); !os.IsNotExist(err) {
+		t.Fatalf("created an unnecessary workspace copy: %v", err)
+	}
+	paths := make([]string, 0, 2)
+	for _, prompt := range []string{"controller instructions", "worker instructions"} {
+		launch.SystemPromptFile, launch.SystemPrompt = "", prompt
+		argv, err := p.GetLaunchCommand(context.Background(), launch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, arg := range argv {
+			if arg == "--append-system-prompt" {
+				paths = append(paths, argv[i+1])
+			}
+		}
+	}
+	if len(paths) != 2 || paths[0] == paths[1] {
+		t.Fatalf("shared-workspace prompts collide: %#v", paths)
+	}
+	for i, prompt := range []string{"controller instructions", "worker instructions"} {
+		data, err := os.ReadFile(paths[i])
+		if err != nil || !strings.HasSuffix(string(data), prompt) {
+			t.Fatalf("session instructions were overwritten: %q, %v", data, err)
+		}
+	}
+}
+
 func TestManagedHooksPreserveUserFiles(t *testing.T) {
 	work := t.TempDir()
 	cfg := ports.WorkspaceHookConfig{WorkspacePath: work}
