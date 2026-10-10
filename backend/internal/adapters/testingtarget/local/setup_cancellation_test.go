@@ -44,9 +44,11 @@ if sys.argv[1:] == ["child"]:
     sys.exit(0)
 name = Path(sys.argv[0]).name
 args = sys.argv[1:]
+if name == "node" and args and Path(args[0]).name == "npm-cli.js":
+    name, args = "npm", args[1:]
 if name == "git" and os.environ["SETUP_TEST_STAGE"] == "build":
     os.execv(os.environ["SETUP_TEST_GIT"], ["git", *args])
-if ((name == "npm" and os.environ["SETUP_TEST_STAGE"] == "prepare") or
+if ((name == "npm" and args[0] == "ci" and os.environ["SETUP_TEST_STAGE"] == "prepare") or
         (name == "go" and args[0] == "build" and os.environ["SETUP_TEST_STAGE"] == "build")) and not release.exists():
     child = subprocess.Popen([sys.executable, sys.argv[0], "child"])
     ready.write_text(json.dumps([os.getpid(), child.pid]))
@@ -62,6 +64,8 @@ elif name == "node" and args == ["--version"]:
 elif name == "node" and Path(args[0]).name == "prepare.cjs":
     Path(".vite").mkdir(exist_ok=True)
     Path(".vite/testing-target.json").write_text("{}")
+elif name == "npm" and args == ["--version"]:
+    print("11.19.0")
 elif name == "npm":
     Path("node_modules").mkdir(exist_ok=True)
 `
@@ -69,6 +73,13 @@ elif name == "npm":
 		if err := os.WriteFile(filepath.Join(tools, name), []byte(script), 0o700); err != nil {
 			t.Fatal(err)
 		}
+	}
+	npm := filepath.Join(root, "lib", "node_modules", "npm", "bin", "npm-cli.js")
+	if err := os.MkdirAll(filepath.Dir(npm), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(npm, nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
 	t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("SETUP_TEST_READY", ready)
@@ -143,12 +154,13 @@ func TestPreparationCancellationStopsChildrenAndReusesCheckout(t *testing.T) {
 	ready, release := setupCancellationTools(t, root, "prepare")
 	t.Setenv("HOME", root)
 	checkout := filepath.Join(root, ".ao", "dev", "agentic-target", "repos", "owned", "checkout")
-	for _, name := range []string{"backend", "frontend/src/shared", "packages/product-ui", "frontend/node_modules"} {
+	for _, name := range []string{"backend", "frontend/src/shared", "packages/product-ui", "frontend/node_modules", ".github/workflows"} {
 		if err := os.MkdirAll(filepath.Join(checkout, name), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
 	files := map[string]string{
+		".github/workflows/frontend.yml":        "node-version: 24\nrun: npm ci\n",
 		"backend/go.mod":                        "module example.test/owned\n\ngo 1.27.1\n",
 		"frontend/src/main.ts":                  `import {resolveDaemonLaunch} from "./shared/daemon-launch"; resolveDaemonLaunch();`,
 		"frontend/src/shared/daemon-launch.ts":  "export function resolveDaemonLaunch() {}",

@@ -13,17 +13,22 @@ import (
 
 func TestWorkerContextUsesOnlyLiveTargetPaths(t *testing.T) {
 	f := fixture(t)
+	f.s.preflight = json.RawMessage(`{"nodeVersion":"v24.19.0","npmVersion":"11.17.0"}`)
 	ctx := context.Background()
 	got, err := f.a.WorkerContext(ctx, f.s.target)
 	if err != nil || got.CheckoutPath != filepath.Dir(f.s.frontend) || got.CLIPath != filepath.Join(f.s.root, "target-ao") || got.RunFilePath != filepath.Join(f.s.root, "running.json") || got.DataDir != f.s.target.DataDir || got.FixtureDir != filepath.Join(f.s.root, "fixtures") {
 		t.Fatalf("worker context = %+v, %v", got, err)
 	}
 	var facts struct {
-		Revision string `json:"revision"`
-		Daemon   string `json:"daemonExecutable"`
-		Port     int    `json:"port"`
+		Revision  string `json:"revision"`
+		Daemon    string `json:"daemonExecutable"`
+		Port      int    `json:"port"`
+		Preflight struct {
+			Node string `json:"nodeVersion"`
+			NPM  string `json:"npmVersion"`
+		} `json:"preflight"`
 	}
-	if err := json.Unmarshal([]byte(got.LaunchContext), &facts); err != nil || facts.Revision != f.s.revision || facts.Daemon != f.s.daemon || facts.Port != f.s.port {
+	if err := json.Unmarshal([]byte(got.LaunchContext), &facts); err != nil || facts.Revision != f.s.revision || facts.Daemon != f.s.daemon || facts.Port != f.s.port || facts.Preflight.Node != "v24.19.0" || facts.Preflight.NPM != "11.17.0" {
 		t.Fatalf("worker did not receive checked launch facts: %s, %v", got.LaunchContext, err)
 	}
 	foreign := f.s.target

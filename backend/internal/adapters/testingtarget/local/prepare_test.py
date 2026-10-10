@@ -33,23 +33,66 @@ class WarmPreparationTest(unittest.TestCase):
                     (cwd / ".vite/testing-target.json").write_text("{}")
                 return "https://example.test/repo.git" if "get-url" in args else ""
 
-            with patch.object(prepare, "run", side_effect=run), patch.object(prepare, "preflight", return_value={"goVersion": "go1.27.1", "nodeVersion": "v22.23.2"}):
+            toolchain = {"nodePath": "/ci/bin/node", "npmPath": "/ci/lib/npm-cli.js",
+                         "nodeVersion": "v24.21.0", "npmVersion": "11.19.0"}
+            with patch.object(prepare, "run", side_effect=run), patch.object(prepare, "preflight", return_value={"goVersion": "go1.27.1"}), patch.object(prepare, "ci_toolchain", return_value=toolchain):
                 first = prepare.prepare(root, "a" * 40, root / "cache")
                 second = prepare.prepare(first, "b" * 40, root / "cache")
                 self.assertEqual(first, second)
                 self.assertIn((["git", "cat-file", "-e", "b" * 40 + "^{commit}"], first), calls)
                 self.assertNotIn((["git", "fetch", "--no-tags", "origin", "b" * 40], first), calls)
                 self.assertEqual(sum(args[:2] == ["git", "clone"] for args, _ in calls), 1)
-                self.assertEqual(sum(args[:2] == ["npm", "ci"] for args, _ in calls), 2)
+                self.assertEqual(sum(args[:3] == [toolchain["nodePath"], toolchain["npmPath"], "ci"] for args, _ in calls), 2)
                 (first / "frontend/package-lock.json").write_text("changed")
                 prepare.prepare(root, "c" * 40, root / "cache")
-                self.assertEqual(sum(args[:2] == ["npm", "ci"] for args, _ in calls), 3)
+                self.assertEqual(sum(args[:3] == [toolchain["nodePath"], toolchain["npmPath"], "ci"] for args, _ in calls), 3)
+                toolchain["npmVersion"] = "11.20.0"
+                prepare.prepare(root, "d" * 40, root / "cache")
+                self.assertEqual(sum(args[:3] == [toolchain["nodePath"], toolchain["npmPath"], "ci"] for args, _ in calls), 5)
+                self.assertEqual(json.loads((first / "frontend/.vite/testing-target.json").read_text())["preflight"]["npmVersion"], "11.20.0")
                 (first / ".ao-testing-active").write_text("live launch")
                 with self.assertRaises(FileExistsError):
                     prepare.prepare(root, "d" * 40, root / "cache")
                 self.assertEqual((first / ".ao-testing-active").read_text(), "live launch")
                 self.assertEqual((first / "frontend/node_modules/kept").read_text(), "cached")
                 self.assertFalse(any("clean" in args for args, _ in calls))
+
+    def test_ci_toolchain_ignores_host_shims_and_reports_missing_requirement(self):
+        for requirement, expected in [("24", "v24.21.0"), ("22.23.2", "v22.23.2"), ("24.20.0", None)]:
+            with self.subTest(requirement=requirement), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp).resolve()
+                workflow = root / ".github/workflows/frontend.yml"
+                workflow.parent.mkdir(parents=True)
+                workflow.write_text(f"node-version: 22\nrun: npm ci --dry-run\nnode-version: {requirement}\nrun: npm ci\n")
+                bins = []
+                for version, npm_version in [("v22.23.2", "10.9.8"), ("v24.21.0", "11.19.0")]:
+                    prefix = root / version
+                    (prefix / "bin").mkdir(parents=True)
+                    (prefix / "bin/node").touch()
+                    npm = prefix / "lib/node_modules/npm/bin/npm-cli.js"
+                    npm.parent.mkdir(parents=True)
+                    npm.touch()
+                    bins.append(str(prefix / "bin"))
+                original_path = os.pathsep.join(bins)
+
+                def run(args, cwd):
+                    self.assertEqual(cwd, root)
+                    node = Path(args[0])
+                    return node.parent.parent.name if args[1:] == ["--version"] else (
+                        "10.9.8" if node.parent.parent.name.startswith("v22") else "11.19.0")
+
+                with patch.dict(os.environ, {"PATH": original_path}), patch.object(prepare, "run", side_effect=run):
+                    if expected is None:
+                        with self.assertRaisesRegex(RuntimeError, "unsupported_toolchain: frontend CI requires Node 24.20.0.+available: v22.23.2.+v24.21.0"):
+                            prepare.ci_toolchain(root)
+                        self.assertEqual(os.environ["PATH"], original_path)
+                    else:
+                        facts = prepare.ci_toolchain(root)
+                        self.assertEqual(facts["ciNode"], requirement)
+                        self.assertEqual(facts["nodeVersion"], expected)
+                        self.assertEqual(facts["nodePath"], str(root / expected / "bin/node"))
+                        self.assertEqual(facts["npmVersion"], "11.19.0" if expected.startswith("v24") else "10.9.8")
+                        self.assertEqual(os.environ["PATH"].split(os.pathsep)[0], str(root / expected / "bin"))
 
     def test_controller_reservation_is_validated_and_left_to_its_owner(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -70,7 +113,8 @@ class WarmPreparationTest(unittest.TestCase):
             (root / "package-lock.json").write_text("lock")
             with patch.object(prepare, "run", side_effect=subprocess.CalledProcessError(1, "npm")):
                 with self.assertRaises(subprocess.CalledProcessError):
-                    prepare.install(root, root / "stamp")
+                    prepare.install(root, root / "stamp", {"nodePath": "/ci/node", "npmPath": "/ci/npm-cli.js",
+                                                               "nodeVersion": "v24.21.0", "npmVersion": "11.19.0"})
             self.assertFalse((root / "stamp").exists())
         with patch.dict(os.environ, {"GOCACHE": "/normal/go", "npm_config_cache": "/normal/npm",
                                      "AO_DATA_DIR": "/supervisor"}):

@@ -43,15 +43,63 @@ def reserve(checkout, owner=None):
             path.unlink()
 
 
-def install(directory, stamp):
+def ci_toolchain(checkout):
+    workflow = checkout / ".github/workflows/frontend.yml"
+    current = None
+    required = set()
+    for line in workflow.read_text().splitlines():
+        match = re.fullmatch(r"\s*node-version:\s*['\"]?(\d+(?:\.\d+){0,2})['\"]?\s*(?:#.*)?", line)
+        if match:
+            current = match.group(1)
+        if re.search(r"\bnpm ci\b", line) and "--dry-run" not in line:
+            if current is None:
+                raise RuntimeError("unsupported_revision: frontend CI npm ci has no literal Node version")
+            required.add(current)
+    if len(required) != 1:
+        raise RuntimeError("unsupported_revision: frontend CI has no single Node requirement for npm ci")
+    requirement = required.pop()
+    prefix = tuple(map(int, requirement.split(".")))
+    seen = set()
+    available = []
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if not directory:
+            continue
+        node = (Path(directory) / "node").resolve()
+        if node in seen or not node.is_file():
+            continue
+        seen.add(node)
+        try:
+            version = run([str(node), "--version"], checkout)
+        except (OSError, subprocess.CalledProcessError):
+            available.append(f"{node}: version probe failed")
+            continue
+        npm = node.parent.parent / "lib/node_modules/npm/bin/npm-cli.js"
+        available.append(f"{version} at {node}" + ("" if npm.is_file() else " without bundled npm"))
+        if not npm.is_file():
+            continue
+        match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", version)
+        if not match or tuple(map(int, match.groups()))[:len(prefix)] != prefix:
+            continue
+        npm_version = run([str(node), str(npm), "--version"], checkout)
+        # Lifecycle scripts must resolve the same Node, not a worker's shim.
+        os.environ["PATH"] = str(node.parent) + os.pathsep + os.environ["PATH"]
+        return {"ciNode": requirement, "nodeVersion": version,
+                "npmVersion": npm_version, "nodePath": str(node), "npmPath": str(npm)}
+    raise RuntimeError(f"unsupported_toolchain: frontend CI requires Node {requirement} with bundled npm; "
+                       f"available: {'; '.join(available) or 'none'}")
+
+
+def install(directory, stamp, toolchain):
     if (directory / "node_modules").is_symlink():
         raise RuntimeError("Target node_modules must belong to its checkout, not a symlink")
     lockfile = directory / "package-lock.json"
-    digest = hashlib.sha256(lockfile.read_bytes()).hexdigest()
+    digest = hashlib.sha256(lockfile.read_bytes() + toolchain["nodeVersion"].encode() +
+                            toolchain["npmVersion"].encode()).hexdigest()
     if stamp.exists() and stamp.read_text().strip() == digest and (directory / "node_modules").is_dir():
         return
-    run(["npm", "ci", "--prefer-offline", "--no-audit", "--no-fund"], directory)
-    stamp.write_text(hashlib.sha256(lockfile.read_bytes()).hexdigest() + "\n")
+    run([toolchain["nodePath"], toolchain["npmPath"], "ci", "--prefer-offline",
+         "--no-audit", "--no-fund"], directory)
+    stamp.write_text(digest + "\n")
 
 
 def preflight(checkout):
@@ -133,9 +181,11 @@ def prepare(repository, commit, cache, reservation_owner=None):
                 # PR intake may have fetched this commit from a fork, not origin.
                 run(["git", "cat-file", "-e", commit + "^{commit}"], checkout)
             run(["git", "checkout", "--detach", commit], checkout)
+            toolchain = ci_toolchain(checkout)
             facts = preflight(checkout)
+            facts.update(toolchain)
             for directory in ["frontend", "packages/product-ui"]:
-                install(checkout / directory, root / (directory.replace("/", "-") + ".sha256"))
+                install(checkout / directory, root / (directory.replace("/", "-") + ".sha256"), toolchain)
             frontend = checkout / "frontend"
             adapter = Path(__file__).resolve().parent
             # The existing runtime builder skips unchanged source signatures.
