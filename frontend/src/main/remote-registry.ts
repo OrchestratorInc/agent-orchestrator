@@ -21,7 +21,7 @@ export class RemoteRegistry {
 
 	connected(entry: RemoteEntry): ConnectedHostView | undefined {
 		const existing = this.live.get(entry.url);
-		return existing?.view.hostId === entry.hostId && existing.password === entry.password ? existing.view : undefined;
+		return existing && existing.view.hostId === entry.hostId && existing.password === entry.password ? existing.view : undefined;
 	}
 
 	private enqueue<T>(action: () => Promise<T>): Promise<T> {
