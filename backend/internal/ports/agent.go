@@ -693,3 +693,21 @@ const (
 	PromptDeliveryAfterStart  PromptDeliveryStrategy = "after_start"
 	PromptDeliveryCustomAgent PromptDeliveryStrategy = "custom_agent"
 )
+
+// AgentInteractiveNativeRestorer requires a strict, taskless initialization after
+// runtime launch. It never exposes fresh argv as a successful ordinary resume.
+type AgentInteractiveNativeRestorer interface {
+	PrepareNativeRestore(context.Context, RestoreConfig) (NativeRestoreInitialization, error)
+}
+
+// NativeRestoreInitialization is private to one restore attempt. The adapter
+// validates native history and interprets current terminal/witness evidence;
+// the manager alone owns runtime I/O, deadlines, publication and cleanup.
+type NativeRestoreInitialization interface {
+	Argv() []string
+	LaunchEnv() map[string]string
+	ResumeInput() string
+	TargetID() string
+	Ready(context.Context, string, string) (bool, error)
+	Restored(context.Context, string, string) (bool, error)
+}

@@ -1,6 +1,8 @@
-# memcode TUI: native restore blocks registration
+# memcode TUI: historical mount-time restore failure
 
-memcode is **not registered or tested inside AO**. The official Linux x86-64
+This section records the original unregistered candidate. Recovery now uses the supported interactive `/resume` route through strict AO initialization; the original mount-time failure below remains unchanged evidence.
+
+At the original checkpoint, memcode was **not registered or tested inside AO**. The official Linux x86-64
 v0.38.1 binary starts its native TUI, but an exact native resume exits 2 with
 `panic: ui: AppendString called without primary screen support`. A new native
 reproduction with a valid synthetic two-message transcript reproduces this

@@ -119,3 +119,9 @@ To make Codex the default worker, use `ao project set-config my-app --worker-age
 	<Card title="Cursor" description="Terminal UI and native ACP Chat." href="/plugins/agents/cursor" />
 	<Card title="Aider" description="Built-in terminal harness." href="/plugins/agents/aider" />
 </Cards>
+
+### memcode (TUI only)
+
+Install the official native release binary and configure its endpoint/model before launching AO. AO supports the terminal UI only, with no Chat, interface handoff, agent switching, or reviewer support. The TUI ignores `--model`; an AO model choice must match the selected native endpoint's `last_model`. Ask, Auto and Bypass map to native `--ask`, `--auto` and `--allow-all`; accept-edits is unsupported and native catastrophic-command checks remain.
+
+Exact restore initializes a taskless empty native composer, sends `/resume <full-native-id>` once, and requires a current-launch native identity witness, real loaded messages and an empty composer before returning success. Missing, malformed, empty or mismatched history fails closed. Private standing instructions use the native session-start hook (8192-byte limit); existing user hooks are preserved. Native session-end during `/resume` does not imply process exit. Human native session/configuration switching inside a managed terminal is outside AO's supported lifecycle.
