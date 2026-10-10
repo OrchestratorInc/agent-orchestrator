@@ -52,7 +52,7 @@ func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObse
 	running := false
 	for i := prompt + 1; i < len(raw); i++ {
 		line := strings.ToLower(strings.TrimSpace(terminalui.PlainTerminalText(raw[i])))
-		if strings.Contains(line, "enter to confirm") || strings.Contains(line, "enter to select") || strings.Contains(line, "enter to submit answer") || strings.Contains(line, "enter to submit all") || strings.Contains(line, "esc to go back") {
+		if strings.Contains(line, "enter to confirm") || strings.Contains(line, "enter to select") || strings.Contains(line, "enter to submit answer") || strings.Contains(line, "enter to submit all") || strings.Contains(line, "esc to go back") || strings.Contains(line, "enter confirm · esc skip") {
 			observation.Work = ports.TerminalSurfaceWorkWaitingInput
 			return observation
 		}

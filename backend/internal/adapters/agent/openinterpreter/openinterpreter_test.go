@@ -16,7 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-const nativeUserRecord = `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"existing task"}]}}` + "\n"
+const nativeUserRecord = `{"timestamp":"2026-10-10T00:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"existing task"}]}}` + "\n"
 
 func TestLaunchPreservesNativeConfigurationAndPromptBoundary(t *testing.T) {
 	p := &Plugin{resolvedBinary: "/bin/interpreter"}
@@ -106,7 +106,7 @@ func writeNativeHistory(t *testing.T, id, workspace string) string {
 	if err := os.Mkdir(filepath.Join(home, "sessions"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	data, err := json.Marshal(map[string]any{"type": "session_meta", "payload": sessionMetadata{ID: id, CWD: workspace}})
+	data, err := json.Marshal(map[string]any{"timestamp": "2026-10-10T00:00:00Z", "type": "session_meta", "payload": sessionMetadata{ID: id, CWD: workspace}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,8 +232,8 @@ func TestTranscriptIdentityMustMatchContent(t *testing.T) {
 		metadata string
 		want     ports.NativeSessionAvailability
 	}{
-		{`{"type":"session_meta","payload":{"id":"wrong"}}`, ports.NativeSessionAvailabilityUnavailable},
-		{`{"type":"session_meta","payload":{"id":"` + id + `"}}`, ports.NativeSessionAvailabilityAvailable},
+		{`{"timestamp":"2026-10-10T00:00:00Z","type":"session_meta","payload":{"id":"wrong"}}`, ports.NativeSessionAvailabilityUnavailable},
+		{`{"timestamp":"2026-10-10T00:00:00Z","type":"session_meta","payload":{"id":"` + id + `"}}`, ports.NativeSessionAvailabilityAvailable},
 	} {
 		if err := os.WriteFile(path, []byte(tc.metadata+"\n"+nativeUserRecord), 0o600); err != nil {
 			t.Fatal(err)
@@ -249,6 +249,19 @@ func TestTranscriptIdentityMustMatchContent(t *testing.T) {
 	got, err := p.ProbeNativeSession(context.Background(), ref)
 	if err != nil || got != ports.NativeSessionAvailabilityUnavailable {
 		t.Fatalf("archived = %q, %v", got, err)
+	}
+}
+
+func TestNativeUserEvidenceRequiresTypedMeaningfulContent(t *testing.T) {
+	for _, content := range []string{"", `null`, `{}`, `[]`, `[{"type":"input_text"}]`, `[{"type":"input_text","text":5}]`, `[{"type":"input_text","text":"  "}]`, `[{"type":"unknown","text":"task"}]`, `[{"type":"input_image","image_url":"image","detail":"invalid"}]`} {
+		if validNativeUserContent(json.RawMessage(content)) {
+			t.Fatalf("accepted invalid user content %q", content)
+		}
+	}
+	for _, content := range []string{`[{"type":"input_text","text":"task"}]`, `[{"type":"input_image","file_id":"file_123"}]`, `[{"type":"input_audio","audio_url":"data:audio/wav;base64,abc"}]`} {
+		if !validNativeUserContent(json.RawMessage(content)) {
+			t.Fatalf("rejected native content %q", content)
+		}
 	}
 }
 

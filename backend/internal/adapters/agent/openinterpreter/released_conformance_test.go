@@ -139,6 +139,7 @@ func TestReleasedCLIConformance(t *testing.T) {
 	if err := json.Unmarshal(data, &hook); err != nil || !IsRootHook(data) {
 		t.Fatalf("native root identity: %s, %v", data, err)
 	}
+	assertNativeHiddenContext(t, p, home, hook.SessionID)
 	fresh.stop()
 	if err := os.Remove(hookPath); err != nil {
 		t.Fatal(err)
@@ -204,8 +205,11 @@ func assertPrivateModelContext(t *testing.T, body []byte) {
 	privateRole, nativeDefault := false, false
 	for _, message := range request.Messages {
 		if bytes.Contains(message.Content, []byte(privateCanary)) {
-			if message.Role != "system" && message.Role != "developer" {
-				t.Fatalf("private hook context became %s content", message.Role)
+			// Native chat-wire-compat::chat_message_role maps every developer
+			// item to user for Chat Completions. Assert this wire contract and
+			// separately verify the tagged native developer record below.
+			if message.Role != "user" {
+				t.Fatalf("unexpected native Chat Completions mapping: %s", message.Role)
 			}
 			privateRole = true
 		}
@@ -215,6 +219,51 @@ func assertPrivateModelContext(t *testing.T, body []byte) {
 	}
 	if !privateRole || !nativeDefault {
 		t.Fatalf("native default instructions/private context missing: %s", body)
+	}
+}
+
+func assertNativeHiddenContext(t *testing.T, p *Plugin, home, id string) {
+	t.Helper()
+	path, ok, err := p.LocateTranscript(context.Background(), ports.NativeSessionRef{ConfigDir: home, NativeSessionID: id})
+	if err != nil || !ok {
+		t.Fatalf("native context transcript: %v, %v", ok, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, line := range bytes.Split(data, []byte{'\n'}) {
+		if !bytes.Contains(line, []byte(privateCanary)) {
+			continue
+		}
+		var record struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Type     string `json:"type"`
+				Role     string `json:"role"`
+				Metadata struct {
+					Kinds []string `json:"content_item_kinds"`
+				} `json:"internal_chat_message_metadata_passthrough"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.Type != "response_item" || record.Payload.Type != "message" {
+			continue
+		}
+		if record.Payload.Role != "developer" {
+			t.Fatalf("private native context became %s message", record.Payload.Role)
+		}
+		for _, kind := range record.Payload.Metadata.Kinds {
+			if kind == "hooks.additional_context" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("missing tagged native developer hook context")
 	}
 }
 

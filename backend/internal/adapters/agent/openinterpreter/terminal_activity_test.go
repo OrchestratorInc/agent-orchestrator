@@ -19,6 +19,7 @@ func TestTerminalActivityUsesCurrentNativeChrome(t *testing.T) {
 		{"native queued inputs", "• Working (0s • esc to interrupt)\n\n• Queued follow-up inputs\n  ↳ Queued follow-up question\n    ⌥+↑ edit last queued message\n\n› Ask Codex to do anything\n\n  ? for shortcuts            100% context left", domain.ActivityActive, true},
 		{"native agents navigation", "› \n  ← for agents · ? for shortcuts   100% context left", domain.ActivityIdle, true},
 		{"permission", "Would you like to run the following command?\n› 1. Yes\n  2. No\nPress enter to confirm", domain.ActivityWaitingInput, true},
+		{"hook trust", "Hooks need review\n› 1. Review hooks\n2. Trust all and continue\n3. Continue without trusting (hooks won't run)\nenter confirm · esc skip", domain.ActivityWaitingInput, true},
 		{"question", "Pick an option\n› 1. Choice\n  tab to add notes | enter to submit answer | esc to interrupt", domain.ActivityWaitingInput, true},
 		{"auth", "Sign in to Open Interpreter", "", false},
 		{"history", "› old task\nAnswer includes ? for shortcuts", "", false},

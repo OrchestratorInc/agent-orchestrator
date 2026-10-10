@@ -124,8 +124,9 @@ func readSessionMetadata(path string) (sessionMetadata, error) {
 		return sessionMetadata{}, fmt.Errorf("open-interpreter: empty native transcript")
 	}
 	var record struct {
-		Type    string          `json:"type"`
-		Payload sessionMetadata `json:"payload"`
+		Timestamp *string         `json:"timestamp"`
+		Type      string          `json:"type"`
+		Payload   sessionMetadata `json:"payload"`
 	}
 	if len(scanner.Bytes()) > 256<<10 {
 		return sessionMetadata{}, fmt.Errorf("open-interpreter: native metadata exceeds size limit")
@@ -133,7 +134,7 @@ func readSessionMetadata(path string) (sessionMetadata, error) {
 	if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
 		return sessionMetadata{}, err
 	}
-	if record.Type != "session_meta" {
+	if record.Type != "session_meta" || record.Timestamp == nil {
 		return sessionMetadata{}, fmt.Errorf("open-interpreter: missing native session metadata")
 	}
 	// Native resume tolerates malformed records and metadata-only files. Those
@@ -141,16 +142,24 @@ func readSessionMetadata(path string) (sessionMetadata, error) {
 	hasUser := false
 	for scanner.Scan() {
 		var item struct {
-			Type    string `json:"type"`
-			Payload struct {
-				Type string `json:"type"`
-				Role string `json:"role"`
+			Timestamp *string `json:"timestamp"`
+			Type      string  `json:"type"`
+			Payload   struct {
+				Type    string          `json:"type"`
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
 			} `json:"payload"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &item); err != nil {
 			return sessionMetadata{}, fmt.Errorf("open-interpreter: malformed native history: %w", err)
 		}
+		if item.Timestamp == nil {
+			return sessionMetadata{}, fmt.Errorf("open-interpreter: native history is missing a timestamp")
+		}
 		if item.Type == "response_item" && item.Payload.Type == "message" && item.Payload.Role == "user" {
+			if !validNativeUserContent(item.Payload.Content) {
+				return sessionMetadata{}, fmt.Errorf("open-interpreter: native user history has invalid or empty content")
+			}
 			hasUser = true
 		}
 	}
@@ -164,6 +173,47 @@ func readSessionMetadata(path string) (sessionMetadata, error) {
 		return sessionMetadata{}, fmt.Errorf("open-interpreter: native history has no user conversation")
 	}
 	return record.Payload, nil
+}
+
+// Match the released native ContentItem variants for the user row used as
+// conversation evidence. A role tag alone is not a native-decodable message.
+func validNativeUserContent(data json.RawMessage) bool {
+	var parts []struct {
+		Type     string  `json:"type"`
+		Text     *string `json:"text"`
+		ImageURL *string `json:"image_url"`
+		FileID   *string `json:"file_id"`
+		AudioURL *string `json:"audio_url"`
+		Detail   *string `json:"detail"`
+	}
+	if json.Unmarshal(data, &parts) != nil || len(parts) == 0 {
+		return false
+	}
+	meaningful := false
+	for _, part := range parts {
+		var value *string
+		switch part.Type {
+		case "input_text", "output_text":
+			value = part.Text
+		case "input_audio":
+			value = part.AudioURL
+		case "input_image":
+			if part.Detail != nil && *part.Detail != "auto" && *part.Detail != "low" && *part.Detail != "high" && *part.Detail != "original" {
+				return false
+			}
+			value = part.ImageURL
+			if value == nil {
+				value = part.FileID
+			}
+		default:
+			return false
+		}
+		if value == nil {
+			return false
+		}
+		meaningful = meaningful || strings.TrimSpace(*value) != ""
+	}
+	return meaningful
 }
 
 func findTranscript(ctx context.Context, root, value string) (string, bool, error) {
