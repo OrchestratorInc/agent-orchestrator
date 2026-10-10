@@ -3,11 +3,12 @@ package modelcatalog
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
 	"time"
+
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // repoConfigRefPatterns are the refs a launch worktree can be seeded from or
@@ -134,7 +135,7 @@ func runGit(dir string, args ...string) ([]byte, error) {
 func runGitInput(dir, input string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := aoprocess.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	if input != "" {
 		cmd.Stdin = strings.NewReader(input)

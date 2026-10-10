@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1429,6 +1430,53 @@ func TestChatSpawnPersistsBrowserCapabilityBeforeControllerStart(t *testing.T) {
 	}
 	if got := rec.Metadata.BrowserCapabilityVerifier; got != "chat-verifier" {
 		t.Fatalf("committed verifier = %q, want chat-verifier", got)
+	}
+}
+
+func TestChatStartsPassTheAOToolServerWithOnlyDaemonCoordinates(t *testing.T) {
+	launcher := &recordingLauncher{}
+	mgr, store, _ := newChatManager(launcher)
+	mgr.executable = func() (string, error) { return "/opt/ao/bin/ao", nil }
+	mgr.runFilePath = "/ao-test/running.json"
+	mgr.browserCapabilities = &scriptedBrowserCapabilities{issues: []browserCapabilityIssue{
+		{token: "spawn-token", verifier: "spawn-verifier"}, {token: "restore-token", verifier: "restore-verifier"},
+	}}
+	project := store.projects[string(chatTestProject)]
+	project.Config.Env = map[string]string{"PROJECT_TOKEN": "secret"}
+	store.projects[string(chatTestProject)] = project
+	ctx := context.Background()
+
+	rec, _, _, err := mgr.Spawn(ctx, ports.SpawnConfig{
+		ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex, RequestedMode: domain.SessionModeChat,
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if _, err := mgr.Kill(ctx, rec.ID); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if _, err := mgr.RestoreWithMode(ctx, rec.ID); err != nil {
+		t.Fatalf("RestoreWithMode: %v", err)
+	}
+
+	want := []ports.ChatMCPServerConfig{{
+		Name: "ao", Type: "stdio", Command: "/opt/ao/bin/ao", Args: []string{"mcp"},
+		Env: map[string]string{EnvSessionID: string(rec.ID), EnvRunFile: "/ao-test/running.json", EnvDataDir: mgr.dataDir},
+	}}
+	if mgr.dataDir == "" {
+		t.Fatal("test manager has no data dir")
+	}
+	if len(launcher.started) != 2 || launcher.started[1].ProviderConversationID == "" {
+		t.Fatalf("want a spawn and a resume, got %d starts", len(launcher.started))
+	}
+	for i, start := range launcher.started {
+		// The agent's own env carries the capability; the tool server never does.
+		if start.Env[EnvBrowserCapability] == "" || !reflect.DeepEqual(start.MCPServers, want) {
+			t.Fatalf("start %d: MCPServers = %+v, want %+v", i, start.MCPServers, want)
+		}
+	}
+	if got := mgr.aoMCPServers(domain.HarnessUnreal, launcher.started[0].Env); got != nil {
+		t.Fatalf("unreal agent got tool servers %+v; its driver refuses them", got)
 	}
 }
 

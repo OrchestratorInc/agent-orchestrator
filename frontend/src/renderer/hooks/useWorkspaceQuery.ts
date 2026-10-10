@@ -78,6 +78,7 @@ function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): 
 		path: artifact.path,
 		previewUrl: artifact.previewUrl,
 		rawUrl: artifact.rawUrl,
+		inlineUrl: artifact.inlineUrl,
 		size: artifact.size,
 		updatedAt: artifact.updatedAt,
 	};
@@ -337,6 +338,9 @@ async function fetchRemoteSessions(hostId: string) {
 		artifactFiles: await Promise.all((session.artifactFiles ?? []).map(async (artifact) => ({
 			...artifact,
 			rawUrl: artifact.rawUrl ? await aoBridge.remotes.previewUrl(hostId, session.id, artifact.rawUrl) : undefined,
+			// The remote daemon's inline origin is a localhost name, which here
+			// would mean this computer; a remote chat shows no frame anyway.
+			inlineUrl: undefined,
 		}))),
 	})));
 }

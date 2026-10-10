@@ -192,6 +192,11 @@ surface (`npm run sqlc`, `npm run api`).
   immediately, and delegate open/focus/selection freshness decisions to the
   daemon coordinator.
 - Electron main handles daemon discovery, launch, and status reporting.
+- On macOS, window close and desktop Quit/Cmd+Q destroy the window while the
+  Dock, menu-bar tray, app-owned daemon, and enabled mobile access remain alive.
+  Reopening creates a fresh window; **Quit AO Completely** in the tray performs
+  a full exit. Desktop browser targets stop with the window. Updates and system
+  shutdown still exit the app; Windows/Linux quit behavior is unchanged.
 - Shell: sidebar (projects + sessions, add/remove project), sessions board,
   session view + inspector, project settings, pull-requests page,
   spawn-orchestrator flow.

@@ -1593,6 +1593,7 @@ func TestSessionsAPI_GetExposesArtifactFilesAndServesHTMLArtifact(t *testing.T) 
 				Path       string `json:"path"`
 				Kind       string `json:"kind"`
 				PreviewURL string `json:"previewUrl"`
+				InlineURL  string `json:"inlineUrl"`
 			} `json:"artifactFiles"`
 		} `json:"session"`
 	}
@@ -1612,6 +1613,13 @@ func TestSessionsAPI_GetExposesArtifactFilesAndServesHTMLArtifact(t *testing.T) 
 	}
 	if resp.Session.ArtifactFiles[1].PreviewURL != "" {
 		t.Fatalf("markdown previewUrl = %q, want empty", resp.Session.ArtifactFiles[1].PreviewURL)
+	}
+	// The chat frames the page from its own inline origin, not the preview one.
+	if inline := resp.Session.ArtifactFiles[0].InlineURL; !strings.Contains(inline, "://ao-inline-artifact.") || !strings.HasSuffix(inline, "/site/index.html") {
+		t.Fatalf("html inlineUrl = %q, want an ao-inline-artifact origin", inline)
+	}
+	if resp.Session.ArtifactFiles[1].InlineURL != "" {
+		t.Fatalf("markdown inlineUrl = %q, want empty", resp.Session.ArtifactFiles[1].InlineURL)
 	}
 
 	directPreviewPath, err := url.Parse(resp.Session.ArtifactFiles[0].PreviewURL)

@@ -1974,7 +1974,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(resume).toHaveBeenCalledOnce();
 	});
 
-	it("shows connecting during the controller gap, then restores the composer when ready", () => {
+	it("shows connecting during the controller gap, then restores the composer when ready", async () => {
 		const { rerender } = render(
 			<ChatWorkspace
 				snapshot={{
@@ -1990,15 +1990,71 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
 		expect(screen.getByTestId("chat-conversation-panel")).toHaveAttribute("inert");
-		// Progress is the topbar spinner; the composer stays empty rather than
-		// painting a second "Connecting…" / "Switching…" label over the editor.
 		expect(screen.queryByText("Connecting to the agent…")).not.toBeInTheDocument();
 		expect(screen.queryByText("The controller is not connected")).not.toBeInTheDocument();
+		expect(screen.getByText("Starting the chat agent")).toBeInTheDocument();
+		expect(document.querySelector(".cursor-chat-composer[data-starting]")).not.toBeNull();
 		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
 
+		rerender(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "connecting" } }}
+				controllerTransitioning
+			/>,
+		);
+		expect(await screen.findByText("Restoring your conversation")).toBeInTheDocument();
+
 		rerender(<ChatWorkspace snapshot={chatFixtureEmpty} />);
-		expect(screen.queryByText("Connecting to the agent…")).not.toBeInTheDocument();
+		expect(screen.queryByText("Restoring your conversation")).not.toBeInTheDocument();
+		expect(document.querySelector(".cursor-chat-composer[data-starting]")).toBeNull();
 		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true");
+	});
+
+	it("docks the composer at the bottom while arriving in a chat that already has messages", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }}
+				session={{ ...chatSession, lastUserMessageAt: "2026-10-09T00:00:00Z" }}
+				controllerTransitioning
+			/>,
+		);
+		const placement = document.querySelector("[data-composer-placement]");
+		expect(placement).toHaveAttribute("data-composer-placement", "dock");
+		expect(placement).toHaveClass("justify-end");
+	});
+
+	it("fades the transcript in only when messages load during an interface switch", () => {
+		const loaded = { ...chatFixtureEmpty, items: [humanMessage("hello")] };
+		const navigation = render(<ChatWorkspace snapshot={chatFixtureEmpty} />);
+		navigation.rerender(<ChatWorkspace snapshot={loaded} />);
+		expect(document.querySelector(".chat-transcript-reveal")).toBeNull();
+		navigation.unmount();
+		const arrival = render(<ChatWorkspace snapshot={chatFixtureEmpty} session={chatSession} controllerTransitioning />);
+		arrival.rerender(<ChatWorkspace snapshot={loaded} session={chatSession} controllerTransitioning />);
+		expect(document.querySelector(".chat-transcript-reveal")).not.toBeNull();
+	});
+
+	it("centers the composer while arriving in a chat with no messages yet", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }}
+				session={{ ...chatSession, lastUserMessageAt: undefined }}
+				controllerTransitioning
+			/>,
+		);
+		expect(document.querySelector("[data-composer-placement]")).toHaveAttribute("data-composer-placement", "center");
+	});
+
+	it("keeps the composer quiet while leaving chat for the terminal", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				controllerTransitioning
+				newWorkDisabled
+			/>,
+		);
+		expect(screen.queryByText("Starting the chat agent")).not.toBeInTheDocument();
+		expect(document.querySelector(".cursor-chat-composer[data-starting]")).toBeNull();
 	});
 
 	it("keeps history readable while a stopped agent resumes after opening", () => {

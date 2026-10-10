@@ -166,7 +166,11 @@ function nextCloudShellTitle(terminals: ShellTerminal[], sessionId: string): str
 	return `Terminal ${count + 1}`;
 }
 
-type OpenShellTerminalMutationInput = OpenShellTerminalInput & { optimisticShell?: ShellTerminal };
+type OpenShellTerminalMutationInput = OpenShellTerminalInput & {
+	optimisticShell?: ShellTerminal;
+	/** The create request open() already started; the mutation adopts it. */
+	request?: Promise<ShellTerminal>;
+};
 
 /** Destroys a shell this renderer owns: daemon, cloud, or preview. */
 async function destroyShellTerminal(handleId: string, hostId?: HostId): Promise<void> {
@@ -286,7 +290,7 @@ export function useOpenShellTerminal(hostId?: HostId) {
 
 	const mutation = useMutation({
 		mutationFn: async (input: OpenShellTerminalMutationInput = {}): Promise<ShellTerminal | null> => {
-			const shell = await createShell(input);
+			const shell = await (input.request ?? createShell(input));
 			// The user closed the tab while it was being created: the shell must not
 			// appear later, so destroy it rather than adopting it.
 			if (input.optimisticShell && cancelledPendingShells.has(input.optimisticShell.handleId)) {
@@ -328,7 +332,8 @@ export function useOpenShellTerminal(hostId?: HostId) {
 				if (index < 0) return [...(current ?? []), shell];
 				return current?.map((candidate, candidateIndex) => (candidateIndex === index ? shell : candidate)) ?? [shell];
 			});
-			if (!shell.cloud) void queryClient.invalidateQueries({ queryKey });
+			// onSettled refetches the list; a second invalidation here only
+			// cancelled and restarted that same request.
 		},
 		onError: (error, _input, context) => {
 			if (context?.optimisticHandleId) settlePendingShell(context.optimisticHandleId);
@@ -355,9 +360,15 @@ export function useOpenShellTerminal(hostId?: HostId) {
 			queryClient.getQueryData<ShellTerminal[]>(queryKey) ?? [],
 			hostId,
 		);
+		// Send the create request before anything renders. The click's state
+		// updates render synchronously in a microtask, ahead of the mutation's own
+		// async steps, so a request started by mutationFn waited for a full
+		// session render. The mutation adopts this request and handles its result.
+		const request = createShell({ ...input, optimisticShell });
+		request.catch(() => undefined);
 		trackPendingShell(optimisticShell);
 		addOptimisticShell(queryClient, queryKey, optimisticShell);
-		mutation.mutate({ ...input, optimisticShell });
+		mutation.mutate({ ...input, optimisticShell, request });
 		return optimisticShell;
 	};
 

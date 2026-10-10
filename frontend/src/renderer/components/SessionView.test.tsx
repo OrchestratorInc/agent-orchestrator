@@ -48,6 +48,7 @@ const interfaceTransitionMock = vi.hoisted(() => ({
 const interfaceTransitionState = vi.hoisted(() => ({
 	starting: false,
 	startingPolicy: undefined as "drain" | "interrupt" | undefined,
+	startingTarget: undefined as "chat" | "tui" | undefined,
 	settling: false,
 	startError: undefined as string | undefined,
 	status: undefined as SessionInterfaceTransitionStatus | undefined,
@@ -165,6 +166,7 @@ vi.mock("../hooks/useSessionInterfaceTransition", async (importOriginal) => ({
 		refreshStatus: interfaceTransitionMock.refreshStatus,
 		starting: interfaceTransitionState.starting,
 		startingPolicy: interfaceTransitionState.startingPolicy,
+		startingTarget: interfaceTransitionState.startingTarget,
 		settling: interfaceTransitionState.settling,
 		startError: interfaceTransitionState.startError,
 		resetStartError: interfaceTransitionMock.resetStartError,
@@ -985,6 +987,7 @@ describe("SessionView", () => {
 		interfaceTransitionMock.acknowledgeNotice.mockReset();
 		interfaceTransitionState.starting = false;
 		interfaceTransitionState.startingPolicy = undefined;
+		interfaceTransitionState.startingTarget = undefined;
 		interfaceTransitionState.settling = false;
 		interfaceTransitionState.startError = undefined;
 		interfaceTransitionState.status = undefined;
@@ -2995,9 +2998,8 @@ describe("SessionView", () => {
 		await userEvent.click(screen.getByRole("button", { name: /^Stop now and switch/ }));
 		await confirmUnsafeChatLeave();
 		await waitFor(() => expect(interfaceTransitionMock.start).toHaveBeenCalledTimes(1));
-		await waitFor(() =>
-			expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "true"),
-		);
+		await waitFor(() => expect(screen.getByTestId("terminal-center")).toBeInTheDocument());
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
 
 		let finishStaging!: (attachments: FileAttachment[]) => void;
 		const staging = renderHook(() =>
@@ -3063,9 +3065,8 @@ describe("SessionView", () => {
 
 		await chooseSessionAction("Switch to terminal UI");
 		await userEvent.click(screen.getByRole("button", { name: /^Stop now and switch/ }));
-		await waitFor(() =>
-			expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "true"),
-		);
+		await waitFor(() => expect(screen.getByTestId("terminal-center")).toBeInTheDocument());
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
 		await act(async () => rejectSwitch(new Error("switch rejected")));
 		expect(interfaceTransitionMock.refreshStatus).toHaveBeenCalledTimes(1);
 		await waitFor(() =>
@@ -3126,7 +3127,8 @@ describe("SessionView", () => {
 		});
 
 		await act(async () => finishRefresh({ supported: true, targetMode: "tui" }));
-		expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "true");
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
 
 		interfaceTransitionState.status = {
 			supported: true,
@@ -3184,7 +3186,8 @@ describe("SessionView", () => {
 			transition,
 		};
 		view.rerender(<SessionView sessionId={session.id} />);
-		expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "true");
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
 
 		interfaceTransitionState.status = {
 			supported: true,
@@ -3508,11 +3511,65 @@ describe("SessionView", () => {
 		interfaceTransitionState.status.transition!.phase = "completed";
 		interfaceTransitionState.settling = true;
 		view.rerender(<SessionView sessionId="sess-1" />);
-		expect(chatSurface()).toHaveAttribute("data-new-work-disabled", "true");
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
 
 		interfaceTransitionState.settling = false;
 		view.rerender(<SessionView sessionId="sess-1" />);
 		expect(chatSurface()).toHaveAttribute("data-new-work-disabled", "false");
+	});
+
+	it("shows the chat surface on the click itself for an idle terminal session, before the daemon answers", async () => {
+		const session = workerSession("sess-1");
+		session.mode = "tui";
+		session.status = "idle";
+		session.activity = { state: "idle", lastActivityAt: "2026-08-06T00:00:00Z" };
+		interfaceTransitionState.status = { supported: true, targetMode: "chat" };
+		interfaceTransitionMock.start.mockReturnValueOnce(new Promise(() => {}));
+		render(<SessionView sessionId="sess-1" />);
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+
+		await chooseSessionAction("Switch to chat UI");
+
+		expect(interfaceTransitionMock.start).toHaveBeenCalledWith(expect.objectContaining({ targetMode: "chat", policy: "drain" }));
+		expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "true");
+		expect(screen.queryByTestId("terminal-center")).not.toBeInTheDocument();
+	});
+
+	it("shows the chat surface the moment a terminal-to-chat switch is requested", () => {
+		const session = workerSession("sess-1");
+		session.mode = "tui";
+		interfaceTransitionState.status = { supported: true, targetMode: "chat" };
+		interfaceTransitionState.starting = true;
+		interfaceTransitionState.startingPolicy = "interrupt";
+		interfaceTransitionState.startingTarget = "chat";
+		render(<SessionView sessionId="sess-1" />);
+		expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "true");
+		expect(screen.queryByTestId("terminal-center")).not.toBeInTheDocument();
+	});
+
+	it("shows the terminal the moment a chat-to-terminal switch is requested", () => {
+		const session = workerSession("sess-1");
+		session.mode = "chat";
+		interfaceTransitionState.status = { supported: true, targetMode: "tui" };
+		interfaceTransitionState.starting = true;
+		interfaceTransitionState.startingPolicy = "interrupt";
+		interfaceTransitionState.startingTarget = "tui";
+		render(<SessionView sessionId="sess-1" />);
+		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+	});
+
+	it("keeps the current surface while a switch waits for the running turn to finish", () => {
+		const session = workerSession("sess-1");
+		session.mode = "chat";
+		interfaceTransitionState.status = { supported: true, targetMode: "tui" };
+		interfaceTransitionState.starting = true;
+		interfaceTransitionState.startingPolicy = "drain";
+		interfaceTransitionState.startingTarget = "tui";
+		render(<SessionView sessionId="sess-1" />);
+		expect(screen.getByTestId("chat-surface")).toBeInTheDocument();
+		expect(screen.queryByTestId("terminal-center")).not.toBeInTheDocument();
 	});
 
 	it("discards one session's switch consent dialog when navigating to another session", async () => {
