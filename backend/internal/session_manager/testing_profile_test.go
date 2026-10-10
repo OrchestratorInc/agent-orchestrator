@@ -510,9 +510,22 @@ func TestComparisonWorkerReadsPinnedDocsBeforeAnyTargetExists(t *testing.T) {
 	mgr, _, _ := newChatManager(launcher)
 	pinTestingDaemon(mgr)
 	mgr.dataDir = t.TempDir()
+	if err := skillassets.Install(mgr.dataDir); err != nil {
+		t.Fatal(err)
+	}
+	skillPath := filepath.Join(skillassets.TestingDir(mgr.dataDir), "SKILL.md")
+	skill, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"For a PR, the same worker runs both legs.", "ao testing leg start base --json", "ao testing leg start head --json", "Do not spawn a second investigator or restart the"} {
+		if !strings.Contains(string(skill), required) {
+			t.Fatal("installed skill lost the same-worker flow", required)
+		}
+	}
 	profile := &fakeTestingProfile{}
 	mgr.SetTestingProfileResolver(profile)
-	_, err := mgr.LaunchTestingWorker(context.Background(), testingsvc.WorkerLaunchRequest{
+	_, err = mgr.LaunchTestingWorker(context.Background(), testingsvc.WorkerLaunchRequest{
 		ProjectID: chatTestProject, Harness: domain.HarnessClaudeCode, AttemptID: "pending-base", RunID: "base", Comparison: true,
 		Context: ports.TestingWorkerContext{CheckoutPath: "/owned/warm-checkout"}, Prompt: "Compare pinned revisions", Timeout: time.Minute,
 		Prepare: func(_ context.Context, id domain.SessionID) (testingsvc.WorkerBinding, error) {
@@ -527,7 +540,7 @@ func TestComparisonWorkerReadsPinnedDocsBeforeAnyTargetExists(t *testing.T) {
 		t.Fatal(launcher.turns)
 	}
 	prompt := launcher.turns[0]
-	for _, required := range []string{"/owned/warm-checkout", "show <commit>:<path>", "target is not running yet", "same worker and conversation"} {
+	for _, required := range []string{skillPath, "/owned/warm-checkout", "show <commit>:<path>", "target is not running yet", "ao testing leg start base|head --json", "same worker and conversation"} {
 		if !strings.Contains(prompt, required) {
 			t.Fatal("missing first-turn context", required)
 		}
