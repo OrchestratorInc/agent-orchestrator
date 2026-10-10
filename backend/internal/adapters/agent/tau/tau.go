@@ -3,6 +3,7 @@ package tau
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -173,8 +174,11 @@ func (p *Plugin) command(ctx context.Context, workspace string, cfg ports.AgentC
 	}
 	cmd := []string{binary, "--cwd", workspace, "--approve", "--no-extensions", "--extension", extensionPath(workspace)}
 	// --approve admits project AGENTS.md for this process; it is not a tool grant.
-	if prompt != "" {
-		promptFile = filepath.Join(workspace, ".tau", "ao-standing-instructions.md")
+	// Core owns a session-specific file, including on restore. Only standalone
+	// callers need a fallback; its content address keeps shared-workspace
+	// sessions from overwriting one another's instructions before Tau reads them.
+	if promptFile == "" && prompt != "" {
+		promptFile = filepath.Join(workspace, ".tau", fmt.Sprintf("ao-standing-instructions-%x.md", sha256.Sum256([]byte(prompt))))
 		if err := writeManaged(promptFile, "<!-- "+managedSentinel+" -->\n"+prompt); err != nil {
 			return nil, err
 		}
@@ -256,5 +260,5 @@ func writeManaged(path, content string) error {
 	}
 	// The helper rewrites its managed file; include the complete footprint on
 	// every call so writing instructions never uncovers the observer or cache.
-	return hookutil.EnsureWorkspaceGitignore(filepath.Dir(path), "ao_activity.py", "ao-standing-instructions.md", "__pycache__/")
+	return hookutil.EnsureWorkspaceGitignore(filepath.Dir(path), "ao_activity.py", "ao-standing-instructions.md", "ao-standing-instructions-*.md", "__pycache__/")
 }
