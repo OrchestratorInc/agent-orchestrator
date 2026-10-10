@@ -33,7 +33,7 @@ var plans = []Plan{
 	plan("crush", ActionLogin, "Log in to Crush", []string{"crush", "login"}, "Native Charm Hyper login flow; GitHub Copilot remains available as a platform option", "https://github.com/charmbracelet/crush"),
 	plan("cline", ActionLogin, "Log in to Cline", []string{"cline", "auth"}, "Native authentication flow", "https://github.com/cline/cline"),
 	plan("goose", ActionSetup, "Set up Goose", []string{"goose", "configure"}, "Native provider configuration; AO forwards terminal input without persisting or logging the raw input, while Goose controls credential storage", "https://block.github.io/goose/index.html"),
-	terminalInputPlan("gemini", ActionSetup, "Set up Gemini CLI", []string{"gemini"}, "/auth\r", "Select Open setup after Gemini finishes starting to sign in or choose a provider", "https://geminicli.com/docs/get-started/authentication/"),
+	geminiSetupPlan(),
 	terminalInputPlan("qwen", ActionSetup, "Set up Qwen", []string{"qwen"}, qwenAuthInput, "Select Open setup after Qwen finishes starting to configure a model provider", "https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/"),
 	plan("continue", ActionLogin, "Log in to Continue", []string{"cn", "login"}, "Native browser flow", "https://docs.continue.dev/cli/quickstart"),
 	plan("devin", ActionLogin, "Log in to Devin", []string{"devin", "auth", "login"}, "Native browser flow; manual-token flow remains available from the CLI", "https://docs.devin.ai/get-started/devin-intro"),
@@ -114,6 +114,20 @@ func copilotLoginPlan() Plan {
 	p.initialInputReadyStates = []shellterm.InitialInputReadyState{{Text: "/ commands"}}
 	p.sendInitialInputOnReadyTimeout = true
 	p.prepareWorkspace = copilot.EnsureWorkspaceTrusted
+	return p
+}
+
+// geminiSetupPlan waits for Gemini's editor to render, types /auth, then waits
+// for the command completion to prove the slash-command registry is loaded
+// before pressing Enter. Gemini's --prompt-interactive flag (and submitting
+// too early during startup) treats /auth as a model prompt instead.
+func geminiSetupPlan() Plan {
+	p := plan("gemini", ActionSetup, "Set up Gemini CLI", []string{"gemini"}, "Gemini opens its authentication picker automatically", "https://geminicli.com/docs/get-started/authentication/")
+	p.initialInputReadyStates = []shellterm.InitialInputReadyState{{
+		Text:            "Type your message or @path/to/file",
+		RawPrefix:       "/auth",
+		SubmitReadyText: "Manage authentication",
+	}}
 	return p
 }
 

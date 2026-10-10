@@ -798,11 +798,11 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Authorized" })).toBeNull();
 	});
 
-	it("uses Configured for a completed setup action", async () => {
-		const authorized = catalogWithInstalled("codex");
-		authorized.agents[1].authentication.state = "authorized";
+	it("offers Refresh login instead of Set up for configured setup actions", async () => {
+		const configured = catalogWithInstalled("codex");
+		configured.agents[1].authentication.state = "configured";
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
-			if (path === "/api/v1/agents/readiness") return { data: authorized } as never;
+			if (path === "/api/v1/agents/readiness") return { data: configured } as never;
 			if (path === "/api/v1/agents/installers") return { data: plans } as never;
 			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
 			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [
@@ -811,8 +811,8 @@ describe("HarnessSettingsSection", () => {
 			return { data: undefined } as never;
 		});
 		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
-			if (path === "/api/v1/agents/readiness/ensure") return { data: authorized } as never;
-			if (path === "/api/v1/agents/{agent}/probe") return { data: { agent: { id: "codex", label: "Codex", authStatus: "authorized" }, supported: true, installed: true } } as never;
+			if (path === "/api/v1/agents/readiness/ensure") return { data: configured } as never;
+			if (path === "/api/v1/agents/{agent}/probe") return { data: { agent: { id: "codex", label: "Codex", authStatus: "configured" }, supported: true, installed: true } } as never;
 			return { data: undefined } as never;
 		});
 
@@ -820,6 +820,8 @@ describe("HarnessSettingsSection", () => {
 		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
 
 		await within(row).findByText("Configured");
+		expect(within(row).queryByRole("button", { name: "Set up" })).not.toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "Refresh login" })).toBeInTheDocument();
 	});
 
 	it("does not expose manual readiness controls", async () => {

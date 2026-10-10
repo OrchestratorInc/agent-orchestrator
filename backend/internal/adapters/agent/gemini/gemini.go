@@ -3,7 +3,10 @@ package gemini
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -131,11 +134,93 @@ func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return bin, nil
 }
 
-// AuthStatus remains unknown because Gemini has no cheap credential-validation command.
-// Key or OAuth-file presence alone cannot establish that an account works.
+// AuthStatus reports configured when Gemini has locally cached credentials.
+// This is deliberately not authorized: checking a file or environment variable
+// cannot establish that the credential is still valid.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	_, err := p.ResolveBinary(ctx)
-	return ports.AgentAuthStatusUnknown, err
+	if _, err := p.ResolveBinary(ctx); err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	configured, err := hasCachedCredentials()
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	if configured {
+		return ports.AgentAuthStatusConfigured, nil
+	}
+	return ports.AgentAuthStatusUnknown, nil
+}
+
+var (
+	geminiUserHomeDir        = os.UserHomeDir
+	statGeminiCredentialFile = os.Stat
+)
+
+func hasCachedCredentials() (bool, error) {
+	for _, name := range []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"} {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			return true, nil
+		}
+	}
+	configDir, err := geminiConfigDir()
+	if err != nil {
+		return false, err
+	}
+	if configDir == "" {
+		return false, nil
+	}
+	configured, err := geminiAPIKeySelected(filepath.Join(configDir, "settings.json"))
+	if err != nil || configured {
+		return configured, err
+	}
+	return geminiCredentialFileConfigured(filepath.Join(configDir, "oauth_creds.json"), statGeminiCredentialFile)
+}
+
+func geminiAPIKeySelected(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var settings struct {
+		Security struct {
+			Auth struct {
+				SelectedType string `json:"selectedType"`
+			} `json:"auth"`
+		} `json:"security"`
+	}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return false, err
+	}
+	return settings.Security.Auth.SelectedType == "gemini-api-key", nil
+}
+
+func geminiConfigDir() (string, error) {
+	home := strings.TrimSpace(os.Getenv("GEMINI_CLI_HOME"))
+	if home == "" {
+		var err error
+		home, err = geminiUserHomeDir()
+		if err != nil {
+			return "", err
+		}
+	}
+	if home == "" {
+		return "", nil
+	}
+	return filepath.Join(home, ".gemini"), nil
+}
+
+func geminiCredentialFileConfigured(path string, stat func(string) (os.FileInfo, error)) (bool, error) {
+	info, err := stat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !info.IsDir() && info.Size() > 0, nil
 }
 
 // ResolveBinaryPresence keeps initial inventory discovery free of child processes.

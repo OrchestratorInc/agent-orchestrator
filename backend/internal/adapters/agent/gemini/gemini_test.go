@@ -37,6 +37,115 @@ func TestNativeHookActivity(t *testing.T) {
 	}
 }
 
+func TestAuthStatusUsesCachedAPIKey(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "gemini-key")
+	t.Setenv("GOOGLE_API_KEY", "")
+	t.Setenv("GEMINI_CLI_HOME", t.TempDir())
+
+	status, err := (&Plugin{resolvedBinary: "gemini"}).AuthStatus(context.Background())
+	if err != nil || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("AuthStatus = (%q, %v), want configured", status, err)
+	}
+}
+
+func TestAuthStatusUsesCachedOAuthCredentials(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+	cliHome := t.TempDir()
+	t.Setenv("GEMINI_CLI_HOME", cliHome)
+	if err := os.Mkdir(filepath.Join(cliHome, ".gemini"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cliHome, ".gemini", "oauth_creds.json"), []byte(`{"refresh_token":"cached"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := (&Plugin{resolvedBinary: "gemini"}).AuthStatus(context.Background())
+	if err != nil || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("AuthStatus = (%q, %v), want configured", status, err)
+	}
+}
+
+func TestAuthStatusUsesSelectedAPIKeyAuth(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+	cliHome := t.TempDir()
+	t.Setenv("GEMINI_CLI_HOME", cliHome)
+	configDir := filepath.Join(cliHome, ".gemini")
+	if err := os.Mkdir(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settings := `{"security":{"auth":{"selectedType":"gemini-api-key"}}}`
+	if err := os.WriteFile(filepath.Join(configDir, "settings.json"), []byte(settings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := (&Plugin{resolvedBinary: "gemini"}).AuthStatus(context.Background())
+	if err != nil || status != ports.AgentAuthStatusConfigured {
+		t.Fatalf("AuthStatus = (%q, %v), want configured", status, err)
+	}
+}
+
+func TestAuthStatusPropagatesInvalidSettings(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+	cliHome := t.TempDir()
+	t.Setenv("GEMINI_CLI_HOME", cliHome)
+	configDir := filepath.Join(cliHome, ".gemini")
+	if err := os.Mkdir(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "settings.json"), []byte(`{invalid`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := (&Plugin{resolvedBinary: "gemini"}).AuthStatus(context.Background())
+	if status != ports.AgentAuthStatusUnknown || err == nil {
+		t.Fatalf("AuthStatus = (%q, %v), want unknown/error", status, err)
+	}
+}
+
+func TestAuthStatusUnknownWithoutCachedCredentials(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+	t.Setenv("GEMINI_CLI_HOME", t.TempDir())
+
+	status, err := (&Plugin{resolvedBinary: "gemini"}).AuthStatus(context.Background())
+	if err != nil || status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("AuthStatus = (%q, %v), want unknown", status, err)
+	}
+}
+
+func TestAuthStatusPropagatesCredentialStatError(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+	t.Setenv("GEMINI_CLI_HOME", t.TempDir())
+	wantErr := errors.New("credential stat failed")
+	old := statGeminiCredentialFile
+	t.Cleanup(func() { statGeminiCredentialFile = old })
+	statGeminiCredentialFile = func(string) (os.FileInfo, error) { return nil, wantErr }
+
+	status, err := (&Plugin{resolvedBinary: "gemini"}).AuthStatus(context.Background())
+	if status != ports.AgentAuthStatusUnknown || !errors.Is(err, wantErr) {
+		t.Fatalf("AuthStatus = (%q, %v), want unknown/%v", status, err, wantErr)
+	}
+}
+
+func TestAuthStatusPropagatesHomeResolutionError(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
+	t.Setenv("GEMINI_CLI_HOME", "")
+	wantErr := errors.New("home resolution failed")
+	old := geminiUserHomeDir
+	t.Cleanup(func() { geminiUserHomeDir = old })
+	geminiUserHomeDir = func() (string, error) { return "", wantErr }
+
+	status, err := (&Plugin{resolvedBinary: "gemini"}).AuthStatus(context.Background())
+	if status != ports.AgentAuthStatusUnknown || !errors.Is(err, wantErr) {
+		t.Fatalf("AuthStatus = (%q, %v), want unknown/%v", status, err, wantErr)
+	}
+}
+
 func TestLaunchAndRestore(t *testing.T) {
 	p := &Plugin{resolvedBinary: "gemini"}
 	ctx := context.Background()
