@@ -1164,6 +1164,7 @@
 	"providerAccounts.resetBlockedHint": "Next reset after {{time}}.",
 	"providerAccounts.useReset": "Use reset",
 	"providerAccounts.confirmUseReset": "Use a reset on {{name}}?",
+	"providerAccounts.confirmUseResetEarly": "The limit is not reached yet. This can't be undone.",
 	"providerAccounts.confirmUseResetHint": "Clears the usage limits. This can't be undone.",
 	"providerAccounts.resetItem": "Reset {{number}}",
 	"providerAccounts.resetLeftOf": "{{left}} of {{total}} left",

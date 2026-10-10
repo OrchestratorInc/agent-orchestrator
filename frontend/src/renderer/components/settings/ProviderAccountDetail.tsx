@@ -302,14 +302,14 @@ export function AccountDetail({ account, page }: { account: ProviderAccount; pag
 							{typeof resetCount === "number" || (!apiKey && usage) ? (
 								<Rows title={t("providerAccounts.resetsHeading")}>
 									{!resetCount || resetCount <= 0 ? <Row title={t("providerAccounts.noResets")} /> : resetting ? (
-										<Row label={t("providerAccounts.useReset")} title={t("providerAccounts.confirmUseReset", { name })} hint={t("providerAccounts.confirmUseResetHint")}>
+										<Row label={t("providerAccounts.useReset")} title={t("providerAccounts.confirmUseReset", { name })} hint={t(usage?.resetUsable ? "providerAccounts.confirmUseResetHint" : "providerAccounts.confirmUseResetEarly")}>
 											<Button type="button" variant="ghost" className="text-muted-foreground" disabled={page.pending} onClick={() => setResetting(false)}>{t("confirm.cancel")}</Button>
 											<Button type="button" disabled={page.pending} onClick={() => void spendReset()}>{t("providerAccounts.useReset")}</Button>
 										</Row>
 									) : (
 										<Row title={t("providerAccounts.limitResets")} hint={usage?.resetUsable ? t("providerAccounts.resetUsableHint") : resetBlocked ? t("providerAccounts.resetBlockedHint", { time: formatWhen(resetBlocked, "soon") }) : t("providerAccounts.resetIdleHint")}>
 											<span className="text-sm tabular-nums text-foreground">{t("providerAccounts.resetsAvailableShort", { count: resetCount ?? 0 })}</span>
-											<Button type="button" variant={usage?.resetUsable ? "primary" : "secondary"} disabled={page.pending || !usage?.resetUsable} onClick={() => setResetting(true)}>{t("providerAccounts.useReset")}</Button>
+											<Button type="button" variant={usage?.resetUsable ? "primary" : "secondary"} disabled={page.pending || Boolean(resetBlocked)} onClick={() => setResetting(true)}>{t("providerAccounts.useReset")}</Button>
 										</Row>
 									)}
 									{(resetCount && resetCount > 0 ? usage?.resets ?? [] : []).map((reset, index) => (
