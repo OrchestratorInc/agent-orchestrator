@@ -47,10 +47,19 @@ func pinTestingDaemon(mgr *Manager) {
 
 func assertTestingServer(t *testing.T, cfg ChatStart, attemptID domain.TestAttemptID) string {
 	t.Helper()
-	if len(cfg.MCPServers) != 1 {
-		t.Fatalf("MCP server count = %d, want 1", len(cfg.MCPServers))
+	// Chat sessions also carry the general `ao` tool server, so pick the testing
+	// server out by name and require exactly one.
+	var server ports.ChatMCPServerConfig
+	found := 0
+	for _, candidate := range cfg.MCPServers {
+		if candidate.Name == "ao-testing" {
+			server = candidate
+			found++
+		}
 	}
-	server := cfg.MCPServers[0]
+	if found != 1 {
+		t.Fatalf("testing MCP server count = %d, want 1", found)
+	}
 	if server.Name != "ao-testing" || server.Type != "stdio" || server.Command != "/scratch/daemon/ao" ||
 		!reflect.DeepEqual(server.Args, []string{"testing", "mcp"}) {
 		t.Fatal("testing MCP command is not pinned to the running daemon")
@@ -203,8 +212,10 @@ func TestOrdinaryChatSpawnAndRestoreDoNotInjectTestingServer(t *testing.T) {
 		t.Fatal("expected ordinary spawn and restore")
 	}
 	for _, cfg := range launcher.started {
-		if len(cfg.MCPServers) != 0 {
-			t.Fatal("ordinary worker received a testing server")
+		for _, server := range cfg.MCPServers {
+			if server.Name == "ao-testing" {
+				t.Fatal("ordinary worker received a testing server")
+			}
 		}
 	}
 }

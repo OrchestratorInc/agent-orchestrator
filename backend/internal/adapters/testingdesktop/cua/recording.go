@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -16,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	processutil "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // RecordingResult is daemon-only metadata. Path is not accepted from workers.
@@ -314,7 +314,7 @@ func startScreencapture(args, env []string, stdoutPath, stderrPath string) (*rec
 	if err != nil {
 		return nil, errors.Join(err, stdout.Close())
 	}
-	cmd := exec.Command("/usr/sbin/screencapture", args...)
+	cmd := processutil.Command("/usr/sbin/screencapture", args...)
 	cmd.Env, cmd.Stdout, cmd.Stderr = env, stdout, stderr
 	// Closed stdin ends open-ended screencapture during startup. Hold this
 	// pipe open until SIGINT finalizes the movie; never write keystrokes.
