@@ -44,6 +44,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
+	TargetNeovate:     "https://github.com/neovateai/neovate-code",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -239,6 +240,8 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			Target: target, Unsupported: true, Method: "manual",
 			Reason: "Unreal Agent is built into AO; update AO to update the harness.",
 		}}
+	case TargetNeovate:
+		plans = []Plan{s.planNPM(target, "@neovate/code@0.28.5")}
 	case TargetMiMoCode:
 		plans = []Plan{s.planNPM(target, "@mimo-ai/cli")}
 	case TargetDeepSeek:

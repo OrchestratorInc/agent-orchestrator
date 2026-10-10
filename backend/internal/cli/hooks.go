@@ -643,7 +643,7 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		conversation = hookConversationFacts(domain.AgentHarness(agent), event, payload)
 	case domain.HarnessOpenCode, domain.HarnessGrok, domain.HarnessKilocode,
 		domain.HarnessOMP, domain.HarnessPi,
-		domain.HarnessAmp, domain.HarnessPrimeAgent:
+		domain.HarnessAmp, domain.HarnessPrimeAgent, domain.HarnessNeovate:
 		conversation = hookSemanticAcceptanceFacts(event, payload)
 	}
 	path := "sessions/" + url.PathEscape(sessionID) + "/activity"

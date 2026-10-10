@@ -40,6 +40,7 @@ const (
 	HarnessMiMoCode    AgentHarness = "mimo-code"
 	HarnessDeepSeek    AgentHarness = "deepseek-harness"
 	HarnessOpenHands   AgentHarness = "openhands"
+	HarnessNeovate     AgentHarness = "neovate"
 	HarnessCommandCode AgentHarness = "command-code"
 	// HarnessFake is retained for existing test fixtures and historical session
 	// rows, but is not user-selectable.
@@ -55,7 +56,7 @@ var AllHarnesses = []AgentHarness{
 	HarnessCline, HarnessKimi, HarnessMuse, HarnessKiro, HarnessKilocode, HarnessVibe, HarnessPi,
 	HarnessKimchi, HarnessPrimeAgent, HarnessAutohand,
 	HarnessOMP, HarnessFX, HarnessUnreal, HarnessCodewhale, HarnessMiMoCode, HarnessDeepSeek, HarnessOpenHands,
-	HarnessCommandCode,
+	HarnessCommandCode, HarnessNeovate,
 }
 
 // IsKnown reports whether h is one of the supported harnesses.
