@@ -642,7 +642,7 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	case domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessContinue:
 		conversation = hookConversationFacts(domain.AgentHarness(agent), event, payload)
 	case domain.HarnessOpenCode, domain.HarnessGrok, domain.HarnessKilocode,
-		domain.HarnessOMP, domain.HarnessPi,
+		domain.HarnessOMP, domain.HarnessPi, domain.HarnessTau,
 		domain.HarnessAmp, domain.HarnessPrimeAgent:
 		conversation = hookSemanticAcceptanceFacts(event, payload)
 	}

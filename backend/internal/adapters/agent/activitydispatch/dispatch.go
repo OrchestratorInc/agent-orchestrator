@@ -30,6 +30,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/tau"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/vibe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -60,6 +61,7 @@ var Derivers = map[string]DeriveFunc{
 	"mimo-code":    mimocode.DeriveActivityState,
 	"amp":          amp.DeriveActivityState,
 	"pi":           pi.DeriveActivityState,
+	"tau":          tau.DeriveActivityState,
 	"auggie":       auggie.DeriveActivityState,
 	"goose":        activitystate.StandardDeriveActivityState,
 	"openhands":    activitystate.StandardDeriveActivityState,
