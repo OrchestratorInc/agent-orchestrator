@@ -176,6 +176,9 @@ type Reconciler struct {
 	// exact build instead of the control plane uploading it on every provision.
 	workerBinarySHA256       string
 	workerHelperBinarySHA256 string
+	// wake asks Run for a pass now instead of at the next tick, so a new
+	// session starts provisioning without waiting out the interval.
+	wake chan struct{}
 }
 
 func sha256HexOf(data []byte) string {
@@ -245,14 +248,43 @@ func New(store Store, providers Resolver, options Options) *Reconciler {
 		log:                      options.Logger,
 		workerBinarySHA256:       sha256HexOf(options.WorkerBinary),
 		workerHelperBinarySHA256: sha256HexOf(options.WorkerHelperBinary),
+		wake:                     make(chan struct{}, 1),
+	}
+}
+
+// Wake requests an immediate reconcile pass. It never blocks: a request made
+// while one is already pending is absorbed by it, and that pass sees every
+// session created before it starts.
+func (r *Reconciler) Wake() {
+	select {
+	case r.wake <- struct{}{}:
+	default:
 	}
 }
 
 // Run reconciles sandboxes until ctx is canceled.
+//
+// Woken passes run in their own loop, beside the ticker's, so a new session
+// does not wait for a pass that is busy refreshing every live sandbox. The two
+// passes cannot collide: a claim leases its rows and skips leased or locked
+// ones, the same guarantee that lets several control planes reconcile at once.
 func (r *Reconciler) Run(ctx context.Context) error {
 	if err := r.ReconcileOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		r.log.Error("initial sandbox reconciliation failed", "err", err)
 	}
+	woken := make(chan struct{})
+	go func() {
+		defer close(woken)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-r.wake:
+				r.reconcilePass(ctx)
+			}
+		}
+	}()
+	defer func() { <-woken }()
 	ticker := time.NewTicker(r.options.Interval)
 	defer ticker.Stop()
 	for {
@@ -260,10 +292,14 @@ func (r *Reconciler) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if err := r.ReconcileOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				r.log.Error("sandbox reconciliation failed", "err", err)
-			}
+			r.reconcilePass(ctx)
 		}
+	}
+}
+
+func (r *Reconciler) reconcilePass(ctx context.Context) {
+	if err := r.ReconcileOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		r.log.Error("sandbox reconciliation failed", "err", err)
 	}
 }
 
@@ -651,6 +687,16 @@ func (r *Reconciler) reconcileSandbox(ctx context.Context, record domain.Sandbox
 			}
 			return r.fail(ctx, record, err)
 		}
+		// A Freestyle resume restores memory in place in about a second. Wait
+		// for it inside this claim, as provision does for a new VM, so the
+		// worker refresh runs the moment the sandbox is up instead of after a
+		// full requeue. Providers whose restore takes minutes (Coder) keep the
+		// tick-driven path rather than holding the pass.
+		if record.Provider == sandbox.ProviderFreestyle {
+			if resumed, ok := r.awaitRunning(ctx, provider, environment); ok {
+				return r.refreshRestoredWorker(ctx, record, resumed, provider)
+			}
+		}
 		// A NodeOps resume retains the sandbox filesystem, including the
 		// previously uploaded worker binary. Keep the distinct restoring state
 		// until the provider confirms it is running, so that next probe can
@@ -822,6 +868,16 @@ func (r *Reconciler) superviseRunning(
 	provider sandbox.Provider,
 ) error {
 	if record.ObservedState == domain.SandboxObservedRestoring {
+		return r.refreshRestoredWorker(ctx, record, environment, provider)
+	}
+	// Running compute for a sandbox last observed paused means it came back
+	// without passing through restore here: the provider reported it running
+	// before the restore branch could act (Freestyle can report a VM running
+	// while it is still restoring it), or something else resumed it. The pause
+	// retired the worker's connection, so whatever worker the sandbox holds is
+	// fenced and cannot reconnect. Launch a fresh one now, exactly as a restore
+	// would, instead of waiting out the startup deadline with no worker.
+	if record.ObservedState == domain.SandboxObservedStopped {
 		return r.refreshRestoredWorker(ctx, record, environment, provider)
 	}
 
@@ -1191,13 +1247,17 @@ func (r *Reconciler) provision(
 	provider sandbox.Provider,
 ) error {
 	// Dedupe guard: a reconciler that crashed between Create and the durable
-	// write must adopt the sandbox it already made, never create a second.
-	existing, found, err := provider.FindBySession(ctx, record.SessionID)
-	if err != nil {
-		return r.fail(ctx, record, err)
-	}
-	if found {
-		return r.observe(ctx, record, string(existing.ID), domain.SandboxObservedProvisioning, "", time.Second)
+	// write must adopt the sandbox it already made, never create a second. A
+	// provider that rejects a duplicate Create is probed only on that conflict.
+	_, rejectsDuplicates := provider.(sandbox.DuplicateRejectingCreator)
+	if !rejectsDuplicates {
+		existing, found, err := provider.FindBySession(ctx, record.SessionID)
+		if err != nil {
+			return r.fail(ctx, record, err)
+		}
+		if found {
+			return r.observe(ctx, record, string(existing.ID), domain.SandboxObservedProvisioning, "", time.Second)
+		}
 	}
 
 	spec, err := r.workerSpec(ctx, record)
@@ -1216,6 +1276,16 @@ func (r *Reconciler) provision(
 	startedAt := time.Now()
 	environment, err := provider.Create(ctx, spec)
 	if err != nil {
+		if errors.Is(err, sandbox.ErrAlreadyExists) {
+			existing, found, findErr := provider.FindBySession(ctx, record.SessionID)
+			if findErr != nil {
+				return r.fail(ctx, record, findErr)
+			}
+			if found {
+				return r.observe(ctx, record, string(existing.ID), domain.SandboxObservedProvisioning, "", time.Second)
+			}
+			return r.fail(ctx, record, err)
+		}
 		if errors.Is(err, sandbox.ErrAtCapacity) {
 			r.log.Info("provider at capacity; will retry",
 				"session_id", record.SessionID, "provider", record.Provider)
@@ -1242,16 +1312,8 @@ func (r *Reconciler) provision(
 	// running) first. A provider slower than the budget falls back to the
 	// supervise-on-running path unchanged.
 	if bootstrapper, ok := provider.(sandbox.Bootstrapper); ok && len(r.options.WorkerBinary) > 0 {
-		deadline := time.Now().Add(inlineRunningWait)
-		for environment.State != sandbox.StateRunning && time.Now().Before(deadline) && ctx.Err() == nil {
-			time.Sleep(inlineRunningPoll)
-			refreshed, err := provider.Get(ctx, sandbox.ID(environment.ID))
-			if err != nil {
-				break
-			}
-			environment = refreshed
-		}
-		if environment.State == sandbox.StateRunning {
+		if running, ok := r.awaitRunning(ctx, provider, environment); ok {
+			environment = running
 			r.log.Info("bootstrapping worker in freshly provisioned sandbox",
 				"session_id", record.SessionID,
 				"provider", record.Provider,
@@ -1274,6 +1336,32 @@ func (r *Reconciler) provision(
 		}
 	}
 	return r.observe(ctx, record, string(environment.ID), domain.SandboxObservedProvisioning, "", 2*time.Second)
+}
+
+// awaitRunning polls the provider until the sandbox reports running, for at
+// most inlineRunningWait, so the caller can act on it within the same claim. It
+// reports false when the sandbox is still not running (or a probe fails); the
+// caller then falls back to tick-driven supervision.
+func (r *Reconciler) awaitRunning(
+	ctx context.Context,
+	provider sandbox.Provider,
+	environment sandbox.Environment,
+) (sandbox.Environment, bool) {
+	deadline := time.Now().Add(inlineRunningWait)
+	// Probe at once: a provider whose start call returns once the VM is up
+	// (Freestyle) is already running, and should not pay a poll interval.
+	for first := true; environment.State != sandbox.StateRunning &&
+		time.Now().Before(deadline) && ctx.Err() == nil; first = false {
+		if !first {
+			time.Sleep(inlineRunningPoll)
+		}
+		refreshed, err := provider.Get(ctx, environment.ID)
+		if err != nil {
+			return environment, false
+		}
+		environment = refreshed
+	}
+	return environment, environment.State == sandbox.StateRunning
 }
 
 func (r *Reconciler) recreate(
@@ -1317,6 +1405,10 @@ type providerProfile struct {
 		Ingress          string `json:"ingress"`
 		AutoPauseSeconds int    `json:"autoPauseSeconds"`
 	} `json:"nodeOps"`
+	Freestyle struct {
+		Snapshot         string `json:"snapshot"`
+		AutoPauseSeconds int    `json:"autoPauseSeconds"`
+	} `json:"freestyle"`
 }
 
 type workerWorkspaceLayout struct {
@@ -1418,15 +1510,21 @@ func (r *Reconciler) workerSpec(ctx context.Context, record domain.Sandbox) (san
 		workerEnvironment["AO_WORKER_HELPER_EXPECTED_SHA256"] = r.workerHelperBinarySHA256
 		workerEnvironment["AO_WORKER_HELPER_PATH"] = r.options.WorkerHelperDestination
 	}
+	// Freestyle boots from the snapshot stamped on the session's plan, which
+	// Spec carries as its root filesystem.
+	rootFS, autoPauseSeconds := profile.NodeOps.DefaultRootFS, profile.NodeOps.AutoPauseSeconds
+	if record.Provider == sandbox.ProviderFreestyle {
+		rootFS, autoPauseSeconds = profile.Freestyle.Snapshot, profile.Freestyle.AutoPauseSeconds
+	}
 	return sandbox.Spec{
 		Name:             "ao-" + record.SessionID,
 		SessionID:        record.SessionID,
 		OrgID:            record.OrgID,
 		ResourceProfile:  domain.ResourceProfile{CPU: 4, Memory: 8, Disk: 10},
 		Shape:            profile.NodeOps.DefaultShape,
-		RootFS:           profile.NodeOps.DefaultRootFS,
+		RootFS:           rootFS,
 		Ingress:          profile.NodeOps.Ingress,
-		AutoPauseSeconds: profile.NodeOps.AutoPauseSeconds,
+		AutoPauseSeconds: autoPauseSeconds,
 		Environment:      workerEnvironment,
 		DurableRoot:      layout.root,
 		Labels: map[string]string{

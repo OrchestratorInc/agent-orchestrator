@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -21,11 +22,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/interfacereconcile"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/notification"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/projectsnapshot"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/reconcile"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	coderprovider "github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/coder"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/createos"
 	dockerprovider "github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/docker"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/freestyle"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandboxresolve"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -85,6 +88,14 @@ func provisioningDefaults(cfg config.Config) sandbox.ProvisioningDefaults {
 			DurableRoot:    cfg.CoderDurableRoot,
 			WorkerTokenTTL: cfg.CoderWorkerTokenTTL,
 		},
+		Freestyle: sandbox.FreestyleConfig{
+			BaseURL:           cfg.FreestyleBaseURL,
+			APIKey:            cfg.FreestyleAPIKey,
+			DefaultSnapshot:   cfg.FreestyleDefaultSnapshot,
+			SnapshotByHarness: cfg.FreestyleSnapshotByHarness,
+			WorkerTokenTTL:    cfg.FreestyleWorkerTokenTTL,
+			AutoPauseSeconds:  cfg.FreestyleAutoPauseSeconds,
+		},
 	}
 }
 
@@ -103,14 +114,15 @@ func newSandboxReconciler(
 	// session. AvailableSandboxProviders always contains the default, and is
 	// exactly that default for a single-provider deployment.
 	var (
-		nodeOpsProvider sandbox.Provider
-		dockerProvider  sandbox.Provider
-		coderProvider   sandbox.Provider
-		buildsProvider  bool
+		nodeOpsProvider   sandbox.Provider
+		dockerProvider    sandbox.Provider
+		coderProvider     sandbox.Provider
+		freestyleProvider sandbox.Provider
+		buildsProvider    bool
 	)
 	for _, provider := range cfg.AvailableSandboxProviders {
 		switch provider {
-		case sandbox.ProviderNodeOps, sandbox.ProviderDocker, sandbox.ProviderCoder:
+		case sandbox.ProviderNodeOps, sandbox.ProviderDocker, sandbox.ProviderCoder, sandbox.ProviderFreestyle:
 			buildsProvider = true
 		}
 	}
@@ -123,6 +135,13 @@ func newSandboxReconciler(
 	}
 	for _, provider := range cfg.AvailableSandboxProviders {
 		switch provider {
+		case sandbox.ProviderFreestyle:
+			freestyleProvider = freestyle.New(freestyle.Config{
+				BaseURL:         cfg.FreestyleBaseURL,
+				APIKey:          cfg.FreestyleAPIKey,
+				DefaultSnapshot: cfg.FreestyleDefaultSnapshot,
+				Logger:          logger,
+			})
 		case sandbox.ProviderNodeOps:
 			sshPubKeys, err := readSSHPubKeys(cfg.NodeOpsSSHKeyPath)
 			if err != nil {
@@ -162,7 +181,7 @@ func newSandboxReconciler(
 			coderProvider = provider
 		}
 	}
-	return reconcile.New(store, sandboxresolve.New(nodeOpsProvider, dockerProvider, coderProvider, store, providerCipher), reconcile.Options{
+	return reconcile.New(store, sandboxresolve.New(nodeOpsProvider, dockerProvider, coderProvider, freestyleProvider, store, providerCipher), reconcile.Options{
 		PublicURL:              cfg.PublicURL,
 		TerminalStreamEnabled:  cfg.TerminalStreamEnabled,
 		WorkerBinary:           workerBinary,
@@ -178,7 +197,7 @@ func newSandboxReconciler(
 }
 
 // loadWorkerBinaries reads the worker and helper binaries once at startup, but
-// only where a provider that runs hosted workers (nodeops or coder) is offered.
+// only where a provider that runs hosted workers (nodeops, coder, or freestyle) is offered.
 // Docker-only deployments bake the worker into their image and need neither.
 // Both the reconciler (to advertise the expected hashes) and the API server (to
 // serve the content-addressed self-update endpoint) read the same bytes.
@@ -195,7 +214,7 @@ func loadWorkerBinaries(cfg config.Config, logger *slog.Logger) (
 ) {
 	needs := false
 	for _, provider := range cfg.AvailableSandboxProviders {
-		if provider == sandbox.ProviderNodeOps || provider == sandbox.ProviderCoder {
+		if provider == sandbox.ProviderNodeOps || provider == sandbox.ProviderCoder || provider == sandbox.ProviderFreestyle {
 			needs = true
 		}
 	}
@@ -473,6 +492,29 @@ func run(logger *slog.Logger) error {
 		logger.Warn("coding-agent credential validation is disabled for development")
 		apiOptions.CredentialValidator = developmentCredentialValidator{}
 	}
+	if reconciler != nil {
+		apiOptions.SandboxWake = reconciler.Wake
+	}
+	if slices.Contains(cfg.AvailableSandboxProviders, sandbox.ProviderFreestyle) {
+		var grants projectsnapshot.Grants
+		if checkoutBroker != nil {
+			grants = checkoutBroker
+		}
+		projectSnapshots := projectsnapshot.New(projectsnapshot.Config{
+			Provider: sandbox.ProviderFreestyle,
+			VMs: freestyle.New(freestyle.Config{
+				BaseURL: cfg.FreestyleBaseURL,
+				APIKey:  cfg.FreestyleAPIKey,
+				Logger:  logger,
+			}),
+			Store:          store,
+			Grants:         grants,
+			AllowAnonymous: cfg.AllowAnonymousCheckout,
+			Logger:         logger,
+		})
+		apiOptions.ProjectSnapshots = projectSnapshots
+		go projectSnapshots.RunCollector(ctx)
+	}
 	api := httpapi.New(apiOptions)
 	go notificationProcessor.Run(ctx)
 	feedbackDispatcher := cifeedback.New(store, cifeedback.Config{Logger: logger})
@@ -489,6 +531,9 @@ func run(logger *slog.Logger) error {
 		notifyListener := postgres.NewListener(cfg.DatabaseURL, logger)
 		notifyListener.Handle("ao_worker_work", api.HandleWorkerWorkNotify)
 		notifyListener.Handle("ao_notification_event", api.HandleNotificationEventNotify)
+		// Any path that asks a sandbox to run again (resume, a message to a
+		// paused session, a restore) starts provisioning now, not at the next tick.
+		notifyListener.Handle("ao_sandbox_wake", func(string) { reconciler.Wake() })
 		if cfg.TerminalStreamEnabled {
 			notifyListener.Handle("ao_terminal_output", api.HandleTerminalOutputNotify)
 			notifyListener.Handle("ao_terminal_input", api.HandleTerminalInputNotify)

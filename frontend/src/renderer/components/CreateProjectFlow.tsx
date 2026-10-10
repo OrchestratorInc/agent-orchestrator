@@ -1396,7 +1396,15 @@ function CloudProjectCard({
 	const selectedSandboxProvider = useSandboxProviderStore((state) => state.selectedProvider);
 	const sessionSandboxProvider =
 		resolveSandboxProviderPreference(selectedSandboxProvider, sandboxProviders.available) ?? sandboxProviders.default;
-	const usesCoder = sessionSandboxProvider === "coder";
+	// With more than one provider on offer, the project records its own choice
+	// (config.sandboxProvider) and every session of the project runs there.
+	const offersSandboxChoice = sandboxProviders.available.length > 1;
+	const [projectSandboxProvider, setProjectSandboxProvider] = useState<string | null>(null);
+	const effectiveSandboxProvider =
+		projectSandboxProvider !== null && sandboxProviders.available.includes(projectSandboxProvider)
+			? projectSandboxProvider
+			: sessionSandboxProvider;
+	const usesCoder = effectiveSandboxProvider === "coder";
 	// A coder project must pick a concrete template before it is created. With no
 	// template, session start fails later with a 422 (coder_template_required) —
 	// there is no implicit org-default for a bring-your-own-Coder deployment. So
@@ -1639,6 +1647,7 @@ function CloudProjectCard({
 					worker: { agent: selection.workerAgent },
 					orchestrator: { agent: selection.orchestratorAgent },
 					...(coder ? { coder } : {}),
+					...(offersSandboxChoice && effectiveSandboxProvider ? { sandboxProvider: effectiveSandboxProvider } : {}),
 				},
 			});
 			await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
@@ -1832,6 +1841,25 @@ function CloudProjectCard({
 						<p className="text-[12px] leading-5 text-destructive" role="alert">{githubOAuthError}</p>
 					) : null}
 				</div>
+
+				{/* Where the project's sessions run, when the control plane offers a choice. */}
+				{offersSandboxChoice && selectedRepo !== undefined ? (
+					<div className="flex items-center justify-between gap-3">
+						<Label htmlFor="create-project-sandbox" className={onboardingFormLabelClass}>
+							{t("createProject.cloudSandbox")}
+						</Label>
+						<Select value={effectiveSandboxProvider} disabled={isCreating} onValueChange={setProjectSandboxProvider}>
+							<SelectTrigger id="create-project-sandbox" className="max-w-[65%]"><SelectValue /></SelectTrigger>
+							<SelectContent position="popper" side="bottom" align="end" sideOffset={4}>
+								{sandboxProviders.available.map((provider) => (
+									<SelectItem key={provider} value={provider}>
+										{t(`createProject.sandboxProvider.${provider}`, { defaultValue: provider })}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+					</div>
+				) : null}
 
 				{/* Coder template and size are inherited by every session. */}
 				{usesCoder && selectedRepo !== undefined ? (

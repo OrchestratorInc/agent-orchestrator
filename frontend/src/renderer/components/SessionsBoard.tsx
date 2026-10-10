@@ -238,7 +238,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	) : undefined;
 
 	if (projectId && (isProvisioning || projectActions.isSpawning)) {
-		return <OrchestratorStartingChat />;
+		return <OrchestratorStartingChat cloud={workspace?.kind === CLOUD_PROJECT_KIND} />;
 	}
 
 	return (

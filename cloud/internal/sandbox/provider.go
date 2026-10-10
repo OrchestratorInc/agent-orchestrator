@@ -16,6 +16,19 @@ var ErrNotFound = errors.New("sandbox environment not found")
 // ErrAtCapacity indicates that a provider has no capacity for a new sandbox.
 var ErrAtCapacity = errors.New("sandbox provider at capacity")
 
+// ErrAlreadyExists indicates that Create found the session's sandbox already
+// present: the provider enforces one sandbox per session name. The caller
+// adopts that sandbox through FindBySession instead of creating another.
+var ErrAlreadyExists = errors.New("sandbox environment already exists")
+
+// DuplicateRejectingCreator marks a provider whose Create fails with
+// ErrAlreadyExists rather than making a second sandbox for the same session.
+// For such a provider the reconciler creates first and looks up only on that
+// conflict, saving the lookup round trip on every normal provision.
+type DuplicateRejectingCreator interface {
+	CreateRejectsDuplicates()
+}
+
 // ID uniquely identifies a provider sandbox.
 type ID string
 
