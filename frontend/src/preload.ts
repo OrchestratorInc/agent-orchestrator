@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, FOCUS_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type KeybindingOverrides } from "./shared/shortcuts";
+import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, FOCUS_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, SESSION_SWITCHER_CANCEL_CHANNEL, SESSION_SWITCHER_RELEASE_CHANNEL, SESSION_SWITCHER_STEP_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type KeybindingOverrides } from "./shared/shortcuts";
 import {
 	SET_CHAT_DRAFT_RISK_CHANNEL,
 	type ChatDraftBoundaryKind,
@@ -288,6 +288,27 @@ const api = {
 			ipcRenderer.on(NEXT_TAB_SHORTCUT_CHANNEL, wrapped);
 			return () => {
 				ipcRenderer.off(NEXT_TAB_SHORTCUT_CHANNEL, wrapped);
+			};
+		},
+		onSessionSwitcherStep: (listener: (direction: -1 | 1) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, direction: -1 | 1) => listener(direction);
+			ipcRenderer.on(SESSION_SWITCHER_STEP_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(SESSION_SWITCHER_STEP_CHANNEL, wrapped);
+			};
+		},
+		onSessionSwitcherRelease: (listener: () => void) => {
+			const wrapped = () => listener();
+			ipcRenderer.on(SESSION_SWITCHER_RELEASE_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(SESSION_SWITCHER_RELEASE_CHANNEL, wrapped);
+			};
+		},
+		onSessionSwitcherCancel: (listener: () => void) => {
+			const wrapped = () => listener();
+			ipcRenderer.on(SESSION_SWITCHER_CANCEL_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(SESSION_SWITCHER_CANCEL_CHANNEL, wrapped);
 			};
 		},
 		onFocusTerminalShortcut: (listener: () => void) => {

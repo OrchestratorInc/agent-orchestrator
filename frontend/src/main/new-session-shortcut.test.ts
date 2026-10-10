@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, FOCUS_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL } from "../shared/shortcuts";
-import { attachAppShortcuts } from "./app-shortcuts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, FOCUS_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SESSION_SWITCHER_CANCEL_CHANNEL, SESSION_SWITCHER_RELEASE_CHANNEL, SESSION_SWITCHER_STEP_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL } from "../shared/shortcuts";
+import { attachAppShortcuts, cancelSessionSwitcherForFocusLoss, resetSessionSwitcherShortcutState } from "./app-shortcuts";
 import { toggleAppDevTools } from "./app-devtools";
 
 type InputEvent = {
@@ -43,6 +43,10 @@ function fakeTarget() {
 }
 
 describe("attachAppShortcuts", () => {
+	beforeEach(() => {
+		resetSessionSwitcherShortcutState();
+	});
+
 	it("routes Ctrl+Shift+I to shell DevTools when no Browser view is available", async () => {
 		const source = fakeSource();
 		const target = { ...fakeTarget(), toggleDevTools: vi.fn() };
@@ -195,8 +199,6 @@ describe("attachAppShortcuts", () => {
 		["settings", { key: ",", control: true }, OPEN_SETTINGS_SHORTCUT_CHANNEL],
 		["previous session", { key: "PageUp", control: true }, PREVIOUS_SESSION_SHORTCUT_CHANNEL],
 		["next session", { key: "PageDown", control: true }, NEXT_SESSION_SHORTCUT_CHANNEL],
-		["previous tab", { key: "Tab", control: true, shift: true }, PREVIOUS_TAB_SHORTCUT_CHANNEL],
-		["next tab", { key: "Tab", control: true }, NEXT_TAB_SHORTCUT_CHANNEL],
 		["focus terminal", { key: "T", control: true, shift: true }, FOCUS_TERMINAL_SHORTCUT_CHANNEL],
 	] as const)("forwards the Windows/Linux %s shortcut", (_label, input, channel) => {
 		const source = fakeSource();
@@ -207,6 +209,68 @@ describe("attachAppShortcuts", () => {
 
 		expect(target.send).toHaveBeenCalledWith(channel);
 		expect(event.preventDefault).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps macOS Ctrl+Tab as next tab and gives Option+Tab to the session switcher", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(source, true, target);
+
+		const nextTab = source.emit({ key: "Tab", control: true });
+		const open = source.emit({ key: "Tab", alt: true });
+		const again = source.emit({ key: "Tab", alt: true, isAutoRepeat: true });
+		const release = source.emit({ key: "Alt", alt: false, type: "keyUp" });
+
+		expect(target.send).toHaveBeenNthCalledWith(1, NEXT_TAB_SHORTCUT_CHANNEL);
+		expect(target.send).toHaveBeenNthCalledWith(2, SESSION_SWITCHER_STEP_CHANNEL, 1);
+		expect(target.send).toHaveBeenNthCalledWith(3, SESSION_SWITCHER_STEP_CHANNEL, 1);
+		expect(target.send).toHaveBeenNthCalledWith(4, SESSION_SWITCHER_RELEASE_CHANNEL);
+		expect(nextTab.preventDefault).toHaveBeenCalledOnce();
+		expect(open.preventDefault).toHaveBeenCalledOnce();
+		expect(again.preventDefault).toHaveBeenCalledOnce();
+		expect(release.preventDefault).toHaveBeenCalledOnce();
+		expect(target.focus).not.toHaveBeenCalled();
+	});
+
+	it("owns Ctrl+Tab on Windows and Linux, including backward, escape, and focus loss", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(source, false, target, true);
+
+		const open = source.emit({ key: "Tab", control: true });
+		const back = source.emit({ key: "Tab", control: true, shift: true, isAutoRepeat: true });
+		expect(target.send).toHaveBeenNthCalledWith(1, SESSION_SWITCHER_STEP_CHANNEL, 1);
+		expect(target.send).toHaveBeenNthCalledWith(2, SESSION_SWITCHER_STEP_CHANNEL, -1);
+		expect(target.send).not.toHaveBeenCalledWith(NEXT_TAB_SHORTCUT_CHANNEL);
+		expect(target.send).not.toHaveBeenCalledWith(PREVIOUS_TAB_SHORTCUT_CHANNEL);
+		expect(open.preventDefault).toHaveBeenCalledOnce();
+		expect(back.preventDefault).toHaveBeenCalledOnce();
+		// The browser view asks the shell to take focus for other shortcuts.
+		// The switcher must leave focus where it is so xterm and the page keep it.
+		expect(target.focus).not.toHaveBeenCalled();
+
+		const escape = source.emit({ key: "Escape" });
+		const release = source.emit({ key: "Control", type: "keyUp" });
+		expect(escape.preventDefault).toHaveBeenCalledOnce();
+		expect(target.send).toHaveBeenCalledWith(SESSION_SWITCHER_CANCEL_CHANNEL);
+		expect(target.send).not.toHaveBeenCalledWith(SESSION_SWITCHER_RELEASE_CHANNEL);
+		expect(release.preventDefault).not.toHaveBeenCalled();
+
+		source.emit({ key: "Tab", control: true });
+		cancelSessionSwitcherForFocusLoss();
+		source.emit({ key: "Control", type: "keyUp" });
+		expect(target.send).toHaveBeenCalledTimes(5);
+		expect(target.send).toHaveBeenNthCalledWith(5, SESSION_SWITCHER_CANCEL_CHANNEL);
+		expect(target.send).not.toHaveBeenCalledWith(SESSION_SWITCHER_RELEASE_CHANNEL);
+	});
+
+	it("does not open the session switcher from Alt+Tab on Windows", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(source, false, target);
+		const event = source.emit({ key: "Tab", alt: true });
+		expect(event.preventDefault).not.toHaveBeenCalled();
+		expect(target.send).not.toHaveBeenCalled();
 	});
 
 	it("reads live user overrides without reattaching the listener", () => {

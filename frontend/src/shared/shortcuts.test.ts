@@ -4,7 +4,9 @@ import {
 	matchesAppShortcut,
 	matchesFocusTerminalShortcut,
 	matchesKeyboardShortcutsHelpShortcut,
+	isSessionSwitcherModifierRelease,
 	matchesNextTabShortcut,
+	sessionSwitcherDirection,
 	matchesNextSessionShortcut,
 	matchesNewSessionShortcut,
 	matchesNewShellTerminalShortcut,
@@ -114,6 +116,23 @@ describe("additional application shortcuts", () => {
 		expect(matchesAppShortcut("close-shell-terminal", chord({ key: "w", meta: true }), true)).toBe(true);
 		expect(matchesAppShortcut("close-shell-terminal", chord({ key: "w", ctrl: true }), false)).toBe(true);
 		expect(matchesAppShortcut("close-shell-terminal", chord({ key: "w", meta: true }), false)).toBe(false);
+	});
+});
+
+describe("session switcher chord", () => {
+	it("uses Option+Tab on macOS and Ctrl+Tab on Windows and Linux", () => {
+		expect(sessionSwitcherDirection(chord({ key: "Tab", alt: true }), true)).toBe(1);
+		expect(sessionSwitcherDirection(chord({ key: "Tab", alt: true, shift: true }), true)).toBe(-1);
+		expect(sessionSwitcherDirection(chord({ key: "Tab", ctrl: true }), true)).toBeNull();
+		expect(sessionSwitcherDirection(chord({ key: "Tab", ctrl: true }), false)).toBe(1);
+		expect(sessionSwitcherDirection(chord({ key: "Tab", ctrl: true, shift: true }), false)).toBe(-1);
+		expect(sessionSwitcherDirection(chord({ key: "Tab", alt: true }), false)).toBeNull();
+		expect(sessionSwitcherDirection(chord({ key: "Tab", ctrl: true, meta: true }), false)).toBeNull();
+		expect(isSessionSwitcherModifierRelease("Alt", true)).toBe(true);
+		expect(isSessionSwitcherModifierRelease("Control", false)).toBe(true);
+		expect(isSessionSwitcherModifierRelease("Shift", true)).toBe(false);
+		expect(defaultShortcutBindings("switch-session", true).map((binding) => binding.alt)).toEqual([true, true]);
+		expect(defaultShortcutBindings("switch-session", false).map((binding) => binding.ctrl)).toEqual([true, true]);
 	});
 });
 

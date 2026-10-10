@@ -2677,5 +2677,9 @@
 	"cues.cancelSetup": "Cancel setup",
 	"cues.dismissStartupError": "Dismiss startup cue error",
 	"cues.commandAndOutput": "Command and output: {{name}}",
-	"cues.noCommandOutput": "No command output."
+	"cues.noCommandOutput": "No command output.",
+	"shortcut.switch-session": "세션 전환",
+	"sessionSwitcher.label": "세션 전환",
+	"sessionSwitcher.orchestrator": "오케스트레이터",
+	"sessionSwitcher.selected": "{{title}}, {{position}} / {{count}}"
 }

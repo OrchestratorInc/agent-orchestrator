@@ -8,6 +8,7 @@ import { memo, type CSSProperties, type ReactNode, useCallback, useEffect, useMe
 import { FolderPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CommandPalette } from "../components/CommandPalette";
+import { SessionSwitcher } from "../components/SessionSwitcher";
 import { CenterPanelShell } from "../components/CenterPanelShell";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
 import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
@@ -455,6 +456,22 @@ function ShellLayout() {
 		!usesPreviewWorkspaceData &&
 		!daemonStatus.code &&
 		(daemonStatus.state !== "ready" || workspaceStartupState === "loading" || (!workspaceQuery.isSuccess && !workspaceQuery.isError));
+	const switcherProjectId = routeParams.hostId
+		? routeParams.projectId ??
+			remoteWorkspaces.find(
+				(workspace) =>
+					workspace.hostId === routeParams.hostId &&
+					(workspace.id === routeParams.projectId || workspace.sessions.some((session) => session.id === routeParams.sessionId)),
+			)?.id
+		: scopedProjectId && scopedProjectId !== STANDALONE_WORKSPACE_ID
+			? scopedProjectId
+			: undefined;
+	const switcherWorkspace = switcherProjectId
+		? (routeParams.hostId ? remoteWorkspaces : workspaces).find(
+			(workspace) => workspace.id === switcherProjectId && (routeParams.hostId ? workspace.hostId === routeParams.hostId : !workspace.hostId),
+		)
+		: undefined;
+	const switcherSessions = switcherWorkspace?.sessions ?? [];
 	const navigateSession = useCallback(
 		(direction: -1 | 1) => {
 			const hostId = routeParams.hostId;
@@ -1394,6 +1411,18 @@ function ShellLayout() {
 					workspaces={workspaces}
 				/>
 					<CommandPalette />
+					<SessionSwitcher
+						currentSessionId={routeParams.sessionId}
+						kanban={!routeParams.sessionId}
+						onCommit={(sessionId) => {
+							if (!switcherProjectId) return;
+							const session = switcherSessions.find((item) => item.id === sessionId);
+							if (session?.kind === "worker") recordManualWorkerOpen(sessionUiKey(sessionId, routeParams.hostId));
+							void navigate(sessionNavigateTarget(switcherProjectId, sessionId, routeParams.hostId));
+						}}
+						projectKey={switcherProjectId ? `${routeParams.hostId ?? "local"}:${switcherProjectId}` : undefined}
+						sessions={switcherSessions}
+					/>
 				</div>
 				</TerminalCacheProvider>
 			</SessionTopbarProvider>

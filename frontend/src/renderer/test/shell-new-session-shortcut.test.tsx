@@ -85,6 +85,9 @@ const shellMocks = vi.hoisted(() => {
 			state.nextSessionListener = listener;
 			return vi.fn();
 		}),
+		onSessionSwitcherStep: vi.fn(() => () => {}),
+		onSessionSwitcherRelease: vi.fn(() => () => {}),
+		onSessionSwitcherCancel: vi.fn(() => () => {}),
 		onFocusTerminalShortcut: vi.fn((listener: () => void) => {
 			state.focusTerminalListener = listener;
 			return vi.fn();
@@ -137,6 +140,9 @@ vi.mock("../lib/bridge", () => ({
 			onCloseShellTerminalShortcut: () => () => {},
 			onPreviousTabShortcut: () => () => {},
 			onNextTabShortcut: () => () => {},
+			onSessionSwitcherStep: () => () => {},
+			onSessionSwitcherRelease: () => () => {},
+			onSessionSwitcherCancel: () => () => {},
 			setCloseShellTerminalShortcutEnabled: () => {},
 			onNewSessionShortcut: shellMocks.onNewSessionShortcut,
 			onKeyboardShortcutsHelp: shellMocks.onKeyboardShortcutsHelp,

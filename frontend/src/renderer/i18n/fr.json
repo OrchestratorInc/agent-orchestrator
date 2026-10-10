@@ -2717,5 +2717,9 @@
 	"cues.cancelSetup": "Cancel setup",
 	"cues.dismissStartupError": "Dismiss startup cue error",
 	"cues.commandAndOutput": "Command and output: {{name}}",
-	"cues.noCommandOutput": "No command output."
+	"cues.noCommandOutput": "No command output.",
+	"shortcut.switch-session": "Changer de session",
+	"sessionSwitcher.label": "Changer de session",
+	"sessionSwitcher.orchestrator": "Orchestrateur",
+	"sessionSwitcher.selected": "{{title}}, {{position}} sur {{count}}"
 }

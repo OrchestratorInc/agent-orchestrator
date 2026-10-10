@@ -99,6 +99,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onNextSessionShortcut: unsubscribe,
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
+					onSessionSwitcherStep: () => unsubscribe,
+					onSessionSwitcherRelease: unsubscribe,
+					onSessionSwitcherCancel: unsubscribe,
 					onFocusTerminalShortcut: unsubscribe,
 				},
 				terminal: {
@@ -715,6 +718,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onNextSessionShortcut: unsubscribe,
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
+					onSessionSwitcherStep: () => unsubscribe,
+					onSessionSwitcherRelease: unsubscribe,
+					onSessionSwitcherCancel: unsubscribe,
 					onFocusTerminalShortcut: unsubscribe,
 				},
 				terminal: {
