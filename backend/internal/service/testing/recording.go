@@ -21,7 +21,7 @@ func (s *Service) deliveryMode() string {
 	if policy, ok := s.deps.Desktop.(ports.TestingDesktopPolicy); ok {
 		return policy.DeliveryMode()
 	}
-	return "background"
+	return "foreground"
 }
 
 func (s *Service) recordingDirectory(st *attemptState) string {

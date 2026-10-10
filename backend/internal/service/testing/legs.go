@@ -55,6 +55,9 @@ func (s *Service) StartComparison(ctx context.Context, baseID, headID domain.Tes
 	if err := json.Unmarshal([]byte(base.RecipeSnapshot), &recipe); err != nil {
 		return StartAttemptResult{}, invalid("Stored recipe cannot be resolved")
 	}
+	if recipe.DeliveryMode != "" && recipe.DeliveryMode != "foreground" {
+		return StartAttemptResult{}, invalid("Stored recipe must use foreground; background input is unsupported")
+	}
 	var pinned struct {
 		PullRequest *struct {
 			BaseSHA string `json:"baseSha"`
@@ -169,6 +172,9 @@ func (s *Service) StartLeg(ctx context.Context, session domain.SessionID, leg st
 	var recipe Recipe
 	if err = json.Unmarshal([]byte(run.RecipeSnapshot), &recipe); err != nil {
 		return StartLegResult{}, invalid("Stored recipe cannot be resolved")
+	}
+	if recipe.DeliveryMode != "" && recipe.DeliveryMode != "foreground" {
+		return StartLegResult{}, invalid("Stored recipe must use foreground; background input is unsupported")
 	}
 	s.mu.Lock()
 	grant, live := s.caps[session]

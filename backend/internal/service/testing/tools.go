@@ -306,6 +306,9 @@ func (s *Service) Execute(ctx context.Context, id domain.TestAttemptID, session 
 			}
 		}
 	}()
+	if record.ConfiguredDeliveryMode == "foreground" && record.DeliveryMode != "foreground" {
+		return result, apierr.Conflict("TEST_INPUT_REFUSED", "Testing input must use foreground; background input is unsupported", nil)
+	}
 	if _, _, err = s.authorize(callCtx, id, session, token); err != nil {
 		return result, err
 	}

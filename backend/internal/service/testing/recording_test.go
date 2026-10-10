@@ -77,7 +77,7 @@ func movieFixture(t *testing.T, configure func(*movieDesktop)) (*fixture, *movie
 	t.Helper()
 	var desktop *movieDesktop
 	f := newFixture(t, func(deps *Deps) {
-		desktop = &movieDesktop{policyDesktop: &policyDesktop{fakeProviders: deps.Desktop.(*fakeProviders), mode: "background"}}
+		desktop = &movieDesktop{policyDesktop: &policyDesktop{fakeProviders: deps.Desktop.(*fakeProviders), mode: "foreground"}}
 		if configure != nil {
 			configure(desktop)
 		}

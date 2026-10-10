@@ -61,6 +61,8 @@ type TestingCleanupResult struct {
 // BindWindow returns the supplied launch identity with its WindowID filled in.
 // Input validates that frame and request refer to that same live window, maps
 // screenshot pixels to native points, and refuses input outside its bounds.
+// Input activates the owned window and refuses delivery if another window is
+// topmost at the input point. Only foreground delivery is supported.
 // It must never fall back to full-desktop input or expose a provider MCP server.
 // Screenshot returns pixels and bounded AX rows from the same capture. Element
 // IDs belong to that capture and binding, and input consumes the capture.

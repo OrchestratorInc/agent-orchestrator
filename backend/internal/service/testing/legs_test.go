@@ -42,8 +42,8 @@ func currentCall(f *fixture, request, name string, input any) (ToolResult, error
 	return f.svc.ExecuteCurrent(context.Background(), f.start.WorkerSessionID, f.worker.binding.Capability, request, name, raw)
 }
 
-func TestComparisonRejectsRunsOutsidePinnedPRRevisions(t *testing.T) {
-	for _, wrongLeg := range []string{"base", "head"} {
+func TestComparisonRejectsMismatchedPinsAndBackgroundRecipe(t *testing.T) {
+	for _, wrongLeg := range []string{"base", "head", "delivery"} {
 		t.Run(wrongLeg, func(t *testing.T) {
 			f := newFixture(t)
 			base, head := f.run, f.run
@@ -51,10 +51,14 @@ func TestComparisonRejectsRunsOutsidePinnedPRRevisions(t *testing.T) {
 			base.CommitSHA, head.CommitSHA = "base-sha", "head-sha"
 			base.RecipeSnapshot = `{"id":"native","pullRequest":{"baseSha":"base-sha","headSha":"head-sha"}}`
 			head.RecipeSnapshot = base.RecipeSnapshot
-			if wrongLeg == "base" {
+			switch wrongLeg {
+			case "base":
 				base.CommitSHA = "other-base"
-			} else {
+			case "head":
 				head.CommitSHA = "other-head"
+			default:
+				base.RecipeSnapshot = `{"id":"native","deliveryMode":"background","pullRequest":{"baseSha":"base-sha","headSha":"head-sha"}}`
+				head.RecipeSnapshot = base.RecipeSnapshot
 			}
 			for _, run := range []domain.TestRunRecord{base, head} {
 				if err := f.svc.deps.Store.CreateTestRun(context.Background(), run); err != nil {
@@ -65,6 +69,9 @@ func TestComparisonRejectsRunsOutsidePinnedPRRevisions(t *testing.T) {
 			_, err := f.svc.StartComparison(context.Background(), base.ID, head.ID, StartAttemptInput{WorkerPrompt: "Compare pinned PR"})
 			if code(err) != "INVALID_TESTING_REQUEST" || f.worker.launches != launches {
 				t.Fatal("un-pinned revision started a worker", err)
+			}
+			if wrongLeg == "delivery" && !strings.Contains(err.Error(), "must use foreground") {
+				t.Fatal("background recipe was not rejected", err)
 			}
 		})
 	}

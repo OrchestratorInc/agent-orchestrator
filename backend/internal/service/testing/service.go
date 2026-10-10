@@ -85,6 +85,9 @@ func (s *Service) configured() error {
 	if s.deps.Store == nil || s.deps.Target == nil || s.deps.Desktop == nil || s.deps.Evidence == nil || s.deps.Workers == nil {
 		return ProviderNotConfigured()
 	}
+	if s.deliveryMode() != "foreground" {
+		return apierr.Unavailable("TESTING_PROVIDER_NOT_CONFIGURED", "Testing desktop must use foreground; background input is unsupported")
+	}
 	return nil
 }
 func invalid(message string) error { return apierr.Invalid("INVALID_TESTING_REQUEST", message, nil) }
@@ -198,6 +201,9 @@ func (s *Service) StartAttempt(ctx context.Context, id domain.TestRunID, in Star
 	var recipe Recipe
 	if err = json.Unmarshal([]byte(run.RecipeSnapshot), &recipe); err != nil {
 		return StartAttemptResult{}, invalid("Stored recipe cannot be resolved")
+	}
+	if recipe.DeliveryMode != "" && recipe.DeliveryMode != "foreground" {
+		return StartAttemptResult{}, invalid("Stored recipe must use foreground; background input is unsupported")
 	}
 	s.mu.Lock()
 	if s.closed {
