@@ -18,6 +18,14 @@ func TestWorkerContextUsesOnlyLiveTargetPaths(t *testing.T) {
 	if err != nil || got.CheckoutPath != filepath.Dir(f.s.frontend) || got.CLIPath != filepath.Join(f.s.root, "target-ao") || got.RunFilePath != filepath.Join(f.s.root, "running.json") || got.DataDir != f.s.target.DataDir || got.FixtureDir != filepath.Join(f.s.root, "fixtures") {
 		t.Fatalf("worker context = %+v, %v", got, err)
 	}
+	var facts struct {
+		Revision string `json:"revision"`
+		Daemon   string `json:"daemonExecutable"`
+		Port     int    `json:"port"`
+	}
+	if err := json.Unmarshal([]byte(got.LaunchContext), &facts); err != nil || facts.Revision != f.s.revision || facts.Daemon != f.s.daemon || facts.Port != f.s.port {
+		t.Fatalf("worker did not receive checked launch facts: %s, %v", got.LaunchContext, err)
+	}
 	foreign := f.s.target
 	foreign.Generation++
 	if _, err := f.a.WorkerContext(ctx, foreign); err == nil {
@@ -37,7 +45,11 @@ func TestWorkerContextUsesOnlyLiveTargetPaths(t *testing.T) {
 func TestTargetCLIUsesTargetBinaryDirectoryEnvironmentAndExitCode(t *testing.T) {
 	f := fixture(t)
 	f.s.frontend = filepath.Join(f.s.root, "checkout with 'quotes'", "frontend")
-	executable := filepath.Join(f.s.frontend, "daemon", "ao")
+	f.s.daemon = filepath.Join(f.s.root, "owned daemon with 'quotes'", "ao")
+	executable := f.s.daemon
+	if err := os.MkdirAll(filepath.Dir(f.s.frontend), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Dir(executable), 0o700); err != nil {
 		t.Fatal(err)
 	}

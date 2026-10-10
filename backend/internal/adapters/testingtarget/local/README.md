@@ -1,12 +1,25 @@
 # Local testing target
 
-`New()` launches the real, unpackaged Electron executable from a prepared
-checkout. Electron manages the target Go daemon. Static Forge/Vite assets avoid
+`New()` prepares the pinned revision in its warm checkout and launches the real,
+unpackaged Electron executable. It builds that revision's Go daemon into the
+private attempt directory and passes its exact path through `AO_DAEMON_COMMAND`.
+Electron manages that owned daemon. Static Forge/Vite assets avoid
 extra Vite and HMR listeners. This is not an Electron package or installed app.
+
+## Start from a PR URL
+
+From an AO worker, run `ao testing start --pr <https://github.com/owner/repo/pull/number>`.
+AO infers the project, snapshots metadata with `gh`, fetches the exact base and
+fork-head SHAs into the warm cache, and saves the full pinned PR patch plus its
+SHA-256 outside the repository. Intake does not launch a target or change HEAD.
+One comparison worker starts base and head with `ao testing leg start base|head`.
+The `local-ao` recipe is available without a manual checkout environment setting.
+Manual issue/run setup still accepts `AO_TESTING_TARGET_CHECKOUT`.
 
 ## Reuse a warm target
 
-From this worker checkout, run:
+The controller runs preparation automatically before launch. For manual setup
+diagnostics from this worker checkout, run:
 
 ```sh
 python3 backend/internal/skillassets/testing/scripts/prepare.py --commit <base-sha>
@@ -20,12 +33,18 @@ Use `--repository <path>` for a different source checkout. It clones once,
 then fetches and checks out each exact revision in the same folder. Tracked
 edits and an active target reservation prevent preparation. It never runs
 `git clean` or deletes `node_modules`. Each package's last installed lockfile
-hash is retained beside the checkout; `npm install --prefer-offline` runs
-only when that hash changes. Go/npm use the user's normal cache settings.
-Only the daemon and Forge/Vite assets needed to launch the app are compiled,
-without packaging or repository test/lint suites. Do not symlink dependencies.
-The manifest pins the revision and hashes the launch artifacts. Set
-`AO_TESTING_TARGET_CHECKOUT` to the printed checkout path for both attempts.
+hash is retained beside the checkout; `npm ci --prefer-offline` runs
+when that hash changes or dependencies are missing. Go/npm use the user's normal cache settings.
+The controller builds Forge/Vite assets and an attempt-owned daemon without
+packaging. Workers may run checks in the owned checkout. Do not symlink dependencies.
+Preflight checks the effective Go version against `go.mod`, the Node version
+against any `package.json` engine constraint, and the revision's actual launch
+resolver with an explicit daemon command. Unsupported revisions retain the
+exact reason before Electron starts. The launcher requires an explicit private
+port other than 3001 and checks the live daemon's recorded and kernel identity
+before startup, after readiness and after cleanup. The manifest pins the revision, hashes
+the frontend launch artifacts and records those runtime facts. For manual
+issue/run setup, set `AO_TESTING_TARGET_CHECKOUT` to the printed checkout path.
 
 ## Slice B wiring
 
@@ -49,8 +68,8 @@ The window identifier is accepted back with the same launch identity.
 
 All inherited `AO_*` values are removed. Owned overrides select fresh data,
 run file, Electron profile, loopback port, launch ID and fake harness. Telemetry
-is disabled. `AO_ALLOWED_ORIGINS=app://renderer` avoids the dev helper adding
-the opaque `null` origin for static assets. Tool callers cannot select a target endpoint or log file.
+is disabled. Allowed origins are `app://renderer` and the private loopback
+origin, avoiding the dev helper's opaque `null` origin for static assets. Tool callers cannot select a target endpoint or log file.
 Readiness checks kernel identities, the run file, `/readyz` executable, startup cwd and live data cwd,
 and successful projects and sessions GETs. Log output is bounded and remains
 readable after cleanup. ReadLogs reads only captured files and does no process
@@ -82,13 +101,18 @@ absence. A descendant disappearing before signal delivery is also gone. Events
 during inventory are noted in target.log. Live PID reuse still prevents signals.
 The Electron main and daemon remain required for every live observation.
 Logs and retained evidence remain. After absence checks pass, only the owned
-data, Electron profile and fixtures are removed; the checkout and normal
+data, Electron profile, fixtures, setup scripts and daemon binary are removed;
+the checkout and normal
 caches remain. A checkout reservation prevents another preparation or launch
 from changing live code. No kill-by-name or kill-by-port is used. A stale owned
 run file is removed only after other absence checks pass.
 
 Default tests use injected process operations and HTTP transports. The live
-proof is opt-in, macOS only, and needs the previously installed Cua Driver:
+proof is opt-in, macOS only, and needs the previously installed Cua Driver.
+Before running it, acquire `~/.ao/dev/live-launch.lock` with `mkdir` and write
+your AO session ID to its `owner` file. If held, defer this live proof. Keep the
+lock until its cleanup is verified, then remove only your matching owner file
+and lock directory. Run:
 
 ```sh
 python3 - <<'PY'

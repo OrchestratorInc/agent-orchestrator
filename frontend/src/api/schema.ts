@@ -4334,12 +4334,15 @@ export interface components {
             id: string;
         };
         CreateTestingRunRequest: {
-            commitSha: string;
-            issueSnapshot: string;
+            commitSha?: string;
+            issueSnapshot?: string;
             issueUrl: string;
             linkedRunId?: string;
+            /** @description GitHub PR URL; resolves and snapshots exact base/head revisions instead of manual issue and commit fields. */
+            prUrl?: string;
             projectId: string;
-            recipeId: string;
+            /** @description Defaults to local-ao for PR URL intake. */
+            recipeId?: string;
             requester: string;
         };
         CueDefinitionRequest: {
@@ -5988,6 +5991,7 @@ export interface components {
         TestingRunResponse: {
             /** Format: date-time */
             createdAt: string;
+            headRunId?: string;
             runId: string;
         };
         TestingScreenshotCall: {

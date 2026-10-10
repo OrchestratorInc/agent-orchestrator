@@ -28,11 +28,12 @@ type TestingTargetWorkerContext interface {
 
 // TestingWorkerContext contains adapter-resolved paths, never worker input.
 type TestingWorkerContext struct {
-	CheckoutPath string
-	CLIPath      string
-	RunFilePath  string
-	DataDir      string
-	FixtureDir   string
+	CheckoutPath  string `json:"checkoutPath"`
+	CLIPath       string `json:"cliPath"`
+	RunFilePath   string `json:"runFilePath"`
+	DataDir       string `json:"dataDir"`
+	FixtureDir    string `json:"fixtureDir"`
+	LaunchContext string `json:"launchContext,omitempty"` // JSON facts checked by the target adapter.
 }
 
 // TestingTargetSpec is daemon-resolved launch input. StateRoot must be beneath
@@ -131,4 +132,9 @@ type TestingEvidenceArtifact struct {
 	Kind     string
 	MIMEType string
 	Frame    *domain.TestDesktopFrame
+}
+
+// TestingPullRequestIntake resolves one provider snapshot into a warm checkout.
+type TestingPullRequestIntake interface {
+	Snapshot(ctx context.Context, project domain.ProjectRecord, prURL string) (domain.TestPullRequestSnapshot, string, error)
 }

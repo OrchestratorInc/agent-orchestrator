@@ -127,12 +127,32 @@ func (a *Adapter) Stop(ctx context.Context, target domain.TestTargetIdentity) (p
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if s.setupGroup != 0 {
+		if err := waitSetupGroup(ctx, s.setupGroup); err != nil {
+			failed.Leftovers = []string{err.Error()}
+			return failed, err
+		}
+		s.setupGroup = 0
+	}
 	if s.stopped && s.leaseInfo == nil {
 		return ports.TestingCleanupResult{State: domain.TestCleanupComplete}, nil
 	}
+	if s.target.ElectronPID == 0 {
+		if s.leaseInfo == nil {
+			err := errors.New("preparation checkout reservation identity unavailable")
+			failed.Leftovers = []string{err.Error()}
+			return failed, err
+		}
+		if err := removePrivateState(s); err != nil {
+			failed.Leftovers = []string{err.Error()}
+			return failed, err
+		}
+		s.stopped = true
+		return ports.TestingCleanupResult{State: domain.TestCleanupComplete}, nil
+	}
 	s.closing = true
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
 	var problems []error
 	if err := a.captureTree(ctx, s); err != nil {
 		problems = append(problems, err)
@@ -241,6 +261,10 @@ func (a *Adapter) Stop(ctx context.Context, target domain.TestTargetIdentity) (p
 			leftovers = append(leftovers, "run file")
 		}
 	}
+	if err := a.checkLiveDaemon(s.liveGuard); err != nil {
+		problems = append(problems, err)
+		leftovers = append(leftovers, "live AO daemon identity changed")
+	}
 	if s.log != nil {
 		if err := s.log.Sync(); err != nil {
 			problems = append(problems, err)
@@ -277,7 +301,7 @@ func removePrivateState(s *launch) error {
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	for _, name := range []string{"data", "electron", "fixtures"} {
+	for _, name := range []string{"data", "electron", "fixtures", "daemon", "setup"} {
 		if err := root.RemoveAll(name); err != nil {
 			return err
 		}
