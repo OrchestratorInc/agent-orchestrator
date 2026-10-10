@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -108,6 +109,38 @@ func TestManagedHooksPreserveUserFiles(t *testing.T) {
 	}
 	if err := p.GetAgentHooks(context.Background(), cfg); err == nil {
 		t.Fatal("overwrote user extension")
+	}
+}
+
+func TestLaunchKeepsAllManagedFilesIgnored(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required to verify workspace cleanliness")
+	}
+	work := t.TempDir()
+	if out, err := exec.Command("git", "-C", work, "init", "--quiet").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	p := fixturePlugin()
+	if err := p.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: work}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{WorkspacePath: work, SystemPrompt: "private standing instructions", Permissions: ports.PermissionModeBypassPermissions}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(work, ".tau", "__pycache__"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"__pycache__/ao_activity.pyc", "user.txt"} {
+		if err := os.WriteFile(filepath.Join(work, ".tau", name), []byte("fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := exec.Command("git", "-C", work, "status", "--porcelain", "--untracked-files=all").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git status: %v: %s", err, out)
+	}
+	if string(out) != "?? .tau/user.txt\n" {
+		t.Fatalf("AO artifacts must stay ignored while user files remain visible: %s", out)
 	}
 }
 

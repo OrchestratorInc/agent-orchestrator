@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -28,10 +27,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		return fmt.Errorf("tau: hook workspace is required")
 	}
 	path := extensionPath(cfg.WorkspacePath)
-	if err := writeManaged(path, activityExtension); err != nil {
-		return err
-	}
-	return hookutil.EnsureWorkspaceGitignore(filepath.Dir(path), "__pycache__/")
+	return writeManaged(path, activityExtension)
 }
 
 // EmitsSemanticMessageAcceptance reports canonical accepted user messages.

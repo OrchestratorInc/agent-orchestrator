@@ -254,5 +254,7 @@ func writeManaged(path, content string) error {
 	if err := hookutil.AtomicWriteFile(path, []byte(content), 0o600); err != nil {
 		return err
 	}
-	return hookutil.EnsureWorkspaceGitignore(filepath.Dir(path), filepath.Base(path))
+	// The helper rewrites its managed file; include the complete footprint on
+	// every call so writing instructions never uncovers the observer or cache.
+	return hookutil.EnsureWorkspaceGitignore(filepath.Dir(path), "ao_activity.py", "ao-standing-instructions.md", "__pycache__/")
 }
