@@ -12,6 +12,8 @@ async function withMuxFixture(scenario, run) {
   let opened = false;
   let inputReceived = false;
   let inputReceivedAt = 0;
+  let cleanupInputs = 0;
+  let killRequests = 0;
   let upgrades = 0;
   let cancellationStarted = false;
   let nativeCueSent = false;
@@ -22,6 +24,7 @@ async function withMuxFixture(scenario, run) {
   let projectConfig = { agentRules: "original audit rules", defaultBranch: "main" };
   let continued = false;
   const target = "opaque:terminal/fixture";
+  const cleanupScenario = scenario.startsWith("lifecycle-cleanup");
   function send(socket, body) {
     const payload = Buffer.from(JSON.stringify(body));
     const header = payload.length < 126 ? Buffer.from([0x81, payload.length])
@@ -42,6 +45,7 @@ async function withMuxFixture(scenario, run) {
       });
       return;
     }
+    if (req.url.endsWith("/kill")) killRequests++;
     if (scenario.startsWith("lifecycle") && req.url !== "/api/v1/sessions/fixture") {
       let body;
       if (req.url.endsWith("/probe")) body = { supported: true, installed: true, agent: { authStatus: "configured" } };
@@ -80,13 +84,14 @@ async function withMuxFixture(scenario, run) {
       res.writeHead(503); res.end("{}"); return;
     }
     const active = !scenario.startsWith("ready-") && (!scenario.startsWith("lifecycle") || cancellationStarted || scenario === "lifecycle-activity-active") && scenario !== "never-active" && !(opened && scenario === "inactive-before-input")
-      && !(inputReceived && scenario !== "never-settles"
+      && !(inputReceived && !["never-settles", "lifecycle-cleanup-never-settles"].includes(scenario)
         && !(scenario === "delayed-settle" && Date.now() - inputReceivedAt < 5200));
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify({ session: {
-      id: "fixture", isTerminated: killed, statusReadiness: "ready", activity: { state: active ? "active" : "idle" },
-      terminalHandleId: opened && scenario === "changed-handle" ? "other-terminal" : target,
-      terminalGeneration: restored ? "restored-epoch" : opened && ["changed-generation", "ready-generation-change"].includes(scenario) ? "epoch-2" : "epoch-1",
+      id: cleanupScenario && upgrades > 1 && scenario.endsWith("-foreign") ? "foreign-session" : "fixture", isTerminated: killed, statusReadiness: "ready", activity: { state: cleanupScenario && upgrades > 1 && scenario.endsWith("-reactivated") ? "active" : active ? "active" : "idle" },
+      ...(cleanupScenario && !scenario.endsWith("-marker-absent") ? { lastUserMessageAt: scenario.endsWith("-marker-null") ? null : scenario.endsWith("-marker-blank") ? " " : inputReceived && scenario.endsWith("-newer-during-cancel") || upgrades > 1 && scenario.endsWith("-newer-user") ? "2026-10-10T02:00:00Z" : "2026-10-10T01:00:00Z" } : {}),
+      terminalHandleId: (opened && scenario === "changed-handle" || cleanupScenario && upgrades > 1 && scenario.endsWith("-handle")) ? "other-terminal" : target,
+      terminalGeneration: restored ? "restored-epoch" : (opened && ["changed-generation", "ready-generation-change"].includes(scenario) || cleanupScenario && upgrades > 1 && scenario.endsWith("-generation")) ? "epoch-2" : "epoch-1",
     } }));
   });
   server.on("upgrade", (req, socket, head) => {
@@ -119,6 +124,14 @@ async function withMuxFixture(scenario, run) {
         if (frame.type === "open") {
           assert.deepEqual(frame, { ch: "terminal", type: "open", id: target, role: "secondary" });
           opened = true;
+          if (cleanupScenario && upgrades > 1) {
+            send(socket, { ch: "terminal", id: target, type: "opened" });
+            const draft = "> For cancellation testing, run a foreground command that waits for 120 seconds. Do not modify files. Wait for the command to finish.\n────────\n  [model] | native session\n";
+            const ready = ">  \n────────\n  [model] | native session\n";
+            send(socket, { ch: "terminal", id: target, type: "data",
+              data: Buffer.from((scenario.endsWith("-stale-cue") ? ready : "") + (scenario.endsWith("-already-empty") ? ready : draft + (scenario.endsWith("-foreign-draft") ? "> unrelated user draft\n────────\n  [model] | native session\n" : ""))).toString("base64") });
+            continue;
+          }
           if (scenario.startsWith("ready-") || ["lifecycle-ready-blocked", "lifecycle-retains-old-instructions"].includes(scenario)) {
             send(socket, { ch: "terminal", id: target, type: "opened" });
             if (scenario === "ready-error") { send(socket, { ch: "terminal", id: target, type: "error", error: "restore attach failed" }); continue; }
@@ -146,6 +159,17 @@ async function withMuxFixture(scenario, run) {
         } else if (frame.type === "data") {
           assert.equal(frame.ch, "terminal");
           assert.equal(frame.id, target);
+          if (cleanupScenario && upgrades > 1) {
+            cleanupInputs++;
+            assert.deepEqual(Buffer.from(frame.data, "base64"), Buffer.from("\x03"));
+            if (!scenario.endsWith("-stale-cue")) {
+              send(socket, { ch: "terminal", id: scenario.endsWith("-foreign-output") ? "foreign-terminal" : target, type: "data",
+                data: Buffer.from(scenario.endsWith("-draft-remains")
+                  ? "> remaining draft\n────────\n  [model] | native session\n"
+                  : ">  \n────────\n  [model] | native session\n").toString("base64") });
+            }
+            continue;
+          }
           assert.deepEqual(Buffer.from(frame.data, "base64"), Buffer.from(scenario === "ctrl-c" ? "\x03" : "\x1b"));
           inputReceived = true;
           inputReceivedAt = Date.now();
@@ -162,7 +186,7 @@ async function withMuxFixture(scenario, run) {
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   try {
     await run({ baseURL: "http://127.0.0.1:" + server.address().port,
-      received, messages, get projectConfig() { return projectConfig; }, get nativeCueSent() { return nativeCueSent; }, get inputReceived() { return inputReceived; }, get upgrades() { return upgrades; } });
+      received, messages, get cleanupInputs() { return cleanupInputs; }, get killRequests() { return killRequests; }, get projectConfig() { return projectConfig; }, get nativeCueSent() { return nativeCueSent; }, get inputReceived() { return inputReceived; }, get upgrades() { return upgrades; } });
   } finally {
     for (const timer of timers) clearTimeout(timer);
     for (const socket of sockets) socket.destroy();
@@ -435,5 +459,145 @@ test("restored provider history cannot substitute for newly configured standing 
     assert.equal(gate("history_file_continuity")?.status, "PASS", JSON.stringify(gate("history_file_continuity")));
     assert.equal(gate("system_prompt_restore")?.status, "FAIL");
     assert.equal(gate("post_restore_message")?.status, "FAIL");
+  });
+});
+
+async function auditCleanup(fixture, options = {}) {
+  return auditAgent({
+    baseURL: fixture.baseURL, agent: "fixture", projectId: "project", timeoutMs: 150,
+    diagnosticAfterNativeProof: true,
+    interruptSpec: { input: "\x1b", postCancelCleanup: { input: "\x03", draftPattern: "(?:^|\\n)> {prompt}\\n─+\\n[ \\t]*\\[model\\][^\\n]*\\n*$", ...options.cleanupSpec }, ...options.interruptSpec },
+    restoredReadySpec: options.withoutReadySpec ? null : options.readySpec || nativeReadySpec,
+    localResult: { agent: "fixture", gates: ["local_binary", "local_version", "local_integration", "local_session_spawn"].map(name => ({ name, status: "PASS" })) },
+  });
+}
+
+test("post-cancel cleanup clears the audit draft exactly once before lifecycle kill", async () => {
+  await withMuxFixture("lifecycle-cleanup-success", async fixture => {
+    const result = await auditCleanup(fixture);
+    const cleanup = result.gates.find(item => item.name === "post_cancel_draft_cleanup");
+    assert.equal(cleanup?.status, "PASS", JSON.stringify(result));
+    assert.equal(fixture.cleanupInputs, 1);
+    assert.equal(fixture.killRequests, 1);
+    assert.equal(cleanup.evidence.inputBytes, 1);
+    assert.equal(cleanup.evidence.inputSent, true);
+    assert.equal(cleanup.evidence.matchedPatterns, 1);
+    assert.ok(cleanup.evidence.outputFramesAfterInput > 0);
+    assert.equal(result.gates.find(item => item.name === "cancellation").status, "PASS");
+  });
+});
+
+for (const scenario of ["foreign", "handle", "generation", "reactivated", "newer-user", "newer-during-cancel", "never-settles", "foreign-draft"]) {
+  test("post-cancel cleanup refuses unsafe " + scenario + " without clearing or lifecycle kill", async () => {
+    await withMuxFixture("lifecycle-cleanup-" + scenario, async fixture => {
+      const result = await auditCleanup(fixture);
+      assert.equal(result.gates.find(item => item.name === "post_cancel_draft_cleanup")?.status, "BLOCKED", JSON.stringify(result));
+      assert.equal(fixture.cleanupInputs, 0);
+      assert.equal(fixture.killRequests, 0);
+      assert.equal(result.gates.find(item => item.name === "termination")?.status, "NOT_RUN");
+      assert.equal(result.gates.find(item => item.name === "native_restore")?.status, "NOT_RUN");
+      if (scenario === "never-settles") assert.equal(result.gates.find(item => item.name === "cancellation")?.status, "FAIL");
+    });
+  });
+}
+
+for (const scenario of ["draft-remains", "stale-cue", "foreign-output"]) {
+  test("post-cancel cleanup never retries or kills when empty composer is unproven: " + scenario, async () => {
+    await withMuxFixture("lifecycle-cleanup-" + scenario, async fixture => {
+      const result = await auditCleanup(fixture);
+      assert.equal(result.gates.find(item => item.name === "post_cancel_draft_cleanup")?.status, "BLOCKED", JSON.stringify(result));
+      assert.equal(fixture.cleanupInputs, 1);
+      assert.equal(fixture.killRequests, 0);
+      assert.equal(result.gates.find(item => item.name === "cancellation")?.status, "PASS");
+    });
+  });
+}
+
+test("post-cancel cleanup skips input when the audit composer is already empty", async () => {
+  await withMuxFixture("lifecycle-cleanup-already-empty", async fixture => {
+    const result = await auditCleanup(fixture);
+    const cleanup = result.gates.find(item => item.name === "post_cancel_draft_cleanup");
+    assert.equal(cleanup?.status, "PASS", JSON.stringify(result));
+    assert.equal(fixture.cleanupInputs, 0);
+    assert.equal(cleanup.evidence.inputSent, false);
+    assert.equal(fixture.killRequests, 1);
+  });
+});
+
+for (const input of ["", "\x03\x03", "\x1b", "clear", null]) {
+  test("post-cancel cleanup rejects any input other than one Ctrl+C: " + JSON.stringify(input), async () => {
+    await withMuxFixture("lifecycle-cleanup-success", async fixture => {
+      const result = await auditCleanup(fixture, { cleanupSpec: { input } });
+      assert.equal(result.gates.find(item => item.name === "post_cancel_draft_cleanup")?.status, "BLOCKED");
+      assert.equal(fixture.cleanupInputs, 0);
+      assert.equal(fixture.killRequests, 0);
+    });
+  });
+}
+
+test("post-cancel cleanup requires the configured empty-composer contract before sending", async () => {
+  await withMuxFixture("lifecycle-cleanup-success", async fixture => {
+    const result = await auditCleanup(fixture, { withoutReadySpec: true });
+    assert.equal(result.gates.find(item => item.name === "post_cancel_draft_cleanup")?.status, "BLOCKED");
+    assert.equal(fixture.cleanupInputs, 0);
+    assert.equal(fixture.killRequests, 0);
+  });
+});
+
+for (const draftPattern of [undefined, "", "Long draft", "{prompt}["]) {
+  test("post-cancel cleanup requires a valid draft cue tied to the audit prompt: " + JSON.stringify(draftPattern), async () => {
+    await withMuxFixture("lifecycle-cleanup-success", async fixture => {
+      const result = await auditCleanup(fixture, { cleanupSpec: { draftPattern } });
+      assert.equal(result.gates.find(item => item.name === "post_cancel_draft_cleanup")?.status, "BLOCKED");
+      assert.equal(fixture.cleanupInputs, 0);
+      assert.equal(fixture.killRequests, 0);
+    });
+  });
+}
+
+for (const cleanupSpec of [
+  { draftPattern: "{prompt}" },
+  { draftPattern: "^> {prompt}$", flags: "m" },
+  { draftPattern: "(?:{prompt}|)" },
+  { draftPattern: "(?:{prompt}|> unrelated user draft\\n─+\\n[ \\t]*\\[model\\][^\\n]*\\n*$)" },
+]) {
+  test("post-cancel cleanup never treats a history-only draft pattern as current composer: " + JSON.stringify(cleanupSpec), async () => {
+    await withMuxFixture("lifecycle-cleanup-foreign-draft", async fixture => {
+      const result = await auditCleanup(fixture, { cleanupSpec });
+      assert.equal(result.gates.find(item => item.name === "post_cancel_draft_cleanup")?.status, "BLOCKED");
+      assert.equal(fixture.cleanupInputs, 0);
+      assert.equal(fixture.killRequests, 0);
+    });
+  });
+}
+
+for (const scenario of ["marker-absent", "marker-null", "marker-blank"]) {
+  test("post-cancel cleanup refuses missing latest-user metadata: " + scenario, async () => {
+    await withMuxFixture("lifecycle-cleanup-" + scenario, async fixture => {
+      const result = await auditCleanup(fixture);
+      assert.equal(result.gates.find(item => item.name === "post_cancel_draft_cleanup")?.status, "BLOCKED");
+      assert.equal(fixture.cleanupInputs, 0);
+      assert.equal(fixture.killRequests, 0);
+    });
+  });
+}
+
+test("post-cancel cleanup requires fresh nonempty output even with a nullable readiness pattern", async () => {
+  await withMuxFixture("lifecycle-cleanup-stale-cue", async fixture => {
+    const result = await auditCleanup(fixture, {
+      readySpec: { patterns: ["(?:" + nativeReadySpec.patterns[0] + "|^$)"] },
+    });
+    assert.equal(result.gates.find(item => item.name === "post_cancel_draft_cleanup")?.status, "BLOCKED");
+    assert.equal(fixture.killRequests, 0);
+    assert.equal(fixture.cleanupInputs, 0);
+  });
+});
+
+test("post-cancel cleanup does not accept a historical empty cue with multiline flags", async () => {
+  await withMuxFixture("lifecycle-cleanup-stale-cue", async fixture => {
+    const result = await auditCleanup(fixture, { readySpec: { patterns: ["^>[ \\t]*$"], flags: "m" } });
+    assert.equal(result.gates.find(item => item.name === "post_cancel_draft_cleanup")?.status, "BLOCKED");
+    assert.equal(fixture.cleanupInputs, 1);
+    assert.equal(fixture.killRequests, 0);
   });
 });

@@ -66,6 +66,10 @@ Restore HTTP 200 and synthetic `idle` do not establish native input readiness.
 Supply a cue for the initialized empty composer with the configured model and
 workspace, not an echoed prompt, loading screen, or draft. Missing cancellation
 or restored-readiness contracts yield `NOT_RUN` without sending those turns.
+For a native CLI that restores the cancelled prompt as a draft, the local
+contract documents optional post-cancel cleanup for exclusive runner-owned
+sessions. It requires a current audit-draft cue and verified empty composer;
+it never clears a user draft or relaxes restored readiness.
 Activity requires an observed active-to-settled turn. Hidden-instruction token
 consumption proves delivery, not confidentiality against model echo. The runner
 introduces a fresh restore token only after confirmed kill and verifies its

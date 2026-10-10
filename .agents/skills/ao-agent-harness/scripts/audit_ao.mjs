@@ -43,6 +43,7 @@ const LOCAL_GATES = [
 ];
 
 const SETTLED_STATES = new Set(["idle", "waiting_input", "blocked"]);
+const CANCELLATION_PROMPT = "For cancellation testing, run a foreground command that waits for 120 seconds. Do not modify files. Wait for the command to finish.";
 
 function now() {
   return new Date().toISOString();
@@ -429,6 +430,49 @@ async function interruptViaMux({ baseURL, sessionId, activeState, timeoutMs, spe
 }
 
 export async function waitForRestoredTerminalReady({ baseURL, sessionId, restoredState, spec, timeoutMs = 30_000 }) {
+  return observeNativeTerminalReady({ baseURL, sessionId, restoredState, spec, timeoutMs });
+}
+
+// Only completeLifecycle calls this, for its new exclusive audit session and
+// just-submitted cancellation turn. This is not a general draft-clearing tool.
+async function cleanupCancelledAuditDraft({ baseURL, sessionId, cancellation, startResponse, spec, readySpec, timeoutMs }) {
+  try {
+    if (!cancellation.passed || !cancellation.observedActive || !startResponse?.ok
+      || startResponse.requestBody?.message !== CANCELLATION_PROMPT) {
+      throw new Error("successful cancellation of the runner's own turn is required before draft cleanup");
+    }
+    if (spec?.input !== "\x03") throw new Error("postCancelCleanup.input must be exactly one Ctrl+C");
+    if (typeof spec.draftPattern !== "string" || spec.draftPattern.length > 4096
+      || !spec.draftPattern.includes("{prompt}") || !/^[imsu]*$/.test(spec.flags || "")) {
+      throw new Error("postCancelCleanup requires a bounded current-composer draftPattern containing {prompt} and valid flags");
+    }
+    const draftSource = spec.draftPattern.replaceAll("{prompt}", CANCELLATION_PROMPT.replace(/[.*+?^$()|[\]{}\\]/g, "\\$&"));
+    const draftExpression = new RegExp(draftSource, spec.flags || "");
+    const draftPattern = new RegExp("(?:" + draftExpression.source + ")(?![\\s\\S])", draftExpression.flags);
+    const active = cancellation.activeState?.response?.session;
+    const settled = cancellation.settledState?.response?.session;
+    if (typeof active?.lastUserMessageAt !== "string" || !active.lastUserMessageAt.trim()) {
+      throw new Error("post-cancel cleanup requires an observed nonempty lastUserMessageAt");
+    }
+    if (!cancellation.activeState?.ok || !cancellation.settledState?.ok
+      || active?.id !== sessionId || settled?.id !== sessionId || active.isTerminated !== false || settled.isTerminated !== false
+      || active.terminalHandleId !== settled.terminalHandleId || active.terminalGeneration !== settled.terminalGeneration
+      || !["idle", "waiting_input"].includes(settled.activity?.state)
+      || (active.lastUserMessageAt ?? null) !== (settled.lastUserMessageAt ?? null)) {
+      throw new Error("original audit session, terminal generation, settled state or latest user turn changed during cancellation");
+    }
+    return await observeNativeTerminalReady({
+      baseURL, sessionId, restoredState: cancellation.settledState, spec: readySpec, timeoutMs,
+      cleanup: { draftPattern, lastUserMessageAt: active.lastUserMessageAt ?? null,
+        patternSha256: hash(JSON.stringify({ draftPattern: spec.draftPattern, flags: spec.flags || "" })) },
+    });
+  } catch (error) {
+    return { passed: false, reason: redactOutput(error.message), evidence: { inputSent: false, inputBytes: 0 } };
+  }
+}
+
+async function observeNativeTerminalReady({ baseURL, sessionId, restoredState, spec, timeoutMs = 30_000, cleanup = null }) {
+  const phase = cleanup ? "post-cancel" : "restored";
   const target = restoredState?.response?.session;
   const terminalId = target?.terminalHandleId;
   const generation = target?.terminalGeneration;
@@ -437,14 +481,17 @@ export async function waitForRestoredTerminalReady({ baseURL, sessionId, restore
   const evidence = {
     transport: "websocket", sessionId, terminalHandleId: terminalId, terminalGeneration: generation,
     startedAt: now(), opened: false, outputFrames: 0, outputBytes: 0, matchedPatterns: 0,
-    inputSent: false, timedOut: false,
+    inputSent: false, inputBytes: 0, timedOut: false,
+    ...(cleanup ? { outputFramesAfterInput: 0 } : {}),
+    ...(cleanup ? { auditPromptSha256: hash(CANCELLATION_PROMPT), draftPatternSha256: cleanup.patternSha256,
+      lastUserMessageAtObserved: cleanup.lastUserMessageAt !== null } : {}),
     qualification: "Native terminal cue from the runtime contract; API idle/readiness alone is insufficient.",
   };
   let socket;
   let closing = false;
   let failure = "";
   let output = "";
-  const decoder = new StringDecoder("utf8");
+  let decoder = new StringDecoder("utf8");
   let patterns = [];
   try {
     if (!Array.isArray(spec?.patterns) || !spec.patterns.length || spec.patterns.length > 8
@@ -452,32 +499,39 @@ export async function waitForRestoredTerminalReady({ baseURL, sessionId, restore
       throw new Error("restoredReady.patterns must contain 1 to 8 bounded regular expressions");
     }
     if (!/^[imsu]*$/.test(spec.flags || "")) throw new Error("restoredReady.flags must use only i, m, s or u");
-    patterns = spec.patterns.map(pattern => new RegExp(pattern, spec.flags || ""));
+    patterns = spec.patterns.map(pattern => {
+      const parsed = new RegExp(pattern, spec.flags || "");
+      return cleanup ? new RegExp("(?:" + parsed.source + ")(?![\\s\\S])", parsed.flags) : parsed;
+    });
+    if (cleanup && patterns.some(pattern => pattern.test(""))) {
+      throw new Error("post-cancel empty-composer patterns must not match empty output");
+    }
     evidence.patternsSha256 = hash(JSON.stringify({ patterns: spec.patterns, flags: spec.flags || "" }));
-    if (typeof generation !== "string" || !generation.trim()) throw new Error("restored session has no valid terminal generation");
+    if (typeof generation !== "string" || !generation.trim()) throw new Error(phase + " session has no valid terminal generation");
     if (!restoredState.ok || target?.id !== sessionId || target.isTerminated !== false
-      || typeof terminalId !== "string" || !terminalId) throw new Error("restored session has no valid terminal target");
+      || typeof terminalId !== "string" || !terminalId) throw new Error(phase + " session has no valid terminal target");
     const url = new URL(baseURL);
     if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) throw new Error("terminal mux must use the audit loopback host");
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.pathname = "/mux"; url.search = ""; url.hash = "";
     evidence.url = url.href;
     socket = new WebSocket(url);
-    socket.addEventListener("error", () => { if (!closing) failure = "restored terminal WebSocket transport error"; });
-    socket.addEventListener("close", () => { if (!closing) failure = "restored terminal WebSocket closed before native readiness"; });
+    socket.addEventListener("error", () => { if (!closing) failure = phase + " terminal WebSocket transport error"; });
+    socket.addEventListener("close", () => { if (!closing) failure = phase + " terminal WebSocket closed before native readiness"; });
     socket.addEventListener("message", event => {
       if (closing) return;
       let frame;
       try { frame = JSON.parse(String(event.data)); }
-      catch { failure = "restored terminal mux returned invalid JSON"; return; }
+      catch { failure = phase + " terminal mux returned invalid JSON"; return; }
       if (frame.ch !== "terminal" || frame.id !== terminalId) return;
       if (frame.type === "opened") { evidence.opened = true; evidence.openedAt = now(); }
       if (frame.type === "error" || frame.type === "exited") {
-        failure = "restored terminal " + frame.type + ": " + redactOutput(frame.error || "terminal exited").slice(0, 1024);
+        failure = phase + " terminal " + frame.type + ": " + redactOutput(frame.error || "terminal exited").slice(0, 1024);
       }
       if (frame.type === "data" && typeof frame.data === "string") {
         const bytes = Buffer.from(frame.data, "base64");
         evidence.outputFrames++;
+        if (cleanup && evidence.inputSent) evidence.outputFramesAfterInput++;
         evidence.outputBytes += bytes.length;
         output = (output + decoder.write(bytes)).slice(-262144);
       }
@@ -490,25 +544,62 @@ export async function waitForRestoredTerminalReady({ baseURL, sessionId, restore
         openSent = true;
       }
       const visible = stripVTControlCharacters(output).replaceAll("\r\n", "\n").replaceAll("\r", "\n").slice(-65536);
-      if (evidence.opened && evidence.outputFrames && patterns.every(pattern => pattern.test(visible))) {
+      const emptyComposer = (!cleanup || (visible.trim().length > 0 && (!evidence.inputSent || evidence.outputFramesAfterInput > 0)))
+        && patterns.every(pattern => pattern.test(visible));
+      if (cleanup && evidence.opened && evidence.outputFrames && !evidence.inputSent
+        && !emptyComposer && cleanup.draftPattern.exec(visible)?.[0].includes(CANCELLATION_PROMPT)) {
+        const preInput = await sessionState(baseURL, sessionId, Math.max(1, deadline - performance.now()));
+        evidence.preInputState = apiEvidence(preInput);
+        const current = preInput.response?.session;
+        if (!preInput.ok || current?.id !== sessionId || current.isTerminated !== false
+          || current.terminalHandleId !== terminalId || current.terminalGeneration !== generation
+          || !["idle", "waiting_input"].includes(current.activity?.state)
+          || (current.lastUserMessageAt ?? null) !== cleanup.lastUserMessageAt) {
+          throw new Error("post-cancel session, terminal generation, settled state or latest user turn changed before cleanup");
+        }
+        if (failure) throw new Error(failure);
+        // Recheck the composer after the awaited API read, before any input.
+        const latestVisible = stripVTControlCharacters(output).replaceAll("\r\n", "\n").replaceAll("\r", "\n").slice(-65536);
+        if (patterns.every(pattern => pattern.test(latestVisible)) || !cleanup.draftPattern.exec(latestVisible)?.[0].includes(CANCELLATION_PROMPT)) continue;
+        evidence.draftCueSha256 = hash(latestVisible);
+        evidence.draftMatchedAt = now();
+        // Never allow earlier empty frames to satisfy the post-input check.
+        output = "";
+        decoder = new StringDecoder("utf8");
+        socket.send(JSON.stringify({ ch: "terminal", type: "data", id: terminalId, data: Buffer.from("\x03").toString("base64") }));
+        evidence.inputSent = true;
+        evidence.inputBytes = 1;
+        evidence.inputSha256 = hash(Buffer.from("\x03"));
+        evidence.inputSentAt = now();
+        continue;
+      }
+      if (evidence.opened && evidence.outputFrames && emptyComposer) {
         const currentResponse = await sessionState(baseURL, sessionId, Math.max(1, deadline - performance.now()));
         evidence.confirmation = apiEvidence(currentResponse);
         const current = currentResponse.response?.session;
         if (!currentResponse.ok || current?.id !== sessionId || current.isTerminated !== false
           || current.terminalHandleId !== terminalId || current.terminalGeneration !== generation
           || !["idle", "waiting_input"].includes(current.activity?.state)) {
-          throw new Error("restored session changed terminal or was not settled when the native cue appeared");
+          throw new Error(phase + " session changed terminal or was not settled when the native cue appeared");
+        }
+        if (cleanup && (current.lastUserMessageAt ?? null) !== cleanup.lastUserMessageAt) {
+          throw new Error("latest user turn changed during post-cancel cleanup");
         }
         if (failure) throw new Error(failure);
+        if (cleanup && !patterns.every(pattern => pattern.test(stripVTControlCharacters(output).replaceAll("\r\n", "\n").replaceAll("\r", "\n").slice(-65536)))) continue;
         evidence.matchedPatterns = patterns.length;
         evidence.matchedAt = now();
         evidence.visibleOutputSha256 = hash(visible);
-        return { passed: true, reason: "the restored native terminal displayed the configured ready cue on the same terminal generation", evidence };
+        return { passed: true, reason: cleanup
+          ? evidence.inputSent ? "one Ctrl+C cleared the audit cancellation draft and the same terminal displayed the empty-composer cue"
+            : "the audit composer was already empty; no cleanup input was sent"
+          : "the restored native terminal displayed the configured ready cue on the same terminal generation", evidence };
       }
       await sleep(10);
     }
     evidence.timedOut = true;
-    throw new Error("the restored native terminal ready cue was not observed before timeout");
+    throw new Error(cleanup ? "post-cancel owned-draft or empty-composer cue was not observed before timeout"
+      : "the restored native terminal ready cue was not observed before timeout");
   } catch (error) {
     evidence.error = redactOutput(error.message);
     return { passed: false, reason: evidence.error, evidence };
@@ -1384,7 +1475,7 @@ async function completeLifecycle({
     baseURL,
     method: "POST",
     path: `sessions/${encodeURIComponent(sessionId)}/send`,
-    body: { message: "For cancellation testing, run a foreground command that waits for 120 seconds. Do not modify files. Wait for the command to finish." },
+    body: { message: CANCELLATION_PROMPT },
     timeoutMs,
   }) : null;
   const cancellation = await interruptActiveTurn({ baseURL, sessionId, startResponse: cancellationStart, timeoutMs, interruptSpec });
@@ -1401,6 +1492,18 @@ async function completeLifecycle({
       ...(cancellation.websocket ? { websocket: cancellation.websocket } : {}),
     },
   ));
+
+  if (interruptSpec && Object.hasOwn(interruptSpec, "postCancelCleanup")) {
+    const cleanup = await cleanupCancelledAuditDraft({
+      baseURL, sessionId, cancellation, startResponse: cancellationStart,
+      spec: interruptSpec.postCancelCleanup, readySpec: restoredReadySpec, timeoutMs,
+    });
+    await record(gate("post_cancel_draft_cleanup", cleanup.passed ? "PASS" : "BLOCKED", cleanup.reason, cleanup.evidence));
+    if (!cleanup.passed) {
+      markNotRun(gates, "post-cancel draft cleanup was not safe or the composer was not confirmed empty");
+      return resultFrom(agent, gates, { projectId, sessionId, workspacePath });
+    }
+  }
 
   const killResponse = await request({
     baseURL,

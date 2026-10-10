@@ -107,6 +107,56 @@ are `NOT_RUN`. If the cue times out or the terminal changes, readiness is
 `BLOCKED` and no continuation is sent. This tests observed input readiness;
 it does not prove that an earlier provisional screen would accept a prompt.
 
+
+### Optional post-cancellation draft cleanup
+
+Some native CLIs restore the cancelled prompt into their composer. For that
+documented behavior only, an explicit `interrupt.postCancelCleanup` may clear
+the runner's just-submitted cancellation draft before lifecycle kill:
+
+```json
+{
+  "input": "\u0003",
+  "draftPattern": "(?:^|\\n)> {prompt}\\n[-]+\\n[ \\t]*model: example-model \\| workspace: [^\\n]+\\n*$"
+}
+```
+
+`input` must be exactly one Ctrl+C. `draftPattern` must be at most 4,096
+characters and include `{prompt}`, which the runner substitutes as escaped
+literal regex text for its exact cancellation prompt. The actual matched span
+must contain that full prompt; an alternative branch without it cannot authorize input. Optional `flags` accepts
+`i`, `m`, `s`, or `u`. Derive a contiguous current-composer cue from native
+samples, including the native draft boundary and model/workspace footer. For
+cleanup, both draft and empty cues must match the absolute output tail, even
+with multiline flags. Test against the audit draft and historical audit text
+followed by a different current draft. A prompt anywhere in scrollback or
+“Long draft” alone does not establish ownership.
+
+This option applies only to a newly runner-created, exclusively controlled audit
+session and its own cancellation turn. Do not use it on user/product sessions
+or while anyone else can edit the composer. The runner requires independently
+successful cancellation, the original live session/terminal generation, and a
+settled `idle` or `waiting_input` state. It requires a nonempty observed `lastUserMessageAt` and rejects any change.
+Missing/null metadata blocks cleanup. The timestamp does not identify unsent
+human edits, so exclusive ownership and the current-composer cue are also required.
+
+The existing `restoredReady.patterns` remains the empty-composer contract. If it
+already matches, cleanup sends nothing. Otherwise the runner waits for the
+owned-draft cue, revalidates identity, generation, settled state, latest user
+turn, and current composer immediately before sending one Ctrl+C through the
+exact secondary mux attachment. It discards earlier output, then requires new
+nonempty terminal output matching the empty-composer cue and the same settled
+identity. Empty-output patterns are rejected. It never retries Ctrl+C:
+a second press can exit the native CLI. The mux wire has no generation argument;
+API revalidation and the exact attachment provide the available fence.
+
+The separate `post_cancel_draft_cleanup` gate preserves the cancellation result.
+Unsafe cleanup, missing cues, or a remaining draft block lifecycle kill/restore
+and leave dependent gates `NOT_RUN`; normal final teardown may still terminate
+the disposable session. With this option absent, behavior is unchanged. Never
+weaken restored readiness to accept a draft, rewrite a failed attempt, or clear
+a different user's content to obtain a pass.
+
 ## Profile and model preparation
 
 Keep credentials in the execution account's existing environment or native
