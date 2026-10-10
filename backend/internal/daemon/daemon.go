@@ -412,7 +412,7 @@ func Run() error {
 		DataDir:             cfg.DataDir,
 		ReconcileOutputType: lcStack.LCM.ReconcileSessionOutputType,
 		HibernationEnabled:  settingsSvc.ChatHibernationEnabled,
-		AppRunID: cfg.AppRunID,
+		AppRunID:            cfg.AppRunID,
 		StopProviderHost: func(ctx context.Context, id domain.SessionID) error {
 			return persistenthost.Shutdown(ctx, cfg.DataDir, string(id))
 		},

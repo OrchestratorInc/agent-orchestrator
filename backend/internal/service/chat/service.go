@@ -76,7 +76,7 @@ type Service struct {
 	renderMeasure    RenderMeasure
 	// renderMeasures tracks background measures, so tests can wait for them.
 	renderMeasures     sync.WaitGroup
-	sides *sideManager
+	sides              *sideManager
 	wakeChat           func(context.Context, domain.SessionID) error
 	hibernationEnabled func() bool
 	viewMu             sync.Mutex
