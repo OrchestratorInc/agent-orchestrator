@@ -336,9 +336,6 @@ func migrate(db *sql.DB) error {
 	if err := repairRenumberedPRReviewPartialMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered PR review-partial migration history: %w", err)
 	}
-	if err := repairRenumberedProviderAccountMigrationHistory(db); err != nil {
-		return fmt.Errorf("repair renumbered provider-account migration history: %w", err)
-	}
 	if err := repairBurnedAutomationsMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair burned automations migration history: %w", err)
 	}
@@ -365,71 +362,6 @@ func migrate(db *sql.DB) error {
 		return fmt.Errorf("run migrations: %w", err)
 	}
 	return reconcileSchema(db)
-}
-
-// repairRenumberedProviderAccountMigrationHistory preserves databases that ran
-// the account manager before main assigned its migration numbers to other
-// features. Account-manager previews recorded 0171 and 0172, and later
-// development builds 0173 and 0180 through 0182, for migrations that now live
-// at 0195 through 0198. Main owns 0171 through 0181, so Goose would take its
-// migrations as already applied on such a database and skip them.
-//
-// Forget each of those versions whose migration is physically absent, so Goose
-// replays it. Nothing is assumed about which build wrote the row: a version is
-// forgotten only when its effect is provably missing and its table is there to
-// receive it. The account-manager migrations run again at their new numbers,
-// which is safe because they create only what is missing.
-func repairRenumberedProviderAccountMigrationHistory(db *sql.DB) error {
-	var gooseTable int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).Scan(&gooseTable); err != nil || gooseTable == 0 {
-		return err
-	}
-	// Each probe answers 1 when the migration has not physically run and can.
-	columnMissing := func(table, column string) string {
-		return `SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '` + table + `') = 1
-AND (SELECT COUNT(*) FROM pragma_table_info('` + table + `') WHERE name = '` + column + `') = 0`
-	}
-	for _, migration := range []struct {
-		version int
-		absent  string
-	}{
-		// Databases of this lineage also record 0168 without the cues table
-		// that main's 0185 alters, so the Cue migration has to run first.
-		{168, `SELECT COUNT(*) = 0 FROM sqlite_master WHERE type = 'table' AND name = 'cues'`},
-		{171, columnMissing("shell_terminals", "preview_capability_verifier")},
-		{172, columnMissing("sessions", "client_request_id")},
-		{173, columnMissing("conversation_messages", "client_payload_hash")},
-		// 0174 only adds a trigger on conversations.
-		{174, `SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'conversations') = 1
-AND (SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name = 'conversation_account_cdc_update') = 0`},
-		{175, columnMissing("sessions", "codex_activity_facts")},
-		{176, columnMissing("sessions", "claude_activity_facts")},
-		// 0177 narrows an existing index; the wider definition is the one that
-		// still excludes failed and cancelled runs by name.
-		{177, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_review_run_session_pr_sha_harness' AND instr(sql, 'NOT IN') > 0`},
-		{178, columnMissing("review", "is_archived")},
-		{179, columnMissing("conversation_messages", "sender_session_id")},
-		{180, columnMissing("sessions", "provision_steps")},
-		{181, columnMissing("sessions", "artifact_dir")},
-	} {
-		var applied, absent int
-		if err := db.QueryRow(`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = ? ORDER BY id DESC LIMIT 1), 0)`, migration.version).Scan(&applied); err != nil {
-			return err
-		}
-		if applied == 0 {
-			continue
-		}
-		if err := db.QueryRow(migration.absent).Scan(&absent); err != nil {
-			return err
-		}
-		if absent == 0 {
-			continue
-		}
-		if _, err := db.Exec(`DELETE FROM goose_db_version WHERE version_id = ?`, migration.version); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // repairRenumberedCueMigrationHistory preserves preview Cue databases that

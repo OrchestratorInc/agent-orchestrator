@@ -197,13 +197,7 @@ var shippedMigrations = map[int64]string{
 	192: "0192_allow_openhands_harness.sql",
 	193: "0193_allow_codewhale_harness.sql",
 	194: "0194_allow_command_code_harness.sql",
-	// 195 to 198 are the account manager. They first ran in development builds
-	// as 173 and 180 to 182, numbers main has since given to other features;
-	// repairRenumberedProviderAccountMigrationHistory covers those databases.
 	195: "0195_provider_accounts.sql",
-	196: "0196_repair_agent_switch_failure_observability.sql",
-	197: "0197_repair_agent_switch_tables.sql",
-	198: "0198_repair_notification_source_key.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
