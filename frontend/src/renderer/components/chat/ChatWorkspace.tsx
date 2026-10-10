@@ -4069,7 +4069,7 @@ const TurnGroup = memo(function TurnGroup({
 			}
 		}
 	}
-	// Only the prompt that opened the turn sits above the Working row. A steer or a
+	// Only the prompt that opened the turn sits above the Worked row. A steer or a
 	// later message stays where it happened among the work, so the reader sees
 	// what the agent had done when it arrived.
 	const firstWorkIndex = runs.findIndex((run) => !isHumanRun(run.items[0]));
@@ -4149,9 +4149,12 @@ const TurnGroup = memo(function TurnGroup({
 	// A live provider failure replaces the Working row with its reconnect card, and a
 	// turn that stops without an outcome (cancelled) has no settled row to hand over to.
 	// The setup checklist sits exactly where the Working row will, so the handoff
-	// does not move anything.
+	// does not move anything. The row goes after the newest work, not under the
+	// prompt: a long turn pushes the prompt off screen, and a Working row up there
+	// leaves the work the reader is watching with no sign that it is still going.
+	let workingRow: ReactNode = null;
 	if (startup || (!group.liveProviderFailure && (group.live || (group.outcome && !showSettledStatus)))) {
-		body.push(
+		workingRow = (
 			<LiveResponseStatus
 				key="turn-working"
 				startedAt={group.liveStartedAt}
@@ -4160,7 +4163,7 @@ const TurnGroup = memo(function TurnGroup({
 				failed={startup?.failed}
 			>
 				{startup ? <SessionStartup {...startup} /> : null}
-			</LiveResponseStatus>,
+			</LiveResponseStatus>
 		);
 	}
 	const outcome = showSettledStatus ? group.outcome : undefined;
@@ -4210,6 +4213,7 @@ const TurnGroup = memo(function TurnGroup({
 	}
 	if (outcome) body.push(...noticeRuns.map(renderRun));
 	if (finalRun) body.push(renderRun(finalRun));
+	if (workingRow) body.push(workingRow);
 	return (
 		<div className="flex min-w-0 flex-col gap-2.5">
 			{body}
