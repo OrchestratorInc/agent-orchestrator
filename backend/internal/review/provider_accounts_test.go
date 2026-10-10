@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 
@@ -22,14 +23,14 @@ func TestReviewerTerminalRunsOnItsWorkersAccount(t *testing.T) {
 		for _, related := range []bool{true, false} {
 			runtime := &fakeRuntime{}
 			reviewer := &fakeReviewerWithLaunchSpec{spec: ports.ReviewCommandSpec{Argv: command, Env: adapterEnv}}
-			launcher := NewLauncher(fakeReviewerResolver{reviewer: reviewer, ok: true}, runtime, t.TempDir(), WithRelatedAccountEnv(func(_ context.Context, id domain.SessionID, h domain.AgentHarness) (map[string]string, error) {
+			launcher := NewLauncher(fakeReviewerResolver{reviewer: reviewer, ok: true}, runtime, t.TempDir(), WithRelatedAccountEnv(func(_ context.Context, id domain.SessionID, h domain.AgentHarness, env map[string]string) error {
 				if id != "mer-1" || h != domain.AgentHarness(harness) {
 					t.Errorf("owner=%s harness=%s", id, h)
 				}
-				if !related {
-					return nil, nil
+				if related {
+					maps.Copy(env, accountEnv)
 				}
-				return accountEnv, nil
+				return nil
 			}))
 			spec := launchSpec()
 			spec.Harness = harness
@@ -57,8 +58,8 @@ func TestReviewerAccountFailureLeavesAnExistingTerminalAlone(t *testing.T) {
 	for _, failure := range []error{ports.ErrProviderLoginRequired, errors.New("account database unavailable")} {
 		runtime := &fakeRuntime{alive: true}
 		reviewer := &fakeReviewerWithLaunchSpec{spec: ports.ReviewCommandSpec{Argv: []string{"codex"}}}
-		launcher := NewLauncher(fakeReviewerResolver{reviewer: reviewer, ok: true}, runtime, t.TempDir(), WithRelatedAccountEnv(func(context.Context, domain.SessionID, domain.AgentHarness) (map[string]string, error) {
-			return nil, failure
+		launcher := NewLauncher(fakeReviewerResolver{reviewer: reviewer, ok: true}, runtime, t.TempDir(), WithRelatedAccountEnv(func(context.Context, domain.SessionID, domain.AgentHarness, map[string]string) error {
+			return failure
 		}))
 		spec := launchSpec()
 		spec.Harness = domain.ReviewerCodex
@@ -95,11 +96,12 @@ func TestReviewerChatRunsOnItsWorkersAccount(t *testing.T) {
 		{nil, failure, ""},
 	} {
 		chat := &recordingReviewChatStart{}
-		launcher := NewLauncher(singleReviewerResolver{reviewer: chatReviewAdapter{}}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat), WithRelatedAccountEnv(func(_ context.Context, id domain.SessionID, h domain.AgentHarness) (map[string]string, error) {
+		launcher := NewLauncher(singleReviewerResolver{reviewer: chatReviewAdapter{}}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat), WithRelatedAccountEnv(func(_ context.Context, id domain.SessionID, h domain.AgentHarness, env map[string]string) error {
 			if id != "mer-1" || h != domain.HarnessCodex {
 				t.Errorf("owner=%s harness=%s", id, h)
 			}
-			return tc.env, tc.err
+			maps.Copy(env, tc.env)
+			return tc.err
 		}))
 		spec := launchSpec()
 		spec.Harness = domain.ReviewerCodex

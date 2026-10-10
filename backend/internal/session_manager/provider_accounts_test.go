@@ -85,7 +85,7 @@ func TestAccountEnvIsAddedOnlyToManagedLaunches(t *testing.T) {
 		if !errors.Is(err, tc.err) || env["PATH"] != "/agent-bin" || env["ANTHROPIC_API_KEY"] != tc.key || (tc.key == "") != (env["AO_PROXY_TICKET"] == "private") {
 			t.Errorf("%s: env=%v err=%v", name, env, err)
 		}
-		if managed, err := m.accountManaged(context.Background(), "s"); managed != (name == "managed") && err == nil {
+		if _, managed, err := m.sessionAccount(context.Background(), "s"); managed != (name == "managed") && err == nil {
 			t.Errorf("%s: managed=%v", name, managed)
 		}
 	}
@@ -110,7 +110,8 @@ func TestRelatedWorkUsesTheOwnersAccountOnlyWhenTheProviderMatches(t *testing.T)
 		m, _, _, _ := newManager()
 		f := &accountRoutingFake{managed: tc.managed, route: domain.ProviderSessionRoute{Provider: tc.provider, AccountID: tc.account}, env: map[string]string{"ticket": "owner"}}
 		m.accounts = f
-		env, err := m.RelatedAccountEnv(context.Background(), "worker", tc.harness)
+		env := map[string]string{}
+		err := m.RelatedAccountEnv(context.Background(), "worker", tc.harness, env)
 		if !errors.Is(err, tc.want) || len(f.launches) != tc.calls || (tc.calls == 1) != (env["ticket"] == "owner") {
 			t.Errorf("%s: env=%v launches=%v err=%v", name, env, f.launches, err)
 		}

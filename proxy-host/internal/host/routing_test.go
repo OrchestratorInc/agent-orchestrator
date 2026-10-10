@@ -193,7 +193,7 @@ func askHeld(server *httptest.Server, ticket string, stream bool) (<-chan heldAn
 			answer <- heldAnswerTo{err: err}
 			return
 		}
-		defer response.Body.Close()
+		defer func() { _ = response.Body.Close() }()
 		body, err := io.ReadAll(response.Body)
 		answer <- heldAnswerTo{status: response.StatusCode, body: string(body), err: err}
 	}()

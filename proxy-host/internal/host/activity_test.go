@@ -208,7 +208,9 @@ func TestFailuresAreCountedByKindAndFirstTokenTimesByTheirMedian(t *testing.T) {
 	}{{now.Add(-2 * time.Hour), true, 5 * time.Millisecond}, {now, true, 300 * time.Millisecond}, {now, true, 100 * time.Millisecond}, {now, true, 900 * time.Millisecond}, {now, false, time.Millisecond}, {now, true, 0}} {
 		a.HandleUsage(context.Background(), coreusage.Record{AuthID: "account", Model: "opus", RequestedAt: first.at, Stream: first.stream, TTFT: first.ttft})
 	}
-	want := fmt.Sprintf(`{"health":{"lastFailure":{"kind":"sign-in","at":%q,"status":401},"failures":{"limit":1,"signIn":3,"server":3,"other":3},"firstWordMs":300}}`, now.Add(-time.Second).UTC().Format(time.RFC3339))
+	// A 499 is the user stopping the agent: it is not counted, and never the last failure.
+	a.HandleUsage(context.Background(), failed(now, 499))
+	want := fmt.Sprintf(`{"health":{"lastFailure":{"kind":"sign-in","at":%q,"status":401},"failures":{"limit":1,"signIn":3,"server":3,"other":2},"firstWordMs":300}}`, now.Add(-time.Second).UTC().Format(time.RFC3339))
 	if got := reported(t, a, "account", now); !reflect.DeepEqual(got, parsed(t, want, nil)) {
 		t.Fatalf("got %v\nwant %s", got, want)
 	}

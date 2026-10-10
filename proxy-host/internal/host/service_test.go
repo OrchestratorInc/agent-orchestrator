@@ -1,6 +1,7 @@
 package host
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,6 +23,59 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 	"gopkg.in/yaml.v3"
 )
+
+// loaded is told each time the SDK's server has taken a configuration. Its handlers read, unguarded,
+// what a load replaces, so a call made while one is under way is a data race inside the SDK.
+var loaded = make(chan struct{}, 16)
+
+// TestMain passes standard output on unchanged and watches it: a line there is the only sign the SDK gives of a finished load.
+func TestMain(m *testing.M) {
+	stdout := os.Stdout
+	read, write, err := os.Pipe()
+	if err != nil {
+		panic(err)
+	}
+	os.Stdout = write
+	copied := make(chan struct{})
+	go func() {
+		defer close(copied)
+		for lines := bufio.NewReader(read); ; {
+			line, err := lines.ReadString('\n')
+			_, _ = stdout.WriteString(line)
+			if strings.Contains(line, "server clients and configuration updated") {
+				select {
+				case loaded <- struct{}{}:
+				default:
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	code := m.Run()
+	_ = write.Close()
+	<-copied
+	os.Exit(code)
+}
+
+// awaitLoad waits until the SDK's server has taken its next configuration and none has followed for
+// the quiet time: the SDK goes on settling its accounts after saying so, and may load a saved change twice.
+func awaitLoad(t *testing.T, quiet time.Duration) {
+	t.Helper()
+	select {
+	case <-loaded:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the SDK did not load its configuration")
+	}
+	for {
+		select {
+		case <-loaded:
+		case <-time.After(quiet):
+			return
+		}
+	}
+}
 
 func TestBuildRejectsUnsafeConfiguration(t *testing.T) {
 	for _, tc := range []struct {
@@ -148,7 +202,7 @@ func freePort(t *testing.T) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	return listener.Addr().(*net.TCPAddr).Port
 }
 
@@ -157,6 +211,9 @@ func running(t *testing.T, service *cliproxy.Service, port int) (call func(metho
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	finished := make(chan error, 1)
+	for len(loaded) > 0 {
+		<-loaded
+	}
 	go func() { finished <- service.Run(ctx) }()
 	stopped := false
 	stop = func() {
@@ -184,20 +241,16 @@ func running(t *testing.T, service *cliproxy.Service, port int) (call func(metho
 		if err != nil {
 			return 0, err.Error()
 		}
-		defer response.Body.Close()
+		defer func() { _ = response.Body.Close() }()
 		data, _ := io.ReadAll(response.Body)
 		return response.StatusCode, strings.TrimSpace(string(data))
 	}
-	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		if status, body := call(http.MethodGet, "/ao/status", control, ""); status == http.StatusOK && body == `{"protocol_version":3}` {
-			// The SDK goes on reading its configuration, unguarded, for 100 ms after it starts listening.
-			time.Sleep(300 * time.Millisecond)
-			return call, stop
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the service did not start")
-		}
+	// The SDK loads its configuration once more after it starts listening; nothing is asked of it before that.
+	awaitLoad(t, 300*time.Millisecond)
+	if status, body := call(http.MethodGet, "/ao/status", control, ""); status != http.StatusOK || body != `{"protocol_version":3}` {
+		t.Fatalf("the started service answered %d %s", status, body)
 	}
+	return call, stop
 }
 
 func TestBuiltHelperServesTheSDKsSignInsAndKeepsAPIKeysAcrossRestarts(t *testing.T) {
@@ -236,6 +289,7 @@ func TestBuiltHelperServesTheSDKsSignInsAndKeepsAPIKeysAcrossRestarts(t *testing
 	if status, body := call(http.MethodPut, "/v0/management/codex-api-key", control, `[{"api-key":"sk-test-key","base-url":"https://api.example.test"}]`); status/100 != 2 {
 		t.Fatalf("saving a key: %d %s", status, body)
 	}
+	awaitLoad(t, time.Second)
 	status, body := call(http.MethodPost, "/ao/tag-api-key", control, `{"id":"key-login","provider":"codex","api_key":"sk-test-key","base_url":"https://api.example.test/","label":"Work"}`)
 	var tagged struct {
 		AuthID string `json:"auth_id"`

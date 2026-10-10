@@ -28,12 +28,12 @@ func (h *harness) usageOf(accountID string, refresh bool) *domain.ProviderAccoun
 
 func (h *harness) fail(authID string) {
 	h.helper.mu.Lock()
-	h.helper.held = []ports.ProviderCredential{{AuthID: authID, Name: "dead.json", Provider: "codex", ModifiedAt: h.svc.now(), Failed: "unauthorized"}}
+	h.helper.held = []ports.ProviderCredential{{AuthID: authID, Name: "dead.json", Provider: "codex", ModifiedAt: h.svc.now(), Failed: true}}
 	h.helper.mu.Unlock()
 	h.advance(30 * time.Second)
 }
 
-func TestUsageIsCachedAndAProviderThatCannotReportDoesNotHideTheAccount(t *testing.T) {
+func TestUsageIsReadEveryFiveMinutesAndAFailedReadingKeepsTheLastGoodOneForHalfAnHour(t *testing.T) {
 	h := setup(t)
 	alice := h.signIn("codex", "alice@example.com")
 	out := h.signIn("codex", "bob@example.com")
@@ -43,28 +43,98 @@ func TestUsageIsCachedAndAProviderThatCannotReportDoesNotHideTheAccount(t *testi
 	if h.view(alice).Usage != nil || len(h.helper.usageFor) != 0 {
 		t.Fatal("usage was read although the list did not ask for it")
 	}
-	for range 3 {
-		if usage := h.usageOf(alice, false); usage == nil || usage.Status != "available" || usage.Plan != "Pro" {
-			t.Fatalf("usage=%+v", usage)
+	// read lists the accounts three times and says how many readings the helper has given.
+	read := func() (*domain.ProviderAccountUsage, int) {
+		t.Helper()
+		for range 2 {
+			_ = h.usageOf(alice, false)
+		}
+		return h.usageOf(alice, false), len(h.helper.usageFor)
+	}
+	if usage, reads := read(); usage == nil || usage.Status != "available" || usage.Plan != "Pro" || reads != 1 || h.usageOf(out, false) != nil {
+		t.Fatalf("usage=%+v reads=%v", usage, h.helper.usageFor)
+	}
+	h.advance(5*time.Minute - time.Second)
+	if _, reads := read(); reads != 1 {
+		t.Fatalf("a reading was asked for again within five minutes: %d reads", reads)
+	}
+	h.advance(time.Second)
+	if _, reads := read(); reads != 2 {
+		t.Fatalf("after five minutes: %d reads", reads)
+	}
+	// The provider stops answering: what the helper knows is new, the rest is the last good reading.
+	h.helper.usageErr = errInjected
+	h.helper.usage = domain.ProviderAccountUsage{PausedReason: "rate limited", Requests: []domain.ProviderAccountRequests{{Succeeded: 3, Failed: 1}},
+		Activity: &domain.ProviderAccountActivity{Today: 7}, Health: &domain.ProviderAccountHealth{FirstWordMs: 900}}
+	h.advance(5 * time.Minute)
+	kept := func(reads int) {
+		t.Helper()
+		usage, got := read()
+		if usage == nil || usage.Status != "available" || usage.Plan != "Pro" || usage.PausedReason != "" || !h.view(alice).SignedIn {
+			t.Fatalf("the last good reading was not kept: usage=%+v", usage)
+		}
+		if usage.Activity == nil || usage.Activity.Today != 7 || usage.Health == nil || usage.Health.FirstWordMs != 900 || !reflect.DeepEqual(usage.Requests, h.helper.usage.Requests) {
+			t.Fatalf("what the helper knows was not refreshed: usage=%+v", usage)
+		}
+		if got != reads {
+			t.Fatalf("%d reads, want %d", got, reads)
 		}
 	}
-	if !reflect.DeepEqual(h.helper.usageFor, []string{"alice@example.com-auth"}) || h.usageOf(out, false) != nil {
-		t.Fatalf("usage reads=%v", h.helper.usageFor)
+	kept(3)
+	h.advance(time.Minute - time.Second)
+	kept(3)
+	h.advance(time.Second)
+	kept(4)
+	// The last good reading was 6 minutes ago; it stands until 30.
+	h.advance(23 * time.Minute)
+	kept(5)
+	h.advance(time.Minute)
+	if usage, reads := read(); usage == nil || usage.Status != "unavailable" || usage.Plan != "" || usage.PausedReason != "rate limited" || reads != 6 || !h.view(alice).SignedIn {
+		t.Fatalf("after half an hour: usage=%+v reads=%d", usage, reads)
 	}
-	h.advance(2 * time.Minute)
-	h.helper.usageErr, h.helper.usage = errInjected, domain.ProviderAccountUsage{PausedReason: "rate limited"}
-	for range 3 {
-		if usage := h.usageOf(alice, false); usage == nil || usage.Status != "unavailable" || usage.PausedReason != "rate limited" || !h.view(alice).SignedIn {
-			t.Fatalf("usage=%+v", usage)
-		}
-	}
-	if len(h.helper.usageFor) != 2 {
-		t.Fatalf("a failed reading was not kept: %d reads", len(h.helper.usageFor))
-	}
-	h.advance(15 * time.Second)
 	h.helper.usageErr, h.helper.usage = nil, domain.ProviderAccountUsage{Status: "available", Plan: "Max"}
-	if usage := h.usageOf(alice, false); usage.Plan != "Max" || len(h.helper.usageFor) != 3 {
-		t.Fatalf("a failed reading was kept too long: usage=%+v reads=%d", usage, len(h.helper.usageFor))
+	h.advance(time.Minute - time.Second)
+	if usage, reads := read(); usage.Status != "unavailable" || reads != 6 {
+		t.Fatalf("a failed reading was retried within a minute: usage=%+v reads=%d", usage, reads)
+	}
+	h.advance(time.Second)
+	if usage, reads := read(); usage.Status != "available" || usage.Plan != "Max" || reads != 7 {
+		t.Fatalf("a failed reading was kept too long: usage=%+v reads=%d", usage, reads)
+	}
+}
+
+func TestTheAccountViewNamesTodaysTokensBySessionAndListsTheModels(t *testing.T) {
+	h := setup(t)
+	alice := h.signIn("codex", "alice@example.com")
+	bob := h.signIn("codex", "bob@example.com")
+	h.assign("s1", domain.HarnessCodex, alice)
+	h.assign("s2", domain.HarnessCodex, alice)
+	h.assign("s3", domain.HarnessCodex, bob)
+	h.assign("idle", domain.HarnessCodex, alice)
+	// The helper knows a session by the hash of its ticket.
+	byTicket := map[string]int64{"a-session-since-deleted": 5}
+	for session, tokens := range map[domain.SessionID]int64{"s1": 10, "s2": 20, "s3": 7} {
+		hash, err := h.svc.ticketHash(session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		byTicket[hash] = tokens
+	}
+	h.helper.usage.Activity = &domain.ProviderAccountActivity{Today: 42, Sessions: byTicket}
+	h.helper.models = []ports.AgentModelInfo{{ID: "gpt-5", Label: "GPT-5"}, {ID: "no-label"}}
+	for range 2 { // The second listing shows the kept reading: it must not have been rewritten.
+		for id, want := range map[string]map[string]int64{alice: {"s1": 10, "s2": 20}, bob: {"s3": 7}} {
+			usage := h.usageOf(id, false)
+			if usage == nil || usage.Activity == nil || usage.Activity.Today != 42 || !reflect.DeepEqual(usage.Activity.Sessions, want) {
+				t.Fatalf("account %s: usage=%+v", id, usage)
+			}
+			if !reflect.DeepEqual(usage.Models, []string{"GPT-5", "no-label"}) {
+				t.Fatalf("models=%v", usage.Models)
+			}
+		}
+	}
+	if len(h.helper.usageFor) != 2 || len(h.helper.usage.Activity.Sessions) != 4 {
+		t.Fatalf("reads=%v, the helper's own count=%v", h.helper.usageFor, h.helper.usage.Activity.Sessions)
 	}
 }
 

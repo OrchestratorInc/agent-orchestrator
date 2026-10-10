@@ -120,6 +120,29 @@ func TestTheGlobalMarkFollowsThisComputersLoginHoweverTheAccountWasAdded(t *test
 	}
 }
 
+func TestTheGlobalMarkAlsoFollowsTheAccountTheReceiptNames(t *testing.T) {
+	h := setup(t)
+	mine := h.signIn("codex", "me@example.com")
+	other := h.signIn("codex", "other@example.com")
+	key, err := h.svc.record(h.ctx, "codex", nativeKey("codex", "config-index:codex:0"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A receipt written before receipts kept the email names only the account.
+	for receipt, want := range map[domain.NativeProviderImport]string{{Fingerprint: "f1", AccountID: other}: other, {Fingerprint: "f1", Email: "ME@example.com"}: mine, {Fingerprint: "f1", AccountID: key}: ""} {
+		state := h.store.get()
+		state.NativeImports = map[string]domain.NativeProviderImport{"codex": receipt}
+		if err = h.store.SaveProviderAccounts(h.ctx, state); err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range []string{mine, other, key} {
+			if h.view(id).Global != (id == want) {
+				t.Fatalf("receipt %+v: account %s global=%t", receipt, id, h.view(id).Global)
+			}
+		}
+	}
+}
+
 func TestThisComputersAPIKeyBecomesTheDefaultAlsoBesideALogin(t *testing.T) {
 	h := setup(t)
 	h.helper.native["codex"] = nativeSource{fingerprint: "f1", login: signIn("codex", "me@example.com")}

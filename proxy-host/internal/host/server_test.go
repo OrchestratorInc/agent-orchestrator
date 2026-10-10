@@ -338,4 +338,14 @@ func TestTaggedAPIKeyIsReportedAsAnAPIKey(t *testing.T) {
 	if signedIn, _ := f.manager.GetByID("signed-in"); signedIn.Metadata["ao_login_id"] != nil {
 		t.Fatal("an empty key tagged a sign-in")
 	}
+	// A key just saved is waited for: the SDK loads it a moment after the save is answered.
+	late := time.AfterFunc(100*time.Millisecond, func() {
+		if _, err := f.manager.Register(coreauth.WithSkipPersist(context.Background()), &coreauth.Auth{ID: "late-key", Provider: "codex", Status: coreauth.StatusActive, Attributes: map[string]string{"api_key": "late"}}); err != nil {
+			t.Error(err)
+		}
+	})
+	defer late.Stop()
+	if code, body := tag(`{"id":"login-3","provider":"codex","api_key":"late"}`); code != http.StatusOK || body != `{"auth_id":"late-key"}` {
+		t.Fatalf("a key loaded after the call: %d %s", code, body)
+	}
 }

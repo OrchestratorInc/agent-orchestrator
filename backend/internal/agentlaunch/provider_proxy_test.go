@@ -48,7 +48,7 @@ func TestManagedCodexLaunchUsesTheAccountHelper(t *testing.T) {
 	if strings.Contains(strings.Join(got, " "), "private-ticket") {
 		t.Fatal("the ticket entered the process arguments")
 	}
-	if CodexProxyProviderFor(managedEnv) != CodexProxyProvider {
+	if CodexProxyProviderFor(managedEnv) != "ao-managed" {
 		t.Fatal("a managed launch names no provider")
 	}
 }

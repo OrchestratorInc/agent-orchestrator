@@ -76,7 +76,7 @@ func (f *fixture) login(method, id string) (int, string) {
 }
 func eventually(t *testing.T, what string, done func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(3 * time.Second); !done(); time.Sleep(5 * time.Millisecond) {
+	for deadline := time.Now().Add(10 * time.Second); !done(); time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
 		}

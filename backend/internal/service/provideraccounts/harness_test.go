@@ -80,6 +80,8 @@ type fakeHelper struct {
 	deleteErr error
 	usage     domain.ProviderAccountUsage
 	usageErr  error
+	usageBy   map[string]domain.ProviderAccountUsage // by sign-in, in place of usage and usageErr
+	usageFail map[string]bool
 	usageFor  []string
 	actions   []string
 	outcome   string
@@ -138,6 +140,9 @@ func (f *fakeHelper) AccountUsage(_ context.Context, a domain.ProviderAccount) (
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.usageFor = append(f.usageFor, a.AuthID)
+	if usage, ok := f.usageBy[a.AuthID]; ok {
+		return usage, map[bool]error{true: errInjected}[f.usageFail[a.AuthID]]
+	}
 	return f.usage, f.usageErr
 }
 
@@ -275,6 +280,13 @@ func (h *harness) assign(session string, agent domain.AgentHarness, accountID st
 	if err := h.svc.AssignAccount(h.ctx, domain.SessionID(session), agent, accountID); err != nil {
 		h.t.Fatalf("assign %s: %v", session, err)
 	}
+}
+
+// settings applies the settings given; the others stay as they are.
+func (h *harness) settings(accountID string, in ports.ProviderAccountAction) error {
+	in.Action = "settings"
+	_, err := h.svc.Act(h.ctx, accountID, in)
+	return err
 }
 
 func (h *harness) act(accountID, action string, more ...string) error {

@@ -235,11 +235,16 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("mobile");
 		expect(screen.getByRole("button", { name: "Mobile" })).toHaveAttribute("data-active", "true");
-		// Opening settings re-checks every account, whichever page is shown.
+		// Opening settings re-checks every account, whichever page is shown, and reads the
+		// plain list beside it so the Accounts page has its rows before usage arrives.
 		await vi.waitFor(() => expect(getMock).toHaveBeenCalledWith(
 			"/api/v1/provider-accounts",
 			{ params: { query: { includeUsage: true, refresh: true } } },
 		));
+		expect(getMock).toHaveBeenCalledWith(
+			"/api/v1/provider-accounts",
+			{ params: { query: { includeUsage: false, refresh: false } } },
+		);
 	});
 
 	it("shows Remote hosts with Developer mode on even while the connection switch is off", async () => {

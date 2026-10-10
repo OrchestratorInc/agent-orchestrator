@@ -2141,6 +2141,7 @@ describe("new task provider account selection", () => {
 		account("codex-secondary", "Maple Codex"),
 		account("codex-signed-out", "Aspen Codex", { signedIn: false }),
 		account("claude-primary", "Willow Claude", { provider: "claude", primary: true }),
+		account("codex-reserve", "Birch Codex", { reserved: true }),
 	] });
 	// The account is one icon button, named after the account it will use.
 	const accountName = /^(Account: |Choose an account|No signed-in )/;
@@ -2171,7 +2172,7 @@ describe("new task provider account selection", () => {
 		h.post.mockResolvedValue({ data: { session: { id: "new-session" } } });
 	});
 
-	it("names the default account, lists only the provider's signed-in ones, and leaves the default to the daemon", async () => {
+	it("names the default account, lists only the provider's signed-in ones not kept in reserve, and leaves the default to the daemon", async () => {
 		const { cache, onCreated, user } = show();
 		const control = await accountControl();
 		expect(control).toHaveAccessibleName("Account: Cedar Codex");
@@ -2179,6 +2180,7 @@ describe("new task provider account selection", () => {
 		expect(control).toHaveAttribute("title", "Account: Cedar Codex");
 		expect(accountDot()).toBeNull();
 		await user.click(control);
+		// Aspen is signed out and Birch is in reserve, so neither is offered for a new task.
 		expect((await screen.findAllByRole("menuitem")).map(item => item.textContent)).toEqual(["Cedar CodexDefault", "Maple Codex", "Manage accounts"]);
 		// Choosing another account and then the default again sends no account, and a default changed elsewhere is followed.
 		await user.click(screen.getByRole("menuitem", { name: /Maple Codex/ }));

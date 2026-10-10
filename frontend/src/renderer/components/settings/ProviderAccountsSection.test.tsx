@@ -4,10 +4,15 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderAccountsSection } from "./ProviderAccountsSection";
 import type { AccountAction, ProviderAccount } from "../../hooks/useProviderAccounts";
+import { useUiStore } from "../../stores/ui-store";
 
-const mock = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), remove: vi.fn(), open: vi.fn(), clipboard: vi.fn() }));
+const mock = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), remove: vi.fn(), open: vi.fn(), clipboard: vi.fn(), navigate: vi.fn(), workspaceQuery: vi.fn(), workspaces: [] as unknown[], costs: new Map<string, unknown>() }));
 vi.mock("../../lib/api-client", () => ({ apiClient: { GET: mock.get, POST: mock.post, DELETE: mock.remove }, apiErrorMessage: (error: { message: string }) => error.message }));
 vi.mock("../../lib/bridge", () => ({ aoBridge: { app: { openExternal: mock.open }, clipboard: { writeText: mock.clipboard } } }));
+// What the page reads beside the accounts: the sessions by name, what they cost, and the way to one.
+vi.mock("../../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: mock.workspaceQuery }));
+vi.mock("../../hooks/useSessionUsageSummaries", () => ({ useSessionUsageSummaries: () => ({ data: mock.costs }) }));
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mock.navigate }));
 
 const LIST = "/api/v1/provider-accounts";
 const ACTIONS = "/api/v1/provider-accounts/{accountId}/actions";
@@ -33,6 +38,7 @@ function act(accountId: string, body: AccountAction) {
 		if (body.action === "assign-session") account.sessions = account === target ? [...account.sessions, body.sessionId!] : account.sessions.filter(id => id !== body.sessionId);
 	}
 	if (body.action === "rename") target.displayName = body.displayName!;
+	if (body.action === "settings") Object.assign(target, { reserved: body.reserved ?? target.reserved, onLimit: body.onLimit ?? target.onLimit, warnAt: body.warnAt ?? target.warnAt });
 	if (body.action === "sign-out") Object.assign(target, { signedIn: false, sessions: [] });
 	if (body.action === "remove") inventory.accounts = inventory.accounts.filter(account => account !== target);
 	return { data: { ...structuredClone(inventory), ...(body.action === "reset" ? { resetOutcome } : {}) } };
@@ -49,6 +55,9 @@ beforeEach(() => {
 	mock.remove.mockResolvedValue({});
 	mock.open.mockResolvedValue(undefined);
 	mock.clipboard.mockResolvedValue(undefined);
+	mock.workspaces = [];
+	mock.costs = new Map();
+	mock.workspaceQuery.mockImplementation(() => ({ data: mock.workspaces }));
 });
 afterEach(cleanup);
 
@@ -107,17 +116,35 @@ describe("accounts list and detail", () => {
 	});
 	it("marks what the list needs to say about each account", async () => {
 		inventory.accounts[0] = { ...alice, global: true, usage: { status: "available", pausedUntil: "2099-01-01T00:00:00Z", signInEnding: true, windows: [{ durationSeconds: 18000, remainingFraction: 0.14 }] } };
-		inventory.accounts[1] = { ...bob, kind: "api_key", global: true };
+		inventory.accounts[1] = { ...bob, kind: "api_key", global: true, reserved: true };
 		inventory.accounts[2] = { ...clara, global: true, signedIn: false };
 		inventory.accounts.push({ ...bob, id: "d", displayName: "Aspen Codex", usage: { status: "available", windows: [{ durationSeconds: 18000, remainingFraction: 0 }] } });
 		const user = await start();
-		expect(listItem(alice)).toHaveTextContent("Cedar CodexDefault·Global·Paused·Sign-in ending·14% left");
-		expect(listItem(bob)).toHaveTextContent("Maple CodexGlobal·API key");
-		expect(listItem(clara)).toHaveTextContent("Global·Signed out");
-		expect(screen.getByTestId("provider-account-d")).toHaveTextContent("Limit reached");
-		expect(within(detail()).getByTestId("provider-account-global")).toHaveAttribute("title", "Found in this machine's own sign-in");
+		expect(listItem(alice)).toHaveTextContent(/^Cedar CodexDeviceDefault·Paused·Sign-in ending·14% left$/);
+		expect(listItem(bob)).toHaveTextContent(/^Maple CodexDeviceIn reserve·API key$/);
+		expect(listItem(clara)).toHaveTextContent(/^Willow ClaudeDeviceSigned out$/);
+		expect(screen.getByTestId("provider-account-d")).toHaveTextContent(/^Aspen CodexLimit reached$/);
+		// This computer's own login is a blue tag with a laptop beside the name, in the list and above the detail.
+		const tags = [within(listItem(alice)).getByText("Device"), within(detail()).getByTestId("provider-account-global")];
+		for (const tag of tags) {
+			expect(tag).toHaveTextContent(/^Device$/);
+			expect(tag).toHaveClass("bg-status-working/15", "text-status-working");
+			expect(tag.querySelector("svg.lucide-laptop")).toBeInTheDocument();
+			expect(tag).toHaveAttribute("title", "Found in this machine's own sign-in");
+		}
+		expect(tags[1].previousElementSibling).toHaveTextContent("Cedar Codex");
+		expect(within(listItem(alice)).queryByText("Global")).toBeNull();
 		await open(user, bob);
+		expect(within(listItem(bob)).getByText("Device")).toHaveAttribute("title", "This machine's own API key");
 		expect(within(detail()).getByTestId("provider-account-global")).toHaveAttribute("title", "This machine's own API key");
+	});
+	it("ends each provider's list with its New account row, the only way to add one", async () => {
+		await start();
+		const rows = (provider: string) => within(screen.getByTestId(`provider-section-${provider}`)).getAllByRole("button").map(row => row.textContent);
+		expect(rows("codex")).toEqual(["Cedar CodexDefault", "Maple Codex", "New Codex accountChoose how to sign in."]);
+		expect(rows("claude")).toEqual(["Willow ClaudeDefault", "New Claude accountChoose how to sign in."]);
+		expect(screen.queryByRole("button", { name: /^Add/ })).toBeNull();
+		expect(screen.queryByText(/^Check(ed| again)/)).toBeNull();
 	});
 	it("checks every account's sign-in on coming back to the window; opening settings did the first check", async () => {
 		await start();
@@ -184,6 +211,7 @@ describe("account usage", () => {
 		expect(detail()).toHaveTextContent("Claude·Max 20x");
 		expect(screen.getByTestId("provider-account-usage-c")).toHaveTextContent("Weekly34% left");
 		expect(detail()).toHaveTextContent("Extra usage$18.20 of $50.00 this month$31.80 left");
+		expect(screen.getByRole("progressbar", { name: "Extra usage" })).toHaveAttribute("aria-valuenow", "64");
 		// A provider that will not say, and an API key, which has no limits to report.
 		await user.click(screen.getByTestId("provider-account-d"));
 		expect(await screen.findByTestId("provider-account-usage-d")).toHaveTextContent("Usage unavailable");
@@ -486,6 +514,7 @@ describe("signing in again", () => {
 		expect(detail()).toHaveTextContent("This account is signed out2 sessions are waiting for it.");
 		expect(screen.queryByTestId("provider-account-usage-b")).toBeNull();
 		expect(within(detail()).queryByRole("button", { name: "Make default" })).toBeNull();
+		expect(within(detail()).queryByRole("button", { name: "Manage plan" })).toBeNull();
 		expect(within(detail()).getByRole("button", { name: "Remove" })).toBeInTheDocument();
 		expect(within(detail()).queryByRole("button", { name: "Sign out" })).toBeNull();
 		await user.click(within(detail()).getByRole("button", { name: "Sign in again" }));
@@ -542,10 +571,13 @@ describe("account resets", () => {
 		}
 		expect(actions("reset")).toHaveLength(6);
 	});
-	it("says when the next reset is allowed, and shows no resets as none", async () => {
+	it("says when the next reset is allowed, takes one before the limit is reached, and shows no resets as none", async () => {
+		const pine = { ...clara, id: "d", displayName: "Pine Claude", primary: false };
+		const fir = { ...clara, id: "e", displayName: "Fir Claude", primary: false, kind: "api_key" as const };
 		inventory.accounts[0].usage = { ...limited(), resetUsable: false, resetBlockedUntil: "2099-01-01T00:00:00Z" };
 		inventory.accounts[1].usage = { status: "available", resetCredits: 0, windows: [{ durationSeconds: 18000, remainingFraction: 0.5 }] };
-		inventory.accounts[2].usage = { ...limited(), resetUsable: false };
+		inventory.accounts[2].usage = { ...limited(), resetUsable: false, windows: [{ durationSeconds: 18000, remainingFraction: 0.6 }] };
+		inventory.accounts.push({ ...pine, usage: { status: "available", windows: [{ durationSeconds: 18000, remainingFraction: 0.5 }] } }, { ...fir, usage: { status: "unavailable" } });
 		const user = await start();
 		expect(detail()).toHaveTextContent(/Limit resetsNext reset after Jan 1.*2 availableUse reset/);
 		expect(within(detail()).getByRole("button", { name: "Use reset" })).toBeDisabled();
@@ -554,6 +586,17 @@ describe("account resets", () => {
 		expect(within(detail()).queryByRole("button", { name: "Use reset" })).toBeNull();
 		await open(user, clara);
 		expect(detail()).toHaveTextContent("Limit resetsUse one when a limit is reached.2 availableUse reset");
+		// No wait is in force, so a reset can be spent early; the confirmation says the limit is not reached.
+		await user.click(within(detail()).getByRole("button", { name: "Use reset" }));
+		expect(ask()).toHaveTextContent("Use a reset on Willow Claude?The limit is not reached yet. This can't be undone.");
+		await user.click(within(ask()).getByRole("button", { name: "Use reset" }));
+		expect(await screen.findByText("Limits reset on Willow Claude.")).toBeInTheDocument();
+		expect(actions("reset")).toEqual([["c", { action: "reset" }]]);
+		// A sign-in whose provider reports no resets says so too; an API key has none to speak of.
+		await open(user, pine);
+		expect(detail()).toHaveTextContent("ResetsNo resets available");
+		await open(user, fir);
+		expect(detail()).not.toHaveTextContent("No resets available");
 	});
 });
 describe("a paused account", () => {
@@ -576,13 +619,21 @@ describe("plan and activity", () => {
 	it("puts the plan facts and recent requests beside the limits", async () => {
 		inventory.accounts[0].usage = { status: "available", windows: [{ durationSeconds: 18000, remainingFraction: 0.5 }] };
 		inventory.accounts[1] = { ...bob, kind: "api_key", usage: { status: "unavailable", addedAt: "2030-09-28T00:00:00Z", requests: [...quiet, { succeeded: 2, failed: 0 }, { succeeded: 1, failed: 0 }] } };
-		inventory.accounts[2].usage = { status: "available", plan: "team", organization: "Acme", renewsAt: "2030-11-14T00:00:00Z", addedAt: "2030-09-03T00:00:00Z", refreshedAt: new Date(Date.now() - 12 * 60_000).toISOString(), requests: [...quiet, { succeeded: 9, failed: 0 }, { succeeded: 4, failed: 3 }], windows: [{ durationSeconds: 18000, remainingFraction: 0.5 }] };
+		inventory.accounts[2].usage = { status: "available", plan: "team", organization: "Acme", renewsAt: "2030-11-14T00:00:00Z", addedAt: "2030-09-03T00:00:00Z", refreshedAt: new Date(Date.now() - 12 * 60_000).toISOString(), requests: [...quiet, { succeeded: 9, failed: 0 }, { succeeded: 4, failed: 3 }], windows: [{ durationSeconds: 18000, remainingFraction: 0.5 }], models: ["opus", "sonnet", "haiku", "opus-4", "sonnet-4", "haiku-4", "opus-3", "haiku-3"] };
 		const user = await start();
 		expect(within(detail()).queryByRole("complementary")).toBeNull();
+		// Each provider keeps the plan, its usage and its billing on a page of its own.
+		await user.click(within(detail()).getByRole("button", { name: "Manage plan" }));
+		expect(mock.open).toHaveBeenLastCalledWith("https://chatgpt.com/codex/settings/usage");
 		await open(user, clara);
+		await user.click(within(detail()).getByRole("button", { name: "Manage plan" }));
+		expect(mock.open).toHaveBeenLastCalledWith("https://claude.ai/settings/usage");
 		for (const fact of ["PlanTeam", "RenewsNov 14, 2030", "OrganizationAcme", "AddedSep 3, 2030", "RequestsLast 3 hours163 failed"]) expect(aside()).toHaveTextContent(fact);
-		// Renewing the sign-in is an account action that says what it does and when it last happened.
-		expect(detail()).toHaveTextContent(/Renew sign-inGets a fresh login from \w+\. Last renewed 12 minutes ago\./);
+		// The models it can use: six by name, the rest counted and named on pointing.
+		expect(aside()).toHaveTextContent("Modelsopussonnethaikuopus-4sonnet-4haiku-4+2");
+		expect(within(aside()).getByText("+2")).toHaveAttribute("title", "opus-3, haiku-3");
+		// Renewing the sign-in is a row among the account's own, which says what it does and when it last happened.
+		expect(detail()).toHaveTextContent(/AccountDisplay name.*Signed in as.*Renew sign-inGets a fresh login from Claude\. Last renewed 12 minutes ago\.RenewSign out/);
 		await user.click(within(detail()).getByRole("button", { name: "Renew" }));
 		expect(await screen.findByText("Sign-in renewed.")).toBeInTheDocument();
 		expect(actions("refresh-sign-in")).toEqual([["c", { action: "refresh-sign-in" }]]);
@@ -591,6 +642,32 @@ describe("plan and activity", () => {
 		expect(aside()).toHaveTextContent("AddedSep 28, 2030");
 		expect(aside()).toHaveTextContent("RequestsLast 3 hours3None failed");
 		expect(within(detail()).queryByRole("button", { name: "Renew" })).toBeNull();
+		expect(within(detail()).queryByRole("button", { name: "Manage plan" })).toBeNull();
+	});
+	it("shows the plan and what the helper counted even while the limits are unavailable", async () => {
+		inventory.accounts[0].usage = { status: "unavailable", plan: "pro", activity: {
+			today: 1_240, week: 5_400, total: 98_000, since: "2030-02-01",
+			days: [{ date: "2030-02-01", tokens: 600 }, { date: "2030-02-02", tokens: 0 }, { date: "2030-02-03", tokens: 1_200 }],
+			models: [{ model: "gpt-5.3-codex", tokens: 750 }, { model: "gpt-5.2", tokens: 250 }],
+		} };
+		inventory.accounts[1].usage = { status: "unavailable", activity: { today: 0, week: 0, total: 0 } };
+		mock.costs = new Map([["session-a", { estimatedCost: { totalNanos: 2_500_000_000 } }]]);
+		const user = await start();
+		expect(screen.getByTestId("provider-account-usage-a")).toHaveTextContent("Usage unavailable");
+		expect(detail()).toHaveTextContent("Codex·Pro");
+		expect(aside()).toHaveTextContent("PlanPro");
+		// A bar a day, the busiest the tallest and today's the last, then the totals and what its sessions cost.
+		const bars = within(aside()).getByRole("img", { name: "Tokens per day" });
+		expect(Array.from(bars.querySelectorAll<HTMLElement>("[title]"), bar => [bar.title, bar.style.height])).toEqual([["Feb 1 · 600", "50%"], ["Feb 2 · 0", "0%"], ["Feb 3 · 1.2K", "100%"]]);
+		expect(bars.querySelector("[title^='Feb 3']")).toHaveClass("bg-foreground");
+		expect(bars).toHaveTextContent("Feb 1Tokens per dayToday");
+		expect(aside()).toHaveTextContent("Through AO today1.2KThrough AO, 7 days5.4KThrough AO since Feb 198KEstimated cost of its sessions$2.50");
+		expect(within(aside()).getByText("Estimated cost of its sessions")).toHaveAttribute("title", "Token counts priced with AO's price list. A subscription is not billed this way.");
+		expect(aside()).toHaveTextContent("By model, 7 daysgpt-5.3-codex75%gpt-5.225%");
+		// A quiet account has totals but no bars, no cost and no model split.
+		await open(user, bob);
+		expect(aside()).toHaveTextContent(/^ActivityThrough AO today0Through AO, 7 days0$/);
+		expect(within(aside()).queryByRole("img")).toBeNull();
 	});
 	it("adds the provider's token tally, leaving out the figures it does not report", async () => {
 		const today = new Date().toISOString().slice(0, 10);
@@ -607,5 +684,98 @@ describe("plan and activity", () => {
 		expect(aside()).toHaveTextContent("Lifetime tokens96M");
 		expect(aside()).not.toHaveTextContent(/Peak day|Requests/);
 		expect(within(detail()).queryByRole("button", { name: "Renew" })).toBeNull();
+	});
+});
+describe("account health", () => {
+	it("says how the last failure went, counts the recent ones by kind, and gives the time to the first word", async () => {
+		inventory.accounts[0].usage = { status: "unavailable", health: { lastFailure: { kind: "sign-in", at: "2030-03-04T12:00:00Z" }, failures: { limit: 3, signIn: 1, server: 0 }, firstWordMs: 1840 } };
+		inventory.accounts[1].usage = { status: "available", windows: [], health: { firstWordMs: 900 } };
+		const user = await start();
+		expect(detail()).toHaveTextContent(/HealthLast failureSign-in refused · Mar 4, 2030, \d+:\d\d.*M3 limit reached1 sign-in refusedTime to first wordTypical, last hour1\.8 s/);
+		await open(user, bob);
+		expect(detail()).toHaveTextContent("HealthTime to first wordTypical, last hour0.9 s");
+		expect(detail()).not.toHaveTextContent("Last failure");
+		await open(user, clara);
+		expect(detail()).not.toHaveTextContent("Health");
+	});
+});
+describe("the sessions on an account", () => {
+	const session = (id: string, title: string, status = "idle") => ({ id, title, status });
+	const list = () => screen.getByTestId("provider-account-sessions");
+	const row = (name: string) => within(within(list()).getByText(name).parentElement!);
+	beforeEach(() => {
+		mock.workspaces = [
+			{ id: "project-1", sessions: [session("s1", "Fix login", "working"), session("s2", "Write docs"), session("s3", ""), session("s4", "Tidy"), session("s5", "Bench"), session("s6", "Lint")] },
+			{ id: "__standalone__", sessions: [session("s7", "Scratch")] },
+		];
+		inventory.accounts[0].sessions = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "gone"];
+		inventory.accounts[0].usage = { status: "available", windows: [], activity: { today: 49_200, week: 49_200, total: 49_200, sessions: { s7: 48_000, s2: 1_200 } } };
+	});
+	it("names them, the busiest today first and five at a time", async () => {
+		const user = await start();
+		expect(mock.workspaceQuery).toHaveBeenCalledWith({ includeCloud: false });
+		// A session AO no longer knows is left out of the list and of its count.
+		expect(detail()).toHaveTextContent("7 sessions on this account");
+		expect(list()).toHaveTextContent(/^Scratch48K todayWrite docs1\.2K todayFix logins3Tidy2 more$/);
+		expect(row("Fix login").getByText("Fix login").previousElementSibling).toHaveClass("bg-status-working");
+		expect(row("Tidy").getByText("Tidy").previousElementSibling).not.toHaveClass("bg-status-working");
+		await user.click(within(list()).getByRole("button", { name: "2 more" }));
+		expect(list()).toHaveTextContent(/^Scratch48K todayWrite docs1\.2K todayFix logins3TidyBenchLint$/);
+		// An account with no session AO knows has no list.
+		await open(user, clara);
+		expect(screen.queryByTestId("provider-account-sessions")).toBeNull();
+	});
+	it("moves one to another account, or opens it and leaves settings", async () => {
+		const user = await start();
+		await user.click(row("Scratch").getByRole("button", { name: "Move to another account" }));
+		expect((await screen.findAllByRole("menuitem")).map(option => option.textContent)).toEqual(["Maple Codex"]);
+		await user.click(screen.getByRole("menuitem", { name: "Maple Codex" }));
+		expect(await status()).toHaveTextContent("Session moved to Maple Codex.");
+		expect(actions("assign-session")).toEqual([["b", { action: "assign-session", sessionId: "s7" }]]);
+		await waitFor(() => expect(detail()).toHaveTextContent("6 sessions on this account"));
+		useUiStore.getState().openGlobalSettings("accountManager");
+		await user.click(row("Fix login").getByRole("button", { name: "Open session" }));
+		expect(mock.navigate).toHaveBeenLastCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "project-1", sessionId: "s1" } });
+		expect(useUiStore.getState().settingsModal).toBeNull();
+		await open(user, bob);
+		await user.click(row("Scratch").getByRole("button", { name: "Open session" }));
+		expect(mock.navigate).toHaveBeenLastCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "s7" } });
+	});
+});
+describe("what an account does on its own", () => {
+	const setting = () => actions("settings").at(-1);
+	const options = async () => (await screen.findAllByRole("menuitem")).map(option => option.textContent);
+	it("keeps an account in reserve, hands its sessions on at a limit, and warns when little is left", async () => {
+		const user = await start();
+		// The default always takes new sessions.
+		expect(within(detail()).getByRole("switch", { name: "Use for new sessions" })).toBeDisabled();
+		expect(detail()).toHaveTextContent("Use for new sessionsThe default is always used.");
+		await open(user, bob);
+		const reserve = () => within(detail()).getByRole("switch", { name: "Use for new sessions" });
+		expect(reserve()).toBeChecked();
+		expect(detail()).toHaveTextContent("Use for new sessionsOff keeps the account in reserve.");
+		await user.click(reserve());
+		expect(setting()).toEqual(["b", { action: "settings", reserved: true }]);
+		await waitFor(() => expect(listItem(bob)).toHaveTextContent(/^Maple CodexIn reserve$/));
+		expect(reserve()).not.toBeChecked();
+		await user.click(reserve());
+		expect(setting()).toEqual(["b", { action: "settings", reserved: false }]);
+		expect(detail()).toHaveTextContent("When a limit is reachedIts sessions move on their next request.Do nothing");
+		await user.click(within(detail()).getByRole("button", { name: "Do nothing" }));
+		expect(await options()).toEqual(["Do nothing", "Cedar Codex"]);
+		await user.click(screen.getByRole("menuitem", { name: "Cedar Codex" }));
+		expect(setting()).toEqual(["b", { action: "settings", onLimit: "a" }]);
+		await user.click(await within(detail()).findByRole("button", { name: "Switch to Cedar Codex" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Do nothing" }));
+		expect(setting()).toEqual(["b", { action: "settings", onLimit: "" }]);
+		await user.click(await within(detail()).findByRole("button", { name: "Never" }));
+		expect(await options()).toEqual(["Never", "At 5%", "At 10%", "At 20%", "At 30%"]);
+		await user.click(screen.getByRole("menuitem", { name: "At 20%" }));
+		expect(setting()).toEqual(["b", { action: "settings", warnAt: 20 }]);
+		expect(await within(detail()).findByRole("button", { name: "At 20%" })).toHaveTextContent("At 20%");
+		// With no other account to hand its sessions to, that choice is not offered.
+		await open(user, clara);
+		expect(detail()).not.toHaveTextContent("When a limit is reached");
+		expect(detail()).toHaveTextContent("Warn me when little is leftNever");
 	});
 });

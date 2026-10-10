@@ -211,12 +211,12 @@ func TestCredentialsListsFileSignInsWithTheHelpersVerdict(t *testing.T) {
 	if first := credentials[0]; first != (ports.ProviderCredential{AuthID: "ok", Name: "ok.json", Provider: "codex", ModifiedAt: time.Date(2030, 1, 2, 3, 4, 5, 5e8, time.UTC)}) {
 		t.Fatalf("first=%+v", first)
 	}
-	failed := map[string]string{}
+	failed := map[string]bool{}
 	for _, credential := range credentials {
 		failed[credential.AuthID] = credential.Failed
 	}
 	// A rate limit is not a sign-in failure.
-	want := map[string]string{"ok": "", "revoked": "Unauthorized: token revoked", "refused": "refresh failed: invalid_grant", "off": "disabled", "limited": ""}
+	want := map[string]bool{"ok": false, "revoked": true, "refused": true, "off": true, "limited": false}
 	if !reflect.DeepEqual(failed, want) {
 		t.Fatalf("failed=%v", failed)
 	}

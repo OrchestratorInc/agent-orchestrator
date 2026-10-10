@@ -288,3 +288,21 @@ func TestAccountActionsThatAreNotResets(t *testing.T) {
 		}
 	}
 }
+
+func TestAClaudePlanIsReadFromTheProfileWhenTheUsageReadingIsMissing(t *testing.T) {
+	profile := upstream(200, `{"account":{"has_claude_max":true,"has_claude_pro":false},"organization":{"name":"Example Team","organization_type":"claude_enterprise","rate_limit_tier":"default_claude_max_5x"}}`)
+	for name, reading := range map[string]string{"no answer": upstream(500, `"upstream error"`), "an answer without limits": upstream(200, `{"extra_usage":{"is_enabled":true}}`)} {
+		c, _ := helperClient(t, providerHelper(t, `{"addedAt":"2029-09-03T08:00:00Z"}`, map[string]string{"GET " + claudeAPI + "/api/oauth/usage": reading, "GET " + claudeProfileURL: profile}))
+		usage, err := c.AccountUsage(ctx, claudeAccount)
+		// A Claude sign-in always has limits, so this is a failed reading that still names the plan.
+		want := domain.ProviderAccountUsage{Status: "unavailable", Plan: "max", PlanTier: "5x", Organization: "Example Team", AddedAt: "2029-09-03T08:00:00Z"}
+		if err == nil || !reflect.DeepEqual(usage, want) {
+			t.Fatalf("%s: usage=%+v err=%v", name, usage, err)
+		}
+	}
+	// Codex names the plan in the usage reading itself: a plan without limits is a reading.
+	c, _ := helperClient(t, providerHelper(t, `{}`, map[string]string{"GET " + codexAPI + "/usage": upstream(200, `{"plan_type":"free"}`)}))
+	if usage, err := c.AccountUsage(ctx, codexAccount); err != nil || usage.Status != "available" || usage.Plan != "free" || len(usage.Windows) != 0 {
+		t.Fatalf("codex: usage=%+v err=%v", usage, err)
+	}
+}

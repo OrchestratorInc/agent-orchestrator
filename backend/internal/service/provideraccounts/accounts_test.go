@@ -87,7 +87,7 @@ func TestASignInReplacesASavedOneOnlyWhenItIsDeadOrEnding(t *testing.T) {
 			h.assign("s1", domain.HarnessCodex, alice)
 			switch reason {
 			case "dead":
-				h.helper.held = []ports.ProviderCredential{{AuthID: "alice@example.com-auth", Name: "alice@example.com.json", Provider: "codex", Failed: "unauthorized"}}
+				h.helper.held = []ports.ProviderCredential{{AuthID: "alice@example.com-auth", Name: "alice@example.com.json", Provider: "codex", Failed: true}}
 			case "ending":
 				h.helper.usage.SignInEnding = true
 			}
@@ -489,5 +489,72 @@ func TestConcurrentSignInsOfOneIdentityLeaveOneEntry(t *testing.T) {
 		if id != state.Accounts[0].ID {
 			t.Fatalf("a sign-in was recorded as %q, the entry is %q", id, state.Accounts[0].ID)
 		}
+	}
+}
+
+func TestSettingsReserveAnAccountNameWhereItsSessionsGoAndSayWhenToWarn(t *testing.T) {
+	h := setup(t)
+	alice := h.signIn("codex", "alice@example.com")
+	bob := h.signIn("codex", "bob@example.com")
+	out := h.signIn("codex", "carol@example.com")
+	claude := h.signIn("claude", "dana@example.com")
+	if err := h.act(out, "sign-out"); err != nil {
+		t.Fatal(err)
+	}
+	h.helper.deleted = nil
+	// The default is what new sessions use, so it cannot be held back.
+	for id, want := range map[string]bool{alice: false, bob: true} {
+		if err := h.settings(id, ports.ProviderAccountAction{Reserved: new(true)}); err != nil || h.view(id).Reserved != want {
+			t.Fatalf("reserving %s: reserved=%t err=%v", id, h.view(id).Reserved, err)
+		}
+	}
+	if err := h.act(bob, "primary"); err != nil || h.view(bob).Reserved || !h.view(bob).Primary {
+		t.Fatalf("the new default is still reserved: view=%+v err=%v", h.view(bob), err)
+	}
+	if err := h.settings(alice, ports.ProviderAccountAction{Reserved: new(true)}); err != nil || !h.view(alice).Reserved {
+		t.Fatalf("the account that was the default: view=%+v err=%v", h.view(alice), err)
+	}
+	if err := h.settings(alice, ports.ProviderAccountAction{Reserved: new(false)}); err != nil || h.view(alice).Reserved {
+		t.Fatalf("lifting the reserve: view=%+v err=%v", h.view(alice), err)
+	}
+	// Sessions move to another account of the same provider, signed in or not.
+	for target, want := range map[string]error{bob: nil, out: nil, "": nil, alice: ports.ErrProviderAccountIncompatible, claude: ports.ErrProviderAccountIncompatible, "gone": ports.ErrProviderAccountIncompatible} {
+		before := h.store.get()
+		if err := h.settings(alice, ports.ProviderAccountAction{OnLimit: new(target)}); !errors.Is(err, want) {
+			t.Fatalf("on limit %q: err=%v, want %v", target, err, want)
+		}
+		if want != nil {
+			h.unchanged(before, "a refused setting")
+		} else if got := h.view(alice).OnLimit; got != target {
+			t.Fatalf("on limit=%q, want %q", got, target)
+		}
+	}
+	for given, want := range map[int]int{-5: 0, 0: 0, 25: 25, 90: 90, 95: 90} {
+		if err := h.settings(alice, ports.ProviderAccountAction{WarnAt: new(given)}); err != nil || h.view(alice).WarnAt != want {
+			t.Fatalf("warn at %d: stored %d err=%v", given, h.view(alice).WarnAt, err)
+		}
+	}
+	// Each setting given replaces what is stored; the others stay.
+	if err := h.settings(alice, ports.ProviderAccountAction{OnLimit: new(bob), WarnAt: new(20)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.settings(alice, ports.ProviderAccountAction{Reserved: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	if view := h.view(alice); !view.Reserved || view.OnLimit != bob || view.WarnAt != 20 {
+		t.Fatalf("view=%+v", view)
+	}
+	if err := h.settings("gone", ports.ProviderAccountAction{WarnAt: new(20)}); !errors.Is(err, ports.ErrProviderAccountUnknown) {
+		t.Fatalf("an unknown account: %v", err)
+	}
+	// A signed-out account is still there to name; a removed one is not.
+	if err := h.settings(out, ports.ProviderAccountAction{OnLimit: new(bob)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.act(bob, "sign-out", alice); err != nil || h.view(out).OnLimit != bob {
+		t.Fatalf("a sign-out cleared the setting: on limit=%q err=%v", h.view(out).OnLimit, err)
+	}
+	if err := h.act(bob, "remove"); err != nil || h.view(alice).OnLimit != "" || h.view(out).OnLimit != "" {
+		t.Fatalf("a removed account is still named: alice=%q carol=%q err=%v", h.view(alice).OnLimit, h.view(out).OnLimit, err)
 	}
 }
