@@ -142,6 +142,10 @@ func NewWithDeps(deps Deps) *Service {
 	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{
 		Agents: agents, Factory: agentregistry.Harnessed, Context: deps.Context, Logger: deps.Logger,
 		AuthenticationCheck: svc.structuredCodexAuthentication,
+		// A catalog built while the agent was signed out carries that failure
+		// (a rejected-credential warning or bare fallback aliases). A detected
+		// login must rediscover it without anyone pressing refresh.
+		OnAuthenticationRecovered: svc.InvalidateModelCatalogs,
 	})
 	if svc.codexAccounts != nil {
 		svc.codexAccounts.onAuthenticationChanged = func() {
@@ -269,7 +273,7 @@ func (s *Service) prefetchModelCatalogs(ctx context.Context, force bool) {
 				if ctx.Err() != nil {
 					return
 				}
-				_, _ = s.RevalidateModels(ctx, record.AgentID, record.ProjectID)
+				_, _ = s.revalidateModels(ctx, record.AgentID, record.ProjectID)
 			}
 		}()
 	}
@@ -295,7 +299,7 @@ func (s *Service) warmModelCatalogs(ctx context.Context) {
 		if !cached.Stale && !catalogNeedsRevalidation(lastSuccess, s.now()) {
 			continue
 		}
-		_, _ = s.RevalidateModels(ctx, agentID, "")
+		_, _ = s.revalidateModels(ctx, agentID, "")
 	}
 }
 
@@ -319,10 +323,21 @@ func (s *Service) monitorModelCatalogFreshness(ctx context.Context) {
 	}
 }
 
-// Models returns one normalized model catalog. Cached values survive daemon
-// restarts; refresh forces a new documented CLI discovery attempt. Discovery
-// failures degrade to the last cached catalog or a custom model input.
+// Models returns one normalized model catalog, stamped with when this user last
+// ran each model. Cached values survive daemon restarts; refresh forces a new
+// documented CLI discovery attempt. Discovery failures degrade to the last
+// cached catalog or a custom model input.
 func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
+	catalog, err := s.modelCatalog(ctx, agentID, projectID, refresh)
+	if err != nil {
+		return catalog, err
+	}
+	// Usage is keyed by the caller's real project, not the credential scope the
+	// catalog lookup may substitute for it.
+	return s.withModelUsage(ctx, agentID, projectID, catalog), nil
+}
+
+func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
 	if s.discoverer == nil {
 		return ports.AgentModelCatalog{}, apierr.Internal("MODEL_DISCOVERY_UNAVAILABLE", "Model discovery is unavailable")
 	}
@@ -353,7 +368,7 @@ func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh
 			retriesExhausted := modelCatalogRetriesExhausted(cached)
 			cached.Catalog.RefreshRecommended = !retriesExhausted && (due || needsRecovery || cached.RefreshState == "error" || cached.RefreshState == "queued")
 			if !retriesExhausted && (due || needsRecovery) && (cached.RetryAt.IsZero() || !s.now().Before(cached.RetryAt)) {
-				go func() { _, _ = s.RevalidateModels(s.ctx, agentID, projectID) }()
+				go func() { _, _ = s.revalidateModels(s.ctx, agentID, projectID) }()
 			} else if retriesExhausted {
 				go s.revalidateChangedInputs(agentID, projectID, cached.BinaryVersion)
 			} else if !due {
@@ -376,7 +391,7 @@ func (s *Service) revalidateChangedInputs(agentID, projectID, cachedFingerprint 
 		return
 	}
 	if s.modelCatalogInputsChanged(s.ctx, agentID, projectID, cachedFingerprint) {
-		_, _ = s.RevalidateModels(s.ctx, agentID, projectID)
+		_, _ = s.revalidateModels(s.ctx, agentID, projectID)
 	}
 }
 
@@ -485,6 +500,16 @@ func (s *Service) globalModelDiscoveryRequest(request ports.AgentModelDiscoveryR
 // RevalidateModels rediscovers a cache-first catalog after the normal read path
 // marks it old enough to refresh in the background.
 func (s *Service) RevalidateModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error) {
+	catalog, err := s.revalidateModels(ctx, agentID, projectID)
+	if err != nil {
+		return catalog, err
+	}
+	return s.withModelUsage(ctx, agentID, projectID, catalog), nil
+}
+
+// revalidateModels is the unstamped variant for background callers that discard
+// the catalog and should not pay for a session-history scan.
+func (s *Service) revalidateModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error) {
 	var err error
 	projectID, err = s.modelCatalogScope(ctx, projectID)
 	if err != nil {
@@ -513,11 +538,16 @@ func (s *Service) InvalidateModelCatalogs(agentID string) {
 				catalog.RefreshRecommended = true
 				catalog.RefreshState = "queued"
 				catalog.RefreshError = ""
+				// The warning described the inputs being invalidated (for
+				// example a rejected login). Clear it so clients stop showing
+				// it while the new discovery runs; a repeat failure restores it.
+				catalog.Warning = ""
+				catalog.WarningCode = ""
 				catalog.LastSuccessAt = nil
 				catalog.RetryAt = nil
 				_ = s.saveCatalog(s.ctx, record.ProjectID, catalog, time.Now().UTC().UnixNano(), 0)
 			}
-			_, _ = s.RevalidateModels(s.ctx, agentID, record.ProjectID)
+			_, _ = s.revalidateModels(s.ctx, agentID, record.ProjectID)
 		}
 	}()
 }
@@ -548,10 +578,12 @@ func (s *Service) InvalidateProjectModelCatalogs(projectID string) {
 			catalog.RefreshRecommended = true
 			catalog.RefreshState = "queued"
 			catalog.RefreshError = ""
+			catalog.Warning = ""
+			catalog.WarningCode = ""
 			catalog.LastSuccessAt = nil
 			catalog.RetryAt = nil
 			_ = s.saveCatalog(s.ctx, projectID, catalog, time.Now().UTC().UnixNano(), 0)
-			_, _ = s.RevalidateModels(s.ctx, record.AgentID, projectID)
+			_, _ = s.revalidateModels(s.ctx, record.AgentID, projectID)
 		}
 	}()
 }
@@ -698,6 +730,7 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		return s.keepCatalogUntilSignIn(persistCtx, item.Manifest.Name, cached, hasCached, policy, version, generation), nil
 	}
 	if discoverErr != nil {
+		warningCode := modelCatalogWarningCode(discoverErr)
 		// Provider model IDs are credential-scoped. Reuse a cached catalog only
 		// when it was produced from the same discovery inputs; otherwise a revoked
 		// key or provider switch could leave invalid IDs in the picker.
@@ -705,6 +738,7 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		if cacheMatchesInputs && len(cached.Catalog.Models) > 0 {
 			cached.Catalog.Stale = true
 			cached.Catalog.Warning = discoverErr.Error()
+			cached.Catalog.WarningCode = warningCode
 			cached.Catalog.RefreshRecommended = true
 			if err := s.saveFailedCatalog(persistCtx, cached, cached.Catalog, generation); err != nil {
 				cached.Catalog.Warning = appendCacheWarning(cached.Catalog.Warning)
@@ -716,7 +750,9 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		if len(discovered.Models) > 0 {
 			discovered.Stale = true
 			discovered.Warning = discoverErr.Error()
+			discovered.WarningCode = warningCode
 			discovered.RefreshRecommended = true
+			discovered.Models = s.labelAliasVersions(persistCtx, agentID, discovered.Models, cached, hasCached)
 			previous := cached
 			if !cacheMatchesInputs {
 				previous.Catalog.LastSuccessAt = nil
@@ -733,6 +769,7 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		fallback.BinaryVersion = version
 		fallback.Stale = true
 		fallback.Warning = discoverErr.Error()
+		fallback.WarningCode = warningCode
 		fallback.RefreshRecommended = true
 		if err := s.saveFailedCatalog(persistCtx, decodedCatalog{Catalog: fallback, ProjectID: projectID}, fallback, generation); err == nil {
 			if updated, found, _ := s.cachedCatalog(persistCtx, agentID, projectID); found {
@@ -776,6 +813,7 @@ func (s *Service) keepCatalogUntilSignIn(ctx context.Context, agentName string, 
 	catalog.LastSuccessAt = nil
 	catalog.Stale = false
 	catalog.Warning = agentName + " is not signed in; sign in to load its models"
+	catalog.WarningCode = ports.ModelCatalogWarningAuthRequired
 	catalog.RefreshState = "idle"
 	catalog.RefreshError = ""
 	catalog.RetryAt = nil
@@ -784,6 +822,51 @@ func (s *Service) keepCatalogUntilSignIn(ctx context.Context, agentName string, 
 		catalog.Warning = appendCacheWarning(catalog.Warning)
 	}
 	return catalog
+}
+
+// labelAliasVersions lets a fallback alias list ("opus") carry the version a
+// previous discovery resolved ("Opus 5.5"). The reference is every catalog
+// cached for the agent in any scope: alias versions are not project-specific,
+// a fallback is exactly when this scope has nothing better, and the labeler
+// takes the newest version it finds per family, so an older or alias-only
+// catalog cannot pull a label backwards.
+func (s *Service) labelAliasVersions(ctx context.Context, agentID string, models []ports.AgentModelInfo, cached decodedCatalog, hasCached bool) []ports.AgentModelInfo {
+	labeler, ok := s.discoverer.(ports.AgentModelAliasLabeler)
+	if !ok || len(models) == 0 {
+		return models
+	}
+	var reference []ports.AgentModelInfo
+	if hasCached {
+		reference = append(reference, cached.Catalog.Models...)
+	}
+	if s.cache != nil {
+		if records, err := s.cache.ListAgentModelCatalogsByAgent(ctx, agentID); err == nil {
+			for _, record := range records {
+				var catalog ports.AgentModelCatalog
+				if json.Unmarshal([]byte(record.CatalogJSON), &catalog) == nil {
+					reference = append(reference, catalog.Models...)
+				}
+			}
+		}
+	}
+	if len(reference) == 0 {
+		return models
+	}
+	return labeler.LabelAliases(agentID, models, reference)
+}
+
+// modelCatalogWarningCode classifies a discovery failure that clients can
+// resolve with the agent's own login.
+func modelCatalogWarningCode(err error) string {
+	switch {
+	case errors.Is(err, ports.ErrAgentModelDiscoveryCredentialExpired):
+		return ports.ModelCatalogWarningAuthExpired
+	case errors.Is(err, ports.ErrAgentModelDiscoveryCredentialRejected),
+		errors.Is(err, ports.ErrAgentModelDiscoverySignInRequired):
+		return ports.ModelCatalogWarningAuthRequired
+	default:
+		return ""
+	}
 }
 
 func applyCustomModelEntryPolicy(catalog, policy ports.AgentModelCatalog) ports.AgentModelCatalog {
@@ -934,7 +1017,7 @@ func (s *Service) saveFailedCatalog(ctx context.Context, previous decodedCatalog
 			if err != nil || !ok || record.Generation != generation || record.RefreshState != "error" || !record.RetryAt.Equal(retryAt) {
 				return
 			}
-			_, _ = s.RevalidateModels(s.ctx, catalog.AgentID, previous.ProjectID)
+			_, _ = s.revalidateModels(s.ctx, catalog.AgentID, previous.ProjectID)
 		})
 	}
 	return nil

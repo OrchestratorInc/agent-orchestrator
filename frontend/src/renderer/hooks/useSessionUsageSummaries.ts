@@ -24,9 +24,13 @@ export function sessionUsageQueryOptions(projectId?: string, hostId?: string) {
 		queryFn: () => fetchSessionUsageSummaries(projectId, hostId),
 		retry: 1,
 		...(hostId ? { refetchInterval: 15_000 } : {}),
-		select: (items: SessionUsageSummary[]) =>
-			new Map(items.map((item) => [item.sessionId, item] as const)),
+		select: summariesById,
 	};
+}
+
+// Module-level so the Map keeps its identity between renders.
+function summariesById(items: SessionUsageSummary[]) {
+	return new Map(items.map((item) => [item.sessionId, item] as const));
 }
 
 export function useSessionUsageSummaries(projectId?: string, hostId?: string) {

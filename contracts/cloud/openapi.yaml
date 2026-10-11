@@ -227,6 +227,18 @@ paths:
     parameters:
       - $ref: "#/components/parameters/OrgId"
       - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: getProject
+      tags: [Projects]
+      responses:
+        "200":
+          description: Project and normalized settings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectResponse"
+        default:
+          $ref: "#/components/responses/Error"
     patch:
       operationId: updateProject
       tags: [Projects]
@@ -260,6 +272,29 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DeleteProjectResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/projects/{projectId}/settings:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/ProjectId"
+    patch:
+      operationId: updateProjectSettings
+      tags: [Projects]
+      description: Merge supplied settings only. Omitted fields are preserved, nested role objects merge, and reviewers replace the array. Null is rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectSettingsInput"
+      responses:
+        "200":
+          description: Validated settings persisted atomically.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectResponse"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/github/installations:
@@ -582,6 +617,33 @@ paths:
                 $ref: "#/components/schemas/WorkerOKResponse"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/startup-retry:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: retrySessionStartup
+      tags: [Sessions]
+      description: >-
+        Retries a session whose worker never started (its startupError explains
+        why). The startup window, repair count and startup error are reset and
+        the worker bootstrap runs again against the existing sandbox; a
+        bring-your-own workspace is never recreated. Returns 409
+        startup_retry_unavailable when the worker has already checked in or the
+        session is not meant to be running.
+      responses:
+        "202":
+          description: The retry was accepted for asynchronous processing.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session]
+                properties:
+                  session:
+                    $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/children:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -635,6 +697,131 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SessionReviewState"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/trigger:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: triggerSessionReviews
+      tags: [Reviews]
+      responses:
+        "200":
+          description: The current commit was already reviewed or is ineligible.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionReviewState"
+        "201":
+          description: A reviewer terminal was started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionReviewState"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/cancel:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: cancelSessionReviews
+      tags: [Reviews]
+      responses:
+        "200":
+          description: Review state after cancellation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionReviewState"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/send:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - name: reviewRunId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: sendSessionReviewToWorker
+      tags: [Reviews]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202":
+          description: The stored review was accepted and durably queued for the worker agent.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event]
+                properties:
+                  event:
+                    $ref: "#/components/schemas/UserMessageEvent"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/preferences:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    patch:
+      operationId: updateSessionPreferences
+      tags: [Sessions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSessionPreferencesInput"
+      responses:
+        "200":
+          description: The updated cloud session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviewer-harnesses:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: inspectSessionReviewerHarnesses
+      tags: [Reviews]
+      responses:
+        "200":
+          description: Supported reviewer CLI availability inside the live sandbox.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HarnessInspectResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviewer-harnesses/{harness}/install:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - name: harness
+        in: path
+        required: true
+        schema:
+          $ref: "#/components/schemas/CloudReviewerHarness"
+    post:
+      operationId: installSessionReviewerHarness
+      tags: [Reviews]
+      responses:
+        "200":
+          description: The installed and verified reviewer CLI.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HarnessStatus"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/messages:
@@ -1267,12 +1454,21 @@ paths:
   /api/cloud/v1/worker/credential:
     get:
       operationId: getWorkerCredential
+      parameters:
+        - name: reviewRunId
+          in: query
+          required: false
+          description: Select the snapshotted reviewer credential for a running review owned by this session.
+          schema:
+            type: string
+            format: uuid
       tags: [Worker Execution]
       security:
         - workerAuth: []
       description: |
         Returns the valid default coding-agent credential selected by the
-        session harness. The secret must never be logged or persisted.
+        session harness, or the durable reviewer harness when reviewRunId is supplied.
+        The secret must never be logged or persisted.
       responses:
         "200":
           description: The decrypted session-scoped coding-agent credential.
@@ -2242,6 +2438,175 @@ components:
           type: boolean
         nextCursor:
           type: string
+    CloudAgentHarness:
+      type: string
+      enum: [claude-code, codex, cursor, opencode]
+    ProjectAgentConfig:
+      type: object
+      additionalProperties: false
+      properties:
+        model:
+          type: string
+          maxLength: 500
+        mode:
+          type: string
+          enum: ["", plan, ask]
+          description: Cursor CLI mode. Omit or use an empty string for the agent default.
+        effort:
+          type: string
+          enum: ["", low, medium, high, xhigh, max]
+          description: Reasoning effort for Codex or Claude Code. Claude Code does not accept xhigh.
+        permissions:
+          type: string
+          enum: ["", default, auto, accept-edits, bypass-permissions]
+          description: Native approval policy. OpenCode does not accept accept-edits. Empty uses the session execution policy.
+    ProjectRoleConfig:
+      type: object
+      additionalProperties: false
+      required: [agent]
+      properties:
+        agent:
+          $ref: "#/components/schemas/CloudAgentHarness"
+        agentConfig:
+          $ref: "#/components/schemas/ProjectAgentConfig"
+    ProjectRoleConfigPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        agent:
+          $ref: "#/components/schemas/CloudAgentHarness"
+        agentConfig:
+          $ref: "#/components/schemas/ProjectAgentConfig"
+    ProjectReviewer:
+      type: object
+      additionalProperties: false
+      required: [harness]
+      properties:
+        harness:
+          $ref: "#/components/schemas/CloudAgentHarness"
+        agentConfig:
+          $ref: "#/components/schemas/ProjectAgentConfig"
+    ProjectConfig:
+      type: object
+      additionalProperties: true
+      description: Canonical nested role settings. Legacy workerAgent and orchestratorAgent are normalized on reads and removed on the next settings write. Nested agents take precedence.
+      properties:
+        sessionPrefix:
+          type: string
+          maxLength: 40
+          pattern: '^([A-Za-z0-9_][A-Za-z0-9_-]*)?$'
+          description: Prefix for new session branches. Empty uses ao; existing sessions are unchanged.
+        worker:
+          $ref: "#/components/schemas/ProjectRoleConfig"
+        orchestrator:
+          $ref: "#/components/schemas/ProjectRoleConfig"
+        reviewers:
+          type: array
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/ProjectReviewer"
+          description: Empty or absent uses the session agent for reviews.
+        autoReview:
+          type: boolean
+          description: Defaults to enabled when absent. Independent of session autoInjectReview feedback delivery.
+        coder:
+          $ref: "#/components/schemas/ProjectCoderConfig"
+    ProjectCoderConfig:
+      type: object
+      additionalProperties: false
+      description: Coder dev-kit settings inherited by every Coder session of the project.
+      properties:
+        templateId:
+          type: string
+          format: uuid
+          description: Coder template; absent uses the organization or deployment default.
+        size:
+          type: string
+          enum: [small, medium, large]
+        startupScript:
+          type: string
+          maxLength: 65536
+        extraRepos:
+          type: array
+          maxItems: 10
+          items:
+            $ref: "#/components/schemas/ProjectCoderRepository"
+        workspaceNamePrefix:
+          $ref: "#/components/schemas/CoderWorkspaceNamePrefix"
+    ProjectCoderRepository:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          pattern: "^https://"
+        branch:
+          type: string
+    CoderWorkspaceNamePrefix:
+      type: string
+      maxLength: 20
+      pattern: '^([a-z]([a-z0-9]|-[a-z0-9])*)?$'
+      description: >-
+        Names new Coder workspaces <prefix>-<short session id> (at most 32
+        characters). Lowercase letters, digits and single hyphens, starting with
+        a letter and not ending with a hyphen. Empty keeps the default ao-<id>;
+        existing sessions keep their workspace.
+    ProjectSettingsConfigPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        sessionPrefix:
+          type: string
+          maxLength: 40
+          pattern: '^([A-Za-z0-9_][A-Za-z0-9_-]*)?$'
+          description: Prefix for new session branches. Empty uses ao; existing sessions are unchanged.
+        worker:
+          description: Null removes the worker override and uses the session agent selection.
+          oneOf:
+            - $ref: "#/components/schemas/ProjectRoleConfigPatch"
+            - type: "null"
+        orchestrator:
+          description: Null removes the orchestrator override and uses the session agent selection.
+          oneOf:
+            - $ref: "#/components/schemas/ProjectRoleConfigPatch"
+            - type: "null"
+        reviewers:
+          type: array
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/ProjectReviewer"
+        autoReview:
+          type: boolean
+        coder:
+          type: object
+          additionalProperties: false
+          description: Only the workspace name prefix is editable after the project is created.
+          properties:
+            workspaceNamePrefix:
+              $ref: "#/components/schemas/CoderWorkspaceNamePrefix"
+    ProjectSettingsInput:
+      type: object
+      additionalProperties: false
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        defaultBranch:
+          type: string
+          minLength: 1
+          maxLength: 255
+        config:
+          $ref: "#/components/schemas/ProjectSettingsConfigPatch"
+    ProjectResponse:
+      type: object
+      additionalProperties: false
+      required: [project]
+      properties:
+        project:
+          $ref: "#/components/schemas/Project"
     Project:
       type: object
       additionalProperties: false
@@ -2265,8 +2630,7 @@ components:
           pattern: "^[1-9][0-9]*$"
           description: GitHub's integer repository ID encoded as a decimal string to preserve precision.
         config:
-          type: object
-          additionalProperties: true
+          $ref: "#/components/schemas/ProjectConfig"
         createdAt:
           type: string
           format: date-time
@@ -2293,6 +2657,8 @@ components:
         config:
           type: object
           additionalProperties: true
+        coder:
+          $ref: "#/components/schemas/ProjectCoderConfig"
     UpdateProjectInput:
       type: object
       additionalProperties: false
@@ -2675,6 +3041,8 @@ components:
           type: string
           maxLength: 200
           description: Coding-agent model to launch with; empty uses the harness default.
+        agentConfig:
+          $ref: "#/components/schemas/ProjectAgentConfig"
         deniedCommands:
           type: array
           items:
@@ -3416,6 +3784,13 @@ components:
             desiredState:
               type: string
               const: deleted
+    SessionResponse:
+      type: object
+      additionalProperties: false
+      required: [session]
+      properties:
+        session:
+          $ref: "#/components/schemas/Session"
     SessionInterfaceMode:
       type: string
       enum: [tui, chat]
@@ -3495,6 +3870,10 @@ components:
         - projectId
         - kind
         - harness
+        - autoReviewEnabled
+        - autoInjectCI
+        - autoInjectReview
+        - terminateOnPrMerge
         - displayName
         - branch
         - mode
@@ -3520,6 +3899,16 @@ components:
           $ref: "#/components/schemas/SessionKind"
         harness:
           type: string
+        reviewerHarness:
+          type: string
+        autoReviewEnabled:
+          type: boolean
+        autoInjectCI:
+          type: boolean
+        autoInjectReview:
+          type: boolean
+        terminateOnPrMerge:
+          type: boolean
         displayName:
           type: string
         branch:
@@ -3551,6 +3940,8 @@ components:
           type: string
         runtimeError:
           type: string
+        startupError:
+          $ref: "#/components/schemas/SessionStartupError"
         activeTurn:
           $ref: "#/components/schemas/Turn"
         isTerminated:
@@ -3559,6 +3950,29 @@ components:
           type: string
           format: date-time
         updatedAt:
+          type: string
+          format: date-time
+    SessionStartupError:
+      type: object
+      additionalProperties: false
+      required: [code, message, at]
+      description: >-
+        The latest user-facing reason the session's sandbox has not started.
+        Present until the worker first checks in or the user retries. While
+        runtimeState is "terminated" AO has stopped retrying; otherwise it is
+        still trying in the background.
+      properties:
+        code:
+          type: string
+          description: >-
+            Stable reason code: workspace_not_ready, terminal_unavailable,
+            unsupported_architecture, durable_root_unavailable,
+            worker_never_started, or bootstrap_failed. Clients must tolerate
+            codes added later.
+        message:
+          type: string
+          description: Human-readable explanation suitable for display as-is.
+        at:
           type: string
           format: date-time
     CreateSessionInput:
@@ -3599,6 +4013,50 @@ components:
         sandboxProviderConnectionId:
           type: string
           format: uuid
+    UpdateSessionPreferencesInput:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        reviewerHarness:
+          oneOf:
+            - $ref: "#/components/schemas/CloudReviewerHarness"
+            - type: string
+              maxLength: 0
+        autoReviewEnabled:
+          type: boolean
+        autoInjectCI:
+          type: boolean
+        autoInjectReview:
+          type: boolean
+        terminateOnPrMerge:
+          type: boolean
+    CloudReviewerHarness:
+      type: string
+      enum: [claude-code, codex, cursor]
+    HarnessStatus:
+      type: object
+      additionalProperties: false
+      required: [harness, status]
+      properties:
+        harness:
+          $ref: "#/components/schemas/CloudReviewerHarness"
+        status:
+          type: string
+          enum: [missing, ready, failed]
+        version:
+          type: string
+        error:
+          type: string
+    HarnessInspectResponse:
+      type: object
+      additionalProperties: false
+      required: [harnesses]
+      properties:
+        harnesses:
+          type: array
+          items:
+            $ref: "#/components/schemas/HarnessStatus"
     SessionPage:
       type: object
       additionalProperties: false
@@ -3903,6 +4361,7 @@ components:
         - sessionId
         - batchId
         - harness
+        - triggerSource
         - pullRequestUrl
         - targetSha
         - status
@@ -3922,6 +4381,9 @@ components:
           type: string
         harness:
           type: string
+        triggerSource:
+          type: string
+          enum: [manual, auto]
         pullRequestUrl:
           type: string
         targetSha:
@@ -3968,7 +4430,7 @@ components:
     SessionReviewState:
       type: object
       additionalProperties: false
-      required: [sessionId, reviews, runs]
+      required: [sessionId, availableReviewerHarnesses, reviews, runs]
       properties:
         sessionId:
           type: string
@@ -3976,6 +4438,10 @@ components:
           type: string
         reviewerHarness:
           type: string
+        availableReviewerHarnesses:
+          type: array
+          items:
+            $ref: "#/components/schemas/CloudReviewerHarness"
         reviews:
           type: array
           items:

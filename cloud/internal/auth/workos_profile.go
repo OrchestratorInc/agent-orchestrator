@@ -19,14 +19,12 @@ const (
 )
 
 type cachedProfile struct {
-	email       string
-	displayName string
-	expiresAt   time.Time
+	profile   WorkOSProfile
+	expiresAt time.Time
 }
 
 type cachedOrganization struct {
-	displayName  string
-	capabilities []string
+	organization WorkOSOrganization
 	expiresAt    time.Time
 }
 
@@ -53,17 +51,17 @@ func newWorkOSProfileResolver(
 	var mutex sync.Mutex
 	cache := make(map[string]cachedProfile)
 
-	return func(ctx context.Context, userID string) (string, string, error) {
+	return func(ctx context.Context, userID string) (WorkOSProfile, error) {
 		userID = strings.TrimSpace(userID)
 		if userID == "" {
-			return "", "", errors.New("WorkOS user ID is required")
+			return WorkOSProfile{}, errors.New("WorkOS user ID is required")
 		}
 		now := time.Now()
 		mutex.Lock()
 		cached, ok := cache[userID]
 		mutex.Unlock()
 		if ok && now.Before(cached.expiresAt) {
-			return cached.email, cached.displayName, nil
+			return cached.profile, nil
 		}
 
 		request, err := http.NewRequestWithContext(
@@ -73,32 +71,33 @@ func newWorkOSProfileResolver(
 			http.NoBody,
 		)
 		if err != nil {
-			return "", "", err
+			return WorkOSProfile{}, err
 		}
 		request.Header.Set("Authorization", "Bearer "+apiKey)
 		response, err := client.Do(request)
 		if err != nil {
-			return "", "", fmt.Errorf("get WorkOS user: %w", err)
+			return WorkOSProfile{}, fmt.Errorf("get WorkOS user: %w", err)
 		}
 		defer response.Body.Close()
 		if response.StatusCode != http.StatusOK {
-			return "", "", fmt.Errorf("get WorkOS user: status %d", response.StatusCode)
+			return WorkOSProfile{}, fmt.Errorf("get WorkOS user: status %d", response.StatusCode)
 		}
 		var user struct {
-			ID        string `json:"id"`
-			Email     string `json:"email"`
-			FirstName string `json:"first_name"`
-			LastName  string `json:"last_name"`
+			ID         string `json:"id"`
+			Email      string `json:"email"`
+			FirstName  string `json:"first_name"`
+			LastName   string `json:"last_name"`
+			ExternalID string `json:"external_id"`
 		}
 		if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&user); err != nil {
-			return "", "", err
+			return WorkOSProfile{}, err
 		}
 		if strings.TrimSpace(user.ID) != userID {
-			return "", "", errors.New("WorkOS user response did not match token")
+			return WorkOSProfile{}, errors.New("WorkOS user response did not match token")
 		}
 		email := strings.ToLower(strings.TrimSpace(user.Email))
 		if email == "" {
-			return "", "", errors.New("WorkOS user has no email")
+			return WorkOSProfile{}, errors.New("WorkOS user has no email")
 		}
 		displayName := strings.TrimSpace(strings.Join(
 			nonEmpty(user.FirstName, user.LastName),
@@ -107,18 +106,31 @@ func newWorkOSProfileResolver(
 		if displayName == "" {
 			displayName = email
 		}
+		profile := WorkOSProfile{
+			Email:       email,
+			DisplayName: displayName,
+			LegacyID:    legacyWorkOSID(user.ExternalID, "user_", userID),
+		}
 		mutex.Lock()
 		trimCache(cache, func(profile cachedProfile) bool {
 			return !now.Before(profile.expiresAt)
 		})
-		cache[userID] = cachedProfile{
-			email:       email,
-			displayName: displayName,
-			expiresAt:   now.Add(5 * time.Minute),
-		}
+		cache[userID] = cachedProfile{profile: profile, expiresAt: now.Add(5 * time.Minute)}
 		mutex.Unlock()
-		return email, displayName, nil
+		return profile, nil
 	}, nil
+}
+
+// legacyWorkOSID returns the WorkOS ID this record was copied from, or "" when
+// external_id is unset, is not a WorkOS ID of the expected kind, or names the
+// record itself. Only AO's own API key can set external_id, so a WorkOS ID
+// there is the link written by the environment copy, not user input.
+func legacyWorkOSID(externalID, prefix, id string) string {
+	externalID = strings.TrimSpace(externalID)
+	if !strings.HasPrefix(externalID, prefix) || externalID == id {
+		return ""
+	}
+	return externalID
 }
 
 func nonEmpty(values ...string) []string {
@@ -154,17 +166,17 @@ func newWorkOSOrganizationResolver(
 	var mutex sync.Mutex
 	cache := make(map[string]cachedOrganization)
 
-	return func(ctx context.Context, organizationID string) (string, []string, error) {
+	return func(ctx context.Context, organizationID string) (WorkOSOrganization, error) {
 		organizationID = strings.TrimSpace(organizationID)
 		if organizationID == "" {
-			return "", nil, errors.New("WorkOS organization ID is required")
+			return WorkOSOrganization{}, errors.New("WorkOS organization ID is required")
 		}
 		now := time.Now()
 		mutex.Lock()
 		cached, ok := cache[organizationID]
 		mutex.Unlock()
 		if ok && now.Before(cached.expiresAt) {
-			return cached.displayName, cached.capabilities, nil
+			return cached.organization, nil
 		}
 
 		request, err := http.NewRequestWithContext(
@@ -174,44 +186,45 @@ func newWorkOSOrganizationResolver(
 			http.NoBody,
 		)
 		if err != nil {
-			return "", nil, err
+			return WorkOSOrganization{}, err
 		}
 		request.Header.Set("Authorization", "Bearer "+apiKey)
 		response, err := client.Do(request)
 		if err != nil {
-			return "", nil, fmt.Errorf("get WorkOS organization: %w", err)
+			return WorkOSOrganization{}, fmt.Errorf("get WorkOS organization: %w", err)
 		}
 		defer response.Body.Close()
 		if response.StatusCode != http.StatusOK {
-			return "", nil, fmt.Errorf("get WorkOS organization: status %d", response.StatusCode)
+			return WorkOSOrganization{}, fmt.Errorf("get WorkOS organization: status %d", response.StatusCode)
 		}
 		var organization struct {
-			ID       string            `json:"id"`
-			Name     string            `json:"name"`
-			Metadata map[string]string `json:"metadata"`
+			ID         string            `json:"id"`
+			Name       string            `json:"name"`
+			Metadata   map[string]string `json:"metadata"`
+			ExternalID string            `json:"external_id"`
 		}
 		if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&organization); err != nil {
-			return "", nil, err
+			return WorkOSOrganization{}, err
 		}
 		if strings.TrimSpace(organization.ID) != organizationID {
-			return "", nil, errors.New("WorkOS organization response did not match token")
+			return WorkOSOrganization{}, errors.New("WorkOS organization response did not match token")
 		}
 		displayName := strings.TrimSpace(organization.Name)
 		if displayName == "" {
 			displayName = "WorkOS organization"
 		}
-		capabilities := parseOrganizationCapabilities(organization.Metadata)
+		resolved := WorkOSOrganization{
+			DisplayName:  displayName,
+			Capabilities: parseOrganizationCapabilities(organization.Metadata),
+			LegacyID:     legacyWorkOSID(organization.ExternalID, "org_", organizationID),
+		}
 		mutex.Lock()
 		trimCache(cache, func(organization cachedOrganization) bool {
 			return !now.Before(organization.expiresAt)
 		})
-		cache[organizationID] = cachedOrganization{
-			displayName:  displayName,
-			capabilities: capabilities,
-			expiresAt:    now.Add(5 * time.Minute),
-		}
+		cache[organizationID] = cachedOrganization{organization: resolved, expiresAt: now.Add(5 * time.Minute)}
 		mutex.Unlock()
-		return displayName, capabilities, nil
+		return resolved, nil
 	}, nil
 }
 

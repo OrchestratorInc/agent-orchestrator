@@ -21,6 +21,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/ptyexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
 
@@ -181,7 +182,7 @@ func reapPaneSessions(
 func signalSessions(ctx context.Context, pids []int, sig string) bool {
 	supported := false
 	for _, pid := range pids {
-		err := exec.CommandContext(ctx, "pkill", sig, "-s", strconv.Itoa(pid)).Run()
+		err := aoprocess.CommandContext(ctx, "pkill", sig, "-s", strconv.Itoa(pid)).Run()
 		if !isUnsupportedMatcher(err) {
 			supported = true
 		}
@@ -209,7 +210,7 @@ func isUnsupportedMatcher(err error) bool {
 // survivors so Destroy stays conservative and still attempts SIGKILL.
 func sessionsHaveProcesses(ctx context.Context, pids []int) bool {
 	for _, pid := range pids {
-		err := exec.CommandContext(ctx, "pgrep", "-s", strconv.Itoa(pid)).Run()
+		err := aoprocess.CommandContext(ctx, "pgrep", "-s", strconv.Itoa(pid)).Run()
 		if err == nil || ctx.Err() != nil {
 			return true
 		}
@@ -224,7 +225,7 @@ func sessionsHaveProcesses(ctx context.Context, pids []int) bool {
 type execRunner struct{}
 
 func (execRunner) Run(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := aoprocess.CommandContext(ctx, name, args...)
 	cmd.Env = append(append([]string(nil), os.Environ()...), env...)
 	// Run from a stable directory, not whatever the daemon process's cwd happens
 	// to be. The first tmux CLI call auto-starts tmux's persistent server, which
@@ -613,6 +614,53 @@ func (r *Runtime) IsAlive(ctx context.Context, handle ports.RuntimeHandle) (bool
 		return false, fmt.Errorf("tmux runtime: probe session %s: %w", id, err)
 	}
 	return true, nil
+}
+
+// ProcessRootPIDs returns every pane leader pid of the session so memory
+// accounting can walk their descendants. A missing session yields no pids and
+// no error; a tmux probe failure is surfaced so callers do not read it as zero.
+func (r *Runtime) ProcessRootPIDs(ctx context.Context, handle ports.RuntimeHandle) ([]int, error) {
+	id, err := handleID(handle)
+	if err != nil {
+		return nil, err
+	}
+	out, err := r.runForSession(ctx, id, listPanePIDsArgs(id)...)
+	if err != nil {
+		if sessionMissingOutput(string(out)) || serverNotRunningOutput(string(out)) || serverSocketAbsentOutput(string(out)) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("tmux runtime: list pane pids %s: %w", id, err)
+	}
+	var ids []int
+	for _, line := range strings.Split(string(out), "\n") {
+		pid, convErr := strconv.Atoi(strings.TrimSpace(line))
+		if convErr != nil || pid <= 1 {
+			continue
+		}
+		ids = append(ids, pid)
+	}
+	return ids, nil
+}
+
+// ServerPID returns the pid of AO's own tmux server, which every session on
+// this socket shares. It is not reachable by walking up from a pane: the
+// server detaches on startup and is reparented to init, not to anything AO
+// already tracks. Zero, false when the server cannot be reached or the
+// output cannot be parsed, and always without a private socket: the default
+// server is the user's own tmux, and everything in it would read as AO.
+func (r *Runtime) ServerPID(ctx context.Context) (int, bool) {
+	if r.socketName == "" {
+		return 0, false
+	}
+	out, err := r.run(ctx, "display-message", "-p", "#{pid}")
+	if err != nil {
+		return 0, false
+	}
+	pid, convErr := strconv.Atoi(strings.TrimSpace(string(out)))
+	if convErr != nil || pid <= 1 {
+		return 0, false
+	}
+	return pid, true
 }
 
 // IsChildAlive also detects exited panes retained by tmux's remain-on-exit.

@@ -27,6 +27,8 @@ import {
 import { agentLabel } from "../lib/agent-options";
 import type { WorkspaceSession } from "../types/workspace";
 import { canonicalTrackerIssueId } from "../types/workspace";
+import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
+import type { ChipTone } from "@aoagents/product-ui";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
 import type { SessionUsageSummary } from "../hooks/useSessionUsageSummaries";
 import {
@@ -54,6 +56,15 @@ export function toBoardSessionPresentation(
 					tone: "var(--color-status-working)",
 				}
 			: undefined;
+	const failedStartStatus =
+		session.provisionState === "failed"
+			? {
+					className: "text-status-exited",
+					indicatorClassName: "bg-status-exited",
+					label: "Start failed",
+					tone: "var(--color-status-exited)",
+				}
+			: undefined;
 	return {
 		activity: session.activity,
 		branch: session.branch,
@@ -63,8 +74,9 @@ export function toBoardSessionPresentation(
 		displayStatus: session.displayStatus,
 		provider: session.provider,
 		status: session.status,
+		statusReadiness: session.statusReadiness,
 		statusPresentation:
-			provisioningStatus ??
+			provisioningStatus ?? failedStartStatus ??
 			(t && switchPresentation && switchVisual
 				? {
 						className: switchVisual.className,
@@ -87,11 +99,17 @@ export function sessionsBoardLabels(t: TFunction): BoardColumnLabels {
 }
 
 export function BoardSessionCardAdapter({
+	memory,
+	memoryTone,
 	onOpen,
 	onTerminate,
 	session,
 	usage,
 }: {
+	/** Live reading of the session's process tree, for the card's resource chip. */
+	memory?: SessionMemoryReading;
+	/** Colour for the chip; neutral unless this card is part of the fix. */
+	memoryTone?: ChipTone;
 	onOpen: () => void;
 	onTerminate?: () => void;
 	session: WorkspaceSession;
@@ -99,6 +117,8 @@ export function BoardSessionCardAdapter({
 }) {
 	return (
 		<DesktopSessionCard
+			memory={memory}
+			memoryTone={memoryTone}
 			onOpen={onOpen}
 			onTerminate={onTerminate}
 			session={session}
@@ -151,6 +171,8 @@ function DesktopSessionCard({
 	footer,
 	hideTerminatedStatus = false,
 	interactive = true,
+	memory,
+	memoryTone,
 	onOpen,
 	onTerminate,
 	session,
@@ -161,6 +183,8 @@ function DesktopSessionCard({
 	footer?: ReactNode;
 	hideTerminatedStatus?: boolean;
 	interactive?: boolean;
+	memory?: SessionMemoryReading;
+	memoryTone?: ChipTone;
 	onOpen?: () => void;
 	onTerminate?: () => void;
 	session: WorkspaceSession;
@@ -177,6 +201,7 @@ function DesktopSessionCard({
 	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
 	const usagePresentation = toUsagePresentation(usage, t);
+	const resourcePresentation = toResourcePresentation(memory, session.activity?.state === "active", memoryTone, t);
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
 
 	const terminationOverlay = showTerminate ? (
@@ -236,7 +261,11 @@ function DesktopSessionCard({
 			branchIcon={<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />}
 			error={termination.error ?? undefined}
 			externalLink={ProductExternalLink}
-			footer={footer}
+			footer={
+				<>
+					{footer}
+				</>
+			}
 			interactive={interactive}
 			labels={{
 				formatTime: formatTimeCompact,
@@ -246,6 +275,7 @@ function DesktopSessionCard({
 					t("shell.lastMessageAt", { time: formatTimeCompact(timestamp) }),
 			}}
 			onOpen={onOpen}
+			resource={resourcePresentation}
 			overlay={terminationOverlay}
 			prs={summaries.map((pr) => ({
 				commentCount: pr.review.unresolvedBy.reduce((count, reviewer) => count + reviewer.count, 0),
@@ -327,6 +357,27 @@ function pullRequestProgressLabel(
 
 // Keep the board metric scannable by showing cost only. The full cost/token
 // summary remains available from the hover tooltip and to screen readers.
+/** "1.4 GB · 82%" while working, just "240 MB" while idle: an idle agent is
+ * always at 0% and printing it is noise. */
+function toResourcePresentation(
+	memory: SessionMemoryReading | undefined,
+	working: boolean,
+	tone: ChipTone | undefined,
+	t: TFunction,
+): (BoardUsagePresentation & { tone?: ChipTone }) | undefined {
+	if (!memory || memory.rssBytes <= 0) return undefined;
+	const size = formatMemory(memory.rssBytes);
+	if (!working) {
+		return { accessibleLabel: t("shell.sessionMemoryAria", { size }), compactLabel: size, tone };
+	}
+	const cpu = formatCPU(memory.cpuPercent);
+	return {
+		accessibleLabel: t("shell.sessionResourceAria", { size, cpu }),
+		compactLabel: `${size} · ${cpu}`,
+		tone,
+	};
+}
+
 function toUsagePresentation(
 	usage: SessionUsageSummary | undefined,
 	t: TFunction,

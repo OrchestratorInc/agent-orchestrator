@@ -282,7 +282,7 @@ func TestPostHogSinkStampsAppVersionWhenSupplied(t *testing.T) {
 // failure, and nothing ties the emit sites to this map at compile time.
 func TestReviewPayloadAllowlistCoversTheReviewFunnel(t *testing.T) {
 	want := map[string][]string{
-		"ao.review.triggered":      {"harness", "created_runs", "reused", "trigger"},
+		"ao.review.triggered":      {"harness", "created_runs", "reused", "trigger", "rerun"},
 		"ao.review.trigger_failed": {"error_kind", "trigger"},
 		"ao.review.submitted":      {"harness", "verdict", "duration_ms", "posted_to_provider", "trigger", "body_bytes", "auto_inject"},
 		"ao.review.cancelled":      {"cancelled_runs"},

@@ -105,6 +105,7 @@ func TestDelegatedTaskDisplayName(t *testing.T) {
 		{name: "whitespace", in: "Fix the renderer\nwithout changing the API", want: "Fix the renderer without changing the API"},
 		{name: "unicode rune limit", in: strings.Repeat("一", 101), want: strings.Repeat("一", 100)},
 		{name: "truncates past the rune limit", in: strings.Repeat(" long", 21), want: strings.TrimSpace(strings.Repeat(" long", 21)[:100])},
+		{name: "trims whitespace at the truncation boundary", in: strings.Repeat("x", 99) + " yyyy", want: strings.Repeat("x", 99)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := delegatedTaskDisplayName(tt.in); got != tt.want {

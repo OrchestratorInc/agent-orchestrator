@@ -37,6 +37,17 @@ describe("mobile Chat API boundaries", () => {
 		expect(init?.headers).not.toHaveProperty("X-AO-Attachment-Upload");
 	});
 
+	it("creates a standalone worker without a project and keeps its model override", async () => {
+		vi.mocked(fetch).mockResolvedValue(response({ session: { id: "standalone-1", mode: "chat" } }, 201));
+		const session = await spawnSession(cfg, { harness: "codex", model: "gpt-5", prompt: "Review this", clientRequestId: "request-1" });
+		const [url, init] = vi.mocked(fetch).mock.calls[0];
+		expect(url).toBe("http://ao.test:3011/api/v1/sessions");
+		expect(JSON.parse(String(init?.body))).toEqual({
+			prompt: "Review this", harness: "codex", model: "gpt-5", mode: "chat", kind: "worker", clientRequestId: "request-1",
+		});
+		expect(session).toMatchObject({ id: "standalone-1", projectId: "", mode: "chat" });
+	});
+
 	it("loads a project-scoped model catalog for the selected agent", async () => {
 		vi.mocked(fetch).mockResolvedValue(response({
 			agentId: "codex", selectionMode: "catalog", allowCustom: true,
@@ -46,6 +57,12 @@ describe("mobile Chat API boundaries", () => {
 		const catalog = await getAgentModels(cfg, "codex", "project one");
 		expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://ao.test:3011/api/v1/agents/codex/models?projectId=project%20one");
 		expect(catalog.models[0]).toMatchObject({ id: "gpt-5", isDefault: true });
+	});
+
+	it("loads the model catalog without a project scope for standalone", async () => {
+		vi.mocked(fetch).mockResolvedValue(response({ agentId: "codex", models: [] }));
+		await getAgentModels(cfg, "codex");
+		expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://ao.test:3011/api/v1/agents/codex/models");
 	});
 
 	it("preserves daemon pin facts used by the Agents ordering", async () => {

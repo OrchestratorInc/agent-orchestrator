@@ -60,6 +60,183 @@ func TestCreateReviewConversationClaimsChatMode(t *testing.T) {
 	}
 }
 
+func TestRestoreReviewLaunchStateRecoversIdentifiersClearedForModeSwitch(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "review-rollback")
+	session, err := s.CreateSession(ctx, sampleRecord("review-rollback"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	review := domain.Review{ID: "review-rollback", SessionID: session.ID, ProjectID: session.ProjectID,
+		Harness: domain.ReviewerCodex, InterfaceMode: domain.ReviewerInterfaceChat,
+		ReviewerHandleID: "review-chat:review-rollback", AgentSessionID: "provider-1",
+		ReviewerLaunchID: "launch-1", ProviderConversationID: "provider-1", ControllerGeneration: "generation-1",
+		ReviewerActivityState: domain.ActivityActive, CreatedAt: now, UpdatedAt: now}
+	if err := s.UpsertReview(ctx, review); err != nil {
+		t.Fatalf("upsert review: %v", err)
+	}
+	if ok, err := s.SetReviewInterfaceMode(ctx, review.ID, domain.ReviewerInterfaceTUI, now.Add(time.Second)); err != nil || !ok {
+		t.Fatalf("switch to terminal: ok=%v err=%v", ok, err)
+	}
+	if ok, err := s.RestoreReviewLaunchState(ctx, review, now.Add(2*time.Second)); err != nil || !ok {
+		t.Fatalf("restore previous launch: ok=%v err=%v", ok, err)
+	}
+	got, ok, err := s.GetReviewByID(ctx, review.ID)
+	if err != nil || !ok {
+		t.Fatalf("get restored review: ok=%v err=%v", ok, err)
+	}
+	if got.InterfaceMode != review.InterfaceMode || got.ReviewerHandleID != review.ReviewerHandleID || got.AgentSessionID != review.AgentSessionID || got.ProviderConversationID != review.ProviderConversationID || got.ControllerGeneration != review.ControllerGeneration || got.ReviewerLaunchID != review.ReviewerLaunchID {
+		t.Fatalf("restored launch = %+v, want %+v", got, review)
+	}
+	recoverable, err := s.ListRecoverableChatReviews(ctx)
+	if err != nil || len(recoverable) != 1 || recoverable[0].ID != review.ID {
+		t.Fatalf("recoverable chats = %+v, err=%v", recoverable, err)
+	}
+}
+
+func TestCreateAndActivateReviewConversationBranchClaimsReview(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "review-branch")
+	session, err := s.CreateSession(ctx, sampleRecord("review-branch"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	review := domain.Review{ID: "review-branch", SessionID: session.ID, ProjectID: session.ProjectID,
+		Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}
+	if err := s.UpsertReview(ctx, review); err != nil {
+		t.Fatalf("upsert review: %v", err)
+	}
+	conversation, err := s.CreateReviewConversation(ctx, "review-branch-conversation", review.ID, session.ProjectID, session.ID, now)
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	branch := domain.ConversationBranch{
+		ID: "fresh-review-branch", ConversationID: conversation.ID, SessionID: session.ID,
+		ParentBranchID: conversation.ActiveBranchID, ProviderConversationID: "fresh-provider",
+		ProviderScopeID: "fresh-review-branch", ProviderIDsScoped: true, CreatedAt: now,
+	}
+	if err := s.CreateAndActivateReviewConversationBranch(ctx, review.ID, branch, "review-generation", now.Add(time.Second)); err != nil {
+		t.Fatalf("activate review branch: %v", err)
+	}
+	got, ok, err := s.GetReviewByID(ctx, review.ID)
+	if err != nil || !ok || got.ProviderConversationID != "fresh-provider" || got.ControllerGeneration != "review-generation" {
+		t.Fatalf("review controller = %+v, ok=%v err=%v", got, ok, err)
+	}
+	active, err := s.ConversationBranch(ctx, conversation.ID, branch.ID)
+	if err != nil || active.ProviderConversationID != "fresh-provider" {
+		t.Fatalf("active branch = %+v, err=%v", active, err)
+	}
+}
+
+func TestReviewProviderEventsUseReviewControllerFence(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "review-events")
+	session, err := s.CreateSession(ctx, sampleRecord("review-events"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	review := domain.Review{ID: "review-events", SessionID: session.ID, ProjectID: session.ProjectID,
+		Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}
+	if err := s.UpsertReview(ctx, review); err != nil {
+		t.Fatalf("upsert review: %v", err)
+	}
+	conversation, err := s.CreateReviewConversation(ctx, "review-events-conversation", review.ID, session.ProjectID, session.ID, now)
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	if claimed, err := s.ClaimReviewChatController(ctx, review.ID, "provider-1", "review-generation", now); err != nil || !claimed {
+		t.Fatalf("claim reviewer controller: claimed=%v err=%v", claimed, err)
+	}
+	projected := 0
+	project := func(context.Context) error { projected++; return nil }
+	applied, err := s.ProjectReviewProviderEvent(ctx, conversation.ID, session.ID, review.ID,
+		"review-generation", "event-1", "message.delta", `{}`, now, project)
+	if err != nil || !applied || projected != 1 {
+		t.Fatalf("review event: applied=%v projected=%d err=%v", applied, projected, err)
+	}
+	applied, err = s.ProjectReviewProviderEvent(ctx, conversation.ID, session.ID, review.ID,
+		"stale-generation", "event-2", "message.delta", `{}`, now, project)
+	if err != nil || applied || projected != 1 {
+		t.Fatalf("stale review event: applied=%v projected=%d err=%v", applied, projected, err)
+	}
+	events, err := s.ProviderEventsSince(ctx, conversation.ID, 0, 10)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("review event archive = %+v, err=%v", events, err)
+	}
+}
+
+func TestCleanupOwnedReviewControllerWorkSettlesItsTurn(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "review-cleanup")
+	session, err := s.CreateSession(ctx, sampleRecord("review-cleanup"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	review := domain.Review{
+		ID: "review-cleanup", SessionID: session.ID, ProjectID: session.ProjectID,
+		Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.UpsertReview(ctx, review); err != nil {
+		t.Fatalf("upsert review: %v", err)
+	}
+	conversation, err := s.CreateReviewConversation(ctx, "review-cleanup-conversation", review.ID, session.ProjectID, session.ID, now)
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	if claimed, err := s.ClaimReviewChatController(ctx, review.ID, "provider-1", "review-generation", now); err != nil || !claimed {
+		t.Fatalf("claim reviewer controller: claimed=%v err=%v", claimed, err)
+	}
+	if ok, err := s.SetReviewInterfaceMode(ctx, review.ID, domain.ReviewerInterfaceTUI, now.Add(time.Second)); err != nil || !ok {
+		t.Fatalf("switch reviewer to terminal: ok=%v err=%v", ok, err)
+	}
+	switched, ok, err := s.GetReviewByID(ctx, review.ID)
+	if err != nil || !ok || switched.ControllerGeneration != "review-generation" {
+		t.Fatalf("switch cleared the old controller fence: review=%+v ok=%v err=%v", switched, ok, err)
+	}
+	created, err := s.AppendReviewUserMessage(ctx, conversation.ID, session.ID, review.ID, "review-generation", domain.ConversationMessage{
+		ID: "review-message", Text: "Review the change", Origin: domain.MessageOriginHuman,
+	}, "review-turn", now)
+	if err != nil || !created {
+		t.Fatalf("append review message: created=%v err=%v", created, err)
+	}
+	if err := s.BindTurnToProvider(ctx, "review-turn", "provider-turn", now); err != nil {
+		t.Fatalf("bind turn: %v", err)
+	}
+	if err := s.UpsertActivity(ctx, conversation.ID, "provider-turn", domain.ConversationActivity{
+		ID: "review-approval", Kind: domain.ActivityKindApproval, Status: domain.ActivityStatusPending,
+		Summary: "Approve", RequestID: "request-1", ProviderItemID: "item-1",
+	}, now); err != nil {
+		t.Fatalf("upsert approval: %v", err)
+	}
+
+	owned, err := s.CleanupOwnedReviewControllerWork(ctx, review.ID, conversation.ID, "stale-generation", now.Add(time.Minute))
+	if err != nil || owned {
+		t.Fatalf("stale cleanup: owned=%v err=%v", owned, err)
+	}
+	owned, err = s.CleanupOwnedReviewControllerWork(ctx, review.ID, conversation.ID, "review-generation", now.Add(2*time.Minute))
+	if err != nil || !owned {
+		t.Fatalf("owned cleanup: owned=%v err=%v", owned, err)
+	}
+	snapshot, err := s.LoadConversationSnapshot(ctx, conversation.ID)
+	if err != nil {
+		t.Fatalf("load conversation: %v", err)
+	}
+	if len(snapshot.Turns) != 1 || snapshot.Turns[0].State != domain.TurnStateFailed {
+		t.Fatalf("reviewer turns = %+v, want one failed turn", snapshot.Turns)
+	}
+	if len(snapshot.Activities) != 1 || snapshot.Activities[0].Status != domain.ActivityStatusFailed {
+		t.Fatalf("reviewer activities = %+v, want one failed approval", snapshot.Activities)
+	}
+}
+
 func TestInsertReviewRunDuplicatePRSHAMapsToSentinel(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -497,5 +674,199 @@ func TestReviewGettersMissing(t *testing.T) {
 	}
 	if _, ok, err := s.GetReviewRun(ctx, "run-missing"); err != nil || ok {
 		t.Fatalf("missing run by id: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestSettleReviewChatWorkClearsOrphanedEpoch(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "review-cleanup")
+	session, err := s.CreateSession(ctx, sampleRecord("review-cleanup"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	review := domain.Review{
+		ID: "review-cleanup", SessionID: session.ID, ProjectID: session.ProjectID,
+		Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.UpsertReview(ctx, review); err != nil {
+		t.Fatalf("upsert review: %v", err)
+	}
+	conversation, err := s.CreateReviewConversation(ctx, "review-cleanup-conversation", review.ID, session.ProjectID, session.ID, now)
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	if claimed, err := s.ClaimReviewChatController(ctx, review.ID, "provider-1", "review-generation", now); err != nil || !claimed {
+		t.Fatalf("claim reviewer controller: claimed=%v err=%v", claimed, err)
+	}
+	created, err := s.AppendReviewUserMessage(ctx, conversation.ID, session.ID, review.ID, "review-generation", domain.ConversationMessage{
+		ID: "review-message", Text: "Review the change", Origin: domain.MessageOriginHuman,
+	}, "review-turn", now)
+	if err != nil || !created {
+		t.Fatalf("append review message: created=%v err=%v", created, err)
+	}
+	if err := s.BindTurnToProvider(ctx, "review-turn", "provider-turn", now); err != nil {
+		t.Fatalf("bind turn: %v", err)
+	}
+	if err := s.UpsertActivity(ctx, conversation.ID, "provider-turn", domain.ConversationActivity{
+		ID: "review-approval", Kind: domain.ActivityKindApproval, Status: domain.ActivityStatusPending,
+		Summary: "Approve", RequestID: "request-1", ProviderItemID: "item-1",
+	}, now); err != nil {
+		t.Fatalf("upsert approval: %v", err)
+	}
+
+	if err := s.SettleReviewChatWork(ctx, review.ID, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetReviewByID(ctx, review.ID)
+	if err != nil || !ok || got.ControllerGeneration != "" {
+		t.Fatalf("old epoch remained: review=%+v err=%v", got, err)
+	}
+	snapshot, err := s.LoadConversationSnapshot(ctx, conversation.ID)
+	if err != nil {
+		t.Fatalf("load conversation: %v", err)
+	}
+	if len(snapshot.Turns) != 1 || snapshot.Turns[0].State != domain.TurnStateFailed {
+		t.Fatalf("reviewer turns = %+v, want one failed turn", snapshot.Turns)
+	}
+	if len(snapshot.Activities) != 1 || snapshot.Activities[0].Status != domain.ActivityStatusFailed {
+		t.Fatalf("reviewer activities = %+v, want one failed approval", snapshot.Activities)
+	}
+}
+
+func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state domain.TurnState
+		stale bool
+		human bool
+	}{
+		{name: "completed", state: domain.TurnStateCompleted},
+		{name: "failed", state: domain.TurnStateFailed},
+		{name: "interrupted", state: domain.TurnStateInterrupted},
+		{name: "obsolete controller", state: domain.TurnStateCompleted, stale: true},
+		{name: "human chat", state: domain.TurnStateCompleted, human: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestStore(t)
+			ctx := context.Background()
+			seedProject(t, s, "batch-review")
+			session, err := s.CreateSession(ctx, sampleRecord("batch-review"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC().Truncate(time.Second)
+			review := domain.Review{ID: "batch-review", SessionID: session.ID, ProjectID: session.ProjectID, Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}
+			if err := s.UpsertReview(ctx, review); err != nil {
+				t.Fatal(err)
+			}
+			conversation, err := s.CreateReviewConversation(ctx, "batch-conversation", review.ID, session.ProjectID, session.ID, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := s.ClaimReviewChatController(ctx, review.ID, "provider", "generation", now); err != nil || !ok {
+				t.Fatalf("claim: %v %v", ok, err)
+			}
+			for _, run := range []domain.ReviewRun{
+				{ID: "missing", BatchID: "batch-1", Status: domain.ReviewRunRunning},
+				{ID: "submitted", BatchID: "batch-1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, Body: "submitted result"},
+				{ID: "next", BatchID: "batch-2", Status: domain.ReviewRunRunning},
+			} {
+				run.ReviewID, run.SessionID, run.Harness, run.CreatedAt = review.ID, session.ID, domain.ReviewerCodex, now
+				if err := s.InsertReviewRun(ctx, run); err != nil {
+					t.Fatal(err)
+				}
+			}
+			origin := domain.MessageOriginDaemon
+			if tc.human {
+				origin = domain.MessageOriginHuman
+			}
+			if ok, err := s.AppendReviewUserMessage(ctx, conversation.ID, session.ID, review.ID, "generation", domain.ConversationMessage{ID: "batch-message", ClientMessageID: "review-batch:batch-1", Text: "Review this batch", Origin: origin}, "batch-turn", now); err != nil || !ok {
+				t.Fatalf("append: %v %v", ok, err)
+			}
+			if err := s.BindTurnToProvider(ctx, "batch-turn", "provider-turn", now); err != nil {
+				t.Fatal(err)
+			}
+			if tc.stale {
+				if ok, err := s.ClaimReviewChatController(ctx, review.ID, "provider", "replacement-generation", now); err != nil || !ok {
+					t.Fatalf("replacement: %v %v", ok, err)
+				}
+			}
+			if err := s.SettleTurn(ctx, conversation.ID, "provider-turn", tc.state, "", now.Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			missing, _, err := s.GetReviewRun(ctx, "missing")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := domain.ReviewRunFailed
+			if tc.stale || tc.human {
+				want = domain.ReviewRunRunning
+			}
+			if missing.Status != want {
+				t.Fatalf("unsubmitted status = %s, want %s", missing.Status, want)
+			}
+			if want == domain.ReviewRunFailed && missing.Body != "reviewer Chat turn ended without submitting a result" {
+				t.Fatalf("failure explanation = %q", missing.Body)
+			}
+			submitted, _, err := s.GetReviewRun(ctx, "submitted")
+			if err != nil || submitted.Status != domain.ReviewRunComplete || submitted.Verdict != domain.VerdictApproved || submitted.Body != "submitted result" {
+				t.Fatalf("submitted result changed: %+v %v", submitted, err)
+			}
+			next, _, err := s.GetReviewRun(ctx, "next")
+			if err != nil || next.Status != domain.ReviewRunRunning {
+				t.Fatalf("new batch changed: %+v %v", next, err)
+			}
+		})
+	}
+}
+
+func TestInsertReviewRunAllowsRerunAfterApproval(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := s.UpsertReview(ctx, domain.Review{
+		ID: "rev-1", SessionID: rec.ID, ProjectID: rec.ProjectID,
+		Harness: domain.ReviewerClaudeCode, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("upsert review: %v", err)
+	}
+	run := domain.ReviewRun{
+		ID: "run-1", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerClaudeCode,
+		PRURL: "https://example/pr/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning, Verdict: domain.VerdictNone, CreatedAt: now,
+	}
+	if err := s.InsertReviewRun(ctx, run); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictApproved, "approved", "rev-1", true); err != nil {
+		t.Fatalf("mark approved: %v", err)
+	} else if !ok {
+		t.Fatal("mark approved: got ok=false")
+	}
+
+	rerun := run
+	rerun.ID = "run-2"
+	rerun.CreatedAt = now.Add(time.Second)
+	if err := s.InsertReviewRun(ctx, rerun); err != nil {
+		t.Fatalf("rerun after approval insert: %v", err)
+	}
+
+	duplicate := rerun
+	duplicate.ID = "run-3"
+	if err := s.InsertReviewRun(ctx, duplicate); !errors.Is(err, domain.ErrDuplicateReviewRun) {
+		t.Fatalf("concurrent rerun = %v, want duplicate", err)
+	}
+	if ok, err := s.UpdateReviewRunResult(ctx, rerun.ID, domain.ReviewRunComplete, domain.VerdictApproved, "approved again", "rev-2", true); err != nil || !ok {
+		t.Fatalf("finish rerun = %v, %v", ok, err)
+	}
+	runs, err := s.ListReviewRunsBySession(ctx, rec.ID)
+	if err != nil || len(runs) != 2 || runs[0].Verdict != domain.VerdictApproved || runs[1].Verdict != domain.VerdictApproved {
+		t.Fatalf("approval history = %+v, %v", runs, err)
 	}
 }

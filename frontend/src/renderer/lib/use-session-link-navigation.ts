@@ -1,48 +1,65 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useSyncExternalStore } from "react";
-import { useCloudProjectsQuery, useCloudSessionsQuery, remoteWorkspaceQueryKey, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useCloudProjectsQuery, useCloudSessionsQuery, remoteWorkspaceQueryKey, toCloudWorkspace, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
+import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSummary } from "../types/workspace";
 import { LOCAL_HOST } from "./hosts";
 import { useNavigateToSession } from "./navigate-to-session";
-import { parseSessionLink, resolveSessionLink, type SessionLinkWorkspace } from "./session-links";
+import { parseSessionLink, resolveSessionLink } from "./session-links";
 
-function useLocalLinkSource(_hostId: string): { ready: boolean; workspaces: SessionLinkWorkspace[] } {
-	const query = useWorkspaceQuery();
-	return { ready: query.isSuccess, workspaces: query.data ?? [] };
+export type SessionLinkSource = {
+	ready: boolean;
+	isLoading: boolean;
+	isError: boolean;
+	workspaces: WorkspaceSummary[];
+};
+
+function useLocalLinkSource(_hostId: string): SessionLinkSource {
+	const query = useWorkspaceQuery({ includeCloud: false });
+	return { ready: query.isSuccess, isLoading: query.isLoading, isError: query.isError, workspaces: query.data ?? [] };
 }
 
-function useCloudLinkSource(_hostId: string): { ready: boolean; workspaces: SessionLinkWorkspace[] } {
+function useCloudLinkSource(_hostId: string): SessionLinkSource {
 	const projects = useCloudProjectsQuery();
 	const sessions = useCloudSessionsQuery();
+	const { org, ready: orgReady } = useCloudOrg();
+	const workspaces = useMemo(() => {
+		if (!org?.id) return [];
+		return (projects.data ?? []).map((project) => toCloudWorkspace(project, sessions.data ?? [], org.id));
+	}, [org?.id, projects.data, sessions.data]);
 	return {
-		ready: projects.isSuccess && sessions.isSuccess,
-		workspaces: (projects.data ?? []).map((project) => ({
-			id: project.id,
-			sessions: (sessions.data ?? []).filter((session) => session.projectId === project.id),
-		})),
+		ready: orgReady && Boolean(org?.id) && projects.isSuccess && sessions.isSuccess,
+		isLoading: !orgReady || projects.isLoading || sessions.isLoading,
+		isError: projects.isError || sessions.isError,
+		workspaces,
 	};
 }
 
-function useRemoteLinkSource(hostId: string): { ready: boolean; workspaces: SessionLinkWorkspace[] } {
+function useRemoteLinkSource(hostId: string): SessionLinkSource {
 	const queryClient = useQueryClient();
 	const subscribe = useCallback((notify: () => void) => queryClient.getQueryCache().subscribe(notify), [queryClient]);
-	const workspaces = useSyncExternalStore(
+	const state = useSyncExternalStore(
 		subscribe,
-		() => queryClient.getQueryData<WorkspaceSummary[]>(remoteWorkspaceQueryKey(hostId)),
+		() => queryClient.getQueryState<WorkspaceSummary[]>(remoteWorkspaceQueryKey(hostId)),
 	);
 	return {
-		ready: workspaces !== undefined,
-		workspaces: workspaces ?? [],
+		ready: state?.status === "success",
+		isLoading: state === undefined || state.status === "pending",
+		isError: state?.status === "error",
+		workspaces: state?.data ?? [],
 	};
+}
+
+export function useSessionLinkSource(sourceHostId?: string, sourceKind?: "cloud"): SessionLinkSource {
+	const remoteHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;
+	const useSource = remoteHostId ? useRemoteLinkSource : sourceKind === "cloud" ? useCloudLinkSource : useLocalLinkSource;
+	return useSource(remoteHostId ?? "");
 }
 
 export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cloud"): (url: string) => boolean {
 	const remoteHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;
-	// Each caller's source is fixed for its mounted surface. Call only that
-	// source's query so a remote terminal never probes the local daemon.
-	const useSource = remoteHostId ? useRemoteLinkSource : sourceKind === "cloud" ? useCloudLinkSource : useLocalLinkSource;
-	const source = useSource(remoteHostId ?? "");
+	const source = useSessionLinkSource(sourceHostId, sourceKind);
 	const navigateToSession = useNavigateToSession();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	return useCallback((url: string) => {

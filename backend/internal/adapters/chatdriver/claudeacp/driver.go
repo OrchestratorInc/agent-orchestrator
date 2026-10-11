@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
@@ -51,6 +52,7 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 		// credential, no network call, and no provider knowledge.
 		OnAuthRejected:        claudeAuthRejected(onAuthRejected),
 		PromptResponseFailure: claudePromptResponseFailure,
+		CanHibernate:          claudeCanHibernate,
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityStreaming:    true,
 			ports.ChatCapabilityTools:        true,
@@ -110,6 +112,29 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 		SessionMode:    claudeSessionMode,
 		SessionOptions: claudeSessionOptions,
 	}, log)}
+}
+
+func claudeCanHibernate(ctx context.Context, conn *acpsdk.ClientSideConnection, id acpsdk.SessionId) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	raw, err := conn.CallExtension(ctx, "_ao/session/can_hibernate", map[string]any{"sessionId": id})
+	if err != nil {
+		var requestErr *acpsdk.RequestError
+		if errors.As(err, &requestErr) && requestErr.Code == -32601 {
+			return false, nil // An unpatched bridge cannot prove background work ended.
+		}
+		return false, err
+	}
+	var result struct {
+		CanHibernate *bool `json:"canHibernate"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return false, err
+	}
+	if result.CanHibernate == nil {
+		return false, errors.New("claude background-task check is missing canHibernate")
+	}
+	return *result.CanHibernate, nil
 }
 
 func validateClaudeLaunchAuth(ctx context.Context, plugin claudePlugin, workingDir string, env map[string]string, log *slog.Logger) error {

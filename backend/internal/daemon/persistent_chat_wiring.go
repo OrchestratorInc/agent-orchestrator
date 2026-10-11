@@ -10,6 +10,7 @@ import (
 
 type persistentChatSessionStore interface {
 	ListAllSessions(context.Context) ([]domain.SessionRecord, error)
+	ListRecoverableChatReviews(context.Context) ([]domain.Review, error)
 }
 
 // reconcilePersistentChatHosts removes hosts only when durable state proves
@@ -20,16 +21,23 @@ func reconcilePersistentChatHosts(ctx context.Context, dataDir string, store per
 	if err != nil {
 		return fmt.Errorf("list sessions for persistent chat hosts: %w", err)
 	}
-	return persistenthost.Reconcile(ctx, dataDir, persistentChatHostKeepSet(records))
+	reviews, err := store.ListRecoverableChatReviews(ctx)
+	if err != nil {
+		return fmt.Errorf("list reviews for persistent chat hosts: %w", err)
+	}
+	return persistenthost.Reconcile(ctx, dataDir, persistentChatHostKeepSet(records, reviews))
 }
 
-func persistentChatHostKeepSet(records []domain.SessionRecord) map[string]struct{} {
+func persistentChatHostKeepSet(records []domain.SessionRecord, reviews []domain.Review) map[string]struct{} {
 	keep := make(map[string]struct{})
 	for _, rec := range records {
-		if rec.IsTerminated || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
+		if rec.IsTerminated || rec.HibernatedAt != nil || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
 			continue
 		}
 		keep[string(rec.ID)] = struct{}{}
+	}
+	for _, review := range reviews {
+		keep["review-"+review.ID] = struct{}{}
 	}
 	return keep
 }

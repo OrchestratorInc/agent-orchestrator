@@ -322,7 +322,18 @@ response="$(curl -fsS --connect-timeout 10 --max-time 30 -X POST \
   -H "Authorization: Worker ${worker_token}" \
   -H "X-AO-Session-ID: %s" \
   "${token_url}${repo_query}")"
-github_token="$(printf '%%s' "$response" | jq -er '.token | select(type == "string" and length > 0)')"
+# jq is not on every workspace image (BYO templates), so parse the token with
+# sed when it is missing. GitHub tokens are [A-Za-z0-9_], so the pattern is exact.
+ao_extract_token() {
+  if command -v jq >/dev/null 2>&1; then
+    printf '%%s' "$1" | jq -er '.token | select(type == "string" and length > 0)'
+    return
+  fi
+  token="$(printf '%%s' "$1" | tr -d '\r\n' | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_.-]*\)".*/\1/p')"
+  [ -n "$token" ] || { echo "AO could not read the GitHub token response" >&2; return 1; }
+  printf '%%s\n' "$token"
+}
+github_token="$(ao_extract_token "$response")"
 printf 'username=x-access-token\npassword=%%s\n' "$github_token"
 `, shellQuote(filepath.Join(dataDir, "worker-token")),
 		shellQuote(strings.TrimRight(publicURL, "/")+"/api/cloud/v1/worker/github-token"),
@@ -332,6 +343,17 @@ printf 'username=x-access-token\npassword=%%s\n' "$github_token"
 	}
 	githubWrapper := fmt.Sprintf(`#!/bin/sh
 set -eu
+# jq is not on every workspace image (BYO templates), so parse the token with
+# sed when it is missing. GitHub tokens are [A-Za-z0-9_], so the pattern is exact.
+ao_extract_token() {
+  if command -v jq >/dev/null 2>&1; then
+    printf '%%s' "$1" | jq -er '.token | select(type == "string" and length > 0)'
+    return
+  fi
+  token="$(printf '%%s' "$1" | tr -d '\r\n' | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_.-]*\)".*/\1/p')"
+  [ -n "$token" ] || { echo "AO could not read the GitHub token response" >&2; return 1; }
+  printf '%%s\n' "$token"
+}
 real_gh="${AO_GH_REAL_BINARY:-}"
 if [ -z "$real_gh" ]; then
   for candidate in /usr/local/bin/gh /usr/bin/gh; do
@@ -355,7 +377,7 @@ else
     -H "Authorization: Worker ${worker_token}" \
     -H "X-AO-Session-ID: %s" \
     %s)"
-  github_token="$(printf '%%s' "$response" | jq -er '.token | select(type == "string" and length > 0)')"
+  github_token="$(ao_extract_token "$response")"
 fi
 if [ "${1:-}" = "pr" ] && [ "${2:-}" = "create" ]; then
   set +e

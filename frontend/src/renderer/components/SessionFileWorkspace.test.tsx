@@ -8,11 +8,11 @@ vi.mock("./FileContentPane", () => ({
 }));
 
 const annotation: FileAnnotationModel = {
-	target: null,
-	draft: "",
+	targets: [],
 	status: "idle",
 	error: "",
 	begin: vi.fn(),
+	draftFor: () => "", statusFor: () => "idle",
 	setDraft: vi.fn(),
 	cancel: vi.fn(),
 	submit: vi.fn(),
@@ -32,7 +32,7 @@ describe("SessionFileWorkspace", () => {
 	it("leaves whole-file feedback rendering to the focused file pane", () => {
 		const activeAnnotation: FileAnnotationModel = {
 			...annotation,
-			target: { path: "src/App.tsx", side: "file", surface: "focused" },
+			targets: [{ path: "src/App.tsx", side: "file", surface: "focused" }],
 		};
 		render(<SessionFileWorkspace annotation={activeAnnotation} path="src/App.tsx" sessionId="sess-1" split={false} />);
 

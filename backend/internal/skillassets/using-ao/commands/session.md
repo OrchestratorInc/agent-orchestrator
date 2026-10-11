@@ -130,7 +130,7 @@ ao session kill mer-3
 
 ### ao session rename
 
-Rename a session.
+Rename a worker session. The project orchestrator cannot be renamed, including by itself; the daemon refuses with `ORCHESTRATOR_RENAME_UNSUPPORTED`.
 
 **Syntax:**
 ```

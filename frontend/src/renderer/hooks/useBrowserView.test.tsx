@@ -116,7 +116,18 @@ function setupBridge() {
 		notifyPanelUsed: vi.fn(),
 		notifyPanelBlur: vi.fn(),
 		onFocusLocation: vi.fn(() => () => undefined),
+		getFindState: vi.fn(async (viewId: string) => ({
+			viewId, tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true,
+		})),
+		findInPage: vi.fn(async ({ viewId, query }: { viewId: string; query: string }) => ({
+			viewId, tabId: "t1", query, activeMatchOrdinal: 1, matches: 1, finalUpdate: true,
+		})),
+		stopFindInPage: vi.fn(async ({ viewId }: { viewId: string }) => ({
+			viewId, tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true,
+		})),
+		onFindOpen: vi.fn(() => () => undefined),
 		onReopenClosedTab: vi.fn(() => () => undefined),
+		onClosePanel: vi.fn(() => () => undefined),
 		devtools: vi.fn(
 			async ({ viewId, operation, placement }: {
 				viewId: string;
@@ -136,6 +147,8 @@ function setupBridge() {
 		})),
 		showProfileMenu: vi.fn(),
 		selectProfile: vi.fn(),
+		reconnectRuntime: vi.fn(async () => undefined),
+		getRuntimeState: vi.fn(async () => ({ connected: false })),
 		historySuggestions: vi.fn(async () => []),
 		historyFavicon: vi.fn(async () => undefined),
 		captureScreenshot: vi.fn(async () => undefined),
@@ -154,6 +167,7 @@ function setupBridge() {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
 		}),
+		onFindState: vi.fn(() => () => undefined),
 		onPageFocus: vi.fn(() => () => undefined),
 		onTabsState: vi.fn((listener: TabsListener) => {
 			tabsListeners.add(listener);
@@ -167,6 +181,7 @@ function setupBridge() {
 			activityListeners.add(listener);
 			return () => activityListeners.delete(listener);
 		}),
+		onRuntimeState: vi.fn(() => () => undefined),
 		onProfileState: vi.fn((listener: ProfileListener) => {
 			profileListeners.add(listener);
 			return () => profileListeners.delete(listener);
@@ -254,6 +269,17 @@ describe("useBrowserView", () => {
 			),
 		).toBe(true);
 		expect(result.current.viewId).toBe("42:sess-1");
+	});
+
+	it("hydrates the runtime connection state for a late-mounted panel", async () => {
+		const bridge = setupBridge();
+		bridge.getRuntimeState.mockResolvedValueOnce({ connected: false });
+		const slot = createSlot();
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+
+		await waitFor(() => expect(bridge.getRuntimeState).toHaveBeenCalled());
+		await waitFor(() => expect(result.current.browserRuntimeConnected).toBe(false));
+		expect(slot).toBeInTheDocument();
 	});
 
 	it("keeps bounds revisions increasing when the same native view remounts", async () => {

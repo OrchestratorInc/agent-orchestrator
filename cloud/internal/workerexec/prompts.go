@@ -113,6 +113,10 @@ clearly.
   notification.
 - If a PR was already opened outside the helper, run
   `+"`ao claim-pr <number-or-url>`"+` before finishing the turn so AO can attach it.
+- When asked to review this session's PR or request an AO review, run
+  `+"`ao review trigger`"+`. It starts AO's reviewer on this session's open PRs in
+  its own reviewer terminal, which the human watches; do not review the PR
+  yourself instead. Its findings arrive here as PR review comments.
 - Only when the task asked you to review a PR: submit the verdict with the
   command described in $AO_REVIEW_HELP.
 

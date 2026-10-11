@@ -10,7 +10,7 @@
 		"icon": "./assets/icon.png",
 		"userInterfaceStyle": "automatic",
 		"backgroundColor": "#0a0b0d",
-		"scheme": "aomobile",
+		"scheme": ["aomobile", "ao-app"],
 		"updates": {
 			"url": "https://u.expo.dev/2d7dec61-2206-4943-8582-a37e160907ea",
 			"checkAutomatically": "ON_LOAD",

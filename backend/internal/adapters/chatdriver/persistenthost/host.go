@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
@@ -77,6 +78,8 @@ var (
 	// client could not prove that it is safe to replace. Callers must preserve the
 	// durable session rather than treating the failed attachment as provider death.
 	ErrOwnershipInconclusive = errors.New("chat host ownership is inconclusive")
+	// ErrNotRunning means a reconnect-only probe found no surviving host.
+	ErrNotRunning = errors.New("chat host is not running")
 )
 
 // Descriptor is the private connection record published by a running host.
@@ -93,6 +96,7 @@ type Descriptor struct {
 
 // Config identifies one provider process and its AO session ownership.
 type Config struct {
+	ReconnectOnly        bool
 	SessionID            string
 	DataDir              string
 	Workdir              string
@@ -332,6 +336,9 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 		// exists. Fail closed instead of launching a competing process.
 		return nil, fmt.Errorf("%w: %w", ErrOwnershipInconclusive, err)
 	}
+	if cfg.ReconnectOnly {
+		return nil, ErrNotRunning
+	}
 	if !filepath.IsAbs(cfg.Workdir) {
 		return nil, errors.New("chat host start requires an absolute workdir")
 	}
@@ -484,6 +491,17 @@ func bindConnToContext(ctx context.Context, conn net.Conn) func(error) error {
 	}
 }
 
+// HostPID returns the live provider host pid recorded for sessionID, for
+// memory accounting of runtime-less Chat sessions. A missing descriptor or an
+// exited host reports false; nothing is ever started or stopped here.
+func HostPID(dataDir, sessionID string) (int, bool) {
+	d, err := readDescriptor(dataDir, sessionID)
+	if err != nil || d.PID <= 0 || !processalive.Alive(d.PID) {
+		return 0, false
+	}
+	return d.PID, true
+}
+
 // Shutdown terminates current session ownership and waits for it to end.
 // Missing/dead hosts are harmless; unknown live owners fail closed.
 // The protocol acknowledgement only confirms that shutdown was requested.
@@ -569,7 +587,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer func() { _ = listener.Close() }()
 
-	child := exec.Command(cfg.Argv[0], cfg.Argv[1:]...) //nolint:gosec // provider argv is constructed by AO's driver.
+	child := aoprocess.Command(cfg.Argv[0], cfg.Argv[1:]...) //nolint:gosec // provider argv is constructed by AO's driver.
 	child.Dir = cfg.Workdir
 	child.Env = cfg.Env
 	configureProviderProcess(child)
@@ -582,9 +600,13 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	child.Stderr = io.Discard
-	if err := child.Start(); err != nil {
+	closeProviderTree, err := startProviderProcess(child)
+	if err != nil {
 		return err
 	}
+	// The job owns descendants even if the direct provider exits first. Close
+	// it before releasing the host lock so Shutdown follows the kill request.
+	defer closeProviderTree()
 
 	d := Descriptor{
 		Version: ProtocolVersion, SessionID: cfg.SessionID, Protocol: cfg.Protocol,
@@ -622,7 +644,7 @@ func Run(ctx context.Context, cfg Config) error {
 		select {
 		case <-providerDone:
 			// Wrapper adapters may exit before their provider child. The hosted
-			// process group is the ownership boundary, so explicit shutdown reaps
+			// process tree is the ownership boundary, so explicit shutdown reaps
 			// any descendant that did not follow stdin closure.
 			_ = killProviderProcess(context.WithoutCancel(ctx), child)
 		case <-time.After(3 * time.Second):

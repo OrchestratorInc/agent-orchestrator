@@ -41,3 +41,19 @@ it("removes contributor handles from generated nightly changes", () => {
 		"**Build details**",
 	].join("\n"));
 });
+
+it("cleans release notes published after the repository moved to OrchestratorInc", () => {
+	const notes = [
+		"**Changes in this nightly**",
+		"",
+		"- Fix update links by @person in [#6228](https://github.com/OrchestratorInc/agent-orchestrator/pull/6228)",
+		"",
+		"**Full Changelog**: https://github.com/OrchestratorInc/agent-orchestrator/compare/v0.13.3...v0.13.4",
+	].join("\n");
+
+	expect(prepareDesktopReleaseNotes(notes)).toBe([
+		"**Changes in this nightly**",
+		"",
+		"- Fix update links [#6228](https://github.com/OrchestratorInc/agent-orchestrator/pull/6228)",
+	].join("\n"));
+});

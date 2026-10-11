@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AppBrowserLinkContext, AppLink } from "./AppLink";
 import { ProductExternalLink } from "./ProductExternalLink";
@@ -81,5 +81,15 @@ describe("AppLink", () => {
 		await user.click(screen.getByRole("menuitem", { name: "Open in Files" }));
 		expect(openFile).toHaveBeenCalledExactlyOnceWith(path);
 		expect(open).not.toHaveBeenCalled();
+	});
+
+	it("mounts a caller supplied preview only after a session link opens", async () => {
+		const preview = vi.fn(() => <div data-testid="session-preview">Worker details</div>);
+		render(<AppLink href="ao://sessions/project/session" hoverPreview={preview}>Worker</AppLink>);
+
+		expect(preview).not.toHaveBeenCalled();
+		fireEvent.pointerOver(screen.getByRole("link"), { pointerType: "mouse" });
+		await waitFor(() => expect(screen.getByTestId("session-preview")).toBeInTheDocument());
+		expect(preview).toHaveBeenCalled();
 	});
 });

@@ -21,6 +21,7 @@ import { LOCAL_ECHO_ENABLED, withLineBufferedLocalInput } from "../lib/terminal-
 import { createTerminalMux, muxUrlFromApiBase, type TerminalMux } from "../lib/terminal-mux";
 import { sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 
 /**
  * The slice of xterm's Terminal the attachment needs. Structural, so tests can
@@ -93,6 +94,8 @@ export type UseTerminalSessionOptions = {
 	isVisible?: boolean;
 	/** Test seam: build the mux client. Defaults to a fresh socket against the current API base. */
 	createMux?: () => TerminalMux;
+	/** Contextual terminal-close text for an intentionally short-lived pane. */
+	exitNotice?: string;
 	/**
 	 * Attach to a standalone shell terminal (POST /api/v1/shell-terminals)
 	 * instead of a session's pane. When set it wins over `session`, which
@@ -733,7 +736,7 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 				// Land whatever was buffered before the notice, and lift the cover:
 				// a pane that exits mid-replay must never be left behind it.
 				flushReplay(false, true);
-				terminal.writeln("\r\n\x1b[2m[process exited]\x1b[0m");
+				terminal.writeln(optionsRef.current.exitNotice ?? "\r\n\x1b[2m[process exited]\x1b[0m");
 				transition("exited");
 				// Preserve xterm scrollback, but release the attachment: an exited
 				// pane has no reason to keep a WebSocket/client writer alive.
@@ -811,6 +814,7 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			// end the gate immediately.
 			if (r.replayBuffering) flushReplay();
 			else revealReplayTail();
+			if (session) recordDirectWorkerInteraction(session.id, "terminal", session.kind, session.hostId);
 			mux.sendInput(handle, data);
 			return true;
 		});

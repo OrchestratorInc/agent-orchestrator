@@ -57,14 +57,67 @@ type DeadlineExtender interface {
 	ExtendDeadline(context.Context, ID, time.Time) error
 }
 
+// ErrWorkspaceNotReady reports that a sandbox's compute exists but cannot take
+// a worker bootstrap yet (for example a Coder agent whose startup script is
+// still running, or a workspace terminal that closed before the bootstrap
+// began). It is retry-later, never
+// evidence that a repair attempt failed.
+var ErrWorkspaceNotReady = errors.New("sandbox workspace is not ready for worker bootstrap")
+
+// User-facing startup error codes. They are stable API values surfaced on the
+// session so a client can explain why a sandbox never started.
+const (
+	StartupErrorWorkspaceNotReady       = "workspace_not_ready"
+	StartupErrorTerminalUnavailable     = "terminal_unavailable"
+	StartupErrorUnsupportedArchitecture = "unsupported_architecture"
+	StartupErrorDurableRootUnavailable  = "durable_root_unavailable"
+	StartupErrorWorkerNeverStarted      = "worker_never_started"
+	StartupErrorBootstrapFailed         = "bootstrap_failed"
+)
+
+// StartupError attaches a stable code and a human message to a provider
+// failure. Message is shown to users verbatim; Err keeps the operator detail.
+type StartupError struct {
+	Code    string
+	Message string
+	Err     error
+}
+
+func (e *StartupError) Error() string {
+	if e.Err == nil {
+		return e.Message
+	}
+	return e.Message + ": " + e.Err.Error()
+}
+
+func (e *StartupError) Unwrap() error { return e.Err }
+
+// WorkerBuild is one CPU architecture's worker and helper executables.
+type WorkerBuild struct {
+	Binary       []byte
+	HelperBinary []byte
+}
+
+// Worker CPU architectures, spelled as Go's GOARCH.
+const (
+	ArchAMD64 = "amd64"
+	ArchARM64 = "arm64"
+)
+
 // WorkerBootstrap contains the worker executable and launch environment.
 type WorkerBootstrap struct {
+	// Binary and HelperBinary are the linux/amd64 build every provider without
+	// architecture detection installs.
 	Binary            []byte
 	Destination       string
 	HelperBinary      []byte
 	HelperDestination string
-	User              string
-	Environment       map[string]string
+	// Builds holds the worker for every architecture the control plane ships,
+	// keyed by GOARCH. A provider that can detect the sandbox CPU picks the
+	// matching build and advertises its hashes instead of the amd64 ones.
+	Builds      map[string]WorkerBuild
+	User        string
+	Environment map[string]string
 	// DurableRoot and DurableIdentity are used by providers whose compute is
 	// replaced on stop/start while a template-backed filesystem is retained.
 	// RequireDurableIdentity makes a restore fail closed if the original volume
@@ -72,6 +125,12 @@ type WorkerBootstrap struct {
 	DurableRoot            string
 	DurableIdentity        string
 	RequireDurableIdentity bool
+	// RequireMountedDurableRoot makes bootstrap fail unless DurableRoot is a
+	// mount point. AO-operated templates mount a dedicated volume there; a
+	// bring-your-own template may keep home on the root filesystem, in which
+	// case the root is created if missing and the identity marker alone guards
+	// against reusing another session's state.
+	RequireMountedDurableRoot bool
 }
 
 // Bootstrapper installs and starts an AO worker in an existing sandbox.

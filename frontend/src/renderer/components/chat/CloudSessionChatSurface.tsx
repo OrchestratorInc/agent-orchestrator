@@ -3,7 +3,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
-import type { ApprovalMode, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, TurnSettings } from "../../types/conversation";
+import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
+import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, TurnSettings } from "../../types/conversation";
+import type { TerminalTarget } from "../../types/terminal";
 import type { WorkspaceSession } from "../../types/workspace";
 import { ChatWorkspace } from "./ChatWorkspace";
 
@@ -20,13 +22,16 @@ type EventPayload = {
 	text?: unknown;
 	origin?: unknown;
 	senderLabel?: unknown;
+	senderSessionId?: unknown;
+	senderProjectId?: unknown;
+	senderDisplayName?: unknown;
 	displayText?: unknown;
 	turnId?: unknown;
 	activity?: unknown;
 	itemId?: unknown;
 };
 
-type CloudTurnSettings = TurnSettings;
+type CloudTurnSettings = TurnSettings & { executionMode?: "agent" | "plan" };
 
 function allowedApprovalModes(harness: string, ceiling?: "read-only" | "standard" | "trusted"): ApprovalMode[] {
 	if (ceiling === "read-only" || !ceiling) return [];
@@ -39,6 +44,7 @@ export function readCloudTurnSettings(key: string): CloudTurnSettings {
 		const saved = JSON.parse(localStorage.getItem(key) ?? "null");
 		if (!saved || typeof saved !== "object") return {};
 		return {
+			executionMode: saved.executionMode === "plan" || saved.executionMode === "agent" ? saved.executionMode : undefined,
 			model: typeof saved.model === "string" ? saved.model : undefined,
 			reasoningEffort: typeof saved.reasoningEffort === "string" ? saved.reasoningEffort : undefined,
 			approvalMode: saved.approvalMode === "default" || saved.approvalMode === "accept-edits" || saved.approvalMode === "auto" || saved.approvalMode === "bypass-permissions" ? saved.approvalMode : undefined,
@@ -215,11 +221,15 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 		if (event.type === "chat.user_message") {
 			const payload = eventPayload(event);
 			const automation = payload.origin === "automation";
+			const senderSessionId = automation && typeof payload.senderSessionId === "string" ? payload.senderSessionId : undefined;
+			const senderProjectId = automation && typeof payload.senderProjectId === "string" ? payload.senderProjectId : undefined;
+			const senderDisplayName = automation && typeof payload.senderDisplayName === "string" ? payload.senderDisplayName : undefined;
 			items.push({
 				kind: "message", id: `cloud-event-${event.sequence}`, sequence: event.sequence, revision: 1,
 				turnId: turnID, role: "user", origin: automation ? "automation" : "human",
 				text: automation && typeof payload.displayText === "string" ? payload.displayText : text,
 				senderLabel: automation && typeof payload.senderLabel === "string" ? payload.senderLabel : undefined,
+				senderSessionId, senderProjectId, senderDisplayName,
 				streaming: false, delivery: "accepted", createdAt: event.createdAt,
 			});
 			continue;
@@ -303,10 +313,28 @@ export function CloudSessionChatSurface({
 	controllerTransitioning,
 	newWorkDisabled,
 	onConversationWorkChange,
+	reviewerTerminal,
+	onOpenReviewerTerminal,
+	reviewerTarget,
+	onSelectChat,
+	daemonReady,
+	theme,
+	auxiliaryTabOrder,
+	onAuxiliaryTabOrderChange,
 }: {
 	session: WorkspaceSession;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
+	/** The Cloud reviewer terminal, shown as its own tab beside the chat as in local sessions. */
+	reviewerTerminal?: { handleId: string; harness: string };
+	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
+	/** The selected reviewer pane, if any. */
+	reviewerTarget?: Extract<TerminalTarget, { kind: "reviewer" }>;
+	onSelectChat?: () => void;
+	daemonReady?: boolean;
+	theme?: "light" | "dark";
+	auxiliaryTabOrder?: string[];
+	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	onOpenFiles?: () => void;
 	onOpenFile?: (path: string) => void;
 	controllerTransitioning?: boolean;
@@ -318,6 +346,7 @@ export function CloudSessionChatSurface({
 	}) => void;
 }) {
 	const cloud = session.cloud;
+	const openSessionLink = useSessionLinkNavigation(undefined, "cloud");
 	const { client, ready } = useCloudCp();
 	const queryClient = useQueryClient();
 	const settingsKey = `cloud-chat-settings:${cloud?.orgId ?? ""}:${session.id}:${session.provider}`;
@@ -407,12 +436,14 @@ export function CloudSessionChatSurface({
 			const selectedSettings: CloudTurnSettings = settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
 			const approvalMode = selectedSettings.approvalMode && approvalModes.includes(selectedSettings.approvalMode)
 				? selectedSettings.approvalMode : approvalModes[0];
+			const mode = selectedSettings.executionMode === "plan" && modelsQuery.data?.modes?.includes("plan")
+				? "read-only" : cloud.permissionMode;
 			return client.sendSessionMessage(cloud.orgId, session.id, {
 				text,
 				...(selectedSettings.model ? { model: selectedSettings.model } : {}),
 				...(selectedSettings.reasoningEffort ? { reasoningEffort: selectedSettings.reasoningEffort } : {}),
-				...(cloud.permissionMode ? { mode: cloud.permissionMode } : {}),
-				...(approvalMode ? { approvalMode } : {}),
+				...(mode ? { mode } : {}),
+				...(approvalMode && mode !== "read-only" ? { approvalMode } : {}),
 			}, { idempotencyKey: clientMessageId });
 		},
 		onSuccess: () => void invalidate(),
@@ -463,10 +494,28 @@ export function CloudSessionChatSurface({
 		},
 		onSettled: () => void invalidate(),
 	});
+	const planOptions: ChatConfigOption[] | undefined =
+		session.provider === "claude-code" && modelsQuery.data?.modes?.includes("plan")
+			? [{
+				id: "mode", name: "Mode", category: "mode", type: "select",
+				currentValue: cloud?.permissionMode === "read-only" || settings.executionMode === "plan" ? "plan" : "agent",
+				choices: [
+					...(cloud?.permissionMode === "read-only" || !modelsQuery.data.modes.includes("default")
+						? [] : [{ value: "agent", name: "Agent" }]),
+					{ value: "plan", name: "Plan" },
+				],
+			}]
+			: undefined;
 	return (
 		<ChatWorkspace
 			snapshot={snapshot}
+			onSessionLinkOpen={openSessionLink}
 			models={modelsQuery.data?.models ?? []}
+			configOptions={planOptions}
+			onChooseConfigOption={planOptions ? (id, choice) => {
+				if (id !== "mode" || !("value" in choice) || !planOptions[0].choices.some((option) => option.value === choice.value)) return;
+				updateSettings({ ...settingsRef.current.settings, executionMode: choice.value === "plan" ? "plan" : "agent" });
+			} : undefined}
 			onChooseSettings={(next) => updateSettings({ ...settingsRef.current.settings, ...next })}
 			showApprovalMode={approvalModes.length > 0}
 			approvalModes={approvalModes}
@@ -508,6 +557,14 @@ export function CloudSessionChatSurface({
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}
 			sessionTitle={session.title}
+			reviewerTerminal={reviewerTerminal}
+			onOpenReviewerTerminal={onOpenReviewerTerminal}
+			reviewerTarget={reviewerTarget}
+			onSelectChat={onSelectChat}
+			daemonReady={daemonReady}
+			theme={theme}
+			auxiliaryTabOrder={auxiliaryTabOrder}
+			onAuxiliaryTabOrderChange={onAuxiliaryTabOrderChange}
 		/>
 	);
 }
