@@ -12,12 +12,13 @@ import (
 	"runtime"
 	"strings"
 
+	acpsdk "github.com/coder/acp-go-sdk"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/dockeragent"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	acpsdk "github.com/coder/acp-go-sdk"
 )
 
 // New uses AO's detached ACP host, without granting client filesystem/terminal
@@ -37,10 +38,10 @@ func validateInitialize(init acpsdk.InitializeResponse) error {
 	// Admission is deliberately pinned to the released distribution qualified by
 	// this binding; later versions need native lifecycle qualification first.
 	if init.AgentInfo == nil || init.AgentInfo.Name != "docker agent" || init.AgentInfo.Version != "v1.150.0" {
-		return fmt.Errorf("Docker Agent native ACP requires tested v1.150.0")
+		return fmt.Errorf("docker agent native ACP requires tested v1.150.0")
 	}
 	if !init.AgentCapabilities.LoadSession {
-		return fmt.Errorf("Docker Agent must support session/load")
+		return fmt.Errorf("docker agent must support session/load")
 	}
 	return nil
 }
@@ -50,7 +51,7 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 		return nil, nil, err
 	}
 	if runtime.GOOS == "windows" {
-		return nil, nil, fmt.Errorf("Docker Agent private hook binding currently supports Unix only")
+		return nil, nil, fmt.Errorf("docker agent private hook binding currently supports Unix only")
 	}
 	config := os.Getenv(dockeragent.ConfigEnv)
 	if value, ok := cfg.Env[dockeragent.ConfigEnv]; ok {
@@ -62,13 +63,13 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	}
 	info, err := os.Stat(config)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Docker Agent configuration: %w", err)
+		return nil, nil, fmt.Errorf("docker agent configuration: %w", err)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, nil, fmt.Errorf("Docker Agent configuration must be a regular file")
+		return nil, nil, fmt.Errorf("docker agent configuration must be a regular file")
 	}
 	if !filepath.IsAbs(cfg.DataDir) || cfg.SessionID == "" {
-		return nil, nil, fmt.Errorf("Docker Agent requires an absolute AO data directory and session ID")
+		return nil, nil, fmt.Errorf("docker agent requires an absolute AO data directory and session ID")
 	}
 	// Stable across runtime generations; scope separates independent conversations
 	// attached to the same AO session. Workspace matching is enforced by native load.
@@ -83,7 +84,7 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	}
 	// Reject overlarge context instead of accepting native bounded-hook truncation.
 	if len(contextBytes) > 32*1024 {
-		return nil, nil, fmt.Errorf("Docker Agent private context exceeds 32 KiB")
+		return nil, nil, fmt.Errorf("docker agent private context exceeds 32 KiB")
 	}
 	contextPath := filepath.Join(dir, "standing-context.json")
 	// Atomic replacement lets a reconnect refresh launch context without leaving

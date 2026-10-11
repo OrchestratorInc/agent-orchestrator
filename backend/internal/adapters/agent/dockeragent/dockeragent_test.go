@@ -2,6 +2,7 @@ package dockeragent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ func TestRejectsTerminalEvenWithTaskAndNativeIdentity(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{}); err != context.Canceled {
+	if _, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{}); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	if _, ok := any(p).(ports.AgentInterfaceHandoff); ok {

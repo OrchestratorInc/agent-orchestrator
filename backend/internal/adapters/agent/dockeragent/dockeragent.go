@@ -41,7 +41,7 @@ func (*Plugin) GetLaunchCommand(ctx context.Context, _ ports.LaunchConfig) ([]st
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, errors.New("Docker Agent is available in Chat mode only")
+	return nil, errors.New("docker agent is available in Chat mode only")
 }
 
 // ResolveBinary selects the standalone binary; Docker Desktop is not required.
