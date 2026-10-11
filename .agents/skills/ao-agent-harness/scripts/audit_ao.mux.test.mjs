@@ -623,7 +623,7 @@ for (const scenario of ["foreign", "handle", "generation", "reactivated", "newer
 for (const scenario of ["draft-remains", "stale-cue", "foreign-output"]) {
   test("post-cancel cleanup never retries or kills when empty composer is unproven: " + scenario, async () => {
     await withMuxFixture("lifecycle-cleanup-" + scenario, async fixture => {
-      const result = await auditCleanup(fixture);
+      const result = await auditCleanup(fixture, scenario === "stale-cue" ? { timeoutMs: 400 } : {});
       assert.equal(result.gates.find(item => item.name === "post_cancel_draft_cleanup")?.status, "BLOCKED", JSON.stringify(result));
       assert.equal(fixture.cleanupInputs, 1);
       assert.equal(fixture.killRequests, 0);
