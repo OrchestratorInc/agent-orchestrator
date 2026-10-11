@@ -333,6 +333,8 @@ func TestPortalCancelFlow(t *testing.T) {
 	store, stripe := newFakeBillingStore(), &fakeStripe{}
 	server := billingServer(store, stripe)
 	store.state.StripeCustomerID = "cus_1"
+	store.customers["cus_1"] = billingOrgID
+	stripe.subscription = billing.Subscription{ID: billingSubID, CustomerID: "cus_1", Status: "active"}
 
 	response := httptest.NewRecorder()
 	server.createBillingPortal(response, billingRequest(http.MethodPost, "/", `{"flow":"cancel"}`))
@@ -351,6 +353,20 @@ func TestPortalCancelFlow(t *testing.T) {
 	if len(stripe.portalCancels) != 3 || stripe.portalCancels[0] != "" || stripe.portalCancels[1] != "" ||
 		stripe.portalCancels[2] != billingSubID {
 		t.Fatalf("portal cancel targets = %q", stripe.portalCancels)
+	}
+
+	// Already set to cancel in Stripe (and not yet known here): the end date
+	// is stored and the portal opens on its home page instead of failing.
+	ends := time.Now().Add(10 * 24 * time.Hour).UTC()
+	stripe.subscription.CancelAt = &ends
+	response = httptest.NewRecorder()
+	server.createBillingPortal(response, billingRequest(http.MethodPost, "/", `{"flow":"cancel"}`))
+	if response.Code != http.StatusOK || stripe.portalCancels[3] != "" {
+		t.Fatalf("already cancelling: %d, cancel target %q", response.Code, stripe.portalCancels[3])
+	}
+	last := store.applied[len(store.applied)-1]
+	if last.CancelAt == nil || !last.CancelAt.Equal(ends) {
+		t.Fatalf("stored cancel at = %v, want %v", last.CancelAt, ends)
 	}
 
 	response = httptest.NewRecorder()

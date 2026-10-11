@@ -267,7 +267,22 @@ func (s *Server) createBillingPortal(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusConflict, "NO_SUBSCRIPTION", "There is no plan to cancel.")
 			return
 		}
-		cancelSubscriptionID = state.StripeSubscriptionID
+		// Stripe refuses a cancel flow for a plan already set to cancel, and
+		// a webhook may not have told us yet. Read the subscription first and
+		// store it, so the app learns when the plan ends; an already
+		// cancelling plan opens the portal home, where it can be renewed.
+		subscription, err := s.billingOptions.Stripe.GetSubscription(r.Context(), state.StripeSubscriptionID)
+		if err != nil {
+			s.writeBillingProviderError(w, r, "read Stripe subscription", err)
+			return
+		}
+		if err := s.applyStripeSubscription(r.Context(), subscription); err != nil {
+			s.writeStoreError(w, r, err)
+			return
+		}
+		if subscription.CancelAt == nil {
+			cancelSubscriptionID = state.StripeSubscriptionID
+		}
 	default:
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "flow must be cancel or empty.")
 		return
@@ -367,6 +382,12 @@ func (s *Server) syncSubscription(ctx context.Context, subscriptionID string) er
 	if err != nil {
 		return err
 	}
+	return s.applyStripeSubscription(ctx, subscription)
+}
+
+// applyStripeSubscription stores a subscription read from Stripe on its
+// organization.
+func (s *Server) applyStripeSubscription(ctx context.Context, subscription billing.Subscription) error {
 	orgID, found, err := s.billingStore.OrgForStripeCustomer(ctx, subscription.CustomerID)
 	if err != nil {
 		return err
