@@ -217,7 +217,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 				kept = append(kept, raw)
 			}
 		}
-		entry, _ := json.Marshal(map[string]any{"type": "command", "command": "node .mastracode/ao-hook.cjs " + event, "timeout": 5})
+		entry, _ := json.Marshal(map[string]any{"type": "command", "command": "node .mastracode/ao-hook.cjs " + event, "timeout": 5000})
 		hooks[event], _ = json.Marshal(append(kept, entry))
 	}
 	if err := writeObject(hooksPath, hooks); err != nil {
