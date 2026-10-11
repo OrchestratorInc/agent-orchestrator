@@ -2336,6 +2336,11 @@ export interface components {
             runtimeState?: string;
             runtimeError?: string;
             startupError?: components["schemas"]["SessionStartupError"];
+            /**
+             * Format: uri
+             * @description The session's workspace page on the organization's own (bring-your-own) Coder deployment, as <baseUrl>/@<owner>/<workspace name>. Present only for sessions on a bring-your-own Coder connection, once the workspace exists; never set for AO's managed Coder or other providers.
+             */
+            coderWorkspaceUrl?: string;
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
             /** Format: date-time */

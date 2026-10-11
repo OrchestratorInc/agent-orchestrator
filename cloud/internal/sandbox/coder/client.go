@@ -555,6 +555,25 @@ func WorkspaceNameWithPrefix(prefix, sessionID string) string {
 	return prefix + "-" + id[:idLength]
 }
 
+// WorkspaceURL is the Coder dashboard page of one AO session's workspace,
+// <baseURL>/@<owner>/<workspace name>, naming the workspace exactly as
+// WorkspaceNameWithPrefix does when AO creates it. It returns "" unless
+// baseURL is an absolute http(s) origin and owner is set, so a malformed
+// record never yields a link.
+func WorkspaceURL(baseURL, owner, prefix, sessionID string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	owner = strings.TrimSpace(owner)
+	endpoint, err := url.Parse(baseURL)
+	if err != nil || endpoint.Host == "" || endpoint.User != nil ||
+		(endpoint.Scheme != "http" && endpoint.Scheme != "https") ||
+		endpoint.RawQuery != "" || endpoint.Fragment != "" ||
+		owner == "" || strings.TrimSpace(sessionID) == "" {
+		return ""
+	}
+	return baseURL + "/@" + url.PathEscape(owner) + "/" +
+		url.PathEscape(WorkspaceNameWithPrefix(prefix, sessionID))
+}
+
 func (c *Client) workspaceName(sessionID string) string {
 	return WorkspaceNameWithPrefix(c.workspaceNamePrefix, sessionID)
 }

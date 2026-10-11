@@ -484,6 +484,7 @@
 	"terminal.sessionLoader.repositoryAgent": "リポジトリとエージェントを準備しています",
 	"terminal.sessionLoader.terminal": "ターミナルに接続しています",
 	"terminal.sessionLoader.label": "セッション設定の進行状況",
+	"terminal.sessionLoader.openCoderWorkspace": "Coder でワークスペースを開く",
 	"createProject.githubAuthFailed": "GitHub 認証に失敗しました",
 	"createProject.githubAuthorizationExpired": "GitHub の認証期限が切れました。",
 	"createProject.githubReposFailed": "リポジトリを読み込めませんでした。",

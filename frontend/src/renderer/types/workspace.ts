@@ -249,6 +249,8 @@ export type WorkspaceSession = {
 		runtimeError?: string;
 		/** Why the worker has not started; cleared once it connects. */
 		startupError?: { code: string; message: string; at: string; detail?: string };
+		/** Bring-your-own Coder workspace page; absent for managed compute. */
+		coderWorkspaceUrl?: string;
 	};
 };
 

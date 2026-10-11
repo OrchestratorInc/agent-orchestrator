@@ -115,6 +115,13 @@ type Session struct {
 	// is filled only for bring-your-own compute, whose operators are the
 	// organization's own.
 	StartupErrorDetail string
+	// BYOCoderWorkspace locates the session's workspace on the organization's
+	// own (bring-your-own) Coder deployment, as AO recorded it in the sandbox
+	// resource profile when it planned the workspace. Set once the provider has
+	// reported the workspace (it exists). Nil for AO's managed
+	// Coder (an internal deployment customers have no login on) and for every
+	// other provider.
+	BYOCoderWorkspace *CoderWorkspaceRef
 	// WorkerEpoch is the highest worker epoch the session has minted for its
 	// agent terminal. It advances every time a fresh worker connects (a resume
 	// from idle-pause, a restore, or any re-provision), so a client can key its
@@ -123,6 +130,15 @@ type Session struct {
 	WorkerEpoch int64
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+// CoderWorkspaceRef is the non-secret identity of one session's Coder
+// workspace: the deployment origin, the owning Coder user and the project's
+// workspace name prefix (empty for the default ao-<id> name).
+type CoderWorkspaceRef struct {
+	BaseURL    string
+	Owner      string
+	NamePrefix string
 }
 
 // Status derives the session's display status from runtime and pull request facts.

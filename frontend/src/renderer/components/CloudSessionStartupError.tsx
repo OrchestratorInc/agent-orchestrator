@@ -6,6 +6,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
 import { CloudCpError } from "../lib/cloud-cp";
 import type { CloudStartupProblem } from "../lib/cloud-lifecycle";
+import { CoderWorkspaceLinkButton } from "./CoderWorkspaceLinkButton";
 import { Button } from "./ui/button";
 
 /**
@@ -17,10 +18,13 @@ export function CloudSessionStartupError({
 	orgId,
 	sessionId,
 	problem,
+	coderWorkspaceUrl,
 }: {
 	orgId: string;
 	sessionId: string;
 	problem: Exclude<CloudStartupProblem, { phase: "retrying" }>;
+	/** Bring-your-own Coder workspace page, so the user can inspect it. */
+	coderWorkspaceUrl?: string;
 }) {
 	const { t } = useTranslation();
 	const { client } = useCloudCp();
@@ -81,21 +85,26 @@ export function CloudSessionStartupError({
 					</Button>
 				) : null}
 				{retryError ? <p className="text-xs text-error">{retryError}</p> : null}
-				{detail ? (
+				{detail || coderWorkspaceUrl ? (
 					<div className="flex w-full flex-col items-center gap-2">
 						<div className="flex items-center gap-1">
-							<Button type="button" variant="ghost" size="sm" onClick={() => setShowDetail((open) => !open)}>
-								{showDetail
-									? <ChevronDown aria-hidden="true" className="size-3.5" />
-									: <ChevronRight aria-hidden="true" className="size-3.5" />}
-								{showDetail ? t("cloud.startupError.hideDetails") : t("cloud.startupError.showDetails")}
-							</Button>
-							<Button type="button" variant="ghost" size="sm" onClick={copyDetail}>
-								{copied ? <Check aria-hidden="true" className="size-3.5" /> : <Copy aria-hidden="true" className="size-3.5" />}
-								{copied ? t("cloud.startupError.copied") : t("cloud.startupError.copyDetails")}
-							</Button>
+							{detail ? (
+								<>
+									<Button type="button" variant="ghost" size="sm" onClick={() => setShowDetail((open) => !open)}>
+										{showDetail
+											? <ChevronDown aria-hidden="true" className="size-3.5" />
+											: <ChevronRight aria-hidden="true" className="size-3.5" />}
+										{showDetail ? t("cloud.startupError.hideDetails") : t("cloud.startupError.showDetails")}
+									</Button>
+									<Button type="button" variant="ghost" size="sm" onClick={copyDetail}>
+										{copied ? <Check aria-hidden="true" className="size-3.5" /> : <Copy aria-hidden="true" className="size-3.5" />}
+										{copied ? t("cloud.startupError.copied") : t("cloud.startupError.copyDetails")}
+									</Button>
+								</>
+							) : null}
+							<CoderWorkspaceLinkButton url={coderWorkspaceUrl} />
 						</div>
-						{showDetail ? (
+						{detail && showDetail ? (
 							<pre
 								className="max-h-48 w-full overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2 text-left font-mono text-xs text-muted-foreground select-text"
 								data-testid="cloud-session-startup-detail"

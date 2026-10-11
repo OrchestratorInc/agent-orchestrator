@@ -1093,6 +1093,20 @@ const sessionSelect = `
 		-- Operator detail is shown only for an organization's own (BYO) compute.
 		CASE WHEN sandbox.provider_connection_id IS NOT NULL
 			THEN COALESCE(sandbox.startup_error_detail, '') ELSE '' END,
+		-- The workspace link is shown only for an organization's own (BYO)
+		-- Coder (customers have no login on AO's managed deployment), and only
+		-- once the provider has reported the workspace. The origin, owner and
+		-- prefix are the ones recorded when AO planned the workspace, so the
+		-- link names the workspace AO actually created.
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
+				AND sandbox.provider_environment_id IS NOT NULL
+			THEN COALESCE(sandbox.resource_profile->'coder'->>'baseUrl', '') ELSE '' END,
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
+				AND sandbox.provider_environment_id IS NOT NULL
+			THEN COALESCE(sandbox.resource_profile->'coder'->>'owner', '') ELSE '' END,
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
+				AND sandbox.provider_environment_id IS NOT NULL
+			THEN COALESCE(sandbox.resource_profile->'coder'->>'workspaceNamePrefix', '') ELSE '' END,
 		COALESCE((
 			SELECT MAX(terminal.worker_epoch)
 			FROM ao_terminal_sessions terminal
@@ -1118,7 +1132,7 @@ const sessionInsertReturning = `id, org_id, project_id, kind, harness,
 	display_name, branch, mode, model, denied_commands, interface,
 	activity_state, is_terminated, auto_inject_ci, auto_inject_review,
 	terminate_on_pr_merge, false, NULL::timestamptz, 0,
-	'', '', '', '', '', '', '', NULL::timestamptz, '', 0, created_at, updated_at`
+	'', '', '', '', '', '', '', NULL::timestamptz, '', '', '', '', 0, created_at, updated_at`
 
 func getSession(
 	ctx context.Context,
@@ -1165,6 +1179,7 @@ func scanProject(row scanner, project *domain.Project) error {
 func scanSession(row scanner, session *domain.Session) error {
 	var activity string
 	var interfaceValue string
+	var coderWorkspace domain.CoderWorkspaceRef
 	err := row.Scan(
 		&session.ID,
 		&session.OrgID,
@@ -1196,10 +1211,17 @@ func scanSession(row scanner, session *domain.Session) error {
 		&session.StartupErrorMessage,
 		&session.StartupErrorAt,
 		&session.StartupErrorDetail,
+		&coderWorkspace.BaseURL,
+		&coderWorkspace.Owner,
+		&coderWorkspace.NamePrefix,
 		&session.WorkerEpoch,
 		&session.CreatedAt,
 		&session.UpdatedAt,
 	)
+	session.BYOCoderWorkspace = nil
+	if coderWorkspace.BaseURL != "" && coderWorkspace.Owner != "" {
+		session.BYOCoderWorkspace = &coderWorkspace
+	}
 	session.Interface = domain.SessionInterface(interfaceValue).Normalized()
 	session.ActivityState = contract.ActivityState(activity)
 	return err

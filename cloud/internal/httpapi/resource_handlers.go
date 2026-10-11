@@ -19,6 +19,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/projectsnapshot"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/coder"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
@@ -140,7 +141,12 @@ type sessionResponse struct {
 	RuntimeError      string   `json:"runtimeError,omitempty"`
 	// StartupError is the latest user-facing reason the session's sandbox has
 	// not started; absent once the worker checks in.
-	StartupError       *sessionStartupError     `json:"startupError,omitempty"`
+	StartupError *sessionStartupError `json:"startupError,omitempty"`
+	// CoderWorkspaceURL is the session's workspace page on the organization's
+	// own (bring-your-own) Coder deployment, once the workspace exists. Never
+	// set for AO's managed Coder, which customers cannot sign in to, or for
+	// other providers.
+	CoderWorkspaceURL  string                   `json:"coderWorkspaceUrl,omitempty"`
 	IsTerminated       bool                     `json:"isTerminated"`
 	AutoInjectCI       bool                     `json:"autoInjectCI"`
 	AutoInjectReview   bool                     `json:"autoInjectReview"`
@@ -1282,6 +1288,10 @@ func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionRe
 			Detail:  session.StartupErrorDetail,
 		}
 	}
+	coderWorkspaceURL := ""
+	if ref := session.BYOCoderWorkspace; ref != nil {
+		coderWorkspaceURL = coder.WorkspaceURL(ref.BaseURL, ref.Owner, ref.NamePrefix, session.ID)
+	}
 	return sessionResponse{
 		ID:                 session.ID,
 		OrgID:              session.OrgID,
@@ -1305,6 +1315,7 @@ func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionRe
 		RuntimeState:       session.RuntimeState,
 		RuntimeError:       session.RuntimeError,
 		StartupError:       startupError,
+		CoderWorkspaceURL:  coderWorkspaceURL,
 		IsTerminated:       session.IsTerminated,
 		AutoInjectCI:       session.AutoInjectCI,
 		AutoInjectReview:   session.AutoInjectReview,

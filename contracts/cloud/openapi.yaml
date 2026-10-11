@@ -4252,6 +4252,15 @@ components:
           type: string
         startupError:
           $ref: "#/components/schemas/SessionStartupError"
+        coderWorkspaceUrl:
+          type: string
+          format: uri
+          description: >-
+            The session's workspace page on the organization's own
+            (bring-your-own) Coder deployment, as
+            <baseUrl>/@<owner>/<workspace name>. Present only for sessions on
+            a bring-your-own Coder connection, once the workspace exists;
+            never set for AO's managed Coder or other providers.
         activeTurn:
           $ref: "#/components/schemas/Turn"
         isTerminated:

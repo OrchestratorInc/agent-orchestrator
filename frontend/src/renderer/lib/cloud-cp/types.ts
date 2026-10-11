@@ -497,6 +497,12 @@ export interface CloudCpSession {
 	 * cleared once the worker connects. `message` is user-facing text.
 	 */
 	startupError?: CloudCpSessionStartupError;
+	/**
+	 * The session's workspace page on the organization's own (bring-your-own)
+	 * Coder deployment, once the workspace exists. Absent for AO's managed
+	 * Coder, other providers, and older control planes.
+	 */
+	coderWorkspaceUrl?: string;
 	isTerminated: boolean;
 	autoInjectCI?: boolean;
 	autoInjectReview?: boolean;

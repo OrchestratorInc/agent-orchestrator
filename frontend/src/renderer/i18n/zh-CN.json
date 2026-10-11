@@ -484,6 +484,7 @@
 	"terminal.sessionLoader.repositoryAgent": "正在准备您的代码仓库和代理",
 	"terminal.sessionLoader.terminal": "正在连接您的终端",
 	"terminal.sessionLoader.label": "会话设置活动",
+	"terminal.sessionLoader.openCoderWorkspace": "在 Coder 中打开工作区",
 	"createProject.githubAuthFailed": "GitHub 身份验证失败",
 	"createProject.githubAuthorizationExpired": "GitHub 授权已过期。",
 	"createProject.githubReposFailed": "无法加载存储库。",

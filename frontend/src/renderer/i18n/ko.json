@@ -484,6 +484,7 @@
 	"terminal.sessionLoader.repositoryAgent": "리포지토리와 에이전트를 준비하는 중",
 	"terminal.sessionLoader.terminal": "터미널에 연결하는 중",
 	"terminal.sessionLoader.label": "세션 설정 활동",
+	"terminal.sessionLoader.openCoderWorkspace": "Coder에서 워크스페이스 열기",
 	"createProject.githubAuthFailed": "GitHub 인증에 실패했습니다",
 	"createProject.githubAuthorizationExpired": "GitHub 인증이 만료되었습니다.",
 	"createProject.githubReposFailed": "저장소를 불러오지 못했습니다.",

@@ -484,6 +484,7 @@
 	"terminal.sessionLoader.repositoryAgent": "Repository und Agent werden vorbereitet",
 	"terminal.sessionLoader.terminal": "Verbindung zum Terminal wird hergestellt",
 	"terminal.sessionLoader.label": "Aktivität zur Sitzungseinrichtung",
+	"terminal.sessionLoader.openCoderWorkspace": "Workspace in Coder öffnen",
 	"createProject.githubAuthFailed": "GitHub-Authentifizierung fehlgeschlagen",
 	"createProject.githubAuthorizationExpired": "Die GitHub-Autorisierung ist abgelaufen.",
 	"createProject.githubReposFailed": "Repositorys konnten nicht geladen werden.",

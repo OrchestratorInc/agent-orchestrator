@@ -1,15 +1,19 @@
 import { useTranslation } from "react-i18next";
 import { cn } from "../lib/utils";
+import { CoderWorkspaceLinkButton } from "./CoderWorkspaceLinkButton";
 import { MultiStepLoader } from "./ui/multi-step-loader";
 
 export function CloudSessionStartupLoader({
 	activeIndex = 0,
 	completed = false,
 	startupNote,
+	coderWorkspaceUrl,
 }: {
 	activeIndex?: number;
 	completed?: boolean;
 	startupNote?: string;
+	/** Bring-your-own Coder workspace page, linked beside the workspace step. */
+	coderWorkspaceUrl?: string;
 }) {
 	const { t } = useTranslation();
 	const loader = <MultiStepLoader
@@ -23,6 +27,7 @@ export function CloudSessionStartupLoader({
 			t("terminal.sessionLoader.repositoryAgent"),
 			t("terminal.sessionLoader.terminal"),
 		]}
+		stepAccessories={coderWorkspaceUrl ? [<CoderWorkspaceLinkButton key="workspace" url={coderWorkspaceUrl} />] : undefined}
 	/>;
 	return (
 		<div

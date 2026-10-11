@@ -487,6 +487,7 @@
 	"terminal.sessionLoader.repositoryAgent": "Preparando tu repositorio y agente",
 	"terminal.sessionLoader.terminal": "Conectando tu terminal",
 	"terminal.sessionLoader.label": "Actividad de configuración de la sesión",
+	"terminal.sessionLoader.openCoderWorkspace": "Abrir el espacio de trabajo en Coder",
 	"createProject.githubAuthFailed": "Error de autenticación de GitHub",
 	"createProject.githubAuthorizationExpired": "La autorización de GitHub ha caducado.",
 	"createProject.githubReposFailed": "No se pudieron cargar los repositorios.",

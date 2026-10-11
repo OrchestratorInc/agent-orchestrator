@@ -221,13 +221,16 @@ function cloudStartupStage(observedState: string | undefined, workerConnected: b
 		: 0;
 }
 
-function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false, startupNote }: { sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean; startupNote?: string }) {
+function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false, startupNote, coderWorkspaceUrl }: { sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean; startupNote?: string; coderWorkspaceUrl?: string }) {
 	const { baseUrl, client } = useCloudCp();
 	const factIndex = cloudStartupStage(observedState, workerConnected, terminalOnly);
 	const [factProgress, setFactProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
 	const [remoteProgress, setRemoteProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
 	const [progress, setProgress] = useState({ index: terminalOnly ? 3 : 0, since: createdAt ?? new Date().toISOString() });
 	const replayCutoff = useRef(Date.now() - 60 * 60 * 1_000);
+	// The loader's own poll learns the workspace link as soon as the workspace
+	// exists, ahead of the session list's slower refresh.
+	const [polledWorkspaceUrl, setPolledWorkspaceUrl] = useState<string>();
 	useEffect(() => {
 		if (!baseUrl || !orgId || terminalOnly) return;
 		const controller = new AbortController();
@@ -262,6 +265,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 				const { session } = await client.getSession(orgId, sessionId, { signal: controller.signal });
 				if (controller.signal.aborted) return;
 				const index = cloudStartupStage(session.observedState, session.runtimeConnected);
+				setPolledWorkspaceUrl(session.coderWorkspaceUrl);
 				setRemoteProgress((current) => current.index === index ? current : { index, since: new Date().toISOString() });
 			} catch {
 				// Keep the last confirmed stage and retry while the loader is visible.
@@ -314,7 +318,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 	}, [client, orgId, sessionId, terminalOnly]);
 	const confirmedFacts = remoteProgress.index > factProgress.index ? remoteProgress : factProgress;
 	const target = confirmedFacts.index > progress.index ? confirmedFacts : progress;
-	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} />;
+	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} coderWorkspaceUrl={polledWorkspaceUrl ?? coderWorkspaceUrl} />;
 }
 
 function CloudInterfaceSwitchLoader({ target }: { target: "chat" | "tui" }) {
@@ -1866,7 +1870,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						<div className="relative min-h-0 flex-1" ref={bindHandoffDialogContainer}>
 							{isCloudPausedStage(cloudStage) ? <CloudPausedStatus stage={cloudStage} /> : null}
 							{startupFailure && session?.cloud ? (
-								<CloudSessionStartupError orgId={session.cloud.orgId} problem={startupFailure} sessionId={session.id} />
+								<CloudSessionStartupError coderWorkspaceUrl={session.cloud.coderWorkspaceUrl} orgId={session.cloud.orgId} problem={startupFailure} sessionId={session.id} />
 							) : null}
 							{session && !session.cloud && handoffDialogContainer ? (
 								<SwitchAgentDialog
@@ -2143,6 +2147,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						terminalOnly={cloudReconnecting && !workspaceRestarting}
 						completed={showCompletedLoader}
 						startupNote={startupProblem?.phase === "retrying" ? startupProblem.message : undefined}
+						coderWorkspaceUrl={session?.cloud?.coderWorkspaceUrl}
 					/>
 					: null}
 			{interfaceUi.dialogs}

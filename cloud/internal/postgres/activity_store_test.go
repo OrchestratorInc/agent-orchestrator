@@ -293,7 +293,9 @@ func TestSupportLookupAndBYOStartupDetail(t *testing.T) {
 		{`INSERT INTO ao_provider_connections (id, org_id, provider, label, encrypted_secret, secret_nonce, validation_state)
 			VALUES ($1, $2, 'coder', 'default', '\x00', '\x00', 'valid')`, []any{connectionID, fixture.orgID}},
 		{`UPDATE ao_sandboxes SET provider = 'coder', provider_connection_id = $1, reconcile_lease_owner = $2,
-			reconcile_lease_until = now() + interval '1 minute' WHERE session_id = $3`, []any{connectionID, owner, fixture.sessionID}},
+			reconcile_lease_until = now() + interval '1 minute', provider_environment_id = 'ws-' || $3::text,
+			resource_profile = '{"coder":{"baseUrl":"https://coder.acme.example.com","owner":"dev","workspaceNamePrefix":"dev"}}'
+			WHERE session_id = $3`, []any{connectionID, owner, fixture.sessionID}},
 	} {
 		if _, err := tx.Exec(ctx, statement.query, statement.args...); err != nil {
 			t.Fatalf("%s: %v", statement.query, err)
@@ -321,6 +323,10 @@ func TestSupportLookupAndBYOStartupDetail(t *testing.T) {
 	if session.StartupErrorCode != "bootstrap_failed" || session.StartupErrorDetail == "" ||
 		len(session.StartupErrorDetail) > maxStartupErrorDetail*2 {
 		t.Fatalf("BYO session startup error = %q / %d bytes of detail", session.StartupErrorCode, len(session.StartupErrorDetail))
+	}
+	if ref := session.BYOCoderWorkspace; ref == nil || ref.BaseURL != "https://coder.acme.example.com" ||
+		ref.Owner != "dev" || ref.NamePrefix != "dev" {
+		t.Fatalf("BYO session coder workspace = %+v", ref)
 	}
 
 	if err := store.RecordActivityEvent(ctx, domain.ActivityEvent{
@@ -377,6 +383,9 @@ func TestSupportLookupAndBYOStartupDetail(t *testing.T) {
 	}
 	if session.StartupErrorDetail != "" {
 		t.Fatalf("managed session exposed operator detail %q", session.StartupErrorDetail)
+	}
+	if session.BYOCoderWorkspace != nil {
+		t.Fatalf("managed session exposed its coder workspace %+v", session.BYOCoderWorkspace)
 	}
 }
 
