@@ -967,6 +967,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if _, ok := m.agents.Agent(cfg.Harness); !ok {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %q", ErrUnknownHarness, cfg.Harness)
 	}
+	if cfg.Harness == domain.HarnessDockerAgent {
+		if cfg.RequestedMode == domain.SessionModeTUI {
+			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: Docker Agent supports Chat only", ports.ErrChatUnsupported)
+		}
+		cfg.RequestedMode = domain.SessionModeChat
+	}
 	// Unreal Agent has no terminal interface or interactive approval channel.
 	// Selecting the harness therefore supplies its only valid launch defaults;
 	// an explicit caller-supplied mode or permission remains authoritative and
@@ -2231,6 +2237,10 @@ func resolvedModelForMetadata(harness domain.AgentHarness, effective, adapter po
 // static catalog. Dynamic catalogs and direct-entry agents defer authoritative
 // model validation to the selected agent at launch time.
 func validateSpawnModel(harness domain.AgentHarness, model string) error {
+	if harness == domain.HarnessDockerAgent && strings.HasPrefix(strings.TrimSpace(model), "model:") {
+		return nil
+	}
+
 	if strings.TrimSpace(model) == "" {
 		return nil
 	}

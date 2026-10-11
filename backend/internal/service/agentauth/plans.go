@@ -16,6 +16,7 @@ import (
 const qwenAuthInput = "i\x7f/auth\r"
 
 var plans = []Plan{
+	documentationPlan("docker-agent", ActionSetup, "Configure Docker Agent", "Configure native provider credentials and set AO_DOCKER_AGENT_CONFIG to an existing absolute YAML path before starting AO. Authorization is checked by the provider on a live turn.", "https://docs.docker.com/ai/docker-agent/providers/"),
 	loginMenuPlan("claude-code", "claude-login", nil, "Log in to Claude Code", []string{"claude", "auth", "login"}, "Choose Claude subscription, Anthropic Console, or SSO", "https://code.claude.com/docs/en/installation"),
 	loginMenuPlan("codex", "codex-login", []string{"--use-default-credential-store"}, "Log in to Codex", []string{"codex", "login"}, "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex"),
 	plan("cursor", ActionLogin, "Log in to Cursor", []string{"cursor-agent", "login"}, "Native browser flow", "https://docs.cursor.com/en/cli/installation"),

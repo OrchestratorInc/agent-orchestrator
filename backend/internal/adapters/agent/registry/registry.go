@@ -23,6 +23,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/deepseekharness"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/devin"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/dockeragent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/fx"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/gemini"
@@ -89,6 +90,7 @@ func Constructors() []adapters.Adapter {
 		unrealagent.New(),
 		mimocode.New(),
 		deepseekharness.New(),
+		dockeragent.New(),
 	}
 }
 

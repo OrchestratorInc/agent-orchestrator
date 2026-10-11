@@ -44,6 +44,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
+	TargetDockerAgent: "https://docs.docker.com/ai/docker-agent/getting-started/installation/",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -253,6 +254,8 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
+	case TargetDockerAgent:
+		plans = []Plan{manualPlan(target, "Install the official standalone Docker Agent v1.150.0 binary on Unix and configure AO_DOCKER_AGENT_CONFIG with an absolute native YAML path. Docker Desktop is optional; AO supports native ACP Chat only.", agentDocumentationURLs[target])}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
 	default:

@@ -136,6 +136,8 @@ func Base(agentID string) ports.AgentModelCatalog {
 	now := time.Now().UTC()
 	entryMode := customModelEntryMode(agentID)
 	switch agentID {
+	case "docker-agent":
+		return catalog(agentID, "native-default", entryMode, now, model("default", "Agent default", true))
 	case "muse":
 		return catalog(agentID, "official-catalog", entryMode, now,
 			model("muse-spark", "Muse Spark", true),
@@ -193,7 +195,7 @@ func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
 		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin":
 		return ports.CustomModelEntryDirect
-	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
+	case "docker-agent", "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
 	default:
 		return ports.CustomModelEntryNone

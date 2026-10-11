@@ -678,7 +678,7 @@ export function TaskComposer({
 			setFallbackAction(
 				canBypassApprovals
 					? "bypass-permissions"
-					: selectedAgent !== "unreal-agent" && interfaceMode !== "tui" &&
+					: selectedAgent !== "unreal-agent" && selectedAgent !== "docker-agent" && interfaceMode !== "tui" &&
 							err instanceof TaskCreateError &&
 							Boolean(err.code && CHAT_PREFLIGHT_CODES.has(err.code))
 						? "tui"
@@ -786,9 +786,9 @@ export function TaskComposer({
 				modelWarning,
 				onFallbackAction: (brief) =>
 					void (fallbackAction === "bypass-permissions"
-						? submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : undefined, "bypass-permissions")
+						? submitTask(brief, (selectedAgent === "unreal-agent" || selectedAgent === "docker-agent") ? "chat" : undefined, "bypass-permissions")
 						: submitTask(brief, "tui")),
-				onSubmit: (brief) => void submitTask(brief, selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined),
+				onSubmit: (brief) => void submitTask(brief, (selectedAgent === "unreal-agent" || selectedAgent === "docker-agent") ? "chat" : requiresTuiFallback ? "tui" : undefined),
 			}}
 			renderAgentControl={(control) => <DesktopAgentControl {...control} hostId={hostId} manageView={isCloudProject ? "cloud" : "local"} />}
 			renderEffortControl={(control) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={inheritedEffort || effortModel?.defaultEffort} availability={effortAvailability} />}

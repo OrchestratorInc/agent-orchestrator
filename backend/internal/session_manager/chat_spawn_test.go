@@ -1825,3 +1825,35 @@ func (l *deadlineConsumingChatLauncher) QueueChatPrompt(_ context.Context, _ dom
 func (l *deadlineConsumingChatLauncher) DrainChatQueue(_ context.Context, _ domain.SessionID) error {
 	return nil
 }
+
+func TestDockerAgentDefaultsToChatAndNeverFallsBackToTerminal(t *testing.T) {
+	for _, requested := range []domain.SessionMode{"", domain.SessionModeChat, domain.SessionModeTUI} {
+		t.Run(string(requested), func(t *testing.T) {
+			launcher := &recordingLauncher{}
+			mgr, st, runtime := newChatManager(launcher)
+			mgr.defaults = fixedSessionModeDefaults(domain.SessionModeTUI)
+			rec, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessDockerAgent, RequestedMode: requested})
+			if requested == domain.SessionModeTUI {
+				if !errors.Is(err, ports.ErrChatUnsupported) {
+					t.Fatalf("TUI error=%v", err)
+				}
+				if len(st.sessions) != 0 {
+					t.Fatal("TUI rejection created durable session")
+				}
+			} else if err != nil || rec.Mode != domain.SessionModeChat {
+				t.Fatalf("rec=%+v err=%v", rec, err)
+			}
+			if runtime.created != 0 {
+				t.Fatal("Docker Agent created terminal runtime")
+			}
+		})
+	}
+	launcher := &recordingLauncher{preflightErr: ports.ErrChatDriverUnavailable}
+	mgr, st, runtime := newChatManager(launcher)
+	if _, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessDockerAgent}); !errors.Is(err, ports.ErrChatDriverUnavailable) {
+		t.Fatal(err)
+	}
+	if runtime.created != 0 || len(st.sessions) != 0 {
+		t.Fatal("unavailable Chat fell back or created durable state")
+	}
+}

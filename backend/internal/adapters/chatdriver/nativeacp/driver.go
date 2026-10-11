@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"time"
 
+	acpsdk "github.com/coder/acp-go-sdk"
+
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -54,6 +56,8 @@ type Config struct {
 	DecodeProviderConversationID func(string) (string, error)
 	// VersionProbe optionally gates admission on a minimum binary version.
 	VersionProbe VersionProbe
+	// ValidateInitialize admits the qualified native ACP identity after handshake.
+	ValidateInitialize func(acpsdk.InitializeResponse) error
 }
 
 // New creates a Chat driver that launches the exact executable resolved by the
@@ -76,8 +80,9 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 	}
 
 	return acpdriver.Config{
-		Harness:      cfg.Harness,
-		Capabilities: capabilities,
+		Harness:            cfg.Harness,
+		ValidateInitialize: cfg.ValidateInitialize,
+		Capabilities:       capabilities,
 		Probe: func(ctx context.Context) error {
 			if cfg.Configure == nil {
 				return fmt.Errorf("%w: incomplete native ACP binding for %s",

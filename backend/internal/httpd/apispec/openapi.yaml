@@ -12339,6 +12339,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - fake
           type: string
         approvalMode:
@@ -12980,6 +12981,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - cloudflared
           type: string
         updatedAt:
@@ -15650,6 +15652,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           type: string
         issueId:
           type: string

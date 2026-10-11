@@ -3,6 +3,7 @@ package nativeacp
 import (
 	"context"
 	"errors"
+	acpsdk "github.com/coder/acp-go-sdk"
 	"testing"
 
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
@@ -153,5 +154,13 @@ func TestBindingReusesPluginRuntimeEnvironment(t *testing.T) {
 	if plugin.dataDir != "/ao" || launch.Env["PROVIDER_DATA_DIR"] != "/ao/provider" ||
 		launch.Env["KEEP"] != "yes" {
 		t.Fatalf("plugin data dir/env = %q, %#v", plugin.dataDir, launch.Env)
+	}
+}
+
+func TestBindingRetainsNativeInitializeAdmission(t *testing.T) {
+	sentinel := errors.New("unqualified native version")
+	cfg := buildConfig(fakePlugin{}, Config{ValidateInitialize: func(acpsdk.InitializeResponse) error { return sentinel }}, nil)
+	if cfg.ValidateInitialize == nil || !errors.Is(cfg.ValidateInitialize(acpsdk.InitializeResponse{}), sentinel) {
+		t.Fatal("native identity admission lost")
 	}
 }
