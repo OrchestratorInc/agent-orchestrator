@@ -38,14 +38,27 @@ func (*Plugin) Manifest() adapters.Manifest {
 
 // ResolveBinary implements the scoped native adapter contract.
 func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
-	return binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "openjarvis", Names: []string{"jarvis"}, UnixHomePaths: [][]string{{".local", "bin", "jarvis"}}, ValidateIdentity: func(ctx context.Context, path string) bool {
+	var identityErr error
+	path, resolveErr := binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "openjarvis", Names: []string{"jarvis"}, UnixHomePaths: [][]string{{".local", "bin", "jarvis"}}, ValidateIdentity: func(ctx context.Context, path string) bool {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		cmd := aoprocess.CommandContext(ctx, path, "--version")
 		cmd.WaitDelay = 100 * time.Millisecond
 		b, err := cmd.CombinedOutput()
-		return err == nil && strings.Contains(string(b), "jarvis, version 1.0.4")
+		if err != nil {
+			identityErr = fmt.Errorf("native --version probe: %w", err)
+			return false
+		}
+		if !strings.Contains(string(b), "jarvis, version 1.0.4") {
+			identityErr = fmt.Errorf("native CLI did not report pinned OpenJarvis1.0.4 identity")
+			return false
+		}
+		return true
 	}})
+	if resolveErr != nil && identityErr != nil {
+		return "", fmt.Errorf("%w: %v", resolveErr, identityErr)
+	}
+	return path, resolveErr
 }
 
 // GetConfigSpec implements the scoped native adapter contract.
