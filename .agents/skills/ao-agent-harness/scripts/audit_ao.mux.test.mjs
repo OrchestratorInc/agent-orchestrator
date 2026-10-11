@@ -16,7 +16,7 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
     startPath: "AO_AUDIT_CANCEL_STARTED.json",
     latePath: "AO_AUDIT_CANCEL_LATE.json",
     token: "AO_CANCEL_WITNESS_V1",
-    lateSideEffectDelayMs: 80,
+    lateSideEffectDelayMs: 250,
   };
   const startWitnessPath = join(witnessRoot, witnessSpec.startPath);
   const lateWitnessPath = join(witnessRoot, witnessSpec.latePath);
