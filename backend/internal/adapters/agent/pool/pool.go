@@ -33,29 +33,41 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 }
 
 func (*Plugin) GetLaunchCommand(ctx context.Context, _ ports.LaunchConfig) ([]string, error) {
-	if err := ctx.Err(); err != nil { return nil, err }
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return nil, errors.New("pool terminal interface is not qualified for AO")
 }
 
 func (*Plugin) GetRestoreCommand(ctx context.Context, _ ports.RestoreConfig) ([]string, bool, error) {
-	if err := ctx.Err(); err != nil { return nil, false, err }
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	return nil, false, errors.New("pool terminal restore is not qualified for AO")
 }
 
 func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	if err := ctx.Err(); err != nil { return ports.AgentAuthStatusUnknown, err }
+	if err := ctx.Err(); err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
 	return credentialStatus(os.Getenv("POOLSIDE_API_KEY")), nil
 }
 
 func (*Plugin) AuthStatusWithEnv(ctx context.Context, env map[string]string) (ports.AgentAuthStatus, error) {
-	if err := ctx.Err(); err != nil { return ports.AgentAuthStatusUnknown, err }
+	if err := ctx.Err(); err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
 	key, present := env["POOLSIDE_API_KEY"]
-	if !present { key = os.Getenv("POOLSIDE_API_KEY") }
+	if !present {
+		key = os.Getenv("POOLSIDE_API_KEY")
+	}
 	return credentialStatus(key), nil
 }
 
 func credentialStatus(key string) ports.AgentAuthStatus {
-	if strings.TrimSpace(key) != "" { return ports.AgentAuthStatusConfigured }
+	if strings.TrimSpace(key) != "" {
+		return ports.AgentAuthStatusConfigured
+	}
 	// Saved native login is not inspected: absent environment key is inconclusive.
 	return ports.AgentAuthStatusUnknown
 }

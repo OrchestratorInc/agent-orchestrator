@@ -24,11 +24,17 @@ func BuildStandingHook(prompt, helperPath string) (settings, helper []byte, err 
 		return nil, nil, fmt.Errorf("pool hook requires an absolute POSIX helper path")
 	}
 	payload, err := json.Marshal(map[string]any{"hook_specific_output": map[string]string{"additional_context": prompt}})
-	if err != nil { return nil, nil, err }
-	if len(payload) >= 1024*1024 { return nil, nil, fmt.Errorf("pool hook output reaches native stdout cap") }
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(payload) >= 32*1024 {
+		return nil, nil, fmt.Errorf("pool serialized hook output reaches the conservative 32 KiB bound")
+	}
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 	command, err := json.Marshal("/bin/sh " + quote(helperPath))
-	if err != nil { return nil, nil, err }
+	if err != nil {
+		return nil, nil, err
+	}
 	settings = []byte("hooks:\n  SessionStart:\n    - matcher: \"*\"\n      command: " + string(command) + "\n")
 	helper = []byte("#!/bin/sh\nprintf '%s' " + quote(string(payload)) + "\n")
 	return settings, helper, nil
