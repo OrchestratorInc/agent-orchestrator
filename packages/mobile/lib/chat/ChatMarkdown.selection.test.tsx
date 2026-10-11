@@ -87,3 +87,43 @@ it("uses the spawn prompt's translucent selection gray on Android", () => {
 		platform.OS = "ios";
 	}
 });
+
+it("keeps inline links accessible on iOS while plain prose remains range-selectable", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => {
+		renderer = create(<ChatMarkdown text={[
+			"# Heading [docs](https://example.com/heading)",
+			"",
+			"> Quote https://example.com/quote",
+			"",
+			"- List [docs](https://example.com/list)",
+			"",
+			"Paragraph [docs](https://example.com/paragraph)",
+			"",
+			"Plain response",
+		].join("\n")} />);
+	});
+	const prose = renderer.root.findAll((node) => node.props.selectable === true);
+	for (const prefix of ["Heading", "Quote", "List", "Paragraph"]) {
+		const block = prose.find((node) => textOf(node).startsWith(prefix));
+		expect(block?.props.uiTextView, `${prefix} should preserve nested link accessibility`).toBe(false);
+	}
+	const plain = prose.find((node) => textOf(node) === "Plain response");
+	expect(plain?.props.uiTextView).toBe(true);
+	expect(renderer.root.findAll((node) => node.props.accessibilityRole === "link")).toHaveLength(4);
+	act(() => renderer.unmount());
+});
+
+it("keeps Android link-containing prose range-selectable", () => {
+	platform.OS = "android";
+	let renderer!: ReactTestRenderer;
+	try {
+		act(() => { renderer = create(<ChatMarkdown text="Read [docs](https://example.com/docs)" />); });
+		const prose = renderer.root.findAll((node) => node.props.selectable === true);
+		expect(prose).toHaveLength(1);
+		expect(prose[0].props.uiTextView).toBe(true);
+		act(() => renderer.unmount());
+	} finally {
+		platform.OS = "ios";
+	}
+});

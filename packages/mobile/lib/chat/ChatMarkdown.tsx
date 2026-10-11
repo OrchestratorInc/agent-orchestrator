@@ -1,7 +1,7 @@
 import { Feather } from "../icons";
 import { UITextView as Text } from "@bsky.app/react-native-uitextview";
 import * as Clipboard from "expo-clipboard";
-import { createContext, memo, useContext, useState, type ReactNode } from "react";
+import { createContext, isValidElement, memo, useContext, useState, type ReactNode } from "react";
 import { Image, Platform, Pressable, ScrollView, StyleSheet, View, type StyleProp, type TextStyle } from "react-native";
 import { haptics } from "../haptics";
 import { openGitHub } from "../openGitHub";
@@ -63,7 +63,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 							{block.items.map((item, itemIndex) => (
 								<View key={itemIndex} style={styles.listRow}>
 									<Text style={styles.marker}>{item.checked !== undefined ? (item.checked ? "☑" : "☐") : block.ordered ? `${itemIndex + 1}.` : "•"}</Text>
-									<Text selectable uiTextView selectionColor={selectionColor} style={[styles.body, styles.listBody, item.checked && styles.taskDone]}>{inline(item.text, styles)}</Text>
+									<SelectableInlineText value={item.text} selectionColor={selectionColor} style={[styles.body, styles.listBody, item.checked && styles.taskDone]} styles={styles} />
 								</View>
 							))}
 						</View>
@@ -71,27 +71,31 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 				}
 				if (block.kind === "heading") {
 					return (
-						<Text key={index} selectable uiTextView selectionColor={selectionColor} style={[styles.heading, block.level > 2 && styles.smallHeading]}>
-							{inline(block.text, styles)}
-						</Text>
+						<SelectableInlineText key={index} value={block.text} selectionColor={selectionColor} style={[styles.heading, block.level > 2 && styles.smallHeading]} styles={styles} />
 					);
 				}
 				if (block.kind === "quote") {
 					return (
 						<View key={index} style={styles.quote}>
-							<Text selectable uiTextView selectionColor={selectionColor} style={styles.quoteText}>{inline(block.text, styles)}</Text>
+							<SelectableInlineText value={block.text} selectionColor={selectionColor} style={styles.quoteText} styles={styles} />
 						</View>
 					);
 				}
 				return (
-					<Text key={index} selectable uiTextView selectionColor={selectionColor} style={styles.body}>
-						{inline(block.text, styles)}
-					</Text>
+					<SelectableInlineText key={index} value={block.text} selectionColor={selectionColor} style={styles.body} styles={styles} />
 				);
 			})}
 		</View>
 	);
 });
+
+function SelectableInlineText({ value, selectionColor, style, styles }: { value: string; selectionColor: string; style: StyleProp<TextStyle>; styles: ReturnType<typeof makeStyles> }) {
+	const content = inline(value, styles);
+	// The native UITextView flattens inline children into one accessibility node.
+	// Keep links on RN Text on iOS so VoiceOver can focus their link role.
+	const hasLink = content.some((node) => isValidElement(node) && node.type === MarkdownLink);
+	return <Text selectable uiTextView={Platform.OS !== "ios" || !hasLink} selectionColor={selectionColor} style={style}>{content}</Text>;
+}
 
 let preferredCodeWrap = false;
 
