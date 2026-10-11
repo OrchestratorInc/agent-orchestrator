@@ -350,3 +350,25 @@ explicit AO-variable passthrough, preserve credential filtering, and verify a
 report receipt in the intended daemon. Do not infer success from model narration.
 
 A native `/new` conversation may have a NULL persisted workspace even after successful coding. Corroborate live identity through the owned process and current native PTY breadcrumb, but refuse persisted restore without its required durable workspace. Preserve cursor-bearing rows when a normal terminal shrinks; never recover readiness by replaying ring history. This vertical preservation does not prove complete width reflow. Explicitly include the actual AO worktree in additive instructions when native tools otherwise default to a configured project directory.
+
+
+## Native ACP Chat qualification lessons (Docker Agent)
+
+A Chat-only provider may still require a common agent metadata plugin for AO's
+binary/auth/config inventory. Reject terminal admission before allocating a
+session, default omitted mode to Chat, and prevent fallback to terminal. Do not
+invent a TUI command or use a permissive permission default to satisfy an interface.
+
+Private additive native hooks can carry standing context while preserving user
+hooks and tools. Include the actual AO workspace explicitly: native cwd isolation
+alone does not prevent an agent from following a source-repository path elsewhere
+in AO context. Prove the write landed in the session worktree and the source
+checkout stayed unchanged. Preserve the first wrong-workspace failure separately.
+
+Use the daemon's actual Chat enums when observing settlement (controller `ready`,
+with no running or queued turns); terminal activity and Chat controller states are
+different contracts. A local credentials inventory does not verify remote access.
+Keep provider token-exhaustion and observer errors visible instead of treating
+those attempts as lifecycle passes. Qualify ACP through real AO APIs, not the
+TUI-only audit runner. Record detached-host and native-child PID/kernel start times
+before daemon replacement, Kill, and exact restore.
