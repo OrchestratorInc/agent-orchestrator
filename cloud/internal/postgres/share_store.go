@@ -506,6 +506,9 @@ func (s *Store) ListSharedProjectSessions(
 		if err := scanSession(rows, &session); err != nil {
 			return nil, err
 		}
+		// The startup detail names the owner's own Coder deployment; it is for
+		// the organization's members, not the people it shares a project with.
+		session.StartupErrorDetail = ""
 		sessions = append(sessions, session)
 	}
 	if err := rows.Err(); err != nil {

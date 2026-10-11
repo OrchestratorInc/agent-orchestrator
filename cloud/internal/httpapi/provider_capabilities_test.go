@@ -424,6 +424,32 @@ func TestScratchSessionPlanUsesOrgDefaultAndBYOConnection(t *testing.T) {
 	}
 }
 
+// A scratch project cannot pick a template, so when the organization's own
+// Coder connection has no default template its orchestrator runs on the
+// deployment's Coder instead of failing coder_template_required.
+func TestScratchSessionPlanFallsBackWhenBYOHasNoTemplate(t *testing.T) {
+	store := &stubCoderBYOCStore{omitOrgTemplate: true}
+	s := newBYOCServer(store)
+	principal := domain.Principal{UserID: byocUserID}
+	rec := httptest.NewRecorder()
+	plan, connectionID, ok := s.scratchSessionPlan(
+		rec, scratchPlanRequest(principal), principal, byocOrgID, "claude-code", json.RawMessage(`{"source":"scratch"}`),
+	)
+	if !ok {
+		t.Fatalf("scratch plan failed: %d %s", rec.Code, rec.Body.String())
+	}
+	if plan.Provider != sandbox.ProviderCoder || connectionID != "" {
+		t.Fatalf("plan provider %q connection %q, want the deployment's coder", plan.Provider, connectionID)
+	}
+	profile, err := sandbox.DecodeCoderSessionProfile(plan.ResourceProfile)
+	if err != nil {
+		t.Fatalf("decode profile: %v", err)
+	}
+	if profile.BaseURL == byocBaseURL {
+		t.Fatal("scratch plan still targets the org's own Coder")
+	}
+}
+
 func TestScratchSessionPlanFollowsOrgDefaultForB2C(t *testing.T) {
 	s := newOfferingServer(&offeringStore{})
 	principal := teamPrincipal("nodeops")

@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"net/http"
 	"regexp"
 	"strings"
@@ -129,8 +131,29 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOrgCoder(w, r, orgID) {
 		return
 	}
+	// Only an admin may test a connection: a save can reuse the stored token and
+	// records its outcome in the organization's activity trail.
+	if store, ok := s.store.(orgAdminStore); ok {
+		if err := store.RequireOrgAdmin(r.Context(), principalFrom(r), orgID); err != nil {
+			s.writeStoreError(w, r, err)
+			return
+		}
+	}
+	var body json.RawMessage
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body is invalid.")
+		return
+	}
 	var request putOrgCoderConfigRequest
-	if err := decodeJSON(w, r, &request); err != nil {
+	var present map[string]json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	decodeErr := decoder.Decode(&request)
+	if decodeErr == nil {
+		decodeErr = json.Unmarshal(body, &present)
+	}
+	clear(body)
+	if decodeErr != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body is invalid.")
 		return
 	}
@@ -171,6 +194,9 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "The Coder configuration could not be stored.")
 		return
+	}
+	if stored, ok := s.storedCoderConfig(r, orgID); ok && stored.BaseURL == normalized.BaseURL {
+		keepStoredCoderSettings(&normalized, stored, present)
 	}
 	// Editing an existing connection may omit the token: the stored one is kept
 	// as long as the deployment (base URL) is unchanged. A first save, or a move
@@ -293,6 +319,72 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		ValidatedAt:     validatedAt,
 		UpdatedAt:       &updatedAt,
 	})
+}
+
+// orgAdminStore checks that a principal administers an organization.
+type orgAdminStore interface {
+	RequireOrgAdmin(ctx context.Context, principal domain.Principal, orgID string) error
+}
+
+// storedCoderConfig returns the organization's stored Coder connection config.
+func (s *Server) storedCoderConfig(r *http.Request, orgID string) (domain.OrgCoderConfig, bool) {
+	store, ok := s.store.(coderConnectionForServiceStore)
+	if !ok {
+		return domain.OrgCoderConfig{}, false
+	}
+	_, _, config, _, err := store.CoderConnectionForService(r.Context(), orgID)
+	if err != nil {
+		return domain.OrgCoderConfig{}, false
+	}
+	stored, err := domain.DecodeOrgCoderConfig(config)
+	if err != nil {
+		return domain.OrgCoderConfig{}, false
+	}
+	return stored, true
+}
+
+// keepStoredCoderSettings carries the stored value of every setting the request
+// leaves out, so a client that sends only some fields (an older desktop sends
+// just the base URL and token) cannot reset the rest. The owner is not carried:
+// a new token re-derives it.
+func keepStoredCoderSettings(config *domain.OrgCoderConfig, stored domain.OrgCoderConfig, present map[string]json.RawMessage) {
+	omitted := func(key string) bool { _, ok := present[key]; return !ok }
+	if omitted("templateId") {
+		config.TemplateID = stored.TemplateID
+	}
+	if omitted("agentName") {
+		config.AgentName = stored.AgentName
+	}
+	if omitted("parameters") {
+		config.Parameters = stored.Parameters
+	}
+	if omitted("durableRoot") {
+		config.DurableRoot = stored.DurableRoot
+	}
+	if omitted("endpointServiceName") {
+		config.EndpointServiceName = stored.EndpointServiceName
+	}
+	if omitted("region") {
+		config.Region = stored.Region
+	}
+	if omitted("requireMountedDurableRoot") {
+		config.RequireMountedDurableRoot = stored.RequireMountedDurableRoot
+	}
+	if omitted("startupTimeoutSeconds") {
+		config.StartupTimeoutSeconds = stored.StartupTimeoutSeconds
+	}
+	if omitted("workerUser") {
+		config.WorkerUser = stored.WorkerUser
+	}
+	if omitted("readyProbe") {
+		config.ReadyProbe = stored.ReadyProbe
+	}
+	if omitted("readyProbeTimeoutSeconds") {
+		config.ReadyProbeTimeoutSeconds = stored.ReadyProbeTimeoutSeconds
+	}
+	if omitted("reuseExistingCheckout") {
+		config.ReuseExistingCheckout = stored.ReuseExistingCheckout
+	}
 }
 
 // storedCoderToken returns the organization's stored Coder token when its

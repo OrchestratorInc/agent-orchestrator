@@ -328,6 +328,12 @@ func (s *Store) RequireOrgAdmin(ctx context.Context, principal domain.Principal,
 	})
 }
 
+// RequireOrgMember returns ErrForbidden unless the principal is an active
+// member of the organization.
+func (s *Store) RequireOrgMember(ctx context.Context, principal domain.Principal, orgID string) error {
+	return s.withTenant(ctx, principal, orgID, func(pgx.Tx) error { return nil })
+}
+
 // OrgDisplayName returns an organization's name for its Stripe customer.
 func (s *Store) OrgDisplayName(ctx context.Context, orgID string) (string, error) {
 	var name string
@@ -1192,7 +1198,10 @@ func (s *Store) PauseOverLimit(ctx context.Context, orgID string) (int64, error)
 		if err != nil {
 			return err
 		}
-		if s.billing.mode(billing) != domain.BillingModeSelfServe {
+		// The enforcer has no principal to read the organization's billing
+		// from. Until a member's request records it, the organization may be
+		// a contract one (its sessions predate billing), so it is left alone.
+		if billing.BillingMode == "" || s.billing.mode(billing) != domain.BillingModeSelfServe {
 			return s.clearOverLimitTx(ctx, tx, orgID)
 		}
 		if err := lockOrgTx(ctx, tx, orgID); err != nil {

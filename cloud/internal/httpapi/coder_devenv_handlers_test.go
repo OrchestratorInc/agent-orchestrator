@@ -428,7 +428,7 @@ func TestPutOrgCoderConfigKeepsStoredTokenForSameDeployment(t *testing.T) {
 func TestResolveCoderPlacementCarriesDevEnvironment(t *testing.T) {
 	t.Parallel()
 	connectionConfig, err := domain.EncodeOrgCoderConfig(domain.OrgCoderConfig{
-		BaseURL: "https://coder.11x.example", Owner: "ahmad", WorkerUser: "workspace",
+		BaseURL: "https://coder.acme.example", Owner: "dev", WorkerUser: "workspace",
 		ReadyProbe: "test -f ~/.ready", Parameters: map[string]string{"region": "eu"},
 	})
 	if err != nil {
@@ -450,5 +450,72 @@ func TestResolveCoderPlacementCarriesDevEnvironment(t *testing.T) {
 		override.ReadyProbe != "test -f ~/.ready" || override.ReadyProbeTimeoutSeconds != domain.DefaultCoderReadyProbeTimeoutSeconds ||
 		override.Parameters["region"] != "eu" {
 		t.Fatalf("override = %+v", override)
+	}
+}
+
+// A client that sends only the base URL and a new token (an older desktop)
+// keeps the connection's stored settings instead of resetting them.
+func TestPutOrgCoderConfigKeepsStoredSettingsTheRequestOmits(t *testing.T) {
+	t.Parallel()
+	coderURL := devEnvCoderServer(t).URL
+	srv, store := newDevEnvServer(t, coderURL)
+	reuse := false
+	config, err := domain.EncodeOrgCoderConfig(domain.OrgCoderConfig{
+		BaseURL: coderURL, Owner: "ao-bot", TemplateID: coderCfgTemplate, WorkerUser: domain.CoderWorkerUserWorkspace,
+		ReadyProbe: "test -f ~/.ready", ReadyProbeTimeoutSeconds: 600, ReuseExistingCheckout: &reuse,
+		StartupTimeoutSeconds: 1200, Region: "eu-north-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.config = config
+
+	rec := httptest.NewRecorder()
+	srv.putOrgCoderConfig(rec, coderConfigRequest(t, http.MethodPut,
+		`{"baseUrl":"`+coderURL+`","token":"`+coderCfgToken+`","readyProbe":""}`, nil))
+	if rec.Code != http.StatusOK || store.upserted != 1 {
+		t.Fatalf("status = %d, upserted = %d; body = %s", rec.Code, store.upserted, rec.Body.String())
+	}
+	cfg, err := domain.DecodeOrgCoderConfig(store.lastConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TemplateID != coderCfgTemplate || cfg.WorkerUser != domain.CoderWorkerUserWorkspace || cfg.ReusesExistingCheckout() ||
+		cfg.StartupTimeoutSeconds != 1200 || cfg.Region != "eu-north-1" {
+		t.Fatalf("stored config = %+v, want the omitted settings kept", cfg)
+	}
+	if cfg.ReadyProbe != "" {
+		t.Fatalf("ready probe = %q, want the explicit clear applied", cfg.ReadyProbe)
+	}
+}
+
+// nonAdminDevEnvStore is the organization's connection seen by a member who is
+// not an admin.
+type nonAdminDevEnvStore struct {
+	devEnvStore
+	connectionRead bool
+}
+
+func (s *nonAdminDevEnvStore) RequireOrgAdmin(context.Context, domain.Principal, string) error {
+	return postgres.ErrForbidden
+}
+
+func (s *nonAdminDevEnvStore) CoderConnectionForService(ctx context.Context, orgID string) ([]byte, []byte, []byte, string, error) {
+	s.connectionRead = true
+	return s.devEnvStore.CoderConnectionForService(ctx, orgID)
+}
+
+// A non-admin cannot test a connection: the stored token is never read and
+// nothing is saved.
+func TestPutOrgCoderConfigRefusesNonAdminBeforeReadingTheToken(t *testing.T) {
+	t.Parallel()
+	coderURL := devEnvCoderServer(t).URL
+	_, base := newDevEnvServer(t, coderURL)
+	store := &nonAdminDevEnvStore{devEnvStore: *base}
+	srv := newCoderTemplatesServer(t, newTestCipher(t), store, nil)
+	rec := httptest.NewRecorder()
+	srv.putOrgCoderConfig(rec, coderConfigRequest(t, http.MethodPut, `{"baseUrl":"`+coderURL+`"}`, nil))
+	if rec.Code != http.StatusForbidden || store.upserted != 0 || store.connectionRead {
+		t.Fatalf("status = %d, upserted = %d, connection read = %v", rec.Code, store.upserted, store.connectionRead)
 	}
 }

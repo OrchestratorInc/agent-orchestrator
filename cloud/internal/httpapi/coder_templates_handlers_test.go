@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
@@ -222,5 +224,50 @@ func TestCoderOnlyEndpointsForbiddenWithoutCoder(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// nonMemberCoderConnStore is an organization's Coder connection seen by a caller
+// who is not a member of that organization.
+type nonMemberCoderConnStore struct {
+	fakeCoderConnStore
+	connectionRead bool
+}
+
+func (s *nonMemberCoderConnStore) RequireOrgMember(context.Context, domain.Principal, string) error {
+	return postgres.ErrForbidden
+}
+
+func (s *nonMemberCoderConnStore) CoderConnectionForService(
+	ctx context.Context, orgID string,
+) (encrypted, nonce, config []byte, connectionID string, err error) {
+	s.connectionRead = true
+	return s.fakeCoderConnStore.CoderConnectionForService(ctx, orgID)
+}
+
+// A caller outside the organization never reaches its Coder connection: the
+// template list and a template's parameters are both refused before the
+// organization's stored token is read.
+func TestCoderTemplateEndpointsRefuseNonMembers(t *testing.T) {
+	t.Parallel()
+	store := &nonMemberCoderConnStore{fakeCoderConnStore: fakeCoderConnStore{err: postgres.ErrNotFound}}
+	deployment := &fakeDeploymentTemplateLister{templates: []coder.Template{{ID: "deployment-tpl", Name: "deployment"}}}
+	srv := newCoderTemplatesServer(t, newTestCipher(t), store, deployment)
+
+	rec := httptest.NewRecorder()
+	srv.listCoderTemplates(rec, coderConfigRequest(t, http.MethodGet, "", []string{sandbox.ProviderCoder}))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("list status = %d, want 403; body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req := coderConfigRequest(t, http.MethodGet, "", []string{sandbox.ProviderCoder})
+	chi.RouteContext(req.Context()).URLParams.Add("templateId", coderCfgTemplate)
+	srv.getCoderTemplateParameters(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("parameters status = %d, want 403; body = %s", rec.Code, rec.Body.String())
+	}
+	if store.connectionRead {
+		t.Fatal("read the organization's Coder connection for a non-member")
 	}
 }

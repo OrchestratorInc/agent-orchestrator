@@ -139,11 +139,26 @@ func (s *Server) offeringForOrg(ctx context.Context, principal domain.Principal,
 	}, nil
 }
 
-// requireOrgCoder writes 403 provider_forbidden and returns false when the
-// organization's effective providers exclude coder. Every Coder-only endpoint
-// (bring-your-own connection config, template listing) calls it first.
+// orgMemberStore checks that a principal is an active member of an
+// organization.
+type orgMemberStore interface {
+	RequireOrgMember(ctx context.Context, principal domain.Principal, orgID string) error
+}
+
+// requireOrgCoder writes 403 and returns false unless the caller is a member of
+// the organization and the organization's effective providers include coder.
+// Every Coder-only endpoint (bring-your-own connection config, template listing)
+// calls it first. Membership is checked here because some of those endpoints
+// read the organization's stored Coder token as the service, not as the caller.
 func (s *Server) requireOrgCoder(w http.ResponseWriter, r *http.Request, orgID string) bool {
-	if s.orgProviderAvailable(principalFrom(r), orgID, sandbox.ProviderCoder) {
+	principal := principalFrom(r)
+	if store, ok := s.store.(orgMemberStore); ok {
+		if err := store.RequireOrgMember(r.Context(), principal, orgID); err != nil {
+			s.writeStoreError(w, r, err)
+			return false
+		}
+	}
+	if s.orgProviderAvailable(principal, orgID, sandbox.ProviderCoder) {
 		return true
 	}
 	writeError(w, r, http.StatusForbidden, "provider_forbidden", "Your organization is not enabled for the Coder sandbox provider.")
@@ -365,6 +380,13 @@ func (s *Server) scratchSessionPlan(
 		}
 	}
 	plan, err := s.provisioning.SessionPlanForProviderWithCoder(harness, provider, placement.options, placement.override)
+	if errors.Is(err, sandbox.ErrCoderTemplateRequired) && placement.connectionID != "" {
+		// A scratch project has no way to pick a template, so when the org's own
+		// Coder connection has no default one the orchestrator runs on the
+		// deployment's Coder, as it did before scratch projects used BYO placement.
+		placement = coderPlacement{}
+		plan, err = s.provisioning.SessionPlanForProviderWithCoder(harness, provider, placement.options, placement.override)
+	}
 	if err != nil {
 		s.writeSessionPlanError(w, r, orgID, "", err)
 		return sandbox.Plan{}, "", false
