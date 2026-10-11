@@ -17,6 +17,9 @@ import (
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
+	_ "modernc.org/sqlite" // Register the driver for read-only native history queries.
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
@@ -25,8 +28,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
-	"gopkg.in/yaml.v3"
-	_ "modernc.org/sqlite" // Register the driver for read-only native history queries.
 )
 
 // Plugin supervises the official native interactive terminal.
@@ -351,7 +352,7 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 		if found != "" && found != crumb.SessionID {
 			return ports.SessionInfo{}, false, fmt.Errorf("hermes: ambiguous current native identity")
 		}
-		if e = os.WriteFile(filepath.Join(sessionDir(ref.DataDir, ref.ID), "observed-terminal"), []byte(crumbPath), 0o600); e != nil {
+		if e := os.WriteFile(filepath.Join(sessionDir(ref.DataDir, ref.ID), "observed-terminal"), []byte(crumbPath), 0o600); e != nil {
 			return ports.SessionInfo{}, false, e
 		}
 		found = crumb.SessionID
@@ -484,7 +485,7 @@ func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 }
 
 // ValidateTerminalMessage refuses ordinary AO text while native decisions own input.
-func (p *Plugin) ValidateTerminalMessage(_ string, screen string) error {
+func (p *Plugin) ValidateTerminalMessage(_, screen string) error {
 	state, ok := p.DetectTerminalActivity(screen)
 	if !ok || state != domain.ActivityIdle {
 		return fmt.Errorf("hermes: ordinary AO sends require the current empty native composer; enter approval decisions directly in the terminal")
@@ -493,7 +494,7 @@ func (p *Plugin) ValidateTerminalMessage(_ string, screen string) error {
 }
 
 // TerminalMessageObserved requires a new native running footer after submission.
-func (p *Plugin) TerminalMessageObserved(_ string, baseline, screen string) bool {
+func (p *Plugin) TerminalMessageObserved(_, baseline, screen string) bool {
 	before, ready := p.DetectTerminalActivity(baseline)
 	after, known := p.DetectTerminalActivity(screen)
 	return screen != baseline && ready && before == domain.ActivityIdle && known && after == domain.ActivityActive
