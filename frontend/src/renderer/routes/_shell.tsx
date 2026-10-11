@@ -165,6 +165,7 @@ const ShellCenter = memo(function ShellCenter({
 	startingOrchestrator,
 	startingCloudOrchestrator,
 	startingSteps,
+	startingCoderWorkspaceUrl,
 }: {
 	hideShellTopbar: boolean;
 	isSessionRoute: boolean;
@@ -172,6 +173,7 @@ const ShellCenter = memo(function ShellCenter({
 	startingOrchestrator: boolean;
 	startingCloudOrchestrator: boolean;
 	startingSteps?: WorkspaceSession["provisionSteps"];
+	startingCoderWorkspaceUrl?: string;
 }) {
 	const panelClassName = isSessionRoute || startingOrchestrator ? "center-panel-shell--session" : undefined;
 	// Linux retains an outer drag strip. macOS uses the shared header itself;
@@ -179,7 +181,7 @@ const ShellCenter = memo(function ShellCenter({
 	// Windows already owns a separate WindowTitlebar.
 	const draggableSessionFrame = (isSessionRoute || startingOrchestrator) && isLinux;
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
-	const startingChat = startingOrchestrator ? <OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} /> : null;
+	const startingChat = startingOrchestrator ? <OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} /> : null;
 	// Settings is a self-framed route, so its starting chat gets its own panel.
 	const selfFramedOutlet = <>
 		<div className={startingOrchestrator ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingOrchestrator || undefined}><Outlet /></div>
@@ -452,10 +454,10 @@ function ShellLayout() {
 		),
 	);
 	const startingWorkspace = workspaces.find((workspace) => workspace.id === routeParams.projectId);
-	const startingSteps = openingOrchestrator
-		? startingWorkspace?.sessions
-			.find((session) => session.kind === "orchestrator")?.provisionSteps
+	const startingOrchestratorSession = openingOrchestrator
+		? startingWorkspace?.sessions.find((session) => session.kind === "orchestrator")
 		: undefined;
+	const startingSteps = startingOrchestratorSession?.provisionSteps;
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const replacementErrorProjectId = Object.keys(orchestratorReplacementErrors)[0] ?? null;
 	const isStartupLoading =
@@ -1341,6 +1343,7 @@ function ShellLayout() {
 								startingOrchestrator={openingOrchestrator}
 								startingCloudOrchestrator={!routeParams.hostId && startingWorkspace?.kind === CLOUD_PROJECT_KIND}
 								startingSteps={startingSteps}
+								startingCoderWorkspaceUrl={startingOrchestratorSession?.cloud?.coderWorkspaceUrl}
 							/>
 						</div>
 						</main>

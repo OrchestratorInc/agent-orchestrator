@@ -15,8 +15,8 @@ export function startingConversationSnapshot(sessionId: string, harness: Convers
 
 const pendingSnapshot = startingConversationSnapshot("pending-orchestrator", "claude-code");
 
-export function OrchestratorStartingChat({ steps, cloud = false }: { steps?: readonly SessionProvisionStep[]; cloud?: boolean }) {
-	if (cloud) return <CloudSessionStartupLoader />;
+export function OrchestratorStartingChat({ steps, cloud = false, coderWorkspaceUrl }: { steps?: readonly SessionProvisionStep[]; cloud?: boolean; coderWorkspaceUrl?: string }) {
+	if (cloud) return <CloudSessionStartupLoader coderWorkspaceUrl={coderWorkspaceUrl} />;
 	return <ChatWorkspace
 		snapshot={pendingSnapshot}
 		sessionRole="orchestrator"

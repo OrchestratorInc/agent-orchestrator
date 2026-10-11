@@ -238,7 +238,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	) : undefined;
 
 	if (projectId && (isProvisioning || projectActions.isSpawning)) {
-		return <OrchestratorStartingChat cloud={workspace?.kind === CLOUD_PROJECT_KIND} />;
+		return <OrchestratorStartingChat
+			cloud={workspace?.kind === CLOUD_PROJECT_KIND}
+			coderWorkspaceUrl={workspace?.sessions.find((session) => session.kind === "orchestrator")?.cloud?.coderWorkspaceUrl}
+		/>;
 	}
 
 	return (
