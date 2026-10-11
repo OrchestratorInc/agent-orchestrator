@@ -56,7 +56,7 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 		return true
 	}})
 	if resolveErr != nil && identityErr != nil {
-		return "", fmt.Errorf("%w: %v", resolveErr, identityErr)
+		return "", fmt.Errorf("%w: %w", resolveErr, identityErr)
 	}
 	return path, resolveErr
 }
@@ -181,8 +181,8 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	}
 	required := map[string]bool{"file_read": false, "file_write": false, "shell_exec": false, "code_interpreter": false}
 	for _, tool := range enabled {
-		if _, ok := required[fmt.Sprint(tool)]; ok {
-			required[fmt.Sprint(tool)] = true
+		if _, ok := required[tool]; ok {
+			required[tool] = true
 		}
 	}
 	for tool, ok := range required {
@@ -208,7 +208,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		if prefix != "" {
 			prefix += "\n\n"
 		}
-		sp["prefix"] = prefix + instructions
+		sp["prefix"] = prefix + instructions + "\n\nWhen calling AO CLI commands through shell_exec, preserve the session routing environment using env_passthrough=[\"AO_SESSION_ID\",\"AO_RUN_FILE\",\"AO_PROJECT_ID\",\"AO_DATA_DIR\",\"AO_RUNTIME_LAUNCH_ID\"]. Run in the actual session workspace. This preserves AO routing without passing provider credentials."
 	}
 	overlay, err := toml.Marshal(config)
 	if err != nil {
