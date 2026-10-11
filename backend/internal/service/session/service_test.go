@@ -3642,6 +3642,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"manager switch unavailable", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchUnavailable), apierr.KindConflict, "AGENT_SWITCH_UNAVAILABLE"},
 		{"switch in progress", fmt.Errorf("switch agent mer-1: %w", domain.ErrAgentSwitchInProgress), apierr.KindConflict, "AGENT_SWITCH_IN_PROGRESS"},
 		{"switch idempotency conflict", fmt.Errorf("switch agent mer-1: %w", domain.ErrAgentSwitchIdempotencyConflict), apierr.KindConflict, "AGENT_SWITCH_IDEMPOTENCY_CONFLICT"},
+		{"chat policy unsupported", fmt.Errorf("spawn: %w", ports.ErrChatPermissionModeUnsupported), apierr.KindInvalid, "CHAT_PERMISSION_MODE_UNSUPPORTED"},
 		{"chat mode unsupported", fmt.Errorf("spawn: %w", ports.ErrChatUnsupported), apierr.KindConflict, "SESSION_MODE_UNSUPPORTED"},
 		{"chat recovery inconclusive with deadline", fmt.Errorf("resume agent mer-1: resume chat: %w: persistent ACP host: %w",
 			ports.ErrChatRecoveryInconclusive, fmt.Errorf("chat host ownership is inconclusive: %w", context.DeadlineExceeded)),
