@@ -199,6 +199,24 @@ func TestInteractiveNativeFailureCleanupAndRetryState(t *testing.T) {
 					if failure == "cleanup" && !strings.Contains(err.Error(), "destroy failed") {
 						t.Fatal("cleanup failure hidden", err)
 					}
+					if failure == "cleanup" {
+						if rec.IsTerminated != terminated {
+							t.Fatal("cleanup failure did not restore termination state", rec)
+						}
+						wantSendErr := ErrAgentExited
+						if terminated {
+							wantSendErr = ErrTerminated
+						} else if rec.Activity.State != domain.ActivityExited {
+							t.Fatal("cleanup failure did not quarantine agent input", rec)
+						}
+						before := len(msg.msgs)
+						if sendErr := m.SendWithOptions(ctx, "mer-1", "must not reach unverified runtime", nil, ports.MessageDeliveryOptions{AuthoredByUser: true}); !errors.Is(sendErr, wantSendErr) {
+							t.Fatalf("send after cleanup failure = %v, want %v", sendErr, wantSendErr)
+						}
+						if len(msg.msgs) != before {
+							t.Fatal("input reached unverified runtime after cleanup failure")
+						}
+					}
 				}
 				release, ok := m.AcquireSessionInput("mer-1")
 				if !ok {
