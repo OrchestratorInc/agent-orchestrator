@@ -20,21 +20,25 @@ import (
 
 const maxInstructions = 64 << 10
 
+// Plugin supervises native foreground CodeBuddy Code sessions.
 type Plugin struct {
 	agentbase.Base
 	mu     sync.Mutex
 	binary string
 }
 
+// New constructs the CodeBuddy adapter.
 func New() *Plugin { return &Plugin{} }
 
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 
+// Manifest declares the native agent identity.
 func (*Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{ID: "codebuddy", Name: "CodeBuddy Code", Description: "Tencent CodeBuddy Code foreground TUI sessions.", Version: "0.0.1", Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
 }
 
+// GetConfigSpec exposes direct native model selection.
 func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Native --model ID; configure providers in CodeBuddy first.")
 }
@@ -46,6 +50,7 @@ var binarySpec = binaryutil.BinarySpec{
 	WinPaths: []binaryutil.WinPath{{Base: binaryutil.WinAppData, Parts: []string{"npm", "codebuddy.cmd"}}},
 }
 
+// ResolveBinary finds the installed native CLI.
 func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -62,12 +67,14 @@ func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return binary, err
 }
 
+// InvalidateBinaryResolution clears the resolved executable cache.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.binary = ""
 }
 
+// GetLaunchCommand builds a native TUI launch with task data separated from flags.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	cmd, err := p.command(ctx, cfg.Config, cfg.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.AllowedTools, cfg.DisallowedTools)
 	if err != nil {
@@ -82,6 +89,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return cmd, nil
 }
 
+// GetRestoreCommand requires exact durable history and reapplies fresh standing instructions.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -139,7 +147,7 @@ func instructionText(inline, file string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("codebuddy: read private instructions: %w", err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		b, err := io.ReadAll(io.LimitReader(f, maxInstructions+1))
 		if err != nil {
 			return "", fmt.Errorf("codebuddy: read private instructions: %w", err)
@@ -159,6 +167,7 @@ func validateTask(task string) error {
 	return nil
 }
 
+// AugmentRuntimeLaunchEnv keeps supervised work in the foreground using native controls.
 func (*Plugin) AugmentRuntimeLaunchEnv(env map[string]string, _ string, _ domain.SessionID, _ string) {
 	// Supported native controls keep Bash/Agent foreground and prevent cron
 	// work from outliving the supervised conversation; no native security is disabled.
@@ -167,6 +176,7 @@ func (*Plugin) AugmentRuntimeLaunchEnv(env map[string]string, _ string, _ domain
 	env["DISABLE_AUTOUPDATER"] = "1"
 }
 
+// SessionInfo returns identity captured by native hooks.
 func (*Plugin) SessionInfo(ctx context.Context, ref ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -175,6 +185,7 @@ func (*Plugin) SessionInfo(ctx context.Context, ref ports.SessionRef) (ports.Ses
 	return info, ok, nil
 }
 
+// AuthStatus reports credential configuration without claiming remote authorization.
 func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, err
@@ -189,6 +200,7 @@ func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	return ports.AgentAuthStatusUnknown, nil
 }
 
+// ExitDetectionMode delegates process exit facts to the runtime supervisor.
 func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 	return ports.AgentExitDetectionSupervisor
 }

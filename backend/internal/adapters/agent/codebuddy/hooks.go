@@ -22,11 +22,15 @@ var hooks = hooksjson.Manager{
 	},
 }
 
+// GetAgentHooks merges AO callbacks into native workspace hooks.
 func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	return hooks.Install(ctx, cfg.WorkspacePath)
 }
 
+// UninstallHooks removes only AO-owned native callbacks.
 func (*Plugin) UninstallHooks(ctx context.Context, ws string) error { return hooks.Uninstall(ctx, ws) }
+
+// AreHooksInstalled checks the AO-owned native hook entries.
 func (*Plugin) AreHooksInstalled(ctx context.Context, ws string) (bool, error) {
 	return hooks.AreInstalled(ctx, ws)
 }

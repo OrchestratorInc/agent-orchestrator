@@ -86,7 +86,7 @@ func validateTranscript(ctx context.Context, path, cwd, id string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	s := bufio.NewScanner(f)
 	s.Buffer(make([]byte, 4096), 4<<20)
 	user, assistant := false, false

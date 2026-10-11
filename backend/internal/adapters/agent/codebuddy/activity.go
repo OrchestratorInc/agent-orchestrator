@@ -10,6 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// DeriveActivityState maps supported native hook events to activity.
 func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	switch event {
 	case "user-prompt-submit", "pre-tool-use", "post-tool-use", "post-tool-use-failure":
@@ -25,8 +26,10 @@ func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	}
 }
 
+// ContinuouslyDetectTerminalActivity enables current viewport observation alongside hooks.
 func (*Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
 
+// ValidateTerminalMessage requires an initialized empty native composer before pasting.
 func (p *Plugin) ValidateTerminalMessage(output, message string) error {
 	if err := validateTask(message); err != nil {
 		return err
@@ -38,11 +41,13 @@ func (p *Plugin) ValidateTerminalMessage(output, message string) error {
 	return nil
 }
 
+// ComposerIsEmpty recognizes the current idle composer.
 func (p *Plugin) ComposerIsEmpty(output string) bool {
 	o := p.InspectTerminalSurface(output)
 	return o.Work == ports.TerminalSurfaceWorkIdle && o.Composer == ports.TerminalComposerEmpty
 }
 
+// DetectTerminalActivity maps the current native surface to activity.
 func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
 	switch p.InspectTerminalSurface(output).Work {
 	case ports.TerminalSurfaceWorkActive:
@@ -56,7 +61,7 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 	}
 }
 
-// Interpret only the caller's current rendered viewport. A raw ring tail can
+// InspectTerminalSurface interprets only the caller's current rendered viewport. A raw ring tail can
 // retain overwritten spinner/composer frames and must never authorize input.
 func (*Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObservation {
 	output = strings.TrimRight(output, "\r\n ")
