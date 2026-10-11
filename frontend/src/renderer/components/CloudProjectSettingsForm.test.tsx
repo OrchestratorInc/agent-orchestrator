@@ -44,7 +44,8 @@ beforeEach(() => {
 	mocks.connections.mockReset();
 	mocks.connections.mockResolvedValue({ providerConnections: [] });
 	mocks.me.mockReset();
-	mocks.me.mockResolvedValue({ sandboxProviders: { available: ["nodeops"], default: "nodeops" } });
+	// A B2B org by default: its projects run on Coder.
+	mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["coder"], defaultProvider: "coder", billingMode: "contract", kind: "b2b", features: [] } });
 	mocks.localGet.mockImplementation(async (_path: string, options: { params: { path: { agent: string } } }) => ({ data: {
 		agent: options.params.path.agent, selectionMode: "catalog", allowCustom: true,
 		models: ["worker-model", "orchestrator-model", "reviewer-model", "review-codex"].map((id) => ({ id, label: id, efforts: ["low", "high", "max"] })),
@@ -339,16 +340,40 @@ describe("Cloud project Coder template", () => {
 		expect(mocks.patch).not.toHaveBeenCalled();
 	});
 
-	it("shows the workspace name prefix only for a Coder project", async () => {
+	it("shows no Coder settings at all to a B2C org", async () => {
 		mocks.orgCoderConfig = { baseUrl: "https://coder.acme.test" };
-		renderCoder();
+		mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["freestyle"], defaultProvider: "freestyle", billingMode: "self_serve", kind: "b2c", features: [] } });
+		project.config.coder = { templateId: "tpl-1", workspaceNamePrefix: "legacy" };
+		mount("general");
+		expect(await screen.findByRole("button", { name: "Edit Project name" })).toBeInTheDocument();
 		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
+		expect(screen.queryByText("Coder template")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Edit Workspace name prefix" })).not.toBeInTheDocument();
 	});
 
-	it("shows the workspace name prefix when new sessions run on Coder", async () => {
+	it("shows Coder settings for a project stored on Coder when the org offers both", async () => {
+		mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["freestyle", "coder"], defaultProvider: "freestyle", billingMode: "contract", kind: "both", features: [] } });
+		project.config.sandboxProvider = "coder";
+		mount("general");
+		expect(await screen.findByText("Coder template")).toBeInTheDocument();
+	});
+
+	it("hides Coder settings for a project on the org's non-Coder default when the org offers both", async () => {
+		mocks.me.mockResolvedValue({ organizations: [], offering: { providers: ["freestyle", "coder"], defaultProvider: "freestyle", billingMode: "contract", kind: "both", features: [] } });
+		mount("general");
+		expect(await screen.findByRole("button", { name: "Edit Project name" })).toBeInTheDocument();
+		await waitFor(() => expect(mocks.me).toHaveBeenCalled());
+		expect(screen.queryByText("Coder template")).not.toBeInTheDocument();
+	});
+
+	it("falls back to /me sandboxProviders on an older control plane", async () => {
+		mocks.me.mockResolvedValue({ organizations: [], sandboxProviders: { available: ["coder"], default: "coder" } });
+		mount("general");
+		expect(await screen.findByText("Coder template")).toBeInTheDocument();
+	});
+
+	it("shows the workspace name prefix for a bring-your-own-Coder org", async () => {
 		mocks.orgCoderConfig = { baseUrl: "https://coder.acme.test" };
-		mocks.me.mockResolvedValue({ sandboxProviders: { available: ["coder"], default: "coder" } });
 		renderCoder();
 		expect(await screen.findByRole("button", { name: "Edit Workspace name prefix" })).toBeInTheDocument();
 	});

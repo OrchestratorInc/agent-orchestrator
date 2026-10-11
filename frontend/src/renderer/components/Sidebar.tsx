@@ -2666,7 +2666,9 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	const { cloudEnabled } = useCloudGate();
 	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, session, status, signOut } = useCloudSession();
-	const plan = paidPlanBadge(useCloudBilling().data);
+	// The plan badge is self-serve billing only; a contract org has no plan to show.
+	const billing = useCloudBilling();
+	const plan = billing.offering.selfServeBilling ? paidPlanBadge(billing.data) : null;
 	if (!configured || (!cloudEnabled && !developerMode) || status !== "authenticated") return null;
 	const name = accountName(session?.user);
 

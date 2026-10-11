@@ -25,7 +25,7 @@ import { createPortal } from "react-dom";
 import type { components } from "../../api/schema";
 import type { ImportFolderScan } from "../../preload";
 import { useCloudCp } from "../hooks/useCloudCp";
-import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
+import { useCloudOffering } from "../hooks/useCloudOffering";
 import { CoderTemplatePicker } from "./CoderTemplatePicker";
 import { useCoderTemplates } from "../hooks/useCoderTemplates";
 import { SearchablePicker } from "./SearchablePicker";
@@ -41,13 +41,13 @@ import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { cloudAgentInfos } from "../lib/cloud-agents";
 import { aoBridge } from "../lib/bridge";
 import { CloudCpError } from "../lib/cloud-cp";
+import { CODER_PROVIDER } from "../lib/cloud-offering";
 import { DEFAULT_CODER_WORKSPACE_NAME_PREFIX, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
 import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import type { CloudCpGitHubAppRepository } from "../lib/cloud-cp/types";
 import { useCloudSession } from "../lib/cloud-session";
 import { useUiStore } from "../stores/ui-store";
 import { useShellMaybe } from "../lib/shell-context";
-import { resolveSandboxProviderPreference, useSandboxProviderStore } from "../stores/sandbox-provider-store";
 import {
 	onboardingAlertErrorClass,
 	onboardingFieldErrorClass,
@@ -1387,24 +1387,19 @@ function CloudProjectCard({
 	const { client, baseUrl } = useCloudCp();
 	const { org } = useCloudOrg();
 	const queryClient = useQueryClient();
-	// The coder template picker is offered only when new sessions will run on
-	// coder; its choice is stored on the project and inherited by every session.
-	const sandboxProviders = useCloudSandboxProviders();
-	// The provider new sessions will run on: the user's saved choice when this
-	// control plane offers it, otherwise its default (the same rule the session
-	// launchers apply). Coder options only mean something on Coder.
-	const selectedSandboxProvider = useSandboxProviderStore((state) => state.selectedProvider);
-	const sessionSandboxProvider =
-		resolveSandboxProviderPreference(selectedSandboxProvider, sandboxProviders.available) ?? sandboxProviders.default;
-	// With more than one provider on offer, the project records its own choice
-	// (config.sandboxProvider) and every session of the project runs there.
-	const offersSandboxChoice = sandboxProviders.available.length > 1;
+	// The org's offering decides where the project's sessions run. With more
+	// than one provider the project picks one (config.sandboxProvider, default
+	// the org's default provider) and every session of the project runs there;
+	// with one there is nothing to pick. The coder template picker, size and
+	// workspace prefix appear only when that provider is coder.
+	const offering = useCloudOffering();
+	const offersSandboxChoice = offering.offersProviderChoice;
 	const [projectSandboxProvider, setProjectSandboxProvider] = useState<string | null>(null);
 	const effectiveSandboxProvider =
-		projectSandboxProvider !== null && sandboxProviders.available.includes(projectSandboxProvider)
+		projectSandboxProvider !== null && offering.providers.includes(projectSandboxProvider)
 			? projectSandboxProvider
-			: sessionSandboxProvider;
-	const usesCoder = effectiveSandboxProvider === "coder";
+			: offering.defaultProvider;
+	const usesCoder = effectiveSandboxProvider === CODER_PROVIDER;
 	// A coder project must pick a concrete template before it is created. With no
 	// template, session start fails later with a 422 (coder_template_required) —
 	// there is no implicit org-default for a bring-your-own-Coder deployment. So
@@ -1420,7 +1415,7 @@ function CloudProjectCard({
 	const setCoderWorkspaceNamePrefix = useCoderSessionOptionsStore((s) => s.setWorkspaceNamePrefix);
 	// Workspace naming is a bring-your-own-Coder control: only an org that
 	// connected its own Coder deployment sees and sends the prefix.
-	const orgOwnsCoder = useOrgCoderConfig().data != null;
+	const orgOwnsCoder = useOrgCoderConfig(offering.hasCoder).data != null;
 	const showCoderWorkspaceNamePrefix = usesCoder && orgOwnsCoder;
 	const coderWorkspaceNamePrefixInvalid =
 		showCoderWorkspaceNamePrefix && !isValidCoderWorkspaceNamePrefix(coderWorkspaceNamePrefix.trim());
@@ -1851,7 +1846,7 @@ function CloudProjectCard({
 						<Select value={effectiveSandboxProvider} disabled={isCreating} onValueChange={setProjectSandboxProvider}>
 							<SelectTrigger id="create-project-sandbox" className="max-w-[65%]"><SelectValue /></SelectTrigger>
 							<SelectContent position="popper" side="bottom" align="end" sideOffset={4}>
-								{sandboxProviders.available.map((provider) => (
+								{offering.providers.map((provider) => (
 									<SelectItem key={provider} value={provider}>
 										{t(`createProject.sandboxProvider.${provider}`, { defaultValue: provider })}
 									</SelectItem>

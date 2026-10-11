@@ -29,14 +29,42 @@ export interface CloudCpOrganization {
 	slug: string;
 	displayName: string;
 	role: string;
+	/** This org's own offering (`/me` organizations[i].offering); absent on an older control plane. */
+	offering?: CloudCpOffering;
 }
 
 /** Sandbox providers a control plane offers (`/me` sandboxProviders). */
 export interface CloudCpSandboxProviders {
 	/** Every provider a session may select on this control plane. */
 	available: string[];
-	/** The provider used when a session does not specify one. */
+	/** The org's default provider for a session that does not specify one; may be "". */
 	default: string;
+}
+
+/**
+ * How an organization pays for AO Cloud (`/me` offering.billingMode and
+ * `/billing` billingMode): "self_serve" orgs buy plans through Stripe,
+ * "contract" orgs are billed outside the app, and "off" means the deployment
+ * has no Stripe configured.
+ */
+export type CloudCpBillingMode = "self_serve" | "contract" | "off";
+
+/**
+ * Which product an organization is on, derived from its allowed providers:
+ * coder only is "b2b", freestyle only is "b2c", both is "both", none is "none".
+ */
+export type CloudCpOfferingKind = "b2b" | "b2c" | "both" | "none";
+
+/** The active organization's effective offering (`/me` offering). */
+export interface CloudCpOffering {
+	/** Sandbox providers the organization may run sessions on. */
+	providers: string[];
+	/** The provider a project uses when it does not pick one; "" for no cloud. */
+	defaultProvider: string;
+	billingMode: CloudCpBillingMode;
+	kind: CloudCpOfferingKind;
+	/** Plan feature flags; empty when none. */
+	features: string[];
 }
 
 /** GET /me */
@@ -48,6 +76,12 @@ export interface CloudCpMeResponse {
 	 * deployment lists exactly one available provider (the default).
 	 */
 	sandboxProviders?: CloudCpSandboxProviders;
+	/**
+	 * The offering of organizations[0] (each org also carries its own). Absent
+	 * on a control plane that predates it; the renderer then derives it (see
+	 * hooks/useCloudOffering).
+	 */
+	offering?: CloudCpOffering;
 }
 
 // ---------------------------------------------------------------------------
@@ -1142,8 +1176,11 @@ export interface CloudCpBillingUsage {
 
 /** GET /orgs/{orgId}/billing */
 export interface CloudCpBillingSummary {
+	/** Stripe is configured on this deployment. */
 	enabled: boolean;
 	exempt: boolean;
+	/** How the org pays; absent on a control plane that predates it. */
+	billingMode?: CloudCpBillingMode;
 	plan: string;
 	subscriptionStatus?: string;
 	entitled: boolean;

@@ -12,16 +12,18 @@ const mocks = vi.hoisted(() => ({
 		createBillingCheckout: vi.fn(),
 		createBillingPortal: vi.fn(),
 		resetBillingUsage: vi.fn(),
+		me: vi.fn(),
 	},
 	openExternal: vi.fn(),
+	orgRole: "owner",
 }));
 
 vi.mock("../../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true }) }));
 vi.mock("../../lib/cloud-session", () => ({ useCloudSession: () => ({ status: "authenticated" }) }));
 vi.mock("../../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ client: mocks.client, ready: true, baseUrl: "https://cp.test" }),
+	useCloudCp: () => ({ client: mocks.client, ready: true, baseUrl: "https://cp.test", userId: "user-1" }),
 }));
-vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org-1" } }) }));
+vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org-1", role: mocks.orgRole } }) }));
 vi.mock("../../lib/bridge", () => ({ aoBridge: { app: { openExternal: mocks.openExternal } } }));
 
 const starter = {
@@ -66,6 +68,10 @@ describe("BillingSection", () => {
 	beforeEach(async () => {
 		await appI18n.changeLanguage("en");
 		vi.clearAllMocks();
+		mocks.orgRole = "owner";
+		// An older control plane without `offering`: the billing mode comes from
+		// the /billing summary (the fallback path).
+		mocks.client.me.mockResolvedValue({ user: { id: "user-1" }, organizations: [{ id: "org-1", role: "owner" }] });
 	});
 
 	it("shows Free, Starter and Pro with Starter recommended and Free current, and opens Checkout", async () => {
@@ -134,6 +140,47 @@ describe("BillingSection", () => {
 		await screen.findByText("Usage");
 		fireEvent.click(within(card("starter")).getByRole("button", { name: "Manage" }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Only organization admins can manage billing.");
+	});
+
+	it("hides plan actions and reset from members who are not admins", async () => {
+		mocks.orgRole = "member";
+		mocks.client.getBilling.mockResolvedValue(subscribed());
+		renderSection();
+		await screen.findByText("Usage");
+		expect(screen.getAllByTestId("plan-card")).toHaveLength(3);
+		expect(within(card("starter")).queryByRole("button")).not.toBeInTheDocument();
+		expect(within(card("pro")).queryByRole("button")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Reset now" })).not.toBeInTheDocument();
+		expect(screen.getByText("Only organization admins can manage billing.")).toBeInTheDocument();
+	});
+
+	it("shows no plans to a contract org and never reads /billing", async () => {
+		mocks.client.me.mockResolvedValue({
+			user: { id: "user-1" }, organizations: [{ id: "org-1", role: "owner" }],
+			offering: { providers: ["coder"], defaultProvider: "coder", billingMode: "contract", kind: "b2b", features: [] },
+		});
+		renderSection();
+		expect(await screen.findByText("Your organization's plan is managed by your administrator.")).toBeInTheDocument();
+		expect(screen.queryByTestId("plan-card")).not.toBeInTheDocument();
+		expect(mocks.client.getBilling).not.toHaveBeenCalled();
+	});
+
+	it("shows plans from the server offering for a self-serve org", async () => {
+		mocks.client.me.mockResolvedValue({
+			user: { id: "user-1" }, organizations: [{ id: "org-1", role: "owner" }],
+			offering: { providers: ["freestyle"], defaultProvider: "freestyle", billingMode: "self_serve", kind: "b2c", features: [] },
+		});
+		mocks.client.getBilling.mockResolvedValue(subscribed({ billingMode: "self_serve" }));
+		renderSection();
+		await screen.findByText("Usage");
+		expect(screen.getAllByTestId("plan-card")).toHaveLength(3);
+	});
+
+	it("reads an exempt org as contract on an older control plane", async () => {
+		mocks.client.getBilling.mockResolvedValue({ enabled: true, exempt: true, plan: "internal", entitled: true, plans });
+		renderSection();
+		expect(await screen.findByText("Your organization's plan is managed by your administrator.")).toBeInTheDocument();
+		expect(screen.queryByTestId("plan-card")).not.toBeInTheDocument();
 	});
 
 	it("says so plainly when billing is off", async () => {

@@ -28,7 +28,7 @@ export type GlobalSettingsSection =
 	| "agents"
 	| "billing"
 	| "remoteHosts"
-	| "coder11x"
+	| "coder"
 	| "mobile"
 	| "shortcuts"
 	| "browserProfiles"

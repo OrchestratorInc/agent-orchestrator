@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
-import { useCloudSession } from "../lib/cloud-session";
+import { useCloudOffering } from "../hooks/useCloudOffering";
 import { ensureCodexAccounts } from "../hooks/useCodexAccountsQuery";
 import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
@@ -24,14 +24,6 @@ import { labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
 
-// Internal testers who see the Coder (bring-your-own) settings page in addition
-// to @11x.ai users, so the flow can be exercised on non-11x accounts.
-const CODER_PAGE_TEST_EMAILS = new Set([
-	"prateekkarnal77@gmail.com",
-	"pritommazumdar1995@gmail.com",
-	"c.mohak2004@gmail.com",
-]);
-
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
 }
@@ -45,10 +37,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const diagnostics = useUiStore((state) => state.developerMode && state.diagnostics);
 	// Reads the daemon settings the dialog tree already queries; no extra fetch.
 	const { cloudEnabled } = useCloudGate();
-	// The bring-your-own-Coder page is for @11x.ai users, plus a small allowlist
-	// of internal testers so the flow can be exercised on non-11x accounts.
-	const email = (useCloudSession().session?.user.email ?? "").toLowerCase();
-	const is11x = email.endsWith("@11x.ai") || CODER_PAGE_TEST_EMAILS.has(email);
+	// The org's offering decides the cloud pages: the bring-your-own-Coder page
+	// only when it includes coder, Upgrade only for self-serve billing.
+	const { hasCoder, selfServeBilling } = useCloudOffering();
 
 	const displaySettings = settingsModal;
 	// The selected page includes several store/query subscribers. Mount it one
@@ -72,7 +63,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	}, [deferSettingsBody, settingsModal]);
 	const isBodyReady = bodySettings === displaySettings;
 
-	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, diagnostics, is11x });
+	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling });
 	const remoteHostId = displaySettings?.scope === "project" ? displaySettings.hostId : undefined;
 	// A cloud project lives only in the control plane; the local daemon has no
 	// record of it. Resolve it here so its settings load from the control plane.
@@ -130,7 +121,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	const activeLabel = !settingsModal ? "" : isProjectSettings
 		? (projectSections.find((s) => s.id === activeProjectSection)?.label ?? t("settings.project.general"))
-		: globalSettingsItem(activeSection, { cloudEnabled, developerMode, diagnostics, is11x }).label(t);
+		: globalSettingsItem(activeSection, { cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling }).label(t);
 
 	const closeSettingsDialog = () => {
 		if (!settingsModal) return;
@@ -174,16 +165,23 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			closeSettings();
 		}
 	}, [closeSettings, projectSaveState]);
+	// Re-resolves the requested page as the gates settle: the org's offering
+	// loads after the dialog opens, so a deep link to Upgrade or Coder lands on
+	// it once the offering allows it.
 	useEffect(() => {
 		if (settingsModal?.scope === "global") {
-			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, is11x }).id);
+			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling }).id);
 		}
+	}, [cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling, settingsModal]);
+	// Project scope resets only when a project is opened, never when a gate
+	// settles, so a reported save state survives the offering loading.
+	useEffect(() => {
 		if (settingsModal?.scope === "project") {
 			setActiveProjectSection(settingsModal.cloudOrgId !== undefined && settingsModal.section === "cues" ? "general" : settingsModal.section ?? "general");
 			setProjectSaveState(initialProjectSaveState());
 			setCueBusy(false);
 		}
-	}, [cloudEnabled, developerMode, diagnostics, is11x, settingsModal]);
+	}, [settingsModal]);
 
 	useEffect(() => {
 		setFocusAgentId(settingsModal?.scope === "global" ? settingsModal.focusAgentId : undefined);
@@ -265,7 +263,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			if (displaySettings?.scope === "project") {
 				return <ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} cloudOrgId={cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />;
 			}
-			return <GlobalSettingsForm cloudEnabled={cloudEnabled} is11x={is11x} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} section={activeSection} />;
+			return <GlobalSettingsForm cloudEnabled={cloudEnabled} hasCoder={hasCoder} selfServeBilling={selfServeBilling} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} section={activeSection} />;
 		},
 	};
 }

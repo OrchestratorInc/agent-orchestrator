@@ -66,7 +66,7 @@ import {
 	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
-import { cloudLifecycleStage, cloudStartupProblem } from "../lib/cloud-lifecycle";
+import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage } from "../lib/cloud-lifecycle";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
@@ -329,7 +329,8 @@ function CloudInterfaceSwitchLoader({ target }: { target: "chat" | "tui" }) {
 	);
 }
 
-function CloudPausedStatus() {
+/** Paused-sandbox chip. Names Coder only for a Coder session; any other provider reads "Paused". */
+function CloudPausedStatus({ stage }: { stage: "paused" | "paused_by_coder" }) {
 	const { t } = useTranslation();
 	return (
 		<motion.div
@@ -340,7 +341,7 @@ function CloudPausedStatus() {
 				"bg-background/92 font-mono text-[11px] tracking-tight shadow-sm backdrop-blur-sm",
 				"border-border/80 text-foreground",
 			)}
-			data-cloud-lifecycle-stage="paused_by_coder"
+			data-cloud-lifecycle-stage={stage}
 			initial={{ opacity: 0, y: -4 }}
 			role="status"
 		>
@@ -348,7 +349,7 @@ function CloudPausedStatus() {
 				aria-hidden="true"
 				className="size-1.5 rounded-full bg-warning"
 			/>
-			{t("cloud.lifecycle.pausedByCoder")}
+			{stage === "paused_by_coder" ? t("cloud.lifecycle.pausedByCoder") : t("cloud.lifecycle.paused")}
 		</motion.div>
 	);
 }
@@ -661,7 +662,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const cloudSessionResolving = cloudLookupEnabled && cloudRouteSession.isLoading;
 	const showLifecycleLoader = !startupFailure && ((!session && cloudSessionResolving) || (hasConnectedOnce
 		? (cloudReconnecting || workspaceRestarting)
-		: (cloudReconnecting || (cloudStage != null && cloudStage !== "paused_by_coder" && !sessionReady))));
+		: (cloudReconnecting || (cloudStage != null && !isCloudPausedStage(cloudStage) && !sessionReady))));
 	const loaderVisibleLongEnoughRef = useRef("");
 	const [completionDismissed, setCompletionDismissed] = useState(false);
 	useEffect(() => {
@@ -1803,7 +1804,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							data-testid="session-topbar-host"
 						/>
 						<div className="relative min-h-0 flex-1" ref={bindHandoffDialogContainer}>
-							{cloudStage === "paused_by_coder" ? <CloudPausedStatus /> : null}
+							{isCloudPausedStage(cloudStage) ? <CloudPausedStatus stage={cloudStage} /> : null}
 							{startupFailure && session?.cloud ? (
 								<CloudSessionStartupError orgId={session.cloud.orgId} problem={startupFailure} sessionId={session.id} />
 							) : null}
