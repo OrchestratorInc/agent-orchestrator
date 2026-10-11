@@ -12,6 +12,7 @@ import clineLogo from "../assets/agents/cline.svg";
 import claudeLogo from "../assets/agents/claude.svg";
 import claudeCodeLogo from "../assets/agents/claude-code.svg";
 import codexLogo from "../assets/agents/codex.svg";
+import codewhaleLogo from "../assets/agents/codewhale.svg";
 import continueLogo from "../assets/agents/continue.png";
 import copilotLogo from "../assets/agents/copilot.svg";
 import crushLogo from "../assets/agents/crush.png";
@@ -30,6 +31,7 @@ import kiroLogo from "../assets/agents/kiro.png";
 import museLogo from "../assets/agents/muse.png";
 import mimoCodeLogo from "../assets/agents/mimo-code.svg";
 import ompLogo from "../assets/agents/omp.png";
+import openhandsLogo from "../assets/agents/openhands.svg";
 import opencodeLogo from "../assets/agents/opencode.svg";
 import piLogo from "../assets/agents/pi.png";
 import primeAgentLogo from "../assets/agents/prime-agent.png";
@@ -41,6 +43,7 @@ import vibeLogo from "../assets/agents/vibe.png";
 // Agents without an asset fall back to a lettered tile (fake).
 const LOGOS: AgentLogoSources = {
 	codex: codexLogo,
+	codewhale: codewhaleLogo,
 	"claude-code": claudeCodeLogo,
 	claude: claudeLogo,
 	cursor: cursorLogo,
@@ -60,6 +63,7 @@ const LOGOS: AgentLogoSources = {
 	kimi: kimiLogo,
 	muse: museLogo,
 	omp: ompLogo,
+	openhands: openhandsLogo,
 	kiro: kiroLogo,
 	kilocode: kilocodeLogo,
 	vibe: vibeLogo,

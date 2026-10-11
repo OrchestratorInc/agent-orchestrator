@@ -506,6 +506,49 @@ func TestSessionPersistsDeterministicHandoffInputs(t *testing.T) {
 	}
 }
 
+func TestSessionPersistsArtifactMetadata(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "artifacts")
+
+	rec := sampleRecord("artifacts")
+	rec.Metadata.ArtifactDir = "/tmp/ao/artifacts/artifacts-1"
+	rec.OutputType = domain.SessionOutputArtifact
+
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	got, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("get session: ok=%v err=%v", ok, err)
+	}
+	if got.Metadata.ArtifactDir != rec.Metadata.ArtifactDir {
+		t.Fatalf("artifactDir = %q, want %q", got.Metadata.ArtifactDir, rec.Metadata.ArtifactDir)
+	}
+	if got.OutputType != domain.SessionOutputArtifact {
+		t.Fatalf("outputType = %q, want %q", got.OutputType, domain.SessionOutputArtifact)
+	}
+
+	got.UpdatedAt = got.UpdatedAt.Add(time.Second)
+	if err := s.UpdateSession(ctx, got); err != nil {
+		t.Fatalf("update session: %v", err)
+	}
+	if applied, err := s.UpdateSessionArtifactOutput(ctx, created.ID, "/tmp/ao/artifacts/artifacts-1/final", domain.SessionOutputPR); err != nil || !applied {
+		t.Fatalf("update artifact output: applied=%v err=%v", applied, err)
+	}
+	updated, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("get updated session: ok=%v err=%v", ok, err)
+	}
+	if updated.Metadata.ArtifactDir != "/tmp/ao/artifacts/artifacts-1/final" {
+		t.Fatalf("updated artifactDir = %q, want the narrow write's value", updated.Metadata.ArtifactDir)
+	}
+	if updated.OutputType != domain.SessionOutputPR {
+		t.Fatalf("updated outputType = %q, want %q", updated.OutputType, domain.SessionOutputPR)
+	}
+}
+
 func TestRecordSessionLatestUserPromptIsNarrowAndMonotonic(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -2213,6 +2256,7 @@ func TestRememberProjectPermissionsPinsExistingSessions(t *testing.T) {
 		row.Mode = domain.NormalizeSessionMode(row.Mode)
 		row.ProvisionState = domain.SessionProvisionReady
 		row.Metadata.ConversationCheckpointState = domain.ConversationCheckpointEmpty
+		row.OutputType = domain.SessionOutputNone
 		row.Metadata.Permissions = tc.want
 		if tc.saved == "" {
 			row.Revision++ // Pinning permissions writes even without changing updated_at.
@@ -2264,5 +2308,87 @@ func TestClaimChatControllerGenerationPreservesRecency(t *testing.T) {
 	}
 	if after.Metadata.ControllerGeneration != "after" || !after.UpdatedAt.Equal(before.UpdatedAt) || after.Activity != before.Activity {
 		t.Fatalf("claim changed user-visible facts: before=%+v after=%+v", before, after)
+	}
+}
+
+// The chat surface refetches a session on session_updated, so publishing a
+// start's checklist must persist it and fire that event exactly when it changes.
+func TestSessionProvisionStepsRoundTripAndCDC(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.ProvisionSteps) != 0 {
+		t.Fatalf("new session steps = %+v, want none", r.ProvisionSteps)
+	}
+
+	base, _ := s.LatestSeq(ctx)
+	at := r.UpdatedAt.Add(time.Second)
+	steps := []domain.SessionProvisionStep{
+		{ID: domain.SessionProvisionStepWorktree, Status: domain.SessionProvisionStepDone, StartedAt: &at, EndedAt: &at},
+		{ID: domain.SessionProvisionStepAgent, Status: domain.SessionProvisionStepRunning, StartedAt: &at},
+	}
+	if err := s.SetSessionProvisionSteps(ctx, r.ID, steps, at); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := s.GetSession(ctx, r.ID)
+	if err != nil || !found {
+		t.Fatalf("get session: found=%v err=%v", found, err)
+	}
+	if len(got.ProvisionSteps) != 2 ||
+		got.ProvisionSteps[0].ID != domain.SessionProvisionStepWorktree || got.ProvisionSteps[0].Status != domain.SessionProvisionStepDone ||
+		got.ProvisionSteps[0].EndedAt == nil || !got.ProvisionSteps[0].EndedAt.Equal(at) ||
+		got.ProvisionSteps[1].ID != domain.SessionProvisionStepAgent || got.ProvisionSteps[1].Status != domain.SessionProvisionStepRunning ||
+		got.ProvisionSteps[1].EndedAt != nil {
+		t.Fatalf("steps did not round-trip: %+v", got.ProvisionSteps)
+	}
+	evs, err := s.EventsAfter(ctx, base, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 || string(evs[0].Type) != "session_updated" {
+		t.Fatalf("checklist events = %+v, want one session_updated", evs)
+	}
+
+	base, _ = s.LatestSeq(ctx)
+	if err := s.SetSessionProvisionSteps(ctx, r.ID, steps, at.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if evs, err := s.EventsAfter(ctx, base, 100); err != nil || len(evs) != 0 {
+		t.Fatalf("unchanged checklist events = %+v err=%v, want none", evs, err)
+	}
+}
+
+func TestUpdateSessionDoesNotOverwriteArtifactOutputColumns(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	created, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("get session: %v, %v", ok, err)
+	}
+	if applied, err := s.UpdateSessionArtifactOutput(ctx, created.ID, "/data/artifacts/x", domain.SessionOutputArtifact); err != nil || !applied {
+		t.Fatalf("narrow write: %v, %v", applied, err)
+	}
+	stale.DisplayName = "stale full-row write"
+	if err := s.UpdateSession(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("get session: %v, %v", ok, err)
+	}
+	if got.DisplayName != stale.DisplayName {
+		t.Fatalf("display name = %q, want the full-row write applied", got.DisplayName)
+	}
+	if got.OutputType != domain.SessionOutputArtifact || got.Metadata.ArtifactDir != "/data/artifacts/x" {
+		t.Fatalf("stale UpdateSession clobbered output columns: type=%q dir=%q", got.OutputType, got.Metadata.ArtifactDir)
 	}
 }

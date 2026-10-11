@@ -2,7 +2,7 @@
 
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { CloudCpClient } from "../../lib/cloud-cp";
@@ -14,7 +14,7 @@ vi.mock("../ReadOnlyFileView", () => ({ ReadOnlyFileView: ({ detail, editing, on
 vi.mock("./CloudDiffFile", () => ({ CloudDiffFile: () => <div data-testid="cloud-diff" /> }));
 vi.mock("../markdown/MarkdownFileView", () => ({ MarkdownFileView: ({ content }: { content: string }) => <article>{content}</article> }));
 
-const annotation: FileAnnotationModel = { target: null, draft: "", status: "idle", error: "", begin: vi.fn(), setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
+const annotation: FileAnnotationModel = { targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", statusFor: () => "idle", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
 const detail = { path: "README.md", status: "modified" as const, additions: 1, deletions: 1, size: 8, binary: false, editable: true, fileFingerprint: "fp-1", deleted: false, content: "# Hello", contentTruncated: false, diff: "diff", diffTruncated: false, workspaceVersion: "v1" };
 
 function renderPane(client: CloudCpClient, props: Partial<React.ComponentProps<typeof CloudFileContentPane>> = {}) {
@@ -38,7 +38,10 @@ describe("CloudFileContentPane", () => {
 		const onDirtyChange = vi.fn();
 		renderPane(client, { initialMode: "file", onDirtyChange });
 		await userEvent.click(await screen.findByRole("button", { name: "Edit file" }));
-		fireEvent.change(screen.getByRole("textbox", { name: "editor" }), { target: { value: "# Changed" } });
+		const editor = screen.getByRole("textbox", { name: "Edit README.md" }).querySelector<HTMLElement>(".cm-content");
+		expect(editor).toBeInTheDocument();
+		await userEvent.click(editor!);
+		await userEvent.keyboard("{Control>}a{/Control}# Changed");
 		await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
 		await userEvent.click(screen.getByRole("button", { name: "Save" }));
 		await waitFor(() => expect(updateWorkspaceReviewFile).toHaveBeenCalledWith("org-1", "session-1", { path: "README.md", content: "# Changed", expectedFileFingerprint: "fp-1" }));
@@ -48,7 +51,7 @@ describe("CloudFileContentPane", () => {
 		const client = { getWorkspaceReviewFile: vi.fn().mockResolvedValue(detail) } as unknown as CloudCpClient;
 		const lineAnnotation: FileAnnotationModel = {
 			...annotation,
-			target: {
+			targets: [{
 				path: "README.md",
 				side: "file",
 				line: 2,
@@ -56,7 +59,7 @@ describe("CloudFileContentPane", () => {
 				lineText: "Hello",
 				scope: "combined",
 				surface: "focused",
-			},
+			}],
 		};
 		renderPane(client, { annotation: lineAnnotation, initialMode: "file" });
 		await screen.findByText("# Hello");

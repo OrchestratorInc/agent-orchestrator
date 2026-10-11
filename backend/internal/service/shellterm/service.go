@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -38,6 +39,7 @@ type ShellRuntime interface {
 // start in. The daemon wiring adapts the project service to it.
 type ProjectRootLocator interface {
 	ProjectRoot(ctx context.Context, id domain.ProjectID) (string, error)
+	ProjectEnv(ctx context.Context, id domain.ProjectID) (map[string]string, error)
 }
 
 // SessionWorkspaceLocator resolves a session id to the workspace it is
@@ -70,6 +72,9 @@ type Service struct {
 	now         func() time.Time
 	newHandleID func() (string, error)
 	executable  func() (string, error)
+	// initialInputTimeout bounds the wait for an auth terminal's ready marker;
+	// tests shorten it to exercise the timeout path.
+	initialInputTimeout time.Duration
 
 	// gatesMu guards gates itself (the map), not the individual gate mutexes it
 	// holds.
@@ -161,12 +166,12 @@ func (g *sessionGate) acquire(ctx context.Context, id domain.SessionID) (release
 // NewService builds the shell terminal service. dataDir is the fallback working
 // directory for a shell opened with no project context. A nil logger falls back
 // to slog.Default.
-func NewService(runtime ShellRuntime, store Store, projects ProjectRootLocator, sessions SessionWorkspaceLocator, dataDir, appRunID string, log *slog.Logger) *Service {
+func NewService(shellRuntime ShellRuntime, store Store, projects ProjectRootLocator, sessions SessionWorkspaceLocator, dataDir, appRunID string, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Service{
-		runtime:             runtime,
+		runtime:             shellRuntime,
 		store:               store,
 		projects:            projects,
 		sessions:            sessions,
@@ -178,17 +183,18 @@ func NewService(runtime ShellRuntime, store Store, projects ProjectRootLocator, 
 		now:                 time.Now,
 		newHandleID:         newShellTerminalHandleID,
 		executable:          os.Executable,
+		initialInputTimeout: initialInputTimeout,
 		gates:               map[domain.SessionID]*sessionGate{},
 	}
 }
 
-func (s *Service) pinnedEnv() map[string]string {
-	path, err := agentlaunch.PinnedPATH(s.executable, os.Getenv, nil, s.dataDir)
+func (s *Service) pinnedEnv(projectEnv map[string]string) map[string]string {
+	path, err := agentlaunch.PinnedPATH(s.executable, os.Getenv, projectEnv, s.dataDir)
 	if err != nil {
 		s.log.Warn("shell terminal PATH not pinned to the daemon binary; a bare `ao` may resolve to a different install", "err", err)
-		return nil
+		return agentlaunch.MergeEnv(projectEnv, nil)
 	}
-	return map[string]string{"PATH": path}
+	return agentlaunch.MergeEnv(projectEnv, map[string]string{"PATH": path})
 }
 
 // ValidPreviewCapability accepts a shell's preview-only bearer while its
@@ -283,6 +289,13 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	if err != nil {
 		return ShellTerminal{}, err
 	}
+	var projectEnv map[string]string
+	if projectID != "" {
+		projectEnv, err = s.projects.ProjectEnv(ctx, projectID)
+		if err != nil {
+			return ShellTerminal{}, fmt.Errorf("open shell terminal: resolve project environment: %w", err)
+		}
+	}
 	if title == "" {
 		openTerminals, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
 		if err != nil {
@@ -299,7 +312,7 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 		return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SHELL",
 			"Could not determine a shell to launch. Set SHELL (macOS/Linux) or ComSpec (Windows).")
 	}
-	env := s.pinnedEnv()
+	env := s.pinnedEnv(projectEnv)
 	if env == nil {
 		env = make(map[string]string, 3)
 	}
@@ -328,7 +341,7 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 		}()
 	}
 	return s.openTerminal(ctx, openTerminalConfig{
-		argv: argv, env: env, projectID: projectID, sessionID: in.SessionID,
+		argv: argv, env: env, projectEnv: projectEnv, projectID: projectID, sessionID: in.SessionID,
 		workingDir: workingDir, title: title,
 		previewVerifier: verifier,
 		startOnAttach:   in.StartOnAttach,
@@ -376,7 +389,7 @@ func (s *Service) OpenCommandTerminal(ctx context.Context, in OpenCommandTermina
 		return ShellTerminal{}, err
 	}
 	if len(in.InitialInputReadyStates) > 0 {
-		go s.sendInitialInputWhenReady(context.WithoutCancel(ctx), ports.RuntimeHandle{ID: terminal.HandleID}, in.InitialInput, in.InitialInputReadyStates)
+		go s.sendInitialInputWhenReady(context.WithoutCancel(ctx), ports.RuntimeHandle{ID: terminal.HandleID}, in.InitialInput, in.InitialInputReadyStates, in.SendInitialInputOnReadyTimeout)
 	}
 	return terminal, nil
 }
@@ -426,14 +439,12 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 		return ShellTerminal{}, err
 	}
 	defer readiness.cleanup()
-	env := s.pinnedEnv()
-	if env == nil {
-		env = map[string]string{}
+	projectEnv, err := s.projects.ProjectEnv(ctx, projectID)
+	if err != nil {
+		return ShellTerminal{}, fmt.Errorf("run cue command: resolve project environment: %w", err)
 	}
-	for key, value := range readiness.env {
-		env[key] = value
-	}
-	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectID: projectID,
+	env := agentlaunch.MergeEnv(s.pinnedEnv(projectEnv), readiness.env)
+	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectEnv: projectEnv, projectID: projectID,
 		sessionID: in.SessionID, workingDir: workingDir, title: nextShellTerminalTitle(records)})
 	if err != nil {
 		return ShellTerminal{}, err
@@ -493,21 +504,51 @@ const (
 	initialInputTimeout      = 10 * time.Second
 	initialInputPollInterval = 50 * time.Millisecond
 	initialInputOutputLines  = 100
+
+	initialInputFallbackSendTimeout = 5 * time.Second
 )
 
-func (s *Service) sendInitialInputWhenReady(ctx context.Context, handle ports.RuntimeHandle, input string, readyStates []InitialInputReadyState) {
-	ctx, cancel := context.WithTimeout(ctx, initialInputTimeout)
+// MatchInitialInputReadyState returns the first ready state whose marker text
+// appears in output, or nil when the terminal has not reached any of them.
+func MatchInitialInputReadyState(output string, readyStates []InitialInputReadyState) *InitialInputReadyState {
+	for i := range readyStates {
+		if strings.Contains(output, readyStates[i].Text) {
+			return &readyStates[i]
+		}
+	}
+	return nil
+}
+
+// sendInitialInputAfterTimeout delivers the reviewed input once the ready
+// wait has expired without a marker, as long as the terminal is still alive.
+func (s *Service) sendInitialInputAfterTimeout(handle ports.RuntimeHandle, input string) {
+	ctx, cancel := context.WithTimeout(context.Background(), initialInputFallbackSendTimeout)
+	defer cancel()
+	alive, err := s.runtime.IsAlive(ctx, handle)
+	if err != nil || !alive {
+		s.log.Warn("authentication terminal exited before initial input", "handleId", handle.ID, "error", err)
+		return
+	}
+	s.log.Info("authentication terminal showed no ready marker; sending initial input anyway", "handleId", handle.ID)
+	if err := s.runtime.SendMessage(ctx, handle, input); err != nil {
+		s.log.Warn("authentication terminal initial input failed", "handleId", handle.ID, "error", err)
+	}
+}
+
+func (s *Service) sendInitialInputWhenReady(ctx context.Context, handle ports.RuntimeHandle, input string, readyStates []InitialInputReadyState, sendOnTimeout bool) {
+	ctx, cancel := context.WithTimeout(ctx, s.initialInputTimeout)
 	defer cancel()
 	ticker := time.NewTicker(initialInputPollInterval)
 	defer ticker.Stop()
 	for {
 		output, err := s.runtime.GetOutput(ctx, handle, initialInputOutputLines)
 		if err == nil {
-			var ready *InitialInputReadyState
-			for i := range readyStates {
-				if strings.Contains(output, readyStates[i].Text) {
-					ready = &readyStates[i]
-					break
+			ready := MatchInitialInputReadyState(output, readyStates)
+			if ready == nil {
+				if styled, ok := s.runtime.(ports.StyledTerminalOutputReader); ok {
+					if rendered, styledErr := styled.GetStyledOutput(ctx, handle, initialInputOutputLines); styledErr == nil {
+						ready = MatchInitialInputReadyState(terminalui.PlainTerminalText(rendered), readyStates)
+					}
 				}
 			}
 			if ready == nil {
@@ -527,6 +568,10 @@ func (s *Service) sendInitialInputWhenReady(ctx context.Context, handle ports.Ru
 	wait:
 		select {
 		case <-ctx.Done():
+			if sendOnTimeout {
+				s.sendInitialInputAfterTimeout(handle, input)
+				return
+			}
 			s.log.Warn("authentication terminal did not become ready for initial input", "handleId", handle.ID)
 			return
 		case <-ticker.C:
@@ -538,6 +583,7 @@ type openTerminalConfig struct {
 	handleID                 string
 	argv                     []string
 	env                      map[string]string
+	projectEnv               map[string]string
 	projectID                domain.ProjectID
 	sessionID                domain.SessionID
 	workingDir               string
@@ -583,7 +629,7 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		if cfg.cleanupWorkingDirOnError {
 			s.cleanupAuthWorkspace(cfg.workingDir, handleID)
 		}
-		return ShellTerminal{}, fmt.Errorf("open shell terminal %s: runtime: %w", handleID, err)
+		return ShellTerminal{}, fmt.Errorf("open shell terminal %s: runtime: %w", handleID, agentlaunch.RedactError(err, cfg.projectEnv))
 	}
 
 	rec := ShellTerminalRecord{
@@ -603,6 +649,7 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 	if err := s.store.InsertShellTerminal(ctx, rec); err != nil {
 		stillAlive, destroyErr := s.destroyRuntimeConfirmed(context.WithoutCancel(ctx), handle)
 		if stillAlive {
+			destroyErr = agentlaunch.RedactError(destroyErr, cfg.projectEnv)
 			s.log.Warn("shell terminal rollback failed; retaining workspace for live runtime",
 				"handleId", handle.ID, "workingDir", cfg.workingDir, "error", destroyErr)
 		} else if cfg.cleanupWorkingDirOnError {

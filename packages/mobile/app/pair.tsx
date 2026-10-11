@@ -20,6 +20,8 @@ import { completeOnboarding } from "../lib/onboardingNavigation";
 import { pairFromCode } from "../lib/pairFlow";
 import { isLegacyPairingCode, parsePairingCode } from "../lib/pairingCode";
 import { saveHost, setActiveHost } from "../lib/hosts";
+import { loadAccount } from "../lib/account";
+import { syncAccountHosts, unignoreAccountHost } from "../lib/accountHosts";
 import { probeEndpoint } from "../lib/connectRuntime";
 import { raceEndpoints } from "../lib/race";
 import { connectSheetRoute } from "../lib/sheetResult";
@@ -136,6 +138,12 @@ export default function PairScreen() {
 		// The rest of the app still runs off ServerConfig, so the winning
 		// endpoint is written there as well as into the host list.
 		await saveConfig(result.config);
+		void loadAccount().then(async (account) => {
+			if (account) {
+				await unignoreAccountHost(account.id, result.host.id);
+				await syncAccountHosts(account);
+			}
+		}).catch(() => {});
 		mobileTelemetry()?.capture(MOBILE_EVENTS.paired, { method: "qr", from_onboarding: fromOnboarding });
 		if (fromOnboarding) mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingCompleted);
 		haptics.success();

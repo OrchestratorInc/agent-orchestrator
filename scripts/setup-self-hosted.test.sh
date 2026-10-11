@@ -50,6 +50,100 @@ chmod +x "$tmp/bin/id" "$tmp/bin/uname" "$tmp/pkg/resources/daemon/ao" \
 
 bundle="$tmp/host.tar.gz"
 case "${1:-}" in
+	release-channels)
+		for tool in awk find shasum; do
+			ln -s "$(command -v "$tool")" "$tmp/bin/$tool"
+		done
+		printf '%s\n' '#!/bin/sh' 'cp -R "$TEST_RELEASE_PACKAGE" squashfs-root' > "$tmp/app.AppImage"
+		digest="$(shasum -a 256 "$tmp/app.AppImage" | awk '{print $1}')"
+		python3 - "$tmp" "$digest" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+asset = {"name": "agent-orchestrator-linux-x64.AppImage", "browser_download_url": "https://example.test/stable", "digest": "sha256:" + sys.argv[2]}
+stable = {"tag_name": "v1.0.0", "prerelease": False, "draft": False, "published_at": "2026-10-10T00:00:00Z", "assets": [asset]}
+def nightly(tag, date, url):
+    return dict(stable, tag_name=tag, prerelease=True, published_at=date, assets=[dict(asset, browser_download_url=url)])
+old = nightly("v1.0.0-nightly.old", "2026-10-07T00:00:00Z", "https://example.test/old")
+new = nightly("v1.0.0-nightly.new", "2026-10-08T00:00:00Z", "https://example.test/new")
+draft = dict(new, draft=True, published_at="2026-10-11T00:00:00Z")
+beta = dict(new, tag_name="v1.0.0-beta.1", published_at="2026-10-12T00:00:00Z")
+fixtures = {"stable": stable, "nightly": [old, stable, draft, beta, new], "empty": [stable, draft, beta],
+            "missing-asset": [dict(new, assets=[])], "missing-digest": [dict(new, assets=[dict(asset, digest=None)])],
+            "bad-digest": [dict(new, assets=[dict(asset, digest="sha256:" + "0" * 64)])]}
+for name, data in fixtures.items():
+    (root / (name + ".json")).write_text(json.dumps(data))
+PY
+		printf '%s\n' '#!/bin/sh' \
+			'while [ "$#" -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; https://*) url="$1"; shift ;; --retry) shift 2 ;; *) shift ;; esac; done' \
+			'echo "$url" >> "$TEST_CURL_LOG"' \
+			'case "$url" in' \
+			'  */releases/latest) cp "$TEST_RELEASE_FIXTURES/stable.json" "$out" ;;' \
+			'  */releases\?per_page=100) cp "$TEST_RELEASE_FIXTURES/$TEST_RELEASE_CASE.json" "$out" ;;' \
+			'  https://example.test/*) cp "$TEST_RELEASE_FIXTURES/app.AppImage" "$out" ;;' \
+			'  *) exit 1 ;;' 'esac' > "$tmp/bin/curl"
+		chmod +x "$tmp/bin/curl"
+		for fixture in stable nightly empty missing-asset missing-digest bad-digest; do
+			args=()
+			[[ "$fixture" == stable ]] || args+=(--nightly)
+			result=0
+			env PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host-$fixture" TEST_RELEASE_PACKAGE="$tmp/pkg" \
+				TEST_RELEASE_FIXTURES="$tmp" TEST_RELEASE_CASE="$fixture" TEST_CURL_LOG="$tmp/$fixture.urls" \
+				/bin/bash "$script" "${args[@]}" --install-only > "$tmp/out" 2>&1 || result=$?
+			case "$fixture" in
+				stable|nightly)
+					[[ "$result" == 0 ]] || { cat "$tmp/out" >&2; exit 1; }
+					[[ -d "$(readlink "$tmp/host-$fixture/current")" ]]
+					expected=stable
+					[[ "$fixture" == stable ]] || expected=new
+					grep -Fxq "https://example.test/$expected" "$tmp/$fixture.urls"
+					;;
+				*)
+					[[ "$result" != 0 && ! -e "$tmp/host-$fixture/current" ]]
+					case "$fixture" in
+						empty) grep -q 'No published nightly release' "$tmp/out" ;;
+						missing-asset|missing-digest) grep -q 'No verified release asset' "$tmp/out" ;;
+						bad-digest) grep -q 'Release SHA-256 mismatch' "$tmp/out" ;;
+					esac
+					;;
+			esac
+		done
+		;;
+	bootstrap-nightly)
+		bootstrap="${script%/*}/bootstrap-self-hosted.sh"
+		ln -s /bin/bash "$tmp/bin/bash"
+		for tool in apt-get sudo systemctl cloudflared; do
+			printf '%s\n' '#!/bin/sh' 'exit 0' > "$tmp/bin/$tool"
+			chmod +x "$tmp/bin/$tool"
+		done
+		printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$@" > "$TEST_INSTALL_ARGS"' > "$tmp/installer"
+		printf '%s\n' '#!/bin/sh' 'cp "$TEST_INSTALLER" "$4"' > "$tmp/bin/curl"
+		chmod +x "$tmp/bin/curl"
+		for mode in stable nightly nightly-lan; do
+			args=()
+			[[ "$mode" == stable ]] || args+=(--nightly)
+			[[ "$mode" != nightly-lan ]] || args+=(--lan)
+			env PATH="$tmp/bin" TEST_INSTALLER="$tmp/installer" TEST_INSTALL_ARGS="$tmp/args" \
+				/bin/bash "$bootstrap" "${args[@]}" > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; exit 1; }
+			if [[ "$mode" == stable ]]; then
+				if grep -q -- '--nightly' "$tmp/args"; then exit 1; fi
+			else
+				grep -Fxq -- '--nightly' "$tmp/args"
+			fi
+			if [[ "$mode" == nightly-lan ]]; then
+				if grep -q -- '--tunnel' "$tmp/args"; then exit 1; fi
+			else
+				grep -Fxq -- '--tunnel' "$tmp/args"
+			fi
+		done
+		for entry in "$script" "$bootstrap"; do
+			option=--bundle
+			[[ "$entry" == "$script" ]] || option=--source-ref
+			result=0
+			/bin/bash "$entry" --nightly "$option" main > "$tmp/out" 2>&1 || result=$?
+			[[ "$result" == 2 ]]
+			grep -q 'cannot be combined' "$tmp/out"
+		done
+		;;
 	bad-tmux)
 		chmod -x "$tmp/pkg/resources/tmux/bin/tmux"
 		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
@@ -319,6 +413,6 @@ case "${1:-}" in
 			! grep -q 'Pair this host' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 		fi
 		;;
-	*) printf 'Usage: %s {bad-tmux|no-systemd|inactive-systemd|prune|failed-restarts|failed-first-install|failed-readiness|failed-mac-bootstrap|failed-mac-readiness|failed-mac-first|relative-current|concurrent|interrupted|piped|tunnel-pairing|tunnel-unavailable}\n' "$0" >&2; exit 2 ;;
+	*) printf 'Usage: %s {release-channels|bootstrap-nightly|bad-tmux|no-systemd|inactive-systemd|prune|failed-restarts|failed-first-install|failed-readiness|failed-mac-bootstrap|failed-mac-readiness|failed-mac-first|relative-current|concurrent|interrupted|piped|tunnel-pairing|tunnel-unavailable}\n' "$0" >&2; exit 2 ;;
 esac
 printf 'PASS %s\n' "$1"

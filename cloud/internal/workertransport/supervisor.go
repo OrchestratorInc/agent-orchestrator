@@ -70,10 +70,16 @@ type Supervisor struct {
 	Shell               string
 	AgentCommand        workerexec.Command
 	AgentCommandFactory AgentCommandFactory
-	AgentTerminalID     string
-	Started             chan<- error
-	PollInterval        time.Duration
-	Logger              *slog.Logger
+	ReviewCommand       workerexec.Command
+	// ReviewCommandFactory resolves a fresh, provider-specific command on each
+	// review launch. It lets the Cloud reviewer selector change independently
+	// from the session's already-running interactive harness.
+	ReviewCommandFactory func(context.Context, string) (workerexec.Command, error)
+	ProjectReviewCommand func(context.Context, worker.TerminalCommand) (workerexec.Command, error)
+	AgentTerminalID      string
+	Started              chan<- error
+	PollInterval         time.Duration
+	Logger               *slog.Logger
 	// Streams, when non-nil, holds a persistent duplex terminal stream per
 	// open terminal for low-latency input/output. The polled transport stays
 	// authoritative whenever a stream is absent or unhealthy.
@@ -348,6 +354,22 @@ func (s *Supervisor) StartAgent(ctx context.Context, command workerexec.Command,
 	return nil
 }
 
+// SetReviewCommand configures the fresh coding-agent command used by automated
+// PR review terminals. Review processes share the checkout but must not resume
+// the interactive session's native conversation.
+func (s *Supervisor) SetReviewCommand(command workerexec.Command) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ReviewCommand = command
+}
+
+// SetReviewCommandFactory configures provider-specific fresh reviewer commands.
+func (s *Supervisor) SetReviewCommandFactory(factory func(context.Context, string) (workerexec.Command, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ReviewCommandFactory = factory
+}
+
 func (s *Supervisor) forwardTurn(ctx context.Context) (bool, error) {
 	// The Chat controller owns the durable turn queue while ChatUI is active.
 	// Do not claim a turn here: doing so races the headless runner and either
@@ -455,6 +477,18 @@ func (s *Supervisor) handle(
 		}
 	case "workspace.diff":
 		response, err = workspace.Diff(ctx)
+	case "harness.inspect":
+		var input worker.HarnessInspectRequest
+		err = decodePayload(request.Payload, &input)
+		if err == nil {
+			response, err = inspectHarnesses(ctx, input)
+		}
+	case "harness.install":
+		var input worker.HarnessInstallRequest
+		err = decodePayload(request.Payload, &input)
+		if err == nil {
+			response, err = installHarness(ctx, input)
+		}
 	case "workspace.review.summary":
 		response, err = workspace.ReviewSummary(ctx)
 	case "workspace.review.tree":
@@ -587,6 +621,8 @@ func (s *Supervisor) handle(
 		if err == nil {
 			if input.TerminalID == s.AgentTerminalID {
 				err = s.writeAgentPrompt(input.TerminalID, input.Data)
+			} else if input.Review {
+				err = s.writeAgentPrompt(input.TerminalID, input.Data)
 			} else {
 				err = s.writeTerminal(input)
 			}
@@ -634,7 +670,7 @@ func (s *Supervisor) handle(
 
 func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalCommand) error {
 	if input.TerminalID == "" ||
-		(input.Kind != "workspace" && input.Kind != "agent") {
+		(input.Kind != "workspace" && input.Kind != "agent" && input.Kind != "reviewer") {
 		return errors.New("invalid terminal open request")
 	}
 	s.mu.Lock()
@@ -642,12 +678,19 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 		s.mu.Unlock()
 		return nil
 	}
+	s.mu.Unlock()
 	processCtx, cancel := context.WithCancel(ctx)
-	command, cleanup, err := s.terminalCommand(processCtx, input.Kind)
+	command, cleanup, err := s.terminalCommand(processCtx, input)
 	if err != nil {
 		cancel()
-		s.mu.Unlock()
 		return err
+	}
+	s.mu.Lock()
+	if _, exists := s.terminals[input.TerminalID]; exists {
+		s.mu.Unlock()
+		cancel()
+		cleanup()
+		return nil
 	}
 	columns, rows := input.Columns, input.Rows
 	if columns == 0 {
@@ -683,7 +726,11 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 	}
 	s.mu.Unlock()
 
-	go s.copyTerminalOutput(processCtx, input.TerminalID, terminal, input.Kind == "agent" && input.NextOutputSequence > 1)
+	outputDone := make(chan struct{})
+	go func() {
+		defer close(outputDone)
+		s.copyTerminalOutput(processCtx, input.TerminalID, terminal, input.Kind == "agent" && input.NextOutputSequence > 1)
+	}()
 	if s.Streams != nil {
 		go s.runTerminalStream(processCtx, input.TerminalID, terminal)
 	}
@@ -695,6 +742,16 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 		// PublishTerminalExit delays this signal, a concurrent stop can observe an
 		// already-removed terminal and incorrectly conclude that shutdown finished.
 		close(terminal.done)
+		if input.Kind == "reviewer" {
+			// A reviewer can reject its launch arguments immediately. Preserve
+			// that diagnostic before canceling the output upload or closing the
+			// PTY; otherwise the UI only receives "reviewer terminal finished".
+			select {
+			case <-outputDone:
+			case <-processCtx.Done():
+			case <-time.After(3 * time.Second):
+			}
+		}
 		s.mu.Lock()
 		current := s.terminals[input.TerminalID]
 		if current == terminal {
@@ -723,21 +780,45 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 
 func (s *Supervisor) terminalCommand(
 	ctx context.Context,
-	kind string,
+	input worker.TerminalCommand,
 ) (*exec.Cmd, func(), error) {
-	if kind == "agent" {
-		// openTerminal holds s.mu while it snapshots the command and creates the
-		// terminal entry. Do not lock s.mu again here: sync.Mutex is not
-		// re-entrant, and doing so leaves the worker stuck before the PTY (and
-		// coding-agent process) is started.
-		agentCommand := s.AgentCommand
-		if agentCommand.Path == "" {
+	if input.Kind == "agent" || input.Kind == "reviewer" {
+		// openTerminal holds s.mu while this command is created.
+		commandConfig := s.AgentCommand
+		if input.Kind == "reviewer" {
+			if s.ProjectReviewCommand == nil || input.Reviewer == nil || input.ReviewRunID == "" {
+				return nil, func() {}, errors.New("reviewer command is unavailable")
+			}
+			var err error
+			commandConfig, err = s.ProjectReviewCommand(ctx, input)
+			if err != nil {
+				return nil, func() {}, err
+			}
+		} else if input.Review {
+			if s.ReviewCommandFactory != nil {
+				var err error
+				commandConfig, err = s.ReviewCommandFactory(ctx, input.Harness)
+				if err != nil {
+					return nil, func() {}, err
+				}
+			} else {
+				commandConfig = s.ReviewCommand
+			}
+		}
+		if commandConfig.Path == "" {
 			return nil, func() {}, errors.New("interactive agent command is unavailable")
 		}
-		command := exec.CommandContext(ctx, agentCommand.Path, agentCommand.Args...)
-		command.Dir = agentCommand.Dir
-		command.Env = terminalEnvironment(agentCommand.Env)
-		cleanup := agentCommand.Cleanup
+		args := append([]string(nil), commandConfig.Args...)
+		if input.Review && len(input.Data) > 0 {
+			// Codex accepts an initial positional prompt. Supplying it at process
+			// startup avoids racing its interactive TUI initialization, which can
+			// drop a prompt typed immediately after the PTY opens.
+			args = append(args, string(input.Data))
+		}
+		command := exec.CommandContext(ctx, commandConfig.Path, args...)
+		command.Dir = commandConfig.Dir
+		command.Env = terminalEnvironment(commandConfig.Env)
+		cleanup := commandConfig.Cleanup
 		if cleanup == nil {
 			cleanup = func() {}
 		}

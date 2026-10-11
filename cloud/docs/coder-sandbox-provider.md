@@ -75,6 +75,34 @@ path, must exist as a non-symlink mount point, and must survive Coder `stop` the
 `start`. The template must include the `mountpoint` utility so bootstrap can
 verify the contract before writing state.
 
+A bring-your-own (organization) Coder connection relaxes this contract, because
+customer templates commonly keep home on the root filesystem and run as a user
+other than `coder`:
+
+- The durable root defaults to `$HOME` (also accepted as `~`), resolved inside
+  the workspace to the agent user's home directory at bootstrap. An explicit
+  absolute path is still accepted.
+- The root need not be a mount point; it is created (owned by the workspace
+  user) if missing, and the session identity marker alone refuses another
+  session's state. Set `requireMountedDurableRoot: true` on the connection to
+  keep the strict check. A symbolic link is always refused.
+- `startupTimeoutSeconds` on the connection (default 1200, 60-7200) is that
+  session's ready wait and startup ceiling, replacing the deployment
+  `AO_CLOUD_SANDBOX_STARTUP_TIMEOUT` and the 10-minute ceiling.
+- On a startup failure AO marks the session failed and records a user-facing
+  `startupError`, but never stops or deletes the customer's workspace; only a
+  user-initiated session delete removes the workspace AO created.
+
+AO bootstraps only once the agent is `connected` and its `lifecycle_state` is
+`ready`, `start_error`, or `start_timeout`: `created` and `starting` mean the
+template's startup script is still preparing the workspace. (Coder's
+`start_blocks_login` is enforced by clients, not the agent, so AO waits on the
+lifecycle itself.) A workspace terminal that closes before the bootstrap
+begins is retried with backoff, is not counted as a repair attempt, and is
+logged with the agent's status and lifecycle at each attempt. The worker build follows the agent's declared architecture (the
+`coder_agent` `arch`), verified with `uname -m` before anything is installed;
+`amd64` and `arm64` workspaces are supported.
+
 AO derives every stateful path beneath that root:
 
 | State | Path relative to the durable root |

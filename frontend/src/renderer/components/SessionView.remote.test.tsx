@@ -66,6 +66,7 @@ it("keeps equal local, Box A, and Box B session IDs isolated through chat sends"
 		? { hostId: "box-b", label: "Box B", url, base: "http://127.0.0.1:4001" }
 		: { hostId: "box-a", label: "Box A", url, base: "http://127.0.0.1:4000" });
 	const posts: string[] = [];
+	const views: { url: string; active: boolean }[] = [];
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const request = input instanceof Request ? input : new Request(input);
 		const path = new URL(request.url).pathname;
@@ -76,6 +77,10 @@ it("keeps equal local, Box A, and Box B session IDs isolated through chat sends"
 		if (path.endsWith("/conversation/messages")) {
 			posts.push(request.url);
 			return Response.json({ state: "accepted", turnId: `turn-${host}` }, { status: 202 });
+		}
+		if (path.endsWith("/chat-view")) {
+			views.push({ url: request.url, active: (await request.json()).active });
+			return new Response(null, { status: 204 });
 		}
 		return Response.json({});
 	}));
@@ -101,6 +106,12 @@ it("keeps equal local, Box A, and Box B session IDs isolated through chat sends"
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 	boxB.unmount();
+	await waitFor(() => expect(views).toEqual(expect.arrayContaining([
+		{ url: "http://127.0.0.1:4000/api/v1/sessions/session-1/chat-view", active: true },
+		{ url: "http://127.0.0.1:4000/api/v1/sessions/session-1/chat-view", active: false },
+		{ url: "http://127.0.0.1:4001/api/v1/sessions/session-1/chat-view", active: true },
+		{ url: "http://127.0.0.1:4001/api/v1/sessions/session-1/chat-view", active: false },
+	])));
 });
 
 it("removes remote chat actions when its host disconnects, without falling back to local", async () => {
@@ -151,7 +162,7 @@ it("hides stale chat controls when the upstream daemon fails but its proxy remai
 	upstreamFailed = true;
 	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	expect(queryClient.getQueryData(remoteWorkspaceQueryKey("box-a"))).toBeDefined();
-	expect(screen.queryByTestId("session-detail")).not.toBeInTheDocument();
+	await waitFor(() => expect(screen.queryByTestId("session-detail")).not.toBeInTheDocument());
 	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
 	expect(screen.queryByRole("combobox", { name: "Message the agent" })).not.toBeInTheDocument();
 	expect(screen.queryByRole("complementary", { name: "Session inspector" })).not.toBeInTheDocument();
@@ -681,6 +692,7 @@ it("opens the returned reviewer Chat when a remote review is triggered", async (
 });
 
 it("opens a TUI reviewer terminal through Box B's mux handle", async () => {
+	HTMLElement.prototype.scrollTo = vi.fn();
 	remoteConnect.mockResolvedValue({ hostId: "box-b", label: "Box B", url: "http://box-b:3001", base: "http://127.0.0.1:4001" });
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const request = input instanceof Request ? input : new Request(input);
@@ -736,7 +748,7 @@ it("opens a shell tab on Box B without attaching a local or Box A terminal", asy
 	expect(localPost).not.toHaveBeenCalled();
 });
 
-it("switches a remote Terminal session through its host and fences worker input while pending", async () => {
+it("switches a remote Terminal session through its host and leaves the terminal for Chat at once", async () => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -765,7 +777,8 @@ it("switches a remote Terminal session through its host and fences worker input 
 	await userEvent.click(await screen.findByRole("button", { name: "Session actions" }));
 	await userEvent.click(await screen.findByRole("menuitem", { name: "Switch to chat UI" }));
 	await waitFor(() => expect(posts).toEqual([{ url: "http://127.0.0.1:4000/api/v1/sessions/session-1/interface-transition", body: { targetMode: "chat", policy: "drain", historyPolicy: "strict" } }]));
-	await waitFor(() => expect(terminal).toHaveAttribute("data-input-disabled", "true"));
+	await waitFor(() => expect(terminal).not.toBeInTheDocument());
+	expect(await screen.findByRole("combobox", { name: "Message the agent" })).toBeInTheDocument();
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });

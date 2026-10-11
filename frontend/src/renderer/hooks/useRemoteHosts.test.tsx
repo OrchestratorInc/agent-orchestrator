@@ -8,14 +8,18 @@ const remotes = vi.hoisted(() => ({
 	disconnect: vi.fn(),
 	connected: vi.fn(),
 }));
+const account = vi.hoisted(() => ({ status: "authenticated" as "authenticated" | "unauthenticated" }));
 
 vi.mock("../lib/bridge", () => ({ aoBridge: { remotes } }));
+vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ status: account.status, session: account.status === "authenticated" ? { user: { id: "user-a" } } : null }) }));
+vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }) }));
 
 import { baseUrlForHost, connectedHosts } from "../lib/host-clients";
 import { useConnectedHosts } from "./useHostConnection";
 import { requestRemoteHostsRefresh, useRemoteHosts } from "./useRemoteHosts";
 
 beforeEach(() => {
+	account.status = "authenticated";
 	remotes.list.mockReset().mockResolvedValue([
 		{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" },
 		{ hostId: "box-b", label: "Box B", url: "http://box-b:3001" },
@@ -40,6 +44,21 @@ it("does not connect to saved boxes until Remote hosts is enabled", async () => 
 	await waitFor(() => expect(result.current.hosts).toHaveLength(0));
 	expect(remotes.list).not.toHaveBeenCalled();
 	expect(remotes.connect).not.toHaveBeenCalled();
+});
+
+it("requires AO sign-in and disconnects remote hosts on sign-out", async () => {
+	useUiStore.setState({ remoteHosts: true });
+	account.status = "unauthenticated";
+	const { result, rerender } = renderHook(() => useRemoteHosts());
+	expect(result.current.hosts).toEqual([]);
+	expect(remotes.list).not.toHaveBeenCalled();
+	account.status = "authenticated";
+	rerender();
+	await waitFor(() => expect(result.current.hosts).toHaveLength(2));
+	account.status = "unauthenticated";
+	rerender();
+	await waitFor(() => expect(result.current.hosts).toEqual([]));
+	expect(connectedHosts()).toEqual([]);
 });
 
 it("keeps remote hosts disconnected until Developer mode is enabled", async () => {

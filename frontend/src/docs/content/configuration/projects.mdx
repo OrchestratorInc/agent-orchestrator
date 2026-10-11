@@ -3,7 +3,7 @@ title: Projects
 description: Configure project workers, orchestrators, setup, reviews, and issue intake.
 ---
 
-A project groups work in one repository, a multi-repository workspace, or an AO-managed Scratch directory. AO stores project settings in its database. There is no current `agent-orchestrator.yaml` project registry.
+A project groups work in one repository, a multi-repository workspace, or an Orchestrator-managed Scratch directory. Orchestrator stores project settings in its database. There is no current `agent-orchestrator.yaml` project registry.
 
 To start, choose **Add project** in the desktop sidebar, select a repository, choose a worker agent in Project Settings, and create a small task. A worker implements the task in its own workspace. An orchestrator supervises workers. A reviewer is a separate agent run that checks a worker's pull request.
 
@@ -17,7 +17,7 @@ Use Project Settings for interactive edits. The CLI's `set-config` command repla
 | --- | --- |
 | Single repository | A normal Git project. Each session gets an isolated worktree. |
 | Workspace | A root repository and its direct child repositories, managed together. |
-| Scratch | Work in a plain AO-managed directory without Git branches or pull requests. |
+| Scratch | Work in a plain Orchestrator-managed directory without Git branches or pull requests. |
 
 Add and manage projects in the desktop sidebar. The CLI equivalents are:
 
@@ -39,33 +39,34 @@ ao project rm <project-id>
 
 | Field | Purpose |
 | --- | --- |
-| `canonicalRepoURL` | Trusted upstream for numeric PR claims. It does not change where AO checks out or pushes. |
+| `canonicalRepoURL` | Trusted upstream for numeric PR claims. It does not change where Orchestrator checks out or pushes. |
 | `autoReview` | Default automatic-review setting copied to new worker sessions. |
-| `workersRequestReview` | When `true`, new workers request an AO review of their own PR once it is ready, and again after each fix. When unset, workers ask the user or orchestrator before starting one. |
+| `workersRequestReview` | When `true`, new workers request an Orchestrator review of their own PR once it is ready, and again after each fix. When unset, workers ask the user or orchestrator before starting one. |
 | `defaultBranch` | Base branch for new Git worktrees. Defaults to `auto`. |
 | `sessionPrefix` | Prefix for generated session identifiers. |
 | `env` | Extra environment variables passed to agent runtimes. |
 | `symlinks` | Repository-relative paths linked into each session workspace. |
-| `postCreate` | Shell commands AO runs after creating a workspace. |
+| `postCreate` | Shell commands Orchestrator runs after creating a workspace. |
+| `preRemove` | Shell commands Orchestrator runs before permanently removing a managed Git worktree. |
 | `agentConfig` | Default model, permission, and effort settings. Set effort through Project Settings or the daemon API; CLI replacement drops it. |
 | `worker` | Worker harness and agent-config overrides. |
 | `orchestrator` | Orchestrator harness and agent-config overrides. |
 | `agentRules` | Standing instructions for workers. |
 | `agentRulesFile` | Repository-relative instructions appended to worker instructions. |
 | `orchestratorRules` | Standing instructions for orchestrators. |
-| `reviewers` | Harnesses used for AO review runs. |
+| `reviewers` | Harnesses used for Orchestrator review runs. |
 | `trackerIntake` | Opt-in, read-only issue intake that can start workers. Also requires `AO_TRACKER_INTAKE=on` in the daemon environment. |
-| `containerReap` | Project-wide opt-out from AO's session-container cleanup. |
+| `containerReap` | Project-wide opt-out from Orchestrator's session-container cleanup. |
 
-`symlinks` and `agentRulesFile` must stay inside the repository. AO rejects absolute paths and paths that traverse outside it. Scratch projects do not support Git-only fields such as `defaultBranch` or `symlinks`.
+`symlinks` and `agentRulesFile` must stay inside the repository. Orchestrator rejects absolute paths and paths that traverse outside it. Scratch projects do not support Git-only fields such as `defaultBranch` or `symlinks`.
 
 ### Choose a base branch
 
-The default `defaultBranch: "auto"` resolves each repository separately. AO chooses the remote named by Git's `checkout.defaultRemote`, then `origin`, or the repository's only remote. It reads that remote's symbolic `HEAD` and fetches the advertised branch. When offline, AO can use the same remote's cached `HEAD`.
+The default `defaultBranch: "auto"` resolves each repository separately. Orchestrator chooses the remote named by Git's `checkout.defaultRemote`, then `origin`, or the repository's only remote. It reads that remote's symbolic `HEAD` and fetches the advertised branch. When offline, Orchestrator can use the same remote's cached `HEAD`.
 
-AO does not guess from the checked-out branch, `main`, or `master`. If a repository has no authoritative remote default, or its remotes are ambiguous, spawning fails with `DEFAULT_BRANCH_UNRESOLVED`.
+Orchestrator does not guess from the checked-out branch, `main`, or `master`. If a repository has no authoritative remote default, or its remotes are ambiguous, spawning fails with `DEFAULT_BRANCH_UNRESOLVED`.
 
-For a single repository or workspace root, set `defaultBranch` explicitly. For a workspace child, configure its primary remote with `checkout.defaultRemote` when needed, then set its cached remote `HEAD` with `git remote set-head`. AO-created repositories are an exception: AO records their branch choice when it creates them and backfills the choice for older AO-created repositories on first resolution.
+For a single repository or workspace root, set `defaultBranch` explicitly. For a workspace child, configure its primary remote with `checkout.defaultRemote` when needed, then set its cached remote `HEAD` with `git remote set-head`. Orchestrator-created repositories are an exception: Orchestrator records their branch choice when it creates them and backfills the choice for older Orchestrator-created repositories on first resolution.
 
 ## Worker and orchestrator roles
 
@@ -86,7 +87,7 @@ Choose each role's harness and provider settings independently:
 }
 ```
 
-Use the model names provided by the installed agent. AO uses the provider CLI and its existing sign-in; project settings do not store provider tokens. The example's `bypass-permissions` mode lets provider tools act without their normal approval prompts. Choose it only when that behavior is intended. Available permission modes depend on the provider.
+Use the model names provided by the installed agent. Orchestrator uses the provider CLI and its existing sign-in; project settings do not store provider tokens. The example's `bypass-permissions` mode lets provider tools act without their normal approval prompts. Choose it only when that behavior is intended. Available permission modes depend on the provider.
 
 ## Choose Chat or Terminal UI
 
@@ -94,9 +95,9 @@ Use the model names provided by the installed agent. AO uses the provider CLI an
 
 Chat support depends on the harness and its installed version. See the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui).
 
-Choose the default in **Settings → General**. A choice made for a new task or with `ao spawn --mode chat|tui` takes precedence. Otherwise, AO uses its compatibility default, Terminal UI. `agentConfig.mode` selects a provider execution mode; it does not select Chat or Terminal UI.
+Choose the default in **Settings → General**. A choice made for a new task or with `ao spawn --mode chat|tui` takes precedence. Otherwise, Orchestrator uses its compatibility default, Terminal UI. `agentConfig.mode` selects a provider execution mode; it does not select Chat or Terminal UI.
 
-If you explicitly request Chat from an unsupported harness, spawning fails. An inherited Chat default can fall back to Terminal UI. Compatible Claude Code and Codex sessions can switch interfaces without changing the AO session or worktree. For switch choices and history behavior, see [Switch interfaces](/dashboard#switch-interfaces).
+If you explicitly request Chat from an unsupported harness, spawning fails. An inherited Chat default can fall back to Terminal UI. Compatible Claude Code and Codex sessions can switch interfaces without changing the Orchestrator session or worktree. For switch choices and history behavior, see [Switch interfaces](/dashboard#switch-interfaces).
 
 ## Setup and rules
 
@@ -105,7 +106,15 @@ If you explicitly request Chat from an unsupported harness, spawning fails. An i
 
 Use `env`, `symlinks`, and `postCreate` for repeatable workspace setup. A failing `postCreate` command prevents the agent from starting, so keep setup commands deterministic. Symlink restrictions are described in [Configuration fields](#configuration-fields).
 
-Use `agentRules` or `agentRulesFile` for worker instructions and `orchestratorRules` for supervision instructions. If both worker fields are set, AO combines the inline rules and file contents.
+Open **Project Settings → Scripts** to edit the **Setup** and **Cleanup** steps. Switching tabs keeps your edits. **Save changes** saves both lists. The scripts run automatically at their workspace lifecycle events.
+
+Setup steps run in order in separate shells. Each step has its own 10-minute limit. There is no separate total setup timeout. Existing session-start and request deadlines can stop setup sooner. New Chat sessions have a 10-minute total start budget, including workspace creation, setup, and agent start. A failed or cancelled step stops launch. Cancellation stops the shell and its child processes before workspace rollback.
+
+The same command list runs on every platform. Use `sh` syntax on macOS/Linux and `cmd` syntax on Windows. Quoting, variables, and command chaining differ. For a project used on multiple platforms, call a script that supports each platform, such as `node scripts/setup.mjs`.
+
+Cleanup steps use `preRemove`. They run in order after processes stop and before permanent worktree removal. They have no execution time limit. Daemon shutdown cancels them. A failed step preserves the worktree. Save a fix, then use **Retry cleanup** for terminated sessions. Dirty worktrees remain intact. Replacing an orchestrator is the exception: its cleanup gets 90 seconds, and Orchestrator removes the old worktree even if a step fails or runs out of time. Cleanup does not run on ordinary agent exit or app quit, and it excludes scratch workspaces.
+
+Use `agentRules` or `agentRulesFile` for worker instructions and `orchestratorRules` for supervision instructions. If both worker fields are set, Orchestrator combines the inline rules and file contents.
 
 For example, these fields link local setup files, install dependencies, and load worker rules. This is a configuration fragment; keep any other existing fields when applying it:
 
@@ -123,7 +132,7 @@ For a reusable manual action, use a project **Cue**. An agent Cue sends a prompt
 
 <span id="choose-a-reviewer" />
 
-Choose reviewers separately in Project Settings. The [agent catalog](/plugins/agents) lists reviewer support and its limits. If you do not choose one, AO reviews with the project's default worker agent, using that worker's model and effort, when it is Claude Code, Codex, OpenCode, Muse, or Kimchi. Without a default worker agent, AO uses the session's worker harness when it is one of those, and Claude Code otherwise. Worker permissions never carry over to a reviewer. Select another reviewer harness explicitly.
+Choose reviewers separately in Project Settings. The [agent catalog](/plugins/agents) lists reviewer support and its limits. If you do not choose one, Orchestrator reviews with the project's default worker agent, using that worker's model and effort, when it is Claude Code, Codex, OpenCode, Muse, or Kimchi. Without a default worker agent, Orchestrator uses the session's worker harness when it is one of those, and Claude Code otherwise. Worker permissions never carry over to a reviewer. Select another reviewer harness explicitly.
 
 These configuration fields choose a reviewer and enable automatic review for new workers. The JSON is a fragment, so keep other fields when using the API:
 
@@ -163,7 +172,7 @@ For interactive edits, use Project Settings. For a complete CLI reference, use `
 
 ## Choose a workspace or standalone directory
 
-AO chooses isolation from the project kind. Git projects use worktrees. Workspace projects materialize the root and its child repositories together. Scratch projects use AO-managed plain directories. There are no `workspace: clone` or `runtime: process` settings in the current configuration.
+Orchestrator chooses isolation from the project kind. Git projects use worktrees. Workspace projects materialize the root and its child repositories together. Scratch projects use Orchestrator-managed plain directories. There are no `workspace: clone` or `runtime: process` settings in the current configuration.
 
 For work without a project, start a standalone worker:
 
@@ -177,7 +186,7 @@ Standalone workers require an explicit agent. Do not combine `--standalone` with
 
 <span id="tracker-and-scm" />
 
-AO observes GitHub and GitLab repositories and can use their issue trackers. It resolves a repository from Git identity. The retired `tracker.plugin`, `scm.plugin`, `package`, and `path` settings are not used; see [Migration](/migration) for other old configuration examples. Linear is not supported.
+Orchestrator observes GitHub and GitLab repositories and can use their issue trackers. It resolves a repository from Git identity. The retired `tracker.plugin`, `scm.plugin`, `package`, and `path` settings are not used; see [Migration](/migration) for other old configuration examples. Linear is not supported.
 
 Set `canonicalRepoURL` when a numeric PR claim should use a particular upstream. It does not change checkout or push destinations. For issue spawning, select `--tracker-provider github|gitlab`. See [issue intake](/plugins/trackers) and [source-control setup](/plugins/scm), including self-managed GitLab hosts.
 
@@ -187,7 +196,7 @@ Issue intake starts workers only when both the daemon has `AO_TRACKER_INTAKE=on`
 
 <span id="tune-automation-per-project" />
 
-AO handles CI, review feedback, and merge conflicts through built-in lifecycle rules. Project settings do not accept a `reactions` override. See [Automation reference](/configuration/lifecycle-automation) for the rules and scheduling limits.
+Orchestrator handles CI, review feedback, and merge conflicts through built-in lifecycle rules. Project settings do not accept a `reactions` override. See [Automation reference](/configuration/lifecycle-automation) for the rules and scheduling limits.
 
 Create recurring work in **Automations**. Create reusable prompts or shell commands in project **Cues**. They are saved resources, not project-configuration fields.
 
@@ -197,19 +206,19 @@ Create recurring work in **Automations**. Create reusable prompts or shell comma
 
 Use **Resume agent** or `ao session resume-agent <id>` to restart a stopped controller in a session that is still active. Use **Restore** or `ao session restore <id>` to relaunch a terminated session when its harness supports recovery. `ao session kill <id>` terminates the session; `ao session exit-agent <id>` stops only its controller.
 
-Keep the harness installed and signed in. Recovery may restore the session, worktree, and supported provider conversation, but it cannot recreate arbitrary terminal screen history. AO does not force-delete a dirty registered worktree. `orchestratorSessionStrategy` and `opencodeIssueSessionStrategy` are not current configuration fields.
+Keep the harness installed and signed in. Recovery may restore the session, worktree, and supported provider conversation, but it cannot recreate arbitrary terminal screen history. Orchestrator does not force-delete a dirty registered worktree. `orchestratorSessionStrategy` and `opencodeIssueSessionStrategy` are not current configuration fields.
 
 ## Common problems
 
 **The project does not appear in the dashboard.** Add it in the desktop app or run `ao project add --path /absolute/path/to/repo`. `ao start` opens the app; it does not register a repository. If the repository moved, remove and re-add it or relink it instead of editing `storageKey` manually.
 
-**The agent starts without environment variables.** Add `.env` or the relevant tool configuration directory to `symlinks`. AO does not copy secrets into worktrees by default.
+**The agent starts without environment variables.** Add `.env` or the relevant tool configuration directory to `symlinks`. Orchestrator does not copy secrets into worktrees by default.
 
 **Setup fails before the agent starts.** Check `postCreate`. A failing command stops the session before the agent launches.
 
 **Two projects have confusing session names.** Set `sessionPrefix` in Project Settings or typed config. Do not include path separators or traversal components.
 
-**GitHub or GitLab calls fail.** Check that the corresponding CLI or token is signed in. AO does not store provider tokens in project config.
+**GitHub or GitLab calls fail.** Check that the corresponding CLI or token is signed in. Orchestrator does not store provider tokens in project config.
 
 ## Next steps
 

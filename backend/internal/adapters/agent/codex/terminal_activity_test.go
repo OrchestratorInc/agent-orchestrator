@@ -87,6 +87,22 @@ func TestInspectTerminalSurfaceSeparatesCodexWorkFromComposer(t *testing.T) {
 			wantEditor: ports.TerminalComposerEmpty,
 		},
 		{
+			name: "idle empty composer above a two-row footer",
+			output: "\x1b[1m›\x1b[m \x1b[2mAsk Codex to do anything\x1b[m\n\n" +
+				"  \x1b[38;2;246;226;183mGPT-6.1-Sol low\x1b[m · \x1b[38;2;171;223;167m~/project\x1b[m\n" +
+				"  \x1b[1m←\x1b[m for agents · \x1b[1m?\x1b[m for shortcuts    ⚠ \x1b[38;2;196;167;103m3 warnings\x1b[m · \x1b[1mf2\x1b[m to view\n",
+			wantWork:   ports.TerminalSurfaceWorkIdle,
+			wantEditor: ports.TerminalComposerEmpty,
+		},
+		{
+			name: "idle draft above a two-row footer",
+			output: "\x1b[1m›\x1b[m Keep this draft\n\n" +
+				"  \x1b[38;2;246;226;183mGPT-6.1-Sol low\x1b[m · \x1b[38;2;171;223;167m~/project\x1b[m\n" +
+				"  \x1b[1m?\x1b[m for shortcuts    ⚠ 3 warnings · \x1b[1mf2\x1b[m to view\n",
+			wantWork:   ports.TerminalSurfaceWorkIdle,
+			wantEditor: ports.TerminalComposerDraft,
+		},
+		{
 			name:       "idle draft",
 			output:     "› Keep this draft\n\ngpt-5.6-sol low · ~/project\n",
 			wantWork:   ports.TerminalSurfaceWorkIdle,

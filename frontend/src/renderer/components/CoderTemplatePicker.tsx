@@ -30,21 +30,18 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 	// Parameter controls appear only when the selected template declares them.
 	const supportsSize = supportedParams.includes("size");
 	const supportsStartup = supportedParams.includes("startup_script");
-	const templateOptions = [
-		{ id: "", name: t("coder.template.default", { defaultValue: "Organization workspace" }), description: t("coder.template.defaultHint", { defaultValue: "The workspace configured for your org." }), parameters: [] as string[] },
-		// Curated list: surface only the AO Dev-kit templates for now. Internal /
-		// plumbing templates (ao-azure-vm*, ao-linux-docker, etc.) are hidden so the
-		// picker stays short; the default is still reachable via "Organization
-		// workspace" above.
-		...templates
-			.filter((tpl) => tpl.name.startsWith("ao-devkit"))
-			.map((tpl) => ({
-				id: tpl.id,
-				name: tpl.displayName || tpl.name,
-				description: tpl.description,
-				parameters: tpl.parameters ?? [],
-			})),
-	];
+	// Every project must choose a concrete template: there is no implicit
+	// "organization default" option, because a bring-your-own-Coder org may have
+	// no deployment-default template, in which case an empty choice fails only
+	// later at session start (HTTP 422 coder_template_required). The picker lists
+	// every template the deployment or org connection exposes, as-is; curation
+	// (e.g. hiding an internal template) is done by removing it in Coder, not here.
+	const templateOptions = templates.map((tpl) => ({
+		id: tpl.id,
+		name: tpl.displayName || tpl.name,
+		description: tpl.description,
+		parameters: tpl.parameters ?? [],
+	}));
 
 	return (
 		<div className="flex flex-col gap-4 text-sm">
@@ -54,7 +51,7 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 						<span className="font-medium text-foreground">{t("coder.template.label", { defaultValue: "Template" })}</span>
 						<SearchablePicker
 							ariaLabel={t("coder.template.label", { defaultValue: "Template" })}
-							placeholder={t("coder.template.default", { defaultValue: "Organization workspace" })}
+							placeholder={t("coder.template.select", { defaultValue: "Select a template" })}
 							searchPlaceholder={t("coder.template.search", { defaultValue: "Search templates" })}
 							value={templateId}
 							onChange={(id) => {

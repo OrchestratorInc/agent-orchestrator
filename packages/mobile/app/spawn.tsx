@@ -21,7 +21,7 @@ import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
 import { openingHostId, spawnHostMatches } from "../lib/hostRoute";
-import { resolveSpawnProject } from "../lib/projectFilter";
+import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
 import { appendSpawnAttachments, readSpawnAttachments, type SpawnAttachment } from "../lib/spawn-attachments";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
@@ -47,7 +47,7 @@ function SpawnModalContent() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
-	const { projects, projectsKnown, activeProjectId, config, currentHostId, connection, unreachable, spawn } = useApp();
+	const { projects, projectsKnown, activeProjectId, config, currentHostId, connection, unreachable, setActiveProject, spawn } = useApp();
 	const [openedHostId, setOpenedHostId] = useState(() => openingHostId(routeHostId, currentHostId ?? undefined));
 	const hostMatches = spawnHostMatches({ openedHostId, currentHostId: currentHostId ?? undefined, routeProjectId, routeHostId });
 	useEffect(() => {
@@ -136,7 +136,6 @@ function SpawnModalContent() {
 	// copy of it — see app/sheets/agent.tsx.
 	const allAgents = useMemo(() => rankAgents(catalog), [catalog]);
 	const agents = useMemo(() => mode === "chat" ? allAgents.filter((agent) => chatHarnesses.includes(agent.id)) : allAgents, [allAgents, chatHarnesses, mode]);
-	const project = projects.find((item) => item.id === projectId);
 	const projectWorkerAgent = projectDetail?.config?.worker?.agent ?? projectDetail?.agent ?? "";
 	const projectWorkerModel = projectDetail?.config?.worker?.agentConfig?.model ?? projectDetail?.config?.agentConfig?.model ?? "";
 	const resolvedModel = resolveSpawnModel({ selectedAgent: harness, projectWorkerAgent, projectWorkerModel });
@@ -167,7 +166,7 @@ function SpawnModalContent() {
 	);
 
 	useEffect(() => {
-		if (!config || !hostMatches || !projectId) { setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }
+		if (!config || !hostMatches || !projectId || projectId === STANDALONE_PROJECT) { setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }
 		let cancelled = false;
 		setProjectDetailLoadedFor(null);
 		getProject(config, projectId)
@@ -179,7 +178,7 @@ function SpawnModalContent() {
 
 	useEffect(() => {
 		if (agentTouched || loading || !catalog) return;
-		if (projectId && projectDetailLoadedFor !== projectId) return;
+		if (projectId && projectId !== STANDALONE_PROJECT && projectDetailLoadedFor !== projectId) return;
 		const nextHarness = resolveSpawnAgent({
 			projectWorkerAgent: projectDetail?.config?.worker?.agent,
 			projectAgent: projectDetail?.agent,
@@ -192,7 +191,7 @@ function SpawnModalContent() {
 		if (!config || !hostMatches || !projectId || !harness) { setModelCatalog(undefined); return; }
 		let cancelled = false;
 		setModelLoading(true);
-		getAgentModels(config, harness, projectId)
+		getAgentModels(config, harness, projectId === STANDALONE_PROJECT ? undefined : projectId)
 			.then((nextCatalog) => { if (!cancelled) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
 			.catch((cause) => { if (!cancelled) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled) setModelLoading(false); });
@@ -319,6 +318,7 @@ function SpawnModalContent() {
 				requestRef.current = { payload, attachments: attachmentsRef.current, id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
 			}
 			const session = await spawn({ ...request, clientRequestId: requestRef.current.id });
+			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
 			haptics.success();
 			// Dismiss the modal first, then open the freshly spawned session's mode-aware surface
 			// once the dismiss transition has settled. Firing both navigations in the
@@ -404,8 +404,8 @@ function SpawnModalContent() {
 				<KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
 				{Platform.OS === "ios" ? voiceFeedback : null}
 				<SpawnComposerControls
-					projects={projects.map((item) => ({ id: item.id, label: item.name }))}
-					projectId={project?.id ?? null}
+					projects={[...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
+					projectId={projectId}
 					onSelectProject={changeProject}
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
 					harness={harness}

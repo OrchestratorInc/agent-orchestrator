@@ -38,6 +38,8 @@ export type EditorHandoffState = {
 	preferredEditorId: EditorId;
 	workspaceAvailable: boolean;
 	unavailableReason?: string;
+	/** The daemon's error code, when it answered; lets the renderer tell "gone" from "couldn't check". */
+	unavailableCode?: string;
 };
 
 export type OpenSessionTargetInput = {

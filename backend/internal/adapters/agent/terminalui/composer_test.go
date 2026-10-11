@@ -49,6 +49,8 @@ func TestLastPromptComposerState(t *testing.T) {
 		{name: "dim placeholder", output: "❯ \x1b[2mAsk a question\x1b[0m", want: ComposerEmpty},
 		{name: "draft", output: "❯ keep this draft", want: ComposerDraft},
 		{name: "wrapped draft", output: "❯\nkeep this draft", want: ComposerDraft},
+		{name: "truecolor draft", output: "❯ \x1b[38;2;246;226;183mkeep this draft", want: ComposerDraft},
+		{name: "colon truecolor draft", output: "❯ \x1b[38:2::246:226:183mkeep this draft", want: ComposerDraft},
 		{
 			// A rule below the prompt ends the composer's content region;
 			// provider status chrome below that rule is not human input.

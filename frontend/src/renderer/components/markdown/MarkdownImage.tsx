@@ -1,6 +1,6 @@
 import { useContext, useState } from "react";
 import { MarkdownFileContext } from "./markdown-file-context";
-import { resolveMarkdownImageSrc } from "../../lib/markdown-image-resolver";
+import { resolveArtifactImageSrc, resolveMarkdownImageSrc } from "../../lib/markdown-image-resolver";
 import { baseUrlForHost } from "../../lib/host-clients";
 
 /**
@@ -19,7 +19,9 @@ export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
 	// the same reference, and that one deserves its own attempt.
 	const [failedSrc, setFailedSrc] = useState<string | null>(null);
 	const base = context?.hostId ? baseUrlForHost(context.hostId) : undefined;
-	const resolvedSrc = context
+	const resolvedSrc = context?.artifactOrigin
+		? resolveArtifactImageSrc(context.artifactOrigin, context.filePath, src)
+		: context
 		? context.hostId && !base ? undefined : resolveMarkdownImageSrc(context.sessionId, context.filePath, src, context.version, base)
 		: src;
 	if (!resolvedSrc || resolvedSrc === failedSrc) return <span className="text-muted-foreground">{alt ?? ""}</span>;

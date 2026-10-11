@@ -3,9 +3,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
-const { localGet, remoteConnect } = vi.hoisted(() => ({ localGet: vi.fn(), remoteConnect: vi.fn() }));
+const { localGet, remoteConnect, remotePreviewUrl } = vi.hoisted(() => ({ localGet: vi.fn(), remoteConnect: vi.fn(), remotePreviewUrl: vi.fn() }));
 vi.mock("../lib/api-client", () => ({ apiClient: { GET: localGet }, hasTrustedApiBaseUrl: () => true }));
-vi.mock("../lib/bridge", () => ({ aoBridge: { remotes: { connect: remoteConnect, disconnect: vi.fn() } } }));
+vi.mock("../lib/bridge", () => ({ aoBridge: { remotes: { connect: remoteConnect, previewUrl: remotePreviewUrl, disconnect: vi.fn() } } }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
 vi.mock("../lib/agent-switch-visibility", () => ({ agentSwitchVisibility: { setQueryHealthy: vi.fn() } }));
 vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ ready: false, baseUrl: "", client: {} }) }));
@@ -131,4 +131,34 @@ it("keeps a host's registered projects visible when its sessions request fails",
 	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	await waitFor(() => expect(result.current.failedHostIds).toEqual(["box-a"]), { timeout: 3000 });
 	expect(result.current.data[0]).toEqual(expect.objectContaining({ hostId: "box-a", id: "project-1" }));
+});
+
+it("maps remote artifact raw reads through the host proxy", async () => {
+	await prepareTwoHosts();
+	const rawUrl = "http://ao-preview-artifact.onuxg43jn5xc2mi.localhost:3001/docs/report.md?raw=true";
+	const mapped = "http://ao-preview-token.localhost:4000/docs/report.md?raw=true";
+	remotePreviewUrl.mockResolvedValue(mapped);
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const url = input instanceof Request ? input.url : String(input);
+		return Response.json(url.endsWith("/projects")
+			? { projects: [{ id: "project-1", name: "Remote", path: "/remote" }] }
+			: { sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", prs: [], artifactFiles: [{ path: "docs/report.md", name: "report.md", kind: "markdown", size: 12, rawUrl }] }] });
+	}));
+	const { result } = renderHook(() => useRemoteWorkspaces(), { wrapper });
+	await waitFor(() => expect(result.current.data[0]?.sessions[0]?.artifactFiles?.[0]?.rawUrl).toBe(mapped));
+	expect(remotePreviewUrl).toHaveBeenCalledWith("box-a", "session-1", rawUrl);
+});
+
+it("never keeps a remote daemon's inline artifact origin, which here would name this computer", async () => {
+	await prepareTwoHosts();
+	remotePreviewUrl.mockResolvedValue("http://ao-preview-token.localhost:4000/q3/report.html?raw=true");
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const url = input instanceof Request ? input.url : String(input);
+		return Response.json(url.endsWith("/projects")
+			? { projects: [{ id: "project-1", name: "Remote", path: "/remote" }] }
+			: { sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", prs: [], artifactFiles: [{ path: "q3/report.html", name: "report.html", kind: "html", size: 12, rawUrl: "http://ao-preview-artifact.x.localhost:3001/q3/report.html?raw=true", inlineUrl: "http://ao-inline-artifact.x.localhost:3001/q3/report.html" }] }] });
+	}));
+	const { result } = renderHook(() => useRemoteWorkspaces(), { wrapper });
+	await waitFor(() => expect(result.current.data[0]?.sessions[0]?.artifactFiles?.[0]?.path).toBe("q3/report.html"));
+	expect(result.current.data[0]?.sessions[0]?.artifactFiles?.[0]?.inlineUrl).toBeUndefined();
 });

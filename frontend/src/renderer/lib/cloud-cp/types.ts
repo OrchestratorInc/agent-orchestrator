@@ -151,6 +151,22 @@ export interface CloudCpListQuery {
 // Projects (`resource_handlers.go`)
 // ---------------------------------------------------------------------------
 
+import type { ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRoleConfig, ProjectReviewer } from "../../../../../packages/cloud-client/src/types";
+
+export type CloudCpProjectAgentConfig = ProjectAgentConfig;
+export type CloudCpProjectRoleConfig = ProjectRoleConfig;
+export type CloudCpProjectReviewer = ProjectReviewer;
+/**
+ * PATCH /orgs/{orgId}/projects/{projectId}/settings. `config.coder` accepts
+ * only `workspaceNamePrefix` (an empty string returns to the default `ao`);
+ * the rest of a project's coder config is fixed at creation.
+ */
+export type CloudCpProjectSettingsRequest = ProjectSettingsInput & {
+	config?: NonNullable<ProjectSettingsInput["config"]> & {
+		coder?: { workspaceNamePrefix: string };
+	};
+};
+
 export interface CloudCpProject {
 	id: string;
 	orgId: string;
@@ -158,7 +174,7 @@ export interface CloudCpProject {
 	repositoryUrl: string;
 	defaultBranch: string;
 	githubRepositoryId?: string;
-	config: Record<string, unknown>;
+	config: ProjectConfig;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -189,6 +205,12 @@ export interface CloudCpProjectCoderConfig {
 	startupScript?: string;
 	/** Additional repositories every session of the project clones alongside the primary repo. */
 	extraRepos?: CloudCpSessionRepo[];
+	/**
+	 * Prefix for the project's new Coder workspace names (`<prefix>-<short id>`).
+	 * Empty/absent keeps the default `ao`. Must match `^[a-z][a-z0-9-]{0,19}$`
+	 * without a trailing `-` or a `--` run.
+	 */
+	workspaceNamePrefix?: string;
 }
 
 /** PATCH /orgs/{orgId}/projects/{projectId} */
@@ -336,6 +358,8 @@ export interface CloudCpSession {
 	projectId: string;
 	kind: string;
 	harness: string;
+	reviewerHarness?: string;
+	autoReviewEnabled?: boolean;
 	displayName: string;
 	branch: string;
 	mode: string;
@@ -349,6 +373,12 @@ export interface CloudCpSession {
 	observedState?: string;
 	runtimeState?: string;
 	runtimeError?: string;
+	/**
+	 * Why the session's worker has not started yet. Set while AO is retrying
+	 * startup and kept once it gives up (`runtimeState === "terminated"`);
+	 * cleared once the worker connects. `message` is user-facing text.
+	 */
+	startupError?: CloudCpSessionStartupError;
 	isTerminated: boolean;
 	autoInjectCI?: boolean;
 	autoInjectReview?: boolean;
@@ -364,6 +394,23 @@ export interface CloudCpSession {
 	workerEpoch?: number;
 	createdAt: string;
 	updatedAt: string;
+}
+
+/**
+ * A cloud session's startup failure. Known codes: workspace_not_ready,
+ * terminal_unavailable, unsupported_architecture, durable_root_unavailable,
+ * worker_never_started, bootstrap_failed; treat any other code generically.
+ */
+export interface CloudCpSessionStartupError {
+	code: string;
+	message: string;
+	/** RFC 3339 time the failure was recorded. */
+	at: string;
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/startup-retry responds 202. */
+export interface CloudCpRetrySessionStartupResponse {
+	session: CloudCpSession;
 }
 
 export interface CloudCpInterfaceTransition {
@@ -425,6 +472,14 @@ export interface CloudCpAcknowledgeInterfaceTransitionNoticeResponse {
 
 export interface CloudCpSessionResponse {
 	session: CloudCpSession;
+}
+
+export interface CloudCpUpdateSessionPreferencesRequest {
+	reviewerHarness?: string;
+	autoReviewEnabled?: boolean;
+	autoInjectCI?: boolean;
+	autoInjectReview?: boolean;
+	terminateOnPrMerge?: boolean;
 }
 
 export interface CloudCpSessionListResponse {
@@ -648,7 +703,10 @@ export interface CloudCpSessionChildrenResponse {
 	page: CloudCpPageInfo;
 }
 
-/** Detailed PR data used by the shared local/cloud inspector UI. */
+// ---------------------------------------------------------------------------
+// Pull requests and AO reviews (`pull_request_handlers.go`)
+// ---------------------------------------------------------------------------
+
 export interface CloudCpPullRequestSummary {
 	url: string;
 	htmlUrl?: string;
@@ -720,6 +778,58 @@ export interface CloudCpSessionPullRequestsResponse {
 	pullRequests: CloudCpPullRequestSummary[];
 }
 
+export type CloudCpAOReviewRunStatus = "running" | "complete" | "delivered" | "failed" | "cancelled";
+export type CloudCpAOReviewVerdict = "" | "approved" | "changes_requested";
+export type CloudCpAOReviewState = "needs_review" | "running" | "up_to_date" | "changes_requested" | "ineligible";
+
+export interface CloudCpAOReviewRun {
+	id: string;
+	reviewId: string;
+	sessionId: string;
+	batchId: string;
+	harness: string;
+	triggerSource: "manual" | "auto";
+	pullRequestUrl: string;
+	targetSha: string;
+	status: CloudCpAOReviewRunStatus;
+	verdict: CloudCpAOReviewVerdict;
+	body: string;
+	providerReviewId: string;
+	reviewerTerminalId?: string;
+	createdAt: string;
+	deliveredAt?: string;
+	autoInjectReview: boolean;
+}
+
+export interface CloudCpPRReviewState {
+	pullRequestUrl: string;
+	pullRequestNumber: number;
+	title: string;
+	targetSha: string;
+	status: CloudCpAOReviewState;
+	latestRun?: CloudCpAOReviewRun;
+	previousRun?: CloudCpAOReviewRun;
+}
+
+export interface CloudCpSessionReviewState {
+	sessionId: string;
+	reviewerHandleId?: string;
+	reviewerHarness?: string;
+	availableReviewerHarnesses: string[];
+	reviews: CloudCpPRReviewState[];
+	runs: CloudCpAOReviewRun[];
+}
+
+export interface CloudCpHarnessStatus {
+	harness: "claude-code" | "codex" | "cursor";
+	status: "missing" | "ready" | "failed";
+	version?: string;
+	error?: string;
+}
+
+export interface CloudCpHarnessInspectResponse {
+	harnesses: CloudCpHarnessStatus[];
+}
 export interface CloudCpListSessionsQuery extends CloudCpListQuery {
 	/** Restrict the listing to one project. */
 	projectId?: string;
@@ -830,6 +940,8 @@ export type CloudCpTerminalKind = "workspace" | "agent";
 /** POST /orgs/{orgId}/sessions/{sessionId}/terminal-ticket */
 export interface CloudCpTerminalTicketRequest {
 	kind: CloudCpTerminalKind;
+	/** Optional exact terminal surface, used for a dedicated reviewer terminal. */
+	terminalId?: string;
 }
 
 export interface CloudCpTerminalTicketResponse {

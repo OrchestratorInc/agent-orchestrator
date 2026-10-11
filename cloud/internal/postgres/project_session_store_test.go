@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,5 +105,20 @@ func TestQueuedTurnDoesNotOverrideIdleWorkerActivity(t *testing.T) {
 				t.Fatalf("status = %q, want idle despite %s turn", got, turnState)
 			}
 		})
+	}
+}
+
+func TestSessionInsertReturningMatchesScannerArity(t *testing.T) {
+	const scanSessionDestinations = 32
+	if got := strings.Count(sessionInsertReturning, ",") + 1; got != scanSessionDestinations {
+		t.Fatalf("session insert RETURNING fields = %d, want %d", got, scanSessionDestinations)
+	}
+	for _, field := range []string{
+		"reviewer_harness", "auto_review_enabled", "auto_inject_ci",
+		"auto_inject_review", "terminate_on_pr_merge",
+	} {
+		if !strings.Contains(sessionInsertReturning, field) {
+			t.Fatalf("session insert RETURNING is missing %s", field)
+		}
 	}
 }

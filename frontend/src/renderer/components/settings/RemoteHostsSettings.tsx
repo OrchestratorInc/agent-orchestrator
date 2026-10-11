@@ -4,6 +4,11 @@ import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { disconnectHost } from "../../lib/host-clients";
 import { requestRemoteHostsRefresh } from "../../hooks/useRemoteHosts";
+import { useCloudLocalAuth } from "../../hooks/useCloudLocalAuth";
+import { useCloudSession } from "../../lib/cloud-session";
+import { deleteAccountRemoteHost, saveAccountRemoteHost } from "../../lib/account-remote-hosts";
+import { useSettings } from "../../hooks/useSettings";
+import { useLocalSignInDialogStore } from "../../stores/local-signin-dialog-store";
 import { useUiStore } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
@@ -18,6 +23,11 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 	const { t } = useTranslation();
 	const enabled = useUiStore((state) => state.remoteHosts);
 	const setEnabled = useUiStore((state) => state.setRemoteHosts);
+	const { status, signIn } = useCloudSession();
+	const { settings } = useSettings();
+	const cloudBaseUrl = settings?.cloudControlPlaneUrl ?? "";
+	const { available: localAuthAvailable } = useCloudLocalAuth();
+	const openLocalSignIn = useLocalSignInDialogStore((state) => state.openDialog);
 	const [saved, setSaved] = useState<SavedHost[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [loadError, setLoadError] = useState("");
@@ -45,10 +55,11 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 	};
 
 	useEffect(() => {
-		void load();
+		if (status === "authenticated") void load();
+		else setSaved([]);
 		// The bridge is fixed for the lifetime of this Settings page.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, []);
+	}, [status]);
 
 	const resetForm = () => {
 		setEditing(null);
@@ -80,6 +91,11 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			if (health === "incompatible") throw new Error(t("remote.hostIncompatible"));
 			if (editing?.hostId) await disconnectHost(editing.hostId);
 			if (editing && !editing.hostId && editing.url !== nextUrl) await aoBridge.remotes.remove(editing.url);
+			const current = (await aoBridge.remotes.list()).find((item) => item.url === nextUrl);
+			if (current?.hostId && cloudBaseUrl) {
+				const token = await aoBridge.remotes.issueAccountToken(current.url);
+				await saveAccountRemoteHost(cloudBaseUrl, { hostId: current.hostId, label: current.label, url: current.url, token });
+			}
 			await load();
 			resetForm();
 			if (!enabled) setEnabled(true);
@@ -96,6 +112,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 		setRemoveBusy(true);
 		setRemoveError("");
 		try {
+			if (confirmingRemoval.hostId && cloudBaseUrl) await deleteAccountRemoteHost(cloudBaseUrl, confirmingRemoval.hostId);
 			await aoBridge.remotes.remove(confirmingRemoval.url);
 			if (confirmingRemoval.hostId) await disconnectHost(confirmingRemoval.hostId);
 			await load();
@@ -107,6 +124,16 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			setRemoveBusy(false);
 		}
 	};
+
+	if (status !== "authenticated") return (
+		<SettingsSection title={t("settings.remoteHosts")} sectionId="remoteHosts" titleHidden={titleHidden} grouped>
+			<SettingsRow label={t("shell.signInToAOCloud")}>{status === "unauthenticated" ? (
+				<Button onClick={() => localAuthAvailable ? openLocalSignIn() : signIn()} size="sm" type="button">
+					{t("shell.signInToAOCloud")}
+				</Button>
+			) : null}</SettingsRow>
+		</SettingsSection>
+	);
 
 	return <>
 		<SettingsSection title={t("settings.remoteHosts")} sectionId="remoteHosts" titleHidden={titleHidden} grouped>

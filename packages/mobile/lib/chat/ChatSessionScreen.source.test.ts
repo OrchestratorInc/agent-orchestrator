@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 const screenSource = readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8");
 const composerSource = readFileSync(new URL("./ChatComposer.tsx", import.meta.url), "utf8");
 const apiSource = readFileSync(new URL("./api.ts", import.meta.url), "utf8");
+const actionsSheetSource = readFileSync(new URL("./ConversationActionsSheet.tsx", import.meta.url), "utf8");
 
 describe("active turn controls", () => {
 	it("remounts the composer when a same-ID session changes host", () => {
@@ -60,6 +61,11 @@ describe("active turn controls", () => {
 		expect(screenSource).not.toContain("conversation.rename(next)");
 	});
 
+	it("does not offer rename on the project orchestrator", () => {
+		expect(screenSource).toContain('canRename: !("projectName" in session)');
+		expect(actionsSheetSource).toContain('canRename: entry.canRename && can(snapshot, "rename")');
+	});
+
 	it("shows a failed start's reason instead of only a stopped-agent banner", () => {
 		expect(screenSource).toContain('session.provisionState !== "failed"');
 		expect(screenSource).toContain('title="Session failed to start" message={failedStart}');
@@ -75,5 +81,14 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain("encodeURIComponent(reviewPromptHostKey)");
 		expect(screenSource).toContain("reviewSummaries.summaryFor(config, session.id, reviewPromptPR.number)");
 		expect(screenSource).toContain("<ChatComposer");
+	});
+});
+
+describe("stopped agents", () => {
+	it("resumes an exited agent once when its session is opened", () => {
+		expect(screenSource).toContain("const autoResumeTried = useRef<string | undefined>(undefined);");
+		expect(screenSource).toContain("shouldAutoResume(session, terminated, Boolean(config))");
+		expect(screenSource).toContain("controllerStoppedBanner(terminated, resumeError ?? snapshot.controller.error)");
+		expect(screenSource).toContain("void resume(true);");
 	});
 });

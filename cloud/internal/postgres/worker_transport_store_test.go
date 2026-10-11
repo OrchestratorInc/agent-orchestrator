@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -89,3 +90,27 @@ func TestAgentTerminalInputMarksSessionActive(t *testing.T) {
 		})
 	}
 }
+
+func TestHarnessRequestMigrationAllowsInspectAndInstall(t *testing.T) {
+	contents, err := migrationFiles.ReadFile("migrations/00048_worker_request_kind_union.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migration := string(contents)
+	for _, kind := range []string{
+		"'harness.inspect'", "'harness.install'",
+		"'workspace.diff-file'", "'workspace.review.summary'",
+		"'workspace.review.tree'", "'workspace.review.search'",
+		"'workspace.review.file'", "'workspace.review.diffs'",
+		"'workspace.review.revision'", "'workspace.review.write'",
+	} {
+		if !strings.Contains(migration, kind) {
+			t.Errorf("migration does not allow worker request kind %s", kind)
+		}
+	}
+}
+
+// The read-only-session and viewer-role guards in CreateWorkspaceRequest /
+// createWorkerRequest gate file mutations by kind. The review file-write path
+// dispatches "workspace.review.write", so both write kinds must be recognized or
+// a viewer / read-only member could overwrite files through the review endpoint.

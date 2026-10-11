@@ -25,6 +25,18 @@ func TestPingChecksWriterAndReaderPools(t *testing.T) {
 	}
 }
 
+func TestPingRejectsClosedReaderPool(t *testing.T) {
+	writer, reader := openPingDatabases(t)
+	st := NewStore(writer, reader)
+
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close reader: %v", err)
+	}
+	if err := st.Ping(context.Background()); err == nil || !strings.Contains(err.Error(), "reader") {
+		t.Fatalf("ping after reader close = %v, want reader failure", err)
+	}
+}
+
 func TestPingHonorsContextWhileWriterPoolIsBusy(t *testing.T) {
 	writer, reader := openPingDatabases(t)
 	writer.SetMaxOpenConns(1)

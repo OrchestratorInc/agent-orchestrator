@@ -6,6 +6,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // CleanWorkspacePath normalizes a browser/workspace path without discarding
@@ -29,7 +30,7 @@ func CleanWorkspacePath(raw string) (string, bool) {
 // OpenWorkspaceFile opens a regular file beneath workspacePath using os.Root.
 // os.Root follows symlinks that remain inside the workspace and rejects links
 // that escape it, so callers can safely serve the returned handle without a
-// second path lookup.
+// second path lookup. Anything but a regular file is fs.ErrNotExist.
 func OpenWorkspaceFile(workspacePath, assetPath string) (*os.File, fs.FileInfo, string, error) {
 	clean, ok := CleanWorkspacePath(assetPath)
 	if !ok {
@@ -41,7 +42,10 @@ func OpenWorkspaceFile(workspacePath, assetPath string) (*os.File, fs.FileInfo, 
 	}
 	defer func() { _ = root.Close() }()
 
-	file, err := root.Open(filepath.FromSlash(clean))
+	// O_NONBLOCK: opening a FIFO would otherwise block until a writer appears,
+	// and the path can be swapped for one at any time. A regular file's reads
+	// ignore it. What was opened is checked on the open file.
+	file, err := root.OpenFile(filepath.FromSlash(clean), os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, nil, "", err
 	}

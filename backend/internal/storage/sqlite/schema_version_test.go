@@ -71,6 +71,78 @@ INSERT INTO goose_db_version (version_id, is_applied) VALUES (149, 1);
 	}
 }
 
+func TestMigrateRepairsPriorSchemaAppVersionMigrationNumber130(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 129)
+	if _, err := db.Exec(`
+CREATE TABLE schema_app_version (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    version INTEGER NOT NULL CHECK (version >= 0),
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO schema_app_version (id, version) VALUES (1, 130);
+INSERT INTO goose_db_version (version_id, is_applied) VALUES (130, 1);
+`); err != nil {
+		t.Fatalf("seed prior PR migration: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate prior PR database: %v", err)
+	}
+	var reviewPartialColumn, applied130, version int64
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('pr') WHERE name = 'review_partial'`).Scan(&reviewPartialColumn); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 130 AND is_applied = 1`).Scan(&applied130); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT version FROM schema_app_version WHERE id = 1`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := latestMigrationVersion()
+	if err != nil {
+		t.Fatalf("latest migration: %v", err)
+	}
+	if reviewPartialColumn != 1 || applied130 != 1 || version != latest {
+		t.Fatalf("review_partial = %d, applied 0130 = %d, stamp = %d; want 1, 1, %d", reviewPartialColumn, applied130, version, latest)
+	}
+}
+
+func TestMigrateRepairsPriorSchemaAppVersionMigrationNumber148(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 147)
+	if _, err := db.Exec(`
+CREATE TABLE schema_app_version (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    version INTEGER NOT NULL CHECK (version >= 0),
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO schema_app_version (id, version) VALUES (1, 148);
+INSERT INTO goose_db_version (version_id, is_applied) VALUES (148, 1);
+`); err != nil {
+		t.Fatalf("seed prior PR migration: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate prior PR database: %v", err)
+	}
+	var dismissedAtColumn, applied148, version int64
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('notifications') WHERE name = 'dismissed_at'`).Scan(&dismissedAtColumn); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 148 AND is_applied = 1`).Scan(&applied148); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT version FROM schema_app_version WHERE id = 1`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := latestMigrationVersion()
+	if err != nil {
+		t.Fatalf("latest migration: %v", err)
+	}
+	if dismissedAtColumn != 1 || applied148 != 1 || version != latest {
+		t.Fatalf("dismissed_at = %d, applied 0148 = %d, stamp = %d; want 1, 1, %d", dismissedAtColumn, applied148, version, latest)
+	}
+}
+
 func TestMigrateRepairsPriorSchemaAppVersionMigrationNumber163(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 162)
 	if _, err := db.Exec(`
@@ -107,6 +179,59 @@ INSERT INTO goose_db_version (version_id, is_applied) VALUES (163, 1);
 	}
 	if err := migrate(db); err != nil {
 		t.Fatalf("repeat migration: %v", err)
+	}
+}
+
+func TestMigrateRepairsPriorSchemaAppVersionMigrationNumber179(t *testing.T) {
+	for _, senderPresent := range []bool{false, true} {
+		name := "old_stamp"
+		if senderPresent {
+			name = "upstream_sender"
+		}
+		t.Run(name, func(t *testing.T) {
+			baseVersion := int64(178)
+			if senderPresent {
+				baseVersion = 179
+			}
+			db := openMigratedDatabaseCopy(t, baseVersion)
+			if _, err := db.Exec(`
+CREATE TABLE schema_app_version (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    version INTEGER NOT NULL CHECK (version >= 0),
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO schema_app_version (id, version) VALUES (1, 179);
+`); err != nil {
+				t.Fatalf("seed prior stamp: %v", err)
+			}
+			if !senderPresent {
+				if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (179, 1)`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for range 2 {
+				if err := migrate(db); err != nil {
+					t.Fatalf("migrate prior PR database: %v", err)
+				}
+			}
+			var senderColumns, applied179, version int64
+			if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('conversation_messages') WHERE name IN ('sender_session_id', 'sender_project_id', 'sender_display_name')`).Scan(&senderColumns); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 179 AND is_applied = 1`).Scan(&applied179); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.QueryRow(`SELECT version FROM schema_app_version WHERE id = 1`).Scan(&version); err != nil {
+				t.Fatal(err)
+			}
+			latest, err := latestMigrationVersion()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if senderColumns != 3 || applied179 != 1 || version != latest {
+				t.Fatalf("sender columns = %d, applied 0179 = %d, stamp = %d; want 3, 1, %d", senderColumns, applied179, version, latest)
+			}
+		})
 	}
 }
 

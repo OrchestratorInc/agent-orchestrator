@@ -18,7 +18,7 @@ import { WORKSPACE_REVIEW_BATCH_SIZE, WORKSPACE_REVIEW_INITIAL_BATCHES, WORKSPAC
 import { statusLabel, statusTone } from "../../lib/workspace-file-status";
 import { useUiStore } from "../../stores/ui-store";
 import { type FileOpenOptions } from "../FileContentPane";
-import { PanelMessage, RetryButton, FileAnnotationComposer, LineFeedbackButtonControl, type FileAnnotationModel } from "../WorkspaceDiffView";
+import { PanelMessage, RetryButton, FileAnnotationComposer, FileAnnotationSendBar, LineFeedbackButtonControl, cancelFileAnnotations, fileAnnotationKey, type FileAnnotationModel } from "../WorkspaceDiffView";
 import { VscodeGoToFileIcon } from "../icons/VscodeGoToFileIcon";
 import { WorkspaceEntryIcon } from "../WorkspaceEntryIcon";
 import { Button } from "../ui/button";
@@ -29,9 +29,13 @@ import { SettingsMenuTrigger } from "../settings/SettingsMenuTrigger";
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { formatTimeTerse } from "../../lib/format-time";
+import { useAskInChat } from "../../lib/chat-context-bus";
 import { sessionUiKey } from "../../lib/hosts";
 import { AO_PIERRE_FILES_REVIEW_CSS, AO_PIERRE_SURFACE_CSS } from "./pierreTheme";
+import { ImageDiffView, isWorkspaceImagePath } from "../ImageDiffView";
 import { REVIEW_CONTEXT_LINES, diffContentVersion, endsAtLastHunk, hydratedCopy, patchIdentity, stableFileDiff } from "./trailingContext";
+import { SelectionAskButton } from "./SelectionAskButton";
+import { codeReference, useCodeSelection } from "./useCodeSelection";
 import { usePersistentGutterUtility } from "./usePersistentGutterUtility";
 
 const parsedPatchCache = new Map<string, { patch: string; files: FileDiffMetadata[] }>();
@@ -40,6 +44,8 @@ const workingScopeOrder = ["unstaged", "staged", "untracked"] as const;
 const SOURCE_CONTROL = MENU_TRIGGER_CHROME;
 // Height of the custom per-file header row below (h-9).
 const FILE_HEADER_HEIGHT_PX = 36;
+// Keeps an item's version (a 32-bit content hash, two flag bits, then this) a safe integer.
+const ANNOTATION_REVISION_SPAN = 65_536;
 const REVIEW_CODE_VIEW_LAYOUT = { gap: 4, paddingBottom: 8, paddingTop: 0 };
 const REVIEW_CODE_VIEW_METRICS = { diffHeaderHeight: FILE_HEADER_HEIGHT_PX };
 const REVIEW_CODE_VIEW_THEME = { dark: "github-dark", light: "github-light" } as const;
@@ -319,6 +325,15 @@ export function WorkspaceReviewPane({
 	}, [batches, patchQueries]);
 
 	const summaryById = useMemo(() => new Map(files.map((file) => [`${reviewSelectionKey}:${file.path}`, file])), [files, reviewSelectionKey]);
+	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
+	// session has a Chat composer; each file's header carries its item id.
+	const askInChat = useAskInChat(sessionId, hostId);
+	const codeSelection = useCodeSelection(reviewRef, (selection) => {
+		// Pierre portals the custom header into this host's light DOM; the selected
+		// code is in its shadow root. Search this host to keep the file lookup local.
+		const file = summaryById.get(selection.host.querySelector("[data-review-item-id]")?.getAttribute("data-review-item-id") ?? "");
+		if (file) askInChat?.(codeReference(file.path, selection, true));
+	}, askInChat !== undefined);
 
 	const loadDiffFiles = useCallback(
 		async (metadata: FileDiffMetadata) => {
@@ -364,6 +379,7 @@ export function WorkspaceReviewPane({
 	// CodeView re-renders an item whenever the item object changes, and Pierre
 	// 1.4.1 throws if that render sees a different object with the same cache key.
 	const publishedItemsRef = useRef(new Map<string, CodeViewItem<"feedback">>());
+	const annotationRevisionsRef = useRef(new Map<string, { key: string; revision: number }>());
 
 	const items = useMemo(
 		() => {
@@ -381,24 +397,29 @@ export function WorkspaceReviewPane({
 				if (!metadata) return [];
 				const fileDiff = stableFileDiff(endOfFile.get(file.path) ?? metadata);
 				const collapsed = collapsedPaths.has(file.path);
-				const fileAnnotationActive = annotation.target?.surface !== "focused" && annotation.target?.path === file.path && annotation.target.side === "file";
-				const activeTarget = annotation.target?.surface !== "focused" && annotation.target?.path === file.path && annotation.target.side !== "file"
-					? annotation.target
-					: null;
+				const fileTargets = annotation.targets.filter((target) => target.surface !== "focused" && target.path === file.path);
+				const fileAnnotationActive = fileTargets.some((target) => target.side === "file");
+				const activeTargets = fileTargets.filter((target) => target.side !== "file" && target.line != null);
 				const id = itemId(file.path);
-				const version = diffContentVersion(fileDiff) * 8 + (collapsed ? 1 : 0) + (activeTarget ? 2 : 0) + (fileAnnotationActive ? 4 : 0);
+				// Each set of open boxes gets its own revision, so opening or closing
+				// one among several still changes the item's version.
+				const annotationKey = activeTargets.map(fileAnnotationKey).join("\n");
+				const lastRevision = annotationRevisionsRef.current.get(id);
+				const annotationRevision = lastRevision?.key === annotationKey ? lastRevision.revision : (lastRevision?.revision ?? 0) + 1;
+				annotationRevisionsRef.current.set(id, { key: annotationKey, revision: annotationRevision });
+				const version = (diffContentVersion(fileDiff) * 4 + (collapsed ? 1 : 0) + (fileAnnotationActive ? 2 : 0)) * ANNOTATION_REVISION_SPAN + (annotationRevision % ANNOTATION_REVISION_SPAN);
 				const previous = publishedItemsRef.current.get(id);
-				if (previous?.type === "diff" && !activeTarget && !fileAnnotationActive && previous.annotations == null && previous.fileDiff === fileDiff && previous.version === version && previous.collapsed === collapsed) return [previous];
+				if (previous?.type === "diff" && activeTargets.length === 0 && !fileAnnotationActive && previous.annotations == null && previous.fileDiff === fileDiff && previous.version === version && previous.collapsed === collapsed) return [previous];
 				const item: CodeViewItem<"feedback"> = {
 					id,
 					type: "diff",
 					fileDiff,
 					collapsed,
-					annotations: activeTarget?.line != null ? [{
-						lineNumber: activeTarget.line,
-						side: activeTarget.side === "old" ? "deletions" : "additions",
+					annotations: activeTargets.length > 0 ? activeTargets.map((target) => ({
+						lineNumber: target.line as number,
+						side: target.side === "old" ? "deletions" : "additions",
 						metadata: "feedback",
-					}] : undefined,
+					})) : undefined,
 					// CodeView only re-reads an item when its version changes: the content
 					// part lets changed or newly hydrated diffs through, the low bits carry
 					// the collapsed/annotation state.
@@ -408,7 +429,7 @@ export function WorkspaceReviewPane({
 				return [item];
 			});
 		},
-		[annotation.target, collapsedPaths, endOfFileContents, endOfFileFiles, files, metadataByPath, reviewSelectionKey],
+		[annotation.targets, collapsedPaths, endOfFileContents, endOfFileFiles, files, metadataByPath, reviewSelectionKey],
 	);
 
 	const beginLineAnnotation = useCallback((itemId: string, lineNumber: number, side: "deletions" | "additions") => {
@@ -428,7 +449,7 @@ export function WorkspaceReviewPane({
 		});
 	}, [annotation, data.workspaceVersion, scope, summaryById]);
 	const toggleCollapsed = useCallback((path: string) => {
-		if (annotation.target?.surface === "review" && annotation.target.path === path) annotation.cancel();
+		cancelFileAnnotations(annotation, (target) => target.surface === "review" && target.path === path);
 		setCollapsedPaths((current) => {
 			const next = new Set(current);
 			if (next.has(path)) next.delete(path);
@@ -437,7 +458,7 @@ export function WorkspaceReviewPane({
 		});
 	}, [annotation]);
 	const collapsePath = useCallback((path: string) => {
-		if (annotation.target?.surface === "review" && annotation.target.path === path) annotation.cancel();
+		cancelFileAnnotations(annotation, (target) => target.surface === "review" && target.path === path);
 		setCollapsedPaths((current) => {
 			if (current.has(path)) return current;
 			const next = new Set(current);
@@ -450,7 +471,7 @@ export function WorkspaceReviewPane({
 		if (checked) collapsePath(file.path);
 	}, [collapsePath, toggleViewed]);
 	const collapseAll = useCallback(() => {
-		if (annotation.target?.surface === "review") annotation.cancel();
+		cancelFileAnnotations(annotation, (target) => target.surface === "review");
 		setCollapsedPaths(new Set(files.map((file) => file.path)));
 	}, [annotation, files]);
 	const expandAll = useCallback(() => {
@@ -460,13 +481,13 @@ export function WorkspaceReviewPane({
 	const allFilesCollapsed = files.length > 0 && files.every((file) => collapsedPaths.has(file.path));
 	const toggleAll = allFilesCollapsed ? expandAll : collapseAll;
 	const selectCommit = useCallback((commit: WorkspaceCommitSummary) => {
-		if ((scope !== "committed" || selectedCommitSha !== commit.sha) && annotation.target?.surface === "review") annotation.cancel();
+		if (scope !== "committed" || selectedCommitSha !== commit.sha) cancelFileAnnotations(annotation, (target) => target.surface === "review");
 		setSelectedCommitSha(commit.sha);
 		setScope("committed");
 		setCommitBrowserOpen(false);
 	}, [annotation, scope, selectedCommitSha]);
 	const selectScope = useCallback((nextScope: WorkspaceDiffScope) => {
-		if (nextScope !== scope && annotation.target?.surface === "review") annotation.cancel();
+		if (nextScope !== scope) cancelFileAnnotations(annotation, (target) => target.surface === "review");
 		setScope(nextScope);
 		setSelectedCommitSha(undefined);
 		setCommitBrowserOpen(false);
@@ -615,7 +636,12 @@ export function WorkspaceReviewPane({
 							tokenizeMaxLineLength: 2_000,
 							unsafeCSS: AO_PIERRE_SURFACE_CSS + AO_PIERRE_FILES_REVIEW_CSS,
 						}}
-						renderAnnotation={() => <FileAnnotationComposer annotation={annotation} />}
+						renderAnnotation={(line, item) => {
+							const path = summaryById.get(item.id)?.path;
+							const side = "side" in line ? line.side : undefined;
+							const target = annotation.targets.find((open) => open.surface !== "focused" && open.path === path && open.side !== "file" && open.line === line.lineNumber && (open.side === "old" ? "deletions" : "additions") === side);
+							return target ? <FileAnnotationComposer annotation={annotation} target={target} /> : null;
+						}}
 						renderGutterUtility={(getHoveredLine, item) => (
 							<LineFeedbackButtonControl
 								gutter
@@ -634,10 +660,12 @@ export function WorkspaceReviewPane({
 							const isViewed = viewed.has(file.path);
 							const isCollapsed = collapsedPaths.has(file.path);
 							const renderedAvailable = canOpenRendered(file);
-							const fileAnnotationActive = annotation.target?.surface !== "focused" && annotation.target?.path === file.path && annotation.target.side === "file";
+							const fileAnnotationTarget = annotation.targets.find((target) => target.surface !== "focused" && target.path === file.path && target.side === "file");
+							const fileAnnotationActive = fileAnnotationTarget != null;
 							return (
-								<Popover onOpenChange={(open) => { if (!open) annotation.cancel(); }} open={fileAnnotationActive}>
-									<div className="relative bg-background">
+								<Popover onOpenChange={(open) => { if (!open && fileAnnotationTarget) annotation.cancel(fileAnnotationTarget); }} open={fileAnnotationActive}>
+									{/* Lets a code selection in this file's surface find its item. */}
+									<div className="relative bg-background" data-review-item-id={item.id}>
 										{/* The whole row toggles the file (the chevron just rotates);
 										    name + stats on the left, every action grouped on the right
 										    with "viewed" pinned to the far edge. */}
@@ -757,7 +785,7 @@ export function WorkspaceReviewPane({
 										side="bottom"
 										sideOffset={0}
 									>
-										<FileAnnotationComposer annotation={annotation} />
+										{fileAnnotationTarget ? <FileAnnotationComposer annotation={annotation} target={fileAnnotationTarget} /> : null}
 									</PopoverContent>
 								</Popover>
 							);
@@ -765,15 +793,33 @@ export function WorkspaceReviewPane({
 						style={{ height: "100%" }}
 					/>
 				) : null}
+				<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
 				{files.filter((file) => file.binary || !metadataByPath.has(file.path)).map((file) => {
 					const deferred = isDeferredByDefault(file) && !loadedDeferredPaths.has(file.path);
 					const serverDeferredReason = serverDeferredByPath.get(file.path);
 					const pending = pendingDiffPaths.has(file.path);
 					const unavailable = !file.binary && !deferred && !serverDeferredReason && !pending;
+					const image = file.binary && isWorkspaceImagePath(file.path);
 					return (
 					<div className="m-2 flex items-center gap-2 rounded-md border border-border bg-surface p-3" key={file.path}>
-						<FileCode2 aria-hidden="true" className="text-passive" />
-						<div className="min-w-0 flex-1"><p className="truncate text-xs">{file.path}</p><p className="text-caption text-muted-foreground">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : serverDeferredReason ? t("files.diffUnavailableReason", { reason: serverDeferredReason }) : pending ? t("files.loadingDiff") : t("files.diffUnavailable")}</p></div>
+						{image ? (
+							<div className="min-w-0 flex-1">
+								<p className="truncate text-xs">{file.path}</p>
+								<ImageDiffView
+									path={file.path}
+									sessionId={sessionId}
+									hostId={hostId}
+									split={split}
+									status={file.status}
+									version={data.workspaceVersion ?? ""}
+								/>
+							</div>
+						) : (
+							<>
+								<FileCode2 aria-hidden="true" className="text-passive" />
+								<div className="min-w-0 flex-1"><p className="truncate text-xs">{file.path}</p><p className="text-caption text-muted-foreground">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : serverDeferredReason ? t("files.diffUnavailableReason", { reason: serverDeferredReason }) : pending ? t("files.loadingDiff") : t("files.diffUnavailable")}</p></div>
+							</>
+						)}
 						{deferred ? <Button onClick={() => setLoadedDeferredPaths((current) => new Set(current).add(file.path))} size="sm" type="button" variant="outline">{t("files.loadDiff")}</Button> : null}
 						{unavailable ? <RetryButton onClick={retryAll} /> : null}
 						{onOpenFile ? <Button onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="sm" type="button" variant="outline">{t("files.fileView")}</Button> : null}
@@ -783,6 +829,7 @@ export function WorkspaceReviewPane({
 			</div>
 				</>
 			)}
+			<FileAnnotationSendBar annotation={annotation} surface="review" />
 		</div>
 	);
 }

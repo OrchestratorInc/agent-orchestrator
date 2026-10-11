@@ -8,6 +8,11 @@ import type { WorkspaceFileSummary } from "../hooks/useSessionWorkspaceFiles";
 type WorkspaceFileStatus = WorkspaceFileSummary["status"];
 type ImageDiffSide = "before" | "after";
 
+/** Matches the image extensions supported by the daemon's blob endpoint. */
+export function isWorkspaceImagePath(path: string): boolean {
+	return /\.(apng|avif|bmp|gif|ico|jpe?g|png|webp)$/i.test(path);
+}
+
 // A light checkerboard so transparent pixels read as transparent instead of
 // borrowing the panel background.
 const CHECKERBOARD =
@@ -17,7 +22,7 @@ const CHECKERBOARD =
 // route sets no-store, so `version` — the file detail's load timestamp — is what
 // makes an edited image reload: without a changing URL the element never
 // refetches at all.
-function workspaceImageUrl(sessionId: string, path: string, side: ImageDiffSide, version: number, hostId?: string, remoteBaseUrl?: string): string | undefined {
+function workspaceImageUrl(sessionId: string, path: string, side: ImageDiffSide, version: number | string, hostId?: string, remoteBaseUrl?: string): string | undefined {
 	const base = hostId ? remoteBaseUrl : getApiBaseUrl();
 	if (base === undefined) return undefined;
 	const query = new URLSearchParams({ path, side, v: String(version) });
@@ -47,7 +52,7 @@ export function ImageDiffView({
 	hostId?: string;
 	split: boolean;
 	status: WorkspaceFileStatus;
-	version: number;
+	version: number | string;
 }) {
 	const { t } = useTranslation();
 	// A file with no change on this side has nothing to compare against: an added
@@ -97,7 +102,7 @@ function ImageDiffPane({
 	side: ImageDiffSide;
 	sessionId: string;
 	hostId?: string;
-	version: number;
+	version: number | string;
 }) {
 	const { t } = useTranslation();
 	const { baseUrl: remoteBaseUrl } = useHostConnection(hostId);

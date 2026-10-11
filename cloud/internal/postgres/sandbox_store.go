@@ -34,7 +34,7 @@ const sandboxColumns = `sandbox.session_id, sandbox.org_id, sandbox.provider,
 	sandbox.worker_last_seen_at, sandbox.startup_started_at,
 	sandbox.startup_attempts,
 	sandbox.deletion_requested_at,
-	sandbox.last_error, sandbox.updated_at`
+	sandbox.last_error, sandbox.startup_error_code, sandbox.updated_at`
 
 // ClaimSandboxes leases up to limit due sandboxes for reconciliation. The
 // SKIP LOCKED claim is what makes the reconcile loop safe to run under multiple
@@ -551,6 +551,15 @@ func (s *Store) PauseIfIdle(
 					WHERE ao_turns.session_id = $1
 						AND ao_turns.org_id = $2
 						AND ao_turns.state IN ('queued', 'provisioning', 'running', 'cancel_requested')
+				)
+				-- A manual PR review is work in flight even though it is not
+				-- represented by a normal user turn. Keep its worker alive until
+				-- the review reaches a terminal state.
+				AND NOT EXISTS (
+					SELECT 1 FROM ao_review_runs
+					WHERE ao_review_runs.org_id = $2
+						AND ao_review_runs.review_session_id = $1
+						AND ao_review_runs.status = 'running'
 				)`,
 			sessionID,
 			orgID,
@@ -846,7 +855,7 @@ func (s *Store) WorkerLaunchSpec(
 		err := tx.QueryRow(
 			ctx,
 			`SELECT session.id, session.project_id, project.display_name, project.config,
-				session.kind, session.harness,
+				session.kind, session.harness, session.agent_config,
 				session.display_name, session.branch, session.prompt,
 				session.agent_session_id, session.mode,
 				COALESCE(NULLIF(selection.selected_model, ''), session.model),
@@ -871,6 +880,7 @@ func (s *Store) WorkerLaunchSpec(
 			&launch.ProjectConfig,
 			&launch.Kind,
 			&launch.Harness,
+			&launch.AgentConfig,
 			&launch.DisplayName,
 			&launch.Branch,
 			&launch.Prompt,
@@ -987,6 +997,9 @@ func (s *Store) MarkWorkerSeen(
 			SET worker_last_seen_at = now(),
 				startup_started_at = NULL,
 				startup_attempts = 0,
+				startup_error_code = '',
+				startup_error_message = '',
+				startup_error_at = NULL,
 				observed_state = CASE
 					WHEN observed_state IN ('requested', 'provisioning', 'restoring', 'bootstrapping', 'disconnected')
 						THEN 'running'
@@ -1253,6 +1266,89 @@ func (s *Store) RecordSandboxStartupRepair(
 	return attempts, nil
 }
 
+// RecordSandboxStartupError stores the latest user-facing reason a sandbox has
+// not started. It is fenced by the reconcile lease like every other
+// reconciler write, and is cleared by the worker's first heartbeat or a user
+// retry.
+func (s *Store) RecordSandboxStartupError(
+	ctx context.Context,
+	owner, orgID, sessionID, code, message string,
+) error {
+	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(
+			ctx,
+			`UPDATE ao_sandboxes
+			SET startup_error_code = $4,
+				startup_error_message = $5,
+				startup_error_at = CASE
+					WHEN startup_error_code IS DISTINCT FROM $4
+						OR startup_error_message IS DISTINCT FROM $5
+						OR startup_error_at IS NULL
+						THEN now()
+					ELSE startup_error_at
+				END
+			WHERE session_id = $1 AND org_id = $2
+				AND reconcile_lease_owner = $3
+				AND reconcile_lease_until > now()`,
+			sessionID, orgID, owner, code, message,
+		)
+		if err != nil {
+			return fmt.Errorf("record sandbox startup error: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrSandboxLeaseLost
+		}
+		return nil
+	})
+}
+
+// RetrySessionStartup re-arms a session whose worker never started: it resets
+// the startup window, repair count, failure backoff and startup error, and
+// puts a parked (terminated) or failed sandbox back into provisioning so the
+// reconciler re-runs the worker bootstrap against the existing environment.
+// It is a no-op returning ErrConflict when the worker has already checked in or
+// the session is not meant to be running, so it cannot disturb a live session.
+func (s *Store) RetrySessionStartup(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID string,
+) error {
+	return s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, _ sessionAccess) error {
+		tag, err := tx.Exec(
+			ctx,
+			`UPDATE ao_sandboxes sandbox
+			SET observed_state = CASE
+					WHEN observed_state IN ('terminated', 'failed') THEN 'provisioning'
+					ELSE observed_state
+				END,
+				startup_started_at = now(),
+				startup_attempts = 0,
+				consecutive_failures = 0,
+				startup_error_code = '',
+				startup_error_message = '',
+				startup_error_at = NULL,
+				last_error = '',
+				reconcile_after = now(),
+				updated_at = now()
+			FROM ao_sessions session
+			WHERE sandbox.session_id = $1 AND sandbox.org_id = $2
+				AND session.org_id = sandbox.org_id AND session.id = sandbox.session_id
+				AND NOT session.is_terminated
+				AND sandbox.desired_state = 'running'
+				AND sandbox.worker_last_seen_at IS NULL
+				AND sandbox.observed_state IN ('terminated', 'failed', 'provisioning', 'bootstrapping')`,
+			sessionID, orgID,
+		)
+		if err != nil {
+			return fmt.Errorf("retry session startup: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrConflict
+		}
+		return nil
+	})
+}
+
 func scanSandbox(row rowScanner) (domain.Sandbox, error) {
 	var record domain.Sandbox
 	var resourceProfile, bootstrapContext []byte
@@ -1271,6 +1367,7 @@ func scanSandbox(row rowScanner) (domain.Sandbox, error) {
 		&record.StartupAttempts,
 		&record.DeletionRequestedAt,
 		&record.LastError,
+		&record.StartupErrorCode,
 		&record.UpdatedAt,
 		&record.KeepAlive,
 	); err != nil {

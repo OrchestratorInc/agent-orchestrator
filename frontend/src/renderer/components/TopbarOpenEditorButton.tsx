@@ -2,7 +2,7 @@ import { ChevronDown, Code2, FolderOpen, SquareTerminal } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { OpenTarget, OpenTargetId } from "../../shared/editor-handoff";
-import { useEditorHandoffState, useOpenSessionTarget } from "../hooks/useEditorHandoff";
+import { useEditorHandoffState, useOpenSessionTarget, workspaceCheckFailed } from "../hooks/useEditorHandoff";
 import { TopbarActionError, TopbarButton } from "./TopbarButton";
 import {
 	DropdownMenu,
@@ -98,13 +98,15 @@ export function TopbarOpenEditorButton({
 		open.mutate({ sessionId, projectId, ...(targetId ? { targetId } : {}) });
 	};
 	const launchError = open.error instanceof Error ? open.error.message : null;
-	const workspaceError = !stateQuery.isPending && !workspaceAvailable
+	const waitingLabel = stateQuery.isPending
+		? t("editor.preparingWorkspace")
+		: (workspaceCheckFailed(state) ? t("editor.checkingWorkspace") : null);
+	const workspaceError = !waitingLabel && !workspaceAvailable
 		? state?.unavailableReason ?? t("editor.workspaceUnavailable")
 		: null;
 	const noEditorInstalled = !stateQuery.isPending && workspaceAvailable && editors.length === 0;
-	const mainTitle = stateQuery.isPending
-		? t("editor.preparingWorkspace")
-		: (workspaceError
+	const mainTitle = waitingLabel
+		?? (workspaceError
 			?? (preferred
 				? t("editor.openWorkspaceInTitle", { name: preferred.name })
 				: (noEditorInstalled ? t("editor.noEditorInstalled") : t("editor.chooseEditorTitle"))));
@@ -128,9 +130,8 @@ export function TopbarOpenEditorButton({
 					<TooltipTrigger asChild>
 						<span className="inline-flex">
 							<TopbarButton
-								aria-label={stateQuery.isPending
-									? t("editor.preparingWorkspace")
-									: (workspaceError
+								aria-label={waitingLabel
+									?? (workspaceError
 										?? (preferred
 											? t("editor.openInAria", { name: preferred.name })
 											: (noEditorInstalled ? t("editor.noEditorInstalled") : t("editor.chooseEditor"))))}

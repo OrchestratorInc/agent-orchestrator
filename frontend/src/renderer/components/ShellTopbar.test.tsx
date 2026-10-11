@@ -231,6 +231,20 @@ beforeEach(() => {
 	useUiStore.setState({ inspectorSessions: {}, settingsModal: null, newTaskRequest: null });
 });
 
+describe("optimistic orchestrator topbar", () => {
+	it("uses the actual orchestrator actions before a session exists", () => {
+		useWorkspaceQueryMock.mockReturnValue({ data: [], isError: false, isLoading: false, isSuccess: true });
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider><ShellTopbar embedded startingOrchestrator /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByRole("button", { name: "New task" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Open Kanban" })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
+	});
+});
+
 describe("ShellTopbar route identity", () => {
 	it("identifies the Automations route instead of presenting it as the board", () => {
 		locationMock.pathname = "/automations";
@@ -469,7 +483,7 @@ describe("ShellTopbar orchestrator actions", () => {
 		if (!pulses) expect(indicator).not.toHaveClass("animate-status-pulse");
 	});
 
-	it("shows a rejected orchestrator resume request", async () => {
+	it("opens an exited orchestrator at once and shows a rejected resume request", async () => {
 		postMock.mockRejectedValueOnce(new Error("resume request failed"));
 		const exitedOrchestrator = {
 			...orchestrator,
@@ -481,7 +495,7 @@ describe("ShellTopbar orchestrator actions", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Orchestrator, Exited" }));
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("resume request failed");
-		expect(navigateMock).not.toHaveBeenCalled();
+		expect(navigateMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows a clear Kanban button on embedded orchestrator sessions", async () => {
@@ -792,7 +806,9 @@ describe("TopbarArchiveButton", () => {
 			response: { status: 500 },
 		});
 
-		expect(await screen.findByRole("alert")).toHaveTextContent("do the thing: runtime teardown failed");
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("runtime teardown failed");
+		expect(alert).toHaveAttribute("title", "do the thing: runtime teardown failed");
 	});
 
 	it("falls back to the project board when no orchestrator is available", async () => {

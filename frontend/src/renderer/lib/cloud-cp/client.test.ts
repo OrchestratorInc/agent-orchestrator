@@ -64,6 +64,75 @@ describe("Cloud control-plane interface transitions", () => {
 });
 
 describe("cloud control-plane session lifecycle", () => {
+	it("uses the cloud review endpoints for an encoded session", async () => {
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ sessionId: "session/1", reviews: [], runs: [] }), {
+					status: 201,
+					headers: { "Content-Type": "application/json" },
+				}),
+		);
+		const client = createCloudCpClient({
+			baseUrl: "https://cloud.example.test/",
+			getToken: async () => "token",
+			fetchImpl: fetchMock as typeof fetch,
+		});
+
+		await client.triggerSessionReviews("org/1", "session/1");
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/reviews/trigger",
+			expect.objectContaining({ method: "POST" }),
+		);
+	});
+
+	it("asks the control plane to deliver a stored review to the worker", async () => {
+		const fetchMock = vi.fn(
+			async (_input: RequestInfo | URL, _init?: RequestInit) =>
+				new Response(JSON.stringify({ event: { sequence: 12 } }), {
+					status: 202,
+					headers: { "Content-Type": "application/json" },
+				}),
+		);
+		const client = createCloudCpClient({
+			baseUrl: "https://cloud.example.test/",
+			getToken: async () => "token",
+			fetchImpl: fetchMock as typeof fetch,
+		});
+
+		await client.sendSessionReviewToWorker("org/1", "session/1", "run/1", {
+			idempotencyKey: "review-run-1",
+		});
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/reviews/run%2F1/send",
+			expect.objectContaining({ method: "POST" }),
+		);
+		const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+		expect(new Headers(request.headers).get("Idempotency-Key")).toBe("review-run-1");
+	});
+
+	it("inspects and installs only through typed cloud harness routes", async () => {
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ harness: "cursor", status: "ready" }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+		);
+		const client = createCloudCpClient({
+			baseUrl: "https://cloud.example.test/",
+			getToken: async () => "token",
+			fetchImpl: fetchMock as typeof fetch,
+		});
+
+		await client.installSessionReviewerHarness("org/1", "session/1", "cursor");
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/reviewer-harnesses/cursor/install",
+			expect.objectContaining({ method: "POST" }),
+		);
+	});
 	it("pages startup events through JSON without opening an SSE stream", async () => {
 		const page = { events: [{ sessionId: "session/1", sequence: 4, type: "worker.ready", payload: {}, createdAt: "2026-09-29T00:00:00Z" }], hasMore: false, nextAfter: 4 };
 		const fetchMock = vi.fn(async () => new Response(JSON.stringify(page), {
@@ -79,6 +148,15 @@ describe("cloud control-plane session lifecycle", () => {
 		expect(new Headers((fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0]?.[1].headers).get("authorization")).toBe("Bearer token");
 	});
 
+	it("reads a Cloud project and patches only supplied settings", async () => {
+		const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ project: { id: "project" } }), { headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.test", getToken: async () => "token", fetchImpl: fetchMock });
+		await client.getProject("org/1", "project/1");
+		await client.updateProjectSettings("org/1", "project/1", { config: { autoReview: false } });
+		expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/projects/project%2F1");
+		expect(fetchMock.mock.calls[1]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/projects/project%2F1/settings");
+		expect(fetchMock.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ method: "PATCH", body: JSON.stringify({ config: { autoReview: false } }) }));
+	});
 	it("uses the organization GitHub App installation and repository routes", async () => {
 		const responses = [
 			{ installationUrl: "https://github.com/apps/ao/installations/new", expiresAt: "2026-09-22T12:00:00Z" },
@@ -291,6 +369,42 @@ describe("cloud control-plane session lifecycle", () => {
 			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/restore",
 			expect.objectContaining({ method: "POST" }),
 		);
+	});
+
+	it("posts a startup retry for one encoded session without a body", async () => {
+		const fetchMock = vi.fn(async () =>
+			new Response(JSON.stringify({ session: { id: "session/1", runtimeState: "bootstrapping" } }), {
+				status: 202,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test/", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+
+		const response = await client.retrySessionStartup("org/1", "session/1");
+
+		expect(response.session.runtimeState).toBe("bootstrapping");
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/startup-retry",
+			expect.objectContaining({ method: "POST" }),
+		);
+		const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1];
+		expect(init.body).toBeUndefined();
+	});
+
+	it("surfaces an unavailable startup retry as a typed control-plane error", async () => {
+		const fetchMock = vi.fn(async () =>
+			new Response(JSON.stringify({ error: "conflict", code: "startup_retry_unavailable", message: "session is not retryable", requestId: "req-1" }), {
+				status: 409,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test/", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+
+		await expect(client.retrySessionStartup("org", "session")).rejects.toMatchObject({
+			name: "CloudCpError",
+			status: 409,
+			code: "startup_retry_unavailable",
+		});
 	});
 
 	it("patches automatic CI feedback for one cloud session", async () => {

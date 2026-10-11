@@ -2,6 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useQueries } from "@tanstack/react-query";
 import { StickyNote } from "lucide-react";
 import { useEffect, useMemo } from "react";
+import { useUiStore } from "../stores/ui-store";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { labelForHost } from "../lib/host-clients";
@@ -64,6 +65,8 @@ type NewTaskDialogProps = {
 
 export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCreated, onOpenChange }: NewTaskDialogProps) {
 	const { t } = useTranslation();
+	// Settings opens as a page in the center pane; step aside so it is not hidden behind this modal.
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const localWorkspaces = useWorkspaceQuery({ subscribed: open }).data ?? [];
 	const remoteWorkspaces = useRemoteWorkspaces({ subscribed: open }).data ?? [];
 	const workspaces = hostId ? remoteWorkspaces.filter((workspace) => workspace.hostId === hostId) : localWorkspaces;
@@ -124,7 +127,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 		}
 	}, [open, projectAvatars]);
 	return (
-		<Dialog.Root open={open} onOpenChange={onOpenChange}>
+		<Dialog.Root open={open && !settingsOpen} onOpenChange={onOpenChange}>
 			<Dialog.Portal>
 				<Dialog.Overlay className="dialog-overlay data-[state=open]:animate-overlay-in data-[state=closed]:animate-overlay-out" />
 				<Dialog.Content className="fixed left-1/2 top-1/2 z-overlay w-dialog-xl -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-border bg-popover p-0 text-popover-foreground shadow-xl data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none">
@@ -142,11 +145,11 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 							renderTrigger={() => (
 								<span className="inline-flex min-w-0 items-center gap-1.5">
 									{selectedProjectId === STANDALONE_WORKSPACE_ID ? (
-										<StickyNote aria-hidden="true" className="size-[1em] shrink-0 text-muted-foreground" />
+										<StickyNote aria-hidden="true" className="size-[0.85em] shrink-0 -translate-y-px text-muted-foreground" />
 									) : selectedProjectAvatar ? (
 										<ProjectOwnerAvatar avatar={selectedProjectAvatar} className="size-[1em]" />
-									) : <StickyNote aria-hidden="true" className="size-[1em] shrink-0 text-muted-foreground" />}
-									<span className="min-w-0 truncate">{selectedProjectName}</span>
+									) : <StickyNote aria-hidden="true" className="size-[0.85em] shrink-0 -translate-y-px text-muted-foreground" />}
+									<span className="min-w-0 -translate-y-px truncate">{selectedProjectName}</span>
 								</span>
 							)}
 							renderMenuItem={(option) => {
@@ -155,7 +158,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 									<>
 										<span className="relative flex w-5 shrink-0 items-center justify-center">
 											{option.value === STANDALONE_WORKSPACE_ID ? (
-												<StickyNote aria-hidden="true" className="size-[18px]! text-muted-foreground" />
+												<StickyNote aria-hidden="true" className="size-4! -translate-y-px text-muted-foreground" />
 											) : (
 												<span className="flex items-center -space-x-2">
 													{avatars.slice(0, 2).map((avatar) => (

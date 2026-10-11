@@ -72,6 +72,10 @@ type OpenCommandTerminalInput struct {
 	Title                   string
 	InitialInput            string
 	InitialInputReadyStates []InitialInputReadyState
+	// SendInitialInputOnReadyTimeout sends InitialInput once the ready wait
+	// expires without a marker, provided the terminal is still alive. Only for
+	// harnesses whose input is harmless at any point after startup.
+	SendInitialInputOnReadyTimeout bool
 }
 
 // RunCueCommandInput is the trusted, project-scoped command request

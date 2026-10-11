@@ -28,6 +28,12 @@ type sessionStore interface {
 	// write. It returns false when a concurrent lifecycle/agent-switch boundary
 	// made the reducer's previously read session stale.
 	UpdateSessionFromActivitySignal(ctx context.Context, rec domain.SessionRecord, expectedRevision int64) (bool, error)
+	// UpdateSessionArtifactOutput is a narrow write touching only
+	// artifact_dir and session_output_type. ReconcileSessionOutputType uses
+	// it instead of a read-modify-write UpdateSession so a stale in-memory
+	// read can never replay is_terminated, activity, runtime identity, or
+	// preview state backwards over a newer concurrent write.
+	UpdateSessionArtifactOutput(ctx context.Context, id domain.SessionID, artifactDir string, outputType domain.SessionOutputType) (bool, error)
 	// ListSessions returns every session in a project. The dispatcher reads it
 	// to resolve the current orchestrator at delivery time.
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
@@ -172,6 +178,13 @@ func WithTelemetry(sink ports.EventSink) Option {
 	return func(m *Manager) { m.telemetry = sink }
 }
 
+// WithDataDir supplies AO's data directory so ReconcileSessionOutputType can
+// derive a session's artifact directory when its stored value is empty (a
+// row created before that column existed).
+func WithDataDir(dir string) Option {
+	return func(m *Manager) { m.dataDir = dir }
+}
+
 // WithContainerReaper wires the container leg of #2652: MarkTerminated will
 // force-remove the terminated session's ao.session-labeled Docker containers,
 // unless the project opts out via ProjectConfig.ContainerReap.Disabled.
@@ -221,6 +234,10 @@ func WithUrgentNudgeGate(pred func(domain.AgentHarness) bool) Option {
 // It also owns agent nudges caused by PR observations, including merge-conflict, CI-failure, and review-feedback prompts.
 type Manager struct {
 	store sessionStore
+	// reconcileMu serializes ReconcileSessionOutputType calls so an older scan
+	// can never persist over a newer one. It is separate from mu, so a slow
+	// artifact walk never blocks lifecycle mutations.
+	reconcileMu sync.Mutex
 	// guard is the shared pane-write primitive every reaction nudge goes
 	// through (see sessionguard). Nil when no messenger was wired: reaction
 	// nudges become no-ops but the reducer still runs.
@@ -238,6 +255,9 @@ type Manager struct {
 	projects         projectConfigLoader
 	operationGateMu  sync.RWMutex
 	operationGate    sessionOperationGate
+	// dataDir backs ReconcileSessionOutputType's artifact-dir fallback for
+	// sessions rows created before session_output_type/artifact_dir existed.
+	dataDir string
 
 	mu        sync.Mutex
 	window    time.Duration
@@ -1561,6 +1581,9 @@ func (m *Manager) markSpawned(
 			return nil, fmt.Errorf("lifecycle: MarkSpawned for unknown session %q", id)
 		}
 		now := m.clock()
+		if rec.IsTerminated {
+			rec.CleanupGeneration++
+		}
 		rec.IsTerminated = false
 		rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}
 		// Each spawn/restore must re-prove its hook pipeline: clear the receipt so

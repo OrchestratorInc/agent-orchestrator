@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS schema_app_version (
 );
 
 INSERT INTO schema_app_version (id, version)
-VALUES (1, 179)
+VALUES (1, 195)
 ON CONFLICT(id) DO UPDATE SET
     version = excluded.version,
     updated_at = CURRENT_TIMESTAMP;

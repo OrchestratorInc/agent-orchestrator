@@ -9,7 +9,7 @@ import (
 )
 
 func TestChatProviderHandoffRequiresExactCoordinatorProof(t *testing.T) {
-	for _, scenario := range []string{"verified", "ordinary_resume", "wrong_native_id", "wrong_session", "wrong_direction", "source_still_running", "first_worker_chat", "unowned_history"} {
+	for _, scenario := range []string{"verified", "ordinary_resume", "wrong_native_id", "wrong_session", "wrong_direction", "source_still_running", "first_worker_chat", "unowned_history", "rebound_project_root", "rebound_project_root_recovered"} {
 		t.Run(scenario, func(t *testing.T) {
 			rec := domain.SessionRecord{
 				ID: "p-1", ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessQwen,
@@ -40,6 +40,18 @@ func TestChatProviderHandoffRequiresExactCoordinatorProof(t *testing.T) {
 				st.conversationErr = domain.ErrNoConversation
 			case "unowned_history":
 				st.activeBranch.SessionID = ""
+			case "rebound_project_root", "rebound_project_root_recovered":
+				// A replacement orchestrator returning to Chat with its own native id on a
+				// root its predecessor created: an in-place resume, not a handoff.
+				rec.Kind = domain.KindOrchestrator
+				st.conversation.Scope = domain.ConversationScopeProject
+				st.activeBranch.SessionID = "p-0"
+				st.activeBranch.ProviderConversationID = "opaque-B"
+				if scenario == "rebound_project_root_recovered" {
+					live = false
+					rec.IsTerminated = true
+					transition.Phase = domain.SessionInterfaceTransitionCompleted
+				}
 			}
 			st.transitions[transition.ID] = transition
 			m := New(Deps{Store: st})

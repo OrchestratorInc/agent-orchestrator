@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -113,6 +114,17 @@ func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) e
 	rec.Revision = f.sessions[rec.ID].Revision + 1
 	f.sessions[rec.ID] = rec
 	return nil
+}
+
+func (f *fakeStore) UpdateSessionArtifactOutput(_ context.Context, id domain.SessionID, artifactDir string, outputType domain.SessionOutputType) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok {
+		return false, nil
+	}
+	rec.Metadata.ArtifactDir = artifactDir
+	rec.OutputType = outputType
+	f.sessions[id] = rec
+	return true, nil
 }
 
 func (f *fakeStore) UpdateSessionFromActivitySignal(_ context.Context, rec domain.SessionRecord, expected int64) (bool, error) {
@@ -774,7 +786,7 @@ func TestRuntimeObservation_ConfirmedDeathIsSuppressedDuringSessionMutation(t *t
 	if err := m.ApplyRuntimeObservation(ctx, "mer-1", ports.RuntimeFacts{Runtime: ports.ProbeDead, Workload: ports.ProbeFailed}); err != nil {
 		t.Fatal(err)
 	}
-	if got := st.sessions["mer-1"]; got != rec {
+	if got := st.sessions["mer-1"]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("runtime observation mutated session during exclusive operation: got %+v, want %+v", got, rec)
 	}
 }
@@ -786,7 +798,7 @@ func TestRuntimeObservation_FailedProbeDoesNotMutate(t *testing.T) {
 	if err := m.ApplyRuntimeObservation(ctx, "mer-1", ports.RuntimeFacts{Runtime: ports.ProbeFailed, Workload: ports.ProbeFailed}); err != nil {
 		t.Fatal(err)
 	}
-	if st.sessions["mer-1"] != before {
+	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatalf("failed probe should not persist a state, got %+v", st.sessions["mer-1"])
 	}
 }
@@ -820,7 +832,7 @@ func TestRuntimeObservation_AliveWorkloadCannotResurrectExitedSession(t *testing
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if st.sessions["mer-1"] != before {
+	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatalf("original supervisor observation resurrected exited session: %+v", st.sessions["mer-1"])
 	}
 }
@@ -834,7 +846,7 @@ func TestRuntimeObservation_StaleLaunchIsIgnored(t *testing.T) {
 	if err := m.ApplyRuntimeObservation(ctx, "mer-1", ports.RuntimeFacts{Runtime: ports.ProbeAlive, Workload: ports.ProbeDead, LaunchID: "launch-1"}); err != nil {
 		t.Fatal(err)
 	}
-	if st.sessions["mer-1"] != before {
+	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatalf("stale launch observation mutated session: %+v", st.sessions["mer-1"])
 	}
 }
@@ -846,7 +858,7 @@ func TestActivity_InvalidIsIgnored(t *testing.T) {
 	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: false, State: domain.ActivityIdle}); err != nil {
 		t.Fatal(err)
 	}
-	if st.sessions["mer-1"] != before {
+	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatal("invalid signal must not mutate")
 	}
 }
@@ -1215,7 +1227,7 @@ func TestActivity_StaleUserPromptDoesNotResumeExitedWorkload(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := st.sessions["mer-1"]; got != rec {
+	if got := st.sessions["mer-1"]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("stale prompt resumed exited workload: %+v", got)
 	}
 }
@@ -1251,7 +1263,7 @@ func TestActivity_StaleLaunchSignalIsIgnored(t *testing.T) {
 	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: true, State: domain.ActivityExited, LaunchID: "launch-1"}); err != nil {
 		t.Fatal(err)
 	}
-	if st.sessions["mer-1"] != before {
+	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatalf("stale process exit mutated session: %+v", st.sessions["mer-1"])
 	}
 }
@@ -1328,7 +1340,7 @@ func TestActivity_CancelledLaunchReleasesAndRejectsEarlySignal(t *testing.T) {
 	if err := <-signalDone; err != nil {
 		t.Fatal(err)
 	}
-	if got := st.sessions["mer-1"]; got != rec {
+	if got := st.sessions["mer-1"]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("cancelled launch signal mutated durable state: %+v", got)
 	}
 }
@@ -1885,7 +1897,7 @@ func TestActivity_OldRuntimeGenerationCannotReplaceConversationCheckpoint(t *tes
 	}); err != nil {
 		t.Fatalf("ApplyActivitySignal: %v", err)
 	}
-	if got := store.sessions[rec.ID]; got != rec {
+	if got := store.sessions[rec.ID]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("old generation mutated current checkpoint: got %+v, want %+v", got, rec)
 	}
 }
@@ -1913,7 +1925,7 @@ func TestActivity_UntaggedTUIHookCannotMutateLaunchedRuntime(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ApplyActivitySignal: %v", err)
 	}
-	if got := store.sessions[rec.ID]; got != rec {
+	if got := store.sessions[rec.ID]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("untagged callback mutated launched runtime: got %+v, want %+v", got, rec)
 	}
 }
@@ -1939,7 +1951,7 @@ func TestActivity_LaunchTaggedTUIStopAfterChatEpochCannotMutateSession(t *testin
 	}); err != nil {
 		t.Fatalf("ApplyActivitySignal: %v", err)
 	}
-	if got := store.sessions[rec.ID]; got != rec {
+	if got := store.sessions[rec.ID]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("late TUI Stop mutated Chat owner: got %+v, want %+v", got, rec)
 	}
 }
@@ -1966,7 +1978,7 @@ func TestActivity_UntaggedTUIStopAfterChatEpochCannotMutateSession(t *testing.T)
 	}); err != nil {
 		t.Fatalf("ApplyActivitySignal: %v", err)
 	}
-	if got := store.sessions[rec.ID]; got != rec {
+	if got := store.sessions[rec.ID]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("untagged late TUI Stop mutated Chat owner: got %+v, want %+v", got, rec)
 	}
 }
@@ -2028,7 +2040,7 @@ func TestActivity_LateSourceSignalAfterStopConfirmationIsFenced(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ApplyActivitySignal: %v", err)
 	}
-	if got := store.session(rec.ID); got != rec {
+	if got := store.session(rec.ID); !reflect.DeepEqual(got, rec) {
 		t.Fatalf("late source signal mutated stopped session: got %+v, want %+v", got, rec)
 	}
 	if calls := store.acknowledgements(); len(calls) != 0 {
@@ -2060,7 +2072,7 @@ func TestActivity_LateSourceSignalAfterTargetActivationIsFenced(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ApplyActivitySignal: %v", err)
 	}
-	if got := store.session(rec.ID); got != rec {
+	if got := store.session(rec.ID); !reflect.DeepEqual(got, rec) {
 		t.Fatalf("late source signal mutated target owner: got %+v, want %+v", got, rec)
 	}
 	if calls := store.acknowledgements(); len(calls) != 0 {
@@ -2092,7 +2104,7 @@ func TestActivity_StaleGenerationPromptSubmitDoesNotAcknowledgeAgentSwitch(t *te
 	if calls := store.acknowledgements(); len(calls) != 0 {
 		t.Fatalf("stale generation produced acknowledgement calls: %+v", calls)
 	}
-	if got := store.session(rec.ID); got != rec {
+	if got := store.session(rec.ID); !reflect.DeepEqual(got, rec) {
 		t.Fatalf("stale generation mutated session: got %+v, want %+v", got, rec)
 	}
 }
@@ -2268,11 +2280,17 @@ func TestMarkSpawnedReactivatesUsageAfterLifecycleTransition(t *testing.T) {
 		Activity:     domain.Activity{State: domain.ActivityExited},
 		Metadata:     domain.SessionMetadata{RuntimeLaunchID: "launch-old"},
 	}
+	rec := st.sessions["mer-1"]
+	rec.CleanupGeneration = 7
+	st.sessions[rec.ID] = rec
 	usage := &fakeUsageLifecycle{fakeUsageFinalizer: fakeUsageFinalizer{store: st}}
 	m.SetUsageFinalizer(usage)
 
 	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{RuntimeLaunchID: "launch-new"}); err != nil {
 		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].CleanupGeneration; got != 8 {
+		t.Fatalf("restored cleanup generation = %d, want 8", got)
 	}
 	if usage.reactivateCalls != 1 || usage.reactivateID != "mer-1" ||
 		usage.reactivateLaunch != "launch-new" || !usage.sawLive {
@@ -3824,7 +3842,7 @@ func TestApplyTrackerFacts_TerminalStateIsSuppressedDuringSessionMutation(t *tes
 	if err := m.ApplyTrackerFacts(ctx, "mer-1", o); err != nil {
 		t.Fatalf("ApplyTrackerFacts: %v", err)
 	}
-	if got := st.sessions["mer-1"]; got != rec {
+	if got := st.sessions["mer-1"]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("tracker observation mutated session during exclusive operation: got %+v, want %+v", got, rec)
 	}
 }
@@ -3891,7 +3909,7 @@ func TestApplyTrackerFacts_AssigneeChangedIsLogOnly(t *testing.T) {
 	if err := m.ApplyTrackerFacts(ctx, "mer-1", o); err != nil {
 		t.Fatalf("ApplyTrackerFacts: %v", err)
 	}
-	if st.sessions["mer-1"] != before {
+	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatalf("assignee-only change must not mutate the session row, got %+v", st.sessions["mer-1"])
 	}
 	if len(msg.msgs) != 0 {
@@ -3997,7 +4015,7 @@ func TestApplyTrackerFacts_NotFetchedIsNoop(t *testing.T) {
 	if err := m.ApplyTrackerFacts(ctx, "mer-1", ports.TrackerObservation{Fetched: false}); err != nil {
 		t.Fatalf("ApplyTrackerFacts: %v", err)
 	}
-	if st.sessions["mer-1"] != before {
+	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatalf("not-fetched observation must not mutate state")
 	}
 	if len(msg.msgs) != 0 {
@@ -4072,7 +4090,7 @@ func TestActivity_SameStateRepeatAfterReceiptIsNoOp(t *testing.T) {
 	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: true, State: domain.ActivityActive}); err != nil {
 		t.Fatal(err)
 	}
-	if st.sessions["mer-1"] != before {
+	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatalf("same-state repeat after receipt must not rewrite: %+v", st.sessions["mer-1"])
 	}
 }
