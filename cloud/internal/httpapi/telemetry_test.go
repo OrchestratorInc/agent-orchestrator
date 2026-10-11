@@ -163,18 +163,18 @@ func TestSupportLookupIsOperatorOnly(t *testing.T) {
 	}
 
 	request := httptest.NewRequest(http.MethodGet,
-		"/api/cloud/v1/control/support/lookup?email=Ahmad@11x.ai&sessions=5000&activity=7", nil)
+		"/api/cloud/v1/control/support/lookup?email=Dev@Example.com&sessions=5000&activity=7", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("status %d: %s", response.Code, response.Body.String())
 	}
-	if len(store.queries) != 1 || store.queries[0].Email != "Ahmad@11x.ai" ||
+	if len(store.queries) != 1 || store.queries[0].Email != "Dev@Example.com" ||
 		store.queries[0].SessionLimit != 200 || store.queries[0].ActivityLimit != 7 {
 		t.Fatalf("queries = %+v", store.queries)
 	}
-	if strings.Contains(logs.String(), "Ahmad@11x.ai") {
+	if strings.Contains(logs.String(), "Dev@Example.com") {
 		t.Fatalf("the looked-up email was logged:\n%s", logs.String())
 	}
 

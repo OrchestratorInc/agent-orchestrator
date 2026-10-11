@@ -20,12 +20,12 @@ describe("cloud funnel event allowlist", () => {
 			ttr_ms: 1234.6,
 			project_id: "11111111-1111-1111-1111-111111111111",
 			prompt: "do the secret thing",
-			email: "ahmad@11x.ai",
+			email: "dev@example.com",
 		});
 		expect(safe).toMatchObject({ provider: "coder", session_kind: "worker", stage: "startup", code: "bootstrap_failed", status: 422, ttr_ms: 1235 });
 		expect(safe.project_id_hash).toMatch(/^[0-9a-f]{64}$/);
 		expect(JSON.stringify(safe)).not.toContain("secret");
-		expect(JSON.stringify(safe)).not.toContain("ahmad");
+		expect(JSON.stringify(safe)).not.toContain("dev@example.com");
 		expect(safe).not.toHaveProperty("project_id");
 	});
 

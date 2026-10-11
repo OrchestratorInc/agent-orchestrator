@@ -13,7 +13,7 @@ func TestCoderPlanParameterMergeOrder(t *testing.T) {
 	const templateID = "2a2e262c-b31c-4202-946d-a19ad45d1fd2"
 	defaults := ProvisioningDefaults{Provider: ProviderCoder}
 	override := &CoderDeploymentOverride{
-		BaseURL: "https://coder.11x.example", Owner: "ahmad", DurableRoot: "~",
+		BaseURL: "https://coder.acme.example", Owner: "dev", DurableRoot: "~",
 		Parameters: map[string]string{"region": "org-eu", "size": "org-size", "team": "org-team"},
 	}
 	plan, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, &CoderSessionOptions{
@@ -52,7 +52,7 @@ func TestCoderPlanStampsDevEnvironment(t *testing.T) {
 	const templateID = "2a2e262c-b31c-4202-946d-a19ad45d1fd2"
 	defaults := ProvisioningDefaults{Provider: ProviderCoder}
 	base := CoderDeploymentOverride{
-		BaseURL: "https://coder.11x.example", Owner: "ahmad", TemplateID: templateID, DurableRoot: "~",
+		BaseURL: "https://coder.acme.example", Owner: "dev", TemplateID: templateID, DurableRoot: "~",
 	}
 
 	plain, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, nil, &base)

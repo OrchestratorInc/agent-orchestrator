@@ -26,7 +26,7 @@ export AO_CLOUD_SUPPORT_TOKEN=...                      # from Secrets Manager
 
 # By email (case-insensitive): every account, its orgs, recent sessions, activity.
 curl -sS -H "Authorization: Bearer $AO_CLOUD_SUPPORT_TOKEN" \
-  "$AO_CLOUD_URL/api/cloud/v1/control/support/lookup?email=ahmad@11x.ai" | jq
+  "$AO_CLOUD_URL/api/cloud/v1/control/support/lookup?email=dev@example.com" | jq
 
 # By organization or by session (the session's org, filtered to that session).
 curl -sS -H "Authorization: Bearer $AO_CLOUD_SUPPORT_TOKEN" \
@@ -62,7 +62,7 @@ identity. Set it per query block:
 ```sql
 BEGIN;
 -- ao_users has no RLS.
-SELECT id, auth_provider, email, created_at FROM ao_users WHERE lower(email) = lower('ahmad@11x.ai');
+SELECT id, auth_provider, email, created_at FROM ao_users WHERE lower(email) = lower('dev@example.com');
 
 -- Memberships are visible under the user's identity.
 SELECT set_config('ao.user_id', '<USER_ID>', true);
@@ -251,7 +251,7 @@ Dashboards and alarms for these metrics are defined in
 `cloud/scripts/configure-offering-monitoring.py --environment <env> --apply`
 (or `--print-commands` to review the aws CLI calls).
 
-## 4. BYO Coder (11x and other customer-owned Coder)
+## 4. BYO Coder (customer-owned Coder)
 
 A BYO session runs on the customer's Coder through their connection
 (`ao_provider_connections`, provider `coder`). AO never stops or deletes a BYO
@@ -270,7 +270,7 @@ stage: worker_install
 cause: coder: launch preinstalled worker: coder: worker bootstrap failed: AO worker did not start ...
 agent_lifecycle: start_error
 build_status: running
-coder_owner: ahmad
+coder_owner: <coder user>
 coder_template: <template id>
 workspace_id: <workspace id>
 --- build log (tail) ---

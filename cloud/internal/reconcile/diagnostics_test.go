@@ -72,7 +72,7 @@ func (p *diagnosingProvider) BootstrapWorker(ctx context.Context, id sandbox.ID,
 	sandbox.BeginStage(ctx, sandbox.StageAgentWait)(nil, map[string]string{"workspace_id": string(id)})
 	finish := sandbox.BeginStage(ctx, sandbox.StageWorkerInstall)
 	err := p.byoProvider.BootstrapWorker(ctx, id, bootstrap)
-	finish(err, map[string]string{"workspace_id": string(id), "coder_owner": "ahmad"})
+	finish(err, map[string]string{"workspace_id": string(id), "coder_owner": "dev"})
 	return err
 }
 

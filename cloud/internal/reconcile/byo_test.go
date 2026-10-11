@@ -43,7 +43,7 @@ func (p *byoProvider) BootstrapWorker(_ context.Context, _ sandbox.ID, bootstrap
 func coderRecord(t *testing.T, connectionID string, profile map[string]any, startedAgo time.Duration) domain.Sandbox {
 	t.Helper()
 	coder := map[string]any{
-		"baseUrl": "https://coder.example.com", "owner": "ahmad",
+		"baseUrl": "https://coder.example.com", "owner": "dev",
 		"templateId": "2a2e262c-b31c-4202-946d-a19ad45d1fd2", "durableRoot": "$HOME",
 	}
 	for key, value := range profile {
