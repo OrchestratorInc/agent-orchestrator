@@ -1383,6 +1383,14 @@ func (r *Reconciler) recreate(
 	)
 	recreated, err := recreator.Recreate(ctx, environment.ID, spec)
 	if err != nil {
+		// A provider account limit is a wait, not a failure: the next tick
+		// finds the old VM gone and provisions once capacity frees up.
+		if errors.Is(err, sandbox.ErrAtCapacity) {
+			r.log.Info("provider at capacity during recreate; will retry",
+				"session_id", record.SessionID, "provider", record.Provider)
+			return r.observe(ctx, record, record.ProviderEnvironmentID,
+				domain.SandboxObservedProvisioning, "waiting for provider capacity", capacityRetryBackoff)
+		}
 		return r.fail(ctx, record, err)
 	}
 	if bootstrapper, ok := recreator.(sandbox.Bootstrapper); ok && len(r.options.WorkerBinary) > 0 {
@@ -1406,7 +1414,10 @@ type providerProfile struct {
 		AutoPauseSeconds int    `json:"autoPauseSeconds"`
 	} `json:"nodeOps"`
 	Freestyle struct {
-		Snapshot         string `json:"snapshot"`
+		Snapshot string `json:"snapshot"`
+		// BaseSnapshot is the harness snapshot a project snapshot was built
+		// on, booted instead when the project snapshot no longer exists.
+		BaseSnapshot     string `json:"baseSnapshot"`
 		AutoPauseSeconds int    `json:"autoPauseSeconds"`
 	} `json:"freestyle"`
 }
@@ -1511,10 +1522,17 @@ func (r *Reconciler) workerSpec(ctx context.Context, record domain.Sandbox) (san
 		workerEnvironment["AO_WORKER_HELPER_PATH"] = r.options.WorkerHelperDestination
 	}
 	// Freestyle boots from the snapshot stamped on the session's plan, which
-	// Spec carries as its root filesystem.
+	// Spec carries as its root filesystem. A project snapshot collected since
+	// the session was planned falls back to the harness snapshot it was built
+	// on, so a create or recreate boots and the worker clones instead of the
+	// session failing.
 	rootFS, autoPauseSeconds := profile.NodeOps.DefaultRootFS, profile.NodeOps.AutoPauseSeconds
+	fallbackRootFS := ""
 	if record.Provider == sandbox.ProviderFreestyle {
 		rootFS, autoPauseSeconds = profile.Freestyle.Snapshot, profile.Freestyle.AutoPauseSeconds
+		if base := strings.TrimSpace(profile.Freestyle.BaseSnapshot); base != rootFS {
+			fallbackRootFS = base
+		}
 	}
 	return sandbox.Spec{
 		Name:             "ao-" + record.SessionID,
@@ -1523,6 +1541,7 @@ func (r *Reconciler) workerSpec(ctx context.Context, record domain.Sandbox) (san
 		ResourceProfile:  domain.ResourceProfile{CPU: 4, Memory: 8, Disk: 10},
 		Shape:            profile.NodeOps.DefaultShape,
 		RootFS:           rootFS,
+		FallbackRootFS:   fallbackRootFS,
 		Ingress:          profile.NodeOps.Ingress,
 		AutoPauseSeconds: autoPauseSeconds,
 		Environment:      workerEnvironment,

@@ -3,6 +3,7 @@ package projectsnapshot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -17,20 +18,25 @@ import (
 )
 
 type fakeVMs struct {
-	mu               sync.Mutex
-	created          []sandbox.Spec
-	deleted          []sandbox.ID
-	commands         []string
-	envs             []map[string]string
-	snapshots        int
-	deletedSnapshots []string
-	execErr          error
+	mu                sync.Mutex
+	created           []sandbox.Spec
+	deleted           []sandbox.ID
+	commands          []string
+	envs              []map[string]string
+	snapshots         int
+	deletedSnapshots  []string
+	execErr           error
+	createErr         error
+	deleteSnapshotErr error
 }
 
 func (f *fakeVMs) Create(_ context.Context, spec sandbox.Spec) (sandbox.Environment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.created = append(f.created, spec)
+	if f.createErr != nil {
+		return sandbox.Environment{}, f.createErr
+	}
 	return sandbox.Environment{ID: "vm-builder"}, nil
 }
 
@@ -59,17 +65,27 @@ func (f *fakeVMs) Snapshot(context.Context, sandbox.ID, string) (string, error) 
 func (f *fakeVMs) DeleteSnapshot(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.deleteSnapshotErr != nil {
+		return f.deleteSnapshotErr
+	}
 	f.deletedSnapshots = append(f.deletedSnapshots, id)
 	return nil
 }
 
+// fakeStore models the snapshot table: idle holds the collectable records
+// (idle past the cutoff, or retired by a rebuild), referenced the snapshots a
+// live session's plan still names, and buildHeld a build another replica holds.
 type fakeStore struct {
-	mu       sync.Mutex
-	existing *domain.RepositorySandboxSnapshot
-	replaced []domain.RepositorySandboxSnapshot
-	used     int
-	idle     []string
-	cutoff   time.Time
+	mu         sync.Mutex
+	existing   *domain.RepositorySandboxSnapshot
+	replaced   []domain.RepositorySandboxSnapshot
+	used       int
+	idle       []string
+	referenced map[string]bool
+	cutoff     time.Time
+	buildHeld  bool
+	claims     int
+	releases   int
 }
 
 func (f *fakeStore) lookup(orgID, repositoryKey, harness string) (domain.RepositorySandboxSnapshot, bool) {
@@ -103,6 +119,8 @@ func (f *fakeStore) ReplaceRepositorySandboxSnapshot(_ context.Context, snapshot
 	previous := ""
 	if f.existing != nil {
 		previous = f.existing.SnapshotID
+		// Retired, never dropped: the collector deletes it when unreferenced.
+		f.idle = append(f.idle, previous)
 	}
 	snapshot.CreatedAt = time.Now() // the store stamps now()
 	f.replaced = append(f.replaced, snapshot)
@@ -110,13 +128,52 @@ func (f *fakeStore) ReplaceRepositorySandboxSnapshot(_ context.Context, snapshot
 	return previous, nil
 }
 
-func (f *fakeStore) DeleteIdleRepositorySandboxSnapshots(_ context.Context, _ string, cutoff time.Time) ([]string, error) {
+func (f *fakeStore) CollectIdleRepositorySandboxSnapshots(
+	ctx context.Context, _ string, cutoff time.Time,
+	remove func(context.Context, string) error,
+) ([]string, error) {
+	f.mu.Lock()
+	f.cutoff = cutoff
+	candidates := append([]string(nil), f.idle...)
+	f.mu.Unlock()
+	var collected []string
+	var failures []error
+	for _, id := range candidates {
+		f.mu.Lock()
+		referenced := f.referenced[id]
+		f.mu.Unlock()
+		if referenced {
+			continue
+		}
+		if err := remove(ctx, id); err != nil {
+			failures = append(failures, err)
+			continue // the record stays for the next run
+		}
+		f.mu.Lock()
+		for i, idle := range f.idle {
+			if idle == id {
+				f.idle = append(f.idle[:i], f.idle[i+1:]...)
+				break
+			}
+		}
+		f.mu.Unlock()
+		collected = append(collected, id)
+	}
+	return collected, errors.Join(failures...)
+}
+
+func (f *fakeStore) AcquireRepositorySnapshotBuild(context.Context, string, string, string, string) (func(), bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.cutoff = cutoff
-	idle := f.idle
-	f.idle = nil
-	return idle, nil
+	if f.buildHeld {
+		return nil, false, nil
+	}
+	f.claims++
+	return func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.releases++
+	}, true, nil
 }
 
 type fakeGrants struct{ token string }
@@ -336,5 +393,100 @@ func TestCollectDeletesIdleSnapshotsAtTheProvider(t *testing.T) {
 	}
 	if !store.cutoff.Equal(now.Add(-IdleRetention)) {
 		t.Fatalf("cutoff = %v, want %v", store.cutoff, now.Add(-IdleRetention))
+	}
+}
+
+// A rebuild must not delete the snapshot a running session booted from: its
+// recreate boots that same snapshot. It is deleted once nothing references it.
+func TestEnsureKeepsAReplacedSnapshotALiveSessionReferences(t *testing.T) {
+	vms := &fakeVMs{}
+	store := &fakeStore{
+		existing:   recorded("sh-old", "sh-base", time.Now().Add(-48*time.Hour)),
+		referenced: map[string]bool{"sh-old": true},
+	}
+	builder := newTestBuilder(vms, store)
+	builder.Ensure(request())
+	waitIdle(t, builder)
+
+	if len(vms.deletedSnapshots) != 0 {
+		t.Fatalf("deleted %v while a live session references it", vms.deletedSnapshots)
+	}
+	store.mu.Lock()
+	store.referenced = nil
+	store.mu.Unlock()
+	builder.Collect(context.Background())
+	if len(vms.deletedSnapshots) != 1 || vms.deletedSnapshots[0] != "sh-old" {
+		t.Fatalf("retired snapshot not collected once unreferenced: %v", vms.deletedSnapshots)
+	}
+}
+
+// A provider delete that fails keeps the record, so the next run retries it
+// rather than leaking the provider copy.
+func TestCollectRetriesAFailedProviderDelete(t *testing.T) {
+	vms := &fakeVMs{deleteSnapshotErr: errors.New("freestyle down")}
+	store := &fakeStore{idle: []string{"sh-idle"}}
+	builder := newTestBuilder(vms, store)
+	builder.Collect(context.Background())
+	if len(store.idle) != 1 {
+		t.Fatalf("record dropped after a failed provider delete: %v", store.idle)
+	}
+	vms.deleteSnapshotErr = nil
+	builder.Collect(context.Background())
+	if len(vms.deletedSnapshots) != 1 || len(store.idle) != 0 {
+		t.Fatalf("retry did not collect: deleted=%v idle=%v", vms.deletedSnapshots, store.idle)
+	}
+}
+
+// A provider at its VM limit (builder VMs count against it) defers the build
+// rather than failing loudly or recording anything.
+func TestEnsureDefersABuildAtProviderCapacity(t *testing.T) {
+	vms, store := &fakeVMs{createErr: fmt.Errorf("%w: LIMIT_EXCEEDED", sandbox.ErrAtCapacity)}, &fakeStore{}
+	builder := newTestBuilder(vms, store)
+	builder.Ensure(request())
+	waitIdle(t, builder)
+	if len(store.replaced) != 0 || vms.snapshots != 0 {
+		t.Fatal("recorded a snapshot from a build that never got a VM")
+	}
+	if store.releases != 1 {
+		t.Fatalf("build claim not released: releases=%d", store.releases)
+	}
+}
+
+// One replica runs at most MaxConcurrentBuilds builder VMs at once.
+func TestEnsureCapsConcurrentBuilds(t *testing.T) {
+	builder := newTestBuilder(&fakeVMs{}, &fakeStore{})
+	builder.config.MaxConcurrentBuilds = 1
+	builder.mu.Lock()
+	builder.inflight["other/repo/codex"] = true
+	builder.mu.Unlock()
+	builder.Ensure(request())
+	builder.mu.Lock()
+	defer builder.mu.Unlock()
+	if builder.inflight[request().key()] {
+		t.Fatal("started a build past the concurrency cap")
+	}
+}
+
+// Another control-plane replica already building the same snapshot wins; this
+// one does not start a second builder VM.
+func TestEnsureSkipsABuildAnotherReplicaHolds(t *testing.T) {
+	vms, store := &fakeVMs{}, &fakeStore{buildHeld: true}
+	builder := newTestBuilder(vms, store)
+	builder.Ensure(request())
+	waitIdle(t, builder)
+	if len(vms.created) != 0 {
+		t.Fatalf("built while another replica held the claim: %+v", vms.created)
+	}
+
+	store.mu.Lock()
+	store.buildHeld = false
+	store.mu.Unlock()
+	builder.Ensure(request())
+	waitIdle(t, builder)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(vms.created) != 1 || store.claims != 1 || store.releases != 1 {
+		t.Fatalf("created=%d claims=%d releases=%d, want one claimed and released build",
+			len(vms.created), store.claims, store.releases)
 	}
 }

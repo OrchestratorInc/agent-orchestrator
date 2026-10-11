@@ -144,11 +144,26 @@ type createVMRequest struct {
 
 // Create boots one VM for a session from its snapshot. The worker is launched
 // separately by BootstrapWorker, which carries the one-time bootstrap ticket.
+//
+// A session planned on a project snapshot that has since been collected boots
+// from spec.FallbackRootFS (the harness snapshot the project snapshot was built
+// on) instead of failing: the worker then clones the repository itself.
 func (c *Client) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Environment, error) {
 	snapshot := firstNonEmpty(spec.RootFS, c.defaultSnapshot)
 	if snapshot == "" {
 		return sandbox.Environment{}, errors.New("freestyle: no snapshot configured for this sandbox")
 	}
+	environment, err := c.create(ctx, spec, snapshot)
+	fallback := strings.TrimSpace(spec.FallbackRootFS)
+	if errors.Is(err, sandbox.ErrSnapshotNotFound) && fallback != "" && fallback != snapshot {
+		c.log.Warn("freestyle snapshot is gone; booting the fallback snapshot",
+			"session_id", spec.SessionID, "snapshot", snapshot, "fallback", fallback)
+		return c.create(ctx, spec, fallback)
+	}
+	return environment, err
+}
+
+func (c *Client) create(ctx context.Context, spec sandbox.Spec, snapshot string) (sandbox.Environment, error) {
 	body := createVMRequest{
 		SnapshotID: snapshot,
 		Metadata:   spec.Labels,
@@ -173,6 +188,9 @@ func (c *Client) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Environ
 		if body.Slug != "" && errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusConflict &&
 			strings.Contains(httpErr.Body, "slug") {
 			return sandbox.Environment{}, fmt.Errorf("%w: %s", sandbox.ErrAlreadyExists, body.Slug)
+		}
+		if snapshotMissing(err) {
+			return sandbox.Environment{}, fmt.Errorf("%w: freestyle snapshot %s", sandbox.ErrSnapshotNotFound, snapshot)
 		}
 		return sandbox.Environment{}, err
 	}
@@ -428,7 +446,11 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		raw, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
-		return &HTTPError{StatusCode: response.StatusCode, Body: truncate(strings.TrimSpace(string(raw)), 512)}
+		httpErr := &HTTPError{StatusCode: response.StatusCode, Body: truncate(strings.TrimSpace(string(raw)), 512)}
+		if limitExceeded(httpErr) {
+			return fmt.Errorf("%w: %w", sandbox.ErrAtCapacity, httpErr)
+		}
+		return httpErr
 	}
 	if out == nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxResponseBody))
@@ -438,6 +460,32 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		return fmt.Errorf("freestyle: decode %s response: %w", path, err)
 	}
 	return nil
+}
+
+// limitExceeded reports a Freestyle account limit rejection (LIMIT_EXCEEDED,
+// for example the concurrent VM cap, which project snapshot builder VMs count
+// against too) or a rate limit. It is capacity, not a broken request: the
+// caller waits and retries instead of failing the session.
+func limitExceeded(err *HTTPError) bool {
+	return err.StatusCode == http.StatusTooManyRequests ||
+		strings.Contains(strings.ToUpper(err.Body), "LIMIT_EXCEEDED")
+}
+
+// snapshotMissing reports a create rejected because its snapshot does not
+// exist. The VM collection itself always exists, so a 404 from it can only be
+// the snapshot; other statuses are checked for a snapshot-not-found message.
+func snapshotMissing(err error) bool {
+	if errors.Is(err, sandbox.ErrNotFound) {
+		return true
+	}
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) || httpErr.StatusCode < 400 || httpErr.StatusCode > 499 {
+		return false
+	}
+	body := strings.ToLower(httpErr.Body)
+	return strings.Contains(body, "snapshot") &&
+		(strings.Contains(body, "not found") || strings.Contains(body, "not_found") ||
+			strings.Contains(body, "does not exist"))
 }
 
 func normalizeState(state string) string {

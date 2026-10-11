@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/url"
 	"os"
 	"strings"
@@ -40,27 +41,127 @@ func TestRepositorySnapshotStoreUseReplaceAndCollect(t *testing.T) {
 		t.Fatalf("lookup = %+v ok=%v err=%v", got, ok, err)
 	}
 
-	// Just used, so a week-old cutoff leaves it alone.
-	idle, err := store.DeleteIdleRepositorySandboxSnapshots(ctx, "freestyle", time.Now().Add(-time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range idle {
-		if id == "sh-2" {
-			t.Fatal("collected a snapshot used moments ago")
+	collect := func(cutoff time.Time, fail error) []string {
+		t.Helper()
+		var removed []string
+		_, err := store.CollectIdleRepositorySandboxSnapshots(ctx, "freestyle", cutoff,
+			func(_ context.Context, id string) error {
+				if id == "sh-1" || id == "sh-2" {
+					removed = append(removed, id)
+					return fail
+				}
+				return nil
+			})
+		if err != nil && fail == nil {
+			t.Fatal(err)
 		}
+		return removed
+	}
+	// Just used, so a week-old cutoff leaves it alone; the replaced snapshot
+	// is retired and collectable at once.
+	if removed := collect(time.Now().Add(-time.Hour), nil); !containsString(removed, "sh-1") || containsString(removed, "sh-2") {
+		t.Fatalf("removed %v, want the retired sh-1 only", removed)
 	}
 	// Past its cutoff it is collected once, across organizations, and gone.
-	idle, err = store.DeleteIdleRepositorySandboxSnapshots(ctx, "freestyle", time.Now().Add(time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !containsString(idle, "sh-2") {
-		t.Fatalf("idle = %v, want sh-2", idle)
+	if removed := collect(time.Now().Add(time.Hour), nil); !containsString(removed, "sh-2") {
+		t.Fatalf("removed %v, want sh-2", removed)
 	}
 	if _, ok, err := store.UseRepositorySandboxSnapshot(ctx, fixture.orgID, key, "freestyle", "codex"); err != nil || ok {
 		t.Fatalf("lookup after collection: ok=%v err=%v", ok, err)
 	}
+}
+
+// A snapshot a live session's plan names survives both a rebuild and the idle
+// collector until the session is deleted; a failed provider delete keeps the
+// record for the next run.
+func TestRepositorySnapshotStoreKeepsReferencedSnapshots(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	key := "github:" + uuid.NewString()
+	suffix := uuid.NewString()
+	oldID, newID := "sh-old-"+suffix, "sh-new-"+suffix
+	snapshot := domain.RepositorySandboxSnapshot{
+		OrgID: fixture.orgID, RepositoryKey: key, RepositoryIdentity: "acme/repo",
+		Provider: "freestyle", Harness: "codex", SnapshotID: oldID, BaseSnapshotID: "sh-base",
+	}
+	if _, err := store.ReplaceRepositorySandboxSnapshot(ctx, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes
+		SET provider = 'freestyle', resource_profile = jsonb_build_object('freestyle', jsonb_build_object('snapshot', $2::text))
+		WHERE session_id = $1`, fixture.sessionID, oldID); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.SnapshotID = newID
+	if _, err := store.ReplaceRepositorySandboxSnapshot(ctx, snapshot); err != nil {
+		t.Fatal(err)
+	}
+
+	collect := func(fail error) (removed []string) {
+		t.Helper()
+		_, err := store.CollectIdleRepositorySandboxSnapshots(ctx, "freestyle", time.Now().Add(-time.Hour),
+			func(_ context.Context, id string) error {
+				if id == oldID {
+					removed = append(removed, id)
+					return fail
+				}
+				return nil
+			})
+		if (err != nil) != (fail != nil && len(removed) > 0) {
+			t.Fatalf("collect err = %v (fail=%v removed=%v)", err, fail, removed)
+		}
+		return removed
+	}
+	recorded := func() int {
+		t.Helper()
+		var count int
+		if err := admin.QueryRow(ctx, `SELECT count(*) FROM ao_repository_sandbox_snapshots
+			WHERE org_id = $1 AND snapshot_id = $2`, fixture.orgID, oldID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	if removed := collect(nil); len(removed) != 0 || recorded() != 1 {
+		t.Fatalf("removed %v (records=%d) while a live session references it", removed, recorded())
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET desired_state = 'deleted' WHERE session_id = $1`,
+		fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if removed := collect(errors.New("provider down")); len(removed) != 1 || recorded() != 1 {
+		t.Fatalf("failed provider delete: removed %v, records=%d; want the record kept", removed, recorded())
+	}
+	if removed := collect(nil); len(removed) != 1 || recorded() != 0 {
+		t.Fatalf("retry: removed %v, records=%d; want it collected", removed, recorded())
+	}
+	if got, ok, err := store.UseRepositorySandboxSnapshot(ctx, fixture.orgID, key, "freestyle", "codex"); err != nil || !ok || got.SnapshotID != newID {
+		t.Fatalf("current snapshot = %+v ok=%v err=%v, want %s", got, ok, err, newID)
+	}
+}
+
+// Only one control-plane replica builds a given snapshot at a time.
+func TestRepositorySnapshotBuildClaimIsExclusive(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	key := "github:" + uuid.NewString()
+	release, ok, err := store.AcquireRepositorySnapshotBuild(ctx, fixture.orgID, key, "freestyle", "codex")
+	if err != nil || !ok {
+		t.Fatalf("first claim: ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := store.AcquireRepositorySnapshotBuild(ctx, fixture.orgID, key, "freestyle", "codex"); err != nil || ok {
+		t.Fatalf("second claim while held: ok=%v err=%v", ok, err)
+	}
+	if other, ok, err := store.AcquireRepositorySnapshotBuild(ctx, fixture.orgID, key, "freestyle", "claude-code"); err != nil || !ok {
+		t.Fatalf("claim on another harness: ok=%v err=%v", ok, err)
+	} else {
+		other()
+	}
+	release()
+	again, ok, err := store.AcquireRepositorySnapshotBuild(ctx, fixture.orgID, key, "freestyle", "codex")
+	if err != nil || !ok {
+		t.Fatalf("claim after release: ok=%v err=%v", ok, err)
+	}
+	again()
 }
 
 func containsString(values []string, want string) bool {

@@ -3,6 +3,7 @@ package reconcile
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -804,6 +805,81 @@ func TestProvisionAdoptsSandboxOnDuplicateConflict(t *testing.T) {
 	}
 	if got := store.observations; len(got) != 1 || got[0] != domain.SandboxObservedProvisioning {
 		t.Fatalf("observations = %v, want adoption as provisioning", got)
+	}
+}
+
+// specProvider records the spec of every Create and Recreate, and answers
+// Recreate with recreateErr.
+type specProvider struct {
+	lifecycleProvider
+	specs       []sandbox.Spec
+	recreateErr error
+}
+
+func (p *specProvider) CreateRejectsDuplicates() {}
+
+func (p *specProvider) Create(_ context.Context, spec sandbox.Spec) (sandbox.Environment, error) {
+	p.specs = append(p.specs, spec)
+	return p.environment, nil
+}
+
+func (p *specProvider) Recreate(_ context.Context, _ sandbox.ID, spec sandbox.Spec) (sandbox.Environment, error) {
+	p.specs = append(p.specs, spec)
+	return p.environment, p.recreateErr
+}
+
+// A Freestyle session planned on a project snapshot carries the harness
+// snapshot it was built on as the fallback, so a create or recreate after the
+// project snapshot is collected still boots.
+func TestFreestyleSpecCarriesTheBaseSnapshotAsFallback(t *testing.T) {
+	store := &lifecycleStore{}
+	provider := &specProvider{lifecycleProvider: lifecycleProvider{environment: sandbox.Environment{
+		ID: "vm-1", State: sandbox.StateProvisioning,
+	}}}
+	record := provisionRecord()
+	record.ResourceProfile = json.RawMessage(
+		`{"provider":"freestyle","freestyle":{"snapshot":"snap-project","baseSnapshot":"snap-codex"}}`)
+	if err := testReconciler(store, provider).provision(context.Background(), record, provider); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if len(provider.specs) != 1 || provider.specs[0].RootFS != "snap-project" ||
+		provider.specs[0].FallbackRootFS != "snap-codex" {
+		t.Fatalf("specs = %+v, want snap-project with fallback snap-codex", provider.specs)
+	}
+
+	// A plan that boots the harness snapshot itself has no fallback.
+	record.ResourceProfile = json.RawMessage(`{"provider":"freestyle","freestyle":{"snapshot":"snap-codex"}}`)
+	provider.specs = nil
+	if err := testReconciler(store, provider).provision(context.Background(), record, provider); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if provider.specs[0].FallbackRootFS != "" {
+		t.Fatalf("fallback = %q, want none", provider.specs[0].FallbackRootFS)
+	}
+}
+
+// A recreate rejected for provider capacity waits and retries rather than
+// failing the session.
+func TestRecreateAtCapacityWaitsInsteadOfFailing(t *testing.T) {
+	store := &lifecycleStore{}
+	provider := &specProvider{
+		lifecycleProvider: lifecycleProvider{environment: sandbox.Environment{ID: "vm-1"}},
+		recreateErr:       fmt.Errorf("%w: freestyle 403: LIMIT_EXCEEDED", sandbox.ErrAtCapacity),
+	}
+	record := provisionRecord()
+	record.ProviderEnvironmentID = "vm-1"
+	record.ResourceProfile = json.RawMessage(`{"provider":"freestyle","freestyle":{"snapshot":"snap-codex"}}`)
+	if err := testReconciler(store, provider).recreate(
+		context.Background(), record, provider.environment, provider,
+	); err != nil {
+		t.Fatalf("recreate: %v", err)
+	}
+	if len(store.failures) != 0 {
+		t.Fatalf("failures = %v, want none at capacity", store.failures)
+	}
+	if got := store.observations; len(got) != 1 || got[0] != domain.SandboxObservedProvisioning ||
+		store.lastErrors[0] != "waiting for provider capacity" {
+		t.Fatalf("observations = %v (%v), want a capacity wait", got, store.lastErrors)
 	}
 }
 

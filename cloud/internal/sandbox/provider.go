@@ -16,6 +16,10 @@ var ErrNotFound = errors.New("sandbox environment not found")
 // ErrAtCapacity indicates that a provider has no capacity for a new sandbox.
 var ErrAtCapacity = errors.New("sandbox provider at capacity")
 
+// ErrSnapshotNotFound indicates that Create was asked to boot from a snapshot
+// (root filesystem) the provider no longer has.
+var ErrSnapshotNotFound = errors.New("sandbox snapshot not found")
+
 // ErrAlreadyExists indicates that Create found the session's sandbox already
 // present: the provider enforces one sandbox per session name. The caller
 // adopts that sandbox through FindBySession instead of creating another.
@@ -40,9 +44,14 @@ type Spec struct {
 	ResourceProfile domain.ResourceProfile
 	Shape           string
 	RootFS          string
-	Ingress         string
-	Environment     map[string]string
-	Labels          map[string]string
+	// FallbackRootFS is booted instead when RootFS no longer exists at the
+	// provider, e.g. a Freestyle project snapshot collected or replaced after
+	// the session was planned on it. It is the harness base snapshot the
+	// project snapshot was built on; empty means no fallback.
+	FallbackRootFS string
+	Ingress        string
+	Environment    map[string]string
+	Labels         map[string]string
 	// DurableRoot is provider-specific persisted workspace storage. It remains
 	// empty for providers whose established contract already owns persistence.
 	DurableRoot       string
