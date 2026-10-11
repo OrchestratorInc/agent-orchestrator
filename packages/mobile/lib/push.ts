@@ -355,26 +355,21 @@ export function unpairFromServer(target: HostMetadata | null): Promise<void> {
 	return orderedMutation(() => unpairFromServerNow(target));
 }
 
-async function unregisterFromDaemon(reg: Registration): Promise<void> {
-	await flushPendingUnregisters();
-	if (reg.hostId && !(await unregisterIfVerified(reg))) await queuePendingUnregister(reg);
-}
-
-// Resolves once this machine's local status is cleared. The daemon call (an
-// identity probe plus a DELETE) follows in the same queue, so a later
-// register still runs after it, but the caller does not wait on the network.
-// It can't change the outcome: an offline daemon is retried later anyway.
+// Resolves once this machine's local status is cleared and the unregister it
+// still owes is queued, so a suspended or killed app retries it on next launch.
+// The daemon call (an identity probe plus a DELETE) drains that queue in the
+// next step, so a later register still runs after it, but the caller does not
+// wait on the network. A legacy registration has no identity to verify, so it
+// is cleared locally and never sent.
 export function unregisterFromPush(cfg: ServerConfig | null): Promise<void> {
 	const cleared = orderedMutation(async () => {
 		const reg = cfg ? await loadRegistration(cfg) : null;
-		if (reg) await clearRegistration(reg);
-		return reg;
+		if (!reg) return;
+		if (reg.hostId) await queuePendingUnregister(reg);
+		await clearRegistration(reg);
 	});
 	// Queued now, not from inside the step above, so nothing queued in between
 	// (a re-register) can run before this DELETE.
-	void orderedMutation(async () => {
-		const reg = await cleared;
-		if (reg) await unregisterFromDaemon(reg);
-	}).catch(() => {});
-	return cleared.then(() => undefined);
+	void orderedMutation(flushPendingUnregisters).catch(() => {});
+	return cleared;
 }

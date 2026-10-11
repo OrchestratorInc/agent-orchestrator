@@ -198,10 +198,26 @@ describe("push registration across machines", () => {
 
 		await unregisterFromPush(config("h_b"));
 		expect(unregisterPushDevice).not.toHaveBeenCalled();
+		// Owed before it resolves, so a killed app still retries it on next launch.
+		expect(JSON.parse(secure.get("ao.pushPendingUnregister") ?? "[]")).toEqual([
+			expect.objectContaining({ hostId: "h_b", token: "ExponentPushToken[test]" }),
+		]);
 
 		releaseProbe();
 		expect((await getPushStatus(config("h_b"))).registered).toBe(false);
 		expect(unregisterPushDevice).toHaveBeenCalledExactlyOnceWith(config("h_b"), "ExponentPushToken[test]");
+		expect(secure.has("ao.pushPendingUnregister")).toBe(false);
+	});
+
+	it("leaves nothing owed after a quick off then on", async () => {
+		await registerForPush(config("h_b"));
+
+		void unregisterFromPush(config("h_b"));
+		await registerForPush(config("h_b"));
+		await settled();
+
+		expect(secure.has("ao.pushPendingUnregister")).toBe(false);
+		expect((await getPushStatus(config("h_b"))).registered).toBe(true);
 	});
 
 	it("sends the off request before a quick re-enable registers again", async () => {
