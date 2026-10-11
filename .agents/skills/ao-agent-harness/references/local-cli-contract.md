@@ -246,3 +246,23 @@ owned audit dialog. Do not equate HTTP kill acknowledgement or an omitted option
 plus kernel start, unrelated control ownership, and delayed side-effect absence.
 See the [CodeBuddy report](../../../../docs/research/codebuddy-tui-2026-10-11.md) for
 separate earlier failures, later controls, exact UI/daemon capture provenance and CI.
+
+
+## Stakpak native qualification hold
+
+Released Stakpak0.3.88 accepts a positional task without submitting it in the
+interactive TUI. An eventual adapter must use current-viewport readiness and
+serialized after-start input. `--system-prompt-file` is additive on begin, but
+its system message persists in checkpoints: applying renewed instructions on
+`--session UUID` added a second system message in live proof. Do not count a
+fresh-token response as instruction deduplication.
+
+Native Escape settled the composer while an executing `run_command` shell and
+sleep descendant survived and wrote their delayed marker. Record PID plus kernel
+start and the complete delayed-effect window; settled TUI does not prove reaping.
+Native `cancel_task` targets background tasks and cannot qualify foreground
+cancellation. Do not narrow the probe to a single-process command, monkeypatch
+upstream, or edit native history to erase these failures. Keep Stakpak
+unregistered pending a released native fix, then requalify actual AO. ACP load
+flags alone still do not prove history replay. See the
+[qualification hold](../../../../docs/research/stakpak-tui-hold-2026-10-11.md).

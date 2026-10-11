@@ -1,0 +1,54 @@
+{
+  "candidate": "stakpak",
+  "status": "blocked",
+  "release": "v0.3.88",
+  "source": "d3eba6f502a79b993b826ef3ab4065eec9e38dfa",
+  "archiveSHA256": "1e923d6b632e6bda743b3f48c40914f657853478647c26d0a47729a7728490c6",
+  "binarySHA256": "5329d4d44afbc9df57d4c99fd9f066750bce81c73d0e459171e6610640321663",
+  "native": {
+    "version": "0.3.88",
+    "started": "2026-10-11T15:57:52.959978+00:00",
+    "gates": {
+      "restoreHistoryFreshInstructions": {
+        "cwd": "/home/azureuser/.ao/audits/candidate-integrations-20261011/reports/stakpak/native-002/workspace",
+        "standing": "STANDINGST6509",
+        "project": "PROJECTST6509",
+        "count": 2,
+        "renew": "renew17"
+      },
+      "restoredSystemMessageCount": 2,
+      "standingTokenOccurrences": 2,
+      "childGoneAfterCancel": false,
+      "noLateSideEffect": false
+    },
+    "nativeIDDigest": "f4f392cb470d80016f3653f735c5eefef49e3ee70f75a59adb76b96cf4776cbf",
+    "pid": 932179,
+    "child": {
+      "pid": 932367,
+      "kernelStart": "78005410"
+    },
+    "finished": "2026-10-11T15:58:49.815755+00:00"
+  },
+  "first": {
+    "cwd": "/home/azureuser/.ao/audits/candidate-integrations-20261011/reports/stakpak/native-002/workspace",
+    "standing": "STANDINGST6509",
+    "project": "PROJECTST6509",
+    "count": 1
+  },
+  "initialSubmittedOccurrences": 1,
+  "agentsPreserved": true,
+  "aoProof": "NOT_RUN: unregistered unsafe native cancellation; no actual AO session or screenshot",
+  "cleanup": {
+    "utc": "2026-10-11T16:02:21.194099+00:00",
+    "ownedPIDsAbsent": {
+      "931606": true,
+      "931924": true,
+      "932179": true,
+      "932367": true,
+      "932369": true
+    },
+    "nativeHistoryAndProfilesPreserved": true,
+    "productionUntouched": true,
+    "scratchAOStateCreated": false
+  }
+}
