@@ -25,4 +25,4 @@ jobs:
           python-version: "3.12"
       # Standard-library fixtures only: no native CLI, provider calls, or secrets.
       - name: Run credential-free memcode fixture tests
-        run: python -m unittest discover -s test/harness -p test_memcode_conformance.py -v
+        run: python -m unittest discover -s test/harness -p 'test_memcode_*.py' -v

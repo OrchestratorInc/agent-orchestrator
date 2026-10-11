@@ -143,6 +143,36 @@ func TestGetAgentHooksAcceptsNullHooks(t *testing.T) {
 	}
 }
 
+func TestCleanupWorkspaceRemovesOnlyValidatedSessionArtifacts(t *testing.T) {
+	data := t.TempDir()
+	root := filepath.Join(data, "agent-launches", "memcode")
+	for _, session := range []string{"ao-1", "ao-2"} {
+		dir := filepath.Join(root, session, "launch-1")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "witness.json"), []byte("private"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := New()
+	if err := p.CleanupWorkspace(context.Background(), ports.WorkspaceHookConfig{DataDir: data, SessionID: "ao-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "ao-1")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cleaned session artifacts stat = %v, want not exist", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "ao-2", "launch-1", "witness.json")); err != nil {
+		t.Fatalf("sibling session artifact stat = %v, want preserved", err)
+	}
+	if err := p.CleanupWorkspace(context.Background(), ports.WorkspaceHookConfig{DataDir: data, SessionID: "../ao-2"}); err == nil {
+		t.Fatal("path-traversing session id accepted")
+	}
+	if _, err := os.Stat(filepath.Join(root, "ao-2", "launch-1", "witness.json")); err != nil {
+		t.Fatalf("sibling session artifact after rejected cleanup = %v, want preserved", err)
+	}
+}
+
 func TestLongPrivateContextIsNotTruncated(t *testing.T) {
 	data := []byte(strings.Repeat("Standing instruction αβ.\n\n", 1200))
 	chunks, err := instructionChunks(data)
