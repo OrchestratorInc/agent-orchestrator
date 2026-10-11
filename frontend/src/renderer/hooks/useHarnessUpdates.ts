@@ -7,7 +7,7 @@ import { clientForSessionHost } from "../lib/host-clients";
 import { LOCAL_HOST } from "../lib/hosts";
 
 export type AgentUpdateAdvisory = components["schemas"]["AgentUpdateAdvisory"];
-export type HarnessInstallJob = components["schemas"]["InstallJob"];
+type HarnessInstallJob = components["schemas"]["InstallJob"];
 export const installerQueryKey = ["agent-installers"] as const;
 export const installJobsQueryKey = ["agent-install-jobs"] as const;
 export const updateAdvisoryQueryKey = (agentId: AgentId, hostId?: string) => ["agent-update-advisory", hostId ?? LOCAL_HOST, agentId] as const;
