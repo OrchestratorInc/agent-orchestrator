@@ -26,7 +26,15 @@ func TestSourceContainsExcerptSelection(t *testing.T) {
 		{"line boundary", "First **important** line.\nNext line.", "line.\nNext", true},
 		{"unrelated text", "Use **bold** text here.", "totally unrelated", false},
 		{"link target", "Open [the docs](https://example.com) now.", "example.com", false},
-		{"image alt", "![alt text](https://example.com/a.png)", "alt text", false},
+		{"native image caption", "![alt text](https://example.com/a.png)", "alt text", true},
+		{"native heading and bullets", "# Title\n\n- One\n- Two", "Title\n\n• One\n• Two", true},
+		{"native numbered list", "1. One\n2. Two", "1. One\n2. Two", true},
+		{"native nested numbered list", "1. Outer\n   1. Inner\n   2. Next\n2. End", "1. Outer\n2. Inner\n3. Next\n4. End", true},
+		{"native tasks", "- [ ] Pending\n- [x] Done", "☐ Pending\n☑ Done", true},
+		{"native code label", "```ts\ncode();\n```", "ts\ncode();", true},
+		{"native table", "| A | B |\n| --- | --- |\n| X | Y |", "A  |  B\nX  |  Y", true},
+		{"fabricated bullet content", "- One\n- Two", "• One\n• Forged", false},
+		{"fabricated code label", "```ts\ncode();\n```", "python\ncode();", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

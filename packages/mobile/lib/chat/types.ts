@@ -44,6 +44,8 @@ export type ConversationTurn = {
 };
 
 export type DeliveryState = "queued" | "sending" | "accepted" | "uncertain" | "failed";
+export type ChatExcerpt = { conversationId: string; messageId: string; revision: number; text: string };
+export type ConversationContentSummary = { type: string; text?: string; sourceMessageId?: string; sourceRevision?: number };
 export type ConversationMessage = {
 	kind: "message";
 	id: string;
@@ -53,6 +55,7 @@ export type ConversationMessage = {
 	role: "user" | "assistant";
 	origin: "human" | "automation" | "daemon" | "provider";
 	text: string;
+	content?: ConversationContentSummary[];
 	streaming: boolean;
 	delivery?: DeliveryState;
 	senderLabel?: string;

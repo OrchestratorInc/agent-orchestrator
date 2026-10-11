@@ -1,7 +1,7 @@
 import { Feather } from "../icons";
 import { UITextView as Text } from "@bsky.app/react-native-uitextview";
 import * as Clipboard from "expo-clipboard";
-import { createContext, isValidElement, memo, useContext, useState, type ReactNode } from "react";
+import { createContext, isValidElement, memo, useCallback, useContext, useState, type ReactNode } from "react";
 import { Image, Platform, Pressable, ScrollView, StyleSheet, View, type StyleProp, type TextStyle } from "react-native";
 import { haptics } from "../haptics";
 import { openGitHub } from "../openGitHub";
@@ -12,10 +12,12 @@ import { HighlightedCodeText } from "./HighlightedCodeText";
 import { allowsUnderscoreEmphasis } from "./inlineEmphasis";
 import { parseBlocks, type MarkdownBlock } from "./markdownBlocks";
 import { iconSize, microLabel, prose, radius, space, type } from "../tokens";
+import type { ChatExcerpt } from "./types";
 
 // The conversation screen decides how a tapped link opens (it knows the AO host
 // that the agent's localhost links map onto); the renderer only reports the tap.
-const AddResponseToChat = createContext<((text: string) => void) | null>(null);
+
+const AddResponseToChat = createContext<((text: string, source?: Omit<ChatExcerpt, "text">) => void) | null>(null);
 const OpenChatLink = createContext<((url: string) => void) | null>(null);
 
 /**
@@ -36,7 +38,7 @@ function defaultOpenChatLink(url: string): void {
 	void openGitHub(url);
 }
 
-export function ChatLinkProvider({ onLinkOpen, onAddToChat, children }: { onLinkOpen: (url: string) => void; onAddToChat?: (text: string) => void; children: ReactNode }) {
+export function ChatLinkProvider({ onLinkOpen, onAddToChat, children }: { onLinkOpen: (url: string) => void; onAddToChat?: (text: string, source?: Omit<ChatExcerpt, "text">) => void; children: ReactNode }) {
 	return <OpenChatLink.Provider value={onLinkOpen}><AddResponseToChat.Provider value={onAddToChat ?? null}>{children}</AddResponseToChat.Provider></OpenChatLink.Provider>;
 }
 
@@ -48,7 +50,7 @@ export function ChatLinkProvider({ onLinkOpen, onAddToChat, children }: { onLink
  * readable text; the renderer never hides content because a provider used
  * syntax it does not know.
  */
-export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, continuousSelection = false }: { text: string; streaming?: boolean; continuousSelection?: boolean }) {
+export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, continuousSelection = false, selectionSource }: { text: string; streaming?: boolean; continuousSelection?: boolean; selectionSource?: Omit<ChatExcerpt, "text"> }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const selectionColor = Platform.OS === "android" ? t.accentBorder : t.accent;
@@ -58,7 +60,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		// in one text surface, then show image previews without repeating captions.
 		const images = blocks.filter((block): block is Extract<MarkdownBlock, { kind: "image" }> => block.kind === "image");
 		return <View style={styles.root}>
-			<SelectableResponseText text={text} />
+			<SelectableResponseText text={text} source={selectionSource} />
 			{images.map((image, index) => <MarkdownImage key={`${image.url}-${index}`} alt={image.alt} url={image.url} selectionColor={selectionColor} showCaption={false} />)}
 		</View>;
 	}
@@ -106,13 +108,14 @@ function SelectableProseGroup({ blocks, selectionColor, styles }: { blocks: Arra
 }
 
 /** One native text surface for selecting across every part of a response. */
-export function SelectableResponseText({ text }: { text: string }) {
+export function SelectableResponseText({ text, source }: { text: string; source?: Omit<ChatExcerpt, "text"> }) {
 	const t = useTheme();
 	const addToChat = useContext(AddResponseToChat);
-	const onLayout = useAndroidResponseSelection(addToChat);
+	const select = useCallback((selected: string) => source ? addToChat?.(selected, source) : addToChat?.(selected), [addToChat, source]);
+	const onLayout = useAndroidResponseSelection(source ? select : null);
 	const styles = useThemedStyles(makeStyles);
 	const selectionColor = Platform.OS === "android" ? t.accentBorder : t.accent;
-	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={Boolean(addToChat)} onAddToChat={(event) => addToChat?.(event.nativeEvent.text)}>
+	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={Boolean(addToChat && source)} onAddToChat={(event) => select(event.nativeEvent.text)}>
 		{parseBlocks(text).map((block, index) => {
 			const separator = index > 0 ? "\n\n" : "";
 			if (block.kind === "heading") return <Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>{separator}{inline(block.text, styles)}</Text>;
@@ -120,7 +123,7 @@ export function SelectableResponseText({ text }: { text: string }) {
 			if (block.kind === "quote") return <Text key={index} style={styles.quoteText}>{separator}{inline(block.text, styles)}</Text>;
 			if (block.kind === "list") return <Text key={index}>{separator}{block.items.map((item, itemIndex) => <Text key={itemIndex} style={item.checked ? styles.taskDone : undefined}>{itemIndex > 0 ? "\n" : ""}{item.checked !== undefined ? (item.checked ? "☑ " : "☐ ") : block.ordered ? `${itemIndex + 1}. ` : "• "}{inline(item.text, styles)}</Text>)}</Text>;
 			if (block.kind === "code") return <Text key={index} style={styles.selectionCode}>{separator}{block.language ? `${block.language}\n` : ""}{block.text}</Text>;
-			if (block.kind === "table") return <Text key={index}>{separator}{[block.headers, ...block.rows].map((row) => row.join("  |  ")).join("\n")}</Text>;
+			if (block.kind === "table") return <Text key={index}>{separator}{[block.headers, ...block.rows].map((row, rowIndex) => <Text key={rowIndex}>{rowIndex > 0 ? "\n" : ""}{row.map((cell, cellIndex) => <Text key={cellIndex}>{cellIndex > 0 ? "  |  " : ""}{inline(cell, styles)}</Text>)}</Text>)}</Text>;
 			if (block.kind === "image") return <Text key={index} style={styles.imageCaption}>{separator}{block.alt || block.url}</Text>;
 			return <Text key={index}>{separator}────────</Text>;
 		})}

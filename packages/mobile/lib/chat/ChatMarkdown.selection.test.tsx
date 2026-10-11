@@ -197,13 +197,14 @@ it("keeps Android link-containing prose range-selectable", () => {
 
 it("adds the exact native selection without changing the response or link handlers", () => {
 	const onAddToChat = vi.fn();
+	const source = { conversationId: "conversation", messageId: "response", revision: 2 };
 	let renderer!: ReactTestRenderer;
-	act(() => { renderer = create(<ChatLinkProvider onLinkOpen={vi.fn()} onAddToChat={onAddToChat}><ChatMarkdown continuousSelection text={"# Heading\n\n- One\n- Two"} /></ChatLinkProvider>); });
+	act(() => { renderer = create(<ChatLinkProvider onLinkOpen={vi.fn()} onAddToChat={onAddToChat}><ChatMarkdown continuousSelection selectionSource={source} text={"# Heading\n\n- One\n- Two"} /></ChatLinkProvider>); });
 	const root = renderer.root.find((node) => node.props.selectable === true);
 	expect(root.props.addToChatEnabled).toBe(true);
 	const selection = "ding\n\n• One\n• Tw";
 	act(() => root.props.onAddToChat({ nativeEvent: { target: 1, text: selection } }));
-	expect(onAddToChat).toHaveBeenCalledExactlyOnceWith(selection);
+	expect(onAddToChat).toHaveBeenCalledExactlyOnceWith(selection, source);
 	expect(textOf(root)).toBe("Heading\n\n• One\n• Two");
 	act(() => renderer.unmount());
 });

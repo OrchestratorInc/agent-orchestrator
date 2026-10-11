@@ -33,6 +33,8 @@ import { ChatComposer } from "./ChatComposer";
 import { ComposerGlass } from "./composer-glass";
 import { encodeResponseDraft } from "./responseQuotes";
 
+const source = { conversationId: "conversation", messageId: "response", revision: 1 };
+
 const props = () => ({
 	sessionId: "session", config: null,
 	snapshot: { turns: [], items: [], controller: { state: "idle" }, settings: {} },
@@ -46,7 +48,7 @@ it("adds and removes selected text while preserving the existing editable reply,
 	const p = props();
 	await act(async () => { renderer = create(<ChatComposer {...p} />); });
 	act(() => renderer.root.findByType(TextInput).props.onChangeText("Explain this"));
-	act(() => renderer.update(<ChatComposer {...p} quoteRequest={{ id: "q1", text: "Title\n• Bullet", composerKey: "session" }} />));
+	act(() => renderer.update(<ChatComposer {...p} quoteRequest={{ id: "q1", text: "Title\n• Bullet", source, composerKey: "session" }} />));
 	expect(renderer.root.findByType(TextInput).props.value).toBe("Explain this");
 	const quote = renderer.root.findByProps({ accessibilityLabel: "Quoted response: Title\n• Bullet" });
 	const panel = renderer.root.findByType(TextInput).parent?.parent;
@@ -59,15 +61,15 @@ it("adds and removes selected text while preserving the existing editable reply,
 	expect(renderer.root.findAllByProps({ accessibilityLabel: "Quoted response: Title\n• Bullet" })).toHaveLength(0);
 	expect(renderer.root.findByType(TextInput).props.value).toBe("Explain this");
 	await act(async () => renderer.root.findByProps({ accessibilityLabel: "Send message" }).props.onPress());
-	expect(p.onSend).toHaveBeenCalledWith("Explain this", undefined, undefined);
+	expect(p.onSend).toHaveBeenCalledWith("Explain this", undefined, undefined, undefined);
 });
 
-it("sends the exact selected excerpt with the reply only when Send is pressed, then clears both", async () => {
+it("sends desktop-compatible source references separately from the reply, then clears both", async () => {
 	const p = props();
-	await act(async () => { renderer = create(<ChatComposer {...p} quoteRequest={{ id: "q1", text: "Title\n\n• Bullet 👋", composerKey: "session" }} />); });
+	await act(async () => { renderer = create(<ChatComposer {...p} quoteRequest={{ id: "q1", text: "Title\n\n• Bullet 👋", source, composerKey: "session" }} />); });
 	act(() => renderer.root.findByType(TextInput).props.onChangeText("Why?"));
 	await act(async () => renderer.root.findByProps({ accessibilityLabel: "Send message" }).props.onPress());
-	expect(p.onSend).toHaveBeenCalledExactlyOnceWith("> Title\n> \n> • Bullet 👋\n\nWhy?", undefined, undefined);
+	expect(p.onSend).toHaveBeenCalledExactlyOnceWith("Why?", undefined, undefined, [{ ...source, text: "Title\n\n• Bullet 👋" }]);
 	expect(renderer.root.findByType(TextInput).props.value).toBe("");
 	expect(renderer.root.findAll((node) => String(node.props.accessibilityLabel).startsWith("Remove quote:"))).toHaveLength(0);
 });
@@ -76,9 +78,9 @@ it("keeps a quote added while an earlier send is waiting for acknowledgement", a
 	const p = props();
 	let finish!: (id: string) => void;
 	p.onSend = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
-	await act(async () => { renderer = create(<ChatComposer {...p} quoteRequest={{ id: "q1", text: "First", composerKey: "session" }} />); });
+	await act(async () => { renderer = create(<ChatComposer {...p} quoteRequest={{ id: "q1", text: "First", source, composerKey: "session" }} />); });
 	act(() => renderer.root.findByProps({ accessibilityLabel: "Send message" }).props.onPress());
-	act(() => renderer.update(<ChatComposer {...p} quoteRequest={{ id: "q2", text: "Second", composerKey: "session" }} />));
+	act(() => renderer.update(<ChatComposer {...p} quoteRequest={{ id: "q2", text: "Second", source, composerKey: "session" }} />));
 	await act(async () => finish("send-id"));
 	expect(renderer.root.findAllByProps({ accessibilityLabel: "Quoted response: Second" })).toHaveLength(1);
 });
@@ -86,7 +88,7 @@ it("keeps a quote added while an earlier send is waiting for acknowledgement", a
 it("restores a saved quote alongside a typed draft", async () => {
 	const p = props();
 	p.config = { host: "localhost", httpPort: "1234", muxPort: "1234", password: "test" } as ComponentProps<typeof ChatComposer>["config"];
-	storage.getItem.mockResolvedValueOnce(encodeResponseDraft("Saved reply", [{ id: "saved", text: "Saved excerpt" }]));
+	storage.getItem.mockResolvedValueOnce(encodeResponseDraft("Saved reply", [{ id: "saved", text: "Saved excerpt", source }]));
 	await act(async () => { renderer = create(<ChatComposer {...p} />); });
 	expect(renderer.root.findByType(TextInput).props.value).toBe("Saved reply");
 	expect(renderer.root.findAllByProps({ accessibilityLabel: "Quoted response: Saved excerpt" })).toHaveLength(1);

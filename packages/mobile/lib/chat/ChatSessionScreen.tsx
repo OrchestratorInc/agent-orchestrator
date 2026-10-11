@@ -307,10 +307,10 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const composerKey = config ? JSON.stringify([machineIdentity(config), session.id]) : session.id;
 	const [quoteRequest, setQuoteRequest] = useState<ResponseQuoteRequest>();
 	const quoteSequence = useRef(0);
-	const addResponseToChat = useCallback((text: string) => {
-		if (!text.length) return;
+	const addResponseToChat = useCallback((text: string, source?: ResponseQuoteRequest["source"]) => {
+		if (!text.length || !source) return;
 		setDismissedRequest(request?.sequence);
-		setQuoteRequest({ id: `${Date.now()}-${++quoteSequence.current}`, text, composerKey });
+		setQuoteRequest({ id: `${Date.now()}-${++quoteSequence.current}`, text, source, composerKey });
 	}, [composerKey, request?.sequence]);
 	const quoteHandled = useCallback((id: string) => setQuoteRequest((current) => current?.id === id ? undefined : current), []);
 

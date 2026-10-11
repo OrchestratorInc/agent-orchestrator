@@ -15,7 +15,7 @@ import { fontScaleCap, iconSize, space, type } from "../tokens";
 import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { MicKey } from "../voice/MicKey";
 import { useVoiceInput } from "../voice/useVoiceInput";
-import { activeTurn, type ChatConfigOption, type ChatImage, type ChatModel, type ChatResource, type ChatSkill, type ConversationSnapshot, type TurnSettings } from "./types";
+import { activeTurn, type ChatConfigOption, type ChatExcerpt, type ChatImage, type ChatModel, type ChatResource, type ChatSkill, type ConversationSnapshot, type TurnSettings } from "./types";
 import {
 	composerSuggestionKey,
 	findComposerSuggestion,
@@ -35,7 +35,7 @@ import { queuedConversationMessages } from "./timelineModel";
 import { userFacingError } from "../connectionError";
 import type { DashboardPR, SessionPRSummary } from "../api";
 import { PRReviewPrompt } from "./PRReviewPrompt";
-import { decodeResponseDraft, encodeResponseDraft, responseReplyText, type ResponseQuote, type ResponseQuoteRequest } from "./responseQuotes";
+import { decodeResponseDraft, encodeResponseDraft, responseReplyText, responseExcerpts, excerptDraftText, isChatExcerpt, type ResponseQuote, type ResponseQuoteRequest } from "./responseQuotes";
 import { afterDraftWrites } from "./pendingSend";
 
 type Attachment =
@@ -127,7 +127,7 @@ export function ChatComposer({
 	pending?: boolean;
 	interrupting?: boolean;
 	disabled?: boolean;
-	onSend(text: string, attachments?: ChatImage[], resources?: ChatResource[]): Promise<string>;
+	onSend(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]): Promise<string>;
 	onAcknowledgeSend(id: string): Promise<void>;
 	completedRetry?: { id: string; draftText: string };
 	onSteer(text: string): Promise<string>;
@@ -260,8 +260,8 @@ export function ChatComposer({
 	const canEmbedFiles = snapshot.capabilities?.includes("embedded_context");
 	const hasDraft = Boolean(text.trim() || quotes.length);
 	const primaryAction = composerPrimaryAction({ active, hasDraft, hasAttachments: attachments.length > 0 });
-	const steerEligible = Boolean(canSteer && hasDraft && attachments.length === 0);
-	const deliveryPresentation = composerDeliveryPresentation({ active, canSteer: Boolean(canSteer), hasDraft, hasAttachments: attachments.length > 0, hasQueued: visibleQueuedMessages.length > 0 });
+	const steerEligible = Boolean(canSteer && hasDraft && attachments.length === 0 && quotes.length === 0);
+	const deliveryPresentation = composerDeliveryPresentation({ active, canSteer: Boolean(canSteer && quotes.length === 0), hasDraft, hasAttachments: attachments.length > 0, hasQueued: visibleQueuedMessages.length > 0 });
 	const stopped = snapshot.controller.state === "stopped";
 	const draftKey = config ? `ao.chat.draft.${machineIdentity(config)}.${sessionId}` : null;
 	const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -276,7 +276,7 @@ export function ChatComposer({
 	useEffect(() => {
 		if (!quoteRequest || consumedQuote.current === quoteRequest.id) return;
 		consumedQuote.current = quoteRequest.id;
-		const next = [...latestQuotes.current, { id: quoteRequest.id, text: quoteRequest.text }];
+		const next = [...latestQuotes.current, { id: quoteRequest.id, text: quoteRequest.text, source: quoteRequest.source }];
 		latestQuotes.current = next;
 		setQuotes(next);
 		onQuoteHandled?.(quoteRequest.id);
@@ -319,7 +319,7 @@ export function ChatComposer({
 		if (draftTimer.current) clearTimeout(draftTimer.current);
 		const current = latestText.current;
 		const currentQuotes = latestQuotes.current;
-		const matches = responseReplyText(current, currentQuotes) === completedRetry.draftText;
+		const matches = currentQuotes.length <= 8 && currentQuotes.every((quote) => isChatExcerpt({ ...quote.source, text: quote.text })) && excerptDraftText(responseReplyText(current, currentQuotes), responseExcerpts(currentQuotes)) === completedRetry.draftText;
 		if (matches) {
 			latestText.current = "";
 			setText("");
@@ -349,12 +349,13 @@ export function ChatComposer({
 		setSubmitting(true);
 		if (draftTimer.current) clearTimeout(draftTimer.current);
 		try {
+			const excerpts = responseExcerpts(quotes);
 			const images = attachments.filter((item): item is Extract<Attachment, { kind: "image" }> => item.kind === "image").map((item) => item.image);
 			const resources = attachments.filter((item): item is Extract<Attachment, { kind: "resource" }> => item.kind === "resource").map((item) => item.resource);
 			const route = composerDeliveryRoute(intent, steerEligible);
 			const id = route === "steer"
 				? await onSteer(trimmed)
-				: await onSend(trimmed, images.length ? images : undefined, resources.length ? resources : undefined);
+				: await onSend(trimmed, images.length ? images : undefined, resources.length ? resources : undefined, excerpts.length ? excerpts : undefined);
 			if (draftKey) {
 				const current = latestText.current;
 				const currentQuotes = latestQuotes.current;

@@ -1,11 +1,32 @@
-/** Selected snippets remain separate from the editable reply until send. */
-export interface ResponseQuote { id: string; text: string }
+import type { ChatExcerpt } from "./types";
+
+/** Selected snippets retain their durable transcript provenance until send. */
+export interface ResponseQuote { id: string; text: string; source?: Omit<ChatExcerpt, "text"> }
 export interface ResponseQuoteRequest extends ResponseQuote { composerKey: string }
 
 const PREFIX = "ao.quoted-draft.v1:";
 
+export function isChatExcerpt(value: unknown): value is ChatExcerpt {
+	if (!value || typeof value !== "object") return false;
+	const item = value as ChatExcerpt;
+	return typeof item.conversationId === "string" && Boolean(item.conversationId) && typeof item.messageId === "string" && Boolean(item.messageId) && Number.isSafeInteger(item.revision) && item.revision >= 0 && typeof item.text === "string" && Boolean(item.text.trim());
+}
+
 export function responseReplyText(text: string, quotes: readonly ResponseQuote[]): string {
-	return [...quotes.map((quote) => quote.text.split("\n").map((line) => `> ${line}`).join("\n")), text.trim()].filter(Boolean).join("\n\n");
+	return text.trim() || (quotes.length ? `Use the attached ${quotes.length} chat excerpt(s) as context` : "");
+}
+
+export function responseExcerpts(quotes: readonly ResponseQuote[]): ChatExcerpt[] {
+	if (quotes.length > 8) throw new Error("Attach at most 8 selections to one message.");
+	return quotes.map((quote) => {
+		if (!isChatExcerpt({ ...quote.source, text: quote.text })) throw new Error("Reselect this older quote before sending so its source can be verified.");
+		return { ...quote.source!, text: quote.text };
+	});
+}
+
+/** Keep retries tied to both the reply and the exact selections, like desktop. */
+export function excerptDraftText(text: string, excerpts?: readonly ChatExcerpt[]): string {
+	return excerpts?.length ? JSON.stringify({ text, excerpts }) : text;
 }
 
 export function encodeResponseDraft(text: string, quotes: readonly ResponseQuote[]): string {
