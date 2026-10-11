@@ -37,7 +37,7 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
     return witnessSpec;
   };
   const stopWitness = () => {
-    if (witnessChild && witnessChild.exitCode === null) witnessChild.kill();
+    if (witnessChild && witnessChild.exitCode === null) witnessChild.kill("SIGKILL");
   };
   const received = [];
   const sockets = new Set();
