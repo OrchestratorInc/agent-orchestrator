@@ -2691,5 +2691,8 @@
 	"settings.billing.runningDetail": "오케스트레이터 {{orchestrators}}/{{orchestratorSlots}} · 워커 {{workers}}/{{workerSlots}}",
 	"settings.billing.totalSessions": "전체 세션",
 	"settings.billing.totalDetail": "실행 중과 일시 중지 포함. 자리를 비우려면 하나를 보관하세요.",
-	"settings.billing.usageNote": "실행 중인 세션마다 계산됩니다. 세션 두 개를 한 시간 실행하면 2 세션 시간입니다. 일시 중지된 세션은 계산되지 않습니다."
+	"settings.billing.usageNote": "실행 중인 세션마다 계산됩니다. 세션 두 개를 한 시간 실행하면 2 세션 시간입니다. 일시 중지된 세션은 계산되지 않습니다.",
+	"settings.billing.cancelNotice": "{{plan}} 플랜이 {{date}}에 종료되며, 이후 무료 플랜으로 전환됩니다.",
+	"settings.billing.keepPlan": "{{plan}} 유지",
+	"settings.billing.freeStarts": "{{date}}부터 시작"
 }

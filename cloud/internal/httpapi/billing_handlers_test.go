@@ -53,6 +53,9 @@ func newFakeBillingStore() *fakeBillingStore {
 func (f *fakeBillingStore) BillingSummary(context.Context, domain.Principal, string) (domain.BillingSummary, error) {
 	return domain.BillingSummary{Enabled: true, Plan: f.state.Plan}, nil
 }
+func (f *fakeBillingStore) SubscriptionCancelAt(context.Context, domain.Principal, string) (*time.Time, error) {
+	return nil, nil
+}
 func (f *fakeBillingStore) OrgBilling(context.Context, domain.Principal, string) (domain.OrgBilling, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -113,6 +116,7 @@ type fakeStripe struct {
 	checkouts     []billing.CheckoutRequest
 	subscription  billing.Subscription
 	subscriptions int
+	portalCancels []string
 }
 
 func (f *fakeStripe) CreateCustomer(context.Context, string, string) (string, error) {
@@ -127,7 +131,10 @@ func (f *fakeStripe) CreateCheckoutSession(_ context.Context, input billing.Chec
 	f.checkouts = append(f.checkouts, input)
 	return "https://checkout.stripe.test/cs_1", nil
 }
-func (f *fakeStripe) CreatePortalSession(context.Context, string, string, string) (string, error) {
+func (f *fakeStripe) CreatePortalSession(_ context.Context, _, _, _, cancelSubscriptionID string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.portalCancels = append(f.portalCancels, cancelSubscriptionID)
 	return "https://billing.stripe.test/p_1", nil
 }
 func (f *fakeStripe) GetPrice(_ context.Context, id string) (billing.Price, error) {
@@ -316,5 +323,39 @@ func TestBillingSummaryListsPlansPricedFromStripe(t *testing.T) {
 	if response.Code != http.StatusOK || !body.Enabled || len(body.Plans) != 1 ||
 		body.Plans[0].Name != "starter" || body.Plans[0].UnitAmount != 2000 || body.Plans[0].Interval != "month" {
 		t.Fatalf("summary: %d %+v", response.Code, body)
+	}
+}
+
+// Downgrading to Free opens the portal straight on cancelling the plan; a
+// plain request opens the portal home, and there is nothing to cancel without
+// a live subscription.
+func TestPortalCancelFlow(t *testing.T) {
+	store, stripe := newFakeBillingStore(), &fakeStripe{}
+	server := billingServer(store, stripe)
+	store.state.StripeCustomerID = "cus_1"
+
+	response := httptest.NewRecorder()
+	server.createBillingPortal(response, billingRequest(http.MethodPost, "/", `{"flow":"cancel"}`))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("cancel without a subscription: %d", response.Code)
+	}
+
+	store.state.StripeSubscriptionID, store.state.SubscriptionStatus = billingSubID, "active"
+	for _, body := range []string{``, `{}`, `{"flow":"cancel"}`} {
+		response = httptest.NewRecorder()
+		server.createBillingPortal(response, billingRequest(http.MethodPost, "/", body))
+		if response.Code != http.StatusOK {
+			t.Fatalf("portal %q: %d %s", body, response.Code, response.Body.String())
+		}
+	}
+	if len(stripe.portalCancels) != 3 || stripe.portalCancels[0] != "" || stripe.portalCancels[1] != "" ||
+		stripe.portalCancels[2] != billingSubID {
+		t.Fatalf("portal cancel targets = %q", stripe.portalCancels)
+	}
+
+	response = httptest.NewRecorder()
+	server.createBillingPortal(response, billingRequest(http.MethodPost, "/", `{"flow":"refund"}`))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("unknown flow: %d", response.Code)
 	}
 }

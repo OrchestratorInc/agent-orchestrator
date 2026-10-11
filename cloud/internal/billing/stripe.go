@@ -160,7 +160,11 @@ func (c *Client) CreateCheckoutSession(ctx context.Context, input CheckoutReques
 // CreatePortalSession returns the URL of the Customer Portal for a customer.
 // configuration selects a portal configuration (bpc_...); empty uses the
 // account's default, which exists only once it is saved in the dashboard.
-func (c *Client) CreatePortalSession(ctx context.Context, customerID, returnURL, configuration string) (string, error) {
+// cancelSubscriptionID, when set, opens the portal straight on cancelling that
+// subscription and returns to returnURL once it is done.
+func (c *Client) CreatePortalSession(
+	ctx context.Context, customerID, returnURL, configuration, cancelSubscriptionID string,
+) (string, error) {
 	form := url.Values{}
 	form.Set("customer", customerID)
 	if configuration != "" {
@@ -168,6 +172,14 @@ func (c *Client) CreatePortalSession(ctx context.Context, customerID, returnURL,
 	}
 	if returnURL != "" {
 		form.Set("return_url", returnURL)
+	}
+	if cancelSubscriptionID != "" {
+		form.Set("flow_data[type]", "subscription_cancel")
+		form.Set("flow_data[subscription_cancel][subscription]", cancelSubscriptionID)
+		if returnURL != "" {
+			form.Set("flow_data[after_completion][type]", "redirect")
+			form.Set("flow_data[after_completion][redirect][return_url]", returnURL)
+		}
 	}
 	var session struct {
 		URL string `json:"url"`
@@ -189,6 +201,8 @@ type Subscription struct {
 	OrgID       string
 	PeriodStart *time.Time
 	PeriodEnd   *time.Time
+	// CancelAt is when a subscription set to cancel ends; nil while it renews.
+	CancelAt *time.Time
 	// Limits are parsed from the subscribed product's metadata; LimitsErr is
 	// set instead when that metadata is incomplete.
 	Limits    *domain.PlanLimits
@@ -207,6 +221,8 @@ func (c *Client) GetSubscription(ctx context.Context, subscriptionID string) (Su
 		Metadata           map[string]string `json:"metadata"`
 		CurrentPeriodStart int64             `json:"current_period_start"`
 		CurrentPeriodEnd   int64             `json:"current_period_end"`
+		CancelAt           int64             `json:"cancel_at"`
+		CancelAtPeriodEnd  bool              `json:"cancel_at_period_end"`
 		Items              struct {
 			Data []struct {
 				CurrentPeriodStart int64 `json:"current_period_start"`
@@ -253,6 +269,14 @@ func (c *Client) GetSubscription(ctx context.Context, subscriptionID string) (Su
 	if end > 0 {
 		value := time.Unix(end, 0).UTC()
 		subscription.PeriodEnd = &value
+	}
+	switch {
+	case raw.CancelAt > 0:
+		value := time.Unix(raw.CancelAt, 0).UTC()
+		subscription.CancelAt = &value
+	case raw.CancelAtPeriodEnd && subscription.PeriodEnd != nil:
+		value := *subscription.PeriodEnd
+		subscription.CancelAt = &value
 	}
 	return subscription, nil
 }

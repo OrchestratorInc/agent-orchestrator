@@ -21,7 +21,7 @@ import (
 type StripeAPI interface {
 	CreateCustomer(ctx context.Context, orgID, name string) (string, error)
 	CreateCheckoutSession(ctx context.Context, input billing.CheckoutRequest) (string, error)
-	CreatePortalSession(ctx context.Context, customerID, returnURL, configuration string) (string, error)
+	CreatePortalSession(ctx context.Context, customerID, returnURL, configuration, cancelSubscriptionID string) (string, error)
 	GetSubscription(ctx context.Context, subscriptionID string) (billing.Subscription, error)
 	GetPrice(ctx context.Context, priceID string) (billing.Price, error)
 }
@@ -44,6 +44,7 @@ type BillingOptions struct {
 // implements it.
 type billingStore interface {
 	BillingSummary(ctx context.Context, principal domain.Principal, orgID string) (domain.BillingSummary, error)
+	SubscriptionCancelAt(ctx context.Context, principal domain.Principal, orgID string) (*time.Time, error)
 	OrgBilling(ctx context.Context, principal domain.Principal, orgID string) (domain.OrgBilling, error)
 	RequireOrgAdmin(ctx context.Context, principal domain.Principal, orgID string) error
 	OrgDisplayName(ctx context.Context, orgID string) (string, error)
@@ -68,7 +69,10 @@ type planOffer struct {
 
 type billingSummaryResponse struct {
 	domain.BillingSummary
-	Plans []planOffer `json:"plans"`
+	// CancelAt is when a subscription set to cancel ends and the organization
+	// drops to Free.
+	CancelAt *time.Time  `json:"cancelAt,omitempty"`
+	Plans    []planOffer `json:"plans"`
 }
 
 // planOfferTTL bounds how stale a cached price may be: a price edited in the
@@ -128,13 +132,18 @@ func (s *Server) getBilling(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	cancelAt, err := s.billingStore.SubscriptionCancelAt(r.Context(), principalFrom(r), orgID)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
 	plans := []planOffer{}
 	if s.billingReady() {
 		plans = s.planOffers(r.Context())
 	} else {
 		summary.Enabled = false
 	}
-	writeJSON(w, http.StatusOK, billingSummaryResponse{BillingSummary: summary, Plans: plans})
+	writeJSON(w, http.StatusOK, billingSummaryResponse{BillingSummary: summary, CancelAt: cancelAt, Plans: plans})
 }
 
 func (s *Server) createBillingCheckout(w http.ResponseWriter, r *http.Request) {
@@ -239,8 +248,32 @@ func (s *Server) createBillingPortal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusConflict, "NO_SUBSCRIPTION", "Choose a plan first.")
 		return
 	}
-	link, err := s.billingOptions.Stripe.CreatePortalSession(
-		r.Context(), state.StripeCustomerID, s.billingOptions.ReturnURL, s.billingOptions.PortalConfiguration)
+	// {"flow":"cancel"} opens the portal straight on cancelling the plan
+	// (downgrading to Free, which has no Stripe price to switch to).
+	var body struct {
+		Flow string `json:"flow"`
+	}
+	if r.ContentLength != 0 {
+		if err := decodeJSONLimit(w, r, &body, 4<<10); err != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+	}
+	cancelSubscriptionID := ""
+	switch body.Flow {
+	case "":
+	case "cancel":
+		if state.StripeSubscriptionID == "" || !subscriptionLive(state.SubscriptionStatus) {
+			writeError(w, r, http.StatusConflict, "NO_SUBSCRIPTION", "There is no plan to cancel.")
+			return
+		}
+		cancelSubscriptionID = state.StripeSubscriptionID
+	default:
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "flow must be cancel or empty.")
+		return
+	}
+	link, err := s.billingOptions.Stripe.CreatePortalSession(r.Context(), state.StripeCustomerID,
+		s.billingOptions.ReturnURL, s.billingOptions.PortalConfiguration, cancelSubscriptionID)
 	if err != nil {
 		s.writeBillingProviderError(w, r, "create Stripe portal session", err)
 		return
@@ -363,6 +396,7 @@ func (s *Server) syncSubscription(ctx context.Context, subscriptionID string) er
 		Limits:         subscription.Limits,
 		PeriodStart:    subscription.PeriodStart,
 		PeriodEnd:      subscription.PeriodEnd,
+		CancelAt:       subscription.CancelAt,
 	})
 }
 

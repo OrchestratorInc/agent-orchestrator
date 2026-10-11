@@ -197,6 +197,7 @@ type SubscriptionUpdate struct {
 	Limits         *domain.PlanLimits
 	PeriodStart    *time.Time
 	PeriodEnd      *time.Time
+	CancelAt       *time.Time
 }
 
 // ApplySubscription stores the subscription's current state on the
@@ -227,6 +228,7 @@ func (s *Store) ApplySubscription(ctx context.Context, orgID string, update Subs
 				plan = CASE WHEN plan = $5 THEN plan ELSE $6 END,
 				billing_period_start = $7,
 				billing_period_end = $8,
+				subscription_cancel_at = $10,
 				usage_week_anchor = CASE WHEN $9 THEN coalesce(usage_week_anchor, now()) ELSE usage_week_anchor END,
 				past_due_since = CASE
 					WHEN $3 = 'past_due' THEN coalesce(past_due_since, now())
@@ -235,7 +237,7 @@ func (s *Store) ApplySubscription(ctx context.Context, orgID string, update Subs
 				updated_at = now()
 			WHERE id = $1`,
 			orgID, update.SubscriptionID, update.Status, limits, domain.PlanInternal, plan,
-			update.PeriodStart, update.PeriodEnd, entitled,
+			update.PeriodStart, update.PeriodEnd, entitled, update.CancelAt,
 		)
 		return err
 	})
@@ -419,6 +421,21 @@ func (p billingPolicy) planAdmissionTx(
 			Used: usage.WeeklyUsedMinutes, ResetsAt: usage.WeeklyResetsAt}
 	}
 	return nil
+}
+
+// SubscriptionCancelAt returns when the organization's subscription, set to
+// cancel, ends; nil while it renews.
+func (s *Store) SubscriptionCancelAt(ctx context.Context, principal domain.Principal, orgID string) (*time.Time, error) {
+	var cancelAt *time.Time
+	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx,
+			`SELECT subscription_cancel_at FROM ao_organizations WHERE id = $1`, orgID).Scan(&cancelAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	})
+	return cancelAt, err
 }
 
 // BillingSummary returns what the desktop app shows on its billing screen.

@@ -2673,5 +2673,8 @@
 	"settings.billing.runningDetail": "编排器 {{orchestrators}}/{{orchestratorSlots}} · 工作会话 {{workers}}/{{workerSlots}}",
 	"settings.billing.totalSessions": "会话总数",
 	"settings.billing.totalDetail": "包括运行中和已暂停的会话。归档一个以腾出名额。",
-	"settings.billing.usageNote": "每个运行中的会话都会计时：两个会话运行一小时计 2 会话小时。已暂停的会话不计时。"
+	"settings.billing.usageNote": "每个运行中的会话都会计时：两个会话运行一小时计 2 会话小时。已暂停的会话不计时。",
+	"settings.billing.cancelNotice": "你的 {{plan}} 套餐将于 {{date}} 结束，之后将转为免费套餐。",
+	"settings.billing.keepPlan": "保留 {{plan}}",
+	"settings.billing.freeStarts": "{{date}} 开始"
 }

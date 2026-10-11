@@ -107,9 +107,60 @@ func TestAPIErrorsSurfaceStripeMessage(t *testing.T) {
 		_, _ = io.WriteString(w, `{"error":{"type":"invalid_request_error","code":"resource_missing","message":"No such price"}}`)
 	}))
 	defer server.Close()
-	_, err := NewClient("rk_test", server.URL).CreatePortalSession(context.Background(), "cus_1", "", "")
+	_, err := NewClient("rk_test", server.URL).CreatePortalSession(context.Background(), "cus_1", "", "", "")
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Code != "resource_missing" || apiErr.Status != 400 {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestGetSubscriptionReportsWhenACancelledPlanEnds(t *testing.T) {
+	for _, tc := range []struct {
+		name, fields string
+		want         int64
+	}{
+		{"renewing", `"cancel_at_period_end":false`, 0},
+		{"at period end", `"cancel_at_period_end":true`, 1802592000},
+		{"at a set time", `"cancel_at":1801000000,"cancel_at_period_end":false`, 1801000000},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, `{"id":"sub_1","customer":"cus_1","status":"active",`+tc.fields+`,
+				"items":{"data":[{"current_period_start":1800000000,"current_period_end":1802592000,"price":{"product":{"metadata":{}}}}]}}`)
+		}))
+		subscription, err := NewClient("rk_test", server.URL).GetSubscription(context.Background(), "sub_1")
+		server.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := int64(0)
+		if subscription.CancelAt != nil {
+			got = subscription.CancelAt.Unix()
+		}
+		if got != tc.want {
+			t.Errorf("%s: cancel at %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestPortalCancelFlowOpensOnTheSubscription(t *testing.T) {
+	var form url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		form = r.PostForm
+		_, _ = io.WriteString(w, `{"url":"https://billing.stripe.com/p/session/x"}`)
+	}))
+	defer server.Close()
+	if _, err := NewClient("rk_test", server.URL).CreatePortalSession(
+		context.Background(), "cus_1", "https://a/return", "bpc_1", "sub_1"); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		"customer": "cus_1", "configuration": "bpc_1", "return_url": "https://a/return",
+		"flow_data[type]": "subscription_cancel", "flow_data[subscription_cancel][subscription]": "sub_1",
+		"flow_data[after_completion][type]": "redirect", "flow_data[after_completion][redirect][return_url]": "https://a/return",
+	} {
+		if form.Get(key) != want {
+			t.Errorf("%s = %q, want %q", key, form.Get(key), want)
+		}
 	}
 }

@@ -2671,5 +2671,8 @@
 	"settings.billing.runningDetail": "Orchestrator {{orchestrators}}/{{orchestratorSlots}} · Workers {{workers}}/{{workerSlots}}",
 	"settings.billing.totalSessions": "Total sessions",
 	"settings.billing.totalDetail": "Running and paused. Archive one to free a slot.",
-	"settings.billing.usageNote": "Every running session counts, so two sessions running for an hour use 2 session hours. Paused sessions don't count."
+	"settings.billing.usageNote": "Every running session counts, so two sessions running for an hour use 2 session hours. Paused sessions don't count.",
+	"settings.billing.cancelNotice": "Your {{plan}} plan ends on {{date}}. You'll move to Free then.",
+	"settings.billing.keepPlan": "Keep {{plan}}",
+	"settings.billing.freeStarts": "Starts {{date}}"
 }

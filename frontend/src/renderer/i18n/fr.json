@@ -2732,5 +2732,8 @@
 	"settings.billing.runningDetail": "Orchestrateur {{orchestrators}}/{{orchestratorSlots}} · Workers {{workers}}/{{workerSlots}}",
 	"settings.billing.totalSessions": "Sessions au total",
 	"settings.billing.totalDetail": "En cours et en pause. Archivez-en une pour libérer une place.",
-	"settings.billing.usageNote": "Chaque session en cours compte : deux sessions pendant une heure utilisent 2 heures de session. Les sessions en pause ne comptent pas."
+	"settings.billing.usageNote": "Chaque session en cours compte : deux sessions pendant une heure utilisent 2 heures de session. Les sessions en pause ne comptent pas.",
+	"settings.billing.cancelNotice": "Votre forfait {{plan}} se termine le {{date}}. Vous passerez alors au forfait Gratuit.",
+	"settings.billing.keepPlan": "Garder {{plan}}",
+	"settings.billing.freeStarts": "Commence le {{date}}"
 }

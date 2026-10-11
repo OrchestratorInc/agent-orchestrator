@@ -579,3 +579,24 @@ func TestPresenceLeavesOtherProvidersAlone(t *testing.T) {
 		t.Fatal("presence changed a coder sandbox")
 	}
 }
+
+// A subscription set to cancel records when it ends; renewing clears it.
+func TestSubscriptionCancelAtFollowsStripe(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	ends := time.Now().Add(20 * 24 * time.Hour).UTC().Truncate(time.Second)
+	if err := store.ApplySubscription(ctx, fixture.orgID, SubscriptionUpdate{
+		SubscriptionID: "sub_cancel", Status: "active", Limits: starterLimits(), CancelAt: &ends,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.SubscriptionCancelAt(ctx, principal, fixture.orgID)
+	if err != nil || got == nil || !got.Equal(ends) {
+		t.Fatalf("cancel at = %v, err = %v; want %v", got, err, ends)
+	}
+	subscribe(t, store, fixture.orgID, "active", starterLimits())
+	if got, err = store.SubscriptionCancelAt(ctx, principal, fixture.orgID); err != nil || got != nil {
+		t.Fatalf("after renewing: cancel at = %v, err = %v; want none", got, err)
+	}
+}

@@ -1148,6 +1148,8 @@ export interface CloudCpBillingSummary {
 	subscriptionStatus?: string;
 	entitled: boolean;
 	currentPeriodEnd?: string;
+	/** When a plan set to cancel ends and the org moves to Free; absent while it renews. */
+	cancelAt?: string;
 	limits?: CloudCpPlanLimits;
 	usage?: CloudCpBillingUsage;
 	/** Plans available for checkout, cheapest first. */

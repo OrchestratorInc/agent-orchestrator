@@ -2732,5 +2732,8 @@
 	"settings.billing.runningDetail": "Orquestrador {{orchestrators}}/{{orchestratorSlots}} · Workers {{workers}}/{{workerSlots}}",
 	"settings.billing.totalSessions": "Sessões no total",
 	"settings.billing.totalDetail": "Em execução e pausadas. Arquive uma para liberar uma vaga.",
-	"settings.billing.usageNote": "Cada sessão em execução conta: duas sessões por uma hora usam 2 horas de sessão. Sessões pausadas não contam."
+	"settings.billing.usageNote": "Cada sessão em execução conta: duas sessões por uma hora usam 2 horas de sessão. Sessões pausadas não contam.",
+	"settings.billing.cancelNotice": "Seu plano {{plan}} termina em {{date}}. Depois disso, você passará para o Grátis.",
+	"settings.billing.keepPlan": "Manter {{plan}}",
+	"settings.billing.freeStarts": "Começa em {{date}}"
 }
