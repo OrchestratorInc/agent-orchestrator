@@ -387,3 +387,22 @@ explicit permissive preferences unless bypass was requested. Protect current
 rendered drafts/permissions with serialized admission. Native optional embedding
 initialization can outlive a turn; do not infer prompt readiness or cancellation
 from an old raw output ring or describe embedding/background ownership as proven.
+
+
+## Pool compatible-provider qualification hold
+
+Pool v1.0.16 initializes ACP and creates standalone sessions without a successful
+model call. With the available authorized Z.ai coding endpoint, it emitted
+`/v4/v1/chat/completions` and failed with 404; explicitly adding `/v1` did not
+repair routing. A direct `/v4/chat/completions` provider control succeeded, but
+that control is not native Pool or AO conformance. Do not convert initialize,
+session/new, empty authMethods or credential presence into authorization.
+Unknown native history hard-failed; valid load/replay remains unproved.
+
+Keep Pool unregistered until a released native provider-path fix or an already
+authorized working endpoint enables full qualification. Unnamed SessionStart
+hooks are additive, but fail open and cap model-visible context at 32 KiB.
+Bound serialized output as well as raw instruction bytes (JSON escaping grows
+payloads); actual hook invocation, consumption and failure detection remain
+required. Source-only helper construction must never count as instruction proof.
+See the [native hold report](../../../../docs/research/pool-acp-hold-2026-10-11.md).
