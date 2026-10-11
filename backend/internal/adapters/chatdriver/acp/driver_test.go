@@ -4473,3 +4473,40 @@ func TestACPExplicitScopeOptOutWinsOverProtocol(t *testing.T) {
 		t.Fatalf("scoped capabilities: %v", caps)
 	}
 }
+
+func TestACPResumedLazyContextValidation(t *testing.T) {
+	agent := &fakeAgent{promptNoPermission: true}
+	checked := false
+	driver := New(Config{
+		Harness: domain.HarnessPool, Probe: func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		ValidateSessionReady: func(_ context.Context, _ LaunchConfig, id string) error {
+			checked = true
+			if id != "claude-session-1" {
+				t.Fatalf("native id: %s", id)
+			}
+			return errors.New("resumed context missing")
+		},
+	}, nil)
+	driver.useTestProcess(fakeSpawn(agent))
+	conv, err := driver.Resume(context.Background(), ports.ChatResumeConfig{WorkspacePath: t.TempDir(), ProviderConversationID: "claude-session-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conv.Close()
+	if checked {
+		t.Fatal("context checked before lazy resumed initialization")
+	}
+	if _, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		event := nextEvent(t, conv.Events())
+		if event.Kind == ports.ChatEventTurnCompleted {
+			if !checked || event.TurnState != domain.TurnStateFailed {
+				t.Fatalf("missing resumed context reported success: %+v", event)
+			}
+			break
+		}
+	}
+}

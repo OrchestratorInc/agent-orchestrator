@@ -50,7 +50,7 @@ type LaunchConfig struct {
 
 // Config binds one harness to an ACP agent implementation.
 type Config struct {
-	// ValidateSessionReady checks native context after load and completed prompts.
+	// ValidateSessionReady checks native context before completed prompt publication.
 	// Some providers initialize a fresh session lazily on its first prompt.
 	// Live host adoption preserves the original process context and skips it.
 	ValidateSessionReady func(context.Context, LaunchConfig, string) error
@@ -471,12 +471,6 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		}
 		configOptions = resp.ConfigOptions
 		modes = resp.Modes
-	}
-	if d.cfg.ValidateSessionReady != nil {
-		if err := d.cfg.ValidateSessionReady(ctx, launchCfg, cfg.ProviderConversationID); err != nil {
-			conv.discard()
-			return nil, fmt.Errorf("%w: ACP session initialization: %w", ports.ErrChatResumeFailed, err)
-		}
 	}
 	conv.start(
 		cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
