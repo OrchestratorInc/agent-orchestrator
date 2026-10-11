@@ -67,3 +67,71 @@ that applies independently to ordinary tasks, preserves defaults/user rules and
 can be scoped to one AO session. Requalify against that release before enabling
 launch, then implement inventory/auth/native model selection, lifecycle boundaries
 and UI evidence. This hold intentionally does not close issue6542.
+
+## Recovery diagnosis and upstream proposal (run 2026-10-12)
+
+The remaining prerequisite is now concrete: an explicit additive per-process
+instruction input in the released Freebuff CLI. The npm registry still reports
+0.2.26. Its private release gitHead is
+`962fddbe93c2c7f3278e718e0dc45d92c9920a9c`; the public source snapshot below is
+**not** that release's exact source revision.
+
+Independent inspection of the unchanged pinned executable found the root-only
+knowledge filter at byte offset 95,885,895. Retained native-005 state SHA256 is
+`06678df808cbf132bacd436fddd575c981a589272615575c82b62f01260d5018`.
+Its effective system prompt SHA256 is
+`94317617bcd00c91c757a5868154a4899ee7e5968d720570c43dcc6bc93e00fd`:
+root AGENTS.md content is present; nested private instruction content is absent.
+The visible task artifact exists; the independent private receipt does not.
+This is deterministic exclusion before inference, not missing discovery or cwd.
+No identical provider probe was repeated during recovery.
+
+At public snapshot `76bd2de6e409bbff627d9276eddd39362bbed642`:
+
+- [Prompt formatting](https://github.com/CodebuffAI/freebuff/blob/76bd2de6e409bbff627d9276eddd39362bbed642/packages/agent-runtime/src/templates/strings.ts#L130)
+  filters project knowledge to root AGENTS.md/CLAUDE.md; home/user knowledge is
+  merged separately without that path filter.
+- [Run transport](https://github.com/CodebuffAI/freebuff/blob/76bd2de6e409bbff627d9276eddd39362bbed642/sdk/src/run.ts#L612)
+  omits the internal userKnowledgeFiles input in fresh and continuing runs.
+- [Native arguments](https://github.com/CodebuffAI/freebuff/blob/76bd2de6e409bbff627d9276eddd39362bbed642/cli/src/cli-args.ts#L52)
+  expose no additive instructions or root-agent selection in Freebuff.
+
+Supported alternatives inspected: profile/config-dir isolation does not redirect
+home instruction loading; nested discovery remains filtered; on-demand skills
+and explicit reads depend on visible task context; custom agent definitions
+replace the default root or require explicit selection. None is a supported
+private additive session overlay preserving native defaults. Changing HOME,
+root/user rules, bundled agents, or the installed binary is outside this contract.
+
+[Unapplied upstream patch proposal](freebuff-upstream-append-instructions.patch)
+adds a proposed `FREEBUFF_APPEND_INSTRUCTIONS_FILE` input and bounded UTF-8
+loader, then transports a distinct additive host overlay into existing knowledge
+formatting. **This environment variable does not exist in stock 0.2.26.** The
+proposal targets the immutable public snapshot, was not built or executed, and
+was not submitted to an upstream repository. It changes no installed native code.
+The file read occurs before client creation and outside its catch-to-null path;
+unreadable/invalid input rejects admission. It preserves home/project maps,
+default root selection, auth, tool schemas, broker and permissions. The reserved
+host key is refreshed on cloned state; cached-client context is immutable until
+client replacement. Linux file checks need a separately reviewed cross-platform
+implementation before upstream distribution.
+
+Included proposed loader regression tests are unexecuted. Required additional
+upstream regression and released-native acceptance criteria:
+
+| Boundary | Required observable result |
+| --- | --- |
+| Default input absent | Ordinary native behavior and user/project instructions preserved |
+| Fresh run plus private file | Effective default-root prompt contains home, root and host context; visible task unchanged |
+| Second turn | Host effect remains present; no duplicate overlay or user-map mutation |
+| Prior-state continuation | Fresh host overlay replaces stale host context; unrelated knowledge preserved; actual effective prompt refreshed |
+| File rejection | Relative/missing/directory/symlink/empty/oversized/invalid UTF-8/NUL input fails before any model/tool turn |
+| Native root variants | Qualify actual selected roots; templates omitting knowledge formatting are unsupported, never silently admitted |
+| Real ordinary task | Correct-workspace edit plus independently required private artifact, without naming the private path/token/receipt |
+| Native cancellation then AO | Executing-child cancellation, independent AO Kill/control isolation, current rendered input guards and actual AO UI PNG |
+
+An official released input plus those native/AO proofs remains required before
+registration. Non-restorable TUI scope is still acceptable; restore, Chat,
+handoff and reviewer surfaces remain unsupported. AO screenshot is unavailable
+because the mandatory instruction prerequisite prevents truthful AO admission.
+Existing launch and restore gates remain intact. No local routine suite ran.
