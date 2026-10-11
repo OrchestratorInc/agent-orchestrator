@@ -1760,7 +1760,9 @@ func (s *Service) InterruptSideQuestion(ctx context.Context, session domain.Sess
 		return ErrSideUnavailable
 	}
 	runtime.mu.Lock()
-	stopping := runtime.activeTurnID != ""
+	// Only a turn the provider is running can be stopped. Recording a Stop for
+	// one still being dispatched would leave the flag to excuse a later failure.
+	stopping := runtime.activeTurnID != "" && runtime.providerTurnID != ""
 	if stopping {
 		runtime.stopRequested = true
 	}

@@ -1039,6 +1039,11 @@ export function useIndependentSideChats(
 		: undefined;
 	// The main chat's Timeline renders the side transcript, so live status,
 	// "Worked for", and scroll follow behave exactly as they do in the main chat.
+	// Stable per side: the Timeline's draft effects depend on this identity.
+	const timelineDraftScope = useMemo(
+		() => (activeId ? { sessionId: `side:${activeId}`, incarnation: activeId } : undefined),
+		[activeId],
+	);
 	const conversation = useMemo(
 		() => (snapshot && snapshot.side.id === activeId ? sideConversationSnapshot(snapshot, olderPages) : undefined),
 		[snapshot, olderPages, activeId],
@@ -1330,7 +1335,7 @@ export function useIndependentSideChats(
 									key={activeId}
 									snapshot={conversation}
 									annotationNavigationRef={timelineNavigationRef}
-									draftScope={{ sessionId: `side:${activeId}`, incarnation: activeId }}
+									draftScope={timelineDraftScope!}
 									draftPersistenceAvailable={false}
 									hasOlder={conversation.hasMoreBefore}
 									loadingOlder={loadingOlder}

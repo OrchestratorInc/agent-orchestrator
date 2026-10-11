@@ -59,10 +59,45 @@ describe("sideConversationSnapshot", () => {
 		const conversation = sideConversationSnapshot(latest, [older]);
 		// Same timestamp: the tool call sorts before the answer it led to.
 		expect(conversation.items.map((item) => item.id)).toEqual(["m1", "a2", "m2"]);
-		// The Timeline anchors groups on sequence, so the merged order is numbered.
-		expect(conversation.items.map((item) => item.sequence)).toEqual([1, 2, 3]);
+		// Sequences increase in merged order, and same-millisecond entries stay distinct.
+		const sequences = conversation.items.map((item) => item.sequence);
+		expect(sequences).toEqual([...sequences].sort((a, b) => a - b));
+		expect(new Set(sequences).size).toBe(3);
 		expect(conversation.hasMoreBefore).toBe(false);
 		expect(conversation.items[2]).toMatchObject({ text: "Updated answer 2" });
+	});
+
+	it("keeps an item's sequence when older pages load, so turns do not remount", () => {
+		const latest: SideSnapshot = {
+			side,
+			hasMore: true,
+			turns: [turn("t2", "completed", 2)],
+			messages: [message("m2", "t2", "assistant", "Answer 2", 2, 2)],
+			activities: [],
+		};
+		const older: SideSnapshot = {
+			side,
+			hasMore: false,
+			turns: [turn("t1", "completed", 1)],
+			messages: [message("m1", "t1", "assistant", "Answer 1", 1, 1)],
+			activities: [],
+		};
+		const before = sideConversationSnapshot(latest).items.find((item) => item.id === "m2")?.sequence;
+		const after = sideConversationSnapshot(latest, [older]).items.find((item) => item.id === "m2")?.sequence;
+		expect(after).toBe(before);
+	});
+
+	it("keeps a retried side turn retryable when its retry fails too", () => {
+		// The side store re-runs the same turn and records itself as the source.
+		const conversation = sideConversationSnapshot({
+			side,
+			hasMore: false,
+			turns: [turn("again", "failed", 1, { retryOfTurnId: "again", errorMessage: "rate limited" })],
+			messages: [],
+			activities: [],
+		});
+		expect(conversation.turns[0]?.retryOfTurnId).toBeUndefined();
+		expect(conversation.turns[0]?.providerTurnId).toBe("again");
 	});
 
 	it("keeps failed side turns retryable and reports a running side as busy", () => {

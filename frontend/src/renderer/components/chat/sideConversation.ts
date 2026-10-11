@@ -102,7 +102,10 @@ function sideConversationTurn(turn: SideTurn): ConversationTurn {
 		id: turn.id,
 		state,
 		errorMessage: turn.errorMessage || undefined,
-		retryOfTurnId: turn.retryOfTurnId || undefined,
+		// A side retry re-runs the same turn and records itself as its source. The
+		// Timeline would read that as "already retried" and drop Retry, stranding a
+		// turn that fails again with the side's queue blocked behind it.
+		retryOfTurnId: turn.retryOfTurnId && turn.retryOfTurnId !== turn.id ? turn.retryOfTurnId : undefined,
 		// The main timeline offers Retry only on a failed turn the provider saw.
 		// Every failed side turn is retryable through the side API, including one
 		// that failed before dispatch, so mark it as seen.
@@ -143,9 +146,17 @@ export function sideConversationSnapshot(snapshot: SideSnapshot, olderPages: rea
 			.filter((activity) => !queued.has(activity.turnId))
 			.map((activity) => ({ time: activity.createdAt, order: 0, item: sideConversationActivity(activity) as ConversationItem })),
 	].sort((a, b) => a.time.localeCompare(b.time) || a.order - b.order);
-	// The Timeline trusts snapshot order and anchors groups on sequence. Side
-	// activities have no sequence of their own, so number the merged order.
-	const items = entries.map(({ item }, index) => ({ ...item, sequence: index + 1 }));
+	// The Timeline trusts snapshot order and keys groups and runs on sequence.
+	// Side activities have no sequence of their own, so derive one from time:
+	// unlike a running index it does not shift when older pages load or a queued
+	// turn dispatches, so turns are not remounted and open sections stay open.
+	let previous = -Infinity;
+	const items = entries.map(({ time, item }) => {
+		const at = Date.parse(time);
+		// Same-millisecond entries keep their sorted order with a small step.
+		previous = at > previous ? at : previous + 0.001;
+		return { ...item, sequence: previous };
+	});
 	const running = turns.some((turn) => turn.state === "running");
 	return {
 		conversationId: snapshot.side.id,
@@ -155,8 +166,8 @@ export function sideConversationSnapshot(snapshot: SideSnapshot, olderPages: rea
 		controller: { state: controllerState(snapshot.side, running), error: snapshot.side.errorMessage || undefined },
 		turns: turns.filter((turn) => !queued.has(turn.id)).map(sideConversationTurn),
 		items,
-		latestSequence: items.length,
-		oldestSequence: items.length ? 1 : 0,
+		latestSequence: items.at(-1)?.sequence ?? 0,
+		oldestSequence: items[0]?.sequence ?? 0,
 		hasMoreBefore: olderPages.at(-1)?.hasMore ?? snapshot.hasMore,
 		settings: { model: snapshot.side.model, reasoningEffort: snapshot.side.effort },
 	};
