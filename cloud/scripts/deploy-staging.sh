@@ -45,6 +45,10 @@ PROVIDERS="$AO_CLOUD_SANDBOX_PROVIDERS"
 # secret, so a Freestyle outage cannot block a release. New sessions then fetch
 # the current worker from the control plane before starting.
 SKIP_FREESTYLE_BAKE="${SKIP_FREESTYLE_BAKE:-}"
+# SKIP_CODER_WORKSPACE_PUBLISH=1 keeps the published Coder workspace image (for
+# a host that cannot build it, or a Coder registry outage). Workers self-update
+# at boot, so a stale baked worker only costs the first start a download.
+SKIP_CODER_WORKSPACE_PUBLISH="${SKIP_CODER_WORKSPACE_PUBLISH:-}"
 ARTIFACTS_BUCKET="${AO_CLOUD_ARTIFACTS_BUCKET:-ao-cloud-staging-artifacts}"
 NODEOPS_SECRET_ID="${AO_CLOUD_NODEOPS_SECRET_ID:-ao-cloud/staging/nodeops}"
 CODER_SECRET_ID="${AO_CLOUD_CODER_SECRET_ID:-ao-cloud/staging/coder}"
@@ -341,7 +345,9 @@ scan_image "$WORKER_REPOSITORY" "$worker_image_digest"
 # baked binaries are byte-identical to what the reconciler advertises
 # (AO_WORKER_EXPECTED_SHA256). The nodeops path is unaffected: its template is
 # published out of band by scripts/publish-nodeops-template.sh.
-if providers_has coder; then
+if providers_has coder && [[ "$SKIP_CODER_WORKSPACE_PUBLISH" == 1 ]]; then
+	echo "Coder workspace image: skipped (SKIP_CODER_WORKSPACE_PUBLISH=1); workers self-update at boot." >&2
+elif providers_has coder; then
 	AWS_REGION="$REGION" \
 		AO_CLOUD_CP_IMAGE="$control_image" \
 		AO_CLOUD_CODER_SECRET_ID="$CODER_SECRET_ID" \
