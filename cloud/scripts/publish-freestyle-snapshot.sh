@@ -19,6 +19,11 @@ set -euo pipefail
 # Run from cloud/. Prints {"<harness>": "<snapshot id>", ...} on stdout; with
 # AO_CLOUD_FREESTYLE_UPDATE_SECRET=1 it also writes that map (and the
 # claude-code snapshot as default_snapshot) into the Freestyle secret.
+#
+# Pruning: after a bake it deletes old harness snapshots (see
+# prune_harness_snapshots). A deploy passes AO_CLOUD_FREESTYLE_PRUNE=0 so a
+# failed rollout never loses the snapshots the running task boots from, then
+# reruns this with AO_CLOUD_FREESTYLE_PRUNE_ONLY=1 once the service is healthy.
 
 # Defaults to the ao-cloud profile for manual runs; a deploy passes an empty
 # AWS_PROFILE to use its own ambient credentials.
@@ -33,17 +38,38 @@ BASE_DOCKERFILE="${AO_CLOUD_FREESTYLE_BASE_DOCKERFILE:-nodeops/Sandbox.base.Dock
 ARTIFACTS_BUCKET="${AO_CLOUD_ARTIFACTS_BUCKET:-ao-cloud-staging-artifacts}"
 UPDATE_SECRET="${AO_CLOUD_FREESTYLE_UPDATE_SECRET:-}"
 CP_IMAGE="${AO_CLOUD_CP_IMAGE:-}"
+PRUNE="${AO_CLOUD_FREESTYLE_PRUNE:-1}"
+PRUNE_ONLY="${AO_CLOUD_FREESTYLE_PRUNE_ONLY:-}"
+# Snapshots that must survive a prune besides the newest two per harness:
+# explicit ids, task definitions (ARNs), and every task definition the listed
+# cluster/service pairs are running or rolling to. Staging and production are
+# both protected by default, since they may share one Freestyle account.
+PROTECT_SNAPSHOTS="${AO_CLOUD_FREESTYLE_PROTECT_SNAPSHOTS:-}"
+PROTECT_TASK_DEFINITIONS="${AO_CLOUD_FREESTYLE_PROTECT_TASK_DEFINITIONS:-}"
+PROTECT_SERVICES="${AO_CLOUD_FREESTYLE_PROTECT_SERVICES-ao-cloud-staging/ao-cloud-staging-api ao-cloud-production/ao-cloud-production-api}"
 # Freestyle caps one exec at five minutes; each Dockerfile RUN step is one exec.
 EXEC_TIMEOUT_MS=300000
 
 log() { printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 die() { log "error: $*"; exit 1; }
 
-[[ -n "$CP_IMAGE" ]] || die "set AO_CLOUD_CP_IMAGE to the control-plane image whose worker binaries should be baked"
 [[ -f "$BASE_DOCKERFILE" ]] || die "missing $BASE_DOCKERFILE (run from cloud/)"
-for tool in aws curl docker jq python3; do
+for tool in aws curl jq python3; do
 	command -v "$tool" >/dev/null || die "$tool is required"
 done
+if [[ "$PRUNE_ONLY" != 1 ]]; then
+	[[ -n "$CP_IMAGE" ]] || die "set AO_CLOUD_CP_IMAGE to the control-plane image whose worker binaries should be baked"
+	command -v docker >/dev/null || die "docker is required"
+	# The worker binaries a bake stages are environment artifacts: a production
+	# bake must not write into the staging bucket, nor the reverse.
+	case "$FREESTYLE_SECRET_ID" in
+	*/production/*) [[ "$ARTIFACTS_BUCKET" != *staging* ]] ||
+		die "production bake ($FREESTYLE_SECRET_ID) must not use $ARTIFACTS_BUCKET; set AO_CLOUD_ARTIFACTS_BUCKET" ;;
+	*/staging/*) [[ "$ARTIFACTS_BUCKET" != *production* ]] ||
+		die "staging bake ($FREESTYLE_SECRET_ID) must not use $ARTIFACTS_BUCKET; set AO_CLOUD_ARTIFACTS_BUCKET" ;;
+	esac
+fi
+IFS=',' read -ra harness_list <<<"$HARNESSES"
 
 aws_cli() {
 	if [[ -n "$AWS_PROFILE" ]]; then
@@ -166,6 +192,54 @@ for instruction in lines:
     sys.stdout.write(body.strip() + "\0")
 PY
 }
+
+# Each release bakes a new set, and Freestyle plans cap the snapshot count
+# (10 on Free). Keep the two newest per harness: the set just baked and the one
+# before it, which sessions started before this release still name for a
+# repair (Recreate boots from the session's own snapshot). Never delete one that
+# something still boots from: the Freestyle secret's map, the set just baked,
+# and every task definition the protected services run or roll to. If any of
+# that cannot be read, delete nothing. Project snapshots (ao-project-*) are
+# pruned by the control plane, not here.
+prune_harness_snapshots() {
+	local listing current stale id arn arns svc index=0
+	local task_definitions="$PROTECT_TASK_DEFINITIONS"
+	local protect_args=(--protect "$PROTECT_SNAPSHOTS")
+	listing="$(api GET /v5/snapshots)" || { log "could not list snapshots; skipping prune"; return 0; }
+	current="$(aws_cli secretsmanager get-secret-value --secret-id "$FREESTYLE_SECRET_ID" \
+		--query SecretString --output text |
+		jq -r '[((.snapshot_by_harness // "{}") | fromjson | .[]), (.default_snapshot // empty)] | join(",")')" ||
+		{ log "could not read $FREESTYLE_SECRET_ID; skipping prune"; return 0; }
+	protect_args+=(--protect "$current")
+	if [[ -n "${snapshot_map:-}" ]]; then
+		protect_args+=(--protect "$(jq -r '[.[]] | join(",")' <<<"$snapshot_map")")
+	fi
+	for svc in $PROTECT_SERVICES; do
+		arns="$(aws_cli ecs describe-services --cluster "${svc%%/*}" --services "${svc#*/}" \
+			--query 'services[].deployments[].taskDefinition' --output text)" ||
+			{ log "could not read service $svc; skipping prune"; return 0; }
+		task_definitions+=" $arns"
+	done
+	for arn in $task_definitions; do
+		[[ "$arn" != None ]] || continue
+		index=$((index + 1))
+		aws_cli ecs describe-task-definition --task-definition "$arn" >"$workdir/protect-$index.json" ||
+			{ log "could not read task definition $arn; skipping prune"; return 0; }
+		protect_args+=(--protect-task-definition "$workdir/protect-$index.json")
+	done
+	stale="$(./scripts/freestyle-stale-snapshots.py --harnesses "$HARNESSES" "${protect_args[@]}" <<<"$listing")" ||
+		{ log "could not select stale snapshots; skipping prune"; return 0; }
+	for id in $stale; do
+		if api DELETE "/v5/snapshots/$id" >/dev/null; then
+			log "pruned snapshot $id"
+		fi
+	done
+}
+
+if [[ "$PRUNE_ONLY" == 1 ]]; then
+	prune_harness_snapshots
+	exit 0
+fi
 
 # Extract the exact worker binaries the control plane serves (amd64: Freestyle
 # VMs are x86-64) and stage them in S3 for the VM to fetch.
@@ -316,7 +390,6 @@ $check; git --version >/dev/null; gh --version >/dev/null; cat /usr/local/bin/ao
 }
 
 # The harnesses are independent builder VMs: bake them in parallel.
-IFS=',' read -ra harness_list <<<"$HARNESSES"
 pids=()
 for harness in "${harness_list[@]}"; do
 	bake_harness "$harness" &
@@ -330,27 +403,9 @@ done
 
 snapshot_map="$(cat "$workdir"/snapshot-* | jq -R -s 'split("\n") | map(select(length > 0) | split("\t") | {(.[0]): .[1]}) | add')"
 
-# Each release bakes a new set, and Freestyle plans cap the snapshot count
-# (10 on Free). Keep the two newest per harness: the set just baked and the one
-# before it, which sessions started before this release still name for a
-# repair (Recreate boots from the session's own snapshot). Project snapshots
-# (ao-project-*) are pruned by the control plane, not here.
-prune_harness_snapshots() {
-	local listing harness stale
-	listing="$(api GET /v5/snapshots)" || { log "could not list snapshots; skipping prune"; return 0; }
-	for harness in "${harness_list[@]}"; do
-		stale="$(jq -r --arg h "$harness" '
-			[.snapshots[]
-			 | select((.slug // "") | test("^ao-" + $h + "-[0-9a-f]{12}-[0-9]{14}$"))]
-			| sort_by(.createdAt) | reverse | .[2:][] | .id' <<<"$listing")"
-		for id in $stale; do
-			if api DELETE "/v5/snapshots/$id" >/dev/null; then
-				log "[$harness] pruned snapshot $id"
-			fi
-		done
-	done
-}
-prune_harness_snapshots
+if [[ "$PRUNE" == 1 ]]; then
+	prune_harness_snapshots
+fi
 
 if [[ "$UPDATE_SECRET" == 1 ]]; then
 	current="$(aws_cli secretsmanager get-secret-value --secret-id "$FREESTYLE_SECRET_ID" --query SecretString --output text)"

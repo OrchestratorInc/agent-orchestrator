@@ -18,6 +18,40 @@ NODEOPS_SECRET_ID="${AO_CLOUD_NODEOPS_SECRET_ID:-ao-cloud/production/nodeops}"
 CODER_SECRET_ID="${AO_CLOUD_CODER_SECRET_ID:-ao-cloud/production/coder}"
 FREESTYLE_SECRET_ID="${AO_CLOUD_FREESTYLE_SECRET_ID:-ao-cloud/production/freestyle}"
 WORKER_SECRET_ID="${AO_CLOUD_WORKER_SECRET_ID:-ao-cloud/production/worker}"
+# Stripe billing is optional: without this secret production runs with billing
+# off.
+STRIPE_SECRET_ID="${AO_CLOUD_STRIPE_SECRET_ID:-ao-cloud/production/stripe}"
+# Where a Freestyle bake stages the worker binaries for its builder VMs.
+ARTIFACTS_BUCKET="${AO_CLOUD_PRODUCTION_ARTIFACTS_BUCKET:-ao-cloud-production-artifacts}"
+# SKIP_FREESTYLE_BAKE=1 reuses the snapshots already recorded in the Freestyle
+# secret, so a Freestyle outage cannot block a promotion. New sessions then
+# fetch the current worker from the control plane before starting.
+SKIP_FREESTYLE_BAKE="${SKIP_FREESTYLE_BAKE:-}"
+
+# shellcheck source=lib/deploy-common.sh
+source ./scripts/lib/deploy-common.sh
+
+# --rolling-200-100 rolls production with maximumPercent=200 and
+# minimumHealthyPercent=100 instead of the default 100/0, so the old task keeps
+# serving until the new one is healthy (see deployment_configuration).
+ROLLING=false
+RELEASE_ARG=""
+for arg in "$@"; do
+	case "$arg" in
+	--rolling-200-100) ROLLING=true ;;
+	-*)
+		echo "Unknown option $arg (usage: promote-production.sh [--rolling-200-100] [release])." >&2
+		exit 1
+		;;
+	*)
+		if [[ -n "$RELEASE_ARG" ]]; then
+			echo "Pass at most one release." >&2
+			exit 1
+		fi
+		RELEASE_ARG="$arg"
+		;;
+	esac
+done
 
 AWS_OPTIONS=(--region "$REGION")
 if [[ -n "${AWS_PROFILE:-}" ]]; then
@@ -65,32 +99,8 @@ environment = {item["name"]: item["value"] for item in container["environment"]}
 print(environment["AO_CLOUD_RELEASE"])
 PY
 )"
-staging_provider="$(
-	SOURCE="$staging_source" python3 - <<'PY'
-import json
-import os
-
-source = json.loads(os.environ["SOURCE"])
-container = next(
-    item
-    for item in source["taskDefinition"]["containerDefinitions"]
-    if item["name"] == "control-plane"
-)
-environment = {item["name"]: item["value"] for item in container["environment"]}
-print(environment["AO_CLOUD_SANDBOX_PROVIDER"])
-PY
-)"
-SANDBOX_PROVIDER="${AO_CLOUD_SANDBOX_PROVIDER:-$staging_provider}"
-if [[ "$SANDBOX_PROVIDER" != "nodeops" && "$SANDBOX_PROVIDER" != "coder" && "$SANDBOX_PROVIDER" != "freestyle" ]]; then
-	echo "AO_CLOUD_SANDBOX_PROVIDER must be nodeops, coder, or freestyle." >&2
-	exit 1
-fi
-if [[ "$SANDBOX_PROVIDER" != "$staging_provider" ]]; then
-	echo "Production must use the sandbox provider validated by staging (${staging_provider})." >&2
-	exit 1
-fi
-# The full provider set production serves. It mirrors staging (a multi-provider
-# CP plumbs every provider's secrets) unless explicitly overridden.
+# The providers the healthy staging task serves: production may serve any
+# subset of them, never one staging has not exercised.
 staging_providers="$(
 	SOURCE="$staging_source" python3 - <<'PY'
 import json
@@ -106,7 +116,16 @@ environment = {item["name"]: item["value"] for item in container["environment"]}
 print(environment.get("AO_CLOUD_SANDBOX_PROVIDERS", environment["AO_CLOUD_SANDBOX_PROVIDER"]))
 PY
 )"
-PROVIDERS="${AO_CLOUD_SANDBOX_PROVIDERS:-$staging_providers}"
+# Production declares its own offering in scripts/offering/production.env; a
+# value set in the promoting shell wins. Only the secrets of providers
+# production actually serves are required.
+load_offering ./scripts/offering/production.env
+SANDBOX_PROVIDER="$AO_CLOUD_SANDBOX_PROVIDER"
+PROVIDERS="$AO_CLOUD_SANDBOX_PROVIDERS"
+if [[ "$SANDBOX_PROVIDER" != "nodeops" && "$SANDBOX_PROVIDER" != "coder" && "$SANDBOX_PROVIDER" != "freestyle" ]]; then
+	echo "AO_CLOUD_SANDBOX_PROVIDER must be nodeops, coder, or freestyle." >&2
+	exit 1
+fi
 IFS=',' read -ra _providers_list <<<"$PROVIDERS"
 for _provider in "${_providers_list[@]}"; do
 	if [[ "$_provider" != "nodeops" && "$_provider" != "coder" && "$_provider" != "freestyle" ]]; then
@@ -118,11 +137,20 @@ if ! providers_has "$SANDBOX_PROVIDER"; then
 	echo "AO_CLOUD_SANDBOX_PROVIDER ($SANDBOX_PROVIDER) must be one of AO_CLOUD_SANDBOX_PROVIDERS ($PROVIDERS)." >&2
 	exit 1
 fi
-if [[ "$PROVIDERS" != "$staging_providers" ]]; then
-	echo "Production must serve the same sandbox providers validated by staging (${staging_providers})." >&2
-	exit 1
-fi
-release="${1:-$staging_release}"
+./scripts/validate-hosted-settings.py \
+	--offering \
+	--environment production \
+	--staging-providers "$staging_providers" \
+	--providers "$PROVIDERS" \
+	--provider "$SANDBOX_PROVIDER" \
+	--capability-gated-providers "$AO_CLOUD_CAPABILITY_GATED_PROVIDERS" \
+	--default-org-capabilities "$AO_CLOUD_DEFAULT_ORG_CAPABILITIES" \
+	--default-org-billing "$AO_CLOUD_DEFAULT_ORG_BILLING" \
+	--paywalled-features "$AO_CLOUD_PAYWALLED_FEATURES" \
+	--idle-pause-threshold "$AO_CLOUD_IDLE_PAUSE_THRESHOLD" \
+	--freestyle-idle-pause-threshold "$AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD"
+echo "Offering: providers=${PROVIDERS} (staging: ${staging_providers}) default=${SANDBOX_PROVIDER} gated=${AO_CLOUD_CAPABILITY_GATED_PROVIDERS:-none} default_org_capabilities=${AO_CLOUD_DEFAULT_ORG_CAPABILITIES:-none} default_org_billing=${AO_CLOUD_DEFAULT_ORG_BILLING} paywalled=${AO_CLOUD_PAYWALLED_FEATURES:-none}" >&2
+release="${RELEASE_ARG:-$staging_release}"
 if [[ "$release" != "$staging_release" ]]; then
 	echo "Release ${release} is not the healthy staging release ${staging_release}." >&2
 	exit 1
@@ -138,6 +166,15 @@ fi
 	--cluster "$PRODUCTION_CLUSTER" \
 	--service "$PRODUCTION_SERVICE" \
 	--alarm "$ROLLBACK_ALARM" >/dev/null
+# The task definition running before this promotion. Its Freestyle snapshots
+# stay protected from the post-promotion prune.
+previous_task="$(
+	aws_cli ecs describe-services \
+		--cluster "$PRODUCTION_CLUSTER" \
+		--services "$PRODUCTION_SERVICE" \
+		--query 'services[0].taskDefinition' \
+		--output text
+)"
 
 control_image="$(
 	SOURCE="$staging_source" python3 - <<'PY'
@@ -288,22 +325,56 @@ if providers_has freestyle; then
 fi
 unset worker_settings
 
+# Only a missing secret turns billing off; any other lookup error fails here.
+stripe_secret_arn="$(optional_secret_arn "$STRIPE_SECRET_ID")"
+if [[ -n "$stripe_secret_arn" ]]; then
+	stripe_settings="$(
+		aws_cli secretsmanager get-secret-value \
+			--secret-id "$STRIPE_SECRET_ID" \
+			--query SecretString \
+			--output text
+	)"
+	./scripts/validate-hosted-settings.py \
+		--stripe <(printf '%s' "$stripe_settings") \
+		--environment production
+	# Price ids are not credentials; the key and webhook secret stay secrets.
+	stripe_price_ids="$(jq -c '.price_ids | if type == "string" then fromjson else . end' <<<"$stripe_settings")"
+	stripe_portal_configuration="$(jq -r '.portal_configuration // ""' <<<"$stripe_settings")"
+	# Organizations created before billing went live stay exempt.
+	stripe_exempt_before="$(jq -r '.exempt_orgs_created_before // ""' <<<"$stripe_settings")"
+	unset stripe_settings
+	echo "Stripe billing: enabled from $STRIPE_SECRET_ID" >&2
+else
+	echo "Stripe billing: off ($STRIPE_SECRET_ID not found)" >&2
+fi
+
 # Freestyle boots sessions from snapshots with ao-worker baked in, so a release
 # that changes the worker must rebake them; otherwise every new session first
 # downloads the current worker from the control plane. Bake from the exact
-# control-plane digest, record the new snapshot ids in the Freestyle secret, and
-# give this release's task those ids directly.
-if providers_has freestyle; then
+# control-plane digest into the production bucket, record the new snapshot ids
+# in the Freestyle secret, and give this release's task those ids directly. Old
+# snapshots are pruned only after the new task is healthy.
+freestyle_baked=false
+if providers_has freestyle && [[ "$SKIP_FREESTYLE_BAKE" == 1 ]]; then
+	echo "Freestyle bake: skipped (SKIP_FREESTYLE_BAKE=1); reusing the snapshots in $FREESTYLE_SECRET_ID." >&2
+elif providers_has freestyle; then
+	if ! aws_cli s3api head-bucket --bucket "$ARTIFACTS_BUCKET" >/dev/null; then
+		echo "Freestyle bake needs the production artifacts bucket ${ARTIFACTS_BUCKET} (AO_CLOUD_PRODUCTION_ARTIFACTS_BUCKET)." >&2
+		exit 1
+	fi
 	snapshot_by_harness="$(
 		AWS_PROFILE="${AWS_PROFILE:-}" \
 			AWS_REGION="$REGION" \
 			AO_CLOUD_CP_IMAGE="$control_image" \
 			AO_CLOUD_FREESTYLE_SECRET_ID="$FREESTYLE_SECRET_ID" \
+			AO_CLOUD_ARTIFACTS_BUCKET="$ARTIFACTS_BUCKET" \
 			AO_CLOUD_FREESTYLE_UPDATE_SECRET=1 \
+			AO_CLOUD_FREESTYLE_PRUNE=0 \
 			./scripts/publish-freestyle-snapshot.sh | tail -n 1
 	)"
 	jq -e 'type == "object"' <<<"$snapshot_by_harness" >/dev/null ||
 		{ echo "Freestyle snapshot bake did not return a snapshot map." >&2; exit 1; }
+	freestyle_baked=true
 fi
 
 aws_cli iam get-role --role-name ao-cloud-production-execution-role >/dev/null
@@ -352,6 +423,12 @@ register_api_task() {
 		--set-secret "AO_CLOUD_SANDBOX_RECONCILE_INTERVAL=${worker_secret_arn}:sandbox_reconcile_interval::"
 		--set-secret "AO_CLOUD_SANDBOX_STARTUP_TIMEOUT=${worker_secret_arn}:sandbox_startup_timeout::"
 		--set-secret "AO_CLOUD_WORKER_HEARTBEAT_TIMEOUT=${worker_secret_arn}:worker_heartbeat_timeout::"
+		--set-environment "AO_CLOUD_CAPABILITY_GATED_PROVIDERS=${AO_CLOUD_CAPABILITY_GATED_PROVIDERS}"
+		--set-environment "AO_CLOUD_DEFAULT_ORG_CAPABILITIES=${AO_CLOUD_DEFAULT_ORG_CAPABILITIES}"
+		--set-environment "AO_CLOUD_DEFAULT_ORG_BILLING=${AO_CLOUD_DEFAULT_ORG_BILLING}"
+		--set-environment "AO_CLOUD_PAYWALLED_FEATURES=${AO_CLOUD_PAYWALLED_FEATURES}"
+		--set-environment "AO_CLOUD_IDLE_PAUSE_THRESHOLD=${AO_CLOUD_IDLE_PAUSE_THRESHOLD}"
+		--set-environment "AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD=${AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD}"
 	)
 	if providers_has coder; then
 		render_args+=(
@@ -384,6 +461,15 @@ register_api_task() {
 			--set-secret "AO_CLOUD_FREESTYLE_API_KEY=${freestyle_secret_arn}:api_key::"
 			--set-secret "AO_CLOUD_FREESTYLE_DEFAULT_SNAPSHOT=${freestyle_secret_arn}:default_snapshot::"
 			--set-secret "AO_CLOUD_FREESTYLE_WORKER_TOKEN_TTL=${freestyle_secret_arn}:worker_token_ttl::"
+		)
+	fi
+	if [[ -n "$stripe_secret_arn" ]]; then
+		render_args+=(
+			--set-environment "AO_CLOUD_STRIPE_PRICE_IDS=${stripe_price_ids}"
+			--set-environment "AO_CLOUD_STRIPE_PORTAL_CONFIGURATION=${stripe_portal_configuration}"
+			--set-environment "AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE=${stripe_exempt_before}"
+			--set-secret "AO_CLOUD_STRIPE_SECRET_KEY=${stripe_secret_arn}:secret_key::"
+			--set-secret "AO_CLOUD_STRIPE_WEBHOOK_SECRET=${stripe_secret_arn}:webhook_secret::"
 		)
 	fi
 	payload="$(printf '%s' "$source" | ./scripts/render-task-definition.py "${render_args[@]}")"
@@ -514,7 +600,10 @@ target_group="$(
 		--query 'TargetGroups[0].TargetGroupArn' \
 		--output text
 )"
-deployment_configuration="{\"maximumPercent\":100,\"minimumHealthyPercent\":0,\"deploymentCircuitBreaker\":{\"enable\":true,\"rollback\":true},\"alarms\":{\"alarmNames\":[\"${ROLLBACK_ALARM}\"],\"enable\":true,\"rollback\":true}}"
+deployment_configuration="$(deployment_configuration "$ROLLBACK_ALARM" "$ROLLING")"
+if [[ "$ROLLING" == true ]]; then
+	echo "Rolling production 200/100: the old task drains for the target group's deregistration delay." >&2
+fi
 service_status="$(
 	aws_cli ecs describe-services \
 		--cluster "$PRODUCTION_CLUSTER" \
@@ -608,7 +697,14 @@ then
 fi
 
 verification_error=""
-for _ in $(seq 1 18); do
+verify_args=()
+verify_attempts=18
+if [[ "$ROLLING" == true ]]; then
+	# The replaced task's target drains for the deregistration delay.
+	verify_args+=(--allow-draining-targets)
+	verify_attempts=36
+fi
+for _ in $(seq 1 "$verify_attempts"); do
 	if verification_error="$(
 		./scripts/verify-ecs-service.py \
 			--region "$REGION" \
@@ -617,7 +713,8 @@ for _ in $(seq 1 18); do
 			--alarm "$ROLLBACK_ALARM" \
 			--expected-task-definition "$api_task" \
 			--expected-control-image "$control_image" \
-			--expected-worker-image "$worker_image" 2>&1
+			--expected-worker-image "$worker_image" \
+			${verify_args[@]+"${verify_args[@]}"} 2>&1
 	)"; then
 		verification_error=""
 		break
@@ -629,6 +726,19 @@ if [[ -n "$verification_error" ]]; then
 	exit 1
 fi
 trap - EXIT
+
+# Only now, with the new task healthy, delete old harness snapshots. The task
+# that ran before this promotion and the one now running stay protected, as does
+# whatever staging runs. A failed prune never fails the promotion.
+if [[ "$freestyle_baked" == true ]]; then
+	AWS_PROFILE="${AWS_PROFILE:-}" \
+		AWS_REGION="$REGION" \
+		AO_CLOUD_FREESTYLE_SECRET_ID="$FREESTYLE_SECRET_ID" \
+		AO_CLOUD_FREESTYLE_PRUNE_ONLY=1 \
+		AO_CLOUD_FREESTYLE_PROTECT_TASK_DEFINITIONS="$previous_task $api_task" \
+		./scripts/publish-freestyle-snapshot.sh ||
+		echo "warning: Freestyle snapshot prune failed; old snapshots remain." >&2
+fi
 
 printf 'Promoted release %s\nControl-plane digest: %s\nWorker digest: %s\nTask definition: %s\n' \
 	"$release" \
