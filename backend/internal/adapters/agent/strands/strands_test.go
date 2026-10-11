@@ -247,6 +247,7 @@ func TestUnsupportedCustomShellSetup(t *testing.T) {
 	for _, config := range []string{
 		`{"profile":{"agentConfig":{"systemPrompt":"shadow"}}}`,
 		`{"profile":{"agentConfigModules":[{"kind":"agent-config","module":"./custom.mjs"}]}}`,
+		`{"profile":{"mcpServers":{"custom":{"command":"custom-mcp"}}}}`,
 		`{"profile":{"plugins":[{"kind":"plugin","module":"./custom.mjs"}]}}`,
 		`{"profile":{"tools":[{"kind":"tool","module":"./custom.mjs"}]}}`,
 		`{"profile":{"subagents":[{"kind":"subagent","module":"./custom.mjs"}]}}`,
@@ -263,5 +264,13 @@ func TestUnsupportedCustomShellSetup(t *testing.T) {
 		if _, err := p.GetLaunchCommand(context.Background(), cfg); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestRuntimeLaunchEnvDisablesMCPDiscovery(t *testing.T) {
+	env := map[string]string{"STRANDS_CLI_MCP_DISCOVERY": "on"}
+	New().AugmentRuntimeLaunchEnv(env, t.TempDir(), "ao-1", "launch-1")
+	if env["STRANDS_CLI_MCP_DISCOVERY"] != "off" {
+		t.Fatalf("MCP discovery = %q; want off", env["STRANDS_CLI_MCP_DISCOVERY"])
 	}
 }

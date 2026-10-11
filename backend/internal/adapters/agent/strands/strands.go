@@ -329,16 +329,17 @@ func (p *Plugin) InvalidateBinaryResolution() {
 type nativeConfig struct {
 	AgentProject string `json:"agentProject"`
 	Profile      struct {
-		Instructions       string            `json:"instructions"`
-		Model              string            `json:"model"`
-		ModelModule        json.RawMessage   `json:"modelModule"`
-		Plugins            []json.RawMessage `json:"plugins"`
-		Tools              []json.RawMessage `json:"tools"`
-		Subagents          []json.RawMessage `json:"subagents"`
-		Sandbox            json.RawMessage   `json:"sandbox"`
-		BuiltinTools       json.RawMessage   `json:"builtinTools"`
-		AgentConfig        json.RawMessage   `json:"agentConfig"`
-		AgentConfigModules json.RawMessage   `json:"agentConfigModules"`
+		Instructions       string                     `json:"instructions"`
+		Model              string                     `json:"model"`
+		ModelModule        json.RawMessage            `json:"modelModule"`
+		MCPServers         map[string]json.RawMessage `json:"mcpServers"`
+		Plugins            []json.RawMessage          `json:"plugins"`
+		Tools              []json.RawMessage          `json:"tools"`
+		Subagents          []json.RawMessage          `json:"subagents"`
+		Sandbox            json.RawMessage            `json:"sandbox"`
+		BuiltinTools       json.RawMessage            `json:"builtinTools"`
+		AgentConfig        json.RawMessage            `json:"agentConfig"`
+		AgentConfigModules json.RawMessage            `json:"agentConfigModules"`
 	} `json:"profile"`
 	Permissions struct {
 		Mode  string   `json:"mode"`
@@ -371,8 +372,8 @@ func (cfg nativeConfig) validate(mode ports.PermissionMode, model string) error 
 	if len(cfg.Profile.AgentConfig) > 0 && string(cfg.Profile.AgentConfig) != "null" && string(cfg.Profile.AgentConfig) != "{}" || len(cfg.Profile.AgentConfigModules) > 0 && string(cfg.Profile.AgentConfigModules) != "null" && string(cfg.Profile.AgentConfigModules) != "[]" && string(cfg.Profile.AgentConfigModules) != "{}" {
 		return errors.New("strands: custom agent configuration is unsupported by AO instructions and native identity")
 	}
-	if len(cfg.Profile.Plugins) > 0 || len(cfg.Profile.Tools) > 0 || len(cfg.Profile.Subagents) > 0 || len(cfg.Profile.Sandbox) > 0 && string(cfg.Profile.Sandbox) != "null" {
-		return errors.New("strands: custom plugins, tools, subagents and sandboxes are unsupported by AO cancellation")
+	if len(cfg.Profile.MCPServers) > 0 || len(cfg.Profile.Plugins) > 0 || len(cfg.Profile.Tools) > 0 || len(cfg.Profile.Subagents) > 0 || len(cfg.Profile.Sandbox) > 0 && string(cfg.Profile.Sandbox) != "null" {
+		return errors.New("strands: custom MCP servers, plugins, tools, subagents and sandboxes are unsupported by AO cancellation")
 	}
 	var builtins map[string]json.RawMessage
 	if json.Unmarshal(cfg.Profile.BuiltinTools, &builtins) == nil {
