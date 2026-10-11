@@ -28,6 +28,8 @@ const cloudCpClientMock = vi.hoisted(() => ({
 	getSession: vi.fn(),
 	getSessionReviewState: cloudReviewGetMock,
 	retrySessionStartup: vi.fn(),
+	// The presence heartbeat beats once the test document has focus.
+	touchSessionPresence: vi.fn(async () => undefined),
 }));
 const cloudResumeMock = cloudCpClientMock.resumeSession;
 const cloudRetryStartupMock = cloudCpClientMock.retrySessionStartup;
@@ -1125,6 +1127,7 @@ describe("SessionView", () => {
 		expect(screen.queryByText("session not found")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Switch to chat UI" })).not.toBeInTheDocument();
 		expect(workspaceSessionLookup).toHaveBeenCalledWith("cloud-session", undefined, false);
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
 	});
 
 	it("uses the project route to distinguish local and Cloud sessions with the same ID", () => {
@@ -1848,6 +1851,20 @@ describe("SessionView", () => {
 			type: "agent.ready", sessionId: "sess-2", sequence: 1, createdAt: new Date().toISOString(), payload: {},
 		}));
 		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal");
+	});
+
+	it("waits for a Cloud orchestrator's terminal content after the worker connects", () => {
+		autoAttachSessionTerminal.current = false;
+		const session = workerSession("sess-orch");
+		session.mode = "tui";
+		session.runtimeConnected = true;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "running", observedState: "running" };
+		const view = render(<SessionView sessionId="sess-orch" />);
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+		autoAttachSessionTerminal.current = true;
+		session.terminalGeneration = "ready";
+		view.rerender(<SessionView sessionId="sess-orch" />);
+		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
 	});
 
 	it("checks the final step when terminal content is ready, then reveals it", () => {

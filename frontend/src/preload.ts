@@ -255,8 +255,8 @@ const api = {
 		setChatDraftRisk: (risks: readonly ChatDraftBoundaryKind[], copy?: ChatDraftDialogCopy) => {
 			ipcRenderer.send(SET_CHAT_DRAFT_RISK_CHANNEL, risks, copy);
 		},
-		onOpenSettingsShortcut: (listener: () => void) => {
-			const wrapped = () => listener();
+		onOpenSettingsShortcut: (listener: (section?: string) => void) => {
+			const wrapped = (_event: unknown, section?: unknown) => listener(typeof section === "string" ? section : undefined);
 			ipcRenderer.on(OPEN_SETTINGS_SHORTCUT_CHANNEL, wrapped);
 			return () => {
 				ipcRenderer.off(OPEN_SETTINGS_SHORTCUT_CHANNEL, wrapped);

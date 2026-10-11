@@ -462,6 +462,7 @@ export function toCloudWorkspaceSession(
 			runtimeState: session.runtimeState,
 			runtimeError: session.runtimeError,
 			startupError: session.startupError,
+			coderWorkspaceUrl: session.coderWorkspaceUrl,
 		},
 	};
 }

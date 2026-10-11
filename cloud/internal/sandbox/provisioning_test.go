@@ -7,6 +7,38 @@ import (
 	"time"
 )
 
+// Rewriting a plan onto a project snapshot keeps the harness snapshot it
+// replaced as baseSnapshot, the fallback if the project snapshot is collected.
+func TestWithFreestyleSnapshotKeepsTheBaseSnapshot(t *testing.T) {
+	plan := Plan{
+		Provider:         ProviderFreestyle,
+		ResourceProfile:  json.RawMessage(`{"freestyle":{"snapshot":"snap-codex"}}`),
+		BootstrapContext: json.RawMessage(`{"freestyle":{"snapshot":"snap-codex"}}`),
+	}
+	rewritten, err := WithFreestyleSnapshot(plan, "snap-project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := WithFreestyleSnapshot(rewritten, "snap-project-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []json.RawMessage{again.ResourceProfile, again.BootstrapContext} {
+		var document struct {
+			Freestyle struct {
+				Snapshot     string `json:"snapshot"`
+				BaseSnapshot string `json:"baseSnapshot"`
+			} `json:"freestyle"`
+		}
+		if err := json.Unmarshal(raw, &document); err != nil {
+			t.Fatal(err)
+		}
+		if document.Freestyle.Snapshot != "snap-project-2" || document.Freestyle.BaseSnapshot != "snap-codex" {
+			t.Fatalf("freestyle = %+v, want snap-project-2 on base snap-codex", document.Freestyle)
+		}
+	}
+}
+
 func TestNewCoderWorkspaceLayout(t *testing.T) {
 	t.Parallel()
 	layout, err := NewCoderWorkspaceLayout("/home/coder")

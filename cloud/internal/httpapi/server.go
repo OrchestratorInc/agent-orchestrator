@@ -13,10 +13,13 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/logctx"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/projectsnapshot"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -173,6 +176,13 @@ type Server struct {
 	// capabilityGatedProviders is the set of providers that additionally require
 	// a matching organization capability. Empty by default (no gating).
 	capabilityGatedProviders map[string]bool
+	// defaultOrgCapabilities apply to any organization without capabilities of
+	// its own (AO_CLOUD_DEFAULT_ORG_CAPABILITIES): personal organizations, and
+	// WorkOS organizations whose metadata has no capabilities key.
+	defaultOrgCapabilities []string
+	// defaultOrgBilling is the billing arrangement of an organization whose
+	// WorkOS metadata sets none (AO_CLOUD_DEFAULT_ORG_BILLING).
+	defaultOrgBilling string
 	// coderTemplates lists the Coder templates a client may pick from. Nil when
 	// the deployment does not offer the coder provider.
 	coderTemplates CoderTemplateLister
@@ -204,11 +214,19 @@ type Server struct {
 	terminalStreams         *terminalStreams
 	workWaiters             *workWaiters
 	notificationWake        func()
+	sandboxWake             func()
+	projectSnapshots        ProjectSnapshotter
+	billingOptions          *BillingOptions
+	billingStore            billingStore
+	offerCache              planOfferCache
+	presenceLimiter         presenceLimiter
 	notificationWaiters     *notificationWaiters
 	// workerBinariesBySHA serves the content-addressed worker/helper binaries
 	// so a worker with a stale baked copy can heal itself to this exact build.
 	workerBinariesBySHA map[string][]byte
 	handler             http.Handler
+	activity            *activity.Recorder
+	supportToken        string
 }
 
 type Options struct {
@@ -220,6 +238,12 @@ type Options struct {
 	SandboxProvider           string
 	AvailableSandboxProviders []string
 	CapabilityGatedProviders  []string
+	// DefaultOrgCapabilities are the capabilities of an organization that has
+	// none of its own; see Server.defaultOrgCapabilities.
+	DefaultOrgCapabilities []string
+	// DefaultOrgBilling is domain.OrgBillingSelfServe (the default when blank)
+	// or domain.OrgBillingContract.
+	DefaultOrgBilling string
 	// CoderTemplates lists templates available from the configured Coder provider.
 	CoderTemplates     CoderTemplateLister
 	Provisioning       sandbox.ProvisioningDefaults
@@ -248,6 +272,25 @@ type Options struct {
 	TerminalStreamEnabled   bool
 	TerminalRelayEnabled    bool
 	NotificationWake        func()
+	// SandboxWake asks the sandbox reconciler for an immediate pass; nil when
+	// this control plane runs no reconciler.
+	SandboxWake func()
+	// ProjectSnapshots prepares per-project Freestyle snapshots; nil disables
+	// them and every session boots from its harness snapshot.
+	ProjectSnapshots ProjectSnapshotter
+	// Billing configures Stripe billing; nil leaves it off.
+	Billing *BillingOptions
+	// Activity records the per-organization support trail; nil records nothing.
+	Activity *activity.Recorder
+	// SupportToken enables the operator support lookup route
+	// (AO_CLOUD_SUPPORT_TOKEN); empty leaves the route unregistered.
+	SupportToken string
+}
+
+// ProjectSnapshotter looks up and builds a project's prepared snapshot.
+type ProjectSnapshotter interface {
+	Lookup(context.Context, projectsnapshot.Request) (string, bool)
+	Ensure(projectsnapshot.Request)
 }
 
 func New(options Options) *Server {
@@ -297,6 +340,17 @@ func New(options Options) *Server {
 			capabilityGatedProviders[provider] = true
 		}
 	}
+	defaultOrgCapabilities := make([]string, 0, len(options.DefaultOrgCapabilities))
+	for _, capability := range options.DefaultOrgCapabilities {
+		if capability = strings.ToLower(strings.TrimSpace(capability)); capability != "" &&
+			!slices.Contains(defaultOrgCapabilities, capability) {
+			defaultOrgCapabilities = append(defaultOrgCapabilities, capability)
+		}
+	}
+	defaultOrgBilling := domain.NormalizeOrgBilling(options.DefaultOrgBilling)
+	if defaultOrgBilling == "" {
+		defaultOrgBilling = domain.OrgBillingSelfServe
+	}
 	server := &Server{
 		store:                     options.Store,
 		transcripts:               options.Transcripts,
@@ -307,6 +361,8 @@ func New(options Options) *Server {
 		sandboxProvider:           sandboxProvider,
 		availableSandboxProviders: availableSandboxProviders,
 		capabilityGatedProviders:  capabilityGatedProviders,
+		defaultOrgCapabilities:    defaultOrgCapabilities,
+		defaultOrgBilling:         defaultOrgBilling,
 		coderTemplates:            options.CoderTemplates,
 		provisioning:              options.Provisioning,
 		workerTokens:              options.WorkerTokens,
@@ -332,13 +388,21 @@ func New(options Options) *Server {
 		terminalStreams:           newTerminalStreams(),
 		workWaiters:               newWorkWaiters(),
 		notificationWake:          options.NotificationWake,
+		sandboxWake:               options.SandboxWake,
+		projectSnapshots:          options.ProjectSnapshots,
+		billingOptions:            options.Billing,
 		notificationWaiters:       newNotificationWaiters(),
+		activity:                  options.Activity,
+		supportToken:              options.SupportToken,
 	}
 	workerBinaries := [][]byte{options.WorkerBinary, options.WorkerHelperBinary}
 	for _, build := range options.WorkerBuilds {
 		workerBinaries = append(workerBinaries, build.Binary, build.HelperBinary)
 	}
 	server.workerBinariesBySHA = indexWorkerBinaries(workerBinaries...)
+	if store, ok := options.Store.(billingStore); ok {
+		server.billingStore = store
+	}
 	if server.credentialValidator == nil {
 		server.credentialValidator = newAgentCredentialValidator(nil)
 	}
@@ -385,6 +449,13 @@ func New(options Options) *Server {
 	if server.environmentControlToken != "" {
 		router.Post("/api/cloud/v1/control/github/scratch-projects", server.createEnvironmentScratchProject)
 	}
+	// Operator-only support lookup (cloud/docs/support-runbook.md).
+	if server.supportToken != "" {
+		router.Get("/api/cloud/v1/control/support/lookup", server.supportLookup)
+	}
+	// Stripe signs its webhooks; the handler verifies the signature.
+	router.Post("/api/cloud/v1/billing/stripe/webhook", server.stripeWebhook)
+	router.Get("/billing/return", server.billingReturn)
 	router.Route("/api/cloud/v1", func(router chi.Router) {
 		router.Post("/remote-hosts/{hostId}/address", server.updateRemoteHostAddress)
 		router.Post("/auth/local/register", server.registerLocal)
@@ -477,6 +548,10 @@ func New(options Options) *Server {
 				router.Post("/projects/scratch", server.createGitHubScratchProject)
 			}
 			router.Get("/projects", server.listProjects)
+			router.Get("/billing", server.getBilling)
+			router.Post("/billing/checkout", server.createBillingCheckout)
+			router.Post("/billing/portal", server.createBillingPortal)
+			router.Post("/billing/usage/reset", server.resetBillingUsage)
 			router.Get("/notifications", server.listNotifications)
 			router.Get("/notification-events", server.notificationEvents)
 			router.Patch("/notifications/{notificationId}", server.markNotificationRead)
@@ -503,6 +578,7 @@ func New(options Options) *Server {
 			router.Get("/sessions", server.listSessions)
 			router.Post("/sessions", server.createSession)
 			router.Get("/sandbox/coder/templates", server.listCoderTemplates)
+			router.Get("/coder-templates/{templateId}/parameters", server.getCoderTemplateParameters)
 			router.Get("/sessions/{sessionId}", server.getSession)
 			router.Patch("/sessions/{sessionId}/preferences", server.updateSessionPreferences)
 			router.Patch("/sessions/{sessionId}/auto-inject-ci", server.setCloudSessionAutoInjectCI)
@@ -510,6 +586,7 @@ func New(options Options) *Server {
 			router.Patch("/sessions/{sessionId}/merge-policy", server.setCloudSessionMergePolicy)
 			router.Post("/sessions/wake", server.wakePausedSessions)
 			router.Post("/sessions/{sessionId}/resume", server.resumeSession)
+			router.Post("/sessions/{sessionId}/presence", server.touchSessionPresence)
 			router.Post("/sessions/{sessionId}/startup-retry", server.retrySessionStartup)
 			router.Post("/sessions/{sessionId}/restore", server.restoreSession)
 			router.Get("/sessions/{sessionId}/children", server.listSessionChildren)
@@ -594,7 +671,12 @@ func (s *Server) requestID(next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Request-ID", requestID)
 		w.Header().Set("X-AO-Release", s.release)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDKey, requestID)))
+		ctx := context.WithValue(r.Context(), requestIDKey, requestID)
+		// One log scope per request: middleware and handlers annotate it with the
+		// user, organization, session and provider as they learn them, and the
+		// access-log line and every *Context log call carry them.
+		ctx = logctx.Begin(ctx, logctx.Fields{RequestID: requestID})
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -657,11 +739,17 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 			"request_id", requestID(r),
 			"release", s.release,
 		}
-		// Stamp the URL-scoped organization so the access log is greppable by
-		// tenant for fast RCA (empty on non-org routes like worker/health).
-		if orgID := chi.URLParam(r, "orgId"); orgID != "" {
-			attrs = append(attrs, "org_id", orgID)
-		}
+		// Stamp the URL-scoped organization and session so the access log is
+		// greppable by tenant for fast RCA (empty on non-org routes like
+		// worker/health), plus everything the request scope learned: the
+		// authenticated user, a worker's session, the sandbox provider.
+		logctx.Annotate(r.Context(), logctx.Fields{
+			OrgID:     chi.URLParam(r, "orgId"),
+			SessionID: chi.URLParam(r, "sessionId"),
+		})
+		fields := logctx.From(r.Context())
+		fields.RequestID = "" // already stamped above
+		attrs = append(attrs, fields.Args()...)
 		s.logger.Log(r.Context(), level, "HTTP request complete", attrs...)
 	})
 }
@@ -685,6 +773,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			writeError(w, r, http.StatusServiceUnavailable, "authentication_unavailable", "Authentication is temporarily unavailable.")
 			return
 		}
+		logctx.Annotate(r.Context(), logctx.Fields{UserID: principal.UserID})
 		ctx := context.WithValue(r.Context(), principalKey, principal)
 		ctx = context.WithValue(ctx, bearerKey, token)
 		next.ServeHTTP(w, r.WithContext(ctx))
