@@ -34,6 +34,7 @@ function checkRestore(context, checkPermissions = false) {
     const saved = entries.find(entry => entry.type === 'config')?.config;
     const requested = context.config.approvalMode;
     if (saved && requested !== 'yolo') {
+      if (saved.approvalMode === 'yolo') throw new Error('AO: Neovate saved yolo approval exceeds the requested permission mode');
       if (saved.approvalTools?.length) throw new Error('AO: Neovate saved tool approvals exceed the requested permission mode');
       if (requested === 'default' && saved.approvalMode === 'autoEdit') throw new Error('AO: Neovate saved autoEdit exceeds default permissions');
     }

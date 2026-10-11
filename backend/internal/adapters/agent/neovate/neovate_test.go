@@ -184,10 +184,14 @@ func TestRestoreRejectsSavedApprovalsBroaderThanRequestedMode(t *testing.T) {
 		{"default", nativePermissionPolicy{ApprovalMode: "default"}, ports.PermissionModeDefault, false},
 		{"saved autoEdit", nativePermissionPolicy{ApprovalMode: "autoEdit"}, ports.PermissionModeDefault, true},
 		{"explicit edits", nativePermissionPolicy{ApprovalMode: "autoEdit"}, ports.PermissionModeAcceptEdits, false},
+		{"saved yolo default", nativePermissionPolicy{ApprovalMode: "yolo"}, ports.PermissionModeDefault, true},
+		{"saved yolo edits", nativePermissionPolicy{ApprovalMode: "yolo"}, ports.PermissionModeAcceptEdits, true},
+		{"saved yolo auto", nativePermissionPolicy{ApprovalMode: "yolo"}, ports.PermissionModeAuto, true},
 		{"saved tool default", nativePermissionPolicy{ApprovalTools: []string{"bash"}}, ports.PermissionModeDefault, true},
 		{"saved tool edits", nativePermissionPolicy{ApprovalTools: []string{"bash"}}, ports.PermissionModeAcceptEdits, true},
 		{"saved tool auto", nativePermissionPolicy{ApprovalTools: []string{"bash"}}, ports.PermissionModeAuto, true},
 		{"explicit bypass", nativePermissionPolicy{ApprovalMode: "autoEdit", ApprovalTools: []string{"bash"}}, ports.PermissionModeBypassPermissions, false},
+		{"saved yolo explicit bypass", nativePermissionPolicy{ApprovalMode: "yolo"}, ports.PermissionModeBypassPermissions, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			workspace := t.TempDir()

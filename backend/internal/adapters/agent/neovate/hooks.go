@@ -225,6 +225,9 @@ func validatePermissionPolicy(saved nativePermissionPolicy, requested ports.Perm
 	if mode == ports.PermissionModeBypassPermissions {
 		return nil
 	}
+	if saved.ApprovalMode == "yolo" {
+		return errors.New("saved native yolo approval exceeds the requested permission mode; reset it in Neovate before restoring")
+	}
 	if len(saved.ApprovalTools) != 0 {
 		return errors.New("saved native tool approvals exceed the requested permission mode; revoke them in Neovate before restoring")
 	}

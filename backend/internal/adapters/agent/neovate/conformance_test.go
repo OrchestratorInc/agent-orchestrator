@@ -196,6 +196,8 @@ func TestReleasedNeovateTUIConformance(t *testing.T) {
 		message string
 	}{
 		{"autoEdit into default", nativePermissionPolicy{ApprovalMode: "autoEdit"}, ports.PermissionModeDefault, "saved autoEdit exceeds default permissions"},
+		{"yolo into default", nativePermissionPolicy{ApprovalMode: "yolo"}, ports.PermissionModeDefault, "saved yolo approval exceeds the requested permission mode"},
+		{"yolo into edits", nativePermissionPolicy{ApprovalMode: "yolo"}, ports.PermissionModeAcceptEdits, "saved yolo approval exceeds the requested permission mode"},
 		{"tool grant into default", nativePermissionPolicy{ApprovalMode: "default", ApprovalTools: []string{"bash"}}, ports.PermissionModeDefault, "saved tool approvals exceed the requested permission mode"},
 		{"tool grant into edits", nativePermissionPolicy{ApprovalMode: "default", ApprovalTools: []string{"bash"}}, ports.PermissionModeAcceptEdits, "saved tool approvals exceed the requested permission mode"},
 	} {
