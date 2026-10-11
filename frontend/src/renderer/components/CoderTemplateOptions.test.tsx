@@ -90,6 +90,19 @@ describe("CoderTemplateOptions", () => {
 		expect(screen.queryByText("size")).not.toBeInTheDocument();
 	});
 
+	it("marks a single-choice parameter required, since it always holds a value", async () => {
+		mocks.getCoderTemplateParameters.mockResolvedValue({ parameters: PARAMETERS });
+		const user = userEvent.setup();
+		renderOptions();
+		await user.click(await screen.findByRole("button", { name: "Template options (5)" }));
+		const marked = Array.from(document.querySelectorAll("label"))
+			.filter((node) => node.textContent?.endsWith("*Required"))
+			.map((node) => node.textContent?.replace("*Required", ""));
+		// CPUs is required by Coder; Region is a dropdown. A free-text field, a
+		// switch and a multi-select (which may be left empty) stay unmarked.
+		expect(marked).toEqual(["CPUs", "Region"]);
+	});
+
 	it("keeps only values changed from the default", async () => {
 		mocks.getCoderTemplateParameters.mockResolvedValue({ parameters: PARAMETERS.slice(0, 3) });
 		const user = userEvent.setup();
@@ -112,7 +125,7 @@ describe("CoderTemplateOptions", () => {
 		mocks.getCoderTemplateParameters.mockResolvedValue({ parameters: PARAMETERS.slice(3) });
 		const user = userEvent.setup();
 		const { onChange } = renderOptions();
-		expect(await screen.findByRole("combobox", { name: "Region" })).toHaveTextContent("Europe");
+		expect(await screen.findByRole("combobox", { name: /^Region/ })).toHaveTextContent("Europe");
 		expect(screen.getByText("Set at creation")).toBeInTheDocument();
 
 		const services = screen.getByRole("group", { name: "Services" });
