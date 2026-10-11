@@ -20,6 +20,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/reaper"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
@@ -500,6 +501,20 @@ func TestReconcile_PreservesFailedLiveSessionAndReapsLeakedTmux(t *testing.T) {
 	// No runtime.Create: a promptless worker must not be blank-relaunched.
 	if st.rt.created != 0 {
 		t.Fatalf("want 0 runtime Creates (promptless worker must not relaunch), got %d", st.rt.created)
+	}
+
+	// The preserved session's old runtime handle is still dead, and the reaper's
+	// first tick after boot observes it (#6200). Preservation must survive that
+	// tick, or the session is terminated seconds after reconcile kept it.
+	if err := reaper.New(st.lcm, st.store, st.rt, reaper.Config{}).Tick(ctx); err != nil {
+		t.Fatalf("reaper tick: %v", err)
+	}
+	gotA, _, err = st.store.GetSession(ctx, recA.ID)
+	if err != nil {
+		t.Fatalf("get session A after reaper tick: %v", err)
+	}
+	if gotA.IsTerminated {
+		t.Fatalf("session A: reaper terminated a session reconcile preserved for recovery: %+v", gotA)
 	}
 
 	// Session B's leaked runtime must have been destroyed.

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -262,5 +263,54 @@ func TestTick_WarnsOnlyOnceForSessionWithoutHandle(t *testing.T) {
 		if got := strings.Count(logs.String(), "session="+string(id)); got != 1 {
 			t.Fatalf("warning count for %s = %d, want 1; logs:\n%s", id, got, logs.String())
 		}
+	}
+}
+
+type signalingLCM struct{ observed chan domain.SessionID }
+
+func (l signalingLCM) ApplyRuntimeObservation(_ context.Context, id domain.SessionID, _ ports.RuntimeFacts) error {
+	select {
+	case l.observed <- id:
+	default:
+	}
+	return nil
+}
+
+// A runtime that died across a daemon restart belongs to boot reconciliation
+// until it has relaunched or preserved the session (#6200): the periodic loop
+// must not observe it before the daemon releases the reaper.
+func TestStart_WaitsForReadyBeforeTicking(t *testing.T) {
+	lcm := signalingLCM{observed: make(chan domain.SessionID, 16)}
+	ready := make(chan struct{})
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sessions := fakeSessions{rows: []domain.SessionRecord{probableSession("mer-1")}}
+	r := New(lcm, sessions, fakeRuntime{}, Config{Tick: time.Millisecond, Logger: quietLogger(), Ready: ready})
+	done := r.Start(runCtx)
+
+	select {
+	case <-lcm.observed:
+		t.Fatal("reaper observed a session before boot recovery released it")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(ready)
+	select {
+	case <-lcm.observed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reaper did not tick after it was released")
+	}
+	cancel()
+	<-done
+}
+
+func TestStart_UnreleasedReaperStopsOnCancel(t *testing.T) {
+	runCtx, cancel := context.WithCancel(context.Background())
+	r := New(&fakeLCM{}, fakeSessions{}, fakeRuntime{}, Config{Logger: quietLogger(), Ready: make(chan struct{})})
+	done := r.Start(runCtx)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("unreleased reaper loop did not exit on cancellation")
 	}
 }
