@@ -1380,7 +1380,7 @@ func minimumNodeVersionForTarget(target Target) [3]int {
 	switch target {
 	case TargetAuggie, TargetDroid, TargetGemini:
 		return [3]int{20, 0, 0}
-	case TargetClaudeCode, TargetQwen, TargetAutohand:
+	case TargetClaudeCode, TargetQwen, TargetAutohand, TargetStrands:
 		return [3]int{22, 0, 0}
 	case TargetPi:
 		return [3]int{22, 19, 0}

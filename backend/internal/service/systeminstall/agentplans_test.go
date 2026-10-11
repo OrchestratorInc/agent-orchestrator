@@ -492,6 +492,7 @@ func TestNPMPlanUsesTargetSpecificNodeFloors(t *testing.T) {
 		{name: "auggie accepts node 20", target: TargetAuggie, nodeVersion: "v20.0.0", wantAllowed: true},
 		{name: "auggie rejects node 18", target: TargetAuggie, nodeVersion: "v18.20.0", wantReason: "Node.js 20+"},
 		{name: "claude rejects node 20", target: TargetClaudeCode, nodeVersion: "v20.19.0", wantReason: "Node.js 22+"},
+		{name: "strands rejects node 20", target: TargetStrands, nodeVersion: "v20.19.0", wantReason: "Node.js 22+"},
 		{name: "pi rejects node 22.18", target: TargetPi, nodeVersion: "v22.18.0", wantReason: "Node.js 22.19+"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
