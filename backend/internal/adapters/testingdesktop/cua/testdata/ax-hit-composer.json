@@ -1,0 +1,134 @@
+{
+  "trusted": true,
+  "hitCode": 0,
+  "windowCode": 0,
+  "windowID": 9628,
+  "ancestry": [
+    {
+      "pid": 38580,
+      "role": "AXPopUpButton",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXGroup",
+      "title": "",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXWebArea",
+      "title": "Agent Orchestrator",
+      "owner": "Electron"
+    },
+    {
+      "pid": 38580,
+      "role": "AXWindow",
+      "title": "Agent Orchestrator (dev)",
+      "owner": "Electron"
+    }
+  ]
+}
