@@ -171,7 +171,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		prompt = string(data)
 	}
 	text, _ := json.Marshal(prompt + "\n\nThe actual AO workspace for this session is " + cfg.WorkspacePath + ".")
-	if err := writeManaged(filepath.Join(pluginDir, "index.ts"), "// "+sentinel+"\nexport default {id: "+fmt.Sprintf("%q", managedID)+", instructions: "+string(text)+"};\n"); err != nil {
+	if err := writeManaged(filepath.Join(pluginDir, "index.ts"), "// "+sentinel+"\n"+pluginWitnessSource+"\nexport default {id: "+fmt.Sprintf("%q", managedID)+", instructions(context) { observeNativeIdentity(context); return "+string(text)+"; }};\n"); err != nil {
 		return err
 	}
 	plugins[managedID] = encoded
@@ -253,15 +253,32 @@ const {spawnSync} = require("node:child_process");
 const event = process.argv[2];
 const payload = JSON.parse(fs.readFileSync(0, "utf8"));
 const names = {SessionStart:"session-start", AgentStart:"agent-start", UserPromptSubmit:"user-prompt-submit", Stop:"stop", PermissionRequest:"permission-request", PermissionResult:"permission-result", Interrupt:"interrupt"};
-if (event === "SessionStart" && process.env.AO_MASTRA_RECEIPT_PATH) {
-  // Local evidence precedes daemon delivery: a callback can be parked while
-  // the manager verifies this generation before publishing the launch.
-  const receipt = {nativeId:payload.session_id, cwd:payload.cwd, generation:process.env.AO_RUNTIME_LAUNCH_ID};
-  const path = process.env.AO_MASTRA_RECEIPT_PATH;
-  fs.writeFileSync(path+".tmp", JSON.stringify(receipt), {mode:0o600});
-  fs.renameSync(path+".tmp", path);
-}
 if (payload.session_id === "session-init") delete payload.session_id;
 if (event === "UserPromptSubmit") payload.prompt = payload.user_message;
 if (names[event]) spawnSync("ao", ["hooks", "mastra-code", names[event]], {input:JSON.stringify(payload), stdio:["pipe","ignore","ignore"], timeout:4000, windowsHide:true});
+`
+
+// The released native SessionStart hook can retain its bootstrap session-init ID
+// on passive resume. Use the supported plugin runtime getter, without modifying
+// native state or sending a prompt, to observe the actual active thread instead.
+const pluginWitnessSource = `import fs from "node:fs";
+let identityObserver;
+function observeNativeIdentity(context) {
+  const path = process.env.AO_MASTRA_RECEIPT_PATH;
+  if (!path || identityObserver) return;
+  const deadline = Date.now() + 60000;
+  identityObserver = setInterval(() => {
+    if (Date.now() >= deadline) { clearInterval(identityObserver); return; }
+    const session = context.getActiveSession?.();
+    const nativeId = session?.thread.getId();
+    if (!nativeId || nativeId === "session-init") return;
+    const receipt = {nativeId, cwd:process.cwd(), generation:process.env.AO_RUNTIME_LAUNCH_ID};
+    try {
+      fs.writeFileSync(path+".tmp", JSON.stringify(receipt), {mode:0o600});
+      fs.renameSync(path+".tmp", path);
+      clearInterval(identityObserver);
+    } catch { /* Missing receipt fails closed in the supervisor. */ }
+  }, 250);
+  identityObserver.unref();
+}
 `

@@ -15,7 +15,7 @@ func (m *Manager) verifyNativeRestore(ctx context.Context, verifier ports.Native
 	if !ok {
 		return errors.New("native restore requires a current rendered terminal")
 	}
-	proofCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	proofCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	for {
 		output, err := reader.GetStyledOutput(proofCtx, handle, 32)

@@ -183,6 +183,9 @@ func TestGenerationWitnessRejectsFallbackAndDraft(t *testing.T) {
 	p, cfg := prepared(t)
 	restore := ports.RestoreConfig{DataDir: cfg.DataDir, Session: ports.SessionRef{ID: cfg.SessionID, WorkspacePath: cfg.WorkspacePath, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: testThread}}}
 	path := receiptPath(cfg.DataDir, cfg.SessionID, "g1")
+	if ready, err := p.VerifyNativeRestore(context.Background(), restore, "g1", emptyComposer); ready || err != nil {
+		t.Fatalf("missing runtime witness = %v,%v", ready, err)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -191,6 +194,7 @@ func TestGenerationWitnessRejectsFallbackAndDraft(t *testing.T) {
 		ready, wantErr         bool
 	}{
 		{testThread, "g1", emptyComposer, true, false},
+		{"session-init", "g1", emptyComposer, false, true},
 		{"00000000-0000-0000-0000-000000000000", "g1", emptyComposer, false, true},
 		{testThread, "old", emptyComposer, false, true},
 		{testThread, "g1", strings.Replace(emptyComposer, "› ", "› draft", 1), false, false},
