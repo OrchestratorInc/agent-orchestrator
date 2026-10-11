@@ -19,6 +19,7 @@ var ErrUnqualified = errors.New("stakpak v0.3.88 TUI is unqualified: shell desce
 // Plugin provides independent metadata while refusing unqualified execution.
 type Plugin struct{ agentbase.Base }
 
+// New returns an unregistered adapter whose execution paths remain refused.
 func New() *Plugin { return &Plugin{} }
 
 var _ adapters.Adapter = (*Plugin)(nil)
@@ -27,6 +28,7 @@ var _ ports.AgentBinaryResolver = (*Plugin)(nil)
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 var _ ports.AgentExitDetector = (*Plugin)(nil)
 
+// Manifest describes the guarded source contract without registering it.
 func (*Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID: "stakpak", Name: "Stakpak", Version: "0.1.0",
@@ -50,10 +52,12 @@ func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	return ports.AgentAuthStatusUnknown, nil
 }
 
+// ExitDetectionMode delegates eventual process-exit observation to the supervisor.
 func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 	return ports.AgentExitDetectionSupervisor
 }
 
+// GetLaunchCommand refuses execution until native cancellation is qualified.
 func (*Plugin) GetLaunchCommand(ctx context.Context, _ ports.LaunchConfig) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -61,6 +65,7 @@ func (*Plugin) GetLaunchCommand(ctx context.Context, _ ports.LaunchConfig) ([]st
 	return nil, ErrUnqualified
 }
 
+// GetRestoreCommand hard-errors rather than permitting fresh-history fallback.
 func (*Plugin) GetRestoreCommand(ctx context.Context, _ ports.RestoreConfig) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -68,6 +73,7 @@ func (*Plugin) GetRestoreCommand(ctx context.Context, _ ports.RestoreConfig) ([]
 	return nil, false, ErrUnqualified
 }
 
+// GetAgentHooks refuses preparation of an unqualified runtime.
 func (*Plugin) GetAgentHooks(ctx context.Context, _ ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err

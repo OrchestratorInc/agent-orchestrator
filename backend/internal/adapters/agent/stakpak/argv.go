@@ -64,7 +64,7 @@ func validateInstructions(ctx context.Context, path, expected string) error {
 	if err != nil {
 		return errors.New("stakpak instruction file is unreadable")
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }() // read-only handle; read errors are checked below
 	opened, err := file.Stat()
 	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
 		return errors.New("stakpak instruction file changed during validation")
