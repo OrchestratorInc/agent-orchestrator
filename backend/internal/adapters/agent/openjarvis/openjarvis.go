@@ -274,7 +274,7 @@ func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	return ports.AgentAuthStatusUnknown, nil
 }
 
-// Only an actual change from the admission baseline can witness this send.
+// TerminalMessageObserved requires an actual change from the admission baseline.
 // Historical echoes (including identical prior turns) are never sufficient.
 func (*Plugin) TerminalMessageObserved(message, baseline, screen string) bool {
 	if screen == baseline {
