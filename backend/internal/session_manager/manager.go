@@ -2167,6 +2167,9 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	if override.Permissions != "" {
 		merged.Permissions = override.Permissions
 	}
+	if harness == domain.HarnessPool && merged.Permissions == "" {
+		merged.Permissions = ports.PermissionModeDefault
+	}
 	return merged
 }
 

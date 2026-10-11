@@ -37,6 +37,9 @@ func TestPoolDefaultChatNeverFallsBack(t *testing.T) {
 		} else if err != nil || rec.Mode != domain.SessionModeChat {
 			t.Fatalf("default: %s, %v", rec.Mode, err)
 		}
+		if preflight == nil && launcher.preflightPermissions[0] != ports.PermissionModeDefault {
+			t.Fatal("Pool omitted policy must default to manual")
+		}
 		if rt.created != 0 {
 			t.Fatal("Pool fell back to terminal")
 		}
