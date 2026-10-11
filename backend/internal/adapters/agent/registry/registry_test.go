@@ -83,6 +83,13 @@ func TestGetAgentHooksFootprintIsGitignored(t *testing.T) {
 			if ha.Harness == "kimi" {
 				cfg.Env = map[string]string{"KIMI_CODE_HOME": filepath.Join(cfg.DataDir, "kimi")}
 			}
+			if ha.Harness == "openjarvis" {
+				home := t.TempDir()
+				if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[tools]\nenabled=['file_read','file_write','shell_exec','code_interpreter']\n[agent]\ndefault_agent='orchestrator'\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				cfg.Env = map[string]string{"OPENJARVIS_HOME": home}
+			}
 			ensureAgentBinary(t, string(ha.Harness))
 			if err := ha.Agent.GetAgentHooks(context.Background(), cfg); err != nil {
 				t.Fatalf("GetAgentHooks: %v", err)

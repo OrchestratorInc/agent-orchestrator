@@ -1,0 +1,13 @@
+---
+title: OpenJarvis
+---
+
+AO runs Stanford OpenJarvis **1.0.4** `jarvis chat --agent orchestrator`, using the native code-assistant preset and your configured provider. This package version is independent of the desktop release. Install the official Python package, initialize `jarvis init --preset code-assistant`, configure a compatible cloud provider, and refresh Harness settings. No local inference model download is required.
+
+AO appends its private instructions to `[system_prompt].prefix` in a private per-session config overlay. It preserves the native agent template, persona files, security settings and original config. It does not use `--system` or change native permissions. Only default permission mode is supported; native confirmation decisions are answered directly in the terminal.
+
+Initial tasks and user sends support **one plain UTF-8 line, at most 3000 bytes**, with no surrounding whitespace, controls or slash command. Multiline tasks, attachments and automated coordination envelopes are refused. Every programmatic send requires the current rendered empty `You>` composer and unchanged owned runtime/generation. Active turns and confirmation prompts refuse sends. Concurrent programmatic writes are serialized. Human terminal input remains native and is not covered by this programmatic admission check.
+
+Native history exists only while the process runs. AO never fabricates a conversation ID or replays history: restore fails explicitly; start a new session after Kill. Chat mode, cross-interface handoff, reviewer mode and switching are unavailable. Native cancellation of running tools is not advertised; use AO Kill for termination. Activity reconciliation can lag the native composer by the normal 30-second interval.
+
+Models use free-form native `--model`; AO has no verified catalog. Credentials report configured or unknown, not verified authorization.
