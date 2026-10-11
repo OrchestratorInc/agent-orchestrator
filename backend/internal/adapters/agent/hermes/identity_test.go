@@ -70,7 +70,7 @@ func TestCurrentIdentityUsesOwnedPTYAfterNativeNewWithoutDatabaseCwd(t *testing.
 	for path, contents := range map[string][]byte{
 		filepath.Join(sessionDir(data, "identity-fixture"), "native-home"):      []byte(home),
 		filepath.Join(sessionDir(data, "identity-fixture"), "native-workspace"): []byte(workspace),
-		filepath.Join(home, "runtime", "active_sessions.json"):                leases,
+		filepath.Join(home, "runtime", "active_sessions.json"):                  leases,
 		crumbPath: crumb,
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
