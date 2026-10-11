@@ -33,7 +33,7 @@ func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string,
 
 	// Deliberately do not use CommandContext: once READY is received the host
 	// must survive cancellation of the request that created it.
-	cmd := exec.Command(exe, args...)
+	cmd := exec.Command(exe, args...) //nolint:forbidigo // detached PTY host must outlive request cancellation
 	cmd.Dir = cwd
 	cmd.Env = merged
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}

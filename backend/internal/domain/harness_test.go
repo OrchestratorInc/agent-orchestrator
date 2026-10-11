@@ -113,3 +113,22 @@ func TestOpenHandsHarnessIsKnown(t *testing.T) {
 		t.Fatal("HarnessOpenHands.IsKnown() = false, want true")
 	}
 }
+
+func TestCommandCodeHarnessIsKnown(t *testing.T) {
+	if HarnessCommandCode != AgentHarness("command-code") {
+		t.Fatalf("HarnessCommandCode = %q, want command-code", HarnessCommandCode)
+	}
+	if !HarnessCommandCode.IsKnown() {
+		t.Fatal("HarnessCommandCode.IsKnown() = false, want true")
+	}
+	found := false
+	for _, harness := range AllHarnesses {
+		if harness == HarnessCommandCode {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("AllHarnesses does not contain HarnessCommandCode")
+	}
+}
