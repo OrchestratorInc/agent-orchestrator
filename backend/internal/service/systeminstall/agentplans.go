@@ -8,7 +8,7 @@ import (
 )
 
 var agentDocumentationURLs = map[Target]string{
-	TargetStrands:     "https://github.com/strands-agents/strands",
+	TargetStrands:     "https://github.com/strands-agents/harness-sdk/tree/e519d67021b9c009e56e9309edcd94ab87e7156e/strands-cli",
 	TargetClaudeCode:  "https://code.claude.com/docs/en/installation",
 	TargetCodex:       "https://github.com/openai/codex",
 	TargetCursor:      "https://docs.cursor.com/en/cli/installation",
