@@ -179,7 +179,10 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600)
+	if err := os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "native-workspace"), []byte(cfg.WorkspacePath), 0o600)
 }
 func nativeOverlay(config map[string]any) string {
 	agent, _ := config["agent"].(map[string]any)
@@ -284,6 +287,14 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 	if err != nil {
 		return ports.SessionInfo{}, false, err
 	}
+	workspace := ref.WorkspacePath
+	if workspace == "" {
+		b, err := os.ReadFile(filepath.Join(sessionDir(ref.DataDir, ref.ID), "native-workspace"))
+		if err != nil || len(b) == 0 {
+			return ports.SessionInfo{}, false, nil
+		}
+		workspace = string(b)
+	}
 	b, err := os.ReadFile(filepath.Join(home, "runtime", "active_sessions.json"))
 	if os.IsNotExist(err) {
 		return ports.SessionInfo{}, false, nil
@@ -336,7 +347,7 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 			continue
 		}
 		cwd, e := os.Readlink(filepath.Join(string(filepath.Separator), "proc", strconv.Itoa(lease.PID), "cwd"))
-		if e != nil || filepath.Clean(cwd) != filepath.Clean(crumb.Cwd) {
+		if e != nil || filepath.Clean(cwd) != filepath.Clean(crumb.Cwd) || filepath.Clean(cwd) != filepath.Clean(workspace) {
 			continue
 		}
 		db, e := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(home, "state.db"))+"?mode=ro")
@@ -346,7 +357,10 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 		var storedCwd string
 		e = db.QueryRowContext(ctx, "SELECT COALESCE(cwd,'') FROM sessions WHERE id=?", crumb.SessionID).Scan(&storedCwd)
 		_ = db.Close()
-		if e != nil || filepath.Clean(storedCwd) != filepath.Clean(cwd) {
+		// Native /new creates the exact database row without cwd. The live
+		// owned process and its PTY breadcrumb still corroborate the AO
+		// workspace; a populated conflicting database cwd remains rejected.
+		if e != nil || (storedCwd != "" && filepath.Clean(storedCwd) != filepath.Clean(cwd)) {
 			continue
 		}
 		if found != "" && found != crumb.SessionID {
