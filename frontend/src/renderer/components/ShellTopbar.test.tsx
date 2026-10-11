@@ -14,6 +14,7 @@ import {
 } from "../types/workspace";
 import { ShellTopbar, TopbarArchiveButton } from "./ShellTopbar";
 import { TooltipProvider } from "./ui/tooltip";
+import { appShortcutBus } from "../test/app-shortcut-bus";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
 
@@ -705,6 +706,21 @@ describe("ShellTopbar open-in-editor control", () => {
 });
 
 describe("TopbarArchiveButton", () => {
+	it("opens the same confirmation from the archive shortcut, and archives only after Confirm", async () => {
+		renderKill();
+
+		act(() => appShortcutBus.emit({ id: "archive-session" }));
+
+		const dialog = await screen.findByRole("dialog", { name: "Are you sure you want to archive this session?" });
+		expect(postMock).not.toHaveBeenCalled();
+		await userEvent.click(within(dialog).getByRole("button", { name: "No" }));
+		expect(postMock).not.toHaveBeenCalled();
+
+		act(() => appShortcutBus.emit({ id: "archive-session" }));
+		await clickKillDialogConfirm();
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+	});
+
 	it("asks for confirmation in the shared modal before archiving", async () => {
 		renderKill();
 

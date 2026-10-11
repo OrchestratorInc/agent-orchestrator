@@ -2,7 +2,7 @@ import { OrchestratorStartingChat } from "../components/chat/OrchestratorStartin
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
-import { createFileRoute, Outlet, useMatchRoute, useNavigate, useParams } from "@tanstack/react-router";
+import { createFileRoute, Outlet, useMatchRoute, useNavigate, useParams, useRouter } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
 import { memo, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "lucide-react";
@@ -58,7 +58,6 @@ import {
 	hidesShellTopbar,
 } from "../lib/platform";
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
-import { matchesRendererShortcut } from "../stores/keybindings-store";
 import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
 import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
@@ -68,6 +67,9 @@ import { useCloudSession } from "../lib/cloud-session";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
+import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
+import { useSidebarOrderStore } from "../stores/sidebar-order-store";
+import { useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 
 export const Route = createFileRoute("/_shell")({
@@ -211,6 +213,7 @@ function ShellLayout() {
 	useAgentInventoryTelemetry();
 	const { t } = useTranslation();
 	const navigate = useNavigate();
+	const router = useRouter();
 	const matchRoute = useMatchRoute();
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp();
@@ -455,35 +458,42 @@ function ShellLayout() {
 		!usesPreviewWorkspaceData &&
 		!daemonStatus.code &&
 		(daemonStatus.state !== "ready" || workspaceStartupState === "loading" || (!workspaceQuery.isSuccess && !workspaceQuery.isError));
-	const navigateSession = useCallback(
-		(direction: -1 | 1) => {
-			const hostId = routeParams.hostId;
-			const projectId = hostId
-				? routeParams.projectId ??
-					remoteWorkspacesRef.current.find(
-						(workspace) =>
-							workspace.hostId === hostId && workspace.sessions.some((session) => session.id === routeParams.sessionId),
-					)?.id
-				: scopedProjectId;
-			if (!projectId) return;
-			const workspace = hostId
-				? remoteWorkspacesRef.current.find((item) => item.hostId === hostId && item.id === projectId)
-				: workspacesRef.current.find((item) => item.id === projectId);
-			const sessions = (workspace?.sessions ?? []).filter(sessionIsActive);
-			if (sessions.length === 0) return;
-			const currentIndex = sessions.findIndex((session) => session.id === routeParams.sessionId);
-			const nextIndex =
-				currentIndex === -1
-					? direction === 1
-						? 0
-						: sessions.length - 1
-					: (currentIndex + direction + sessions.length) % sessions.length;
-			const session = sessions[nextIndex];
-			if (!session || session.id === routeParams.sessionId) return;
-			if (session.kind === "worker") recordManualWorkerOpen(sessionUiKey(session.id, hostId));
-			void navigate(sessionNavigateTarget(projectId, session.id, hostId));
+	// Session shortcuts walk the sidebar's own order (pinned, projects in the
+	// user's drag order, scratchpad), not the daemon's raw list, so "next" always
+	// means the row below the current one on screen.
+	const sidebarSessionOrder = useCallback(() => {
+		const { projectOrder, sessionOrders } = useSidebarOrderStore.getState();
+		return buildSidebarSessionOrder({
+			workspaces: workspacesRef.current,
+			remoteWorkspaces: remoteWorkspacesRef.current,
+			projectOrder,
+			sessionOrders,
+		});
+	}, []);
+	const openNavSession = useCallback(
+		(entry: SidebarNavSession) => {
+			if (entry.session.kind === "worker") recordManualWorkerOpen(sessionUiKey(entry.sessionId, entry.hostId));
+			void navigate(sessionNavigateTarget(entry.projectId, entry.sessionId, entry.hostId));
 		},
-		[navigate, routeParams.hostId, routeParams.projectId, routeParams.sessionId, scopedProjectId],
+		[navigate],
+	);
+	const navigateSession = useCallback(
+		(direction: -1 | 1, onlyNeedingAttention = false) => {
+			// The settings page owns these chords while it is open (they step its sections).
+			if (useUiStore.getState().settingsModal?.scope === "global") return;
+			const target = stepSessionNav(
+				sidebarSessionOrder(),
+				{ sessionId: routeParams.sessionId, hostId: routeParams.hostId },
+				direction,
+				onlyNeedingAttention ? (entry) => sessionWantsAttention(entry.session) : undefined,
+			);
+			if (target) {
+				openNavSession(target);
+			} else if (onlyNeedingAttention) {
+				useUiStore.getState().showGlobalToast(t("shortcut.noAttentionSessions"));
+			}
+		},
+		[openNavSession, routeParams.hostId, routeParams.sessionId, sidebarSessionOrder, t],
 	);
 
 	const updateWorkspaces = useCallback(
@@ -1049,27 +1059,22 @@ function ShellLayout() {
 		return () => mediaQuery.removeEventListener("change", handleChange);
 	}, [themePreference, syncSystemTheme]);
 
-	useEffect(() => {
-		const handleKeyDown = (event: KeyboardEvent) => {
-			if (matchesRendererShortcut("toggle-sidebar", event)) {
-				event.preventDefault();
-				toggleSidebar();
-				return;
-			}
-			if (matchesRendererShortcut("open-project", event)) {
-				const workspacesWithoutStandalone = workspacesRef.current.filter(
-					(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID,
-				);
-				const workspace = workspacesWithoutStandalone[Number(event.key) - 1];
-				if (workspace) {
-					event.preventDefault();
-					void navigate({ to: "/projects/$projectId", params: { projectId: workspace.id } });
-				}
-			}
-		};
-		window.addEventListener("keydown", handleKeyDown);
-		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [navigate, toggleSidebar]);
+	// These arrive from the main process (see main/app-shortcuts.ts) so they also
+	// fire while xterm or a native Browser view holds focus.
+	useAppShortcut("toggle-sidebar", () => toggleSidebar());
+	useAppShortcut("jump-to-session", ({ index }) => {
+		// The palette's own list claims the digits while it is open.
+		if (useUiStore.getState().isCommandPaletteOpen) return;
+		if (useUiStore.getState().settingsModal?.scope === "global") return;
+		const target = index === undefined ? undefined : sidebarSessionOrder()[index];
+		if (target) openNavSession(target);
+	});
+	useAppShortcut("previous-attention-session", () => navigateSession(-1, true));
+	useAppShortcut("next-attention-session", () => navigateSession(1, true));
+	useAppShortcut("history-back", () => {
+		if (router.history.canGoBack()) router.history.back();
+	});
+	useAppShortcut("history-forward", () => router.history.forward());
 
 	// New session (⌘N / Ctrl+Shift+N) is detected in the main process and
 	// delivered here, so it fires even when focus is inside xterm or a native
@@ -1092,7 +1097,8 @@ function ShellLayout() {
 		[routeParams.hostId, routeParams.projectId, scopedProjectId, requestNewTask],
 	);
 
-	useEffect(() => aoBridge.app.onKeyboardShortcutsHelp(() => setIsKeyboardShortcutsOpen(true)), []);
+	// ⌘/ toggles: a second press closes the sheet.
+	useEffect(() => aoBridge.app.onKeyboardShortcutsHelp(() => setIsKeyboardShortcutsOpen((open) => !open)), []);
 
 	// A folder was dropped on the app's taskbar icon/shortcut (main process,
 	// cold start or an already-running instance) — feeds the same drop flow as
@@ -1167,18 +1173,6 @@ function ShellLayout() {
 		};
 	}, [navigateSession]);
 
-	useEffect(
-		() =>
-			aoBridge.app.onFocusTerminalShortcut(() => {
-				document
-					.querySelector<HTMLElement>(
-						"[data-terminal-activation-phase='visible'] .xterm-helper-textarea, " +
-							"[data-testid='session-terminal-slot'] .xterm-helper-textarea",
-					)
-					?.focus();
-			}),
-		[],
-	);
 	const openProject = useCallback(
 		(projectId: string) => void navigate({ to: "/projects/$projectId", params: { projectId } }),
 		[navigate],
