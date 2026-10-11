@@ -61,6 +61,16 @@ func TestNativeHistoryPreflight(t *testing.T) {
 			t.Fatal("accepted corrupt history")
 		}
 	})
+	t.Run("compaction summary", func(t *testing.T) {
+		p, w, id := historyFixture(t)
+		messages := `{"message_id":"m2","turn_id":"t1","message":{"role":"compactionSummary","summary":"Earlier conversation summary"}}` + "\n"
+		if err := os.WriteFile(filepath.Join(p, "v2", "sessions", "exact", "messages.jsonl"), []byte(messages), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateNativeHistory(context.Background(), p, id, w); err != nil {
+			t.Fatalf("native compaction summary refused: %v", err)
+		}
+	})
 	t.Run("missing identity", func(t *testing.T) {
 		p, w, _ := historyFixture(t)
 		if err := validateNativeHistory(context.Background(), p, "mvs_00000000000000000000000000000000", w); err == nil {
@@ -70,10 +80,27 @@ func TestNativeHistoryPreflight(t *testing.T) {
 }
 
 func TestHistoryRejectsValidJSONWithInvalidNativeShape(t *testing.T) {
-	for _, data := range []string{`{}`, `[]`, `null`, `{"message":{"role":"user"}}`, `{"message_id":"x","turn_id":"t","message":{"role":"alien","content":[{"type":"text"}]}}`} {
+	for _, data := range []string{
+		`{}`,
+		`[]`,
+		`null`,
+		`{"message":{"role":"user"}}`,
+		`{"message_id":"x","turn_id":"t","message":{"role":"alien","content":[{"type":"text"}]}}`,
+		`{"message_id":"x","turn_id":"t","message":{"role":"compactionSummary"}}`,
+		`{"message_id":"x","turn_id":"t","message":{"role":"compactionSummary","summary":""}}`,
+		`{"message_id":"x","turn_id":"t","message":{"role":"compactionSummary","summary":"ok","content":null}}`,
+		`{"message_id":"x","turn_id":"t","message":{"role":"compactionSummary","summary":"ok","content":[]}}`,
+	} {
 		if validHistoryMessage([]byte(data)) {
 			t.Fatalf("accepted invalid native envelope: %s", data)
 		}
+	}
+}
+
+func TestHistoryAcceptsNativeCompactionSummary(t *testing.T) {
+	data := `{"message_id":"m2","turn_id":"t1","message":{"role":"compactionSummary","summary":"Earlier conversation summary"}}`
+	if !validHistoryMessage([]byte(data)) {
+		t.Fatalf("rejected native compaction summary: %s", data)
 	}
 }
 

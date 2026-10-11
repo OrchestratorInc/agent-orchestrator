@@ -106,11 +106,19 @@ func validHistoryMessage(data []byte) bool {
 		ID      string `json:"message_id"`
 		TurnID  string `json:"turn_id"`
 		Message struct {
-			Role    string            `json:"role"`
-			Content []json.RawMessage `json:"content"`
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+			Summary *string         `json:"summary"`
 		} `json:"message"`
 	}
-	if json.Unmarshal(data, &row) != nil || row.ID == "" || row.TurnID == "" || len(row.Message.Content) == 0 {
+	if json.Unmarshal(data, &row) != nil || row.ID == "" || row.TurnID == "" {
+		return false
+	}
+	if row.Message.Role == "compactionSummary" {
+		return row.Message.Summary != nil && *row.Message.Summary != "" && len(row.Message.Content) == 0
+	}
+	var content []json.RawMessage
+	if json.Unmarshal(row.Message.Content, &content) != nil || len(content) == 0 {
 		return false
 	}
 	switch row.Message.Role {
@@ -118,7 +126,7 @@ func validHistoryMessage(data []byte) bool {
 	default:
 		return false
 	}
-	for _, part := range row.Message.Content {
+	for _, part := range content {
 		var item struct {
 			Type string `json:"type"`
 		}
