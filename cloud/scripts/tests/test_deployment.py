@@ -810,7 +810,7 @@ class OfferingTests(unittest.TestCase):
         )
         self.assertNotIn("nodeops", files["staging"]["AO_CLOUD_SANDBOX_PROVIDERS"])
         self.assertEqual(files["staging"]["AO_CLOUD_SANDBOX_PROVIDER"], "coder")
-        self.assertNotIn("freestyle", files["production"]["AO_CLOUD_SANDBOX_PROVIDERS"])
+        self.assertEqual(files["production"]["AO_CLOUD_SANDBOX_PROVIDER"], "coder")
 
 
 def offering_file(environment):
