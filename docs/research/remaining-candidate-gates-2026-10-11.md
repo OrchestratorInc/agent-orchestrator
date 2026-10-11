@@ -71,3 +71,10 @@ were untouched. Native provider processes no longer remain from this stage.
 Next actions: review complete integration PRs independently; keep holds draft.
 Requalify explicit upstream/auth prerequisites with fresh native and actual AO
 proof before any registration. Never infer runtime success from green unit CI.
+
+Pool alternate provider follow-up: presence-only inspection found no DeepSeek key
+in the process environment, OpenCode auth (only zai-coding-plan), or50 native/
+audit credential/config files across previous/current profiles, ~/.hermes and
+~/.config. Audit helper searches found no configured DeepSeek route. No secret
+value was printed/imported and no proxy or native patch was introduced. The
+existing Z.ai native route failure remains the honest available-provider block.
