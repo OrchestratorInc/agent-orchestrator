@@ -1193,7 +1193,7 @@ func TestHarnessLaunchGateBlocksCodexMaintenanceBeforeSessionEnumeration(t *test
 	}
 	defer release()
 
-	for _, operation := range []AgentOperation{AgentOperationReinstall, AgentOperationUpdate, AgentOperationUninstall} {
+	for _, operation := range []AgentOperation{AgentOperationReinstall, AgentOperationUpdate} {
 		method := "npm"
 		if _, err := s.StartAgentOperation(context.Background(), TargetCodex, method, operation); !errors.Is(err, ErrHarnessActive) {
 			t.Fatalf("%s error = %v, want ErrHarnessActive", operation, err)
@@ -1554,32 +1554,5 @@ func TestOpenCodeVendorUpdatePinsApprovedReleaseOverAdvisory(t *testing.T) {
 	s.workers.Wait()
 	if want := []string{"/Users/test/.opencode/bin/opencode", "upgrade", "1.18.35", "--method", "curl"}; !slices.Equal(ran, want) {
 		t.Fatalf("ran %v, want the approved release %v", ran, want)
-	}
-}
-
-func TestVendorInstallerUninstallKeepsUserData(t *testing.T) {
-	s := newTestService("darwin", "bash", "sh")
-	planner, err := s.newRequestPlanner(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for target, want := range map[Target][]string{
-		TargetOpencode: {"opencode", "uninstall", "--keep-config", "--keep-data", "--force"},
-		TargetDevin:    {"devin", "uninstall", "--force"},
-	} {
-		plan, err := planner.resolveAgentMethod(target, "official-installer", AgentOperationUninstall)
-		if err != nil {
-			t.Fatalf("%s: %v", target, err)
-		}
-		if !slices.Equal(plan.Command, want) {
-			t.Fatalf("%s uninstall = %v, want %v", target, plan.Command, want)
-		}
-		if got := targetInstalledCopy(plan, target, "/opt/"+string(target)); got.Command[0] != "/opt/"+string(target) {
-			t.Fatalf("%s uninstall runs %q, not the binary sessions run", target, got.Command[0])
-		}
-	}
-	plans := planner.agentMethodPlans(TargetGrok, AgentOperationUninstall)
-	if len(plans) != 1 || !plans[0].Unsupported || !strings.Contains(plans[0].Reason, "uninstall guide") {
-		t.Fatalf("Grok uninstall = %+v, want an unsupported plan pointing to the vendor guide", plans)
 	}
 }

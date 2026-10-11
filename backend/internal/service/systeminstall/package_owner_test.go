@@ -82,7 +82,7 @@ func TestUpdateAdvisoryMaintainsConfirmedOwnerMissingFromHarnessMethods(t *testi
 		}
 		for _, method := range plan.Methods {
 			if method.ID == "homebrew" {
-				if !method.UpdateAvailable || method.UpdateCommand != "brew upgrade block-goose-cli" || !method.UninstallAvailable || method.UninstallCommand != "brew uninstall block-goose-cli" {
+				if !method.UpdateAvailable || method.UpdateCommand != "brew upgrade block-goose-cli" {
 					t.Fatalf("Goose homebrew method = %+v", method)
 				}
 				return

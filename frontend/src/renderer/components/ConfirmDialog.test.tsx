@@ -3,12 +3,12 @@ import { expect, test, vi } from "vitest";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 test("keeps confirmation fields in a scrollable body separate from the footer", () => {
-	render(<ConfirmDialog open title="Uninstall Codex?" description="Choose the original method." confirmLabel="Uninstall" onConfirm={vi.fn()} onOpenChange={vi.fn()}>
+	render(<ConfirmDialog open title="Log out of Codex?" description="Choose the original method." confirmLabel="Log out" onConfirm={vi.fn()} onOpenChange={vi.fn()}>
 		<label><input type="checkbox" />I confirm the original method</label>
 	</ConfirmDialog>);
 	const body = screen.getByRole("checkbox").closest(".overflow-y-auto");
 	expect(body).toHaveClass("min-h-0");
-	expect(body).not.toContainElement(screen.getByRole("button", { name: "Uninstall" }));
+	expect(body).not.toContainElement(screen.getByRole("button", { name: "Log out" }));
 });
 
 test("can disable confirmation without preventing cancellation", () => {

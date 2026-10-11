@@ -158,19 +158,6 @@ func TestUpdateOutcomeRequiresKnownNewerReleaseToReachRunningBinary(t *testing.T
 	}
 }
 
-func TestUninstallOutcomeFailsWhenSameBinaryStillRuns(t *testing.T) {
-	baseline := &installedBaseline{path: "/usr/local/bin/codex"}
-	if got := uninstallOutcome(baseline, VerifyResult{ResolvedPath: "/usr/local/bin/codex"}, nil); !strings.Contains(got, "still runs") {
-		t.Fatalf("same binary = %q", got)
-	}
-	if got := uninstallOutcome(baseline, VerifyResult{}, errors.New("not found")); got != "" {
-		t.Fatalf("removed binary = %q", got)
-	}
-	if got := uninstallOutcome(baseline, VerifyResult{ResolvedPath: "/opt/homebrew/bin/codex"}, nil); got != "" {
-		t.Fatalf("other copy = %q", got)
-	}
-}
-
 func TestUpdateOutcomeRejectsUnverifiedOrPartialUpdates(t *testing.T) {
 	for _, output := range []string{"codex 0.155.0", "codex development", "codex 0.149.0"} {
 		failure, _ := updateOutcome(&installedBaseline{version: "0.150.0", latest: "0.160.1"}, VerifyResult{Output: output})

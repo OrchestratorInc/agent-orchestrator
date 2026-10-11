@@ -2013,7 +2013,7 @@ type AgentUpdateAdvisoryQuery struct {
 // catalog. The daemon still owns the argv behind the method id.
 type StartAgentInstallRequest struct {
 	Method          string                       `json:"method,omitempty" description:"Server-issued installation method id. Omit to use the recommended viable method."`
-	Operation       systeminstall.AgentOperation `json:"operation,omitempty" enum:"install,reinstall,update,uninstall" description:"Requested operation. Defaults to install for older clients."`
+	Operation       systeminstall.AgentOperation `json:"operation,omitempty" enum:"install,reinstall,update" description:"Requested operation. Defaults to install for older clients."`
 	ExpectedVersion string                       `json:"expectedVersion,omitempty" description:"For updates, the available version explicitly approved by the user. Used only as a verification floor, never as a command argument."`
 }
 

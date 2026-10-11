@@ -100,8 +100,8 @@ func (c *SystemInstallController) startAgent(w http.ResponseWriter, r *http.Requ
 	if operation == "" {
 		operation = systeminstall.AgentOperationInstall
 	}
-	if operation != systeminstall.AgentOperationInstall && operation != systeminstall.AgentOperationReinstall && operation != systeminstall.AgentOperationUpdate && operation != systeminstall.AgentOperationUninstall {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_INSTALL_OPERATION", "operation must be install, reinstall, update, or uninstall", nil)
+	if operation != systeminstall.AgentOperationInstall && operation != systeminstall.AgentOperationReinstall && operation != systeminstall.AgentOperationUpdate {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_INSTALL_OPERATION", "operation must be install, reinstall, or update", nil)
 		return
 	}
 	job, err := c.Installer.StartAgentOperation(r.Context(), target, request.Method, operation, request.ExpectedVersion)
@@ -157,7 +157,7 @@ func writeAgentInstallError(w http.ResponseWriter, r *http.Request, err error) b
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INSTALL_METHOD_UNAVAILABLE", "the selected install method is unavailable", nil)
 		return true
 	case errors.Is(err, systeminstall.ErrInstallOwner):
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "INSTALL_OWNER_UNCONFIRMED", "AO could not confirm this method installed the harness it runs; update or remove it with the tool that installed it", nil)
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "INSTALL_OWNER_UNCONFIRMED", "AO could not confirm this method installed the harness it runs; update it with the tool that installed it", nil)
 		return true
 	case errors.Is(err, systeminstall.ErrHarnessActive):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "HARNESS_ACTIVE", "end active sessions for this harness before changing its installation", nil)

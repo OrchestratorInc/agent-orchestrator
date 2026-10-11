@@ -7,4 +7,4 @@ Captured from the real development Electron app on macOS using isolated AO data,
 - [Health (dark)](health-dark.png): resolved executable and diagnostic information.
 - [Logout confirmation](logout-confirm.png): native logout confirmation naming the host.
 
-Native review covered list-to-detail navigation, the three tabs, both themes, login terminal open/close, and logout/uninstall confirmation cancellation. Install/update/uninstall/logout commands were not executed against the machine's installed harnesses or credentials; command selection and lifecycle behavior were exercised with backend and UI tests.
+Native review covered list-to-detail navigation, the three tabs, both themes, login terminal open/close, and logout confirmation cancellation. Install/update/logout commands were not executed against the machine's installed harnesses or credentials; command selection and lifecycle behavior were exercised with backend and UI tests.

@@ -32,7 +32,7 @@ var (
 	ErrInstallMethod = errors.New("systeminstall: invalid install method")
 	// ErrInstallActive prevents a second operation from being silently discarded.
 	ErrInstallActive = errors.New("systeminstall: harness install operation already active")
-	// ErrInstallOwner refuses to update or remove a binary the selected method did not install.
+	// ErrInstallOwner refuses to update a binary the selected method did not install.
 	ErrInstallOwner = errors.New("systeminstall: installation owner not confirmed")
 	// ErrUpdateVersion rejects an invalid caller-supplied verification target.
 	ErrUpdateVersion = errors.New("systeminstall: invalid expected update version")
@@ -189,25 +189,19 @@ type Plan struct {
 	Method              string
 	DocsURL             string
 	ExpectedDestination string
-	// Remove lists program files a vendor's documented uninstall deletes, for
-	// vendors with no uninstall command. AO removes them itself instead of
-	// running Command; user settings and history are never listed.
-	Remove []string
 }
 
 // AgentPlan is the display-safe plan returned to the settings page. Command is
 // a preview of fixed server-owned argv and is never accepted from the client.
 type AgentPlan struct {
-	AgentID          string `json:"agentId"`
-	Available        bool   `json:"available"`
-	Automatic        bool   `json:"automatic"`
-	Method           string `json:"method"`
-	Command          string `json:"command,omitempty"`
-	Reason           string `json:"reason,omitempty"`
-	Notice           string `json:"notice,omitempty"`
-	DocumentationURL string `json:"documentationUrl"`
-	// UninstallGuide explains removing a vendor install AO cannot remove.
-	UninstallGuide      *UninstallGuide      `json:"uninstallGuide,omitempty"`
+	AgentID             string               `json:"agentId"`
+	Available           bool                 `json:"available"`
+	Automatic           bool                 `json:"automatic"`
+	Method              string               `json:"method"`
+	Command             string               `json:"command,omitempty"`
+	Reason              string               `json:"reason,omitempty"`
+	Notice              string               `json:"notice,omitempty"`
+	DocumentationURL    string               `json:"documentationUrl"`
 	ExpectedDestination string               `json:"expectedDestination,omitempty"`
 	Methods             []AgentInstallMethod `json:"methods"`
 }
@@ -229,12 +223,9 @@ type AgentInstallMethod struct {
 	UpdateAvailable     bool   `json:"updateAvailable"`
 	UpdateCommand       string `json:"updateCommand,omitempty"`
 	UpdateReason        string `json:"updateReason,omitempty"`
-	UninstallAvailable  bool   `json:"uninstallAvailable"`
-	UninstallCommand    string `json:"uninstallCommand,omitempty"`
-	UninstallReason     string `json:"uninstallReason,omitempty"`
 }
 
-// AgentOperation selects a fixed install, reinstall, update, or uninstall plan.
+// AgentOperation selects a fixed install, reinstall, or update plan.
 type AgentOperation string
 
 const (
@@ -244,12 +235,10 @@ const (
 	AgentOperationReinstall AgentOperation = "reinstall"
 	// AgentOperationUpdate refreshes the installed agent CLI using its selected method.
 	AgentOperationUpdate AgentOperation = "update"
-	// AgentOperationUninstall removes the installed agent CLI using its selected method.
-	AgentOperationUninstall AgentOperation = "uninstall"
 )
 
 func (operation AgentOperation) valid() bool {
-	return operation == AgentOperationInstall || operation == AgentOperationReinstall || operation == AgentOperationUpdate || operation == AgentOperationUninstall
+	return operation == AgentOperationInstall || operation == AgentOperationReinstall || operation == AgentOperationUpdate
 }
 
 // Status is the lifecycle state of an install Job.
@@ -463,12 +452,10 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 		recommended := recommendedPlanIndex(plans)
 		plan := plans[recommended]
 		updateByMethod := plansByMethod(planner.agentMethodPlans(target, AgentOperationUpdate))
-		uninstallByMethod := plansByMethod(planner.agentMethodPlans(target, AgentOperationUninstall))
 		methods := make([]AgentInstallMethod, 0, len(plans))
 		for index, methodPlan := range plans {
 			reinstallPlan := reinstallByMethod[methodPlan.Method]
 			updatePlan := operationPlanFor(updateByMethod, methodPlan.Method)
-			uninstallPlan := operationPlanFor(uninstallByMethod, methodPlan.Method)
 			methods = append(methods, AgentInstallMethod{
 				ID: methodPlan.Method, Label: installMethodLabel(methodPlan.Method),
 				Available: !methodPlan.Unsupported, Recommended: index == recommended,
@@ -478,8 +465,6 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 				ReinstallCommand:    displayCommand(reinstallPlan), ReinstallReason: reinstallPlan.Reason,
 				UpdateAvailable: !updatePlan.Unsupported,
 				UpdateCommand:   displayCommand(updatePlan), UpdateReason: updatePlan.Reason,
-				UninstallAvailable: !uninstallPlan.Unsupported,
-				UninstallCommand:   displayCommand(uninstallPlan), UninstallReason: uninstallPlan.Reason,
 			})
 		}
 		out = append(out, AgentPlan{
@@ -489,7 +474,6 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 			DocumentationURL:    plan.DocsURL,
 			ExpectedDestination: plan.ExpectedDestination,
 			Methods:             methods,
-			UninstallGuide:      uninstallGuideFor(target, s.goos),
 		})
 	}
 	return out, nil
@@ -639,7 +623,7 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		return Job{}, fmt.Errorf("systeminstall: unknown harness target %q", target)
 	}
 	var releaseHarness func()
-	requiresHarnessGate := target == TargetDroid || target == TargetFX || operation == AgentOperationReinstall || operation == AgentOperationUpdate || operation == AgentOperationUninstall
+	requiresHarnessGate := target == TargetDroid || target == TargetFX || operation == AgentOperationReinstall || operation == AgentOperationUpdate
 	if requiresHarnessGate {
 		s.mu.Lock()
 		if current, ok := s.jobs[target]; ok && activeStatus(current.Status) {
@@ -687,15 +671,12 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 	}
 
 	var baseline *installedBaseline
-	if operation == AgentOperationUpdate || operation == AgentOperationUninstall {
+	if operation == AgentOperationUpdate {
 		if baseline, err = s.confirmInstalledOwner(ctx, target, plan); err != nil {
 			return Job{}, err
 		}
 		if baseline != nil && baseline.path != "" {
 			plan = targetInstalledCopy(plan, target, baseline.path)
-		}
-		if len(plan.Remove) > 0 {
-			plan = s.confirmVendorRemoval(plan, target, baseline)
 		}
 	}
 	if operation == AgentOperationUpdate && expected != "" {
@@ -1064,9 +1045,7 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		"NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false",
 	}
 	var runErr error
-	if len(plan.Remove) > 0 {
-		runErr = removeProgramFiles(plan.Remove, out)
-	} else if plan.Script != nil {
+	if plan.Script != nil {
 		if s.installScripts == nil {
 			runErr = errors.New("remote installer runner is not configured")
 		} else {
@@ -1100,17 +1079,6 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		return
 	}
 
-	if operation == AgentOperationUninstall {
-		if baseline != nil {
-			result, verifyErr := s.verifier.Verify(s.backgroundContext, job.Target)
-			if failure := uninstallOutcome(baseline, result, verifyErr); failure != "" {
-				s.finishAgentJob(job, StatusFailed, out.String(), failure, "")
-				return
-			}
-		}
-		s.finishAgentJob(job, StatusSucceeded, out.String(), "", "")
-		return
-	}
 	if err := s.transitionAgentJob(job, StatusVerifying, out.String(), "", ""); err != nil {
 		s.finishAgentJob(job, StatusFailed, "", fmt.Sprintf("persist verifying state: %v", err), "")
 		return
@@ -1255,9 +1223,6 @@ func (s *Service) resolvePlan(target Target) Plan {
 }
 
 func displayCommand(plan Plan) string {
-	if len(plan.Remove) > 0 {
-		return "remove " + strings.Join(plan.Remove, " ")
-	}
 	if plan.Script != nil {
 		return fmt.Sprintf("%s <downloaded from %s>", strings.Join(plan.Script.Interpreter, " "), plan.Script.URL)
 	}

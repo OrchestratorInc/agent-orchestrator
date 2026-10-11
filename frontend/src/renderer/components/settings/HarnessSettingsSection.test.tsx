@@ -214,9 +214,7 @@ function mockInstalledOperations(savedMethod?: string, readiness = readyCatalog(
 		methods: plan.methods.map((method) => ({
 			...method,
 			updateAvailable: method.id !== "official-installer",
-			uninstallAvailable: method.id !== "official-installer",
 			updateReason: method.id === "official-installer" ? "Vendor update is not supported." : "",
-			uninstallReason: method.id === "official-installer" ? "Vendor removal is not supported." : "",
 		})),
 	})) };
 	let operationJobs = savedMethod ? [{ target: "codex", method: savedMethod, status: "succeeded", startedAt: "2026-09-24T12:00:00Z" }] : [];
@@ -292,7 +290,6 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.queryByRole("textbox", { name: "Search harnesses" })).toBeNull();
 		expect(within(page).getByRole("tab", { name: "Account" })).toHaveAttribute("aria-selected", "true");
 		expect(within(page).getByRole("button", { name: "Update" })).toBeEnabled();
-		expect(within(page).getByRole("button", { name: "Uninstall" })).toBeEnabled();
 		expect(within(page).getByText("Installed version")).toBeInTheDocument();
 		// A historical install/check date is not a verified update date.
 		expect(within(page).queryByText("Last updated")).toBeNull();
@@ -386,8 +383,8 @@ describe("HarnessSettingsSection", () => {
 		expect(within(page).getByText("Authentication")).toBeInTheDocument();
 		expect(within(page).getByText("Executable")).toBeInTheDocument();
 		expect(within(page).getByText("~/.local/bin/codex")).toBeInTheDocument();
-		// Health never changes the harness: no install, update, login or uninstall here.
-		for (const name of ["Install", "Update", "Login", "Uninstall"]) expect(within(page).queryByRole("button", { name })).toBeNull();
+		// Health never changes the harness: no install, update or login here.
+		for (const name of ["Install", "Update", "Login"]) expect(within(page).queryByRole("button", { name })).toBeNull();
 		await userEvent.click(within(page).getByRole("button", { name: "Check again" }));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/probe", { params: { path: { agent: "codex" } } });
 		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
@@ -651,36 +648,9 @@ describe("HarnessSettingsSection", () => {
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "npm", operation: "update", expectedVersion: "1.3.0" } });
 		expect(within(row).getByRole("status")).toHaveTextContent("Updating");
 		expect(within(row).getByRole("button", { name: "Updating…" })).toBeDisabled();
-		expect(within(row).queryByRole("button", { name: "Uninstall" })).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Show diagnostics" })).toBeNull();
 		backToList();
 		expect(within(await findListRow("codex")).getByRole("status")).toHaveTextContent("Updating…");
-	});
-
-	it("shows how to remove a vendor install AO cannot remove", async () => {
-		const readiness = catalogWithInstalled("cursor");
-		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
-			if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
-			if (path === "/api/v1/agents/installers") return { data: { agents: plans.agents.map((plan) => plan.agentId !== "cursor" ? plan : {
-				...plan,
-				uninstallGuide: { programPaths: ["~/.local/share/cursor-agent", "~/.local/bin/cursor-agent"], userDataPaths: ["~/.cursor-cli"], editsShellProfile: true, documented: false },
-				methods: plan.methods.map((method) => ({ ...method, uninstallAvailable: false, uninstallReason: "No uninstall command." })),
-			}) } } as never;
-			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
-			return { data: undefined } as never;
-		});
-		vi.mocked(apiClient.POST).mockResolvedValue({ data: readiness } as never);
-		renderSection();
-		const row = await findAgentRow("cursor");
-		expect(within(row).getByText("Remove Cursor yourself")).toBeInTheDocument();
-		expect(within(row).getByText("rm -rf ~/.local/share/cursor-agent ~/.local/bin/cursor-agent")).toBeInTheDocument();
-		expect(within(row).getByText("rm -rf ~/.cursor-cli")).toBeInTheDocument();
-		expect(within(row).getByText("Then delete the PATH line its installer added to your shell profile.")).toBeInTheDocument();
-		expect(within(row).getByText("Paths come from its install script; check the vendor guide.")).toBeInTheDocument();
-		expect(within(row).getByRole("link", { name: "Uninstall guide" })).toHaveAttribute("href", "https://cursor.com/cli");
-		expect(within(row).getByRole("button", { name: "Uninstall" })).toBeDisabled();
-		await userEvent.click(within(row).getAllByRole("button", { name: "Copy command" })[0]);
-		expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith("rm -rf ~/.local/share/cursor-agent ~/.local/bin/cursor-agent");
 	});
 
 	it("explains a harness with no installable method instead of questioning its ownership", async () => {
@@ -690,7 +660,7 @@ describe("HarnessSettingsSection", () => {
 			if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
 			if (path === "/api/v1/agents/installers") return { data: { agents: [...plans.agents.filter((plan) => plan.agentId !== "goose"), {
 				agentId: "goose", available: false, automatic: false, method: "manual", reason,
-				methods: [{ id: "manual", label: "Manual", available: false, recommended: true, reason, reinstallAvailable: false, updateAvailable: false, uninstallAvailable: false }],
+				methods: [{ id: "manual", label: "Manual", available: false, recommended: true, reason, reinstallAvailable: false, updateAvailable: false }],
 			}] } } as never;
 			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
 			if (path === "/api/v1/agents/{agent}/update-advisory") {
@@ -715,30 +685,10 @@ describe("HarnessSettingsSection", () => {
 		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
 		await userEvent.click(within(row).getByRole("button", { name: "Update manually" }));
 		expect(openExternal).toHaveBeenCalledWith("https://github.com/openai/codex");
-		expect(within(row).getByRole("button", { name: "Uninstall" })).toBeDisabled();
 		expect(within(row).getByText("Installation method could not be verified. Manage this CLI using its original installer.")).toBeInTheDocument();
 		expect(screen.queryByRole("dialog")).toBeNull();
 		expect(within(row).queryByRole("combobox")).toBeNull();
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
-	});
-
-	it("uses only a minimal uninstall confirmation and supports cancellation", async () => {
-		mockInstalledOperations("npm");
-		renderSection();
-		const row = await findAgentRow("codex");
-		await userEvent.click(within(row).getByRole("button", { name: "Uninstall" }));
-		let dialog = screen.getByRole("dialog", { name: "Uninstall Codex?" });
-		expect(within(dialog).queryByRole("combobox")).toBeNull();
-		expect(within(dialog).queryByRole("checkbox")).toBeNull();
-		expect(within(dialog).queryByText("npm")).toBeNull();
-		expect(within(dialog).getByRole("button", { name: "Uninstall" })).toBeEnabled();
-		await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
-		await userEvent.click(within(row).getByRole("button", { name: "Uninstall" }));
-		dialog = screen.getByRole("dialog");
-		await userEvent.click(within(dialog).getByRole("button", { name: "Uninstall" }));
-		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "npm", operation: "uninstall" } });
-		expect(within(row).getByRole("status")).toHaveTextContent("Uninstalling");
 	});
 
 	it("never substitutes an available manager for an unsupported saved method", async () => {
@@ -747,7 +697,6 @@ describe("HarnessSettingsSection", () => {
 		const row = await findAgentRow("codex");
 		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
 		expect(within(row).getByRole("button", { name: "Update manually" })).toBeEnabled();
-		expect(within(row).getByRole("button", { name: "Uninstall" })).toBeDisabled();
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
@@ -759,23 +708,6 @@ describe("HarnessSettingsSection", () => {
 		const row = await findAgentRow("codex");
 		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
 		expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
-	});
-
-	it.each(["removed", "different-owner", "ownership-unknown"] as const)("blocks an open confirmation when fresh state is %s", async (state) => {
-		mockInstalledOperations("npm");
-		const { client } = renderSection();
-		await within(await findListRow("codex")).findByRole("img", { name: "v1.3.0 available" });
-		await userEvent.click(within(await findAgentRow("codex")).getByRole("button", { name: "Uninstall" }));
-		const dialog = screen.getByRole("dialog");
-		act(() => {
-			if (state === "removed") client.setQueryData(agentReadinessQueryKey, catalogWithInstalled("claude-code"));
-			else client.setQueryData(["agent-update-advisory", "local", "codex"], {
-				agentId: "codex", status: "unknown", source: state === "different-owner" ? "homebrew" : undefined,
-				reason: state === "ownership-unknown" ? "ownership_unconfirmed" : undefined,
-			});
-		});
-		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Uninstall" })).toBeDisabled());
-		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
 	it("reopens details for a daemon rejection and retries the same update", async () => {
@@ -814,7 +746,7 @@ describe("HarnessSettingsSection", () => {
 		expect(await within(await findListRow("goose")).findByRole("status")).toHaveTextContent("Working…");
 	});
 
-	it("prioritizes login, hides uninstall through cleanup, and never auto-updates", async () => {
+	it("prioritizes login and never auto-updates", async () => {
 		const readiness = catalogWithInstalled("codex");
 		readiness.agents[1].authentication.state = "unauthorized";
 		mockInstalledOperations("npm", readiness);
@@ -844,14 +776,11 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
 		await userEvent.click(within(row).getByRole("button", { name: "Login" }));
 		expect(within(row).getByRole("tab", { name: "Account" })).toHaveAttribute("aria-selected", "true");
-		expect(within(row).queryByRole("button", { name: "Uninstall" })).toBeNull();
 		await userEvent.click(await screen.findByRole("button", { name: "Complete login terminal" }));
 		await waitFor(() => expect(apiClient.DELETE).toHaveBeenCalled());
-		expect(within(row).queryByRole("button", { name: "Uninstall" })).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
 		await act(async () => { resolveClose({ data: undefined }); });
 		await waitFor(() => expect(within(row).getByRole("button", { name: "Update" })).toBeEnabled());
-		expect(within(row).getByRole("button", { name: "Uninstall" })).toBeEnabled();
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
@@ -870,33 +799,6 @@ describe("HarnessSettingsSection", () => {
 		act(() => { client.setQueryData(["agent-install-jobs"], [completed]); });
 		await waitFor(() => expect(row.querySelector("time")).toHaveAttribute("datetime", "2026-10-07T12:00:00Z"));
 		expect(within(row).queryByRole("button", { name: "Show diagnostics" })).toBeNull();
-	});
-
-	it("keeps uninstall hidden until the fresh check after closing login finishes", async () => {
-		const readiness = readyCatalog();
-		readiness.agents[1].authentication.state = "unauthorized";
-		mockInstalledOperations("npm", readiness);
-		let resolveProbe!: (value: unknown) => void;
-		const probe = new Promise((resolve) => { resolveProbe = resolve; });
-		const post = vi.mocked(apiClient.POST);
-		const previous = post.getMockImplementation()!;
-		post.mockImplementation(async (path, options) => {
-			if (path === "/api/v1/agents/{agent}/auth") return { data: {
-				agentId: "codex", action: "login", terminal: { handleId: "auth-codex", title: "Codex login", workingDir: "/tmp", createdAt: "2026-10-07T00:00:00Z" },
-			} } as never;
-			if (path === "/api/v1/agents/{agent}/probe") return await probe as never;
-			return (previous as (path: string, options: unknown) => Promise<never>)(path, options);
-		});
-		vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
-		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
-		renderSection();
-		const row = await findAgentRow("codex");
-		await userEvent.click(await within(row).findByRole("button", { name: "Login" }));
-		await userEvent.click(await within(row).findByRole("button", { name: "Close settings" }));
-		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/probe", { params: { path: { agent: "codex" } } }));
-		expect(within(row).queryByRole("button", { name: "Uninstall" })).toBeNull();
-		await act(async () => { resolveProbe({ data: { agent: { id: "codex", authStatus: "unauthorized" }, installed: true } }); });
-		await waitFor(() => expect(within(row).getByRole("button", { name: "Uninstall" })).toBeEnabled());
 	});
 
 	it("keeps displayed versions and maintenance requests scoped to the selected host", async () => {

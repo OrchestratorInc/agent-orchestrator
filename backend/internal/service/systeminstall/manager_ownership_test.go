@@ -276,8 +276,8 @@ func TestNPMPrefixOwningBinaryFindsPrefixesOutsideDaemonNPM(t *testing.T) {
 		if !ok {
 			t.Fatal("~/.local npm prefix was not recognised")
 		}
-		plan := targetInstalledCopy(Plan{Method: "npm", Package: pkg, Command: []string{"npm", "uninstall", "-g", "--prefix", "/daemon/npm", pkg}}, TargetPi, bin)
-		if want := []string{"npm", "uninstall", "-g", "--prefix", got, pkg}; !slices.Equal(plan.Command, want) {
+		plan := targetInstalledCopy(Plan{Method: "npm", Package: pkg, Command: []string{"npm", "install", "-g", "--prefix", "/daemon/npm", pkg + "@latest"}}, TargetPi, bin)
+		if want := []string{"npm", "install", "-g", "--prefix", got, pkg + "@latest"}; !slices.Equal(plan.Command, want) {
 			t.Fatalf("command = %v, want %v", plan.Command, want)
 		}
 	})

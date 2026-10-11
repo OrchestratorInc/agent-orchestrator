@@ -151,7 +151,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Start an asynchronous install, update, or uninstall for one fixed agent
+      summary: Start an asynchronous install, reinstall, or update for one fixed agent
         harness
       tags:
       - agents
@@ -9961,12 +9961,6 @@ components:
           type: string
         reinstallReason:
           type: string
-        uninstallAvailable:
-          type: boolean
-        uninstallCommand:
-          type: string
-        uninstallReason:
-          type: string
         updateAvailable:
           type: boolean
         updateCommand:
@@ -9980,7 +9974,6 @@ components:
       - recommended
       - reinstallAvailable
       - updateAvailable
-      - uninstallAvailable
       type: object
     AgentInstallPlan:
       properties:
@@ -10006,8 +9999,6 @@ components:
           type: string
         reason:
           type: string
-        uninstallGuide:
-          $ref: '#/components/schemas/AgentUninstallGuide'
       required:
       - agentId
       - available
@@ -10299,35 +10290,6 @@ components:
           $ref: '#/components/schemas/AgentSwitch'
       required:
       - switch
-      type: object
-    AgentUninstallGuide:
-      properties:
-        command:
-          description: Vendor uninstall command for this install.
-          type: string
-        docsUrl:
-          description: Vendor page with uninstall instructions.
-          type: string
-        documented:
-          description: Whether the vendor documents these steps.
-          type: boolean
-        editsShellProfile:
-          description: Whether the installer added a PATH line to the shell profile.
-          type: boolean
-        programPaths:
-          description: Program files and directories to remove.
-          items:
-            type: string
-          type: array
-        userDataPaths:
-          description: Optional settings, sign-in and history paths.
-          items:
-            type: string
-          type: array
-      required:
-      - programPaths
-      - editsShellProfile
-      - documented
       type: object
     AgentUpdateAdvisory:
       properties:
@@ -15971,7 +15933,6 @@ components:
           - install
           - reinstall
           - update
-          - uninstall
           type: string
       type: object
     StartCodexAccountSwitchRequest:

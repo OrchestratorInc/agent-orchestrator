@@ -99,7 +99,7 @@ type installedBaseline struct {
 	scheme   versionScheme
 }
 
-// confirmInstalledOwner refuses an update or uninstall through a method that
+// confirmInstalledOwner refuses an update through a method that
 // does not own the binary the harness adapter runs, so AO never changes a
 // different copy than the one sessions launch.
 func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan Plan) (*installedBaseline, error) {
@@ -122,10 +122,10 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 			s.mu.Unlock()
 			return baseline, nil
 		}
-		return nil, fmt.Errorf("%w: AO could not confirm which %s installation is in use (%w); update or remove it manually", ErrInstallOwner, target, err)
+		return nil, fmt.Errorf("%w: AO could not confirm which %s installation is in use (%w); update it manually", ErrInstallOwner, target, err)
 	}
 	if !s.methodOwnsBinary(ctx, plan, verified.ResolvedPath) {
-		return nil, fmt.Errorf("%w: the %s that AO runs (%s) was not installed with %s; update or remove it manually with the tool that installed it", ErrInstallOwner, target, verified.ResolvedPath, installMethodLabel(plan.Method))
+		return nil, fmt.Errorf("%w: the %s that AO runs (%s) was not installed with %s; update it manually with the tool that installed it", ErrInstallOwner, target, verified.ResolvedPath, installMethodLabel(plan.Method))
 	}
 	scheme := versionSchemeFor(target)
 	version, _ := scheme.find(verified.Output)
@@ -201,13 +201,4 @@ func updateOutcome(baseline *installedBaseline, result VerifyResult) (failure, n
 		return "", strings.TrimSpace(fmt.Sprintf("Updated %s to %s. %s", before.display, after.display, note))
 	}
 	return "", strings.TrimSpace(fmt.Sprintf("Version unchanged at %s. %s", after.display, note))
-}
-
-// uninstallOutcome reports a failure when the exact binary sessions ran
-// before the uninstall still runs afterwards.
-func uninstallOutcome(baseline *installedBaseline, result VerifyResult, verifyErr error) string {
-	if baseline == nil || verifyErr != nil || baseline.path == "" || result.ResolvedPath != baseline.path {
-		return ""
-	}
-	return fmt.Sprintf("the uninstall finished, but %s still runs", baseline.path)
 }

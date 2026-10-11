@@ -48,7 +48,7 @@ export interface paths {
         /** Get the current or last install job for one agent harness */
         get: operations["getAgentInstallStatus"];
         put?: never;
-        /** Start an asynchronous install, update, or uninstall for one fixed agent harness */
+        /** Start an asynchronous install, reinstall, or update for one fixed agent harness */
         post: operations["startAgentInstall"];
         delete?: never;
         options?: never;
@@ -3310,9 +3310,6 @@ export interface components {
             reinstallAvailable: boolean;
             reinstallCommand?: string;
             reinstallReason?: string;
-            uninstallAvailable: boolean;
-            uninstallCommand?: string;
-            uninstallReason?: string;
             updateAvailable: boolean;
             updateCommand?: string;
             updateReason?: string;
@@ -3328,7 +3325,6 @@ export interface components {
             methods: components["schemas"]["AgentInstallMethod"][];
             notice?: string;
             reason?: string;
-            uninstallGuide?: components["schemas"]["AgentUninstallGuide"];
         };
         AgentInstallationObservation: {
             /** Format: date-time */
@@ -3426,20 +3422,6 @@ export interface components {
         };
         AgentSwitchResponse: {
             switch: components["schemas"]["AgentSwitch"];
-        };
-        AgentUninstallGuide: {
-            /** @description Vendor uninstall command for this install. */
-            command?: string;
-            /** @description Vendor page with uninstall instructions. */
-            docsUrl?: string;
-            /** @description Whether the vendor documents these steps. */
-            documented: boolean;
-            /** @description Whether the installer added a PATH line to the shell profile. */
-            editsShellProfile: boolean;
-            /** @description Program files and directories to remove. */
-            programPaths: string[];
-            /** @description Optional settings, sign-in and history paths. */
-            userDataPaths?: string[];
         };
         AgentUpdateAdvisory: {
             agentId: string;
@@ -5574,7 +5556,7 @@ export interface components {
              * @description Requested operation. Defaults to install for older clients.
              * @enum {string}
              */
-            operation?: "install" | "reinstall" | "update" | "uninstall";
+            operation?: "install" | "reinstall" | "update";
         };
         StartCodexAccountSwitchRequest: {
             /** @deprecated */

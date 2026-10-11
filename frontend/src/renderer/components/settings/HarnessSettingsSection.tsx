@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, CircleArrowUp, ChevronLeft, ChevronRight, Copy, ExternalLink, KeyRound, LoaderCircle, LogIn, LogOut, RefreshCw, Search, Trash2, TriangleAlert, X } from "lucide-react";
+import { BookOpen, Check, CircleArrowUp, ChevronLeft, ChevronRight, Copy, ExternalLink, KeyRound, LoaderCircle, LogIn, LogOut, RefreshCw, Search, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -21,7 +21,6 @@ import { useCloudOrg } from "../../hooks/useCloudOrg";
 import { providerConnectionsQueryKey, useProviderConnections } from "../../hooks/useProviderConnections";
 import { GitHubTokenField } from "../onboarding/GitHubTokenField";
 import { HarnessModelDefaults } from "./HarnessModelDefaults";
-import { HarnessUninstallGuide } from "./HarnessUninstallGuide";
 import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPanel";
 import { SettingsRow } from "./SettingsRow";
 import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
@@ -47,11 +46,8 @@ export { updateAdvisoryRefreshInterval } from "../../hooks/useHarnessUpdates";
 type AgentInstallPlan = components["schemas"]["AgentInstallPlan"];
 type InstallJob = components["schemas"]["InstallJob"];
 type AgentUpdateAdvisory = components["schemas"]["AgentUpdateAdvisory"];
-type AgentOperation = "install" | "reinstall" | "update" | "uninstall";
-type InstalledOperation = "update" | "uninstall";
+type AgentOperation = "install" | "reinstall" | "update";
 type AgentInstallMethod = AgentInstallPlan["methods"][number];
-type OperationRequest = { agentId: AgentId; method: string };
-
 const POLL_INTERVAL_MS = 1_000;
 const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // The first check right after a login terminal exits can fail transiently (the
@@ -103,8 +99,8 @@ function isActive(job: InstallJob | undefined): boolean {
 	return job?.status === "running" || job?.status === "installing" || job?.status === "verifying";
 }
 
-function supportsOperation(method: AgentInstallMethod | undefined, operation: InstalledOperation): boolean {
-	return Boolean(method?.available && (operation === "update" ? method.updateAvailable : method.uninstallAvailable));
+function supportsUpdate(method: AgentInstallMethod | undefined): boolean {
+	return Boolean(method?.available && method.updateAvailable);
 }
 
 function diagnosticsText(agentId: AgentId, job: InstallJob): string {
@@ -327,7 +323,6 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		if (selectedAgentRef.current !== null && selectedAgentRef.current !== agentId) return;
 		openDetail(agentId);
 	};
-	const [operationRequest, setOperationRequest] = useState<OperationRequest | null>(null);
 	// Operation identity is local to jobs started here; restored jobs use neutral copy.
 	const [operationAttempts, setOperationAttempts] = useState<Partial<Record<AgentId, { operation: AgentOperation; startedAt?: string }>>>({});
 	// The API has no durable update history. Only record verified updates we
@@ -568,9 +563,9 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 
 	const startAgentOperation = async (agentId: AgentId, method: string, operation: AgentOperation): Promise<boolean> => {
 		if (isActive(jobMap.get(agentId)) || authWorkflowRef.current?.agentId === agentId || authStartPendingRef.current) return false;
-		if ((operation === "update" || operation === "uninstall") && (!installed.has(agentId)
+		if (operation === "update" && (!installed.has(agentId)
 			|| operationMethodId(agentId) !== method
-			|| !supportsOperation(plans.get(agentId)?.methods.find((candidate) => candidate.id === method), operation))) return false;
+			|| !supportsUpdate(plans.get(agentId)?.methods.find((candidate) => candidate.id === method)))) return false;
 		if (operation === "update" && (needsAuthentication(agentId) || authPlans.isPending || authPlans.isError)) return false;
 		if (!beginAction(agentId)) return false;
 		setOperationAttempts((current) => ({ ...current, [agentId]: { operation } }));
@@ -591,7 +586,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				body: { method, operation, ...(expectedVersion ? { expectedVersion } : {}) },
 			});
 			if (error || !data) {
-				setActionErrors((current) => ({ ...current, [agentId]: apiErrorMessage(error, t(operation === "uninstall" ? "settings.harness.uninstallFailed" : operation === "update" ? "settings.harness.updateFailed" : "settings.harness.startFailed")) }));
+				setActionErrors((current) => ({ ...current, [agentId]: apiErrorMessage(error, t(operation === "update" ? "settings.harness.updateFailed" : "settings.harness.startFailed")) }));
 				revealAgent(agentId);
 				return false;
 			}
@@ -608,28 +603,15 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		}
 	};
 
-	const requestInstalledOperation = (agentId: AgentId, operation: InstalledOperation) => {
+	const requestUpdate = (agentId: AgentId) => {
 		if (!installed.has(agentId) || pendingActions.current.has(agentId) || isActive(jobMap.get(agentId))
 			|| authWorkflowRef.current?.agentId === agentId || authStartPendingRef.current) return;
 		const methods = plans.get(agentId)?.methods ?? [];
 		const method = operationMethodId(agentId);
-		if (!method || !supportsOperation(methods.find((candidate) => candidate.id === method), operation)) return;
+		if (!method || !supportsUpdate(methods.find((candidate) => candidate.id === method))) return;
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
-		if (operation === "update") {
-			void startAgentOperation(agentId, method, operation);
-			return;
-		}
-		setOperationRequest({ agentId, method });
+		void startAgentOperation(agentId, method, "update");
 	};
-
-	const requestMethods = operationRequest ? plans.get(operationRequest.agentId)?.methods ?? [] : [];
-	const requestMethod = requestMethods.find((method) => method.id === operationRequest?.method);
-	const requestBusy = operationRequest ? pendingAgentIds.has(operationRequest.agentId) : false;
-	const canConfirmOperation = Boolean(operationRequest && installed.has(operationRequest.agentId)
-		&& !requestBusy && !isActive(jobMap.get(operationRequest.agentId))
-		&& !authStates[operationRequest.agentId]?.pending && authWorkflow?.agentId !== operationRequest.agentId
-		&& operationMethodId(operationRequest.agentId) === operationRequest.method
-		&& supportsOperation(requestMethod, "uninstall"));
 
 	const verifyInstall = async (agentId: AgentId) => {
 		if (!beginAction(agentId)) return;
@@ -845,14 +827,12 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const installMethod = availableMethods.find((method) => method.recommended) ?? availableMethods[0];
 		const methodId = operationMethodId(agentId);
 		const maintenanceMethod = plan?.methods.find((method) => method.id === methodId);
-		const canUpdate = supportsOperation(maintenanceMethod, "update");
-		const canUninstall = supportsOperation(maintenanceMethod, "uninstall");
+		const canUpdate = supportsUpdate(maintenanceMethod);
 		// A harness with no installable method (built into AO, or an installer
 		// that must run interactively here) explains itself; ownership is not the question.
 		const manualOnly = Boolean(plan?.methods.length) && plan!.methods.every((method) => method.id === "manual");
 		const ownershipReason = !methodId ? (manualOnly && plan?.reason ? plan.reason : t("settings.harness.ownershipUnknown")) : undefined;
 		const updateReason = ownershipReason || maintenanceMethod?.updateReason || maintenanceMethod?.reason || t("settings.harness.updateUnsupported");
-		const uninstallReason = ownershipReason || maintenanceMethod?.uninstallReason || maintenanceMethod?.reason || t("settings.harness.uninstallUnsupported");
 		const advisoryQuery = advisoryMap.get(agentId);
 		const advisory = advisoryQuery?.data;
 		const updateUnknown = advisoryQuery?.isError || !hasDefinitiveUpdateStatus(advisory);
@@ -893,7 +873,6 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 			: t(isSetupAction ? "settings.harness.configurationUnknown" : "settings.harness.loginUnknown");
 		const progressLabel = job?.status === "verifying" ? t("settings.harness.verifying")
 			: currentOperation === "update" ? t("settings.harness.updating")
-			: currentOperation === "uninstall" ? t("settings.harness.uninstalling")
 			: currentOperation === "install" ? t("settings.harness.installing") : t("settings.harness.working");
 		const rowError = actionError ?? authState?.error ?? (jobFailed ? job?.error ?? t("settings.harness.installFailed") : undefined);
 		const listTone: HarnessTone = !isInstalled ? (rowError ? "error" : "off")
@@ -932,7 +911,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 					<ExternalLink aria-hidden="true" />{t("settings.harness.installGuide")}
 				</Button> : null
 			) : showUpdate && !needsLogin ? (
-				canUpdate ? <Button type="button" data-harness-primary-action="" size="sm" className={actionClass} onClick={() => requestInstalledOperation(agentId, "update")}>
+				canUpdate ? <Button type="button" data-harness-primary-action="" size="sm" className={actionClass} onClick={() => requestUpdate(agentId)}>
 					{t(failed && currentOperation === "update" ? "settings.harness.retryUpdate" : "settings.harness.update")}
 				</Button> : plan?.documentationUrl ? <Button type="button" data-harness-primary-action="" size="sm" variant="outline" className={actionClass} title={updateReason} onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button> : null
 			) : null;
@@ -946,7 +925,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				{t(isDocumentationAction ? "settings.harness.viewDocumentation" : isSetupAction ? "settings.harness.openSetup" : "settings.harness.loginAgain")}
 			</Button> : null;
 		return {
-			agentId, plan, job, isInstalled, methodId, maintenanceMethod, canUpdate, canUninstall, manualOnly, updateReason, uninstallReason,
+			agentId, plan, job, isInstalled, methodId, maintenanceMethod, canUpdate, manualOnly, updateReason,
 			advisoryQuery, advisory, updateUnknown, updateAvailable, currentVersion, busy, failed, jobFailed, currentOperation, readinessAgent,
 			authPlan, authStatus, authSummary, rowAuthWorkflow, authBusy, showUpdate, hasDiagnostics, rowError, versionText, versionUnverified,
 			updatedAt, installationAction, accountAction, progressLabel, installationPending, installNote, listTone, statusLabel,
@@ -997,8 +976,10 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 					<span className="text-xs text-settings-label">{formatTimestamp(details.updatedAt)}</span>
 				</HarnessDetailRow> : null}
 			</HarnessDetailGroup>
-			{isInstalled && details.showUpdate && !details.canUpdate && details.updateReason !== details.uninstallReason ? <p className="-mt-3 text-xs text-settings-muted">{details.updateReason}</p> : null}
+			{isInstalled && details.showUpdate && !details.canUpdate ? <p className="-mt-3 text-xs text-settings-muted">{details.updateReason}</p> : null}
 			{isInstalled && details.updateUnknown && !details.advisoryQuery?.isPending && !details.manualOnly ? <p className="-mt-3 text-xs text-settings-muted">{t("settings.harness.updateCheckUnavailable")}</p> : null}
+			{/* A harness with no installable method explains how it is maintained instead. */}
+			{isInstalled && details.manualOnly && plan?.reason && !(details.showUpdate && !details.canUpdate) ? <p className="-mt-3 text-xs text-settings-muted">{plan.reason}</p> : null}
 
 			{showAccount || rowAuthWorkflow ? <HarnessDetailGroup title={t("settings.harness.account")}>
 				<HarnessDetailRow label={authBusy && rowAuthWorkflow ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.logoutInProgress" : "settings.harness.loginInProgress") : details.authSummary}>
@@ -1017,23 +998,10 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				}}
 			/> : null}
 
-			{details.rowError && !operationRequest ? <p role="alert" className="text-xs text-error">{details.rowError}</p> : null}
+			{details.rowError ? <p role="alert" className="text-xs text-error">{details.rowError}</p> : null}
 			{details.jobFailed && !authBusy ? <div><Button type="button" size="sm" variant="outline" disabled={details.busy} onClick={() => void verifyInstall(agentId)}>{t("settings.harness.verifyAgain")}</Button></div> : null}
 			{diagnosticsPanel(details)}
 
-			{isInstalled && !authBusy && !details.busy ? <HarnessDetailGroup title={t("settings.harness.dangerZone")}>
-				<HarnessDetailRow
-					label={t("settings.harness.uninstallAgent", { agent: agentLabel(agentId) })}
-					description={details.canUninstall && methodLabel ? t("settings.harness.uninstallWith", { method: methodLabel }) : undefined}
-				>
-					<Button type="button" size="sm" variant="outline" className="h-8 border-error/40 px-3 text-error hover:border-error/60 hover:bg-error/10 hover:text-error focus-visible:ring-2 focus-visible:ring-error" disabled={!details.canUninstall} aria-describedby={!details.canUninstall ? `harness-uninstall-reason-${agentId}` : undefined} onClick={() => requestInstalledOperation(agentId, "uninstall")}>
-						<Trash2 aria-hidden="true" />{t(details.failed && details.currentOperation === "uninstall" ? "settings.harness.retryUninstall" : "settings.harness.uninstall")}
-					</Button>
-				</HarnessDetailRow>
-			</HarnessDetailGroup> : null}
-			{isInstalled && !authBusy && !details.busy && !details.canUninstall ? (plan?.uninstallGuide && (!details.methodId || details.methodId === "official-installer")
-				? <div id={`harness-uninstall-reason-${agentId}`} className="-mt-3"><HarnessUninstallGuide agent={agentLabel(agentId)} guide={plan.uninstallGuide} fallbackDocsUrl={plan.documentationUrl} /></div>
-				: <p id={`harness-uninstall-reason-${agentId}`} className="-mt-3 text-xs text-settings-muted">{details.uninstallReason}</p>) : null}
 		</div>;
 	};
 
@@ -1218,21 +1186,6 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				error={logoutRequest ? authStates[logoutRequest]?.error : null}
 				onConfirm={() => { if (logoutRequest) void startAuth(logoutRequest, "logout").then((started) => { if (started) setLogoutRequest(null); }); }}
 				onOpenChange={(open) => { if (!open && !authStartPendingRef.current) setLogoutRequest(null); }}
-			/>
-			<ConfirmDialog
-				open={operationRequest !== null}
-				title={t("settings.harness.uninstallConfirmTitle", { agent: operationRequest ? agentLabel(operationRequest.agentId) : "" })}
-				description={null}
-				confirmLabel={t("settings.harness.uninstall")}
-				destructive
-				busy={requestBusy}
-				confirmDisabled={!canConfirmOperation}
-				error={operationRequest ? actionErrors[operationRequest.agentId] : null}
-				onConfirm={() => {
-					if (!operationRequest || !canConfirmOperation) return;
-					void startAgentOperation(operationRequest.agentId, operationRequest.method, "uninstall").then((started) => { if (started) setOperationRequest(null); });
-				}}
-				onOpenChange={(open) => { if (!open && !requestBusy) setOperationRequest(null); }}
 			/>
 		</>
 	);
