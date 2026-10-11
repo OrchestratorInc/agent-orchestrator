@@ -559,7 +559,7 @@ export function ChatComposer({
 							const next = latestQuotes.current.filter((item) => item.id !== quote.id);
 							latestQuotes.current = next;
 							setQuotes(next);
-						}} style={styles.removeQuote}><Feather name="x" size={16} color={t.textTertiary} /></Pressable>
+						}} style={styles.removeQuote}><Feather name="x" size={iconSize.lg} color={t.textSecondary} /></Pressable>
 					</View>)}
 				</ScrollView> : null}
 				<View style={styles.composerRow}>
@@ -625,9 +625,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// when everything fits, the two never touch.
 	metaRow: { width: "100%", height: 44, flexDirection: "row", alignItems: "center", gap: space.sm },
 	settingsSlot: { flex: 1, minWidth: 0, height: 44, alignItems: "flex-start", justifyContent: "center", overflow: "hidden" },
-	quotes: { maxHeight: 120, flexGrow: 0, marginTop: space.sm, marginHorizontal: space.sm },
-	quote: { minHeight: 44, flexDirection: "row", alignItems: "flex-start", gap: space.sm, paddingLeft: space.sm },
-	quoteText: { ...type.subheadline, flex: 1, minWidth: 0, paddingVertical: space.md, color: t.textSecondary },
+	quotes: { maxHeight: 120, flexGrow: 0, marginTop: space.xxs, marginHorizontal: space.sm },
+	quote: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.sm },
+	quoteText: { ...type.subheadline, flex: 1, minWidth: 0, paddingVertical: space.xs, color: t.textSecondary },
 	removeQuote: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
 	// One glass panel for selected quotes, attach, the field, dictation and the filled
 	// control that commits. The pill's radius is half its resting height, so a
