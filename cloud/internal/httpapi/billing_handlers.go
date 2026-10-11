@@ -415,7 +415,26 @@ func (s *Server) createBillingPortal(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusConflict, "NO_SUBSCRIPTION", "There is no plan to cancel.")
 			return
 		}
-		cancelSubscriptionID = state.StripeSubscriptionID
+		// Stripe refuses a cancel flow for a plan already set to cancel, and
+		// a webhook may not have told us yet. Read the subscription first and
+		// store it, so the app learns when the plan ends; an already
+		// cancelling plan opens the portal home, where it can be renewed.
+		subscription, err := s.billingOptions.Stripe.GetSubscription(r.Context(), state.StripeSubscriptionID)
+		if err != nil {
+			s.writeBillingProviderError(w, r, "read Stripe subscription", err)
+			return
+		}
+		// Store it through the same locked flow as a webhook (a synthetic
+		// event: nothing to dedupe), so a missed webhook cannot leave the
+		// app unaware the plan is ending.
+		if err := s.syncSubscription(r.Context(), billing.Event{Type: "portal.cancel_check"},
+			state.StripeSubscriptionID, state.StripeCustomerID); err != nil {
+			s.writeStoreError(w, r, err)
+			return
+		}
+		if subscription.CancelAt == nil {
+			cancelSubscriptionID = state.StripeSubscriptionID
+		}
 	default:
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "flow must be cancel or empty.")
 		return
