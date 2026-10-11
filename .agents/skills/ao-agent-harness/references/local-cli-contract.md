@@ -213,3 +213,36 @@ IDs. If upstream offers only free-form model selection, omit unsupported model
 commands: `local_models_list` and model comparison remain `NOT_RUN`. An empty
 AO catalog remains `FAIL` in this strict catalog-based audit, even if the
 integration truthfully supports free-form models.
+
+
+## CodeBuddy Code native TUI qualification
+
+Pin the released npm package and launcher hash; 2.164.0 was qualified on Ubuntu.
+Use a positional task after `--` and actual bounded additive text in
+`--append-system-prompt`; a request to read an instruction file is not equivalent.
+`--resume ID` needs explicit durable ID/cwd validation before launch because AO's
+`ok=false` restore path can otherwise replay the initial task fresh. Respect the
+effective runtime `CODEBUDDY_CONFIG_DIR`, not just the daemon environment.
+
+Preserve native manual permissions. Supported foreground-only environment controls
+are `CODEBUDDY_CODE_DISABLE_BACKGROUND_TASKS=1`, `CODEBUDDY_DISABLE_CRON=1` and
+`DISABLE_AUTOUPDATER=1`; these do not authorize bypass permissions. Only default
+permissions, TUI and bounded histories are qualified; ACP declarations are not
+provider conformance. Native model selection is freeform and credential presence
+is configured, not a general authorization claim.
+
+The native bundled Ink renderer emits static output with `CI=1` or
+`CONTINUOUS_INTEGRATION` enabled. A desktop proof launcher must use an interactive
+environment (the final isolated lab used `CI=false`). Retain static-output failures
+and never authorize input from a stale ring tail. Native suggested prompts also
+look nonempty; conservatively refuse AO pastes until the native surface is empty.
+If disabling suggestions for an owned audit, merge the supported native
+`promptSuggestionEnabled=false` setting rather than modifying upstream code.
+
+One Escape cancelled the observed foreground shell. A second Escape can open native
+Rewind; observe the current screen before any following input, and dismiss only an
+owned audit dialog. Do not equate HTTP kill acknowledgement or an omitted optional
+`freed` field with kernel cleanup: corroborate host/supervisor/native and child PID
+plus kernel start, unrelated control ownership, and delayed side-effect absence.
+See the [CodeBuddy report](../../../../docs/research/codebuddy-tui-2026-10-11.md) for
+separate earlier failures, later controls, exact UI/daemon capture provenance and CI.
