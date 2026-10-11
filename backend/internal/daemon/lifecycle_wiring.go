@@ -410,7 +410,10 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 		agent, found := m.agents.Agent(rec.Harness)
 		if policy, supports := agent.(interface{ ValidateTerminalMessage(string, string) error }); found && supports {
 			lock, _ := m.inputLocks.LoadOrStore(id, &terminalMessageAdmission{})
-			admission := lock.(*terminalMessageAdmission)
+			admission, validAdmission := lock.(*terminalMessageAdmission)
+			if !validAdmission {
+				return fmt.Errorf("session %s: invalid input admission state", id)
+			}
 			admission.Lock()
 			defer admission.Unlock()
 			reader, supports := m.runtime.(interface {

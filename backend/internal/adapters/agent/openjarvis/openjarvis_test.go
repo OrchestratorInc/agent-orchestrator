@@ -7,8 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/pelletier/go-toml/v2"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestInputFailsClosed(t *testing.T) {
