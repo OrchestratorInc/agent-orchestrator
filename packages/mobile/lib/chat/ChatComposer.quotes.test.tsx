@@ -30,6 +30,7 @@ vi.mock("./RequestCard", () => ({ RequestCard: "RequestCard" }));
 vi.mock("./PRReviewPrompt", () => ({ PRReviewPrompt: "PRReviewPrompt" }));
 
 import { ChatComposer } from "./ChatComposer";
+import { ComposerGlass } from "./composer-glass";
 import { encodeResponseDraft } from "./responseQuotes";
 
 const props = () => ({
@@ -47,6 +48,10 @@ it("adds and removes selected text while preserving the existing editable reply,
 	act(() => renderer.root.findByType(TextInput).props.onChangeText("Explain this"));
 	act(() => renderer.update(<ChatComposer {...p} quoteRequest={{ id: "q1", text: "Title\n• Bullet", composerKey: "session" }} />));
 	expect(renderer.root.findByType(TextInput).props.value).toBe("Explain this");
+	const quote = renderer.root.findByProps({ accessibilityLabel: "Quoted response: Title\n• Bullet" });
+	const panel = renderer.root.findByType(TextInput).parent?.parent;
+	expect(quote.parent?.parent?.parent).toBe(panel);
+	expect(panel?.findAllByType(ComposerGlass)).toHaveLength(1);
 	expect(p.onSend).not.toHaveBeenCalled();
 	expect(p.onQuoteHandled).toHaveBeenCalledWith("q1");
 	const remove = renderer.root.findByProps({ accessibilityLabel: "Remove quote: Title\n• Bullet" });

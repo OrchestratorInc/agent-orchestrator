@@ -44,7 +44,7 @@ type Attachment =
 
 const MAX_EMBEDDED_FILE_BYTES = 500_000;
 
-/** The pill's resting height; it grows with the field up to COMPOSER_MAX_HEIGHT. */
+/** Resting panel height without quotes; the input row grows up to COMPOSER_MAX_HEIGHT. */
 export const COMPOSER_HEIGHT = 56;
 export const COMPOSER_FIELD_HEIGHT = 44;
 /**
@@ -547,49 +547,50 @@ export function ChatComposer({
 				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.restoreText}>{request.title}</Text>
 				<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.restoreAction}>Answer</Text>
 			</Pressable> : null}
-			{!requestCard && quotes.length ? <ScrollView style={styles.quotes} keyboardShouldPersistTaps="handled">
-				{quotes.map((quote) => <View key={quote.id} style={styles.quote}>
-					<Feather name="corner-down-right" size={16} color={t.textTertiary} />
-					<Text numberOfLines={3} style={styles.quoteText} accessibilityLabel={`Quoted response: ${quote.text}`}>{quote.text}</Text>
-					<Pressable accessibilityRole="button" accessibilityLabel={`Remove quote: ${quote.text}`} onPress={() => {
-						haptics.tap();
-						const next = latestQuotes.current.filter((item) => item.id !== quote.id);
-						latestQuotes.current = next;
-						setQuotes(next);
-					}} style={styles.removeQuote}><Feather name="x" size={16} color={t.textTertiary} /></Pressable>
-				</View>)}
-			</ScrollView> : null}
 			{requestCard ?? <Animated.View
 				style={[styles.composer, activeReviewPR && styles.reviewComposer, activeReviewPR && reviewComposerSurfaceStyle, stopped && { opacity: 0.55 }]}
 			>
 				{activeReviewPR ? <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, reviewComposerGlassStyle]}><ComposerGlass radius={COMPOSER_RADIUS} /></Animated.View> : <ComposerGlass radius={COMPOSER_RADIUS} />}
-				<ChatAttachmentMenu disabled={stopped || submitting} canAttachFile={Boolean(canEmbedFiles)} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />
-				<TextInput
-					ref={inputRef}
-					accessibilityLabel="Message the agent"
-					editable={!stopped && !submitting}
-					value={text}
-					onChangeText={(value) => { latestText.current = value; setText(value); }}
-					onSelectionChange={(event) => setCursor(event.nativeEvent.selection.start)}
-					onContentSizeChange={(event) => {
-						if (!latestText.current) {
-							setFieldHeight(COMPOSER_FIELD_HEIGHT);
-							return;
-						}
-						// Native contentSize already includes the TextInput's vertical
-						// padding. Treat it as the field's full height; converting it to
-						// lines counted the padding as an extra line on the first render.
-						const contentHeight = Math.ceil(event.nativeEvent.contentSize.height);
-						setFieldHeight(Math.max(COMPOSER_FIELD_HEIGHT, Math.min(COMPOSER_FIELD_MAX_HEIGHT, contentHeight)));
-					}}
-					placeholder={stopped ? "Agent is stopped" : deliveryPresentation.placeholder}
-					placeholderTextColor={t.textFaint}
-					style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}
-					multiline
-					maxLength={40_000}
-				/>
-				<MicKey variant="plain" size={44} glyphSize={iconSize.lg} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} />
-				{primaryAction === "stop" ? <Pressable accessibilityRole="button" accessibilityLabel="Stop turn" accessibilityState={{ busy: interrupting, disabled: disabled || interrupting }} disabled={disabled || interrupting} onPress={() => { haptics.tap(); void onInterrupt(); }} style={[styles.stop, (disabled || interrupting) && { opacity: 0.55 }]}>{interrupting ? <ActivityIndicator size="small" color={t.textPrimary} /> : <Feather name="square" size={12} color={t.textPrimary} />}</Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={active ? "Queue message" : "Send message"} accessibilityState={{ disabled: disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) }} disabled={disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!hasDraft && attachments.length === 0)} onPress={() => { haptics.tap(); void submit("send"); }} style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, (disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!hasDraft && attachments.length === 0)) && { opacity: 0.35 }]}>{pending || submitting ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}</Pressable>}
+				{quotes.length ? <ScrollView style={styles.quotes} keyboardShouldPersistTaps="handled">
+					{quotes.map((quote) => <View key={quote.id} style={styles.quote}>
+						<Text numberOfLines={2} style={styles.quoteText} accessibilityLabel={`Quoted response: ${quote.text}`}>{quote.text}</Text>
+						<Pressable accessibilityRole="button" accessibilityLabel={`Remove quote: ${quote.text}`} onPress={() => {
+							haptics.tap();
+							const next = latestQuotes.current.filter((item) => item.id !== quote.id);
+							latestQuotes.current = next;
+							setQuotes(next);
+						}} style={styles.removeQuote}><Feather name="x" size={16} color={t.textTertiary} /></Pressable>
+					</View>)}
+				</ScrollView> : null}
+				<View style={styles.composerRow}>
+					<ChatAttachmentMenu disabled={stopped || submitting} canAttachFile={Boolean(canEmbedFiles)} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />
+					<TextInput
+						ref={inputRef}
+						accessibilityLabel="Message the agent"
+						editable={!stopped && !submitting}
+						value={text}
+						onChangeText={(value) => { latestText.current = value; setText(value); }}
+						onSelectionChange={(event) => setCursor(event.nativeEvent.selection.start)}
+						onContentSizeChange={(event) => {
+							if (!latestText.current) {
+								setFieldHeight(COMPOSER_FIELD_HEIGHT);
+								return;
+							}
+							// Native contentSize already includes the TextInput's vertical
+							// padding. Treat it as the field's full height; converting it to
+							// lines counted the padding as an extra line on the first render.
+							const contentHeight = Math.ceil(event.nativeEvent.contentSize.height);
+							setFieldHeight(Math.max(COMPOSER_FIELD_HEIGHT, Math.min(COMPOSER_FIELD_MAX_HEIGHT, contentHeight)));
+						}}
+						placeholder={stopped ? "Agent is stopped" : deliveryPresentation.placeholder}
+						placeholderTextColor={t.textFaint}
+						style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}
+						multiline
+						maxLength={40_000}
+					/>
+					<MicKey variant="plain" size={44} glyphSize={iconSize.lg} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} />
+					{primaryAction === "stop" ? <Pressable accessibilityRole="button" accessibilityLabel="Stop turn" accessibilityState={{ busy: interrupting, disabled: disabled || interrupting }} disabled={disabled || interrupting} onPress={() => { haptics.tap(); void onInterrupt(); }} style={[styles.stop, (disabled || interrupting) && { opacity: 0.55 }]}>{interrupting ? <ActivityIndicator size="small" color={t.textPrimary} /> : <Feather name="square" size={12} color={t.textPrimary} />}</Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={active ? "Queue message" : "Send message"} accessibilityState={{ disabled: disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) }} disabled={disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!hasDraft && attachments.length === 0)} onPress={() => { haptics.tap(); void submit("send"); }} style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, (disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!hasDraft && attachments.length === 0)) && { opacity: 0.35 }]}>{pending || submitting ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}</Pressable>}
+				</View>
 			</Animated.View>}
 		</>
 	);
@@ -624,22 +625,23 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// when everything fits, the two never touch.
 	metaRow: { width: "100%", height: 44, flexDirection: "row", alignItems: "center", gap: space.sm },
 	settingsSlot: { flex: 1, minWidth: 0, height: 44, alignItems: "flex-start", justifyContent: "center", overflow: "hidden" },
-	// One pill for the whole row: attach, the field, dictation, and the one filled
+	quotes: { maxHeight: 120, flexGrow: 0 },
+	quote: { minHeight: 44, flexDirection: "row", alignItems: "flex-start", gap: space.sm, paddingLeft: space.lg, paddingRight: space.xs, paddingTop: space.xs },
+	quoteText: { ...type.subheadline, flex: 1, minWidth: 0, paddingVertical: space.md, color: t.textSecondary },
+	removeQuote: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+	// One glass panel for selected quotes, attach, the field, dictation and the filled
 	// control that commits. The pill's radius is half its resting height, so a
-	// single line reads as a capsule and a long message grows a rounded panel —
+	// single line reads as a capsule; quotes and long replies grow a rounded panel —
 	// no second border, no second surface.
 	//
 	// The fill goes transparent where the glass layer is drawing behind it: an
 	// opaque pill under a material is the one arrangement that turns glass grey.
 	//
 	// Bottom-align the controls so attach, mic and send stay anchored while the
-	// text field grows above them. The pill grows around the row; the glass fills
-	// that pill rather than receiving a separately measured height.
-	quotes: { maxHeight: 150, marginBottom: space.xs, borderRadius: 16, backgroundColor: t.bgElevated },
-	quote: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, borderLeftWidth: 2, borderLeftColor: t.borderStrong },
-	quoteText: { flex: 1, minWidth: 0, paddingVertical: space.sm, fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-	removeQuote: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-	composer: { minHeight: COMPOSER_HEIGHT, maxHeight: COMPOSER_MAX_HEIGHT, flexDirection: "row", alignItems: "flex-end", gap: space.xxs, paddingHorizontal: space.xs, paddingVertical: space.xs, backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated, borderRadius: COMPOSER_RADIUS, borderCurve: "continuous" },
+	// text field grows above them. The panel grows around both rows; the glass fills
+	// that panel rather than receiving a separately measured height.
+	composer: { minHeight: COMPOSER_HEIGHT, flexDirection: "column", paddingHorizontal: space.xs, paddingVertical: space.xs, backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated, borderRadius: COMPOSER_RADIUS, borderCurve: "continuous" },
+	composerRow: { maxHeight: COMPOSER_MAX_HEIGHT, flexDirection: "row", alignItems: "flex-end", gap: space.xxs },
 	reviewComposer: { backgroundColor: "transparent" },
 	// The native content-size event grows this from its one-line resting height;
 	// at the cap, the multiline field scrolls while the controls remain in place.
