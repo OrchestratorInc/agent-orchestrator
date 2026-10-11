@@ -78,6 +78,7 @@ const (
 	TargetDeepSeek    Target = "deepseek-harness"
 	TargetOpenHands   Target = "openhands"
 	TargetCommandCode Target = "command-code"
+	TargetCodeBuddy   Target = "codebuddy"
 	// TargetCloudflared is the optional connector that makes a paired phone
 	// reachable from outside the local network.
 	TargetCloudflared Target = "cloudflared"
@@ -91,7 +92,7 @@ var agentTargets = []Target{
 	TargetContinue, TargetDevin, TargetKiro, TargetKilocode, TargetVibe,
 	TargetMuse, TargetAgy, TargetAutohand, TargetKimchi, TargetPrimeAgent,
 	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetDeepSeek, TargetOpenHands,
-	TargetCommandCode,
+	TargetCommandCode, TargetCodeBuddy,
 }
 
 var agentTargetSet = func() map[Target]bool {
@@ -1383,6 +1384,8 @@ func minimumNodeVersionForTarget(target Target) [3]int {
 		return [3]int{22, 0, 0}
 	case TargetPi:
 		return [3]int{22, 19, 0}
+	case TargetCodeBuddy:
+		return [3]int{18, 20, 8}
 	default:
 		return [3]int{16, 0, 0}
 	}

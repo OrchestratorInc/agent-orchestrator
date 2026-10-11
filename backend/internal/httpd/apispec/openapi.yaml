@@ -12339,6 +12339,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - codebuddy
           - fake
           type: string
         approvalMode:
@@ -15653,6 +15654,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - codebuddy
           type: string
         issueId:
           type: string

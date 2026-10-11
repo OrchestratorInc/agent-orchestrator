@@ -324,3 +324,20 @@ func hasLine(content, line string) bool {
 	}
 	return false
 }
+
+func TestCodeBuddyIsTUISelectable(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("codebuddy")
+	if !ok {
+		t.Fatal("CodeBuddy is not registered")
+	}
+	if _, ok := adapter.(ports.Agent); !ok {
+		t.Fatal("CodeBuddy is not a terminal agent")
+	}
+	if !domain.AgentHarness("codebuddy").IsKnown() {
+		t.Fatal("CodeBuddy is not selectable")
+	}
+}

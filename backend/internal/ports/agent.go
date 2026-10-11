@@ -9,6 +9,8 @@ import (
 )
 
 var (
+	// ErrTerminalMessageNotReady refuses a paste into a native decision or draft.
+	ErrTerminalMessageNotReady = errors.New("terminal composer is not ready for a message")
 	// ErrUnsupportedEffort reports a value the selected model did not advertise.
 	ErrUnsupportedEffort = errors.New("unsupported model effort")
 	// ErrModelCapabilitiesUnavailable reports tuning that cannot be validated safely.
@@ -615,6 +617,8 @@ type WorkspaceHookConfig struct {
 
 // RestoreConfig carries inputs needed to continue an existing native agent session.
 type RestoreConfig struct {
+	// Env is the effective runtime environment, including native profile overrides.
+	Env             map[string]string
 	Config          AgentConfig
 	DataDir         string
 	Kind            domain.SessionKind
@@ -633,6 +637,12 @@ type RestoreConfig struct {
 	// system-prompt flag should re-apply this in their resume command.
 	SystemPrompt     string
 	SystemPromptFile string
+}
+
+// TerminalMessageInputGuard validates pastes under an exclusive input lease
+// against the current rendered viewport. Raw native keys remain available.
+type TerminalMessageInputGuard interface {
+	ValidateTerminalMessage(output, message string) error
 }
 
 // SessionRef identifies an AO session whose agent-owned metadata may be read.

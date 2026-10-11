@@ -15,6 +15,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/amp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/auggie"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codebuddy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/commandcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/continueagent"
@@ -49,6 +50,7 @@ var Derivers = map[string]DeriveFunc{
 	"muse":         muse.DeriveActivityState,
 	"omp":          omp.DeriveActivityState,
 	"codex":        codex.DeriveActivityState,
+	"codebuddy":    codebuddy.DeriveActivityState,
 	"continue":     continueagent.DeriveActivityState,
 	"droid":        droid.DeriveActivityState,
 	"agy":          agy.DeriveActivityState,
