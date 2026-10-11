@@ -22,6 +22,12 @@ type Plugin struct{ agentbase.Base }
 // New constructs the native TUI adapter.
 func New() *Plugin { return &Plugin{} }
 
+// ExitDetectionMode opts Memcode into AO's process supervisor. Memcode's
+// session-end hook does not reliably report ordinary TUI process exit.
+func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
+	return ports.AgentExitDetectionSupervisor
+}
+
 // Manifest implements the native TUI adapter contract.
 func (*Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{ID: "memcode", Name: "memcode", Description: "Official memcode terminal sessions", Version: "0.0.1", Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
