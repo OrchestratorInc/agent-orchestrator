@@ -26,6 +26,9 @@ type Options struct {
 	// IdleThreshold is how long a session must have had no user message, with
 	// no turn in flight, before its sandbox is paused.
 	IdleThreshold time.Duration
+	// ProviderIdleThresholds overrides IdleThreshold for sandboxes on the named
+	// providers. A zero entry turns idle pause off for that provider.
+	ProviderIdleThresholds map[string]time.Duration
 	// Logger receives lifecycle events.
 	Logger *slog.Logger
 }
@@ -47,7 +50,7 @@ func New(store Store, options Options) *Scanner {
 	if options.Interval <= 0 {
 		options.Interval = DefaultInterval
 	}
-	if options.IdleThreshold <= 0 {
+	if options.IdleThreshold < 0 {
 		options.IdleThreshold = DefaultIdleThreshold
 	}
 	if options.Logger == nil {
@@ -82,7 +85,11 @@ func (s *Scanner) ScanOnce(ctx context.Context) error {
 		return err
 	}
 	for _, ref := range refs {
-		paused, err := s.store.PauseIfIdle(ctx, ref.OrgID, ref.SessionID, s.options.IdleThreshold)
+		threshold := s.thresholdFor(ref.Provider)
+		if threshold <= 0 {
+			continue
+		}
+		paused, err := s.store.PauseIfIdle(ctx, ref.OrgID, ref.SessionID, threshold)
 		if err != nil {
 			s.log.Error("idle-pause check failed",
 				"session_id", ref.SessionID, "org_id", ref.OrgID, "err", err)
@@ -91,8 +98,17 @@ func (s *Scanner) ScanOnce(ctx context.Context) error {
 		if paused {
 			s.log.Info("paused idle sandbox",
 				"session_id", ref.SessionID, "org_id", ref.OrgID,
-				"idle_threshold", s.options.IdleThreshold)
+				"idle_threshold", threshold)
 		}
 	}
 	return nil
+}
+
+// thresholdFor is how long a sandbox on provider must be idle before it is
+// paused; zero means never.
+func (s *Scanner) thresholdFor(provider string) time.Duration {
+	if threshold, ok := s.options.ProviderIdleThresholds[provider]; ok {
+		return threshold
+	}
+	return s.options.IdleThreshold
 }

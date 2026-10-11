@@ -15,8 +15,9 @@ func TestBillingIsOffWithoutAStripeKey(t *testing.T) {
 	if cfg.BillingEnabled() {
 		t.Fatal("billing enabled without AO_CLOUD_STRIPE_SECRET_KEY")
 	}
-	if cfg.IdlePauseThreshold != 15*time.Minute {
-		t.Fatalf("idle pause default = %v, want 15m", cfg.IdlePauseThreshold)
+	if cfg.IdlePauseThreshold != time.Hour || cfg.FreestyleIdlePauseThreshold != 15*time.Minute {
+		t.Fatalf("idle pause defaults = %v, freestyle %v; want 1h and 15m",
+			cfg.IdlePauseThreshold, cfg.FreestyleIdlePauseThreshold)
 	}
 }
 

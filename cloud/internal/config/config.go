@@ -87,6 +87,9 @@ type Config struct {
 	// IdlePauseThreshold is how long a session must be quiet, with no turn in
 	// flight, before the control plane pauses its sandbox.
 	IdlePauseThreshold time.Duration
+	// FreestyleIdlePauseThreshold replaces IdlePauseThreshold for Freestyle
+	// sandboxes. Zero disables idle pause for them.
+	FreestyleIdlePauseThreshold time.Duration
 	// TerminalStreamEnabled turns on the low-latency terminal path: workers
 	// hold a persistent stream to the control plane and Postgres NOTIFY
 	// replaces the input/output polling loops. Off means the polled
@@ -191,11 +194,16 @@ const defaultNodeOpsAutoPauseSeconds = 0
 // Give background sessions a full hour before their NodeOps VM is paused. A
 // visible workspace terminal still holds its shorter interactive lease, but
 // this default avoids turning an ordinary review break into a cold resume.
-// defaultIdlePauseThreshold pauses a session after 15 quiet minutes. On a
-// provider that snapshots memory (Freestyle) a pause keeps the agent and wakes
-// in about a second, so a short threshold costs the user little and keeps
-// idle sessions from holding compute.
-const defaultIdlePauseThreshold = 15 * time.Minute
+// Give background sessions a full hour before their NodeOps VM is paused. A
+// visible workspace terminal still holds its shorter interactive lease, but
+// this default avoids turning an ordinary review break into a cold resume.
+const defaultIdlePauseThreshold = time.Hour
+
+// defaultFreestyleIdlePauseThreshold pauses a Freestyle session after 15 quiet
+// minutes. Freestyle snapshots memory, so a pause keeps the agent and wakes in
+// about a second; a short threshold costs the user little and keeps idle
+// sessions from holding billed compute.
+const defaultFreestyleIdlePauseThreshold = 15 * time.Minute
 
 const defaultIdlePauseInterval = 30 * time.Second
 
@@ -286,10 +294,12 @@ func Load() (Config, error) {
 		// old 3m budget and triggered a needless worker reinstall mid-startup. This
 		// is the value the reconciler actually uses (it overrides the
 		// DefaultStartupTimeout fallback), so it is the one that has to change.
-		SandboxStartupTimeout:    durationEnv("AO_CLOUD_SANDBOX_STARTUP_TIMEOUT", 6*time.Minute),
-		WorkerHeartbeatTimeout:   durationEnv("AO_CLOUD_WORKER_HEARTBEAT_TIMEOUT", time.Minute),
-		IdlePauseInterval:        durationEnv("AO_CLOUD_IDLE_PAUSE_INTERVAL", defaultIdlePauseInterval),
-		IdlePauseThreshold:       durationEnv("AO_CLOUD_IDLE_PAUSE_THRESHOLD", defaultIdlePauseThreshold),
+		SandboxStartupTimeout:  durationEnv("AO_CLOUD_SANDBOX_STARTUP_TIMEOUT", 6*time.Minute),
+		WorkerHeartbeatTimeout: durationEnv("AO_CLOUD_WORKER_HEARTBEAT_TIMEOUT", time.Minute),
+		IdlePauseInterval:      durationEnv("AO_CLOUD_IDLE_PAUSE_INTERVAL", defaultIdlePauseInterval),
+		IdlePauseThreshold:     durationEnv("AO_CLOUD_IDLE_PAUSE_THRESHOLD", defaultIdlePauseThreshold),
+		FreestyleIdlePauseThreshold: durationEnv(
+			"AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD", defaultFreestyleIdlePauseThreshold),
 		InterfaceHandoffInterval: durationEnv("AO_CLOUD_INTERFACE_HANDOFF_INTERVAL", 500*time.Millisecond),
 
 		NodeOpsBaseURL:         strings.TrimSpace(os.Getenv("AO_CLOUD_NODEOPS_BASE_URL")),
@@ -590,6 +600,9 @@ func Load() (Config, error) {
 	if cfg.IdlePauseThreshold != 0 && cfg.IdlePauseThreshold < time.Minute {
 		return Config{}, errors.New("AO_CLOUD_IDLE_PAUSE_THRESHOLD must be 0 (disabled) or at least 1m")
 	}
+	if cfg.FreestyleIdlePauseThreshold != 0 && cfg.FreestyleIdlePauseThreshold < time.Minute {
+		return Config{}, errors.New("AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD must be 0 (disabled) or at least 1m")
+	}
 	if cfg.BillingEnabled() {
 		if cfg.StripeWebhookSecret == "" {
 			return Config{}, errors.New("AO_CLOUD_STRIPE_WEBHOOK_SECRET is required when AO_CLOUD_STRIPE_SECRET_KEY is set")
@@ -722,7 +735,9 @@ func (c Config) Hosted() bool {
 // the Coder workspace deadline that would otherwise auto-stop the VM — so a
 // cloud session behaves like a local one (no teardown, no terminal reconnect on
 // resume). The cost is continuous compute for every non-terminated session.
-func (c Config) IdlePauseDisabled() bool { return c.IdlePauseThreshold == 0 }
+func (c Config) IdlePauseDisabled() bool {
+	return c.IdlePauseThreshold == 0 && c.FreestyleIdlePauseThreshold == 0
+}
 
 func (c Config) WorkerTokenTTL() time.Duration {
 	if c.SandboxProvider == sandbox.ProviderDocker {

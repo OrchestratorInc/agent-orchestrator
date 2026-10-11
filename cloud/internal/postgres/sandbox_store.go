@@ -494,7 +494,7 @@ func (s *Store) RunningSandboxSessions(ctx context.Context) ([]domain.SandboxRef
 	err := s.withService(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(
 			ctx,
-			`SELECT session_id, org_id FROM ao_sandboxes
+			`SELECT session_id, org_id, provider FROM ao_sandboxes
 			WHERE desired_state = 'running' AND observed_state = 'running'`,
 		)
 		if err != nil {
@@ -503,7 +503,7 @@ func (s *Store) RunningSandboxSessions(ctx context.Context) ([]domain.SandboxRef
 		defer rows.Close()
 		for rows.Next() {
 			var ref domain.SandboxRef
-			if err := rows.Scan(&ref.SessionID, &ref.OrgID); err != nil {
+			if err := rows.Scan(&ref.SessionID, &ref.OrgID, &ref.Provider); err != nil {
 				return err
 			}
 			refs = append(refs, ref)
@@ -599,7 +599,8 @@ func (s *Store) MarkSandboxBusy(ctx context.Context, orgID, sessionID string) er
 // TouchSessionPresence records that a person is looking at a running session
 // (its view is visible in the desktop app): it holds the short interaction
 // lease and counts as an interaction for idle pause. It never wakes a paused
-// session; opening the terminal does that.
+// session; opening the terminal does that. Only Freestyle sandboxes, which are
+// billed and idle-paused on a short threshold, are touched.
 func (s *Store) TouchSessionPresence(
 	ctx context.Context,
 	principal domain.Principal,
@@ -610,7 +611,7 @@ func (s *Store) TouchSessionPresence(
 			`UPDATE ao_sandboxes SET
 				interactive_until = greatest(coalesce(interactive_until, now()), now() + $3::interval),
 				last_interaction_at = now()
-			WHERE org_id = $1 AND session_id = $2 AND desired_state = 'running'`,
+			WHERE org_id = $1 AND session_id = $2 AND desired_state = 'running' AND provider = 'freestyle'`,
 			orgID, sessionID, intervalString(interactiveSessionLease))
 		return err
 	})

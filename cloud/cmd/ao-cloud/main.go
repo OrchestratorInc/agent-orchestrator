@@ -412,13 +412,18 @@ func run(logger *slog.Logger) error {
 	}
 	// The scanner only has anything to do where sandboxes exist to pause, and
 	// only when idle-pause is enabled. With AO_CLOUD_IDLE_PAUSE_THRESHOLD=0
-	// (keep-warm) it never runs, so no session is ever paused for idleness.
+	// and AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD=0 (keep-warm) it never runs.
+	// Freestyle has its own threshold; every other provider uses the general
+	// one, and 0 keeps that provider's sessions warm.
 	var idlePauseScanner *idlepause.Scanner
 	if reconciler != nil && !cfg.IdlePauseDisabled() {
 		idlePauseScanner = idlepause.New(store, idlepause.Options{
 			Interval:      cfg.IdlePauseInterval,
 			IdleThreshold: cfg.IdlePauseThreshold,
-			Logger:        logger,
+			ProviderIdleThresholds: map[string]time.Duration{
+				sandbox.ProviderFreestyle: cfg.FreestyleIdlePauseThreshold,
+			},
+			Logger: logger,
 		})
 	}
 	// Worker tokens are only issued where sandboxes are provisioned. Leaving
@@ -586,6 +591,7 @@ func run(logger *slog.Logger) error {
 			logger.Info("idle-pause scanner started",
 				"interval", cfg.IdlePauseInterval,
 				"idle_threshold", cfg.IdlePauseThreshold,
+				"freestyle_idle_threshold", cfg.FreestyleIdlePauseThreshold,
 			)
 			if err := idlePauseScanner.Run(ctx); err != nil {
 				logger.Error("idle-pause scanner stopped", "error", err)

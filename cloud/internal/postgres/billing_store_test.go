@@ -554,3 +554,28 @@ func TestOnlyFreestyleSessionsAreBilled(t *testing.T) {
 		t.Fatalf("docker sessions must not count toward the plan: %+v, err = %v", summary.Usage, err)
 	}
 }
+
+// Presence pings never touch a non-Freestyle sandbox.
+func TestPresenceLeavesOtherProvidersAlone(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	if _, err := admin.Exec(ctx,
+		`UPDATE ao_sandboxes SET provider = 'coder', desired_state = 'running', observed_state = 'running',
+			interactive_until = NULL, last_interaction_at = NULL
+		WHERE session_id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	if err := store.TouchSessionPresence(ctx, principal, fixture.orgID, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	var touched bool
+	if err := admin.QueryRow(ctx,
+		`SELECT interactive_until IS NOT NULL OR last_interaction_at IS NOT NULL FROM ao_sandboxes WHERE session_id = $1`,
+		fixture.sessionID).Scan(&touched); err != nil {
+		t.Fatal(err)
+	}
+	if touched {
+		t.Fatal("presence changed a coder sandbox")
+	}
+}
