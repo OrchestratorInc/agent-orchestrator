@@ -34,6 +34,11 @@ type InputLease interface {
 	AcquireSessionInput(id domain.SessionID) (release func(), ok bool)
 }
 
+// MessageInputChecker runs under the input lease at the actual paste boundary.
+type MessageInputChecker interface {
+	ValidateSessionMessageInput(context.Context, domain.SessionRecord, string) error
+}
+
 // Outcome reports what a guarded write did. Anything other than Sent means the
 // message did NOT reach the pane; callers that record delivery must not stamp
 // a suppressed write as delivered.
@@ -412,6 +417,14 @@ func (g *Guard) sendAdmittedChecked(ctx context.Context, id domain.SessionID, ms
 	if preWrite != nil {
 		if err := preWrite(ctx, rec); err != nil {
 			return SuppressedUnknown, fmt.Errorf("guard %s: pre-write check: %w", id, err)
+		}
+	}
+	g.leaseMu.RLock()
+	checker, guarded := g.lease.(MessageInputChecker)
+	g.leaseMu.RUnlock()
+	if guarded {
+		if err := checker.ValidateSessionMessageInput(ctx, rec, msg); err != nil {
+			return SuppressedUnknown, fmt.Errorf("guard %s: terminal input: %w", id, err)
 		}
 	}
 	if err := g.messenger.Send(ctx, id, msg); err != nil {

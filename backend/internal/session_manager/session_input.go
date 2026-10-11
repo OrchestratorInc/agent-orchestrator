@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
 
@@ -35,7 +36,25 @@ var _ sessionguard.InputLease = (*Manager)(nil)
 // close admission and wait for every already-admitted write to finish.
 func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok bool) {
 	id = domain.SessionID(strings.TrimSpace(string(id)))
+	serialized := false
+	if m.agents != nil && m.store != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		rec, found, err := m.store.GetSession(ctx, id)
+		cancel()
+		if err != nil {
+			return nil, false
+		}
+		if found {
+			if agent, registered := m.agents.Agent(rec.Harness); registered {
+				_, serialized = agent.(ports.TerminalMessageInputGuard)
+			}
+		}
+	}
 	m.agentOpMu.Lock()
+	if serialized && m.inputLeases[id] != 0 {
+		m.agentOpMu.Unlock()
+		return nil, false
+	}
 	if m.agentOperationActiveLocked(id) && !m.agentSwitchDecisionInputAllowedLocked(id) {
 		m.agentOpMu.Unlock()
 		return nil, false
@@ -50,6 +69,31 @@ func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok b
 	return func() {
 		once.Do(func() { m.releaseSessionInput(id) })
 	}, true
+}
+
+// ValidateSessionMessageInput runs while the shared input lease excludes native
+// keystrokes and runtime replacement for an opted-in harness.
+func (m *Manager) ValidateSessionMessageInput(ctx context.Context, rec domain.SessionRecord, message string) error {
+	if m.agents == nil || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI {
+		return nil
+	}
+	agent, found := m.agents.Agent(rec.Harness)
+	if !found {
+		return nil
+	}
+	guard, guarded := agent.(ports.TerminalMessageInputGuard)
+	if !guarded {
+		return nil
+	}
+	reader, available := m.runtime.(ports.StyledTerminalOutputReader)
+	if !available {
+		return errors.New("current rendered terminal is unavailable")
+	}
+	output, err := reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, 32)
+	if err != nil {
+		return err
+	}
+	return guard.ValidateTerminalMessage(output, message)
 }
 
 func (m *Manager) releaseSessionInput(id domain.SessionID) {

@@ -635,6 +635,20 @@ type RestoreConfig struct {
 	SystemPromptFile string
 }
 
+// NativeRestoreVerifier is required by CLIs whose resume command can silently
+// open fresh history. AO checks current-generation native evidence and a
+// rendered viewport before publishing the replacement runtime.
+type NativeRestoreVerifier interface {
+	VerifyNativeRestore(context.Context, RestoreConfig, string, string) (bool, error)
+}
+
+// TerminalMessageInputGuard opts a harness into serialized pane input and
+// validates pasted messages against the current rendered composer. Raw user
+// keystrokes remain available for native decisions and editing drafts.
+type TerminalMessageInputGuard interface {
+	ValidateTerminalMessage(output, message string) error
+}
+
 // SessionRef identifies an AO session whose agent-owned metadata may be read.
 type SessionRef struct {
 	ID            string

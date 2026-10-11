@@ -12339,6 +12339,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - mastra-code
           - fake
           type: string
         approvalMode:
@@ -12980,6 +12981,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - mastra-code
           - cloudflared
           type: string
         updatedAt:
@@ -15653,6 +15655,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - mastra-code
           type: string
         issueId:
           type: string
