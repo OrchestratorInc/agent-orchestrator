@@ -499,7 +499,8 @@ export interface CloudCpSession {
 	startupError?: CloudCpSessionStartupError;
 	/**
 	 * The session's workspace page on the organization's own (bring-your-own)
-	 * Coder deployment, once the workspace exists. Absent for AO's managed
+	 * Coder deployment, from the session's creation (the workspace may not
+	 * exist yet). Absent for AO's managed
 	 * Coder, other providers, and older control planes.
 	 */
 	coderWorkspaceUrl?: string;

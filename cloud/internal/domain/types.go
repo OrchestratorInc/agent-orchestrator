@@ -117,8 +117,8 @@ type Session struct {
 	StartupErrorDetail string
 	// BYOCoderWorkspace locates the session's workspace on the organization's
 	// own (bring-your-own) Coder deployment, as AO recorded it in the sandbox
-	// resource profile when it planned the workspace. Set once the provider has
-	// reported the workspace (it exists). Nil for AO's managed
+	// resource profile when it planned the workspace, so it is known from the
+	// session's creation (the workspace may not exist yet). Nil for AO's managed
 	// Coder (an internal deployment customers have no login on) and for every
 	// other provider.
 	BYOCoderWorkspace *CoderWorkspaceRef

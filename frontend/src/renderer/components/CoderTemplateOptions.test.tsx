@@ -101,6 +101,9 @@ describe("CoderTemplateOptions", () => {
 		// CPUs is required by Coder; Region is a dropdown. A free-text field, a
 		// switch and a multi-select (which may be left empty) stay unmarked.
 		expect(marked).toEqual(["CPUs", "Region"]);
+		expect(screen.getByRole("spinbutton", { name: /CPUs/ })).toHaveAttribute("aria-required", "true");
+		expect(screen.getByRole("combobox", { name: /^Region/ })).toHaveAttribute("aria-required", "true");
+		expect(screen.getByRole("textbox", { name: "Base branch" })).not.toHaveAttribute("aria-required");
 	});
 
 	it("keeps only values changed from the default", async () => {

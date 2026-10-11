@@ -181,7 +181,7 @@ function TemplateParameterField({
 				disabled={disabled}
 				onValueChange={(next) => onChange(next === EMPTY_OPTION_VALUE ? "" : next)}
 			>
-				<SelectTrigger id={id} className="w-full min-w-0" aria-describedby={describedBy}>
+				<SelectTrigger id={id} className="w-full min-w-0" aria-describedby={describedBy} aria-required={mandatory || undefined}>
 					<SelectValue placeholder={t("coder.templateOptions.selectPlaceholder")} />
 				</SelectTrigger>
 				<SelectContent>
@@ -204,6 +204,7 @@ function TemplateParameterField({
 				spellCheck={false}
 				autoComplete="off"
 				aria-describedby={describedBy}
+				aria-required={mandatory || undefined}
 				onChange={(event) => onChange(event.target.value)}
 			/>
 		);

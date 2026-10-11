@@ -2508,7 +2508,7 @@ describe("CreateProjectFlow project import validation", () => {
 		cloudMocks.coderAvailable = true;
 		cloudMocks.coderDefault = true;
 		cloudMocks.coderTemplates = [
-			{ id: "tpl-11x", name: "dev-kit", displayName: "11x dev-kit", description: "", parameters: [] },
+			{ id: "tpl-devkit", name: "dev-kit", displayName: "Team dev-kit", description: "", parameters: [] },
 		];
 		cloudMocks.listGitHubInstallations.mockResolvedValue({
 			installations: [{
@@ -2537,21 +2537,21 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
 
 		await user.click(screen.getByRole("combobox", { name: "Template" }));
-		await user.click(await screen.findByRole("option", { name: "11x dev-kit" }));
+		await user.click(await screen.findByRole("option", { name: "Team dev-kit" }));
 		await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
 		await user.click(screen.getByRole("button", { name: "Create" }));
 		await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
-		expect(cloudMocks.createGitHubProject.mock.calls[0][1].config.coder.templateId).toBe("tpl-11x");
+		expect(cloudMocks.createGitHubProject.mock.calls[0][1].config.coder.templateId).toBe("tpl-devkit");
 	});
 
 	it("sends an optional Coder workspace name prefix and blocks create while it is invalid", async () => {
-		cloudMocks.orgCoderConfig = { baseUrl: "https://coder.11x.test" };
+		cloudMocks.orgCoderConfig = { baseUrl: "https://coder.acme.example.com" };
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.sessionStatus = "authenticated";
 		cloudMocks.coderAvailable = true;
 		cloudMocks.coderDefault = true;
 		cloudMocks.coderTemplates = [
-			{ id: "tpl-11x", name: "dev-kit", displayName: "11x dev-kit", description: "", parameters: [] },
+			{ id: "tpl-devkit", name: "dev-kit", displayName: "Team dev-kit", description: "", parameters: [] },
 		];
 		cloudMocks.listGitHubInstallations.mockResolvedValue({
 			installations: [{
@@ -2574,7 +2574,7 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
 		await user.click(await screen.findByRole("option", { name: /acme\/app/ }));
 		await user.click(await screen.findByRole("combobox", { name: "Template" }));
-		await user.click(await screen.findByRole("option", { name: "11x dev-kit" }));
+		await user.click(await screen.findByRole("option", { name: "Team dev-kit" }));
 		await screen.findByLabelText("Worker agent");
 
 		const prefix = screen.getByRole("textbox", { name: "Workspace name prefix" });
@@ -2596,7 +2596,7 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(screen.getByRole("button", { name: "Create" }));
 		await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
 		expect(cloudMocks.createGitHubProject.mock.calls[0][1].config.coder).toEqual({
-			templateId: "tpl-11x",
+			templateId: "tpl-devkit",
 			workspaceNamePrefix: "acme-dev",
 		});
 	});
@@ -2646,7 +2646,7 @@ describe("CreateProjectFlow project import validation", () => {
 		cloudMocks.coderAvailable = true;
 		cloudMocks.coderDefault = true;
 		cloudMocks.coderTemplates = [
-			{ id: "tpl-11x", name: "dev-kit", displayName: "11x dev-kit", description: "", parameters: [] },
+			{ id: "tpl-devkit", name: "dev-kit", displayName: "Team dev-kit", description: "", parameters: [] },
 		];
 		cloudMocks.getCoderTemplateParameters.mockResolvedValue({
 			parameters: [
@@ -2680,9 +2680,9 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(screen.queryByText("Template options")).not.toBeInTheDocument();
 
 		await user.click(screen.getByRole("combobox", { name: "Template" }));
-		await user.click(await screen.findByRole("option", { name: "11x dev-kit" }));
+		await user.click(await screen.findByRole("option", { name: "Team dev-kit" }));
 		expect(await screen.findByText("Template options")).toBeInTheDocument();
-		expect(cloudMocks.getCoderTemplateParameters).toHaveBeenCalledWith("org-1", "tpl-11x", expect.anything());
+		expect(cloudMocks.getCoderTemplateParameters).toHaveBeenCalledWith("org-1", "tpl-devkit", expect.anything());
 
 		// Defaults prefill; only the edited field is sent.
 		expect(screen.getByRole("textbox", { name: "Region" })).toHaveValue("eu");
@@ -2695,19 +2695,19 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(screen.getByRole("button", { name: "Create" }));
 		await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
 		expect(cloudMocks.createGitHubProject.mock.calls[0][1].config.coder).toEqual({
-			templateId: "tpl-11x",
+			templateId: "tpl-devkit",
 			parameters: { disk_gb: "120" },
 		});
 	});
 
 	it("omits the Coder workspace name prefix when left empty", async () => {
-		cloudMocks.orgCoderConfig = { baseUrl: "https://coder.11x.test" };
+		cloudMocks.orgCoderConfig = { baseUrl: "https://coder.acme.example.com" };
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.sessionStatus = "authenticated";
 		cloudMocks.coderAvailable = true;
 		cloudMocks.coderDefault = true;
 		cloudMocks.coderTemplates = [
-			{ id: "tpl-11x", name: "dev-kit", displayName: "11x dev-kit", description: "", parameters: [] },
+			{ id: "tpl-devkit", name: "dev-kit", displayName: "Team dev-kit", description: "", parameters: [] },
 		];
 		cloudMocks.listGitHubInstallations.mockResolvedValue({
 			installations: [{
@@ -2730,13 +2730,13 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
 		await user.click(await screen.findByRole("option", { name: /acme\/app/ }));
 		await user.click(await screen.findByRole("combobox", { name: "Template" }));
-		await user.click(await screen.findByRole("option", { name: "11x dev-kit" }));
+		await user.click(await screen.findByRole("option", { name: "Team dev-kit" }));
 		await screen.findByLabelText("Worker agent");
 		expect(screen.getByRole("textbox", { name: "Workspace name prefix" })).toHaveValue("");
 		await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
 		await user.click(screen.getByRole("button", { name: "Create" }));
 		await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
-		expect(cloudMocks.createGitHubProject.mock.calls[0][1].config.coder).toEqual({ templateId: "tpl-11x" });
+		expect(cloudMocks.createGitHubProject.mock.calls[0][1].config.coder).toEqual({ templateId: "tpl-devkit" });
 	});
 
 	it("does not offer additional coder session repositories", async () => {
