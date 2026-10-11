@@ -89,13 +89,16 @@ STRIPE_PLAINTEXT_ENV = {
     "AO_CLOUD_STRIPE_PORTAL_CONFIGURATION",
     "AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE",
 }
+# The operator support lookup token is optional (ao-cloud/<environment>/support,
+# key "token"); without it the support endpoint does not exist.
+SUPPORT_SECRET_ENV = {"AO_CLOUD_SUPPORT_TOKEN": "token"}
 # AO_CLOUD_SANDBOX_DEFAULT_PROVIDER is a leftover no release reads; inherited,
 # it only misleads whoever reads the task definition.
 LEGACY_ENV = {"AO_CLOUD_SANDBOX_DEFAULT_PROVIDER"}
 # Names a deploy sets explicitly or not at all. A value inherited from the
 # previous revision is dropped, so deleting the Stripe secret turns billing off
 # instead of leaving a stale secret reference behind.
-DEPLOY_MANAGED_ENV = set(STRIPE_SECRET_ENV) | STRIPE_PLAINTEXT_ENV | LEGACY_ENV
+DEPLOY_MANAGED_ENV = set(STRIPE_SECRET_ENV) | STRIPE_PLAINTEXT_ENV | set(SUPPORT_SECRET_ENV) | LEGACY_ENV
 # The offering: which providers an organization may use and how it is billed.
 # Every deploy sets these explicitly (scripts/offering/<environment>.env).
 OFFERING_ENV = (
@@ -609,7 +612,7 @@ def build_task_definition(
                 "control-plane task is missing hosted secrets: "
                 + ", ".join(missing)
             )
-        plaintext = sorted((required_secrets | set(STRIPE_SECRET_ENV)) & values.keys())
+        plaintext = sorted((required_secrets | set(STRIPE_SECRET_ENV) | set(SUPPORT_SECRET_ENV)) & values.keys())
         if plaintext:
             raise ValueError(
                 "hosted settings must not be plaintext environment values: "

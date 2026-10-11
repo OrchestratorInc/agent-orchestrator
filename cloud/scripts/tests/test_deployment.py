@@ -992,6 +992,29 @@ class BillingAndOfferingTaskDefinitionTests(unittest.TestCase):
                 secret_overrides=coder_secret_overrides("staging"),
             )
 
+    def test_support_token_is_managed_and_secret_only(self):
+        source = task_source("staging")
+        container = source["taskDefinition"]["containerDefinitions"][0]
+        container["secrets"].append(
+            {"name": "AO_CLOUD_SUPPORT_TOKEN", "valueFrom": "arn:secret:ao-cloud/staging/support:token::"}
+        )
+        # Inherited without the secret this deploy: stripped, not left dangling.
+        _, secrets = rendered_names(render_coder(source, secret_overrides=coder_secret_overrides("staging")))
+        self.assertNotIn("AO_CLOUD_SUPPORT_TOKEN", secrets)
+        # Set by the deploy: rendered as a secret reference.
+        _, secrets = rendered_names(render_coder(
+            task_source("staging"),
+            secret_overrides=coder_secret_overrides("staging")
+            | {"AO_CLOUD_SUPPORT_TOKEN": "arn:secret:ao-cloud/staging/support:token::"},
+        ))
+        self.assertIn("AO_CLOUD_SUPPORT_TOKEN", secrets)
+        with self.assertRaisesRegex(ValueError, "plaintext"):
+            render_coder(
+                task_source("staging"),
+                environment_overrides={"AO_CLOUD_SUPPORT_TOKEN": "x" * 40},
+                secret_overrides=coder_secret_overrides("staging"),
+            )
+
     def test_rejects_stripe_key_as_plaintext(self):
         with self.assertRaisesRegex(ValueError, "plaintext"):
             render_coder(

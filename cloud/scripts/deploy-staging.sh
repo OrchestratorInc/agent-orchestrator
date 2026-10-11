@@ -53,6 +53,7 @@ WORKER_SECRET_ID="${AO_CLOUD_WORKER_SECRET_ID:-ao-cloud/staging/worker}"
 # Stripe billing is optional: without this secret the control plane runs with
 # billing off, as before.
 STRIPE_SECRET_ID="${AO_CLOUD_STRIPE_SECRET_ID:-ao-cloud/staging/stripe}"
+SUPPORT_SECRET_ID="${AO_CLOUD_SUPPORT_SECRET_ID:-ao-cloud/staging/support}"
 HEAD_SHA="$(git rev-parse HEAD)"
 RELEASE="${RELEASE_ARG:-$HEAD_SHA}"
 IMAGE_TAG="${RELEASE//+/-}-linux-amd64"
@@ -211,6 +212,8 @@ if providers_has freestyle; then
 	unset freestyle_settings
 fi
 unset worker_settings
+# The operator support lookup token is optional: without it the endpoint is off.
+support_secret_arn="$(optional_secret_arn "$SUPPORT_SECRET_ID")"
 # Only a missing secret turns billing off; any other lookup error fails here.
 stripe_secret_arn="$(optional_secret_arn "$STRIPE_SECRET_ID")"
 if [[ -n "$stripe_secret_arn" ]]; then
@@ -434,6 +437,9 @@ register_task_definition() {
 				--set-secret "AO_CLOUD_NODEOPS_REGION=${nodeops_secret_arn}:region::"
 				--set-secret "AO_CLOUD_NODEOPS_WORKER_TOKEN_TTL=${nodeops_secret_arn}:worker_token_ttl::"
 			)
+		fi
+		if [[ -n "$support_secret_arn" ]]; then
+			render_args+=(--set-secret "AO_CLOUD_SUPPORT_TOKEN=${support_secret_arn}:token::")
 		fi
 		if [[ -n "$stripe_secret_arn" ]]; then
 			render_args+=(

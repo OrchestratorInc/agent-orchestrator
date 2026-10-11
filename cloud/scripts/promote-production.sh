@@ -21,6 +21,7 @@ WORKER_SECRET_ID="${AO_CLOUD_WORKER_SECRET_ID:-ao-cloud/production/worker}"
 # Stripe billing is optional: without this secret production runs with billing
 # off.
 STRIPE_SECRET_ID="${AO_CLOUD_STRIPE_SECRET_ID:-ao-cloud/production/stripe}"
+SUPPORT_SECRET_ID="${AO_CLOUD_SUPPORT_SECRET_ID:-ao-cloud/production/support}"
 # Where a Freestyle bake stages the worker binaries for its builder VMs.
 ARTIFACTS_BUCKET="${AO_CLOUD_PRODUCTION_ARTIFACTS_BUCKET:-ao-cloud-production-artifacts}"
 # SKIP_FREESTYLE_BAKE=1 reuses the snapshots already recorded in the Freestyle
@@ -325,6 +326,8 @@ if providers_has freestyle; then
 fi
 unset worker_settings
 
+# The operator support lookup token is optional: without it the endpoint is off.
+support_secret_arn="$(optional_secret_arn "$SUPPORT_SECRET_ID")"
 # Only a missing secret turns billing off; any other lookup error fails here.
 stripe_secret_arn="$(optional_secret_arn "$STRIPE_SECRET_ID")"
 if [[ -n "$stripe_secret_arn" ]]; then
@@ -462,6 +465,9 @@ register_api_task() {
 			--set-secret "AO_CLOUD_FREESTYLE_DEFAULT_SNAPSHOT=${freestyle_secret_arn}:default_snapshot::"
 			--set-secret "AO_CLOUD_FREESTYLE_WORKER_TOKEN_TTL=${freestyle_secret_arn}:worker_token_ttl::"
 		)
+	fi
+	if [[ -n "$support_secret_arn" ]]; then
+		render_args+=(--set-secret "AO_CLOUD_SUPPORT_TOKEN=${support_secret_arn}:token::")
 	fi
 	if [[ -n "$stripe_secret_arn" ]]; then
 		render_args+=(
