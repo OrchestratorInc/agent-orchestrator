@@ -79,7 +79,16 @@ IMAGE_TAG="${RELEASE//+/-}-linux-amd64"
 # (CVE-2026-93990 UTF-16 surrogate validation) and libstdc++ (CVE-2026-95619
 # aligned operator new overflow) findings have no Debian 13 fix yet; the worker
 # parses no UTF-16 XML and makes no attacker-sized aligned allocations.
-SCAN_CVE_ALLOWLIST="${AO_CLOUD_SCAN_CVE_ALLOWLIST:-CVE-2026-57432 CVE-2026-45186 CVE-2026-12087 CVE-2025-15661 CVE-2026-58051 CVE-2026-7017 CVE-2026-48962 CVE-2026-57433 CVE-2026-66032 CVE-2026-48961 CVE-2026-48959 CVE-2026-66034 CVE-2026-58050 CVE-2026-13221 CVE-2026-14456 CVE-2026-66046 CVE-2026-63076 CVE-2026-53615 CVE-2026-54874 CVE-2026-63072 CVE-2026-8927 CVE-2026-8924 CVE-2026-8286 CVE-2026-85091 CVE-2026-93990 CVE-2026-95619}"
+# The gnutls28 findings (CVE-2026-95210, CVE-2026-88647, CVE-2026-67693:
+# certificate and hostname checks that accept a crafted certificate;
+# CVE-2026-95184, CVE-2026-95209: rejecting valid ones) and cyrus-sasl2
+# (CVE-2026-107161, DIGEST-MD5 client overflow) have no Debian 13 fix yet. Only
+# git's HTTPS transport and curl link gnutls (ao-worker, node and the agents use
+# their own TLS); abusing it needs an on-path attacker holding a CA-signed
+# certificate for the target. The DIGEST-MD5 plugin (libsasl2-modules) is not
+# installed, so the SASL overflow is unreachable. This image runs only for the
+# docker provider; Coder and Freestyle sessions boot Ubuntu images instead.
+SCAN_CVE_ALLOWLIST="${AO_CLOUD_SCAN_CVE_ALLOWLIST:-CVE-2026-57432 CVE-2026-45186 CVE-2026-12087 CVE-2025-15661 CVE-2026-58051 CVE-2026-7017 CVE-2026-48962 CVE-2026-57433 CVE-2026-66032 CVE-2026-48961 CVE-2026-48959 CVE-2026-66034 CVE-2026-58050 CVE-2026-13221 CVE-2026-14456 CVE-2026-66046 CVE-2026-63076 CVE-2026-53615 CVE-2026-54874 CVE-2026-63072 CVE-2026-8927 CVE-2026-8924 CVE-2026-8286 CVE-2026-85091 CVE-2026-93990 CVE-2026-95619 CVE-2026-95210 CVE-2026-88647 CVE-2026-67693 CVE-2026-95184 CVE-2026-95209 CVE-2026-107161}"
 
 AWS_OPTIONS=(--region "$REGION")
 if [[ -n "${AWS_PROFILE:-}" ]]; then
