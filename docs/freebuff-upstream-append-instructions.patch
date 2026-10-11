@@ -1,0 +1,148 @@
+--- a/cli/src/utils/codebuff-client.ts
++++ b/cli/src/utils/codebuff-client.ts
+@@ -1,3 +1,4 @@
++import { loadAppendInstructions } from './append-instructions'
+ import { API_KEY_ENV_VAR } from '@codebuff/common/old-constants'
+ import { AskUserBridge } from '@codebuff/common/utils/ask-user-bridge'
+ import { CodebuffClient } from '@codebuff/sdk'
+@@ -67,6 +68,11 @@
+       return null
+     }
+ 
++    // Read before creating/admitting a client. Failure must not fall back to
++    // an unconfigured client; no private content is logged.
++    const appendInstructions = await loadAppendInstructions(
++      getSystemProcessEnv().FREEBUFF_APPEND_INSTRUCTIONS_FILE,
++    )
+     const projectRoot = getProjectRoot()
+ 
+     // Set up ripgrep path for SDK to use
+@@ -96,6 +102,7 @@
+             }
+           : {}),
+         cwd: projectRoot,
++        appendInstructions,
+         // Keeps the model's skill list identical to the one the registry shows
+         // (utils/skill-registry.ts). The SDK default is project-only so that a
+         // server embedding it cannot read a home directory by omission; the
+--- a/sdk/src/run.ts
++++ b/sdk/src/run.ts
+@@ -202,6 +202,8 @@
+    *  `computeProjectIndexFromFiles`). Skips the per-run tree-sitter parse;
+    *  ignored when `projectFiles` is absent. */
+   projectIndex?: ComputedProjectIndex
++  /** Explicit additive host context; never a replacement for native instructions. */
++  appendInstructions?: string
+   knowledgeFiles?: Record<string, string>
+   agentDefinitions?: AgentDefinition[]
+   maxAgentSteps?: number
+@@ -544,6 +546,7 @@
+   projectFiles,
+   projectIndex,
+   knowledgeFiles,
++  appendInstructions,
+   agentDefinitions,
+   maxAgentSteps = MAX_AGENT_STEPS_DEFAULT,
+   env,
+@@ -638,6 +641,15 @@
+       spawn,
+       logger,
+     })
++  }
++  // Session state is newly initialized or cloned above. Use a reserved key,
++  // preserving real home/project knowledge and native agent definitions.
++  // Always remove an old host overlay before optionally applying this process's
++  // explicit configuration; never inherit stale host instructions after load.
++  delete sessionState.fileContext.userKnowledgeFiles['host://append-instructions']
++  if (appendInstructions !== undefined) {
++    sessionState.fileContext.userKnowledgeFiles['host://append-instructions'] =
++      appendInstructions
+   }
+   const traceSessionId =
+     previousRun?.traceSessionId ?? traceSessionIdOption ?? crypto.randomUUID()
+--- /dev/null
++++ b/cli/src/utils/append-instructions.ts
+@@ -0,0 +1,39 @@
++import { constants } from 'node:fs'
++import { open } from 'node:fs/promises'
++import { isAbsolute } from 'node:path'
++
++const MAX_BYTES = 64 * 1024
++
++/** Proposed explicit per-process host input. Unset preserves native defaults. */
++export async function loadAppendInstructions(path?: string): Promise<string | undefined> {
++  if (path === undefined) return undefined
++  if (!isAbsolute(path) || /[\0\r\n]/.test(path)) {
++    throw new Error('Invalid append instructions path')
++  }
++  // Linux proposal: reject symlinks and special files before reading.
++  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
++  try {
++    const stat = await file.stat()
++    if (!stat.isFile() || stat.size === 0 || stat.size > MAX_BYTES) {
++      throw new Error('Invalid append instructions file')
++    }
++    // A bounded read also handles growth after fstat without unbounded allocation.
++    const bytes = Buffer.alloc(MAX_BYTES + 1)
++    let length = 0
++    while (length < bytes.length) {
++      const { bytesRead } = await file.read(bytes, length, bytes.length - length, null)
++      if (bytesRead === 0) break
++      length += bytesRead
++    }
++    if (length === 0 || length > MAX_BYTES) {
++      throw new Error('Invalid append instructions size')
++    }
++    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length))
++    if (!text.trim() || text.includes('\0')) {
++      throw new Error('Invalid append instructions text')
++    }
++    return text
++  } finally {
++    await file.close()
++  }
++}
+--- /dev/null
++++ b/cli/src/utils/append-instructions.test.ts
+@@ -0,0 +1,41 @@
++import { describe, expect, test } from 'bun:test'
++import { mkdtemp, writeFile, symlink, rm } from 'node:fs/promises'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { loadAppendInstructions } from './append-instructions'
++
++describe('explicit additive instructions file', () => {
++  test('unset input preserves default configuration', async () => {
++    expect(await loadAppendInstructions()).toBeUndefined()
++  })
++  test('reads private UTF-8 independently of visible task', async () => {
++    const dir = await mkdtemp(join(tmpdir(), 'freebuff-instructions-'))
++    try {
++      const file = join(dir, 'system.md')
++      const content = 'Private host instructions: 你好.\n'
++      await writeFile(file, content, { mode: 0o600 })
++      expect(await loadAppendInstructions(file)).toBe(content)
++    } finally {
++      await rm(dir, { recursive: true, force: true })
++    }
++  })
++  test('invalid or unreadable configuration fails before client admission', async () => {
++    const dir = await mkdtemp(join(tmpdir(), 'freebuff-instructions-'))
++    try {
++      for (const input of ['', 'relative.md', dir, join(dir, 'missing')]) {
++        await expect(loadAppendInstructions(input)).rejects.toThrow()
++      }
++      const file = join(dir, 'system.md')
++      for (const content of [Buffer.alloc(0), Buffer.from('  '), Buffer.from([0xff]), Buffer.from('a\0b'), Buffer.alloc(65537, 65)]) {
++        await writeFile(file, content)
++        await expect(loadAppendInstructions(file)).rejects.toThrow()
++      }
++      await writeFile(file, 'valid')
++      const link = join(dir, 'link')
++      await symlink(file, link)
++      await expect(loadAppendInstructions(link)).rejects.toThrow()
++    } finally {
++      await rm(dir, { recursive: true, force: true })
++    }
++  })
++})
