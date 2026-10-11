@@ -171,6 +171,8 @@ if aws_cli secretsmanager describe-secret --secret-id "$STRIPE_SECRET_ID" >/dev/
 	# Price ids are not credentials; the key and webhook secret stay secrets.
 	stripe_price_ids="$(jq -c '.price_ids // empty' <<<"$stripe_settings")"
 	stripe_portal_configuration="$(jq -r '.portal_configuration // ""' <<<"$stripe_settings")"
+	# Organizations created before billing went live stay exempt.
+	stripe_exempt_before="$(jq -r '.exempt_orgs_created_before // ""' <<<"$stripe_settings")"
 	if [[ -z "$stripe_price_ids" || "$stripe_price_ids" == "{}" ]] ||
 		[[ "$(jq -r '(.secret_key // "") != "" and (.webhook_secret // "") != ""' <<<"$stripe_settings")" != "true" ]]; then
 		echo "$STRIPE_SECRET_ID must hold secret_key, webhook_secret, and price_ids." >&2
@@ -374,6 +376,7 @@ register_task_definition() {
 			render_args+=(
 				--set-environment "AO_CLOUD_STRIPE_PRICE_IDS=${stripe_price_ids}"
 				--set-environment "AO_CLOUD_STRIPE_PORTAL_CONFIGURATION=${stripe_portal_configuration}"
+				--set-environment "AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE=${stripe_exempt_before}"
 				--set-secret "AO_CLOUD_STRIPE_SECRET_KEY=${stripe_secret_arn}:secret_key::"
 				--set-secret "AO_CLOUD_STRIPE_WEBHOOK_SECRET=${stripe_secret_arn}:webhook_secret::"
 			)
