@@ -141,6 +141,17 @@ func run(logger *slog.Logger) error {
 		"repository_url", bootstrap.Launch.RepositoryURL,
 	)
 
+	// A Coder template that already cloned the repository (and runs its dev
+	// stack there) can ask the session to work in that checkout instead of a
+	// fresh clone. Decide before anything captures the workspace path.
+	reuse := worker.ReuseDecision{Workspace: workspace}
+	if os.Getenv(worker.ReuseExistingCheckoutEnv) == "1" &&
+		strings.TrimSpace(bootstrap.Launch.RepositoryURL) != "" &&
+		!worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
+		reuse = resolveReusedWorkspace(ctx, logger, bootstrap, workspace, dataDir)
+		workspace = reuse.Workspace
+	}
+
 	// The workspace shell is deliberately available before checkout starts. A
 	// developer can inspect the sandbox immediately while repository preparation
 	// and coding-agent authentication continue in the background.
@@ -375,7 +386,7 @@ func run(logger *slog.Logger) error {
 	go func() {
 		chatReadyClosed := false
 		for {
-			err := prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL)
+			err := prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL, reuse)
 			if err == nil {
 				break
 			}
@@ -480,12 +491,17 @@ func prepareWorkspace(
 	client *client,
 	bootstrap worker.BootstrapResponse,
 	workspace, dataDir, publicURL string,
+	reuse worker.ReuseDecision,
 ) error {
 	if worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
 		if err := worker.PrepareScratchWorkspace(ctx, worker.ExecGitRunner{}, workspace); err != nil {
 			return fmt.Errorf("prepare scratch workspace: %w", err)
 		}
 		logger.Info("initialized scratch workspace")
+	} else if reuse.Reused {
+		if err := prepareReusedWorkspace(ctx, logger, client, bootstrap, workspace, dataDir, publicURL, reuse); err != nil {
+			return err
+		}
 	} else {
 		checkoutGrant, err := client.checkoutGrant(ctx)
 		if err != nil {
@@ -526,6 +542,70 @@ func prepareWorkspace(
 	); err != nil {
 		return fmt.Errorf("record workspace review base: %w", err)
 	}
+	return nil
+}
+
+// resolveReusedWorkspace decides whether the session works in the checkout
+// the workspace template already cloned, logs why, and, when it does, scopes
+// AO's git setup to this process tree (see worker.ReusedCheckoutGitEnvironment)
+// so the checkout's and the user's git configuration stay untouched.
+func resolveReusedWorkspace(
+	ctx context.Context,
+	logger *slog.Logger,
+	bootstrap worker.BootstrapResponse,
+	workspace, dataDir string,
+) worker.ReuseDecision {
+	home := strings.TrimSpace(os.Getenv("HOME"))
+	decision := worker.ResolveReusedCheckout(
+		ctx, worker.ExecGitRunner{}, home, workspace, dataDir,
+		bootstrap.Launch.RepositoryURL, bootstrap.SessionID,
+		bootstrap.Launch.Branch, bootstrap.Launch.DefaultBranch,
+	)
+	if !decision.Reused {
+		logger.Info("checkout reuse: cloning into the AO workspace instead",
+			"workspace", decision.Workspace, "reason", decision.Reason)
+		return decision
+	}
+	logger.Info("checkout reuse: working in the template's existing checkout",
+		"workspace", decision.Workspace, "adopted_now", decision.AdoptedNow, "stash", decision.Stash)
+	for key, value := range worker.ReusedCheckoutGitEnvironment(dataDir) {
+		_ = os.Setenv(key, value)
+	}
+	_ = os.Setenv("AO_WORKSPACE_DIR", decision.Workspace)
+	return decision
+}
+
+// prepareReusedWorkspace refreshes an adopted checkout: it writes the session
+// git tooling, fetches with the session's checkout grant, moves a just-adopted
+// branch up to the fetched base, and clones any extra repositories beside it
+// exactly as for a fresh checkout.
+func prepareReusedWorkspace(
+	ctx context.Context,
+	logger *slog.Logger,
+	client *client,
+	bootstrap worker.BootstrapResponse,
+	workspace, dataDir, publicURL string,
+	reuse worker.ReuseDecision,
+) error {
+	checkoutGrant, err := client.checkoutGrant(ctx)
+	if err != nil {
+		if !anonymousCheckoutEnabled() {
+			return fmt.Errorf("request checkout grant: %w", err)
+		}
+		checkoutGrant = worker.CheckoutGrantResponse{CloneURL: bootstrap.Launch.RepositoryURL}
+	}
+	if err := worker.ConfigureReusedCheckoutGit(dataDir, publicURL, bootstrap.SessionID); err != nil {
+		return fmt.Errorf("configure repository tooling: %w", err)
+	}
+	if err := worker.PrepareReusedCheckout(ctx, worker.ExecGitRunner{}, workspace, checkoutGrant); err != nil {
+		return fmt.Errorf("refresh the reused repository checkout: %w", err)
+	}
+	if reuse.AdoptedNow {
+		if err := worker.AdvanceAdoptedCheckout(ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.DefaultBranch); err != nil {
+			logger.Warn("checkout reuse: could not fast-forward the session branch to the latest base", "error", err)
+		}
+	}
+	cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap.Launch.ExtraRepos, workspace, dataDir)
 	return nil
 }
 
