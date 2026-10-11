@@ -2687,7 +2687,7 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 						<AccountAvatar user={session?.user} />
 						<span className="min-w-0 truncate tracking-tight">{name}</span>
 						{plan ? (
-							<span className="shrink-0 rounded-full bg-[var(--color-accent)] px-1.5 py-px text-[length:var(--font-size-xs)] font-medium leading-4 text-white">
+							<span className="shrink-0 rounded-full bg-[var(--color-status-working)] px-1.5 py-px text-[length:var(--font-size-xs)] font-medium leading-4 text-white">
 								{plan}
 							</span>
 						) : null}
