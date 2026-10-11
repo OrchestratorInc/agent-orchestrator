@@ -239,3 +239,33 @@ func TestPortalCancelFlowOpensOnTheSubscription(t *testing.T) {
 		}
 	}
 }
+
+func TestProductSubscriptionsPagesAndSkipsEndedOnes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		switch {
+		case r.URL.Path == "/v1/prices" && query.Get("product") == "prod_1":
+			_, _ = io.WriteString(w, `{"data":[{"id":"price_a"},{"id":"price_b"}],"has_more":false}`)
+		case r.URL.Path == "/v1/subscriptions" && query.Get("price") == "price_a" && query.Get("starting_after") == "":
+			if query.Get("status") != "all" || query.Get("limit") != "100" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			_, _ = io.WriteString(w, `{"data":[{"id":"sub_1","status":"active"},{"id":"sub_2","status":"canceled"}],"has_more":true}`)
+		case r.URL.Path == "/v1/subscriptions" && query.Get("price") == "price_a" && query.Get("starting_after") == "sub_2":
+			_, _ = io.WriteString(w, `{"data":[{"id":"sub_3","status":"past_due"}],"has_more":false}`)
+		case r.URL.Path == "/v1/subscriptions" && query.Get("price") == "price_b":
+			_, _ = io.WriteString(w, `{"data":[{"id":"sub_4","status":"incomplete_expired"},{"id":"sub_5","status":"trialing"}],"has_more":false}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	ids, err := NewClient("rk_test", server.URL).ProductSubscriptions(context.Background(), "prod_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(ids, ",") != "sub_1,sub_3,sub_5" {
+		t.Fatalf("subscriptions = %v, want sub_1,sub_3,sub_5", ids)
+	}
+}

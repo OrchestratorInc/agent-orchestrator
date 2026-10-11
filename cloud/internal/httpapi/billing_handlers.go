@@ -27,6 +27,7 @@ type StripeAPI interface {
 	CreatePortalSession(ctx context.Context, customerID, returnURL, configuration, cancelSubscriptionID string) (string, error)
 	GetSubscription(ctx context.Context, subscriptionID string) (billing.Subscription, error)
 	GetPrice(ctx context.Context, priceID string) (billing.Price, error)
+	ProductSubscriptions(ctx context.Context, productID string) ([]string, error)
 }
 
 // BillingOptions configures Stripe billing. A nil *BillingOptions leaves
@@ -545,6 +546,35 @@ func (s *Server) handleStripeEvent(ctx context.Context, event billing.Event) (st
 		if subscriptionID := event.InvoiceSubscription(); subscriptionID != "" {
 			return "sync subscription", s.syncSubscription(ctx, event, subscriptionID, object.Customer)
 		}
+	case "product.updated":
+		return s.syncProduct(ctx, event, object.ID)
+	}
+	return "", nil
+}
+
+// syncProduct applies a plan product's edited metadata (its plan limits) to
+// every subscription on it right away, instead of at each one's next renewal,
+// and drops the cached plan prices so the plan cards show the change too. A
+// failure retries the whole event; re-reading a subscription is idempotent.
+func (s *Server) syncProduct(ctx context.Context, event billing.Event, productID string) (string, error) {
+	s.offerCache.mu.Lock()
+	s.offerCache.offers = nil
+	s.offerCache.mu.Unlock()
+	if productID == "" {
+		return "", nil
+	}
+	subscriptionIDs, err := s.billingOptions.Stripe.ProductSubscriptions(ctx, productID)
+	if err != nil {
+		return "list product subscriptions", err
+	}
+	for _, subscriptionID := range subscriptionIDs {
+		if err := s.syncSubscription(ctx, event, subscriptionID, ""); err != nil {
+			return "sync product subscription", err
+		}
+	}
+	if len(subscriptionIDs) > 0 {
+		s.logger.Info("applied Stripe product update to its subscriptions",
+			"product_id", productID, "subscriptions", len(subscriptionIDs))
 	}
 	return "", nil
 }

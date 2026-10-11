@@ -337,6 +337,61 @@ func (c *Client) GetSubscription(ctx context.Context, subscriptionID string) (Su
 	return subscription, nil
 }
 
+// productSubscriptionPageLimit is how many objects one list call returns; Stripe's
+// maximum.
+const productSubscriptionPageLimit = 100
+
+// ProductSubscriptions lists the IDs of the subscriptions on any price (active
+// or archived) of a product, skipping ones that have ended. A product.updated
+// webhook uses it to re-read subscriptions whose plan limits live in that
+// product's metadata.
+func (c *Client) ProductSubscriptions(ctx context.Context, productID string) ([]string, error) {
+	var priceIDs []string
+	err := c.list(ctx, "/v1/prices", url.Values{"product": {productID}}, func(id, _ string) {
+		priceIDs = append(priceIDs, id)
+	})
+	if err != nil {
+		return nil, err
+	}
+	var subscriptionIDs []string
+	for _, priceID := range priceIDs {
+		err := c.list(ctx, "/v1/subscriptions", url.Values{"price": {priceID}, "status": {"all"}}, func(id, status string) {
+			if status != "canceled" && status != "incomplete_expired" {
+				subscriptionIDs = append(subscriptionIDs, id)
+			}
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return subscriptionIDs, nil
+}
+
+// list pages through a Stripe list endpoint, calling visit with each object's
+// ID and status (empty for objects without one).
+func (c *Client) list(ctx context.Context, path string, query url.Values, visit func(id, status string)) error {
+	query.Set("limit", strconv.Itoa(productSubscriptionPageLimit))
+	for {
+		var page struct {
+			Data []struct {
+				ID     string `json:"id"`
+				Status string `json:"status"`
+			} `json:"data"`
+			HasMore bool `json:"has_more"`
+		}
+		if err := c.do(ctx, http.MethodGet, path+"?"+query.Encode(), nil, "", &page); err != nil {
+			return err
+		}
+		for _, item := range page.Data {
+			visit(item.ID, item.Status)
+		}
+		if !page.HasMore || len(page.Data) == 0 {
+			return nil
+		}
+		query.Set("starting_after", page.Data[len(page.Data)-1].ID)
+	}
+}
+
 // Price is a plan's price as shown to a customer choosing a plan.
 type Price struct {
 	ID         string             `json:"id"`

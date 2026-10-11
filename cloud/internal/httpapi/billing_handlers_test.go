@@ -186,6 +186,8 @@ type fakeStripe struct {
 	prices        int
 	priceErr      error
 	portalCancels []string
+	// productSubs maps a product to the subscriptions on it.
+	productSubs map[string][]string
 }
 
 func (f *fakeStripe) CreateCustomer(context.Context, string, string) (string, error) {
@@ -224,6 +226,11 @@ func (f *fakeStripe) GetPrice(_ context.Context, id string) (billing.Price, erro
 		return billing.Price{}, f.priceErr
 	}
 	return billing.Price{ID: id, UnitAmount: 2000, Currency: "usd", Interval: "month"}, nil
+}
+func (f *fakeStripe) ProductSubscriptions(_ context.Context, productID string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.productSubs[productID], nil
 }
 func (f *fakeStripe) GetSubscription(context.Context, string) (billing.Subscription, error) {
 	f.mu.Lock()
@@ -718,5 +725,39 @@ func TestCancelAtFlowsFromStripeToTheSummary(t *testing.T) {
 	store.cancelAt = &cancelAt
 	if summary := getBillingSummary(t, server); summary.CancelAt == nil || !summary.CancelAt.Equal(cancelAt) {
 		t.Fatalf("cancelAt = %v, want %v", summary.CancelAt, cancelAt)
+	}
+}
+
+// Editing a plan product's metadata in Stripe re-reads every subscription on
+// it, so new limits apply at once rather than at each renewal, and refreshes
+// the cached plan cards.
+func TestProductUpdateReappliesItsSubscriptions(t *testing.T) {
+	store, stripe := newFakeBillingStore(), &fakeStripe{subscription: activeStarterSubscription()}
+	store.customers[billingCusID] = billingOrgID
+	stripe.productSubs = map[string][]string{"prod_starter": {billingSubID}}
+	server := billingServer(store, stripe)
+
+	// Prime the plan-card cache.
+	_ = server.planOffers(context.Background())
+	pricesBefore := stripe.prices
+
+	payload := `{"id":"evt_product","type":"product.updated","data":{"object":{"id":"prod_starter","object":"product"}}}`
+	response := httptest.NewRecorder()
+	server.stripeWebhook(response, signedWebhook(t, payload))
+	if response.Code != http.StatusOK || len(store.applied) != 1 || store.applied[0].SubscriptionID != billingSubID ||
+		!store.events["evt_product"] {
+		t.Fatalf("product update: status %d applied %+v events %v", response.Code, store.applied, store.events)
+	}
+	_ = server.planOffers(context.Background())
+	if stripe.prices == pricesBefore {
+		t.Fatal("the plan-card cache was not refreshed after a product update")
+	}
+
+	// A product with no subscriptions is acknowledged without applying anything.
+	payload = `{"id":"evt_product_2","type":"product.updated","data":{"object":{"id":"prod_unused","object":"product"}}}`
+	response = httptest.NewRecorder()
+	server.stripeWebhook(response, signedWebhook(t, payload))
+	if response.Code != http.StatusOK || len(store.applied) != 1 {
+		t.Fatalf("unused product: status %d applied %d", response.Code, len(store.applied))
 	}
 }
