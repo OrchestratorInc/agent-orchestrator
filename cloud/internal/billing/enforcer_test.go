@@ -14,6 +14,9 @@ type fakeUsageStore struct {
 	sampleErr error
 	paused    map[string]int
 	failOrg   string
+
+	usageBefore, eventsBefore time.Time
+	pruneEventsErr            error
 }
 
 func (f *fakeUsageStore) SampleUsage(context.Context) ([]string, error) { return f.orgs, f.sampleErr }
@@ -24,7 +27,30 @@ func (f *fakeUsageStore) PauseOverLimit(_ context.Context, orgID string) (int64,
 	f.paused[orgID]++
 	return 1, nil
 }
-func (f *fakeUsageStore) PruneUsage(context.Context, time.Time) error { return nil }
+func (f *fakeUsageStore) PruneUsage(_ context.Context, before time.Time) error {
+	f.usageBefore = before
+	return nil
+}
+func (f *fakeUsageStore) PruneStripeEvents(_ context.Context, before time.Time) error {
+	f.eventsBefore = before
+	return f.pruneEventsErr
+}
+
+func TestPruneDropsOldUsageAndProcessedEvents(t *testing.T) {
+	store := &fakeUsageStore{paused: map[string]int{}}
+	enforcer := &Enforcer{Store: store, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	now := time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC)
+	if !enforcer.Prune(context.Background(), now) {
+		t.Fatal("prune failed")
+	}
+	if !store.usageBefore.Equal(now.Add(-usageRetention)) || !store.eventsBefore.Equal(now.Add(-90*24*time.Hour)) {
+		t.Fatalf("usage before %v, events before %v", store.usageBefore, store.eventsBefore)
+	}
+	store.pruneEventsErr = errors.New("db down")
+	if enforcer.Prune(context.Background(), now) {
+		t.Fatal("a failed event prune must be retried")
+	}
+}
 
 func TestTickEnforcesEveryOrgEvenWhenOneFails(t *testing.T) {
 	store := &fakeUsageStore{orgs: []string{"a", "b", "c"}, paused: map[string]int{}, failOrg: "b"}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/idlepause"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/jackc/pgx/v5"
 )
@@ -381,6 +382,11 @@ func (s *Store) SetSandboxDesiredState(
 	orgID, sessionID, desiredState string,
 ) error {
 	return s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+		if desiredState == "running" {
+			if err := s.billing.forPrincipal(principal, orgID).wakeAdmissionTx(ctx, tx, orgID, sessionID, wakeAny); err != nil {
+				return err
+			}
+		}
 		tag, err := tx.Exec(
 			ctx,
 			`UPDATE ao_sandboxes
@@ -415,7 +421,13 @@ func (s *Store) ResumeSession(
 	orgID, sessionID string,
 ) (domain.SandboxLifecycle, error) {
 	var lifecycle domain.SandboxLifecycle
-	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, _ sessionAccess) error {
+	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
+		// Waking a paused billed session takes a running slot: check the plan
+		// in this transaction, under the organization lock, so two resumes
+		// cannot both take the last slot.
+		if err := s.billing.forAccess(principal, access, orgID).wakeAdmissionTx(ctx, tx, orgID, sessionID, wakeFromPaused); err != nil {
+			return err
+		}
 		err := tx.QueryRow(
 			ctx,
 			`UPDATE ao_sandboxes
@@ -455,35 +467,88 @@ func (s *Store) WakePausedSessions(
 	orgID string,
 ) (int64, error) {
 	var woken int64
+	policy := s.billing.forPrincipal(principal, orgID)
 	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(
-			ctx,
-			`UPDATE ao_sandboxes sandbox
-			SET desired_state = 'running',
-				reconcile_after = now(),
-				startup_started_at = now(),
-				interactive_until = CASE
-					WHEN sandbox.interactive_until IS NULL
-						OR sandbox.interactive_until < now() + $3::interval
-						THEN now() + $3::interval
-					ELSE sandbox.interactive_until
-				END,
-				updated_at = now()
-			FROM ao_sessions session
-			WHERE sandbox.org_id = $1
-				AND sandbox.org_id = session.org_id
-				AND sandbox.session_id = session.id
-				AND session.created_by_user_id = $2
-				AND NOT session.is_terminated
-				AND sandbox.desired_state = 'paused'`,
-			orgID,
-			principal.UserID,
-			intervalString(interactiveSessionLease),
-		)
-		if err != nil {
-			return fmt.Errorf("wake paused sessions: %w", err)
+		// Unbilled sandboxes wake together. Billed ones (only while billing is
+		// enforced) wake one at a time below, each within the plan.
+		billed := ""
+		if policy.enforced {
+			billed = sandbox.ProviderFreestyle
 		}
-		woken = tag.RowsAffected()
+		wake := func(onlySessionID string) (int64, error) {
+			tag, err := tx.Exec(
+				ctx,
+				`UPDATE ao_sandboxes sandbox
+				SET desired_state = 'running',
+					reconcile_after = now(),
+					startup_started_at = now(),
+					interactive_until = CASE
+						WHEN sandbox.interactive_until IS NULL
+							OR sandbox.interactive_until < now() + $3::interval
+							THEN now() + $3::interval
+						ELSE sandbox.interactive_until
+					END,
+					updated_at = now()
+				FROM ao_sessions session
+				WHERE sandbox.org_id = $1
+					AND sandbox.org_id = session.org_id
+					AND sandbox.session_id = session.id
+					AND session.created_by_user_id = $2
+					AND NOT session.is_terminated
+					AND sandbox.desired_state = 'paused'
+					AND CASE WHEN $5 = '' THEN sandbox.provider IS DISTINCT FROM NULLIF($4, '')
+						ELSE sandbox.session_id = NULLIF($5, '')::uuid END`,
+				orgID,
+				principal.UserID,
+				intervalString(interactiveSessionLease),
+				billed,
+				onlySessionID,
+			)
+			if err != nil {
+				return 0, fmt.Errorf("wake paused sessions: %w", err)
+			}
+			return tag.RowsAffected(), nil
+		}
+		var err error
+		if woken, err = wake(""); err != nil || billed == "" {
+			return err
+		}
+		rows, err := tx.Query(ctx,
+			`SELECT sandbox.session_id::text FROM ao_sandboxes sandbox
+			JOIN ao_sessions session ON session.org_id = sandbox.org_id AND session.id = sandbox.session_id
+			WHERE sandbox.org_id = $1 AND session.created_by_user_id = $2 AND NOT session.is_terminated
+				AND sandbox.desired_state = 'paused' AND sandbox.provider = $3
+			ORDER BY sandbox.updated_at DESC, sandbox.session_id`,
+			orgID, principal.UserID, billed)
+		if err != nil {
+			return err
+		}
+		sessionIDs, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		// The most recently used sessions get the plan's free slots first.
+		var refusal error
+		for _, sessionID := range sessionIDs {
+			if err := policy.wakeAdmissionTx(ctx, tx, orgID, sessionID, wakeFromPaused); err != nil {
+				if !IsPlanRefusal(err) {
+					return err
+				}
+				if refusal == nil {
+					refusal = err
+				}
+				continue
+			}
+			count, err := wake(sessionID)
+			if err != nil {
+				return err
+			}
+			woken += count
+		}
+		// Nothing could wake: say why, so the app can offer the upgrade.
+		if woken == 0 && refusal != nil {
+			return refusal
+		}
 		return nil
 	})
 	return woken, err
@@ -602,21 +667,35 @@ func (s *Store) MarkSandboxBusy(ctx context.Context, orgID, sessionID string) er
 // lease and counts as an interaction for idle pause. It never wakes a paused
 // session; opening the terminal does that. Only Freestyle sandboxes, which are
 // billed and idle-paused on a short threshold, are touched.
+//
+// Only people who can work in the session (members and editors) keep it
+// awake: a viewer watching a shared session does not hold its owner's
+// sandbox, and plan, running. A session touched within presenceInterval is
+// left alone, so many open windows or a fast client cost one write.
 func (s *Store) TouchSessionPresence(
 	ctx context.Context,
 	principal domain.Principal,
 	orgID, sessionID string,
 ) error {
-	return s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, _ sessionAccess) error {
+	return s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
+		if access.Role == "viewer" {
+			return nil
+		}
 		_, err := tx.Exec(ctx,
 			`UPDATE ao_sandboxes SET
 				interactive_until = greatest(coalesce(interactive_until, now()), now() + $3::interval),
 				last_interaction_at = now()
-			WHERE org_id = $1 AND session_id = $2 AND desired_state = 'running' AND provider = 'freestyle'`,
-			orgID, sessionID, intervalString(interactiveSessionLease))
+			WHERE org_id = $1 AND session_id = $2 AND desired_state = 'running' AND provider = 'freestyle'
+				AND (last_interaction_at IS NULL OR last_interaction_at <= now() - $4::interval)`,
+			orgID, sessionID, intervalString(interactiveSessionLease), intervalString(PresenceInterval))
 		return err
 	})
 }
+
+// PresenceInterval is how often a session's presence is recorded at most. It
+// is well inside the interaction lease a touch reserves, so a steady
+// heartbeat keeps the lease from lapsing.
+const PresenceInterval = 30 * time.Second
 
 // CountActiveSandboxes counts sandboxes whose provider deletion has not yet
 // been observed. Delete intent alone does not release paid capacity.
@@ -1354,7 +1433,12 @@ func (s *Store) RetrySessionStartup(
 	principal domain.Principal,
 	orgID, sessionID string,
 ) error {
-	return s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, _ sessionAccess) error {
+	return s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
+		// A retry provisions a VM again for a failed startup: within the plan
+		// for a billed session, like creating one.
+		if err := s.billing.forAccess(principal, access, orgID).wakeAdmissionTx(ctx, tx, orgID, sessionID, wakeRetry); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(
 			ctx,
 			`UPDATE ao_sandboxes sandbox

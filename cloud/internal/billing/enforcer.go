@@ -13,7 +13,10 @@ const (
 	// usageRetention keeps a little more than any measured window (weekly)
 	// plus a billing period, for support questions.
 	usageRetention = 40 * 24 * time.Hour
-	pruneInterval  = 24 * time.Hour
+	// stripeEventRetention keeps processed webhook ids far longer than Stripe
+	// retries a delivery (three days), so a late retry is still recognized.
+	stripeEventRetention = 90 * 24 * time.Hour
+	pruneInterval        = 24 * time.Hour
 )
 
 // UsageStore is what the enforcer needs from the store.
@@ -21,6 +24,7 @@ type UsageStore interface {
 	SampleUsage(ctx context.Context) ([]string, error)
 	PauseOverLimit(ctx context.Context, orgID string) (int64, error)
 	PruneUsage(ctx context.Context, before time.Time) error
+	PruneStripeEvents(ctx context.Context, before time.Time) error
 }
 
 // Enforcer meters running sandboxes and pauses organizations that are over
@@ -46,9 +50,7 @@ func (e *Enforcer) Run(ctx context.Context) {
 	for {
 		e.Tick(ctx)
 		if now := e.now(); now.Sub(lastPrune) >= pruneInterval {
-			if err := e.Store.PruneUsage(ctx, now.Add(-usageRetention)); err != nil && ctx.Err() == nil {
-				e.Logger.Warn("prune usage ledger", "error", err)
-			} else {
+			if e.Prune(ctx, now) {
 				lastPrune = now
 			}
 		}
@@ -58,6 +60,28 @@ func (e *Enforcer) Run(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// Prune drops usage and processed webhook ids nobody reads any more. It
+// reports whether both succeeded.
+func (e *Enforcer) Prune(ctx context.Context, now time.Time) bool {
+	if e.Logger == nil {
+		e.Logger = slog.Default()
+	}
+	ok := true
+	if err := e.Store.PruneUsage(ctx, now.Add(-usageRetention)); err != nil {
+		ok = false
+		if ctx.Err() == nil {
+			e.Logger.Warn("prune usage ledger", "error", err)
+		}
+	}
+	if err := e.Store.PruneStripeEvents(ctx, now.Add(-stripeEventRetention)); err != nil {
+		ok = false
+		if ctx.Err() == nil {
+			e.Logger.Warn("prune processed Stripe events", "error", err)
+		}
+	}
+	return ok
 }
 
 // Tick records one usage sample and pauses over-limit organizations.

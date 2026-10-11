@@ -12,6 +12,20 @@ import (
 // design partners). Set it directly on ao_organizations.plan.
 const PlanInternal = "internal"
 
+// Billing modes. Only self-serve organizations are subject to plans, usage
+// limits and the usage enforcer.
+const (
+	// BillingModeOff: Stripe billing is not configured on the deployment, or
+	// does not apply to the organization (no billed provider is offered).
+	BillingModeOff = "off"
+	// BillingModeContract: the organization pays under a contract, is on the
+	// internal plan, or is grandfathered.
+	BillingModeContract = "contract"
+	// BillingModeSelfServe: the organization subscribes to a plan through
+	// Stripe Checkout.
+	BillingModeSelfServe = "self_serve"
+)
+
 // UsageWeek is the length of the weekly usage window.
 const UsageWeek = 7 * 24 * time.Hour
 
@@ -32,6 +46,19 @@ type PlanLimits struct {
 	WindowSessionHours   float64 `json:"windowSessionHours"`
 	WeeklySessionHours   float64 `json:"weeklySessionHours"`
 	ManualResetsPerMonth int     `json:"manualResetsPerMonth"`
+	// Features are the paywalled features the plan includes (Stripe product
+	// metadata ao_features, a comma list).
+	Features []string `json:"features,omitempty"`
+}
+
+// HasFeature reports whether the plan includes feature.
+func (l PlanLimits) HasFeature(feature string) bool {
+	for _, included := range l.Features {
+		if included == feature {
+			return true
+		}
+	}
+	return false
 }
 
 // Stripe product metadata keys for PlanLimits.
@@ -44,7 +71,25 @@ const (
 	MetadataWindowSessionHours   = "ao_window_session_hours"
 	MetadataWeeklySessionHours   = "ao_weekly_session_hours"
 	MetadataManualResetsPerMonth = "ao_manual_resets_per_month"
+	// MetadataFeatures is optional: a comma list of paywalled features.
+	MetadataFeatures = "ao_features"
 )
+
+// ParseFeatureList reads a comma list of feature names, lowercased, trimmed
+// and deduplicated, in order.
+func ParseFeatureList(raw string) []string {
+	var features []string
+	seen := map[string]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		feature := strings.ToLower(strings.TrimSpace(part))
+		if feature == "" || seen[feature] {
+			continue
+		}
+		seen[feature] = true
+		features = append(features, feature)
+	}
+	return features
+}
 
 // ParsePlanLimits reads PlanLimits from Stripe product metadata. Every key is
 // required: a product missing one is a dashboard mistake, and guessing a
@@ -86,6 +131,7 @@ func ParsePlanLimits(metadata map[string]string) (PlanLimits, error) {
 	floatValue(MetadataWindowSessionHours, &limits.WindowSessionHours)
 	floatValue(MetadataWeeklySessionHours, &limits.WeeklySessionHours)
 	intValue(MetadataManualResetsPerMonth, 0, &limits.ManualResetsPerMonth)
+	limits.Features = ParseFeatureList(metadata[MetadataFeatures])
 	if len(problems) == 0 && limits.MaxRunningSandboxes > limits.MaxActiveSandboxes {
 		problems = append(problems, MetadataMaxRunningSandboxes+" exceeds "+MetadataMaxActiveSandboxes)
 	}
@@ -169,6 +215,32 @@ type OrgBilling struct {
 	UsageWeekAnchor      *time.Time
 	PastDueSince         *time.Time
 	CreatedAt            time.Time
+	// BillingMode is the organization's billing as last recorded from WorkOS
+	// (OrgBillingContract, BillingModeSelfServe, or empty when never seen).
+	// Background work, which has no principal, decides on it.
+	BillingMode string
+	// SubscriptionCreated is when the current subscription was created in
+	// Stripe, to keep the newest when an organization ends up with two.
+	SubscriptionCreated *time.Time
+	// PendingCheckout is the open Checkout session started for the
+	// organization, if any.
+	PendingCheckout *PendingCheckout
+}
+
+// PendingCheckout is a Stripe Checkout session that is open for an
+// organization. A second Checkout is not started while it is open, so one
+// organization cannot end up with two subscriptions.
+type PendingCheckout struct {
+	ID        string    `json:"id"`
+	URL       string    `json:"url"`
+	PriceID   string    `json:"priceId"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+// Open reports whether the session can still be completed at now, with a
+// minute's margin so a link handed out is not about to expire.
+func (p *PendingCheckout) Open(now time.Time) bool {
+	return p != nil && p.ID != "" && p.ExpiresAt.After(now.Add(time.Minute))
 }
 
 // Exempt reports whether billing does not apply to the organization.
@@ -194,7 +266,12 @@ type UsageSummary struct {
 
 // BillingSummary is the billing state the desktop app shows.
 type BillingSummary struct {
-	Enabled            bool          `json:"enabled"`
+	// Enabled means Stripe billing is configured on the deployment. Whether
+	// plans apply to this organization is BillingMode.
+	Enabled bool `json:"enabled"`
+	// BillingMode is one of the BillingMode constants; the app shows plans
+	// only for BillingModeSelfServe.
+	BillingMode        string        `json:"billingMode"`
 	Exempt             bool          `json:"exempt"`
 	Plan               string        `json:"plan"`
 	SubscriptionStatus string        `json:"subscriptionStatus,omitempty"`
@@ -202,4 +279,6 @@ type BillingSummary struct {
 	CurrentPeriodEnd   *time.Time    `json:"currentPeriodEnd,omitempty"`
 	Limits             *PlanLimits   `json:"limits,omitempty"`
 	Usage              *UsageSummary `json:"usage,omitempty"`
+	// Features are the paywalled features the organization's plan includes.
+	Features []string `json:"features"`
 }

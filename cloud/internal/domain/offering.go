@@ -16,15 +16,6 @@ const (
 	OrgBillingContract = "contract"
 )
 
-// Billing modes reported to clients (/me offering.billingMode, /billing
-// billingMode). Only BillingModeSelfServe organizations are subject to plan
-// admission, limits, and the over-limit enforcer.
-const (
-	BillingModeOff       = "off"
-	BillingModeContract  = "contract"
-	BillingModeSelfServe = "self_serve"
-)
-
 // Offering kinds summarize which sandbox providers an organization may use:
 // coder is the business (bring-your-own or managed Coder) offering, every other
 // managed provider (freestyle, and docker on a local control plane) is the

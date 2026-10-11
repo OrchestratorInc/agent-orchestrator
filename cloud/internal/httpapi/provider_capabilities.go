@@ -96,7 +96,9 @@ func (s *Server) defaultProviderForOrg(principal domain.Principal, orgID string)
 
 // billingModeForOrg computes domain.BillingMode for one organization.
 func (s *Server) billingModeForOrg(ctx context.Context, principal domain.Principal, orgID string) (string, error) {
-	if !s.billingReady() {
+	if !s.billingReady() || !s.orgOffersBilledProvider(principal, orgID) {
+		// Plans only sell billed (Freestyle) capacity: an organization offered
+		// none has nothing to buy, matching GET /billing.
 		return domain.BillingModeOff, nil
 	}
 	plan, grandfathered := "", false

@@ -286,6 +286,7 @@ func TestMeOfferingBillingMode(t *testing.T) {
 		{"contract metadata", domain.OrgBillingContract, "free", false, domain.BillingModeContract},
 		{"internal plan", "", domain.PlanInternal, false, domain.BillingModeContract},
 		{"grandfathered", "", "free", true, domain.BillingModeContract},
+		{"coder only has nothing to buy", "", "free", false, domain.BillingModeOff},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -298,6 +299,12 @@ func TestMeOfferingBillingMode(t *testing.T) {
 			s.billingOptions = &BillingOptions{Stripe: &fakeStripe{}}
 			s.billingStore = newFakeBillingStore()
 			principal := teamPrincipal("coder")
+			if tc.want != domain.BillingModeOff {
+				// Plans sell Freestyle capacity, so only an organization
+				// offered Freestyle has a self-serve or contract mode.
+				s.availableSandboxProviders = append(s.availableSandboxProviders, sandbox.ProviderFreestyle)
+				principal = teamPrincipal("coder", "freestyle")
+			}
 			principal.OrgBilling = tc.orgBilling
 			if got := getMe(t, s, principal).Offering.BillingMode; got != tc.want {
 				t.Fatalf("billingMode = %q, want %q", got, tc.want)

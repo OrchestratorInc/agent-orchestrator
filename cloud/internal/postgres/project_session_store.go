@@ -329,7 +329,7 @@ func (s *Store) CreateSession(
 	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		var err error
 		session, err = createSessionTx(
-			ctx, tx, orgID, idempotencyKey, maxActiveSandboxes, s.billing, input, input.ParentSessionID, principal.UserID,
+			ctx, tx, orgID, idempotencyKey, maxActiveSandboxes, s.billing.forPrincipal(principal, orgID), input, input.ParentSessionID, principal.UserID,
 		)
 		return err
 	})
@@ -568,7 +568,7 @@ func (s *Store) CreateGitHubScratchProject(
 			orgID,
 			"github-scratch:"+commandID,
 			maxActiveSandboxes,
-			s.billing,
+			s.billing.forPrincipal(principal, orgID),
 			input.Session,
 			"",
 			principal.UserID,

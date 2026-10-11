@@ -217,6 +217,7 @@ type Server struct {
 	billingOptions          *BillingOptions
 	billingStore            billingStore
 	offerCache              planOfferCache
+	presenceLimiter         presenceLimiter
 	notificationWaiters     *notificationWaiters
 	// workerBinariesBySHA serves the content-addressed worker/helper binaries
 	// so a worker with a stale baked copy can heal itself to this exact build.

@@ -26,6 +26,14 @@ import (
 
 const defaultBaseURL = "https://api.stripe.com"
 
+// APIVersion pins the Stripe API version every request is made with, so a
+// change to the account's default version cannot change the shapes this
+// client reads. 2025-03-31.basil reports the billing period on subscription
+// items and an invoice's subscription under parent.subscription_details;
+// GetSubscription and Event.InvoiceSubscription read those (and the older
+// shapes, for webhook endpoints still on an earlier version).
+const APIVersion = "2025-03-31.basil"
+
 // Client is a minimal Stripe API client authenticated with a (restricted)
 // secret key.
 type Client struct {
@@ -68,6 +76,7 @@ func (c *Client) do(ctx context.Context, method, path string, form url.Values, i
 		return err
 	}
 	request.SetBasicAuth(c.key, "")
+	request.Header.Set("Stripe-Version", APIVersion)
 	if form != nil {
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
@@ -130,11 +139,21 @@ type CheckoutRequest struct {
 	PriceID    string
 	SuccessURL string
 	CancelURL  string
+	// ExpiresAt bounds how long the session stays open (Stripe allows 30
+	// minutes to 24 hours). Zero keeps Stripe's default of 24 hours.
+	ExpiresAt time.Time
 }
 
-// CreateCheckoutSession returns the URL of a hosted Checkout page that
-// subscribes the customer to the price.
-func (c *Client) CreateCheckoutSession(ctx context.Context, input CheckoutRequest) (string, error) {
+// CheckoutSession is a created Checkout session.
+type CheckoutSession struct {
+	ID        string
+	URL       string
+	ExpiresAt time.Time
+}
+
+// CreateCheckoutSession creates a hosted Checkout page that subscribes the
+// customer to the price.
+func (c *Client) CreateCheckoutSession(ctx context.Context, input CheckoutRequest) (CheckoutSession, error) {
 	form := url.Values{}
 	form.Set("mode", "subscription")
 	form.Set("customer", input.CustomerID)
@@ -145,16 +164,47 @@ func (c *Client) CreateCheckoutSession(ctx context.Context, input CheckoutReques
 	form.Set("success_url", input.SuccessURL)
 	form.Set("cancel_url", input.CancelURL)
 	form.Set("allow_promotion_codes", "true")
+	if !input.ExpiresAt.IsZero() {
+		form.Set("expires_at", strconv.FormatInt(input.ExpiresAt.Unix(), 10))
+	}
 	var session struct {
-		URL string `json:"url"`
+		ID        string `json:"id"`
+		URL       string `json:"url"`
+		ExpiresAt int64  `json:"expires_at"`
 	}
 	if err := c.do(ctx, http.MethodPost, "/v1/checkout/sessions", form, "", &session); err != nil {
+		return CheckoutSession{}, err
+	}
+	if session.URL == "" || session.ID == "" {
+		return CheckoutSession{}, errors.New("stripe returned a checkout session without an id or url")
+	}
+	created := CheckoutSession{ID: session.ID, URL: session.URL}
+	if session.ExpiresAt > 0 {
+		created.ExpiresAt = time.Unix(session.ExpiresAt, 0).UTC()
+	} else {
+		created.ExpiresAt = time.Now().Add(24 * time.Hour).UTC()
+	}
+	return created, nil
+}
+
+// ExpireCheckoutSession closes an open Checkout session so it can no longer
+// be paid, and returns the session's status afterwards: "expired", or
+// "complete" when it was paid before it could be closed.
+func (c *Client) ExpireCheckoutSession(ctx context.Context, sessionID string) (string, error) {
+	path := "/v1/checkout/sessions/" + url.PathEscape(sessionID)
+	var session struct {
+		Status string `json:"status"`
+	}
+	err := c.do(ctx, http.MethodPost, path+"/expire", url.Values{}, "", &session)
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.Status == http.StatusBadRequest {
+		// Only an open session can be expired: read what became of it.
+		err = c.do(ctx, http.MethodGet, path, nil, "", &session)
+	}
+	if err != nil {
 		return "", err
 	}
-	if session.URL == "" {
-		return "", errors.New("stripe returned a checkout session without a url")
-	}
-	return session.URL, nil
+	return session.Status, nil
 }
 
 // CreatePortalSession returns the URL of the Customer Portal for a customer.
@@ -187,6 +237,7 @@ type Subscription struct {
 	CustomerID  string
 	Status      string
 	OrgID       string
+	Created     *time.Time
 	PeriodStart *time.Time
 	PeriodEnd   *time.Time
 	// Limits are parsed from the subscribed product's metadata; LimitsErr is
@@ -204,6 +255,7 @@ func (c *Client) GetSubscription(ctx context.Context, subscriptionID string) (Su
 		ID                 string            `json:"id"`
 		Customer           string            `json:"customer"`
 		Status             string            `json:"status"`
+		Created            int64             `json:"created"`
 		Metadata           map[string]string `json:"metadata"`
 		CurrentPeriodStart int64             `json:"current_period_start"`
 		CurrentPeriodEnd   int64             `json:"current_period_end"`
@@ -225,6 +277,10 @@ func (c *Client) GetSubscription(ctx context.Context, subscriptionID string) (Su
 	}
 	subscription := Subscription{
 		ID: raw.ID, CustomerID: raw.Customer, Status: raw.Status, OrgID: raw.Metadata["ao_org_id"],
+	}
+	if raw.Created > 0 {
+		created := time.Unix(raw.Created, 0).UTC()
+		subscription.Created = &created
 	}
 	// Newer API versions report the billing period on the items rather than
 	// on the subscription; accept either.
@@ -302,8 +358,26 @@ type Event struct {
 			Customer          string `json:"customer"`
 			Subscription      string `json:"subscription"`
 			ClientReferenceID string `json:"client_reference_id"`
+			// Parent carries an invoice's subscription from API version
+			// 2025-03-31.basil on, which dropped the top-level field.
+			Parent struct {
+				SubscriptionDetails struct {
+					Subscription string `json:"subscription"`
+				} `json:"subscription_details"`
+			} `json:"parent"`
 		} `json:"object"`
 	} `json:"data"`
+}
+
+// InvoiceSubscription is the subscription an invoice event belongs to, in
+// either the current (parent.subscription_details) or the pre-2025-03-31
+// (top-level subscription) shape: the webhook endpoint's API version, not
+// the client's, decides which one Stripe sends.
+func (e Event) InvoiceSubscription() string {
+	if id := e.Data.Object.Parent.SubscriptionDetails.Subscription; id != "" {
+		return id
+	}
+	return e.Data.Object.Subscription
 }
 
 // ErrInvalidSignature rejects a webhook that was not signed with the

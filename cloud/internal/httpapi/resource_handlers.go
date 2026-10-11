@@ -770,12 +770,7 @@ func (s *Server) resumeSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId and sessionId must be UUIDs.")
 		return
 	}
-	if s.billingStore != nil {
-		if err := s.billingStore.WakeAllowed(r.Context(), principalFrom(r), orgID, sessionID); err != nil {
-			s.writeStoreError(w, r, err)
-			return
-		}
-	}
+	// ResumeSession checks the plan in the transaction that wakes the session.
 	lifecycle, err := s.store.ResumeSession(
 		r.Context(), principalFrom(r), orgID, sessionID,
 	)
