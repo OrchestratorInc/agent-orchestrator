@@ -416,7 +416,7 @@ func TestReadyProbeTimeoutFailsWithOutput(t *testing.T) {
 	readyAt := time.Now().Add(-2 * time.Hour)
 	fake := newDevEnvCoder(t, &readyAt, readyProbeResult{
 		exitCode: 1,
-		output:   "Bootstrapping step 3/5\nGITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+		output:   "Bootstrapping step 3/5\nGITHUB_TOKEN=ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789",
 	})
 	err, stages := devEnvBootstrap(t, fake, func(client *Client) {
 		client.readyProbe = "grep -q '^Ready' ~/.bootstrap-status"

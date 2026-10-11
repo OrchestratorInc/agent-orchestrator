@@ -29,12 +29,12 @@ func TestRedactMasksCredentials(t *testing.T) {
 		{"key value", `token=ghs_abcdefghijklmnopqrstuvwxyz012345 next`, "ghs_abcdefghijklmnopqrstuvwxyz012345"},
 		{"json pair", `{"api_key": "sk-proj-abcdefghijklmnopqrstuvwxyz"}`, "sk-proj-abcdefghijklmnopqrstuvwxyz"},
 		{"url userinfo", "git clone https://x-access-token:ghs_SECRETSECRETSECRETSECRET@github.com/acme/repo", "ghs_SECRETSECRETSECRETSECRET"},
-		{"github pat", "pushing with github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz", "github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz"},
-		{"jwt", "id eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJlc2ln", "eyJzdWIiOiIxMjM0In0"},
+		{"github pat", "pushing with github_pat_" + "11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz", "github_pat_" + "11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz"},
+		{"jwt", "id eyJhbGciOiJIUzI1NiJ9." + "eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJlc2ln", "eyJzdWIiOiIxMjM0In0"},
 		{"aws key", "AKIA" + "ABCDEFGHIJKLMNOP in env", "AKIA" + "ABCDEFGHIJKLMNOP"},
-		{"stripe", "whsec_abcdefghijklmno and sk_live_abcdefghijkl", "sk_live_abcdefghijkl"},
-		{"pem", "-----BEGIN OPENSSH " + "PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH " + "PRIVATE KEY-----", "b3BlbnNzaC1rZXktdjEAAAAA"},
-		{"password", "PGPASSWORD=hunter2hunter2 psql", "hunter2hunter2"},
+		{"stripe", "whsec_" + "abcdefghijklmno and sk_" + "live_abcdefghijkl", "sk_" + "live_abcdefghijkl"},
+		{"pem", "-----BEGIN OPENSSH " + "PRIVATE KEY-----\nb3BlbnNz" + "aC1rZXktdjEAAAAA\n-----END OPENSSH " + "PRIVATE KEY-----", "b3BlbnNz" + "aC1rZXktdjEAAAAA"},
+		{"password", "PGPASSWORD=" + "hunter2hunter2 psql", "hunter2hunter2"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
