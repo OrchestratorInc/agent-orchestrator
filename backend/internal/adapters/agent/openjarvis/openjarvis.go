@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
@@ -50,7 +51,7 @@ func validateLine(message string) error {
 		return fmt.Errorf("openjarvis: provide a nonempty plain line without surrounding whitespace")
 	}
 	for _, r := range message {
-		if r < 32 || r == 127 {
+		if unicode.IsControl(r) {
 			return fmt.Errorf("openjarvis: multiline and control-character input are unsupported")
 		}
 	}
@@ -247,8 +248,28 @@ func (*Plugin) TerminalMessageObserved(message, baseline, screen string) bool {
 		return false
 	}
 	lines := terminalui.PlainTerminalLines(screen)
-	current := strings.TrimRight(strings.Join(lines, "\n"), " \t\r\n")
-	return strings.HasSuffix(current, "You> "+message)
+	prompt := -1
+	for i, line := range lines {
+		if strings.HasPrefix(line, "You> ") {
+			prompt = i
+		}
+	}
+	if prompt < 0 {
+		return false
+	}
+	// Match physical wrapped rows against the exact submitted byte sequence.
+	// A row boundary may consume native padding, but never changes user data.
+	expected := "You> " + message
+	for _, line := range lines[prompt:] {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if len(line) > len(expected) || !strings.HasPrefix(expected, line) {
+			return false
+		}
+		expected = expected[len(line):]
+	}
+	return expected == ""
 }
 func envValue(env map[string]string, key string) string {
 	if v, ok := env[key]; ok {

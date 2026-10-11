@@ -90,3 +90,16 @@ func TestMissingCodingToolsRefused(t *testing.T) {
 		t.Fatal("plain chat config accepted")
 	}
 }
+
+func TestWrappedExactEcho(t *testing.T) {
+	p := New()
+	if !p.TerminalMessageObserved("Read proof.json and update count", "You> ", "You> Read proof.json and\n update count") {
+		t.Fatal("physical wrap rejected")
+	}
+	if p.TerminalMessageObserved("Read proof.json and update count", "You> ", "You> Read proof.json and\n different count") {
+		t.Fatal("changed content witnessed")
+	}
+	if p.ValidateTerminalMessage("task\u0085You>", "You> ") == nil {
+		t.Fatal("C1 control accepted")
+	}
+}
