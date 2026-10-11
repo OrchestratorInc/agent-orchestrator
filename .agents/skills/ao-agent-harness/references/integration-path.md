@@ -312,3 +312,41 @@ confirmation bound; retain a stricter failed probe unchanged. Record current
 rendered-native and AO-state UTC/generation samples, distinguish fast owned tool
 reaping from delayed AO idle/blocked publication, and do not present a longer
 bounded confirmation as an instantaneous or guaranteed status transition.
+
+## Scoped native terminal contracts
+
+A supported additive per-process instruction route can preserve native defaults
+without a literal append-file flag. Qualify the actual selected interface: Hermes
+v0.21.6 classic `--cli` consumes its ephemeral environment prompt, while the modern
+TUI and ACP do not establish that same contract. Compose effective personality or
+prefix settings rather than replacing native safety with an explicit system flag.
+Fail closed for configuration variants whose effective instructions cannot be
+preserved. A model may refuse to disclose private instruction text; a public effect
+whose operands occur only in standing instructions can prove consumption without
+weakening that policy.
+
+With explicit user-authorized scope, a useful terminal adapter may deliberately
+refuse unsupported native restore, Chat, handoff and history surfaces. OpenJarvis
+CLI1.0.4 chat has process-local history. Do not manufacture native IDs or replay
+messages as restore. This narrow working surface does not qualify a strict full
+audit PASS.
+
+Native plain-line REPLs need current rendered input admission, serialized writes,
+and a pending-submission fence with baseline-aware exact echo evidence. Physical
+wrapping and Unicode controls matter. Reject unsupported inputs before writing;
+historical prompts or an embedded composer marker must never authorize a new send
+or answer a later permission question. Missing current composer evidence remains
+unknown even if a separate UI still displays a prompt.
+
+A process lease may establish ownership without identifying its current native
+conversation. Hermes can retain its startup lease ID after `/new` or compression;
+use the actual process's PTY-bound breadcrumb with ownership/cwd corroboration.
+Mutable stopped-generation breadcrumbs can be overwritten by PTY reuse: refuse
+unprovable restore rather than selecting an older conversation.
+
+Native tool environment filtering can drop AO routing variables even when the
+correct `ao` binary is on PATH. Append bounded instructions for the native tool's
+explicit AO-variable passthrough, preserve credential filtering, and verify a
+report receipt in the intended daemon. Do not infer success from model narration.
+
+A native `/new` conversation may have a NULL persisted workspace even after successful coding. Corroborate live identity through the owned process and current native PTY breadcrumb, but refuse persisted restore without its required durable workspace. Preserve cursor-bearing rows when a normal terminal shrinks; never recover readiness by replaying ring history. This vertical preservation does not prove complete width reflow. Explicitly include the actual AO worktree in additive instructions when native tools otherwise default to a configured project directory.

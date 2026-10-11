@@ -259,3 +259,22 @@ Windows fallback targets the child process. Detached descendants that create a
 new session/group require native cleanup outside this command helper. A clean
 runner report is not evidence that externally interrupted or deliberately
 reparented processes have been reaped.
+
+## Current-source terminal evidence
+
+Electron can replace an audit daemon. Record the actual serving PID, executable
+hash and build VCS revision/dirty bit, runfile, native identity digest and generation
+before and after capture. A checkout HEAD label alone does not establish the built
+source. Requalify changed binaries, retain earlier dirty-build evidence, and never
+borrow a successful capture's provenance for an incomplete or failed image.
+
+Distinguish cancellation's observed no-late-artifact deadline from a later native
+turn that explicitly requests and receives permission to rerun a cancelled command.
+Retain the stricter failed control. A fresh conversation or narrower confirmation
+bound is a separate control, not proof that the earlier behavior was fixed.
+
+Explicit user execution constraints override blanket local-validation guidance.
+When routine validation is restricted to PR CI, run only essential authorized
+native/AO proof and minimal artifact builds on the VPS. Record complete current-head
+remote checks; interrupted or omitted local suites remain NOT_RUN. An untouched
+runner's earlier fixture PASS is historical and must not be described as retested.

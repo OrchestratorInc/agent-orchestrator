@@ -1,0 +1,35 @@
+{
+  "utc": "2026-10-11T08:19:59.386978+00:00",
+  "capture": "original actual AO Electron full screen; inspect before publication",
+  "PNGsha": "7f93912f6137220510d84bc15eabb9f0ac8b8b2e714d1a7e795fef61a16b71e0",
+  "source": "c5615c8494821d572649ae3847977b8aaa4fd4b8",
+  "binaryBuild": {
+    "vcs.revision": "c5615c8494821d572649ae3847977b8aaa4fd4b8",
+    "vcs.time": "2026-10-11T08:09:51Z",
+    "vcs.modified": "false"
+  },
+  "UIcommit": "c5615c8494821d572649ae3847977b8aaa4fd4b8",
+  "nativeVersion": "0.21.6",
+  "model": "glm-5.3-flash",
+  "permissions": "native default",
+  "before": {
+    "AOsession": "live-hermes-008-1",
+    "nativeIDHash": "b420afc756aa8d5c3c5ac71f51286869ff0401f39c16c1f173fcdd200b538581",
+    "generation": "ecc6f9c2-73ed-4532-9300-807bd29c64bb",
+    "status": "idle",
+    "daemonPID": 882470,
+    "daemonExe": "/home/azureuser/.ao/audits/hermes-openjarvis-20261011/proof-bin/hermes/ao",
+    "daemonSHA": "cc4c54c3cd45d7a104cb3f1b177915c80c0c598b7254ba259ec87a7710bd1e03",
+    "runFile": "/home/azureuser/.ao/audits/hermes-openjarvis-20261011/reports/ao-hermes-008/running.json"
+  },
+  "after": {
+    "AOsession": "live-hermes-008-1",
+    "nativeIDHash": "b420afc756aa8d5c3c5ac71f51286869ff0401f39c16c1f173fcdd200b538581",
+    "generation": "ecc6f9c2-73ed-4532-9300-807bd29c64bb",
+    "status": "idle",
+    "daemonPID": 882470,
+    "daemonExe": "/home/azureuser/.ao/audits/hermes-openjarvis-20261011/proof-bin/hermes/ao",
+    "daemonSHA": "cc4c54c3cd45d7a104cb3f1b177915c80c0c598b7254ba259ec87a7710bd1e03",
+    "runFile": "/home/azureuser/.ao/audits/hermes-openjarvis-20261011/reports/ao-hermes-008/running.json"
+  }
+}
