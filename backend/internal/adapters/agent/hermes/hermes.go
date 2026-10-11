@@ -26,15 +26,21 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"gopkg.in/yaml.v3"
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // Register the driver for read-only native history queries.
 )
 
+// Plugin supervises the official native interactive terminal.
 type Plugin struct{ agentbase.Base }
 
+// New creates the native TUI adapter.
 func New() *Plugin { return &Plugin{} }
+
+// Manifest implements the scoped native adapter contract.
 func (*Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{ID: "hermes", Name: "Hermes Agent", Description: "Official Nous Research Hermes Agent interactive terminal; native approvals and exact session restore.", Version: "0.0.1", Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
 }
+
+// ResolveBinary implements the scoped native adapter contract.
 func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	if runtime.GOOS != "linux" {
 		return "", fmt.Errorf("hermes: AO lease observation currently supports Linux only")
@@ -48,6 +54,8 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 		return err == nil && strings.Contains(string(b), "Hermes Agent v0.21.6")
 	}})
 }
+
+// GetConfigSpec implements the scoped native adapter contract.
 func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Native Hermes --model override; provider and credentials remain native configuration.")
 }
@@ -62,6 +70,8 @@ func validate(cfg ports.LaunchConfig) error {
 		return fmt.Errorf("hermes: permission mode %q unsupported; use native default or explicit bypass", cfg.Permissions)
 	}
 }
+
+// GetLaunchCommand implements the scoped native adapter contract.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -80,11 +90,11 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	}
 	if cfg.Prompt != "" {
 		dir := sessionDir(cfg.DataDir, cfg.SessionID)
-		if err := os.MkdirAll(dir, 0700); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, err
 		}
 		path := filepath.Join(dir, "initial-query.txt")
-		if err := os.WriteFile(path, []byte(cfg.Prompt), 0600); err != nil {
+		if err := os.WriteFile(path, []byte(cfg.Prompt), 0o600); err != nil {
 			return nil, err
 		}
 		cmd = append(cmd, "--query-file", path)
@@ -144,10 +154,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 				return fmt.Errorf("hermes: invalid native configuration: %w", err)
 			}
 		}
-		original, err = nativeOverlay(config)
-		if err != nil {
-			return err
-		}
+		original = nativeOverlay(config)
 	}
 	cfg.Env["AO_HERMES_ORIGINAL_EPHEMERAL"] = original
 	instructions := cfg.SystemPrompt
@@ -168,12 +175,12 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		cfg.Env["HERMES_EPHEMERAL_SYSTEM_PROMPT"] = original + instructions
 	}
 	dir := sessionDir(cfg.DataDir, cfg.SessionID)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0600)
+	return os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600)
 }
-func nativeOverlay(config map[string]any) (string, error) {
+func nativeOverlay(config map[string]any) string {
 	agent, _ := config["agent"].(map[string]any)
 	display, _ := config["display"].(map[string]any)
 	name := strings.ToLower(strings.TrimSpace(fmt.Sprint(display["personality"])))
@@ -197,12 +204,12 @@ func nativeOverlay(config map[string]any) (string, error) {
 						parts = append(parts, strings.ToUpper(k[:1])+k[1:]+": "+s)
 					}
 				}
-				return strings.TrimSpace(strings.Join(parts, "\n")), nil
+				return strings.TrimSpace(strings.Join(parts, "\n"))
 			}
-			return promptText(v), nil
+			return promptText(v)
 		}
 	}
-	return promptText(agent["system_prompt"]), nil
+	return promptText(agent["system_prompt"])
 }
 func promptText(v any) string {
 	if v == nil {
@@ -223,6 +230,8 @@ func nativeHome(data, id string) (string, error) {
 	b, err := os.ReadFile(filepath.Join(sessionDir(data, id), "native-home"))
 	return string(b), err
 }
+
+// GetRestoreCommand implements the scoped native adapter contract.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -247,7 +256,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var cwd string
 	var messages int
 	var children int
@@ -261,6 +270,8 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	}
 	return append(cmd, "--resume", id), true, nil
 }
+
+// SessionInfo implements the scoped native adapter contract.
 func (p *Plugin) SessionInfo(ctx context.Context, ref ports.SessionRef) (ports.SessionInfo, bool, error) {
 	return p.readSessionInfo(ctx, ref, "")
 }
@@ -294,7 +305,7 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 		if !leaseProcessMatches(lease.PID, lease.Start) {
 			continue
 		}
-		env, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(lease.PID), "environ"))
+		env, err := os.ReadFile(filepath.Join(string(filepath.Separator), "proc", strconv.Itoa(lease.PID), "environ"))
 		if err != nil {
 			continue
 		}
@@ -313,7 +324,7 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 		}
 		// The lease proves process ownership only. /new and compression rotate
 		// the native terminal breadcrumb without transferring the startup lease.
-		tty, e := os.Readlink(filepath.Join("/proc", strconv.Itoa(lease.PID), "fd", "0"))
+		tty, e := os.Readlink(filepath.Join(string(filepath.Separator), "proc", strconv.Itoa(lease.PID), "fd", "0"))
 		if e != nil || !strings.HasPrefix(tty, "/dev/pts/") {
 			continue
 		}
@@ -323,7 +334,7 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 		if e != nil || crumb.Timestamp < lease.Start {
 			continue
 		}
-		cwd, e := os.Readlink(filepath.Join("/proc", strconv.Itoa(lease.PID), "cwd"))
+		cwd, e := os.Readlink(filepath.Join(string(filepath.Separator), "proc", strconv.Itoa(lease.PID), "cwd"))
 		if e != nil || filepath.Clean(cwd) != filepath.Clean(crumb.Cwd) {
 			continue
 		}
@@ -333,14 +344,14 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 		}
 		var storedCwd string
 		e = db.QueryRowContext(ctx, "SELECT COALESCE(cwd,'') FROM sessions WHERE id=?", crumb.SessionID).Scan(&storedCwd)
-		db.Close()
+		_ = db.Close()
 		if e != nil || filepath.Clean(storedCwd) != filepath.Clean(cwd) {
 			continue
 		}
 		if found != "" && found != crumb.SessionID {
 			return ports.SessionInfo{}, false, fmt.Errorf("hermes: ambiguous current native identity")
 		}
-		if e = os.WriteFile(filepath.Join(sessionDir(ref.DataDir, ref.ID), "observed-terminal"), []byte(crumbPath), 0600); e != nil {
+		if e = os.WriteFile(filepath.Join(sessionDir(ref.DataDir, ref.ID), "observed-terminal"), []byte(crumbPath), 0o600); e != nil {
 			return ports.SessionInfo{}, false, e
 		}
 		found = crumb.SessionID
@@ -350,6 +361,8 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 	}
 	return ports.SessionInfo{AgentSessionID: found}, true, nil
 }
+
+// AuthStatus implements the scoped native adapter contract.
 func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -361,8 +374,14 @@ func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	}
 	return ports.AgentAuthStatusUnknown, nil
 }
-func (*Plugin) ContinuouslyDetectTerminalActivity() bool   { return true }
+
+// ContinuouslyDetectTerminalActivity implements the scoped native adapter contract.
+func (*Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
+
+// EmptyComposerProvesWaitingInputReady implements the scoped native adapter contract.
 func (*Plugin) EmptyComposerProvesWaitingInputReady() bool { return true }
+
+// DetectTerminalActivity implements the scoped native adapter contract.
 func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
 	// Native placeholders use italic; typed composer text has normal styling.
 	composerOutput := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllStringFunc(output, func(sequence string) string {
@@ -396,7 +415,10 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 	return "", false
 }
 
+// RequiresRenderedActivity implements the scoped native adapter contract.
 func (*Plugin) RequiresRenderedActivity() bool { return true }
+
+// ResolveNativeSessionID implements the scoped native adapter contract.
 func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSessionResolveConfig) (string, bool, error) {
 	info, ok, err := p.readSessionInfo(ctx, ports.SessionRef{ID: string(cfg.SessionID), DataDir: cfg.DataDir}, cfg.LaunchID)
 	return info.AgentSessionID, ok, err
@@ -408,7 +430,7 @@ func leaseProcessMatches(pid int, expected float64) bool {
 	if pid <= 0 || expected <= 0 {
 		return false
 	}
-	stat, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	stat, err := os.ReadFile(filepath.Join(string(filepath.Separator), "proc", strconv.Itoa(pid), "stat"))
 	if err != nil {
 		return false
 	}
@@ -455,6 +477,8 @@ func readBreadcrumb(path string) (breadcrumb, error) {
 	}
 	return b, e
 }
+
+// ExitDetectionMode implements the scoped native adapter contract.
 func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 	return ports.AgentExitDetectionSupervisor
 }

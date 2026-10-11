@@ -2,17 +2,18 @@ package hermes
 
 import (
 	"context"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestStandingInstructionsPreserveNativeOverlay(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HERMES_HOME", home)
-	if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte("agent:\n  system_prompt: Native profile instructions\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte("agent:\n  system_prompt: Native profile instructions\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env := map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Native invocation instructions"}
@@ -84,13 +85,13 @@ func TestLeadingDashTaskStaysInPrivateQueryFile(t *testing.T) {
 	}
 }
 func TestPersonalityPreservesNativePrecedence(t *testing.T) {
-	overlay, err := nativeOverlay(map[string]any{"display": map[string]any{"personality": "technical"}, "agent": map[string]any{"system_prompt": "ignored native manual overlay"}})
-	if err != nil || overlay != builtinPersonalities["technical"] {
-		t.Fatalf("overlay=%q err=%v", overlay, err)
+	overlay := nativeOverlay(map[string]any{"display": map[string]any{"personality": "technical"}, "agent": map[string]any{"system_prompt": "ignored native manual overlay"}})
+	if overlay != builtinPersonalities["technical"] {
+		t.Fatalf("overlay=%q", overlay)
 	}
-	overlay, err = nativeOverlay(map[string]any{"display": map[string]any{"personality": "custom"}, "personalities": map[string]any{"custom": "first"}, "agent": map[string]any{"personalities": map[string]any{"custom": map[string]any{"system_prompt": "native", "tone": "gentle"}}}})
-	if err != nil || overlay != "native\nTone: gentle" {
-		t.Fatalf("overlay=%q err=%v", overlay, err)
+	overlay = nativeOverlay(map[string]any{"display": map[string]any{"personality": "custom"}, "personalities": map[string]any{"custom": "first"}, "agent": map[string]any{"personalities": map[string]any{"custom": map[string]any{"system_prompt": "native", "tone": "gentle"}}}})
+	if overlay != "native\nTone: gentle" {
+		t.Fatalf("overlay=%q", overlay)
 	}
 }
 
@@ -104,18 +105,20 @@ func TestNativeModalChromeBlocks(t *testing.T) {
 }
 func TestStickyProfileFailsClosed(t *testing.T) {
 	home := t.TempDir()
-	os.WriteFile(filepath.Join(home, "active_profile"), []byte("work"), 0600)
+	if err := os.WriteFile(filepath.Join(home, "active_profile"), []byte("work"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "test", Env: map[string]string{"HERMES_HOME": home}, SystemPrompt: "AO"}) == nil {
 		t.Fatal("sticky profile silently overridden")
 	}
 }
 
 func TestNativeItalicPlaceholderAndDraft(t *testing.T) {
-	state, ok := New().DetectTerminalActivity("────────\n❯ \x1b[38;5;136;3mPlan a feature\x1b[m\n────────")
+	state, ok := New().DetectTerminalActivity("────────────────────────────────────────\n❯ \x1b[38;5;136;3mPlan a feature\x1b[m\n────────────────────────────────────────")
 	if !ok || state != "idle" {
 		t.Fatalf("native placeholder %s %v", state, ok)
 	}
-	if _, ok := New().DetectTerminalActivity("────────\n❯ Plan a feature\n────────"); ok {
+	if _, ok := New().DetectTerminalActivity("────────────────────────────────────────\n❯ Plan a feature\n────────────────────────────────────────"); ok {
 		t.Fatal("human draft accepted")
 	}
 }
