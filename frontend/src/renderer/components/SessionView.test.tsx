@@ -5,6 +5,7 @@ import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, withi
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionView } from "./SessionView";
+import { appShortcutBus } from "../test/app-shortcut-bus";
 import { useFilesTopbarHost } from "./files-topbar-host";
 import { SessionTopbarProvider } from "./SessionTopbarPortal";
 import { TooltipProvider } from "./ui/tooltip";
@@ -48,6 +49,7 @@ const interfaceTransitionMock = vi.hoisted(() => ({
 const interfaceTransitionState = vi.hoisted(() => ({
 	starting: false,
 	startingPolicy: undefined as "drain" | "interrupt" | undefined,
+	startingTarget: undefined as "chat" | "tui" | undefined,
 	settling: false,
 	startError: undefined as string | undefined,
 	status: undefined as SessionInterfaceTransitionStatus | undefined,
@@ -165,6 +167,7 @@ vi.mock("../hooks/useSessionInterfaceTransition", async (importOriginal) => ({
 		refreshStatus: interfaceTransitionMock.refreshStatus,
 		starting: interfaceTransitionState.starting,
 		startingPolicy: interfaceTransitionState.startingPolicy,
+		startingTarget: interfaceTransitionState.startingTarget,
 		settling: interfaceTransitionState.settling,
 		startError: interfaceTransitionState.startError,
 		resetStartError: interfaceTransitionMock.resetStartError,
@@ -326,7 +329,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		shellTarget?: { kind: "shell"; handleId: string };
 		onSelectShellTerminal?: (handleId: string) => void;
 		onCloseShellTerminal?: (handleId: string) => void;
-		workspaceTabs?: Array<{ key: string; content: ReactNode; onSelect: () => void }>;
+		workspaceTabs?: Array<{ key: string; content: ReactNode; onSelect: () => void; onClose?: () => void }>;
 		workspaceTabActions?: ReactNode;
 		newWorkDisabled?: boolean;
 		onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void;
@@ -368,7 +371,12 @@ vi.mock("./chat/SessionChatSurface", async () => {
 			{headerActions}
 			{sessionTabAction}
 			<div role="tablist">
-				{workspaceTabs?.map((tab) => <div key={tab.key}>{tab.content}</div>)}
+				{workspaceTabs?.map((tab) => (
+					<div key={tab.key}>
+						{tab.content}
+						{tab.onClose ? <button onClick={tab.onClose} type="button">{`close ${tab.key}`}</button> : null}
+					</div>
+				))}
 				{workspaceTabActions}
 				{tabStripAction}
 			</div>
@@ -985,6 +993,7 @@ describe("SessionView", () => {
 		interfaceTransitionMock.acknowledgeNotice.mockReset();
 		interfaceTransitionState.starting = false;
 		interfaceTransitionState.startingPolicy = undefined;
+		interfaceTransitionState.startingTarget = undefined;
 		interfaceTransitionState.settling = false;
 		interfaceTransitionState.startError = undefined;
 		interfaceTransitionState.status = undefined;
@@ -1200,6 +1209,102 @@ describe("SessionView", () => {
 		expect(tabs).toHaveTextContent("sess-1-shell");
 		expect(tabs).not.toHaveTextContent("sess-2-shell");
 		expect(tabs).not.toHaveTextContent("loose-shell");
+	});
+
+	it("toggles between the session pane and its latest shell terminal from the terminal shortcut", () => {
+		shellTerminalsState.data = [
+			{ handleId: "sh-a", sessionId: "sess-1", title: "sess-1-shell", workingDir: "/p", createdAt: "2026-07-24T00:00:00Z" },
+		];
+		render(<SessionView sessionId="sess-1" />);
+		expect(useUiStore.getState().visibleTerminalKindBySession["sess-1"]).toBe("worker");
+
+		act(() => appShortcutBus.emit({ id: "toggle-terminal" }));
+		expect(useUiStore.getState().visibleTerminalKindBySession["sess-1"]).toBe("shell");
+		expect(openShellTerminalMock).not.toHaveBeenCalled();
+
+		act(() => appShortcutBus.emit({ id: "toggle-terminal" }));
+		expect(useUiStore.getState().visibleTerminalKindBySession["sess-1"]).toBe("worker");
+	});
+
+	it("reopens the most recently closed file tab, newest first, and does nothing once the stack is empty", () => {
+		workerSession("sess-1").mode = "chat";
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(screen.getByRole("button", { name: "select src/App.tsx" }));
+		expect(screen.getByRole("button", { name: "close file:src/App.tsx" })).toBeInTheDocument();
+
+		fireEvent.click(screen.getByRole("button", { name: "close file:src/App.tsx" }));
+		expect(screen.queryByRole("button", { name: "close file:src/App.tsx" })).not.toBeInTheDocument();
+
+		act(() => appShortcutBus.emit({ id: "reopen-closed-tab" }));
+		expect(screen.getByRole("button", { name: "close file:src/App.tsx" })).toBeInTheDocument();
+
+		// Nothing left to reopen: the tab stays as it is.
+		act(() => appShortcutBus.emit({ id: "reopen-closed-tab" }));
+		expect(screen.getAllByRole("button", { name: "close file:src/App.tsx" })).toHaveLength(1);
+	});
+
+	it("opens a shell from the terminal shortcut when the session has none", () => {
+		shellTerminalsState.data = [];
+		render(<SessionView sessionId="sess-1" />);
+
+		act(() => appShortcutBus.emit({ id: "toggle-terminal" }));
+
+		expect(openShellTerminalMock).toHaveBeenCalledWith({ projectId: "proj-1", sessionId: "sess-1" });
+	});
+
+	it("opens the model picker from its shortcut, and leaves a disabled picker alone", () => {
+		render(<SessionView sessionId="sess-1" />);
+		const picker = document.createElement("button");
+		picker.dataset.shortcutTarget = "model-picker";
+		const onClick = vi.fn();
+		picker.addEventListener("keydown", onClick);
+		document.body.append(picker);
+
+		act(() => appShortcutBus.emit({ id: "model-picker" }));
+		expect(onClick).toHaveBeenCalledTimes(1);
+
+		picker.disabled = true;
+		act(() => appShortcutBus.emit({ id: "model-picker" }));
+		expect(onClick).toHaveBeenCalledTimes(1);
+		picker.remove();
+	});
+
+	it("ignores session shortcuts while the global Settings page covers the session", async () => {
+		const copy = vi.spyOn(window.ao!.editorHandoff, "copyWorkspacePath").mockResolvedValue(undefined);
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
+		render(<SessionView sessionId="sess-1" />);
+		act(() => useUiStore.setState({ settingsModal: { scope: "global", section: "general" } as never }));
+
+		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
+		act(() => appShortcutBus.emit({ id: "copy-session-path" }));
+
+		expect(inspectorOpen("sess-1")).toBe(false);
+		expect(copy).not.toHaveBeenCalled();
+		act(() => useUiStore.setState({ settingsModal: null }));
+	});
+
+	it("copies the session path from its shortcut and says so", async () => {
+		const copy = vi.spyOn(window.ao!.editorHandoff, "copyWorkspacePath").mockResolvedValue(undefined);
+		render(<SessionView sessionId="sess-1" />);
+
+		act(() => appShortcutBus.emit({ id: "copy-session-path" }));
+
+		expect(copy).toHaveBeenCalledWith("sess-1");
+		await waitFor(() => expect(useUiStore.getState().globalToast?.title).toBe("Session path copied"));
+		copy.mockRestore();
+	});
+
+	it("reports a failed path copy instead of failing silently", async () => {
+		const copy = vi.spyOn(window.ao!.editorHandoff, "copyWorkspacePath").mockRejectedValue(new Error("Workspace removed"));
+		render(<SessionView sessionId="sess-1" />);
+
+		act(() => appShortcutBus.emit({ id: "copy-session-path" }));
+
+		await waitFor(() => expect(useUiStore.getState().globalToast?.title).toBe("Could not copy session path"));
+		expect(useUiStore.getState().globalToast?.body).toBe("Workspace removed");
+		copy.mockRestore();
 	});
 
 	// The pane shows one terminal at a time, so selecting a shell takes the
@@ -2995,9 +3100,8 @@ describe("SessionView", () => {
 		await userEvent.click(screen.getByRole("button", { name: /^Stop now and switch/ }));
 		await confirmUnsafeChatLeave();
 		await waitFor(() => expect(interfaceTransitionMock.start).toHaveBeenCalledTimes(1));
-		await waitFor(() =>
-			expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "true"),
-		);
+		await waitFor(() => expect(screen.getByTestId("terminal-center")).toBeInTheDocument());
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
 
 		let finishStaging!: (attachments: FileAttachment[]) => void;
 		const staging = renderHook(() =>
@@ -3063,9 +3167,8 @@ describe("SessionView", () => {
 
 		await chooseSessionAction("Switch to terminal UI");
 		await userEvent.click(screen.getByRole("button", { name: /^Stop now and switch/ }));
-		await waitFor(() =>
-			expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "true"),
-		);
+		await waitFor(() => expect(screen.getByTestId("terminal-center")).toBeInTheDocument());
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
 		await act(async () => rejectSwitch(new Error("switch rejected")));
 		expect(interfaceTransitionMock.refreshStatus).toHaveBeenCalledTimes(1);
 		await waitFor(() =>
@@ -3126,7 +3229,8 @@ describe("SessionView", () => {
 		});
 
 		await act(async () => finishRefresh({ supported: true, targetMode: "tui" }));
-		expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "true");
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
 
 		interfaceTransitionState.status = {
 			supported: true,
@@ -3184,7 +3288,8 @@ describe("SessionView", () => {
 			transition,
 		};
 		view.rerender(<SessionView sessionId={session.id} />);
-		expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "true");
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
 
 		interfaceTransitionState.status = {
 			supported: true,
@@ -3508,11 +3613,65 @@ describe("SessionView", () => {
 		interfaceTransitionState.status.transition!.phase = "completed";
 		interfaceTransitionState.settling = true;
 		view.rerender(<SessionView sessionId="sess-1" />);
-		expect(chatSurface()).toHaveAttribute("data-new-work-disabled", "true");
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
 
 		interfaceTransitionState.settling = false;
 		view.rerender(<SessionView sessionId="sess-1" />);
 		expect(chatSurface()).toHaveAttribute("data-new-work-disabled", "false");
+	});
+
+	it("shows the chat surface on the click itself for an idle terminal session, before the daemon answers", async () => {
+		const session = workerSession("sess-1");
+		session.mode = "tui";
+		session.status = "idle";
+		session.activity = { state: "idle", lastActivityAt: "2026-08-06T00:00:00Z" };
+		interfaceTransitionState.status = { supported: true, targetMode: "chat" };
+		interfaceTransitionMock.start.mockReturnValueOnce(new Promise(() => {}));
+		render(<SessionView sessionId="sess-1" />);
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+
+		await chooseSessionAction("Switch to chat UI");
+
+		expect(interfaceTransitionMock.start).toHaveBeenCalledWith(expect.objectContaining({ targetMode: "chat", policy: "drain" }));
+		expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "true");
+		expect(screen.queryByTestId("terminal-center")).not.toBeInTheDocument();
+	});
+
+	it("shows the chat surface the moment a terminal-to-chat switch is requested", () => {
+		const session = workerSession("sess-1");
+		session.mode = "tui";
+		interfaceTransitionState.status = { supported: true, targetMode: "chat" };
+		interfaceTransitionState.starting = true;
+		interfaceTransitionState.startingPolicy = "interrupt";
+		interfaceTransitionState.startingTarget = "chat";
+		render(<SessionView sessionId="sess-1" />);
+		expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "true");
+		expect(screen.queryByTestId("terminal-center")).not.toBeInTheDocument();
+	});
+
+	it("shows the terminal the moment a chat-to-terminal switch is requested", () => {
+		const session = workerSession("sess-1");
+		session.mode = "chat";
+		interfaceTransitionState.status = { supported: true, targetMode: "tui" };
+		interfaceTransitionState.starting = true;
+		interfaceTransitionState.startingPolicy = "interrupt";
+		interfaceTransitionState.startingTarget = "tui";
+		render(<SessionView sessionId="sess-1" />);
+		expect(screen.getByTestId("terminal-center")).toBeInTheDocument();
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+	});
+
+	it("keeps the current surface while a switch waits for the running turn to finish", () => {
+		const session = workerSession("sess-1");
+		session.mode = "chat";
+		interfaceTransitionState.status = { supported: true, targetMode: "tui" };
+		interfaceTransitionState.starting = true;
+		interfaceTransitionState.startingPolicy = "drain";
+		interfaceTransitionState.startingTarget = "tui";
+		render(<SessionView sessionId="sess-1" />);
+		expect(screen.getByTestId("chat-surface")).toBeInTheDocument();
+		expect(screen.queryByTestId("terminal-center")).not.toBeInTheDocument();
 	});
 
 	it("discards one session's switch consent dialog when navigating to another session", async () => {
@@ -4257,7 +4416,7 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("inert");
 		expect(screen.getByTestId("inspector-collapsed-rail")).toBeInTheDocument();
 
-		fireEvent.keyDown(window, { key: "B", ctrlKey: true, shiftKey: true });
+		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
 
 		expect(inspectorOpen("sess-1")).toBe(true);
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
@@ -4342,7 +4501,7 @@ describe("SessionView", () => {
 	it("starts collapsing the resize handle with the inspector panel", () => {
 		render(<SessionView sessionId="sess-1" />);
 
-		fireEvent.keyDown(window, { key: "B", ctrlKey: true, shiftKey: true });
+		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
 
 		expect(screen.getByTestId("inspector-resize-handle")).toHaveClass("hidden");
 		expect(screen.getByTestId("inspector-collapsed-rail")).toBeInTheDocument();
@@ -4354,7 +4513,7 @@ describe("SessionView", () => {
 		act(() => useUiStore.getState().setInspectorView("sess-1", "browser"));
 		expect(browserViewOptions.current).toMatchObject({ active: true });
 
-		fireEvent.keyDown(window, { key: "B", ctrlKey: true, shiftKey: true });
+		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
 
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "collapsed");
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("aria-hidden", "false");
@@ -4370,7 +4529,7 @@ describe("SessionView", () => {
 
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
 
-		fireEvent.keyDown(window, { key: "B", ctrlKey: true, shiftKey: true });
+		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
 
 		expect(inspectorOpen("sess-1")).toBe(false);
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "collapsed");
@@ -4381,7 +4540,7 @@ describe("SessionView", () => {
 		try {
 			render(<SessionView sessionId="sess-1" />);
 
-			fireEvent.keyDown(window, { key: "B", ctrlKey: true, shiftKey: true });
+			act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
 			const split = screen.getByTestId("panel-group");
 			expect(split).toHaveAttribute("data-terminal-live-resize", "true");
 			expect(split).toHaveAttribute("data-topbar-secondary-label-mode", "expanded");
@@ -4455,27 +4614,68 @@ describe("SessionView", () => {
 
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "collapsed");
 
-		fireEvent.keyDown(window, { key: "B", ctrlKey: true, shiftKey: true });
+		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
 
 		expect(inspectorOpen("sess-1")).toBe(true);
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
 	});
 
-	it("toggles the inspector with mod+shift+B", () => {
+	it("toggles the inspector from the main-process shortcut", () => {
 		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
 		render(<SessionView sessionId="sess-1" />);
 
-		fireEvent.keyDown(window, { key: "B", ctrlKey: true, shiftKey: true });
+		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
 		expect(inspectorOpen("sess-1")).toBe(false);
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "collapsed");
 
-		fireEvent.keyDown(window, { key: "B", ctrlKey: true, shiftKey: true });
+		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
 		expect(inspectorOpen("sess-1")).toBe(true);
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
 
-		// Plain ⌘B belongs to the sidebar — the inspector must not react.
-		fireEvent.keyDown(window, { key: "b", metaKey: true });
+		// The sidebar toggle is a different command — the inspector must not react.
+		act(() => appShortcutBus.emit({ id: "toggle-sidebar" }));
 		expect(inspectorOpen("sess-1")).toBe(true);
+	});
+
+	it("opens the changed-files diff with the diff shortcut and closes it on the second press", () => {
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
+		render(<SessionView sessionId="sess-1" />);
+
+		act(() => appShortcutBus.emit({ id: "toggle-diff" }));
+		expect(inspectorOpen("sess-1")).toBe(true);
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("files");
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesChangedOnly ?? true).toBe(true);
+
+		act(() => appShortcutBus.emit({ id: "toggle-diff" }));
+		expect(inspectorOpen("sess-1")).toBe(false);
+	});
+
+	it("shows the changed-files diff, not the full tree, when the diff shortcut finds the Files view in full-tree mode", () => {
+		act(() => {
+			useUiStore.getState().setInspectorOpen("sess-1", true);
+			useUiStore.getState().setInspectorView("sess-1", "files");
+			useUiStore.getState().setFilesChangedOnly("sess-1", false);
+		});
+		render(<SessionView sessionId="sess-1" />);
+
+		act(() => appShortcutBus.emit({ id: "toggle-diff" }));
+
+		expect(inspectorOpen("sess-1")).toBe(true);
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesChangedOnly).toBe(true);
+	});
+
+	it("reopens the inspector on the tab it last showed", () => {
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		render(<SessionView sessionId="sess-1" />);
+		// Mounting applies the "entering a session" defaults, so pick the tab afterwards.
+		act(() => useUiStore.getState().setInspectorView("sess-1", "browser"));
+
+		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
+		expect(inspectorOpen("sess-1")).toBe(false);
+
+		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
+		expect(inspectorOpen("sess-1")).toBe(true);
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("browser");
 	});
 
 	it("keeps the inspector toggle and trailing notification pinned while the panel changes state", () => {
@@ -4753,7 +4953,7 @@ describe("SessionView", () => {
 		rerender(<SessionView sessionId="sess-2" />);
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "collapsed");
 
-		fireEvent.keyDown(window, { key: "B", ctrlKey: true, shiftKey: true });
+		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
 
 		expect(inspectorOpen("sess-2")).toBe(true);
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
@@ -4764,7 +4964,7 @@ describe("SessionView", () => {
 		expect(inspectorOpen("sess-orch")).toBe(false);
 		expect(screen.queryByTestId("inspector-collapsed-rail")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Open Browser" })).toHaveAttribute("aria-pressed", "false");
-		fireEvent.keyDown(window, { key: "B", ctrlKey: true, shiftKey: true });
+		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
 		expect(inspectorOpen("sess-orch")).toBe(true);
 		expect(screen.getByRole("button", { name: "Close Browser" })).toHaveAttribute("aria-pressed", "true");
 		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("browser");

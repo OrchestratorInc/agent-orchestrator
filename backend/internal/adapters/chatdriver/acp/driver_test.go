@@ -789,6 +789,8 @@ type fakeAgent struct {
 	steerPrompt         []acpsdk.ContentBlock
 	steerMeta           map[string]any
 	steerOut            string
+	steerMethodNotFound bool // HandleExtensionMethod returns -32601 for steering
+	steerExtensionErr   error
 }
 
 type legacyKimiAgent struct {
@@ -953,6 +955,16 @@ func (a *fakeAgent) Initialize(_ context.Context, params acpsdk.InitializeReques
 func (a *fakeAgent) HandleExtensionMethod(_ context.Context, method string, raw json.RawMessage) (any, error) {
 	if method != steeringMethod {
 		return nil, acpsdk.NewMethodNotFound(method)
+	}
+	a.mu.Lock()
+	methodNotFound := a.steerMethodNotFound
+	extensionErr := a.steerExtensionErr
+	a.mu.Unlock()
+	if methodNotFound {
+		return nil, acpsdk.NewMethodNotFound(method)
+	}
+	if extensionErr != nil {
+		return nil, extensionErr
 	}
 	var params struct {
 		Prompt []acpsdk.ContentBlock `json:"prompt"`
@@ -3499,6 +3511,79 @@ func TestACPDriverMapsAdvertisedSteeringOntoAO(t *testing.T) {
 	}
 	if _, err := conv.Steer(context.Background(), "other-turn", ports.ChatUserMessage{Text: "wrong turn"}); !errors.Is(err, ports.ErrChatNoSteerableTurn) {
 		t.Fatalf("wrong-turn steer error = %v, want ErrChatNoSteerableTurn", err)
+	}
+}
+
+func TestACPSteerMethodNotFoundIsDefiniteRefusal(t *testing.T) {
+	agent := &fakeAgent{steering: true, steerMethodNotFound: true}
+	driver := New(Config{
+		Harness:      domain.HarnessOpenCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) {
+			return Launch{Command: "fake"}, nil
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+	conv := opened.(*conversation)
+	conv.mu.Lock()
+	conv.activeTurn = "turn-1"
+	conv.mu.Unlock()
+
+	_, err = conv.Steer(context.Background(), "turn-1", ports.ChatUserMessage{Text: "focus on the API"})
+	if err == nil {
+		t.Fatal("Steer: want method-not-found refusal")
+	}
+	var refusal interface{ ChatRefusal() bool }
+	if !errors.As(err, &refusal) || !refusal.ChatRefusal() {
+		t.Fatalf("Steer error = %v, want ChatRefusal", err)
+	}
+	if !isACPMethodNotFound(err) {
+		t.Fatalf("Steer error = %v, want wrapped JSON-RPC -32601", err)
+	}
+}
+
+func TestACPSteerTransportFailureIsNotARefusal(t *testing.T) {
+	agent := &fakeAgent{
+		steering:          true,
+		steerExtensionErr: &acpsdk.RequestError{Code: -32603, Message: "Internal error"},
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessOpenCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) {
+			return Launch{Command: "fake"}, nil
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+	conv := opened.(*conversation)
+	conv.mu.Lock()
+	conv.activeTurn = "turn-1"
+	conv.mu.Unlock()
+
+	_, err = conv.Steer(context.Background(), "turn-1", ports.ChatUserMessage{Text: "focus on the API"})
+	if err == nil {
+		t.Fatal("Steer: want transport-style failure")
+	}
+	var refusal interface{ ChatRefusal() bool }
+	if errors.As(err, &refusal) && refusal.ChatRefusal() {
+		t.Fatalf("Steer error = %v, must not be ChatRefusal", err)
+	}
+	if isACPMethodNotFound(err) {
+		t.Fatalf("Steer error = %v, must not look like method-not-found", err)
 	}
 }
 

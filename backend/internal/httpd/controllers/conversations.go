@@ -1078,6 +1078,10 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_RENAME_UNSUPPORTED", "this agent's conversation carries no title", nil)
 
+	case errors.Is(err, chatsvc.ErrOrchestratorRename):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"ORCHESTRATOR_RENAME_UNSUPPORTED", "the project orchestrator cannot be renamed", nil)
+
 	case errors.Is(err, chatsvc.ErrMCPReloadUnsupported):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_MCP_RELOAD_UNSUPPORTED", "this agent cannot reload its tool servers", nil)

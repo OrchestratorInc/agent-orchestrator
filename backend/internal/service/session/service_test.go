@@ -568,6 +568,22 @@ func TestSessionRenameUpdatesDisplayName(t *testing.T) {
 	}
 }
 
+func TestSessionRenameRejectsOrchestrator(t *testing.T) {
+	for _, terminated := range []bool{false, true} {
+		st := newFakeStore()
+		st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator, IsTerminated: terminated}
+
+		err := (&Service{store: st}).Rename(context.Background(), "mer-1", "My orchestrator")
+		var e *apierr.Error
+		if !errors.As(err, &e) || e.Kind != apierr.KindInvalid || e.Code != "ORCHESTRATOR_RENAME_UNSUPPORTED" {
+			t.Fatalf("terminated=%v: err = %v, want apierr Invalid ORCHESTRATOR_RENAME_UNSUPPORTED", terminated, err)
+		}
+		if got := st.sessions["mer-1"].DisplayName; got != "" {
+			t.Fatalf("terminated=%v: display name = %q, want unchanged", terminated, got)
+		}
+	}
+}
+
 func TestSessionRenameRejectsOverlongDisplayName(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer"}

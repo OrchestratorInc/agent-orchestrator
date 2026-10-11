@@ -11,13 +11,14 @@ import {
 	sanitizeBrowserTitle,
 	sanitizeBrowserURL,
 	scaleBoundsForZoom,
+	shouldHandleAppShortcutInBrowserContext,
 } from "./browser-view-host";
 import { browserProfilePartition, type BrowserProfile } from "../shared/browser-profiles";
 import type { BrowserProfileStore } from "./browser-profile-store";
 import type { BrowserHistoryStore } from "./browser-history-store";
 import {
 	CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL,
-	FOCUS_TERMINAL_SHORTCUT_CHANNEL,
+	APP_SHORTCUT_CHANNEL,
 	NEW_SESSION_SHORTCUT_CHANNEL,
 	NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL,
 } from "../shared/shortcuts";
@@ -475,6 +476,27 @@ describe("browser shortcut matching", () => {
 		expect(browserShortcutAction({ ...input, key: "t", control: false, meta: true }, true)).toBe("new-tab");
 	});
 
+	it("maps page history to ⌘[ / ⌘] on macOS and Alt+←/→ elsewhere, without stealing the session chords", () => {
+		const input = { control: false, meta: false, shift: false, alt: false, type: "keyDown" };
+		expect(browserShortcutAction({ ...input, meta: true, key: "[" }, true)).toBe("back");
+		expect(browserShortcutAction({ ...input, meta: true, key: "]" }, true)).toBe("forward");
+		expect(browserShortcutAction({ ...input, alt: true, key: "ArrowLeft" }, false)).toBe("back");
+		expect(browserShortcutAction({ ...input, alt: true, key: "ArrowRight" }, false)).toBe("forward");
+		// ⌘⇧[ is "previous session" and ⌘⌥← is "previous tab": not the page's to take.
+		expect(browserShortcutAction({ ...input, meta: true, shift: true, key: "{" }, true)).toBeNull();
+		expect(browserShortcutAction({ ...input, meta: true, alt: true, key: "ArrowLeft" }, true)).toBeNull();
+		// Wrong platform modifier.
+		expect(browserShortcutAction({ ...input, control: true, key: "[" }, true)).toBeNull();
+		expect(browserShortcutAction({ ...input, alt: true, key: "ArrowLeft" }, true)).toBeNull();
+	});
+
+	it("keeps app route history out of the Browser panel so ⌘[ turns the page, not the route", () => {
+		const chord = { key: "[", code: "BracketLeft", ctrl: false, meta: true, shift: false, alt: false };
+		expect(shouldHandleAppShortcutInBrowserContext("history-back", chord, true)).toBe(false);
+		expect(shouldHandleAppShortcutInBrowserContext("history-forward", { ...chord, key: "]", code: "BracketRight" }, true)).toBe(false);
+		expect(shouldHandleAppShortcutInBrowserContext("next-session", { ...chord, key: "}", code: "BracketRight", shift: true }, true)).toBe(true);
+	});
+
 	it("leaves Space and Shift+Space to Chromium so browser form controls can accept spaces", () => {
 		const input = { key: " ", control: false, meta: false, shift: false, alt: false, type: "keyDown" };
 		expect(browserShortcutAction(input, false)).toBeNull();
@@ -624,7 +646,7 @@ describe("browser shortcut routing", () => {
 		await vi.waitFor(() => {
 			expect(shellSend).toHaveBeenCalledWith("browser:reopenClosedTab", state.viewId);
 		});
-		expect(shellSend).not.toHaveBeenCalledWith(FOCUS_TERMINAL_SHORTCUT_CHANNEL);
+		expect(shellSend).not.toHaveBeenCalledWith(APP_SHORTCUT_CHANNEL, { id: "reopen-closed-tab" });
 
 		const openEvent = emitBeforeInput({ key: "t", control: true });
 		// App-shortcut rejection + browser new-tab handler both consume the chord.
@@ -4582,7 +4604,7 @@ describe("browser annotation IPC", () => {
 });
 
 describe("dispose after the window is destroyed", () => {
-	it("does not touch contentView/views once the window reports destroyed", async () => {
+	it.each(["live", "already destroyed"])("closes %s tab contents without touching the destroyed window", async (contentsState) => {
 		const handlers = new Map<string, InvokeHandler>();
 		const view = {
 			webContents: {
@@ -4600,9 +4622,8 @@ describe("dispose after the window is destroyed", () => {
 				send: () => undefined,
 				setWindowOpenHandler: () => undefined,
 				stop: () => undefined,
-				// Real Electron throws "Object has been destroyed" here after close.
 				close: vi.fn(() => {
-					throw new Error("Object has been destroyed");
+					if (contentsState === "already destroyed") throw new Error("Object has been destroyed");
 				}),
 			},
 			setBounds: () => undefined,
@@ -4614,7 +4635,10 @@ describe("dispose after the window is destroyed", () => {
 		});
 		const host = createBrowserViewHost({
 			mainWindow: {
-				contentView: { addChildView: () => undefined, removeChildView },
+				get contentView() {
+					if (destroyed) throw new Error("Object has been destroyed");
+					return { addChildView: () => undefined, removeChildView };
+				},
 				getContentBounds: () => ({ x: 0, y: 0, width: 800, height: 600 }),
 				webContents: { id: 1, send: () => undefined },
 				isDestroyed: () => destroyed,
@@ -4636,9 +4660,9 @@ describe("dispose after the window is destroyed", () => {
 
 		destroyed = true; // window "closed" fired
 
-		expect(() => host.dispose()).not.toThrow();
+		await expect(host.dispose()).resolves.toBeUndefined();
 		expect(removeChildView).not.toHaveBeenCalled();
-		expect(view.webContents.close).not.toHaveBeenCalled();
+		expect(view.webContents.close).toHaveBeenCalledOnce();
 	});
 
 	it("deduplicates host disposal while runtime cleanup is in flight", async () => {
