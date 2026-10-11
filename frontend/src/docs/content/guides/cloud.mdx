@@ -3,11 +3,11 @@ title: Cloud sessions
 description: Set up a hosted project and work on a remote session from the desktop app.
 ---
 
-AO Cloud is the hosted service for running a project's worker in a remote workspace. Its control plane handles sign-in, projects, sessions, messages, and worker connections. Cloud is separate from a local desktop project and from Connect Mobile, which reaches your own computer. Cloud requires an enabled desktop build, an account with access, and a reachable service. The Cloud choice may be absent in your app. The local product still works without Cloud.
+Orchestrator Cloud is the hosted service for running a project's worker in a remote workspace. Its control plane handles sign-in, projects, sessions, messages, and worker connections. Cloud is separate from a local desktop project and from Connect Mobile, which reaches your own computer. Cloud requires an enabled desktop build, an account with access, and a reachable service. The Cloud choice may be absent in your app. The local product still works without Cloud.
 
 ## Before you start
 
-1. Install the current [desktop release](/installation) and sign in using **Sign in to AO Cloud** in the sidebar. If that entry is missing, Cloud is not enabled for your build or account. Contact the team that granted access; a local GitHub sign-in alone does not enable it.
+1. Install the current [desktop release](/installation) and sign in using **Sign in to Orchestrator Cloud** in the sidebar. If that entry is missing, Cloud is not enabled for your build or account. Contact the team that granted access; a local GitHub sign-in alone does not enable it.
 2. In **Settings → Harness**, switch to **Cloud** and connect a supported coding agent. On v0.13.3, open **Settings → Cloud** and choose **Open Harness settings**. The Cloud worker picker offers Claude Code, Codex, Cursor, and OpenCode only when the corresponding Cloud connection is valid. This coding-agent connection is separate from the sandbox provider choice; a local agent installation or local CLI login does not supply a Cloud credential.
 3. Have access to the GitHub repository you want to work on. Cloud project creation uses a GitHub installation and repository grant, separate from the `gh` login used by local projects. Follow the **Connect GitHub** flow in project setup if the repository is missing.
 

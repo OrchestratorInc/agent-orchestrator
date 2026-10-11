@@ -16,11 +16,13 @@ import (
 )
 
 const (
-	defaultDisplayReadinessTTL = 5 * time.Minute
-	defaultLaunchReadinessTTL  = 30 * time.Second
-	defaultInstallCheckTimeout = 2 * time.Second
-	defaultAuthCheckTimeout    = 10 * time.Second
-	defaultReadinessWorkers    = 4
+	defaultDisplayReadinessTTL  = 5 * time.Minute
+	defaultLaunchReadinessTTL   = 30 * time.Second
+	defaultInstallCheckTimeout  = 2 * time.Second
+	opencodeInstallCheckTimeout = 12 * time.Second
+	opencodeV2MigrationTimeout  = 30 * time.Minute
+	defaultAuthCheckTimeout     = 10 * time.Second
+	defaultReadinessWorkers     = 4
 )
 
 var defaultReadinessRetryDelays = []time.Duration{15 * time.Second, time.Minute, 5 * time.Minute}
@@ -529,7 +531,11 @@ func (c *readinessCoordinator) runCheck(id string, purpose domain.AgentReadiness
 
 func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent, presenceOnly bool) (domain.AgentInstallationObservation, bool) {
 	attempted := c.now()
-	ctx, cancel := context.WithTimeout(c.ctx, c.installTimeout)
+	timeout := c.installTimeout
+	if timeout == defaultInstallCheckTimeout && (item.Harness == domain.HarnessOpenCode || item.Harness == domain.HarnessOpenCodeV2) {
+		timeout = opencodeInstallCheckTimeout
+	}
+	ctx, cancel := context.WithTimeout(c.ctx, timeout)
 	defer cancel()
 	var path string
 	var err error
@@ -551,7 +557,7 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 	}
 	var incompatibleVersion *opencode.IncompatibleVersionError
 	if errors.As(err, &incompatibleVersion) {
-		return successfulInstallation(attempted, domain.AgentInstallationNotInstalled, domain.AgentReadinessReasonInstallIncompatibleVersion, err.Error()), false
+		return successfulInstallation(attempted, domain.AgentInstallationNotInstalled, domain.AgentReadinessReasonNotInstalled, item.Manifest.Name+" is not installed."), false
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return failedInstallation(attempted, domain.AgentReadinessReasonInstallCheckTimeout, "Installation check timed out."), true
@@ -574,7 +580,12 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	if !ok {
 		return successfulAuthentication(attempted, domain.AgentAuthenticationUnknown, domain.AgentReadinessReasonAuthCheckUnsupported, "Authentication checks are not supported for this harness."), false
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, c.authTimeout)
+	timeout := c.authTimeout
+	if timeout == defaultAuthCheckTimeout && item.Harness == domain.HarnessOpenCodeV2 {
+		// First-use migration needs its own budget; the adapter bounds its auth CLI separately.
+		timeout = opencodeV2MigrationTimeout
+	}
+	ctx, cancel := context.WithTimeout(c.ctx, timeout)
 	defer cancel()
 	status, err := checker.AuthStatus(ctx)
 	if err != nil {

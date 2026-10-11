@@ -75,6 +75,11 @@ export type SessionArtifact = {
 	path: string;
 	previewUrl?: string;
 	rawUrl?: string;
+	/**
+	 * The page on its own inline origin, for framing it in the chat thread: its
+	 * files load same-origin there, and the daemon refuses that origin. html only.
+	 */
+	inlineUrl?: string;
 	size: number;
 	updatedAt: string;
 };
@@ -104,6 +109,7 @@ export type SessionProvisionStep = {
 export type SessionBranchState = { commits: number; remoteBranch?: string; unpushed: number };
 
 export type WorkspaceSession = {
+	workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";
 	id: string;
 	/** Installation ID of the daemon that owns this session; absent for local and Cloud. */
 	hostId?: string;

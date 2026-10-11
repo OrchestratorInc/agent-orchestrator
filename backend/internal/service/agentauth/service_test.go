@@ -278,6 +278,49 @@ func TestStartPreparesKimiAuthWorkspaceWithSeededTrust(t *testing.T) {
 	}
 }
 
+func TestStartPreparesCopilotAuthWorkspaceWithSeededTrust(t *testing.T) {
+	// Not parallel: isolates HOME/COPILOT_HOME so the copilot adapter's trust
+	// seed lands in a throwaway home instead of the developer's real one.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("COPILOT_HOME", "")
+
+	dataDir := t.TempDir()
+	opener := &recordingTerminalOpener{}
+	svc := NewWithAgentResolver(foundExecutable("copilot"), nil, opener, dataDir)
+
+	if _, err := svc.Start(context.Background(), "copilot"); err != nil {
+		t.Fatalf("Start(copilot): %v", err)
+	}
+	wantDir := filepath.Join(dataDir, "auth-workspace", "copilot")
+	if opener.input.WorkingDir != wantDir {
+		t.Fatalf("terminal working dir = %q, want %q", opener.input.WorkingDir, wantDir)
+	}
+	if got := opener.input.Argv; !reflect.DeepEqual(got, []string{"/test/bin/copilot"}) {
+		t.Fatalf("terminal argv = %#v, want copilot TUI launch", got)
+	}
+	if opener.input.InitialInput != "/login" {
+		t.Fatalf("initial input = %q, want automatic /login injection", opener.input.InitialInput)
+	}
+	if got := opener.input.InitialInputReadyStates; !reflect.DeepEqual(got, []shellterm.InitialInputReadyState{{Text: "/ commands"}}) {
+		t.Fatalf("initial input ready states = %#v, want Copilot composer footer", got)
+	}
+	if !opener.input.SendInitialInputOnReadyTimeout {
+		t.Fatal("Copilot login does not fall back to /login after a slow startup")
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".copilot", "config.json"))
+	if err != nil {
+		t.Fatalf("read copilot config: %v", err)
+	}
+	realDir, err := filepath.EvalSymlinks(wantDir)
+	if err != nil {
+		t.Fatalf("resolve auth workspace: %v", err)
+	}
+	if !strings.Contains(string(data), `"`+realDir+`"`) {
+		t.Fatalf("copilot config = %s, want trusted folder %q", data, realDir)
+	}
+}
+
 type recordingTerminalOpener struct {
 	calls    int
 	input    shellterm.OpenCommandTerminalInput

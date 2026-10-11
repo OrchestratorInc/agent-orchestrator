@@ -395,6 +395,26 @@ export interface AutoReviewDetail {
 	commandSource?: string;
 }
 
+/** An agent HTML page published with `ao render`, shown inline in its turn. */
+export interface RenderRef {
+	id: string;
+	title: string;
+	height: number;
+	/** Daemon-relative route, `/api/v1/sessions/{id}/renders/{renderId}`. */
+	path: string;
+	/** `[width, height]` pairs measured when the page was published, sorted by width. */
+	heights?: Array<[number, number]>;
+}
+
+/** An HTML session artifact the agent reported with `ao report --artifact`, shown inline in its turn. */
+export interface ArtifactRef {
+	/** Relative to the session's artifact directory, slash-separated. */
+	path: string;
+	name: string;
+	/** Daemon-relative route, `/api/v1/sessions/{id}/artifact-files/{path}`. */
+	url: string;
+}
+
 /**
  * A `system` activity's discriminator and the fields that belong to it.
  *
@@ -411,7 +431,13 @@ export interface SystemEventDetail {
 		| "steer"
 		| "plan"
 		| "context.reset"
-		| "context.boundary";
+		| "context.boundary"
+		| "render"
+		| "artifact";
+	/** render */
+	render?: RenderRef;
+	/** artifact */
+	artifact?: ArtifactRef;
 	/** model.rerouted */
 	fromModel?: string;
 	toModel?: string;

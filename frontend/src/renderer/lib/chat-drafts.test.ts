@@ -48,6 +48,124 @@ class MemoryStorage implements DraftStorage {
 	}
 }
 
+describe("optimistic composer drafts", () => {
+	const sent = { id: "sent", path: ".ao/attachments/sent.png", name: "sent.png", mimeType: "image/png", bytes: 4 };
+	const next = { ...sent, id: "next", path: ".ao/attachments/next.png" };
+	const input = {
+		kind: "send" as const, optimistic: true, nativeImages: true,
+		composerText: "same request", attachments: [sent],
+		requestText: "same request\n\nAttached files:\n- .ao/attachments/sent.png",
+		clientMessageId: "optimistic-send-1",
+	};
+
+	it("separates the sent snapshot from a repeated next draft and keeps both across retry", () => {
+		const storage = new MemoryStorage();
+		const prepared = prepareChatComposerDelivery("optimistic", input, storage);
+		if (!prepared.ok) throw new Error("Failed to prepare test delivery");
+		expect(prepared.draft.composer).toMatchObject({
+			revision: prepared.mutation.revision + 1, text: "", attachments: [],
+			delivery: { nativeImages: true, draft: { text: input.composerText, attachments: [sent] } },
+		});
+		writeChatComposerText("optimistic", input.composerText, storage);
+		writeChatAttachments("optimistic", [next], storage);
+		const retry = prepareChatComposerDelivery("optimistic", { ...input, clientMessageId: "ignored" }, storage);
+		expect(retry).toMatchObject({ ok: true, recovered: true, mutation: prepared.mutation });
+		markChatComposerDeliveryAccepted("optimistic", input.clientMessageId, prepared.mutation.revision, storage);
+		expect(clearAcceptedChatComposer("optimistic", prepared.mutation.revision, storage, [sent.id, next.id]))
+			.toMatchObject({ ok: true, cleared: false });
+		expect(readChatSessionDraft("optimistic", storage).composer).toMatchObject({ text: input.composerText, attachments: [next] });
+		expect(readChatSessionDraft("optimistic", storage).composer.delivery).toBeUndefined();
+	});
+
+	it("reports the untouched empty next composer as cleared after acceptance", () => {
+		const storage = new MemoryStorage();
+		const prepared = prepareChatComposerDelivery("empty-next-draft", input, storage);
+		if (!prepared.ok) throw new Error("Failed to prepare test delivery");
+		expect(clearAcceptedChatComposer("empty-next-draft", prepared.mutation.revision, storage))
+			.toMatchObject({ ok: true, cleared: true, draft: { composer: { text: "", attachments: [] } } });
+		expect(readChatSessionDraft("empty-next-draft", storage).composer.delivery).toBeUndefined();
+	});
+
+	it.each(["empty", "text", "attachment"])("keeps the rejected original alongside a %s next draft", (kind) => {
+		const storage = new MemoryStorage();
+		const prepared = prepareChatComposerDelivery("rejected", input, storage);
+		if (!prepared.ok) throw new Error("Failed to prepare test delivery");
+		if (kind === "text") writeChatComposerText("rejected", "next draft", storage);
+		if (kind === "attachment") writeChatAttachments("rejected", [next], storage);
+		expect(clearRejectedChatComposerDelivery("rejected", input.clientMessageId, prepared.mutation.revision, storage).ok).toBe(true);
+		const restored = readChatSessionDraft("rejected", storage).composer;
+		if (kind === "empty") {
+			expect(restored).toMatchObject({ text: input.composerText, attachments: [sent] });
+			expect(restored.delivery).toBeUndefined();
+		} else {
+			expect(restored.text).toBe(kind === "text" ? "next draft" : "");
+			expect(restored.attachments).toEqual(kind === "attachment" ? [next] : []);
+			expect(restored.delivery).toEqual(prepared.mutation);
+		}
+	});
+
+	it("keeps the editable draft intact when optimistic preparation cannot persist", () => {
+		const backing = new MemoryStorage();
+		writeChatComposerText("unproven-optimistic", input.composerText, backing);
+		const failing: DraftStorage = {
+			getItem: backing.getItem.bind(backing), removeItem: backing.removeItem.bind(backing),
+			setItem: () => { throw new DOMException("full", "QuotaExceededError"); },
+		};
+		expect(prepareChatComposerDelivery("unproven-optimistic", input, failing).ok).toBe(false);
+		expect(readChatSessionDraft("unproven-optimistic", backing).composer.text).toBe(input.composerText);
+		expect(readChatSessionDraft("unproven-optimistic", backing).composer.delivery).toBeUndefined();
+	});
+
+	it("skips a stale failed-save retry without changing a newer draft", () => {
+		const storage = new MemoryStorage();
+		const old = writeChatComposerText("failed-save", "draft A", storage);
+		const newer = writeChatComposerText("failed-save", "draft B", storage);
+		expect(writeChatComposerText("failed-save", "unsaved A", storage, old.draft.composer.revision)).toEqual(newer);
+		expect(readChatSessionDraft("failed-save", storage).composer.text).toBe("draft B");
+		expect(writeChatComposerText("failed-save", "latest draft", storage, newer.draft.composer.revision).draft.composer.text).toBe("latest draft");
+	});
+
+	it.each([
+		null,
+		{ text: 1, attachments: [] },
+		{ text: "original", attachments: null },
+		{ text: "original", attachments: [{ ...sent, id: "" }] },
+		{ text: "original", attachments: [{ ...sent, path: "/outside-workspace" }] },
+	])("rejects an invalid persisted sent snapshot: %j", (draft) => {
+		const storage = new MemoryStorage();
+		prepareChatComposerDelivery("invalid-snapshot", input, storage);
+		for (const [key, raw] of storage.values) {
+			const record = JSON.parse(raw);
+			if (record.composer) {
+				record.composer.delivery.draft = draft;
+				storage.setItem(key, JSON.stringify(record));
+			}
+		}
+		expect(readChatSessionDraft("invalid-snapshot", storage).composer.delivery).toBeUndefined();
+	});
+
+	it("keeps excerpt sends recoverable for editing after a definitive refusal", () => {
+		const storage = new MemoryStorage();
+		const excerpts = [{
+			id: "excerpt-1", conversationId: "conversation-1", messageId: "message-1",
+			revision: 2, text: "selected context", role: "assistant" as const,
+		}];
+		const prepared = prepareChatComposerDelivery("excerpt-refusal", { ...input, excerpts }, storage);
+		if (!prepared.ok) throw new Error("Failed to prepare test delivery");
+		expect(prepared.draft.composer).toMatchObject({
+			revision: prepared.mutation.revision, text: input.composerText,
+			attachments: [sent], excerpts,
+		});
+		expect(prepared.mutation.draft).toBeUndefined();
+		expect(prepared.mutation.excerpts).toEqual(excerpts);
+
+		expect(clearRejectedChatComposerDelivery("excerpt-refusal", input.clientMessageId, prepared.mutation.revision, storage).ok).toBe(true);
+		const restored = readChatSessionDraft("excerpt-refusal", storage).composer;
+		expect(restored).toMatchObject({ text: input.composerText, attachments: [sent], excerpts });
+		expect(restored.delivery).toBeUndefined();
+	});
+});
+
 describe("Chat draft storage", () => {
 	it("persists transcript excerpts and journals the exact references for retry", () => {
 		const storage = new MemoryStorage();
@@ -596,12 +714,13 @@ describe("Chat draft storage", () => {
 		).toMatchObject({ ok: false });
 	});
 
-	it("keeps an accepted delivery durable when clearing local storage fails", () => {
+	it.each([false, true])("keeps an accepted delivery durable when clearing local storage fails (optimistic: %s)", (optimistic) => {
 		const backing = new MemoryStorage();
 		const prepared = prepareChatComposerDelivery(
 			"session-accepted",
 			{
 				kind: "send",
+				optimistic,
 				composerText: "accepted once",
 				attachments: [],
 				requestText: "accepted once",
@@ -639,6 +758,25 @@ describe("Chat draft storage", () => {
 		});
 	});
 
+	it("removes sent attachments while preserving the next draft and its new attachments", () => {
+		const storage = new MemoryStorage();
+		const sent = { id: "sent", path: ".ao/attachments/sent.png", name: "sent.png", mimeType: "image/png", bytes: 4 };
+		const next = { ...sent, id: "next", path: ".ao/attachments/next.png" };
+		const prepared = prepareChatComposerDelivery("session-next-attachments", {
+			kind: "send", composerText: "submitted", attachments: [sent],
+			requestText: "submitted", clientMessageId: "sent-1",
+		}, storage);
+		if (!prepared.ok) throw new Error("Failed to prepare test delivery");
+		writeChatComposerText("session-next-attachments", "next draft", storage);
+		writeChatAttachments("session-next-attachments", [sent, next], storage);
+		expect(clearAcceptedChatComposer("session-next-attachments", prepared.mutation.revision, storage, [sent.id]))
+			.toMatchObject({ ok: true, cleared: false });
+		expect(readChatSessionDraft("session-next-attachments", storage).composer).toMatchObject({
+			text: "next draft", attachments: [next],
+		});
+		expect(readChatSessionDraft("session-next-attachments", storage).composer.delivery).toBeUndefined();
+	});
+
 	it("clears only the accepted delivery journal when a later composer revision exists", () => {
 		const storage = new MemoryStorage();
 		const prepared = prepareChatComposerDelivery(
@@ -673,6 +811,7 @@ describe("Chat draft storage", () => {
 			"session-refused-later-composer",
 			{
 				kind: "steer",
+				optimistic: true,
 				composerText: "submitted steer",
 				attachments: [],
 				requestText: "submitted steer",
@@ -681,6 +820,8 @@ describe("Chat draft storage", () => {
 			storage,
 		);
 		expect(prepared.ok).toBe(true);
+		expect(prepared.draft.composer).toMatchObject({ text: "submitted steer", attachments: [] });
+		expect(prepared.draft.composer.delivery?.draft).toBeUndefined();
 		writeChatComposerText("session-refused-later-composer", "newer unsent draft", storage);
 
 		expect(

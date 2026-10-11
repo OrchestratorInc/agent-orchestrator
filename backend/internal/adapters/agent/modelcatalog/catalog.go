@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
@@ -108,24 +109,26 @@ var commandSpecs = map[string]commandSpec{
 	// contract every opencode ships; dropping the flag lists an identical catalog
 	// (and still honors the provider-presence env used for cloud scoping) without
 	// betting on a flag that can be rejected.
-	"opencode":    {args: []string{"models"}, parser: parseIDLines},
-	"opencode-v2": {args: []string{"models"}, parser: parseIDLines},
-	"grok":        {args: []string{"models"}, parser: parseGrokModels},
-	"cursor":      {args: []string{"models"}, parser: parseCursorModels},
-	"agy":         {args: []string{"models"}, parser: parseAgyModels},
-	"kilocode":    {args: []string{"models"}, parser: parseIDLines},
-	"pi":          {args: []string{"--list-models"}, parser: parsePiModels},
-	"kimchi":      {args: []string{"--list-models"}, parser: parsePiModels},
-	"prime-agent": {args: []string{"model", "list"}, parser: parsePiModels},
-	"kimi":        {args: []string{"provider", "list", "--json"}, parser: parseJSONModels},
-	"auggie":      {args: []string{"models", "list", "--json"}, parser: parseJSONModels},
-	"kiro":        {args: []string{"chat", "--list-models", "--format", "json"}, parser: parseJSONModels, signIn: kiroSignIn},
-	"omp":         {args: []string{"models", "--json"}, parser: parseJSONModels},
-	"copilot":     {args: []string{"help", "config"}, parser: parseCopilotConfigModels},
-	"droid":       {args: []string{"exec", "--help"}, parser: parseDroidHelpModels},
-	"crush":       {args: []string{"models"}, parser: parseIDLines},
-	"fx":          {args: []string{"models", "--json"}, parser: parseFXModels},
-	"mimo-code":   {args: []string{"models"}, parser: parseMiMoModels},
+	"opencode":     {args: []string{"models"}, parser: parseIDLines},
+	"opencode-v2":  {args: []string{"models"}, parser: parseIDLines},
+	"grok":         {args: []string{"models"}, parser: parseGrokModels},
+	"cursor":       {args: []string{"models"}, parser: parseCursorModels},
+	"agy":          {args: []string{"models"}, parser: parseAgyModels},
+	"kilocode":     {args: []string{"models"}, parser: parseIDLines},
+	"pi":           {args: []string{"--list-models"}, parser: parsePiModels},
+	"kimchi":       {args: []string{"--list-models"}, parser: parsePiModels},
+	"prime-agent":  {args: []string{"model", "list"}, parser: parsePiModels},
+	"kimi":         {args: []string{"provider", "list", "--json"}, parser: parseJSONModels},
+	"auggie":       {args: []string{"models", "list", "--json"}, parser: parseJSONModels},
+	"kiro":         {args: []string{"chat", "--list-models", "--format", "json"}, parser: parseJSONModels, signIn: kiroSignIn},
+	"omp":          {args: []string{"models", "--json"}, parser: parseJSONModels},
+	"codewhale":    {args: []string{"models", "--json"}, parser: parseJSONModels},
+	"copilot":      {args: []string{"help", "config"}, parser: parseCopilotConfigModels},
+	"droid":        {args: []string{"exec", "--help"}, parser: parseDroidHelpModels},
+	"crush":        {args: []string{"models"}, parser: parseIDLines},
+	"fx":           {args: []string{"models", "--json"}, parser: parseFXModels},
+	"mimo-code":    {args: []string{"models"}, parser: parseMiMoModels},
+	"command-code": {args: []string{"--list-models"}, parser: parseAgyModels},
 }
 
 // Base returns the picker behavior AO can provide without executing a CLI.
@@ -188,7 +191,7 @@ func Manual(agentID string) ports.AgentModelCatalog {
 func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	switch agentID {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
-		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "mimo-code", "deepseek-harness", "devin":
+		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin":
 		return ports.CustomModelEntryDirect
 	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
@@ -260,7 +263,19 @@ func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscov
 		return Discover(ctx, request.AgentID, request.Binary, request.WorkingDir,
 			withOpenCodeCredentialPresence(request.Env, request.CredentialType))
 	}
-	return Discover(ctx, request.AgentID, request.Binary, request.WorkingDir, request.Env)
+	env := request.Env
+	if request.AgentID == "opencode-v2" {
+		dataHome, err := opencodev2.DataHome(ctx)
+		if err != nil {
+			return ports.AgentModelCatalog{}, fmt.Errorf("opencode-v2 model catalog: prepare data home: %w", err)
+		}
+		env = make(map[string]string, len(request.Env)+1)
+		for key, value := range request.Env {
+			env[key] = value
+		}
+		env["XDG_DATA_HOME"] = dataHome
+	}
+	return Discover(ctx, request.AgentID, request.Binary, request.WorkingDir, env)
 }
 
 // opencodeCredentialEnv maps an opencode cloud credential type to the env var
@@ -500,10 +515,64 @@ func Discover(ctx context.Context, agentID, binary, workingDir string, env map[s
 	if len(models) == 0 {
 		return base, fmt.Errorf("%s model discovery returned no models", agentID)
 	}
-	base.Models = applyConfiguredDefault(models, configuredDefaultModel(agentID, workingDir, env))
+	models = applyConfiguredDefault(models, configuredDefaultModel(agentID, workingDir, env))
+	if agentID == "codewhale" {
+		models = markCodewhaleResolvedDefault(ctx, binary, workingDir, env, models)
+	}
+	base.Models = models
 	base.Source = "cli"
 	base.FetchedAt = time.Now().UTC()
 	return base, nil
+}
+
+var codewhaleResolvedModelPattern = regexp.MustCompile(`(?mi)^resolved:\s*(\S+)`)
+var codewhaleResolvedProviderPattern = regexp.MustCompile(`(?mi)^provider:\s*(\S+)`)
+
+// markCodewhaleResolvedDefault marks Codewhale's runtime-effective model as
+// the catalog default by asking `codewhale model resolve`, which reads the
+// same provider and model configuration a launched session would use. The
+// result keeps the picker from reporting "model not reported": a resolved id
+// is matched case-insensitively against the catalog, and a configured model
+// the catalog does not list is appended the way Claude's configured model is.
+// A failed or empty resolve is best-effort and leaves the catalog unchanged.
+func markCodewhaleResolvedDefault(ctx context.Context, binary, workingDir string, env map[string]string, models []ports.AgentModelInfo) []ports.AgentModelInfo {
+	if err := ctx.Err(); err != nil {
+		return models
+	}
+	runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	output, err := modelCommand(runCtx, binary, []string{"model", "resolve"}, workingDir, env).CombinedOutput()
+	if err != nil {
+		return models
+	}
+	return applyCodewhaleResolvedModel(models, output)
+}
+
+// applyCodewhaleResolvedModel marks the resolved model in the catalog.
+func applyCodewhaleResolvedModel(models []ports.AgentModelInfo, resolveOutput []byte) []ports.AgentModelInfo {
+	match := codewhaleResolvedModelPattern.FindSubmatch(resolveOutput)
+	if len(match) < 2 {
+		return models
+	}
+	resolved := strings.TrimSpace(string(match[1]))
+	if resolved == "" {
+		return models
+	}
+	found := false
+	for i := range models {
+		if strings.EqualFold(models[i].ID, resolved) {
+			models[i].IsDefault = true
+			found = true
+		}
+	}
+	if !found {
+		entry := ports.AgentModelInfo{ID: resolved, Label: resolved, IsDefault: true}
+		if provider := codewhaleResolvedProviderPattern.FindSubmatch(resolveOutput); len(provider) >= 2 {
+			entry.Provider = strings.TrimSpace(string(provider[1]))
+		}
+		models = append(models, entry)
+	}
+	return models
 }
 
 func discoverUnrealCatalog(env map[string]string) ports.AgentModelCatalog {

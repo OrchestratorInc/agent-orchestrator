@@ -204,4 +204,59 @@ describe("FileTree", () => {
 		await userEvent.click(row);
 		expect(onSelectPath).toHaveBeenCalledWith(expect.objectContaining({ path: "notes.txt", type: "file" }));
 	});
+
+	it("keeps the open file active when a folder is clicked", async () => {
+		getMock.mockImplementation(async (_path: string, options: unknown) => {
+			const query = (options as { params?: { query?: { path?: string } } }).params?.query?.path;
+			if (query) return treeResponse(query, []);
+			return treeResponse("", [
+				{ name: "src", path: "src", type: "dir", hasChanges: false },
+				{ name: "README.md", path: "README.md", type: "file", status: "unmodified" },
+			]);
+		});
+		const onSelectPath = vi.fn();
+
+		renderWithQuery(
+			<FileTree changedOnly={false} changedOnlyData={[]} onSelectPath={onSelectPath} selectedPath="README.md" sessionId="sess-1" filterText="" />,
+		);
+
+		const readme = await findTreeRow("workspace-file-tree", "README.md");
+		await waitFor(() => expect(readme).toHaveAttribute("data-item-selected"));
+		const folder = await findTreeRow("workspace-file-tree", "src/");
+		await userEvent.click(folder);
+
+		await waitFor(() => expect(folder).toHaveAttribute("aria-expanded", "true"));
+		await waitFor(() => expect(folder).not.toHaveAttribute("data-item-selected"));
+		expect(readme).toHaveAttribute("data-item-selected");
+		expect(onSelectPath).not.toHaveBeenCalled();
+	});
+
+	it("settles child and following rows when a folder opens, and hides the focus ring after a pointer press", async () => {
+		const animate = vi.fn();
+		Object.defineProperty(HTMLElement.prototype, "animate", { configurable: true, writable: true, value: animate });
+		getMock.mockImplementation(async (_path: string, options: unknown) => {
+			const query = (options as { params?: { query?: { path?: string } } }).params?.query?.path;
+			if (!query) {
+				return treeResponse("", [
+					{ name: "src", path: "src", type: "dir", hasChanges: false },
+					{ name: "README.md", path: "README.md", type: "file", status: "unmodified" },
+				]);
+			}
+			return treeResponse(query, [{ name: "app.go", path: "src/app.go", type: "file", status: "unmodified" }]);
+		});
+
+		renderWithQuery(
+			<FileTree changedOnly={false} changedOnlyData={[]} onSelectPath={vi.fn()} selectedPath={null} sessionId="sess-1" filterText="" />,
+		);
+
+		await userEvent.click(await findTreeRow("workspace-file-tree", "src/"));
+		await findTreeRow("workspace-file-tree", "src/app.go");
+
+		// One animation for the new child row, one for README.md moving down.
+		await waitFor(() => expect(animate).toHaveBeenCalledTimes(2));
+		expect(screen.getByTestId("workspace-file-tree")).toHaveAttribute("data-pointer-focus");
+
+		await userEvent.keyboard("{ArrowDown}");
+		expect(screen.getByTestId("workspace-file-tree")).not.toHaveAttribute("data-pointer-focus");
+	});
 });
