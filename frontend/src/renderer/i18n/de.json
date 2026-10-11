@@ -2626,7 +2626,6 @@
 	"coder.templateOptions.title": "Vorlagenoptionen",
 	"coder.templateOptions.titleCount": "Vorlagenoptionen ({{total}})",
 	"coder.templateOptions.required": "Erforderlich",
-	"coder.templateOptions.setAtCreation": "Bei der Erstellung festgelegt",
 	"coder.templateOptions.loadFailed": "Die Optionen dieser Vorlage konnten nicht geladen werden.",
 	"coder.templateOptions.listPlaceholder": "Werte mit Kommas trennen",
 	"coder.templateOptions.selectPlaceholder": "Option auswählen",

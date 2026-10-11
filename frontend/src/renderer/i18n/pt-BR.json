@@ -2665,7 +2665,6 @@
 	"coder.templateOptions.title": "Opções do modelo",
 	"coder.templateOptions.titleCount": "Opções do modelo ({{total}})",
 	"coder.templateOptions.required": "Obrigatório",
-	"coder.templateOptions.setAtCreation": "Definido na criação",
 	"coder.templateOptions.loadFailed": "Não foi possível carregar as opções deste modelo.",
 	"coder.templateOptions.listPlaceholder": "Separe os valores com vírgulas",
 	"coder.templateOptions.selectPlaceholder": "Selecione uma opção",

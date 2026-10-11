@@ -113,16 +113,10 @@ function TemplateParameterField({
 	// single-choice parameter can't be left empty either, so it is marked too.
 	const mandatory = parameter.required || (options.length > 0 && parameter.type !== "list(string)" && parameter.type !== "bool");
 	const heading = (
-		<span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-			<Label htmlFor={id} className="text-foreground">
-				{label}
-				{mandatory ? <span aria-hidden="true">*</span> : null}
-				{mandatory ? <span className="sr-only">{t("coder.templateOptions.required")}</span> : null}
-			</Label>
-			{parameter.mutable ? null : (
-				<span className="text-xs text-muted-foreground">{t("coder.templateOptions.setAtCreation")}</span>
-			)}
-		</span>
+		<Label htmlFor={id} className="text-foreground">
+			<span>{label}{mandatory ? <span aria-hidden="true"> *</span> : null}</span>
+			{mandatory ? <span className="sr-only">{t("coder.templateOptions.required")}</span> : null}
+		</Label>
 	);
 	const hint = description ? <p id={hintId} className={onboardingFieldHintClass}>{description}</p> : null;
 	const describedBy = description ? hintId : undefined;

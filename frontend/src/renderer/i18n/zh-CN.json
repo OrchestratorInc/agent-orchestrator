@@ -2608,7 +2608,6 @@
 	"coder.templateOptions.title": "模板选项",
 	"coder.templateOptions.titleCount": "模板选项 ({{total}})",
 	"coder.templateOptions.required": "必填",
-	"coder.templateOptions.setAtCreation": "创建时设定",
 	"coder.templateOptions.loadFailed": "无法加载此模板的选项。",
 	"coder.templateOptions.listPlaceholder": "用逗号分隔多个值",
 	"coder.templateOptions.selectPlaceholder": "选择一个选项",

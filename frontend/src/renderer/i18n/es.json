@@ -2665,7 +2665,6 @@
 	"coder.templateOptions.title": "Opciones de la plantilla",
 	"coder.templateOptions.titleCount": "Opciones de la plantilla ({{total}})",
 	"coder.templateOptions.required": "Obligatorio",
-	"coder.templateOptions.setAtCreation": "Se fija al crear",
 	"coder.templateOptions.loadFailed": "No se pudieron cargar las opciones de esta plantilla.",
 	"coder.templateOptions.listPlaceholder": "Separa los valores con comas",
 	"coder.templateOptions.selectPlaceholder": "Selecciona una opción",

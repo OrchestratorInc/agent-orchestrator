@@ -85,7 +85,7 @@ describe("CoderTemplateOptions", () => {
 		expect(screen.getByText("Required")).toBeInTheDocument();
 		expect(screen.getByRole("switch", { name: "Docker" })).not.toBeChecked();
 		// Ordered by the template's `order`.
-		const labels = Array.from(document.querySelectorAll("label")).map((node) => node.textContent?.replace("*Required", ""));
+		const labels = Array.from(document.querySelectorAll("label")).map((node) => node.textContent?.replace(" *Required", ""));
 		expect(labels).toEqual(["CPUs", "Base branch", "Docker"]);
 		expect(screen.queryByText("size")).not.toBeInTheDocument();
 	});
@@ -96,8 +96,8 @@ describe("CoderTemplateOptions", () => {
 		renderOptions();
 		await user.click(await screen.findByRole("button", { name: "Template options (5)" }));
 		const marked = Array.from(document.querySelectorAll("label"))
-			.filter((node) => node.textContent?.endsWith("*Required"))
-			.map((node) => node.textContent?.replace("*Required", ""));
+			.filter((node) => node.textContent?.endsWith(" *Required"))
+			.map((node) => node.textContent?.replace(" *Required", ""));
 		// CPUs is required by Coder; Region is a dropdown. A free-text field, a
 		// switch and a multi-select (which may be left empty) stay unmarked.
 		expect(marked).toEqual(["CPUs", "Region"]);
@@ -121,12 +121,11 @@ describe("CoderTemplateOptions", () => {
 		expect(onChange).toHaveBeenLastCalledWith({ docker: "true" });
 	});
 
-	it("shows a select for options, a multi-select for list(string), and marks immutable ones", async () => {
+	it("shows a select for options and a multi-select for list(string)", async () => {
 		mocks.getCoderTemplateParameters.mockResolvedValue({ parameters: PARAMETERS.slice(3) });
 		const user = userEvent.setup();
 		const { onChange } = renderOptions();
 		expect(await screen.findByRole("combobox", { name: /^Region/ })).toHaveTextContent("Europe");
-		expect(screen.getByText("Set at creation")).toBeInTheDocument();
 
 		const services = screen.getByRole("group", { name: "Services" });
 		const [database, cache] = Array.from(services.querySelectorAll("button[role='checkbox']"));

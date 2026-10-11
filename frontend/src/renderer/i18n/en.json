@@ -2607,7 +2607,6 @@
 	"coder.templateOptions.title": "Template options",
 	"coder.templateOptions.titleCount": "Template options ({{total}})",
 	"coder.templateOptions.required": "Required",
-	"coder.templateOptions.setAtCreation": "Set at creation",
 	"coder.templateOptions.loadFailed": "Couldn't load this template's options.",
 	"coder.templateOptions.listPlaceholder": "Separate values with commas",
 	"coder.templateOptions.selectPlaceholder": "Select an option",

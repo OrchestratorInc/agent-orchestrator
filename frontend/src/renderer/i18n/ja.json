@@ -2626,7 +2626,6 @@
 	"coder.templateOptions.title": "テンプレートオプション",
 	"coder.templateOptions.titleCount": "テンプレートオプション ({{total}})",
 	"coder.templateOptions.required": "必須",
-	"coder.templateOptions.setAtCreation": "作成時に設定",
 	"coder.templateOptions.loadFailed": "このテンプレートのオプションを読み込めませんでした。",
 	"coder.templateOptions.listPlaceholder": "値はカンマで区切ります",
 	"coder.templateOptions.selectPlaceholder": "オプションを選択",

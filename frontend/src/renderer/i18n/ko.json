@@ -2626,7 +2626,6 @@
 	"coder.templateOptions.title": "템플릿 옵션",
 	"coder.templateOptions.titleCount": "템플릿 옵션 ({{total}})",
 	"coder.templateOptions.required": "필수",
-	"coder.templateOptions.setAtCreation": "생성 시 설정됨",
 	"coder.templateOptions.loadFailed": "이 템플릿의 옵션을 불러올 수 없습니다.",
 	"coder.templateOptions.listPlaceholder": "값을 쉼표로 구분하세요",
 	"coder.templateOptions.selectPlaceholder": "옵션 선택",
