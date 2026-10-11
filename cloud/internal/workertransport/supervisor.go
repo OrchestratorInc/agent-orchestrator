@@ -181,7 +181,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		return errors.New("worker transport workspace is required")
 	}
 	if s.Shell == "" {
-		s.Shell = "/bin/sh"
+		s.Shell = defaultWorkspaceShell()
 	}
 	if s.Logger == nil {
 		s.Logger = slog.Default()
@@ -776,6 +776,27 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 		}
 	}()
 	return nil
+}
+
+// defaultWorkspaceShell resolves the shell that owns interactive workspace
+// terminals when the launch does not name one. It must interpret cursor-key
+// CSI sequences: Debian's /bin/sh is dash, whose line editing has no arrow-key
+// bindings, so Up/Down echo the raw bytes back as "^[[A" instead of walking
+// history — the cloud workspace terminal then looks like the escape bytes are
+// being dropped. Both worker images ship bash, so prefer it and fall back to
+// /bin/sh only where bash is absent.
+func defaultWorkspaceShell() string {
+	return workspaceShell(func(path string) bool {
+		info, err := os.Stat(path)
+		return err == nil && !info.IsDir()
+	})
+}
+
+func workspaceShell(shellExists func(string) bool) string {
+	if shellExists("/bin/bash") {
+		return "/bin/bash"
+	}
+	return "/bin/sh"
 }
 
 func (s *Supervisor) terminalCommand(

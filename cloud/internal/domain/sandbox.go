@@ -132,9 +132,13 @@ type WorkerLaunch struct {
 	Harness        string
 	DisplayName    string
 	Branch         string
-	Prompt         string
-	AgentSessionID string
-	Interface      SessionInterface
+	// SessionBranchTip is the commit SHA the control plane last recorded as the
+	// session branch tip (empty when never captured). The worker adopts an
+	// origin-only branch only when this tip is an ancestor of the remote ref.
+	SessionBranchTip string
+	Prompt           string
+	AgentSessionID   string
+	Interface        SessionInterface
 	// ParentSessionID is the orchestrator that spawned this session, empty for
 	// top-level sessions. It gates the worker:report scope and the report
 	// guidance in the worker prompt.
