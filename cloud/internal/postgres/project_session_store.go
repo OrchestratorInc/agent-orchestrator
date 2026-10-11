@@ -1094,18 +1094,15 @@ const sessionSelect = `
 		CASE WHEN sandbox.provider_connection_id IS NOT NULL
 			THEN COALESCE(sandbox.startup_error_detail, '') ELSE '' END,
 		-- The workspace link is shown only for an organization's own (BYO)
-		-- Coder (customers have no login on AO's managed deployment), and only
-		-- once the provider has reported the workspace. The origin, owner and
-		-- prefix are the ones recorded when AO planned the workspace, so the
-		-- link names the workspace AO actually created.
+		-- Coder (customers have no login on AO's managed deployment). The
+		-- origin, owner and prefix are recorded when AO plans the workspace,
+		-- so the link is known from the session's creation and names the
+		-- workspace AO creates.
 		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
-				AND sandbox.provider_environment_id IS NOT NULL
 			THEN COALESCE(sandbox.resource_profile->'coder'->>'baseUrl', '') ELSE '' END,
 		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
-				AND sandbox.provider_environment_id IS NOT NULL
 			THEN COALESCE(sandbox.resource_profile->'coder'->>'owner', '') ELSE '' END,
 		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
-				AND sandbox.provider_environment_id IS NOT NULL
 			THEN COALESCE(sandbox.resource_profile->'coder'->>'workspaceNamePrefix', '') ELSE '' END,
 		COALESCE((
 			SELECT MAX(terminal.worker_epoch)
