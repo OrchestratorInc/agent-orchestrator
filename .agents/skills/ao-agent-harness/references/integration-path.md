@@ -417,3 +417,31 @@ file-tree inclusion or saved metadata alone does not prove private standing
 instructions independently of user input. Qualify a fresh task that never names
 the private path/token/receipt and verify the privately required side artifact.
 Do not change root/user AGENTS.md or replace native bundled agents to force it.
+
+
+## Pool compatible-provider recovery: lazy private context
+
+The historical Z.ai hold above remains valid for that endpoint. Stock Pool1.0.16
+subsequently completed native and actual AO Chat tool turns with the authorized
+DeepSeek standalone root. Provider-root compatibility requires a real native
+turn; catalog-selected `deepseek-flash` did not validate the unavailable requested
+`deepseek-chat` model. Preserve native model-set rejection and user hooks.
+
+SessionStart hooks require a matcher. Fresh sessions initialize hooks on their
+first prompt; a loaded session interrupted by Kill can also initialize lazily on
+its first continuation. Do not demand a witness immediately after new/load.
+Validate the native session/workspace witness before publishing successful prompt
+completion, and separately prove instruction consumption on real file edits.
+Because native hooks fail open, this check observes missing context after the
+turn; it is not a tool execution security boundary. Live detached-host adoption
+must retain its original context rather than resetting its witness.
+
+A rejected operation can make the model refuse a superficially similar follow-up
+without emitting a new permission request. Preserve that negative attempt, then
+request an independently authorized, distinct operation to exercise cancellation.
+An accepted mode setter alone proves mode negotiation, not permission semantics.
+Prove cancel and Kill with PID plus kernel-start markers, nested child reaping,
+no delayed artifact, an unrelated control session and exact restored history.
+Scope unqualified optional ACP capabilities explicitly, even when initialize
+advertises them. The TUI audit runner cannot replace actual daemon Chat proof.
+See the [recovery report](../../../../docs/research/pool-acp-recovery-2026-10-12.md).
