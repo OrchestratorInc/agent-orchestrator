@@ -69,4 +69,21 @@ describe("CloudSessionStartupError", () => {
 		expect(screen.getByText("Its cloud workspace is no longer running.")).toBeInTheDocument();
 		expect(screen.queryByRole("button")).not.toBeInTheDocument();
 	});
+
+	it("reveals and copies bring-your-own diagnostics", async () => {
+		const writeText = vi.fn().mockResolvedValue(undefined);
+		Object.assign(navigator, { clipboard: { writeText } });
+		mount({ phase: "failed", code: "bootstrap_failed", message: "Your Coder workspace failed to start.", detail: "build log tail: quota exceeded" });
+		expect(screen.queryByTestId("cloud-session-startup-detail")).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "Show details" }));
+		expect(screen.getByTestId("cloud-session-startup-detail").textContent).toContain("quota exceeded");
+		await userEvent.click(screen.getByRole("button", { name: "Copy details" }));
+		expect(writeText).toHaveBeenCalledWith(expect.stringContaining("bootstrap_failed"));
+		expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
+	});
+
+	it("shows no details control without diagnostics", () => {
+		mount({ phase: "failed", message: "AO couldn't open a terminal in the workspace." });
+		expect(screen.queryByRole("button", { name: "Show details" })).toBeNull();
+	});
 });

@@ -446,6 +446,11 @@ export interface CloudCpSessionStartupError {
 	message: string;
 	/** RFC 3339 time the failure was recorded. */
 	at: string;
+	/**
+	 * Redacted diagnostics (build and agent log tails) for bring-your-own
+	 * compute, where the customer can act on them. Absent otherwise.
+	 */
+	detail?: string;
 }
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/startup-retry responds 202. */

@@ -64,7 +64,19 @@ describe("cloudStartupProblem", () => {
 	}
 
 	it("reports a final startup failure once AO gives up", () => {
-		expect(cloudStartupProblem(withRuntime("terminated", { startupError }))).toEqual({ phase: "failed", message: startupError.message });
+		expect(cloudStartupProblem(withRuntime("terminated", { startupError }))).toEqual({
+			phase: "failed",
+			message: startupError.message,
+			code: startupError.code,
+		});
+	});
+
+	it("carries bring-your-own diagnostics with a final failure", () => {
+		const withDetail = { ...startupError, detail: "coder build log:\nterraform: quota exceeded\n" };
+		expect(cloudStartupProblem(withRuntime("terminated", { startupError: withDetail }))).toMatchObject({
+			phase: "failed",
+			detail: "coder build log:\nterraform: quota exceeded",
+		});
 	});
 
 	it.each(["bootstrapping", "provisioning", "failed"])("keeps a startup error as a retrying note while AO is still trying (%s)", (runtimeState) => {

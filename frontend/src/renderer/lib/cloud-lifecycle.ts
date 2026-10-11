@@ -61,7 +61,7 @@ export function cloudLifecycleStage(session?: WorkspaceSession): CloudLifecycleS
  *   the pane explains that instead of rendering blank.
  */
 export type CloudStartupProblem =
-	| { phase: "failed"; message: string }
+	| { phase: "failed"; message: string; code?: string; detail?: string }
 	| { phase: "retrying"; message: string }
 	| { phase: "unavailable"; message?: string };
 
@@ -74,7 +74,11 @@ export function cloudStartupProblem(session?: WorkspaceSession): CloudStartupPro
 	const runtimeState = lifecycle.runtimeState || lifecycle.observedState;
 	const final = runtimeState !== undefined && FINAL_RUNTIME_STATES.has(runtimeState);
 	const message = lifecycle.startupError?.message?.trim();
-	if (message) return final ? { phase: "failed", message } : { phase: "retrying", message };
+	if (message) {
+		if (!final) return { phase: "retrying", message };
+		const detail = lifecycle.startupError?.detail?.trim() || undefined;
+		return { phase: "failed", message, code: lifecycle.startupError?.code, detail };
+	}
 	if (final) return { phase: "unavailable", message: lifecycle.runtimeError?.trim() || undefined };
 	return undefined;
 }
