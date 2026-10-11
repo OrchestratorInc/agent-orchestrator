@@ -2699,5 +2699,8 @@
 	"settings.billing.runningDetail": "Orchestrator {{orchestrators}}/{{orchestratorSlots}} · Worker {{workers}}/{{workerSlots}}",
 	"settings.billing.totalSessions": "Sitzungen insgesamt",
 	"settings.billing.totalDetail": "Laufend und pausiert. Archiviere eine, um einen Platz freizugeben.",
-	"settings.billing.usageNote": "Jede laufende Sitzung zählt: Zwei Sitzungen für eine Stunde verbrauchen 2 Sitzungsstunden. Pausierte Sitzungen zählen nicht."
+	"settings.billing.usageNote": "Jede laufende Sitzung zählt: Zwei Sitzungen für eine Stunde verbrauchen 2 Sitzungsstunden. Pausierte Sitzungen zählen nicht.",
+	"settings.billing.cancelNotice": "Dein {{plan}}-Tarif endet am {{date}}. Danach wechselst du zu Kostenlos.",
+	"settings.billing.keepPlan": "{{plan}} behalten",
+	"settings.billing.freeStarts": "Ab {{date}}"
 }

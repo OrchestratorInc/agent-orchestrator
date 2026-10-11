@@ -2699,5 +2699,8 @@
 	"settings.billing.runningDetail": "オーケストレーター {{orchestrators}}/{{orchestratorSlots}} · ワーカー {{workers}}/{{workerSlots}}",
 	"settings.billing.totalSessions": "セッション合計",
 	"settings.billing.totalDetail": "実行中と一時停止中を含みます。枠を空けるにはアーカイブしてください。",
-	"settings.billing.usageNote": "実行中のセッションごとに計上されます。2 つのセッションを 1 時間実行すると 2 セッション時間です。一時停止中は計上されません。"
+	"settings.billing.usageNote": "実行中のセッションごとに計上されます。2 つのセッションを 1 時間実行すると 2 セッション時間です。一時停止中は計上されません。",
+	"settings.billing.cancelNotice": "{{plan}} プランは {{date}} に終了し、その後は無料プランになります。",
+	"settings.billing.keepPlan": "{{plan}} を継続",
+	"settings.billing.freeStarts": "{{date}} から開始"
 }

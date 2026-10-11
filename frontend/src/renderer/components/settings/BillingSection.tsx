@@ -107,6 +107,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 		});
 	const openCheckout = (plan: string) => openExternal(`checkout:${plan}`, () => client.createBillingCheckout(orgId, plan));
 	const openPortal = () => openExternal("portal", () => client.createBillingPortal(orgId));
+	const openCancel = () => openExternal("portal:cancel", () => client.createBillingPortal(orgId, "cancel"));
 	const reset = () =>
 		runAction("reset", async () => {
 			const next = await client.resetBillingUsage(orgId);
@@ -117,6 +118,8 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	const currentPlan = summary.entitled && !summary.exempt ? (summary.limits?.plan ?? summary.plan) : "free";
 	const subscribed = currentPlan !== "free";
 	const lapsed = summary.subscriptionStatus === "past_due" || summary.subscriptionStatus === "unpaid";
+	// A plan set to cancel stays current until it ends, then the org moves to Free.
+	const endsAt = subscribed && summary.cancelAt ? formatDay(summary.cancelAt) : "";
 	const offers = summary.plans ?? [];
 	const limits = summary.limits;
 	const usage = summary.usage;
@@ -127,6 +130,17 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 		<>
 			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
 				{summary.exempt ? <p className="px-1 text-xs text-muted-foreground">{t("settings.billing.exempt")}</p> : null}
+				{endsAt ? (
+					<p className="flex items-center justify-between gap-3 px-1 text-xs text-settings-muted">
+						{t("settings.billing.cancelNotice", { plan: planName(currentPlan), date: endsAt })}
+						{manage ? (
+							<Button size="sm" variant="secondary" disabled={pending !== null} onClick={() => void openPortal()}>
+								{pending === "portal" ? spinner : <ExternalLink className="size-icon-sm" aria-hidden="true" />}
+								{t("settings.billing.keepPlan", { plan: planName(currentPlan) })}
+							</Button>
+						) : null}
+					</p>
+				) : null}
 				{lapsed && manage ? (
 					<p role="alert" className="flex items-center justify-between gap-3 px-1 text-xs text-destructive">
 						{t("settings.billing.paymentFailed")}
@@ -142,9 +156,13 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						price={t("settings.billing.freePrice")}
 						features={[t("settings.billing.freeLocal"), t("settings.billing.freeNoCloud")]}
 						current={currentPlan === "free"}
-						action={subscribed && manage ? (
-							<Button size="sm" variant="secondary" className="w-full" disabled={pending !== null} onClick={() => void openPortal()}>
-								{pending === "portal" ? spinner : null}
+						action={endsAt ? (
+							<Button size="sm" variant="secondary" className="w-full" disabled>
+								{t("settings.billing.freeStarts", { date: endsAt })}
+							</Button>
+						) : subscribed && manage ? (
+							<Button size="sm" variant="secondary" className="w-full" disabled={pending !== null} onClick={() => void openCancel()}>
+								{pending === "portal:cancel" ? spinner : null}
 								{t("settings.billing.downgrade")}
 							</Button>
 						) : null}
@@ -388,6 +406,13 @@ function formatDate(iso: string | undefined): string {
 	const date = new Date(iso);
 	if (Number.isNaN(date.getTime())) return "";
 	return date.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+/** A day such as "Tue, 10 Nov 2026", for when a cancelled plan ends. */
+function formatDay(iso: string): string {
+	const date = new Date(iso);
+	if (Number.isNaN(date.getTime())) return "";
+	return date.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 }
 
 /** Time until `iso` as "in 1 h 20 m" / "in 5 m" / "now". */

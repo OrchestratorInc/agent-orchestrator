@@ -120,6 +120,29 @@ describe("BillingSection", () => {
 		expect(mocks.client.createBillingCheckout).not.toHaveBeenCalled();
 	});
 
+	it("downgrading to Free opens the portal on cancelling the plan", async () => {
+		mocks.client.getBilling.mockResolvedValue(subscribed());
+		mocks.client.createBillingPortal.mockResolvedValue({ url: "https://billing.stripe.test/cancel" });
+		renderSection();
+		await screen.findByText("Usage");
+		fireEvent.click(within(card("free")).getByRole("button", { name: "Downgrade" }));
+		await waitFor(() => expect(mocks.openExternal).toHaveBeenCalledWith("https://billing.stripe.test/cancel"));
+		expect(mocks.client.createBillingPortal).toHaveBeenCalledWith("org-1", "cancel");
+	});
+
+	it("says when a cancelled plan ends and offers to keep it", async () => {
+		mocks.client.getBilling.mockResolvedValue(subscribed({ cancelAt: "2026-11-10T09:00:00Z" }));
+		mocks.client.createBillingPortal.mockResolvedValue({ url: "https://billing.stripe.test/p_1" });
+		renderSection();
+		expect(await screen.findByText(/^Your Starter plan ends on .+\. You'll move to Free then\.$/)).toBeInTheDocument();
+		expect(within(card("starter")).getByText("Current")).toBeInTheDocument();
+		const starts = within(card("free")).getByRole("button", { name: /^Starts / });
+		expect(starts).toBeDisabled();
+		expect(within(card("free")).queryByRole("button", { name: "Downgrade" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Keep Starter" }));
+		await waitFor(() => expect(mocks.client.createBillingPortal).toHaveBeenCalledWith("org-1"));
+	});
+
 	it("confirms before spending a manual reset", async () => {
 		mocks.client.getBilling.mockResolvedValue(subscribed());
 		const after = subscribed();
@@ -152,6 +175,15 @@ describe("BillingSection", () => {
 		expect(within(card("pro")).queryByRole("button")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Reset now" })).not.toBeInTheDocument();
 		expect(screen.getByText("Only organization admins can manage billing.")).toBeInTheDocument();
+	});
+
+	it("tells members when a cancelled plan ends without offering to keep it", async () => {
+		mocks.orgRole = "member";
+		mocks.client.getBilling.mockResolvedValue(subscribed({ cancelAt: "2026-11-10T09:00:00Z" }));
+		renderSection();
+		expect(await screen.findByText(/^Your Starter plan ends on .+\. You'll move to Free then\.$/)).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Keep Starter" })).not.toBeInTheDocument();
+		expect(within(card("free")).queryByRole("button", { name: "Downgrade" })).not.toBeInTheDocument();
 	});
 
 	it("shows no plans to a contract org and never reads /billing", async () => {

@@ -230,8 +230,11 @@ export interface CloudCpClient {
 	getBilling(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
 	/** A Stripe Checkout URL that subscribes the org to `plan`. Admins only. */
 	createBillingCheckout(orgId: string, plan: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingLinkResponse>;
-	/** A Stripe Customer Portal URL for changing plan, card, or cancelling. Admins only. */
-	createBillingPortal(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingLinkResponse>;
+	/**
+	 * A Stripe Customer Portal URL for changing plan, card, or cancelling. Admins only.
+	 * `flow: "cancel"` opens the portal straight on cancelling the plan (downgrading to Free).
+	 */
+	createBillingPortal(orgId: string, flow?: "cancel", options?: CloudCpRequestOptions): Promise<CloudCpBillingLinkResponse>;
 	/** Spend one of the plan's manual resets of the weekly usage limit. Admins only. */
 	resetBillingUsage(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
 	/** Heartbeat while a session is on screen, so reading it keeps it awake. */
@@ -699,8 +702,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		getBilling: (orgId, o) => requestJson("GET", `/orgs/${seg(orgId)}/billing`, { signal: o?.signal }),
 		createBillingCheckout: (orgId, plan, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/billing/checkout`, { body: { plan }, signal: o?.signal }),
-		createBillingPortal: (orgId, o) =>
-			requestJson("POST", `/orgs/${seg(orgId)}/billing/portal`, { body: {}, signal: o?.signal }),
+		createBillingPortal: (orgId, flow, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/billing/portal`, { body: flow ? { flow } : {}, signal: o?.signal }),
 		resetBillingUsage: (orgId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/billing/usage/reset`, { body: {}, signal: o?.signal }),
 		touchSessionPresence: (orgId, sessionId, o) =>

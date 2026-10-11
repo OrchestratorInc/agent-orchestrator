@@ -44,6 +44,7 @@ type fakeBillingStore struct {
 	linkErr   error
 	cleared   []string
 	touches   int
+	cancelAt  *time.Time
 }
 
 func newFakeBillingStore() *fakeBillingStore {
@@ -60,6 +61,11 @@ func (f *fakeBillingStore) BillingSummary(context.Context, domain.Principal, str
 		mode = domain.BillingModeSelfServe
 	}
 	return domain.BillingSummary{Enabled: true, BillingMode: mode, Plan: f.state.Plan}, nil
+}
+func (f *fakeBillingStore) SubscriptionCancelAt(context.Context, domain.Principal, string) (*time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cancelAt, nil
 }
 func (f *fakeBillingStore) OrgBilling(context.Context, domain.Principal, string) (domain.OrgBilling, error) {
 	f.mu.Lock()
@@ -179,6 +185,7 @@ type fakeStripe struct {
 	subscriptions int
 	prices        int
 	priceErr      error
+	portalCancels []string
 }
 
 func (f *fakeStripe) CreateCustomer(context.Context, string, string) (string, error) {
@@ -203,7 +210,10 @@ func (f *fakeStripe) ExpireCheckoutSession(_ context.Context, id string) (string
 	}
 	return "expired", nil
 }
-func (f *fakeStripe) CreatePortalSession(context.Context, string, string, string) (string, error) {
+func (f *fakeStripe) CreatePortalSession(_ context.Context, _, _, _, cancelSubscriptionID string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.portalCancels = append(f.portalCancels, cancelSubscriptionID)
 	return "https://billing.stripe.test/p_1", nil
 }
 func (f *fakeStripe) GetPrice(_ context.Context, id string) (billing.Price, error) {
@@ -632,5 +642,65 @@ func TestPresenceHeartbeatsAreRateLimitedPerSession(t *testing.T) {
 	if !server.presenceLimiter.allow("x", time.Now().Add(-postgres.PresenceInterval)) ||
 		!server.presenceLimiter.allow("x", time.Now()) {
 		t.Fatal("a heartbeat after the interval must go through")
+	}
+}
+
+// Downgrading to Free opens the portal straight on cancelling the plan; a
+// plain request opens the portal home, and there is nothing to cancel without
+// a live subscription.
+func TestPortalCancelFlow(t *testing.T) {
+	store, stripe := newFakeBillingStore(), &fakeStripe{}
+	server := billingServer(store, stripe)
+	store.state.StripeCustomerID = "cus_1"
+
+	response := httptest.NewRecorder()
+	server.createBillingPortal(response, billingRequest(http.MethodPost, "/", `{"flow":"cancel"}`))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("cancel without a subscription: %d", response.Code)
+	}
+
+	store.state.StripeSubscriptionID, store.state.SubscriptionStatus = billingSubID, "active"
+	for _, body := range []string{``, `{}`, `{"flow":"cancel"}`} {
+		response = httptest.NewRecorder()
+		server.createBillingPortal(response, billingRequest(http.MethodPost, "/", body))
+		if response.Code != http.StatusOK {
+			t.Fatalf("portal %q: %d %s", body, response.Code, response.Body.String())
+		}
+	}
+	if len(stripe.portalCancels) != 3 || stripe.portalCancels[0] != "" || stripe.portalCancels[1] != "" ||
+		stripe.portalCancels[2] != billingSubID {
+		t.Fatalf("portal cancel targets = %q", stripe.portalCancels)
+	}
+
+	response = httptest.NewRecorder()
+	server.createBillingPortal(response, billingRequest(http.MethodPost, "/", `{"flow":"refund"}`))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("unknown flow: %d", response.Code)
+	}
+}
+
+// When a plan set to cancel ends goes from Stripe to the store through the
+// locked apply, and back out on the billing summary.
+func TestCancelAtFlowsFromStripeToTheSummary(t *testing.T) {
+	cancelAt := time.Unix(1_802_592_000, 0).UTC()
+	subscription := activeStarterSubscription()
+	subscription.CancelAt = &cancelAt
+	store, stripe := newFakeBillingStore(), &fakeStripe{subscription: subscription}
+	store.customers[billingCusID] = billingOrgID
+	server := billingServer(store, stripe)
+	payload := `{"id":"evt_cancel","type":"customer.subscription.updated","data":{"object":{"id":"` + billingSubID +
+		`","object":"subscription","customer":"` + billingCusID + `","status":"active"}}}`
+	response := httptest.NewRecorder()
+	server.stripeWebhook(response, signedWebhook(t, payload))
+	if response.Code != http.StatusOK || len(store.applied) != 1 || store.applied[0].CancelAt == nil ||
+		!store.applied[0].CancelAt.Equal(cancelAt) {
+		t.Fatalf("status %d applied %+v", response.Code, store.applied)
+	}
+	if summary := getBillingSummary(t, server); summary.CancelAt != nil {
+		t.Fatalf("renewing plan reports cancelAt %v", summary.CancelAt)
+	}
+	store.cancelAt = &cancelAt
+	if summary := getBillingSummary(t, server); summary.CancelAt == nil || !summary.CancelAt.Equal(cancelAt) {
+		t.Fatalf("cancelAt = %v, want %v", summary.CancelAt, cancelAt)
 	}
 }

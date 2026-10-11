@@ -412,6 +412,8 @@ type SubscriptionUpdate struct {
 	// Created is when Stripe created the subscription, to keep the newest
 	// when an organization ends up with two live ones.
 	Created *time.Time
+	// CancelAt is when a subscription set to cancel ends; nil while it renews.
+	CancelAt *time.Time
 }
 
 // SubscriptionOutcome is what ApplySubscription did with an update.
@@ -533,6 +535,7 @@ func applySubscriptionTx(ctx context.Context, tx pgx.Tx, orgID string, current d
 			plan = CASE WHEN plan = $5 THEN plan ELSE $6 END,
 			billing_period_start = $7,
 			billing_period_end = $8,
+			subscription_cancel_at = $10,
 			usage_week_anchor = CASE WHEN $9 THEN coalesce(usage_week_anchor, now()) ELSE usage_week_anchor END,
 			past_due_since = CASE
 				WHEN $3 = 'past_due' THEN coalesce(past_due_since, now())
@@ -541,7 +544,7 @@ func applySubscriptionTx(ctx context.Context, tx pgx.Tx, orgID string, current d
 			updated_at = now()
 		WHERE id = $1`,
 		orgID, update.SubscriptionID, update.Status, limits, domain.PlanInternal, plan,
-		update.PeriodStart, update.PeriodEnd, entitled,
+		update.PeriodStart, update.PeriodEnd, entitled, update.CancelAt,
 	); err != nil {
 		return err
 	}
@@ -968,6 +971,21 @@ func (p billingPolicy) replayOrMessageWakeTx(
 		return false, nil
 	}
 	return p.messageWakeTx(ctx, tx, orgID, sessionID, refuse)
+}
+
+// SubscriptionCancelAt returns when the organization's subscription, set to
+// cancel, ends; nil while it renews.
+func (s *Store) SubscriptionCancelAt(ctx context.Context, principal domain.Principal, orgID string) (*time.Time, error) {
+	var cancelAt *time.Time
+	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx,
+			`SELECT subscription_cancel_at FROM ao_organizations WHERE id = $1`, orgID).Scan(&cancelAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	})
+	return cancelAt, err
 }
 
 // BillingSummary returns what the desktop app shows on its billing screen.
