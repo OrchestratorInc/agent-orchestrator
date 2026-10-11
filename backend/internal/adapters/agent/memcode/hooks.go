@@ -78,13 +78,16 @@ func EmitStartWitness(out io.Writer) error {
 		sequence = old.Sequence + 1
 	}
 	b, _ := json.Marshal(witness{Generation: generation, NativeID: id, Sequence: sequence})
+	if err := EmitInstructionChunk(out, "context-chunk-0"); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	if err := hookutil.AtomicWriteFile(path, b, 0o600); err != nil {
 		return err
 	}
-	return EmitInstructionChunk(out, "context-chunk-0")
+	return nil
 }
 
 // GetAgentHooks implements the native TUI adapter contract.
@@ -141,6 +144,9 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		if err := json.Unmarshal(b, &hooks); err != nil {
 			return err
 		}
+	}
+	if hooks == nil {
+		hooks = map[string][]map[string]json.RawMessage{}
 	}
 	for native, event := range map[string]string{"session_start": "session-start", "pre_tool_use": "pre-tool-use", "post_tool_use": "post-tool-use"} {
 		entries := hooks[native][:0]
