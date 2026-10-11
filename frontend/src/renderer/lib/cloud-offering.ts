@@ -117,6 +117,16 @@ export function resolveCloudOffering(
 }
 
 /** Org roles that may buy, change or reset a plan (the control plane's RequireOrgAdmin). */
+/**
+ * A project picks its sandbox provider only when the org has more than one and
+ * the control plane sent the offering itself. An older control plane's fallback
+ * providers come from `/me` sandboxProviders, and it ignores the project's
+ * stored provider, so a choice there would not take effect.
+ */
+export function offersProviderChoice(offering: Pick<ResolvedCloudOffering, "providers" | "source"> | undefined): boolean {
+	return offering?.source === "server" && offering.providers.length > 1;
+}
+
 export function canManageBilling(org: Pick<CloudCpOrganization, "role"> | undefined): boolean {
 	return org?.role === "owner" || org?.role === "admin";
 }

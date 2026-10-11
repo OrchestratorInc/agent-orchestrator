@@ -8,6 +8,7 @@ import {
 	canManageBilling,
 	cloudMeQueryKey,
 	offeringKindFor,
+	offersProviderChoice,
 	projectSandboxProvider,
 	resolveCloudOffering,
 	selectActiveOrganization,
@@ -76,6 +77,23 @@ describe("resolveCloudOffering", () => {
 	it("resolves nothing before /me loads, and no cloud without providers", () => {
 		expect(resolveCloudOffering(undefined)).toBeUndefined();
 		expect(resolveCloudOffering({ user, organizations: [] })).toMatchObject({ providers: [], defaultProvider: "", kind: "none" });
+	});
+});
+
+describe("offersProviderChoice", () => {
+	it("offers a choice only for several providers the server sent", () => {
+		const both = offering({ providers: ["coder", "freestyle"], defaultProvider: "coder", kind: "both" });
+		expect(offersProviderChoice(resolveCloudOffering({ user, organizations: [org("o1")], offering: both }))).toBe(true);
+		const single = offering({ providers: ["coder"], defaultProvider: "coder", kind: "b2b" });
+		expect(offersProviderChoice(resolveCloudOffering({ user, organizations: [org("o1")], offering: single }))).toBe(false);
+		// An older control plane lists several providers but ignores a project's pick.
+		const legacy: CloudCpMeResponse = {
+			user,
+			organizations: [org("o1")],
+			sandboxProviders: { available: ["nodeops", "coder"], default: "coder" },
+		};
+		expect(offersProviderChoice(resolveCloudOffering(legacy))).toBe(false);
+		expect(offersProviderChoice(undefined)).toBe(false);
 	});
 });
 

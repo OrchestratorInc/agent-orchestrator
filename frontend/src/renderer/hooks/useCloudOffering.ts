@@ -14,6 +14,7 @@ import {
 	CODER_PROVIDER,
 	canManageBilling,
 	cloudMeQueryKey,
+	offersProviderChoice,
 	resolveCloudOffering,
 	type ResolvedCloudOffering,
 } from "../lib/cloud-offering";
@@ -26,7 +27,7 @@ export interface UseCloudOfferingResult extends Omit<ResolvedCloudOffering, "sou
 	source: ResolvedCloudOffering["source"] | undefined;
 	/** The org's providers include coder: Coder settings and project options apply. */
 	hasCoder: boolean;
-	/** More than one provider: a project picks where its sessions run. */
+	/** More than one server-sent provider: a project picks where its sessions run. */
 	offersProviderChoice: boolean;
 	/** Billing UI (plans, usage, plan badge, plan prompts) applies. */
 	selfServeBilling: boolean;
@@ -81,7 +82,7 @@ export function useCloudOffering(): UseCloudOfferingResult {
 		...resolved,
 		source: me.data ? resolved.source : undefined,
 		hasCoder: resolved.providers.includes(CODER_PROVIDER),
-		offersProviderChoice: resolved.providers.length > 1,
+		offersProviderChoice: me.data !== undefined && offersProviderChoice(resolved),
 		selfServeBilling: resolved.billingMode === "self_serve",
 		canManageBilling: canManageBilling(org),
 		org,
