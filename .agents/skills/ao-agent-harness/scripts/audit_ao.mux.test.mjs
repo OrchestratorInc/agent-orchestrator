@@ -21,6 +21,8 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
   const startWitnessPath = join(witnessRoot, witnessSpec.startPath);
   const lateWitnessPath = join(witnessRoot, witnessSpec.latePath);
   let witnessChild;
+  let lateWitnessTimer;
+  let witnessInterrupted = false;
   const startWitness = (mode = "running") => {
     if (mode === "natural-settle") {
       const kind = process.platform === "linux" ? "linux-proc-startticks" : process.platform === "win32" ? "win32-creation-ticks" : "posix-lstart";
@@ -31,12 +33,25 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
       const identity = mode === "wrong-identity"
         ? "const processIdentity=(process.platform==='linux'?'linux-proc-startticks':process.platform==='win32'?'win32-creation-ticks':'posix-lstart')+':wrong';"
         : "const cp=require('node:child_process');const processIdentity=(()=>{if(process.platform==='linux'){const value=fs.readFileSync('/proc/self/stat','utf8');const fields=value.slice(value.lastIndexOf(')')+2).trim().split(/\\s+/);return 'linux-proc-startticks:'+fields[19]}if(process.platform==='win32'){return 'win32-creation-ticks:'+cp.execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command','(Get-Process -Id '+process.pid+').StartTime.ToUniversalTime().Ticks'],{encoding:'utf8'}).trim()}return 'posix-lstart:'+cp.execFileSync('ps',['-o','lstart=','-p',String(process.pid)],{encoding:'utf8'}).trim()})();";
-      const program = `const fs=require("node:fs");${identity}const token=${JSON.stringify(witnessSpec.token)};fs.writeFileSync(${JSON.stringify(startWitnessPath)},JSON.stringify({token,pid:process.pid,processIdentity}));setTimeout(()=>fs.writeFileSync(${JSON.stringify(lateWitnessPath)},JSON.stringify({token,pid:process.pid})),${witnessSpec.lateSideEffectDelayMs});setTimeout(()=>{},10000);`;
+      const program = `const fs=require("node:fs");${identity}const token=${JSON.stringify(witnessSpec.token)};fs.writeFileSync(${JSON.stringify(startWitnessPath)},JSON.stringify({token,pid:process.pid,processIdentity}));setTimeout(()=>{},10000);`;
       witnessChild = spawn(process.execPath, ["-e", program], { stdio: "ignore" });
+      const armLateWitness = () => {
+        if (witnessInterrupted) return;
+        if (!existsSync(startWitnessPath)) {
+          lateWitnessTimer = setTimeout(armLateWitness, 5);
+          return;
+        }
+        lateWitnessTimer = setTimeout(() => {
+          if (!witnessInterrupted) writeFileSync(lateWitnessPath, JSON.stringify({ token: witnessSpec.token, pid: witnessChild.pid }));
+        }, witnessSpec.lateSideEffectDelayMs);
+      };
+      armLateWitness();
     }
     return witnessSpec;
   };
   const stopWitness = () => {
+    witnessInterrupted = true;
+    clearTimeout(lateWitnessTimer);
     if (witnessChild && witnessChild.exitCode === null) witnessChild.kill("SIGKILL");
   };
   const received = [];
