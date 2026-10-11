@@ -25,7 +25,7 @@ import { useSettings } from "../hooks/useSettings";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
-import { cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
+import { cloudAgentInfos, connectedCredentialType, credentialModelScope, isCloudHarnessConnected } from "../lib/cloud-agents";
 import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
 import { fallbackEffort } from "../lib/effort";
 import {
@@ -563,12 +563,17 @@ export function TaskComposer({
 		openGlobalSettings("harness", {
 			focusAgentId: selectedAgent,
 			...(hostId ? { hostId } : {}),
-			harnessView: "local",
+			// A cloud task runs on the cloud connection, so that is the login to fix.
+			harnessView: isCloudProject ? "cloud" : "local",
 			startLogin: true,
 			preserveProject: true,
 		});
-	}, [hostId, openGlobalSettings, selectedAgent]);
-	const modelWarning = modelAuthIssue ? (
+	}, [hostId, isCloudProject, openGlobalSettings, selectedAgent]);
+	// The catalog is read through this computer's login, but a cloud task runs on
+	// the cloud connection: once that is connected, this computer's login state is
+	// irrelevant to the task and the notice only confuses.
+	const cloudHarnessReady = isCloudProject && isCloudHarnessConnected(cloudConnectionsQuery.data, selectedAgent);
+	const modelWarning = modelAuthIssue && cloudHarnessReady ? undefined : modelAuthIssue ? (
 		<ModelCatalogNotice
 			agentLabel={selectedAgentLabel}
 			issue={modelAuthIssue}
