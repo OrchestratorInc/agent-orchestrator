@@ -14,7 +14,8 @@ func TestSideConversationsPreserveProviderToolDefaults(t *testing.T) {
 	for _, operation := range []string{"start", "fork", "resume"} {
 		t.Run(operation, func(t *testing.T) {
 			d, srv := newTestDriver(t)
-			cfg := ports.ChatStartConfig{WorkspacePath: t.TempDir(), Permissions: "auto", Effort: "high", SystemPrompt: "side standing instructions", ProviderScopeID: "side", ProviderIDsScoped: true}
+			servers := []ports.ChatMCPServerConfig{{Name: "ao", Type: "stdio", Command: "/usr/local/bin/ao", Args: []string{"mcp"}}}
+			cfg := ports.ChatStartConfig{WorkspacePath: t.TempDir(), Permissions: "auto", Effort: "high", SystemPrompt: "side standing instructions", ProviderScopeID: "side", ProviderIDsScoped: true, MCPServers: servers}
 			var conv ports.ChatConversation
 			var err error
 			method := "thread/" + operation
@@ -25,7 +26,7 @@ func TestSideConversationsPreserveProviderToolDefaults(t *testing.T) {
 				srv.reply(method, `{"thread":{"id":"isolated-side"}}`)
 				conv, err = d.ForkIntoHost(context.Background(), "main", "completed-A", cfg)
 			case "resume":
-				conv, err = d.Resume(context.Background(), ports.ChatResumeConfig{WorkspacePath: cfg.WorkspacePath, ProviderConversationID: "side", Permissions: cfg.Permissions, Effort: cfg.Effort, SystemPrompt: cfg.SystemPrompt, ProviderScopeID: "side", ProviderIDsScoped: true})
+				conv, err = d.Resume(context.Background(), ports.ChatResumeConfig{WorkspacePath: cfg.WorkspacePath, ProviderConversationID: "side", Permissions: cfg.Permissions, Effort: cfg.Effort, SystemPrompt: cfg.SystemPrompt, ProviderScopeID: "side", ProviderIDsScoped: true, MCPServers: servers})
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -36,8 +37,13 @@ func TestSideConversationsPreserveProviderToolDefaults(t *testing.T) {
 				t.Fatal(err)
 			}
 			config := params["config"].(map[string]any)
-			if len(config) != 1 || config["model_reasoning_effort"] != "high" || params["developerInstructions"] != cfg.SystemPrompt || params["sandbox"] == "read-only" {
+			if len(config) != 2 || config["model_reasoning_effort"] != "high" || params["developerInstructions"] != cfg.SystemPrompt || params["sandbox"] == "read-only" {
 				t.Fatalf("inherited configuration changed: %+v", params)
+			}
+			// Every open path, including the fork, carries AO's tool server so a
+			// side has its tools from the first turn rather than after a restart.
+			if mcp, ok := config["mcp_servers"].(map[string]any); !ok || mcp["ao"] == nil {
+				t.Fatalf("side %s has no ao tool server: %+v", operation, config)
 			}
 			if operation == "fork" && params["lastTurnId"] != "completed-A" {
 				t.Fatal(params)

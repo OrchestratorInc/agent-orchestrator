@@ -126,6 +126,16 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	// references can only fail again; return them to the draft for removal.
 	"CHAT_EXCERPT_INVALID",
 	"CHAT_EXCERPT_STALE",
+	// A /btw or /side request the daemon refused never opened a side chat, so a
+	// retry cannot succeed; return the draft instead of locking the composer.
+	"CHAT_SIDE_UNAVAILABLE",
+	"CHAT_SIDE_UNSUPPORTED",
+	"CHAT_SIDE_ANCHOR_UNAVAILABLE",
+	"CHAT_SIDE_INVALID_REQUEST",
+	"CHAT_SIDE_NOT_READY",
+	"CHAT_SIDE_RECREATE_REQUIRED",
+	"CHAT_SIDE_CLOSED",
+	"CHAT_SIDE_IDEMPOTENCY_CONFLICT",
 ]);
 
 // Native image blocks are persisted with the chat turn and sent to the provider.

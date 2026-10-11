@@ -26,6 +26,9 @@ type connectedSideForkDriver struct {
 	forks   []*fakeConversation
 	configs []ports.ChatStartConfig
 	sources []string
+	// mainConfig is the main session's start config, kept to prove sides copy
+	// rather than mutate it.
+	mainConfig ports.ChatStartConfig
 }
 
 func (d *connectedSideForkDriver) ForkIntoHost(_ context.Context, source, anchor string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {

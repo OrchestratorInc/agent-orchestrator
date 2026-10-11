@@ -754,6 +754,7 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 	}
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
+	conv.launchMode = cfg.Permissions
 	params := map[string]any{
 		"threadId":          sourceProviderConversationID,
 		"lastTurnId":        conv.nativeID(lastProviderTurnID),
@@ -765,8 +766,10 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 	if cfg.Model != "" {
 		params["model"] = cfg.Model
 	}
-	if cfg.Effort != "" {
-		params["config"] = map[string]any{"model_reasoning_effort": cfg.Effort}
+	// Same overrides as thread/start and thread/resume: without the MCP servers
+	// a fresh fork has no AO tools until a restart resumes it.
+	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
+		params["config"] = config
 	}
 	if cfg.SystemPrompt != "" {
 		params["developerInstructions"] = cfg.SystemPrompt

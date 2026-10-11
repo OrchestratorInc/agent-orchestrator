@@ -95,11 +95,14 @@ type sideRuntime struct {
 	activeTurnID    string
 	compacting      bool
 	dispatchBlocked bool
-	providerTurnID  string
-	messageText     map[string]string
-	messageIDs      map[string]string
-	activityIDs     map[string]string
-	activityText    map[string]string
+	// stopRequested records that the user pressed Stop on the active turn. A
+	// stopped turn must not hold the queue the way a provider failure does.
+	stopRequested  bool
+	providerTurnID string
+	messageText    map[string]string
+	messageIDs     map[string]string
+	activityIDs    map[string]string
+	activityText   map[string]string
 }
 
 type sideManager struct {
@@ -417,7 +420,8 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	if label == "" {
 		label = fmt.Sprintf("Side chat %d", len(existing)+1)
 	}
-	cfg.Env = cloneStartConfig(cfg).Env
+	cloned := cloneStartConfig(cfg)
+	cfg.Env = cloned.Env
 	if cfg.Env == nil {
 		cfg.Env = map[string]string{}
 	}
@@ -426,6 +430,16 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	cfg.Env["AO_SESSION"] = cfg.Env["AO_SESSION_ID"]
 	delete(cfg.Env, "AO_BROWSER_CAPABILITY")
 	delete(cfg.Env, "AO_PREVIEW_CAPABILITY")
+	// Tool servers inherit the main session's identity too. Rewrite it on a copy
+	// (the main controller still owns the original maps) so a side's `ao` tools,
+	// such as html_render, never attach output to the main chat's turn.
+	cfg.MCPServers = cloned.MCPServers
+	for i := range cfg.MCPServers {
+		if _, ok := cfg.MCPServers[i].Env["AO_SESSION_ID"]; ok {
+			cfg.MCPServers[i].Env["AO_SESSION_ID"] = cfg.Env["AO_SESSION_ID"]
+			cfg.MCPServers[i].Env["AO_SIDE_CONVERSATION_ID"] = idNew
+		}
+	}
 	frozenConfig, err := json.Marshal(frozenSideConfig{DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt), AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers})
 	if err != nil {
 		return domain.SideConversation{}, err
@@ -1191,6 +1205,7 @@ func (m *sideManager) schedule() {
 				continue
 			}
 			runtime.activeTurnID = turn.ID
+			runtime.stopRequested = false
 			runtime.mu.Unlock()
 			m.mu.Unlock()
 			go func() {
@@ -1359,11 +1374,20 @@ func (m *sideManager) awaitSideTurn(ctx context.Context, runtime *sideRuntime, s
 			message := ""
 			if event.TurnState != domain.TurnStateCompleted {
 				runtime.mu.Lock()
-				runtime.dispatchBlocked = true
+				stopped := runtime.stopRequested
+				runtime.stopRequested = false
+				// A provider failure holds the queue until the user retries, as in
+				// the main chat. A turn the user stopped does not: later questions
+				// must still dispatch, and the stopped one stays retryable.
+				if !stopped {
+					runtime.dispatchBlocked = true
+				}
 				runtime.mu.Unlock()
 				state = "failed"
 				if event.Err != nil {
 					message = event.Err.Error()
+				} else if stopped {
+					message = "Stopped."
 				}
 			}
 			if err := m.store.SettleSideTurn(context.Background(), side.ID, turn.ID, side.Generation,
@@ -1735,7 +1759,21 @@ func (s *Service) InterruptSideQuestion(ctx context.Context, session domain.Sess
 	if runtime == nil {
 		return ErrSideUnavailable
 	}
-	return runtime.conv.Interrupt(ctx, "")
+	runtime.mu.Lock()
+	stopping := runtime.activeTurnID != ""
+	if stopping {
+		runtime.stopRequested = true
+	}
+	runtime.mu.Unlock()
+	if err := runtime.conv.Interrupt(ctx, ""); err != nil {
+		if stopping {
+			runtime.mu.Lock()
+			runtime.stopRequested = false
+			runtime.mu.Unlock()
+		}
+		return err
+	}
+	return nil
 }
 
 // CloseIndependentSideChat stops and removes one side chat.

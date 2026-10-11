@@ -690,9 +690,7 @@ export function useIndependentSideChats(
 			);
 			if (duplicate) return current;
 			if (draft.references.length >= 8) {
-				queueMicrotask(() =>
-					setError("A side question can include up to eight references. Remove one to add another."),
-				);
+				queueMicrotask(() => setError(t("sideChat.referenceLimit")));
 				return current;
 			}
 			return {
@@ -701,7 +699,7 @@ export function useIndependentSideChats(
 			};
 		});
 		setFocusKey((key) => key + 1);
-	}, []);
+	}, [t]);
 	const attachFiles = useCallback(
 		async (sideId: string, files: File[]) => {
 			if (files.length === 0) return;
@@ -1321,7 +1319,7 @@ export function useIndependentSideChats(
 										title={side.label}
 									>
 										<MessageSquare className="browser-panel__tab-icon" aria-hidden="true" />
-										<span className="browser-panel__tab-title">{side.label?.trim() || "Side Chat"}</span>
+										<span className="browser-panel__tab-title">{side.label?.trim() || t("sideChat.defaultLabel")}</span>
 									</button>
 								)}
 								<button
@@ -1584,7 +1582,7 @@ export function useIndependentSideChats(
 						{snapshot.side.state !== "ready" ? (
 							<p className="border-b border-border px-4 py-2 text-xs text-muted-foreground" role="status">
 								{snapshot.side.errorMessage ||
-									(snapshot.side.state === "recovering" ? "Reconnecting side chat…" : snapshot.side.state)}
+									(snapshot.side.state === "recovering" ? t("sideChat.reconnecting") : snapshot.side.state)}
 							</p>
 						) : null}
 						<div className="relative min-h-0 flex-1">
@@ -1886,7 +1884,7 @@ export function useIndependentSideChats(
 				{closeDialog}
 				<div className="flex flex-1 flex-col items-center justify-center gap-3 p-4 text-center text-xs text-muted-foreground">
 					<p>
-						{enabled ? "No side chat opened yet" : t("sideChat.sideChatsAreAvailableOnlyForLocalDesktopChatSessions")}
+						{enabled ? t("sideChat.noneOpen") : t("sideChat.sideChatsAreAvailableOnlyForLocalDesktopChatSessions")}
 					</p>
 					{enabled ? <p className="max-w-sm leading-relaxed">{t("sideChat.isolationPolicy")}</p> : null}
 					{error ? <p role="alert">{error}</p> : null}

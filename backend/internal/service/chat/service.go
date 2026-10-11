@@ -1501,8 +1501,11 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 		return err
 	}
 	defer gate.unlock()
+	// Each side is marked closed before its host stops, and a host that fails to
+	// stop stays queued for the periodic cleanup retry. Stopping the main chat
+	// (Exit agent, agent switch, spawn rollback) must not depend on it.
 	if err := s.closeSessionSides(ctx, id); err != nil {
-		return err
+		s.log.Warn("side chat cleanup deferred while stopping session", "session", id, "error", err)
 	}
 	s.viewMu.Lock()
 	delete(s.viewClosedAt, id)

@@ -1,6 +1,7 @@
 import { createPortal } from "react-dom";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
+import { useSideChatsAvailable } from "../../lib/side-chats";
 /**
  * The central surface for a chat-mode session.
  *
@@ -389,7 +390,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<{ id: string; text: string; messageId?: string; revision?: number }>();
-	const sideEnabled = !hostId && !unavailable && !session.isTerminated && !session.cloud;
+	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
 	const openSideInspector = () => {
 		const ui = useUiStore.getState();
 		ui.setInspectorView(uiSessionId, "sideChat");
@@ -622,7 +623,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				busy={commands.busy}
 				excerptsEnabled
 				onSend={async (text, attachments, clientMessageId, excerpts) => {
-					const btw = /^\/(?:btw|side)(?:\s+|$)/i.exec(text);
+					// Only claim /btw and /side where side chats can open. Elsewhere the
+					// text goes to the agent as typed (it may be the harness's own skill),
+					// so a failed side launch can never strand the main draft.
+					const btw = sideEnabled ? /^\/(?:btw|side)(?:\s+|$)/i.exec(text) : null;
 					if (btw) {
 						openSideInspector();
 						const side = await sideChats.create(undefined, true, clientMessageId);

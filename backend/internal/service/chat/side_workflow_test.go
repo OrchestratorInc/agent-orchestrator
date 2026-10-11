@@ -30,6 +30,9 @@ func newSideWorkflow(t *testing.T, mode string, harnesses ...domain.AgentHarness
 	driver := &connectedSideForkDriver{}
 	driver.start = func(cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
 		if cfg.SessionID == testSession {
+			driver.mu.Lock()
+			driver.mainConfig = cfg
+			driver.mu.Unlock()
 			return main, nil
 		}
 		conv := newFakeConversation()
@@ -47,7 +50,7 @@ func newSideWorkflow(t *testing.T, mode string, harnesses ...domain.AgentHarness
 	changed := &changedExcerptStore{Store: st, mode: mode}
 	var ids atomic.Int64
 	svc := chatsvc.New(chatsvc.Options{Store: changed, Reader: fullSnapshotReader(st), Sessions: st, Drivers: fakeRegistry{driver: driver}, AppRunID: "workflow", NewID: func() string { return fmt.Sprintf("workflow-%d", ids.Add(1)) }})
-	ctrl, err := svc.Start(ctx, chatsvc.StartConfig{SessionID: testSession, ProjectID: testProject, Harness: harnessType, WorkspacePath: t.TempDir(), Model: "initial", Effort: "low", Permissions: "default", SystemPrompt: "Frozen instructions", MCPServers: []ports.ChatMCPServerConfig{{Name: "exploration", Type: "stdio", Command: "test-mcp"}}})
+	ctrl, err := svc.Start(ctx, chatsvc.StartConfig{SessionID: testSession, ProjectID: testProject, Harness: harnessType, WorkspacePath: t.TempDir(), Model: "initial", Effort: "low", Permissions: "default", SystemPrompt: "Frozen instructions", MCPServers: []ports.ChatMCPServerConfig{{Name: "exploration", Type: "stdio", Command: "test-mcp", Env: map[string]string{"AO_SESSION_ID": string(testSession)}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,6 +507,17 @@ func TestSideCreationFromOlderExcerptUsesLatestCompletedAnchor(t *testing.T) {
 	if cfg.ReadOnly || cfg.Permissions != "default" || cfg.WorkspacePath == "" || len(cfg.MCPServers) != 1 || cfg.MCPServers[0].Name != "exploration" || cfg.Env["AO_SIDE_CONVERSATION_ID"] != side.ID {
 		t.Fatalf("side launch policy: %+v", cfg)
 	}
+	// The side's tool server acts as the side, never as the main session.
+	if env := cfg.MCPServers[0].Env; env["AO_SESSION_ID"] != cfg.Env["AO_SESSION_ID"] || env["AO_SIDE_CONVERSATION_ID"] != side.ID {
+		t.Fatalf("side tool server env = %v, side env session = %q", env, cfg.Env["AO_SESSION_ID"])
+	}
+	// Rewriting the side's copy must not touch the main session's servers.
+	h.driver.mu.Lock()
+	mainServers := h.driver.mainConfig.MCPServers
+	h.driver.mu.Unlock()
+	if mainServers[0].Env["AO_SESSION_ID"] != string(testSession) {
+		t.Fatalf("main tool server env changed: %v", mainServers[0].Env)
+	}
 }
 
 func TestSideBoundaryDeliveryOrderAndTranscriptWording(t *testing.T) {
@@ -571,5 +585,56 @@ func TestSideProvidersInheritMCPAndPermissionsWithoutDispatch(t *testing.T) {
 				t.Fatal("empty side dispatched inherited work")
 			}
 		})
+	}
+}
+
+// Stopping a side answer must not freeze the side's queue. A provider failure
+// still holds it until retry, matching the main chat.
+func TestSideStopReleasesQueueButFailureHoldsIt(t *testing.T) {
+	h := newSideWorkflow(t, "")
+	h.source(t)
+	side := h.side(t, "stop", true)
+	ctx := context.Background()
+	send := func(text string) {
+		t.Helper()
+		if _, err := h.svc.SendSideQuestion(ctx, testSession, side.ID, ports.ChatUserMessage{Text: text, ClientMessageID: text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	turnState := func(s domain.SideSnapshot, text string) (string, string) {
+		for _, turn := range s.Turns {
+			if turn.ClientMessageID == text {
+				return turn.State, turn.ErrorMessage
+			}
+		}
+		return "", ""
+	}
+	provider := h.provider(0)
+	send("first")
+	h.awaitSide(t, side.ID, func(domain.SideSnapshot) bool { return provider.sendCallCount() == 1 })
+	send("second")
+	if err := h.svc.InterruptSideQuestion(ctx, testSession, side.ID); err != nil {
+		t.Fatal(err)
+	}
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateInterrupted})
+	snap := h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool {
+		state, _ := turnState(s, "second")
+		return state == "running" && provider.sendCallCount() == 2
+	})
+	if state, message := turnState(snap, "first"); state != "failed" || message != "Stopped." {
+		t.Fatalf("stopped turn = %q %q", state, message)
+	}
+
+	// The second turn fails on the provider side without a Stop.
+	send("third")
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-2", TurnState: domain.TurnStateFailed})
+	h.awaitSide(t, side.ID, func(s domain.SideSnapshot) bool {
+		state, _ := turnState(s, "second")
+		return state == "failed"
+	})
+	time.Sleep(100 * time.Millisecond)
+	snap = h.awaitSide(t, side.ID, func(domain.SideSnapshot) bool { return true })
+	if state, _ := turnState(snap, "third"); state != "queued" || provider.sendCallCount() != 2 {
+		t.Fatalf("provider failure released the queue: third=%q sends=%d", state, provider.sendCallCount())
 	}
 }

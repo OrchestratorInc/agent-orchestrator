@@ -1194,6 +1194,36 @@ describe("project remembering waits for provider permissions", () => {
 });
 
 describe("side command routing", () => {
+	beforeEach(() => {
+		useUiStore.setState({ developerMode: true, sideChats: true });
+	});
+	afterEach(() => {
+		useUiStore.setState({ developerMode: false, sideChats: false });
+	});
+
+	it.each([
+		["side chats are off", { developerMode: true, sideChats: false }, "codex"],
+		["Developer mode is off", { developerMode: false, sideChats: true }, "codex"],
+		["the harness cannot run sides", { developerMode: true, sideChats: true }, "cursor"],
+	] as const)("sends /btw to the main chat when %s", async (_case, flags, provider) => {
+		useUiStore.setState(flags);
+		sideMocks.create.mockReset();
+		const mainSend = vi.fn().mockResolvedValue(undefined);
+		(conversationCommandState as { send?: unknown }).send = mainSend;
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<Wrapper client={queryClient}>
+				<SessionChatSurface session={{ ...session, provider }} />
+			</Wrapper>,
+		);
+		await act(async () => {
+			await sideMocks.workspaceSend!("/btw what is this?", undefined, "submission-main");
+		});
+		expect(sideMocks.create).not.toHaveBeenCalled();
+		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: "/btw what is this?", clientMessageId: "submission-main" }));
+		delete (conversationCommandState as { send?: unknown }).send;
+	});
+
 	it.each(["btw", "side"])(
 		"/%s creates a new side for every new submission and reuses a retry key",
 		async (command) => {

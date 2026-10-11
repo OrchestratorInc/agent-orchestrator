@@ -413,7 +413,7 @@ describe("side panel navigation and recovery", () => {
 			return result;
 		});
 		render(<SidePanelHarness />);
-		expect(await screen.findByRole("tab", { name: "Side Chat" })).toHaveAttribute("aria-selected", "true");
+		expect(await screen.findByRole("tab", { name: "Side chat" })).toHaveAttribute("aria-selected", "true");
 		await screen.findByLabelText("Side chat question");
 	});
 
