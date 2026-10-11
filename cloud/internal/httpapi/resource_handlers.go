@@ -143,9 +143,9 @@ type sessionResponse struct {
 	// not started; absent once the worker checks in.
 	StartupError *sessionStartupError `json:"startupError,omitempty"`
 	// CoderWorkspaceURL is the session's workspace page on the organization's
-	// own (bring-your-own) Coder deployment, once the workspace exists. Never
-	// set for AO's managed Coder, which customers cannot sign in to, or for
-	// other providers.
+	// own (bring-your-own) Coder deployment, from the session's creation (the
+	// workspace may not exist yet). Never set for AO's managed Coder, which
+	// customers cannot sign in to, or for other providers.
 	CoderWorkspaceURL  string                   `json:"coderWorkspaceUrl,omitempty"`
 	IsTerminated       bool                     `json:"isTerminated"`
 	AutoInjectCI       bool                     `json:"autoInjectCI"`
@@ -617,6 +617,12 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	// reconciler reads it back from the row rather than from configuration, so
 	// a later config change cannot disturb a session already in flight.
 	plan, err := s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts, coderOverride)
+	if errors.Is(err, sandbox.ErrCoderTemplateRequired) && coderOverride != nil && isScratchProject(project.Config) {
+		// A scratch project cannot pick a template; as for its first
+		// orchestrator (scratchSessionPlan), it runs on the deployment's Coder.
+		coderOverride, request.SandboxProviderConnectionID = nil, ""
+		plan, err = s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts, coderOverride)
+	}
 	if err != nil {
 		s.writeSessionPlanError(w, r, orgID, request.ProjectID, err)
 		return

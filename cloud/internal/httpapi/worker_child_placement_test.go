@@ -106,3 +106,37 @@ func TestCreateWorkerChildOnManagedCoderStaysManaged(t *testing.T) {
 		t.Fatalf("child base URL = %q, want the managed deployment", profile.BaseURL)
 	}
 }
+
+// A managed-Coder parent in an organization that has (or later gains) a
+// bring-your-own connection still keeps its children on the managed
+// deployment: a child runs where its orchestrator runs. A scratch project's
+// orchestrator lands here when the connection has no default template.
+func TestCreateWorkerChildOfManagedParentInBYOOrgStaysManaged(t *testing.T) {
+	t.Parallel()
+	store := &placementChildStore{
+		stubChildStore: stubChildStore{credentialAvailable: true},
+		placement: domain.OrchestratorPlacement{
+			Provider:         sandbox.ProviderCoder,
+			ProjectConfig:    []byte(`{"source":"scratch"}`),
+			CoderConnections: byoCoderConnections(t),
+		},
+	}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderCoder), sandbox.ProviderCoder)
+
+	rec := httptest.NewRecorder()
+	srv.createWorkerChild(rec, childRequest(t, []string{"worker:orchestrate"}))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	if store.captured.SandboxConnectionID != "" {
+		t.Fatalf("SandboxConnectionID = %q, want none (the parent is on the managed Coder)", store.captured.SandboxConnectionID)
+	}
+	profile, err := sandbox.DecodeCoderSessionProfile(store.captured.ResourceProfile)
+	if err != nil {
+		t.Fatalf("decode stamped profile: %v", err)
+	}
+	if profile.BaseURL != "https://coder.example.com" {
+		t.Fatalf("child base URL = %q, want the managed deployment", profile.BaseURL)
+	}
+}

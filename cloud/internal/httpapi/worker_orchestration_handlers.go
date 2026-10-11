@@ -246,7 +246,13 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 		if preferred == "" {
 			preferred = parent.ConnectionID
 		}
-		placement, err = resolveCoderPlacement(parent.ProjectConfig, parent.CoderConnections, preferred)
+		connections := parent.CoderConnections
+		if preferred == "" {
+			// The orchestrator runs on the deployment's Coder (it has no
+			// connection of its own), so its children do too.
+			connections = nil
+		}
+		placement, err = resolveCoderPlacement(parent.ProjectConfig, connections, preferred)
 		if err != nil {
 			s.writeCoderPlacementError(w, r, err)
 			return

@@ -347,6 +347,15 @@ func (s *Server) writeSessionPlanError(w http.ResponseWriter, r *http.Request, o
 	)
 }
 
+// isScratchProject reports whether a project was created as a scratch project
+// (no repository chosen), whose config carries source "scratch".
+func isScratchProject(config json.RawMessage) bool {
+	var probe struct {
+		Source string `json:"source"`
+	}
+	return json.Unmarshal(config, &probe) == nil && probe.Source == "scratch"
+}
+
 // scratchSessionPlan resolves where a new scratch project's orchestrator runs,
 // with the same rules as any other session: the project config's
 // sandboxProvider when it sets one (which the organization must be allowed to
