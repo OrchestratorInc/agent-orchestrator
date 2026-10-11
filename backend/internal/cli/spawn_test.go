@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 func authorizedAgentsJSON(agent string) string {
@@ -62,6 +63,11 @@ func TestSpawnHelpListsEveryRegisteredHarness(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, harness := range registry.Harnessed() {
+		// Codewhale remains registered for existing sessions but is intentionally
+		// hidden from the public spawn help while it is not generally available.
+		if harness.Harness == domain.HarnessCodewhale {
+			continue
+		}
 		if id := string(harness.Harness); !strings.Contains(out, id) {
 			t.Errorf("spawn help does not list registered harness %q:\n%s", id, out)
 		}
