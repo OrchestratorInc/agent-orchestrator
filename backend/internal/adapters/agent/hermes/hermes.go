@@ -40,7 +40,7 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("hermes: AO lease observation currently supports Linux only")
 	}
 	return binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "hermes", Names: []string{"hermes"}, UnixHomePaths: [][]string{{".local", "bin", "hermes"}, {".hermes", "hermes-agent", ".venv", "bin", "hermes"}}, ValidateIdentity: func(ctx context.Context, path string) bool {
-		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		cmd := aoprocess.CommandContext(ctx, path, "--version")
 		cmd.WaitDelay = 100 * time.Millisecond
@@ -105,6 +105,9 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	home, err := nativeconfig.Resolve(cfg.Env, "HERMES_HOME", ".hermes")
 	if err != nil {
 		return err
+	}
+	if filepath.Base(filepath.Dir(home)) == "profiles" {
+		return fmt.Errorf("hermes: named native profiles are not supported by this initial rendered-composer integration")
 	}
 	// Native sticky profiles can redirect a root even when HERMES_HOME is set.
 	if filepath.Base(filepath.Dir(home)) != "profiles" {
@@ -361,6 +364,19 @@ func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 func (*Plugin) ContinuouslyDetectTerminalActivity() bool   { return true }
 func (*Plugin) EmptyComposerProvesWaitingInputReady() bool { return true }
 func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
+	// Native placeholders use italic; typed composer text has normal styling.
+	composerOutput := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllStringFunc(output, func(sequence string) string {
+		params := strings.Split(strings.TrimSuffix(strings.TrimPrefix(sequence, "\x1b["), "m"), ";")
+		for _, param := range params {
+			if param == "3" {
+				return strings.TrimSuffix(sequence, "m") + ";2m"
+			}
+			if param == "23" {
+				return strings.TrimSuffix(sequence, "m") + ";22m"
+			}
+		}
+		return sequence
+	})
 	lines := terminalui.PlainTerminalLines(output)
 	for i := len(lines) - 1; i >= 0 && i >= len(lines)-16; i-- {
 		line := strings.TrimSpace(lines[i])
@@ -371,7 +387,7 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 			return domain.ActivityActive, true
 		}
 		if strings.HasPrefix(line, "❯") || strings.HasPrefix(line, "☤ ❯") {
-			if terminalui.LastPromptIsEmptyOrDimPlaceholder(output, "❯") || terminalui.LastPromptIsEmptyOrDimPlaceholder(output, "☤ ❯") {
+			if terminalui.LastPromptIsEmptyOrDimPlaceholder(composerOutput, "❯") || terminalui.LastPromptIsEmptyOrDimPlaceholder(composerOutput, "☤ ❯") {
 				return domain.ActivityIdle, true
 			}
 			return "", false

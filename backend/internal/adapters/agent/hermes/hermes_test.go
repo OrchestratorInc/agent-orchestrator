@@ -109,3 +109,13 @@ func TestStickyProfileFailsClosed(t *testing.T) {
 		t.Fatal("sticky profile silently overridden")
 	}
 }
+
+func TestNativeItalicPlaceholderAndDraft(t *testing.T) {
+	state, ok := New().DetectTerminalActivity("────────\n❯ \x1b[38;5;136;3mPlan a feature\x1b[m\n────────")
+	if !ok || state != "idle" {
+		t.Fatalf("native placeholder %s %v", state, ok)
+	}
+	if _, ok := New().DetectTerminalActivity("────────\n❯ Plan a feature\n────────"); ok {
+		t.Fatal("human draft accepted")
+	}
+}
