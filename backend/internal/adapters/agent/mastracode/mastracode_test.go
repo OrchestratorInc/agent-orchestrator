@@ -4,12 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -128,6 +128,10 @@ func TestHistoryRejectsMissingForeignEmptyLockedAndUnsafeThreads(t *testing.T) {
 	if err := check(testThread); err != nil {
 		t.Fatal(err)
 	}
+	var original []byte
+	if err := db.QueryRow(`SELECT metadata FROM mastra_threads WHERE id=?`, testThread).Scan(&original); err != nil {
+		t.Fatal(err)
+	}
 	for _, id := range []string{"", "session-init", "00000000-0000-0000-0000-000000000000"} {
 		if err := check(id); err == nil {
 			t.Fatalf("accepted missing history %q", id)
@@ -138,19 +142,15 @@ func TestHistoryRejectsMissingForeignEmptyLockedAndUnsafeThreads(t *testing.T) {
 		`UPDATE mastra_threads SET metadata=jsonb_set(metadata,'$.yolo',1)`,
 		`UPDATE mastra_threads SET metadata=jsonb_set(metadata,'$.escapeAsCancel',0)`,
 	} {
-		if _, err := db.Exec("SAVEPOINT probe"); err != nil {
-			t.Fatal(err)
-		}
+		// The adapter opens an independent read-only connection. Commit fixture
+		// changes so that connection observes them, then restore the exact blob.
 		if _, err := db.Exec(update); err != nil {
 			t.Fatal(err)
 		}
 		if err := check(testThread); err == nil {
 			t.Fatalf("accepted unsafe history: %s", update)
 		}
-		if _, err := db.Exec("ROLLBACK TO probe"); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := db.Exec("RELEASE probe"); err != nil {
+		if _, err := db.Exec(`UPDATE mastra_threads SET metadata=? WHERE id=?`, original, testThread); err != nil {
 			t.Fatal(err)
 		}
 	}

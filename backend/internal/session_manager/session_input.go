@@ -36,22 +36,8 @@ var _ sessionguard.InputLease = (*Manager)(nil)
 // close admission and wait for every already-admitted write to finish.
 func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok bool) {
 	id = domain.SessionID(strings.TrimSpace(string(id)))
-	serialized := false
-	if m.agents != nil && m.store != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		rec, found, err := m.store.GetSession(ctx, id)
-		cancel()
-		if err != nil {
-			return nil, false
-		}
-		if found {
-			if agent, registered := m.agents.Agent(rec.Harness); registered {
-				_, serialized = agent.(ports.TerminalMessageInputGuard)
-			}
-		}
-	}
 	m.agentOpMu.Lock()
-	if serialized && m.inputLeases[id] != 0 {
+	if m.serializedInput[id] && m.inputLeases[id] != 0 {
 		m.agentOpMu.Unlock()
 		return nil, false
 	}
@@ -71,6 +57,19 @@ func (m *Manager) AcquireSessionInput(id domain.SessionID) (release func(), ok b
 	}, true
 }
 
+// No durable reads belong in lease acquisition. Prepare sets this before
+// launch; the first guarded paste also sets it after detached-host adoption.
+// That paste fails closed if another already-admitted writer is still active.
+func (m *Manager) enableSerializedInput(id domain.SessionID) bool {
+	m.agentOpMu.Lock()
+	defer m.agentOpMu.Unlock()
+	if m.serializedInput == nil {
+		m.serializedInput = make(map[domain.SessionID]bool)
+	}
+	m.serializedInput[id] = true
+	return m.inputLeases[id] <= 1
+}
+
 // ValidateSessionMessageInput runs while the shared input lease excludes native
 // keystrokes and runtime replacement for an opted-in harness.
 func (m *Manager) ValidateSessionMessageInput(ctx context.Context, rec domain.SessionRecord, message string) error {
@@ -84,6 +83,9 @@ func (m *Manager) ValidateSessionMessageInput(ctx context.Context, rec domain.Se
 	guard, guarded := agent.(ports.TerminalMessageInputGuard)
 	if !guarded {
 		return nil
+	}
+	if !m.enableSerializedInput(rec.ID) {
+		return ports.ErrTerminalMessageNotReady
 	}
 	reader, available := m.runtime.(ports.StyledTerminalOutputReader)
 	if !available {

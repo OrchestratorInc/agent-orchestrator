@@ -61,13 +61,13 @@ func (*Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
 
 func validatePolicy(mode ports.PermissionMode, allowed, denied []string) error {
 	if len(allowed) != 0 || len(denied) != 0 {
-		return errors.New("Mastra Code does not expose AO tool allow/deny mappings")
+		return errors.New("mastra-code does not expose AO tool allow/deny mappings")
 	}
 	switch ports.NormalizePermissionMode(mode) {
 	case ports.PermissionModeDefault, ports.PermissionModeBypassPermissions:
 		return nil
 	default:
-		return fmt.Errorf("Mastra Code does not support permission mode %q; use native permissions or explicitly select bypass", mode)
+		return fmt.Errorf("mastra-code does not support permission mode %q; use native permissions or explicitly select bypass", mode)
 	}
 }
 
@@ -97,7 +97,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 func validateTask(prompt string) error {
 	text := strings.TrimSpace(prompt)
 	if strings.HasPrefix(text, "/") || strings.HasPrefix(text, "!") {
-		return errors.New("Mastra Code dispatches slash/! startup input as native commands; AO tasks must be plain text")
+		return errors.New("mastra-code dispatches slash/! startup input as native commands; AO tasks must be plain text")
 	}
 	return nil
 }
@@ -130,7 +130,7 @@ func (*Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHook
 	}
 	launch := cfg.Env["AO_RUNTIME_LAUNCH_ID"]
 	if launch == "" {
-		return errors.New("Mastra Code requires a supervised runtime generation")
+		return errors.New("mastra-code requires a supervised runtime generation")
 	}
 	path := receiptPath(cfg.DataDir, cfg.SessionID, launch)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -175,10 +175,10 @@ func validateNativeSettings(profile string, mode ports.PermissionMode) error {
 		return errors.New("native Mastra yolo is enabled; disable it natively or explicitly select AO bypass")
 	}
 	if settings.BackgroundTools.Enabled || settings.Signals.Schedule {
-		return errors.New("Mastra background tools/schedulers are outside AO's qualified foreground ownership; disable them natively")
+		return errors.New("mastra-code background tools/schedulers are outside AO's qualified foreground ownership; disable them natively")
 	}
 	if settings.Storage.Backend == "pg" || settings.Storage.Libsql.URL != "" {
-		return errors.New("Mastra Code currently requires its local default LibSQL history")
+		return errors.New("mastra-code currently requires its local default LibSQL history")
 	}
 	return nil
 }

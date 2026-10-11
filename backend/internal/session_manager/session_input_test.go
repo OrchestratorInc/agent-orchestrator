@@ -19,6 +19,34 @@ func newInputLeaseTestManager() *Manager {
 	}
 }
 
+func TestOptedInInputIsSerializedAndAdoptionFailsClosed(t *testing.T) {
+	m := newInputLeaseTestManager()
+	first, ok := m.AcquireSessionInput("mastra-1")
+	if !ok {
+		t.Fatal("first lease refused")
+	}
+	second, ok := m.AcquireSessionInput("mastra-1")
+	if !ok {
+		t.Fatal("legacy lease refused before opt-in")
+	}
+	if m.enableSerializedInput("mastra-1") {
+		t.Fatal("adoption admitted a paste alongside existing input")
+	}
+	second()
+	if !m.enableSerializedInput("mastra-1") {
+		t.Fatal("single holder not admitted")
+	}
+	if _, ok := m.AcquireSessionInput("mastra-1"); ok {
+		t.Fatal("concurrent raw input admitted")
+	}
+	first()
+	release, ok := m.AcquireSessionInput("mastra-1")
+	if !ok {
+		t.Fatal("admission did not reopen after release")
+	}
+	release()
+}
+
 func TestAgentOperationClosesAdmissionThenDrainsExistingInput(t *testing.T) {
 	m := newInputLeaseTestManager()
 	release, ok := m.AcquireSessionInput("worker-1")

@@ -44,7 +44,7 @@ func refuseExistingWorkspaceHistory(ctx context.Context, workspace string) error
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var count int
 	probe, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -61,14 +61,14 @@ func refuseExistingWorkspaceHistory(ctx context.Context, workspace string) error
 		return err
 	}
 	if count != 0 {
-		return errors.New("Mastra already has history for this workspace; fresh CLI launch would auto-resume and skip the initial task")
+		return errors.New("mastra-code already has history for this workspace; fresh CLI launch would auto-resume and skip the initial task")
 	}
 	return nil
 }
 
-func validateHistory(ctx context.Context, workspace, id string, model string, mode ports.PermissionMode) error {
+func validateHistory(ctx context.Context, workspace, id, model string, mode ports.PermissionMode) error {
 	if !nativeIDPattern.MatchString(id) {
-		return errors.New("Mastra restore requires a complete native thread UUID; refusing fresh fallback")
+		return errors.New("mastra-code restore requires a complete native thread UUID; refusing fresh fallback")
 	}
 	state, err := readState(workspace)
 	if err != nil {
@@ -87,7 +87,7 @@ func validateHistory(ctx context.Context, workspace, id string, model string, mo
 		signalErr := process.Signal(syscall.Signal(0))
 		_ = process.Release()
 		if signalErr == nil || errors.Is(signalErr, syscall.EPERM) {
-			return errors.New("Mastra requested thread is locked by a live process")
+			return errors.New("mastra-code requested thread is locked by a live process")
 		}
 		if !errors.Is(signalErr, syscall.ESRCH) && !errors.Is(signalErr, os.ErrProcessDone) {
 			return fmt.Errorf("cannot establish native lock ownership: %w", signalErr)
@@ -99,7 +99,7 @@ func validateHistory(ctx context.Context, workspace, id string, model string, mo
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	probe, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	var path, savedModel sql.NullString
@@ -111,7 +111,7 @@ func validateHistory(ctx context.Context, workspace, id string, model string, mo
 		return fmt.Errorf("missing or unreadable native Mastra history: %w", err)
 	}
 	if !path.Valid || filepath.Clean(path.String) != filepath.Clean(workspace) || messages == 0 {
-		return errors.New("Mastra history must belong to this exact workspace and contain real messages")
+		return errors.New("mastra-code history must belong to this exact workspace and contain real messages")
 	}
 	if yolo != 0 && ports.NormalizePermissionMode(mode) != ports.PermissionModeBypassPermissions {
 		return errors.New("saved Mastra thread has yolo enabled; explicit bypass is required")
@@ -120,7 +120,7 @@ func validateHistory(ctx context.Context, workspace, id string, model string, mo
 		return errors.New("saved Mastra thread disables Escape cancellation; enable it natively before AO restore")
 	}
 	if model != "" && (!savedModel.Valid || model != savedModel.String) {
-		return errors.New("Mastra resume model override is not qualified; retain the native saved model")
+		return errors.New("mastra-code resume model override is not qualified; retain the native saved model")
 	}
 	return nil
 }
@@ -178,10 +178,10 @@ func (*Plugin) VerifyNativeRestore(ctx context.Context, cfg ports.RestoreConfig,
 		return false, err
 	}
 	if receipt.Generation != generation || filepath.Clean(receipt.Cwd) != filepath.Clean(cfg.Session.WorkspacePath) {
-		return false, errors.New("Mastra restore witness is stale or belongs to another workspace")
+		return false, errors.New("mastra-code restore witness is stale or belongs to another workspace")
 	}
 	if receipt.NativeID != cfg.Session.Metadata[ports.MetadataKeyAgentSessionID] {
-		return false, errors.New("Mastra resumed a different native thread; refusing fallback")
+		return false, errors.New("mastra-code resumed a different native thread; refusing fallback")
 	}
 	return (&Plugin{}).ComposerIsEmpty(output), nil
 }

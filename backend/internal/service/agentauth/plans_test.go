@@ -19,6 +19,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		action                                               Action
 		argv                                                 []string
 	}{
+		{"mastra-code", "Configure Mastra Code", "", "Configure a native provider key or Mastra customProviders in AO_DATA_DIR/mastra-code/profile/settings.json. AO does not import other vendors' logins. Stored keys indicate configuration, not authorization.", "https://github.com/mastra-ai/mastra/tree/8a0fd46222d8737e4c369291a3efa59e632aadbd/mastracode", "", ActionSetup, nil},
 		{"claude-code", "Log in to Claude Code", "claude", "Choose Claude subscription, Anthropic Console, or SSO", "https://code.claude.com/docs/en/installation", "", ActionLogin, []string{"claude", "auth", "login"}},
 		{"codex", "Log in to Codex", "codex", "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex", "", ActionLogin, []string{"codex", "login"}},
 		{"cursor", "Log in to Cursor", "cursor-agent", "Native browser flow", "https://docs.cursor.com/en/cli/installation", "", ActionLogin, []string{"cursor-agent", "login"}},
@@ -70,7 +71,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		// with no command to drive. DeepSeek Harness has no login subcommand either,
 		// but its web profile serves the Models page that writes the credential, so
 		// its setup is a terminal plan.
-		case "aider", "unreal-agent":
+		case "aider", "unreal-agent", "mastra-code":
 			wantLaunchMode = LaunchDocumentation
 		}
 		if seen[got.AgentID] {

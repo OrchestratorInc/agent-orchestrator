@@ -72,23 +72,23 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		return err
 	}
 	if !filepath.IsAbs(cfg.WorkspacePath) {
-		return errors.New("Mastra Code requires an absolute workspace")
+		return errors.New("mastra-code requires an absolute workspace")
 	}
 	profile := cfg.Env["MASTRA_APP_DATA_DIR"]
 	if profile == "" {
 		profile = filepath.Join(cfg.DataDir, adapterID, "profile")
 	}
 	if !filepath.IsAbs(profile) {
-		return errors.New("Mastra Code requires an absolute native profile")
+		return errors.New("mastra-code requires an absolute native profile")
 	}
 	for _, name := range []string{"MASTRA_STORAGE_BACKEND", "MASTRA_DB_URL"} {
 		if cfg.Env[name] != "" || os.Getenv(name) != "" {
-			return errors.New("Mastra Code remote/custom storage is not qualified")
+			return errors.New("mastra-code remote/custom storage is not qualified")
 		}
 	}
 	for _, path := range []string{configPath(cfg.WorkspacePath, "database.json"), filepath.Join(userHome(), ".mastracode", "database.json")} {
 		if _, err := os.Stat(path); err == nil {
-			return errors.New("Mastra Code legacy database overrides are not qualified; preserve and configure native local default storage")
+			return errors.New("mastra-code legacy database overrides are not qualified; preserve and configure native local default storage")
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -104,7 +104,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		database = filepath.Join(profile, "mastra.db")
 	}
 	if !filepath.IsAbs(database) {
-		return errors.New("Mastra Code requires an absolute native database path")
+		return errors.New("mastra-code requires an absolute native database path")
 	}
 	root := configPath(cfg.WorkspacePath)
 	pluginDir := configPath(cfg.WorkspacePath, "plugins", managedID)
@@ -237,7 +237,7 @@ func userHome() string { home, _ := os.UserHomeDir(); return home }
 func readState(workspace string) (nativeState, error) {
 	data, err := os.ReadFile(configPath(workspace, "ao-runtime.json"))
 	if err != nil {
-		return nativeState{}, fmt.Errorf("Mastra native state has not been prepared: %w", err)
+		return nativeState{}, fmt.Errorf("mastra-code native state has not been prepared: %w", err)
 	}
 	var state nativeState
 	err = json.Unmarshal(data, &state)
