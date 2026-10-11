@@ -161,7 +161,39 @@ async function readUpdateSettingsForTelemetry(): Promise<{ channel?: unknown; fe
 }
 
 export function withTelemetryContext(properties: TelemetryProperties): TelemetryProperties {
-	return { ...telemetryContext, ...properties, $process_person_profile: false };
+	return { ...telemetryContext, ...cloudContext, ...properties, $process_person_profile: false };
+}
+
+// The signed-in cloud org, tagged on every event and exception once /me has
+// resolved: the org id only as a hash, plus the offering's kind and billing
+// mode from a fixed vocabulary.
+let cloudContext: TelemetryProperties = {};
+const CLOUD_ORG_KINDS = new Set(["b2b", "b2c", "both", "none", "unknown"]);
+const CLOUD_BILLING_MODES = new Set(["self_serve", "contract", "off", "unknown"]);
+
+function enumValue(value: unknown, allowed: ReadonlySet<string>, fallback = "unknown"): string {
+	return typeof value === "string" && allowed.has(value) ? value : fallback;
+}
+
+export function setCloudTelemetryContext(context: { orgId?: string; orgKind?: string; billingMode?: string }): void {
+	const next: TelemetryProperties = {
+		cloud_org_kind: enumValue(context.orgKind, CLOUD_ORG_KINDS),
+		cloud_billing_mode: enumValue(context.billingMode, CLOUD_BILLING_MODES),
+	};
+	cloudContext = { ...cloudContext, ...next };
+	void hashedTelemetryID(context.orgId).then((hash) => {
+		cloudContext = hash ? { ...cloudContext, cloud_org_id_hash: hash } : omitKey(cloudContext, "cloud_org_id_hash");
+	});
+}
+
+function omitKey(properties: TelemetryProperties, key: string): TelemetryProperties {
+	const { [key]: _omitted, ...rest } = properties;
+	return rest;
+}
+
+/** Test seam. */
+export function resetCloudTelemetryContextForTest(): void {
+	cloudContext = {};
 }
 
 export function postHogEventName(event: string): string {
@@ -457,8 +489,103 @@ async function sanitizeRendererContextProperties(properties?: TelemetryPropertie
 	if (projectIDHash) {
 		safe.project_id_hash = projectIDHash;
 	}
+	const sessionIDHash = await hashedTelemetryID(properties?.session_id);
+	if (sessionIDHash) {
+		safe.session_id_hash = sessionIDHash;
+	}
 	return safe;
 }
+
+// Values the cloud funnel events may carry. Anything outside a vocabulary is
+// reported as "other" so a free-form string can never leak through.
+const CLOUD_PROVIDERS = new Set(["coder", "freestyle", "docker", "nodeops", "ecs", "daytona", "default"]);
+const CLOUD_SIGN_IN_METHODS = new Set(["workos", "local"]);
+const CLOUD_SESSION_KINDS = new Set(["worker", "orchestrator"]);
+const CLOUD_FAILURE_STAGES = new Set(["create", "startup"]);
+const CLOUD_UPGRADE_SOURCES = new Set(["settings", "plan_refusal", "banner", "other"]);
+const CLOUD_CODE_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const CLOUD_PLAN_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+
+function cloudCode(value: unknown): string {
+	return typeof value === "string" && CLOUD_CODE_PATTERN.test(value) ? value : "other";
+}
+
+function cloudPlan(value: unknown): string {
+	return typeof value === "string" && CLOUD_PLAN_PATTERN.test(value) ? value : "other";
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : undefined;
+}
+
+async function sanitizeCloudFunnelProperties(event: string, properties?: TelemetryProperties): Promise<TelemetryProperties> {
+	const safe: TelemetryProperties = {};
+	switch (event) {
+		case "ao.renderer.cloud_signed_in":
+			safe.method = enumValue(properties?.method, CLOUD_SIGN_IN_METHODS, "other");
+			break;
+		case "ao.renderer.cloud_offering_resolved": {
+			safe.org_kind = enumValue(properties?.org_kind, CLOUD_ORG_KINDS);
+			safe.billing_mode = enumValue(properties?.billing_mode, CLOUD_BILLING_MODES);
+			safe.default_provider = enumValue(properties?.default_provider, CLOUD_PROVIDERS, "other");
+			for (const key of ["provider_count", "org_count"]) {
+				const value = nonNegativeNumber(properties?.[key]);
+				if (value !== undefined) safe[key] = value;
+			}
+			break;
+		}
+		case "ao.renderer.cloud_project_created":
+		case "ao.renderer.cloud_session_create_requested":
+		case "ao.renderer.cloud_session_ready":
+		case "ao.renderer.cloud_session_failed": {
+			safe.provider = enumValue(properties?.provider, CLOUD_PROVIDERS, "other");
+			const projectIDHash = await hashedTelemetryID(properties?.project_id);
+			if (projectIDHash) safe.project_id_hash = projectIDHash;
+			if (event !== "ao.renderer.cloud_project_created") {
+				safe.session_kind = enumValue(properties?.session_kind, CLOUD_SESSION_KINDS, "other");
+			}
+			const ttr = nonNegativeNumber(properties?.ttr_ms);
+			if (ttr !== undefined && event !== "ao.renderer.cloud_session_create_requested") safe.ttr_ms = ttr;
+			if (event === "ao.renderer.cloud_session_failed") {
+				safe.stage = enumValue(properties?.stage, CLOUD_FAILURE_STAGES, "other");
+				safe.code = cloudCode(properties?.code);
+				const status = nonNegativeNumber(properties?.status);
+				if (status !== undefined) safe.status = status;
+			}
+			break;
+		}
+		case "ao.renderer.cloud_upgrade_viewed":
+			safe.source = enumValue(properties?.source, CLOUD_UPGRADE_SOURCES, "other");
+			break;
+		case "ao.renderer.cloud_checkout_started":
+		case "ao.renderer.cloud_checkout_completed": {
+			safe.plan = cloudPlan(properties?.plan);
+			const duration = nonNegativeNumber(properties?.duration_ms);
+			if (duration !== undefined && event === "ao.renderer.cloud_checkout_completed") safe.duration_ms = duration;
+			break;
+		}
+		case "ao.renderer.cloud_plan_refusal_shown":
+		case "ao.renderer.cloud_limit_reached":
+			safe.code = cloudCode(properties?.code);
+			if (typeof properties?.shown === "boolean") safe.shown = properties.shown;
+			break;
+	}
+	return safe;
+}
+
+const CLOUD_FUNNEL_EVENTS = new Set([
+	"ao.renderer.cloud_signed_in",
+	"ao.renderer.cloud_offering_resolved",
+	"ao.renderer.cloud_project_created",
+	"ao.renderer.cloud_session_create_requested",
+	"ao.renderer.cloud_session_ready",
+	"ao.renderer.cloud_session_failed",
+	"ao.renderer.cloud_upgrade_viewed",
+	"ao.renderer.cloud_checkout_started",
+	"ao.renderer.cloud_checkout_completed",
+	"ao.renderer.cloud_plan_refusal_shown",
+	"ao.renderer.cloud_limit_reached",
+]);
 
 const ORCHESTRATOR_SPAWN_SOURCE_SET = new Set<string>(ORCHESTRATOR_SPAWN_SOURCES);
 
@@ -469,6 +596,7 @@ export async function sanitizeRendererProperties(
 	event: string,
 	properties?: TelemetryProperties,
 ): Promise<TelemetryProperties> {
+	if (CLOUD_FUNNEL_EVENTS.has(event)) return sanitizeCloudFunnelProperties(event, properties);
 	const safe: TelemetryProperties = {};
 	switch (event) {
 		case "ao.app.active":

@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, ExternalLink, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { useCloudBilling, cloudBillingQueryKey } from "../../hooks/useCloudBilling";
@@ -10,6 +10,7 @@ import { aoBridge } from "../../lib/bridge";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import type { CloudCpBillingSummary, CloudCpPlanLimits, CloudCpPlanOffer } from "../../lib/cloud-cp/types";
 import { useCloudSession } from "../../lib/cloud-session";
+import { reportUpgradeViewed } from "../../lib/cloud-telemetry";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog";
@@ -44,6 +45,10 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	const [pending, setPending] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [confirmReset, setConfirmReset] = useState(false);
+	// The Upgrade page is the paywall's landing: count each visit once mounted.
+	useEffect(() => {
+		if (status === "authenticated") reportUpgradeViewed("settings");
+	}, [status]);
 
 	const title = t("settings.billing.title");
 	if (status !== "authenticated") {
