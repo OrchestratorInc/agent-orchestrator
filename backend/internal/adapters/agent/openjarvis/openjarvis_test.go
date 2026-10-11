@@ -47,7 +47,8 @@ func TestOverlayPreservesSecurityPersonaAndPrefix(t *testing.T) {
 	if err := toml.Unmarshal(b, &config); err != nil {
 		t.Fatal(err)
 	}
-	if config["system_prompt"].(map[string]any)["prefix"] != "Native prefix\n\nAO standing" {
+	prefix := config["system_prompt"].(map[string]any)["prefix"].(string)
+	if !strings.HasPrefix(prefix, "Native prefix\n\nAO standing\n\n") || !strings.Contains(prefix, `env_passthrough=["AO_SESSION_ID","AO_RUN_FILE","AO_PROJECT_ID","AO_DATA_DIR","AO_RUNTIME_LAUNCH_ID"]`) {
 		t.Fatal("lost additive prefix")
 	}
 	if config["security"].(map[string]any)["enabled"] != true || config["memory_files"].(map[string]any)["soul_path"] != "relative/SOUL.md" {
