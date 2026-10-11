@@ -3,7 +3,7 @@ package poolacp
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
+	"path"
 	"strings"
 	"unicode/utf8"
 )
@@ -20,7 +20,7 @@ func BuildStandingHook(prompt, helperPath string) (settings, helper []byte, err 
 	if len(prompt) >= 32*1024 {
 		return nil, nil, fmt.Errorf("pool standing instructions reach the native 32 KiB hook cap")
 	}
-	if !filepath.IsAbs(helperPath) || !strings.HasPrefix(helperPath, "/") || !utf8.ValidString(helperPath) || strings.ContainsAny(helperPath, "\x00\r\n") {
+	if !path.IsAbs(helperPath) || !strings.HasPrefix(helperPath, "/") || !utf8.ValidString(helperPath) || strings.ContainsAny(helperPath, "\x00\r\n") {
 		return nil, nil, fmt.Errorf("pool hook requires an absolute POSIX helper path")
 	}
 	payload, err := json.Marshal(map[string]any{"hook_specific_output": map[string]string{"additional_context": prompt}})

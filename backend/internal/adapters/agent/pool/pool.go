@@ -16,6 +16,7 @@ import (
 // Plugin is metadata only. Native ACP admission awaits independent qualification.
 type Plugin struct{ agentbase.Base }
 
+// New creates unregistered metadata for a user-installed Pool executable.
 func New() *Plugin { return &Plugin{} }
 
 var _ ports.Agent = (*Plugin)(nil)
@@ -23,15 +24,18 @@ var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.AgentBinaryResolver = (*Plugin)(nil)
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
+// Manifest describes the source-only, unqualified Pool preparation.
 func (*Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{ID: "pool", Name: "Poolside Pool", Description: "User-installed Poolside pool; ACP preparation only.", Version: "0.0.1", Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
 }
 
+// ResolveBinary discovers the installed executable without downloading it.
 func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	// Discovery does not establish binary identity or version compatibility.
 	return binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "Poolside pool", Names: []string{"pool"}, WinNames: []string{"pool.exe"}})
 }
 
+// GetLaunchCommand refuses unqualified terminal launches.
 func (*Plugin) GetLaunchCommand(ctx context.Context, _ ports.LaunchConfig) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -39,6 +43,7 @@ func (*Plugin) GetLaunchCommand(ctx context.Context, _ ports.LaunchConfig) ([]st
 	return nil, errors.New("pool terminal interface is not qualified for AO")
 }
 
+// GetRestoreCommand hard-refuses restore so missing history cannot launch fresh.
 func (*Plugin) GetRestoreCommand(ctx context.Context, _ ports.RestoreConfig) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -46,6 +51,7 @@ func (*Plugin) GetRestoreCommand(ctx context.Context, _ ports.RestoreConfig) ([]
 	return nil, false, errors.New("pool terminal restore is not qualified for AO")
 }
 
+// AuthStatus reports credential presence without claiming remote authorization.
 func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, err
@@ -53,6 +59,7 @@ func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	return credentialStatus(os.Getenv("POOLSIDE_API_KEY")), nil
 }
 
+// AuthStatusWithEnv respects explicit session credential overrides.
 func (*Plugin) AuthStatusWithEnv(ctx context.Context, env map[string]string) (ports.AgentAuthStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, err

@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -34,7 +35,7 @@ func TestTerminalAdmissionAndRestoreRefused(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{}); err != context.Canceled {
+	if _, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation: %v", err)
 	}
 }
