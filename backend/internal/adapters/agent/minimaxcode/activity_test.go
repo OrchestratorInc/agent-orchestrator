@@ -34,6 +34,8 @@ func TestTerminalActivity(t *testing.T) {
 		{"old stopping before current cleared composer", "Stopping response\nDraft cleared · Ctrl+- restore · Ctrl+C exit\n" + composer, domain.ActivityIdle, true},
 		{"old ready before current active composer", "Message · Enter send · Ctrl+J newline\n" + composer + "Loading · Esc stop\n" + composer, domain.ActivityActive, false},
 		{"long draft history while working", longDraft + "Loading · Esc stop\n" + composer, domain.ActivityActive, false},
+		{"old active before current short draft", "Loading · Esc stop\nPrompt · Enter send · Ctrl+J newline\n───\n› current draft\n───\n" + footer, "", false},
+		{"old stopping before current unknown screen", "Stopping response\nApproval required\n───\nAllow tool?\n" + footer, "", false},
 		{"old long draft before unknown screen", longDraft + "Approval required\n───\nAllow tool?\n" + footer, "", false},
 		{"unconfigured long draft", "Long draft · Ctrl+G edit · Enter send\n───\n› draft\n───\nworkspace │ loading\n", "", false},
 		{"typed draft", "Prompt · Enter send · Ctrl+J newline\n───\n› user draft\n" + footer, "", false},

@@ -26,6 +26,7 @@ func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 var ansiRE = regexp.MustCompile(`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b\][^\x07]*(?:\x07|\x1b\\)`)
 var footerRE = regexp.MustCompile(`(?m)^.*(?:│|\|).*(?:Ask|Auto|Full access).*(?:│|\|).*✦ [^\n]+\s*$`)
 var emptyRE = regexp.MustCompile(`(?s)(?:Message · Enter send · Ctrl\+J newline[^\n]*|Draft cleared · Ctrl\+- restore · Ctrl\+C exit)\s*\n\s*─+\s*\n\s*›\s+Ask Mcode to do anything\s*\n\s*─+\s*\n(?:\s*[^\n]+(?:│|\|)[^\n]+✦ [^\n]+)+\s*\z`)
+var activeRE = regexp.MustCompile(`(?m)^[^\n]*(?:Esc stop|Stopping response)[^\n]*\n[ \t]*─+[ \t]*\n[ \t]*›[^\n]*(?:\n[ \t]+[^│|─\n]*)*\n[ \t]*─+[ \t]*\n(?:\s*[^\n]+(?:│|\|)[^\n]+✦ [^\n]+)+\s*\z`)
 
 // MiniMax's composerLabels returns working/follow-up modes before Long draft.
 // This complete composer therefore proves settled input, but never empty input.
@@ -54,7 +55,7 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 	if emptyRE.MatchString(tail) || draftRE.MatchString(tail) {
 		return domain.ActivityIdle, true
 	}
-	if strings.Contains(tail, "Esc stop") || strings.Contains(tail, "Stopping response") {
+	if activeRE.MatchString(tail) {
 		return domain.ActivityActive, true
 	}
 	return "", false
