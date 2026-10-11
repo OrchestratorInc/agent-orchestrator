@@ -14,8 +14,8 @@ import (
 
 func starterLimits() *domain.PlanLimits {
 	return &domain.PlanLimits{
-		Plan: "starter", MaxActiveSandboxes: 2, OrchestratorSlots: 1, WindowHours: 5,
-		WindowSessionHours: 6, WeeklySessionHours: 20, ManualResetsPerMonth: 1,
+		Plan: "starter", MaxActiveSandboxes: 8, MaxRunningSandboxes: 2, OrchestratorSlots: 1, WindowHours: 6,
+		WindowSessionHours: 8, WeeklySessionHours: 20, ManualResetsPerMonth: 1,
 	}
 }
 
@@ -92,7 +92,7 @@ func TestPlanSlotsReserveOneOrchestratorAndCountWorkers(t *testing.T) {
 	}
 
 	pro := starterLimits()
-	pro.Plan, pro.MaxActiveSandboxes = "pro", 4
+	pro.Plan, pro.MaxActiveSandboxes, pro.MaxRunningSandboxes = "pro", 16, 4
 	subscribe(t, store, fixture.orgID, "active", pro)
 	if _, err := createKind(store, fixture, "worker"); err != nil {
 		t.Fatalf("worker after upgrading to 3 worker slots: %v", err)
@@ -103,7 +103,7 @@ func TestEntitlementFollowsSubscriptionStatus(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	store.EnableBilling(7*24*time.Hour, time.Time{})
 	limits := starterLimits()
-	limits.MaxActiveSandboxes, limits.OrchestratorSlots = 10, 0
+	limits.MaxActiveSandboxes, limits.MaxRunningSandboxes, limits.OrchestratorSlots = 10, 10, 0
 
 	subscribe(t, store, fixture.orgID, "past_due", limits)
 	if _, err := createKind(store, fixture, "worker"); err != nil {
@@ -141,7 +141,8 @@ func TestUsageLimitsAndManualWeeklyReset(t *testing.T) {
 	store.EnableBilling(7*24*time.Hour, time.Time{})
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
 	limits := starterLimits()
-	limits.MaxActiveSandboxes, limits.OrchestratorSlots = 10, 0
+	limits.MaxActiveSandboxes, limits.MaxRunningSandboxes, limits.OrchestratorSlots = 10, 10, 0
+	limits.WindowHours, limits.WindowSessionHours = 5, 6
 	subscribe(t, store, fixture.orgID, "active", limits)
 	// Anchor the week three days ago, so usage from earlier this week counts.
 	if _, err := admin.Exec(context.Background(),
@@ -289,7 +290,7 @@ func TestUsageSamplingAndOverLimitPause(t *testing.T) {
 		t.Fatalf("within plan: paused %d, err %v", paused, err)
 	}
 	// Over the window, but a turn is in flight: it is allowed to finish.
-	addUsage(t, admin, fixture, 2, 200, time.Minute)
+	addUsage(t, admin, fixture, 2, 250, time.Minute)
 	if _, err := admin.Exec(ctx,
 		`UPDATE ao_sessions SET activity_state = 'active' WHERE id = $1`, fixture.sessionID); err != nil {
 		t.Fatal(err)
@@ -434,5 +435,52 @@ func TestRecentSandboxActivityDefersIdlePause(t *testing.T) {
 	}
 	if paused, err := store.PauseIfIdle(ctx, fixture.orgID, fixture.sessionID, 15*time.Minute); err != nil || !paused {
 		t.Fatalf("idle for 16 minutes: paused = %v, err = %v", paused, err)
+	}
+}
+
+// Running slots and total VMs are separate limits: a paused session frees its
+// running slot (so another may start) but still counts toward the total, and
+// waking it again needs a free running slot.
+func TestRunningSlotsAndTotalVMsAreSeparateLimits(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	store.EnableBilling(7*24*time.Hour, time.Time{})
+	limits := starterLimits()
+	limits.MaxActiveSandboxes, limits.MaxRunningSandboxes, limits.OrchestratorSlots = 3, 2, 1
+	subscribe(t, store, fixture.orgID, "active", limits)
+	setState := func(sessionID, desired string) {
+		t.Helper()
+		if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET desired_state = $2 WHERE session_id = $1`, sessionID, desired); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setState(fixture.sessionID, "running")
+
+	// The fixture's worker holds the only worker running slot.
+	if _, err := createKind(store, fixture, "worker"); limitCode(err) != LimitWorkerSlots {
+		t.Fatalf("second running worker: err = %v, want %s", err, LimitWorkerSlots)
+	}
+	// Paused, it frees the running slot but still counts toward the total.
+	setState(fixture.sessionID, "paused")
+	second, err := createKind(store, fixture, "worker")
+	if err != nil {
+		t.Fatalf("worker after pausing the first: %v", err)
+	}
+	// Waking the first now needs the running slot the second holds.
+	if err := store.WakeAllowed(ctx, principal, fixture.orgID, fixture.sessionID); limitCode(err) != LimitWorkerSlots {
+		t.Fatalf("wake with no running slot: err = %v, want %s", err, LimitWorkerSlots)
+	}
+	setState(second.ID, "paused")
+	if err := store.WakeAllowed(ctx, principal, fixture.orgID, fixture.sessionID); err != nil {
+		t.Fatalf("wake with a free running slot: %v", err)
+	}
+	// Total VMs: orchestrator makes 3 of 3; a fourth session is refused even
+	// though the worker running slot is free.
+	if _, err := createKind(store, fixture, "orchestrator"); err != nil {
+		t.Fatalf("orchestrator: %v", err)
+	}
+	if _, err := createKind(store, fixture, "worker"); limitCode(err) != LimitTotalSessions {
+		t.Fatalf("fourth session: err = %v, want %s", err, LimitTotalSessions)
 	}
 }

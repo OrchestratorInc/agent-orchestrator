@@ -701,7 +701,7 @@ func createSessionTx(
 	// The plan's slots and usage limits, checked under the same organization
 	// lock as the quota above, so concurrent creators cannot both take the
 	// last slot. This covers sessions an orchestrator spawns too.
-	if err := billing.planAdmissionTx(ctx, tx, orgID, input.Kind, true, time.Now()); err != nil {
+	if err := billing.planAdmissionTx(ctx, tx, orgID, input.Kind, admitCreate, time.Now()); err != nil {
 		return domain.Session{}, err
 	}
 	var projectConfig json.RawMessage

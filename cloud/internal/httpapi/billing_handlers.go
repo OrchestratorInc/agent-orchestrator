@@ -451,7 +451,9 @@ func planLimitMessage(code string) string {
 	case postgres.LimitOrchestratorSlots:
 		return "Your plan's orchestrator is already running. Stop it to start another."
 	case postgres.LimitWorkerSlots:
-		return "Your plan's sessions are all in use. Archive one or upgrade your plan."
+		return "All your plan's running sessions are in use. Pause or archive one, or upgrade your plan."
+	case postgres.LimitTotalSessions:
+		return "You've reached your plan's total sessions. Archive one or upgrade your plan."
 	case postgres.LimitWindow:
 		return "You've reached your plan's usage limit for now."
 	case postgres.LimitWeekly:

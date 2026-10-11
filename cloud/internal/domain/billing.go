@@ -21,10 +21,12 @@ const UsageWeek = 7 * 24 * time.Hour
 type PlanLimits struct {
 	Plan string `json:"plan"`
 	// MaxActiveSandboxes counts every session that has a sandbox, running or
-	// paused, orchestrators included.
+	// paused, orchestrators included: the plan's total VMs.
 	MaxActiveSandboxes int `json:"maxActiveSandboxes"`
-	// OrchestratorSlots of MaxActiveSandboxes are reserved for orchestrators;
-	// workers may use the rest.
+	// MaxRunningSandboxes bounds how many of them run at once.
+	MaxRunningSandboxes int `json:"maxRunningSandboxes"`
+	// OrchestratorSlots of MaxRunningSandboxes are reserved for orchestrators;
+	// workers may run in the rest.
 	OrchestratorSlots    int     `json:"orchestratorSlots"`
 	WindowHours          int     `json:"windowHours"`
 	WindowSessionHours   float64 `json:"windowSessionHours"`
@@ -36,6 +38,7 @@ type PlanLimits struct {
 const (
 	MetadataPlan                 = "ao_plan"
 	MetadataMaxActiveSandboxes   = "ao_max_active_sandboxes"
+	MetadataMaxRunningSandboxes  = "ao_max_running_sandboxes"
 	MetadataOrchestratorSlots    = "ao_orchestrator_slots"
 	MetadataWindowHours          = "ao_window_hours"
 	MetadataWindowSessionHours   = "ao_window_session_hours"
@@ -72,13 +75,22 @@ func ParsePlanLimits(metadata map[string]string) (PlanLimits, error) {
 		*target = value
 	}
 	intValue(MetadataMaxActiveSandboxes, 1, &limits.MaxActiveSandboxes)
+	// Optional: plans set up before running caps existed run all their VMs.
+	if strings.TrimSpace(metadata[MetadataMaxRunningSandboxes]) == "" {
+		limits.MaxRunningSandboxes = limits.MaxActiveSandboxes
+	} else {
+		intValue(MetadataMaxRunningSandboxes, 1, &limits.MaxRunningSandboxes)
+	}
 	intValue(MetadataOrchestratorSlots, 0, &limits.OrchestratorSlots)
 	intValue(MetadataWindowHours, 1, &limits.WindowHours)
 	floatValue(MetadataWindowSessionHours, &limits.WindowSessionHours)
 	floatValue(MetadataWeeklySessionHours, &limits.WeeklySessionHours)
 	intValue(MetadataManualResetsPerMonth, 0, &limits.ManualResetsPerMonth)
-	if len(problems) == 0 && limits.OrchestratorSlots > limits.MaxActiveSandboxes {
-		problems = append(problems, MetadataOrchestratorSlots+" exceeds "+MetadataMaxActiveSandboxes)
+	if len(problems) == 0 && limits.MaxRunningSandboxes > limits.MaxActiveSandboxes {
+		problems = append(problems, MetadataMaxRunningSandboxes+" exceeds "+MetadataMaxActiveSandboxes)
+	}
+	if len(problems) == 0 && limits.OrchestratorSlots > limits.MaxRunningSandboxes {
+		problems = append(problems, MetadataOrchestratorSlots+" exceeds "+MetadataMaxRunningSandboxes)
 	}
 	if len(problems) > 0 {
 		return PlanLimits{}, errors.New("invalid plan metadata: " + strings.Join(problems, "; "))
@@ -86,9 +98,17 @@ func ParsePlanLimits(metadata map[string]string) (PlanLimits, error) {
 	return limits, nil
 }
 
-// WorkerSlots is how many non-orchestrator sessions the plan allows.
+// WorkerSlots is how many non-orchestrator sessions may run at once.
 func (l PlanLimits) WorkerSlots() int {
-	return l.MaxActiveSandboxes - l.OrchestratorSlots
+	return l.RunningSlots() - l.OrchestratorSlots
+}
+
+// RunningSlots is how many sessions may run at once.
+func (l PlanLimits) RunningSlots() int {
+	if l.MaxRunningSandboxes == 0 {
+		return l.MaxActiveSandboxes
+	}
+	return l.MaxRunningSandboxes
 }
 
 // WindowMinutes and WeeklyMinutes are the limits in session-minutes, the unit
@@ -156,18 +176,20 @@ func (b OrgBilling) Exempt() bool { return b.Plan == PlanInternal }
 
 // UsageSummary is what an organization has used against its limits.
 type UsageSummary struct {
-	WindowUsedMinutes   int        `json:"windowUsedMinutes"`
-	WindowLimitMinutes  int        `json:"windowLimitMinutes"`
-	WindowHours         int        `json:"windowHours"`
-	WindowResetsAt      *time.Time `json:"windowResetsAt,omitempty"`
-	WeeklyUsedMinutes   int        `json:"weeklyUsedMinutes"`
-	WeeklyLimitMinutes  int        `json:"weeklyLimitMinutes"`
-	WeeklyResetsAt      *time.Time `json:"weeklyResetsAt,omitempty"`
-	ManualResetsAllowed int        `json:"manualResetsAllowed"`
-	ManualResetsUsed    int        `json:"manualResetsUsed"`
-	ManualResetsRenewAt *time.Time `json:"manualResetsRenewAt,omitempty"`
-	ActiveOrchestrators int        `json:"activeOrchestrators"`
-	ActiveWorkers       int        `json:"activeWorkers"`
+	WindowUsedMinutes    int        `json:"windowUsedMinutes"`
+	WindowLimitMinutes   int        `json:"windowLimitMinutes"`
+	WindowHours          int        `json:"windowHours"`
+	WindowResetsAt       *time.Time `json:"windowResetsAt,omitempty"`
+	WeeklyUsedMinutes    int        `json:"weeklyUsedMinutes"`
+	WeeklyLimitMinutes   int        `json:"weeklyLimitMinutes"`
+	WeeklyResetsAt       *time.Time `json:"weeklyResetsAt,omitempty"`
+	ManualResetsAllowed  int        `json:"manualResetsAllowed"`
+	ManualResetsUsed     int        `json:"manualResetsUsed"`
+	ManualResetsRenewAt  *time.Time `json:"manualResetsRenewAt,omitempty"`
+	ActiveOrchestrators  int        `json:"activeOrchestrators"`
+	ActiveWorkers        int        `json:"activeWorkers"`
+	RunningOrchestrators int        `json:"runningOrchestrators"`
+	RunningWorkers       int        `json:"runningWorkers"`
 }
 
 // BillingSummary is the billing state the desktop app shows.

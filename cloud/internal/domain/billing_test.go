@@ -103,3 +103,20 @@ func TestResetPeriodStart(t *testing.T) {
 		t.Fatalf("calendar fallback: %v", got)
 	}
 }
+
+func TestRunningSandboxesDefaultToTheTotalAndCannotExceedIt(t *testing.T) {
+	limits, err := ParsePlanLimits(starterMetadata())
+	if err != nil || limits.MaxRunningSandboxes != 2 || limits.RunningSlots() != 2 {
+		t.Fatalf("missing running cap must default to the total: %+v %v", limits, err)
+	}
+	metadata := starterMetadata()
+	metadata[MetadataMaxActiveSandboxes], metadata[MetadataMaxRunningSandboxes] = "8", "2"
+	limits, err = ParsePlanLimits(metadata)
+	if err != nil || limits.MaxActiveSandboxes != 8 || limits.RunningSlots() != 2 || limits.WorkerSlots() != 1 {
+		t.Fatalf("limits = %+v, err = %v", limits, err)
+	}
+	metadata[MetadataMaxRunningSandboxes] = "9"
+	if _, err := ParsePlanLimits(metadata); err == nil {
+		t.Fatal("a running cap above the total was accepted")
+	}
+}

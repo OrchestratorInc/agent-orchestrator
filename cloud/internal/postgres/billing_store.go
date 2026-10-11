@@ -24,6 +24,7 @@ var ErrNoResetsLeft = errors.New("no manual usage resets left this billing perio
 const (
 	LimitOrchestratorSlots = "ORCHESTRATOR_SLOTS_FULL"
 	LimitWorkerSlots       = "WORKER_SLOTS_FULL"
+	LimitTotalSessions     = "SESSION_LIMIT_REACHED"
 	LimitWindow            = "WINDOW_LIMIT_REACHED"
 	LimitWeekly            = "WEEKLY_LIMIT_REACHED"
 )
@@ -245,13 +246,16 @@ func usageTx(ctx context.Context, tx pgx.Tx, billing domain.OrgBilling, now time
 	if err := tx.QueryRow(ctx,
 		`SELECT
 			count(*) FILTER (WHERE se.kind = 'orchestrator'),
-			count(*) FILTER (WHERE se.kind <> 'orchestrator')
+			count(*) FILTER (WHERE se.kind <> 'orchestrator'),
+			count(*) FILTER (WHERE se.kind = 'orchestrator' AND sb.desired_state = 'running'),
+			count(*) FILTER (WHERE se.kind <> 'orchestrator' AND sb.desired_state = 'running')
 		FROM ao_sandboxes sb
 		JOIN ao_sessions se ON se.org_id = sb.org_id AND se.id = sb.session_id
 		WHERE sb.org_id = $1
 			AND sb.observed_state NOT IN ('deleted', 'deleting', 'terminated', 'failed')`,
 		billing.OrgID,
-	).Scan(&usage.ActiveOrchestrators, &usage.ActiveWorkers); err != nil {
+	).Scan(&usage.ActiveOrchestrators, &usage.ActiveWorkers,
+		&usage.RunningOrchestrators, &usage.RunningWorkers); err != nil {
 		return usage, err
 	}
 	limits := billing.Limits
@@ -321,11 +325,23 @@ func usageTx(ctx context.Context, tx pgx.Tx, billing domain.OrgBilling, now time
 	return usage, nil
 }
 
-// planAdmissionTx decides whether the organization may start (or wake) a
-// session of kind. countSlots is false for a wake: the session already holds
-// its slot. Only entitlement and usage are checked then.
+// admission is what a plan check is for.
+type admission int
+
+const (
+	// admitCreate checks a new session: total VMs, a running slot, usage.
+	admitCreate admission = iota
+	// admitWake checks waking a paused session: a running slot and usage. It
+	// already holds its share of the total.
+	admitWake
+	// admitUsage checks entitlement and usage only, for the usage enforcer.
+	admitUsage
+)
+
+// planAdmissionTx decides whether the organization may create or wake a
+// session of kind under its plan.
 func (p billingPolicy) planAdmissionTx(
-	ctx context.Context, tx pgx.Tx, orgID, kind string, countSlots bool, now time.Time,
+	ctx context.Context, tx pgx.Tx, orgID, kind string, mode admission, now time.Time,
 ) error {
 	if !p.enforced {
 		return nil
@@ -346,18 +362,24 @@ func (p billingPolicy) planAdmissionTx(
 	if err != nil {
 		return err
 	}
-	if countSlots {
+	if mode == admitCreate {
+		total := usage.ActiveOrchestrators + usage.ActiveWorkers
+		if total >= limits.MaxActiveSandboxes {
+			return &PlanLimitError{Code: LimitTotalSessions, Plan: limits.Plan, Limit: limits.MaxActiveSandboxes, Used: total}
+		}
+	}
+	if mode == admitCreate || mode == admitWake {
 		if kind == "orchestrator" && limits.OrchestratorSlots > 0 {
-			if usage.ActiveOrchestrators >= limits.OrchestratorSlots {
+			if usage.RunningOrchestrators >= limits.OrchestratorSlots {
 				return &PlanLimitError{Code: LimitOrchestratorSlots, Plan: limits.Plan,
-					Limit: limits.OrchestratorSlots, Used: usage.ActiveOrchestrators}
+					Limit: limits.OrchestratorSlots, Used: usage.RunningOrchestrators}
 			}
 		} else {
-			// Without reserved orchestrator slots an orchestrator is counted
-			// like any other session.
-			used, limit := usage.ActiveWorkers, limits.WorkerSlots()
+			// Without reserved orchestrator slots an orchestrator shares the
+			// running pool with workers.
+			used, limit := usage.RunningWorkers, limits.WorkerSlots()
 			if kind == "orchestrator" {
-				used, limit = usage.ActiveWorkers+usage.ActiveOrchestrators, limits.MaxActiveSandboxes
+				used, limit = usage.RunningWorkers+usage.RunningOrchestrators, limits.RunningSlots()
 			}
 			if used >= limit {
 				return &PlanLimitError{Code: LimitWorkerSlots, Plan: limits.Plan, Limit: limit, Used: used}
@@ -449,17 +471,24 @@ func (s *Store) WakeAllowed(ctx context.Context, principal domain.Principal, org
 		return nil
 	}
 	return s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
-		var desired string
+		// Serialize with session creation, so two wakes cannot both take the
+		// last running slot.
+		if _, err := tx.Exec(ctx, `SELECT id FROM ao_organizations WHERE id = $1 FOR UPDATE`, orgID); err != nil {
+			return err
+		}
+		var desired, kind string
 		err := tx.QueryRow(ctx,
-			`SELECT desired_state FROM ao_sandboxes WHERE org_id = $1 AND session_id = $2`, orgID, sessionID,
-		).Scan(&desired)
+			`SELECT sb.desired_state, se.kind FROM ao_sandboxes sb
+			JOIN ao_sessions se ON se.org_id = sb.org_id AND se.id = sb.session_id
+			WHERE sb.org_id = $1 AND sb.session_id = $2`, orgID, sessionID,
+		).Scan(&desired, &kind)
 		if errors.Is(err, pgx.ErrNoRows) || (err == nil && desired == "running") {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		return s.billing.planAdmissionTx(ctx, tx, orgID, "", false, time.Now())
+		return s.billing.planAdmissionTx(ctx, tx, orgID, kind, admitWake, time.Now())
 	})
 }
 
@@ -506,7 +535,7 @@ func (s *Store) PauseOverLimit(ctx context.Context, orgID string) (int64, error)
 	}
 	var paused int64
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
-		err := s.billing.planAdmissionTx(ctx, tx, orgID, "", false, time.Now())
+		err := s.billing.planAdmissionTx(ctx, tx, orgID, "", admitUsage, time.Now())
 		var limitErr *PlanLimitError
 		if err == nil || !(errors.Is(err, ErrPlanRequired) || errors.As(err, &limitErr)) {
 			return err
