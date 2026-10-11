@@ -30,9 +30,16 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
     if (!witnessChild) {
       const program = `const fs=require("node:fs");const token=${JSON.stringify(witnessSpec.token)};fs.writeFileSync(${JSON.stringify(startWitnessPath)},JSON.stringify({token,pid:process.pid}));setTimeout(()=>{},10000);`;
       witnessChild = spawn(process.execPath, ["-e", program], { stdio: "ignore" });
-      lateWitnessTimer = setTimeout(() => {
-        writeFileSync(lateWitnessPath, JSON.stringify({ token: witnessSpec.token, pid: witnessChild.pid }));
-      }, witnessSpec.lateSideEffectDelayMs);
+      const armLateWitness = () => {
+        if (!existsSync(startWitnessPath)) {
+          lateWitnessTimer = setTimeout(armLateWitness, 5);
+          return;
+        }
+        lateWitnessTimer = setTimeout(() => {
+          writeFileSync(lateWitnessPath, JSON.stringify({ token: witnessSpec.token, pid: witnessChild.pid }));
+        }, witnessSpec.lateSideEffectDelayMs);
+      };
+      armLateWitness();
     }
     return witnessSpec;
   };
