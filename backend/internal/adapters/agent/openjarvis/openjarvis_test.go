@@ -36,7 +36,8 @@ func TestOverlayPreservesSecurityPersonaAndPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := map[string]string{"OPENJARVIS_HOME": home}
-	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: env, SystemPrompt: "AO standing"}); err != nil {
+	workspace := t.TempDir()
+	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: env, WorkspacePath: workspace, SystemPrompt: "AO standing"}); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(env["OPENJARVIS_CONFIG"])
@@ -50,6 +51,9 @@ func TestOverlayPreservesSecurityPersonaAndPrefix(t *testing.T) {
 	prefix := config["system_prompt"].(map[string]any)["prefix"].(string)
 	if !strings.HasPrefix(prefix, "Native prefix\n\nAO standing\n\n") || !strings.Contains(prefix, `env_passthrough=["AO_SESSION_ID","AO_RUN_FILE","AO_PROJECT_ID","AO_DATA_DIR","AO_RUNTIME_LAUNCH_ID"]`) {
 		t.Fatal("lost additive prefix")
+	}
+	if !strings.Contains(prefix, workspace) {
+		t.Fatal("missing actual session workspace")
 	}
 	if config["security"].(map[string]any)["enabled"] != true || config["memory_files"].(map[string]any)["soul_path"] != "relative/SOUL.md" {
 		t.Fatal("lost native settings")
