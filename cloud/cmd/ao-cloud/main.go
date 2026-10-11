@@ -182,7 +182,20 @@ func newSandboxReconciler(
 			coderProvider = provider
 		}
 	}
-	return reconcile.New(store, sandboxresolve.New(nodeOpsProvider, dockerProvider, coderProvider, freestyleProvider, store, providerCipher), reconcile.Options{
+	return reconcile.New(store, sandboxresolve.New(nodeOpsProvider, dockerProvider, coderProvider, freestyleProvider, store, providerCipher),
+		reconcilerOptions(cfg, workerBinary, workerHelperBinary, workerBuilds, logger)), nil
+}
+
+// reconcilerOptions maps the control-plane config onto the reconciler options.
+// It is split out so the config-to-reconciler wiring (keep-warm in particular)
+// is testable without a database or provider credentials.
+func reconcilerOptions(
+	cfg config.Config,
+	workerBinary, workerHelperBinary []byte,
+	workerBuilds map[string]sandbox.WorkerBuild,
+	logger *slog.Logger,
+) reconcile.Options {
+	return reconcile.Options{
 		PublicURL:              cfg.PublicURL,
 		TerminalStreamEnabled:  cfg.TerminalStreamEnabled,
 		WorkerBinary:           workerBinary,
@@ -192,9 +205,9 @@ func newSandboxReconciler(
 		StartupTimeout:         cfg.SandboxStartupTimeout,
 		HeartbeatTimeout:       cfg.WorkerHeartbeatTimeout,
 		AllowAnonymousCheckout: cfg.AllowAnonymousCheckout,
-		KeepWarm:               cfg.IdlePauseDisabled(),
+		KeepWarm:               cfg.KeepWarm(),
 		Logger:                 logger,
-	}), nil
+	}
 }
 
 // loadWorkerBinaries reads the worker and helper binaries once at startup, but
@@ -411,12 +424,13 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	// The scanner only has anything to do where sandboxes exist to pause, and
-	// only when idle-pause is enabled. With AO_CLOUD_IDLE_PAUSE_THRESHOLD=0
-	// and AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD=0 (keep-warm) it never runs.
-	// Freestyle has its own threshold; every other provider uses the general
-	// one, and 0 keeps that provider's sessions warm.
+	// only when some provider has idle-pause enabled. With both
+	// AO_CLOUD_IDLE_PAUSE_THRESHOLD=0 and AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD=0
+	// it never runs. Freestyle has its own threshold; every other provider uses
+	// the general one, and 0 keeps that provider's sessions warm (the scanner
+	// skips them, and the reconciler's KeepWarm follows the general threshold).
 	var idlePauseScanner *idlepause.Scanner
-	if reconciler != nil && !cfg.IdlePauseDisabled() {
+	if reconciler != nil && cfg.IdlePauseScannerEnabled() {
 		idlePauseScanner = idlepause.New(store, idlepause.Options{
 			Interval:      cfg.IdlePauseInterval,
 			IdleThreshold: cfg.IdlePauseThreshold,
