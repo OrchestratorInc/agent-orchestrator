@@ -106,6 +106,7 @@ const cloudMocks = vi.hoisted(() => ({
 	syncGitHubInstallation: vi.fn(),
 	listGitHubRepositories: vi.fn(),
 	createGitHubProject: vi.fn(),
+	getCoderTemplateParameters: vi.fn(),
 	listProjects: vi.fn(),
 	signIn: vi.fn(),
 }));
@@ -161,6 +162,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 			syncGitHubInstallation: cloudMocks.syncGitHubInstallation,
 			listGitHubRepositories: cloudMocks.listGitHubRepositories,
 			createGitHubProject: cloudMocks.createGitHubProject,
+			getCoderTemplateParameters: cloudMocks.getCoderTemplateParameters,
 			listProjects: cloudMocks.listProjects,
 		},
 		ready: cloudMocks.cloudEnabled && cloudMocks.sessionStatus === "authenticated",
@@ -391,6 +393,7 @@ beforeEach(() => {
 	cloudMocks.syncGitHubInstallation.mockReset().mockResolvedValue({ installation: {} });
 	cloudMocks.listGitHubRepositories.mockReset().mockResolvedValue({ items: [], page: { hasMore: false } });
 	cloudMocks.createGitHubProject.mockReset().mockResolvedValue({ project: { id: "cp-app" } });
+	cloudMocks.getCoderTemplateParameters.mockReset().mockResolvedValue({ parameters: [] });
 	githubDaemonMocks.getGitHubStatus.mockReset().mockResolvedValue({ connected: false });
 	githubDaemonMocks.listGitHubRepos.mockReset().mockResolvedValue({ repos: [] });
 	githubDaemonMocks.saveGitHubPAT.mockReset().mockResolvedValue(undefined);
@@ -2635,6 +2638,66 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(screen.getByRole("button", { name: "Create" }));
 		await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
 		expect(cloudMocks.createGitHubProject.mock.calls[0][1].config.coder).toEqual({ templateId: "tpl-ao" });
+	});
+
+	it("lists the chosen template's options and sends only the values changed from default", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		cloudMocks.coderAvailable = true;
+		cloudMocks.coderDefault = true;
+		cloudMocks.coderTemplates = [
+			{ id: "tpl-11x", name: "dev-kit", displayName: "11x dev-kit", description: "", parameters: [] },
+		];
+		cloudMocks.getCoderTemplateParameters.mockResolvedValue({
+			parameters: [
+				{ name: "region", displayName: "Region", type: "string", mutable: false, required: false, defaultValue: "eu" },
+				{ name: "docker", displayName: "Docker", type: "bool", mutable: true, required: false, defaultValue: "true" },
+				{ name: "disk_gb", displayName: "Disk (GB)", type: "number", mutable: true, required: true, defaultValue: "50" },
+			],
+		});
+		cloudMocks.listGitHubInstallations.mockResolvedValue({
+			installations: [{
+				id: "inst-1", githubInstallationId: "100", accountLogin: "acme", accountType: "Organization",
+				status: "active", repositorySelection: "all", syncStatus: "ready", createdAt: "", updatedAt: "",
+			}],
+		});
+		cloudMocks.listGitHubRepositories.mockResolvedValue({
+			items: [{
+				githubRepositoryId: "555", name: "app", fullName: "acme/app", htmlUrl: "https://github.com/acme/app",
+				defaultBranch: "main", visibility: "private", isPrivate: true, isArchived: false, access: "write", grantedAt: "",
+			}],
+			page: { hasMore: false },
+		});
+		cloudMocks.createGitHubProject.mockResolvedValue({ project: { id: "cp-1" } });
+		const user = userEvent.setup();
+		render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
+
+		await user.click(screen.getByRole("button", { name: "Clone to the cloud" }));
+		await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
+		await user.click(await screen.findByRole("option", { name: /acme\/app/ }));
+		await screen.findByLabelText("Worker agent");
+		// No section before a template is chosen.
+		expect(screen.queryByText("Template options")).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("combobox", { name: "Template" }));
+		await user.click(await screen.findByRole("option", { name: "11x dev-kit" }));
+		expect(await screen.findByText("Template options")).toBeInTheDocument();
+		expect(cloudMocks.getCoderTemplateParameters).toHaveBeenCalledWith("org-1", "tpl-11x", expect.anything());
+
+		// Defaults prefill; only the edited field is sent.
+		expect(screen.getByRole("textbox", { name: "Region" })).toHaveValue("eu");
+		const disk = screen.getByRole("spinbutton", { name: /Disk \(GB\)/ });
+		expect(disk).toHaveValue(50);
+		await user.clear(disk);
+		await user.type(disk, "120");
+
+		await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
+		await user.click(screen.getByRole("button", { name: "Create" }));
+		await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
+		expect(cloudMocks.createGitHubProject.mock.calls[0][1].config.coder).toEqual({
+			templateId: "tpl-11x",
+			parameters: { disk_gb: "120" },
+		});
 	});
 
 	it("omits the Coder workspace name prefix when left empty", async () => {

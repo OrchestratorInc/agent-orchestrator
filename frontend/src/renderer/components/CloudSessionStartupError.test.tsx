@@ -82,6 +82,20 @@ describe("CloudSessionStartupError", () => {
 		expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
 	});
 
+	it("explains a workspace whose ready check never passed, with the probe output behind Show details", async () => {
+		mount({
+			phase: "failed",
+			code: "workspace_setup_not_ready",
+			message: "The workspace ready check (grep -q '^Ready' ~/.bootstrap-status) did not pass within 15 minutes.",
+			detail: "bootstrap: installing docker...",
+		});
+		expect(screen.getByRole("heading", { name: "The workspace setup didn't finish" })).toBeInTheDocument();
+		expect(screen.getByText(/did not pass within 15 minutes/)).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+		await userEvent.click(screen.getByRole("button", { name: "Show details" }));
+		expect(screen.getByTestId("cloud-session-startup-detail").textContent).toContain("installing docker");
+	});
+
 	it("shows no details control without diagnostics", () => {
 		mount({ phase: "failed", message: "AO couldn't open a terminal in the workspace." });
 		expect(screen.queryByRole("button", { name: "Show details" })).toBeNull();

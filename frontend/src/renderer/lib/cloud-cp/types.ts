@@ -198,12 +198,13 @@ export type CloudCpProjectRoleConfig = ProjectRoleConfig;
 export type CloudCpProjectReviewer = ProjectReviewer;
 /**
  * PATCH /orgs/{orgId}/projects/{projectId}/settings. `config.coder` accepts
- * only `workspaceNamePrefix` (an empty string returns to the default `ao`);
- * the rest of a project's coder config is fixed at creation.
+ * `workspaceNamePrefix` (an empty string returns to the default `ao`) and
+ * `parameters` (template parameter overrides, merged key by key); the rest of
+ * a project's coder config is fixed at creation.
  */
 export type CloudCpProjectSettingsRequest = ProjectSettingsInput & {
 	config?: NonNullable<ProjectSettingsInput["config"]> & {
-		coder?: { workspaceNamePrefix: string };
+		coder?: { workspaceNamePrefix?: string; parameters?: Record<string, string> };
 	};
 };
 
@@ -251,6 +252,12 @@ export interface CloudCpProjectCoderConfig {
 	 * without a trailing `-` or a `--` run.
 	 */
 	workspaceNamePrefix?: string;
+	/**
+	 * Coder template parameter overrides (name -> value), only the values the
+	 * user changed from the template default. A `list(string)` value is a JSON
+	 * array string and a `bool` value is "true" or "false".
+	 */
+	parameters?: Record<string, string>;
 }
 
 /** PATCH /orgs/{orgId}/projects/{projectId} */
@@ -335,6 +342,45 @@ export interface CloudCpCoderTemplatesResponse {
 	templates: CloudCpCoderTemplate[];
 }
 
+/** The value types a Coder template parameter declares. */
+export type CloudCpCoderTemplateParameterType = "string" | "number" | "bool" | "list(string)";
+
+export interface CloudCpCoderTemplateParameterOption {
+	name: string;
+	value: string;
+	description?: string;
+}
+
+/**
+ * One rich parameter of a Coder template's active version
+ * (GET /orgs/{orgId}/coder-templates/{templateId}/parameters).
+ */
+export interface CloudCpCoderTemplateParameter {
+	name: string;
+	displayName?: string;
+	description?: string;
+	type: CloudCpCoderTemplateParameterType;
+	/** Coder's form hint (e.g. "dropdown", "radio", "multi-select"); informational. */
+	formType?: string;
+	/** False when the value is fixed once a workspace is created. */
+	mutable: boolean;
+	required: boolean;
+	/** Encoded like a project override: JSON array string for list(string), "true"/"false" for bool. */
+	defaultValue?: string;
+	options?: CloudCpCoderTemplateParameterOption[];
+	order?: number;
+}
+
+export interface CloudCpCoderTemplateParametersResponse {
+	parameters: CloudCpCoderTemplateParameter[];
+}
+
+/**
+ * Who runs the worker and the agent inside a bring-your-own Coder workspace:
+ * AO's own `ao-worker` user (the default) or the workspace's login user.
+ */
+export type CloudCpCoderWorkerUser = "ao-worker" | "workspace";
+
 /**
  * GET /orgs/{orgId}/coder-config — an org's bring-your-own-Coder connection.
  * Non-secret fields only: the stored API token is never echoed back, surfaced
@@ -353,6 +399,8 @@ export interface CloudCpOrgCoderConfig {
 	 * bring-your-own org leaves it empty and picks the template per project.
 	 */
 	defaultTemplateId?: string;
+	/** The org-default template id as the control plane names it on the wire. */
+	templateId?: string;
 	/** Optional agent name the sandbox connects through. */
 	agentName?: string;
 	/**
@@ -363,6 +411,19 @@ export interface CloudCpOrgCoderConfig {
 	endpointServiceName?: string;
 	/** Optional AWS region for the PrivateLink endpoint (e.g. eu-north-1). */
 	region?: string;
+	/** Org-level Coder template parameter values, set by AO ops. */
+	parameters?: Record<string, string>;
+	durableRoot?: string;
+	requireMountedDurableRoot?: boolean;
+	startupTimeoutSeconds?: number;
+	/** Absent means "ao-worker". */
+	workerUser?: CloudCpCoderWorkerUser;
+	/** Shell command polled as the workspace user until it exits 0, before the worker starts. */
+	readyProbe?: string;
+	/** How long to poll `readyProbe` (30..3600); absent means 900. */
+	readyProbeTimeoutSeconds?: number;
+	/** Reuse a matching checkout under ~/work; absent means true with the workspace user. */
+	reuseExistingCheckout?: boolean;
 	/** True when an API token is stored. The token itself is never returned. */
 	tokenSet: boolean;
 }
@@ -390,6 +451,23 @@ export interface CloudCpPutOrgCoderConfigRequest {
 	endpointServiceName?: string;
 	/** Optional AWS region for the PrivateLink endpoint. */
 	region?: string;
+	// The fields below are org settings the form carries through so a save does
+	// not drop them (the PUT replaces the whole config). Send each only when set:
+	// the control plane rejects unknown fields, so an older one refuses a body
+	// that names a field it predates.
+	/** The org-default template id (the control plane's field name). */
+	templateId?: string;
+	parameters?: Record<string, string>;
+	durableRoot?: string;
+	requireMountedDurableRoot?: boolean;
+	startupTimeoutSeconds?: number;
+	/** Omit for the default "ao-worker". */
+	workerUser?: CloudCpCoderWorkerUser;
+	/** Max 1000 characters. */
+	readyProbe?: string;
+	/** 30..3600; omit for the default 900. */
+	readyProbeTimeoutSeconds?: number;
+	reuseExistingCheckout?: boolean;
 }
 
 export interface CloudCpSession {

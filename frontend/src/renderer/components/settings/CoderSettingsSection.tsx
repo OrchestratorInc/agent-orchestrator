@@ -6,6 +6,8 @@ import { aoBridge } from "../../lib/bridge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
+import { Switch } from "../ui/switch";
+import type { CloudCpOrgCoderConfig, CloudCpPutOrgCoderConfigRequest } from "../../lib/cloud-cp";
 import { useCloudGate } from "../../hooks/useCloudGate";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
@@ -48,6 +50,7 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 
 	const [baseUrl, setBaseUrl] = useState("");
 	const [token, setToken] = useState("");
+	const [devEnv, setDevEnv] = useState<DevEnvDraft>(EMPTY_DEV_ENV);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
@@ -57,6 +60,7 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	useEffect(() => {
 		if (!loaded) return;
 		setBaseUrl(loaded.baseUrl ?? "");
+		setDevEnv(devEnvDraftOf(loaded));
 	}, [loaded]);
 
 	// A connection must be saved before the control plane can reach the org's Coder
@@ -77,21 +81,26 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 		);
 	}
 
-	// Saving always sends a token: the control plane re-derives the workspace owner
-	// from it and the form never round-trips the stored secret. So Save stays
-	// disabled until a token is in the field — which also means that, once a
-	// connection is saved and its templates are loaded, Save is no longer clickable
-	// unless a new token is pasted. Re-fetching templates after that is the refresh
-	// button on the Templates section, not Save.
-	const canSave = !busy && orgId !== "" && baseUrl.trim() !== "" && token.trim() !== "";
+	// A save sends a new token when one is pasted: the control plane re-derives the
+	// workspace owner from it and the form never round-trips the stored secret.
+	// Without one, Save is only for dev-environment edits on a stored connection,
+	// which keep the stored token. So once a connection is saved and its templates
+	// are loaded, Save is not clickable until something changes; re-fetching
+	// templates is the refresh button on the Templates section, not Save.
+	const timeoutInvalid = devEnv.readyProbe.trim() !== "" && !isValidReadyProbeTimeout(devEnv.readyProbeTimeout);
+	const devEnvDirty = loaded != null && !sameDevEnv(devEnv, devEnvDraftOf(loaded));
+	const canSave = !busy && orgId !== "" && baseUrl.trim() !== "" && !timeoutInvalid
+		&& (token.trim() !== "" || (tokenStored && devEnvDirty));
 	const save = async () => {
 		if (!canSave) return;
 		setBusy(true);
 		setError(null);
 		try {
 			await client.putOrgCoderConfig(orgId, {
+				...carriedCoderConfig(loaded),
 				baseUrl: baseUrl.trim(),
 				token: token.trim() === "" ? undefined : token.trim(),
+				...devEnvRequestFields(devEnv),
 			});
 			setToken("");
 			// The connection now points at a (possibly new) Coder, so its template list
@@ -163,6 +172,78 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						{baseUrl.trim() === "" ? (
 							<p className={onboardingFieldHintClass}>{t("settings.coder.tokenCreateNeedsUrl", { defaultValue: "Enter your Coder URL above first." })}</p>
 						) : null}
+					</div>
+				</div>
+
+				<div className="flex flex-col gap-4 border-t border-border pt-4">
+					<Label className={onboardingFormLabelClass}>{t("settings.coder.devEnvTitle")}</Label>
+					<div className="flex flex-col gap-1">
+						<div className="flex items-center justify-between gap-3">
+							<Label htmlFor="coder-worker-user" className="text-[13px] text-foreground">{t("settings.coder.workerUserLabel")}</Label>
+							<Switch
+								id="coder-worker-user"
+								checked={devEnv.workspaceUser}
+								disabled={busy}
+								aria-describedby="coder-worker-user-hint"
+								onCheckedChange={(workspaceUser) => setDevEnv((current) => ({ ...current, workspaceUser }))}
+							/>
+						</div>
+						<p id="coder-worker-user-hint" className={onboardingFieldHintClass}>{t("settings.coder.workerUserHint")}</p>
+					</div>
+					<div className="flex flex-col gap-1">
+						<div className="flex items-center justify-between gap-3">
+							<Label htmlFor="coder-reuse-checkout" className="text-[13px] text-foreground">{t("settings.coder.reuseCheckoutLabel")}</Label>
+							<Switch
+								id="coder-reuse-checkout"
+								// Only meaningful for the workspace user: shown off and locked otherwise.
+								checked={devEnv.workspaceUser && devEnv.reuseCheckout}
+								disabled={busy || !devEnv.workspaceUser}
+								aria-describedby="coder-reuse-checkout-hint"
+								onCheckedChange={(reuseCheckout) => setDevEnv((current) => ({ ...current, reuseCheckout }))}
+							/>
+						</div>
+						<p id="coder-reuse-checkout-hint" className={onboardingFieldHintClass}>{t("settings.coder.reuseCheckoutHint")}</p>
+					</div>
+					<div className="flex flex-col gap-1.5">
+						<Label htmlFor="coder-ready-probe" className="text-[13px] text-foreground">{t("settings.coder.readyProbeLabel")}</Label>
+						<p id="coder-ready-probe-hint" className={onboardingFieldHintClass}>{t("settings.coder.readyProbeHint")}</p>
+						<Input
+							id="coder-ready-probe"
+							type="text"
+							autoComplete="off"
+							spellCheck={false}
+							maxLength={READY_PROBE_MAX_LENGTH}
+							className="font-mono text-[13px]"
+							placeholder="grep -q '^Ready' ~/.bootstrap-status"
+							aria-describedby="coder-ready-probe-hint"
+							disabled={busy}
+							value={devEnv.readyProbe}
+							onChange={(event) => setDevEnv((current) => ({ ...current, readyProbe: event.target.value }))}
+						/>
+					</div>
+					<div className="flex flex-col gap-1.5">
+						<Label htmlFor="coder-ready-probe-timeout" className="text-[13px] text-foreground">{t("settings.coder.readyProbeTimeoutLabel")}</Label>
+						<Input
+							id="coder-ready-probe-timeout"
+							type="number"
+							inputMode="numeric"
+							min={READY_PROBE_TIMEOUT_MIN}
+							max={READY_PROBE_TIMEOUT_MAX}
+							className="w-32 font-mono text-[13px]"
+							placeholder={String(READY_PROBE_TIMEOUT_DEFAULT)}
+							aria-invalid={timeoutInvalid || undefined}
+							aria-describedby="coder-ready-probe-timeout-hint"
+							disabled={busy || devEnv.readyProbe.trim() === ""}
+							value={devEnv.readyProbeTimeout}
+							onChange={(event) => setDevEnv((current) => ({ ...current, readyProbeTimeout: event.target.value }))}
+						/>
+						<p
+							id="coder-ready-probe-timeout-hint"
+							className={timeoutInvalid ? onboardingFieldErrorClass : onboardingFieldHintClass}
+							role={timeoutInvalid ? "alert" : undefined}
+						>
+							{timeoutInvalid ? t("settings.coder.readyProbeTimeoutInvalid") : t("settings.coder.readyProbeTimeoutHint")}
+						</p>
 					</div>
 				</div>
 
@@ -248,4 +329,86 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 			</div>
 		</SettingsSection>
 	);
+}
+
+const READY_PROBE_MAX_LENGTH = 1000;
+const READY_PROBE_TIMEOUT_MIN = 30;
+const READY_PROBE_TIMEOUT_MAX = 3600;
+const READY_PROBE_TIMEOUT_DEFAULT = 900;
+
+/** The dev-environment fields as the form edits them. */
+interface DevEnvDraft {
+	workspaceUser: boolean;
+	reuseCheckout: boolean;
+	readyProbe: string;
+	/** Seconds as typed; "" uses the default. */
+	readyProbeTimeout: string;
+}
+
+const EMPTY_DEV_ENV: DevEnvDraft = { workspaceUser: false, reuseCheckout: true, readyProbe: "", readyProbeTimeout: "" };
+
+function devEnvDraftOf(config: CloudCpOrgCoderConfig): DevEnvDraft {
+	return {
+		workspaceUser: config.workerUser === "workspace",
+		// Reusing the template's checkout defaults on for the workspace user.
+		reuseCheckout: config.reuseExistingCheckout ?? true,
+		readyProbe: config.readyProbe ?? "",
+		readyProbeTimeout: config.readyProbeTimeoutSeconds ? String(config.readyProbeTimeoutSeconds) : "",
+	};
+}
+
+function sameDevEnv(a: DevEnvDraft, b: DevEnvDraft): boolean {
+	return a.workspaceUser === b.workspaceUser
+		&& (!a.workspaceUser || a.reuseCheckout === b.reuseCheckout)
+		&& a.readyProbe.trim() === b.readyProbe.trim()
+		&& (a.readyProbe.trim() === "" || a.readyProbeTimeout.trim() === b.readyProbeTimeout.trim());
+}
+
+/** Blank uses the default; otherwise a whole number of seconds in range. */
+function isValidReadyProbeTimeout(value: string): boolean {
+	const trimmed = value.trim();
+	if (trimmed === "") return true;
+	if (!/^\d+$/.test(trimmed)) return false;
+	const seconds = Number(trimmed);
+	return seconds >= READY_PROBE_TIMEOUT_MIN && seconds <= READY_PROBE_TIMEOUT_MAX;
+}
+
+/**
+ * The dev-environment fields for the PUT body, each only when it differs from
+ * the default: the PUT replaces the stored config (so leaving one out resets
+ * it), and an older control plane rejects fields it does not know.
+ */
+function devEnvRequestFields(draft: DevEnvDraft): Partial<CloudCpPutOrgCoderConfigRequest> {
+	const fields: Partial<CloudCpPutOrgCoderConfigRequest> = {};
+	if (draft.workspaceUser) {
+		fields.workerUser = "workspace";
+		fields.reuseExistingCheckout = draft.reuseCheckout;
+	}
+	const probe = draft.readyProbe.trim();
+	if (probe !== "") {
+		fields.readyProbe = probe;
+		const timeout = draft.readyProbeTimeout.trim();
+		if (timeout !== "") fields.readyProbeTimeoutSeconds = Number(timeout);
+	}
+	return fields;
+}
+
+/**
+ * Stored settings this form does not edit, carried through a save so it does
+ * not drop them. The owner is left out on purpose: the control plane derives it
+ * from the token, which may have changed.
+ */
+function carriedCoderConfig(config: CloudCpOrgCoderConfig | null | undefined): Partial<CloudCpPutOrgCoderConfigRequest> {
+	if (!config) return {};
+	const fields: Partial<CloudCpPutOrgCoderConfigRequest> = {};
+	const templateId = config.templateId || config.defaultTemplateId;
+	if (templateId) fields.templateId = templateId;
+	if (config.agentName) fields.agentName = config.agentName;
+	if (config.endpointServiceName) fields.endpointServiceName = config.endpointServiceName;
+	if (config.region) fields.region = config.region;
+	if (config.parameters && Object.keys(config.parameters).length > 0) fields.parameters = config.parameters;
+	if (config.durableRoot) fields.durableRoot = config.durableRoot;
+	if (config.requireMountedDurableRoot) fields.requireMountedDurableRoot = true;
+	if (config.startupTimeoutSeconds) fields.startupTimeoutSeconds = config.startupTimeoutSeconds;
+	return fields;
 }
