@@ -406,3 +406,14 @@ Bound serialized output as well as raw instruction bytes (JSON escaping grows
 payloads); actual hook invocation, consumption and failure detection remain
 required. Source-only helper construction must never count as instruction proof.
 See the [native hold report](../../../../docs/research/pool-acp-hold-2026-10-11.md).
+
+
+## Nested instruction discovery is not global delivery
+
+Freebuff0.2.26 persisted nested AGENTS.md in knowledgeFiles and could read it when
+a visible task requested standing context, yet an ordinary fresh task did not
+apply its mandatory private receipt instruction. Keep those controls separate:
+file-tree inclusion or saved metadata alone does not prove private standing
+instructions independently of user input. Qualify a fresh task that never names
+the private path/token/receipt and verify the privately required side artifact.
+Do not change root/user AGENTS.md or replace native bundled agents to force it.
