@@ -30,7 +30,7 @@ func TestCurrentIdentityUsesOwnedPTYAfterNativeNewWithoutDatabaseCwd(t *testing.
 		t.Fatal(err)
 	}
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait(); _ = terminal.Close() }()
-	proc := filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid))
+	proc := filepath.Join(string(filepath.Separator), "proc", strconv.Itoa(cmd.Process.Pid))
 	stat, err := os.ReadFile(filepath.Join(proc, "stat"))
 	if err != nil {
 		t.Fatal(err)
