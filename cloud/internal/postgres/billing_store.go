@@ -58,9 +58,14 @@ func (s *Store) EnableBilling(pastDueGrace time.Duration, exemptBefore time.Time
 	s.billing = billingPolicy{enforced: true, pastDueGrace: pastDueGrace, exemptBefore: exemptBefore}
 }
 
-// exempt reports whether billing does not apply to the organization.
+// exempt reports whether billing does not apply to the organization. A
+// grandfathered organization that subscribes opts in: from then on its plan
+// applies like anyone else's.
 func (p billingPolicy) exempt(billing domain.OrgBilling) bool {
-	return billing.Exempt() || (!p.exemptBefore.IsZero() && billing.CreatedAt.Before(p.exemptBefore))
+	if billing.Exempt() {
+		return true
+	}
+	return billing.StripeSubscriptionID == "" && !p.exemptBefore.IsZero() && billing.CreatedAt.Before(p.exemptBefore)
 }
 
 // BillingEnforced reports whether plan enforcement is on.

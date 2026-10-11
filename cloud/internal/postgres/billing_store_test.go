@@ -405,6 +405,14 @@ func TestOrganizationsCreatedBeforeTheCutoffAreExempt(t *testing.T) {
 	if _, err := createKind(store, fixture, "worker"); !errors.Is(err, ErrPlanRequired) {
 		t.Fatalf("an org created after the cutoff: err = %v, want ErrPlanRequired", err)
 	}
+
+	// Subscribing opts a grandfathered org into its plan.
+	store.EnableBilling(7*24*time.Hour, time.Now().Add(-time.Hour))
+	subscribe(t, store, fixture.orgID, "active", starterLimits())
+	summary, err = store.BillingSummary(ctx, domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID)
+	if err != nil || summary.Exempt || !summary.Entitled || summary.Usage == nil {
+		t.Fatalf("summary = %+v, err = %v; want the subscribed plan to apply", summary, err)
+	}
 }
 
 // Recent worker-reported activity (a build, a dev server, terminal output)
