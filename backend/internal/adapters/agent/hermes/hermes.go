@@ -290,7 +290,10 @@ func (*Plugin) readSessionInfo(ctx context.Context, ref ports.SessionRef, launch
 	workspace := ref.WorkspacePath
 	if workspace == "" {
 		b, err := os.ReadFile(filepath.Join(sessionDir(ref.DataDir, ref.ID), "native-workspace"))
-		if err != nil || len(b) == 0 {
+		if err != nil {
+			return ports.SessionInfo{}, false, fmt.Errorf("hermes: native workspace metadata: %w", err)
+		}
+		if len(b) == 0 {
 			return ports.SessionInfo{}, false, nil
 		}
 		workspace = string(b)
