@@ -62,6 +62,40 @@ func TestHookPinsIdentityAndRejectsReplacement(t *testing.T) {
 	if strings.TrimSpace(string(got)) != first {
 		t.Fatal("native identity not pinned")
 	}
+	preload := filepath.Join(t.TempDir(), "capture.cjs")
+	capture := filepath.Join(t.TempDir(), "payload.json")
+	preloadSource := `require('node:child_process').spawnSync=(_command,_args,options)=>{require('node:fs').writeFileSync(process.env.AO_HOOK_CAPTURE,options.input);return {status:0}};`
+	if err := os.WriteFile(preload, []byte(preloadSource), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []string{"PreToolUse", "PermissionRequest", "PostToolUse", "PostToolUseFailure"} {
+		childPayload := fmt.Sprintf(`{"hook_event_name":%q,"session_id":"child-session","agent_id":"child-1","agent_type":"Explore"}`, event)
+		cmd := exec.Command(node, "--require", preload, hook)
+		cmd.Env = append(os.Environ(), "PATH="+t.TempDir(), "TMPDIR="+filepath.Join(profile, "launches", "test-generation", "tmp"), "AO_HOOK_CAPTURE="+capture)
+		cmd.Stdin = strings.NewReader(childPayload)
+		if out, err := cmd.CombinedOutput(); err != nil || len(out) != 0 {
+			t.Fatalf("%s child hook refused: %s %v", event, out, err)
+		}
+		forwarded, err := os.ReadFile(capture)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var forwardedPayload struct {
+			SessionID string `json:"session_id"`
+			AgentID   string `json:"agent_id"`
+			AgentType string `json:"agent_type"`
+		}
+		if err := json.Unmarshal(forwarded, &forwardedPayload); err != nil {
+			t.Fatal(err)
+		}
+		if forwardedPayload.SessionID != first || forwardedPayload.AgentID != "child-1" || forwardedPayload.AgentType != "Explore" {
+			t.Fatalf("%s forwarded child payload = %+v", event, forwardedPayload)
+		}
+	}
+	got, _ = os.ReadFile(identity)
+	if strings.TrimSpace(string(got)) != first {
+		t.Fatal("child tool hook replaced pinned identity")
+	}
 	out := run("mvs_00000000000000000000000000000000")
 	var rejection struct {
 		Continue *bool  `json:"continue"`
@@ -69,6 +103,12 @@ func TestHookPinsIdentityAndRejectsReplacement(t *testing.T) {
 	}
 	if json.Unmarshal(out, &rejection) != nil || rejection.Continue == nil || *rejection.Continue || rejection.Message == "" {
 		t.Fatalf("replacement not refused: %s", out)
+	}
+	cmd := exec.Command(node, hook)
+	cmd.Env = append(os.Environ(), "PATH="+t.TempDir(), "TMPDIR="+filepath.Join(profile, "launches", "test-generation", "tmp"))
+	cmd.Stdin = strings.NewReader(`{"hook_event_name":"PreToolUse","session_id":"child-session","agent_id":"child-1"}`)
+	if out, err := cmd.Output(); err != nil || !strings.Contains(string(out), `"continue":false`) {
+		t.Fatalf("incomplete child provenance accepted: %s %v", out, err)
 	}
 	if err := os.Remove(identity); err != nil {
 		t.Fatal(err)

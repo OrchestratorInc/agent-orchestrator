@@ -24,10 +24,22 @@ try {
   const payload=JSON.parse(fs.readFileSync(0,'utf8'));
   const event=payload.hook_event_name;
   const nativeID=payload.session_id;
-  if (!/^mvs_[a-f0-9]{32}$/.test(nativeID || '')) { refuse(); process.exit(0); }
   const identityFile=path.join(profile,'ao-native-id');
   const expected=fs.readFileSync(identityFile,'utf8').trim();
-  if (expected && nativeID!==expected) { refuse(); process.exit(0); }
+  const rootID=/^mvs_[a-f0-9]{32}$/;
+  if (expected && !rootID.test(expected)) { refuse(); process.exit(0); }
+  const childToolEvent=new Set(['PreToolUse','PermissionRequest','PostToolUse','PostToolUseFailure']).has(event);
+  const childToken=/^[^\x00-\x1f\x7f]{1,256}$/;
+  const validChildToken=(value)=>typeof value==='string' && value.trim()===value && childToken.test(value);
+  const childProvenance=childToolEvent && validChildToken(nativeID) && validChildToken(payload.agent_id) && validChildToken(payload.agent_type);
+  if (expected && nativeID!==expected && childProvenance) {
+    // MiniMax keeps the child's session_id on inherited tool hooks. Report the
+    // already-pinned root while preserving agent_id/agent_type provenance.
+    payload.session_id=expected;
+  } else {
+    if (!rootID.test(nativeID || '')) { refuse(); process.exit(0); }
+    if (expected && nativeID!==expected) { refuse(); process.exit(0); }
+  }
   if (!expected) {
     if (event!=='SessionStart') { refuse(); process.exit(0); }
     fs.writeFileSync(identityFile,nativeID+'\n',{mode:0o600});
