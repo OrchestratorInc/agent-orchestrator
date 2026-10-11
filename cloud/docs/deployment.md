@@ -453,12 +453,14 @@ rolls the release, so organizations must be entitled first.
 | `ao-cloud/production/coder` | already exists | unchanged |
 | `ao-cloud/production/freestyle` | before production lists Freestyle | `api_key`, `default_snapshot`, `worker_token_ttl`, `snapshot_by_harness` (the first bake overwrites the last two) |
 | `ao-cloud/production/stripe` | before billing goes live | `secret_key` (live `sk_live_`/`rk_live_`), `webhook_secret`, `price_ids`, optional `portal_configuration` and `exempt_orgs_created_before` |
+| `ao-cloud/production/support` | optional, any time | `token` (32+ chars): enables the operator support lookup (`docs/support-runbook.md`) |
 
 Also before production lists Freestyle: create the
 `ao-cloud-production-artifacts` S3 bucket (or set
 `AO_CLOUD_PRODUCTION_ARTIFACTS_BUCKET`), and grant
 `ao-cloud-production-execution-role` `secretsmanager:GetSecretValue` on each
-new secret. Register the production Stripe webhook endpoint against
+new secret, including `support`: a task whose execution role cannot read a
+referenced secret never starts, and the deploy rolls back. Register the production Stripe webhook endpoint against
 `https://api.aoagents.dev` and use its signing secret as `webhook_secret`.
 
 ### 2. WorkOS organization metadata
@@ -477,26 +479,40 @@ organizations without the key get `AO_CLOUD_DEFAULT_ORG_CAPABILITIES`
 - B2C self-serve organizations need nothing: they get the defaults and
   `self_serve` billing.
 
+Staging and production share one WorkOS environment (the same API key), so
+metadata set for a staging test is live for that organization in production too.
+Production ignores it until it runs a gated release.
+
+Personal organizations (no WorkOS organization) cannot carry metadata. Before
+gating `coder` in production, list personal organizations with live Coder
+sandboxes; their owners must move to a tagged WorkOS organization, or production
+must leave `coder` ungated (`AO_CLOUD_CAPABILITY_GATED_PROVIDERS=freestyle`) until
+they do.
+
 The control plane caches organization metadata for a few minutes, so allow for
 that before testing a change.
 
 ### 3. Rollout order
 
-1. Staging: set the internal organization's metadata in WorkOS Staging, then
+1. Staging: set the internal organization's metadata in WorkOS, then
    `deploy-staging.sh` (staging.env gates `coder,freestyle`). Verify a
    `capabilities=coder` organization gets Coder, an organization without
    metadata gets Freestyle only, and `/me` `offering` matches.
 2. Billing in staging: with `ao-cloud/staging/stripe` present, verify Checkout,
    the webhook, and that a `billing=contract` organization is never charged.
 3. Production metadata: tag every existing B2B organization and the internal
-   organization in WorkOS Production (step 2).
-4. Promote Coder only: `promote-production.sh --rolling-200-100` with
+   organization in WorkOS (step 2).
+4. Clear the worker image scan: the promotion refuses non-allowlisted
+   CRITICAL/HIGH findings. Debian base packages (gnutls28, cyrus-sasl2 as of
+   2026-10-11) can surface new ones with no fix yet; assess each before
+   adding it to the shared allowlist, never with a one-off override.
+5. Promote Coder only: `promote-production.sh --rolling-200-100` with
    production.env as checked in (`coder`, gate on, billing off unless the
    Stripe secret exists).
-5. Freestyle in production: create the Freestyle secret and artifacts bucket,
+6. Freestyle in production: create the Freestyle secret and artifacts bucket,
    set `AO_CLOUD_SANDBOX_PROVIDERS=coder,freestyle` in
    `scripts/offering/production.env`, and promote again.
-6. Billing in production: create `ao-cloud/production/stripe` and promote
+7. Billing in production: create `ao-cloud/production/stripe` and promote
    again. Organizations created before `exempt_orgs_created_before` stay
    exempt.
 
