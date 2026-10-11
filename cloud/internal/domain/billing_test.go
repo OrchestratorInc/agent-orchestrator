@@ -120,3 +120,33 @@ func TestRunningSandboxesDefaultToTheTotalAndCannotExceedIt(t *testing.T) {
 		t.Fatal("a running cap above the total was accepted")
 	}
 }
+
+func TestParsePlanLimitsReadsOptionalFeatures(t *testing.T) {
+	limits, err := ParsePlanLimits(starterMetadata())
+	if err != nil || len(limits.Features) != 0 {
+		t.Fatalf("no ao_features: %+v %v", limits.Features, err)
+	}
+	metadata := starterMetadata()
+	metadata[MetadataFeatures] = " SSO, priority-support,,sso "
+	limits, err = ParsePlanLimits(metadata)
+	if err != nil || strings.Join(limits.Features, ",") != "sso,priority-support" {
+		t.Fatalf("features = %v err = %v", limits.Features, err)
+	}
+	if !limits.HasFeature("sso") || limits.HasFeature("audit-log") {
+		t.Fatalf("HasFeature wrong for %v", limits.Features)
+	}
+}
+
+func TestPendingCheckoutOpen(t *testing.T) {
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	var none *PendingCheckout
+	if none.Open(now) {
+		t.Fatal("nil checkout is open")
+	}
+	if !(&PendingCheckout{ID: "cs_1", ExpiresAt: now.Add(time.Hour)}).Open(now) {
+		t.Fatal("an hour left must be open")
+	}
+	if (&PendingCheckout{ID: "cs_1", ExpiresAt: now.Add(30 * time.Second)}).Open(now) {
+		t.Fatal("a link about to expire must not be handed out")
+	}
+}

@@ -24,6 +24,12 @@ type Principal struct {
 	// optional features such as the coder sandbox provider. Empty for personal or
 	// local organizations.
 	OrgCapabilities []string
+	// OrgBilling is how the active organization pays for AO Cloud, seeded from
+	// WorkOS organization metadata (metadata.billing) or the deployment
+	// default: OrgBillingContract exempts it from self-serve plans. Empty when
+	// unknown, in which case the last value recorded on the organization
+	// applies.
+	OrgBilling string
 }
 
 type Membership struct {

@@ -70,7 +70,9 @@ func (s *Server) createTerminalTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A ticket wakes a paused sandbox, so it is subject to the plan's usage
-	// limits like resume is.
+	// limits like resume is. This early answer takes no lock and returns at
+	// once for unbilled (Coder, Docker) and running sessions; the transaction
+	// that wakes the sandbox checks again.
 	if s.billingStore != nil {
 		if err := s.billingStore.WakeAllowed(r.Context(), principalFrom(r), orgID, sessionID); err != nil {
 			s.writeStoreError(w, r, err)

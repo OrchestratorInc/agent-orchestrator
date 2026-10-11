@@ -82,18 +82,21 @@ func TestCreateCheckoutSessionSendsSubscriptionForm(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		form = r.PostForm
-		_, _ = io.WriteString(w, `{"url":"https://checkout.stripe.com/c/pay/cs_test"}`)
+		_, _ = io.WriteString(w, `{"id":"cs_test","url":"https://checkout.stripe.com/c/pay/cs_test","expires_at":1800003600}`)
 	}))
 	defer server.Close()
-	link, err := NewClient("rk_test", server.URL).CreateCheckoutSession(context.Background(), CheckoutRequest{
+	session, err := NewClient("rk_test", server.URL).CreateCheckoutSession(context.Background(), CheckoutRequest{
 		OrgID: "org-1", CustomerID: "cus_1", PriceID: "price_pro", SuccessURL: "https://a/ok", CancelURL: "https://a/no",
+		ExpiresAt: time.Unix(1800003600, 0),
 	})
-	if err != nil || !strings.HasPrefix(link, "https://checkout.stripe.com/") {
-		t.Fatalf("link = %q err = %v", link, err)
+	if err != nil || !strings.HasPrefix(session.URL, "https://checkout.stripe.com/") || session.ID != "cs_test" ||
+		session.ExpiresAt.Unix() != 1800003600 {
+		t.Fatalf("session = %+v err = %v", session, err)
 	}
 	for key, want := range map[string]string{
 		"mode": "subscription", "customer": "cus_1", "client_reference_id": "org-1",
 		"line_items[0][price]": "price_pro", "subscription_data[metadata][ao_org_id]": "org-1",
+		"expires_at": "1800003600",
 	} {
 		if form.Get(key) != want {
 			t.Errorf("%s = %q, want %q", key, form.Get(key), want)
@@ -111,5 +114,77 @@ func TestAPIErrorsSurfaceStripeMessage(t *testing.T) {
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Code != "resource_missing" || apiErr.Status != 400 {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// Every request pins the API version whose shapes the client reads.
+func TestRequestsPinTheStripeAPIVersion(t *testing.T) {
+	var version string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		version = r.Header.Get("Stripe-Version")
+		_, _ = io.WriteString(w, `{"id":"price_1","unit_amount":2000,"currency":"usd","recurring":{"interval":"month"},
+			"product":{"metadata":{"ao_plan":"pro","ao_max_active_sandboxes":"4","ao_orchestrator_slots":"1",
+			"ao_window_hours":"5","ao_window_session_hours":"12","ao_weekly_session_hours":"40",
+			"ao_manual_resets_per_month":"1","ao_features":"Priority-Support, sso ,sso"}}}`)
+	}))
+	defer server.Close()
+	price, err := NewClient("rk_test", server.URL).GetPrice(context.Background(), "price_1")
+	if err != nil || version != APIVersion {
+		t.Fatalf("version = %q err = %v", version, err)
+	}
+	if price.Limits == nil || strings.Join(price.Limits.Features, ",") != "priority-support,sso" {
+		t.Fatalf("plan features = %+v", price.Limits)
+	}
+}
+
+// An invoice names its subscription under parent.subscription_details from
+// 2025-03-31.basil on, and at the top level before; both are read.
+func TestInvoiceSubscriptionReadsBothShapes(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	for name, payload := range map[string]string{
+		"basil":  `{"id":"evt_1","type":"invoice.paid","data":{"object":{"id":"in_1","parent":{"subscription_details":{"subscription":"sub_1"}}}}}`,
+		"legacy": `{"id":"evt_1","type":"invoice.paid","data":{"object":{"id":"in_1","subscription":"sub_1"}}}`,
+	} {
+		event, err := VerifyWebhook([]byte(payload), sign([]byte(payload), "whsec_test", now), "whsec_test", now)
+		if err != nil || event.InvoiceSubscription() != "sub_1" {
+			t.Errorf("%s: subscription = %q err = %v", name, event.InvoiceSubscription(), err)
+		}
+	}
+}
+
+// Expiring a Checkout that was already paid reports it complete instead of
+// failing, so the caller does not start a second one.
+func TestExpireCheckoutSessionReportsACompletedSession(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/checkout/sessions/cs_open/expire":
+			_, _ = io.WriteString(w, `{"id":"cs_open","status":"expired"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/checkout/sessions/cs_paid/expire":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"type":"invalid_request_error","message":"Only open sessions can be expired"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/checkout/sessions/cs_paid":
+			_, _ = io.WriteString(w, `{"id":"cs_paid","status":"complete"}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client := NewClient("rk_test", server.URL)
+	if status, err := client.ExpireCheckoutSession(context.Background(), "cs_open"); err != nil || status != "expired" {
+		t.Fatalf("open: %q %v", status, err)
+	}
+	if status, err := client.ExpireCheckoutSession(context.Background(), "cs_paid"); err != nil || status != "complete" {
+		t.Fatalf("paid: %q %v", status, err)
+	}
+}
+
+func TestGetSubscriptionReadsCreated(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"id":"sub_1","customer":"cus_1","status":"active","created":1790000000,"items":{"data":[]}}`)
+	}))
+	defer server.Close()
+	subscription, err := NewClient("rk_test", server.URL).GetSubscription(context.Background(), "sub_1")
+	if err != nil || subscription.Created == nil || subscription.Created.Unix() != 1790000000 {
+		t.Fatalf("subscription = %+v err = %v", subscription, err)
 	}
 }

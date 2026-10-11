@@ -523,6 +523,8 @@ func run(logger *slog.Logger) error {
 	}
 	if cfg.BillingEnabled() {
 		store.EnableBilling(cfg.BillingPastDueGrace, cfg.BillingExemptOrgsCreatedBefore)
+		store.SetBillingBusyGrace(cfg.BillingBusyGrace)
+		store.SetPaywalledFeatures(cfg.PaywalledFeatures)
 		apiOptions.Billing = &httpapi.BillingOptions{
 			Stripe:              billing.NewClient(cfg.StripeSecretKey, cfg.StripeBaseURL),
 			WebhookSecret:       cfg.StripeWebhookSecret,

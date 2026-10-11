@@ -62,3 +62,22 @@ func TestBillingExemptCutoffParses(t *testing.T) {
 		t.Fatal("an unparseable cutoff was accepted")
 	}
 }
+
+func TestBillingBusyGraceAndPaywalledFeatures(t *testing.T) {
+	setWorkOSTestEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BillingBusyGrace != 5*time.Minute || len(cfg.PaywalledFeatures) != 0 {
+		t.Fatalf("defaults: grace %v, paywalled %v; want 5m and nothing gated", cfg.BillingBusyGrace, cfg.PaywalledFeatures)
+	}
+	t.Setenv("AO_CLOUD_BILLING_BUSY_GRACE", "90s")
+	t.Setenv("AO_CLOUD_PAYWALLED_FEATURES", " SSO, audit-log ,")
+	if cfg, err = Load(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BillingBusyGrace != 90*time.Second || strings.Join(cfg.PaywalledFeatures, ",") != "sso,audit-log" {
+		t.Fatalf("grace %v, paywalled %v", cfg.BillingBusyGrace, cfg.PaywalledFeatures)
+	}
+}

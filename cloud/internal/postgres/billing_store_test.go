@@ -23,7 +23,7 @@ func subscribe(t *testing.T, store *Store, orgID, status string, limits *domain.
 	t.Helper()
 	start := time.Now().Add(-24 * time.Hour)
 	end := start.AddDate(0, 1, 0)
-	if err := store.ApplySubscription(context.Background(), orgID, SubscriptionUpdate{
+	if _, err := store.ApplySubscription(context.Background(), orgID, SubscriptionUpdate{
 		SubscriptionID: "sub_" + orgID[:8], Status: status, Limits: limits, PeriodStart: &start, PeriodEnd: &end,
 	}); err != nil {
 		t.Fatal(err)

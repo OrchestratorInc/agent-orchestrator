@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 )
 
@@ -147,6 +148,14 @@ type Config struct {
 	// BillingExemptOrgsCreatedBefore grandfathers organizations created before
 	// it (AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE, RFC 3339). Zero: none.
 	BillingExemptOrgsCreatedBefore time.Time
+	// BillingBusyGrace is how long the usage enforcer lets a busy Freestyle
+	// session of an over-limit organization finish its work before pausing it
+	// anyway (AO_CLOUD_BILLING_BUSY_GRACE, default 5m).
+	BillingBusyGrace time.Duration
+	// PaywalledFeatures are the features a self-serve plan must list (Stripe
+	// product metadata ao_features) to be used (AO_CLOUD_PAYWALLED_FEATURES,
+	// comma list). Empty, the default, gates nothing.
+	PaywalledFeatures []string
 
 	DockerHost           string
 	DockerWorkerImage    string
@@ -331,6 +340,8 @@ func Load() (Config, error) {
 		StripePortalConfiguration:      strings.TrimSpace(os.Getenv("AO_CLOUD_STRIPE_PORTAL_CONFIGURATION")),
 		BillingPastDueGrace:            durationEnv("AO_CLOUD_BILLING_PAST_DUE_GRACE", 7*24*time.Hour),
 		BillingExemptOrgsCreatedBefore: billingExemptBefore,
+		BillingBusyGrace:               durationEnv("AO_CLOUD_BILLING_BUSY_GRACE", 5*time.Minute),
+		PaywalledFeatures:              domain.ParseFeatureList(os.Getenv("AO_CLOUD_PAYWALLED_FEATURES")),
 
 		DockerHost:        envOrDefault("AO_CLOUD_DOCKER_HOST", "unix:///var/run/docker.sock"),
 		DockerWorkerImage: envOrDefault("AO_CLOUD_DOCKER_WORKER_IMAGE", "ao-cloud-worker:local"),
@@ -620,6 +631,9 @@ func Load() (Config, error) {
 		}
 		if cfg.BillingPastDueGrace < 0 {
 			return Config{}, errors.New("AO_CLOUD_BILLING_PAST_DUE_GRACE must not be negative")
+		}
+		if cfg.BillingBusyGrace < 0 {
+			return Config{}, errors.New("AO_CLOUD_BILLING_BUSY_GRACE must not be negative")
 		}
 	}
 	if cfg.InterfaceHandoffInterval <= 0 {

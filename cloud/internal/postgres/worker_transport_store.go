@@ -551,7 +551,12 @@ func (s *Store) IssueTerminalTicket(
 			"threshold", unconsumedTicketThreshold,
 		)
 	}
-	if err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, _ sessionAccess) error {
+	if err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
+		// Waking a paused billed session is within the plan only. An unbilled
+		// (Coder, Docker) or running session returns before any lock.
+		if err := s.billing.forAccess(principal, access).wakeAdmissionTx(ctx, tx, orgID, sessionID, wakeFromPaused); err != nil {
+			return err
+		}
 		_, err := tx.Exec(ctx,
 			`UPDATE ao_sandboxes
 			SET desired_state = CASE WHEN desired_state = 'paused' THEN 'running' ELSE desired_state END,
@@ -1138,6 +1143,14 @@ func (s *Store) queueTerminalRequest(
 		// mirrors the wake in IssueTerminalTicket for the in-session case where the
 		// box paused underneath an already-open terminal.
 		if kind == "terminal.input" || kind == "terminal.resize" {
+			// A billed session beyond its plan is not woken by a keystroke; it
+			// stays paused (the plan refusal is shown when the terminal is
+			// opened). This runs before anything is inserted, so the plan
+			// check may take the organization lock.
+			wake, err := s.billing.messageWakeTx(ctx, tx, terminal.OrgID, terminal.SessionID, false)
+			if err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx,
 				`UPDATE ao_sandboxes
 				SET desired_state = CASE WHEN desired_state = 'paused' THEN 'running' ELSE desired_state END,
@@ -1146,7 +1159,7 @@ func (s *Store) queueTerminalRequest(
 					interactive_until = now() + $3::interval,
 					updated_at = now()
 				WHERE org_id = $1 AND session_id = $2
-				  AND desired_state IN ('running', 'paused')
+				  AND (desired_state = 'running' OR ($5 AND desired_state = 'paused'))
 				  AND (
 					desired_state = 'paused'
 					OR interactive_until IS NULL
@@ -1155,6 +1168,7 @@ func (s *Store) queueTerminalRequest(
 				terminal.OrgID, terminal.SessionID,
 				intervalString(interactiveSessionLease),
 				intervalString(interactiveSessionLease-interactionRefreshThrottle),
+				wake,
 			); err != nil {
 				return err
 			}

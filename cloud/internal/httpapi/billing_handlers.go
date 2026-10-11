@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -15,12 +16,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/billing"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 )
 
 // StripeAPI is the part of the Stripe client the billing handlers use.
 type StripeAPI interface {
 	CreateCustomer(ctx context.Context, orgID, name string) (string, error)
-	CreateCheckoutSession(ctx context.Context, input billing.CheckoutRequest) (string, error)
+	CreateCheckoutSession(ctx context.Context, input billing.CheckoutRequest) (billing.CheckoutSession, error)
+	ExpireCheckoutSession(ctx context.Context, sessionID string) (string, error)
 	CreatePortalSession(ctx context.Context, customerID, returnURL, configuration string) (string, error)
 	GetSubscription(ctx context.Context, subscriptionID string) (billing.Subscription, error)
 	GetPrice(ctx context.Context, priceID string) (billing.Price, error)
@@ -49,15 +52,39 @@ type billingStore interface {
 	OrgDisplayName(ctx context.Context, orgID string) (string, error)
 	LinkStripeCustomer(ctx context.Context, orgID, customerID string) error
 	OrgForStripeCustomer(ctx context.Context, customerID string) (string, bool, error)
-	ApplySubscription(ctx context.Context, orgID string, update postgres.SubscriptionUpdate) error
+	ApplySubscriptionLocked(ctx context.Context, orgID string,
+		fetch func(ctx context.Context, current domain.OrgBilling) (postgres.SubscriptionUpdate, error),
+	) (postgres.SubscriptionOutcome, error)
+	StartCheckout(ctx context.Context, principal domain.Principal, orgID string,
+		start func(ctx context.Context, state domain.OrgBilling) (postgres.CheckoutStart, error),
+	) (*domain.PendingCheckout, error)
+	ClearPendingCheckout(ctx context.Context, orgID, checkoutID string) error
 	StripeEventSeen(ctx context.Context, eventID string) (bool, error)
 	RecordStripeEvent(ctx context.Context, eventID, eventType string) error
 	ResetWeeklyUsage(ctx context.Context, principal domain.Principal, orgID string) error
 	WakeAllowed(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
+	OrgHasFeature(ctx context.Context, orgID, feature string) bool
 }
 
 func (s *Server) billingReady() bool {
 	return s.billingOptions != nil && s.billingStore != nil && s.billingOptions.Stripe != nil
+}
+
+// orgHasFeature reports whether the organization may use a paywalled feature
+// (see postgres.Store.OrgHasFeature). Without billing every feature is
+// available.
+func (s *Server) orgHasFeature(ctx context.Context, orgID, feature string) bool {
+	if s.billingStore == nil {
+		return true
+	}
+	return s.billingStore.OrgHasFeature(ctx, orgID, feature)
+}
+
+// orgOffersBilledProvider reports whether the principal's organization may
+// run sessions on a billed provider (Freestyle). An organization offered only
+// Coder or Docker has nothing to buy, so plans do not apply to it.
+func (s *Server) orgOffersBilledProvider(principal domain.Principal) bool {
+	return slices.Contains(s.providersForOrg(principal, s.availableSandboxProviders), sandbox.ProviderFreestyle)
 }
 
 // planOffer is one plan the organization can choose, priced from Stripe.
@@ -71,44 +98,104 @@ type billingSummaryResponse struct {
 	Plans []planOffer `json:"plans"`
 }
 
-// planOfferTTL bounds how stale a cached price may be: a price edited in the
-// Stripe dashboard shows in the app within this long.
-const planOfferTTL = 10 * time.Minute
+const (
+	// planOfferTTL bounds how stale a cached price may be: a price edited in
+	// the Stripe dashboard shows in the app within this long.
+	planOfferTTL = 10 * time.Minute
+	// planOfferRetryTTL is how long a listing with a price Stripe failed to
+	// return is served before Stripe is asked again, so an outage does not
+	// put a Stripe call on every billing screen load.
+	planOfferRetryTTL = time.Minute
+	// planOfferFetchTimeout bounds one refresh of every price.
+	planOfferFetchTimeout = 30 * time.Second
+)
 
 type planOfferCache struct {
-	mu      sync.Mutex
-	offers  []planOffer
-	fetched time.Time
+	mu       sync.Mutex
+	offers   []planOffer
+	fetched  time.Time
+	complete bool
+	// inflight is closed when the refresh under way finishes.
+	inflight chan struct{}
 }
 
 // planOffers returns the configured plans priced from Stripe, cached. A plan
-// whose price cannot be read is listed by name only rather than hidden.
+// whose price cannot be read is listed by name only rather than hidden. One
+// request refreshes the cache at a time, without holding the cache lock
+// while it waits on Stripe; others are served the previous listing, or wait
+// for the first one.
 func (s *Server) planOffers(ctx context.Context) []planOffer {
 	cache := &s.offerCache
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-	if cache.offers != nil && time.Since(cache.fetched) < planOfferTTL {
-		return cache.offers
+	for {
+		cache.mu.Lock()
+		if cache.offers != nil {
+			ttl := planOfferTTL
+			if !cache.complete {
+				ttl = planOfferRetryTTL
+			}
+			if time.Since(cache.fetched) < ttl {
+				offers := cache.offers
+				cache.mu.Unlock()
+				return offers
+			}
+		}
+		if wait := cache.inflight; wait != nil {
+			stale := cache.offers
+			cache.mu.Unlock()
+			if stale != nil {
+				return stale
+			}
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return s.unpricedPlanOffers()
+			}
+		}
+		done := make(chan struct{})
+		cache.inflight = done
+		cache.mu.Unlock()
+
+		// The refresh outlives a caller that gives up: others may be waiting.
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), planOfferFetchTimeout)
+		offers, complete := s.fetchPlanOffers(fetchCtx)
+		cancel()
+
+		cache.mu.Lock()
+		cache.offers, cache.fetched, cache.complete, cache.inflight = offers, time.Now(), complete, nil
+		cache.mu.Unlock()
+		close(done)
+		return offers
 	}
+}
+
+// fetchPlanOffers prices every configured plan from Stripe, cheapest first.
+func (s *Server) fetchPlanOffers(ctx context.Context) ([]planOffer, bool) {
+	offers := s.unpricedPlanOffers()
+	complete := true
+	for index := range offers {
+		price, err := s.billingOptions.Stripe.GetPrice(ctx, offers[index].ID)
+		if err != nil {
+			s.logger.Warn("read Stripe price", "plan", offers[index].Name, "price_id", offers[index].ID, "error", err)
+			complete = false
+			continue
+		}
+		offers[index].Price = price
+	}
+	sort.SliceStable(offers, func(i, j int) bool { return offers[i].UnitAmount < offers[j].UnitAmount })
+	return offers, complete
+}
+
+// unpricedPlanOffers lists the configured plans by name, without prices.
+func (s *Server) unpricedPlanOffers() []planOffer {
 	names := make([]string, 0, len(s.billingOptions.PriceIDs))
 	for name := range s.billingOptions.PriceIDs {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	offers := make([]planOffer, 0, len(names))
-	complete := true
 	for _, name := range names {
-		priceID := s.billingOptions.PriceIDs[name]
-		price, err := s.billingOptions.Stripe.GetPrice(ctx, priceID)
-		if err != nil {
-			s.logger.Warn("read Stripe price", "plan", name, "price_id", priceID, "error", err)
-			price, complete = billing.Price{ID: priceID}, false
-		}
-		offers = append(offers, planOffer{Name: name, Price: price})
-	}
-	sort.SliceStable(offers, func(i, j int) bool { return offers[i].UnitAmount < offers[j].UnitAmount })
-	if complete {
-		cache.offers, cache.fetched = offers, time.Now()
+		offers = append(offers, planOffer{Name: name, Price: billing.Price{ID: s.billingOptions.PriceIDs[name]}})
 	}
 	return offers
 }
@@ -120,22 +207,54 @@ func (s *Server) getBilling(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.billingStore == nil {
-		writeJSON(w, http.StatusOK, billingSummaryResponse{Plans: []planOffer{}})
+		writeJSON(w, http.StatusOK, billingSummaryResponse{
+			BillingSummary: domain.BillingSummary{BillingMode: domain.BillingModeOff, Features: []string{}},
+			Plans:          []planOffer{},
+		})
 		return
 	}
-	summary, err := s.billingStore.BillingSummary(r.Context(), principalFrom(r), orgID)
+	principal := principalFrom(r)
+	summary, err := s.billingStore.BillingSummary(r.Context(), principal, orgID)
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	plans := []planOffer{}
-	if s.billingReady() {
-		plans = s.planOffers(r.Context())
-	} else {
+	if summary.Features == nil {
+		summary.Features = []string{}
+	}
+	switch {
+	case !s.billingReady():
 		summary.Enabled = false
+		summary.BillingMode = domain.BillingModeOff
+	case summary.BillingMode == domain.BillingModeSelfServe && !s.orgOffersBilledProvider(principal):
+		// Nothing this organization runs is billed: no plans to show.
+		summary.BillingMode = domain.BillingModeOff
+	}
+	plans := []planOffer{}
+	if summary.BillingMode == domain.BillingModeSelfServe {
+		plans = s.planOffers(r.Context())
 	}
 	writeJSON(w, http.StatusOK, billingSummaryResponse{BillingSummary: summary, Plans: plans})
 }
+
+// checkoutSessionTTL is how long a Checkout link stays payable. While it is
+// open the organization's admins are handed the same link again rather than
+// a second Checkout, which could start a second subscription.
+const checkoutSessionTTL = time.Hour
+
+var (
+	errAlreadySubscribed = errors.New("organization already has a subscription")
+	errCheckoutCompleted = errors.New("organization's checkout just completed")
+)
+
+// stripeCallError is a failed call to Stripe made while starting a Checkout.
+type stripeCallError struct {
+	step string
+	err  error
+}
+
+func (e *stripeCallError) Error() string { return e.step + ": " + e.err.Error() }
+func (e *stripeCallError) Unwrap() error { return e.err }
 
 func (s *Server) createBillingCheckout(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
@@ -159,52 +278,79 @@ func (s *Server) createBillingCheckout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "UNKNOWN_PLAN", "Choose one of the available plans.")
 		return
 	}
-	principal := principalFrom(r)
-	if err := s.billingStore.RequireOrgAdmin(r.Context(), principal, orgID); err != nil {
-		s.writeStoreError(w, r, err)
-		return
-	}
-	state, err := s.billingStore.OrgBilling(r.Context(), principal, orgID)
-	if err != nil {
-		s.writeStoreError(w, r, err)
-		return
-	}
-	// A second Checkout would start a second subscription; plan changes go
-	// through the Customer Portal instead.
-	if state.StripeSubscriptionID != "" && subscriptionLive(state.SubscriptionStatus) {
+	stripe := s.billingOptions.Stripe
+	now := time.Now()
+	// Runs under the organization's lock: concurrent requests see the
+	// Checkout the first one starts and are handed the same link.
+	pending, err := s.billingStore.StartCheckout(r.Context(), principalFrom(r), orgID,
+		func(ctx context.Context, state domain.OrgBilling) (postgres.CheckoutStart, error) {
+			var start postgres.CheckoutStart
+			// A second Checkout would start a second subscription; plan
+			// changes go through the Customer Portal instead.
+			if state.StripeSubscriptionID != "" && subscriptionLive(state.SubscriptionStatus) {
+				return start, errAlreadySubscribed
+			}
+			if open := state.PendingCheckout; open.Open(now) {
+				if open.PriceID == price {
+					start.Pending = open
+					return start, nil
+				}
+				// Another plan: close the open Checkout first, so only one
+				// can ever be paid.
+				status, err := stripe.ExpireCheckoutSession(ctx, open.ID)
+				if err != nil {
+					return start, &stripeCallError{"expire Stripe checkout session", err}
+				}
+				if status == "complete" {
+					return start, errCheckoutCompleted
+				}
+				start.ClearPending = true
+			}
+			customerID := state.StripeCustomerID
+			if customerID == "" {
+				name, err := s.billingStore.OrgDisplayName(ctx, orgID)
+				if err != nil {
+					return start, err
+				}
+				if customerID, err = stripe.CreateCustomer(ctx, orgID, name); err != nil {
+					return start, &stripeCallError{"create Stripe customer", err}
+				}
+				start.CustomerID = customerID
+			}
+			session, err := stripe.CreateCheckoutSession(ctx, billing.CheckoutRequest{
+				OrgID:      orgID,
+				CustomerID: customerID,
+				PriceID:    price,
+				SuccessURL: s.billingOptions.ReturnURL + "?checkout=success",
+				CancelURL:  s.billingOptions.ReturnURL + "?checkout=cancelled",
+				ExpiresAt:  now.Add(checkoutSessionTTL),
+			})
+			if err != nil {
+				return start, &stripeCallError{"create Stripe checkout session", err}
+			}
+			start.Pending = &domain.PendingCheckout{
+				ID: session.ID, URL: session.URL, PriceID: price, ExpiresAt: session.ExpiresAt,
+			}
+			start.ClearPending = false
+			return start, nil
+		})
+	var callErr *stripeCallError
+	switch {
+	case errors.Is(err, errAlreadySubscribed):
 		writeError(w, r, http.StatusConflict, "ALREADY_SUBSCRIBED",
 			"This organization already has a subscription. Use Manage billing to change plans.")
-		return
+	case errors.Is(err, errCheckoutCompleted):
+		writeError(w, r, http.StatusConflict, "CHECKOUT_COMPLETED",
+			"A checkout for this organization was just paid. Your plan will appear in a moment.")
+	case errors.As(err, &callErr):
+		s.writeBillingProviderError(w, r, callErr.step, callErr.err)
+	case err != nil:
+		s.writeStoreError(w, r, err)
+	case pending == nil:
+		s.writeStoreError(w, r, errors.New("checkout started without a session"))
+	default:
+		writeJSON(w, http.StatusOK, map[string]string{"url": pending.URL})
 	}
-	customerID := state.StripeCustomerID
-	if customerID == "" {
-		name, err := s.billingStore.OrgDisplayName(r.Context(), orgID)
-		if err != nil {
-			s.writeStoreError(w, r, err)
-			return
-		}
-		customerID, err = s.billingOptions.Stripe.CreateCustomer(r.Context(), orgID, name)
-		if err != nil {
-			s.writeBillingProviderError(w, r, "create Stripe customer", err)
-			return
-		}
-		if err := s.billingStore.LinkStripeCustomer(r.Context(), orgID, customerID); err != nil {
-			s.writeStoreError(w, r, err)
-			return
-		}
-	}
-	link, err := s.billingOptions.Stripe.CreateCheckoutSession(r.Context(), billing.CheckoutRequest{
-		OrgID:      orgID,
-		CustomerID: customerID,
-		PriceID:    price,
-		SuccessURL: s.billingOptions.ReturnURL + "?checkout=success",
-		CancelURL:  s.billingOptions.ReturnURL + "?checkout=cancelled",
-	})
-	if err != nil {
-		s.writeBillingProviderError(w, r, "create Stripe checkout session", err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"url": link})
 }
 
 func subscriptionLive(status string) bool {
@@ -274,7 +420,8 @@ func (s *Server) resetBillingUsage(w http.ResponseWriter, r *http.Request) {
 // stripeWebhook applies subscription changes. Every handled event re-reads
 // the subscription from Stripe, so duplicates and out-of-order deliveries
 // converge on Stripe's current state. A transient failure answers 5xx and
-// Stripe retries.
+// Stripe retries; an event for an organization that does not exist (any
+// more) is acknowledged, so Stripe stops retrying it.
 func (s *Server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 	if !s.billingReady() {
 		writeError(w, r, http.StatusNotFound, "BILLING_DISABLED", "Billing is not enabled on this deployment.")
@@ -300,27 +447,9 @@ func (s *Server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	object := event.Data.Object
-	subscriptionID := ""
-	switch event.Type {
-	case "checkout.session.completed":
-		if object.ClientReferenceID != "" && object.Customer != "" {
-			if err := s.billingStore.LinkStripeCustomer(ctx, object.ClientReferenceID, object.Customer); err != nil {
-				s.writeWebhookFailure(w, r, event, "link customer", err)
-				return
-			}
-		}
-		subscriptionID = object.Subscription
-	case "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted":
-		subscriptionID = object.ID
-	case "invoice.paid", "invoice.payment_failed":
-		subscriptionID = object.Subscription
-	}
-	if subscriptionID != "" {
-		if err := s.syncSubscription(ctx, subscriptionID); err != nil {
-			s.writeWebhookFailure(w, r, event, "sync subscription", err)
-			return
-		}
+	if step, err := s.handleStripeEvent(ctx, event); err != nil {
+		s.writeWebhookFailure(w, r, event, step, err)
+		return
 	}
 	if err := s.billingStore.RecordStripeEvent(ctx, event.ID, event.Type); err != nil {
 		s.writeWebhookFailure(w, r, event, "record event", err)
@@ -329,41 +458,167 @@ func (s *Server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) syncSubscription(ctx context.Context, subscriptionID string) error {
-	subscription, err := s.billingOptions.Stripe.GetSubscription(ctx, subscriptionID)
-	if err != nil {
-		return err
-	}
-	orgID, found, err := s.billingStore.OrgForStripeCustomer(ctx, subscription.CustomerID)
-	if err != nil {
-		return err
-	}
-	if !found {
-		// The customer was created outside Checkout (or its link was lost):
-		// fall back to the organization stamped on the subscription.
-		if subscription.OrgID == "" || requireUUID(subscription.OrgID, "orgId") != nil {
-			s.logger.Warn("Stripe subscription for an unknown customer",
-				"subscription_id", subscription.ID, "customer_id", subscription.CustomerID)
-			return nil
+// handleStripeEvent applies one verified event. It returns the failed step
+// with an error Stripe should retry.
+func (s *Server) handleStripeEvent(ctx context.Context, event billing.Event) (string, error) {
+	object := event.Data.Object
+	switch event.Type {
+	case "checkout.session.completed", "checkout.session.expired":
+		orgID, err := s.checkoutOrg(ctx, event)
+		if err != nil {
+			return "find checkout organization", err
 		}
-		if err := s.billingStore.LinkStripeCustomer(ctx, subscription.OrgID, subscription.CustomerID); err != nil {
+		if orgID == "" {
+			return "", nil
+		}
+		if event.Type == "checkout.session.completed" && object.Customer != "" {
+			if linked, err := s.linkWebhookCustomer(ctx, event, orgID, object.Customer); err != nil || !linked {
+				return "link customer", err
+			}
+		}
+		if err := s.billingStore.ClearPendingCheckout(ctx, orgID, object.ID); err != nil {
+			return "clear pending checkout", err
+		}
+		if event.Type == "checkout.session.completed" && object.Subscription != "" {
+			return "sync subscription", s.syncSubscription(ctx, event, object.Subscription, object.Customer)
+		}
+	case "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted":
+		return "sync subscription", s.syncSubscription(ctx, event, object.ID, object.Customer)
+	case "invoice.paid", "invoice.payment_failed":
+		if subscriptionID := event.InvoiceSubscription(); subscriptionID != "" {
+			return "sync subscription", s.syncSubscription(ctx, event, subscriptionID, object.Customer)
+		}
+	}
+	return "", nil
+}
+
+// checkoutOrg is the organization a Checkout event belongs to: the
+// client_reference_id the control plane set, or the organization of its
+// customer. Empty (and no error) when there is none, which is acknowledged.
+func (s *Server) checkoutOrg(ctx context.Context, event billing.Event) (string, error) {
+	object := event.Data.Object
+	if reference := object.ClientReferenceID; reference != "" {
+		if requireUUID(reference, "client_reference_id") == nil {
+			return reference, nil
+		}
+		s.logger.Warn("Stripe checkout with a client_reference_id that is not an organization",
+			"event_id", event.ID, "checkout_id", object.ID, "client_reference_id", reference)
+	}
+	if object.Customer == "" {
+		return "", nil
+	}
+	orgID, found, err := s.billingStore.OrgForStripeCustomer(ctx, object.Customer)
+	if err != nil || !found {
+		if err == nil {
+			s.logger.Warn("Stripe checkout for an unknown customer", "event_id", event.ID,
+				"checkout_id", object.ID, "customer_id", object.Customer)
+		}
+		return "", err
+	}
+	return orgID, nil
+}
+
+// linkWebhookCustomer links a webhook's customer to its organization. It
+// reports false, without an error, when the organization is gone or already
+// has another customer: retrying would never succeed, so the event is
+// acknowledged and the conflict logged for a person to look at.
+func (s *Server) linkWebhookCustomer(ctx context.Context, event billing.Event, orgID, customerID string) (bool, error) {
+	err := s.billingStore.LinkStripeCustomer(ctx, orgID, customerID)
+	switch {
+	case errors.Is(err, postgres.ErrNotFound):
+		s.logger.Warn("Stripe event for an organization that does not exist", "event_id", event.ID,
+			"event_type", event.Type, "org_id", orgID, "customer_id", customerID)
+		return false, nil
+	case errors.Is(err, postgres.ErrConflict):
+		s.logger.Error("Stripe customer conflicts with the organization's customer; not linked",
+			"event_id", event.ID, "event_type", event.Type, "org_id", orgID, "customer_id", customerID, "error", err)
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	return true, nil
+}
+
+// syncSubscription re-reads a subscription from Stripe and stores it on its
+// organization. The read happens under the organization's lock, so
+// concurrent events for one organization store Stripe's state in order.
+func (s *Server) syncSubscription(ctx context.Context, event billing.Event, subscriptionID, customerHint string) error {
+	stripe := s.billingOptions.Stripe
+	orgID := ""
+	if customerHint != "" {
+		mapped, found, err := s.billingStore.OrgForStripeCustomer(ctx, customerHint)
+		if err != nil {
 			return err
 		}
-		orgID = subscription.OrgID
+		if found {
+			orgID = mapped
+		}
 	}
-	if subscription.LimitsErr != nil {
-		// Keep the last good limits rather than locking the customer out over
-		// a dashboard mistake, and make it loud.
-		s.logger.Error("Stripe product metadata is not a valid AO plan; keeping previous limits",
-			"subscription_id", subscription.ID, "org_id", orgID, "error", subscription.LimitsErr)
+	if orgID == "" {
+		subscription, err := stripe.GetSubscription(ctx, subscriptionID)
+		if err != nil {
+			return err
+		}
+		mapped, found, err := s.billingStore.OrgForStripeCustomer(ctx, subscription.CustomerID)
+		if err != nil {
+			return err
+		}
+		if found {
+			orgID = mapped
+		} else {
+			// The customer was created outside Checkout (or its link was
+			// lost): fall back to the organization stamped on the
+			// subscription.
+			if subscription.OrgID == "" || requireUUID(subscription.OrgID, "orgId") != nil {
+				s.logger.Warn("Stripe subscription for an unknown customer", "event_id", event.ID,
+					"subscription_id", subscription.ID, "customer_id", subscription.CustomerID)
+				return nil
+			}
+			if linked, err := s.linkWebhookCustomer(ctx, event, subscription.OrgID, subscription.CustomerID); err != nil || !linked {
+				return err
+			}
+			orgID = subscription.OrgID
+		}
 	}
-	return s.billingStore.ApplySubscription(ctx, orgID, postgres.SubscriptionUpdate{
-		SubscriptionID: subscription.ID,
-		Status:         subscription.Status,
-		Limits:         subscription.Limits,
-		PeriodStart:    subscription.PeriodStart,
-		PeriodEnd:      subscription.PeriodEnd,
-	})
+	outcome, err := s.billingStore.ApplySubscriptionLocked(ctx, orgID,
+		func(ctx context.Context, current domain.OrgBilling) (postgres.SubscriptionUpdate, error) {
+			subscription, err := stripe.GetSubscription(ctx, subscriptionID)
+			if err != nil {
+				return postgres.SubscriptionUpdate{}, err
+			}
+			if subscription.LimitsErr != nil {
+				// Keep the last good limits rather than locking the customer
+				// out over a dashboard mistake, and make it loud.
+				s.logger.Error("Stripe product metadata is not a valid AO plan; keeping previous limits",
+					"subscription_id", subscription.ID, "org_id", orgID, "error", subscription.LimitsErr)
+			}
+			return postgres.SubscriptionUpdate{
+				SubscriptionID: subscription.ID,
+				CustomerID:     subscription.CustomerID,
+				Status:         subscription.Status,
+				Limits:         subscription.Limits,
+				PeriodStart:    subscription.PeriodStart,
+				PeriodEnd:      subscription.PeriodEnd,
+				Created:        subscription.Created,
+			}, nil
+		})
+	if errors.Is(err, postgres.ErrNotFound) {
+		s.logger.Warn("Stripe subscription for an organization that does not exist", "event_id", event.ID,
+			"subscription_id", subscriptionID, "org_id", orgID)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	switch {
+	case outcome.Duplicate():
+		s.logger.Error("organization has two live Stripe subscriptions; keeping the newest. Cancel and refund the other one.",
+			"event_id", event.ID, "org_id", orgID, "subscription_id", subscriptionID, "outcome", string(outcome))
+	case outcome != postgres.SubscriptionApplied && outcome != postgres.SubscriptionReplaced:
+		s.logger.Info("ignored a Stripe subscription that is not the organization's", "event_id", event.ID,
+			"org_id", orgID, "subscription_id", subscriptionID, "outcome", string(outcome))
+	}
+	return nil
 }
 
 func (s *Server) writeWebhookFailure(w http.ResponseWriter, r *http.Request, event billing.Event, step string, err error) {
@@ -482,9 +737,46 @@ type presenceStore interface {
 	TouchSessionPresence(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
 }
 
+// presenceLimiter drops presence heartbeats for a session already touched
+// within postgres.PresenceInterval, so open windows and fast clients cost one
+// store write per session and interval.
+type presenceLimiter struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+}
+
+// allow reports whether a heartbeat for key may reach the store at now.
+func (l *presenceLimiter) allow(key string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if previous, ok := l.last[key]; ok && now.Sub(previous) < postgres.PresenceInterval {
+		return false
+	}
+	if l.last == nil {
+		l.last = map[string]time.Time{}
+	}
+	if len(l.last) >= 10_000 {
+		for stale, at := range l.last {
+			if now.Sub(at) >= postgres.PresenceInterval {
+				delete(l.last, stale)
+			}
+		}
+	}
+	l.last[key] = now
+	return true
+}
+
+// forget lets the next heartbeat for key through, after one that failed.
+func (l *presenceLimiter) forget(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.last, key)
+}
+
 // touchSessionPresence is the desktop app's heartbeat while a session is on
 // screen, so reading an agent's output counts as using the session and it is
-// not idle-paused under the reader.
+// not idle-paused under the reader. Viewers of a shared session do not keep
+// it awake (the store ignores them).
 func (s *Server) touchSessionPresence(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 	sessionID := chi.URLParam(r, "sessionId")
@@ -497,7 +789,13 @@ func (s *Server) touchSessionPresence(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	key := orgID + "/" + sessionID
+	if !s.presenceLimiter.allow(key, time.Now()) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if err := store.TouchSessionPresence(r.Context(), principalFrom(r), orgID, sessionID); err != nil {
+		s.presenceLimiter.forget(key)
 		s.writeStoreError(w, r, err)
 		return
 	}
