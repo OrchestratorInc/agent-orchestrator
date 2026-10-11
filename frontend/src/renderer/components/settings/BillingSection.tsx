@@ -41,6 +41,10 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	const [pollUntil, setPollUntil] = useState(0);
 	const billing = useCloudBilling({ pollUntil });
 	const orgId = billing.orgId;
+	const offering = billing.offering;
+	// Plan actions (Checkout, Portal, reset) are for org owners and admins; the
+	// control plane refuses them for anyone else.
+	const manage = offering.canManageBilling;
 	const [pending, setPending] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [confirmReset, setConfirmReset] = useState(false);
@@ -49,7 +53,12 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	if (status !== "authenticated") {
 		return <Notice title={title} titleHidden={titleHidden} text={t("settings.billing.signIn")} />;
 	}
-	if (billing.isPending) {
+	// Plans exist only for self-serve orgs. A contract org is billed outside the
+	// app, and a deployment without Stripe has nothing to buy.
+	if (offering.loaded && !offering.selfServeBilling) {
+		return <Notice title={title} titleHidden={titleHidden} text={offering.billingMode === "contract" ? t("settings.billing.contract") : t("settings.billing.disabled")} />;
+	}
+	if (!offering.isError && (!offering.loaded || billing.isPending)) {
 		return (
 			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
 				<p className="flex items-center gap-2 px-3 text-xs text-muted-foreground">
@@ -70,7 +79,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 		);
 	}
 	const summary = billing.data;
-	if (!summary.enabled) {
+	if (!summary.enabled || (summary.billingMode !== undefined && summary.billingMode !== "self_serve")) {
 		return <Notice title={title} titleHidden={titleHidden} text={t("settings.billing.disabled")} />;
 	}
 
@@ -113,7 +122,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 		<>
 			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
 				{summary.exempt ? <p className="px-1 text-xs text-muted-foreground">{t("settings.billing.exempt")}</p> : null}
-				{lapsed ? (
+				{lapsed && manage ? (
 					<p role="alert" className="flex items-center justify-between gap-3 px-1 text-xs text-destructive">
 						{t("settings.billing.paymentFailed")}
 						<Button size="sm" disabled={pending !== null} onClick={() => void openPortal()}>
@@ -128,7 +137,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						price={t("settings.billing.freePrice")}
 						features={[t("settings.billing.freeLocal"), t("settings.billing.freeNoCloud")]}
 						current={currentPlan === "free"}
-						action={subscribed ? (
+						action={subscribed && manage ? (
 							<Button size="sm" variant="secondary" className="w-full" disabled={pending !== null} onClick={() => void openPortal()}>
 								{pending === "portal" ? spinner : null}
 								{t("settings.billing.downgrade")}
@@ -157,18 +166,19 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 								current={isCurrent}
 								recommended={!subscribed && offer.name === RECOMMENDED_PLAN}
 								highlighted={subscribed ? isCurrent : offer.name === RECOMMENDED_PLAN}
-								action={
+								action={manage ? (
 									<Button size="sm" variant={offer.name === RECOMMENDED_PLAN && !isCurrent ? "primary" : "secondary"}
 										className="w-full" disabled={pending !== null} onClick={onClick}>
 										{busy ? spinner : isCurrent ? <ExternalLink className="size-icon-sm" aria-hidden="true" /> : null}
 										{label}
 									</Button>
-								}
+								) : null}
 								t={t}
 							/>
 						);
 					})}
 				</div>
+				{manage ? null : <p className="px-1 text-xs text-muted-foreground">{t("settings.billing.adminOnly")}</p>}
 				{actionError ? <p role="alert" className="px-1 text-xs text-destructive">{actionError}</p> : null}
 			</SettingsSection>
 			{subscribed && limits && usage ? (
@@ -198,7 +208,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 					<SettingsRow label={t("settings.billing.totalSessions")} description={t("settings.billing.totalDetail")}>
 						<Count used={usage.activeOrchestrators + usage.activeWorkers} limit={limits.maxActiveSandboxes} />
 					</SettingsRow>
-					<SettingsRow
+					{manage ? <SettingsRow
 						label={t("settings.billing.reset")}
 						description={resetsLeft > 0
 							? t("settings.billing.resetDetail", { left: resetsLeft, allowed: usage.manualResetsAllowed })
@@ -207,7 +217,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						<Button size="sm" variant="secondary" disabled={resetsLeft === 0 || pending !== null} onClick={() => setConfirmReset(true)}>
 							{t("settings.billing.resetNow")}
 						</Button>
-					</SettingsRow>
+					</SettingsRow> : null}
 				</SettingsSection>
 				<p className="-mt-2 px-1 text-xs text-settings-muted">{t("settings.billing.usageNote")}</p>
 				</>

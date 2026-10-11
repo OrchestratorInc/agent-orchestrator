@@ -4,7 +4,7 @@ import { Pencil, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
-import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
+import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCoderTemplates } from "../hooks/useCoderTemplates";
 import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import { useProviderConnections } from "../hooks/useProviderConnections";
@@ -12,7 +12,7 @@ import { cloudProjectsQueryKey } from "../hooks/useWorkspaceQuery";
 import { CLOUD_AGENT_PROVIDERS, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { agentLabel } from "../lib/agent-options";
 import { DEFAULT_CODER_WORKSPACE_NAME_PREFIX, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
-import { resolveSandboxProviderPreference, useSandboxProviderStore } from "../stores/sandbox-provider-store";
+import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import type { CloudCpProject, CloudCpProjectCoderConfig } from "../lib/cloud-cp";
 import { cloudProjectSettingsDraft, cloudProjectSettingsPatch, type CloudProjectRoleDraft, type CloudProjectSettingsDraft } from "../lib/cloud-project-settings";
 import { AgentAvatar } from "./AgentAvatar";
@@ -52,6 +52,11 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 	const opencodeCredential = connectedCredentialType(connections.data, "opencode");
 	const queryClient = useQueryClient();
 	const saved = useRef(cloudProjectSettingsDraft(project));
+	// Coder settings belong only to a project that runs on Coder: the provider
+	// stored on the project, else the org's default, and only while the org's
+	// offering includes coder. Any other project (and every B2C org) sees none.
+	const offering = useCloudOffering();
+	const usesCoder = offering.hasCoder && projectSandboxProvider(project.config, offering) === CODER_PROVIDER;
 	const save = async (values: ProjectSettingsDraft) => {
 		const response = await client.updateProjectSettings(project.orgId, project.id, cloudProjectSettingsPatch(saved.current, toCloudDraft(values)));
 		saved.current = cloudProjectSettingsDraft(response.project);
@@ -62,7 +67,7 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 	return <ProjectSettingsEditor initialValues={toEditorDraft(cloudProjectSettingsDraft(project))} section={section}
 		capabilities={{ workflow: true, sessionPrefix: true, intake: false, reviewer: true, requiredAgents: false, nameLimit: 120, requiredBranch: true, runtimeDefaults: true, lockedAgents: true }}
 		details={[{ label: t("settings.project.id"), value: project.id }, { label: t("settings.project.kind"), value: t("settings.project.kind.cloud") }, { label: t("settings.project.repo"), value: project.repositoryUrl, href: project.repositoryUrl }]}
-		generalExtra={<CloudProjectCoderSettings project={project} />}
+		generalExtra={usesCoder ? <CloudProjectCoderSettings project={project} /> : undefined}
 		modelScope={(agent) => agent === "opencode" && opencodeCredential ? credentialModelScope(opencodeCredential) : ""}
 		// Without a project reviewer, Cloud reviews with the session's agent: the worker's.
 		defaultReviewer={(draft) => draft.workerAgent}
@@ -76,7 +81,7 @@ function coderConfigOf(project: CloudCpProject): CloudCpProjectCoderConfig | und
 	return coder && typeof coder === "object" ? (coder as CloudCpProjectCoderConfig) : undefined;
 }
 
-/** The project's Coder template, fixed at creation and shown read-only. */
+/** The project's Coder template, fixed at creation and shown read-only. Rendered only for a Coder project. */
 export function CloudProjectCoderSettings({ project }: { project: CloudCpProject }) {
 	const { t } = useTranslation();
 	const coder = coderConfigOf(project);
@@ -126,18 +131,13 @@ export function CloudProjectCoderSettings({ project }: { project: CloudCpProject
 /**
  * The project's Coder workspace name prefix, the one Coder setting editable
  * after creation. Autosaves like the other inline settings fields; only new
- * sessions pick it up. Shown when the project runs on Coder.
+ * sessions pick it up. Shown when the project runs on Coder (its parent is).
  */
 function CoderWorkspaceNamePrefixRow({ project }: { project: CloudCpProject }) {
 	const { t } = useTranslation();
 	const { client, baseUrl } = useCloudCp();
 	const queryClient = useQueryClient();
 	const coder = coderConfigOf(project);
-	const sandboxProviders = useCloudSandboxProviders();
-	const selectedSandboxProvider = useSandboxProviderStore((state) => state.selectedProvider);
-	const sessionSandboxProvider =
-		resolveSandboxProviderPreference(selectedSandboxProvider, sandboxProviders.available) ?? sandboxProviders.default;
-	const usesCoder = coder !== undefined || sessionSandboxProvider === "coder";
 	const savedPrefix = useRef(coder?.workspaceNamePrefix?.trim() ?? "");
 	const [draft, setDraft] = useState(savedPrefix.current);
 	const trimmed = draft.trim();
@@ -164,7 +164,6 @@ function CoderWorkspaceNamePrefixRow({ project }: { project: CloudCpProject }) {
 		const timeout = window.setTimeout(() => mutate(trimmed), 650);
 		return () => window.clearTimeout(timeout);
 	}, [failedValue, invalid, isError, isPending, mutate, reset, trimmed]);
-	if (!usesCoder) return null;
 	const label = t("coder.workspacePrefix.label");
 	return <>
 		<ProjectSettingsInputRow id="coderWorkspaceNamePrefix" label={label} editLabel={t("settings.field.edit", { label })}

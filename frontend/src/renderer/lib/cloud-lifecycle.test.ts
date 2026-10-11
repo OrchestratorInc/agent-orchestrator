@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
-import { cloudLifecycleStage, cloudStartupProblem } from "./cloud-lifecycle";
+import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage } from "./cloud-lifecycle";
 
 function session(
 	desiredState: string,
@@ -38,6 +38,15 @@ describe("cloudLifecycleStage", () => {
 			expect(cloudLifecycleStage(session(desired, observed, connected))).toBe(expected);
 		},
 	);
+
+	it("names Coder only for a paused Coder sandbox", () => {
+		const freestyle = session("paused", "stopped");
+		freestyle.cloud = { ...freestyle.cloud!, sandboxProvider: "freestyle" };
+		expect(cloudLifecycleStage(freestyle)).toBe("paused");
+		expect(isCloudPausedStage("paused")).toBe(true);
+		expect(isCloudPausedStage("paused_by_coder")).toBe(true);
+		expect(isCloudPausedStage("connected")).toBe(false);
+	});
 
 	it("does not invent lifecycle state for local sessions", () => {
 		const local = session("running", "running", true);

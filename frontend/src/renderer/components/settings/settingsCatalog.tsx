@@ -5,7 +5,7 @@ import type { GlobalSettingsSection } from "../../stores/ui-store";
 import { BillingSection } from "./BillingSection";
 import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
 import { BrowserProfilesSection } from "./BrowserProfilesSection";
-import { Coder11xSection } from "./Coder11xSection";
+import { CoderSettingsSection } from "./CoderSettingsSection";
 import { CodexAccountsSection } from "./CodexAccountsSection";
 import { ConnectMobileContent } from "./ConnectMobileContent";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
@@ -33,8 +33,10 @@ type CatalogContext = {
 	developerMode: boolean;
 	/** Developer mode with the Diagnostics toggle on — gates the memory and CPU page. */
 	diagnostics: boolean;
-	/** Signed-in user's email ends with @11x.ai — gates the bring-your-own-Coder page. */
-	is11x: boolean;
+	/** The org's cloud offering includes coder: gates the bring-your-own-Coder page. */
+	hasCoder: boolean;
+	/** The org is on self-serve billing: gates the Upgrade (plans and usage) page. */
+	selfServeBilling: boolean;
 	focusAgentId?: string;
 	hostId?: string;
 	harnessView?: "local" | "cloud";
@@ -80,7 +82,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "billing",
 		icon: CreditCard,
 		label: (t) => t("settings.billing.navLabel"),
-		visible: ({ cloudEnabled }) => cloudEnabled,
+		visible: ({ cloudEnabled, selfServeBilling }) => cloudEnabled && selfServeBilling,
 		render: (_t, titleHidden) => <BillingSection titleHidden={titleHidden} />,
 	},
 	{
@@ -95,11 +97,11 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		),
 	},
 	{
-		id: "coder11x",
+		id: "coder",
 		icon: Server,
-		label: (t) => t("settings.coder11x.navLabel"),
-		visible: ({ is11x }) => is11x,
-		render: (_t, titleHidden) => <Coder11xSection titleHidden={titleHidden} />,
+		label: (t) => t("settings.coder.navLabel"),
+		visible: ({ cloudEnabled, hasCoder }) => cloudEnabled && hasCoder,
+		render: (_t, titleHidden) => <CoderSettingsSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "remoteHosts",

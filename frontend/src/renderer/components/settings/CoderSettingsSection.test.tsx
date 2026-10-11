@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../../i18n";
 import type { UseCoderTemplatesResult } from "../../hooks/useCoderTemplates";
-import { Coder11xSection } from "./Coder11xSection";
+import { CoderSettingsSection } from "./CoderSettingsSection";
 
 // Mutable mock state so each test drives the loaded config and the template list
 // independently. The section under test is gated on a saved connection
@@ -30,12 +30,12 @@ const savedConfig = { baseUrl: "https://coder.test", owner: "me", defaultTemplat
 function renderSection() {
 	render(
 		<QueryClientProvider client={new QueryClient()}>
-			<Coder11xSection />
+			<CoderSettingsSection />
 		</QueryClientProvider>,
 	);
 }
 
-describe("Coder11xSection templates list", () => {
+describe("CoderSettingsSection templates list", () => {
 	beforeEach(async () => {
 		await appI18n.changeLanguage("en");
 		mocks.config.data = undefined;

@@ -38,6 +38,7 @@ import { cloudProjectsQueryKey, cloudSessionsQueryKey, useRemoteWorkspaces, useW
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { apiClient, apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId, hasTrustedApiBaseUrl } from "../lib/api-client";
+import { cachedCloudBillingMode } from "../lib/cloud-offering";
 import { resolveCssColorToHex } from "../lib/css-color";
 import { refreshDaemonStatus } from "../lib/daemon-status";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
@@ -1145,10 +1146,14 @@ function ShellLayout() {
 		setActiveShellTerminal,
 	]);
 
+	// ao-app://billing (Stripe's return page) opens Upgrade only for a
+	// self-serve org; any other org has no plans and lands on general settings.
 	useEffect(
 		() => aoBridge.app.onOpenSettingsShortcut((section) =>
-			useUiStore.getState().openGlobalSettings(section === "billing" ? "billing" : undefined)),
-		[],
+			useUiStore.getState().openGlobalSettings(
+				section === "billing" && cachedCloudBillingMode(queryClient) === "self_serve" ? "billing" : undefined,
+			)),
+		[queryClient],
 	);
 
 	useEffect(() => {

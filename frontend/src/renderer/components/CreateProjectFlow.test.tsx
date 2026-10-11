@@ -90,6 +90,8 @@ const cloudMocks = vi.hoisted(() => ({
 	coderAvailable: false,
 	// Whether the control plane's default sandbox provider is coder.
 	coderDefault: false,
+	// Overrides the org's providers outright (null = derive from coderAvailable).
+	providers: null as string[] | null,
 	// Coder templates the picker lists (empty = deployment offers none / unreachable).
 	coderTemplates: [] as { id: string; name: string; displayName?: string; description?: string; parameters?: string[] }[],
 	orgCoderConfig: null as { baseUrl: string } | null,
@@ -108,13 +110,20 @@ const cloudMocks = vi.hoisted(() => ({
 	signIn: vi.fn(),
 }));
 
-vi.mock("../hooks/useCloudSandboxProviders", () => ({
-	useCloudSandboxProviders: () => ({
-		available: cloudMocks.coderAvailable ? ["nodeops", "coder"] : ["nodeops"],
-		default: cloudMocks.coderDefault ? "coder" : "nodeops",
-		ready: true,
-		isLoading: false,
-	}),
+vi.mock("../hooks/useCloudOffering", () => ({
+	useCloudOffering: () => {
+		const providers = cloudMocks.providers ?? (cloudMocks.coderAvailable ? ["freestyle", "coder"] : ["freestyle"]);
+		const defaultProvider = cloudMocks.coderDefault ? "coder" : providers[0] ?? "";
+		return {
+			providers,
+			defaultProvider,
+			hasCoder: providers.includes("coder"),
+			offersProviderChoice: providers.length > 1,
+			ready: true,
+			loaded: true,
+			isLoading: false,
+		};
+	},
 }));
 
 vi.mock("../hooks/useOrgCoderConfig", () => ({
@@ -351,6 +360,7 @@ beforeEach(() => {
 	cloudMocks.cloudEnabled = false;
 	cloudMocks.coderAvailable = false;
 	cloudMocks.coderDefault = false;
+	cloudMocks.providers = null;
 	cloudMocks.coderTemplates = [];
 	cloudMocks.orgCoderConfig = null;
 	cloudMocks.sessionStatus = "unauthenticated";
@@ -2415,6 +2425,78 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(screen.getByRole("button", { name: "Create" }));
 		await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
 		expect(cloudMocks.createGitHubProject.mock.calls[0][1].config).not.toHaveProperty("coder");
+	});
+
+	describe("offering gates", () => {
+		async function openCloudRepo() {
+			cloudMocks.cloudEnabled = true;
+			cloudMocks.sessionStatus = "authenticated";
+			cloudMocks.listGitHubInstallations.mockResolvedValue({
+				installations: [{
+					id: "inst-1", githubInstallationId: "100", accountLogin: "acme", accountType: "Organization",
+					status: "active", repositorySelection: "all", syncStatus: "ready", createdAt: "", updatedAt: "",
+				}],
+			});
+			cloudMocks.listGitHubRepositories.mockResolvedValue({
+				items: [{
+					githubRepositoryId: "555", name: "app", fullName: "acme/app", htmlUrl: "https://github.com/acme/app",
+					defaultBranch: "main", visibility: "private", isPrivate: true, isArchived: false, access: "write", grantedAt: "",
+				}],
+				page: { hasMore: false },
+			});
+			cloudMocks.createGitHubProject.mockResolvedValue({ project: { id: "cp-1" } });
+			const user = userEvent.setup();
+			render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
+			await user.click(screen.getByRole("button", { name: "Clone to the cloud" }));
+			await user.click(await screen.findByRole("combobox", { name: "Select a repository" }));
+			await user.click(await screen.findByRole("option", { name: /acme\/app/ }));
+			await screen.findByLabelText("Worker agent");
+			return user;
+		}
+
+		it("a B2C org sees no sandbox choice, template picker or workspace prefix", async () => {
+			cloudMocks.providers = ["freestyle"];
+			cloudMocks.orgCoderConfig = { baseUrl: "https://coder.acme.test" };
+			cloudMocks.coderTemplates = [{ id: "tpl-1", name: "dev-kit", displayName: "Dev kit" }];
+			const user = await openCloudRepo();
+			expect(screen.queryByRole("combobox", { name: "Sandbox" })).not.toBeInTheDocument();
+			expect(screen.queryByRole("combobox", { name: "Template" })).not.toBeInTheDocument();
+			expect(screen.queryByRole("textbox", { name: "Workspace name prefix" })).not.toBeInTheDocument();
+			expect(screen.queryByText(/Coder/)).not.toBeInTheDocument();
+			await user.click(screen.getByRole("button", { name: "Create" }));
+			await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
+			const config = cloudMocks.createGitHubProject.mock.calls[0][1].config;
+			expect(config).not.toHaveProperty("coder");
+			expect(config).not.toHaveProperty("sandboxProvider");
+		});
+
+		it("a B2B org gets the template picker without a sandbox choice", async () => {
+			cloudMocks.providers = ["coder"];
+			cloudMocks.coderTemplates = [{ id: "tpl-1", name: "dev-kit", displayName: "Dev kit" }];
+			await openCloudRepo();
+			expect(screen.getByRole("combobox", { name: "Template" })).toBeInTheDocument();
+			expect(screen.queryByRole("combobox", { name: "Sandbox" })).not.toBeInTheDocument();
+		});
+
+		it("an org on both picks the sandbox, defaulting to the org default, with product labels", async () => {
+			cloudMocks.providers = ["freestyle", "coder"];
+			cloudMocks.coderTemplates = [{ id: "tpl-1", name: "dev-kit", displayName: "Dev kit" }];
+			const user = await openCloudRepo();
+			const sandbox = screen.getByRole("combobox", { name: "Sandbox" });
+			expect(sandbox).toHaveTextContent("Instant");
+			expect(screen.queryByRole("combobox", { name: "Template" })).not.toBeInTheDocument();
+			await user.click(sandbox);
+			await user.click(await screen.findByRole("option", { name: "Dev workspace (Coder)" }));
+			expect(await screen.findByRole("combobox", { name: "Template" })).toBeInTheDocument();
+			await user.click(screen.getByRole("combobox", { name: "Template" }));
+			await user.click(await screen.findByRole("option", { name: "Dev kit" }));
+			await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
+			await user.click(screen.getByRole("button", { name: "Create" }));
+			await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
+			const config = cloudMocks.createGitHubProject.mock.calls[0][1].config;
+			expect(config.sandboxProvider).toBe("coder");
+			expect(config.coder.templateId).toBe("tpl-1");
+		});
 	});
 
 	it("requires choosing a coder template before the project can be created", async () => {

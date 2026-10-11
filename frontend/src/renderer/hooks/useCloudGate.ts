@@ -9,7 +9,7 @@
 import { useSettings } from "./useSettings";
 
 export interface CloudGate {
-	/** Whether the cloud offering is available (flag + entitled client + control plane). */
+	/** Whether the cloud offering is available (user toggle or flag, plus a control plane). */
 	cloudEnabled: boolean;
 	/** Whether the local offering is available on this daemon. */
 	localEnabled: boolean;
