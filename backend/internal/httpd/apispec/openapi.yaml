@@ -13733,6 +13733,8 @@ components:
           $ref: '#/components/schemas/ControllersKeepAwakeStatus'
         loopbackOnly:
           type: boolean
+        noPublicTunnel:
+          type: boolean
         password:
           type: string
         port:
@@ -13748,6 +13750,7 @@ components:
       required:
       - enabled
       - loopbackOnly
+      - noPublicTunnel
       - endpoints
       - hostId
       - tunnel

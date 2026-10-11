@@ -143,6 +143,7 @@ function useTreeExpandAnimation(model: TreeModel) {
 			treeHost()?.removeAttribute("data-pointer-focus");
 			if (["Enter", " ", "ArrowRight", "ArrowLeft"].includes(event.key)) markFolderToggle(event);
 		};
+		// `animate` is missing in non-browser DOMs (jsdom), where a late frame would throw.
 		const animate = (dir: string, delta: number) => {
 			if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 			const root = treeHost()?.shadowRoot;
@@ -154,14 +155,14 @@ function useTreeExpandAnimation(model: TreeModel) {
 			const added = Math.max(delta, 0);
 			rows.slice(dirIndex + 1).forEach((row, offset) => {
 				if (offset < added) {
-					row.animate(
+					row.animate?.(
 						[{ opacity: 0, transform: `translateY(-${EXPAND_SLIDE_PX}px)` }, { opacity: 1, transform: "none" }],
 						timing,
 					);
 					return;
 				}
 				// Rows below the folder travel the height gained or lost.
-				row.animate([{ transform: `translateY(${-delta * ROW_HEIGHT}px)` }, { transform: "none" }], timing);
+				row.animate?.([{ transform: `translateY(${-delta * ROW_HEIGHT}px)` }, { transform: "none" }], timing);
 			});
 		};
 		let lastCount = model.getVisibleCount();

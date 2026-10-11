@@ -1,5 +1,7 @@
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
+import { useTabListTabStop } from "../../hooks/useTabListTabStop";
 /**
  * The Chat surface for a session whose persisted mode is `chat`.
  *
@@ -1256,8 +1258,8 @@ function ChatWorkspaceContent({
 	);
 
 	useEffect(() => {
-		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => selectAdjacentTab(-1));
-		const disposeNext = aoBridge.app.onNextTabShortcut(() => selectAdjacentTab(1));
+		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(-1));
+		const disposeNext = aoBridge.app.onNextTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(1));
 		return () => {
 			disposePrevious();
 			disposeNext();
@@ -2052,6 +2054,7 @@ function ChatHeader({
 	// space; chat must too or the back/forward buttons land on the tab label.
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
+	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const header = (
 		<header className="flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar">
 			<div
@@ -2072,6 +2075,7 @@ function ChatHeader({
 						aria-label="Chat tabs"
 						className="flex h-full min-w-0 flex-1 items-stretch"
 						onKeyDown={onTabsKeyDown ?? handleTerminalTabListKeyDown}
+						ref={tabListRef}
 						role="tablist"
 					>
 						{session ? (

@@ -96,7 +96,7 @@ import { cn } from "../lib/utils";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { isOrchestratorSession, sessionAgentExited, sessionIsActive } from "../types/workspace";
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
-import { matchesRendererShortcut } from "../stores/keybindings-store";
+import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
 import {
 	INSPECTOR_SEPARATOR_RESERVE_PX,
@@ -488,6 +488,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const setInspectorOpenForSession = useUiStore((state) => state.setInspectorOpen);
 	const toggleInspector = useUiStore((state) => state.toggleInspector);
 	const setInspectorViewForSession = useUiStore((state) => state.setInspectorView);
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
 	const workspaceFileOpenRequest = useUiStore((state) => state.workspaceFileOpenRequest);
 	const clearWorkspaceFileOpenRequest = useUiStore((state) => state.clearWorkspaceFileOpenRequest);
@@ -1073,7 +1074,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, path),
 		}));
 	}, [setActiveShellTerminal, uiSessionId]);
+	// Closed file tabs, newest last, so ⌘⇧T can bring them back.
+	const closedFilePathsRef = useRef<Record<string, string[]>>({});
 	const closeCenterFile = useCallback((path: string) => {
+		const closed = (closedFilePathsRef.current[uiSessionId] ??= []);
+		closed.push(path);
+		if (closed.length > 20) closed.shift();
 		setFileTabsBySession((current) => ({
 			...current,
 			[uiSessionId]: closeSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, path),
@@ -1732,16 +1738,70 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		toggleInspector(uiSessionId);
 	}, [browserOnly, uiSessionId, toggleInspector, setBrowserContentRevealed]);
 
-	useEffect(() => {
-		if (!hasInspector) return;
-		const handleKeyDown = (event: KeyboardEvent) => {
-			if (!matchesRendererShortcut("toggle-inspector", event)) return;
-			event.preventDefault();
-			handleToggleInspector();
-		};
-		window.addEventListener("keydown", handleKeyDown);
-		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [handleToggleInspector, hasInspector]);
+	// Keyboard commands scoped to the session on screen. The main process matches
+	// the chord (see main/app-shortcuts.ts), so these also work from xterm and the
+	// native Browser view.
+	useSessionShortcut("toggle-inspector", handleToggleInspector, hasInspector);
+	useSessionShortcut(
+		"toggle-diff",
+		() => {
+			if (browserOnly) return;
+			const showingDiff =
+				isInspectorOpen &&
+				inspectorView === "files" &&
+				(useUiStore.getState().inspectorSessions[uiSessionId]?.filesChangedOnly ?? true);
+			if (showingDiff) setInspectorOpenForSession(uiSessionId, false);
+			else prepareFilesInspector();
+		},
+		hasInspector,
+	);
+	useSessionShortcut(
+		"toggle-terminal",
+		() => {
+			if (terminalTarget.kind === "shell") {
+				selectSessionTerminal();
+				focusAfterPaint("[aria-label='Message the agent']");
+				return;
+			}
+			const shell = shellTerminals[shellTerminals.length - 1];
+			if (shell) selectShellTerminal(shell.handleId);
+			else if (!isOrchestrator) addShellTerminal();
+			focusAfterPaint(".xterm-helper-textarea");
+		},
+		hasInspector,
+	);
+	useSessionShortcut(
+		"reopen-closed-tab",
+		() => {
+			const path = closedFilePathsRef.current[uiSessionId]?.pop();
+			if (path) openCenterFile(path, { mode: "file" });
+		},
+		hasInspector,
+	);
+	useSessionShortcut(
+		"copy-session-path",
+		() => {
+			if (!session || session.cloud || hostId) return;
+			aoBridge.editorHandoff.copyWorkspacePath(sessionId).then(
+				() => showGlobalToast(t("shortcut.sessionPathCopied")),
+				(error: unknown) =>
+					showGlobalToast(t("shortcut.sessionPathCopyFailed"), error instanceof Error ? error.message : undefined, "error"),
+			);
+		},
+		hasInspector,
+	);
+	useSessionShortcut(
+		"model-picker",
+		() => {
+			const picker = document.querySelector<HTMLElement>("[data-shortcut-target='model-picker']:not([disabled])");
+			if (!picker) return;
+			// Radix menu triggers open on pointerdown or Enter, never on a synthetic click.
+			picker.dataset.shortcutOpened = "";
+			picker.focus();
+			picker.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+		},
+		hasInspector,
+	);
 
 	const inspectorMotionReadyRef = useRef<string | null>(null);
 	const handleInspectorCloseAnimationComplete = useCallback(() => {
@@ -2129,7 +2189,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
           the band exists so the filter never renders inline first. */}
 			{filesPoppedOut && session
 				? createPortal(
-						<SessionFilesPopOut>{(topbarHost) =>
+						<SessionFilesPopOut onClose={() => handleToggleFilesPopOut(false)}>{(topbarHost) =>
 							<FilesTopbarHostContext.Provider value={topbarHost}>
 								{session.cloud ? (
 									<CloudWorkspaceDiff annotation={fileAnnotation} isMaximized onOpenFile={openCenterFile} onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} session={session} split={filesSplit} />
@@ -2159,7 +2219,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
           and fills the window below any native titlebar overlay. */}
 			{browserPopOutMounted && session
 				? createPortal(
-						<SessionBrowserPopOut onTopbarHost={setBrowserPopoutTopbarHost} phase={browserPopOutPhase === "open" ? "open" : "mounting"}>
+						<SessionBrowserPopOut onClose={() => handleToggleBrowserPopOut(false)} onTopbarHost={setBrowserPopoutTopbarHost} phase={browserPopOutPhase === "open" ? "open" : "mounting"}>
 								{browserPoppedOut && browserPopoutTopbarHost ? <BrowserPanelView
 									active
 									annotationQueue={browserAnnotationQueue}

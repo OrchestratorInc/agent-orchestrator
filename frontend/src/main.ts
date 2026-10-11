@@ -346,6 +346,7 @@ let keybindingOverrides: KeybindingOverrides = {};
 let keybindingRecordingActive = false;
 let closeShellTerminalShortcutEnabled = false;
 let terminalFocused = false;
+let terminalFontSizeFocused = false;
 let chatDraftRisks: ChatDraftBoundaryKind[] = [];
 let chatDraftDialog: ChatDraftDialogCopy | undefined;
 let chatDraftQuitConfirmed = false;
@@ -828,6 +829,7 @@ async function createWindowInternal(): Promise<void> {
 			void toggleAppDevTools(browserViewHost, getShellWebContents);
 		},
 		() => terminalFocused,
+		() => terminalFontSizeFocused,
 	);
 
 	browserViewHost = createBrowserViewHost({
@@ -930,9 +932,11 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.on("render-process-gone", () => {
 		keybindingRecordingActive = false;
 		terminalFocused = false;
+		terminalFontSizeFocused = false;
 	});
 	shellWebContents.on("did-start-loading", () => {
 		terminalFocused = false;
+		terminalFontSizeFocused = false;
 		trayLifecycle.clear();
 	});
 	shellWebContents.on("render-process-gone", () => trayLifecycle.clear());
@@ -1064,6 +1068,7 @@ const editorHandoff = createEditorHandoff({
 		const error = await shell.openPath(workspacePath);
 		if (error) throw new Error(error);
 	},
+	copyText: (text) => clipboard.writeText(text),
 	logError: (message, error) => console.error(message, error),
 });
 
@@ -2101,6 +2106,10 @@ ipcMain.handle("editorHandoff:open", (event, input) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.open(input && typeof input === "object" ? input : { sessionId: "" });
 });
+ipcMain.handle("editorHandoff:copyWorkspacePath", (event, sessionId: string) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	return editorHandoff.copyWorkspacePath(typeof sessionId === "string" ? sessionId : "");
+});
 ipcMain.handle("app:getVersion", () => app.getVersion());
 ipcMain.handle("app:openExternal", async (_event, url: string) => {
 	await openAllowedAppExternalURL(url, shell);
@@ -2168,9 +2177,10 @@ ipcMain.on(SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, (_event, enabled: 
 	closeShellTerminalShortcutEnabled = enabled === true;
 });
 
-ipcMain.on(SET_TERMINAL_FOCUSED_CHANNEL, (event, focused: unknown) => {
+ipcMain.on(SET_TERMINAL_FOCUSED_CHANNEL, (event, focused: unknown, handlesFontSize: unknown) => {
 	if (event.sender !== getShellWebContents() || typeof focused !== "boolean") return;
 	terminalFocused = focused;
+	terminalFontSizeFocused = focused && handlesFontSize === true;
 });
 
 ipcMain.on(SET_CHAT_DRAFT_RISK_CHANNEL, (event, risks: unknown, dialogCopy: unknown) => {
