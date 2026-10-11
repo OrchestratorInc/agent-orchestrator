@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import userEvent from "@testing-library/user-event";
 import { TooltipProvider } from "../ui/tooltip";
 import { lexicalEditorText, typeInLexicalEditor } from "../../test/lexical";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useIndependentSideChats } from "./IndependentSideChats";
 
 const { get, post, put, remove, patch } = vi.hoisted(() => ({
@@ -325,7 +325,18 @@ describe("side panel navigation and recovery", () => {
 									createdAt: "2026-01-01T00:00:00Z",
 								},
 							]
-						: [],
+						: [
+								// A newest page always carries its turn's messages.
+								{
+									id: `${id}-latest-message`,
+									turnId: `${id}-latest`,
+									role: "assistant",
+									text: `Latest answer ${id}`,
+									revision: 1,
+									sequence: 2,
+									createdAt: "2026-01-01T00:00:01Z",
+								},
+							],
 					activities: [],
 					hasMore: !older,
 				},
@@ -353,6 +364,26 @@ describe("side panel navigation and recovery", () => {
 		expect(await screen.findByText("Old answer other")).toBeInTheDocument();
 	});
 	it.each([false, true])("retains the page boundary as new turns arrive (older history loaded: %s)", async (loadBeforeRefresh) => {
+		// The side transcript renders through the main chat's virtualized Timeline.
+		// A viewport taller than every row keeps the whole history mounted, so the
+		// assertions below can read it all.
+		const clientHeight = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")!.get!;
+		const offsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!.get!;
+		const bounds = HTMLElement.prototype.getBoundingClientRect;
+		const tall = [
+			vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
+				return this.getAttribute("role") === "log" ? 1_000_000 : clientHeight.call(this);
+			}),
+			vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+				return this.getAttribute("role") === "log" ? 1_000_000 : offsetHeight.call(this);
+			}),
+			vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+				return this.getAttribute("role") === "log"
+					? ({ ...bounds.call(this), top: 0, height: 1_000_000, bottom: 1_000_000, width: 768 } as DOMRect)
+					: bounds.call(this);
+			}),
+		];
+		onTestFinished(() => tall.forEach((spy) => spy.mockRestore()));
 		const normalGet = get.getMockImplementation()!;
 		let latest = 100;
 		const timestamp = (number: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, number)).toISOString();
@@ -375,7 +406,9 @@ describe("side panel navigation and recovery", () => {
 		await screen.findByText("Answer 51");
 		if (loadBeforeRefresh) {
 			await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
-			await screen.findByText("Answer 1");
+			// The virtualized Timeline keeps the newest rows mounted; the row just
+			// before the page boundary proves the older page joined it.
+			await screen.findByText("Answer 50");
 		}
 		latest = 101;
 		await screen.findByText("Answer 101", {}, { timeout: 3000 });
@@ -386,7 +419,7 @@ describe("side panel navigation and recovery", () => {
 		expect(screen.queryByText("Answer 100")).not.toBeInTheDocument();
 		if (!loadBeforeRefresh) {
 			await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
-			await screen.findByText("Answer 1");
+			await screen.findByText("Answer 50");
 		}
 		expect(get).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
 			params: expect.objectContaining({ query: { before: timestamp(51), limit: 50 } }),

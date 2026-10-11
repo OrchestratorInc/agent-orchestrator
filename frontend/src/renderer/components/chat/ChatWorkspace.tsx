@@ -2333,8 +2333,15 @@ const CHAT_ESTIMATED_TURN_HEIGHT = 600;
 const CHAT_TURN_GAP = 18;
 const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
 
-function Timeline({
+/**
+ * The conversation transcript: turn grouping, live status, "Worked for", and
+ * scroll follow. Exported so a side chat renders its transcript with exactly
+ * this behavior while keeping its own composer.
+ */
+export function Timeline({
 	onAddToSideChat,
+	onAddToChat,
+	onForeignAnnotation,
 	annotationNavigationRef,
 	snapshot,
 	assetBaseUrl,
@@ -2365,6 +2372,10 @@ function Timeline({
 	arriving = false,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
+	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
+	onAddToChat?: (excerpt: ChatDraftExcerptReference) => void;
+	/** Handles annotations whose source is another conversation. */
+	onForeignAnnotation?: (annotation: { text: string; messageId?: string; revision?: number; conversationId?: string }) => void;
 	annotationNavigationRef: MutableRefObject<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>;
 	snapshot: ConversationSnapshot;
 	assetBaseUrl?: string;
@@ -2471,7 +2482,13 @@ function Timeline({
 	// that adds nothing (a failed page or a source outside this branch) must end
 	// the search instead of requesting the same page again.
 	const annotationOlderRequestGroups = useRef<number | undefined>(undefined);
-	const selectAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
+	const selectAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number; conversationId?: string }) => {
+		if (onForeignAnnotation && annotation.conversationId && annotation.conversationId !== snapshot.conversationId) {
+			// The source lives in another conversation (a side chat quoting the main
+			// chat); its host navigates there instead of searching this transcript.
+			onForeignAnnotation(annotation);
+			return;
+		}
 		releaseFollow();
 		setAnnotationNavigationError(undefined);
 		annotationRetryCount.current = 0;
@@ -2487,7 +2504,7 @@ function Timeline({
 			return;
 		}
 		setAnnotationTarget({ ...annotation });
-	}, [releaseFollow]);
+	}, [onForeignAnnotation, releaseFollow, snapshot.conversationId]);
 	useEffect(() => {
 		annotationNavigationRef.current = selectAnnotation;
 		return () => { annotationNavigationRef.current = null; };
@@ -2586,6 +2603,13 @@ function Timeline({
 
 	const addSelectionToChat = useCallback(async () => {
 		if (!selectionAction) return;
+		if (onAddToChat) {
+			// A host with its own composer (a side chat) owns where references go.
+			onAddToChat(selectionAction.excerpt);
+			setSelectionAction(null);
+			window.getSelection()?.removeAllRanges();
+			return;
+		}
 		const composer = readChatSessionDraft(draftScope).composer;
 		// A pending delivery is cleared by revision on acceptance. Changing the
 		// draft now would keep the sent text and excerpts for a second send.
@@ -2605,7 +2629,7 @@ function Timeline({
 		setDraftPersistenceError(result.ok ? undefined : "chat.draft.saveFailed");
 		setSelectionAction(null);
 		window.getSelection()?.removeAllRanges();
-	}, [draftScope, selectionAction]);
+	}, [draftScope, onAddToChat, selectionAction]);
 	const inlineEditRecoveryLabel = durableInlineEditDelivery
 		? durableInlineEditDelivery.state === "accepted"
 			? "chat.draft.clearEdit"

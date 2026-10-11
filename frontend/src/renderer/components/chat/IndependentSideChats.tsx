@@ -1,14 +1,15 @@
-import { TurnWorkSummary } from "./TurnWorkSummary";
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { ArrowUp, Loader2, MessageSquare, MessageSquarePlus, Pencil, Plus, Square, X } from "lucide-react";
+import { ArrowUp, Loader2, MessageSquare, Pencil, Plus, Square, X } from "lucide-react";
 import type { components } from "../../../api/schema";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import type { ChatSkill } from "../../types/conversation";
-import type { ChatModel, ConversationActivity, ConversationMessage } from "../../types/conversation";
+import type { ChatModel } from "../../types/conversation";
 import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
-import { ActivityRow, ApprovalCard, AssistantMessage, HumanMessage, LiveResponseStatus } from "./ChatTimelineItems";
+import { ApprovalCard } from "./ChatTimelineItems";
+import { Timeline } from "./ChatWorkspace";
+import { sideConversationActivity, sideConversationSnapshot } from "./sideConversation";
 import { ComposerEditor, type ComposerEditorHandle, type ComposerTrigger } from "./ComposerEditor";
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import { rankSkills, moveHighlight } from "./composerSuggest";
@@ -22,9 +23,6 @@ import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem } 
 import { handleTabListKeyDown } from "../../lib/terminal-tabs";
 import { saveSideChatDraft, readSideChatDraft } from "./sideChatDraftWriter";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
-import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
-import { annotationBody, annotationTextRange, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
-import { actionMenuContentClass, actionMenuItemClass } from "../ui/menu-styles";
 import { cn } from "../../lib/utils";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../../hooks/useSessionRename";
 
@@ -386,13 +384,11 @@ export function useIndependentSideChats(
 	const [confirmClose, setConfirmClose] = useState<string>();
 	const [closing, setClosing] = useState(false);
 	const [closeError, setCloseError] = useState<string>();
-	const [selectionAction, setSelectionAction] = useState<{ excerpt: ChatDraftExcerptReference; range: Range }>();
-	const selectionButton = useRef<HTMLDivElement>(null);
-	const clearSelection = useCallback(() => setSelectionAction(undefined), []);
-
-	const [navigationTarget, setNavigationTarget] = useState<ChatAnnotationSummaryItem>();
-	const highlightCleanup = useRef<(() => void) | undefined>(undefined);
-	const highlightTimer = useRef<number | undefined>(undefined);
+	// The side transcript renders through the main chat's Timeline, which owns
+	// selection, source navigation, and scroll follow. Same-side annotations from
+	// the composer navigate through it.
+	const timelineNavigationRef = useRef<((annotation: ChatAnnotationSummaryItem) => void) | null>(null);
+	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string>();
 	const [pending, setPending] = useState(false);
 	const [, setSendingRevision] = useState(0);
@@ -413,33 +409,7 @@ export function useIndependentSideChats(
 		olderGeneration.current++;
 		loadingOlderRef.current = false;
 	}
-	const timelineRef = useRef<HTMLDivElement>(null);
-	const timelineContentRef = useRef<HTMLDivElement>(null);
-	const selectionPosition = useChatSelectionPosition(
-		selectionAction?.range,
-		timelineRef,
-		selectionButton,
-		clearSelection,
-	);
-	const followOutputRef = useRef(true);
-	const annotationNavigationHold = useRef(false);
-	useEffect(() => {
-		followOutputRef.current = true;
-		annotationNavigationHold.current = false;
-	}, [activeId]);
-	useEffect(() => {
-		const viewport = timelineRef.current;
-		const content = timelineContentRef.current;
-		if (!viewport || !content) return;
-		const follow = () => {
-			if (followOutputRef.current) viewport.scrollTop = viewport.scrollHeight;
-		};
-		follow();
-		if (typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(follow);
-		observer.observe(content);
-		return () => observer.disconnect();
-	}, [activeId, visible, snapshot?.side.id]);
+	useEffect(() => setLoadingOlder(false), [sessionId, activeId, enabled]);
 	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const sessionRef = useRef(sessionId);
 	sessionRef.current = enabled ? sessionId : "";
@@ -561,6 +531,7 @@ export function useIndependentSideChats(
 		const oldest = olderPages.at(-1)?.turns?.[0]?.createdAt ?? snapshot.turns?.[0]?.createdAt;
 		if (!oldest) return;
 		loadingOlderRef.current = true;
+		setLoadingOlder(true);
 		const generation = ++olderGeneration.current;
 		const scope = olderScope.current;
 		const current = () =>
@@ -584,7 +555,10 @@ export function useIndependentSideChats(
 		} catch (cause) {
 			if (current()) setError(apiErrorMessage(cause));
 		} finally {
-			if (current()) loadingOlderRef.current = false;
+			if (current()) {
+				loadingOlderRef.current = false;
+				setLoadingOlder(false);
+			}
 		}
 	}, [sessionId, activeId, snapshot, olderPages]);
 
@@ -1060,139 +1034,22 @@ export function useIndependentSideChats(
 		},
 		[sessionId, editingTurnId, editingText],
 	);
-	const timeline = snapshot
-		? [
-				...[
-					...olderPages
-						.slice()
-						.reverse()
-						.flatMap((page) => page.messages ?? []),
-					...(snapshot.messages ?? []),
-				].map((message) => ({
-					kind: "message" as const,
-					time: message.createdAt,
-					sequence: message.sequence,
-					message,
-				})),
-				...[
-					...olderPages
-						.slice()
-						.reverse()
-						.flatMap((page) => page.activities ?? []),
-					...(snapshot.activities ?? []),
-				].map((activity) => ({
-					kind: "activity" as const,
-					time: activity.createdAt,
-					sequence: 0,
-					activity,
-				})),
-			].sort((a, b) => a.time.localeCompare(b.time) || a.sequence - b.sequence)
-		: [];
-
 	const currentActiveId = sides.some((side) => side.id === activeId && side.sessionId === sessionId)
 		? activeId
 		: undefined;
-	const activeNumber = sides.findIndex((side) => side.id === currentActiveId) + 1;
-	const captureSelection = useCallback(() => {
-		const selection = window.getSelection();
-		const anchor =
-			selection?.anchorNode instanceof Element ? selection.anchorNode : selection?.anchorNode?.parentElement;
-		const focus = selection?.focusNode instanceof Element ? selection.focusNode : selection?.focusNode?.parentElement;
-		const source = anchor?.closest<HTMLElement>("[data-chat-message-id]");
-		const message = [...(snapshot?.messages ?? []), ...olderPages.flatMap((page) => page.messages ?? [])].find(
-			(message) => message.id === source?.dataset.chatMessageId,
-		);
-		const turn = [...(snapshot?.turns ?? []), ...olderPages.flatMap((page) => page.turns ?? [])].find(
-			(turn) => turn.id === message?.turnId,
-		);
-		if (
-			!selection ||
-			selection.isCollapsed ||
-			!selection.rangeCount ||
-			!source ||
-			!timelineContentRef.current?.contains(source) ||
-			source !== focus?.closest("[data-chat-message-id]") ||
-			!message ||
-			message.streaming ||
-			turn?.state !== "completed" ||
-			!activeId ||
-			!selection.toString().trim()
-		) {
-			clearSelection();
-			return;
-		}
-		setSelectionAction({
-			excerpt: {
-				id: crypto.randomUUID(),
-				conversationId: activeId,
-				messageId: message.id,
-				revision: message.revision,
-				text: selection.toString().trim(),
-				role: message.role as "user" | "assistant",
-			},
-			range: selection.getRangeAt(0).cloneRange(),
-		});
-	}, [activeId, snapshot, olderPages, clearSelection]);
+	// The main chat's Timeline renders the side transcript, so live status,
+	// "Worked for", and scroll follow behave exactly as they do in the main chat.
+	const conversation = useMemo(
+		() => (snapshot && snapshot.side.id === activeId ? sideConversationSnapshot(snapshot, olderPages) : undefined),
+		[snapshot, olderPages, activeId],
+	);
 	const navigateAnnotation = useCallback(
 		(annotation: ChatAnnotationSummaryItem) => {
-			if (annotation.conversationId === activeId) {
-				navigationPageRef.current = undefined;
-				annotationNavigationHold.current = true;
-				followOutputRef.current = false;
-				setNavigationTarget(annotation);
-			} else onNavigate?.(annotation);
+			if (annotation.conversationId === activeId) timelineNavigationRef.current?.(annotation);
+			else onNavigate?.(annotation);
 		},
 		[activeId, onNavigate],
 	);
-	useEffect(() => {
-		clearSelection();
-		setNavigationTarget(undefined);
-		highlightCleanup.current?.();
-		window.clearTimeout(highlightTimer.current);
-	}, [activeId, clearSelection]);
-	useEffect(
-		() => () => {
-			highlightCleanup.current?.();
-			window.clearTimeout(highlightTimer.current);
-		},
-		[],
-	);
-	const navigationPageRef = useRef<string | undefined>(undefined);
-	useEffect(() => {
-		if (!navigationTarget || !activeId || navigationTarget.conversationId !== activeId) return;
-		const source = Array.from(
-			timelineContentRef.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [],
-		).find((node) => node.dataset.chatMessageId === navigationTarget.messageId);
-		if (!source) {
-			if (loadingOlderRef.current) return;
-			const oldest = olderPages.at(-1)?.turns?.[0]?.createdAt ?? snapshot?.turns?.[0]?.createdAt;
-			if ((olderPages.at(-1)?.hasMore ?? snapshot?.hasMore) && oldest && navigationPageRef.current !== oldest) {
-				navigationPageRef.current = oldest;
-				void loadOlder();
-				return;
-			}
-			setError("This annotation's source is unavailable. Reselect the text to create a new reference.");
-			setNavigationTarget(undefined);
-			return;
-		}
-		navigationPageRef.current = undefined;
-		followOutputRef.current = false;
-		highlightCleanup.current?.();
-		window.clearTimeout(highlightTimer.current);
-		highlightCleanup.current = highlightChatAnnotation(source, navigationTarget.text, navigationTarget.revision);
-		const viewport = timelineRef.current;
-		const range = annotationTextRange(annotationBody(source), navigationTarget.text);
-		const rect = range?.getBoundingClientRect() ?? annotationBody(source).getBoundingClientRect();
-		const bounds = viewport?.getBoundingClientRect();
-		if (viewport && bounds && (rect.top < bounds.top + 12 || rect.bottom > bounds.bottom - 12)) {
-			viewport.scrollTo({
-				top: viewport.scrollTop + rect.top + rect.height / 2 - (bounds.top + bounds.height / 2),
-				behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-			});
-		}
-		highlightTimer.current = window.setTimeout(() => highlightCleanup.current?.(), 2200);
-		setNavigationTarget(undefined);
-	}, [navigationTarget, activeId, snapshot, olderPages, loadOlder]);
 	const {
 		scrollRef: tabStripRef,
 		showLeftFade,
@@ -1390,160 +1247,60 @@ export function useIndependentSideChats(
 			}}
 		/>
 	);
-	const renderTimelineItem = (item: (typeof timeline)[number]) => {
-		if (!snapshot || !activeId) return null;
-		return item.kind === "message"
-			? (() => {
-					const message: ConversationMessage = {
-						kind: "message",
-						id: item.message.id,
-						turnId: item.message.turnId,
-						sequence: item.message.sequence,
-						revision: item.message.revision,
-						role: item.message.role === "user" ? "user" : "assistant",
-						origin: item.message.role === "user" ? "human" : "provider",
-						text: item.message.text,
-						streaming: item.message.streaming,
-						createdAt: item.message.createdAt,
-						content: (
-							[...(snapshot.turns ?? []), ...olderPages.flatMap((page) => page.turns ?? [])].find(
-								(turn) => turn.id === item.message.turnId,
-							)?.references ?? []
-						).map((ref) => ({
-							type: "excerpt",
-							text: ref.selection,
-							sourceConversationId: ref.conversationId,
-							sourceMessageId: ref.messageId,
-							sourceRevision: ref.revision,
-						})),
-					};
-					return message.role === "user" ? (
-						<HumanMessage
-							key={message.id}
-							message={message}
-							sessionId={sessionId}
-							onSelectAnnotation={navigateAnnotation}
+	// Like the main chat, the transcript shows answered requests and the pending
+	// ones wait beside the composer, where the reader acts on them.
+	const pendingInteractions = (snapshot?.side.id === activeId ? snapshot?.activities ?? [] : []).filter(
+		(activity) =>
+			activity.status === "pending" &&
+			activity.requestId &&
+			(activity.kind === "approval" || ((activity.kind === "user_input" || activity.kind === "input") && activity.input)),
+	);
+	const renderPendingInteraction = (activity: (typeof pendingInteractions)[number]) => {
+		if (!activeId) return null;
+		const requestId = activity.requestId!;
+		if (activity.kind === "approval")
+			return (
+				<ApprovalCard
+					key={activity.id}
+					activity={sideConversationActivity(activity)}
+					onDecide={(id, decisionId) => void resolveApproval(activeId, id, decisionId)}
+				/>
+			);
+		const input = activity.input!;
+		return (
+			<div key={activity.id} className="space-y-2 rounded-lg border border-border px-3 py-2 text-sm">
+				<p>{input.message}</p>
+				{input.url && /^https?:\/\//i.test(input.url) ? (
+					<a className="underline" href={input.url} target="_blank" rel="noreferrer">
+						{t("sideChat.openRequestedUrl")}
+					</a>
+				) : null}
+				{Object.keys((input.schema?.properties ?? {}) as Record<string, unknown>).map((key) => (
+					<label key={key} className="block">
+						{key}
+						<input
+							className="ml-2 rounded border border-border bg-background p-1"
+							value={inputAnswers[requestId]?.[key] ?? ""}
+							onChange={(event) =>
+								setInputAnswers((current) => ({
+									...current,
+									[requestId]: { ...current[requestId], [key]: event.target.value },
+								}))
+							}
 						/>
-					) : (
-						<AssistantMessage key={message.id} message={message} showCopy={!message.streaming} />
-					);
-				})()
-			: (() => {
-					const activity = item.activity;
-					const conversationActivity: ConversationActivity = {
-						kind: "activity",
-						id: activity.id,
-						turnId: activity.turnId,
-						sequence: 0,
-						revision: 1,
-						activityKind:
-							activity.kind === "input"
-								? "user_input"
-								: [
-											"command",
-											"file_change",
-											"plan",
-											"reasoning",
-											"approval",
-											"usage",
-											"error",
-											"system",
-											"mcp_tool",
-											"auto_review",
-											"user_input",
-									  ].includes(activity.kind)
-									? (activity.kind as ConversationActivity["activityKind"])
-									: "system",
-						status: activity.status as ConversationActivity["status"],
-						summary: activity.summary || activity.kind,
-						detail: (activity.kind === "command" && activity.text
-							? {
-									...(activity.detail && typeof activity.detail === "object" && !Array.isArray(activity.detail)
-										? activity.detail
-										: {}),
-									output: activity.text,
-								}
-							: activity.detail) as ConversationActivity["detail"],
-						requestId: activity.requestId,
-						decisions: activity.decisions?.map((decision) => ({
-							id: decision.id,
-							label: decision.label,
-							kind: decision.kind as NonNullable<ConversationActivity["decisions"]>[number]["kind"],
-						})),
-						createdAt: activity.createdAt,
-					};
-					return (
-						<div key={activity.id}>
-							{activity.kind === "approval" ? (
-								<ApprovalCard
-									activity={conversationActivity}
-									onDecide={(requestId, decisionId) => void resolveApproval(activeId, requestId, decisionId)}
-								/>
-							) : activity.kind === "user_input" || activity.kind === "input" ? null : (
-								<ActivityRow activity={conversationActivity} />
-							)}
-							{(activity.kind === "user_input" || activity.kind === "input") &&
-							activity.status === "pending" &&
-							activity.requestId &&
-							activity.input ? (
-								<div className="space-y-2 pt-2">
-									<p>{activity.input.message}</p>
-									{activity.input.url && /^https?:\/\//i.test(activity.input.url) ? (
-										<a className="underline" href={activity.input.url} target="_blank" rel="noreferrer">
-											{t("sideChat.openRequestedUrl")}
-										</a>
-									) : null}
-									{Object.keys((activity.input.schema?.properties ?? {}) as Record<string, unknown>).map((key) => (
-										<label key={key} className="block">
-											{key}
-											<input
-												className="ml-2 rounded border border-border bg-background p-1"
-												value={inputAnswers[activity.requestId!]?.[key] ?? ""}
-												onChange={(event) =>
-													setInputAnswers((current) => ({
-														...current,
-														[activity.requestId!]: {
-															...current[activity.requestId!],
-															[key]: event.target.value,
-														},
-													}))
-												}
-											/>
-										</label>
-									))}
-									<div className="flex gap-2">
-										<Button
-											type="button"
-											size="sm"
-											onClick={() => void resolveInput(activeId, activity.requestId!, "accept")}
-										>
-											{t("sideChat.submit")}
-										</Button>
-										<Button
-											type="button"
-											size="sm"
-											variant="outline"
-											onClick={() => void resolveInput(activeId, activity.requestId!, "decline")}
-										>
-											{t("sideChat.decline")}
-										</Button>
-									</div>
-								</div>
-							) : null}
-						</div>
-					);
-				})();
+					</label>
+				))}
+				<div className="flex gap-2">
+					<Button type="button" size="sm" onClick={() => void resolveInput(activeId, requestId, "accept")}>
+						{t("sideChat.submit")}
+					</Button>
+					<Button type="button" size="sm" variant="outline" onClick={() => void resolveInput(activeId, requestId, "decline")}>
+						{t("sideChat.decline")}
+					</Button>
+				</div>
+			</div>
+		);
 	};
-	const allTurns = [...(snapshot?.turns ?? []), ...olderPages.flatMap((page) => page.turns ?? [])];
-	const turnGroups = allTurns
-		.filter((turn, index) => allTurns.findIndex((other) => other.id === turn.id) === index)
-		.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
-		.map((turn) => ({
-			turn,
-			items: timeline.filter(
-				(item) => (item.kind === "message" ? item.message.turnId : item.activity.turnId) === turn.id,
-			),
-		}));
 	const panel =
 		enabled && currentActiveId && visible ? (
 			<aside
@@ -1552,31 +1309,6 @@ export function useIndependentSideChats(
 			>
 				{tabBar}
 				{closeDialog}
-				{selectionAction ? (
-					<div
-						ref={selectionButton}
-						style={{
-							left: selectionPosition?.left ?? 0,
-							top: selectionPosition?.top ?? 0,
-							visibility: selectionPosition?.visible ? "visible" : "hidden",
-						}}
-						onMouseDown={(event) => event.preventDefault()}
-						className={cn(actionMenuContentClass, "absolute z-20 flex-row min-w-0 w-max max-w-full shadow-lg")}
-					>
-						<button
-							type="button"
-							className={cn(actionMenuItemClass, "shrink-0 whitespace-nowrap hover:bg-interactive-hover")}
-							onClick={() => {
-								addReference(currentActiveId, selectionAction.excerpt);
-								clearSelection();
-								window.getSelection()?.removeAllRanges();
-							}}
-						>
-							<MessageSquarePlus className="size-3.5" />
-							{t("sideChat.addToChat")}
-						</button>
-					</div>
-				) : null}
 				{snapshot && snapshot.side.id === activeId ? (
 					<>
 						{snapshot.side.state !== "ready" ? (
@@ -1585,111 +1317,40 @@ export function useIndependentSideChats(
 									(snapshot.side.state === "recovering" ? t("sideChat.reconnecting") : snapshot.side.state)}
 							</p>
 						) : null}
-						<div className="relative min-h-0 flex-1">
-							<div
-								ref={timelineRef}
-								onMouseUp={captureSelection}
-								onKeyUp={captureSelection}
-								onWheel={() => {
-									annotationNavigationHold.current = false;
-								}}
-								onPointerDown={() => {
-									annotationNavigationHold.current = false;
-								}}
-								onKeyDown={() => {
-									annotationNavigationHold.current = false;
-								}}
-								onScroll={(event) => {
-									if (annotationNavigationHold.current) return;
-									const element = event.currentTarget;
-									followOutputRef.current = element.scrollHeight - element.clientHeight - element.scrollTop < 48;
-								}}
-								className="cursor-chat-timeline select-text h-full min-w-0 overflow-x-hidden overflow-y-auto px-4 py-5 [overflow-wrap:anywhere]"
-								role="log"
-								aria-label={t("sideChat.sideChatMessages", {
-									value1: activeNumber,
-								})}
-							>
-								<div
-									ref={timelineContentRef}
-									className={cn(
-										"mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-5",
-										timeline.length === 0 && !(snapshot.turns ?? []).length && "min-h-full justify-center",
-									)}
-								>
-									{timeline.length === 0 && !(snapshot.turns ?? []).length ? (
-										<div className="mx-auto flex max-w-sm flex-col items-center gap-2 py-8 text-center text-sm">
-											<h3 className="font-medium">{t("sideChat.askASideQuestion")}</h3>
-											<p className="text-xs leading-relaxed text-muted-foreground">{t("sideChat.isolationPolicy")}</p>
-										</div>
-									) : null}
-									{(olderPages.at(-1)?.hasMore ?? snapshot.hasMore) ? (
-										<button
-											type="button"
-											className="self-center text-xs text-muted-foreground underline"
-											onClick={() => void loadOlder()}
-										>
-											{t("sideChat.loadEarlierMessages")}
-										</button>
-									) : null}
-									{turnGroups.map(({ turn, items }) => {
-										const humans = items.filter((item) => item.kind === "message" && item.message.role === "user");
-										const work = items.filter((item) => !humans.includes(item));
-										const final = [...work]
-											.reverse()
-											.find((item) => item.kind === "message" && item.message.role !== "user");
-										const folded = work.filter((item) => item !== final);
-										const durationMs = turn.completedAt
-											? Math.max(0, Date.parse(turn.completedAt) - Date.parse(turn.startedAt ?? turn.createdAt))
-											: undefined;
-										const body = humans.map(renderTimelineItem);
-										if (turn.state === "running") {
-											body.push(
-												<div key="working" data-testid="side-live-turn-status">
-													<LiveResponseStatus startedAt={turn.startedAt ?? turn.createdAt} />
-												</div>,
-											);
-											body.push(...work.map(renderTimelineItem));
-										} else {
-											if (turn.completedAt)
-												body.push(
-													<TurnWorkSummary key="worked" durationMs={durationMs}>
-														{folded.length ? folded.map(renderTimelineItem) : undefined}
-													</TurnWorkSummary>,
-												);
-											else body.push(...folded.map(renderTimelineItem));
-											if (final) body.push(renderTimelineItem(final));
-										}
-										return (
-											<div key={turn.id} className="flex min-w-0 flex-col gap-2.5">
-												{body}
-											</div>
-										);
-									})}
-									{timeline
-										.filter(
-											(item) =>
-												!turnGroups.some(
-													({ turn }) =>
-														turn.id === (item.kind === "message" ? item.message.turnId : item.activity.turnId),
-												),
-										)
-										.map(renderTimelineItem)}
-									{(snapshot.turns ?? [])
-										.filter((turn) => turn.state === "failed")
-										.map((turn) => (
-											<div key={turn.id} className="rounded-lg border border-border px-3 py-2 text-xs">
-												<p role="alert" className="text-destructive">
-													{turn.errorMessage}
-												</p>
-												<Button type="button" size="sm" variant="ghost" onClick={() => void retry(activeId, turn.id)}>
-													{t("sideChat.retryQuestion")}
-												</Button>
-											</div>
-										))}
+						{conversation ? (
+							<div className="relative flex min-h-0 flex-1 flex-col">
+								{conversation.items.length === 0 ? (
+									// The Timeline draws nothing for an empty transcript.
+									<div className="mx-auto flex max-w-sm flex-1 flex-col items-center justify-center gap-2 px-4 py-8 text-center text-sm">
+										<h3 className="font-medium">{t("sideChat.askASideQuestion")}</h3>
+										<p className="text-xs leading-relaxed text-muted-foreground">{t("sideChat.isolationPolicy")}</p>
+									</div>
+								) : null}
+								<Timeline
+									key={activeId}
+									snapshot={conversation}
+									annotationNavigationRef={timelineNavigationRef}
+									draftScope={{ sessionId: `side:${activeId}`, incarnation: activeId }}
+									draftPersistenceAvailable={false}
+									hasOlder={conversation.hasMoreBefore}
+									loadingOlder={loadingOlder}
+									onLoadOlder={() => void loadOlder()}
+									excerptsEnabled
+									onAddToChat={(excerpt) => addReference(activeId, excerpt)}
+									onForeignAnnotation={(annotation) => onNavigate?.(annotation)}
+									onDecide={(requestId, decisionId) => void resolveApproval(activeId, requestId, decisionId)}
+									busy={conversation.controller.state === "busy"}
+									retryControl={{ retry: (turnId) => retry(activeId, turnId) }}
+								/>
+							</div>
+						) : null}
+						{pendingInteractions.length ? (
+							<div className="shrink-0 px-4 pb-2">
+								<div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
+									{pendingInteractions.map(renderPendingInteraction)}
 								</div>
 							</div>
-						</div>
+						) : null}
 						{snapshot.side.state === "failed" && snapshot.side.recreateRequired ? (
 							<Button
 								type="button"
