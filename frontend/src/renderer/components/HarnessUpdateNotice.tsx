@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, LoaderCircle, X } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useAgentAuthPlans } from "../hooks/useAgentAuth";
 import { cacheAgentReadiness, ensureAgentReadiness, useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
@@ -92,12 +93,17 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	};
 	const isExpanded = expanded && updates.length > 1;
 
-	return <aside role="region" aria-label={t("settings.harness.updateNoticeTitle")}
-		className="fixed right-4 top-14 isolate z-[calc(var(--z-overlay)-1)] w-[min(300px,calc(100vw-32px))] text-card-foreground"
-		data-browser-native-overlay="true" data-state="open">
+	// Portaled to the end of <body>: Electron applies window drag regions in DOM
+	// order, so a later drag strip (the home page's) would otherwise override no-drag.
+	return createPortal(<aside role="region" aria-label={t("settings.harness.updateNoticeTitle")}
+		// Sit in the free space at the top, except below Settings' topbar so its close button stays reachable.
+		className={`fixed right-4 ${settingsModal ? "top-[52px]" : "top-3"} isolate z-[calc(var(--z-overlay)-1)] w-[min(300px,calc(100vw-32px))] text-card-foreground`}
+		data-browser-native-overlay="true" data-state="open"
+		// Outside Settings the stack reaches the window's drag region, which would swallow its clicks.
+		style={{ WebkitAppRegion: "no-drag" } as CSSProperties}>
 		{/* The stack toggle sits above the cards so it never reads as part of one notice. */}
-		{updates.length > 1 ? <div className="mb-5 flex justify-end">
-			<Button type="button" variant="ghost" size="sm" className="h-6 rounded-full border border-border bg-card px-2 text-[11px] text-settings-muted shadow-sm hover:bg-muted" aria-expanded={isExpanded} aria-controls={stackId} onClick={() => setExpanded(!isExpanded)}>{t(isExpanded ? "settings.harness.hideUpdateStack" : "settings.harness.showUpdateStack", { count: updates.length })}</Button>
+		{updates.length > 1 ? <div className="mb-2 flex justify-end">
+			<Button type="button" variant="ghost" size="sm" className="h-6 rounded-md border border-border bg-card px-2 text-[11px] text-settings-muted shadow-sm hover:bg-muted" aria-expanded={isExpanded} aria-controls={stackId} onClick={() => setExpanded(!isExpanded)}>{t(isExpanded ? "settings.harness.hideUpdateStack" : "settings.harness.showUpdateStack", { count: updates.length })}</Button>
 		</div> : null}
 		{/* flow-root keeps the stack's negative margin inside this box, so the cards behind peek out below only. */}
 		<div className="relative flow-root">
@@ -105,7 +111,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 			{updates.length > 2 ? <div className="absolute inset-x-4 -bottom-2 top-4 z-0 rounded-xl border border-border bg-card shadow-sm" /> : null}
 			<div className="absolute inset-x-2 -bottom-1 top-2 z-10 rounded-xl border border-border bg-card shadow-sm" />
 		</div> : null}
-		<div id={stackId} className="relative z-10 -m-4 max-h-[min(272px,calc(100dvh-56px))] space-y-5 overflow-y-auto overscroll-contain p-4">
+		<div id={stackId} className="relative z-10 -m-4 max-h-[min(272px,calc(100dvh-64px))] space-y-4 overflow-y-auto overscroll-contain p-4">
 			{(isExpanded ? updates : updates.slice(0, 1)).map(({ agentId, advisory, key }) => {
 				const plan = installers.data?.find((candidate) => candidate.agentId === agentId);
 				const job = jobs.data?.find((candidate) => candidate.target === agentId);
@@ -120,8 +126,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 					useHarnessActionRequest.getState().setRequest({ agentId, latestVersion: advisory.latestVersion!, action: needsLogin ? "login" : "update" });
 					openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true });
 				};
-				return <article key={key} aria-label={agentLabel(agentId)} className="relative rounded-xl border border-border bg-card px-2.5 py-2 shadow-lg">
-					<Button type="button" variant="ghost" size="icon" className="absolute -right-1 -top-4 z-20 size-6 rounded-full border border-border bg-card shadow-sm hover:bg-muted" aria-label={t("settings.harness.dismissAgentUpdate", { agent: agentLabel(agentId) })} onClick={() => dismiss(key)}><X className="size-3.5" aria-hidden="true" /></Button>
+				return <article key={key} aria-label={agentLabel(agentId)} className="relative rounded-xl border border-border bg-card px-2.5 py-2 shadow-md">
+					<Button type="button" variant="ghost" size="icon" className="absolute -left-2 -top-2 z-20 size-6 rounded-full border border-border bg-card shadow-sm hover:bg-muted" aria-label={t("settings.harness.dismissAgentUpdate", { agent: agentLabel(agentId) })} onClick={() => dismiss(key)}><X className="size-3.5" aria-hidden="true" /></Button>
 					<div className="flex items-center gap-2">
 						<AgentAvatar className="size-5 shrink-0" decorative provider={agentId} />
 						<p className="min-w-0 flex-1 break-words text-[13px] font-medium">{agentLabel(agentId)}</p>
@@ -137,5 +143,5 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 			})}
 		</div>
 		</div>
-	</aside>;
+	</aside>, document.body);
 }

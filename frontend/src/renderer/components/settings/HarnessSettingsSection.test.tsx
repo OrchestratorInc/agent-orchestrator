@@ -449,7 +449,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const page = await findAgentRow("codex");
 		expect(await within(page).findByText("Connected")).toBeInTheDocument();
-		await userEvent.click(await within(page).findByRole("button", { name: "Log in again" }));
+		await userEvent.click(await within(page).findByRole("button", { name: "Relogin" }));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", { params: { path: { agent: "codex" } } });
 		expect(await screen.findByRole("button", { name: "Complete login terminal" })).toBeInTheDocument();
 	});
@@ -1075,7 +1075,7 @@ describe("HarnessSettingsSection", () => {
 		expect(await within(row).findByText("Connected")).toBeInTheDocument();
 		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
-		expect(within(row).getByRole("button", { name: "Log in again" })).toBeEnabled();
+		expect(within(row).getByRole("button", { name: "Relogin" })).toBeEnabled();
 	});
 
 	it("offers fx installation while readiness refreshes automatically", async () => {
@@ -1506,7 +1506,7 @@ describe("HarnessSettingsSection", () => {
 		expect(await within(row).findByText("Connected")).toBeInTheDocument();
 		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
-		expect(within(row).getByRole("button", { name: "Log in again" })).toBeEnabled();
+		expect(within(row).getByRole("button", { name: "Relogin" })).toBeEnabled();
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
 

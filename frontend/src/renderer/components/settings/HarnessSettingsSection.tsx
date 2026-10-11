@@ -1151,14 +1151,15 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 								{/* Not-installed harnesses stay in place but recede. */}
 								<AgentAvatar className={cn("shrink-0", split ? "size-5" : "size-6", !details.isInstalled && "opacity-45 grayscale")} decorative provider={agentId} />
 								<span className={cn("min-w-0 flex-1 truncate text-sm", details.isInstalled || selected ? "text-settings-label" : "text-settings-muted")}>{agentLabel(agentId)}</span>
-								{details.isInstalled && details.updateAvailable ? <CircleArrowUp
-									className="size-4 shrink-0 text-settings-muted"
-									strokeWidth={1.75}
-									aria-label={t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}
-									role="img"
-								/> : null}
-								{details.busy ? <span role="status" className="flex shrink-0 items-center"><LoaderCircle className="size-3.5 animate-spin text-settings-muted" aria-hidden="true" /><span className="sr-only">{details.progressLabel}</span></span>
-									: details.authBusy ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
+								{/* One status slot: progress replaces the update icon while an install, update or login runs. */}
+								{details.busy ? <span role="status" className="flex size-4 shrink-0 items-center justify-center"><LoaderCircle className="size-4 animate-spin text-settings-muted" strokeWidth={1.75} aria-hidden="true" /><span className="sr-only">{details.progressLabel}</span></span>
+									: details.authBusy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" strokeWidth={1.75} aria-hidden="true" />
+									: details.isInstalled && details.updateAvailable ? <CircleArrowUp
+										className="size-4 shrink-0 text-settings-muted"
+										strokeWidth={1.75}
+										aria-label={t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}
+										role="img"
+									/>
 									: details.listTone === "error" ? <HarnessStatusDot tone="error" /> : null}
 								{split ? null : <ChevronRight className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />}
 							</button>;

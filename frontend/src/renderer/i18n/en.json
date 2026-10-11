@@ -1377,7 +1377,7 @@
 	"settings.harness.verifyFailed": "{{agent}} finished installing, but AO could not find its executable.",
 	"settings.harness.verifyAgain": "Verify again",
 	"settings.harness.verifying": "Verifying…",
-	"settings.harness.loginAgain": "Log in again",
+	"settings.harness.loginAgain": "Relogin",
 	"settings.harness.openDetails": "Open {{agent}} details",
 	"settings.harness.allHarnesses": "All harnesses",
 	"settings.harness.detailTabs": "{{agent}} settings",
