@@ -233,3 +233,45 @@ func TestComposerAdmissionAndUnsupportedPolicies(t *testing.T) {
 		t.Fatal("unexpected Chat/reviewer capability")
 	}
 }
+
+func TestDefaultLaunchUsesNativePermissionsWithoutLosingSettings(t *testing.T) {
+	p, cfg := prepared(t)
+	state, err := readState(cfg.WorkspacePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(state.Profile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(state.Profile, "settings.json")
+	if err := writeObject(path, map[string]any{"preferences": map[string]any{"theme": "dark", "yolo": nil}, "customProviders": []string{"preserve"}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Env["AO_RUNTIME_LAUNCH_ID"] = "g1"
+	if err := p.PrepareRuntimeLaunch(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := readObject(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prefs map[string]any
+	if err := json.Unmarshal(settings["preferences"], &prefs); err != nil {
+		t.Fatal(err)
+	}
+	if prefs["yolo"] != false || prefs["theme"] != "dark" || !strings.Contains(string(settings["customProviders"]), "preserve") {
+		t.Fatal("native permission preference or unrelated settings lost")
+	}
+	prefs["yolo"] = true
+	settings["preferences"], _ = json.Marshal(prefs)
+	if err := writeObject(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.PrepareRuntimeLaunch(context.Background(), cfg); err == nil {
+		t.Fatal("silently rewrote explicit native bypass")
+	}
+	cfg.Config.Permissions = ports.PermissionModeBypassPermissions
+	if err := p.PrepareRuntimeLaunch(context.Background(), cfg); err != nil || cfg.Env["MASTRACODE_YOLO"] != "1" {
+		t.Fatalf("explicit bypass = %s,%v", cfg.Env["MASTRACODE_YOLO"], err)
+	}
+}

@@ -118,6 +118,36 @@ func (*Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHook
 	if err := validateNativeSettings(state.Profile, cfg.Config.Permissions); err != nil {
 		return err
 	}
+	if ports.NormalizePermissionMode(cfg.Config.Permissions) != ports.PermissionModeBypassPermissions {
+		if state.Profile != filepath.Join(cfg.DataDir, adapterID, "profile") {
+			return errors.New("mastra-code native permission setup requires the AO-owned profile")
+		}
+		// The released CLI only recognizes truthy YOLO environment values;
+		// "0" cannot override the SDK's yolo=true default. Use its supported
+		// preference in AO's profile, preserving every unrelated native field.
+		settingsPath := filepath.Join(state.Profile, "settings.json")
+		settings, err := readObject(settingsPath)
+		if err != nil {
+			return err
+		}
+		preferences := map[string]json.RawMessage{}
+		if raw, ok := settings["preferences"]; ok && string(raw) != "null" {
+			if err := json.Unmarshal(raw, &preferences); err != nil {
+				return err
+			}
+			if preferences == nil {
+				preferences = map[string]json.RawMessage{}
+			}
+		}
+		preferences["yolo"] = json.RawMessage("false")
+		settings["preferences"], _ = json.Marshal(preferences)
+		if err := os.MkdirAll(state.Profile, 0o700); err != nil {
+			return err
+		}
+		if err := writeObject(settingsPath, settings); err != nil {
+			return err
+		}
+	}
 	if model := strings.TrimSpace(cfg.Config.Model); model != "" {
 		cfg.Env["MASTRACODE_MODEL_ID"] = model
 	}
