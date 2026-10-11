@@ -280,10 +280,15 @@ workspace_id: <workspace id>
 ```
 
 `stage` is where it failed: `workspace_create`, `workspace_start`,
-`agent_wait`, `durable_root_probe`, `worker_install` (installs and launches
+`agent_wait`, `durable_root_probe`, `ready_probe` (the connection's
+`readyProbe`, run as the workspace user until it exits 0; attrs carry
+`attempts` and `exit_code`), `worker_install` (installs and launches
 the worker with `setsid`; the `cause` shows the last 1 KB of bootstrap
-terminal output). A failure after `worker_install` succeeded (no heartbeat,
-`worker_never_started`) is on the worker side: read its log.
+terminal output; attrs carry `worker_user` and `checkout_reuse`). A failure
+after `worker_install` succeeded (no heartbeat, `worker_never_started`) is on
+the worker side: read its log. With `reuseExistingCheckout`, the worker log
+says which checkout it adopted (`checkout reuse: ...`), any stash it made for
+uncommitted changes, or why it cloned into `<root>/repository` instead.
 
 ### Look at the workspace in the customer's Coder
 
@@ -318,6 +323,7 @@ stdout/stderr, JSON), `worker.pid`, `launch.sh`; the repository is
 | `unsupported_architecture` | the workspace CPU has no AO worker build | AO ships amd64 and arm64; for arm64 make sure the control-plane image includes `ao-worker-linux-arm64` (the CP logs "arm64 worker build unavailable" at boot if not) |
 | `durable_root_unavailable` | the durable root is not usable: `$HOME` not writable or a symlink, not a mount when `requireMountedDurableRoot` is on, or it holds another session's data | fix ownership/permissions of the home directory or mount, or turn off `requireMountedDurableRoot`; a reused volume from another session needs a fresh workspace |
 | `bootstrap_failed` | the bootstrap script failed: no passwordless sudo, or the worker exited right after launch | give the workspace user passwordless sudo; otherwise read `cause` and `worker.log` (common: no egress to the control plane URL, TLS interception, disk full) |
+| `workspace_setup_not_ready` | the connection's `readyProbe` never exited 0 within `readyProbeTimeoutSeconds` (measured from the agent becoming ready); the message carries the probe's last output (bounded, redacted) | run the probe yourself in the workspace as the workspace user; fix the template's own setup or raise the timeout (30..3600 s) |
 | `worker_never_started` | the worker launched but never sent a heartbeat before the deadline | `worker.log` on the workspace; check egress to `AO_CONTROL_PLANE_URL`, proxies, clock skew |
 
 Other BYO signals on the trail:

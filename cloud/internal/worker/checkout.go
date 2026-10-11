@@ -317,6 +317,36 @@ func ConfigureWorkerGit(
 			return fmt.Errorf("%s is required", label)
 		}
 	}
+	if err := writeWorkerGitTooling(dataDir, publicURL, sessionID); err != nil {
+		return err
+	}
+	helperPath := GitCredentialHelperPath(dataDir)
+	commands := [][]string{
+		{"config", "--local", "--replace-all", "credential.helper", ""},
+		{"config", "--local", "--add", "credential.helper", helperPath},
+		{"config", "--local", "--replace-all", "credential.useHttpPath", "true"},
+		{"config", "--local", "--replace-all", "user.name", cloudGitAuthorName},
+		{"config", "--local", "--replace-all", "user.email", cloudGitAuthorEmail},
+		{"checkout", "-B", branch},
+	}
+	for _, command := range commands {
+		if _, err := runner.Run(ctx, workspace, nil, command...); err != nil {
+			return fmt.Errorf("configure worker Git repository: %w", err)
+		}
+	}
+	return nil
+}
+
+// writeWorkerGitTooling writes the session's git credential helper and gh
+// wrapper into the worker data directory.
+func writeWorkerGitTooling(dataDir, publicURL, sessionID string) error {
+	for label, value := range map[string]string{
+		"data directory": dataDir, "public URL": publicURL, "session ID": sessionID,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s is required", label)
+		}
+	}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return fmt.Errorf("create worker Git credential directory: %w", err)
 	}
@@ -451,19 +481,6 @@ GH_TOKEN="$github_token" exec "$real_gh" "$@"
 		shellQuote(strings.TrimRight(publicURL, "/")+"/api/cloud/v1/worker/github-token"))
 	if err := os.WriteFile(filepath.Join(binDir, "gh"), []byte(githubWrapper), 0o700); err != nil {
 		return fmt.Errorf("write worker GitHub CLI wrapper: %w", err)
-	}
-	commands := [][]string{
-		{"config", "--local", "--replace-all", "credential.helper", ""},
-		{"config", "--local", "--add", "credential.helper", helperPath},
-		{"config", "--local", "--replace-all", "credential.useHttpPath", "true"},
-		{"config", "--local", "--replace-all", "user.name", cloudGitAuthorName},
-		{"config", "--local", "--replace-all", "user.email", cloudGitAuthorEmail},
-		{"checkout", "-B", branch},
-	}
-	for _, command := range commands {
-		if _, err := runner.Run(ctx, workspace, nil, command...); err != nil {
-			return fmt.Errorf("configure worker Git repository: %w", err)
-		}
 	}
 	return nil
 }

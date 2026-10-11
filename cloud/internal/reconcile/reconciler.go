@@ -1225,7 +1225,8 @@ func humanDuration(d time.Duration) string {
 // its compute is not ready yet (ErrWorkspaceNotReady) is retried later without
 // being counted as a failed repair; a definitive failure (an unsupported CPU
 // architecture) parks the session immediately; anything else is a normal
-// failure the next tick repairs. The user-facing reason is recorded in every
+// failure the next tick repairs. A workspace ready check that timed out parks
+// the session the same way. The user-facing reason is recorded in every
 // case so the session can explain itself.
 func (r *Reconciler) bootstrapFailed(
 	ctx context.Context,
@@ -1237,6 +1238,14 @@ func (r *Reconciler) bootstrapFailed(
 	var startupErr *sandbox.StartupError
 	if errors.As(err, &startupErr) && startupErr.Code == sandbox.StartupErrorUnsupportedArchitecture {
 		r.log.WarnContext(ctx, "sandbox CPU architecture is not supported",
+			"session_id", record.SessionID, "provider_id", environment.ID, "err", err)
+		return r.terminate(ctx, record, environment, provider, startupErr)
+	}
+	// A workspace ready check that never passed within its own timeout will
+	// not pass on a retry either (its budget is anchored to the agent's ready
+	// time), so park the session with the check's output rather than looping.
+	if errors.As(err, &startupErr) && startupErr.Code == sandbox.StartupErrorWorkspaceSetupNotReady {
+		r.log.WarnContext(ctx, "workspace ready check timed out",
 			"session_id", record.SessionID, "provider_id", environment.ID, "err", err)
 		return r.terminate(ctx, record, environment, provider, startupErr)
 	}

@@ -882,6 +882,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/coder-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description The organization's bring-your-own Coder connection, without its token. 403 provider_forbidden when the organization is not entitled to Coder. */
+        get: operations["getOrgCoderConfig"];
+        /** @description Create or replace the organization's bring-your-own Coder connection (org admins). The token is required on first save and when baseUrl changes; otherwise an omitted token keeps the stored one. An omitted owner is derived from the token. */
+        put: operations["putOrgCoderConfig"];
+        post?: never;
+        delete: operations["deleteOrgCoderConfig"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/coder-templates/{templateId}/parameters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        /** @description The coder_parameter inputs the template's active version declares, read from the organization's own Coder connection (or the deployment's Coder when it has none). 403 provider_forbidden for organizations without Coder; 404 coder_template_not_found for an unknown template; 502 coder_unavailable when Coder cannot be read. */
+        get: operations["getCoderTemplateParameters"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/worker/bootstrap": {
         parameters: {
             query?: never;
@@ -1566,6 +1606,89 @@ export interface components {
             startupScript?: string;
             extraRepos?: components["schemas"]["ProjectCoderRepository"][];
             workspaceNamePrefix?: components["schemas"]["CoderWorkspaceNamePrefix"];
+            parameters?: components["schemas"]["CoderTemplateParameterValues"];
+        };
+        /** @description Values for the chosen template's coder_parameter inputs, by parameter name. A list(string) value is a JSON array string and a bool is "true" or "false". Requires a chosen template; names must be parameters the template declares. At workspace create they override the organization connection's parameters and are overridden by size and startupScript. */
+        CoderTemplateParameterValues: {
+            [key: string]: string;
+        };
+        CoderTemplateParameter: {
+            name: string;
+            displayName: string;
+            description: string;
+            /** @description Coder parameter type: "string", "number", "bool" or "list(string)". */
+            type: string;
+            /** @description Coder's form hint (for example dropdown, multi-select, switch); may be empty. */
+            formType: string;
+            /** @description False when the value can only be set when a workspace is created. */
+            mutable: boolean;
+            required: boolean;
+            defaultValue: string;
+            options: {
+                name: string;
+                value: string;
+                description: string;
+            }[];
+            order: number;
+        };
+        OrgCoderConfig: {
+            baseUrl: string;
+            owner: string;
+            templateId: string;
+            agentName?: string;
+            parameters?: {
+                [key: string]: string;
+            };
+            durableRoot?: string;
+            endpointServiceName?: string;
+            region?: string;
+            requireMountedDurableRoot?: boolean;
+            startupTimeoutSeconds?: number;
+            workerUser: components["schemas"]["CoderWorkerUser"];
+            /** @description Shell command run as the workspace user after the Coder agent is ready and before AO starts its worker; polled every 5 seconds until it exits 0. */
+            readyProbe?: string;
+            /** @description Ready check budget, measured from the agent becoming ready. 900 when a ready check is set without one. On timeout the session fails with startup error workspace_setup_not_ready. */
+            readyProbeTimeoutSeconds?: number;
+            /** @description Work in the checkout of the project repository the template already cloned (under $HOME/work/* or $HOME/*) instead of cloning into ~/repository. Always false for the ao-worker user; defaults to true for the workspace user. */
+            reuseExistingCheckout: boolean;
+        };
+        /**
+         * @description Who runs AO's worker and agent in the workspace: a dedicated ao-worker user (default; added to the docker group when one exists), or the workspace's own login user with its real HOME, groups and environment.
+         * @enum {string}
+         */
+        CoderWorkerUser: "ao-worker" | "workspace";
+        OrgCoderConfigResponse: {
+            configured: boolean;
+            coderConfig?: components["schemas"]["OrgCoderConfig"];
+            validationState?: string;
+            /** Format: date-time */
+            validatedAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        PutOrgCoderConfigInput: {
+            /** @description Coder API token. Required on first save and when baseUrl changes; omit to keep the stored token. */
+            token?: string;
+            baseUrl: string;
+            /** @description Omit to derive from the token. */
+            owner?: string;
+            templateId?: string;
+            agentName?: string;
+            parameters?: {
+                [key: string]: string;
+            };
+            durableRoot?: string;
+            endpointServiceName?: string;
+            region?: string;
+            requireMountedDurableRoot?: boolean;
+            /** @description 0 (default 20 minutes) or 60..7200. */
+            startupTimeoutSeconds?: number;
+            workerUser?: components["schemas"]["CoderWorkerUser"];
+            readyProbe?: string;
+            /** @description 0 (default 900 when readyProbe is set) or 30..3600. */
+            readyProbeTimeoutSeconds?: number;
+            /** @description Omit for the default (true with the workspace user). */
+            reuseExistingCheckout?: boolean;
         };
         ProjectCoderRepository: {
             /** Format: uri */
@@ -1583,9 +1706,10 @@ export interface components {
             orchestrator?: components["schemas"]["ProjectRoleConfigPatch"] | null;
             reviewers?: components["schemas"]["ProjectReviewer"][];
             autoReview?: boolean;
-            /** @description Only the workspace name prefix is editable after the project is created. */
+            /** @description Only the workspace name prefix and the template parameters are editable after the project is created. parameters replaces the stored values as a whole and needs a project with a chosen template. */
             coder?: {
                 workspaceNamePrefix?: components["schemas"]["CoderWorkspaceNamePrefix"];
+                parameters?: components["schemas"]["CoderTemplateParameterValues"];
             };
         };
         ProjectSettingsInput: {
@@ -2221,7 +2345,7 @@ export interface components {
         };
         /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. */
         SessionStartupError: {
-            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, or bootstrap_failed. Clients must tolerate codes added later. */
+            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, or workspace_setup_not_ready (a Coder connection's workspace ready check never passed). Clients must tolerate codes added later. */
             code: string;
             /** @description Human-readable explanation suitable for display as-is. */
             message: string;
@@ -4314,6 +4438,103 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getOrgCoderConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection, or configured=false when there is none. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgCoderConfigResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putOrgCoderConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutOrgCoderConfigInput"];
+            };
+        };
+        responses: {
+            /** @description The validated connection was stored; the token is never returned. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgCoderConfigResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteOrgCoderConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection was removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getCoderTemplateParameters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The template's parameters in Coder's order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        parameters: components["schemas"]["CoderTemplateParameter"][];
+                    };
+                };
             };
             default: components["responses"]["Error"];
         };

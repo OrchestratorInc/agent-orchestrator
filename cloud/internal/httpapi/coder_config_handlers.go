@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"net/http"
 	"regexp"
 	"strings"
@@ -39,6 +40,18 @@ type putOrgCoderConfigRequest struct {
 	// StartupTimeoutSeconds bounds how long AO waits for a workspace to become
 	// ready and its worker to start. Zero uses the 20-minute default.
 	StartupTimeoutSeconds int `json:"startupTimeoutSeconds"`
+	// WorkerUser is "ao-worker" (default) or "workspace": run the worker and
+	// agent as the workspace's own login user.
+	WorkerUser string `json:"workerUser"`
+	// ReadyProbe is an optional shell command that must exit 0, as the
+	// workspace user, before AO launches its worker; polled every 5 seconds
+	// for at most ReadyProbeTimeoutSeconds (default 900, 30..3600).
+	ReadyProbe               string `json:"readyProbe"`
+	ReadyProbeTimeoutSeconds int    `json:"readyProbeTimeoutSeconds"`
+	// ReuseExistingCheckout adopts the template's existing clone of the
+	// project repository; defaults to true with the workspace worker user and
+	// is always false with ao-worker.
+	ReuseExistingCheckout *bool `json:"reuseExistingCheckout"`
 }
 
 // orgCoderConfigResponse is the secret-dropping view of an organization's Coder
@@ -122,13 +135,13 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := []byte(strings.TrimSpace(request.Token))
-	defer clear(token)
+	defer func() { clear(token) }() // also clears a reused stored token
 	request.Token = ""
 	// Every save is a connection test: trail its outcome so support can see
 	// why a BYO Coder connection was rejected without asking the customer.
 	validation := &coderValidation{result: "rejected", baseURL: request.BaseURL}
 	defer s.recordCoderValidation(r, orgID, validation)
-	if len(token) == 0 || len(token) > 64<<10 {
+	if len(token) > 64<<10 {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "A Coder API token is required.")
 		return
 	}
@@ -145,6 +158,10 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		Region:                    request.Region,
 		RequireMountedDurableRoot: request.RequireMountedDurableRoot,
 		StartupTimeoutSeconds:     request.StartupTimeoutSeconds,
+		WorkerUser:                request.WorkerUser,
+		ReadyProbe:                request.ReadyProbe,
+		ReadyProbeTimeoutSeconds:  request.ReadyProbeTimeoutSeconds,
+		ReuseExistingCheckout:     request.ReuseExistingCheckout,
 	})
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "The Coder configuration could not be stored.")
@@ -154,6 +171,17 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "The Coder configuration could not be stored.")
 		return
+	}
+	// Editing an existing connection may omit the token: the stored one is kept
+	// as long as the deployment (base URL) is unchanged. A first save, or a move
+	// to another deployment, must supply a token.
+	if len(token) == 0 {
+		stored, ok := s.storedCoderToken(r, orgID, normalized.BaseURL)
+		if !ok {
+			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "A Coder API token is required.")
+			return
+		}
+		token = stored
 	}
 	// The slimmed connection is just a base URL and a token. Validate that shape by
 	// building a probe client: it checks the URL is an absolute http(s) origin — an
@@ -179,6 +207,11 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 			normalized.StartupTimeoutSeconds > domain.MaxOrgCoderStartupTimeoutSeconds) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error",
 			"The Coder startup timeout must be between 60 seconds and 2 hours.")
+		return
+	}
+	if err := normalized.ValidateDevEnvironment(); err != nil {
+		validation.reason, validation.err = "invalid_config", err
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
 	// A template is optional at the org level — it is chosen per project now — but a
@@ -260,6 +293,36 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		ValidatedAt:     validatedAt,
 		UpdatedAt:       &updatedAt,
 	})
+}
+
+// storedCoderToken returns the organization's stored Coder token when its
+// existing connection points at baseURL, so a settings save can omit the
+// token. It reports false when there is no connection, the deployment
+// changed, or the stored token cannot be read. The caller owns (and clears)
+// the returned bytes; the store write still enforces org-admin rights.
+func (s *Server) storedCoderToken(r *http.Request, orgID, baseURL string) ([]byte, bool) {
+	store, ok := s.store.(coderConnectionForServiceStore)
+	if !ok {
+		return nil, false
+	}
+	encrypted, nonce, config, _, err := store.CoderConnectionForService(r.Context(), orgID)
+	if err != nil || len(encrypted) == 0 {
+		return nil, false
+	}
+	existing, err := domain.DecodeOrgCoderConfig(config)
+	if err != nil || existing.BaseURL != baseURL {
+		return nil, false
+	}
+	token, err := s.secretCipher.Decrypt(encrypted, nonce, providerSecretAssociatedData(orgID, sandbox.ProviderCoder))
+	if err != nil {
+		s.logger.Warn("decrypt stored coder token", "error", err, "request_id", requestID(r))
+		return nil, false
+	}
+	if len(bytes.TrimSpace(token)) == 0 {
+		clear(token)
+		return nil, false
+	}
+	return token, true
 }
 
 // deleteOrgCoderConfig removes an organization's bring-your-own Coder connection.

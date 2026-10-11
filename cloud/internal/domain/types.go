@@ -194,6 +194,13 @@ type ProjectCoderConfig struct {
 	// WorkspaceNamePrefix names new Coder workspaces <prefix>-<short session
 	// id>. Empty keeps the default ao-<id>.
 	WorkspaceNamePrefix string `json:"workspaceNamePrefix,omitempty"`
+	// Parameters are the project's values for the chosen template's
+	// coder_parameter inputs, keyed by parameter name. Values are strings as
+	// Coder takes them: a list(string) value is a JSON array string and a bool
+	// is "true" or "false". At workspace create they override the
+	// organization connection's parameters and are overridden by AO's own
+	// size/startup mapping. See ValidateCoderTemplateParameterValues.
+	Parameters map[string]string `json:"parameters,omitempty"`
 }
 
 // MaxCoderWorkspaceNamePrefix bounds the prefix so <prefix>-<id> stays inside
@@ -315,6 +322,26 @@ type OrgCoderConfig struct {
 	// connection to become ready and its worker to check in before giving up.
 	// Zero uses the bring-your-own default (20 minutes).
 	StartupTimeoutSeconds int `json:"startupTimeoutSeconds,omitempty"`
+	// WorkerUser selects which account runs AO's worker and coding agent in
+	// the workspace: CoderWorkerUserAOWorker (a dedicated ao-worker user, the
+	// historical behavior) or CoderWorkerUserWorkspace (the workspace's own
+	// login user, with its real HOME, groups and environment). Normalized to
+	// CoderWorkerUserAOWorker when unset.
+	WorkerUser string `json:"workerUser,omitempty"`
+	// ReadyProbe is an optional shell command AO runs as the workspace user
+	// after the Coder agent reports ready and before it launches the worker.
+	// AO polls it until it exits 0 or ReadyProbeTimeoutSeconds elapses, for
+	// templates whose own setup outlives the Coder agent's startup script.
+	ReadyProbe string `json:"readyProbe,omitempty"`
+	// ReadyProbeTimeoutSeconds bounds the ReadyProbe wait. Normalized to
+	// DefaultCoderReadyProbeTimeoutSeconds when a probe is set without one.
+	ReadyProbeTimeoutSeconds int `json:"readyProbeTimeoutSeconds,omitempty"`
+	// ReuseExistingCheckout makes the worker use a checkout of the project's
+	// repository the template already cloned (under $HOME/work/* or $HOME/*)
+	// as the session worktree instead of cloning into ~/repository. It only
+	// applies with the workspace worker user, where it defaults to true;
+	// normalization pins it to false for the ao-worker user.
+	ReuseExistingCheckout *bool `json:"reuseExistingCheckout,omitempty"`
 }
 
 // Bounds for OrgCoderConfig.StartupTimeoutSeconds.
@@ -343,6 +370,7 @@ func (c *OrgCoderConfig) normalize() {
 	if len(c.Parameters) == 0 {
 		c.Parameters = nil
 	}
+	c.normalizeDevEnvironment()
 }
 
 // DecodeOrgCoderConfig reads an organization's Coder config from the config

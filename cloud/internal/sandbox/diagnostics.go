@@ -12,7 +12,11 @@ const (
 	StageWorkspaceStart   = "workspace_start"
 	StageAgentWait        = "agent_wait"
 	StageDurableRootProbe = "durable_root_probe"
-	StageWorkerInstall    = "worker_install"
+	// StageReadyProbe is a bring-your-own Coder connection's workspace ready
+	// check, run as the workspace user after the agent is ready and before the
+	// worker is installed.
+	StageReadyProbe    = "ready_probe"
+	StageWorkerInstall = "worker_install"
 )
 
 // StageReport describes one finished provider stage. Attrs carries small,

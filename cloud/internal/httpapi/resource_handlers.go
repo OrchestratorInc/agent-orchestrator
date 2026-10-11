@@ -59,6 +59,10 @@ type coderConfigInput struct {
 	// WorkspaceNamePrefix names the project's Coder workspaces
 	// <prefix>-<short session id>; empty keeps ao-<id>.
 	WorkspaceNamePrefix string `json:"workspaceNamePrefix,omitempty"`
+	// Parameters are values for the chosen template's coder_parameter inputs
+	// (name -> string value); only values changed from the template default
+	// need to be sent. Requires a chosen template.
+	Parameters map[string]string `json:"parameters,omitempty"`
 }
 
 type updateProjectRequest struct {
@@ -261,6 +265,9 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	if !s.validateProjectSandboxProvider(w, r, principalFrom(r), orgID, config) {
 		return
 	}
+	if request.Coder == nil && !s.validateProjectCoderParameters(w, r, orgID, config) {
+		return
+	}
 	// Store the coder dev-kit config (template + size/startup + extra repos)
 	// under the project's config, so every coder session of the project inherits
 	// it. Absent = default template, single repo (unchanged behavior).
@@ -275,6 +282,14 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		// every session build for the project. Best-effort — if the template's
 		// parameters cannot be read, store the config as-is rather than block.
 		coderConfig = s.sanitizeCoderConfig(r.Context(), coderConfig, requestID(r))
+		// Template parameters must be ones the chosen template declares (best
+		// effort: only a readable parameter list can reject a name).
+		if unknown := s.unknownCoderTemplateParameters(
+			r.Context(), orgID, coderConfig.TemplateID, coderConfig.Parameters, requestID(r),
+		); len(unknown) > 0 {
+			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", unknownCoderTemplateParametersMessage(unknown))
+			return
+		}
 		config, err = domain.MergeProjectCoderConfig(config, coderConfig)
 		if err != nil {
 			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project coder configuration is invalid.")
@@ -1054,7 +1069,10 @@ func (s *Server) sanitizeCoderConfig(ctx context.Context, cfg domain.ProjectCode
 // the project would otherwise fail to provision.
 func validateProjectCoderConfig(config json.RawMessage) error {
 	if cfg, ok := domain.DecodeProjectCoderConfig(config); ok {
-		return domain.ValidateCoderWorkspaceNamePrefix(cfg.WorkspaceNamePrefix)
+		if err := domain.ValidateCoderWorkspaceNamePrefix(cfg.WorkspaceNamePrefix); err != nil {
+			return err
+		}
+		return domain.ValidateCoderTemplateParameterValues(cfg.Parameters)
 	}
 	return nil
 }
@@ -1104,6 +1122,18 @@ func parseCoderConfigInput(in *coderConfigInput) (domain.ProjectCoderConfig, err
 	cfg.WorkspaceNamePrefix = strings.TrimSpace(in.WorkspaceNamePrefix)
 	if err := domain.ValidateCoderWorkspaceNamePrefix(cfg.WorkspaceNamePrefix); err != nil {
 		return domain.ProjectCoderConfig{}, err
+	}
+	if len(in.Parameters) > 0 {
+		if cfg.TemplateID == "" {
+			return domain.ProjectCoderConfig{}, fmt.Errorf("coder template parameters require choosing a template")
+		}
+		if err := domain.ValidateCoderTemplateParameterValues(in.Parameters); err != nil {
+			return domain.ProjectCoderConfig{}, err
+		}
+		cfg.Parameters = make(map[string]string, len(in.Parameters))
+		for name, value := range in.Parameters {
+			cfg.Parameters[name] = value
+		}
 	}
 	return cfg, nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -89,6 +90,14 @@ func (c *Client) Diagnose(ctx context.Context, id sandbox.ID) (sandbox.Diagnosti
 		summary["agent_architecture"] = agent.Architecture
 	} else {
 		summary["agent_status"] = "missing"
+	}
+	// The connection's dev-environment options shape how the worker started,
+	// so an operator reading a startup failure sees them alongside the logs.
+	summary["worker_user"] = c.workerUserLabel("")
+	summary["checkout_reuse"] = c.checkoutReuseLabel()
+	if c.readyProbe != "" {
+		summary["ready_probe"] = "configured"
+		summary["ready_probe_timeout_seconds"] = strconv.Itoa(int(c.readyProbeTimeout / time.Second))
 	}
 
 	var firstErr error

@@ -188,7 +188,7 @@ func (r *Reconciler) startupFailed(
 	if record.ProviderEnvironmentID != "" {
 		attrs["provider_environment_id"] = record.ProviderEnvironmentID
 	}
-	for _, key := range []string{"job_error", "job_error_code", "agent_lifecycle", "build_status", "coder_template", "coder_owner"} {
+	for _, key := range []string{"job_error", "job_error_code", "agent_lifecycle", "build_status", "coder_template", "coder_owner", "worker_user", "checkout_reuse", "ready_probe"} {
 		if value := diagnostics.Summary[key]; value != "" {
 			attrs[key] = value
 		}
