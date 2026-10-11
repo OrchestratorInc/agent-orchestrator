@@ -24,12 +24,18 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+// Plugin supervises the official native interactive terminal.
 type Plugin struct{ agentbase.Base }
 
+// New creates the native TUI adapter.
 func New() *Plugin { return &Plugin{} }
+
+// Manifest implements the scoped native adapter contract.
 func (*Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{ID: "openjarvis", Name: "OpenJarvis", Description: "Official OpenJarvis code-assistant terminal. Plain-line input and native confirmations; no persistent conversation restore.", Version: "0.0.1", Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
 }
+
+// ResolveBinary implements the scoped native adapter contract.
 func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "openjarvis", Names: []string{"jarvis"}, UnixHomePaths: [][]string{{".local", "bin", "jarvis"}}, ValidateIdentity: func(ctx context.Context, path string) bool {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -40,6 +46,8 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 		return err == nil && strings.Contains(string(b), "jarvis, version 1.0.4")
 	}})
 }
+
+// GetConfigSpec implements the scoped native adapter contract.
 func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Native --model override. Configure a compatible engine/provider using the OpenJarvis code-assistant preset first.")
 }
@@ -63,6 +71,8 @@ func validateLine(message string) error {
 	}
 	return nil
 }
+
+// GetLaunchCommand implements the scoped native adapter contract.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -86,18 +96,26 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
 	return cmd, nil
 }
+
+// GetPromptDeliveryStrategy implements the scoped native adapter contract.
 func (*Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
 	return ports.PromptDeliveryAfterStart, ctx.Err()
 }
+
+// PromptReadinessHints implements the scoped native adapter contract.
 func (*Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	return ports.PromptReadinessHints{Patterns: []string{"You>"}, Timeout: 60 * time.Second, PollInterval: 100 * time.Millisecond, Lines: 40}, ctx.Err()
 }
+
+// GetRestoreCommand implements the scoped native adapter contract.
 func (*Plugin) GetRestoreCommand(ctx context.Context, _ ports.RestoreConfig) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
 	return nil, false, fmt.Errorf("openjarvis: native chat history is in memory; restore is unsupported (start a new session)")
 }
+
+// GetAgentHooks implements the scoped native adapter contract.
 func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -179,11 +197,11 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		return err
 	}
 	dir := filepath.Join(cfg.DataDir, "agents", "openjarvis", cfg.SessionID)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	path = filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(path, overlay, 0600); err != nil {
+	if err := os.WriteFile(path, overlay, 0o600); err != nil {
 		return err
 	}
 	cfg.Env["OPENJARVIS_CONFIG"] = path
@@ -202,9 +220,17 @@ func (p *Plugin) ValidateTerminalMessage(message, screen string) error {
 	}
 	return nil
 }
-func (*Plugin) RequiresRenderedActivity() bool             { return true }
-func (*Plugin) ContinuouslyDetectTerminalActivity() bool   { return true }
+
+// RequiresRenderedActivity implements the scoped native adapter contract.
+func (*Plugin) RequiresRenderedActivity() bool { return true }
+
+// ContinuouslyDetectTerminalActivity implements the scoped native adapter contract.
+func (*Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
+
+// EmptyComposerProvesWaitingInputReady implements the scoped native adapter contract.
 func (*Plugin) EmptyComposerProvesWaitingInputReady() bool { return true }
+
+// DetectTerminalActivity implements the scoped native adapter contract.
 func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
 	lines := terminalui.PlainTerminalLines(output)
 	text := strings.Join(lines, "\n")
@@ -231,6 +257,8 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 	}
 	return domain.ActivityActive, true
 }
+
+// AuthStatus implements the scoped native adapter contract.
 func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -290,6 +318,8 @@ func resolveNativePath(path, workspace string, env map[string]string) (string, e
 	}
 	return filepath.Abs(path)
 }
+
+// ExitDetectionMode implements the scoped native adapter contract.
 func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 	return ports.AgentExitDetectionSupervisor
 }

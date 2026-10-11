@@ -2,12 +2,13 @@ package openjarvis
 
 import (
 	"context"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/pelletier/go-toml/v2"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/pelletier/go-toml/v2"
 )
 
 func TestInputFailsClosed(t *testing.T) {
@@ -30,7 +31,7 @@ func TestOverlayPreservesSecurityPersonaAndPrefix(t *testing.T) {
 	home := t.TempDir()
 	source := filepath.Join(home, "config.toml")
 	original := []byte("[tools]\nenabled=['file_read','file_write','shell_exec','code_interpreter']\n[engine]\ndefault='cloud'\n[agent]\ndefault_agent='orchestrator'\n[security]\nenabled=true\n[system_prompt]\nprefix='Native prefix'\n[memory_files]\nsoul_path='relative/SOUL.md'\n")
-	if err := os.WriteFile(source, original, 0600); err != nil {
+	if err := os.WriteFile(source, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env := map[string]string{"OPENJARVIS_HOME": home}
@@ -85,7 +86,9 @@ func TestEchoRequiresNewCurrentSubmission(t *testing.T) {
 }
 func TestMissingCodingToolsRefused(t *testing.T) {
 	home := t.TempDir()
-	os.WriteFile(filepath.Join(home, "config.toml"), []byte("[agent]\ndefault_agent='orchestrator'\n"), 0600)
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[agent]\ndefault_agent='orchestrator'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "test", Env: map[string]string{"OPENJARVIS_HOME": home}}) == nil {
 		t.Fatal("plain chat config accepted")
 	}
