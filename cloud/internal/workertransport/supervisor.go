@@ -1175,6 +1175,10 @@ func transportError(err error) (string, string) {
 		return "WORKSPACE_NOT_FOUND", "The requested workspace path does not exist."
 	case errors.Is(err, os.ErrPermission):
 		return "WORKSPACE_PERMISSION_DENIED", "The worker denied access to the workspace path."
+	case errors.Is(err, workerexec.ErrChatAdapterInstalling):
+		return "CHAT_ADAPTER_INSTALLING", "Setting up Chat UI on this workspace. Try again in a minute."
+	case errors.Is(err, workerexec.ErrChatAdapterUnavailable):
+		return "CHAT_ADAPTER_UNAVAILABLE", "Chat UI for Claude needs the Claude ACP adapter (@agentclientprotocol/claude-agent-acp) on this workspace, and AO could not install it. Install it in the workspace template, or use the terminal."
 	default:
 		return "WORKER_OPERATION_FAILED", "The worker could not complete the operation."
 	}

@@ -255,6 +255,11 @@ func run(logger *slog.Logger) error {
 			Workspace: workspace, Logger: logger,
 		}
 	}
+	if bootstrap.Launch.Harness == "claude-code" {
+		// Chat UI needs the Claude ACP adapter; a bring-your-own template may
+		// not ship it, so start installing it now rather than on first chat.
+		workerexec.WarmClaudeACPAdapter()
+	}
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
