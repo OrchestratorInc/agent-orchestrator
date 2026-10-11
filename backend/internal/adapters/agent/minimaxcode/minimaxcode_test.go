@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -75,6 +76,18 @@ func TestPrivateProfileSnapshot(t *testing.T) {
 	if st.Mode().Perm() != 0600 {
 		t.Fatalf("config mode %o", st.Mode().Perm())
 	}
+	cfg.Config.Permissions = ports.PermissionModeBypassPermissions
+	if err := p.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	b, err = os.ReadFile(filepath.Join(profile, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "permissionMode: bypassPermissions") {
+		t.Fatalf("bypass permission mode was not serialized natively: %s", b)
+	}
+	cfg.Config.Permissions = ports.PermissionModeDefault
 	if err := p.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}

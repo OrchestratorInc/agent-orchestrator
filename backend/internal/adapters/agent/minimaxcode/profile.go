@@ -94,7 +94,12 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if config == nil {
 		config = map[string]any{}
 	}
-	config["permissionMode"] = string(ports.NormalizePermissionMode(cfg.Config.Permissions))
+	permissionMode := ports.NormalizePermissionMode(cfg.Config.Permissions)
+	if permissionMode == ports.PermissionModeBypassPermissions {
+		config["permissionMode"] = "bypassPermissions"
+	} else {
+		config["permissionMode"] = string(permissionMode)
+	}
 	data, err = yaml.Marshal(config)
 	if err != nil {
 		return errors.New("MiniMax provider config could not be encoded")
@@ -198,20 +203,23 @@ func copyProfileTree(ctx context.Context, source, target string) error {
 		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 			return err
 		}
-		file, err := sourceRoot.Open(filepath.Join(filepath.Base(source), rel))
-		if err != nil {
+		var b []byte
+		if err := func() error {
+			file, err := sourceRoot.Open(filepath.Join(filepath.Base(source), rel))
+			if err != nil {
+				return err
+			}
+			defer func() { _ = file.Close() }()
+			opened, err := file.Stat()
+			if err != nil {
+				return err
+			}
+			if !os.SameFile(info, opened) {
+				return errors.New("MiniMax profile resource changed during snapshot")
+			}
+			b, err = io.ReadAll(io.LimitReader(file, (16<<20)+1))
 			return err
-		}
-		defer func() { _ = file.Close() }()
-		opened, err := file.Stat()
-		if err != nil {
-			return err
-		}
-		if !os.SameFile(info, opened) {
-			return errors.New("MiniMax profile resource changed during snapshot")
-		}
-		b, err := io.ReadAll(io.LimitReader(file, (16<<20)+1))
-		if err != nil {
+		}(); err != nil {
 			return err
 		}
 		bytes += int64(len(b))

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 
 	_ "modernc.org/sqlite" // Register the driver for read-only native session validation.
 )
+
+const maxHistoryManifestBytes = 1 << 20
 
 func validateNativeHistory(ctx context.Context, profile, id, workspace string) error {
 	dbPath := filepath.Join(profile, "v2", "sqlite", "runtime-state.sqlite")
@@ -63,9 +66,23 @@ func validateNativeHistory(ctx context.Context, profile, id, workspace string) e
 	if canonicalHistory != history {
 		return errors.New("native history must not traverse symlinks")
 	}
-	data, err := os.ReadFile(filepath.Join(history, "manifest.json"))
+	manifestPath := filepath.Join(history, "manifest.json")
+	manifestInfo, err := os.Lstat(manifestPath)
+	if err != nil || !manifestInfo.Mode().IsRegular() || manifestInfo.Size() > maxHistoryManifestBytes {
+		return errors.New("native history manifest is unavailable or outside supported bounds")
+	}
+	manifestFile, err := os.Open(manifestPath)
 	if err != nil {
 		return errors.New("native history manifest is unavailable")
+	}
+	defer func() { _ = manifestFile.Close() }()
+	openedManifest, err := manifestFile.Stat()
+	if err != nil || !os.SameFile(manifestInfo, openedManifest) || !openedManifest.Mode().IsRegular() {
+		return errors.New("native history manifest changed during validation")
+	}
+	data, err := io.ReadAll(io.LimitReader(manifestFile, maxHistoryManifestBytes+1))
+	if err != nil || len(data) > maxHistoryManifestBytes {
+		return errors.New("native history manifest is unavailable or outside supported bounds")
 	}
 	var manifest struct {
 		SessionID string `json:"sessionId"`

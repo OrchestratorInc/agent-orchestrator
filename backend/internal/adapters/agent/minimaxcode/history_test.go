@@ -71,6 +71,33 @@ func TestNativeHistoryPreflight(t *testing.T) {
 			t.Fatalf("native compaction summary refused: %v", err)
 		}
 	})
+	t.Run("oversized manifest", func(t *testing.T) {
+		p, w, id := historyFixture(t)
+		manifest := filepath.Join(p, "v2", "sessions", "exact", "manifest.json")
+		if err := os.WriteFile(manifest, make([]byte, maxHistoryManifestBytes+1), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateNativeHistory(context.Background(), p, id, w); err == nil {
+			t.Fatal("accepted oversized native history manifest")
+		}
+	})
+	t.Run("manifest symlink", func(t *testing.T) {
+		p, w, id := historyFixture(t)
+		manifest := filepath.Join(p, "v2", "sessions", "exact", "manifest.json")
+		outside := filepath.Join(t.TempDir(), "manifest.json")
+		if err := os.WriteFile(outside, []byte(`{"sessionId":"`+id+`"}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(manifest); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, manifest); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		if err := validateNativeHistory(context.Background(), p, id, w); err == nil {
+			t.Fatal("accepted symlinked native history manifest")
+		}
+	})
 	t.Run("missing identity", func(t *testing.T) {
 		p, w, _ := historyFixture(t)
 		if err := validateNativeHistory(context.Background(), p, "mvs_00000000000000000000000000000000", w); err == nil {
