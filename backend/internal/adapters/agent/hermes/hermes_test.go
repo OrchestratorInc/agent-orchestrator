@@ -122,3 +122,26 @@ func TestNativeItalicPlaceholderAndDraft(t *testing.T) {
 		t.Fatal("human draft accepted")
 	}
 }
+
+func TestRestoreRefusesNativeRotationAfterObservation(t *testing.T) {
+	data := t.TempDir()
+	dir := sessionDir(data, "ao-rotation")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "native-home"), []byte(home), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	crumb := filepath.Join(home, "native-terminal-fixture")
+	if err := os.WriteFile(crumb, []byte(`{"session_id":"new-conversation","cwd":"/workspace","ts":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "observed-terminal"), []byte(crumb), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: data, Session: ports.SessionRef{ID: "ao-rotation", WorkspacePath: "/workspace", Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "old-conversation"}}})
+	if err == nil || ok || !strings.Contains(err.Error(), "rotated") {
+		t.Fatalf("stale conversation restore: %v %v", ok, err)
+	}
+}
