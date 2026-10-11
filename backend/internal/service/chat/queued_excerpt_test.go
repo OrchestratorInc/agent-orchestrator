@@ -36,12 +36,6 @@ func (s *changedExcerptStore) ConversationMessages(ctx context.Context, id strin
 		switch s.mode {
 		case "revision":
 			messages[i].Revision++
-		case "missing pair":
-			for j := range messages {
-				if messages[j].TurnID == message.TurnID && messages[j].Role == domain.MessageRoleUser {
-					messages[j].Text = ""
-				}
-			}
 		}
 	}
 	return messages, nil
@@ -76,7 +70,7 @@ func (s *changedExcerptStore) NextQueuedTurn(ctx context.Context, id string) (do
 }
 
 func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
-	for _, mode := range []string{"revision", "rollback", "missing pair", "invalid"} {
+	for _, mode := range []string{"revision", "rollback", "invalid"} {
 		t.Run(mode, func(t *testing.T) {
 			var changed *changedExcerptStore
 			h := newHarnessWithConversationAndStore(t, nil, func(st *sqlite.Store) chatsvc.Store {

@@ -3335,11 +3335,22 @@ func TestSendVerifiesExcerptAndFallsBackToTextForProvider(t *testing.T) {
 		Text: "Use it", ClientMessageID: "excerpt-followup", Origin: domain.MessageOriginHuman,
 		Excerpts: []ports.ChatExcerptReference{{
 			ConversationID: h.ctrl.ConversationID(), MessageID: source.ID,
-			Revision: source.Revision + 1, Text: "no longer relevant to the accepted retry",
+			Revision: source.Revision, Text: "exact sentence",
 		}},
 	})
 	if err != nil || duplicate.ID != "" {
 		t.Fatalf("idempotent excerpt retry = (%+v, %v), want duplicate success", duplicate, err)
+	}
+	// Reusing the client id for a different payload is a conflict, not a
+	// silently accepted duplicate.
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "Use it", ClientMessageID: "excerpt-followup", Origin: domain.MessageOriginHuman,
+		Excerpts: []ports.ChatExcerptReference{{
+			ConversationID: h.ctrl.ConversationID(), MessageID: source.ID,
+			Revision: source.Revision + 1, Text: "a different selection",
+		}},
+	}); !errors.Is(err, domain.ErrClientMessageConflict) {
+		t.Fatalf("conflicting excerpt retry error = %v, want ErrClientMessageConflict", err)
 	}
 
 	_, err = h.svc.Send(ctx, testSession, ports.ChatUserMessage{
@@ -3351,6 +3362,68 @@ func TestSendVerifiesExcerptAndFallsBackToTextForProvider(t *testing.T) {
 	})
 	if !errors.Is(err, chatsvc.ErrExcerptStale) {
 		t.Fatalf("stale excerpt error = %v, want ErrExcerptStale", err)
+	}
+}
+
+func TestExcerptFromRunningAndInterruptedTurnsIsAccepted(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	seed, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "plan it", ClientMessageID: "running-seed", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatalf("send seed: %v", err)
+	}
+	// The plan fragment is settled while its turn keeps running.
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: seed.ProviderTurnID},
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: seed.ProviderTurnID,
+			ProviderItemID: "plan", Text: "Step one: delete the cache."},
+	)
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Messages) == 2 && !s.Messages[1].Streaming
+	})
+	plan := snapshot.Messages[1]
+	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "don't do this", ClientMessageID: "running-excerpt", Origin: domain.MessageOriginHuman,
+		Excerpts: []ports.ChatExcerptReference{{
+			ConversationID: h.ctrl.ConversationID(), MessageID: plan.ID,
+			Revision: plan.Revision, Text: "delete the cache",
+		}},
+	})
+	if err != nil || queued.State != domain.TurnStateQueued {
+		t.Fatalf("excerpt from running turn = (%s, %v), want queued", queued.State, err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted,
+		ProviderTurnID: seed.ProviderTurnID, TurnState: domain.TurnStateCompleted})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["don't do this"] == domain.TurnStateRunning
+	})
+	sent := h.conv.sentMessages()
+	if len(sent) != 2 || !strings.Contains(sent[1].Text, "delete the cache") ||
+		!strings.Contains(sent[1].Text, "User:\nplan it") {
+		t.Fatalf("drained delivery = %#v", sent)
+	}
+
+	// The user stops the next turn after a partial answer; quoting it still works.
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "provider-turn-2",
+			ProviderItemID: "partial", Text: "Keeping the cache, because"},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted,
+			ProviderTurnID: "provider-turn-2", TurnState: domain.TurnStateInterrupted},
+	)
+	snapshot = h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["don't do this"] == domain.TurnStateInterrupted && len(s.Messages) == 4
+	})
+	partial := snapshot.Messages[3]
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "because what?", ClientMessageID: "interrupted-excerpt", Origin: domain.MessageOriginHuman,
+		Excerpts: []ports.ChatExcerptReference{{
+			ConversationID: h.ctrl.ConversationID(), MessageID: partial.ID,
+			Revision: partial.Revision, Text: "Keeping the cache",
+		}},
+	}); err != nil {
+		t.Fatalf("excerpt from interrupted turn: %v", err)
 	}
 }
 

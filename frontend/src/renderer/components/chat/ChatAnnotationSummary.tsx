@@ -31,7 +31,7 @@ export function ChatAnnotationSummary({
 	const { t } = useTranslation();
 	const triggerRef = useRef<HTMLButtonElement>(null);
 	if (annotations.length === 0) return null;
-	const label = `${annotations.length} annotation${annotations.length === 1 ? "" : "s"}`;
+	const label = t("chat.annotationCount", { count: annotations.length });
 
 	return (
 		<Popover open={open} onOpenChange={setOpen}>

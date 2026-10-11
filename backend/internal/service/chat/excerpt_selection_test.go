@@ -24,6 +24,8 @@ func TestSourceContainsExcerptSelection(t *testing.T) {
 		{"ordinary quotes", `He said "hello" and it's fine.`, `"hello" and it's`, true},
 		{"inline boundary", "First **important** and *useful* point.", "important and useful", true},
 		{"line boundary", "First **important** line.\nNext line.", "line.\nNext", true},
+		{"prose into fence", "Run the tests:\n\n```ts\nnpm test\n```", "Run the tests:\n\nnpm test", true},
+		{"fence language label", "Run the tests:\n\n```ts\nnpm test\n```", "Run the tests: ts npm test", false},
 		{"unrelated text", "Use **bold** text here.", "totally unrelated", false},
 		{"link target", "Open [the docs](https://example.com) now.", "example.com", false},
 		{"image alt", "![alt text](https://example.com/a.png)", "alt text", false},

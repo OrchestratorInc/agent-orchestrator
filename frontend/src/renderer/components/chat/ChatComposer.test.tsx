@@ -547,6 +547,19 @@ describe("send keys", () => {
 		expect(screen.queryByRole("button", { name: "Retry message safely" })).not.toBeInTheDocument();
 	});
 
+	it("hides and withholds draft excerpts while the feature is off", async () => {
+		const sessionId = "composer-excerpts-disabled";
+		writeChatExcerptReferences(sessionId, [{ id: "off", conversationId: "conversation-1", messageId: "source-1", revision: 1, text: "hidden", role: "assistant" as const }]);
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer onSend={onSend} draftSessionId={sessionId} excerptsEnabled={false} />);
+		expect(screen.queryByRole("button", { name: "1 annotation" })).not.toBeInTheDocument();
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "plain message");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onSend.mock.calls[0]?.[4]).toBeUndefined();
+	});
+
 	it("queues instead of steering when excerpts are attached", async () => {
 		const sessionId = "composer-excerpt-no-steer";
 		const excerpts = [{ id: "keep", conversationId: "conversation-1", messageId: "source-1", revision: 1, text: "keep me", role: "assistant" as const }];

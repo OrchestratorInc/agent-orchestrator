@@ -209,8 +209,11 @@ export const ChatComposer = memo(function ChatComposer({
 	acceptedClientMessageIds,
 	emptyPlaceholder,
 	onSelectAnnotation,
+	excerptsEnabled = true,
 }: {
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
+	/** Off hides and withholds draft excerpts; a journaled delivery still retries exactly. */
+	excerptsEnabled?: boolean;
 	focusRef?: Ref<ChatComposerHandle>;
 	onSend: (
 		text: string,
@@ -415,7 +418,7 @@ export const ChatComposer = memo(function ChatComposer({
 		getComposerMutation,
 	);
 	const optimisticSend = Boolean(durableDelivery?.draft && composerMutation.pending);
-	const contextReferences = draftScope
+	const contextReferences = draftScope && excerptsEnabled
 		? readChatSessionDraft(draftScope).composer.excerpts ?? []
 		: [];
 	const [appliedAcceptanceSequence, setAppliedAcceptanceSequence] = useState(0);

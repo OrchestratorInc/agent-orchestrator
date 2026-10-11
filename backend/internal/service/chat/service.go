@@ -1160,19 +1160,22 @@ func (s *Service) Send(
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
-	if msg.ClientMessageID != "" && len(msg.Excerpts) > 0 {
-		if controller, controllerErr := s.Controller(id); controllerErr == nil {
-			if existing, found, lookupErr := controller.store.ConversationMessageByClientID(ctx, controller.conversation.ID, msg.ClientMessageID); lookupErr != nil {
-				return domain.ConversationTurn{}, fmt.Errorf("read message delivery: %w", lookupErr)
-			} else if found {
-				msg.ClientPayloadHash = existing.ClientPayloadHash
-				return controller.Send(ctx, msg)
-			}
-		}
-	}
 	msg.ClientPayloadHash, err = clientPayloadHash(msg)
 	if err != nil {
 		return domain.ConversationTurn{}, err
+	}
+	// A crash-safe retry may arrive after its source message changed. Once this
+	// client id is durable, the store's fingerprint check decides: the same
+	// payload is a duplicate, a different one is a conflict. Re-validating the
+	// old selection here would wrongly refuse an accepted retry.
+	if msg.ClientMessageID != "" && len(msg.Excerpts) > 0 {
+		if controller, controllerErr := s.Controller(id); controllerErr == nil {
+			if _, found, lookupErr := controller.store.ConversationMessageByClientID(ctx, controller.conversation.ID, msg.ClientMessageID); lookupErr != nil {
+				return domain.ConversationTurn{}, fmt.Errorf("read message delivery: %w", lookupErr)
+			} else if found {
+				return controller.Send(ctx, msg)
+			}
+		}
 	}
 	var reports reportsvc.PreparedBatch
 	if s.reports != nil && msg.Origin != domain.MessageOriginAutomation {
@@ -1247,16 +1250,21 @@ func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwn
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
-	// A crash-safe retry may arrive after its source message changed. Once this
-	// client id is already durable, the controller's existing idempotency path is
-	// authoritative and must not be blocked by re-validating old selection text.
+	// Fingerprint the request before hydration adds server-owned context, so a
+	// retry hashes the same way as Send. A durable client id then goes straight
+	// to the store's duplicate/conflict check, as in Send.
+	if len(msg.Excerpts) > 0 && msg.ClientPayloadHash == "" {
+		msg.ClientPayloadHash, err = clientPayloadHash(msg)
+		if err != nil {
+			return domain.ConversationTurn{}, err
+		}
+	}
 	if msg.ClientMessageID != "" && len(msg.Excerpts) > 0 {
-		if existing, found, lookupErr := controller.store.ConversationMessageByClientID(
+		if _, found, lookupErr := controller.store.ConversationMessageByClientID(
 			ctx, controller.conversation.ID, msg.ClientMessageID,
 		); lookupErr != nil {
 			return domain.ConversationTurn{}, fmt.Errorf("read message delivery: %w", lookupErr)
 		} else if found {
-			msg.ClientPayloadHash = existing.ClientPayloadHash
 			return controller.Send(ctx, msg)
 		}
 	}
@@ -1290,9 +1298,14 @@ func hydrateExcerptReferences(ctx context.Context, controller *Controller, msg *
 		if !found || source.Revision != excerpt.Revision || source.Streaming || source.TurnID == "" || !sourceContainsExcerptSelection(source, text) || (source.Role != domain.MessageRoleUser && source.Role != domain.MessageRoleAssistant) {
 			return fmt.Errorf("%w: source message changed or no longer contains the selection; reselect it", ErrExcerptStale)
 		}
+		// A settled message keeps its revision when its turn later completes, so
+		// running, interrupted, failed, and recovered turns are valid sources: the
+		// user can quote a plan mid-turn or a partial answer after Stop. Queued,
+		// cancelled, and rolled-back turns never reached the visible transcript.
 		turn, err := controller.store.TurnByID(ctx, source.TurnID)
-		if err != nil || turn.ConversationID != controller.conversation.ID || turn.State != domain.TurnStateCompleted || turn.RolledBackAt != nil {
-			return fmt.Errorf("%w: source turn is not complete", ErrExcerptStale)
+		if err != nil || turn.ConversationID != controller.conversation.ID ||
+			turn.State == domain.TurnStateQueued || turn.State == domain.TurnStateCancelled || turn.RolledBackAt != nil {
+			return fmt.Errorf("%w: source turn is no longer in this chat", ErrExcerptStale)
 		}
 		var userText, assistantText string
 		for _, candidate := range messages {
@@ -1312,9 +1325,8 @@ func hydrateExcerptReferences(ctx context.Context, controller *Controller, msg *
 				assistantText += candidate.Text
 			}
 		}
-		if userText == "" || assistantText == "" {
-			return fmt.Errorf("%w: source turn has no complete user and assistant messages", ErrExcerptStale)
-		}
+		// One side can be empty: a running turn may have no answer yet, and a
+		// provider-started turn (compaction, TUI work) may have no user prompt.
 		msg.Content = append(msg.Content, ports.ChatContent{
 			Type: "excerpt", URI: ports.ChatExcerptResourceURIPrefix + source.ID,
 			Name: fmt.Sprintf("%s message", source.Role), MIMEType: "text/plain", Text: text,

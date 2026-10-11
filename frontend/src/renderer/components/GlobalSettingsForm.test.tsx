@@ -206,7 +206,7 @@ beforeEach(async () => {
 		saving: false,
 		saveError: false,
 	});
-	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false });
+	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, chatExcerpts: false });
 	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
 	document.documentElement.lang = "en";
 });
@@ -272,6 +272,21 @@ describe("GlobalSettingsForm", () => {
 		await user.click(toggle);
 		expect(window.localStorage.getItem("ao.diagnostics")).toBe("true");
 		expect(useUiStore.getState().diagnostics).toBe(true);
+	});
+
+	it("reveals the Chat excerpts toggle only in Developer mode and persists it", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		await screen.findByRole("switch", { name: "Developer mode" });
+		expect(screen.queryByRole("switch", { name: "Chat excerpts" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("switch", { name: "Developer mode" }));
+		const toggle = await screen.findByRole("switch", { name: "Chat excerpts" });
+		expect(toggle).toHaveAttribute("aria-checked", "false");
+
+		await user.click(toggle);
+		expect(window.localStorage.getItem("ao.chatExcerpts")).toBe("true");
+		expect(useUiStore.getState().chatExcerpts).toBe(true);
 	});
 
 	it("keeps Remote hosts in its own page and persists the enable switch", async () => {

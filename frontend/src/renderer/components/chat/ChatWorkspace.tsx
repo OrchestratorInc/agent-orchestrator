@@ -1735,6 +1735,7 @@ function ChatWorkspaceContent({
 										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
 									/>
 									<ChatComposer
+										excerptsEnabled={excerptsEnabled}
 										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}
 										key={`${draftScopeKey}:${draftPersistenceAvailable ? "saved" : "memory"}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
@@ -2447,6 +2448,7 @@ function Timeline({
 	const onActivityDisclosureChange = useCallback((key: string, open: boolean) => {
 		setActivityDisclosureOverrides((current) => ({ ...current, [key]: open }));
 	}, []);
+	const { t } = useTranslation();
 	const [hoveredMarker, setHoveredMarker] = useState<number | null>(null);
 	const [selectionAction, setSelectionAction] = useState<{
 		excerpt: ChatDraftExcerptReference;
@@ -2454,6 +2456,9 @@ function Timeline({
 	} | null>(null);
 	const selectionButton = useRef<HTMLDivElement>(null);
 	const clearSelectionAction = useCallback(() => setSelectionAction(null), []);
+	useEffect(() => {
+		if (!excerptsEnabled) setSelectionAction(null);
+	}, [excerptsEnabled]);
 	const selectionPosition = useChatSelectionPosition(selectionAction?.range, scroller, selectionButton, clearSelectionAction);
 	const [annotationTarget, setAnnotationTarget] = useState<{ text: string; messageId?: string; revision?: number }>();
 	const [annotationNavigationError, setAnnotationNavigationError] = useState<string>();
@@ -2476,11 +2481,11 @@ function Timeline({
 				setAnnotationTarget({ ...annotation, messageId: source.dataset.chatMessageId });
 				return;
 			}
-			setAnnotationNavigationError("This annotation's source is unavailable. Reselect the text to create a new reference.");
+			setAnnotationNavigationError(t("chat.annotationSourceUnavailable"));
 			return;
 		}
 		setAnnotationTarget({ ...annotation });
-	}, [releaseFollow]);
+	}, [releaseFollow, t]);
 	useEffect(() => {
 		annotationNavigationRef.current = selectAnnotation;
 		return () => { annotationNavigationRef.current = null; };
@@ -2644,7 +2649,6 @@ function Timeline({
 	// widens chat; shorter histories (common on non-Codex harnesses) often
 	// stop overflowing and used to lose the minimap exactly then.
 	const minimapEnabled = scrollbar.markers.length > 0;
-	const { t } = useTranslation();
 	const openingTurnId = startup?.openingTurnId;
 	// The checklist holds the working slot until the agent is up and its first
 	// turn is live; a clean start then leaves no trace.
@@ -3264,7 +3268,7 @@ function Timeline({
 				onLoadOlder();
 				return;
 			}
-			setAnnotationNavigationError("The referenced message is no longer available in this chat.");
+			setAnnotationNavigationError(t("chat.annotationMessageUnavailable"));
 			setAnnotationTarget(undefined);
 			return;
 		}
@@ -3277,7 +3281,7 @@ function Timeline({
 			}
 			if (virtualized) virtualizer.scrollToIndex(index, { align: "center" });
 			if (annotationRetryCount.current++ >= 20) {
-				setAnnotationNavigationError("The referenced message could not be brought into view.");
+				setAnnotationNavigationError(t("chat.annotationNotInView"));
 				setAnnotationTarget(undefined);
 				return;
 			}
@@ -3314,7 +3318,7 @@ function Timeline({
 			setAnnotationTarget(undefined);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [annotationTarget, groups, hasOlder, loadingOlder, onLoadOlder, virtualized, virtualizer, virtualRows, activityDisclosureOverrides]);
+	}, [annotationTarget, groups, hasOlder, loadingOlder, onLoadOlder, virtualized, virtualizer, virtualRows, activityDisclosureOverrides, t]);
 	useEffect(() => {
 		const node = scroller.current;
 		const content = virtualized ? virtualContent.current
@@ -3705,7 +3709,7 @@ function Timeline({
 					className={cn(actionMenuContentClass, "absolute min-w-0 w-max max-w-full shadow-lg")}
 				>
 					<button type="button" onClick={() => void addSelectionToChat()} className={cn(actionMenuItemClass, "shrink-0 whitespace-nowrap hover:bg-interactive-hover hover:text-foreground")}>
-						<MessageSquarePlus aria-hidden="true" className="size-3.5" /> Add to chat
+						<MessageSquarePlus aria-hidden="true" className="size-3.5" /> {t("chat.addToChat")}
 					</button>
 				</div>
 			) : null}

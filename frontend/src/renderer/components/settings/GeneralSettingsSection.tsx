@@ -260,6 +260,7 @@ export function GeneralSettingsSection({
 				</SettingsRow>
 				{developerMode && <CloudOfferingRow />}
 				{developerMode && <DiagnosticsRow />}
+				{developerMode && <ChatExcerptsRow />}
 			</SettingsSection>
 		</>
 	);
@@ -306,6 +307,25 @@ function DiagnosticsRow() {
 				<Switch aria-label={t("settings.diagnostics")} checked={diagnostics} onCheckedChange={setDiagnostics} />
 			</SettingsRow>
 			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">{t("settings.diagnosticsToggleHint")}</p>
+		</div>
+	);
+}
+
+/**
+ * Developer Mode-only toggle for "Add to chat" transcript excerpts. Renderer
+ * state like Diagnostics: it only decides whether chat offers the selection
+ * action and attaches draft excerpts.
+ */
+function ChatExcerptsRow() {
+	const { t } = useTranslation();
+	const chatExcerpts = useUiStore((state) => state.chatExcerpts);
+	const setChatExcerpts = useUiStore((state) => state.setChatExcerpts);
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow label={t("settings.chatExcerpts")}>
+				<Switch aria-label={t("settings.chatExcerpts")} checked={chatExcerpts} onCheckedChange={setChatExcerpts} />
+			</SettingsRow>
+			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">{t("settings.chatExcerptsHint")}</p>
 		</div>
 	);
 }

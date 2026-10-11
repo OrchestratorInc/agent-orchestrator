@@ -190,6 +190,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onConversationWorkChange?: (state: ConversationWorkState) => void;
 }) {
 	const uiSessionId = sessionUiKey(session.id, hostId);
+	// "Add to chat" excerpts are an experiment behind Developer mode.
+	const excerptsEnabled = useUiStore((state) => state.developerMode && state.chatExcerpts);
 	const {
 		snapshot: queriedSnapshot,
 		isLoading,
@@ -584,7 +586,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				loadingOlder={isLoadingOlder}
 				onLoadOlder={loadOlder}
 				busy={commands.busy}
-				excerptsEnabled
+				excerptsEnabled={excerptsEnabled}
 				onSend={(text, attachments, clientMessageId, excerpts) =>
 					commands.send({
 						text,

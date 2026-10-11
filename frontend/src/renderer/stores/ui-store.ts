@@ -128,6 +128,8 @@ export type UiState = {
 	remoteHosts: boolean;
 	/** Memory and CPU monitoring (card chips, memory light, Diagnostics page). Only takes effect in Developer mode. Default off. */
 	diagnostics: boolean;
+	/** Experimental "Add to chat" transcript excerpts. Only takes effect in Developer mode. Default off. */
+	chatExcerpts: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
 	terminalCopyOnSelect: boolean;
 	restartingProjectIds: ReadonlySet<string>;
@@ -179,6 +181,7 @@ export type UiState = {
 	setDeveloperMode: (enabled: boolean) => void;
 	setRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
+	setChatExcerpts: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
@@ -238,6 +241,7 @@ const sidebarStorageKey = "ao.sidebar.open";
 const developerModeStorageKey = "ao.developerMode";
 const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
+const chatExcerptsStorageKey = "ao.chatExcerpts";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
@@ -260,6 +264,10 @@ function initialRemoteHosts() {
 
 function initialDiagnostics() {
 	return getLocalStorage()?.getItem(diagnosticsStorageKey) === "true";
+}
+
+function initialChatExcerpts() {
+	return getLocalStorage()?.getItem(chatExcerptsStorageKey) === "true";
 }
 
 function initialTerminalCopyOnSelect() {
@@ -321,6 +329,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	developerMode: initialDeveloperModeValue,
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
+	chatExcerpts: initialChatExcerpts(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
@@ -375,6 +384,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setDiagnostics: (diagnostics) => {
 		getLocalStorage()?.setItem(diagnosticsStorageKey, String(diagnostics));
 		set({ diagnostics });
+	},
+	setChatExcerpts: (chatExcerpts) => {
+		getLocalStorage()?.setItem(chatExcerptsStorageKey, String(chatExcerpts));
+		set({ chatExcerpts });
 	},
 	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
