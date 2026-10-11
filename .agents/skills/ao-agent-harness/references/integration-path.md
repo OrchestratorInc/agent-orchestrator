@@ -445,3 +445,23 @@ no delayed artifact, an unrelated control session and exact restored history.
 Scope unqualified optional ACP capabilities explicitly, even when initialize
 advertises them. The TUI audit runner cannot replace actual daemon Chat proof.
 See the [recovery report](../../../../docs/research/pool-acp-recovery-2026-10-12.md).
+
+
+## Freebuff instruction transport recovery
+
+Freebuff0.2.26 discovers nested AGENTS.md but its default prompt formatter filters
+project knowledge to root AGENTS.md/CLAUDE.md. Persisted discovery is therefore
+insufficient even before inference. Its home-user map is unfiltered internally,
+but the released CLI/public run transport exposes no additive host input.
+Profile isolation does not redirect home knowledge; same-ID custom agents replace
+native defaults. Do not change HOME/root rules, select a replacement native root,
+or pass a visible instruction-reading task to force qualification.
+
+When upstream-only, provide an unapplied patch against an immutable source
+snapshot and regression acceptance criteria, distinguishing that public snapshot
+from the private release revision. An explicit host overlay must preserve native
+home/project knowledge, tools/permissions and default root; reject unreadable or
+oversized input before a turn. A source proposal or modified local build is not
+stock release conformance. Keep production registration gated until an official
+released input passes ordinary-task independent consumption and actual AO UI
+proof. See the [recovery report](../../../../docs/research/freebuff-recovery-2026-10-12.md).
