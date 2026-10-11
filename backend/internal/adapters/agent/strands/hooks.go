@@ -39,11 +39,13 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 // EmitsSubmitActivity reports the native BeforeInvocationEvent callback.
 func (p *Plugin) EmitsSubmitActivity() bool { return true }
 
-// DeriveActivityState maps only native root-invocation lifecycle events.
+// DeriveActivityState maps native root-invocation and permission lifecycle events.
 func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	switch event {
 	case "active":
 		return domain.ActivityActive, true
+	case "permission-request":
+		return domain.ActivityBlocked, true
 	case "session-start", "stop":
 		return domain.ActivityIdle, true
 	default:

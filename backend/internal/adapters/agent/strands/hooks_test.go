@@ -41,8 +41,8 @@ func TestHooksPreservePluginsAndStayOutsideWorkspace(t *testing.T) {
 	}
 }
 
-func TestActivityUsesInvocationCallbacks(t *testing.T) {
-	for event, want := range map[string]domain.ActivityState{"session-start": domain.ActivityIdle, "active": domain.ActivityActive, "stop": domain.ActivityIdle} {
+func TestActivityUsesInvocationAndPermissionCallbacks(t *testing.T) {
+	for event, want := range map[string]domain.ActivityState{"session-start": domain.ActivityIdle, "active": domain.ActivityActive, "permission-request": domain.ActivityBlocked, "stop": domain.ActivityIdle} {
 		got, ok := DeriveActivityState(event, nil)
 		if !ok || got != want {
 			t.Fatalf("%s: %s %v", event, got, ok)

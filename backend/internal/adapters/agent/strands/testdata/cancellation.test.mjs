@@ -101,12 +101,37 @@ test("activity rebinds same native root and fences session/workspace changes", {
       options.plugins[1].initAgent(agent);
       return hooks;
     };
-    assert.equal(initialize("root-identity").length, 3);
-    assert.equal(initialize("root-identity").length, 3, "new same-session root must receive hooks");
+    assert.equal(initialize("root-identity").length, 5);
+    assert.equal(initialize("root-identity").length, 5, "new same-session root must receive hooks");
     assert.equal(initialize("child", process.cwd(), false).length, 0);
     assert.throws(() => initialize("other-root"), /changing native session/);
     assert.throws(() => initialize("root-identity", "/different"), /changing native session/);
   } finally { process.argv.splice(0, process.argv.length, ...saved); }
+});
+
+
+test("permission activity reports a native broker wait and its resolution", { skip: !modules }, async () => {
+  const root = resolve(modules, "@strands-agents");
+  const { BeforeToolCallEvent, HookOrder } = await import(pathToFileURL(join(root, "sdk/dist/src/index.node.js")));
+  const { bridgePermissionActivity } = await import(new URL("../assets/ao-activity.mjs", import.meta.url));
+  const hooks = [];
+  const events = [];
+  const agent = { addHook: (event, callback, options = {}) => hooks.push({event, callback, order: options.order ?? 0}) };
+  const reset = bridgePermissionActivity(agent, event => events.push(event));
+  const callbacks = hooks.filter(hook => hook.event === BeforeToolCallEvent).sort((a, b) => a.order - b.order);
+  assert.deepEqual(callbacks.map(callback => callback.order), [HookOrder.INTERVENTION_INPUT - 1, HookOrder.INTERVENTION_INPUT + 1]);
+
+  await callbacks[0].callback({toolUse: {toolUseId: "allowed"}});
+  await callbacks[1].callback({toolUse: {toolUseId: "allowed"}});
+  await delay(5);
+  assert.deepEqual(events, [], "a synchronous permission pass must stay active");
+
+  await callbacks[0].callback({toolUse: {toolUseId: "prompted"}});
+  await delay(5);
+  assert.deepEqual(events, ["permission-request"]);
+  await callbacks[1].callback({toolUse: {toolUseId: "prompted"}});
+  assert.deepEqual(events, ["permission-request", "active"]);
+  reset();
 });
 
 

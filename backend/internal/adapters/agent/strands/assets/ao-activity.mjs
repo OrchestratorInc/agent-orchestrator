@@ -1,6 +1,14 @@
 // agent-orchestrator: managed Strands activity plugin
 import { spawnSync } from "node:child_process";
-import { BeforeInvocationEvent, AfterInvocationEvent, InitializedEvent, Sandbox, Tool } from "@strands-agents/sdk";
+import {
+  BeforeInvocationEvent,
+  BeforeToolCallEvent,
+  AfterInvocationEvent,
+  HookOrder,
+  InitializedEvent,
+  Sandbox,
+  Tool,
+} from "@strands-agents/sdk";
 import { makeShell } from "@strands-agents/sdk/vended-tools/shell";
 
 // Preserve the released shell's schema, validation, output and error handling.
@@ -46,6 +54,47 @@ function report(event, agent) {
   }
 }
 
+// Native permissions run at INTERVENTION_INPUT and await the TUI broker from
+// inside BeforeToolCallEvent. Bracket that hook instead of copying Cedar policy
+// or scraping the terminal: an allowed call reaches the trailing hook before a
+// zero-delay timer fires, while a displayed permission panel leaves it pending.
+// The trailing hook runs as soon as the user answers, before tool execution.
+export function bridgePermissionActivity(agent, emit) {
+  const pending = new Map();
+  const blocked = new Set();
+
+  agent.addHook(BeforeToolCallEvent, (event) => {
+    const id = event.toolUse.toolUseId;
+    const candidate = { reported: false, timer: undefined };
+    candidate.timer = setTimeout(() => {
+      if (pending.get(id) !== candidate) return;
+      candidate.reported = true;
+      const first = blocked.size === 0;
+      blocked.add(id);
+      if (first) emit("permission-request");
+    }, 0);
+    pending.set(id, candidate);
+  }, { order: HookOrder.INTERVENTION_INPUT - 1 });
+
+  agent.addHook(BeforeToolCallEvent, (event) => {
+    const id = event.toolUse.toolUseId;
+    const candidate = pending.get(id);
+    if (!candidate) return;
+    clearTimeout(candidate.timer);
+    pending.delete(id);
+    blocked.delete(id);
+    if (candidate.reported && blocked.size === 0 && pending.size === 0) {
+      emit("active");
+    }
+  }, { order: HookOrder.INTERVENTION_INPUT + 1 });
+
+  return () => {
+    for (const candidate of pending.values()) clearTimeout(candidate.timer);
+    pending.clear();
+    blocked.clear();
+  };
+}
+
 // Capture the selected built-in before saved user plugins initialize. Reject
 // replacement by a custom plugin rather than silently changing its semantics.
 const selectedShells = new WeakMap();
@@ -85,8 +134,9 @@ export default {
         throw new Error("strands: background dispatch inside AO is unsupported");
       }
     };
+    const resetPermissionActivity = bridgePermissionActivity(agent, (event) => report(event, agent));
     agent.addHook(InitializedEvent, () => { requireForeground(); report("session-start", agent); });
-    agent.addHook(BeforeInvocationEvent, () => { requireForeground(); report("active", agent); });
-    agent.addHook(AfterInvocationEvent, () => report("stop", agent));
+    agent.addHook(BeforeInvocationEvent, () => { resetPermissionActivity(); requireForeground(); report("active", agent); });
+    agent.addHook(AfterInvocationEvent, () => { resetPermissionActivity(); report("stop", agent); });
   },
 };
