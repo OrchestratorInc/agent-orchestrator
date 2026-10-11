@@ -24,12 +24,25 @@ type activity struct {
 	lastCheck  time.Time
 	cpu        cpuSample
 	procRoot   string
+	// cgroupRoot is where the cgroup filesystem is mounted (/sys/fs/cgroup by
+	// default). Its root group is the sandbox's own when the worker runs in a
+	// container, which /proc/stat is not.
+	cgroupRoot string
 }
 
 type cpuSample struct {
 	total, idle, self uint64
-	ok                bool
+	// cgroupUsage is the cumulative CPU time of the sandbox's cgroup, taken
+	// at at; cgroup reports whether it was read (and the sample uses it).
+	cgroupUsage time.Duration
+	at          time.Time
+	cgroup      bool
+	ok          bool
 }
+
+// clockTick is the kernel's USER_HZ tick that /proc reports CPU time in. It is
+// 100 on every Linux architecture AO's workers run on.
+const clockTick = 10 * time.Millisecond
 
 func (a *activity) noteOutput(at time.Time) {
 	a.mu.Lock()
@@ -53,9 +66,29 @@ func (a *activity) busySince(now time.Time, shellPIDs []int) bool {
 	if root == "" {
 		root = "/proc"
 	}
+	cgroupRoot := a.cgroupRoot
+	if cgroupRoot == "" {
+		cgroupRoot = "/sys/fs/cgroup"
+	}
 	sample, ok := readCPU(root)
+	if ok {
+		// Prefer the cgroup's own CPU time: in a container (a Docker-based
+		// Coder workspace) /proc/stat is the whole host's, so other tenants'
+		// work would keep this sandbox from ever counting as idle.
+		if usage, found := readCgroupCPU(cgroupRoot); found {
+			sample.cgroupUsage, sample.cgroup, sample.at = usage, true, now
+		}
+	}
 	cpuBusy := false
-	if ok && a.cpu.ok && sample.total > a.cpu.total {
+	switch {
+	case ok && a.cpu.ok && sample.cgroup && a.cpu.cgroup && now.After(a.cpu.at):
+		wall := float64(now.Sub(a.cpu.at))
+		self := float64(time.Duration(sample.self-a.cpu.self) * clockTick)
+		busy := float64(sample.cgroupUsage-a.cpu.cgroupUsage) - self
+		// Cgroup usage is CPU time across cores; over wall time it is cores
+		// in use.
+		cpuBusy = busy/wall > busyCPUFraction
+	case ok && a.cpu.ok && !sample.cgroup && !a.cpu.cgroup && sample.total > a.cpu.total:
 		elapsed := float64(sample.total - a.cpu.total)
 		busy := elapsed - float64(sample.idle-a.cpu.idle) - float64(sample.self-a.cpu.self)
 		// /proc/stat sums every core, so normalize to "cores in use" before
@@ -70,6 +103,38 @@ func (a *activity) busySince(now time.Time, shellPIDs []int) bool {
 		a.cpu = sample
 	}
 	return outputBusy || cpuBusy || hasChildren(root, shellPIDs)
+}
+
+// readCgroupCPU returns the cumulative CPU time of the cgroup mounted at root:
+// cgroup v2's cpu.stat usage_usec, or cgroup v1's cpuacct.usage. It reports
+// false when neither is readable (not Linux, or no cgroup filesystem), and the
+// caller falls back to /proc/stat.
+func readCgroupCPU(root string) (time.Duration, bool) {
+	if stat, err := os.ReadFile(filepath.Join(root, "cpu.stat")); err == nil {
+		for _, line := range strings.Split(string(stat), "\n") {
+			key, value, found := strings.Cut(strings.TrimSpace(line), " ")
+			if !found || key != "usage_usec" {
+				continue
+			}
+			usec, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+			if err != nil {
+				return 0, false
+			}
+			return time.Duration(usec) * time.Microsecond, true
+		}
+	}
+	for _, controller := range []string{"cpuacct", "cpu,cpuacct", "cpuacct,cpu"} {
+		usage, err := os.ReadFile(filepath.Join(root, controller, "cpuacct.usage"))
+		if err != nil {
+			continue
+		}
+		nanoseconds, err := strconv.ParseUint(strings.TrimSpace(string(usage)), 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return time.Duration(nanoseconds), true
+	}
+	return 0, false
 }
 
 // readCPU returns system-wide CPU time (all cores) and this process's own,
