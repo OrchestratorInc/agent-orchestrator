@@ -28,6 +28,8 @@ const cloudCpClientMock = vi.hoisted(() => ({
 	getSession: vi.fn(),
 	getSessionReviewState: cloudReviewGetMock,
 	retrySessionStartup: vi.fn(),
+	// The presence heartbeat beats once the test document has focus.
+	touchSessionPresence: vi.fn(async () => undefined),
 }));
 const cloudResumeMock = cloudCpClientMock.resumeSession;
 const cloudRetryStartupMock = cloudCpClientMock.retrySessionStartup;
