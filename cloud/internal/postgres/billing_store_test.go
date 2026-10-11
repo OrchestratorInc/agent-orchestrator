@@ -72,7 +72,7 @@ func TestBillingOffKeepsSessionCreationUnchanged(t *testing.T) {
 
 func TestPlanSlotsReserveOneOrchestratorAndCountWorkers(t *testing.T) {
 	store, _, fixture := openNotificationTestStore(t)
-	store.EnableBilling(7 * 24 * time.Hour)
+	store.EnableBilling(7*24*time.Hour, time.Time{})
 
 	if _, err := createKind(store, fixture, "orchestrator"); !errors.Is(err, ErrPlanRequired) {
 		t.Fatalf("no subscription: err = %v, want ErrPlanRequired", err)
@@ -101,7 +101,7 @@ func TestPlanSlotsReserveOneOrchestratorAndCountWorkers(t *testing.T) {
 
 func TestEntitlementFollowsSubscriptionStatus(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
-	store.EnableBilling(7 * 24 * time.Hour)
+	store.EnableBilling(7*24*time.Hour, time.Time{})
 	limits := starterLimits()
 	limits.MaxActiveSandboxes, limits.OrchestratorSlots = 10, 0
 
@@ -138,7 +138,7 @@ func TestEntitlementFollowsSubscriptionStatus(t *testing.T) {
 
 func TestUsageLimitsAndManualWeeklyReset(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
-	store.EnableBilling(7 * 24 * time.Hour)
+	store.EnableBilling(7*24*time.Hour, time.Time{})
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
 	limits := starterLimits()
 	limits.MaxActiveSandboxes, limits.OrchestratorSlots = 10, 0
@@ -194,7 +194,7 @@ func TestUsageLimitsAndManualWeeklyReset(t *testing.T) {
 
 func TestResetRequiresAnAdmin(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
-	store.EnableBilling(7 * 24 * time.Hour)
+	store.EnableBilling(7*24*time.Hour, time.Time{})
 	subscribe(t, store, fixture.orgID, "active", starterLimits())
 	if _, err := admin.Exec(context.Background(),
 		`UPDATE ao_org_memberships SET role = 'member' WHERE org_id = $1 AND user_id = $2`, fixture.orgID, fixture.userID); err != nil {
@@ -262,7 +262,7 @@ func TestApplySubscriptionSetsAnchorOnceAndTracksPastDue(t *testing.T) {
 func TestUsageSamplingAndOverLimitPause(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()
-	store.EnableBilling(7 * 24 * time.Hour)
+	store.EnableBilling(7*24*time.Hour, time.Time{})
 	if _, err := admin.Exec(ctx,
 		`UPDATE ao_sandboxes SET desired_state = 'running', observed_state = 'running' WHERE session_id = $1`,
 		fixture.sessionID); err != nil {
@@ -354,7 +354,7 @@ func TestTerminalInteractionDefersIdlePauseAndPresenceNeverWakes(t *testing.T) {
 // plan check runs under the organization lock session creation already takes.
 func TestConcurrentCreatesCannotBothTakeTheLastSlot(t *testing.T) {
 	store, _, fixture := openNotificationTestStore(t)
-	store.EnableBilling(7 * 24 * time.Hour)
+	store.EnableBilling(7*24*time.Hour, time.Time{})
 	subscribe(t, store, fixture.orgID, "active", starterLimits())
 	const racers = 6
 	results := make(chan error, racers)
@@ -380,5 +380,28 @@ func TestConcurrentCreatesCannotBothTakeTheLastSlot(t *testing.T) {
 	}
 	if won != 1 || refused != racers-1 {
 		t.Fatalf("won %d, refused %d; want exactly one orchestrator", won, refused)
+	}
+}
+
+// Organizations created before the cutoff are grandfathered; newer ones are
+// billed.
+func TestOrganizationsCreatedBeforeTheCutoffAreExempt(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	if _, err := admin.Exec(ctx,
+		`UPDATE ao_organizations SET created_at = now() - interval '1 day' WHERE id = $1`, fixture.orgID); err != nil {
+		t.Fatal(err)
+	}
+	store.EnableBilling(7*24*time.Hour, time.Now().Add(-time.Hour))
+	if _, err := createKind(store, fixture, "worker"); err != nil {
+		t.Fatalf("an org created before the cutoff must be exempt: %v", err)
+	}
+	summary, err := store.BillingSummary(ctx, domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID)
+	if err != nil || !summary.Exempt || !summary.Entitled {
+		t.Fatalf("summary = %+v, err = %v; want exempt", summary, err)
+	}
+	store.EnableBilling(7*24*time.Hour, time.Now().Add(-48*time.Hour))
+	if _, err := createKind(store, fixture, "worker"); !errors.Is(err, ErrPlanRequired) {
+		t.Fatalf("an org created after the cutoff: err = %v, want ErrPlanRequired", err)
 	}
 }

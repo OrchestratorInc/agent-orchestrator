@@ -148,6 +148,7 @@ type OrgBilling struct {
 	PeriodEnd            *time.Time
 	UsageWeekAnchor      *time.Time
 	PastDueSince         *time.Time
+	CreatedAt            time.Time
 }
 
 // Exempt reports whether billing does not apply to the organization.

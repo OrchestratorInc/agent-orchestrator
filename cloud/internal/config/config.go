@@ -141,6 +141,9 @@ type Config struct {
 	// BillingPastDueGrace is how long a past_due subscription keeps working
 	// while Stripe retries the card.
 	BillingPastDueGrace time.Duration
+	// BillingExemptOrgsCreatedBefore grandfathers organizations created before
+	// it (AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE, RFC 3339). Zero: none.
+	BillingExemptOrgsCreatedBefore time.Time
 
 	DockerHost           string
 	DockerWorkerImage    string
@@ -215,6 +218,14 @@ func Load() (Config, error) {
 		if err := json.Unmarshal([]byte(raw), &freestyleSnapshotByHarnessEnv); err != nil {
 			return Config{}, fmt.Errorf("invalid AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS: %w", err)
 		}
+	}
+	var billingExemptBefore time.Time
+	if raw := strings.TrimSpace(os.Getenv("AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE (RFC 3339): %w", err)
+		}
+		billingExemptBefore = parsed
 	}
 	stripePriceIDsEnv := map[string]string{}
 	if raw := strings.TrimSpace(os.Getenv("AO_CLOUD_STRIPE_PRICE_IDS")); raw != "" {
@@ -301,14 +312,15 @@ func Load() (Config, error) {
 		FreestyleWorkerTokenTTL: durationEnv(
 			"AO_CLOUD_FREESTYLE_WORKER_TOKEN_TTL", sandbox.DefaultWorkerTokenTTL,
 		),
-		FreestyleAutoPauseSeconds: intEnvOrDefault("AO_CLOUD_FREESTYLE_AUTO_PAUSE_SECONDS", 0),
-		StripeSecretKey:           strings.TrimSpace(os.Getenv("AO_CLOUD_STRIPE_SECRET_KEY")),
-		StripeWebhookSecret:       strings.TrimSpace(os.Getenv("AO_CLOUD_STRIPE_WEBHOOK_SECRET")),
-		StripeBaseURL:             strings.TrimSpace(os.Getenv("AO_CLOUD_STRIPE_BASE_URL")),
-		StripePriceIDs:            stripePriceIDsEnv,
-		BillingReturnURL:          strings.TrimSpace(os.Getenv("AO_CLOUD_BILLING_RETURN_URL")),
-		StripePortalConfiguration: strings.TrimSpace(os.Getenv("AO_CLOUD_STRIPE_PORTAL_CONFIGURATION")),
-		BillingPastDueGrace:       durationEnv("AO_CLOUD_BILLING_PAST_DUE_GRACE", 7*24*time.Hour),
+		FreestyleAutoPauseSeconds:      intEnvOrDefault("AO_CLOUD_FREESTYLE_AUTO_PAUSE_SECONDS", 0),
+		StripeSecretKey:                strings.TrimSpace(os.Getenv("AO_CLOUD_STRIPE_SECRET_KEY")),
+		StripeWebhookSecret:            strings.TrimSpace(os.Getenv("AO_CLOUD_STRIPE_WEBHOOK_SECRET")),
+		StripeBaseURL:                  strings.TrimSpace(os.Getenv("AO_CLOUD_STRIPE_BASE_URL")),
+		StripePriceIDs:                 stripePriceIDsEnv,
+		BillingReturnURL:               strings.TrimSpace(os.Getenv("AO_CLOUD_BILLING_RETURN_URL")),
+		StripePortalConfiguration:      strings.TrimSpace(os.Getenv("AO_CLOUD_STRIPE_PORTAL_CONFIGURATION")),
+		BillingPastDueGrace:            durationEnv("AO_CLOUD_BILLING_PAST_DUE_GRACE", 7*24*time.Hour),
+		BillingExemptOrgsCreatedBefore: billingExemptBefore,
 
 		DockerHost:        envOrDefault("AO_CLOUD_DOCKER_HOST", "unix:///var/run/docker.sock"),
 		DockerWorkerImage: envOrDefault("AO_CLOUD_DOCKER_WORKER_IMAGE", "ao-cloud-worker:local"),

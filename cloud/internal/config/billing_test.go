@@ -45,3 +45,19 @@ func TestBillingRequiresWebhookSecretAndPrices(t *testing.T) {
 		t.Fatalf("billing config = %+v", cfg)
 	}
 }
+
+func TestBillingExemptCutoffParses(t *testing.T) {
+	setWorkOSTestEnv(t)
+	t.Setenv("AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE", "2026-10-11T00:00:00Z")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.BillingExemptOrgsCreatedBefore.Equal(time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("cutoff = %v", cfg.BillingExemptOrgsCreatedBefore)
+	}
+	t.Setenv("AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE", "yesterday")
+	if _, err := Load(); err == nil {
+		t.Fatal("an unparseable cutoff was accepted")
+	}
+}

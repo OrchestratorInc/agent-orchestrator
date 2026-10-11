@@ -46,11 +46,20 @@ func (e *PlanLimitError) Error() string {
 type billingPolicy struct {
 	enforced     bool
 	pastDueGrace time.Duration
+	// exemptBefore grandfathers organizations created before it, so turning
+	// billing on does not block the people already using a deployment.
+	exemptBefore time.Time
 }
 
-// EnableBilling turns plan enforcement on for session creation.
-func (s *Store) EnableBilling(pastDueGrace time.Duration) {
-	s.billing = billingPolicy{enforced: true, pastDueGrace: pastDueGrace}
+// EnableBilling turns plan enforcement on for session creation. Organizations
+// created before exemptBefore (zero: none) are exempt, like plan internal.
+func (s *Store) EnableBilling(pastDueGrace time.Duration, exemptBefore time.Time) {
+	s.billing = billingPolicy{enforced: true, pastDueGrace: pastDueGrace, exemptBefore: exemptBefore}
+}
+
+// exempt reports whether billing does not apply to the organization.
+func (p billingPolicy) exempt(billing domain.OrgBilling) bool {
+	return billing.Exempt() || (!p.exemptBefore.IsZero() && billing.CreatedAt.Before(p.exemptBefore))
 }
 
 // BillingEnforced reports whether plan enforcement is on.
@@ -62,11 +71,11 @@ func orgBillingTx(ctx context.Context, tx pgx.Tx, orgID string) (domain.OrgBilli
 	var limits []byte
 	err := tx.QueryRow(ctx,
 		`SELECT plan, stripe_customer_id, stripe_subscription_id, subscription_status, plan_limits,
-			billing_period_start, billing_period_end, usage_week_anchor, past_due_since
+			billing_period_start, billing_period_end, usage_week_anchor, past_due_since, created_at
 		FROM ao_organizations WHERE id = $1`,
 		orgID,
 	).Scan(&billing.Plan, &customer, &subscription, &status, &limits,
-		&billing.PeriodStart, &billing.PeriodEnd, &billing.UsageWeekAnchor, &billing.PastDueSince)
+		&billing.PeriodStart, &billing.PeriodEnd, &billing.UsageWeekAnchor, &billing.PastDueSince, &billing.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.OrgBilling{}, ErrNotFound
 	}
@@ -325,7 +334,7 @@ func (p billingPolicy) planAdmissionTx(
 	if err != nil {
 		return err
 	}
-	if billing.Exempt() {
+	if p.exempt(billing) {
 		return nil
 	}
 	if billing.Limits == nil ||
@@ -376,7 +385,7 @@ func (s *Store) BillingSummary(ctx context.Context, principal domain.Principal, 
 		}
 		now := time.Now()
 		summary.Plan = billing.Plan
-		summary.Exempt = billing.Exempt()
+		summary.Exempt = s.billing.exempt(billing)
 		summary.SubscriptionStatus = billing.SubscriptionStatus
 		summary.CurrentPeriodEnd = billing.PeriodEnd
 		summary.Limits = billing.Limits
@@ -408,7 +417,7 @@ func (s *Store) ResetWeeklyUsage(ctx context.Context, principal domain.Principal
 			return err
 		}
 		now := time.Now()
-		if billing.Exempt() {
+		if s.billing.exempt(billing) {
 			return nil
 		}
 		if billing.Limits == nil ||

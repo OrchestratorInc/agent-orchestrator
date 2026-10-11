@@ -517,7 +517,7 @@ func run(logger *slog.Logger) error {
 		go projectSnapshots.RunCollector(ctx)
 	}
 	if cfg.BillingEnabled() {
-		store.EnableBilling(cfg.BillingPastDueGrace)
+		store.EnableBilling(cfg.BillingPastDueGrace, cfg.BillingExemptOrgsCreatedBefore)
 		apiOptions.Billing = &httpapi.BillingOptions{
 			Stripe:              billing.NewClient(cfg.StripeSecretKey, cfg.StripeBaseURL),
 			WebhookSecret:       cfg.StripeWebhookSecret,
