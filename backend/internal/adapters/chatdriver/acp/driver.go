@@ -718,6 +718,12 @@ func conversationCapabilities(
 	caps[ports.ChatCapabilityElicitation] = true
 	caps[ports.ChatCapabilityNestedAgents] = true
 	caps[ports.ChatCapabilityTerminalOutput] = true
+	// An adapter's explicit scope opt-out wins over protocol declarations.
+	for capability, enabled := range configured {
+		if !enabled {
+			caps[capability] = false
+		}
+	}
 	return caps
 }
 

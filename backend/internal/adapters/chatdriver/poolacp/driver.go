@@ -22,6 +22,7 @@ import (
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness: domain.HarnessPool, Configure: configure,
+		Capabilities:       ports.ChatCapabilities{ports.ChatCapabilityImages: false, ports.ChatCapabilityEmbeddedContext: false, ports.ChatCapabilityResourceLinks: false, ports.ChatCapabilityElicitation: false, ports.ChatCapabilityNestedAgents: false, ports.ChatCapabilityTerminalOutput: false},
 		ValidateInitialize: validateInitialize, ValidateSessionReady: validateSessionReady,
 		SessionMode: sessionMode, SessionOptions: sessionOptions, ValidateTurnSettings: validateTurnSettings,
 	}, log)

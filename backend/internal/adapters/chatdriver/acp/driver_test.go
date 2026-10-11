@@ -4462,3 +4462,14 @@ func TestACPDriverRequiredSessionInitialization(t *testing.T) {
 		}
 	}
 }
+
+func TestACPExplicitScopeOptOutWinsOverProtocol(t *testing.T) {
+	init := acpsdk.InitializeResponse{}
+	init.AgentCapabilities.LoadSession = true
+	init.AgentCapabilities.PromptCapabilities.Image = true
+	configured := ports.ChatCapabilities{ports.ChatCapabilityImages: false, ports.ChatCapabilityNestedAgents: false}
+	caps := conversationCapabilities(configured, init)
+	if caps[ports.ChatCapabilityImages] || caps[ports.ChatCapabilityNestedAgents] || !caps[ports.ChatCapabilityHistory] {
+		t.Fatalf("scoped capabilities: %v", caps)
+	}
+}
