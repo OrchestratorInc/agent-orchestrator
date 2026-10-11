@@ -112,7 +112,7 @@ export function SelectableResponseText({ text, source }: { text: string; source?
 	const t = useTheme();
 	const addToChat = useContext(AddResponseToChat);
 	const select = useCallback((selected: string) => source ? addToChat?.(selected, source) : addToChat?.(selected), [addToChat, source]);
-	const onLayout = useAndroidResponseSelection(source ? select : null);
+	const onLayout = useAndroidResponseSelection(addToChat && source ? select : null);
 	const styles = useThemedStyles(makeStyles);
 	const selectionColor = Platform.OS === "android" ? t.accentBorder : t.accent;
 	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={Boolean(addToChat && source)} onAddToChat={(event) => select(event.nativeEvent.text)}>

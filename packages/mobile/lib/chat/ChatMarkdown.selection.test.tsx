@@ -30,10 +30,24 @@ vi.mock("../ThemeProvider", () => ({
 }));
 
 import { ChatLinkProvider, ChatMarkdown, SelectableResponseText } from "./ChatMarkdown";
+import * as androidSelection from "./useAndroidResponseSelection";
 
 function textOf(node: { children: Array<string | { children: unknown[] }> }): string {
 	return node.children.map((child) => typeof child === "string" ? child : textOf(child as typeof node)).join("");
 }
+
+it("keeps Add to chat disabled when the surface has no registered composer", () => {
+	const hook = vi.spyOn(androidSelection, "useAndroidResponseSelection").mockReturnValue(vi.fn());
+	let renderer!: ReactTestRenderer;
+	try {
+		act(() => { renderer = create(<ChatMarkdown continuousSelection selectionSource={{ conversationId: "conversation", messageId: "response", revision: 1 }} text="Response" />); });
+		expect(hook).toHaveBeenCalledWith(null);
+		expect(renderer.root.find((node) => node.props.selectable === true).props.addToChatEnabled).toBe(false);
+	} finally {
+		act(() => renderer.unmount());
+		hook.mockRestore();
+	}
+});
 
 it.each(["ios", "android"])("selects a heading and adjacent paragraphs as one range on %s", (os) => {
 	platform.OS = os;
