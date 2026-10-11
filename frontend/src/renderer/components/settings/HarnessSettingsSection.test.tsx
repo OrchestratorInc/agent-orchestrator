@@ -328,8 +328,11 @@ describe("HarnessSettingsSection", () => {
 		expect(within(list).getByText("Effort: low · medium · high")).toBeInTheDocument();
 		// A model without effort levels shows nothing in their place.
 		expect(within(list).queryByText("No effort control")).toBeNull();
-		// Unreported context and inputs are left out, not shown as unknown.
-		expect(within(list).queryByText(/Context|Inputs|Unknown/)).toBeNull();
+		// Reported context and inputs show once; a model that reports neither shows nothing in their place.
+		expect(within(list).getAllByText(/Context/)).toHaveLength(1);
+		expect(within(list).getAllByText(/Inputs/)).toHaveLength(1);
+		const unreported = within(list).getByText("gpt-5.3-mini").closest("li") as HTMLElement;
+		expect(within(unreported).queryByText(/Context|Inputs|Unknown/)).toBeNull();
 		expect(within(page).getByRole("button", { name: "Default model" })).toBeInTheDocument();
 		expect(within(list).getByText("Context (tokens): 200,000")).toBeInTheDocument();
 		expect(within(list).getByText("Inputs: Text · Image")).toBeInTheDocument();
@@ -1165,8 +1168,11 @@ describe("HarnessSettingsSection", () => {
 
 	it("shows installed harnesses and install actions without authentication UI", async () => {
 		renderSection();
-		await waitFor(() => expect(screen.getAllByText("Installed").length).toBeGreaterThan(0), { timeout: 10_000 });
-		expect(screen.getByText("Codex")).toBeInTheDocument();
+		// The list carries status as a tooltip; the harness page states it.
+		await waitFor(async () => expect(await findListRow("claude-code")).toHaveAttribute("title", "Installed"), { timeout: 10_000 });
+		expect(await findListRow("codex")).toBeInTheDocument();
+		const page = await findAgentRow("claude-code");
+		expect(within(page).getAllByText("Installed").length).toBeGreaterThan(0);
 		expect(screen.queryByText(/sign in/i)).not.toBeInTheDocument();
 	});
 
