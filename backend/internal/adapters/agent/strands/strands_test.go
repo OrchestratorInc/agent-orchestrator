@@ -247,6 +247,7 @@ func TestUnsupportedCustomShellSetup(t *testing.T) {
 	for _, config := range []string{
 		`{"profile":{"agentConfig":{"systemPrompt":"shadow"}}}`,
 		`{"profile":{"agentConfigModules":[{"kind":"agent-config","module":"./custom.mjs"}]}}`,
+		`{"profile":{"plugins":[{"kind":"plugin","module":"./custom.mjs"}]}}`,
 		`{"profile":{"tools":[{"kind":"tool","module":"./custom.mjs"}]}}`,
 		`{"profile":{"subagents":[{"kind":"subagent","module":"./custom.mjs"}]}}`,
 		`{"profile":{"sandbox":{"kind":"sandbox","module":"./custom.mjs"}}}`,

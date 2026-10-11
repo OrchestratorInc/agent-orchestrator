@@ -2278,5 +2278,8 @@ WHERE type = 'table' AND name = 'sessions'`,
 	if !strings.Contains(schema, "'command-code'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Command Code and did not match known pre-Command-Code schema")
 	}
+	if !strings.Contains(schema, "'strands'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Strands and did not match known pre-Strands schema")
+	}
 	return nil
 }

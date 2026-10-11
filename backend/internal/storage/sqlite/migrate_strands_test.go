@@ -64,3 +64,15 @@ func TestMigration0201AllowsStrandsAndReversesBothHistoricalSchemas(t *testing.T
 		})
 	}
 }
+
+func TestReconcileStrandsRejectsDivergentHarnessConstraint(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 194)
+	mustExec(t, db, `PRAGMA writable_schema = ON`)
+	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''fake''))', '''fake'' ))') WHERE type = 'table' AND name = 'sessions'`)
+	mustExec(t, db, `PRAGMA writable_schema = RESET`)
+
+	err := reconcileHarnessConstraint(db)
+	if err == nil || !strings.Contains(err.Error(), "missing Strands") {
+		t.Fatalf("reconcile divergent sessions constraint = %v; want missing Strands error", err)
+	}
+}
