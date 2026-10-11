@@ -2735,5 +2735,10 @@
 	"sideChat.closeNamed": "Close {{name}}",
 	"sideChat.closeNamedConfirm": "Close {{name}}?",
 	"sideChat.closeExplanation": "Closing stops this side chat’s running work and removes its conversation and draft.",
-	"sideChat.addToChat": "Add to chat"
+	"sideChat.addToChat": "Add to chat",
+	"chat.workedFor": "Arbeitszeit",
+	"sideChat.deleteConfirm": "Seitenchat löschen?",
+	"sideChat.deleteExplanation": "Dieser Seitenchat und seine Nachrichten werden entfernt.",
+	"sideChat.delete": "Löschen",
+	"sideChat.nextMessageQueued": "Deine nächste Nachricht wird in die Warteschlange gestellt"
 }

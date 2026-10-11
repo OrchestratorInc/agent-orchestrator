@@ -2735,5 +2735,10 @@
 	"sideChat.closeNamed": "Close {{name}}",
 	"sideChat.closeNamedConfirm": "Close {{name}}?",
 	"sideChat.closeExplanation": "Closing stops this side chat’s running work and removes its conversation and draft.",
-	"sideChat.addToChat": "Add to chat"
+	"sideChat.addToChat": "Add to chat",
+	"chat.workedFor": "작업 시간",
+	"sideChat.deleteConfirm": "사이드 채팅을 삭제할까요?",
+	"sideChat.deleteExplanation": "이 사이드 채팅과 메시지가 삭제됩니다.",
+	"sideChat.delete": "삭제",
+	"sideChat.nextMessageQueued": "다음에 보내는 메시지는 대기열에 추가됩니다"
 }

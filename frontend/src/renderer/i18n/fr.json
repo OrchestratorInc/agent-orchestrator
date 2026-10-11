@@ -2775,5 +2775,10 @@
 	"sideChat.closeNamed": "Close {{name}}",
 	"sideChat.closeNamedConfirm": "Close {{name}}?",
 	"sideChat.closeExplanation": "Closing stops this side chat’s running work and removes its conversation and draft.",
-	"sideChat.addToChat": "Add to chat"
+	"sideChat.addToChat": "Add to chat",
+	"chat.workedFor": "Temps de travail",
+	"sideChat.deleteConfirm": "Supprimer le chat latéral ?",
+	"sideChat.deleteExplanation": "Ce chat latéral et ses messages seront supprimés.",
+	"sideChat.delete": "Supprimer",
+	"sideChat.nextMessageQueued": "Le prochain message que vous envoyez sera mis en file d’attente"
 }

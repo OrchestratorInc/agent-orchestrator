@@ -2717,5 +2717,10 @@
 	"sideChat.closeNamed": "Close {{name}}",
 	"sideChat.closeNamedConfirm": "Close {{name}}?",
 	"sideChat.closeExplanation": "Closing stops this side chat’s running work and removes its conversation and draft.",
-	"sideChat.addToChat": "Add to chat"
+	"sideChat.addToChat": "Add to chat",
+	"chat.workedFor": "工作用时",
+	"sideChat.deleteConfirm": "删除侧边聊天？",
+	"sideChat.deleteExplanation": "此侧边聊天及其消息将被删除。",
+	"sideChat.delete": "删除",
+	"sideChat.nextMessageQueued": "你发送的下一条消息将加入队列"
 }
