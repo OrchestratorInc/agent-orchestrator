@@ -13,7 +13,7 @@ Both binaries report these revisions with an unmodified source tree. Routine tes
 
 ## Native contracts and actual results
 
-Hermes official v0.21.6 source `818c13be1dc4fd28987e1e881a9408224afd4535` uses classic interactive `chat --cli --in-workspace`. Its native banner dates the version 2026.9.24; release metadata identifies 2026-10-08. Additive per-process `HERMES_EPHEMERAL_SYSTEM_PROMPT` preserves native personality and safety. Modern `--tui` does not qualify for this prompt route. Sticky/named profiles, managed overlays and unresolved environment-expanded configuration fail closed. Native permissions remain native; no upstream internals or global plugins were modified.
+Hermes official v0.21.6 source `818c13be1dc4fd28987e1e881a9408224afd4535` uses classic interactive `chat --cli --in <workspace>`. Its native banner dates the version 2026.9.24; release metadata identifies 2026-10-08. Additive per-process `HERMES_EPHEMERAL_SYSTEM_PROMPT` preserves native personality and safety. Modern `--tui` does not qualify for this prompt route. Sticky/named profiles, managed overlays and unresolved environment-expanded configuration fail closed. Native permissions remain native; no upstream internals or global plugins were modified.
 
 OpenJarvis is the official CLI **1.0.4**, fixed source `0eb7811df96cf139e6bd6d7fcc9b5cc4ff1418ff`, not desktop-v1.0.2. Interactive `jarvis chat --agent orchestrator` uses existing coding tools and a private additive config prefix; it never replaces SystemPromptBuilder with `--system`. Native history is in memory: no native ID or restore is advertised or fabricated. Native startup warns that its Rust rate limiter is unavailable; this limitation is not hidden or bypassed.
 
