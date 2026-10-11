@@ -124,7 +124,7 @@ export function SelectableResponseText({ text, source }: { text: string; source?
 			if (block.kind === "list") return <Text key={index}>{separator}{block.items.map((item, itemIndex) => <Text key={itemIndex} style={item.checked ? styles.taskDone : undefined}>{itemIndex > 0 ? "\n" : ""}{item.checked !== undefined ? (item.checked ? "☑ " : "☐ ") : block.ordered ? `${itemIndex + 1}. ` : "• "}{inline(item.text, styles)}</Text>)}</Text>;
 			if (block.kind === "code") return <Text key={index} style={styles.selectionCode}>{separator}{block.language ? `${block.language}\n` : ""}{block.text}</Text>;
 			if (block.kind === "table") return <Text key={index}>{separator}{[block.headers, ...block.rows].map((row, rowIndex) => <Text key={rowIndex}>{rowIndex > 0 ? "\n" : ""}{row.map((cell, cellIndex) => <Text key={cellIndex}>{cellIndex > 0 ? "  |  " : ""}{inline(cell, styles)}</Text>)}</Text>)}</Text>;
-			if (block.kind === "image") return <Text key={index} style={styles.imageCaption}>{separator}{block.alt || block.url}</Text>;
+			if (block.kind === "image") return <Text key={index} style={styles.imageCaption}>{separator}{inline(block.alt || block.url, styles)}</Text>;
 			return <Text key={index}>{separator}────────</Text>;
 		})}
 	</Text>;

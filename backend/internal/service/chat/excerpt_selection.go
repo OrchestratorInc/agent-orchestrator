@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"bytes"
 	"html"
 	"regexp"
 	"strconv"
@@ -85,7 +86,19 @@ func renderedExcerptTextWithMarkers(markdown string, native bool) string {
 			}
 		case *ast.Image:
 			if native {
-				caption := excerptTextValue(n.Text(source), false)
+				var alt strings.Builder
+				_ = ast.Walk(n, func(child ast.Node, entering bool) (ast.WalkStatus, error) {
+					if entering {
+						switch value := child.(type) {
+						case *ast.Text:
+							alt.WriteString(excerptTextValue(value.Value(source), value.IsRaw()))
+						case *ast.String:
+							alt.WriteString(excerptTextValue(value.Value, value.IsRaw() || value.IsCode()))
+						}
+					}
+					return ast.WalkContinue, nil
+				})
+				caption := alt.String()
 				if caption == "" {
 					caption = string(n.Destination)
 				}
@@ -119,7 +132,7 @@ func renderedExcerptTextWithMarkers(markdown string, native bool) string {
 		case *ast.CodeBlock, *ast.FencedCodeBlock:
 			if fenced, ok := node.(*ast.FencedCodeBlock); native && ok {
 				if fenced.Info != nil {
-					visible.Write(fenced.Info.Text(source))
+					visible.Write(fenced.Info.Value(source))
 				}
 				visible.WriteByte(' ')
 			}
@@ -146,11 +159,11 @@ func nativeListIndex(item *ast.ListItem, source []byte) int {
 		return 1
 	}
 	line := first.Lines().At(0)
-	start := strings.LastIndexByte(string(source[:line.Start]), '\n') + 1
+	start := bytes.LastIndexByte(source[:line.Start], '\n') + 1
 	index := 1
 	for start > 0 {
 		end := start - 1
-		start = strings.LastIndexByte(string(source[:end]), '\n') + 1
+		start = bytes.LastIndexByte(source[:end], '\n') + 1
 		if !nativeOrderedItem.Match(source[start:end]) {
 			break
 		}
