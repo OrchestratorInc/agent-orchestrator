@@ -6,6 +6,9 @@ import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCoderTemplates } from "../hooks/useCoderTemplates";
+import { useCoderTemplateParameters } from "../hooks/useCoderTemplateParameters";
+import { changedParameterOverrides, parameterOverridesPatch } from "../lib/coder-template-parameters";
+import { CoderTemplateOptions } from "./CoderTemplateOptions";
 import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudProjectsQueryKey } from "../hooks/useWorkspaceQuery";
@@ -125,7 +128,65 @@ export function CloudProjectCoderSettings({ project }: { project: CloudCpProject
 		{orgCoderConfig != null || (coder?.workspaceNamePrefix?.trim() ?? "") !== "" ? (
 			<CoderWorkspaceNamePrefixRow project={project} />
 		) : null}
+		{templateId !== "" ? <CoderTemplateParametersSettings project={project} templateId={templateId} /> : null}
 	</SettingsGroup>;
+}
+
+/**
+ * The project's "Template options": its saved `coder.parameters` over the
+ * template's defaults. Autosaves like the other inline fields, sending only the
+ * keys that changed (a key reset to its default is sent at the default, since
+ * the endpoint merges the map). Only new sessions pick the values up. Hidden
+ * when the template has no parameters or the control plane predates the route.
+ */
+function CoderTemplateParametersSettings({ project, templateId }: { project: CloudCpProject; templateId: string }) {
+	const { t } = useTranslation();
+	const { client, baseUrl } = useCloudCp();
+	const queryClient = useQueryClient();
+	const { parameters } = useCoderTemplateParameters(project.orgId, templateId);
+	const saved = useRef<Record<string, string>>(coderConfigOf(project)?.parameters ?? {});
+	// null until the first edit: the controls show the saved values over the
+	// template defaults, and nothing is sent until the user changes one.
+	const [draft, setDraft] = useState<Record<string, string> | null>(null);
+	const shown = draft ?? changedParameterOverrides(parameters, saved.current);
+	const save = useMutation({
+		mutationFn: (patch: Record<string, string>) =>
+			client.updateProjectSettings(project.orgId, project.id, { config: { coder: { parameters: patch } } }),
+		onSuccess: (response, patch) => {
+			saved.current = coderConfigOf(response.project)?.parameters ?? { ...saved.current, ...patch };
+			queryClient.setQueryData(cloudProjectSettingsQueryKey(baseUrl, project.orgId, project.id), response.project);
+			void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
+		},
+	});
+	const { mutate, isPending, isError } = save;
+	const patch = draft === null ? undefined : parameterOverridesPatch(parameters, saved.current, draft);
+	const patchKey = patch ? JSON.stringify(patch) : "";
+	const failedKey = isError && save.variables ? JSON.stringify(save.variables) : "";
+	useEffect(() => {
+		// Only send a change, once; a failed patch waits for another edit.
+		if (!patch || isPending || patchKey === failedKey) return;
+		const timeout = window.setTimeout(() => mutate(patch), 650);
+		return () => window.clearTimeout(timeout);
+		// patchKey stands in for patch, which is a fresh object every render.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [patchKey, failedKey, isPending, mutate]);
+	return (
+		<div className="px-3 pb-3 pt-1">
+			<CoderTemplateOptions
+				orgId={project.orgId}
+				templateId={templateId}
+				overrides={shown}
+				onChange={setDraft}
+				footer={save.isError ? (
+					<p className="text-xs text-error" role="alert">
+						{save.error instanceof Error ? save.error.message : t("settings.project.saveFailed")}
+					</p>
+				) : (
+					<p className="text-xs text-settings-muted">{t("coder.templateOptions.settingsHint")}</p>
+				)}
+			/>
+		</div>
+	);
 }
 
 /**

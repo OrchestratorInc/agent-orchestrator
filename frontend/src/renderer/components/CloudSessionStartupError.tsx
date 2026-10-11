@@ -36,6 +36,12 @@ export function CloudSessionStartupError({
 	});
 	const failed = problem.phase === "failed";
 	const detail = problem.phase === "failed" ? problem.detail : undefined;
+	// The workspace's ready check never passed: the server message names the
+	// check, and the details carry its last output.
+	const setupNotReady = problem.phase === "failed" && problem.code === "workspace_setup_not_ready";
+	const title = setupNotReady
+		? t("cloud.startupError.workspaceSetupNotReadyTitle")
+		: failed ? t("cloud.startupError.title") : t("cloud.startupError.unavailableTitle");
 	const [showDetail, setShowDetail] = useState(false);
 	const [copied, setCopied] = useState(false);
 	const copyDetail = () => {
@@ -55,7 +61,7 @@ export function CloudSessionStartupError({
 		>
 			<div className="flex w-96 max-w-full flex-col items-center gap-3 text-center" role="alert">
 				<h2 className="text-heading-sm font-semibold text-foreground">
-					{failed ? t("cloud.startupError.title") : t("cloud.startupError.unavailableTitle")}
+					{title}
 				</h2>
 				<p className="text-sm leading-relaxed text-muted-foreground">
 					{problem.message ?? t("cloud.startupError.unavailableDescription")}

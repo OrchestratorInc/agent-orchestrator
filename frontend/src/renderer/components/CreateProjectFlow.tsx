@@ -27,6 +27,7 @@ import type { ImportFolderScan } from "../../preload";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { CoderTemplatePicker } from "./CoderTemplatePicker";
+import { CoderTemplateOptions } from "./CoderTemplateOptions";
 import { useCoderTemplates } from "../hooks/useCoderTemplates";
 import { SearchablePicker } from "./SearchablePicker";
 import { buildCoderRequestOptions, useCoderSessionOptionsStore } from "../stores/coder-session-options-store";
@@ -1411,6 +1412,8 @@ function CloudProjectCard({
 		usesCoder &&
 		coderTemplates.templates.length > 0 &&
 		coderTemplateId.trim() === "";
+	const coderParameters = useCoderSessionOptionsStore((s) => s.parameters);
+	const setCoderParameters = useCoderSessionOptionsStore((s) => s.setParameters);
 	const coderWorkspaceNamePrefix = useCoderSessionOptionsStore((s) => s.workspaceNamePrefix);
 	const setCoderWorkspaceNamePrefix = useCoderSessionOptionsStore((s) => s.setWorkspaceNamePrefix);
 	// Workspace naming is a bring-your-own-Coder control: only an org that
@@ -1860,6 +1863,15 @@ function CloudProjectCard({
 				{usesCoder && selectedRepo !== undefined ? (
 					<div className="space-y-4">
 						<CoderTemplatePicker orgId={org?.id} />
+						{coderTemplateId.trim() !== "" ? (
+							<CoderTemplateOptions
+								orgId={org?.id}
+								templateId={coderTemplateId}
+								overrides={coderParameters}
+								onChange={setCoderParameters}
+								disabled={isCreating}
+							/>
+						) : null}
 						{showCoderWorkspaceNamePrefix ? <div className="flex flex-col gap-2 text-sm">
 							<Label htmlFor="coderWorkspaceNamePrefix" className="font-medium text-foreground">
 								{t("coder.workspacePrefix.label")}
