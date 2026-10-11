@@ -6,12 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -700,9 +698,12 @@ func createSessionTx(
 	}
 	// The plan's slots and usage limits, checked under the same organization
 	// lock as the quota above, so concurrent creators cannot both take the
-	// last slot. This covers sessions an orchestrator spawns too.
-	if err := billing.planAdmissionTx(ctx, tx, orgID, input.Kind, admitCreate, time.Now()); err != nil {
-		return domain.Session{}, err
+	// last slot. This covers sessions an orchestrator spawns too. Only
+	// Freestyle sandboxes are billed.
+	if billedProvider(sessionProvider(input.Provider)) {
+		if err := billing.planAdmissionTx(ctx, tx, orgID, input.Kind, admitCreate, time.Now()); err != nil {
+			return domain.Session{}, err
+		}
 	}
 	var projectConfig json.RawMessage
 	if err := tx.QueryRow(ctx, `SELECT config FROM ao_projects WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
@@ -766,10 +767,7 @@ func createSessionTx(
 		return domain.Session{}, normalizeConstraintError(err)
 	}
 
-	provider := strings.ToLower(strings.TrimSpace(input.Provider))
-	if provider == "" {
-		provider = sandbox.DefaultProvider
-	}
+	provider := sessionProvider(input.Provider)
 	if input.SandboxConnectionID != "" {
 		var connectionProvider string
 		if err := tx.QueryRow(

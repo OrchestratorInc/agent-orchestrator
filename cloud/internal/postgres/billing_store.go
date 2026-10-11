@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 )
 
 // ErrPlanRequired rejects paid work for an organization without an entitled
@@ -67,6 +69,19 @@ func (p billingPolicy) exempt(billing domain.OrgBilling) bool {
 	}
 	return billing.StripeSubscriptionID == "" && !p.exemptBefore.IsZero() && billing.CreatedAt.Before(p.exemptBefore)
 }
+
+// sessionProvider is the sandbox provider a new session gets.
+func sessionProvider(requested string) string {
+	if provider := strings.ToLower(strings.TrimSpace(requested)); provider != "" {
+		return provider
+	}
+	return sandbox.DefaultProvider
+}
+
+// billedProvider reports whether sandboxes on provider count against a plan.
+// Only Freestyle is billed; Coder and Docker sandboxes run on capacity the
+// deployment already pays for.
+func billedProvider(provider string) bool { return provider == sandbox.ProviderFreestyle }
 
 // BillingEnforced reports whether plan enforcement is on.
 func (s *Store) BillingEnforced() bool { return s.billing.enforced }
@@ -256,9 +271,9 @@ func usageTx(ctx context.Context, tx pgx.Tx, billing domain.OrgBilling, now time
 			count(*) FILTER (WHERE se.kind <> 'orchestrator' AND sb.desired_state = 'running')
 		FROM ao_sandboxes sb
 		JOIN ao_sessions se ON se.org_id = sb.org_id AND se.id = sb.session_id
-		WHERE sb.org_id = $1
+		WHERE sb.org_id = $1 AND sb.provider = $2
 			AND sb.observed_state NOT IN ('deleted', 'deleting', 'terminated', 'failed')`,
-		billing.OrgID,
+		billing.OrgID, sandbox.ProviderFreestyle,
 	).Scan(&usage.ActiveOrchestrators, &usage.ActiveWorkers,
 		&usage.RunningOrchestrators, &usage.RunningWorkers); err != nil {
 		return usage, err
@@ -485,13 +500,13 @@ func (s *Store) WakeAllowed(ctx context.Context, principal domain.Principal, org
 		if _, err := tx.Exec(ctx, `SELECT id FROM ao_organizations WHERE id = $1 FOR UPDATE`, orgID); err != nil {
 			return err
 		}
-		var desired, kind string
+		var desired, kind, provider string
 		err := tx.QueryRow(ctx,
-			`SELECT sb.desired_state, se.kind FROM ao_sandboxes sb
+			`SELECT sb.desired_state, se.kind, sb.provider FROM ao_sandboxes sb
 			JOIN ao_sessions se ON se.org_id = sb.org_id AND se.id = sb.session_id
 			WHERE sb.org_id = $1 AND sb.session_id = $2`, orgID, sessionID,
-		).Scan(&desired, &kind)
-		if errors.Is(err, pgx.ErrNoRows) || (err == nil && desired == "running") {
+		).Scan(&desired, &kind, &provider)
+		if errors.Is(err, pgx.ErrNoRows) || (err == nil && (desired == "running" || !billedProvider(provider))) {
 			return nil
 		}
 		if err != nil {
@@ -509,14 +524,14 @@ func (s *Store) SampleUsage(ctx context.Context) ([]string, error) {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO ao_usage_minutes (org_id, minute, session_id)
 			SELECT org_id, date_trunc('minute', now()), session_id FROM ao_sandboxes
-			WHERE desired_state = 'running' AND observed_state = 'running'
-			ON CONFLICT DO NOTHING`,
+			WHERE desired_state = 'running' AND observed_state = 'running' AND provider = $1
+			ON CONFLICT DO NOTHING`, sandbox.ProviderFreestyle,
 		); err != nil {
 			return fmt.Errorf("sample usage: %w", err)
 		}
 		rows, err := tx.Query(ctx,
 			`SELECT DISTINCT org_id::text FROM ao_sandboxes
-			WHERE desired_state = 'running' AND observed_state = 'running'`)
+			WHERE desired_state = 'running' AND observed_state = 'running' AND provider = $1`, sandbox.ProviderFreestyle)
 		if err != nil {
 			return err
 		}
@@ -553,6 +568,7 @@ func (s *Store) PauseOverLimit(ctx context.Context, orgID string) (int64, error)
 			`UPDATE ao_sandboxes SET desired_state = 'paused', startup_started_at = NULL,
 				reconcile_after = now(), updated_at = now()
 			WHERE org_id = $1
+				AND provider = $2
 				AND desired_state = 'running'
 				AND observed_state = 'running'
 				AND NOT EXISTS (
@@ -570,7 +586,7 @@ func (s *Store) PauseOverLimit(ctx context.Context, orgID string) (int64, error)
 					WHERE r.org_id = ao_sandboxes.org_id AND r.review_session_id = ao_sandboxes.session_id
 						AND r.status = 'running'
 				)`,
-			orgID)
+			orgID, sandbox.ProviderFreestyle)
 		if err != nil {
 			return err
 		}

@@ -51,8 +51,18 @@ func addUsage(t *testing.T, admin *pgxpool.Pool, fixture notificationFixture, pa
 func createKind(store *Store, fixture notificationFixture, kind string) (domain.Session, error) {
 	return store.CreateSession(context.Background(), domain.Principal{UserID: fixture.userID, Provider: "local"},
 		fixture.orgID, "billing-"+uuid.NewString(), 10, domain.CreateSession{
-			ProjectID: fixture.projectID, Kind: kind, Harness: "codex", DisplayName: kind, Provider: "docker",
+			ProjectID: fixture.projectID, Kind: kind, Harness: "codex", DisplayName: kind, Provider: "freestyle",
 		})
+}
+
+// billFixtureSandbox moves the fixture's sandbox onto Freestyle, the billed
+// provider.
+func billFixtureSandbox(t *testing.T, admin *pgxpool.Pool, fixture notificationFixture) {
+	t.Helper()
+	if _, err := admin.Exec(context.Background(),
+		`UPDATE ao_sandboxes SET provider = 'freestyle' WHERE session_id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func limitCode(err error) string {
@@ -71,7 +81,8 @@ func TestBillingOffKeepsSessionCreationUnchanged(t *testing.T) {
 }
 
 func TestPlanSlotsReserveOneOrchestratorAndCountWorkers(t *testing.T) {
-	store, _, fixture := openNotificationTestStore(t)
+	store, admin, fixture := openNotificationTestStore(t)
+	billFixtureSandbox(t, admin, fixture)
 	store.EnableBilling(7*24*time.Hour, time.Time{})
 
 	if _, err := createKind(store, fixture, "orchestrator"); !errors.Is(err, ErrPlanRequired) {
@@ -262,6 +273,7 @@ func TestApplySubscriptionSetsAnchorOnceAndTracksPastDue(t *testing.T) {
 
 func TestUsageSamplingAndOverLimitPause(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	billFixtureSandbox(t, admin, fixture)
 	ctx := context.Background()
 	store.EnableBilling(7*24*time.Hour, time.Time{})
 	if _, err := admin.Exec(ctx,
@@ -455,6 +467,7 @@ func TestRecentSandboxActivityDefersIdlePause(t *testing.T) {
 // waking it again needs a free running slot.
 func TestRunningSlotsAndTotalVMsAreSeparateLimits(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	billFixtureSandbox(t, admin, fixture)
 	ctx := context.Background()
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
 	store.EnableBilling(7*24*time.Hour, time.Time{})
@@ -517,5 +530,27 @@ func TestUsageBeforeSubscribingIsNotCharged(t *testing.T) {
 	if summary.Usage.WindowUsedMinutes != 10 || summary.Usage.WeeklyUsedMinutes != 10 {
 		t.Fatalf("window %d, week %d minutes; want only the 10 since subscribing",
 			summary.Usage.WindowUsedMinutes, summary.Usage.WeeklyUsedMinutes)
+	}
+}
+
+// Only Freestyle sandboxes are billed: a Coder or Docker session needs no plan
+// and does not count toward the plan's slots or usage.
+func TestOnlyFreestyleSessionsAreBilled(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	store.EnableBilling(7*24*time.Hour, time.Time{})
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	if _, err := store.CreateSession(ctx, principal, fixture.orgID, "billing-"+uuid.NewString(), 10, domain.CreateSession{
+		ProjectID: fixture.projectID, Kind: "worker", Harness: "codex", DisplayName: "docker worker", Provider: "docker",
+	}); err != nil {
+		t.Fatalf("an unbilled provider must not need a plan: %v", err)
+	}
+	if _, err := createKind(store, fixture, "worker"); !errors.Is(err, ErrPlanRequired) {
+		t.Fatalf("freestyle without a plan: err = %v, want ErrPlanRequired", err)
+	}
+	subscribe(t, store, fixture.orgID, "active", starterLimits())
+	summary, err := store.BillingSummary(ctx, principal, fixture.orgID)
+	if err != nil || summary.Usage == nil || summary.Usage.ActiveWorkers != 0 {
+		t.Fatalf("docker sessions must not count toward the plan: %+v, err = %v", summary.Usage, err)
 	}
 }
