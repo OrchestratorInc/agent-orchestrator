@@ -2,9 +2,11 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
@@ -126,4 +128,128 @@ func (s *Server) coderTemplateListerForOrg(ctx context.Context, orgID string) (C
 		return nil, nil
 	}
 	return s.coderTemplates, nil
+}
+
+// CoderTemplateParameterReader reads the rich parameters a Coder template's
+// active version declares. The coder provider client implements it.
+type CoderTemplateParameterReader interface {
+	TemplateParameters(ctx context.Context, templateID string) ([]coder.TemplateParameter, error)
+}
+
+// getCoderTemplateParameters returns the parameters of one Coder template, for
+// the project form's "Template options". Like the template list it reads the
+// organization's own Coder connection when it has one, else the deployment's.
+func (s *Server) getCoderTemplateParameters(w http.ResponseWriter, r *http.Request) {
+	orgID, templateID := chi.URLParam(r, "orgId"), chi.URLParam(r, "templateId")
+	if requireUUID(orgID, "orgId") != nil || requireUUID(templateID, "templateId") != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId and templateId must be UUIDs.")
+		return
+	}
+	if !s.requireOrgCoder(w, r, orgID) {
+		return
+	}
+	reader, err := s.coderTemplateParameterReaderForOrg(r.Context(), orgID)
+	if err != nil {
+		s.logger.Error("resolve coder template parameter reader", "error", err, "request_id", requestID(r))
+		writeError(w, r, http.StatusBadGateway, "coder_unavailable", "Could not load the Coder template's options.")
+		return
+	}
+	if reader == nil {
+		writeError(w, r, http.StatusNotFound, "coder_template_not_found", "The Coder template was not found.")
+		return
+	}
+	parameters, err := reader.TemplateParameters(r.Context(), templateID)
+	if errors.Is(err, coder.ErrTemplateNotFound) {
+		writeError(w, r, http.StatusNotFound, "coder_template_not_found", "The Coder template was not found.")
+		return
+	}
+	if err != nil {
+		s.logger.Error("read coder template parameters", "error", err, "request_id", requestID(r))
+		writeError(w, r, http.StatusBadGateway, "coder_unavailable", "Could not load the Coder template's options.")
+		return
+	}
+	if parameters == nil {
+		parameters = []coder.TemplateParameter{}
+	}
+	for i := range parameters {
+		if parameters[i].Options == nil {
+			parameters[i].Options = []coder.TemplateParameterOption{}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"parameters": parameters})
+}
+
+// coderTemplateParameterReaderForOrg resolves the same per-organization (or
+// deployment) Coder client the template list uses, as a parameter reader. Nil
+// means no Coder is configured for the organization.
+func (s *Server) coderTemplateParameterReaderForOrg(ctx context.Context, orgID string) (CoderTemplateParameterReader, error) {
+	lister, err := s.coderTemplateListerForOrg(ctx, orgID)
+	if err != nil || lister == nil {
+		return nil, err
+	}
+	reader, ok := lister.(CoderTemplateParameterReader)
+	if !ok {
+		return nil, nil
+	}
+	return reader, nil
+}
+
+// unknownCoderTemplateParameters checks a project's template parameter values
+// against the parameters the template declares. It is best effort: when the
+// template's parameters cannot be read (no Coder, Coder unreachable) it
+// reports none unknown, so a transient Coder read never blocks a project
+// save. Only a readable parameter list can reject a name.
+func (s *Server) unknownCoderTemplateParameters(
+	ctx context.Context,
+	orgID, templateID string,
+	parameters map[string]string,
+	reqID string,
+) []string {
+	if len(parameters) == 0 || templateID == "" {
+		return nil
+	}
+	reader, err := s.coderTemplateParameterReaderForOrg(ctx, orgID)
+	if err != nil || reader == nil {
+		if err != nil {
+			s.logger.Warn("validate coder template parameters: resolve reader", "error", err, "request_id", reqID)
+		}
+		return nil
+	}
+	declared, err := reader.TemplateParameters(ctx, templateID)
+	if err != nil {
+		s.logger.Warn("validate coder template parameters: read template", "error", err, "request_id", reqID)
+		return nil
+	}
+	names := make([]string, 0, len(declared))
+	for _, parameter := range declared {
+		names = append(names, parameter.Name)
+	}
+	return domain.UnknownCoderTemplateParameters(parameters, names)
+}
+
+// validateProjectCoderParameters checks the template parameters a free-form
+// project config carries under coder.parameters: they need a chosen template,
+// and (best effort) must be parameters that template declares. It writes 422
+// validation_error and returns false on rejection. Shape is validated
+// separately by validateProjectCoderConfig.
+func (s *Server) validateProjectCoderParameters(w http.ResponseWriter, r *http.Request, orgID string, config json.RawMessage) bool {
+	cfg, ok := domain.DecodeProjectCoderConfig(config)
+	if !ok || len(cfg.Parameters) == 0 {
+		return true
+	}
+	templateID := strings.TrimSpace(cfg.TemplateID)
+	if templateID == "" {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Coder template parameters require choosing a template.")
+		return false
+	}
+	if unknown := s.unknownCoderTemplateParameters(r.Context(), orgID, templateID, cfg.Parameters, requestID(r)); len(unknown) > 0 {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", unknownCoderTemplateParametersMessage(unknown))
+		return false
+	}
+	return true
+}
+
+// unknownCoderTemplateParametersMessage explains rejected parameter names.
+func unknownCoderTemplateParametersMessage(unknown []string) string {
+	return "The Coder template does not declare these parameters: " + strings.Join(unknown, ", ") + "."
 }

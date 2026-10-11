@@ -241,6 +241,7 @@ func resolveCoderPlacement(
 			Size:                cfg.Size,
 			StartupScript:       cfg.StartupScript,
 			WorkspaceNamePrefix: cfg.WorkspaceNamePrefix,
+			Parameters:          cfg.Parameters,
 		}
 	}
 	var chosen *domain.ProviderConnection
@@ -274,6 +275,10 @@ func resolveCoderPlacement(
 		DurableRoot:               cfg.DurableRoot,
 		RequireMountedDurableRoot: cfg.RequireMountedDurableRoot,
 		StartupTimeoutSeconds:     cfg.StartupTimeoutSeconds,
+		WorkerUser:                cfg.WorkerUser,
+		ReadyProbe:                cfg.ReadyProbe,
+		ReadyProbeTimeoutSeconds:  cfg.ReadyProbeTimeoutSeconds,
+		ReuseExistingCheckout:     cfg.ReusesExistingCheckout(),
 	}
 	return placement, nil
 }

@@ -95,6 +95,10 @@ const (
 	StartupErrorDurableRootUnavailable  = "durable_root_unavailable"
 	StartupErrorWorkerNeverStarted      = "worker_never_started"
 	StartupErrorBootstrapFailed         = "bootstrap_failed"
+	// StartupErrorWorkspaceSetupNotReady means a bring-your-own Coder
+	// connection's workspace ready check never passed within its timeout: the
+	// template's own setup did not finish, so AO did not start its worker.
+	StartupErrorWorkspaceSetupNotReady = "workspace_setup_not_ready"
 )
 
 // StartupError attaches a stable code and a human message to a provider
@@ -153,6 +157,12 @@ type WorkerBootstrap struct {
 	// case the root is created if missing and the identity marker alone guards
 	// against reusing another session's state.
 	RequireMountedDurableRoot bool
+	// RunAsWorkspaceUser (Coder only) runs the worker as the workspace's own
+	// login user instead of User: no account is created and nothing is
+	// launched through sudo, so the worker and its agent keep that user's
+	// HOME, groups and environment. The Coder provider sets it from the
+	// session profile; callers leave it false.
+	RunAsWorkspaceUser bool
 }
 
 // Bootstrapper installs and starts an AO worker in an existing sandbox.

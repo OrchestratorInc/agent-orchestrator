@@ -489,6 +489,9 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 	if !s.validateProjectSandboxProvider(w, r, principalFrom(r), orgID, config) {
 		return
 	}
+	if !s.validateProjectCoderParameters(w, r, orgID, config) {
+		return
+	}
 	store, ok := s.store.(githubProjectStore)
 	if !ok {
 		writeError(w, r, http.StatusNotImplemented, "not_implemented", "GitHub project creation is unavailable.")

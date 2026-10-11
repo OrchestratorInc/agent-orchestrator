@@ -133,6 +133,29 @@ type CoderSessionProfile struct {
 	// StartupTimeoutSeconds overrides the deployment startup budget for this
 	// session's ready wait and startup ceiling. Zero keeps the deployment value.
 	StartupTimeoutSeconds int `json:"startupTimeoutSeconds,omitempty"`
+	// WorkerUser is CoderWorkerUserWorkspace when the worker and agent run as
+	// the workspace's own login user. Empty (rows written before the field
+	// existed, and the default) keeps the dedicated ao-worker user.
+	WorkerUser string `json:"workerUser,omitempty"`
+	// ReadyProbe, when set, is a shell command the workspace user must see
+	// exit 0 before AO launches the worker, polled for at most
+	// ReadyProbeTimeoutSeconds.
+	ReadyProbe               string `json:"readyProbe,omitempty"`
+	ReadyProbeTimeoutSeconds int    `json:"readyProbeTimeoutSeconds,omitempty"`
+	// ReuseExistingCheckout tells the worker to adopt a checkout of the
+	// session repository the template already cloned. Only meaningful with
+	// the workspace worker user.
+	ReuseExistingCheckout bool `json:"reuseExistingCheckout,omitempty"`
+}
+
+// CoderWorkerUserWorkspace is the CoderSessionProfile.WorkerUser value that
+// runs the worker as the workspace's own login user.
+const CoderWorkerUserWorkspace = domain.CoderWorkerUserWorkspace
+
+// RunsAsWorkspaceUser reports whether the session's worker runs as the
+// workspace's own login user.
+func (p CoderSessionProfile) RunsAsWorkspaceUser() bool {
+	return p.WorkerUser == CoderWorkerUserWorkspace
 }
 
 // RequiresMountedDurableRoot reports whether bootstrap must find a mounted
@@ -160,6 +183,11 @@ type CoderSessionOptions struct {
 	// WorkspaceNamePrefix names the session's workspace <prefix>-<id> instead
 	// of the default ao-<id>. It applies with or without a picked template.
 	WorkspaceNamePrefix string
+	// Parameters are the project's values for the picked template's rich
+	// parameters. Like Size and StartupScript they apply only with a picked
+	// template; they override the connection's parameters and are overridden
+	// by Size and StartupScript.
+	Parameters map[string]string
 }
 
 // CoderDeploymentOverride redirects a session's Coder provisioning to a specific
@@ -181,7 +209,18 @@ type CoderDeploymentOverride struct {
 	// StartupTimeoutSeconds is the connection's startup budget. Zero selects
 	// DefaultBYOCoderStartupTimeout.
 	StartupTimeoutSeconds int
+	// WorkerUser, ReadyProbe, ReadyProbeTimeoutSeconds and
+	// ReuseExistingCheckout are the connection's dev-environment options,
+	// stamped onto each session profile (see CoderSessionProfile).
+	WorkerUser               string
+	ReadyProbe               string
+	ReadyProbeTimeoutSeconds int
+	ReuseExistingCheckout    bool
 }
+
+// readyProbeStartupMargin is the startup budget a session keeps after its
+// ready check passes: worker install, repository checkout and first check-in.
+const readyProbeStartupMargin = 10 * time.Minute
 
 // DefaultBYOCoderStartupTimeout is the startup budget for a bring-your-own
 // Coder connection that does not set one. Customer templates routinely clone
@@ -304,6 +343,20 @@ func DecodeCoderSessionProfile(raw json.RawMessage) (CoderSessionProfile, error)
 	}
 	if profile.StartupTimeoutSeconds < 0 {
 		return CoderSessionProfile{}, errors.New("Coder session startup timeout must not be negative")
+	}
+	profile.WorkerUser = strings.TrimSpace(profile.WorkerUser)
+	if profile.WorkerUser == domain.CoderWorkerUserAOWorker {
+		profile.WorkerUser = ""
+	}
+	if profile.WorkerUser != "" && profile.WorkerUser != CoderWorkerUserWorkspace {
+		return CoderSessionProfile{}, fmt.Errorf("Coder session worker user %q is not supported", profile.WorkerUser)
+	}
+	profile.ReadyProbe = strings.TrimSpace(profile.ReadyProbe)
+	if profile.ReadyProbeTimeoutSeconds < 0 {
+		return CoderSessionProfile{}, errors.New("Coder session ready check timeout must not be negative")
+	}
+	if !profile.RunsAsWorkspaceUser() {
+		profile.ReuseExistingCheckout = false
 	}
 	return profile, nil
 }
@@ -536,6 +589,15 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 			if startupTimeoutSeconds <= 0 {
 				startupTimeoutSeconds = int(DefaultBYOCoderStartupTimeout / time.Second)
 			}
+			// A ready check can hold the worker back for its whole timeout, so the
+			// session's startup budget must outlast it with room to spare.
+			if strings.TrimSpace(override.ReadyProbe) != "" {
+				readyBudget := override.ReadyProbeTimeoutSeconds
+				if readyBudget <= 0 {
+					readyBudget = domain.DefaultCoderReadyProbeTimeoutSeconds
+				}
+				startupTimeoutSeconds = max(startupTimeoutSeconds, readyBudget+int(readyProbeStartupMargin/time.Second))
+			}
 		}
 		workspaceNamePrefix := ""
 		if coder != nil {
@@ -566,11 +628,18 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 		if err != nil {
 			return Plan{}, err
 		}
-		// Layer on the picked template's size/startup form values only when the
-		// client explicitly picked a non-default template — the default template
-		// does not declare those rich parameters, so sending them would make Coder
-		// reject the build.
+		// Layer on the project's values for the picked template's parameters,
+		// then its size/startup form values, only when the client explicitly
+		// picked a non-default template: the default template does not declare
+		// those rich parameters, so sending them would make Coder reject the
+		// build. Merge order: connection parameters, then the project's
+		// parameters, then AO's own size/startup mapping.
 		if pickedTemplate {
+			for name, value := range coder.Parameters {
+				if name = strings.TrimSpace(name); name != "" {
+					parameters[name] = value
+				}
+			}
 			if size := strings.TrimSpace(coder.Size); size != "" {
 				parameters["size"] = size
 			}
@@ -595,6 +664,9 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 		if startupTimeoutSeconds > 0 {
 			coderProfile["startupTimeoutSeconds"] = startupTimeoutSeconds
 		}
+		if override != nil {
+			addCoderDevEnvironment(coderProfile, override)
+		}
 		resourceProfile["coder"] = coderProfile
 		bootstrapContext["coder"] = map[string]any{
 			"owner":       strings.TrimSpace(coderCfg.Owner),
@@ -616,6 +688,27 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 		ResourceProfile:  resourceJSON,
 		BootstrapContext: bootstrapJSON,
 	}, nil
+}
+
+// addCoderDevEnvironment stamps a bring-your-own connection's dev-environment
+// options onto a session's Coder profile. The default (ao-worker user, no
+// ready check, no checkout reuse) adds nothing, so those profiles keep their
+// historical shape.
+func addCoderDevEnvironment(coderProfile map[string]any, override *CoderDeploymentOverride) {
+	if strings.ToLower(strings.TrimSpace(override.WorkerUser)) == CoderWorkerUserWorkspace {
+		coderProfile["workerUser"] = CoderWorkerUserWorkspace
+		if override.ReuseExistingCheckout {
+			coderProfile["reuseExistingCheckout"] = true
+		}
+	}
+	if probe := strings.TrimSpace(override.ReadyProbe); probe != "" {
+		timeout := override.ReadyProbeTimeoutSeconds
+		if timeout <= 0 {
+			timeout = domain.DefaultCoderReadyProbeTimeoutSeconds
+		}
+		coderProfile["readyProbe"] = probe
+		coderProfile["readyProbeTimeoutSeconds"] = timeout
+	}
 }
 
 func normalizeProvider(provider string) string {
