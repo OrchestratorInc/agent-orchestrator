@@ -577,6 +577,22 @@ func (q *Queries) ConversationActivityExistsForProviderItem(ctx context.Context,
 	return exists, err
 }
 
+const detachSessionConversation = `-- name: DetachSessionConversation :exec
+UPDATE conversations SET current_session_id = NULL, updated_at = ?
+WHERE id = ? AND scope = 'session' AND current_session_id = ?
+`
+
+type DetachSessionConversationParams struct {
+	UpdatedAt        time.Time
+	ID               string
+	CurrentSessionID *domain.SessionID
+}
+
+func (q *Queries) DetachSessionConversation(ctx context.Context, arg DetachSessionConversationParams) error {
+	_, err := q.db.ExecContext(ctx, detachSessionConversation, arg.UpdatedAt, arg.ID, arg.CurrentSessionID)
+	return err
+}
+
 const failOrphanedConversationActivities = `-- name: FailOrphanedConversationActivities :exec
 UPDATE conversation_activities
 SET status = 'failed', revision = revision + 1, updated_at = ?1
@@ -2240,9 +2256,15 @@ func (q *Queries) SelectConversationByReview(ctx context.Context, currentReviewI
 }
 
 const selectConversationBySession = `-- name: SelectConversationBySession :one
-SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode FROM conversations WHERE current_session_id = ? LIMIT 1
+SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode FROM conversations WHERE current_session_id = ?
+ORDER BY scope = 'project' DESC, created_at DESC, id DESC
+LIMIT 1
 `
 
+// An orchestrator can be bound to both its provisioning-time session row and the
+// project row its controller uses: briefly while its first controller adopts the
+// queue, and for good on databases older builds wrote (#6523). The project row is
+// the live one.
 func (q *Queries) SelectConversationBySession(ctx context.Context, currentSessionID *domain.SessionID) (Conversation, error) {
 	row := q.db.QueryRowContext(ctx, selectConversationBySession, currentSessionID)
 	var i Conversation
@@ -3380,6 +3402,42 @@ func (q *Queries) SelectProjectConversation(ctx context.Context, projectID *doma
 	return i, err
 }
 
+const selectProvisioningConversationsForSession = `-- name: SelectProvisioningConversationsForSession :many
+SELECT id FROM conversations
+WHERE current_session_id = ? AND scope = 'session' AND id <> ?
+ORDER BY created_at, id
+`
+
+type SelectProvisioningConversationsForSessionParams struct {
+	CurrentSessionID *domain.SessionID
+	ID               string
+}
+
+// The session-scoped rows a session is bound to besides the given conversation:
+// where an orchestrator's provisioning-time prompts wait for its project row.
+func (q *Queries) SelectProvisioningConversationsForSession(ctx context.Context, arg SelectProvisioningConversationsForSessionParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, selectProvisioningConversationsForSession, arg.CurrentSessionID, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const selectQueuedConversationMessage = `-- name: SelectQueuedConversationMessage :one
 SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name
 FROM conversation_messages
@@ -3450,6 +3508,76 @@ func (q *Queries) SelectQueuedConversationTurnOrder(ctx context.Context, convers
 	for rows.Next() {
 		var i SelectQueuedConversationTurnOrderRow
 		if err := rows.Scan(&i.ID, &i.RequestedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const selectQueuedUserMessagesForAdoption = `-- name: SelectQueuedUserMessagesForAdoption :many
+SELECT m.id, m.turn_id, m.origin, m.text, m.client_message_id, m.client_payload_hash,
+       m.delivery_content_json, m.sender_session_id, m.sender_project_id, m.sender_display_name,
+       m.created_at, t.requested_at
+FROM conversation_messages m
+JOIN conversation_turns t ON t.id = m.turn_id AND t.conversation_id = m.conversation_id
+WHERE m.conversation_id = ?
+  AND t.handled_by_session_id = ?
+  AND t.state = 'queued'
+  AND t.promotion_started_at IS NULL
+  AND m.role = 'user'
+ORDER BY m.sequence
+`
+
+type SelectQueuedUserMessagesForAdoptionParams struct {
+	ConversationID     string
+	HandledBySessionID domain.SessionID
+}
+
+type SelectQueuedUserMessagesForAdoptionRow struct {
+	ID                  string
+	TurnID              sql.NullString
+	Origin              domain.MessageOrigin
+	Text                string
+	ClientMessageID     string
+	ClientPayloadHash   sql.NullString
+	DeliveryContentJson string
+	SenderSessionID     string
+	SenderProjectID     string
+	SenderDisplayName   string
+	CreatedAt           time.Time
+	RequestedAt         time.Time
+}
+
+func (q *Queries) SelectQueuedUserMessagesForAdoption(ctx context.Context, arg SelectQueuedUserMessagesForAdoptionParams) ([]SelectQueuedUserMessagesForAdoptionRow, error) {
+	rows, err := q.db.QueryContext(ctx, selectQueuedUserMessagesForAdoption, arg.ConversationID, arg.HandledBySessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SelectQueuedUserMessagesForAdoptionRow{}
+	for rows.Next() {
+		var i SelectQueuedUserMessagesForAdoptionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TurnID,
+			&i.Origin,
+			&i.Text,
+			&i.ClientMessageID,
+			&i.ClientPayloadHash,
+			&i.DeliveryContentJson,
+			&i.SenderSessionID,
+			&i.SenderProjectID,
+			&i.SenderDisplayName,
+			&i.CreatedAt,
+			&i.RequestedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

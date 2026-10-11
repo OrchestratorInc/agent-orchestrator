@@ -116,7 +116,11 @@ func (s *Service) queueWithoutController(
 // ensureConversation opens the session's conversation before its controller
 // exists. CreateConversation returns the existing row for a session that
 // already has one, so this stays correct when Start opens the same
-// conversation later.
+// conversation later. An orchestrator queues in a session-scoped row too, even
+// though its controller uses the project conversation: binding that narrative
+// here would let a retiring orchestrator's controller drain these prompts and
+// would file them before the context boundary Start records. Start adopts them
+// instead (adoptProvisioningQueue).
 func (s *Service) ensureConversation(
 	ctx context.Context,
 	record domain.SessionRecord,
@@ -134,6 +138,40 @@ func (s *Service) ensureConversation(
 		return domain.ConversationRecord{}, fmt.Errorf("open conversation for %s: %w", record.ID, err)
 	}
 	return conversation, nil
+}
+
+// adoptProvisioningQueue hands an orchestrator's provisioning-time prompts to the
+// project conversation its first controller opened, so they drain there instead
+// of waiting in a row no controller reads (#6523). Only a session that has never
+// had a controller qualifies: a prompt an older build stranded on a session that
+// has since run is stale, and replaying it would repeat work.
+func (s *Service) adoptProvisioningQueue(
+	ctx context.Context,
+	id domain.SessionID,
+	conversation domain.ConversationRecord,
+) (domain.ConversationRecord, error) {
+	if s.sessions == nil {
+		return conversation, nil
+	}
+	record, found, err := s.sessions.GetSession(ctx, id)
+	if err != nil {
+		return domain.ConversationRecord{}, fmt.Errorf("read chat session before adopting queued prompts: %w", err)
+	}
+	if !found || !record.ProvisionState.IsProvisioning() || record.Metadata.ControllerGeneration != "" {
+		return conversation, nil
+	}
+	adopted, err := s.store.AdoptProvisioningQueue(ctx, id, conversation.ID, s.newID, s.now())
+	if err != nil {
+		return domain.ConversationRecord{}, fmt.Errorf("adopt queued prompts for %s: %w", id, err)
+	}
+	if adopted == 0 {
+		return conversation, nil
+	}
+	refreshed, err := s.store.ConversationForSession(ctx, id)
+	if err != nil {
+		return domain.ConversationRecord{}, fmt.Errorf("reload conversation after adopting queued prompts: %w", err)
+	}
+	return refreshed, nil
 }
 
 // DrainQueued dispatches messages saved before the controller started.

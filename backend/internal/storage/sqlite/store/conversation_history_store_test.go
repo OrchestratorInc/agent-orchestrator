@@ -269,6 +269,123 @@ func TestProjectConversationRebindsAcrossOrchestratorReplacement(t *testing.T) {
 	}
 }
 
+// Older builds opened a session-scoped row while an orchestrator provisioned and
+// a project row when its controller started, binding both to the session (#6523).
+// The project row holds the live transcript, so lookups must not return the
+// older provisioning row that only kept the stranded opening prompt.
+func TestConversationForSessionPrefersProjectNarrativeOverProvisioningRow(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "split-chat")
+
+	record := sampleRecord("split-chat")
+	record.Kind = domain.KindOrchestrator
+	record.Mode = domain.SessionModeChat
+	orchestrator, err := s.CreateSession(ctx, record)
+	if err != nil {
+		t.Fatalf("create orchestrator: %v", err)
+	}
+	provisioning, err := s.CreateConversation(ctx, "provisioning-row", domain.ConversationScopeSession,
+		"split-chat", orchestrator.ID, histClock)
+	if err != nil {
+		t.Fatalf("create provisioning conversation: %v", err)
+	}
+	project, err := s.CreateConversation(ctx, "project-row", domain.ConversationScopeProject,
+		"split-chat", orchestrator.ID, histClock.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("create project conversation: %v", err)
+	}
+	if provisioning.ID == project.ID {
+		t.Fatalf("fixture did not split the session: both rows are %s", project.ID)
+	}
+
+	lookup, err := s.ConversationForSession(ctx, orchestrator.ID)
+	if err != nil {
+		t.Fatalf("lookup split orchestrator: %v", err)
+	}
+	if lookup.ID != project.ID || lookup.Scope != domain.ConversationScopeProject {
+		t.Fatalf("lookup = %s (%s), want project conversation %s", lookup.ID, lookup.Scope, project.ID)
+	}
+}
+
+// A first orchestrator controller adopts the prompts queued while it
+// provisioned. The move is one transaction: copies keep their order, the
+// originals can no longer drain, and a retried start finds nothing to adopt.
+func TestAdoptProvisioningQueueMovesPromptsOnce(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "adopt-chat")
+
+	record := sampleRecord("adopt-chat")
+	record.Kind = domain.KindOrchestrator
+	record.Mode = domain.SessionModeChat
+	record.ProvisionState = domain.SessionProvisionProvisioning
+	orchestrator, err := s.CreateSession(ctx, record)
+	if err != nil {
+		t.Fatalf("create orchestrator: %v", err)
+	}
+	provisioning, err := s.CreateConversation(ctx, "provisioning-row", domain.ConversationScopeSession,
+		"adopt-chat", orchestrator.ID, histClock)
+	if err != nil {
+		t.Fatalf("create provisioning conversation: %v", err)
+	}
+	for i, text := range []string{"opening brief", "follow-up"} {
+		if _, err := s.AppendUserMessage(ctx, provisioning.ID, orchestrator.ID, "", domain.ConversationMessage{
+			ID: fmt.Sprintf("queued-message-%d", i), Text: text, Origin: domain.MessageOriginHuman,
+			ClientMessageID: fmt.Sprintf("client-%d", i),
+		}, fmt.Sprintf("queued-turn-%d", i), histClock.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatalf("queue %q: %v", text, err)
+		}
+	}
+	project, err := s.CreateConversation(ctx, "project-row", domain.ConversationScopeProject,
+		"adopt-chat", orchestrator.ID, histClock.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("create project conversation: %v", err)
+	}
+
+	next := 0
+	newID := func() string {
+		next++
+		return fmt.Sprintf("adopted-%d", next)
+	}
+	adopted, err := s.AdoptProvisioningQueue(ctx, orchestrator.ID, project.ID, newID, histClock.Add(2*time.Minute))
+	if err != nil || adopted != 2 {
+		t.Fatalf("adopt = %d, %v; want 2 prompts", adopted, err)
+	}
+	if again, err := s.AdoptProvisioningQueue(ctx, orchestrator.ID, project.ID, newID, histClock.Add(3*time.Minute)); err != nil || again != 0 {
+		t.Fatalf("retried adopt = %d, %v; want nothing left", again, err)
+	}
+
+	moved, err := s.LoadConversationSnapshot(ctx, project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	for _, message := range moved.Messages {
+		texts = append(texts, message.Text)
+	}
+	if !reflect.DeepEqual(texts, []string{"opening brief", "follow-up"}) {
+		t.Fatalf("project messages = %q, want both prompts in order", texts)
+	}
+	for _, turn := range moved.Turns {
+		if turn.State != domain.TurnStateQueued || turn.HandledBySessionID != orchestrator.ID {
+			t.Fatalf("adopted turn = %+v, want queued for %s", turn, orchestrator.ID)
+		}
+	}
+	source, err := s.LoadConversationSnapshot(ctx, provisioning.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Conversation.SessionID != "" {
+		t.Fatalf("provisioning row still bound to %s", source.Conversation.SessionID)
+	}
+	for _, turn := range source.Turns {
+		if turn.State != domain.TurnStateCancelled {
+			t.Fatalf("source turn %s = %s, want cancelled so it cannot drain", turn.ID, turn.State)
+		}
+	}
+}
+
 func TestProviderArchiveAndProjectionCommitAtomically(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()

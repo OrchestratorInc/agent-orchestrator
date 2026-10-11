@@ -556,6 +556,12 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	if err != nil {
 		return nil, fmt.Errorf("open conversation: %w", err)
 	}
+	if scope == domain.ConversationScopeProject && cfg.ProviderHandoff == nil {
+		conversation, err = s.adoptProvisioningQueue(ctx, cfg.SessionID, conversation)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var repairedBranch domain.ConversationBranch
 	var restoredProviderOwner bool
 	if cfg.ProviderHandoff == nil && owner.Kind != domain.ConversationOwnerReview {

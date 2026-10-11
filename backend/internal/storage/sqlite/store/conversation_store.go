@@ -913,6 +913,101 @@ func (s *Store) ConversationForSession(
 	return conversationToDomain(row), nil
 }
 
+// AdoptProvisioningQueue moves the prompts a session queued in a session-scoped
+// conversation into conversationID, the project conversation its first
+// controller opened (#6523). Copies are appended at fresh sequences, after any
+// context boundary the controller just recorded, so they stay visible and drain
+// there. The originals are cancelled and their row detached in the same
+// transaction, so a retried start can neither deliver a prompt twice nor find
+// it again.
+func (s *Store) AdoptProvisioningQueue(
+	ctx context.Context,
+	session domain.SessionID,
+	conversationID string,
+	newID func() string,
+	now time.Time,
+) (adopted int, err error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	err = s.inTx(ctx, "adopt provisioning queue", func(q *gen.Queries) error {
+		sources, err := q.SelectProvisioningConversationsForSession(ctx,
+			gen.SelectProvisioningConversationsForSessionParams{CurrentSessionID: &session, ID: conversationID})
+		if err != nil {
+			return fmt.Errorf("select provisioning conversations for %s: %w", session, err)
+		}
+		for _, source := range sources {
+			queued, err := q.SelectQueuedUserMessagesForAdoption(ctx,
+				gen.SelectQueuedUserMessagesForAdoptionParams{ConversationID: source, HandledBySessionID: session})
+			if err != nil {
+				return fmt.Errorf("select queued prompts in %s: %w", source, err)
+			}
+			for _, msg := range queued {
+				// A client retry may already have landed in the project conversation.
+				delivered := false
+				if msg.ClientMessageID != "" {
+					_, lookupErr := q.SelectConversationMessageByClientID(ctx, gen.SelectConversationMessageByClientIDParams{
+						ConversationID: conversationID, ClientMessageID: msg.ClientMessageID,
+					})
+					if lookupErr == nil {
+						delivered = true
+					} else if !errors.Is(lookupErr, sql.ErrNoRows) {
+						return fmt.Errorf("lookup client message %s: %w", msg.ClientMessageID, lookupErr)
+					}
+				}
+				if !delivered {
+					sequence, err := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{UpdatedAt: now, ID: conversationID})
+					if err != nil {
+						return fmt.Errorf("allocate sequence: %w", err)
+					}
+					turnID := newID()
+					if err := q.InsertConversationTurn(ctx, gen.InsertConversationTurnParams{
+						ID: turnID, ConversationID: conversationID, HandledBySessionID: session,
+						State: domain.TurnStateQueued, RequestedAt: msg.RequestedAt,
+					}); err != nil {
+						return fmt.Errorf("insert adopted turn: %w", err)
+					}
+					if err := q.InsertConversationMessage(ctx, gen.InsertConversationMessageParams{
+						ID:                  newID(),
+						ConversationID:      conversationID,
+						TurnID:              sql.NullString{String: turnID, Valid: true},
+						Sequence:            sequence,
+						Role:                domain.MessageRoleUser,
+						Origin:              msg.Origin,
+						Text:                msg.Text,
+						ClientMessageID:     msg.ClientMessageID,
+						ClientPayloadHash:   msg.ClientPayloadHash,
+						DeliveryContentJson: msg.DeliveryContentJson,
+						SenderSessionID:     msg.SenderSessionID,
+						SenderProjectID:     msg.SenderProjectID,
+						SenderDisplayName:   msg.SenderDisplayName,
+						CreatedAt:           msg.CreatedAt,
+						UpdatedAt:           now,
+					}); err != nil {
+						return fmt.Errorf("insert adopted message: %w", err)
+					}
+					adopted++
+				}
+				if _, err := q.CancelQueuedConversationTurnByID(ctx, gen.CancelQueuedConversationTurnByIDParams{
+					CompletedAt: timeToNullTime(now), ID: msg.TurnID.String, ConversationID: source,
+				}); err != nil {
+					return fmt.Errorf("cancel adopted source turn %s: %w", msg.TurnID.String, err)
+				}
+			}
+			if err := q.DetachSessionConversation(ctx, gen.DetachSessionConversationParams{
+				UpdatedAt: now, ID: source, CurrentSessionID: &session,
+			}); err != nil {
+				return fmt.Errorf("detach provisioning conversation %s: %w", source, err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return adopted, nil
+}
+
 // ConversationForReview looks up the durable conversation owned by a reviewer
 // row rather than by its parent worker session.
 func (s *Store) ConversationForReview(ctx context.Context, reviewID string) (domain.ConversationRecord, error) {

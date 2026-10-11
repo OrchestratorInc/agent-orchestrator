@@ -19,8 +19,38 @@ VALUES (?, 'review', ?, ?, ?, 0, ?, ?, ?);
 -- name: SelectConversationByReview :one
 SELECT * FROM conversations WHERE current_review_id = ? LIMIT 1;
 
+-- An orchestrator can be bound to both its provisioning-time session row and the
+-- project row its controller uses: briefly while its first controller adopts the
+-- queue, and for good on databases older builds wrote (#6523). The project row is
+-- the live one.
 -- name: SelectConversationBySession :one
-SELECT * FROM conversations WHERE current_session_id = ? LIMIT 1;
+SELECT * FROM conversations WHERE current_session_id = ?
+ORDER BY scope = 'project' DESC, created_at DESC, id DESC
+LIMIT 1;
+
+-- The session-scoped rows a session is bound to besides the given conversation:
+-- where an orchestrator's provisioning-time prompts wait for its project row.
+-- name: SelectProvisioningConversationsForSession :many
+SELECT id FROM conversations
+WHERE current_session_id = ? AND scope = 'session' AND id <> ?
+ORDER BY created_at, id;
+
+-- name: SelectQueuedUserMessagesForAdoption :many
+SELECT m.id, m.turn_id, m.origin, m.text, m.client_message_id, m.client_payload_hash,
+       m.delivery_content_json, m.sender_session_id, m.sender_project_id, m.sender_display_name,
+       m.created_at, t.requested_at
+FROM conversation_messages m
+JOIN conversation_turns t ON t.id = m.turn_id AND t.conversation_id = m.conversation_id
+WHERE m.conversation_id = ?
+  AND t.handled_by_session_id = ?
+  AND t.state = 'queued'
+  AND t.promotion_started_at IS NULL
+  AND m.role = 'user'
+ORDER BY m.sequence;
+
+-- name: DetachSessionConversation :exec
+UPDATE conversations SET current_session_id = NULL, updated_at = ?
+WHERE id = ? AND scope = 'session' AND current_session_id = ?;
 
 -- name: SelectProjectConversation :one
 SELECT * FROM conversations WHERE project_id = ? AND scope = 'project' LIMIT 1;
