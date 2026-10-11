@@ -27,11 +27,47 @@ vi.mock("../ThemeProvider", () => ({
 	useThemedStyles: (factory: (theme: Record<string, string>) => unknown) => factory(theme),
 }));
 
-import { ChatMarkdown } from "./ChatMarkdown";
+import { ChatMarkdown, SelectableResponseText } from "./ChatMarkdown";
 
 function textOf(node: { children: Array<string | { children: unknown[] }> }): string {
 	return node.children.map((child) => typeof child === "string" ? child : textOf(child as typeof node)).join("");
 }
+
+it.each(["ios", "android"])("selects a heading and adjacent paragraphs as one range on %s", (os) => {
+	platform.OS = os;
+	let renderer!: ReactTestRenderer;
+	try {
+		act(() => { renderer = create(<ChatMarkdown text={"# Getting this to production\n\nFirst paragraph.\n\nSecond paragraph."} />); });
+		const selectable = renderer.root.findAll((node) => node.props.selectable === true);
+		expect(selectable).toHaveLength(1);
+		expect(selectable[0].props.uiTextView).toBe(true);
+		expect(textOf(selectable[0])).toBe("Getting this to production\n\nFirst paragraph.\n\nSecond paragraph.");
+		act(() => renderer.unmount());
+	} finally {
+		platform.OS = "ios";
+	}
+});
+
+it.each(["ios", "android"])("offers one continuous selection across all response text on %s", (os) => {
+	platform.OS = os;
+	let renderer!: ReactTestRenderer;
+	try {
+		act(() => { renderer = create(<SelectableResponseText text={[
+			"# Title", "", "Body [link](https://example.com).", "", "- List item", "", "> Quoted text", "",
+			"```text", "Code text", "```", "", "| Column |", "| --- |", "| Cell |", "",
+			"![Caption](https://example.com/image.png)",
+		].join("\n")} />); });
+		const selectable = renderer.root.findAll((node) => node.props.selectable === true);
+		expect(selectable).toHaveLength(1);
+		expect(selectable[0].props.uiTextView).toBe(true);
+		const selectedText = textOf(selectable[0]);
+		for (const part of ["Title", "Body link.", "List item", "Quoted text", "Code text", "Column", "Cell", "Caption"]) expect(selectedText).toContain(part);
+		expect(renderer.root.findAll((node) => node.props.accessibilityRole === "link")).toHaveLength(0);
+		act(() => renderer.unmount());
+	} finally {
+		platform.OS = "ios";
+	}
+});
 
 it("lets readers select response prose in every rendered Markdown block", () => {
 	let renderer!: ReactTestRenderer;

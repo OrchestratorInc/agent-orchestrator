@@ -24,7 +24,7 @@ import { useApp } from "../store";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { MascotLamp } from "../ui";
-import { ChatMarkdown } from "./ChatMarkdown";
+import { ChatMarkdown, SelectableResponseText } from "./ChatMarkdown";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { caretNotation, commandOutputText } from "./ansi";
 import { jumpToLatestColors, userMessageSurfaceStyle } from "./chatChrome";
@@ -246,6 +246,7 @@ const TimelineItem = memo(function TimelineItem({
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const [selectingResponse, setSelectingResponse] = useState(false);
 	if (item.kind === "message") {
 		if (item.role === "user" && item.origin === "human") {
 			const delivery = deliveryCopy(item.delivery);
@@ -267,7 +268,11 @@ const TimelineItem = memo(function TimelineItem({
 			<View style={styles.assistantRow}>
 				{item.senderLabel ? <Text style={styles.sender}>{item.senderLabel}</Text> : null}
 				<ChatMarkdown text={item.streaming ? `${item.text || ""} ▍` : item.text} streaming={item.streaming} />
-				{!item.streaming && item.text ? <Pressable accessibilityRole="button" accessibilityLabel="Copy response" hitSlop={10} onPress={() => { void Clipboard.setStringAsync(item.text); haptics.success(); }} style={styles.copy}><Feather name="copy" size={12} color={t.textFaint} /></Pressable> : null}
+				{!item.streaming && item.text ? <View style={styles.responseActions}>
+					<Pressable accessibilityRole="button" accessibilityLabel="Copy response" hitSlop={10} onPress={() => { void Clipboard.setStringAsync(item.text); haptics.success(); }} style={styles.copy}><Feather name="copy" size={12} color={t.textFaint} /></Pressable>
+					<Pressable accessibilityRole="button" accessibilityLabel="Select response text" hitSlop={10} onPress={() => setSelectingResponse(true)} style={styles.selectResponse}><Feather name="type" size={12} color={t.textFaint} /><Text style={styles.selectResponseLabel}>Select text</Text></Pressable>
+				</View> : null}
+				{selectingResponse ? <ResponseSelectionModal text={item.text} onClose={() => setSelectingResponse(false)} /> : null}
 			</View>
 		);
 	}
@@ -289,6 +294,22 @@ const TimelineItem = memo(function TimelineItem({
 	if (item.activityKind === "error") return <ErrorActivity activity={item} />;
 	return <ActivityRow activity={item} />;
 });
+
+function ResponseSelectionModal({ text, onClose }: { text: string; onClose(): void }) {
+	const styles = useThemedStyles(makeStyles);
+	const insets = useSafeAreaInsets();
+	return <Modal visible animationType="slide" onRequestClose={onClose}>
+		<View style={[styles.selectionScreen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+			<View style={styles.selectionHeader}>
+				<Text style={styles.selectionTitle}>Select response text</Text>
+				<Pressable accessibilityRole="button" accessibilityLabel="Close text selection" onPress={onClose} style={styles.selectionClose}><Text style={styles.selectionCloseLabel}>Done</Text></Pressable>
+			</View>
+			<ScrollView contentContainerStyle={styles.selectionContent}>
+				<SelectableResponseText text={text} />
+			</ScrollView>
+		</View>
+	</Modal>;
+}
 
 function SystemSignal({ icon, title, detail, danger }: { icon: keyof typeof Feather.glyphMap; title: string; detail?: unknown; danger?: boolean }) {
 	const t = useTheme();
@@ -1009,7 +1030,16 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	steerLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, letterSpacing: 1, fontWeight: "600", marginBottom: space.hair },
 	assistantRow: { paddingVertical: space.lg },
 	sender: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600", marginBottom: space.xxs },
+	responseActions: { flexDirection: "row", alignItems: "center", gap: space.md },
 	copy: { alignSelf: "flex-start", alignItems: "center", justifyContent: "center", width: 28, height: 28, marginTop: space.hair, marginLeft: -7 },
+	selectResponse: { flexDirection: "row", alignItems: "center", gap: space.xxs, minHeight: 28, marginTop: space.hair },
+	selectResponseLabel: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize },
+	selectionScreen: { flex: 1, backgroundColor: t.bgBase },
+	selectionHeader: { minHeight: 52, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: space.xl, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle },
+	selectionTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, fontWeight: "600" },
+	selectionClose: { minHeight: 40, justifyContent: "center", paddingLeft: space.md },
+	selectionCloseLabel: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.callout.fontSize, fontWeight: "600" },
+	selectionContent: { paddingHorizontal: space.xl, paddingVertical: space.lg },
 	jump: { position: "absolute", right: 14, bottom: 12, minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.md, borderRadius: 16, backgroundColor: jumpToLatestColors(t).backgroundColor, borderWidth: 1, borderColor: t.borderStrong },
 	jumpText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption2.fontSize, fontWeight: "600" },
 	systemSignal: { marginVertical: space.xs, flexDirection: "row", alignItems: "flex-start", gap: space.sm, borderWidth: 1, borderColor: t.borderDefault, borderRadius: 8, backgroundColor: t.bgSurface, padding: space.sm },
