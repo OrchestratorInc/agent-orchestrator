@@ -154,7 +154,7 @@ func TestBootstrapWorkerLaunchesBakedWorkerWithoutUnconditionalChown(t *testing.
 	command, _ := api.last(http.MethodPost, "/exec-await").body["command"].(string)
 	for _, want := range []string{
 		// Freestyle keeps the agent alive across the worker restart a wake does.
-		"runuser --user 'ao-worker' -- env 'AO_WORKER_BOOTSTRAP_TOKEN=ticket' 'AO_WORKER_PERSIST_AGENT=1' '/usr/local/bin/ao-worker'",
+		"runuser --user 'ao-worker' -- env 'AO_WORKER_BOOTSTRAP_TOKEN=ticket' 'AO_WORKER_PARTIAL_CLONE=1' 'AO_WORKER_PERSIST_AGENT=1' '/usr/local/bin/ao-worker'",
 		`[ "$(stat -c %U /workspace)" = 'ao-worker' ] || chown -R`,
 		"setsid nohup",
 	} {

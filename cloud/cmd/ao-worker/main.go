@@ -492,7 +492,8 @@ func prepareWorkspace(
 			checkoutGrant = worker.CheckoutGrantResponse{CloneURL: bootstrap.Launch.RepositoryURL}
 			logger.Info("using anonymous public GitHub checkout")
 		}
-		if err := worker.PrepareCheckout(ctx, worker.ExecGitRunner{}, workspace, checkoutGrant); err != nil {
+		if err := worker.PrepareCheckoutWithOptions(ctx, worker.ExecGitRunner{}, workspace, checkoutGrant,
+			worker.CheckoutOptions{PartialClone: os.Getenv(worker.PartialCloneEnv) == "1"}); err != nil {
 			return fmt.Errorf("prepare repository checkout: %w", err)
 		}
 		if err := worker.ConfigureWorkerGit(

@@ -293,11 +293,15 @@ func (c *Client) BootstrapWorker(
 	// Repair issues a new one-time ticket, so pass this bootstrap's environment
 	// rather than anything stored at creation. Freestyle restores a paused VM's
 	// memory, so the agent is kept alive across the worker restart a wake does.
-	environment := make(map[string]string, len(bootstrap.Environment)+1)
+	environment := make(map[string]string, len(bootstrap.Environment)+2)
 	for key, value := range bootstrap.Environment {
 		environment[key] = value
 	}
 	environment["AO_WORKER_PERSIST_AGENT"] = "1"
+	// Freestyle project snapshots bake a partial clone, so a session without a
+	// snapshot clones the same way. Only Freestyle opts in; every other
+	// provider keeps full clones (worker.PartialCloneEnv).
+	environment["AO_WORKER_PARTIAL_CLONE"] = "1"
 	command := launchEnvironment(environment) + shellQuote(destination)
 	if user := strings.TrimSpace(bootstrap.User); user != "" {
 		quotedUser := shellQuote(user)
