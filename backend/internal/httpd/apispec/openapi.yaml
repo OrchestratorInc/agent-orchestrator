@@ -12981,6 +12981,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - pool
           - cloudflared
           type: string
         updatedAt:

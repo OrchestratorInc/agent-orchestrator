@@ -4449,7 +4449,11 @@ func TestACPDriverRequiredSessionInitialization(t *testing.T) {
 	if seenID != "" {
 		t.Fatal("fresh hook checked before lazy initialization")
 	}
-	if _, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "hello"}); err != nil {
+	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
 		t.Fatal(err)
 	}
 	for {
@@ -4497,7 +4501,11 @@ func TestACPResumedLazyContextValidation(t *testing.T) {
 	if checked {
 		t.Fatal("context checked before lazy resumed initialization")
 	}
-	if _, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"}); err != nil {
+	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
 		t.Fatal(err)
 	}
 	for {
