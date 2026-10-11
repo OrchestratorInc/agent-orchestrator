@@ -378,22 +378,37 @@ func (s *Server) writeBillingProviderError(w http.ResponseWriter, r *http.Reques
 }
 
 // billingReturn is the page Checkout and the Customer Portal send the browser
-// back to. The desktop app refreshes the plan itself; this only tells the
-// user they can go back.
+// back to. It hands off to the desktop app through the ao-app://billing deep
+// link, which opens Settings on Billing; the app also re-reads the plan when
+// its window regains focus, so a build that cannot receive the deep link (a
+// development build) still shows the new plan.
 func (s *Server) billingReturn(w http.ResponseWriter, r *http.Request) {
-	message := "You can close this tab and return to Agent Orchestrator."
-	switch r.URL.Query().Get("checkout") {
+	outcome := r.URL.Query().Get("checkout")
+	message := "You can return to Agent Orchestrator."
+	switch outcome {
 	case "success":
-		message = "Payment complete. You can close this tab and return to Agent Orchestrator."
+		message = "Payment complete. Returning you to Agent Orchestrator."
 	case "cancelled":
-		message = "Checkout was cancelled. You can close this tab and return to Agent Orchestrator."
+		message = "Checkout was cancelled. Returning you to Agent Orchestrator."
+	default:
+		outcome = ""
+	}
+	target := "ao-app://billing"
+	if outcome != "" {
+		target += "?checkout=" + outcome
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
-	_, _ = io.WriteString(w, `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Orchestrator</title>`+
-		`<style>body{font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#111;color:#eee}p{max-width:28rem;padding:1rem;text-align:center;line-height:1.5}</style>`+
-		`</head><body><p>`+message+`</p></body></html>`)
+	_, _ = io.WriteString(w, `<!doctype html><html><head><meta charset="utf-8">`+
+		`<meta name="viewport" content="width=device-width,initial-scale=1">`+
+		`<meta http-equiv="refresh" content="0;url=`+target+`">`+
+		`<title>Agent Orchestrator</title>`+
+		`<style>body{font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#111;color:#eee}`+
+		`main{max-width:28rem;padding:1rem;text-align:center;line-height:1.5}`+
+		`a{display:inline-block;margin-top:1rem;padding:.5rem 1rem;border-radius:6px;background:#3b82f6;color:#fff;text-decoration:none}</style>`+
+		`</head><body><main><p>`+message+`</p><a href="`+target+`">Open Agent Orchestrator</a></main></body></html>`)
 }
 
 // writePlanError maps billing refusals to responses the desktop app can act

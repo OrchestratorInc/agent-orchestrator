@@ -1,14 +1,14 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Loader2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Check, ExternalLink, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
+import { useCloudBilling, cloudBillingQueryKey } from "../../hooks/useCloudBilling";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { useCloudGate } from "../../hooks/useCloudGate";
-import { useCloudOrg } from "../../hooks/useCloudOrg";
 import { aoBridge } from "../../lib/bridge";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
-import type { CloudCpBillingSummary, CloudCpBillingUsage, CloudCpPlanOffer } from "../../lib/cloud-cp/types";
+import type { CloudCpBillingSummary, CloudCpPlanLimits, CloudCpPlanOffer } from "../../lib/cloud-cp/types";
 import { useCloudSession } from "../../lib/cloud-session";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -16,15 +16,16 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
-export const cloudBillingQueryKey = ["cloud-billing"] as const;
+export { cloudBillingQueryKey };
 
-/** After a Checkout or Portal opens, poll briefly so the new plan shows without a manual refresh. */
-const POLL_AFTER_EXTERNAL_MS = 5_000;
+/** After Checkout or the Portal opens, poll briefly so the new plan shows without a manual refresh. */
 const POLL_WINDOW_MS = 3 * 60_000;
+const RECOMMENDED_PLAN = "starter";
 
 /**
- * The org's AO Cloud plan, its usage against the plan, and the actions an admin
- * takes on it. Payment itself happens on Stripe's pages in the system browser.
+ * Upgrade: the AO Cloud plans (Free, Starter, Pro), the org's usage against its
+ * plan, and the actions an admin takes on it. Payment happens on Stripe's pages
+ * in the system browser, which return to the app afterwards.
  */
 export function BillingSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { cloudEnabled } = useCloudGate();
@@ -35,29 +36,18 @@ export function BillingSection({ titleHidden }: { titleHidden?: boolean }) {
 function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
 	const { status } = useCloudSession();
-	const { client, ready } = useCloudCp();
-	const { org } = useCloudOrg();
+	const { client } = useCloudCp();
 	const queryClient = useQueryClient();
-	const orgId = org?.id ?? "";
 	const [pollUntil, setPollUntil] = useState(0);
-	const billing = useQuery({
-		queryKey: [...cloudBillingQueryKey, orgId],
-		enabled: ready && orgId !== "",
-		queryFn: ({ signal }) => client.getBilling(orgId, { signal }),
-		refetchOnWindowFocus: true,
-		refetchInterval: () => (Date.now() < pollUntil ? POLL_AFTER_EXTERNAL_MS : false),
-	});
+	const billing = useCloudBilling({ pollUntil });
+	const orgId = billing.orgId;
 	const [pending, setPending] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [confirmReset, setConfirmReset] = useState(false);
 
 	const title = t("settings.billing.title");
 	if (status !== "authenticated") {
-		return (
-			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
-				<p className="px-3 text-xs leading-relaxed text-muted-foreground">{t("settings.billing.signIn")}</p>
-			</SettingsSection>
-		);
+		return <Notice title={title} titleHidden={titleHidden} text={t("settings.billing.signIn")} />;
 	}
 	if (billing.isPending) {
 		return (
@@ -80,6 +70,9 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 		);
 	}
 	const summary = billing.data;
+	if (!summary.enabled) {
+		return <Notice title={title} titleHidden={titleHidden} text={t("settings.billing.disabled")} />;
+	}
 
 	const runAction = async (name: string, action: () => Promise<void>) => {
 		setPending(name);
@@ -98,6 +91,8 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 			await aoBridge.app.openExternal(url);
 			setPollUntil(Date.now() + POLL_WINDOW_MS);
 		});
+	const openCheckout = (plan: string) => openExternal(`checkout:${plan}`, () => client.createBillingCheckout(orgId, plan));
+	const openPortal = () => openExternal("portal", () => client.createBillingPortal(orgId));
 	const reset = () =>
 		runAction("reset", async () => {
 			const next = await client.resetBillingUsage(orgId);
@@ -105,88 +100,101 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 			setConfirmReset(false);
 		});
 
-	if (!summary.enabled) {
-		return (
-			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
-				<p className="px-3 text-xs leading-relaxed text-muted-foreground">{t("settings.billing.disabled")}</p>
-			</SettingsSection>
-		);
-	}
-	if (summary.exempt) {
-		return (
-			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
-				<p className="px-3 text-xs leading-relaxed text-muted-foreground">{t("settings.billing.exempt")}</p>
-			</SettingsSection>
-		);
-	}
-
-	const error = actionError ? <p role="alert" className="px-3 text-xs text-destructive">{actionError}</p> : null;
-
-	if (!summary.entitled) {
-		const lapsed = summary.subscriptionStatus === "past_due" || summary.subscriptionStatus === "unpaid";
-		return (
-			<>
-				{lapsed ? (
-					<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
-						<SettingsRow label={planName(summary.plan, t)} description={t("settings.billing.paymentFailed")}>
-							<Button size="sm" disabled={pending !== null} onClick={() => void openExternal("portal", () => client.createBillingPortal(orgId))}>
-								{pending === "portal" ? <Loader2 className="size-icon-sm animate-spin" aria-hidden="true" /> : <ExternalLink className="size-icon-sm" aria-hidden="true" />}
-								{t("settings.billing.updatePayment")}
-							</Button>
-						</SettingsRow>
-					</SettingsSection>
-				) : null}
-				<SettingsSection title={t("settings.billing.choosePlan")} sectionId={lapsed ? undefined : "billing"} titleHidden={titleHidden && !lapsed} grouped>
-					{(summary.plans ?? []).map((offer) => (
-						<SettingsRow key={offer.name} label={planName(offer.name, t)} description={offerDetail(offer, t)}>
-							<Button size="sm" variant="secondary" disabled={pending !== null}
-								onClick={() => void openExternal(`checkout:${offer.name}`, () => client.createBillingCheckout(orgId, offer.name))}>
-								{pending === `checkout:${offer.name}` ? <Loader2 className="size-icon-sm animate-spin" aria-hidden="true" /> : null}
-								{t("settings.billing.choose")}
-							</Button>
-						</SettingsRow>
-					))}
-				</SettingsSection>
-				{error}
-			</>
-		);
-	}
-
+	const currentPlan = summary.entitled && !summary.exempt ? (summary.limits?.plan ?? summary.plan) : "free";
+	const subscribed = currentPlan !== "free";
+	const lapsed = summary.subscriptionStatus === "past_due" || summary.subscriptionStatus === "unpaid";
+	const offers = summary.plans ?? [];
 	const limits = summary.limits;
 	const usage = summary.usage;
 	const resetsLeft = usage ? Math.max(0, usage.manualResetsAllowed - usage.manualResetsUsed) : 0;
+	const spinner = <Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />;
+
 	return (
 		<>
-			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
-				<SettingsRow
-					label={planName(summary.plan, t)}
-					description={summary.subscriptionStatus === "past_due" ? t("settings.billing.paymentFailed") : planRenewal(summary, t)}
-				>
-					<Button size="sm" variant="secondary" disabled={pending !== null} onClick={() => void openExternal("portal", () => client.createBillingPortal(orgId))}>
-						{pending === "portal" ? <Loader2 className="size-icon-sm animate-spin" aria-hidden="true" /> : <ExternalLink className="size-icon-sm" aria-hidden="true" />}
-						{t("settings.billing.manage")}
-					</Button>
-				</SettingsRow>
+			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
+				{summary.exempt ? <p className="px-1 text-xs text-muted-foreground">{t("settings.billing.exempt")}</p> : null}
+				{lapsed ? (
+					<p role="alert" className="flex items-center justify-between gap-3 px-1 text-xs text-destructive">
+						{t("settings.billing.paymentFailed")}
+						<Button size="sm" disabled={pending !== null} onClick={() => void openPortal()}>
+							{pending === "portal" ? spinner : <ExternalLink className="size-icon-sm" aria-hidden="true" />}
+							{t("settings.billing.updatePayment")}
+						</Button>
+					</p>
+				) : null}
+				<div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+					<PlanCard
+						name={t("settings.billing.planFree")}
+						price={t("settings.billing.freePrice")}
+						features={[t("settings.billing.freeLocal"), t("settings.billing.freeNoCloud")]}
+						current={currentPlan === "free"}
+						action={subscribed ? (
+							<Button size="sm" variant="secondary" className="w-full" disabled={pending !== null} onClick={() => void openPortal()}>
+								{pending === "portal" ? spinner : null}
+								{t("settings.billing.downgrade")}
+							</Button>
+						) : null}
+						t={t}
+					/>
+					{offers.map((offer) => {
+						const isCurrent = currentPlan === offer.name;
+						const busy = pending === `checkout:${offer.name}` || (pending === "portal" && subscribed);
+						let label = t("settings.billing.upgrade");
+						let onClick = () => void openCheckout(offer.name);
+						if (isCurrent) {
+							label = t("settings.billing.manage");
+							onClick = () => void openPortal();
+						} else if (subscribed) {
+							label = t("settings.billing.switchPlan");
+							onClick = () => void openPortal();
+						}
+						return (
+							<PlanCard
+								key={offer.name}
+								name={planName(offer.name)}
+								price={offerPrice(offer, t)}
+								features={offer.limits ? planFeatures(offer.limits, t) : []}
+								current={isCurrent}
+								recommended={offer.name === RECOMMENDED_PLAN}
+								action={
+									<Button size="sm" variant={offer.name === RECOMMENDED_PLAN && !isCurrent ? "primary" : "secondary"}
+										className="w-full" disabled={pending !== null} onClick={onClick}>
+										{busy ? spinner : isCurrent ? <ExternalLink className="size-icon-sm" aria-hidden="true" /> : null}
+										{label}
+									</Button>
+								}
+								t={t}
+							/>
+						);
+					})}
+				</div>
+				{actionError ? <p role="alert" className="px-1 text-xs text-destructive">{actionError}</p> : null}
 			</SettingsSection>
-			{limits && usage ? (
+			{subscribed && limits && usage ? (
 				<SettingsSection title={t("settings.billing.usage")} grouped>
 					<UsageRow
-						label={t("settings.billing.window", { hours: usage.windowHours })}
+						label={t("settings.billing.windowUsage", { hours: usage.windowHours })}
 						used={usage.windowUsedMinutes}
 						limit={usage.windowLimitMinutes}
 						resetsAt={usage.windowResetsAt}
 						t={t}
 					/>
 					<UsageRow
-						label={t("settings.billing.weekly")}
+						label={t("settings.billing.weeklyUsage")}
 						used={usage.weeklyUsedMinutes}
 						limit={usage.weeklyLimitMinutes}
 						resetsAt={usage.weeklyResetsAt}
 						absoluteReset
 						t={t}
 					/>
-					<SettingsRow label={t("settings.billing.sessions")} description={sessionsDetail(usage, limits.orchestratorSlots, limits.maxActiveSandboxes, t)}>
-						<span />
+					<SettingsRow label={t("settings.billing.runningSessions")} description={t("settings.billing.runningDetail", {
+						orchestrators: usage.runningOrchestrators, orchestratorSlots: limits.orchestratorSlots,
+						workers: usage.runningWorkers, workerSlots: runningSlots(limits) - limits.orchestratorSlots,
+					})}>
+						<Count used={usage.runningOrchestrators + usage.runningWorkers} limit={runningSlots(limits)} />
+					</SettingsRow>
+					<SettingsRow label={t("settings.billing.totalSessions")} description={t("settings.billing.totalDetail")}>
+						<Count used={usage.activeOrchestrators + usage.activeWorkers} limit={limits.maxActiveSandboxes} />
 					</SettingsRow>
 					<SettingsRow
 						label={t("settings.billing.reset")}
@@ -200,7 +208,6 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 					</SettingsRow>
 				</SettingsSection>
 			) : null}
-			{error}
 			<Dialog open={confirmReset} onOpenChange={(open) => { if (pending !== "reset") setConfirmReset(open); }}>
 				<DialogContent>
 					<DialogHeader>
@@ -211,13 +218,74 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 					<DialogFooter>
 						<Button variant="ghost" size="sm" disabled={pending === "reset"} onClick={() => setConfirmReset(false)}>{t("settings.billing.cancel")}</Button>
 						<Button size="sm" disabled={pending === "reset"} onClick={() => void reset()}>
-							{pending === "reset" ? <Loader2 className="size-icon-sm animate-spin" aria-hidden="true" /> : null}
+							{pending === "reset" ? spinner : null}
 							{t("settings.billing.resetConfirm")}
 						</Button>
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
 		</>
+	);
+}
+
+function Notice({ title, titleHidden, text }: { title: string; titleHidden?: boolean; text: string }) {
+	return (
+		<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
+			<p className="px-3 text-xs leading-relaxed text-muted-foreground">{text}</p>
+		</SettingsSection>
+	);
+}
+
+function PlanCard({ name, price, features, current, recommended, action, t }: {
+	name: string;
+	price: string;
+	features: string[];
+	current: boolean;
+	recommended?: boolean;
+	action: React.ReactNode;
+	t: TFunction;
+}) {
+	return (
+		<div
+			data-testid="plan-card"
+			data-plan={name.toLowerCase()}
+			className={cn(
+				"relative flex flex-col gap-2 rounded-lg border bg-[var(--color-bg-settings-row)] p-3",
+				recommended ? "border-[var(--color-accent)]" : "border-transparent",
+			)}
+		>
+			{current ? (
+				<span className="absolute right-2 top-2 rounded-full bg-[var(--color-status-working)] px-1.5 py-px text-[length:var(--font-size-xs)] font-medium leading-4 text-white">
+					{t("settings.billing.current")}
+				</span>
+			) : null}
+			<div className="flex flex-col gap-1">
+				{recommended ? (
+					<span className="w-fit rounded-full bg-[var(--color-accent)] px-1.5 py-px text-[length:var(--font-size-xs)] font-medium leading-4 text-white">
+						{t("settings.billing.recommended")}
+					</span>
+				) : null}
+				<span className="text-sm font-semibold text-settings-label">{name}</span>
+				<span className="text-xs tabular-nums text-settings-muted">{price}</span>
+			</div>
+			<ul className="flex flex-1 flex-col gap-1">
+				{features.map((feature) => (
+					<li key={feature} className="flex items-start gap-1.5 text-xs leading-4 text-settings-muted">
+						<Check className="mt-px size-icon-sm shrink-0" aria-hidden="true" />
+						{feature}
+					</li>
+				))}
+			</ul>
+			{action}
+		</div>
+	);
+}
+
+function Count({ used, limit }: { used: number; limit: number }) {
+	return (
+		<span className={cn("text-sm tabular-nums", used >= limit ? "text-destructive" : "text-settings-label")}>
+			{used}/{limit}
+		</span>
 	);
 }
 
@@ -256,47 +324,34 @@ function UsageRow({ label, used, limit, resetsAt, absoluteReset, t }: {
 	);
 }
 
-function planName(plan: string, t: TFunction): string {
-	if (!plan || plan === "free") return t("settings.billing.noPlan");
+function runningSlots(limits: CloudCpPlanLimits): number {
+	return limits.maxRunningSandboxes && limits.maxRunningSandboxes > 0 ? limits.maxRunningSandboxes : limits.maxActiveSandboxes;
+}
+
+function planName(plan: string): string {
 	return plan.charAt(0).toUpperCase() + plan.slice(1);
 }
 
-function offerDetail(offer: CloudCpPlanOffer, t: TFunction): string | undefined {
-	const parts: string[] = [];
-	if (offer.unitAmount !== undefined && offer.currency) {
-		parts.push(t("settings.billing.price", { price: formatMoney(offer.unitAmount, offer.currency), interval: intervalLabel(offer.interval, t) }));
-	}
-	if (offer.limits) {
-		parts.push(t("settings.billing.planSessions", { count: offer.limits.maxActiveSandboxes }));
-		parts.push(t("settings.billing.planWeekly", { hours: offer.limits.weeklySessionHours }));
-	}
-	return parts.length ? parts.join(" · ") : undefined;
+function planFeatures(limits: CloudCpPlanLimits, t: TFunction): string[] {
+	return [
+		t("settings.billing.featureRunning", { count: runningSlots(limits) }),
+		t("settings.billing.featureTotal", { count: limits.maxActiveSandboxes }),
+		t("settings.billing.featureWindow", { hours: limits.windowSessionHours, window: limits.windowHours }),
+		t("settings.billing.featureWeekly", { hours: limits.weeklySessionHours }),
+	];
 }
 
-function planRenewal(summary: CloudCpBillingSummary, t: TFunction): string | undefined {
-	if (!summary.currentPeriodEnd) return undefined;
-	return t("settings.billing.renews", { date: formatDate(summary.currentPeriodEnd) });
-}
-
-function sessionsDetail(usage: CloudCpBillingUsage, orchestratorSlots: number, maxActive: number, t: TFunction): string {
-	if (orchestratorSlots > 0) {
-		return t("settings.billing.sessionsDetail", {
-			orchestrators: usage.activeOrchestrators,
-			orchestratorSlots,
-			workers: usage.activeWorkers,
-			workerSlots: maxActive - orchestratorSlots,
-		});
-	}
-	return t("settings.billing.sessionsDetailShared", { used: usage.activeOrchestrators + usage.activeWorkers, limit: maxActive });
-}
-
-function intervalLabel(interval: string | undefined, t: TFunction): string {
-	return interval === "year" ? t("settings.billing.intervalYear") : t("settings.billing.intervalMonth");
+function offerPrice(offer: CloudCpPlanOffer, t: TFunction): string {
+	if (offer.unitAmount === undefined || !offer.currency) return "";
+	return t("settings.billing.price", {
+		price: formatMoney(offer.unitAmount, offer.currency),
+		interval: offer.interval === "year" ? t("settings.billing.intervalYear") : t("settings.billing.intervalMonth"),
+	});
 }
 
 function formatMoney(minorUnits: number, currency: string): string {
 	try {
-		return new Intl.NumberFormat(undefined, { style: "currency", currency: currency.toUpperCase() }).format(minorUnits / 100);
+		return new Intl.NumberFormat(undefined, { style: "currency", currency: currency.toUpperCase(), maximumFractionDigits: minorUnits % 100 === 0 ? 0 : 2 }).format(minorUnits / 100);
 	} catch {
 		return `${(minorUnits / 100).toFixed(2)} ${currency.toUpperCase()}`;
 	}
@@ -334,3 +389,5 @@ function billingActionError(error: unknown, t: TFunction): string {
 	}
 	return t("settings.billing.actionFailed");
 }
+
+export type { CloudCpBillingSummary };

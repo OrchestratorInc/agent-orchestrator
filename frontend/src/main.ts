@@ -80,6 +80,7 @@ import { toggleAppDevTools } from "./main/app-devtools";
 import { attachAppShortcuts } from "./main/app-shortcuts";
 import {
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
+	OPEN_SETTINGS_SHORTCUT_CHANNEL,
 	SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL,
 	SET_TERMINAL_FOCUSED_CHANNEL,
 	type KeybindingOverrides,
@@ -2692,6 +2693,13 @@ function focusCloudWindow(): void {
 
 async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	focusCloudWindow();
+	// Stripe Checkout and the Customer Portal return here (via the control
+	// plane's /billing/return page): open Settings on Billing, which re-reads
+	// the plan when it mounts.
+	if (isBillingDeepLink(url)) {
+		getShellWebContents()?.send(OPEN_SETTINGS_SHORTCUT_CHANNEL, "billing");
+		return;
+	}
 	try {
 		const session = await handleCloudDeepLink(url, cloudDataDir());
 		if (!session) return;
@@ -2699,6 +2707,15 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	} catch (error) {
 		console.error("WorkOS callback failed:", error);
 		await showCloudSignInFailure(error);
+	}
+}
+
+function isBillingDeepLink(raw: string): boolean {
+	try {
+		const url = new URL(raw);
+		return url.protocol === "ao-app:" && url.hostname === "billing";
+	} catch {
+		return false;
 	}
 }
 

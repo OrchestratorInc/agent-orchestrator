@@ -1114,6 +1114,7 @@ export interface CloudCpCreateGitHubProjectRequest {
 export interface CloudCpPlanLimits {
 	plan: string;
 	maxActiveSandboxes: number;
+	maxRunningSandboxes?: number;
 	orchestratorSlots: number;
 	windowHours: number;
 	windowSessionHours: number;
@@ -1135,6 +1136,8 @@ export interface CloudCpBillingUsage {
 	manualResetsRenewAt?: string;
 	activeOrchestrators: number;
 	activeWorkers: number;
+	runningOrchestrators: number;
+	runningWorkers: number;
 }
 
 /** GET /orgs/{orgId}/billing */

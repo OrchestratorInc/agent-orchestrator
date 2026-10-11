@@ -1,3 +1,4 @@
+import { useUiStore } from "../../stores/ui-store";
 import { createCloudCpClient, type CloudCpClient } from "./index";
 import { queryClient } from "../query-client";
 
@@ -44,5 +45,22 @@ export function createRendererCloudCpClient(baseUrl: string): CloudCpClient {
 		onForbidden: () => {
 			void queryClient.invalidateQueries({ queryKey: ["cloud-org"] });
 		},
+		onPlanRefused: () => openUpgradeAfterPlanRefusal(),
 	});
+}
+
+/** How often a plan refusal may open the Upgrade page; retries must not keep reopening it. */
+const PLAN_REFUSAL_COOLDOWN_MS = 60_000;
+let lastUpgradePrompt = 0;
+
+/**
+ * The control plane refused work because of the org's plan: refresh the plan
+ * and open Settings on Upgrade, where the plans and usage explain why.
+ */
+export function openUpgradeAfterPlanRefusal(now = Date.now()): boolean {
+	void queryClient.invalidateQueries({ queryKey: ["cloud-billing"] });
+	if (now - lastUpgradePrompt < PLAN_REFUSAL_COOLDOWN_MS) return false;
+	lastUpgradePrompt = now;
+	useUiStore.getState().openGlobalSettings("billing");
+	return true;
 }

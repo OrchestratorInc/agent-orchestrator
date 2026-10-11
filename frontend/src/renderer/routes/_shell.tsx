@@ -1146,7 +1146,8 @@ function ShellLayout() {
 	]);
 
 	useEffect(
-		() => aoBridge.app.onOpenSettingsShortcut(() => useUiStore.getState().openGlobalSettings()),
+		() => aoBridge.app.onOpenSettingsShortcut((section) =>
+			useUiStore.getState().openGlobalSettings(section === "billing" ? "billing" : undefined)),
 		[],
 	);
 

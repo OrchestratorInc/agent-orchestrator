@@ -106,6 +106,8 @@ export interface CloudCpClientOptions {
 	 * re-resolve the current org so callers stop hammering a dead org.
 	 */
 	onForbidden?: () => void;
+	/** Called when the control plane refuses work for plan reasons (no plan, slots full, usage limit). */
+	onPlanRefused?: (code: string) => void;
 }
 
 export interface CloudCpRequestOptions {
@@ -434,6 +436,16 @@ function seg(value: string): string {
 	return encodeURIComponent(value);
 }
 
+/** Error codes the control plane uses when a plan does not allow the request. */
+export const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
+	"PLAN_REQUIRED",
+	"ORCHESTRATOR_SLOTS_FULL",
+	"WORKER_SLOTS_FULL",
+	"SESSION_LIMIT_REACHED",
+	"WINDOW_LIMIT_REACHED",
+	"WEEKLY_LIMIT_REACHED",
+]);
+
 async function errorFromResponse(response: Response): Promise<CloudCpError> {
 	let message = `Cloud control plane request failed with status ${response.status}.`;
 	let code: string | undefined;
@@ -469,7 +481,7 @@ function newIdempotencyKey(): string {
 }
 
 export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClient {
-	const { baseUrl, getToken, onForbidden } = options;
+	const { baseUrl, getToken, onForbidden, onPlanRefused } = options;
 	// Wrap the default so the global fetch is never invoked detached from its
 	// realm (Chromium throws "Illegal invocation" for a bare fetch reference).
 	const doFetch: typeof fetch = options.fetchImpl ?? ((input, init) => fetch(input, init));
@@ -499,7 +511,9 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			// the renderer re-resolves the current org instead of stranding every
 			// org-scoped call. Fire before throwing so callers still see the error.
 			if (response.status === 403) onForbidden?.();
-			throw await errorFromResponse(response);
+			const error = await errorFromResponse(response);
+			if (error.code && PLAN_REFUSAL_CODES.has(error.code)) onPlanRefused?.(error.code);
+			throw error;
 		}
 		return response;
 	}
