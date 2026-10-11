@@ -247,6 +247,8 @@ func TestUnsupportedCustomShellSetup(t *testing.T) {
 	for _, config := range []string{
 		`{"profile":{"agentConfig":{"systemPrompt":"shadow"}}}`,
 		`{"profile":{"agentConfigModules":[{"kind":"agent-config","module":"./custom.mjs"}]}}`,
+		`{"profile":{"interventions":{"custom":{"module":"./custom.mjs"}}}}`,
+		`{"profile":{"interventionModules":[{"kind":"intervention","module":"./custom.mjs"}]}}`,
 		`{"profile":{"mcpServers":{"custom":{"command":"custom-mcp"}}}}`,
 		`{"profile":{"plugins":[{"kind":"plugin","module":"./custom.mjs"}]}}`,
 		`{"profile":{"tools":[{"kind":"tool","module":"./custom.mjs"}]}}`,
@@ -267,9 +269,17 @@ func TestUnsupportedCustomShellSetup(t *testing.T) {
 	}
 }
 
-func TestRuntimeLaunchEnvDisablesMCPDiscovery(t *testing.T) {
-	env := map[string]string{"STRANDS_CLI_MCP_DISCOVERY": "on"}
-	New().AugmentRuntimeLaunchEnv(env, t.TempDir(), "ao-1", "launch-1")
+func TestRuntimeLaunchEnvFencesNativeHomeAndDisablesMCPDiscovery(t *testing.T) {
+	p, cfg := setup(t, `{}`)
+	validatedHome := os.Getenv("HOME")
+	if _, err := p.GetLaunchCommand(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"HOME": t.TempDir(), "USERPROFILE": t.TempDir(), "STRANDS_CLI_MCP_DISCOVERY": "on"}
+	p.AugmentRuntimeLaunchEnv(env, t.TempDir(), "ao-1", "launch-1")
+	if env["HOME"] != validatedHome || env["USERPROFILE"] != validatedHome {
+		t.Fatalf("native home was not fenced: %#v", env)
+	}
 	if env["STRANDS_CLI_MCP_DISCOVERY"] != "off" {
 		t.Fatalf("MCP discovery = %q; want off", env["STRANDS_CLI_MCP_DISCOVERY"])
 	}

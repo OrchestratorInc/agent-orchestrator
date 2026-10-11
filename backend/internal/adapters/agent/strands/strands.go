@@ -26,6 +26,8 @@ type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
+	nativeHomeMu   sync.RWMutex
+	nativeHome     string
 }
 
 var _ ports.Agent = (*Plugin)(nil)
@@ -128,13 +130,16 @@ func (p *Plugin) command(ctx context.Context, dataDir, id string, mode ports.Per
 	if len(allow) > 0 || len(deny) > 0 {
 		return nil, errors.New("strands: per-launch tool restrictions are unsupported")
 	}
-	native, err := readNativeConfig(ctx)
+	native, home, err := readNativeConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if err := native.validate(mode, config.Model); err != nil {
 		return nil, err
 	}
+	p.nativeHomeMu.Lock()
+	p.nativeHome = home
+	p.nativeHomeMu.Unlock()
 	prompt := inline
 	if prompt == "" && file != "" {
 		data, err := os.ReadFile(file)
@@ -329,17 +334,19 @@ func (p *Plugin) InvalidateBinaryResolution() {
 type nativeConfig struct {
 	AgentProject string `json:"agentProject"`
 	Profile      struct {
-		Instructions       string                     `json:"instructions"`
-		Model              string                     `json:"model"`
-		ModelModule        json.RawMessage            `json:"modelModule"`
-		MCPServers         map[string]json.RawMessage `json:"mcpServers"`
-		Plugins            []json.RawMessage          `json:"plugins"`
-		Tools              []json.RawMessage          `json:"tools"`
-		Subagents          []json.RawMessage          `json:"subagents"`
-		Sandbox            json.RawMessage            `json:"sandbox"`
-		BuiltinTools       json.RawMessage            `json:"builtinTools"`
-		AgentConfig        json.RawMessage            `json:"agentConfig"`
-		AgentConfigModules json.RawMessage            `json:"agentConfigModules"`
+		Instructions        string                     `json:"instructions"`
+		Model               string                     `json:"model"`
+		ModelModule         json.RawMessage            `json:"modelModule"`
+		MCPServers          map[string]json.RawMessage `json:"mcpServers"`
+		Plugins             []json.RawMessage          `json:"plugins"`
+		Tools               []json.RawMessage          `json:"tools"`
+		Subagents           []json.RawMessage          `json:"subagents"`
+		Sandbox             json.RawMessage            `json:"sandbox"`
+		BuiltinTools        json.RawMessage            `json:"builtinTools"`
+		AgentConfig         json.RawMessage            `json:"agentConfig"`
+		AgentConfigModules  json.RawMessage            `json:"agentConfigModules"`
+		Interventions       json.RawMessage            `json:"interventions"`
+		InterventionModules json.RawMessage            `json:"interventionModules"`
 	} `json:"profile"`
 	Permissions struct {
 		Mode  string   `json:"mode"`
@@ -347,33 +354,57 @@ type nativeConfig struct {
 	} `json:"permissions"`
 }
 
-func readNativeConfig(ctx context.Context) (nativeConfig, error) {
+func readNativeConfig(ctx context.Context) (nativeConfig, string, error) {
 	var cfg nativeConfig
 	if err := ctx.Err(); err != nil {
-		return cfg, err
+		return cfg, "", err
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return cfg, err
+		return cfg, "", err
 	}
 	data, err := os.ReadFile(filepath.Join(home, ".strands", "cli", "config.json"))
 	if errors.Is(err, os.ErrNotExist) {
-		return cfg, nil
+		return cfg, home, nil
 	}
 	if err != nil {
-		return cfg, err
+		return cfg, "", err
 	} //nolint:gosec // native public configuration; never return contents
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return cfg, errors.New("strands: invalid native CLI configuration")
+		return cfg, "", errors.New("strands: invalid native CLI configuration")
 	}
-	return cfg, nil
+	return cfg, home, nil
 }
+
+func hasNativeEntries(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return true
+	}
+	switch value := value.(type) {
+	case nil:
+		return false
+	case []any:
+		return len(value) > 0
+	case map[string]any:
+		return len(value) > 0
+	default:
+		return true
+	}
+}
+
 func (cfg nativeConfig) validate(mode ports.PermissionMode, model string) error {
 	if len(cfg.Profile.AgentConfig) > 0 && string(cfg.Profile.AgentConfig) != "null" && string(cfg.Profile.AgentConfig) != "{}" || len(cfg.Profile.AgentConfigModules) > 0 && string(cfg.Profile.AgentConfigModules) != "null" && string(cfg.Profile.AgentConfigModules) != "[]" && string(cfg.Profile.AgentConfigModules) != "{}" {
 		return errors.New("strands: custom agent configuration is unsupported by AO instructions and native identity")
 	}
 	if len(cfg.Profile.MCPServers) > 0 || len(cfg.Profile.Plugins) > 0 || len(cfg.Profile.Tools) > 0 || len(cfg.Profile.Subagents) > 0 || len(cfg.Profile.Sandbox) > 0 && string(cfg.Profile.Sandbox) != "null" {
 		return errors.New("strands: custom MCP servers, plugins, tools, subagents and sandboxes are unsupported by AO cancellation")
+	}
+	if hasNativeEntries(cfg.Profile.Interventions) || hasNativeEntries(cfg.Profile.InterventionModules) {
+		return errors.New("strands: custom interventions are unsupported by AO cancellation")
 	}
 	var builtins map[string]json.RawMessage
 	if json.Unmarshal(cfg.Profile.BuiltinTools, &builtins) == nil {

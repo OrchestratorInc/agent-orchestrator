@@ -18,7 +18,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if _, err := p.ResolveBinary(ctx); err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	cfg, err := readNativeConfig(ctx)
+	cfg, _, err := readNativeConfig(ctx)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
