@@ -21,18 +21,23 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
   const startWitnessPath = join(witnessRoot, witnessSpec.startPath);
   const lateWitnessPath = join(witnessRoot, witnessSpec.latePath);
   let witnessChild;
+  let lateWitnessTimer;
   const startWitness = (mode = "running") => {
     if (mode === "natural-settle") {
       writeFileSync(startWitnessPath, JSON.stringify({ token: witnessSpec.token, pid: 2147483647 }));
       return witnessSpec;
     }
     if (!witnessChild) {
-      const program = `const fs=require("node:fs");const token=${JSON.stringify(witnessSpec.token)};fs.writeFileSync(${JSON.stringify(startWitnessPath)},JSON.stringify({token,pid:process.pid}));setTimeout(()=>fs.writeFileSync(${JSON.stringify(lateWitnessPath)},JSON.stringify({token,pid:process.pid})),${witnessSpec.lateSideEffectDelayMs});setTimeout(()=>{},10000);`;
+      const program = `const fs=require("node:fs");const token=${JSON.stringify(witnessSpec.token)};fs.writeFileSync(${JSON.stringify(startWitnessPath)},JSON.stringify({token,pid:process.pid}));setTimeout(()=>{},10000);`;
       witnessChild = spawn(process.execPath, ["-e", program], { stdio: "ignore" });
+      lateWitnessTimer = setTimeout(() => {
+        writeFileSync(lateWitnessPath, JSON.stringify({ token: witnessSpec.token, pid: witnessChild.pid }));
+      }, witnessSpec.lateSideEffectDelayMs);
     }
     return witnessSpec;
   };
   const stopWitness = () => {
+    clearTimeout(lateWitnessTimer);
     if (witnessChild && witnessChild.exitCode === null) witnessChild.kill();
   };
   const received = [];
@@ -214,7 +219,7 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
           assert.deepEqual(Buffer.from(frame.data, "base64"), Buffer.from(scenario === "ctrl-c" ? "\x03" : "\x1b"));
           inputReceived = true;
           inputReceivedAt = Date.now();
-          stopWitness();
+          if (scenario !== "survives-interrupt") stopWitness();
           if (scenario === "input-error") send(socket, { ch: "terminal", id: target, type: "error", error: "session input is disabled" });
         } else if (frame.ch === "system" && frame.type === "ping") {
           if (scenario !== "no-pong") send(socket, { ch: "system", type: "pong" });
@@ -277,6 +282,17 @@ test("mux cancellation refuses a settled native refusal without a command-start 
     assert.equal(fixture.inputReceived, false);
     assert.equal(result.witness.command, null);
     assert.match(result.reason, /without a valid command-start witness/);
+  });
+});
+
+test("mux cancellation fails when the witnessed process survives and writes its late marker", async () => {
+  await withMuxFixture("survives-interrupt", async fixture => {
+    const witnessSpec = fixture.startWitness();
+    const result = await interruptActiveTurn({ baseURL: fixture.baseURL, sessionId: "fixture",
+      startResponse: { ok: true }, timeoutMs: 600, interruptSpec: { input: "\x1b" }, witnessSpec });
+    assert.equal(result.passed, false);
+    assert.equal(fixture.inputReceived, true);
+    assert.match(result.reason, /delayed side effect|remained alive/);
   });
 });
 
