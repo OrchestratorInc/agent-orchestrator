@@ -12,6 +12,9 @@ import (
 type fakeProc struct {
 	t    *testing.T
 	root string
+	// cgroup is a cgroup mount that holds nothing until setCgroupV2 or
+	// setCgroupV1 writes it, so /proc/stat is used by default.
+	cgroup string
 }
 
 func newFakeProc(t *testing.T) *fakeProc {
@@ -20,7 +23,31 @@ func newFakeProc(t *testing.T) *fakeProc {
 	if err := os.MkdirAll(filepath.Join(root, "self"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return &fakeProc{t: t, root: root}
+	return &fakeProc{t: t, root: root, cgroup: filepath.Join(root, "cgroup")}
+}
+
+// setCgroupV2 writes the sandbox cgroup's cumulative CPU time (cgroup v2).
+func (f *fakeProc) setCgroupV2(usage time.Duration) {
+	f.t.Helper()
+	if err := os.MkdirAll(f.cgroup, 0o755); err != nil {
+		f.t.Fatal(err)
+	}
+	stat := "usage_usec " + itoa(uint64(usage/time.Microsecond)) + "\nuser_usec 0\nsystem_usec 0\n"
+	if err := os.WriteFile(filepath.Join(f.cgroup, "cpu.stat"), []byte(stat), 0o644); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// setCgroupV1 writes the sandbox cgroup's cumulative CPU time (cgroup v1).
+func (f *fakeProc) setCgroupV1(usage time.Duration) {
+	f.t.Helper()
+	dir := filepath.Join(f.cgroup, "cpu,cpuacct")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cpuacct.usage"), []byte(itoa(uint64(usage))+"\n"), 0o644); err != nil {
+		f.t.Fatal(err)
+	}
 }
 
 // setCPU writes cumulative ticks: busy work, idle, and the worker's own.
@@ -59,7 +86,7 @@ func appendUint(buffer []byte, value uint64) []byte {
 
 func TestQuietSandboxIsIdle(t *testing.T) {
 	proc := newFakeProc(t)
-	a := &activity{procRoot: proc.root}
+	a := &activity{procRoot: proc.root, cgroupRoot: proc.cgroup}
 	now := time.Now()
 	proc.setCPU(100, 10_000, 50)
 	a.busySince(now, nil) // baseline sample
@@ -72,7 +99,7 @@ func TestQuietSandboxIsIdle(t *testing.T) {
 
 func TestCPUWorkKeepsTheSandboxBusyButTheWorkersOwnDoesNot(t *testing.T) {
 	proc := newFakeProc(t)
-	a := &activity{procRoot: proc.root}
+	a := &activity{procRoot: proc.root, cgroupRoot: proc.cgroup}
 	now := time.Now()
 	proc.setCPU(100, 10_000, 50)
 	a.busySince(now, nil)
@@ -88,10 +115,47 @@ func TestCPUWorkKeepsTheSandboxBusyButTheWorkersOwnDoesNot(t *testing.T) {
 	}
 }
 
+// In a container (a Docker-based Coder workspace) /proc/stat is the host's:
+// another tenant's heavy work must not keep this sandbox awake, and the
+// sandbox's own cgroup CPU time decides instead.
+func TestContainerCPUIsReadFromTheCgroupNotTheHost(t *testing.T) {
+	for _, version := range []struct {
+		name string
+		set  func(*fakeProc, time.Duration)
+	}{
+		{"cgroup v2", (*fakeProc).setCgroupV2},
+		{"cgroup v1", (*fakeProc).setCgroupV1},
+	} {
+		t.Run(version.name, func(t *testing.T) {
+			proc := newFakeProc(t)
+			a := &activity{procRoot: proc.root, cgroupRoot: proc.cgroup}
+			now := time.Now()
+			proc.setCPU(100, 10_000, 50)
+			version.set(proc, time.Second)
+			a.busySince(now, nil)
+
+			// The host is saturated by other containers; this sandbox used
+			// 100ms in 20s, all of it the worker's own 10 ticks.
+			proc.setCPU(4_000, 10_100, 60)
+			version.set(proc, time.Second+100*time.Millisecond)
+			if a.busySince(now.Add(20*time.Second), nil) {
+				t.Fatal("host-wide CPU from other tenants kept the container busy")
+			}
+
+			// The agent in this sandbox used 2s of CPU in 20s: busy.
+			proc.setCPU(8_000, 10_200, 60)
+			version.set(proc, 3*time.Second+100*time.Millisecond)
+			if !a.busySince(now.Add(40*time.Second), nil) {
+				t.Fatal("CPU work in the container's own cgroup was not reported busy")
+			}
+		})
+	}
+}
+
 func TestAProcessUnderAWorkspaceShellKeepsTheSandboxBusy(t *testing.T) {
 	proc := newFakeProc(t)
 	proc.setCPU(100, 10_000, 50)
-	a := &activity{procRoot: proc.root}
+	a := &activity{procRoot: proc.root, cgroupRoot: proc.cgroup}
 	proc.addProcess(4242, 999)
 	if a.busySince(time.Now(), []int{1000}) {
 		t.Fatal("a process under another parent kept the sandbox busy")
@@ -104,7 +168,7 @@ func TestAProcessUnderAWorkspaceShellKeepsTheSandboxBusy(t *testing.T) {
 func TestTerminalOutputSinceTheLastCheckIsBusy(t *testing.T) {
 	proc := newFakeProc(t)
 	proc.setCPU(100, 10_000, 50)
-	a := &activity{procRoot: proc.root}
+	a := &activity{procRoot: proc.root, cgroupRoot: proc.cgroup}
 	start := time.Now()
 	a.busySince(start, nil)
 	a.noteOutput(start.Add(5 * time.Second))

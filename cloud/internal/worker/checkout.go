@@ -66,9 +66,35 @@ func (ExecGitRunner) Run(ctx context.Context, dir string, env map[string]string,
 	return output.String(), nil
 }
 
+// CheckoutOptions tunes how PrepareCheckout clones a fresh workspace.
+type CheckoutOptions struct {
+	// PartialClone clones history without the contents of older file versions
+	// (--filter=blob:none). Only Freestyle sets it (AO_WORKER_PARTIAL_CLONE=1),
+	// matching the partial clone its project snapshots bake. Every other
+	// provider (Coder, BYO Coder, Docker) keeps a full clone, so offline history
+	// operations never need a lazy blob fetch.
+	PartialClone bool
+}
+
+// PartialCloneEnv is the worker environment variable a provider sets to "1"
+// to opt its sessions into partial clones (see CheckoutOptions.PartialClone).
+const PartialCloneEnv = "AO_WORKER_PARTIAL_CLONE"
+
 // PrepareCheckout clones once, then validates and fetches the persistent
-// workspace. The token exists only in the network command's askpass environment.
+// workspace. The token exists only in the network command's askpass
+// environment. A fresh clone is a full clone; see PrepareCheckoutWithOptions.
 func PrepareCheckout(ctx context.Context, runner GitRunner, workspace string, grant CheckoutGrantResponse) error {
+	return PrepareCheckoutWithOptions(ctx, runner, workspace, grant, CheckoutOptions{})
+}
+
+// PrepareCheckoutWithOptions is PrepareCheckout with explicit clone options.
+func PrepareCheckoutWithOptions(
+	ctx context.Context,
+	runner GitRunner,
+	workspace string,
+	grant CheckoutGrantResponse,
+	options CheckoutOptions,
+) error {
 	if runner == nil {
 		return errors.New("git runner is required")
 	}
@@ -111,7 +137,7 @@ func PrepareCheckout(ctx context.Context, runner GitRunner, workspace string, gr
 			// staging directory and merge the result in, so a bare git clone into
 			// a non-empty directory does not fail and checkout no longer depends
 			// on agent-vs-checkout startup ordering.
-			return cloneIntoNonEmptyWorkspace(ctx, runner, workspace, grant, expected)
+			return cloneIntoNonEmptyWorkspace(ctx, runner, workspace, grant, expected, options)
 		}
 	}
 	if !errors.Is(statErr, os.ErrNotExist) {
@@ -122,7 +148,7 @@ func PrepareCheckout(ctx context.Context, runner GitRunner, workspace string, gr
 	}
 	if err := withGitCredential(grant.Token, func(env map[string]string) error {
 		_, err := runner.Run(ctx, filepath.Dir(workspace), env,
-			"clone", "--origin", "origin", "--no-tags", partialCloneFilter, "--", grant.CloneURL, workspace)
+			cloneArgs(options, grant.CloneURL, workspace)...)
 		return err
 	}); err != nil {
 		return err
@@ -205,7 +231,14 @@ func EnsureWorkspaceReviewBase(ctx context.Context, runner GitRunner, workspace,
 // the clone did not produce are preserved; the clone's .git directory and
 // tracked files are moved in. This removes the ordering dependency between
 // agent startup and repository checkout.
-func cloneIntoNonEmptyWorkspace(ctx context.Context, runner GitRunner, workspace string, grant CheckoutGrantResponse, expected string) error {
+func cloneIntoNonEmptyWorkspace(
+	ctx context.Context,
+	runner GitRunner,
+	workspace string,
+	grant CheckoutGrantResponse,
+	expected string,
+	options CheckoutOptions,
+) error {
 	// Stage inside the workspace itself, not its parent. The parent is the
 	// provider's durable root (e.g. Coder's /home/coder), which is owned by the
 	// provider's own user and is not writable by the AO worker user, so a
@@ -221,8 +254,7 @@ func cloneIntoNonEmptyWorkspace(ctx context.Context, runner GitRunner, workspace
 	defer os.RemoveAll(staging)
 	clone := filepath.Join(staging, "repository")
 	if err := withGitCredential(grant.Token, func(env map[string]string) error {
-		_, err := runner.Run(ctx, staging, env,
-			"clone", "--origin", "origin", "--no-tags", partialCloneFilter, "--", grant.CloneURL, clone)
+		_, err := runner.Run(ctx, staging, env, cloneArgs(options, grant.CloneURL, clone)...)
 		return err
 	}); err != nil {
 		return err
@@ -254,7 +286,17 @@ func cloneIntoNonEmptyWorkspace(ctx context.Context, runner GitRunner, workspace
 // on demand (blame, log -p, checking out another commit) through the repo's
 // credential helper, which brokers a fresh token for every network operation.
 // For a mature repository this cuts the clone to a fraction of its full size.
+// It is applied only when CheckoutOptions.PartialClone is set (Freestyle).
 const partialCloneFilter = "--filter=blob:none"
+
+// cloneArgs builds the primary-checkout clone command.
+func cloneArgs(options CheckoutOptions, cloneURL, destination string) []string {
+	args := []string{"clone", "--origin", "origin", "--no-tags"}
+	if options.PartialClone {
+		args = append(args, partialCloneFilter)
+	}
+	return append(args, "--", cloneURL, destination)
+}
 
 // ConfigureWorkerGit prepares the assigned branch and a repo-local credential
 // helper that brokers a fresh scoped token for each GitHub network operation.
@@ -453,7 +495,8 @@ func CloneExtraRepo(
 	if runner == nil {
 		return errors.New("git runner is required")
 	}
-	args := []string{"clone", "--origin", "origin", "--no-tags", partialCloneFilter}
+	// Extra repos are always full clones, whatever the provider.
+	args := []string{"clone", "--origin", "origin", "--no-tags"}
 	if strings.TrimSpace(branch) != "" {
 		args = append(args, "--branch", branch)
 	}

@@ -14,6 +14,7 @@ package projectsnapshot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -36,8 +37,14 @@ const (
 	// Active repositories use theirs on every session; this mostly reclaims
 	// snapshots whose projects were deleted and never added back.
 	IdleRetention = 7 * 24 * time.Hour
+	// DefaultMaxConcurrentBuilds is how many builder VMs one replica runs at
+	// once by default.
+	DefaultMaxConcurrentBuilds = 2
 	// collectInterval is how often idle snapshots are looked for.
 	collectInterval = time.Hour
+	// collectDeleteTimeout bounds one provider snapshot delete. The record
+	// stays locked meanwhile, so a lookup racing it waits at most this long.
+	collectDeleteTimeout = 30 * time.Second
 	// MarkerFile, inside the cloned repository's .git directory, tells the
 	// worker the checkout came from a project snapshot and should move to the
 	// latest origin/HEAD once, rather than keep the commit it was baked at.
@@ -61,8 +68,21 @@ type VMs interface {
 type Store interface {
 	UseRepositorySandboxSnapshot(ctx context.Context, orgID, repositoryKey, provider, harness string) (domain.RepositorySandboxSnapshot, bool, error)
 	RepositorySandboxSnapshot(ctx context.Context, orgID, repositoryKey, provider, harness string) (domain.RepositorySandboxSnapshot, bool, error)
+	// ReplaceRepositorySandboxSnapshot returns the replaced snapshot only when
+	// no live session's plan references it; a referenced one is retained for
+	// the collector.
 	ReplaceRepositorySandboxSnapshot(ctx context.Context, snapshot domain.RepositorySandboxSnapshot) (string, error)
-	DeleteIdleRepositorySandboxSnapshots(ctx context.Context, provider string, cutoff time.Time) ([]string, error)
+	// CollectIdleRepositorySandboxSnapshots calls remove for each idle,
+	// unreferenced snapshot and deletes its record only once remove succeeds.
+	CollectIdleRepositorySandboxSnapshots(
+		ctx context.Context, provider string, cutoff time.Time,
+		remove func(ctx context.Context, snapshotID string) error,
+	) ([]string, error)
+	// AcquireRepositorySnapshotBuild claims one snapshot's build across
+	// control-plane replicas; ok is false while another replica builds it.
+	AcquireRepositorySnapshotBuild(
+		ctx context.Context, orgID, repositoryKey, provider, harness string,
+	) (release func(), ok bool, err error)
 }
 
 // Grants issues a short-lived clone token for a session's repository.
@@ -123,7 +143,11 @@ type Config struct {
 	Grants         Grants
 	AllowAnonymous bool
 	MaxAge         time.Duration
-	Logger         *slog.Logger
+	// MaxConcurrentBuilds caps the builder VMs this replica runs at once.
+	// Builder VMs count against the provider account's VM limit like session
+	// VMs do, so an unbounded burst of builds could starve sessions.
+	MaxConcurrentBuilds int
+	Logger              *slog.Logger
 }
 
 // Builder looks up and (re)builds project snapshots.
@@ -138,6 +162,9 @@ type Builder struct {
 func New(config Config) *Builder {
 	if config.MaxAge <= 0 {
 		config.MaxAge = DefaultMaxAge
+	}
+	if config.MaxConcurrentBuilds <= 0 {
+		config.MaxConcurrentBuilds = DefaultMaxConcurrentBuilds
 	}
 	if config.Logger == nil {
 		config.Logger = slog.Default()
@@ -175,7 +202,9 @@ func usable(snapshot domain.RepositorySandboxSnapshot, request Request) bool {
 func (b *Builder) Ensure(request Request) {
 	key := request.key()
 	b.mu.Lock()
-	if b.inflight[key] {
+	// A build skipped here is not lost: every session create calls Ensure, so
+	// the next one starts it once a slot is free.
+	if b.inflight[key] || len(b.inflight) >= b.config.MaxConcurrentBuilds {
 		b.mu.Unlock()
 		return
 	}
@@ -189,11 +218,32 @@ func (b *Builder) Ensure(request Request) {
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 		defer cancel()
+		// The in-process guard above covers this replica; the store claim
+		// covers the others. It is taken before the needs-build check so a
+		// replica that loses the race sees the snapshot the winner recorded.
+		release, claimed, err := b.config.Store.AcquireRepositorySnapshotBuild(
+			ctx, request.OrgID, request.RepositoryKey, b.config.Provider, request.Harness)
+		if err != nil {
+			b.config.Logger.Warn("claim project snapshot build",
+				"project_id", request.ProjectID, "harness", request.Harness, "error", err)
+			return
+		}
+		if !claimed {
+			return
+		}
+		defer release()
 		if !b.needsBuild(ctx, request) {
 			return
 		}
 		started := b.now()
 		snapshotID, err := b.build(ctx, request)
+		if errors.Is(err, sandbox.ErrAtCapacity) {
+			// The account is at its VM limit (builder VMs count against it).
+			// Sessions take priority; the next session create retries.
+			b.config.Logger.Info("project snapshot build deferred: provider at capacity",
+				"project_id", request.ProjectID, "harness", request.Harness)
+			return
+		}
 		if err != nil {
 			b.config.Logger.Warn("project snapshot build failed",
 				"project_id", request.ProjectID, "harness", request.Harness, "error", err)
@@ -265,9 +315,11 @@ func (b *Builder) build(ctx context.Context, request Request) (string, error) {
 		return "", fmt.Errorf("record project snapshot: %w", err)
 	}
 	if previous != "" {
-		if err := b.config.VMs.DeleteSnapshot(ctx, previous); err != nil {
-			b.config.Logger.Warn("delete replaced project snapshot", "snapshot_id", previous, "error", err)
-		}
+		// The store retired the replaced snapshot rather than dropping it: a
+		// session still running from it may need it for a recreate. Collecting
+		// now deletes it at the provider at once when nothing references it,
+		// and otherwise leaves it for a later run.
+		b.Collect(ctx)
 	}
 	return snapshotID, nil
 }
@@ -286,25 +338,24 @@ func (b *Builder) RunCollector(ctx context.Context) {
 	}
 }
 
-// Collect deletes snapshots no session has booted from within IdleRetention:
-// first the record, so no new session can pick one up, then the provider copy.
-// A provider delete that fails leaves an unreferenced snapshot behind, which
-// the provider's own retention reclaims.
+// Collect deletes snapshots no session has booted from within IdleRetention
+// and no live session's plan still references (a long-running session may be
+// recreated from its snapshot at any time). The provider copy is deleted
+// first and the record only once that succeeds, so a failed provider delete
+// is retried on the next run instead of leaking the copy.
 func (b *Builder) Collect(ctx context.Context) {
-	snapshotIDs, err := b.config.Store.DeleteIdleRepositorySandboxSnapshots(
-		ctx, b.config.Provider, b.now().Add(-IdleRetention))
-	if err != nil {
-		if ctx.Err() == nil {
-			b.config.Logger.Warn("collect idle project snapshots", "error", err)
-		}
-		return
-	}
+	snapshotIDs, err := b.config.Store.CollectIdleRepositorySandboxSnapshots(
+		ctx, b.config.Provider, b.now().Add(-IdleRetention),
+		func(ctx context.Context, snapshotID string) error {
+			deleteCtx, cancel := context.WithTimeout(ctx, collectDeleteTimeout)
+			defer cancel()
+			return b.config.VMs.DeleteSnapshot(deleteCtx, snapshotID)
+		})
 	for _, snapshotID := range snapshotIDs {
-		if err := b.config.VMs.DeleteSnapshot(ctx, snapshotID); err != nil {
-			b.config.Logger.Warn("delete idle project snapshot", "snapshot_id", snapshotID, "error", err)
-			continue
-		}
 		b.config.Logger.Info("deleted idle project snapshot", "snapshot_id", snapshotID)
+	}
+	if err != nil && ctx.Err() == nil {
+		b.config.Logger.Warn("collect idle project snapshots", "error", err)
 	}
 }
 

@@ -31,9 +31,22 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) error {
 }
 
 func decodeJSONLimit(w http.ResponseWriter, r *http.Request, target any, limit int64) error {
+	return decodeJSONBody(w, r, target, limit, true)
+}
+
+// decodeJSONTolerant decodes like decodeJSON but ignores unknown fields, for
+// worker requests a newer worker may extend before this control plane knows
+// the field (a control-plane rollback).
+func decodeJSONTolerant(w http.ResponseWriter, r *http.Request, target any) error {
+	return decodeJSONBody(w, r, target, maxRequestBody, false)
+}
+
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, target any, limit int64, strict bool) error {
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
+	if strict {
+		decoder.DisallowUnknownFields()
+	}
 	if err := decoder.Decode(target); err != nil {
 		return err
 	}

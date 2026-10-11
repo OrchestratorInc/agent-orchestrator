@@ -354,9 +354,9 @@ func TestCloneExtraRepoDoesNotPersistToken(t *testing.T) {
 	}
 }
 
-// Every clone path is a partial clone: history without old file contents, so
-// a mature repository checks out in a fraction of the time.
-func TestCheckoutClonesArePartial(t *testing.T) {
+// Only a checkout that opts in (Freestyle) is a partial clone. Coder, BYO
+// Coder, and Docker checkouts, and every extra-repo clone, stay full clones.
+func TestCheckoutPartialCloneOnlyWhenOptedIn(t *testing.T) {
 	hasFilter := func(args []string) bool {
 		for _, arg := range args {
 			if arg == partialCloneFilter {
@@ -366,19 +366,8 @@ func TestCheckoutClonesArePartial(t *testing.T) {
 		return false
 	}
 	grant := CheckoutGrantResponse{CloneURL: "https://github.com/acme/repo.git"}
-
-	t.Run("empty workspace", func(t *testing.T) {
-		runner := &stagingRecorderRunner{cloneURL: grant.CloneURL}
-		workspace := filepath.Join(t.TempDir(), "repository")
-		if err := PrepareCheckout(context.Background(), runner, workspace, grant); err != nil {
-			t.Fatalf("PrepareCheckout: %v", err)
-		}
-		if !hasFilter(runner.cloneArgs) {
-			t.Fatalf("clone args %q lack %s", runner.cloneArgs, partialCloneFilter)
-		}
-	})
-	t.Run("non-empty workspace", func(t *testing.T) {
-		runner := &stagingRecorderRunner{cloneURL: grant.CloneURL}
+	empty := func(t *testing.T) string { return filepath.Join(t.TempDir(), "repository") }
+	nonEmpty := func(t *testing.T) string {
 		workspace := filepath.Join(t.TempDir(), "repository")
 		if err := os.MkdirAll(workspace, 0o755); err != nil {
 			t.Fatal(err)
@@ -386,11 +375,43 @@ func TestCheckoutClonesArePartial(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(workspace, ".claude"), []byte("agent"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := PrepareCheckout(context.Background(), runner, workspace, grant); err != nil {
-			t.Fatalf("PrepareCheckout: %v", err)
+		return workspace
+	}
+
+	for _, layout := range []struct {
+		name      string
+		workspace func(*testing.T) string
+	}{{"empty workspace", empty}, {"non-empty workspace", nonEmpty}} {
+		t.Run(layout.name+" default is full", func(t *testing.T) {
+			runner := &stagingRecorderRunner{cloneURL: grant.CloneURL}
+			if err := PrepareCheckout(context.Background(), runner, layout.workspace(t), grant); err != nil {
+				t.Fatalf("PrepareCheckout: %v", err)
+			}
+			if len(runner.cloneArgs) == 0 || hasFilter(runner.cloneArgs) {
+				t.Fatalf("default clone args %q must be a full clone", runner.cloneArgs)
+			}
+		})
+		t.Run(layout.name+" opted in is partial", func(t *testing.T) {
+			runner := &stagingRecorderRunner{cloneURL: grant.CloneURL}
+			if err := PrepareCheckoutWithOptions(context.Background(), runner, layout.workspace(t), grant,
+				CheckoutOptions{PartialClone: true}); err != nil {
+				t.Fatalf("PrepareCheckoutWithOptions: %v", err)
+			}
+			if !hasFilter(runner.cloneArgs) {
+				t.Fatalf("clone args %q lack %s", runner.cloneArgs, partialCloneFilter)
+			}
+		})
+	}
+
+	t.Run("extra repo is full", func(t *testing.T) {
+		runner := &stagingRecorderRunner{cloneURL: grant.CloneURL}
+		parent := t.TempDir()
+		if err := CloneExtraRepo(context.Background(), runner, parent, filepath.Join(parent, "extra"),
+			grant.CloneURL, "main", "", t.TempDir()); err != nil {
+			t.Fatalf("CloneExtraRepo: %v", err)
 		}
-		if !hasFilter(runner.cloneArgs) {
-			t.Fatalf("clone args %q lack %s", runner.cloneArgs, partialCloneFilter)
+		if len(runner.cloneArgs) == 0 || hasFilter(runner.cloneArgs) {
+			t.Fatalf("extra repo clone args %q must be a full clone", runner.cloneArgs)
 		}
 	})
 }

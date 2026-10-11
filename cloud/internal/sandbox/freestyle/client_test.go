@@ -23,6 +23,16 @@ type fakeAPI struct {
 	requests []recorded
 	execOut  string
 	execCode int
+	// missingSnapshots makes a create from one of these snapshots 404.
+	missingSnapshots map[string]bool
+	// createStatus, when set, answers every create with it and createBody.
+	createStatus int
+	createBody   string
+}
+
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 type recorded struct {
@@ -45,6 +55,12 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.requests = append(f.requests, recorded{r.Method, r.URL.Path, body, r.Header.Get("Authorization")})
 	path := strings.TrimPrefix(r.URL.Path, "/v5/vms")
 	switch {
+	case r.Method == http.MethodPost && path == "" && f.createStatus != 0:
+		w.WriteHeader(f.createStatus)
+		_, _ = io.WriteString(w, f.createBody)
+	case r.Method == http.MethodPost && path == "" && f.missingSnapshots[stringValue(body["snapshotId"])]:
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"code":"SNAPSHOT_NOT_FOUND","message":"snapshot not found"}`)
 	case r.Method == http.MethodPost && path == "":
 		slug, _ := body["slug"].(string)
 		if _, taken := f.vms[slug]; taken && slug != "" {
@@ -154,7 +170,7 @@ func TestBootstrapWorkerLaunchesBakedWorkerWithoutUnconditionalChown(t *testing.
 	command, _ := api.last(http.MethodPost, "/exec-await").body["command"].(string)
 	for _, want := range []string{
 		// Freestyle keeps the agent alive across the worker restart a wake does.
-		"runuser --user 'ao-worker' -- env 'AO_WORKER_BOOTSTRAP_TOKEN=ticket' 'AO_WORKER_PERSIST_AGENT=1' '/usr/local/bin/ao-worker'",
+		"runuser --user 'ao-worker' -- env 'AO_WORKER_BOOTSTRAP_TOKEN=ticket' 'AO_WORKER_PARTIAL_CLONE=1' 'AO_WORKER_PERSIST_AGENT=1' '/usr/local/bin/ao-worker'",
 		`[ "$(stat -c %U /workspace)" = 'ao-worker' ] || chown -R`,
 		"setsid nohup",
 	} {
@@ -214,6 +230,59 @@ func TestExecRootSurfacesNonzeroExit(t *testing.T) {
 	var httpErr *HTTPError
 	if err == nil || errors.As(err, &httpErr) {
 		t.Fatalf("err = %v, want a command failure, not an HTTP error", err)
+	}
+}
+
+// A session planned on a project snapshot that was collected since boots from
+// the harness snapshot it was built on rather than failing.
+func TestCreateBootsTheFallbackWhenTheSnapshotIsGone(t *testing.T) {
+	api := newFakeAPI()
+	api.missingSnapshots = map[string]bool{"snap-project": true}
+	client := testClient(t, api)
+	if _, err := client.Create(context.Background(), sandbox.Spec{
+		SessionID: "s", RootFS: "snap-project", FallbackRootFS: "snap-codex",
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got := api.last(http.MethodPost, "/v5/vms").body["snapshotId"]; got != "snap-codex" {
+		t.Fatalf("snapshotId = %v, want the fallback snap-codex", got)
+	}
+
+	// Recreate goes through the same fallback.
+	if _, err := client.Recreate(context.Background(), "vm-ao-s", sandbox.Spec{
+		SessionID: "s", RootFS: "snap-project", FallbackRootFS: "snap-codex",
+	}); err != nil {
+		t.Fatalf("recreate: %v", err)
+	}
+	if got := api.last(http.MethodPost, "/v5/vms").body["snapshotId"]; got != "snap-codex" {
+		t.Fatalf("recreate snapshotId = %v, want the fallback snap-codex", got)
+	}
+
+	// Without a fallback the missing snapshot is reported as such.
+	_, err := client.Create(context.Background(), sandbox.Spec{SessionID: "s2", RootFS: "snap-project"})
+	if !errors.Is(err, sandbox.ErrSnapshotNotFound) {
+		t.Fatalf("err = %v, want ErrSnapshotNotFound", err)
+	}
+}
+
+// Freestyle's account VM limit (which builder VMs count against) is capacity
+// the reconciler waits out, not a failed session.
+func TestCreateReportsLimitExceededAsCapacity(t *testing.T) {
+	api := newFakeAPI()
+	api.createStatus = http.StatusForbidden
+	api.createBody = `{"code":"LIMIT_EXCEEDED","message":"concurrent VM limit reached"}`
+	_, err := testClient(t, api).Create(context.Background(), sandbox.Spec{SessionID: "s"})
+	if !errors.Is(err, sandbox.ErrAtCapacity) {
+		t.Fatalf("err = %v, want ErrAtCapacity", err)
+	}
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) || !strings.Contains(err.Error(), "concurrent VM limit") {
+		t.Fatalf("err = %v, want the provider message kept", err)
+	}
+	api.createStatus = http.StatusBadRequest
+	api.createBody = `{"code":"INVALID","message":"bad request"}`
+	if _, err := testClient(t, api).Create(context.Background(), sandbox.Spec{SessionID: "s"}); errors.Is(err, sandbox.ErrAtCapacity) {
+		t.Fatalf("a plain 400 was reported as capacity: %v", err)
 	}
 }
 

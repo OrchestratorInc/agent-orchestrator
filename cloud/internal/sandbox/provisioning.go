@@ -637,7 +637,9 @@ func FreestyleSnapshot(plan Plan) string {
 }
 
 // WithFreestyleSnapshot returns plan booting from snapshot instead, used when
-// the session's project has a prepared snapshot for its harness.
+// the session's project has a prepared snapshot for its harness. The harness
+// snapshot it replaces is kept as baseSnapshot, which a later create or
+// recreate boots if the project snapshot has been collected by then.
 func WithFreestyleSnapshot(plan Plan, snapshot string) (Plan, error) {
 	rewrite := func(raw json.RawMessage) (json.RawMessage, error) {
 		var document map[string]any
@@ -647,6 +649,11 @@ func WithFreestyleSnapshot(plan Plan, snapshot string) (Plan, error) {
 		freestyle, ok := document["freestyle"].(map[string]any)
 		if !ok {
 			return nil, errors.New("plan has no freestyle section")
+		}
+		if _, stamped := freestyle["baseSnapshot"]; !stamped {
+			if base, ok := freestyle["snapshot"].(string); ok && strings.TrimSpace(base) != "" {
+				freestyle["baseSnapshot"] = base
+			}
 		}
 		freestyle["snapshot"] = snapshot
 		return json.Marshal(document)

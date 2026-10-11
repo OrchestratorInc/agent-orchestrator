@@ -743,14 +743,25 @@ func (c Config) Hosted() bool {
 	return c.Environment == "staging" || c.Environment == "production"
 }
 
-// IdlePauseDisabled reports whether idle auto-pause is turned off (keep-warm):
-// AO_CLOUD_IDLE_PAUSE_THRESHOLD=0. When disabled the idle scanner does not run
-// and the reconciler keeps sandboxes alive through idle — including extending
-// the Coder workspace deadline that would otherwise auto-stop the VM — so a
-// cloud session behaves like a local one (no teardown, no terminal reconnect on
-// resume). The cost is continuous compute for every non-terminated session.
-func (c Config) IdlePauseDisabled() bool {
-	return c.IdlePauseThreshold == 0 && c.FreestyleIdlePauseThreshold == 0
+// KeepWarm reports whether the general (non-Freestyle) providers, Coder among
+// them, are kept warm through idle: AO_CLOUD_IDLE_PAUSE_THRESHOLD=0. The
+// reconciler then keeps those sandboxes alive through idle, including
+// extending the Coder workspace deadline that would otherwise auto-stop the VM,
+// so a cloud session behaves like a local one (no teardown, no terminal
+// reconnect on resume). The cost is continuous compute for every
+// non-terminated session. It depends only on the general threshold: the
+// Freestyle threshold (AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD) governs only
+// Freestyle sandboxes and must never turn Coder keep-warm off.
+func (c Config) KeepWarm() bool {
+	return c.IdlePauseThreshold == 0
+}
+
+// IdlePauseScannerEnabled reports whether the idle-pause scanner has any
+// provider to pause. It runs when either threshold is non-zero, applying the
+// Freestyle threshold to Freestyle sandboxes and the general one to every
+// other provider; a zero threshold makes it skip that provider's sessions.
+func (c Config) IdlePauseScannerEnabled() bool {
+	return c.IdlePauseThreshold != 0 || c.FreestyleIdlePauseThreshold != 0
 }
 
 func (c Config) WorkerTokenTTL() time.Duration {

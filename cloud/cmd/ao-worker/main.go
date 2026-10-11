@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -156,6 +157,12 @@ func run(logger *slog.Logger) error {
 		if err := os.Setenv(key, value); err != nil {
 			return fmt.Errorf("set worker tooling environment %s: %w", key, err)
 		}
+	}
+	// An agent that outlived the previous worker still has that worker's epoch
+	// in its environment; its hooks read the current one from this file, so
+	// the notifications they queue are delivered rather than discarded.
+	if err := notificationoutbox.WriteWorkerEpoch(dataDir, bootstrap.Epoch); err != nil {
+		logger.Warn("record worker epoch for agent hooks", "error", err)
 	}
 	if !worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
 		if err := os.Setenv("PATH", worker.ToolingBinDir(dataDir)+string(os.PathListSeparator)+os.Getenv("PATH")); err != nil {
@@ -333,6 +340,9 @@ func run(logger *slog.Logger) error {
 			defer outbox.Close()
 			results <- (&notificationoutbox.Flusher{
 				Outbox: outbox, WorkerEpoch: bootstrap.Epoch, Logger: logger,
+				// A persisted agent survives worker restarts; what it queued under
+				// an earlier epoch is still its live state, so deliver it here.
+				AdoptPriorEpochs: transportSupervisor.PersistsAgent(),
 				Deliver: func(deliveryCtx context.Context, event notificationoutbox.Event) error {
 					if err := transportSupervisor.DeliverNotification(deliveryCtx, event); err == nil {
 						return nil
@@ -492,7 +502,8 @@ func prepareWorkspace(
 			checkoutGrant = worker.CheckoutGrantResponse{CloneURL: bootstrap.Launch.RepositoryURL}
 			logger.Info("using anonymous public GitHub checkout")
 		}
-		if err := worker.PrepareCheckout(ctx, worker.ExecGitRunner{}, workspace, checkoutGrant); err != nil {
+		if err := worker.PrepareCheckoutWithOptions(ctx, worker.ExecGitRunner{}, workspace, checkoutGrant,
+			worker.CheckoutOptions{PartialClone: os.Getenv(worker.PartialCloneEnv) == "1"}); err != nil {
 			return fmt.Errorf("prepare repository checkout: %w", err)
 		}
 		if err := worker.ConfigureWorkerGit(
@@ -642,6 +653,11 @@ type client struct {
 	// busy reports sandbox activity for the next heartbeat; set once the
 	// transport supervisor exists.
 	busy atomic.Pointer[func() bool]
+	// busyAccepted records that the control plane's last heartbeat response
+	// advertised worker.HeartbeatFeatureBusy. Until then (and after a
+	// control-plane rollback) the field is not sent: an older control plane
+	// rejects unknown heartbeat fields.
+	busyAccepted atomic.Bool
 }
 
 // startStartupPrefetch begins the lookups the coding agent's launch needs but
@@ -786,23 +802,41 @@ func (c *client) reconnect(ctx context.Context) (worker.BootstrapResponse, error
 }
 
 func (c *client) heartbeat(ctx context.Context) (string, error) {
-	var response worker.HeartbeatResponse
-	busy := false
-	if probe := c.busy.Load(); probe != nil {
-		busy = (*probe)()
-	}
-	err := c.do(ctx, "/worker/heartbeat", worker.HeartbeatRequest{
+	request := worker.HeartbeatRequest{
 		Version:      workerVersion,
 		Capabilities: workerCapabilities,
-		Busy:         busy,
-	}, &response)
+	}
+	if c.busyAccepted.Load() {
+		if probe := c.busy.Load(); probe != nil {
+			request.Busy = (*probe)()
+		}
+	}
+	var response worker.HeartbeatResponse
+	err := c.do(ctx, "/worker/heartbeat", request, &response)
+	if err != nil && request.Busy && rejectedUnknownField(err) {
+		// The control plane was rolled back to a release that rejects the
+		// field. Drop it and retry once; the next response says whether to
+		// send it again.
+		c.busyAccepted.Store(false)
+		request.Busy = false
+		response = worker.HeartbeatResponse{}
+		err = c.do(ctx, "/worker/heartbeat", request, &response)
+	}
 	if err != nil {
 		return "", err
 	}
+	c.busyAccepted.Store(slices.Contains(response.Features, worker.HeartbeatFeatureBusy))
 	if response.WorkerToken == "" {
 		return "", errors.New("control plane returned no renewed worker token")
 	}
 	return response.WorkerToken, nil
+}
+
+// rejectedUnknownField reports a 400 from a control plane that refused a
+// request field it does not know (its decoder disallows unknown fields).
+func rejectedUnknownField(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, " returned 400") && strings.Contains(message, "unknown field")
 }
 
 func (c *client) heartbeatLoop(ctx context.Context, logger *slog.Logger) error {
