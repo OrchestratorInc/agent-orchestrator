@@ -482,3 +482,19 @@ func readBreadcrumb(path string) (breadcrumb, error) {
 func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 	return ports.AgentExitDetectionSupervisor
 }
+
+// ValidateTerminalMessage refuses ordinary AO text while native decisions own input.
+func (p *Plugin) ValidateTerminalMessage(_ string, screen string) error {
+	state, ok := p.DetectTerminalActivity(screen)
+	if !ok || state != domain.ActivityIdle {
+		return fmt.Errorf("hermes: ordinary AO sends require the current empty native composer; enter approval decisions directly in the terminal")
+	}
+	return nil
+}
+
+// TerminalMessageObserved requires a new native running footer after submission.
+func (p *Plugin) TerminalMessageObserved(_ string, baseline, screen string) bool {
+	before, ready := p.DetectTerminalActivity(baseline)
+	after, known := p.DetectTerminalActivity(screen)
+	return screen != baseline && ready && before == domain.ActivityIdle && known && after == domain.ActivityActive
+}
