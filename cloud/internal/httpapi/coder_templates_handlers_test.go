@@ -271,3 +271,21 @@ func TestCoderTemplateEndpointsRefuseNonMembers(t *testing.T) {
 		t.Fatal("read the organization's Coder connection for a non-member")
 	}
 }
+
+// Project creation validates Coder template parameters with the organization's
+// stored token; for a caller outside the organization that validation never
+// reads the connection, so it cannot probe the template or drive the token.
+func TestProjectCoderParameterValidationRefusesNonMembers(t *testing.T) {
+	t.Parallel()
+	store := &nonMemberCoderConnStore{fakeCoderConnStore: fakeCoderConnStore{err: postgres.ErrNotFound}}
+	srv := newCoderTemplatesServer(t, newTestCipher(t), store, &fakeDeploymentTemplateLister{})
+	req := coderConfigRequest(t, http.MethodPost, "", []string{sandbox.ProviderCoder})
+	if unknown := srv.unknownCoderTemplateParameters(
+		req.Context(), coderCfgOrgID, coderCfgTemplate, map[string]string{"guess": "x"}, "req-1",
+	); len(unknown) != 0 {
+		t.Fatalf("unknown = %v, want none reported to a non-member", unknown)
+	}
+	if store.connectionRead {
+		t.Fatal("read the organization's Coder connection for a non-member")
+	}
+}

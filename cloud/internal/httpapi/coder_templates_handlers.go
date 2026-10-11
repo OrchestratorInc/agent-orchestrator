@@ -97,6 +97,15 @@ func (s *Server) listCoderTemplates(w http.ResponseWriter, r *http.Request) {
 // coder.NewForOrg, the same decrypt-and-build helper the sandbox resolver uses, so
 // a per-org lister is constructed exactly as a per-org session is.
 func (s *Server) coderTemplateListerForOrg(ctx context.Context, orgID string) (CoderTemplateLister, error) {
+	// The organization's connection is read as the service and its token used
+	// on the caller's behalf, so the caller must be a member. Every caller is a
+	// request handler; without a principal the membership check refuses.
+	if store, ok := s.store.(orgMemberStore); ok {
+		principal, _ := ctx.Value(principalKey).(domain.Principal)
+		if err := store.RequireOrgMember(ctx, principal, orgID); err != nil {
+			return nil, err
+		}
+	}
 	if store, ok := s.store.(coderConnectionForServiceStore); ok && s.secretCipher != nil {
 		encrypted, nonce, config, _, err := store.CoderConnectionForService(ctx, orgID)
 		switch {
