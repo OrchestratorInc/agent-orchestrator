@@ -86,6 +86,11 @@ func TestExactRestoreRejectsLostCorruptOrWrongWorkspaceHistory(t *testing.T) {
 	if err != nil || !ok || !reflect.DeepEqual(cmd, []string{"/native/codebuddy", "--append-system-prompt", "fresh", "--resume", id}) {
 		t.Fatalf("restore=%q ok=%v err=%v", cmd, ok, err)
 	}
+	override := cfg
+	override.Env = map[string]string{"CODEBUDDY_CONFIG_DIR": t.TempDir()}
+	if _, _, err := p.GetRestoreCommand(context.Background(), override); err == nil {
+		t.Fatal("runtime profile override fell back to daemon history")
+	}
 	wrong := cfg
 	wrong.Session.WorkspacePath = t.TempDir()
 	if _, _, err := p.GetRestoreCommand(context.Background(), wrong); err == nil {

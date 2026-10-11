@@ -14,11 +14,17 @@ Native model IDs use direct text selection; AO does not invent a model catalog.
 The runtime qualification used Z.ai's OpenAI-compatible coding endpoint and
 `glm-5.3-flash`; a models.json-only startup still required native Tencent login.
 
+Native TUI rendering requires an interactive environment: native Ink uses static
+output when `CI` or `CONTINUOUS_INTEGRATION` is enabled. AO refuses uninitialized
+static surfaces instead of pasting into them.
+
 Only **Default** permissions are qualified. AO preserves native permission
 controls and folder trust, and refuses Auto, Accept Edits and Bypass Permissions.
 Answer native decisions in the terminal. AO message delivery requires the current
 rendered empty composer and refuses drafts, initialization, active work and
-permission/login/trust dialogs under a serialized input lease.
+permission/login/trust dialogs under a serialized input lease. Native prompt
+suggestions are conservatively treated as nonempty input; use the native TUI
+or disable suggestions through native settings before sending an AO message.
 
 The initial task is a single positional argument after `--`, so leading dashes
 remain task data. Private standing instructions use the actual bounded text in
