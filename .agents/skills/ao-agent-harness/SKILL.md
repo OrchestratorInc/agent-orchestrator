@@ -75,8 +75,9 @@ Activity requires an observed active-to-settled turn. Hidden-instruction token
 consumption proves delivery, not confidentiality against model echo. The runner
 introduces a fresh restore token only after confirmed kill and verifies its
 project-config write before restore, so initial history cannot supply it.
-Cancellation separately requires a tokenized foreground-command start/PID
-witness while the turn is active, then proves that PID stopped and its delayed
+Cancellation separately requires a tokenized foreground-command start/PID plus
+kernel process-start identity witness while the turn is active, then proves that
+exact process stopped and its delayed
 side effect remained absent after native interrupt input. Settlement alone does
 not pass when the command finished naturally or the native agent refused it.
 

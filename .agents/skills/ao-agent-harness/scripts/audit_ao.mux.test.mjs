@@ -24,11 +24,15 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
   let lateWitnessTimer;
   const startWitness = (mode = "running") => {
     if (mode === "natural-settle") {
-      writeFileSync(startWitnessPath, JSON.stringify({ token: witnessSpec.token, pid: 2147483647 }));
+      const kind = process.platform === "linux" ? "linux-proc-startticks" : process.platform === "win32" ? "win32-creation-ticks" : "posix-lstart";
+      writeFileSync(startWitnessPath, JSON.stringify({ token: witnessSpec.token, pid: 2147483647, processIdentity: `${kind}:missing` }));
       return witnessSpec;
     }
     if (!witnessChild) {
-      const program = `const fs=require("node:fs");const token=${JSON.stringify(witnessSpec.token)};fs.writeFileSync(${JSON.stringify(startWitnessPath)},JSON.stringify({token,pid:process.pid}));setTimeout(()=>{},10000);`;
+      const identity = mode === "wrong-identity"
+        ? "const processIdentity=(process.platform==='linux'?'linux-proc-startticks':process.platform==='win32'?'win32-creation-ticks':'posix-lstart')+':wrong';"
+        : "const cp=require('node:child_process');const processIdentity=(()=>{if(process.platform==='linux'){const value=fs.readFileSync('/proc/self/stat','utf8');const fields=value.slice(value.lastIndexOf(')')+2).trim().split(/\\s+/);return 'linux-proc-startticks:'+fields[19]}if(process.platform==='win32'){return 'win32-creation-ticks:'+cp.execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command','(Get-Process -Id '+process.pid+').StartTime.ToUniversalTime().Ticks'],{encoding:'utf8'}).trim()}return 'posix-lstart:'+cp.execFileSync('ps',['-o','lstart=','-p',String(process.pid)],{encoding:'utf8'}).trim()})();";
+      const program = `const fs=require("node:fs");${identity}const token=${JSON.stringify(witnessSpec.token)};fs.writeFileSync(${JSON.stringify(startWitnessPath)},JSON.stringify({token,pid:process.pid,processIdentity}));setTimeout(()=>{},10000);`;
       witnessChild = spawn(process.execPath, ["-e", program], { stdio: "ignore" });
       const armLateWitness = () => {
         if (!existsSync(startWitnessPath)) {
@@ -59,6 +63,7 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
   let nativeCueSent = false;
   let killed = false;
   let restored = false;
+  let witnessIdleSampled = false;
   const messages = [];
   const timers = [];
   let projectConfig = { agentRules: "original audit rules", defaultBranch: "main" };
@@ -133,7 +138,12 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
     if (scenario === "state-http-error" && opened) {
       res.writeHead(503); res.end("{}"); return;
     }
-    const active = !["refusal", "natural-settle"].includes(scenario) && !scenario.startsWith("ready-") && (!scenario.startsWith("lifecycle") || cancellationStarted || scenario === "lifecycle-activity-active") && scenario !== "never-active" && !(opened && scenario === "inactive-before-input")
+    let witnessActiveReady = true;
+    if (scenario === "witness-before-active") {
+      witnessActiveReady = witnessIdleSampled;
+      if (!witnessIdleSampled && existsSync(startWitnessPath)) witnessIdleSampled = true;
+    }
+    const active = !["refusal", "natural-settle"].includes(scenario) && !scenario.startsWith("ready-") && (!scenario.startsWith("lifecycle") || cancellationStarted || scenario === "lifecycle-activity-active") && scenario !== "never-active" && witnessActiveReady && !(opened && scenario === "inactive-before-input")
       && !(inputReceived && !["never-settles", "lifecycle-cleanup-never-settles"].includes(scenario)
         && !(scenario === "delayed-settle" && Date.now() - inputReceivedAt < 5200));
     res.setHeader("content-type", "application/json");
@@ -268,6 +278,27 @@ for (const scenario of ["escape", "ctrl-c"]) {
     });
   });
 }
+
+test("mux cancellation waits when the command witness arrives before AO reports active", async () => {
+  await withMuxFixture("witness-before-active", async fixture => {
+    const witnessSpec = fixture.startWitness();
+    const result = await interruptActiveTurn({ baseURL: fixture.baseURL, sessionId: "fixture",
+      startResponse: { ok: true }, timeoutMs: 600, interruptSpec: { input: "\x1b" }, witnessSpec });
+    assert.equal(result.passed, true, JSON.stringify(result));
+    assert.equal(fixture.inputReceived, true);
+  });
+});
+
+test("mux cancellation refuses a live PID with a different kernel start identity", async () => {
+  await withMuxFixture("escape", async fixture => {
+    const witnessSpec = fixture.startWitness("wrong-identity");
+    const result = await interruptActiveTurn({ baseURL: fixture.baseURL, sessionId: "fixture",
+      startResponse: { ok: true }, timeoutMs: 300, interruptSpec: { input: "\x1b" }, witnessSpec });
+    assert.equal(result.passed, false);
+    assert.equal(fixture.inputReceived, false);
+    assert.equal(result.witness.process.sameIdentity, false);
+  });
+});
 
 test("mux cancellation refuses a naturally settled command even when a start file exists", async () => {
   await withMuxFixture("natural-settle", async fixture => {

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash, randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import { access, lstat, mkdir, mkdtemp, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -49,7 +49,8 @@ const CANCELLATION_WITNESS = Object.freeze({
   token: "AO_CANCEL_WITNESS_V1",
   lateSideEffectDelayMs: 3_000,
 });
-const CANCELLATION_COMMAND = `node -e "const fs=require('node:fs');const token='${CANCELLATION_WITNESS.token}';fs.writeFileSync('${CANCELLATION_WITNESS.startPath}',JSON.stringify({token,pid:process.pid}));setTimeout(()=>fs.writeFileSync('${CANCELLATION_WITNESS.latePath}',JSON.stringify({token,pid:process.pid})),${CANCELLATION_WITNESS.lateSideEffectDelayMs});setTimeout(()=>{},120000)"`;
+const CANCELLATION_PROCESS_IDENTITY = "const processIdentity=(()=>{if(process.platform==='linux'){const value=fs.readFileSync('/proc/self/stat','utf8');const fields=value.slice(value.lastIndexOf(')')+2).trim().split(/\\s+/);return 'linux-proc-startticks:'+fields[19]}if(process.platform==='win32'){return 'win32-creation-ticks:'+cp.execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command','(Get-Process -Id '+process.pid+').StartTime.ToUniversalTime().Ticks'],{encoding:'utf8'}).trim()}return 'posix-lstart:'+cp.execFileSync('ps',['-o','lstart=','-p',String(process.pid)],{encoding:'utf8'}).trim()})();";
+const CANCELLATION_COMMAND = `node -e "const fs=require('node:fs');const cp=require('node:child_process');${CANCELLATION_PROCESS_IDENTITY}const token='${CANCELLATION_WITNESS.token}';fs.writeFileSync('${CANCELLATION_WITNESS.startPath}',JSON.stringify({token,pid:process.pid,processIdentity}));setTimeout(()=>fs.writeFileSync('${CANCELLATION_WITNESS.latePath}',JSON.stringify({token,pid:process.pid})),${CANCELLATION_WITNESS.lateSideEffectDelayMs});setTimeout(()=>{},120000)"`;
 const CANCELLATION_PROMPT = [
   "For cancellation testing, run the following command exactly as one foreground command (not detached):",
   CANCELLATION_COMMAND,
@@ -279,20 +280,77 @@ async function sessionState(baseURL, sessionId, timeoutMs) {
   return request({ baseURL, path: `sessions/${encodeURIComponent(sessionId)}`, timeoutMs });
 }
 
-function cancellationProcessState(pid) {
+function cancellationIdentityKind() {
+  if (process.platform === "linux") return "linux-proc-startticks";
+  if (process.platform === "win32") return "win32-creation-ticks";
+  return "posix-lstart";
+}
+
+function execFileText(file, args) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    execFile(file, args, { encoding: "utf8", timeout: 2_000, windowsHide: true }, (error, stdout) => {
+      if (error) rejectPromise(error);
+      else resolvePromise(stdout.trim());
+    });
+  });
+}
+
+async function kernelProcessStartIdentity(pid) {
+  if (process.platform === "linux") {
+    const value = await readFile(`/proc/${pid}/stat`, "utf8");
+    const fields = value.slice(value.lastIndexOf(")") + 2).trim().split(/\s+/);
+    if (!fields[19]) throw new Error("Linux process start ticks were unavailable");
+    return `linux-proc-startticks:${fields[19]}`;
+  }
+  if (process.platform === "win32") {
+    const value = await execFileText("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+      `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().Ticks`]);
+    if (!value) throw new Error("Windows process creation time was unavailable");
+    return `win32-creation-ticks:${value}`;
+  }
+  const value = await execFileText("ps", ["-o", "lstart=", "-p", String(pid)]);
+  if (!value) throw new Error("POSIX process start time was unavailable");
+  return `posix-lstart:${value}`;
+}
+
+async function cancellationProcessState(pid, expectedIdentitySha256) {
   try {
     process.kill(pid, 0);
-    return { running: true };
   } catch (error) {
-    if (error?.code === "ESRCH") return { running: false };
-    return { running: true, probeError: error instanceof Error ? error.message : String(error) };
+    if (error?.code === "ESRCH") return { running: false, sameIdentity: false };
+    return { running: true, sameIdentity: false, probeError: error instanceof Error ? error.message : String(error) };
+  }
+  try {
+    const identity = await kernelProcessStartIdentity(pid);
+    const identitySha256 = hash(identity);
+    return {
+      running: true,
+      sameIdentity: identitySha256 === expectedIdentitySha256,
+      identityKind: identity.slice(0, identity.indexOf(":")),
+      identitySha256,
+    };
+  } catch (error) {
+    try {
+      process.kill(pid, 0);
+    } catch (probeError) {
+      if (probeError?.code === "ESRCH") return { running: false, sameIdentity: false };
+    }
+    return { running: true, sameIdentity: false, probeError: error instanceof Error ? error.message : String(error) };
   }
 }
 
 function parseCancellationStart(response, spec) {
   const parsed = parseProof(response);
-  if (parsed?.token !== spec?.token || !Number.isSafeInteger(parsed?.pid) || parsed.pid < 1) return null;
-  return { tokenSha256: hash(parsed.token), pid: parsed.pid };
+  const identityPrefix = `${cancellationIdentityKind()}:`;
+  if (parsed?.token !== spec?.token || !Number.isSafeInteger(parsed?.pid) || parsed.pid < 1
+    || typeof parsed.processIdentity !== "string" || parsed.processIdentity.length > 512
+    || !parsed.processIdentity.startsWith(identityPrefix) || parsed.processIdentity.length === identityPrefix.length) return null;
+  return {
+    tokenSha256: hash(parsed.token),
+    pid: parsed.pid,
+    processIdentityKind: cancellationIdentityKind(),
+    processIdentitySha256: hash(parsed.processIdentity),
+  };
 }
 
 function missingWorkspaceFile(response) {
@@ -334,15 +392,17 @@ export async function interruptActiveTurn({ baseURL, sessionId, startResponse, t
     if (state === "active") observedActive = true;
     const witness = parseCancellationStart(startWitness, witnessSpec);
     return {
-      done: Boolean(witness) || SETTLED_STATES.has(state),
+      done: (Boolean(witness) && state === "active") || (observedActive && SETTLED_STATES.has(state)),
       stateResponse,
       startWitness,
       lateWitness,
       witness,
     };
   }, boundedTimeout, Math.min(250, Math.max(10, Math.floor(boundedTimeout / 10))));
-  const processState = active.witness ? cancellationProcessState(active.witness.pid) : null;
-  if (!active.done || !observedActive || !active.witness || !processState?.running
+  const processState = active.witness
+    ? await cancellationProcessState(active.witness.pid, active.witness.processIdentitySha256)
+    : null;
+  if (!active.done || !observedActive || !active.witness || !processState?.running || !processState.sameIdentity
     || !missingWorkspaceFile(active.lateWitness)
     || active.stateResponse?.response?.session?.activity?.state !== "active") {
     return {
@@ -376,7 +436,7 @@ async function interruptViaMux({ baseURL, sessionId, activeState, timeoutMs, spe
     transport: "websocket", sessionId, terminalHandleId: terminalId,
     terminalGeneration: generation, startedAt: now(), opened: false,
     inputBytes: 0, pongObserved: false, frames: [], timedOut: false,
-    qualification: "A system pong acknowledges mux processing, not provider cancellation; cancellation also requires a live command-start witness, the same session settling, the witnessed PID stopping, and no delayed side effect.",
+    qualification: "A system pong acknowledges mux processing, not provider cancellation; cancellation also requires a live command-start witness with matching kernel process-start identity, the same session settling, that exact process stopping, and no delayed side effect.",
     commandWitness: { ...commandWitness, startPath: witnessSpec.startPath, latePath: witnessSpec.latePath,
       lateSideEffectDelayMs: witnessSpec.lateSideEffectDelayMs },
   };
@@ -449,11 +509,14 @@ async function interruptViaMux({ baseURL, sessionId, activeState, timeoutMs, spe
       workspaceFile(baseURL, sessionId, witnessSpec.latePath, Math.max(1, deadline - performance.now())),
     ]);
     const freshWitness = parseCancellationStart(freshStart, witnessSpec);
-    if (!freshWitness || freshWitness.pid !== commandWitness.pid || !cancellationProcessState(commandWitness.pid).running) {
-      throw new Error("foreground command witness changed or its process exited before cancellation input");
+    const preInputProcess = await cancellationProcessState(commandWitness.pid, commandWitness.processIdentitySha256);
+    if (!freshWitness || freshWitness.pid !== commandWitness.pid
+      || freshWitness.processIdentitySha256 !== commandWitness.processIdentitySha256
+      || !preInputProcess.running || !preInputProcess.sameIdentity) {
+      throw new Error("foreground command witness changed, its process identity changed, or it exited before cancellation input");
     }
     if (!missingWorkspaceFile(preInputLate)) throw new Error("delayed side effect appeared before cancellation input");
-    websocket.preInputWitness = { start: apiEvidence(freshStart), late: apiEvidence(preInputLate), processRunning: true };
+    websocket.preInputWitness = { start: apiEvidence(freshStart), late: apiEvidence(preInputLate), process: preInputProcess };
     if (failure) throw new Error(failure);
     const data = { ch: "terminal", type: "data", id: terminalId, data: input.toString("base64") };
     socket.send(JSON.stringify(data)); trace("sent", data);
@@ -497,25 +560,29 @@ async function interruptViaMux({ baseURL, sessionId, activeState, timeoutMs, spe
     let processStopped = false;
     let lateWitness;
     while (performance.now() < proofDeadline) {
-      const processState = cancellationProcessState(commandWitness.pid);
-      if (!processState.running && !processStopped) {
+      const processState = await cancellationProcessState(commandWitness.pid, commandWitness.processIdentitySha256);
+      if ((!processState.running || !processState.sameIdentity) && !processStopped) {
         processStopped = true;
         websocket.processStoppedAt = now();
+        websocket.processStopEvidence = processState;
       }
       lateWitness = await workspaceFile(baseURL, sessionId, witnessSpec.latePath, Math.max(1, proofDeadline - performance.now()));
       if (!missingWorkspaceFile(lateWitness)) throw new Error("cancelled foreground command produced its delayed side effect");
       await sleep(Math.min(50, Math.max(5, proofDeadline - performance.now())));
     }
-    const finalProcess = cancellationProcessState(commandWitness.pid);
+    const finalProcess = await cancellationProcessState(commandWitness.pid, commandWitness.processIdentitySha256);
     const finalLate = await workspaceFile(baseURL, sessionId, witnessSpec.latePath, Math.max(1, timeoutMs));
-    if (!finalProcess.running && !processStopped) {
+    if ((!finalProcess.running || !finalProcess.sameIdentity) && !processStopped) {
       processStopped = true;
       websocket.processStoppedAt = now();
     }
-    if (finalProcess.running || !processStopped) throw new Error("foreground command process remained alive after cancellation");
+    if ((finalProcess.running && finalProcess.sameIdentity) || !processStopped) throw new Error("foreground command process remained alive after cancellation");
     if (!missingWorkspaceFile(finalLate)) throw new Error("delayed side effect was not proven absent after cancellation");
     websocket.postInterruptWitness = {
-      processRunning: false,
+      processRunning: finalProcess.running && finalProcess.sameIdentity,
+      pidRunning: finalProcess.running,
+      sameProcessIdentity: finalProcess.sameIdentity,
+      process: finalProcess,
       late: apiEvidence(finalLate),
       checkedAt: now(),
     };
