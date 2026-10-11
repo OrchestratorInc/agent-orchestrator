@@ -171,7 +171,7 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		prompt = string(data)
 	}
 	text, _ := json.Marshal(prompt + "\n\nThe actual AO workspace for this session is " + cfg.WorkspacePath + ".")
-	if err := writeManaged(filepath.Join(pluginDir, "index.ts"), "// "+sentinel+"\n"+pluginWitnessSource+"\nexport default {id: "+fmt.Sprintf("%q", managedID)+", instructions(context) { observeNativeIdentity(context); return "+string(text)+"; }};\n"); err != nil {
+	if err := writeManaged(filepath.Join(pluginDir, "index.ts"), "// "+sentinel+"\n"+pluginWitnessSource+"\nexport default {id: "+fmt.Sprintf("%q", managedID)+", instructions(context) { const instructions = "+string(text)+"; observeNativeIdentity(context, instructions); return instructions; }};\n"); err != nil {
 		return err
 	}
 	plugins[managedID] = encoded
@@ -263,21 +263,31 @@ if (names[event]) spawnSync("ao", ["hooks", "mastra-code", names[event]], {input
 // native state or sending a prompt, to observe the actual active thread instead.
 const pluginWitnessSource = `import fs from "node:fs";
 let identityObserver;
-function observeNativeIdentity(context) {
+function observeNativeIdentity(context, instructions) {
   const path = process.env.AO_MASTRA_RECEIPT_PATH;
   if (!path || identityObserver) return;
   const deadline = Date.now() + 60000;
-  identityObserver = setInterval(() => {
+  let updating = false;
+  identityObserver = setInterval(async () => {
+    if (updating) return;
     if (Date.now() >= deadline) { clearInterval(identityObserver); return; }
     const session = context.getActiveSession?.();
     const nativeId = session?.thread.getId();
     if (!nativeId || nativeId === "session-init") return;
-    const receipt = {nativeId, cwd:process.cwd(), generation:process.env.AO_RUNTIME_LAUNCH_ID};
+    updating = true;
     try {
+      // Native resume hydrates pluginInstructions from saved thread state. Only
+      // replace this plugin's prior workspace-scoped contribution; retain every
+      // other plugin and all native/system/repository instruction layers.
+      const suffix = "The actual AO workspace for this session is " + context.cwd + ".";
+      const current = session.state.get()?.pluginInstructions ?? [];
+      const others = current.filter(text => !text.endsWith(suffix));
+      await session.state.set({pluginInstructions:[...others, instructions]});
+      const receipt = {nativeId:session.thread.getId(), cwd:process.cwd(), generation:process.env.AO_RUNTIME_LAUNCH_ID};
       fs.writeFileSync(path+".tmp", JSON.stringify(receipt), {mode:0o600});
       fs.renameSync(path+".tmp", path);
       clearInterval(identityObserver);
-    } catch { /* Missing receipt fails closed in the supervisor. */ }
+    } catch { updating = false; /* Missing receipt fails closed in the supervisor. */ }
   }, 250);
   identityObserver.unref();
 }
