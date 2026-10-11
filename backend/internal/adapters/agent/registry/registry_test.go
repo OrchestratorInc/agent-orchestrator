@@ -181,6 +181,17 @@ func TestRegistryIncludesOMP(t *testing.T) {
 	t.Fatal("Harnessed does not contain omp")
 }
 
+func TestRegistryIncludesCodewhale(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("codewhale")
+	if !ok || adapter.Manifest().Name != "Codewhale" {
+		t.Fatalf("codewhale adapter = %+v, ok=%v", adapter, ok)
+	}
+}
+
 func TestRegistryIncludesMiMoCode(t *testing.T) {
 	reg, err := Build()
 	if err != nil {
@@ -213,6 +224,28 @@ func TestRegistryIncludesOpenHands(t *testing.T) {
 		}
 	}
 	t.Fatal("Harnessed does not contain openhands")
+}
+
+func TestRegistryIncludesCommandCode(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("command-code")
+	if !ok {
+		t.Fatal("registry does not contain command-code")
+	}
+	manifest := adapter.Manifest()
+	if manifest.Name != "Command Code" {
+		t.Fatalf("command-code manifest name = %q, want Command Code", manifest.Name)
+	}
+
+	for _, item := range Harnessed() {
+		if item.Harness == domain.HarnessCommandCode {
+			return
+		}
+	}
+	t.Fatal("Harnessed does not contain command-code")
 }
 
 func TestHarnessedExcludesFakeHarness(t *testing.T) {
@@ -270,6 +303,9 @@ func ensureAgentBinary(t *testing.T, name string) {
 	version := "0.80.6"
 	if name == "omp" {
 		version = "17.1.0"
+	}
+	if name == "codewhale" {
+		version = "0.10.0"
 	}
 	script := "#!/usr/bin/env sh\nif [ \"${1:-}\" = \"--version\" ]; then\n  echo \"" + name + " " + version + "\"\nfi\nexit 0\n"
 	if err := os.WriteFile(binPath, []byte(script), 0755); err != nil {

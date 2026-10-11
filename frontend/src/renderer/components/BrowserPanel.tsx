@@ -1752,7 +1752,7 @@ export function BrowserPanelView({
 					</div>
 					{showStaticPreview ? <StaticPreview url={navState.url} /> : null}
 					{navState.url === "" ? (
-						<div className="pointer-events-none absolute inset-0 grid place-items-center p-5 text-center font-mono text-xs text-passive">
+						<div className="pointer-events-none absolute inset-0 grid place-items-center p-5 text-center text-xs text-muted-foreground">
 							<p>{t("browser.emptyUrl")}</p>
 						</div>
 					) : null}

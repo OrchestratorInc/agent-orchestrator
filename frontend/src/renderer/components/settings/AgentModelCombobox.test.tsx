@@ -121,6 +121,32 @@ describe("AgentModelCombobox", () => {
 		expect(screen.getByRole("menuitem", { name: "GPT-5.6 Sol" })).toBeInTheDocument();
 	});
 
+	it("applies menuClassName to the menu", async () => {
+		renderCombobox([{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], { menuClassName: "w-56!" });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		const menu = screen.getByRole("menu");
+		expect(menu).toHaveClass("w-56!");
+	});
+
+	it("hides the can't-find footer in compact menus without custom entry", async () => {
+		renderCombobox([{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], {
+			compact: true,
+			allowCustom: false,
+			customModelEntry: "none",
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.queryByText("Can’t find your model?")).not.toBeInTheDocument();
+	});
+
+	it("keeps the can't-find footer in non-compact menus without custom entry", async () => {
+		renderCombobox([{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], {
+			allowCustom: false,
+			customModelEntry: "none",
+		});
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getByText("Can’t find your model?")).toBeInTheDocument();
+	});
+
 	it("clears an override when the reported agent model is selected", async () => {
 		const { onChange } = renderCombobox([
 			{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol", isDefault: true },
@@ -203,8 +229,14 @@ describe("AgentModelCombobox", () => {
 			expect(screen.queryByRole("menuitem", { name: "Other models" })).not.toBeInTheDocument();
 		});
 
-		it("still finds other models by search", async () => {
+		it("hides search while only the newest models are listed", async () => {
+			await open({ allowCustom: false, customModelEntry: "none" });
+			expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		});
+
+		it("still finds other models by search once they are expanded", async () => {
 			await open();
+			await userEvent.click(screen.getByRole("menuitem", { name: "Other models" }));
 			await userEvent.keyboard("opus 4.5");
 			expect(menuLabels()).toContain("Opus 4.5");
 		});
@@ -255,9 +287,9 @@ describe("AgentModelCombobox", () => {
 
 	it("keeps compact catalogs free of search and result-count chrome", async () => {
 		renderCombobox(
-			Array.from({ length: 7 }, (_, index) => ({
+			Array.from({ length: 4 }, (_, index) => ({
 				id: `gpt-${index}`,
-				label: index === 6 ? "GPT Luna" : `GPT ${index}`,
+				label: index === 3 ? "GPT Luna" : `GPT ${index}`,
 				provider: "OpenAI",
 			})),
 			{ allowCustom: false, customModelEntry: "none" },
@@ -285,11 +317,11 @@ describe("AgentModelCombobox", () => {
 		expect(onCustom).toHaveBeenCalledWith("private/model-id");
 	});
 
-	it("adds simple model search at eight models", async () => {
+	it("adds simple model search at five models", async () => {
 		renderCombobox(
-			Array.from({ length: 8 }, (_, index) => ({
-				id: index === 6 ? "gpt-luna" : index === 7 ? "claude-fable" : `model-${index}`,
-				label: index === 6 ? "Luna" : index === 7 ? "Fable" : `Model ${index}`,
+			Array.from({ length: 5 }, (_, index) => ({
+				id: index === 3 ? "gpt-luna" : index === 4 ? "claude-fable" : `model-${index}`,
+				label: index === 3 ? "Luna" : index === 4 ? "Fable" : `Model ${index}`,
 				provider: "OpenAI",
 			})),
 			{ allowCustom: false },

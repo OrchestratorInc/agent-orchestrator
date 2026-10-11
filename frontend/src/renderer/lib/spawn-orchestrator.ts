@@ -1,6 +1,7 @@
 import { apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId } from "./api-client";
 import { appI18n } from "../i18n";
 import { aoBridge } from "./bridge";
+import { resumeOnce } from "../hooks/useCanResumeAgent";
 import type { OrchestratorSpawnSource } from "./orchestrator-spawn-sources";
 import { captureRendererEvent } from "./telemetry";
 import { clientForSessionHost } from "./host-clients";
@@ -104,7 +105,12 @@ export async function spawnOrchestrator(
  * A 409 AGENT_NOT_EXITED means it is already running — the caller asked for a
  * working orchestrator and that is this one, so it resolves rather than throws.
  */
-export async function resumeOrchestrator(sessionId: string, hostId?: string): Promise<void> {
+export function resumeOrchestrator(sessionId: string, hostId?: string): Promise<void> {
+	// A local resume joins the one SessionView starts when it opens the session.
+	return hostId ? requestOrchestratorResume(sessionId, hostId) : resumeOnce(sessionId, () => requestOrchestratorResume(sessionId));
+}
+
+async function requestOrchestratorResume(sessionId: string, hostId?: string): Promise<void> {
 	const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/resume-agent", {
 		params: { path: { sessionId } },
 	});

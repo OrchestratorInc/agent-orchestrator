@@ -24,9 +24,14 @@ export type RemotesIpcDeps = {
 	registry: RemoteRegistry;
 	requireAccount: () => Promise<void>;
 	getAccountId: () => Promise<string>;
+	localIdentity: () => Promise<string | null>;
 	probe?: (entry: RemoteEntry) => Promise<RemoteHealth>;
 	identity?: (entry: Pick<RemoteEntry, "url">) => Promise<string>;
 };
+
+class LocalIdentityUnavailableError extends Error {
+	constructor() { super("Local AO identity is unavailable; remote connection is offline"); }
+}
 
 /**
  * Saved AO daemons, shared with the CLI's ~/.ao/remotes.json. Everything the
@@ -35,11 +40,27 @@ export type RemotesIpcDeps = {
  */
 export function registerRemotesIpc(
 	ipcMain: IpcMainLike,
-	{ file, registry, requireAccount, getAccountId, probe = probeRemote, identity = readRemoteIdentity }: RemotesIpcDeps,
+	{ file, registry, requireAccount, getAccountId, localIdentity, probe = probeRemote, identity = readRemoteIdentity }: RemotesIpcDeps,
 ): void {
 	const disconnect = (url: string) => registry.disconnect(url);
-	const checkedProbe = async (entry: RemoteEntry): Promise<RemoteHealth> => {
+	const refuseSelf = (hostId: string | undefined, localHostId: string | null) => {
+		if (localHostId && hostId === localHostId) throw new Error("This AO installation is already available locally; a remote connection to itself is not allowed.");
+	};
+	const requireLocalIdentity = async () => {
+		const hostId = await localIdentity();
+		if (!hostId) throw new LocalIdentityUnavailableError();
+		return hostId;
+	};
+	const checkConnectionContext = async (localHostId: string, account: string) => {
+		const [currentLocalHostId, currentAccount] = await Promise.all([localIdentity(), accountID()]);
+		if (currentAccount !== account) throw new Error("Account changed during remote connection.");
+		if (!currentLocalHostId) throw new LocalIdentityUnavailableError();
+		if (currentLocalHostId !== localHostId) throw new Error("Local AO identity changed; remote connection is offline");
+	};
+	const checkedProbe = async (entry: RemoteEntry, account: string): Promise<RemoteHealth> => {
 		if (!entry.hostId) throw new Error("remote host must be paired again to record its identity");
+		const localHostId = await requireLocalIdentity();
+		refuseSelf(entry.hostId, localHostId);
 		let actual: string;
 		try {
 			actual = await identity(entry);
@@ -47,8 +68,12 @@ export function registerRemotesIpc(
 			if (error instanceof IncompatibleRemoteVersionError) return "incompatible";
 			return "offline";
 		}
+		refuseSelf(actual, localHostId);
 		if (actual !== entry.hostId) throw new Error(`remote host identity changed for ${entry.url}; connection refused`);
-		return probe(entry);
+		await checkConnectionContext(localHostId, account);
+		const health = await probe(entry);
+		await checkConnectionContext(localHostId, account);
+		return health;
 	};
 	// Keep edits and connects ordered so an update cannot leave a stale proxy.
 	// ponytail: one queue includes network probes; split by host if five-host setup is too slow.
@@ -73,9 +98,16 @@ export function registerRemotesIpc(
 		return entries.filter((item) => !item.accountUserId || item.accountUserId === account);
 	};
 
-	ipcMain.handle("remotes:list", () => ordered(async () => toHostViews(await owned())));
+	ipcMain.handle("remotes:list", () => ordered(async () => {
+		await accountID();
+		const localHostId = await localIdentity();
+		const entries = await owned();
+		return toHostViews(entries.filter((entry) => !localHostId || entry.hostId !== localHostId));
+	}));
 	ipcMain.handle("remotes:add", async (_event, input: RemoteEntry) => ordered(async () => {
 		const account = await accountID();
+		const localHostId = await requireLocalIdentity();
+		refuseSelf(input.hostId, localHostId);
 		// Probe before saving: a host that never answered is worse than no host,
 		// because it looks configured.
 		let hostId: string;
@@ -85,8 +117,9 @@ export function registerRemotesIpc(
 			if (error instanceof IncompatibleRemoteVersionError) return "incompatible" as RemoteHealth;
 			return "offline" as RemoteHealth;
 		}
+		refuseSelf(hostId, localHostId);
 		const entry = { label: input.label, url: input.url, password: input.password, hostId, accountUserId: account };
-		const health = await checkedProbe(entry);
+		const health = await checkedProbe(entry, account);
 		if (health === "online") {
 			const previous = (await owned()).find((saved) => saved.hostId === hostId);
 			await addRemote(file, entry);
@@ -96,18 +129,34 @@ export function registerRemotesIpc(
 		return health;
 	}));
 	ipcMain.handle("remotes:update", async (_event, url: string, changes: RemoteChanges) => ordered(async () => {
+		const account = await accountID();
 		if (!(await owned()).some((entry) => entry.url === url)) throw new Error("Host does not belong to this account.");
 		const { accountUserId: _ignored, ...editable } = changes;
-		return updateSavedRemote(file, url, editable, disconnect, checkedProbe);
+		return updateSavedRemote(file, url, editable, disconnect, (entry) => checkedProbe(entry, account));
 	}));
 	ipcMain.handle("remotes:remove", async (_event, url: string) => ordered(async () => {
 		if (!(await owned()).some((entry) => entry.url === url)) throw new Error("Host does not belong to this account.");
 		return removeSavedRemote(file, url, disconnect);
 	}));
 	ipcMain.handle("remotes:connect", async (_event, url: string, hostId?: string) => ordered(async () => {
+		const account = await accountID();
 		if (!(await owned()).some((entry) => entry.url === url && (!hostId || entry.hostId === hostId))) throw new Error("Host does not belong to this account.");
 		const entry = await findRemote(file, url, hostId);
-		const health = await checkedProbe(entry);
+		const localHostId = await localIdentity();
+		refuseSelf(entry.hostId, localHostId);
+		// A local restart must not retire an already verified, unchanged remote proxy.
+		if (!localHostId) {
+			const connected = registry.connected(entry);
+			if (connected && await accountID() === account) return connected;
+			throw new LocalIdentityUnavailableError();
+		}
+		let health: RemoteHealth;
+		try { health = await checkedProbe(entry, account); }
+		catch (error) {
+			const connected = registry.connected(entry);
+			if (error instanceof LocalIdentityUnavailableError && connected && await accountID() === account) return connected;
+			throw error;
+		}
 		if (health !== "online") throw new Error(`host ${url} is ${health}`);
 		return registry.connect(entry);
 	}));
@@ -138,7 +187,12 @@ export function registerRemotesIpc(
 		const account = await accountID();
 		const entry = (await readRemotes(file)).find((saved) => saved.url === url && (!saved.accountUserId || saved.accountUserId === account));
 		if (!entry?.hostId) throw new Error("Pair this host before linking it to your account.");
-		if (await identity(entry) !== entry.hostId) throw new Error("Remote host identity changed; connection refused.");
+		const localHostId = await requireLocalIdentity();
+		refuseSelf(entry.hostId, localHostId);
+		const actual = await identity(entry);
+		refuseSelf(actual, localHostId);
+		if (actual !== entry.hostId) throw new Error("Remote host identity changed; connection refused.");
+		await checkConnectionContext(localHostId, account);
 		const endpoint = new URL("/api/v1/remote-host/account-token", entry.url);
 		const response = await fetch(endpoint, {
 			method: "POST", redirect: "error",
@@ -152,11 +206,15 @@ export function registerRemotesIpc(
 	}));
 	ipcMain.handle("remotes:disconnect", async (_event, url: string) => ordered(() => disconnect(url)));
 	ipcMain.handle("remotes:previewUrl", async (_event, hostId: string, sessionId: string, sourceUrl: string) => {
-		await requireAccount();
+		const account = await accountID();
+		refuseSelf(hostId, await localIdentity());
+		if (await accountID() !== account) throw new Error("Account changed during remote connection.");
 		return registry.previewUrl(hostId, sessionId, sourceUrl);
 	});
 	ipcMain.handle("remotes:resolvePreviewUrl", async (_event, hostId: string, sessionId: string, viewedUrl: string) => {
-		await requireAccount();
+		const account = await accountID();
+		refuseSelf(hostId, await localIdentity());
+		if (await accountID() !== account) throw new Error("Account changed during remote connection.");
 		return registry.resolvePreviewUrl(hostId, sessionId, viewedUrl);
 	});
 }

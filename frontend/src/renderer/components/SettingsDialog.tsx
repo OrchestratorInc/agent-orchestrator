@@ -1,4 +1,4 @@
-import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, X, type LucideIcon } from "lucide-react";
+import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -10,6 +10,7 @@ import { ensureCodexAccounts } from "../hooks/useCodexAccountsQuery";
 import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
+import { ProjectScriptsSettings } from "./ProjectScriptsSettings";
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
@@ -104,8 +105,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		{ id: "general", label: t("settings.project.general"), icon: MonitorCog },
 		{ id: "agents", label: t("settings.project.agents"), icon: Bot },
 	];
-	// Environment and cues are local-daemon features; remote hosts and Cloud projects do not expose them.
+	// Scripts, environment, and cues are local-daemon features; remote hosts and Cloud projects do not expose them.
 	if (!remoteHostId && !isCloudProjectSettings) {
+		projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
 		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
 	}
@@ -258,6 +260,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			}
 			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "cues") {
 				return <CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />;
+			}
+			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "scripts") {
+				return <ProjectScriptsSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
 			}
 			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "environment") {
 				return <ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;

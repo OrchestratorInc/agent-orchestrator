@@ -52,6 +52,7 @@ import { useConnectedHosts } from "../hooks/useHostConnection";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { useShellMaybe } from "../lib/shell-context";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
+import { ProjectTerminationFeedback } from "./ShellTopbar";
 import { ProjectBoardActions } from "./ProjectBoardActions";
 import { useDiagnosticsEnabled, usePressureState, useSessionMemory } from "../hooks/useSessionMemory";
 import { AppMemoryIndicator, toSessionFacts, useHasAppMemory } from "./SessionMemoryPanel";
@@ -224,6 +225,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 
 	const actions = projectId && (!hostId || connected) ? (
 		<>
+			<ProjectTerminationFeedback projectId={projectId} hostId={hostId} />
 			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />
 			{boardOwnsNotificationCenter ? (
 				<>

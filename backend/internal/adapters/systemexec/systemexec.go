@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // Adapter implements the host executable and command-runner ports.
@@ -64,8 +65,7 @@ func (Adapter) RunInstall(ctx context.Context, command ports.InstallCommand, std
 	if err != nil {
 		return err
 	}
-	configureProcessGroup(cmd)
-	cmd.Cancel = func() error { return killProcessTree(cmd) }
+	aoprocess.ConfigureTreeCancellation(cmd)
 	cmd.WaitDelay = 5 * time.Second
 	cmd.Stdin = strings.NewReader("")
 	cmd.Stdout = stdout
@@ -132,8 +132,7 @@ func capabilityOutput(parent context.Context, name string, args ...string) (stri
 	if err != nil {
 		return "", err
 	}
-	configureProcessGroup(cmd)
-	cmd.Cancel = func() error { return killProcessTree(cmd) }
+	aoprocess.ConfigureTreeCancellation(cmd)
 	cmd.WaitDelay = 5 * time.Second
 	out, err := cmd.Output()
 	if err != nil {
@@ -190,8 +189,7 @@ func (Adapter) Run(ctx context.Context, argv []string, stdout, stderr io.Writer)
 	if err != nil {
 		return err
 	}
-	configureProcessGroup(cmd)
-	cmd.Cancel = func() error { return killProcessTree(cmd) }
+	aoprocess.ConfigureTreeCancellation(cmd)
 	cmd.WaitDelay = 5 * time.Second
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, CircleArrowUp, ChevronLeft, ChevronRight, Copy, KeyRound, LoaderCircle, LogIn, LogOut, RefreshCw, Search, Trash2, TriangleAlert, X } from "lucide-react";
+import { BookOpen, Check, CircleArrowUp, ChevronLeft, ChevronRight, Copy, ExternalLink, KeyRound, LoaderCircle, LogIn, LogOut, RefreshCw, Search, Trash2, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -877,6 +877,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const installationPending = !agents.error && (agents.isPending || readinessAgent?.installation.state === "unknown");
 		const authPlan = agentAuthPlans.get(agentId);
 		const isSetupAction = authPlan?.action === "setup";
+		const isDocumentationAction = isSetupAction && authPlan?.launchMode === "documentation";
 		const authState = authStates[agentId];
 		const authStatus = readinessAgent?.authentication.state;
 		const rowAuthWorkflow = authWorkflow?.agentId === agentId ? authWorkflow : null;
@@ -884,7 +885,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const needsLogin = needsAuthentication(agentId);
 		const showUpdate = updateAvailable && !authPlans.isPending && !authPlans.isError;
 		const hasDiagnostics = Boolean(job && jobFailed && (job.error || job.output || job.method || job.expectedDestination));
-		const authSummary = authStatus === "configured" ? t("settings.harness.loggedIn")
+		const authSummary = authStatus === "configured" ? t(isSetupAction ? "settings.harness.configured" : "settings.harness.loggedIn")
 			: authStatus === "authorized" ? t(isSetupAction ? "settings.harness.configured" : "settings.harness.loggedIn")
 			: authStatus === "not_applicable" || (!authPlans.isPending && (!authPlan || authPlan.action === "instructions")) ? t("settings.harness.installed")
 			: authPlan && !authPlan.available ? (authPlan.reason ?? t("settings.harness.authFailed"))
@@ -927,6 +928,8 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 					{failed ? t("settings.harness.retryInstall") : t("settings.harness.install")}
 				</Button> : !installationPending && plan?.command ? <Button type="button" size="sm" variant="outline" className={actionClass} onClick={() => void copyText(agentId, plan.command!)}>
 					{copiedAgent === agentId ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{t(copiedAgent === agentId ? "settings.harness.copied" : "settings.harness.copyCommand")}
+				</Button> : !installationPending && plan?.documentationUrl ? <Button type="button" data-harness-primary-action="" size="sm" variant="outline" className={actionClass} onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>
+					<ExternalLink aria-hidden="true" />{t("settings.harness.installGuide")}
 				</Button> : null
 			) : showUpdate && !needsLogin ? (
 				canUpdate ? <Button type="button" data-harness-primary-action="" size="sm" className={actionClass} onClick={() => requestInstalledOperation(agentId, "update")}>
@@ -937,10 +940,10 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const accountAction = authBusy ? authBusyAction
 			: busy ? null
 			: needsLogin ? <Button type="button" data-harness-primary-action="" data-terminal-focus-handoff="true" size="sm" className={actionClass} disabled={!authPlan?.available || Boolean(authWorkflow)} onClick={() => void startAuth(agentId)}>
-				{t(isSetupAction ? "settings.harness.setup" : authState?.error ? "settings.harness.retryLogin" : "settings.harness.login")}
+				{t(isDocumentationAction ? "settings.harness.viewDocumentation" : isSetupAction ? "settings.harness.setup" : authState?.error ? "settings.harness.retryLogin" : "settings.harness.login")}
 			</Button>
 			: canRelogin ? <Button type="button" data-terminal-focus-handoff="true" size="sm" variant="outline" className={actionClass} disabled={Boolean(authWorkflow)} onClick={() => void startAuth(agentId)}>
-				{t(isSetupAction ? "settings.harness.openSetup" : "settings.harness.loginAgain")}
+				{t(isDocumentationAction ? "settings.harness.viewDocumentation" : isSetupAction ? "settings.harness.openSetup" : "settings.harness.loginAgain")}
 			</Button> : null;
 		return {
 			agentId, plan, job, isInstalled, methodId, maintenanceMethod, canUpdate, canUninstall, manualOnly, updateReason, uninstallReason,

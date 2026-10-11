@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerRemotesIpc, remotesFilePath, type RemotesIpcDeps } from "./remotes-main";
 import { RemoteRegistry } from "./remote-registry";
+import { createLocalHostIdentity } from "./remote-request";
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
@@ -27,9 +28,9 @@ const signedIn = async () => {};
 
 function registerRemotes(
 	ipcMain: Parameters<typeof registerRemotesIpc>[0],
-	deps: Omit<RemotesIpcDeps, "getAccountId"> & { getAccountId?: () => Promise<string> },
+	deps: Omit<RemotesIpcDeps, "getAccountId" | "localIdentity"> & Partial<Pick<RemotesIpcDeps, "getAccountId" | "localIdentity">>,
 ): void {
-	registerRemotesIpc(ipcMain, { ...deps, getAccountId: deps.getAccountId ?? (async () => TEST_ACCOUNT) });
+	registerRemotesIpc(ipcMain, { localIdentity: async () => "h_this_mac", ...deps, getAccountId: deps.getAccountId ?? (async () => TEST_ACCOUNT) });
 }
 
 async function tempFile(): Promise<string> {
@@ -52,6 +53,180 @@ describe("remotesFilePath", () => {
 });
 
 describe("registerRemotesIpc", () => {
+	it("hides this installation without deleting its account record or original password", async () => {
+		const file = await tempFile();
+		const original = await readFile(file, "utf8");
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn, localIdentity: async () => "h_workbox" });
+		await expect(ipc.invoke("remotes:list")).resolves.toEqual([]);
+		expect(await readFile(file, "utf8")).toBe(original);
+		await ipc.invoke("remotes:importAccountHost", TEST_ACCOUNT, { hostId: "h_workbox", label: "New name", url: "https://rotated.example", password: "a".repeat(64) });
+		await ipc.invoke("remotes:pruneAccountHosts", TEST_ACCOUNT, ["h_workbox"]);
+		await expect(ipc.invoke("remotes:list")).resolves.toEqual([]);
+		expect(JSON.parse(await readFile(file, "utf8")).remotes).toEqual([
+			{ hostId: "h_workbox", label: "New name", url: "https://rotated.example", password: "old", accountUserId: TEST_ACCOUNT },
+		]);
+	});
+
+	it.each(["remotes:add", "remotes:update", "remotes:connect", "remotes:issueAccountToken", "remotes:previewUrl", "remotes:resolvePreviewUrl"])("rejects direct self access through %s before credentials or proxies", async (channel) => {
+		const file = await tempFile();
+		const original = await readFile(file, "utf8");
+		const probe = vi.fn(async () => "online" as const);
+		const start = vi.fn(async () => { throw new Error("proxy must not start"); });
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(start), requireAccount: signedIn, localIdentity: async () => "h_workbox", identity: async () => "h_workbox", probe });
+		const args = channel === "remotes:add" ? [{ label: "self", url: "https://self.example", password: "new" }]
+			: channel === "remotes:update" ? ["http://192.0.2.1:1", { password: "new" }]
+			: channel.includes("Preview") || channel === "remotes:previewUrl" ? ["h_workbox", "s_1", "http://localhost:3000"]
+			: ["http://192.0.2.1:1"];
+		await expect(ipc.invoke(channel, ...args)).rejects.toThrow(/itself/);
+		expect(probe).not.toHaveBeenCalled();
+		expect(start).not.toHaveBeenCalled();
+		expect(await readFile(file, "utf8")).toBe(original);
+	});
+
+	it("refuses an address that resolves to self under another saved host ID before authentication", async () => {
+		const file = await tempFile();
+		const probe = vi.fn(async () => "online" as const);
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn, identity: async () => "h_this_mac", probe });
+		await expect(ipc.invoke("remotes:update", "http://192.0.2.1:1", { url: "https://self.example" })).rejects.toThrow(/itself/);
+		await expect(ipc.invoke("remotes:issueAccountToken", "http://192.0.2.1:1")).rejects.toThrow(/itself/);
+		expect(probe).not.toHaveBeenCalled();
+	});
+
+	it("defers new connections while identity is unknown, then recovers without changing the password", async () => {
+		const file = await tempFile();
+		const identity = vi.fn(async () => "h_workbox");
+		const probe = vi.fn(async () => "online" as const);
+		let localHostId: string | null = null;
+		const start = vi.fn(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId: string, sourceUrl: string) => sourceUrl, resolvePreviewUrl: (_sessionId: string, viewedUrl: string) => viewedUrl, close: async () => {} }));
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(start), requireAccount: signedIn, identity, probe, localIdentity: async () => localHostId });
+		await expect(ipc.invoke("remotes:list")).resolves.toHaveLength(1);
+		await expect(ipc.invoke("remotes:connect", "http://192.0.2.1:1")).rejects.toThrow(/ is offline$/);
+		expect(identity).not.toHaveBeenCalled();
+		expect(probe).not.toHaveBeenCalled();
+		expect(start).not.toHaveBeenCalled();
+		localHostId = "h_this_mac";
+		await expect(ipc.invoke("remotes:connect", "http://192.0.2.1:1")).resolves.toMatchObject({ hostId: "h_workbox" });
+		expect(start).toHaveBeenCalledWith(expect.objectContaining({ password: "old" }));
+		localHostId = null;
+		await expect(ipc.invoke("remotes:connect", "http://192.0.2.1:1")).resolves.toMatchObject({ hostId: "h_workbox" });
+		expect(start).toHaveBeenCalledOnce();
+		expect(probe).toHaveBeenCalledOnce();
+	});
+
+	it.each(["remotes:add", "remotes:update", "remotes:issueAccountToken"])("defers %s without presenting a credential when local identity is unknown", async (channel) => {
+		const file = await tempFile();
+		const original = await readFile(file, "utf8");
+		const identity = vi.fn(async () => "h_workbox");
+		const probe = vi.fn(async () => "online" as const);
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn, localIdentity: async () => null, identity, probe });
+		const args = channel === "remotes:add" ? [{ label: "Other", url: "https://other.example", password: "new" }]
+			: channel === "remotes:update" ? ["http://192.0.2.1:1", { password: "new" }] : ["http://192.0.2.1:1"];
+		await expect(ipc.invoke(channel, ...args)).rejects.toThrow(/ is offline$/);
+		expect(identity).not.toHaveBeenCalled();
+		expect(probe).not.toHaveBeenCalled();
+		expect(await readFile(file, "utf8")).toBe(original);
+	});
+
+	it.each(["http://192.0.2.1:3011", "https://other.trycloudflare.com:443"])("preserves another host's pairing through %s", async (url) => {
+		const file = await tempFile();
+		await writeFile(file, JSON.stringify({ remotes: [{ hostId: "h_workbox", label: "Other", url, password: "original", accountUserId: TEST_ACCOUNT }] }));
+		const original = await readFile(file, "utf8");
+		const probe = vi.fn(async () => "online" as const);
+		const start = vi.fn(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId: string, sourceUrl: string) => sourceUrl, resolvePreviewUrl: (_sessionId: string, viewedUrl: string) => viewedUrl, close: async () => {} }));
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(start), requireAccount: signedIn, identity: async () => "h_workbox", probe });
+		await expect(ipc.invoke("remotes:connect", url)).resolves.toMatchObject({ hostId: "h_workbox", url });
+		expect(probe).toHaveBeenCalledWith(expect.objectContaining({ url, password: "original" }));
+		expect(start).toHaveBeenCalledWith(expect.objectContaining({ url, password: "original" }));
+		expect(await readFile(file, "utf8")).toBe(original);
+	});
+
+	it("retains an existing verified remote if local identity becomes unavailable during its probe", async () => {
+		const file = await tempFile();
+		const close = vi.fn(async () => {});
+		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl, close }));
+		await registry.connect({ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: "old" });
+		let localHostId: string | null = "h_this_mac";
+		const probe = vi.fn(async () => { localHostId = null; return "online" as const; });
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, { file, registry, requireAccount: signedIn, identity: async () => "h_workbox", localIdentity: async () => localHostId, probe });
+		await expect(ipc.invoke("remotes:connect", "http://192.0.2.1:1")).resolves.toMatchObject({ hostId: "h_workbox" });
+		expect(close).not.toHaveBeenCalled();
+	});
+
+	it("invalidates identity on a same-port restart before allowing another remote connection", async () => {
+		const file = await tempFile();
+		let generation = 1;
+		const localProbe = vi.fn().mockResolvedValueOnce("h_this_mac").mockRejectedValueOnce(new Error("starting")).mockResolvedValueOnce("h_workbox");
+		const localIdentity = createLocalHostIdentity(() => ({ port: 4011, generation }), localProbe);
+		const start = vi.fn(async () => { throw new Error("unused"); });
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(start), requireAccount: signedIn, localIdentity });
+		await expect(ipc.invoke("remotes:list")).resolves.toHaveLength(1);
+		generation++;
+		await expect(ipc.invoke("remotes:connect", "http://192.0.2.1:1")).rejects.toThrow(/ is offline$/);
+		await expect(ipc.invoke("remotes:list")).resolves.toEqual([]);
+		await expect(ipc.invoke("remotes:connect", "http://192.0.2.1:1")).rejects.toThrow(/itself/);
+		expect(start).not.toHaveBeenCalled();
+	});
+
+	it.each(["account", "local identity"])("does not authenticate after %s changes while identity is pending", async (changed) => {
+		const file = await tempFile();
+		let account = TEST_ACCOUNT;
+		let localHostId = "h_this_mac";
+		const probe = vi.fn(async () => "online" as const);
+		const start = vi.fn(async () => { throw new Error("proxy must not start"); });
+		let finish!: (hostId: string) => void;
+		const identity = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(start), requireAccount: signedIn, getAccountId: async () => account, localIdentity: async () => localHostId, identity, probe });
+		const pending = ipc.invoke("remotes:connect", "http://192.0.2.1:1");
+		await vi.waitFor(() => expect(identity).toHaveBeenCalled());
+		if (changed === "account") account = "another-account";
+		else localHostId = "h_workbox";
+		finish("h_workbox");
+		await expect(pending).rejects.toThrow(/changed/);
+		expect(probe).not.toHaveBeenCalled();
+		expect(start).not.toHaveBeenCalled();
+	});
+
+	it("lists the current account rather than an account that signed out while local identity was pending", async () => {
+		const file = await tempFile();
+		let account = TEST_ACCOUNT;
+		let finish!: (hostId: string) => void;
+		const localIdentity = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn, getAccountId: async () => account, localIdentity });
+		const pending = ipc.invoke("remotes:list");
+		await vi.waitFor(() => expect(localIdentity).toHaveBeenCalled());
+		account = "another-account";
+		finish("h_this_mac");
+		await expect(pending).resolves.toEqual([]);
+	});
+
+	it("does not start a proxy after the account changes during the initial local identity request", async () => {
+		const file = await tempFile();
+		let account = TEST_ACCOUNT;
+		let finish!: (hostId: string) => void;
+		const localIdentity = vi.fn().mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; })).mockResolvedValue("h_this_mac");
+		const probe = vi.fn(async () => "online" as const);
+		const start = vi.fn(async () => { throw new Error("proxy must not start"); });
+		const ipc = fakeIpc();
+		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(start), requireAccount: signedIn, getAccountId: async () => account, localIdentity, identity: async () => "h_workbox", probe });
+		const pending = ipc.invoke("remotes:connect", "http://192.0.2.1:1");
+		await vi.waitFor(() => expect(localIdentity).toHaveBeenCalled());
+		account = "another-account";
+		finish("h_this_mac");
+		await expect(pending).rejects.toThrow(/Account changed/);
+		expect(probe).not.toHaveBeenCalled();
+		expect(start).not.toHaveBeenCalled();
+	});
+
 	it("rejects remote-host access before sign-in without reading saved hosts", async () => {
 		const file = await tempFile();
 		const registry = new RemoteRegistry(async () => { throw new Error("proxy must not start"); });

@@ -229,6 +229,7 @@ export function ShellTopbar({
 				data-compact-actions={compactActions ? "true" : "false"}
 				data-testid="workspace-topbar-actions"
 			>
+				{isProjectBoardRoute || isOrchestrator ? <ProjectTerminationFeedback projectId={projectId} hostId={hostId} /> : null}
 				{!boardActionsInPanel && isProjectBoardRoute ? (
 					<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={project?.kind === CLOUD_PROJECT_KIND} style={noDragStyle} />
 				) : null}
@@ -236,7 +237,6 @@ export function ShellTopbar({
 					<>
 						{isOrchestrator ? (
 							<>
-								{!hostId ? <ProjectTerminationFeedback projectId={projectId} /> : null}
 								{sessionAction ? (
 									<div className="inline-flex shrink-0 items-center" style={noDragStyle}>
 										{sessionAction}
@@ -476,26 +476,26 @@ export function TopbarArchiveButton({
 	);
 }
 
-function ProjectTerminationFeedback({ projectId }: { projectId: string | undefined }) {
+export function ProjectTerminationFeedback({ projectId, hostId }: { projectId: string | undefined; hostId?: string }) {
 	const { t } = useTranslation();
-	const states = useProjectTerminateSessionStates(projectId);
+	const states = useProjectTerminateSessionStates(projectId, hostId);
 	if (states.length === 0) return null;
 
 	return (
 		<div aria-label={t("shell.sessionTerminationStatus")} className="flex max-w-content-max items-center gap-2">
 			{states.map((state) =>
 				state.error ? (
-					<TopbarActionError className="max-w-48 truncate" key={state.session.id} title={state.error}>
-						{state.session.title}: {state.error}
+					<TopbarActionError className="max-w-48 truncate" key={state.session.id} title={`${state.session.title}: ${state.error}`}>
+						{state.error}
 					</TopbarActionError>
 				) : (
 					<span
 						className="max-w-40 truncate text-caption text-muted-foreground"
 						key={state.session.id}
 						role="status"
-						title={t("shell.archivingNamed", { title: state.session.title })}
+						title={t(state.cleanupPending ? "shell.workspaceCleanupPending" : "shell.archivingNamed", { title: state.session.title })}
 					>
-						{t("shell.archivingNamed", { title: state.session.title })}
+						{t(state.cleanupPending ? "shell.workspaceCleanupPending" : "shell.archivingNamed", { title: state.session.title })}
 					</span>
 				),
 			)}

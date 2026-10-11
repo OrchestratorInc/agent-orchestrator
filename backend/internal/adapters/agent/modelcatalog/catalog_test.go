@@ -274,16 +274,64 @@ func TestAiderUsesDocumentedDiscoveryCommand(t *testing.T) {
 	}
 }
 
+func TestCodewhaleResolvedModelMarksCatalogDefault(t *testing.T) {
+	models := []ports.AgentModelInfo{
+		{ID: "deepseek-chat", Label: "DeepSeek Chat"},
+		{ID: "deepseek-flash", Label: "DeepSeek Flash"},
+	}
+	got := applyCodewhaleResolvedModel(models, []byte(
+		"requested: deepseek-flash\nresolved: deepseek-flash\nprovider: deepseek\nused_fallback: false\n"))
+	if len(got) != 2 {
+		t.Fatalf("models len = %d, want 2", len(got))
+	}
+	if !got[1].IsDefault || got[0].IsDefault {
+		t.Fatalf("default flags = [%v, %v], want [false, true]", got[0].IsDefault, got[1].IsDefault)
+	}
+}
+
+func TestCodewhaleResolvedModelOutsideCatalogIsAppended(t *testing.T) {
+	models := []ports.AgentModelInfo{{ID: "deepseek-chat", Label: "DeepSeek Chat"}}
+	got := applyCodewhaleResolvedModel(models, []byte(
+		"requested: deepseek-v4-pro\nresolved: deepseek-v4-pro\nprovider: deepseek\n"))
+	if len(got) != 2 {
+		t.Fatalf("models len = %d, want the resolved model appended", len(got))
+	}
+	appended := got[1]
+	if appended.ID != "deepseek-v4-pro" || !appended.IsDefault || appended.Provider != "deepseek" {
+		t.Fatalf("appended entry = %+v, want deepseek-v4-pro default from deepseek", appended)
+	}
+	if got[0].IsDefault {
+		t.Fatal("the unmatched catalog entry must not be marked default")
+	}
+}
+
+func TestCodewhaleResolveFailureLeavesCatalogUnchanged(t *testing.T) {
+	models := []ports.AgentModelInfo{{ID: "deepseek-chat", Label: "DeepSeek Chat"}}
+	for name, output := range map[string][]byte{
+		"empty":       nil,
+		"unparseable": []byte("provider: deepseek\nmodel: none\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := applyCodewhaleResolvedModel(models, output)
+			if len(got) != 1 || got[0].IsDefault {
+				t.Fatalf("catalog changed on %s: %+v", name, got)
+			}
+		})
+	}
+}
+
 func TestOMPAndHelpBackedAgentsUseDocumentedDiscoveryCommands(t *testing.T) {
 	tests := []struct {
 		agent string
 		want  []string
 	}{
 		{agent: "omp", want: []string{"models", "--json"}},
+		{agent: "codewhale", want: []string{"models", "--json"}},
 		{agent: "copilot", want: []string{"help", "config"}},
 		{agent: "droid", want: []string{"exec", "--help"}},
 		{agent: "crush", want: []string{"models"}},
 		{agent: "fx", want: []string{"models", "--json"}},
+		{agent: "command-code", want: []string{"--list-models"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.agent, func(t *testing.T) {
@@ -673,6 +721,36 @@ gpt-oss-120b-medium  GPT-OSS 120B (Medium)
 		{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6 (Thinking)"},
 		{ID: "gemini-3.7-flash-high", Label: "Gemini 3.7 Flash (High)"},
 		{ID: "gpt-oss-120b-medium", Label: "GPT-OSS 120B (Medium)"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("models = %#v, want %#v", got, want)
+	}
+}
+
+func TestCommandCodeCatalogParsesTabularModelList(t *testing.T) {
+	got, err := commandSpecs["command-code"].parser([]byte(`Available models  ·  3 models
+
+Anthropic
+
+anthropic/claude-opus-4-1  Claude Opus 4.1
+anthropic/claude-sonnet-4-6  FREE Claude Sonnet 4.6 (default)
+
+OpenAI
+
+openai/gpt-5.4  GPT-5.4
+
+Pass the full id, or just the short name after the last "/":
+cmd --model openai/gpt-5.4
+
+Docs:  https://commandcode.ai/docs/models
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ports.AgentModelInfo{
+		{ID: "anthropic/claude-sonnet-4-6", Label: "FREE Claude Sonnet 4.6", IsDefault: true},
+		{ID: "anthropic/claude-opus-4-1", Label: "Claude Opus 4.1"},
+		{ID: "openai/gpt-5.4", Label: "GPT-5.4"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("models = %#v, want %#v", got, want)

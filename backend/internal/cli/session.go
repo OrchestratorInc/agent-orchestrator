@@ -100,8 +100,9 @@ type sessionResponse struct {
 }
 
 type killSessionResponse struct {
-	SessionID string `json:"sessionId"`
-	Freed     bool   `json:"freed"`
+	SessionID      string `json:"sessionId"`
+	Freed          bool   `json:"freed"`
+	CleanupPending bool   `json:"cleanupPending"`
 }
 
 type restoreSessionResponse struct {
@@ -619,6 +620,10 @@ func (c *commandContext) killSession(ctx context.Context, cmd *cobra.Command, id
 	}
 	var res killSessionResponse
 	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/kill", struct{}{}, &res); err != nil {
+		return err
+	}
+	if res.CleanupPending {
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "session %s killed (workspace cleanup pending)\n", res.SessionID)
 		return err
 	}
 	if res.Freed {

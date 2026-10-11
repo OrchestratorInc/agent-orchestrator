@@ -25,6 +25,12 @@ const previewHostLabel = "ao-preview"
 // to, not by a string marker that a real workspace path could also contain.
 const previewArtifactHostLabel = "ao-preview-artifact"
 
+// inlineArtifactHostLabel is the reserved first label for the origin an HTML
+// artifact is framed from inside the chat thread. Unlike the preview origins
+// it is refused by the daemon's CORS check, so a page framed there keeps a
+// real origin for its own files yet cannot call the daemon API.
+const inlineArtifactHostLabel = "ao-inline-artifact"
+
 // ErrPreviewHostUnsupported indicates that a session ID cannot be represented
 // by a standards-compliant localhost hostname.
 var ErrPreviewHostUnsupported = errors.New("session ID is too long for a preview hostname")
@@ -214,6 +220,19 @@ func labeledFileURL(baseURL, label string, id domain.SessionID, entry string) (s
 	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String(), nil
+}
+
+// InlineArtifactFileURL builds the origin that frames a session's HTML
+// artifact inline in the chat thread, on a host distinct from both preview
+// origins.
+func InlineArtifactFileURL(baseURL string, id domain.SessionID, entry string) (string, error) {
+	return labeledFileURL(baseURL, inlineArtifactHostLabel, id, entry)
+}
+
+// SessionIDFromInlineArtifactHost decodes the session identity carried by an
+// InlineArtifactFileURL host.
+func SessionIDFromInlineArtifactHost(rawHost string) (domain.SessionID, bool) {
+	return sessionIDFromLabeledHost(rawHost, inlineArtifactHostLabel)
 }
 
 // SessionIDFromHost decodes the session identity carried by a FileURL host.

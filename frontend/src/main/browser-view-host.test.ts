@@ -4582,7 +4582,7 @@ describe("browser annotation IPC", () => {
 });
 
 describe("dispose after the window is destroyed", () => {
-	it("does not touch contentView/views once the window reports destroyed", async () => {
+	it.each(["live", "already destroyed"])("closes %s tab contents without touching the destroyed window", async (contentsState) => {
 		const handlers = new Map<string, InvokeHandler>();
 		const view = {
 			webContents: {
@@ -4600,9 +4600,8 @@ describe("dispose after the window is destroyed", () => {
 				send: () => undefined,
 				setWindowOpenHandler: () => undefined,
 				stop: () => undefined,
-				// Real Electron throws "Object has been destroyed" here after close.
 				close: vi.fn(() => {
-					throw new Error("Object has been destroyed");
+					if (contentsState === "already destroyed") throw new Error("Object has been destroyed");
 				}),
 			},
 			setBounds: () => undefined,
@@ -4614,7 +4613,10 @@ describe("dispose after the window is destroyed", () => {
 		});
 		const host = createBrowserViewHost({
 			mainWindow: {
-				contentView: { addChildView: () => undefined, removeChildView },
+				get contentView() {
+					if (destroyed) throw new Error("Object has been destroyed");
+					return { addChildView: () => undefined, removeChildView };
+				},
 				getContentBounds: () => ({ x: 0, y: 0, width: 800, height: 600 }),
 				webContents: { id: 1, send: () => undefined },
 				isDestroyed: () => destroyed,
@@ -4636,9 +4638,9 @@ describe("dispose after the window is destroyed", () => {
 
 		destroyed = true; // window "closed" fired
 
-		expect(() => host.dispose()).not.toThrow();
+		await expect(host.dispose()).resolves.toBeUndefined();
 		expect(removeChildView).not.toHaveBeenCalled();
-		expect(view.webContents.close).not.toHaveBeenCalled();
+		expect(view.webContents.close).toHaveBeenCalledOnce();
 	});
 
 	it("deduplicates host disposal while runtime cleanup is in flight", async () => {
