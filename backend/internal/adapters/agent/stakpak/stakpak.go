@@ -1,5 +1,6 @@
 // Package stakpak prepares the native v0.3.88 TUI contract. It is intentionally
-// unregistered: permission admission, current identity and restore are unqualified.
+// unregistered: native shell cancellation leaks descendants, and restored
+// standing instructions accumulate in persisted history.
 package stakpak
 
 import (
@@ -13,10 +14,10 @@ import (
 )
 
 // ErrUnqualified is a hard refusal, preventing manager restore fallback to fresh.
-var ErrUnqualified = errors.New("stakpak TUI permission, identity and activity contracts require native qualification")
+var ErrUnqualified = errors.New("stakpak v0.3.88 TUI is unqualified: shell descendants survive cancellation and restored instructions accumulate")
 
 // Plugin provides independent metadata while refusing unqualified execution.
-type Plugin struct { agentbase.Base }
+type Plugin struct{ agentbase.Base }
 
 func New() *Plugin { return &Plugin{} }
 
@@ -29,7 +30,7 @@ var _ ports.AgentExitDetector = (*Plugin)(nil)
 func (*Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID: "stakpak", Name: "Stakpak", Version: "0.1.0",
-		Description: "Unregistered source preparation for native Stakpak TUI v0.3.88.",
+		Description:  "Unregistered source preparation for native Stakpak TUI v0.3.88.",
 		Capabilities: []adapters.Capability{adapters.CapabilityAgent},
 	}
 }
@@ -43,7 +44,9 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 
 // AuthStatus cannot infer effective profile credentials or authorization.
 func (*Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	if err := ctx.Err(); err != nil { return ports.AgentAuthStatusUnknown, err }
+	if err := ctx.Err(); err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
 	return ports.AgentAuthStatusUnknown, nil
 }
 
@@ -52,19 +55,34 @@ func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 }
 
 func (*Plugin) GetLaunchCommand(ctx context.Context, _ ports.LaunchConfig) ([]string, error) {
-	if err := ctx.Err(); err != nil { return nil, err }
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return nil, ErrUnqualified
 }
 
 func (*Plugin) GetRestoreCommand(ctx context.Context, _ ports.RestoreConfig) ([]string, bool, error) {
-	if err := ctx.Err(); err != nil { return nil, false, err }
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	return nil, false, ErrUnqualified
 }
 
 func (*Plugin) GetAgentHooks(ctx context.Context, _ ports.WorkspaceHookConfig) error {
-	if err := ctx.Err(); err != nil { return err }
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return ErrUnqualified
 }
 
 // SessionInfo deliberately inherits unavailable from Base: AO metadata alone
 // does not prove the current native conversation after native session switches.
+
+// GetPromptDeliveryStrategy records the observed native TUI contract. Public
+// launch remains refused; accepting a positional task does not submit it.
+func (*Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return ports.PromptDeliveryAfterStart, nil
+}

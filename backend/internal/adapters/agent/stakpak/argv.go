@@ -14,15 +14,18 @@ import (
 
 const maxInstructionBytes = 128 * 1024
 
-// freshArgs prepares only source-backed argv, not permission admission. Keep
+// freshArgs prepares startup flags only, not permission admission or task delivery. Keep
 // this private until native qualification supplies the missing launch gates.
-// Contract: cli/src/main.rs Cli positional prompt and --workdir; interactive
+// Contract: v0.3.88 ignores positional tasks in interactive mode. Use the
+// after-start strategy for tasks if launch is eventually qualified; interactive
 // system message insertion at mode_interactive.rs:525 followed by native
 // TaskBoardContextHook prepending its embedded base prompt.
 // Native main.rs trims file content before insertion; validation checks the
 // original file against AO text, not byte-for-byte model consumption.
 func freshArgs(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
-	if err := ctx.Err(); err != nil { return nil, err }
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if cfg.Config != (ports.AgentConfig{}) || cfg.Permissions != "" ||
 		len(cfg.AllowedTools) != 0 || len(cfg.DisallowedTools) != 0 || cfg.NativeSessionID != "" {
 		return nil, errors.New("stakpak preparation does not support model, permission, tool or native identity overrides")
@@ -35,27 +38,32 @@ func freshArgs(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	}
 	args := []string{"--workdir", cfg.WorkspacePath}
 	if cfg.SystemPrompt != "" || cfg.SystemPromptFile != "" {
-		if err := validateInstructions(ctx, cfg.SystemPromptFile, cfg.SystemPrompt); err != nil { return nil, err }
+		if err := validateInstructions(ctx, cfg.SystemPromptFile, cfg.SystemPrompt); err != nil {
+			return nil, err
+		}
 		args = append(args, "--system-prompt-file", cfg.SystemPromptFile)
 	}
-	// The option terminator also prevents a task equal to a native subcommand
-	// from selecting that subcommand. Native Clap behavior still needs live proof.
-	if cfg.Prompt != "" { args = append(args, "--", cfg.Prompt) }
 	return args, nil
 }
 
 func validateInstructions(ctx context.Context, path, expected string) error {
-	if err := ctx.Err(); err != nil { return err }
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !filepath.IsAbs(path) || strings.ContainsRune(path, 0) {
 		return errors.New("stakpak instructions require an absolute file path")
 	}
 	info, err := os.Lstat(path)
-	if err != nil { return errors.New("stakpak instruction file is unavailable") }
+	if err != nil {
+		return errors.New("stakpak instruction file is unavailable")
+	}
 	if !info.Mode().IsRegular() || info.Size() > maxInstructionBytes {
 		return errors.New("stakpak instruction file must be a bounded regular file")
 	}
 	file, err := os.Open(path)
-	if err != nil { return errors.New("stakpak instruction file is unreadable") }
+	if err != nil {
+		return errors.New("stakpak instruction file is unreadable")
+	}
 	defer file.Close()
 	opened, err := file.Stat()
 	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
