@@ -506,8 +506,11 @@ export function TaskComposer({
 	const selectedMode = mode || (modelTouched ? (catalogUsesModes ? catalogDefaultOption : "") : defaultModeForSelectedAgent);
 	const selectedModelOrMode = (selectedModel || selectedMode).trim();
 	const projectModelOrMode = projectModelForSelectedAgent || projectModeForSelectedAgent;
+	// With no project model, pin the visible catalog default: the agent's own
+	// configured default may differ from the model shown in New Task.
 	const requestedModel = selectedModelOrMode && selectedModelOrMode !== projectModelOrMode && (
-		selectedModelOrMode !== catalogDefaultOption || isConcreteModelID(projectModelOrMode)
+		selectedModelOrMode !== catalogDefaultOption || isConcreteModelID(projectModelOrMode) ||
+		(!catalogUsesModes && !projectModelOrMode)
 	) ? selectedModelOrMode : undefined;
 	const rememberedEffortIsExplicit = Boolean(
 		rememberedConfigForSelectedAgent &&
