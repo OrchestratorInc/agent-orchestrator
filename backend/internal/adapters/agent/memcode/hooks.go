@@ -184,6 +184,22 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	return hookutil.EnsureWorkspaceGitignore(dir, "hooks.json")
 }
 
+// CleanupWorkspace removes only the private launch artifacts owned by the
+// terminated AO session. The project-local Memcode hook configuration remains.
+func (*Plugin) CleanupWorkspace(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !component.MatchString(cfg.SessionID) || !filepath.IsAbs(cfg.DataDir) {
+		return errors.New("invalid private memcode cleanup location")
+	}
+	path := filepath.Join(cfg.DataDir, "agent-launches", "memcode", cfg.SessionID)
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("memcode cleanup: %w", err)
+	}
+	return nil
+}
+
 // DeriveActivityState maps supported native tool activity hooks.
 func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	switch event {
