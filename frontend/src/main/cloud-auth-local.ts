@@ -1,6 +1,6 @@
 // Dev-only email/password sign-in against a LOCAL Docker control plane running
 // AO_CLOUD_LOCAL_AUTH. This lets an unpackaged desktop build exercise the whole
-// AO cloud flow with zero NodeOps/WorkOS: the CP mints an OPAQUE token (prefix
+// AO cloud flow with no hosted provider or WorkOS: the CP mints an OPAQUE token (prefix
 // "ao_local_", not a JWT) which is stored in the same safeStorage-encrypted
 // store as a WorkOS session, so cloud-cp-proxy.ts and the terminal WS authorize
 // with no further changes.

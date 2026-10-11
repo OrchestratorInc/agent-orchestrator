@@ -10,13 +10,13 @@ API_FAMILY="${AO_CLOUD_API_TASK_FAMILY:-ao-cloud-staging-api}"
 MIGRATION_FAMILY="${AO_CLOUD_MIGRATION_TASK_FAMILY:-ao-cloud-staging-migrate}"
 ROLLBACK_ALARM="${AO_CLOUD_ROLLBACK_ALARM:-ao-cloud-staging-target-5xx}"
 RUNTIME_DATABASE_USER="${AO_CLOUD_RUNTIME_DATABASE_USER:-ao_cloud_app}"
-SANDBOX_PROVIDER="${AO_CLOUD_SANDBOX_PROVIDER:-nodeops}"
+SANDBOX_PROVIDER="${AO_CLOUD_SANDBOX_PROVIDER:-coder}"
 # Every sandbox provider this control plane serves. Defaults to the single
-# primary; a multi-provider CP (for example nodeops,coder) plumbs and preserves
+# primary; a multi-provider CP (for example coder,freestyle) plumbs and preserves
 # all their secrets so a deploy never drops an inactive provider's credentials.
 PROVIDERS="${AO_CLOUD_SANDBOX_PROVIDERS:-$SANDBOX_PROVIDER}"
-NODEOPS_SECRET_ID="${AO_CLOUD_NODEOPS_SECRET_ID:-ao-cloud/staging/nodeops}"
 CODER_SECRET_ID="${AO_CLOUD_CODER_SECRET_ID:-ao-cloud/staging/coder}"
+FREESTYLE_SECRET_ID="${AO_CLOUD_FREESTYLE_SECRET_ID:-ao-cloud/staging/freestyle}"
 WORKER_SECRET_ID="${AO_CLOUD_WORKER_SECRET_ID:-ao-cloud/staging/worker}"
 HEAD_SHA="$(git rev-parse HEAD)"
 RELEASE="${1:-$HEAD_SHA}"
@@ -63,14 +63,14 @@ if [[ ! "$RELEASE" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,199}$ ]]; then
 	echo "Release must be a Git SHA or release tag." >&2
 	exit 1
 fi
-if [[ "$SANDBOX_PROVIDER" != "nodeops" && "$SANDBOX_PROVIDER" != "coder" ]]; then
-	echo "AO_CLOUD_SANDBOX_PROVIDER must be nodeops or coder." >&2
+if [[ "$SANDBOX_PROVIDER" != "coder" && "$SANDBOX_PROVIDER" != "freestyle" ]]; then
+	echo "AO_CLOUD_SANDBOX_PROVIDER must be coder or freestyle." >&2
 	exit 1
 fi
 IFS=',' read -ra _providers_list <<<"$PROVIDERS"
 for _provider in "${_providers_list[@]}"; do
-	if [[ "$_provider" != "nodeops" && "$_provider" != "coder" ]]; then
-		echo "AO_CLOUD_SANDBOX_PROVIDERS entries must each be nodeops or coder, got: $_provider" >&2
+	if [[ "$_provider" != "coder" && "$_provider" != "freestyle" ]]; then
+		echo "AO_CLOUD_SANDBOX_PROVIDERS entries must each be coder or freestyle, got: $_provider" >&2
 		exit 1
 	fi
 done
@@ -107,24 +107,8 @@ worker_settings="$(
 		--output text
 )"
 # Resolve, validate, and later plumb the secrets for every provider this control
-# plane serves. A multi-provider deploy (nodeops,coder) keeps both providers'
+# plane serves. A multi-provider deploy (coder,freestyle) keeps both providers'
 # secrets instead of pruning the inactive one.
-if providers_has nodeops; then
-	nodeops_secret_arn="$(secret_arn "$NODEOPS_SECRET_ID")"
-	nodeops_settings="$(
-		aws_cli secretsmanager get-secret-value \
-			--secret-id "$NODEOPS_SECRET_ID" \
-			--query SecretString \
-			--output text
-	)"
-	./scripts/validate-hosted-settings.py \
-		--nodeops <(printf '%s' "$nodeops_settings") \
-		--worker <(printf '%s' "$worker_settings")
-	# Optional per-harness template mapping. It remains plaintext so a missing
-	# optional JSON key cannot prevent the ECS container from starting.
-	rootfs_by_harness="$(jq -r '.rootfs_by_harness // "{}"' <<<"$nodeops_settings")"
-	unset nodeops_settings
-fi
 if providers_has coder; then
 	coder_secret_arn="$(secret_arn "$CODER_SECRET_ID")"
 	coder_settings="$(
@@ -137,6 +121,22 @@ if providers_has coder; then
 		--coder <(printf '%s' "$coder_settings") \
 		--worker <(printf '%s' "$worker_settings")
 	unset coder_settings
+fi
+if providers_has freestyle; then
+	freestyle_secret_arn="$(secret_arn "$FREESTYLE_SECRET_ID")"
+	freestyle_settings="$(
+		aws_cli secretsmanager get-secret-value \
+			--secret-id "$FREESTYLE_SECRET_ID" \
+			--query SecretString \
+			--output text
+	)"
+	./scripts/validate-hosted-settings.py \
+		--freestyle <(printf '%s' "$freestyle_settings") \
+		--worker <(printf '%s' "$worker_settings")
+	# Snapshot ids are not credentials; plaintext keeps a malformed optional key
+	# from blocking container start.
+	snapshot_by_harness="$(jq -r '.snapshot_by_harness' <<<"$freestyle_settings")"
+	unset freestyle_settings
 fi
 unset worker_settings
 
@@ -242,14 +242,31 @@ scan_image "$WORKER_REPOSITORY" "$worker_image_digest"
 # PTY upload (internal/sandbox/coder/client.go preinstalledCheck). Rebuild and
 # publish it here, before the rollout, from the exact control-plane digest so the
 # baked binaries are byte-identical to what the reconciler advertises
-# (AO_WORKER_EXPECTED_SHA256). The nodeops path is unaffected: its template is
-# published out of band by scripts/publish-nodeops-template.sh.
+# (AO_WORKER_EXPECTED_SHA256).
 if providers_has coder; then
 	AWS_REGION="$REGION" \
 		AO_CLOUD_CP_IMAGE="$control_image" \
 		AO_CLOUD_CODER_SECRET_ID="$CODER_SECRET_ID" \
 		AO_CLOUD_CODER_WORKSPACE_IMAGE_TAG="${IMAGE_TAG}" \
 		./scripts/publish-coder-workspace.sh
+fi
+
+# Freestyle boots sessions from snapshots with ao-worker baked in, so a release
+# that changes the worker must rebake them; otherwise every new session first
+# downloads the current worker from the control plane. Bake from the exact
+# control-plane digest, record the new snapshot ids in the Freestyle secret, and
+# give this release's task those ids directly.
+if providers_has freestyle; then
+	snapshot_by_harness="$(
+		AWS_PROFILE="${AWS_PROFILE:-}" \
+			AWS_REGION="$REGION" \
+			AO_CLOUD_CP_IMAGE="$control_image" \
+			AO_CLOUD_FREESTYLE_SECRET_ID="$FREESTYLE_SECRET_ID" \
+			AO_CLOUD_FREESTYLE_UPDATE_SECRET=1 \
+			./scripts/publish-freestyle-snapshot.sh | tail -n 1
+	)"
+	jq -e 'type == "object"' <<<"$snapshot_by_harness" >/dev/null ||
+		{ echo "Freestyle snapshot bake did not return a snapshot map." >&2; exit 1; }
 fi
 
 register_task_definition() {
@@ -297,17 +314,12 @@ register_task_definition() {
 				--set-secret "AO_CLOUD_CODER_WORKER_TOKEN_TTL=${coder_secret_arn}:worker_token_ttl::"
 			)
 		fi
-		if providers_has nodeops; then
+		if providers_has freestyle; then
 			render_args+=(
-				--set-environment "AO_CLOUD_NODEOPS_ROOTFS_BY_HARNESS=${rootfs_by_harness}"
-				--set-secret "AO_CLOUD_NODEOPS_BASE_URL=${nodeops_secret_arn}:base_url::"
-				--set-secret "AO_CLOUD_NODEOPS_API_KEY=${nodeops_secret_arn}:api_key::"
-				--set-secret "AO_CLOUD_NODEOPS_DEFAULT_SHAPE=${nodeops_secret_arn}:default_shape::"
-				--set-secret "AO_CLOUD_NODEOPS_DEFAULT_ROOTFS=${nodeops_secret_arn}:default_rootfs::"
-				--set-secret "AO_CLOUD_NODEOPS_INGRESS=${nodeops_secret_arn}:ingress::"
-				--set-secret "AO_CLOUD_NODEOPS_SSH_KEY_PATH=${nodeops_secret_arn}:ssh_key_path::"
-				--set-secret "AO_CLOUD_NODEOPS_REGION=${nodeops_secret_arn}:region::"
-				--set-secret "AO_CLOUD_NODEOPS_WORKER_TOKEN_TTL=${nodeops_secret_arn}:worker_token_ttl::"
+				--set-environment "AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS=${snapshot_by_harness}"
+				--set-secret "AO_CLOUD_FREESTYLE_API_KEY=${freestyle_secret_arn}:api_key::"
+				--set-secret "AO_CLOUD_FREESTYLE_DEFAULT_SNAPSHOT=${freestyle_secret_arn}:default_snapshot::"
+				--set-secret "AO_CLOUD_FREESTYLE_WORKER_TOKEN_TTL=${freestyle_secret_arn}:worker_token_ttl::"
 			)
 		fi
 	else

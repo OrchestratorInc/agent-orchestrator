@@ -15,7 +15,7 @@ set -euo pipefail
 # every spawn AND every resume falls back to the upload path. Running this as
 # part of the deploy (see deploy-staging.sh) removes the manual rebake step.
 #
-# Run from the cloud/ directory, like publish-nodeops-template.sh.
+# Run from the cloud/ directory, like publish-freestyle-snapshot.sh.
 
 AWS_REGION="${AWS_REGION:-eu-north-1}"
 CODER_SECRET_ID="${AO_CLOUD_CODER_SECRET_ID:-ao-cloud/staging/coder}"

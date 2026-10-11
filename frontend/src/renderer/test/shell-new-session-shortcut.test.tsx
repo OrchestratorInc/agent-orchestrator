@@ -612,6 +612,16 @@ describe("shell workspace startup", () => {
 		});
 	});
 
+	it("shows the Cloud loader while opening a cloud orchestrator", async () => {
+		shellMocks.state.workspaces = [{ ...workspaces[0], kind: "cloud", sessions: [] }];
+		shellMocks.state.workspaceQuery.data = shellMocks.state.workspaces;
+		shellMocks.state.routeParams = { projectId: workspaces[0].id };
+		useUiStore.getState().setProjectProvisioning(workspaces[0].id, true);
+		await renderShell();
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+		expect(screen.queryByLabelText("Message the agent")).not.toBeInTheDocument();
+	});
+
 	it("opens optimistic chat during submission without a loading page", async () => {
 		useUiStore.getState().setProjectCreationPending(true);
 		const view = await renderShell();

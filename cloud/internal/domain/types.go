@@ -216,6 +216,38 @@ func DecodeProjectCoderConfig(config json.RawMessage) (cfg ProjectCoderConfig, o
 	return *envelope.Coder, true
 }
 
+// RepositorySandboxSnapshot is a prepared VM snapshot for one repository and
+// harness: the harness snapshot (BaseSnapshotID) with the repository cloned.
+// It is shared by every project in the organization on that repository and
+// outlives them. RepositoryIdentity is the GitHub owner/name it was cloned
+// from, which a session's repository must still match to use it.
+type RepositorySandboxSnapshot struct {
+	OrgID              string
+	RepositoryKey      string
+	RepositoryIdentity string
+	Provider           string
+	Harness            string
+	SnapshotID         string
+	BaseSnapshotID     string
+	CreatedAt          time.Time
+}
+
+// DecodeProjectSandboxProvider returns the sandbox provider a project was set up
+// to run its sessions on, stored in its Config as {"sandboxProvider": "..."}.
+// It is empty when the project leaves the choice to the session.
+func DecodeProjectSandboxProvider(config json.RawMessage) string {
+	if len(config) == 0 {
+		return ""
+	}
+	var envelope struct {
+		SandboxProvider string `json:"sandboxProvider"`
+	}
+	if err := json.Unmarshal(config, &envelope); err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(envelope.SandboxProvider))
+}
+
 // MergeProjectCoderConfig stores the coder dev-kit config under the "coder" key
 // of a project's Config, preserving any other keys the config already carries.
 func MergeProjectCoderConfig(config json.RawMessage, coder ProjectCoderConfig) (json.RawMessage, error) {

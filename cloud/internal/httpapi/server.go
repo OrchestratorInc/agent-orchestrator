@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/projectsnapshot"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -204,6 +205,8 @@ type Server struct {
 	terminalStreams         *terminalStreams
 	workWaiters             *workWaiters
 	notificationWake        func()
+	sandboxWake             func()
+	projectSnapshots        ProjectSnapshotter
 	notificationWaiters     *notificationWaiters
 	// workerBinariesBySHA serves the content-addressed worker/helper binaries
 	// so a worker with a stale baked copy can heal itself to this exact build.
@@ -248,6 +251,18 @@ type Options struct {
 	TerminalStreamEnabled   bool
 	TerminalRelayEnabled    bool
 	NotificationWake        func()
+	// SandboxWake asks the sandbox reconciler for an immediate pass; nil when
+	// this control plane runs no reconciler.
+	SandboxWake func()
+	// ProjectSnapshots prepares per-project Freestyle snapshots; nil disables
+	// them and every session boots from its harness snapshot.
+	ProjectSnapshots ProjectSnapshotter
+}
+
+// ProjectSnapshotter looks up and builds a project's prepared snapshot.
+type ProjectSnapshotter interface {
+	Lookup(context.Context, projectsnapshot.Request) (string, bool)
+	Ensure(projectsnapshot.Request)
 }
 
 func New(options Options) *Server {
@@ -332,6 +347,8 @@ func New(options Options) *Server {
 		terminalStreams:           newTerminalStreams(),
 		workWaiters:               newWorkWaiters(),
 		notificationWake:          options.NotificationWake,
+		sandboxWake:               options.SandboxWake,
+		projectSnapshots:          options.ProjectSnapshots,
 		notificationWaiters:       newNotificationWaiters(),
 	}
 	workerBinaries := [][]byte{options.WorkerBinary, options.WorkerHelperBinary}

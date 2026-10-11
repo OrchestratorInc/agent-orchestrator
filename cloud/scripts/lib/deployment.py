@@ -27,16 +27,6 @@ TASK_KEYS = {
     "runtimePlatform",
 }
 
-NODEOPS_SECRET_ENV = {
-    "AO_CLOUD_NODEOPS_BASE_URL": "base_url",
-    "AO_CLOUD_NODEOPS_API_KEY": "api_key",
-    "AO_CLOUD_NODEOPS_DEFAULT_SHAPE": "default_shape",
-    "AO_CLOUD_NODEOPS_DEFAULT_ROOTFS": "default_rootfs",
-    "AO_CLOUD_NODEOPS_INGRESS": "ingress",
-    "AO_CLOUD_NODEOPS_SSH_KEY_PATH": "ssh_key_path",
-    "AO_CLOUD_NODEOPS_REGION": "region",
-    "AO_CLOUD_NODEOPS_WORKER_TOKEN_TTL": "worker_token_ttl",
-}
 CODER_SECRET_ENV = {
     "AO_CLOUD_CODER_URL": "url",
     "AO_CLOUD_CODER_TOKEN": "token",
@@ -47,6 +37,14 @@ CODER_SECRET_ENV = {
     "AO_CLOUD_CODER_DURABLE_ROOT": "durable_root",
     "AO_CLOUD_CODER_WORKER_TOKEN_TTL": "worker_token_ttl",
 }
+FREESTYLE_SECRET_ENV = {
+    "AO_CLOUD_FREESTYLE_API_KEY": "api_key",
+    "AO_CLOUD_FREESTYLE_DEFAULT_SNAPSHOT": "default_snapshot",
+    "AO_CLOUD_FREESTYLE_WORKER_TOKEN_TTL": "worker_token_ttl",
+}
+# Every harness a hosted Freestyle deployment serves needs its own baked
+# snapshot (scripts/publish-freestyle-snapshot.sh).
+FREESTYLE_HARNESSES = ("claude-code", "codex", "cursor")
 WORKER_SECRET_ENV = {
     "AO_CLOUD_WORKER_SIGNING_KEY": "signing_key",
     "AO_CLOUD_MAX_ACTIVE_SANDBOXES_PER_ORG": "max_active_sandboxes_per_org",
@@ -55,14 +53,22 @@ WORKER_SECRET_ENV = {
     "AO_CLOUD_WORKER_HEARTBEAT_TIMEOUT": "worker_heartbeat_timeout",
 }
 PROVIDER_SECRET_ENV = {
-    "nodeops": NODEOPS_SECRET_ENV,
     "coder": CODER_SECRET_ENV,
+    "freestyle": FREESTYLE_SECRET_ENV,
 }
-PROVIDER_ENV_NAMES = set(NODEOPS_SECRET_ENV) | set(CODER_SECRET_ENV) | {
-    "AO_CLOUD_NODEOPS_ROOTFS_BY_HARNESS",
-}
-PROVIDER_AUTO_PAUSE_ENV = "AO_CLOUD_NODEOPS_AUTO_PAUSE_MINUTES"
-NODEOPS_PLAINTEXT_ENV = {"AO_CLOUD_NODEOPS_ROOTFS_BY_HARNESS"}
+FREESTYLE_PLAINTEXT_ENV = {"AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS"}
+PROVIDER_ENV_NAMES = (
+    set(CODER_SECRET_ENV)
+    | set(FREESTYLE_SECRET_ENV)
+    | FREESTYLE_PLAINTEXT_ENV
+)
+# Settings of the retired NodeOps provider. A task definition rendered from an
+# older revision still carries them, so they are always pruned; that is what
+# lets the retired ao-cloud/<env>/nodeops secret be deleted.
+RETIRED_PROVIDER_ENV_PREFIX = "AO_CLOUD_NODEOPS_"
+# Freestyle's own idle pause is not reported as an idle stop, so the reconciler
+# would resume it at once; the control plane's idle scanner owns pausing.
+FREESTYLE_AUTO_PAUSE_ENV = "AO_CLOUD_FREESTYLE_AUTO_PAUSE_SECONDS"
 WORKER_BINARY_PATH = "/ao-worker"
 WORKER_HELPER_BINARY_PATH = "/ao"
 _DIGEST_IMAGE = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
@@ -76,7 +82,7 @@ def resolve_sandbox_providers(
 
     A single-provider deployment passes sandbox_providers=None and gets exactly
     [sandbox_provider], preserving the historical behavior. A multi-provider
-    deployment (for example nodeops,coder) passes every provider it offers so
+    deployment (for example coder,freestyle) passes every provider it offers so
     all of their secrets are plumbed and preserved, and the primary
     (sandbox_provider) must be one of them.
     """
@@ -100,13 +106,13 @@ def _inactive_provider_env_names(providers: list[str]) -> set[str]:
     """Provider env/secret names to prune: those of providers NOT in the set.
 
     Names belonging to an available provider are kept so a multi-provider task
-    retains, for example, its coder secrets during a nodeops-primary deploy.
+    retains, for example, its coder secrets during a freestyle-primary deploy.
     """
     keep: set[str] = set()
     for provider in providers:
         keep |= set(PROVIDER_SECRET_ENV[provider])
-    if "nodeops" in providers:
-        keep |= NODEOPS_PLAINTEXT_ENV
+    if "freestyle" in providers:
+        keep |= FREESTYLE_PLAINTEXT_ENV
     return PROVIDER_ENV_NAMES - keep
 
 
@@ -130,12 +136,12 @@ def validate_hosted_settings(
     provider_settings: dict[str, Any],
     worker: dict[str, Any],
     *,
-    provider: str = "nodeops",
+    provider: str = "coder",
 ) -> None:
     if provider not in PROVIDER_SECRET_ENV:
         raise ValueError(f"unsupported hosted sandbox provider: {provider}")
-    if provider == "nodeops":
-        _validate_nodeops_settings(provider_settings)
+    if provider == "freestyle":
+        _validate_freestyle_settings(provider_settings)
     else:
         _validate_coder_settings(provider_settings)
     _require_secret_strings("worker", worker, WORKER_SECRET_ENV.values())
@@ -157,21 +163,40 @@ def validate_hosted_settings(
         raise ValueError("worker worker_heartbeat_timeout must be at least 30s")
 
 
-def _validate_nodeops_settings(nodeops: dict[str, Any]) -> None:
-    _require_secret_strings("NodeOps", nodeops, NODEOPS_SECRET_ENV.values())
-    if "auto_pause_minutes" in nodeops:
-        raise ValueError("NodeOps settings must not configure provider auto-pause")
+def _validate_freestyle_settings(freestyle: dict[str, Any]) -> None:
+    _require_secret_strings("Freestyle", freestyle, FREESTYLE_SECRET_ENV.values())
+    if "auto_pause_seconds" in freestyle:
+        raise ValueError("Freestyle settings must not configure provider auto-pause")
+    for key in ("api_key", "default_snapshot"):
+        if not freestyle[key].strip():
+            raise ValueError(f"Freestyle {key} must not be empty")
+    if _duration_seconds(freestyle["worker_token_ttl"]) <= 0:
+        raise ValueError("Freestyle worker_token_ttl must be positive")
+    snapshots = freestyle_snapshot_by_harness(freestyle)
+    missing = [harness for harness in FREESTYLE_HARNESSES if harness not in snapshots]
+    if missing:
+        raise ValueError(
+            "Freestyle snapshot_by_harness is missing: " + ", ".join(missing)
+        )
 
-    base_url = urlparse(nodeops["base_url"])
-    if base_url.scheme != "https" or not base_url.netloc:
-        raise ValueError("NodeOps base_url must be an absolute HTTPS URL")
-    for key in ("api_key", "default_shape", "default_rootfs"):
-        if not nodeops[key].strip():
-            raise ValueError(f"NodeOps {key} must not be empty")
-    if nodeops["ingress"].strip().lower() not in ("", "enabled", "disabled"):
-        raise ValueError("NodeOps ingress must be enabled, disabled, or empty")
-    if _duration_seconds(nodeops["worker_token_ttl"]) <= 0:
-        raise ValueError("NodeOps worker_token_ttl must be positive")
+
+def freestyle_snapshot_by_harness(freestyle: dict[str, Any]) -> dict[str, str]:
+    """The harness-to-snapshot map, stored in the secret as a JSON string."""
+    raw = freestyle.get("snapshot_by_harness", "")
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("Freestyle snapshot_by_harness must be a JSON object string")
+    try:
+        snapshots = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError("Freestyle snapshot_by_harness must be valid JSON") from error
+    if not isinstance(snapshots, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str) or not value.strip()
+        for key, value in snapshots.items()
+    ):
+        raise ValueError(
+            "Freestyle snapshot_by_harness must map harness names to snapshot ids"
+        )
+    return snapshots
 
 
 def _validate_coder_settings(coder: dict[str, Any]) -> None:
@@ -253,7 +278,7 @@ def build_task_definition(
     region: str,
     runtime_database_user: str = "",
     worker_image: str = "",
-    sandbox_provider: str = "nodeops",
+    sandbox_provider: str = "coder",
     sandbox_providers: list[str] | None = None,
     environment_overrides: dict[str, str] | None = None,
     secret_overrides: dict[str, str] | None = None,
@@ -286,18 +311,20 @@ def build_task_definition(
     providers = resolve_sandbox_providers(sandbox_provider, sandbox_providers)
     # Prune only the env/secret names of providers this task does NOT serve, so a
     # multi-provider task keeps every available provider's secrets (a
-    # nodeops-primary deploy must not drop coder credentials, and vice versa).
+    # freestyle-primary deploy must not drop coder credentials, and vice versa).
     prune_names = _inactive_provider_env_names(providers)
-    if (
-        PROVIDER_AUTO_PAUSE_ENV in environment_overrides
-        or PROVIDER_AUTO_PAUSE_ENV in secret_overrides
-    ):
+    auto_pause_names = {FREESTYLE_AUTO_PAUSE_ENV}
+    overridden = environment_overrides.keys() | secret_overrides.keys()
+    if auto_pause_names & overridden:
         raise ValueError("provider auto-pause must not be configured by deployment")
+    if any(name.startswith(RETIRED_PROVIDER_ENV_PREFIX) for name in overridden):
+        raise ValueError("retired provider settings must not be configured by deployment")
     values = {
         item["name"]: item["value"]
         for item in container.get("environment", [])
-        if item["name"] != PROVIDER_AUTO_PAUSE_ENV
+        if item["name"] not in auto_pause_names
         and item["name"] not in prune_names
+        and not item["name"].startswith(RETIRED_PROVIDER_ENV_PREFIX)
     }
     values["AO_CLOUD_RELEASE"] = release
     if container_name == "control-plane":
@@ -326,8 +353,9 @@ def build_task_definition(
     secrets = {
         item["name"]: item["valueFrom"]
         for item in container.get("secrets", [])
-        if item["name"] != PROVIDER_AUTO_PAUSE_ENV
+        if item["name"] not in auto_pause_names
         and item["name"] not in prune_names
+        and not item["name"].startswith(RETIRED_PROVIDER_ENV_PREFIX)
     }
     secrets.update(secret_overrides)
     if container_name == "control-plane":
@@ -398,7 +426,7 @@ def validate_task_artifacts(
         != WORKER_HELPER_BINARY_PATH
     ):
         raise ValueError("task definition does not use packaged /ao helper")
-    if PROVIDER_AUTO_PAUSE_ENV in environment:
+    if FREESTYLE_AUTO_PAUSE_ENV in environment:
         raise ValueError("task definition configures provider auto-pause")
     if environment.get("AO_CLOUD_TERMINAL_STREAM") != "1":
         raise ValueError("task definition does not enable terminal streaming")
@@ -445,8 +473,13 @@ def validate_task_artifacts(
             "task definition retains inactive provider secrets: "
             + ", ".join(retained)
         )
-    if PROVIDER_AUTO_PAUSE_ENV in secrets:
+    if FREESTYLE_AUTO_PAUSE_ENV in secrets:
         raise ValueError("task definition loads provider auto-pause from a secret")
+    if any(
+        name.startswith(RETIRED_PROVIDER_ENV_PREFIX)
+        for name in environment.keys() | secrets.keys()
+    ):
+        raise ValueError("task definition retains retired provider settings")
     tags = {item["key"]: item["value"] for item in source.get("tags", [])}
     if tags.get("WorkerImage") != worker_image:
         raise ValueError("task definition uses an unexpected worker image")

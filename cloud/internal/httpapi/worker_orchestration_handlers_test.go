@@ -79,19 +79,17 @@ func (s *stubChildStore) CreateOrchestratorChild(
 	return domain.Session{ID: "00000000-0000-0000-0000-0000000000c3", Kind: "worker"}, nil
 }
 
-// bothProviderProvisioning is a ProvisioningDefaults whose NodeOps and Coder
+// bothProviderProvisioning is a ProvisioningDefaults whose Freestyle and Coder
 // configs both validate, so a plan can be built for either provider regardless
 // of which one is the deployment default.
 func bothProviderProvisioning(defaultProvider string) sandbox.ProvisioningDefaults {
 	return sandbox.ProvisioningDefaults{
 		Provider: defaultProvider,
 		Release:  "test",
-		NodeOps: sandbox.NodeOpsConfig{
-			BaseURL:        "https://api.sb.createos.sh",
-			APIKey:         "test-key",
-			DefaultShape:   "s-1vcpu-1gb",
-			DefaultRootFS:  "devbox:1",
-			WorkerTokenTTL: 15 * time.Minute,
+		Freestyle: sandbox.FreestyleConfig{
+			APIKey:          "test-key",
+			DefaultSnapshot: "snapshot-1",
+			WorkerTokenTTL:  15 * time.Minute,
 		},
 		Coder: sandbox.CoderConfig{
 			BaseURL:        "https://coder.example.com",
@@ -108,7 +106,7 @@ func newChildServer(store Store, provisioning sandbox.ProvisioningDefaults, defa
 	return New(Options{
 		Store:                     store,
 		SandboxProvider:           defaultProvider,
-		AvailableSandboxProviders: []string{sandbox.ProviderNodeOps, sandbox.ProviderCoder},
+		AvailableSandboxProviders: []string{sandbox.ProviderFreestyle, sandbox.ProviderCoder},
 		Provisioning:              provisioning,
 		Logger:                    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
@@ -134,8 +132,8 @@ func childRequestBody(t *testing.T, scopes []string, body string) *http.Request 
 // codex" regression.
 func TestCreateWorkerChildInheritsProjectWorkerAgentWhenUnspecified(t *testing.T) {
 	t.Parallel()
-	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps, parentWorkerAgent: "codex"}
-	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderFreestyle, parentWorkerAgent: "codex"}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderFreestyle), sandbox.ProviderFreestyle)
 
 	rec := httptest.NewRecorder()
 	body := `{"displayName":"add-logger","prompt":"do the work","mode":"trusted"}`
@@ -153,8 +151,8 @@ func TestCreateWorkerChildInheritsProjectWorkerAgentWhenUnspecified(t *testing.T
 // to claude-code (the prior default) rather than erroring.
 func TestCreateWorkerChildFallsBackToClaudeWhenNoWorkerAgent(t *testing.T) {
 	t.Parallel()
-	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps, parentWorkerAgent: ""}
-	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderFreestyle, parentWorkerAgent: ""}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderFreestyle), sandbox.ProviderFreestyle)
 
 	rec := httptest.NewRecorder()
 	body := `{"displayName":"add-logger","prompt":"do the work","mode":"trusted"}`
@@ -173,8 +171,8 @@ func TestCreateWorkerChildFallsBackToClaudeWhenNoWorkerAgent(t *testing.T) {
 // codex children), so the worker matches what was set at project creation.
 func TestCreateWorkerChildForcesProjectWorkerAgentOverExplicit(t *testing.T) {
 	t.Parallel()
-	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps, parentWorkerAgent: "claude-code"}
-	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderFreestyle, parentWorkerAgent: "claude-code"}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderFreestyle), sandbox.ProviderFreestyle)
 
 	rec := httptest.NewRecorder()
 	// Orchestrator explicitly asks for codex, but the project configured claude-code.
@@ -200,12 +198,12 @@ func resourceProfileProvider(t *testing.T, raw json.RawMessage) string {
 	return profile.Provider
 }
 
-// A NodeOps orchestrator must spawn a NodeOps worker even when the control
+// A Freestyle orchestrator must spawn a Freestyle worker even when the control
 // plane default is Coder: the child inherits its parent's provider, not the
 // deployment default. This is the exact regression the fix addresses.
-func TestCreateWorkerChildInheritsNodeOpsProviderOverDefault(t *testing.T) {
+func TestCreateWorkerChildInheritsFreestyleProviderOverDefault(t *testing.T) {
 	t.Parallel()
-	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps}
+	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderFreestyle}
 	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderCoder), sandbox.ProviderCoder)
 
 	rec := httptest.NewRecorder()
@@ -217,23 +215,23 @@ func TestCreateWorkerChildInheritsNodeOpsProviderOverDefault(t *testing.T) {
 	if !store.created {
 		t.Fatal("CreateOrchestratorChild was not called")
 	}
-	if store.captured.Provider != sandbox.ProviderNodeOps {
-		t.Fatalf("child provider = %q, want %q", store.captured.Provider, sandbox.ProviderNodeOps)
+	if store.captured.Provider != sandbox.ProviderFreestyle {
+		t.Fatalf("child provider = %q, want %q", store.captured.Provider, sandbox.ProviderFreestyle)
 	}
-	if got := resourceProfileProvider(t, store.captured.ResourceProfile); got != sandbox.ProviderNodeOps {
-		t.Fatalf("resource profile provider = %q, want %q", got, sandbox.ProviderNodeOps)
+	if got := resourceProfileProvider(t, store.captured.ResourceProfile); got != sandbox.ProviderFreestyle {
+		t.Fatalf("resource profile provider = %q, want %q", got, sandbox.ProviderFreestyle)
 	}
-	if got := resourceProfileProvider(t, store.captured.BootstrapContext); got != sandbox.ProviderNodeOps {
-		t.Fatalf("bootstrap context provider = %q, want %q", got, sandbox.ProviderNodeOps)
+	if got := resourceProfileProvider(t, store.captured.BootstrapContext); got != sandbox.ProviderFreestyle {
+		t.Fatalf("bootstrap context provider = %q, want %q", got, sandbox.ProviderFreestyle)
 	}
 }
 
 // A Coder orchestrator (eleven_x) must spawn a Coder worker even when the
-// control plane default is NodeOps.
+// control plane default is Freestyle.
 func TestCreateWorkerChildInheritsCoderProviderOverDefault(t *testing.T) {
 	t.Parallel()
 	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderCoder}
-	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderFreestyle), sandbox.ProviderFreestyle)
 
 	rec := httptest.NewRecorder()
 	srv.createWorkerChild(rec, childRequest(t, []string{"worker:orchestrate"}))
@@ -253,8 +251,8 @@ func TestCreateWorkerChildInheritsCoderProviderOverDefault(t *testing.T) {
 // never reach the store.
 func TestCreateWorkerChildRequiresOrchestratorScope(t *testing.T) {
 	t.Parallel()
-	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps}
-	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderFreestyle}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderFreestyle), sandbox.ProviderFreestyle)
 
 	rec := httptest.NewRecorder()
 	srv.createWorkerChild(rec, childRequest(t, []string{"worker:heartbeat"}))
@@ -273,7 +271,7 @@ func TestCreateWorkerChildRequiresOrchestratorScope(t *testing.T) {
 func TestCreateWorkerChildForbiddenWhenParentNotActiveOrchestrator(t *testing.T) {
 	t.Parallel()
 	store := &stubChildStore{credentialAvailable: true, parentProviderErr: postgres.ErrForbidden}
-	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderFreestyle), sandbox.ProviderFreestyle)
 
 	rec := httptest.NewRecorder()
 	srv.createWorkerChild(rec, childRequest(t, []string{"worker:orchestrate"}))
@@ -293,16 +291,15 @@ func TestCreateWorkerChildMisconfiguredInheritedProvider(t *testing.T) {
 	t.Parallel()
 	// Provisioning has no Coder config, so building a Coder plan fails validation.
 	provisioning := sandbox.ProvisioningDefaults{
-		Provider: sandbox.ProviderNodeOps,
+		Provider: sandbox.ProviderFreestyle,
 		Release:  "test",
-		NodeOps: sandbox.NodeOpsConfig{
-			BaseURL: "https://api.sb.createos.sh", APIKey: "test-key",
-			DefaultShape: "s-1vcpu-1gb", DefaultRootFS: "devbox:1",
+		Freestyle: sandbox.FreestyleConfig{
+			APIKey: "test-key", DefaultSnapshot: "snapshot-1",
 			WorkerTokenTTL: 15 * time.Minute,
 		},
 	}
 	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderCoder}
-	srv := newChildServer(store, provisioning, sandbox.ProviderNodeOps)
+	srv := newChildServer(store, provisioning, sandbox.ProviderFreestyle)
 
 	rec := httptest.NewRecorder()
 	srv.createWorkerChild(rec, childRequest(t, []string{"worker:orchestrate"}))
@@ -312,6 +309,25 @@ func TestCreateWorkerChildMisconfiguredInheritedProvider(t *testing.T) {
 	}
 	if store.created {
 		t.Fatal("CreateOrchestratorChild ran despite an unbuildable plan")
+	}
+}
+
+// An orchestrator still running on a retired provider cannot spawn children:
+// the handler reports provider_retired instead of a misconfiguration 500, and
+// never creates a child row.
+func TestCreateWorkerChildRejectsRetiredParentProvider(t *testing.T) {
+	t.Parallel()
+	store := &stubChildStore{credentialAvailable: true, parentProvider: "nodeops"}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderFreestyle), sandbox.ProviderFreestyle)
+
+	rec := httptest.NewRecorder()
+	srv.createWorkerChild(rec, childRequest(t, []string{"worker:orchestrate"}))
+
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "provider_retired") {
+		t.Fatalf("status = %d body = %s, want 409 provider_retired", rec.Code, rec.Body.String())
+	}
+	if store.created {
+		t.Fatal("CreateOrchestratorChild ran for a retired parent provider")
 	}
 }
 

@@ -38,6 +38,10 @@ const (
 	// few misses prevents a reconnect storm during heavy replays while still
 	// closing a genuinely unresponsive socket within a bounded window.
 	terminalPingMaxFailures = 3
+	// An agent ticket request waits up to agentTicketWait for the agent
+	// terminal to open, checking every agentTicketPoll.
+	agentTicketWait = 8 * time.Second
+	agentTicketPoll = 100 * time.Millisecond
 )
 
 var errTerminalProcessUnavailable = errors.New("terminal process unavailable")
@@ -68,6 +72,9 @@ func (s *Server) createTerminalTicket(w http.ResponseWriter, r *http.Request) {
 	token, scopes, err := s.store.IssueTerminalTicket(
 		r.Context(), principalFrom(r), orgID, sessionID, input.Kind, input.TerminalID, terminalTicketTTL,
 	)
+	if errors.Is(err, postgres.ErrWorkerUnavailable) && input.Kind == "agent" && input.TerminalID == "" {
+		token, scopes, err = s.awaitAgentTicket(r, orgID, sessionID, err)
+	}
 	if errors.Is(err, postgres.ErrTerminalSessionExited) {
 		writeError(w, r, http.StatusGone, "TERMINAL_SESSION_EXITED", "The coding-agent terminal has exited. Start a new session to continue.")
 		return
@@ -85,6 +92,49 @@ func (s *Server) createTerminalTicket(w http.ResponseWriter, r *http.Request) {
 		"ticket": token, "expiresIn": int(terminalTicketTTL.Seconds()),
 		"scopes": scopes,
 	})
+}
+
+// agentTerminalProbe is the read-only readiness check awaitAgentTicket polls.
+type agentTerminalProbe interface {
+	AgentTerminalLive(ctx context.Context, principal domain.Principal, orgID, sessionID string) (bool, error)
+}
+
+// awaitAgentTicket holds an agent ticket request that found the agent not yet
+// started, instead of answering 409 straight away. Each browser retry costs a
+// full round trip on top of its poll interval, so on a distant client the
+// ticket arrived up to ~0.5s after the terminal opened. Here the wait is a
+// cheap read-only poll beside the database, and the ticket is minted as soon
+// as the terminal is live. IssueTerminalTicket already ran once, so a paused
+// sandbox is waking and the interaction lease is held. When the wait expires
+// it answers the original 409 and the browser retries as before.
+func (s *Server) awaitAgentTicket(r *http.Request, orgID, sessionID string, unavailable error) (string, []string, error) {
+	probe, ok := s.store.(agentTerminalProbe)
+	if !ok {
+		return "", nil, unavailable
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), agentTicketWait)
+	defer cancel()
+	ticker := time.NewTicker(agentTicketPoll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return "", nil, unavailable
+		case <-ticker.C:
+		}
+		live, err := probe.AgentTerminalLive(ctx, principalFrom(r), orgID, sessionID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", nil, unavailable
+			}
+			return "", nil, err
+		}
+		if live {
+			return s.store.IssueTerminalTicket(
+				r.Context(), principalFrom(r), orgID, sessionID, "agent", "", terminalTicketTTL,
+			)
+		}
+	}
 }
 
 func (s *Server) connectTerminal(w http.ResponseWriter, r *http.Request) {

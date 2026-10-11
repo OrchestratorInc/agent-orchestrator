@@ -3,6 +3,7 @@ package sandboxresolve
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -120,7 +121,7 @@ func (p *scopedCoderProvider) ForSandbox(record domain.Sandbox) (sandbox.Provide
 func TestResolveScopesCoderProviderToDurableSessionProfile(t *testing.T) {
 	t.Parallel()
 	provider := &scopedCoderProvider{}
-	resolver := New(nil, nil, provider, nil, nil)
+	resolver := New(nil, provider, nil, nil, nil)
 	record := domain.Sandbox{
 		SessionID: "session-1", Provider: sandbox.ProviderCoder,
 		ResourceProfile: json.RawMessage(`{"coder":{"owner":"planned-owner"}}`),
@@ -137,9 +138,26 @@ func TestResolveScopesCoderProviderToDurableSessionProfile(t *testing.T) {
 
 func TestResolveRejectsUnscopedCoderProvider(t *testing.T) {
 	t.Parallel()
-	resolver := New(nil, nil, struct{ sandbox.Provider }{}, nil, nil)
+	resolver := New(nil, struct{ sandbox.Provider }{}, nil, nil, nil)
 	_, err := resolver.Resolve(context.Background(), domain.Sandbox{Provider: sandbox.ProviderCoder})
 	if err == nil {
 		t.Fatal("Resolve accepted a Coder provider without durable session scoping")
+	}
+}
+
+// A retired provider resolves to ErrProviderRetired so callers can tell it apart
+// from a misconfigured live provider.
+func TestResolveReportsRetiredProvider(t *testing.T) {
+	t.Parallel()
+	resolver := New(nil, nil, nil, nil, nil)
+	for _, provider := range []string{"nodeops", "ecs", "daytona", "lambda-microvms"} {
+		_, err := resolver.Resolve(context.Background(), domain.Sandbox{Provider: provider})
+		if !errors.Is(err, sandbox.ErrProviderRetired) {
+			t.Fatalf("Resolve(%q) error = %v, want ErrProviderRetired", provider, err)
+		}
+	}
+	if _, err := resolver.Resolve(context.Background(), domain.Sandbox{Provider: "bogus"}); err == nil ||
+		errors.Is(err, sandbox.ErrProviderRetired) {
+		t.Fatalf("Resolve(bogus) error = %v, want an unsupported-provider error", err)
 	}
 }

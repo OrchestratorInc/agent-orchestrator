@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 )
 
 // The startup error is stored under the reconcile lease, exposed on session
@@ -115,5 +116,37 @@ func TestSandboxStartupErrorLifecycle(t *testing.T) {
 	// Once the worker has checked in there is nothing to retry.
 	if err := store.RetrySessionStartup(ctx, principal, fixture.orgID, fixture.sessionID); !errors.Is(err, ErrConflict) {
 		t.Fatalf("retry after check-in = %v, want ErrConflict", err)
+	}
+}
+
+// A session whose sandbox ran on a retired provider can be neither retried nor
+// restored: either would queue a provision no reconciler can make.
+func TestRetiredProviderSessionRejectsRetryAndRestore(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes
+		SET provider = 'nodeops', desired_state = 'running', observed_state = 'terminated', worker_last_seen_at = NULL
+		WHERE session_id = $1 AND org_id = $2`, fixture.sessionID, fixture.orgID); err != nil {
+		t.Fatalf("update sandbox: %v", err)
+	}
+	if err := store.RetrySessionStartup(ctx, principal, fixture.orgID, fixture.sessionID); !errors.Is(err, sandbox.ErrProviderRetired) {
+		t.Fatalf("retry startup = %v, want ErrProviderRetired", err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET is_terminated = true WHERE id = $1`, fixture.sessionID); err != nil {
+		t.Fatalf("terminate session: %v", err)
+	}
+	if err := store.RestoreSession(ctx, principal, fixture.orgID, fixture.sessionID); !errors.Is(err, sandbox.ErrProviderRetired) {
+		t.Fatalf("restore = %v, want ErrProviderRetired", err)
+	}
+	var terminated bool
+	var desired string
+	if err := admin.QueryRow(ctx, `SELECT session.is_terminated, sandbox.desired_state
+		FROM ao_sessions session JOIN ao_sandboxes sandbox ON sandbox.session_id = session.id
+		WHERE session.id = $1`, fixture.sessionID).Scan(&terminated, &desired); err != nil {
+		t.Fatal(err)
+	}
+	if !terminated || desired != domain.SandboxDesiredRunning {
+		t.Fatalf("rejected restore changed the session: terminated=%v desired=%q", terminated, desired)
 	}
 }

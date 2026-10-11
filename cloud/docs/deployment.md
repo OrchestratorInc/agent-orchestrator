@@ -15,11 +15,11 @@ Run from a clean checkout of the release commit, inside `cloud/`:
 AWS_PROFILE=ao-cloud ./scripts/deploy-staging.sh
 ```
 
-NodeOps remains the default. To deploy a release against the environment's
-Coder connection instead:
+Coder is the default. To deploy a release that also serves the environment's
+Freestyle provider:
 
 ```bash
-AO_CLOUD_SANDBOX_PROVIDER=coder \
+AO_CLOUD_SANDBOX_PROVIDERS=coder,freestyle \
   AWS_PROFILE=ao-cloud \
   ./scripts/deploy-staging.sh
 ```
@@ -93,8 +93,8 @@ role:
 - `ao-cloud/staging/database-url`
 - `ao-cloud/staging/migration-database-url`
 - `ao-cloud/staging/provider-secret-key`
-- `ao-cloud/staging/nodeops`
 - `ao-cloud/staging/coder` (required only when the Coder provider is selected)
+- `ao-cloud/staging/freestyle` (required only when the Freestyle provider is selected)
 - `ao-cloud/staging/worker`
 - `ao-cloud/repository-broker`
 
@@ -102,9 +102,7 @@ The API task gets only the runtime database credential. The elevated migration
 credential is available only to the one-off migration task. Secrets are not
 baked into the image or task-definition environment.
 
-`nodeops` is a JSON secret with `base_url`, `api_key`, `default_shape`,
-`default_rootfs`, `ingress`, `ssh_key_path`, `region`, and
-`worker_token_ttl`. `worker` contains `signing_key`,
+`worker` contains `signing_key`,
 `max_active_sandboxes_per_org`, `sandbox_reconcile_interval`,
 `sandbox_startup_timeout`, and `worker_heartbeat_timeout`. Deployment validates
 every field before building or registering a task, and ECS injects each value
@@ -119,8 +117,9 @@ absolute normalized non-root path. `parameters_json` must be a JSON object whose
 values are strings; use `{}` when the approved template has no parameters. The
 deployment validates every provider in `AO_CLOUD_SANDBOX_PROVIDERS`. A
 single-provider deployment removes the other provider's environment variables
-and secret references. A multi-provider deployment, such as `nodeops,coder`,
-retains both. The ECS execution role needs `secretsmanager:GetSecretValue` for
+and secret references. A multi-provider deployment, such as `coder,freestyle`,
+retains both. Settings of the retired NodeOps provider (`AO_CLOUD_NODEOPS_*`)
+are always removed from the rendered task definition. The ECS execution role needs `secretsmanager:GetSecretValue` for
 each configured provider's environment-scoped secret.
 
 `ao-cloud/repository-broker` is shared only by the production control plane,
@@ -133,18 +132,16 @@ to the staging control plane. Neither value is exposed through a
 Both ECS execution roles need `secretsmanager:GetSecretValue` for this one
 secret in addition to their environment-scoped secrets.
 
-The configured NodeOps `default_rootfs` must provide the unprivileged
-`ao-worker` account plus `bash`, `git`, `claude`, `codex`, `cursor-agent`, and
-`runuser`. Build the versioned AO rootfs from
-`nodeops/Sandbox.Dockerfile` with `scripts/publish-nodeops-template.sh`, verify
-it in staging, then set `default_rootfs` to that template name. The reconciler
-copies the release's fenced `ao-worker` and AO hook helper binaries into the
-rootfs, owns `/workspace` as `ao-worker`, and launches the worker under that
-account. Claude auto-update is disabled for worker-launched processes so a
-running VM cannot replace or remove its pinned executable. A missing harness
-disables that agent terminal but does not stop workspace transport.
-The separately scanned worker image is the canonical local/reference runtime,
-but CreateOS does not consume that OCI image directly.
+`freestyle` is a JSON secret with `api_key`, `default_snapshot`,
+`worker_token_ttl`, and `snapshot_by_harness` (a JSON object string mapping
+every harness to its snapshot). Deployment bakes those snapshots with
+`scripts/publish-freestyle-snapshot.sh`, which replays the RUN steps of
+`sandbox-image/Sandbox.base.Dockerfile` and
+`sandbox-image/harness/<harness>.Dockerfile` inside a Freestyle VM, so a
+version bump in those files reaches Freestyle on the next deploy. The snapshot
+provides the unprivileged `ao-worker` account, `/workspace`, and the pinned
+harness. Claude auto-update is disabled for worker-launched processes so a
+running VM cannot replace or remove its pinned executable.
 
 Database password rotation must update the corresponding URL secret before the
 next rollout. For an immediate WorkOS or runtime database secret rotation,
@@ -247,8 +244,8 @@ The service reads only these production-scoped secrets:
 - `ao-cloud/production/migration-database-url`
 - `ao-cloud/production/provider-secret-key`
 - `ao-cloud/production/github`
-- `ao-cloud/production/nodeops`
 - `ao-cloud/production/coder` (required only when Coder is running in staging)
+- `ao-cloud/production/freestyle` (required only when Freestyle is running in staging)
 - `ao-cloud/production/worker`
 - `ao-cloud/repository-broker`
 

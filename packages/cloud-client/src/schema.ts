@@ -412,7 +412,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Retries a session whose worker never started (its startupError explains why). The startup window, repair count and startup error are reset and the worker bootstrap runs again against the existing sandbox; a bring-your-own workspace is never recreated. Returns 409 startup_retry_unavailable when the worker has already checked in or the session is not meant to be running. */
+        /** @description Retries a session whose worker never started (its startupError explains why). The startup window, repair count and startup error are reset and the worker bootstrap runs again against the existing sandbox; a bring-your-own workspace is never recreated. Returns 409 startup_retry_unavailable when the worker has already checked in or the session is not meant to be running, and 409 provider_retired when the session ran on a sandbox provider AO no longer supports. */
         post: operations["retrySessionStartup"];
         delete?: never;
         options?: never;
@@ -2194,7 +2194,7 @@ export interface components {
         };
         /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. */
         SessionStartupError: {
-            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, or bootstrap_failed. Clients must tolerate codes added later. */
+            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, or provider_retired (the session ran on a sandbox provider AO no longer supports). Clients must tolerate codes added later. */
             code: string;
             /** @description Human-readable explanation suitable for display as-is. */
             message: string;
@@ -2597,7 +2597,7 @@ export interface components {
             };
         };
         /** @enum {string} */
-        ProviderName: "daytona" | "claude-code" | "codex" | "cursor" | "opencode" | "github" | "coder" | "nodeops";
+        ProviderName: "claude-code" | "codex" | "cursor" | "opencode" | "github" | "coder";
         ProviderPublicConfig: {
             /** Format: uri */
             apiUrl?: string;

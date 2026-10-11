@@ -70,7 +70,7 @@ func TestWorkspaceReviewHandlersDispatchForEveryProvider(t *testing.T) {
 		{"write", http.MethodPut, "/workspace/review/file", worker.WorkspaceReviewWriteRequest{Path: "README.md", Content: "new\n", ExpectedFileFingerprint: "fp"}, (*Server).putWorkspaceReviewFile, "workspace.review.write"},
 		{"chat models", http.MethodGet, "/chat-models", nil, (*Server).getChatModels, "chat.models"},
 	}
-	for _, provider := range []string{sandbox.ProviderDocker, sandbox.ProviderNodeOps, sandbox.ProviderCoder} {
+	for _, provider := range []string{sandbox.ProviderDocker, sandbox.ProviderFreestyle, sandbox.ProviderCoder} {
 		for _, operation := range operations {
 			t.Run(provider+"/"+operation.name, func(t *testing.T) {
 				store := &workspaceReviewHandlerStore{provider: provider}

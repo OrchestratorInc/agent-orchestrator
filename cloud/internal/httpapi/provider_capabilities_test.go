@@ -20,8 +20,8 @@ func TestOrgAllowsProvider(t *testing.T) {
 		capabilities []string
 		want         bool
 	}{
-		{"ungated provider without caps", "nodeops", nil, true},
-		{"ungated provider ignores caps", "nodeops", []string{"coder"}, true},
+		{"ungated provider without caps", "freestyle", nil, true},
+		{"ungated provider ignores caps", "freestyle", []string{"coder"}, true},
 		{"gated coder with capability", "coder", []string{"coder"}, true},
 		{"gated coder with capability among others", "coder", []string{"feature-x", "coder"}, true},
 		{"gated coder without any caps", "coder", nil, false},
@@ -49,15 +49,15 @@ func TestUngatedServerAllowsEverything(t *testing.T) {
 
 func TestProvidersForOrg(t *testing.T) {
 	s := gatedServer()
-	available := []string{"nodeops", "coder"}
+	available := []string{"freestyle", "coder"}
 
 	withoutCoder := s.providersForOrg(domain.Principal{}, available)
-	if !slices.Equal(withoutCoder, []string{"nodeops"}) {
-		t.Fatalf("no capability: got %v, want [nodeops]", withoutCoder)
+	if !slices.Equal(withoutCoder, []string{"freestyle"}) {
+		t.Fatalf("no capability: got %v, want [freestyle]", withoutCoder)
 	}
 
 	withCoder := s.providersForOrg(domain.Principal{OrgCapabilities: []string{"coder"}}, available)
-	if !slices.Equal(withCoder, []string{"nodeops", "coder"}) {
-		t.Fatalf("coder capability: got %v, want [nodeops coder]", withCoder)
+	if !slices.Equal(withCoder, []string{"freestyle", "coder"}) {
+		t.Fatalf("coder capability: got %v, want [freestyle coder]", withCoder)
 	}
 }

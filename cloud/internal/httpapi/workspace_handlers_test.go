@@ -52,7 +52,7 @@ func (s *workspaceHandlerStore) GetWorkspaceRequest(_ context.Context, _ domain.
 }
 
 func TestWorkspaceDiffEndpointsDispatchForEveryProvider(t *testing.T) {
-	for _, provider := range []string{sandbox.ProviderDocker, sandbox.ProviderCoder, sandbox.ProviderNodeOps} {
+	for _, provider := range []string{sandbox.ProviderDocker, sandbox.ProviderCoder, sandbox.ProviderFreestyle} {
 		t.Run(provider, func(t *testing.T) {
 			store := &workspaceHandlerStore{provider: provider}
 			server := workspaceHandlerServer(store)
