@@ -115,3 +115,44 @@ func TestRenderedSurfaceKeepsOnlyRepaintedProgress(t *testing.T) {
 		t.Fatalf("rendered progress = %q", output)
 	}
 }
+
+func TestNormalSurfaceResizeRetainsCurrentBottomPrompt(t *testing.T) {
+	surface := newRenderedSurface(20, 6)
+	surface.Write([]byte("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nYou> "))
+	surface.Resize(20, 3)
+	if got := surface.Tail(3); !strings.HasSuffix(got, "You> ") || strings.Contains(got, "one") {
+		t.Fatalf("lost current bottom prompt: %q", got)
+	}
+	surface.Resize(20, 6)
+	if got := surface.Tail(6); !strings.HasSuffix(got, "You> ") || strings.Contains(got, "one") {
+		t.Fatalf("growth resurrected discarded rows: %q", got)
+	}
+	surface.Write([]byte("\r\x1b[2Kbusy"))
+	surface.Resize(20, 2)
+	if got := surface.Tail(2); strings.Contains(got, "You>") || !strings.Contains(got, "busy") {
+		t.Fatalf("resize resurrected overwritten prompt: %q", got)
+	}
+}
+
+func TestNormalSurfaceResizeKeepsBlankRowsAndWideCells(t *testing.T) {
+	surface := newRenderedSurface(20, 8)
+	surface.Write([]byte("You> "))
+	surface.Resize(10, 4)
+	if got := surface.Tail(4); got != "You> " {
+		t.Fatalf("shifted prompt with blank rows below cursor: %q", got)
+	}
+	surface.Write([]byte("\x1b[4;1H界You> "))
+	surface.Resize(9, 2)
+	if got := surface.Tail(2); !strings.Contains(got, "界You> ") {
+		t.Fatalf("simultaneous width shrink lost wide cells: %q", got)
+	}
+}
+
+func TestAlternateSurfaceResizePreservesExistingSemantics(t *testing.T) {
+	surface := newRenderedSurface(20, 6)
+	surface.Write([]byte("\x1b[?1049h\x1b[Htop\x1b[6;1Hbottom"))
+	surface.Resize(20, 3)
+	if got := surface.Tail(3); !strings.Contains(got, "top") || strings.Contains(got, "bottom") {
+		t.Fatalf("changed alternate-screen resize behavior: %q", got)
+	}
+}
