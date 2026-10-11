@@ -372,3 +372,18 @@ Keep provider token-exhaustion and observer errors visible instead of treating
 those attempts as lifecycle passes. Qualify ACP through real AO APIs, not the
 TUI-only audit runner. Record detached-host and native-child PID/kernel start times
 before daemon replacement, Kill, and exact restore.
+
+
+## Native Mastra TUI lessons
+
+Mastra0.45.0 discards hook additionalContext in its TUI; use its additive native
+plugin instructions and preserve plugin/hook registries and disabledPlugins.
+SessionStart can expose bootstrap session-init; verify restored identity with the
+supported active-session plugin getter. Prevalidate history before resume because
+missing/locked resume may silently create a new thread. Environment permission
+flags alone need live confirmation: code-sdk1.11.0 defaults yolo=true if native
+preferences are absent. Set supported yolo=false in an owned profile and reject
+explicit permissive preferences unless bypass was requested. Protect current
+rendered drafts/permissions with serialized admission. Native optional embedding
+initialization can outlive a turn; do not infer prompt readiness or cancellation
+from an old raw output ring or describe embedding/background ownership as proven.

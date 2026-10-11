@@ -1,0 +1,390 @@
+{
+  "default-permissions-final": {
+    "source": "14fedd56b",
+    "gates": {
+      "nativeYoloOff": true,
+      "initialActiveSettled": true,
+      "freshDefaultPrivateWorkspaceAgentsLeadingDash": true,
+      "secondActiveSettled": true,
+      "initialPromptExactlyOnce": true
+    },
+    "decisions": [
+      {
+        "session": "mastra-tui-proof-002-3",
+        "task": "initial",
+        "nativeDecision": "approve once",
+        "pendingDigest": "b71f8547e628283f557f468da7f64fc0926838b4f9ceb98ec355a49df8972ab1",
+        "utc": "2026-10-11T12:41:52.599511+00:00"
+      },
+      {
+        "session": "mastra-tui-proof-002-3",
+        "task": "initial",
+        "nativeDecision": "approve once",
+        "pendingDigest": "dd261cd8ae53bc7706a33f7bd23ee6a1bb6fc8f601a9a77e679b778558b08dde",
+        "utc": "2026-10-11T12:43:01.322561+00:00"
+      },
+      {
+        "session": "mastra-tui-proof-002-3",
+        "task": "initial",
+        "nativeDecision": "approve once",
+        "pendingDigest": "f7b80a080b7001babc8ed4a4c79485b1b156c96b0039d4944c9d5a04b97bb778",
+        "utc": "2026-10-11T12:43:09.198031+00:00"
+      },
+      {
+        "session": "mastra-tui-proof-002-3",
+        "task": "initial",
+        "nativeDecision": "approve once",
+        "pendingDigest": "a92d451ff216a4c4a3c406e4ba406a40e67480d221f0acfd78a8944dfacb4b36",
+        "utc": "2026-10-11T12:43:14.667496+00:00"
+      },
+      {
+        "session": "mastra-tui-proof-002-3",
+        "task": "initial",
+        "nativeDecision": "approve once",
+        "pendingDigest": "bb90429018b9dc5a4037ca8afc5da26f04445d573a10f944ba86d5c4e8e96b3b",
+        "utc": "2026-10-11T12:43:16.075149+00:00"
+      },
+      {
+        "session": "mastra-tui-proof-002-3",
+        "task": "second",
+        "nativeDecision": "approve once",
+        "pendingDigest": "984dd184e8dd2d6489e368953c93b629b0efeea0e882d5b6b2e9da41a0e28448",
+        "utc": "2026-10-11T12:43:29.657659+00:00"
+      },
+      {
+        "session": "mastra-tui-proof-002-3",
+        "task": "second",
+        "nativeDecision": "approve once",
+        "pendingDigest": "e4a34d7d852943e65adf4c071e45c25ec8233c84c641bcf272bbe8b36de4533e",
+        "utc": "2026-10-11T12:43:31.496732+00:00"
+      }
+    ],
+    "restoreResponse": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "sessionId": "mastra-tui-proof-002-1",
+        "restoreMode": "native",
+        "session": {
+          "id": "mastra-tui-proof-002-1",
+          "projectId": "mastra-tui-proof-002",
+          "kind": "worker",
+          "harness": "mastra-code",
+          "reviewerConfig": {},
+          "autoReviewEnabled": false,
+          "displayName": "Mastra Code native TUI proof",
+          "mode": "tui",
+          "activity": {
+            "state": "idle",
+            "lastActivityAt": "2026-10-11T12:40:59.445264823Z"
+          },
+          "isTerminated": false,
+          "terminateOnPrMerge": false,
+          "autoInjectReview": true,
+          "autoInjectCI": true,
+          "outputType": "none",
+          "createdAt": "2026-10-11T11:41:30.496488066Z",
+          "updatedAt": "2026-10-11T12:40:59.445264823Z",
+          "isPinned": false,
+          "provisionState": "ready",
+          "branchState": {
+            "commits": 0,
+            "unpushed": 0
+          },
+          "statusReadiness": "ready",
+          "chatProviderPreserved": false,
+          "status": "idle",
+          "kanbanColumn": "building",
+          "displayStatus": "Awaiting PR",
+          "terminalHandleId": "ptyhost-v1:mastra-tui-proof-002-1",
+          "branch": "ao/mastra-tui-proof-002-1/root",
+          "terminalGeneration": "6621342d-e85f-4fc4-85f2-3c5bfb93b95c",
+          "model": "zai/glm-5.3-flash",
+          "lastUserMessageAt": "2026-10-11T12:32:36.820667897Z",
+          "lastInteractionAt": "2026-10-11T12:32:36.820667897Z",
+          "lastEventAt": "2026-10-11T12:40:59.445264823Z",
+          "prs": []
+        }
+      }
+    },
+    "freshSession": "mastra-tui-proof-002-3",
+    "workspace": "/home/azureuser/.ao/audits/candidate-integrations-20261011/reports/mastra/ao-attempt-002/data/worktrees/mastra-tui-proof-002/mastra-tui-proof-002-3",
+    "initialPromptDigest": "fa62317d238161d18740d5e6730b988a36b3b2f296f761ea2420af8953822824",
+    "initialProof": {
+      "cwd": "/home/azureuser/.ao/audits/candidate-integrations-20261011/reports/mastra/ao-attempt-002/data/worktrees/mastra-tui-proof-002/mastra-tui-proof-002-3",
+      "standing": "RESTORE_MASTRA_AO_6509",
+      "project": "PROJECT_MASTRA_AO_6509",
+      "count": 1
+    },
+    "secondProof": {
+      "cwd": "/home/azureuser/.ao/audits/candidate-integrations-20261011/reports/mastra/ao-attempt-002/data/worktrees/mastra-tui-proof-002/mastra-tui-proof-002-3",
+      "standing": "RESTORE_MASTRA_AO_6509",
+      "project": "PROJECT_MASTRA_AO_6509",
+      "count": 2
+    },
+    "initialPromptNativeCount": 1,
+    "nativeIDDigest": "1d21be2e6821a2e76ecdfa260f72b9d1c9f8c02d041bad20763e75ae1a14da43",
+    "generation": "27621f52-7c35-43f1-8ad7-b31d54a509d3"
+  },
+  "permission-proof": {
+    "source": "14fedd56b",
+    "gates": {
+      "draftRefused409": true,
+      "approve": true,
+      "reject": true,
+      "cancel": true
+    },
+    "turns": [
+      {
+        "action": "approve",
+        "pendingUTC": "2026-10-11T12:44:52.002865+00:00",
+        "inputResponse": {
+          "status": 409,
+          "body": {
+            "error": "conflict",
+            "code": "SESSION_AWAITING_DECISION",
+            "message": "Session is paused on a permission decision; answer it in the session terminal first",
+            "requestId": "vps-linux/A8JEVlojV0-000322",
+            "reporting_owner": "http"
+          }
+        },
+        "fileExists": true,
+        "nativeDecision": "y"
+      },
+      {
+        "action": "reject",
+        "pendingUTC": "2026-10-11T12:46:47.992479+00:00",
+        "inputResponse": {
+          "status": 409,
+          "body": {
+            "error": "conflict",
+            "code": "SESSION_AWAITING_DECISION",
+            "message": "Session is paused on a permission decision; answer it in the session terminal first",
+            "requestId": "vps-linux/A8JEVlojV0-000402",
+            "reporting_owner": "http"
+          }
+        },
+        "fileExists": false,
+        "nativeDecision": "n"
+      }
+    ],
+    "draftResponse": {
+      "status": 409,
+      "body": {
+        "error": "conflict",
+        "code": "SESSION_AWAITING_DECISION",
+        "message": "Session is paused on a permission decision; answer it in the session terminal first",
+        "requestId": "vps-linux/A8JEVlojV0-000308",
+        "reporting_owner": "http"
+      }
+    },
+    "cancelRecovery": {
+      "utc": "2026-10-11T13:53:14.901457+00:00",
+      "beforeActivity": "active",
+      "fileExists": false,
+      "observation": "Prior permission-cancel turn remained active after native optional embedding initialization; recovery Escape sent once.",
+      "afterActivity": "idle"
+    }
+  },
+  "input-cancel": {
+    "source": "2ebab7b8078f77323fe139de1fbaf2d99e568cef",
+    "receipts": [],
+    "gates": {
+      "draftRefused": true,
+      "childReaped": true,
+      "noLateSideEffect": true,
+      "postCancelEdit": true
+    },
+    "draftSend": {
+      "status": 500,
+      "response": {
+        "error": "internal",
+        "code": "INTERNAL_ERROR",
+        "message": "Internal server error",
+        "requestId": "vps-linux/WnPG8Z8ib8-000239",
+        "reporting_owner": "http"
+      }
+    },
+    "child": {
+      "pid": 904938,
+      "kernelStart": "76525500"
+    },
+    "nativeOwnership": {
+      "host": {
+        "pid": 903289,
+        "kernelStart": "76464370"
+      },
+      "supervisor": {
+        "pid": 903294,
+        "kernelStart": "76464373"
+      },
+      "agent": {
+        "pid": 903302,
+        "kernelStart": "76464381"
+      }
+    },
+    "escapeUTC": "2026-10-11T11:51:53.140098+00:00"
+  },
+  "kill-restore": {
+    "source": "2ebab7b8078f77323fe139de1fbaf2d99e568cef",
+    "gates": {
+      "mainNativeSupervisorHostAndChildGone": true,
+      "independentControlUnchanged": true,
+      "killNoLateSideEffect": true,
+      "missingConfiguredNativeHistoryRefused": true,
+      "liveLockedHistoryRefused": true,
+      "exactNativeIdentityFreshGeneration": true,
+      "freshInstructionsAfterConfirmedKill": true,
+      "restoredActiveSettled": true
+    },
+    "receipts": [],
+    "controlSession": "mastra-tui-proof-002-2",
+    "controlOwnership": {
+      "host": {
+        "pid": 905238,
+        "kernelStart": "76543581"
+      },
+      "supervisor": {
+        "pid": 905244,
+        "kernelStart": "76543583"
+      },
+      "agent": {
+        "pid": 905256,
+        "kernelStart": "76543590"
+      }
+    },
+    "originalNativeDigest": "03dafb8fe8f0dd13514b184252a9173ed987e743a2950bf27cf94249f6822073",
+    "oldGeneration": "6ac7763b-e656-481d-8bf9-2f062a703de7",
+    "mainOwnership": {
+      "host": {
+        "pid": 903289,
+        "kernelStart": "76464370"
+      },
+      "supervisor": {
+        "pid": 903294,
+        "kernelStart": "76464373"
+      },
+      "agent": {
+        "pid": 903302,
+        "kernelStart": "76464381"
+      }
+    },
+    "killChild": {
+      "pid": 905363,
+      "kernelStart": "76544850"
+    },
+    "killResponse": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "sessionId": "mastra-tui-proof-002-1"
+      },
+      "utc": "2026-10-11T11:54:56.711545+00:00"
+    },
+    "responseInterpretation": "Kill returned200 ok=true without freed field; exact kernel process identities checked independently",
+    "restoreProofSource": "047c50e1a",
+    "missingHistoryResponse": {
+      "status": 500,
+      "body": {
+        "error": "internal",
+        "code": "INTERNAL_ERROR",
+        "message": "Internal server error",
+        "requestId": "vps-linux/nin9iciTST-000041",
+        "reporting_owner": "http"
+      }
+    },
+    "lockedHistoryResponse": {
+      "status": 500,
+      "body": {
+        "error": "internal",
+        "code": "INTERNAL_ERROR",
+        "message": "Internal server error",
+        "requestId": "vps-linux/nin9iciTST-000044",
+        "reporting_owner": "http"
+      }
+    },
+    "restoreResponse": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "sessionId": "mastra-tui-proof-002-1",
+        "restoreMode": "native",
+        "session": {
+          "id": "mastra-tui-proof-002-1",
+          "projectId": "mastra-tui-proof-002",
+          "kind": "worker",
+          "harness": "mastra-code",
+          "reviewerConfig": {},
+          "autoReviewEnabled": false,
+          "displayName": "Mastra Code native TUI proof",
+          "mode": "tui",
+          "activity": {
+            "state": "idle",
+            "lastActivityAt": "2026-10-11T12:29:39.192952216Z"
+          },
+          "isTerminated": false,
+          "terminateOnPrMerge": false,
+          "autoInjectReview": true,
+          "autoInjectCI": true,
+          "outputType": "none",
+          "createdAt": "2026-10-11T11:41:30.496488066Z",
+          "updatedAt": "2026-10-11T12:29:39.192952216Z",
+          "isPinned": false,
+          "provisionState": "ready",
+          "branchState": {
+            "commits": 0,
+            "unpushed": 0
+          },
+          "statusReadiness": "ready",
+          "chatProviderPreserved": false,
+          "status": "idle",
+          "kanbanColumn": "building",
+          "displayStatus": "Awaiting PR",
+          "terminalHandleId": "ptyhost-v1:mastra-tui-proof-002-1",
+          "branch": "ao/mastra-tui-proof-002-1/root",
+          "terminalGeneration": "8c8fd6fe-b712-4bb7-aa28-dfe9c1e82610",
+          "model": "zai/glm-5.3-flash",
+          "lastUserMessageAt": "2026-10-11T12:25:49.026390026Z",
+          "lastInteractionAt": "2026-10-11T12:25:49.026390026Z",
+          "lastEventAt": "2026-10-11T12:29:39.192952216Z",
+          "prs": []
+        }
+      },
+      "utc": "2026-10-11T12:29:39.484093+00:00"
+    },
+    "restoredOwnership": {
+      "host": {
+        "pid": 911021,
+        "kernelStart": "76752454"
+      },
+      "supervisor": {
+        "pid": 911027,
+        "kernelStart": "76752461"
+      },
+      "agent": {
+        "pid": 911033,
+        "kernelStart": "76752464"
+      }
+    },
+    "restoredGeneration": "8c8fd6fe-b712-4bb7-aa28-dfe9c1e82610",
+    "restoredNativeDigest": "03dafb8fe8f0dd13514b184252a9173ed987e743a2950bf27cf94249f6822073",
+    "restoredProof": {
+      "cwd": "/home/azureuser/.ao/audits/candidate-integrations-20261011/reports/mastra/ao-attempt-002/data/worktrees/mastra-tui-proof-002/mastra-tui-proof-002-1",
+      "standing": "STANDING_MASTRA_AO_6509",
+      "project": "PROJECT_MASTRA_AO_6509",
+      "count": 5,
+      "historyCount": 4,
+      "currentStanding": "STANDING_MASTRA_AO_6509",
+      "restoredStanding": "RESTORE_MASTRA_AO_6509"
+    },
+    "freshInstructionControl": {
+      "source": "047c50e1a",
+      "successfulField": "restoredStanding",
+      "privateTokenAbsentFromVisibleTask": true,
+      "noPluginOrConfigReadRequested": true,
+      "earlierCurrentStandingAnchoringFailuresPreserved": true,
+      "utc": "2026-10-11T12:33:24.279263+00:00",
+      "observer": "active observed, then permissions runner admitted next task only after current composer empty and AO idle"
+    }
+  }
+}
