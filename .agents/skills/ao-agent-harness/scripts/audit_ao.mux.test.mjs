@@ -254,6 +254,17 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
   try {
     await run({ baseURL: "http://127.0.0.1:" + server.address().port,
       received, messages, witnessSpec, startWitness,
+      async startReadyWitness() {
+        const spec = startWitness();
+        // This fixture's child startup is setup, not the operation under test.
+        // Short deadline tests must reach cancellation with a real start marker.
+        const deadline = Date.now() + 5000;
+        while (!existsSync(startWitnessPath)) {
+          if (Date.now() >= deadline) throw new Error("fixture child did not publish its start witness");
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        return spec;
+      },
       get cleanupInputs() { return cleanupInputs; }, get killRequests() { return killRequests; }, get projectConfig() { return projectConfig; }, get nativeCueSent() { return nativeCueSent; }, get inputReceived() { return inputReceived; }, get upgrades() { return upgrades; } });
   } finally {
     stopWitness();
@@ -491,7 +502,7 @@ for (const value of [0, -1, 60001, 1.5, "60000", null]) {
 
 test("mux cancellation fails when the configured window expires without settling", async () => {
   await withMuxFixture("never-settles", async fixture => {
-    const witnessSpec = fixture.startWitness();
+    const witnessSpec = await fixture.startReadyWitness();
     const result = await interruptActiveTurn({ baseURL: fixture.baseURL, sessionId: "fixture",
       startResponse: { ok: true }, timeoutMs: 500, interruptSpec: { input: "\x1b", settleTimeoutMs: 80 }, witnessSpec });
     assert.equal(result.passed, false);
@@ -503,7 +514,7 @@ test("mux cancellation fails when the configured window expires without settling
 
 test("mux cancellation bounds the configured window by the run timeout", async () => {
   await withMuxFixture("never-settles", async fixture => {
-    const witnessSpec = fixture.startWitness();
+    const witnessSpec = await fixture.startReadyWitness();
     const result = await interruptActiveTurn({ baseURL: fixture.baseURL, sessionId: "fixture",
       startResponse: { ok: true }, timeoutMs: 120, interruptSpec: { input: "\x1b", settleTimeoutMs: 60000 }, witnessSpec });
     assert.equal(result.passed, false);

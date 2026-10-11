@@ -49,3 +49,13 @@ native-005 owned PIDs were absent; no process was killed. Production service,
 protected audit PID625660, profiles, sources and old evidence were untouched.
 Routine validation belongs to exact-head GitHub Actions; record current checks
 in the handoff comment, never reuse historical5/5 or21/21 as current-head proof.
+
+
+Current recovery CI first failed one historical mux fixture (149/150): the
+120ms operation deadline raced real fixture-child startup, so it failed before
+entering the WebSocket timeout branch asserted by that test. The two short-window
+fixtures now wait for their actual child-start marker before starting the tested
+operation. Their80ms/120ms bounds, timeout assertions, production runner and
+native gates are unchanged. This is fixture setup synchronization, not native
+provider conformance. The full fixture suite is rerun only in GitHub Actions;
+preserve the first failed run38178527237 separately from the later result.
