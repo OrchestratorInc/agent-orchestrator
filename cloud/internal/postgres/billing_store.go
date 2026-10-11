@@ -274,6 +274,10 @@ func usageTx(ctx context.Context, tx pgx.Tx, billing domain.OrgBilling, now time
 
 	window := time.Duration(limits.WindowHours) * time.Hour
 	windowStart := now.Add(-window)
+	// Time run before the organization subscribed is not charged to its plan.
+	if billing.UsageWeekAnchor != nil && billing.UsageWeekAnchor.After(windowStart) {
+		windowStart = *billing.UsageWeekAnchor
+	}
 	if err := tx.QueryRow(ctx,
 		`SELECT count(*) FROM ao_usage_minutes WHERE org_id = $1 AND minute > $2`,
 		billing.OrgID, windowStart,

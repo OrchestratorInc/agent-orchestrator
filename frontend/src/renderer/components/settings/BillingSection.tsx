@@ -155,7 +155,8 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 								price={offerPrice(offer, t)}
 								features={offer.limits ? planFeatures(offer.limits, t) : []}
 								current={isCurrent}
-								recommended={offer.name === RECOMMENDED_PLAN}
+								recommended={!subscribed && offer.name === RECOMMENDED_PLAN}
+								highlighted={subscribed ? isCurrent : offer.name === RECOMMENDED_PLAN}
 								action={
 									<Button size="sm" variant={offer.name === RECOMMENDED_PLAN && !isCurrent ? "primary" : "secondary"}
 										className="w-full" disabled={pending !== null} onClick={onClick}>
@@ -171,6 +172,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 				{actionError ? <p role="alert" className="px-1 text-xs text-destructive">{actionError}</p> : null}
 			</SettingsSection>
 			{subscribed && limits && usage ? (
+				<>
 				<SettingsSection title={t("settings.billing.usage")} grouped>
 					<UsageRow
 						label={t("settings.billing.windowUsage", { hours: usage.windowHours })}
@@ -207,6 +209,8 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						</Button>
 					</SettingsRow>
 				</SettingsSection>
+				<p className="-mt-2 px-1 text-xs text-settings-muted">{t("settings.billing.usageNote")}</p>
+				</>
 			) : null}
 			<Dialog open={confirmReset} onOpenChange={(open) => { if (pending !== "reset") setConfirmReset(open); }}>
 				<DialogContent>
@@ -236,12 +240,13 @@ function Notice({ title, titleHidden, text }: { title: string; titleHidden?: boo
 	);
 }
 
-function PlanCard({ name, price, features, current, recommended, action, t }: {
+function PlanCard({ name, price, features, current, recommended, highlighted, action, t }: {
 	name: string;
 	price: string;
 	features: string[];
 	current: boolean;
 	recommended?: boolean;
+	highlighted?: boolean;
 	action: React.ReactNode;
 	t: TFunction;
 }) {
@@ -251,7 +256,7 @@ function PlanCard({ name, price, features, current, recommended, action, t }: {
 			data-plan={name.toLowerCase()}
 			className={cn(
 				"relative flex flex-col gap-2 rounded-lg border bg-[var(--color-bg-settings-row)] p-3",
-				recommended ? "border-[var(--color-accent)]" : "border-transparent",
+				highlighted ? "border-[var(--color-status-working)]" : "border-[var(--color-border)]",
 			)}
 		>
 			{current ? (
@@ -261,7 +266,7 @@ function PlanCard({ name, price, features, current, recommended, action, t }: {
 			) : null}
 			<div className="flex flex-col gap-1">
 				{recommended ? (
-					<span className="w-fit rounded-full bg-[var(--color-accent)] px-1.5 py-px text-[length:var(--font-size-xs)] font-medium leading-4 text-white">
+					<span className="w-fit rounded-full bg-[var(--color-status-working)] px-1.5 py-px text-[length:var(--font-size-xs)] font-medium leading-4 text-white">
 						{t("settings.billing.recommended")}
 					</span>
 				) : null}

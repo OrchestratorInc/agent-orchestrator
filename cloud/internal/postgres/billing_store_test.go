@@ -286,6 +286,10 @@ func TestUsageSamplingAndOverLimitPause(t *testing.T) {
 
 	// Within the plan: nothing paused.
 	subscribe(t, store, fixture.orgID, "active", starterLimits())
+	if _, err := admin.Exec(ctx,
+		`UPDATE ao_organizations SET usage_week_anchor = now() - interval '1 day' WHERE id = $1`, fixture.orgID); err != nil {
+		t.Fatal(err)
+	}
 	if paused, err := store.PauseOverLimit(ctx, fixture.orgID); err != nil || paused != 0 {
 		t.Fatalf("within plan: paused %d, err %v", paused, err)
 	}
@@ -490,5 +494,28 @@ func TestRunningSlotsAndTotalVMsAreSeparateLimits(t *testing.T) {
 	}
 	if _, err := createKind(store, fixture, "worker"); limitCode(err) != LimitTotalSessions {
 		t.Fatalf("fourth session: err = %v, want %s", err, LimitTotalSessions)
+	}
+}
+
+// Time run before subscribing (or while grandfathered) is not charged to the
+// new plan's rolling window or week.
+func TestUsageBeforeSubscribingIsNotCharged(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	store.EnableBilling(7*24*time.Hour, time.Time{})
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	addUsage(t, admin, fixture, 2, 60, 30*time.Minute)
+	subscribe(t, store, fixture.orgID, "active", starterLimits())
+	if _, err := admin.Exec(context.Background(),
+		`UPDATE ao_organizations SET usage_week_anchor = now() - interval '20 minutes' WHERE id = $1`, fixture.orgID); err != nil {
+		t.Fatal(err)
+	}
+	addUsage(t, admin, fixture, 1, 10, 0)
+	summary, err := store.BillingSummary(context.Background(), principal, fixture.orgID)
+	if err != nil || summary.Usage == nil {
+		t.Fatalf("summary = %+v, err = %v", summary, err)
+	}
+	if summary.Usage.WindowUsedMinutes != 10 || summary.Usage.WeeklyUsedMinutes != 10 {
+		t.Fatalf("window %d, week %d minutes; want only the 10 since subscribing",
+			summary.Usage.WindowUsedMinutes, summary.Usage.WeeklyUsedMinutes)
 	}
 }

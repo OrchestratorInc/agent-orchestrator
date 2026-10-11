@@ -80,7 +80,7 @@ describe("BillingSection", () => {
 		expect(within(card("starter")).getByText("$20 / month")).toBeInTheDocument();
 		expect(within(card("starter")).getByText("2 sessions at once")).toBeInTheDocument();
 		expect(within(card("pro")).getByText("16 sessions in total")).toBeInTheDocument();
-		expect(within(card("pro")).getByText("16 h every 6 h")).toBeInTheDocument();
+		expect(within(card("pro")).getByText("16 session hours every 6 h")).toBeInTheDocument();
 		expect(screen.queryByText("Usage")).not.toBeInTheDocument();
 		fireEvent.click(within(card("starter")).getByRole("button", { name: "Upgrade" }));
 		await waitFor(() => expect(mocks.openExternal).toHaveBeenCalledWith("https://checkout.stripe.test/cs_1"));
@@ -93,11 +93,12 @@ describe("BillingSection", () => {
 		await screen.findByText("Usage");
 		expect(within(card("starter")).getByText("Current")).toBeInTheDocument();
 		expect(within(card("free")).queryByText("Current")).not.toBeInTheDocument();
+		expect(screen.queryByText("Recommended")).not.toBeInTheDocument();
 		expect(within(card("starter")).getByRole("button", { name: "Manage" })).toBeInTheDocument();
 		expect(within(card("pro")).getByRole("button", { name: "Switch" })).toBeInTheDocument();
-		expect(screen.getByText("6-hour usage")).toBeInTheDocument();
-		expect(screen.getByText("4.2 of 8 h")).toBeInTheDocument();
-		expect(screen.getByText(/^13 of 20 h · resets /)).toBeInTheDocument();
+		expect(screen.getByText("Last 6 hours")).toBeInTheDocument();
+		expect(screen.getByText("4.2 of 8 session hours")).toBeInTheDocument();
+		expect(screen.getByText(/^13 of 20 session hours · resets /)).toBeInTheDocument();
 		expect(screen.getByText("2/2")).toBeInTheDocument();
 		expect(screen.getByText("3/8")).toBeInTheDocument();
 		expect(screen.getByText("Orchestrator 1/1 · Workers 1/1")).toBeInTheDocument();
@@ -123,7 +124,7 @@ describe("BillingSection", () => {
 		expect(mocks.client.resetBillingUsage).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByRole("button", { name: "Reset" }));
 		await waitFor(() => expect(mocks.client.resetBillingUsage).toHaveBeenCalledWith("org-1"));
-		expect(await screen.findByText(/^0 of 20 h · resets /)).toBeInTheDocument();
+		expect(await screen.findByText(/^0 of 20 session hours · resets /)).toBeInTheDocument();
 	});
 
 	it("explains when only admins may manage billing", async () => {
