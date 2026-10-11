@@ -9,6 +9,8 @@ import (
 )
 
 var (
+	// ErrTerminalMessageNotReady refuses a paste into native decisions or drafts.
+	ErrTerminalMessageNotReady = errors.New("terminal composer is not ready for a message")
 	// ErrUnsupportedEffort reports a value the selected model did not advertise.
 	ErrUnsupportedEffort = errors.New("unsupported model effort")
 	// ErrModelCapabilitiesUnavailable reports tuning that cannot be validated safely.

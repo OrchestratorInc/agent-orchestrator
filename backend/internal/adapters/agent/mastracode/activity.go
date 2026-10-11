@@ -15,7 +15,7 @@ func (p *Plugin) ValidateTerminalMessage(output, message string) error {
 		return err
 	}
 	if !p.ComposerIsEmpty(output) {
-		return errors.New("Mastra requires an initialized empty composer; resolve native decisions or submit/clear your draft in the terminal")
+		return errors.Join(ports.ErrTerminalMessageNotReady, errors.New("Mastra requires an initialized empty composer; resolve native decisions or submit/clear your draft in the terminal"))
 	}
 	return nil
 }

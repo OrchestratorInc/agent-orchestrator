@@ -11,6 +11,7 @@ package sessionguard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -424,6 +425,9 @@ func (g *Guard) sendAdmittedChecked(ctx context.Context, id domain.SessionID, ms
 	g.leaseMu.RUnlock()
 	if guarded {
 		if err := checker.ValidateSessionMessageInput(ctx, rec, msg); err != nil {
+			if errors.Is(err, ports.ErrTerminalMessageNotReady) {
+				return SuppressedAwaitingUser, nil
+			}
 			return SuppressedUnknown, fmt.Errorf("guard %s: terminal input: %w", id, err)
 		}
 	}

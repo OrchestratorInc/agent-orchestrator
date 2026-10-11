@@ -6,12 +6,24 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 type checkedInputLease struct {
 	held     bool
 	checkErr error
 	checked  bool
+}
+
+func TestUnsafeComposerReturnsDecisionConflictWithoutDelivery(t *testing.T) {
+	lease := &checkedInputLease{checkErr: ports.ErrTerminalMessageNotReady}
+	messenger := &fakeMessenger{}
+	g := New(&fakeStore{rec: record(domain.ActivityIdle, false), ok: true}, messenger, nil)
+	g.SetInputLease(lease)
+	outcome, err := g.Deliver(context.Background(), "s1", "task")
+	if err != nil || outcome != SuppressedAwaitingUser || len(messenger.sent) != 0 || lease.held {
+		t.Fatalf("unsafe composer = %v,%v", outcome, err)
+	}
 }
 
 func (l *checkedInputLease) AcquireSessionInput(domain.SessionID) (func(), bool) {
