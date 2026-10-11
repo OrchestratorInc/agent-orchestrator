@@ -131,6 +131,11 @@ type conversation struct {
 	promptResponseFailure func(acpsdk.PromptResponse) error
 	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 
+	// reattachRequest re-binds sessionID with session/resume when the agent
+	// process stays connected but has forgotten the session, as claude-agent-acp
+	// does after its Claude child dies. Nil when the agent cannot resume.
+	reattachRequest *acpsdk.ResumeSessionRequest
+
 	contextTokens     int64
 	contextWindow     int64
 	compactingTurnID  string
@@ -399,7 +404,11 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	if busy {
 		return ports.ChatTurnRef{}, errors.New("ACP conversation already has a turn in flight")
 	}
-	if err := c.applyTurnSettings(ctx, msg.Settings); err != nil {
+	err = c.applyTurnSettings(ctx, msg.Settings)
+	if isACPSessionNotFound(err) && c.reattachSession(ctx, err) {
+		err = c.applyTurnSettings(ctx, msg.Settings)
+	}
+	if err != nil {
 		return ports.ChatTurnRef{}, err
 	}
 	c.mu.Lock()
@@ -421,6 +430,33 @@ func (c *conversation) DiscardDeferredTurn(providerTurnID string) {
 		c.prepared = nil
 	}
 	c.mu.Unlock()
+}
+
+// reattachSession asks the agent to resume AO's stored session id on the live
+// connection after the agent reported it unknown. Nothing has been prompted yet,
+// so retrying the turn's settings afterwards cannot run any work twice. The
+// provider keeps its transcript on disk, so the conversation's context survives.
+func (c *conversation) reattachSession(ctx context.Context, cause error) bool {
+	c.mu.Lock()
+	request := c.reattachRequest
+	c.mu.Unlock()
+	if request == nil {
+		return false
+	}
+	sessionID := string(request.SessionId)
+	c.log.Warn("chat: ACP agent lost its session; reattaching",
+		"providerSessionID", sessionID, "error", cause)
+	resumeCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
+	resp, err := c.conn.ResumeSession(resumeCtx, *request)
+	if err != nil {
+		c.log.Warn("chat: ACP session reattach failed", "providerSessionID", sessionID, "error", err)
+		return false
+	}
+	if len(resp.ConfigOptions) > 0 {
+		c.replaceConfigOptions(resp.ConfigOptions)
+	}
+	return true
 }
 
 func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.ChatTurnSettings) error {
@@ -586,11 +622,18 @@ func (c *conversation) runTurn(ctx context.Context, sessionID string, turn prepa
 	if messageID == "" {
 		messageID = uuid.NewString()
 	}
-	resp, err := c.conn.Prompt(ctx, acpsdk.PromptRequest{
+	request := acpsdk.PromptRequest{
 		SessionId: acpsdk.SessionId(sessionID),
 		MessageId: &messageID,
 		Prompt:    turn.prompt,
-	})
+	}
+	resp, err := c.conn.Prompt(ctx, request)
+	// A turn with no settings to apply reaches the agent here first. An agent
+	// that no longer knows the session rejected the prompt without running it,
+	// so reattaching and resending it once cannot run the turn twice.
+	if isACPSessionNotFound(err) && c.reattachSession(ctx, err) {
+		resp, err = c.conn.Prompt(ctx, request)
+	}
 
 	c.finishPrompt(turn.id, resp, err)
 }
