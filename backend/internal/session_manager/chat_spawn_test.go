@@ -1857,3 +1857,19 @@ func TestDockerAgentDefaultsToChatAndNeverFallsBackToTerminal(t *testing.T) {
 		t.Fatal("unavailable Chat fell back or created durable state")
 	}
 }
+
+func TestDockerAgentRejectsEffortBeforeSessionAllocation(t *testing.T) {
+	for _, override := range []bool{false, true} {
+		mgr, st, runtime := newChatManager(&recordingLauncher{})
+		_, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+			ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessDockerAgent,
+			AgentConfig: ports.AgentConfig{Effort: "high"}, EffortOverride: override,
+		})
+		if !errors.Is(err, ports.ErrUnsupportedEffort) {
+			t.Fatalf("override=%v error=%v", override, err)
+		}
+		if len(st.sessions) != 0 || runtime.created != 0 {
+			t.Fatal("unsupported effort allocated session or terminal runtime")
+		}
+	}
+}

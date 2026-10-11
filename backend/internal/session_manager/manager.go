@@ -1516,6 +1516,9 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
 	}
+	if cfg.Harness == domain.HarnessDockerAgent && resolved.Effort != "" {
+		return ports.AgentConfig{}, fmt.Errorf("%w: Docker Agent does not expose an effort setting", ports.ErrUnsupportedEffort)
+	}
 	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode {
 		resolved.Effort = ""
 		return resolved, nil
