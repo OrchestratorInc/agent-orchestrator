@@ -7,6 +7,7 @@ import { haptics } from "../haptics";
 import { openGitHub } from "../openGitHub";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
+import { useAndroidResponseSelection } from "./useAndroidResponseSelection";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { allowsUnderscoreEmphasis } from "./inlineEmphasis";
 import { parseBlocks, type MarkdownBlock } from "./markdownBlocks";
@@ -14,6 +15,7 @@ import { iconSize, microLabel, prose, radius, space, type } from "../tokens";
 
 // The conversation screen decides how a tapped link opens (it knows the AO host
 // that the agent's localhost links map onto); the renderer only reports the tap.
+const AddResponseToChat = createContext<((text: string) => void) | null>(null);
 const OpenChatLink = createContext<((url: string) => void) | null>(null);
 
 /**
@@ -34,8 +36,8 @@ function defaultOpenChatLink(url: string): void {
 	void openGitHub(url);
 }
 
-export function ChatLinkProvider({ onLinkOpen, children }: { onLinkOpen: (url: string) => void; children: ReactNode }) {
-	return <OpenChatLink.Provider value={onLinkOpen}>{children}</OpenChatLink.Provider>;
+export function ChatLinkProvider({ onLinkOpen, onAddToChat, children }: { onLinkOpen: (url: string) => void; onAddToChat?: (text: string) => void; children: ReactNode }) {
+	return <OpenChatLink.Provider value={onLinkOpen}><AddResponseToChat.Provider value={onAddToChat ?? null}>{children}</AddResponseToChat.Provider></OpenChatLink.Provider>;
 }
 
 /**
@@ -106,9 +108,11 @@ function SelectableProseGroup({ blocks, selectionColor, styles }: { blocks: Arra
 /** One native text surface for selecting across every part of a response. */
 export function SelectableResponseText({ text }: { text: string }) {
 	const t = useTheme();
+	const addToChat = useContext(AddResponseToChat);
+	const onLayout = useAndroidResponseSelection(addToChat);
 	const styles = useThemedStyles(makeStyles);
 	const selectionColor = Platform.OS === "android" ? t.accentBorder : t.accent;
-	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body}>
+	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={Boolean(addToChat)} onAddToChat={(event) => addToChat?.(event.nativeEvent.text)}>
 		{parseBlocks(text).map((block, index) => {
 			const separator = index > 0 ? "\n\n" : "";
 			if (block.kind === "heading") return <Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>{separator}{inline(block.text, styles)}</Text>;

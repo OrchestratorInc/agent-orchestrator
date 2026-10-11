@@ -1,8 +1,78 @@
 diff --git a/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm b/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm
-index 45700cd..bf4a7be 100644
+index 45700cd..ecb864d 100644
 --- a/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm
 +++ b/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm
-@@ -59,6 +59,8 @@ - (instancetype)initWithFrame:(CGRect)frame
+@@ -26,13 +26,59 @@ static NSLineBreakMode RCTNSLineBreakModeFromEllipsizeMode(RNUITextViewEllipsize
+   }
+ }
+ 
++// iOS 15 uses the responder menu; iOS 16+ uses the UITextView edit-menu delegate.
++@interface AOResponseTextView : UITextView
++@property (nonatomic) BOOL addToChatEnabled;
++@property (nonatomic, copy) void (^addToChatHandler)(void);
++@property (nonatomic, strong) NSArray<UIMenuItem *> *savedMenuItems;
++@property (nonatomic, strong) NSArray<UIMenuItem *> *installedMenuItems;
++@end
++
++@implementation AOResponseTextView
++- (BOOL)becomeFirstResponder
++{
++  BOOL became = [super becomeFirstResponder];
++  if (@available(iOS 16.0, *)) { return became; }
++  if (became && self.addToChatEnabled && !self.installedMenuItems) {
++    self.savedMenuItems = UIMenuController.sharedMenuController.menuItems;
++    self.installedMenuItems = [(self.savedMenuItems ?: @[]) arrayByAddingObject:
++        [[UIMenuItem alloc] initWithTitle:@"Add to chat" action:@selector(addToChat:)]];
++    UIMenuController.sharedMenuController.menuItems = self.installedMenuItems;
++  }
++  return became;
++}
++- (BOOL)resignFirstResponder
++{
++  BOOL resigned = [super resignFirstResponder];
++  if (resigned && self.installedMenuItems) {
++    if (UIMenuController.sharedMenuController.menuItems == self.installedMenuItems) {
++      UIMenuController.sharedMenuController.menuItems = self.savedMenuItems;
++    }
++    self.savedMenuItems = nil;
++    self.installedMenuItems = nil;
++  }
++  return resigned;
++}
++- (BOOL)canPerformAction:(SEL)action withSender:(id)sender
++{
++  if (action == @selector(addToChat:)) {
++    return self.addToChatEnabled && self.selectedRange.length > 0;
++  }
++  return [super canPerformAction:action withSender:sender];
++}
++- (void)addToChat:(id)sender
++{
++  if (self.addToChatHandler) self.addToChatHandler();
++}
++@end
++
+ @interface RNUITextView () <RCTRNUITextViewViewProtocol, UIGestureRecognizerDelegate, UITextViewDelegate>
+ 
+ @end
+ 
+ @implementation RNUITextView{
+   UIView * _view;
+-  UITextView * _textView;
++  AOResponseTextView * _textView;
+   RNUITextViewShadowNode::ConcreteState::Shared _state;
+   UITapGestureRecognizer * _outsideTapRecognizer;
+   BOOL _suppressSelectionChange;
+@@ -53,12 +99,16 @@ - (instancetype)initWithFrame:(CGRect)frame
+     self.contentView = _view;
+     self.clipsToBounds = true;
+ 
+-    _textView = [[UITextView alloc] init];
++    _textView = [[AOResponseTextView alloc] init];
++    __weak RNUITextView *weakSelf = self;
++    _textView.addToChatHandler = ^{ [weakSelf addSelectedTextToChat]; };
+     _textView.scrollEnabled = false;
+     _textView.editable = false;
      _textView.selectable = false;
      _textView.textContainerInset = UIEdgeInsetsZero;
      _textView.textContainer.lineFragmentPadding = 0;
@@ -11,7 +81,16 @@ index 45700cd..bf4a7be 100644
      // Keep UIKit's initial state in sync with the Codegen prop default. Since
      // both oldProps and newProps default to `tail`, updateProps will not apply
      // this value on the first render.
-@@ -136,7 +138,20 @@ - (void)drawRect:(CGRect)rect
+@@ -109,6 +159,8 @@ - (void)prepareForRecycle
+ {
+   [super prepareForRecycle];
+   _state.reset();
++  [_textView resignFirstResponder];
++  _textView.addToChatEnabled = NO;
+ 
+   // Reset the frame to zero so that when it properly lays out on the next use
+   _textView.frame = CGRectZero;
+@@ -136,7 +188,20 @@ - (void)drawRect:(CGRect)rect
    const auto &props = *std::static_pointer_cast<RNUITextViewProps const>(_props);
  
    const auto attrString = _state->getData().attributedString;
@@ -33,7 +112,13 @@ index 45700cd..bf4a7be 100644
  
    // Setting attributedText clears any active text selection, and re-assigning
    // the frame triggers a layout flush that has the same effect. Bail out
-@@ -200,6 +215,10 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+@@ -196,10 +261,16 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+     _textView.textContainer.maximumNumberOfLines = newViewProps.numberOfLines;
+   }
+ 
++  _textView.addToChatEnabled = newViewProps.addToChatEnabled;
++
+   if (oldViewProps.selectable != newViewProps.selectable) {
      _textView.selectable = newViewProps.selectable;
    }
  
@@ -44,7 +129,7 @@ index 45700cd..bf4a7be 100644
    if (oldViewProps.allowFontScaling != newViewProps.allowFontScaling) {
      if (@available(iOS 11.0, *)) {
        _textView.adjustsFontForContentSizeCategory = newViewProps.allowFontScaling;
-@@ -310,6 +329,14 @@ - (CGPoint)getLocationOfPress:(UIGestureRecognizer*)sender
+@@ -310,6 +381,14 @@ - (CGPoint)getLocationOfPress:(UIGestureRecognizer*)sender
  - (void)handlePressIfNecessary:(UITapGestureRecognizer*)sender
  {
    const auto location = [self getLocationOfPress:sender];
@@ -59,10 +144,34 @@ index 45700cd..bf4a7be 100644
    const auto eventEmitter = [self getTouchEventEmitter:location];
  
    if (eventEmitter) {
-@@ -337,6 +364,25 @@ - (void)handleLongPressIfNecessary:(UILongPressGestureRecognizer*)sender
+@@ -337,6 +416,49 @@ - (void)handleLongPressIfNecessary:(UILongPressGestureRecognizer*)sender
  
  // MARK: - UITextViewDelegate
  
++- (void)addSelectedTextToChat
++{
++  const NSRange range = _textView.selectedRange;
++  if (!_textView.addToChatEnabled || !_eventEmitter || range.location == NSNotFound ||
++      range.length == 0 || NSMaxRange(range) > _textView.text.length) return;
++  NSString *selected = [_textView.text substringWithRange:range];
++  std::dynamic_pointer_cast<const RNUITextViewEventEmitter>(_eventEmitter)
++    ->onAddToChat(RNUITextViewEventEmitter::OnAddToChat{static_cast<int>(self.tag), selected.UTF8String});
++  _textView.selectedTextRange = nil;
++  [_textView resignFirstResponder];
++}
++
++- (UIMenu *)textView:(UITextView *)textView editMenuForTextInRange:(NSRange)range
++    suggestedActions:(NSArray<UIMenuElement *> *)suggestedActions API_AVAILABLE(ios(16.0))
++{
++  if (!_textView.addToChatEnabled || range.length == 0) {
++    return [UIMenu menuWithChildren:suggestedActions];
++  }
++  __weak RNUITextView *weakSelf = self;
++  UIAction *add = [UIAction actionWithTitle:@"Add to chat" image:[UIImage systemImageNamed:@"text.bubble"]
++      identifier:nil handler:^(__kindof UIAction *action) { [weakSelf addSelectedTextToChat]; }];
++  return [UIMenu menuWithChildren:[@[add] arrayByAddingObjectsFromArray:suggestedActions]];
++}
++
 +- (BOOL)textView:(UITextView *)textView shouldInteractWithURL:(NSURL *)URL inRange:(NSRange)characterRange interaction:(UITextItemInteraction)interaction
 +{
 +  if (characterRange.location >= textView.attributedText.length ||
@@ -102,7 +211,7 @@ index 15b5c6b..e7f8e76 100644
    return shadowView;
  }
 diff --git a/node_modules/@bsky.app/react-native-uitextview/lib/commonjs/RNUITextViewNativeComponent.ts b/node_modules/@bsky.app/react-native-uitextview/lib/commonjs/RNUITextViewNativeComponent.ts
-index 30b49b0..44da022 100644
+index 30b49b0..85e7686 100644
 --- a/node_modules/@bsky.app/react-native-uitextview/lib/commonjs/RNUITextViewNativeComponent.ts
 +++ b/node_modules/@bsky.app/react-native-uitextview/lib/commonjs/RNUITextViewNativeComponent.ts
 @@ -1,5 +1,6 @@
@@ -112,16 +221,30 @@ index 30b49b0..44da022 100644
    type ViewProps,
    codegenNativeComponent,
  } from 'react-native'
-@@ -30,6 +31,7 @@ interface NativeProps extends ViewProps {
+@@ -8,6 +9,10 @@ interface TargetedEvent {
+   target: CodegenTypes.Int32
+ }
+ 
++interface AddToChatEvent extends TargetedEvent {
++  text: string
++}
++
+ interface TextLayoutEvent extends TargetedEvent {
+   lines: string[]
+ }
+@@ -29,7 +34,10 @@ interface NativeProps extends ViewProps {
+   numberOfLines?: CodegenTypes.Int32
    allowFontScaling?: CodegenTypes.WithDefault<boolean, true>
    ellipsizeMode?: CodegenTypes.WithDefault<EllipsizeMode, 'tail'>
++  addToChatEnabled?: boolean
++  onAddToChat?: CodegenTypes.BubblingEventHandler<AddToChatEvent>
    selectable?: boolean
 +  selectionColor?: ColorValue
    onTextLayout?: CodegenTypes.BubblingEventHandler<TextLayoutEvent>
    /**
     * Callback fired when the text selection changes.
 diff --git a/node_modules/@bsky.app/react-native-uitextview/lib/module/RNUITextViewNativeComponent.ts b/node_modules/@bsky.app/react-native-uitextview/lib/module/RNUITextViewNativeComponent.ts
-index 30b49b0..44da022 100644
+index 30b49b0..85e7686 100644
 --- a/node_modules/@bsky.app/react-native-uitextview/lib/module/RNUITextViewNativeComponent.ts
 +++ b/node_modules/@bsky.app/react-native-uitextview/lib/module/RNUITextViewNativeComponent.ts
 @@ -1,5 +1,6 @@
@@ -131,16 +254,56 @@ index 30b49b0..44da022 100644
    type ViewProps,
    codegenNativeComponent,
  } from 'react-native'
-@@ -30,6 +31,7 @@ interface NativeProps extends ViewProps {
+@@ -8,6 +9,10 @@ interface TargetedEvent {
+   target: CodegenTypes.Int32
+ }
+ 
++interface AddToChatEvent extends TargetedEvent {
++  text: string
++}
++
+ interface TextLayoutEvent extends TargetedEvent {
+   lines: string[]
+ }
+@@ -29,7 +34,10 @@ interface NativeProps extends ViewProps {
+   numberOfLines?: CodegenTypes.Int32
    allowFontScaling?: CodegenTypes.WithDefault<boolean, true>
    ellipsizeMode?: CodegenTypes.WithDefault<EllipsizeMode, 'tail'>
++  addToChatEnabled?: boolean
++  onAddToChat?: CodegenTypes.BubblingEventHandler<AddToChatEvent>
    selectable?: boolean
 +  selectionColor?: ColorValue
    onTextLayout?: CodegenTypes.BubblingEventHandler<TextLayoutEvent>
    /**
     * Callback fired when the text selection changes.
+diff --git a/node_modules/@bsky.app/react-native-uitextview/lib/typescript/commonjs/src/Text.d.ts b/node_modules/@bsky.app/react-native-uitextview/lib/typescript/commonjs/src/Text.d.ts
+index 8fea174..624d445 100644
+--- a/node_modules/@bsky.app/react-native-uitextview/lib/typescript/commonjs/src/Text.d.ts
++++ b/node_modules/@bsky.app/react-native-uitextview/lib/typescript/commonjs/src/Text.d.ts
+@@ -11,6 +11,8 @@ export type SelectionChangeEvent = {
+     };
+ };
+ type UITextViewProps = TextProps & {
++    addToChatEnabled?: boolean;
++    onAddToChat?: (event: {nativeEvent: {target: number; text: string}}) => void;
+     uiTextView?: boolean;
+     /**
+      * Fired when the native text selection changes. Only fires on iOS when
+diff --git a/node_modules/@bsky.app/react-native-uitextview/lib/typescript/module/src/Text.d.ts b/node_modules/@bsky.app/react-native-uitextview/lib/typescript/module/src/Text.d.ts
+index 8fea174..624d445 100644
+--- a/node_modules/@bsky.app/react-native-uitextview/lib/typescript/module/src/Text.d.ts
++++ b/node_modules/@bsky.app/react-native-uitextview/lib/typescript/module/src/Text.d.ts
+@@ -11,6 +11,8 @@ export type SelectionChangeEvent = {
+     };
+ };
+ type UITextViewProps = TextProps & {
++    addToChatEnabled?: boolean;
++    onAddToChat?: (event: {nativeEvent: {target: number; text: string}}) => void;
+     uiTextView?: boolean;
+     /**
+      * Fired when the native text selection changes. Only fires on iOS when
 diff --git a/node_modules/@bsky.app/react-native-uitextview/src/RNUITextViewNativeComponent.ts b/node_modules/@bsky.app/react-native-uitextview/src/RNUITextViewNativeComponent.ts
-index 30b49b0..44da022 100644
+index 30b49b0..85e7686 100644
 --- a/node_modules/@bsky.app/react-native-uitextview/src/RNUITextViewNativeComponent.ts
 +++ b/node_modules/@bsky.app/react-native-uitextview/src/RNUITextViewNativeComponent.ts
 @@ -1,5 +1,6 @@
@@ -150,11 +313,38 @@ index 30b49b0..44da022 100644
    type ViewProps,
    codegenNativeComponent,
  } from 'react-native'
-@@ -30,6 +31,7 @@ interface NativeProps extends ViewProps {
+@@ -8,6 +9,10 @@ interface TargetedEvent {
+   target: CodegenTypes.Int32
+ }
+ 
++interface AddToChatEvent extends TargetedEvent {
++  text: string
++}
++
+ interface TextLayoutEvent extends TargetedEvent {
+   lines: string[]
+ }
+@@ -29,7 +34,10 @@ interface NativeProps extends ViewProps {
+   numberOfLines?: CodegenTypes.Int32
    allowFontScaling?: CodegenTypes.WithDefault<boolean, true>
    ellipsizeMode?: CodegenTypes.WithDefault<EllipsizeMode, 'tail'>
++  addToChatEnabled?: boolean
++  onAddToChat?: CodegenTypes.BubblingEventHandler<AddToChatEvent>
    selectable?: boolean
 +  selectionColor?: ColorValue
    onTextLayout?: CodegenTypes.BubblingEventHandler<TextLayoutEvent>
    /**
     * Callback fired when the text selection changes.
+diff --git a/node_modules/@bsky.app/react-native-uitextview/src/Text.tsx b/node_modules/@bsky.app/react-native-uitextview/src/Text.tsx
+index 840d76a..13166f1 100644
+--- a/node_modules/@bsky.app/react-native-uitextview/src/Text.tsx
++++ b/node_modules/@bsky.app/react-native-uitextview/src/Text.tsx
+@@ -31,6 +31,8 @@ export type SelectionChangeEvent = {
+ }
+ 
+ type UITextViewProps = TextProps & {
++  addToChatEnabled?: boolean
++  onAddToChat?: (event: {nativeEvent: {target: number; text: string}}) => void
+   uiTextView?: boolean
+   /**
+    * Fired when the native text selection changes. Only fires on iOS when

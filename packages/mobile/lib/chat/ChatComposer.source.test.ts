@@ -69,8 +69,9 @@ describe("chat composer pill", () => {
 	});
 
 	it("does not clear a newer draft when an earlier send completes", () => {
-		expect(composer).toContain('current === text ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, current)');
-		expect(composer).toContain('if (latestText.current === text) {');
+		expect(composer).toContain('const unchanged = current === text && currentQuotes === quotes;');
+		expect(composer).toContain('unchanged ? AsyncStorage.removeItem(draftKey)');
+		expect(composer).toContain('if (latestText.current === text && latestQuotes.current === quotes) {');
 	});
 
 	it("uses the latest native text when a pasted draft grows before React renders", () => {

@@ -35,6 +35,7 @@ import { queuedConversationMessages } from "./timelineModel";
 import { userFacingError } from "../connectionError";
 import type { DashboardPR, SessionPRSummary } from "../api";
 import { PRReviewPrompt } from "./PRReviewPrompt";
+import { decodeResponseDraft, encodeResponseDraft, responseReplyText, type ResponseQuote, type ResponseQuoteRequest } from "./responseQuotes";
 import { afterDraftWrites } from "./pendingSend";
 
 type Attachment =
@@ -64,6 +65,8 @@ const MAX_IMAGE_BYTES_TOTAL = 25 * 1024 * 1024;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp"]);
 
 export function ChatComposer({
+	quoteRequest,
+	onQuoteHandled,
 	reviewPR,
 	reviewPRSummary,
 	reviewPRCollapsed,
@@ -103,6 +106,8 @@ export function ChatComposer({
 	onDismissRequest,
 	onRestoreRequest,
 }: {
+	quoteRequest?: ResponseQuoteRequest;
+	onQuoteHandled?(id: string): void;
 	reviewPR?: DashboardPR;
 	reviewPRSummary?: SessionPRSummary;
 	reviewPRCollapsed?: boolean;
@@ -223,6 +228,9 @@ export function ChatComposer({
 		transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * keyboard.progress.value }],
 	}));
 	const [text, setText] = useState("");
+	const [quotes, setQuotes] = useState<ResponseQuote[]>([]);
+	const inputRef = useRef<TextInput>(null);
+	const consumedQuote = useRef<string | undefined>(undefined);
 	const [draftLoaded, setDraftLoaded] = useState(false);
 	const [cursor, setCursor] = useState(0);
 	const [fieldHeight, setFieldHeight] = useState(COMPOSER_FIELD_HEIGHT);
@@ -250,7 +258,7 @@ export function ChatComposer({
 	) : null;
 	const canSteer = snapshot.capabilities?.includes("steer") && !steerUnavailable && active;
 	const canEmbedFiles = snapshot.capabilities?.includes("embedded_context");
-	const hasDraft = Boolean(text.trim());
+	const hasDraft = Boolean(text.trim() || quotes.length);
 	const primaryAction = composerPrimaryAction({ active, hasDraft, hasAttachments: attachments.length > 0 });
 	const steerEligible = Boolean(canSteer && hasDraft && attachments.length === 0);
 	const deliveryPresentation = composerDeliveryPresentation({ active, canSteer: Boolean(canSteer), hasDraft, hasAttachments: attachments.length > 0, hasQueued: visibleQueuedMessages.length > 0 });
@@ -259,10 +267,22 @@ export function ChatComposer({
 	const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const openingSuggestion = useRef<string | undefined>(undefined);
 	const pickerGate = useRef(createRequestGate()).current;
+	const latestQuotes = useRef(quotes);
+	latestQuotes.current = quotes;
 	const latestText = useRef(text);
 	const latestCursor = useRef(cursor);
 	latestText.current = text;
 	latestCursor.current = cursor;
+	useEffect(() => {
+		if (!quoteRequest || consumedQuote.current === quoteRequest.id) return;
+		consumedQuote.current = quoteRequest.id;
+		const next = [...latestQuotes.current, { id: quoteRequest.id, text: quoteRequest.text }];
+		latestQuotes.current = next;
+		setQuotes(next);
+		onQuoteHandled?.(quoteRequest.id);
+		haptics.select();
+		requestAnimationFrame(() => inputRef.current?.focus());
+	}, [quoteRequest, onQuoteHandled]);
 	useEffect(() => () => pickerGate.invalidate(), [pickerGate]);
 	useEffect(() => {
 		const queuedIds = new Set(queuedMessages.map((entry) => entry.turnId));
@@ -276,7 +296,12 @@ export function ChatComposer({
 		if (!draftKey) return;
 		let mounted = true;
 		void AsyncStorage.getItem(draftKey)
-			.then((value) => { if (mounted && value) setText((current) => current || value); })
+			.then((value) => {
+				if (!mounted) return;
+				const draft = decodeResponseDraft(value);
+				setText((current) => current || draft.text);
+				setQuotes((current) => [...draft.quotes.filter((quote) => !current.some((item) => item.id === quote.id)), ...current]);
+			})
 			.catch(() => {})
 			.finally(() => { if (mounted) setDraftLoaded(true); });
 		return () => { mounted = false; };
@@ -284,23 +309,27 @@ export function ChatComposer({
 	useEffect(() => {
 		if (!draftKey || !draftLoaded) return;
 		draftTimer.current = setTimeout(() => {
-			void afterDraftWrites(draftKey, () => text ? AsyncStorage.setItem(draftKey, text) : AsyncStorage.removeItem(draftKey)).catch(() => {});
+			const value = encodeResponseDraft(text, quotes);
+			void afterDraftWrites(draftKey, () => value ? AsyncStorage.setItem(draftKey, value) : AsyncStorage.removeItem(draftKey)).catch(() => {});
 		}, 250);
 		return () => { if (draftTimer.current) clearTimeout(draftTimer.current); };
-	}, [draftKey, draftLoaded, text]);
+	}, [draftKey, draftLoaded, text, quotes]);
 	useEffect(() => {
 		if (!completedRetry) return;
 		if (draftTimer.current) clearTimeout(draftTimer.current);
 		const current = latestText.current;
-		const matches = current.trim() === completedRetry.draftText;
+		const currentQuotes = latestQuotes.current;
+		const matches = responseReplyText(current, currentQuotes) === completedRetry.draftText;
 		if (matches) {
 			latestText.current = "";
 			setText("");
+			latestQuotes.current = [];
+			setQuotes([]);
 			setAttachments([]);
 		}
 		void (async () => {
 			if (draftKey) {
-				await afterDraftWrites(draftKey, () => matches ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, current));
+				await afterDraftWrites(draftKey, () => matches ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, encodeResponseDraft(current, currentQuotes)));
 			}
 			await onAcknowledgeSend(completedRetry.id);
 		})().catch((cause) => setLocalError(userFacingError(cause)));
@@ -310,7 +339,7 @@ export function ChatComposer({
 
 	const submit = useCallback(async (intent: ComposerDeliveryIntent = "send") => {
 		if (submitting || pending || disabled || (draftKey && !draftLoaded)) return;
-		const trimmed = text.trim();
+		const trimmed = responseReplyText(text, quotes);
 		if (!trimmed && attachments.length === 0) return;
 		// Dismissed on the tap, not after the send lands. Waiting for the request
 		// tied the keyboard's exit to the network, so it dropped whenever the
@@ -328,13 +357,17 @@ export function ChatComposer({
 				: await onSend(trimmed, images.length ? images : undefined, resources.length ? resources : undefined);
 			if (draftKey) {
 				const current = latestText.current;
-				await afterDraftWrites(draftKey, () => current === text ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, current));
+				const currentQuotes = latestQuotes.current;
+				const unchanged = current === text && currentQuotes === quotes;
+				await afterDraftWrites(draftKey, () => unchanged ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, encodeResponseDraft(current, currentQuotes)));
 			}
 			await onAcknowledgeSend(id);
-			if (latestText.current === text) {
+			if (latestText.current === text && latestQuotes.current === quotes) {
 				latestText.current = "";
 				setText("");
 				setFieldHeight(COMPOSER_FIELD_HEIGHT);
+				latestQuotes.current = [];
+				setQuotes([]);
 				setAttachments([]);
 			}
 			haptics.success();
@@ -342,7 +375,7 @@ export function ChatComposer({
 			setLocalError(userFacingError(cause));
 			haptics.error();
 		} finally { setSubmitting(false); }
-	}, [text, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled]);
+	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled]);
 
 	const addImage = async () => {
 		setLocalError(undefined);
@@ -514,12 +547,25 @@ export function ChatComposer({
 				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.restoreText}>{request.title}</Text>
 				<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.restoreAction}>Answer</Text>
 			</Pressable> : null}
+			{!requestCard && quotes.length ? <ScrollView style={styles.quotes} keyboardShouldPersistTaps="handled">
+				{quotes.map((quote) => <View key={quote.id} style={styles.quote}>
+					<Feather name="corner-down-right" size={16} color={t.textTertiary} />
+					<Text numberOfLines={3} style={styles.quoteText} accessibilityLabel={`Quoted response: ${quote.text}`}>{quote.text}</Text>
+					<Pressable accessibilityRole="button" accessibilityLabel={`Remove quote: ${quote.text}`} onPress={() => {
+						haptics.tap();
+						const next = latestQuotes.current.filter((item) => item.id !== quote.id);
+						latestQuotes.current = next;
+						setQuotes(next);
+					}} style={styles.removeQuote}><Feather name="x" size={16} color={t.textTertiary} /></Pressable>
+				</View>)}
+			</ScrollView> : null}
 			{requestCard ?? <Animated.View
 				style={[styles.composer, activeReviewPR && styles.reviewComposer, activeReviewPR && reviewComposerSurfaceStyle, stopped && { opacity: 0.55 }]}
 			>
 				{activeReviewPR ? <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, reviewComposerGlassStyle]}><ComposerGlass radius={COMPOSER_RADIUS} /></Animated.View> : <ComposerGlass radius={COMPOSER_RADIUS} />}
 				<ChatAttachmentMenu disabled={stopped || submitting} canAttachFile={Boolean(canEmbedFiles)} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />
 				<TextInput
+					ref={inputRef}
 					accessibilityLabel="Message the agent"
 					editable={!stopped && !submitting}
 					value={text}
@@ -543,7 +589,7 @@ export function ChatComposer({
 					maxLength={40_000}
 				/>
 				<MicKey variant="plain" size={44} glyphSize={iconSize.lg} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} />
-				{primaryAction === "stop" ? <Pressable accessibilityRole="button" accessibilityLabel="Stop turn" accessibilityState={{ busy: interrupting, disabled: disabled || interrupting }} disabled={disabled || interrupting} onPress={() => { haptics.tap(); void onInterrupt(); }} style={[styles.stop, (disabled || interrupting) && { opacity: 0.55 }]}>{interrupting ? <ActivityIndicator size="small" color={t.textPrimary} /> : <Feather name="square" size={12} color={t.textPrimary} />}</Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={active ? "Queue message" : "Send message"} accessibilityState={{ disabled: disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) }} disabled={disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!text.trim() && attachments.length === 0)} onPress={() => { haptics.tap(); void submit("send"); }} style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, (disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!text.trim() && attachments.length === 0)) && { opacity: 0.35 }]}>{pending || submitting ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}</Pressable>}
+				{primaryAction === "stop" ? <Pressable accessibilityRole="button" accessibilityLabel="Stop turn" accessibilityState={{ busy: interrupting, disabled: disabled || interrupting }} disabled={disabled || interrupting} onPress={() => { haptics.tap(); void onInterrupt(); }} style={[styles.stop, (disabled || interrupting) && { opacity: 0.55 }]}>{interrupting ? <ActivityIndicator size="small" color={t.textPrimary} /> : <Feather name="square" size={12} color={t.textPrimary} />}</Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={active ? "Queue message" : "Send message"} accessibilityState={{ disabled: disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) }} disabled={disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!hasDraft && attachments.length === 0)} onPress={() => { haptics.tap(); void submit("send"); }} style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, (disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!hasDraft && attachments.length === 0)) && { opacity: 0.35 }]}>{pending || submitting ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}</Pressable>}
 			</Animated.View>}
 		</>
 	);
@@ -589,6 +635,10 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// Bottom-align the controls so attach, mic and send stay anchored while the
 	// text field grows above them. The pill grows around the row; the glass fills
 	// that pill rather than receiving a separately measured height.
+	quotes: { maxHeight: 150, marginBottom: space.xs, borderRadius: 16, backgroundColor: t.bgElevated },
+	quote: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, borderLeftWidth: 2, borderLeftColor: t.borderStrong },
+	quoteText: { flex: 1, minWidth: 0, paddingVertical: space.sm, fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	removeQuote: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
 	composer: { minHeight: COMPOSER_HEIGHT, maxHeight: COMPOSER_MAX_HEIGHT, flexDirection: "row", alignItems: "flex-end", gap: space.xxs, paddingHorizontal: space.xs, paddingVertical: space.xs, backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated, borderRadius: COMPOSER_RADIUS, borderCurve: "continuous" },
 	reviewComposer: { backgroundColor: "transparent" },
 	// The native content-size event grows this from its one-line resting height;

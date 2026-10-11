@@ -9,6 +9,8 @@ const { platform, theme } = vi.hoisted(() => ({
 }));
 
 vi.mock("react-native", () => ({
+	NativeModules: {},
+	findNodeHandle: (view: unknown) => view,
 	Image: "Image",
 	Platform: platform,
 	Pressable: "Pressable",
@@ -190,4 +192,18 @@ it("keeps Android link-containing prose range-selectable", () => {
 	} finally {
 		platform.OS = "ios";
 	}
+});
+
+
+it("adds the exact native selection without changing the response or link handlers", () => {
+	const onAddToChat = vi.fn();
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatLinkProvider onLinkOpen={vi.fn()} onAddToChat={onAddToChat}><ChatMarkdown continuousSelection text={"# Heading\n\n- One\n- Two"} /></ChatLinkProvider>); });
+	const root = renderer.root.find((node) => node.props.selectable === true);
+	expect(root.props.addToChatEnabled).toBe(true);
+	const selection = "ding\n\n• One\n• Tw";
+	act(() => root.props.onAddToChat({ nativeEvent: { target: 1, text: selection } }));
+	expect(onAddToChat).toHaveBeenCalledExactlyOnceWith(selection);
+	expect(textOf(root)).toBe("Heading\n\n• One\n• Two");
+	act(() => renderer.unmount());
 });

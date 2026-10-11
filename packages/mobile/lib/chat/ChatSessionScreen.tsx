@@ -35,6 +35,7 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { getWorkspacePaths, openSessionShell } from "./api";
 import { requestDockModel } from "./requestDockModel";
+import type { ResponseQuoteRequest } from "./responseQuotes";
 import { ChatComposer } from "./ChatComposer";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
@@ -302,6 +303,16 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				: glassHeaderControl("right"),
 		);
 	}, [expandReviewPrompt, headerRightReady, navigation, reviewPromptCollapsed, reviewPromptPR, t]);
+
+	const composerKey = config ? JSON.stringify([machineIdentity(config), session.id]) : session.id;
+	const [quoteRequest, setQuoteRequest] = useState<ResponseQuoteRequest>();
+	const quoteSequence = useRef(0);
+	const addResponseToChat = useCallback((text: string) => {
+		if (!text.length) return;
+		setDismissedRequest(request?.sequence);
+		setQuoteRequest({ id: `${Date.now()}-${++quoteSequence.current}`, text, composerKey });
+	}, [composerKey, request?.sequence]);
+	const quoteHandled = useCallback((id: string) => setQuoteRequest((current) => current?.id === id ? undefined : current), []);
 
 	const loadWorkspaceFiles = useCallback(async () => {
 		if (!config || !conversation.snapshot) return { paths: filePaths, truncated: filePathsTruncated };
@@ -609,7 +620,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="alert-circle" /> : null}
 			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon="rotate-ccw" /> : null}
 			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="send" title="Message delivery uncertain" body={pendingSend.error || "Delivery failed"} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /> : null)}
-			<ChatLinkProvider onLinkOpen={openLink}>
+			<ChatLinkProvider onLinkOpen={openLink} onAddToChat={addResponseToChat}>
 				<ChatTimeline
 					snapshot={snapshot}
 					loadingOlder={conversation.loadingOlder}
@@ -625,7 +636,9 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				/>
 			</ChatLinkProvider>
 			<ChatComposer
-				key={config ? JSON.stringify([machineIdentity(config), session.id]) : session.id}
+				key={composerKey}
+				quoteRequest={quoteRequest?.composerKey === composerKey ? quoteRequest : undefined}
+				onQuoteHandled={quoteHandled}
 				reviewPR={reviewPromptPR}
 				reviewPRSummary={reviewPromptSummary}
 				reviewPRCollapsed={reviewPromptCollapsed}
