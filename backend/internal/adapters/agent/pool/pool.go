@@ -1,4 +1,4 @@
-// Package pool supplies unregistered metadata for user-installed Poolside pool.
+// Package pool supplies Chat-only metadata for user-installed Poolside pool.
 package pool
 
 import (
@@ -13,10 +13,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Plugin is metadata only. Native ACP admission awaits independent qualification.
+// Plugin is metadata only. Pool has no admitted AO terminal surface.
 type Plugin struct{ agentbase.Base }
 
-// New creates unregistered metadata for a user-installed Pool executable.
+// New creates metadata for a user-installed Pool executable.
 func New() *Plugin { return &Plugin{} }
 
 var _ ports.Agent = (*Plugin)(nil)
@@ -24,9 +24,9 @@ var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.AgentBinaryResolver = (*Plugin)(nil)
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// Manifest describes the source-only, unqualified Pool preparation.
+// Manifest describes the user-installed Chat-only Pool agent.
 func (*Plugin) Manifest() adapters.Manifest {
-	return adapters.Manifest{ID: "pool", Name: "Poolside Pool", Description: "User-installed Poolside pool; ACP preparation only.", Version: "0.0.1", Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
+	return adapters.Manifest{ID: "pool", Name: "Poolside Pool", Description: "Native Poolside Pool ACP Chat (Unix).", Version: "0.0.1", Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
 }
 
 // ResolveBinary discovers the installed executable without downloading it.
@@ -40,7 +40,7 @@ func (*Plugin) GetLaunchCommand(ctx context.Context, _ ports.LaunchConfig) ([]st
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, errors.New("pool terminal interface is not qualified for AO")
+	return nil, errors.New("Pool is available in Chat mode only")
 }
 
 // GetRestoreCommand hard-refuses restore so missing history cannot launch fresh.
@@ -48,7 +48,7 @@ func (*Plugin) GetRestoreCommand(ctx context.Context, _ ports.RestoreConfig) ([]
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
-	return nil, false, errors.New("pool terminal restore is not qualified for AO")
+	return nil, false, errors.New("Pool terminal restore is unsupported; use Chat")
 }
 
 // AuthStatus reports credential presence without claiming remote authorization.
@@ -77,4 +77,9 @@ func credentialStatus(key string) ports.AgentAuthStatus {
 	}
 	// Saved native login is not inspected: absent environment key is inconclusive.
 	return ports.AgentAuthStatusUnknown
+}
+
+// GetConfigSpec exposes provider-owned model selection.
+func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
+	return agentbase.ModelConfigSpec(ctx, "Model must exist in the native Pool provider catalog.")
 }

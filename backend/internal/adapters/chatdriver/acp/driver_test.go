@@ -4424,3 +4424,41 @@ func TestACPDriverResumeStartsFreshOnlyForMissingSessionWhenAllowed(t *testing.T
 		})
 	}
 }
+
+// Lazy native initialization must be checked before reporting a successful turn.
+func TestACPDriverRequiredSessionInitialization(t *testing.T) {
+	agent := &fakeAgent{promptNoPermission: true}
+	var seenID string
+	driver := New(Config{
+		Harness: domain.HarnessPool, Probe: func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		ValidateSessionReady: func(_ context.Context, cfg LaunchConfig, id string) error {
+			if cfg.WorkspacePath == "" {
+				t.Fatal("missing workspace")
+			}
+			seenID = id
+			return errors.New("required standing hook absent")
+		},
+	}, nil)
+	driver.useTestProcess(fakeSpawn(agent))
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conv.Close()
+	if seenID != "" {
+		t.Fatal("fresh hook checked before lazy initialization")
+	}
+	if _, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		event := nextEvent(t, conv.Events())
+		if event.Kind == ports.ChatEventTurnCompleted {
+			if event.TurnState != domain.TurnStateFailed || seenID == "" {
+				t.Fatalf("missing hook reported success: %+v", event)
+			}
+			break
+		}
+	}
+}

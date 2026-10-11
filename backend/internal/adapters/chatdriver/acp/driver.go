@@ -50,10 +50,14 @@ type LaunchConfig struct {
 
 // Config binds one harness to an ACP agent implementation.
 type Config struct {
-	Harness      domain.AgentHarness
-	Capabilities ports.ChatCapabilities
-	Probe        func(context.Context) error
-	Launch       func(context.Context, LaunchConfig) (Launch, error)
+	// ValidateSessionReady checks native context after load and completed prompts.
+	// Some providers initialize a fresh session lazily on its first prompt.
+	// Live host adoption preserves the original process context and skips it.
+	ValidateSessionReady func(context.Context, LaunchConfig, string) error
+	Harness              domain.AgentHarness
+	Capabilities         ports.ChatCapabilities
+	Probe                func(context.Context) error
+	Launch               func(context.Context, LaunchConfig) (Launch, error)
 	// ValidateInitialize optionally admits only the tested ACP distribution and
 	// version after the protocol handshake identifies it. This is preferable to
 	// invoking an adapter-specific version flag, which many stdio agents do not
@@ -290,6 +294,7 @@ func (d *Driver) openNewSession(
 		settings.Approval, d.cfg.ValidateTurnSettings, resp.ConfigOptions,
 		conv.legacyWire.modelState(), resp.Modes,
 	)
+	d.bindSessionValidation(conv, launchCfg, string(resp.SessionId))
 	if d.cfg.EncodeProviderConversationID != nil {
 		conv.setReportedProviderConversationID(d.cfg.EncodeProviderConversationID(string(resp.SessionId)))
 	}
@@ -467,12 +472,19 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		configOptions = resp.ConfigOptions
 		modes = resp.Modes
 	}
+	if d.cfg.ValidateSessionReady != nil {
+		if err := d.cfg.ValidateSessionReady(ctx, launchCfg, cfg.ProviderConversationID); err != nil {
+			conv.discard()
+			return nil, fmt.Errorf("%w: ACP session initialization: %w", ports.ErrChatResumeFailed, err)
+		}
+	}
 	conv.start(
 		cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
 		d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
 		cfg.Permissions, d.cfg.ValidateTurnSettings, configOptions,
 		conv.legacyWire.modelState(), modes,
 	)
+	d.bindSessionValidation(conv, launchCfg, cfg.ProviderConversationID)
 	conv.setReportedProviderConversationID(reportedProviderConversationID)
 	if err := conv.applyTurnSettings(ctx, ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions}); err != nil {
 		if !errors.Is(err, ErrACPSetterUnsupported) {
@@ -783,4 +795,21 @@ func normalizeACPLoadError(operation string, err error) error {
 		return fmt.Errorf("%w: %s: %w", ports.ErrChatHistoryLoadFailed, operation, err)
 	}
 	return normalizeACPError(operation, err)
+}
+
+// bindSessionValidation prevents a failed native context hook from being
+// reported as a completed turn. It is observational, not a tool security gate.
+func (d *Driver) bindSessionValidation(conv *conversation, cfg LaunchConfig, id string) {
+	if d.cfg.ValidateSessionReady == nil {
+		return
+	}
+	previous := conv.promptResponseFailure
+	conv.promptResponseFailure = func(resp acpsdk.PromptResponse) error {
+		if previous != nil {
+			if err := previous(resp); err != nil {
+				return err
+			}
+		}
+		return d.cfg.ValidateSessionReady(context.Background(), cfg, id)
+	}
 }

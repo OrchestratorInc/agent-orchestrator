@@ -1,42 +1,131 @@
-// Package poolacp prepares an unregistered binding for native pool acp.
+// Package poolacp binds the user's pinned native Pool ACP agent to AO Chat.
 package poolacp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	acpsdk "github.com/coder/acp-go-sdk"
 )
 
-// New prepares a driver that rejects every launch pending native qualification.
+// New uses Pool's own tools, permissions and durable session history.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
-		Harness:      domain.AgentHarness("pool"),
-		Capabilities: conservativeCapabilities(),
-		Configure:    configure,
+		Harness: domain.HarnessPool, Configure: configure,
+		ValidateInitialize: validateInitialize, ValidateSessionReady: validateSessionReady,
+		SessionMode: sessionMode, SessionOptions: sessionOptions, ValidateTurnSettings: validateTurnSettings,
 	}, log)
 }
 
-func conservativeCapabilities() ports.ChatCapabilities {
-	// Override every nativeacp true default; documentation is not conformance.
-	return ports.ChatCapabilities{
-		ports.ChatCapabilityStreaming: false,
-		ports.ChatCapabilityTools:     false,
-		ports.ChatCapabilityApprovals: false,
-		ports.ChatCapabilityInterrupt: false,
-		ports.ChatCapabilityResume:    false,
+func validateInitialize(init acpsdk.InitializeResponse) error {
+	if init.AgentInfo == nil || init.AgentInfo.Name != "pool-acp" || init.AgentInfo.Version != "1.0.16" || !init.AgentCapabilities.LoadSession {
+		return fmt.Errorf("Pool Chat requires the qualified native pool-acp 1.0.16 with session/load")
 	}
+	return nil
 }
 
-func configure(ctx context.Context, _ acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+func hookDirectory(cfg acpdriver.LaunchConfig) (string, error) {
+	if !filepath.IsAbs(cfg.DataDir) || cfg.SessionID == "" || strings.ContainsAny(string(cfg.SessionID), "/\\") {
+		return "", fmt.Errorf("Pool instructions require an absolute AO data directory and session identity")
+	}
+	return filepath.Join(cfg.DataDir, "prompts", string(cfg.SessionID), "pool"), nil
+}
+
+func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	// TODO: native hook fail-open witness, auth/permission wire contract and
-	// cancellation/restore qualification are prerequisites to process admission.
-	return nil, nil, fmt.Errorf("%w: pool ACP native contracts are not qualified", ports.ErrChatDriverIncompatible)
+	if runtime.GOOS == "windows" {
+		return nil, nil, fmt.Errorf("Pool Chat private hooks currently require Unix")
+	}
+	if err := validateTurnSettings(cfg.Permissions, ports.ChatTurnSettings{Approval: cfg.Permissions}); err != nil {
+		return nil, nil, err
+	}
+	dir, err := hookDirectory(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	helperPath := filepath.Join(dir, "standing.sh")
+	settings, helper, err := BuildStandingHook(cfg.SystemPrompt, helperPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, nil, err
+	}
+	witness := filepath.Join(dir, "started.json")
+	if err := os.Remove(witness); err != nil && !os.IsNotExist(err) {
+		return nil, nil, err
+	}
+	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
+	// Record the native event before emitting the additive context. No project
+	// settings, AGENTS.md, user hooks or default system prompt are replaced.
+	helper = []byte(strings.Replace(string(helper), "#!/bin/sh\n", "#!/bin/sh\numask 077\ncat > "+quote(witness)+" || exit 1\n", 1))
+	for name, content := range map[string][]byte{"standing.sh": helper, "settings.yaml": settings} {
+		if err := os.WriteFile(filepath.Join(dir, name), content, 0o600); err != nil {
+			return nil, nil, err
+		}
+	}
+	return []string{"acp", "--settings", filepath.Join(dir, "settings.yaml")}, nil, nil
+}
+
+func validateSessionReady(ctx context.Context, cfg acpdriver.LaunchConfig, nativeID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	dir, err := hookDirectory(cfg)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "started.json"))
+	if err != nil {
+		return fmt.Errorf("Pool standing hook did not run: %w", err)
+	}
+	var event struct {
+		Event   string `json:"hook_event_name"`
+		Session string `json:"session_id"`
+		Cwd     string `json:"cwd"`
+	}
+	if err := json.Unmarshal(data, &event); err != nil {
+		return fmt.Errorf("Pool standing hook witness: %w", err)
+	}
+	if event.Event != "SessionStart" || event.Session != nativeID || filepath.Clean(event.Cwd) != filepath.Clean(cfg.WorkspacePath) {
+		return fmt.Errorf("Pool standing hook witness does not match the initialized native session/workspace")
+	}
+	return nil
+}
+
+func sessionMode(mode ports.PermissionMode) string {
+	switch ports.NormalizePermissionMode(mode) {
+	case ports.PermissionModeDefault:
+		return "default"
+	case ports.PermissionModeAcceptEdits:
+		return "accept-edits"
+	case ports.PermissionModeBypassPermissions:
+		return "always-allow"
+	default:
+		return ""
+	}
+}
+func validateTurnSettings(_ ports.PermissionMode, settings ports.ChatTurnSettings) error {
+	if sessionMode(settings.Approval) == "" {
+		return fmt.Errorf("Pool Chat does not support approval mode %q", settings.Approval)
+	}
+	return nil
+}
+func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
+	if model := strings.TrimSpace(settings.Model); model != "" {
+		return []acpdriver.SessionOption{{ID: "model", Value: model}}
+	}
+	return nil
 }

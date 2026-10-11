@@ -3,7 +3,9 @@ package poolacp
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -53,19 +55,54 @@ func TestStandingHookValidation(t *testing.T) {
 	}
 }
 
-func TestUnqualifiedLaunchAlwaysRefused(t *testing.T) {
-	for _, cfg := range []acpdriver.LaunchConfig{{}, {WorkspacePath: "/workspace", SystemPrompt: "policy"}, {ReconnectOnly: true}} {
-		args, env, err := configure(context.Background(), cfg)
-		if !errors.Is(err, ports.ErrChatDriverIncompatible) || args != nil || env != nil {
-			t.Fatalf("unqualified admission: %v", err)
+func TestRequiredStandingHookWitness(t *testing.T) {
+	cfg := acpdriver.LaunchConfig{DataDir: t.TempDir(), SessionID: domain.SessionID("owned-session"), WorkspacePath: t.TempDir(), SystemPrompt: "private policy"}
+	args, _, err := configure(context.Background(), cfg)
+	if err != nil || len(args) != 3 {
+		t.Fatalf("configure: %v, %v", args, err)
+	}
+	if err := validateSessionReady(context.Background(), cfg, "native-id"); err == nil {
+		t.Fatal("missing hook must fail closed")
+	}
+	dir, _ := hookDirectory(cfg)
+	for _, event := range []string{`{"hook_event_name":"SessionStart","session_id":"wrong","cwd":"/wrong"}`, `not json`} {
+		if err := os.WriteFile(filepath.Join(dir, "started.json"), []byte(event), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateSessionReady(context.Background(), cfg, "native-id"); err == nil {
+			t.Fatal("bad hook witness accepted")
 		}
 	}
-	for _, capability := range []ports.ChatCapability{ports.ChatCapabilityStreaming, ports.ChatCapabilityTools, ports.ChatCapabilityApprovals, ports.ChatCapabilityInterrupt, ports.ChatCapabilityResume} {
-		caps := conservativeCapabilities()
-		value, present := caps[capability]
-		if !present || value {
-			t.Fatalf("must explicitly disable nativeacp default %s", capability)
+	event, _ := json.Marshal(map[string]string{"hook_event_name": "SessionStart", "session_id": "native-id", "cwd": cfg.WorkspacePath})
+	if err := os.WriteFile(filepath.Join(dir, "started.json"), event, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSessionReady(context.Background(), cfg, "native-id"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := configure(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSessionReady(context.Background(), cfg, "native-id"); err == nil {
+		t.Fatal("replacement launch reused stale witness")
+	}
+}
+func TestPermissionAndModelMappings(t *testing.T) {
+	for _, tc := range []struct {
+		mode   ports.PermissionMode
+		native string
+	}{{ports.PermissionModeDefault, "default"}, {ports.PermissionModeAcceptEdits, "accept-edits"}, {ports.PermissionModeBypassPermissions, "always-allow"}, {ports.PermissionModeAuto, ""}} {
+		if got := sessionMode(tc.mode); got != tc.native {
+			t.Fatalf("%s: %s", tc.mode, got)
 		}
+		err := validateTurnSettings(tc.mode, ports.ChatTurnSettings{Approval: tc.mode})
+		if (err == nil) != (tc.native != "") {
+			t.Fatalf("admission %s: %v", tc.mode, err)
+		}
+	}
+	options := sessionOptions(ports.ChatTurnSettings{Model: "provider-model"})
+	if len(options) != 1 || options[0].ID != "model" || options[0].Value != "provider-model" {
+		t.Fatal(options)
 	}
 }
 

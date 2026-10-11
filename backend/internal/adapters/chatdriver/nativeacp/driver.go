@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"time"
 
+	acpsdk "github.com/coder/acp-go-sdk"
+
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -41,6 +43,8 @@ type VersionProbe func(ctx context.Context, bin string) error
 
 // Config describes the small provider-specific portion of a native ACP binding.
 type Config struct {
+	ValidateInitialize           func(acpsdk.InitializeResponse) error
+	ValidateSessionReady         func(context.Context, acpdriver.LaunchConfig, string) error
 	Harness                      domain.AgentHarness
 	Capabilities                 ports.ChatCapabilities
 	Configure                    Configure
@@ -76,8 +80,10 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 	}
 
 	return acpdriver.Config{
-		Harness:      cfg.Harness,
-		Capabilities: capabilities,
+		Harness:              cfg.Harness,
+		ValidateInitialize:   cfg.ValidateInitialize,
+		ValidateSessionReady: cfg.ValidateSessionReady,
+		Capabilities:         capabilities,
 		Probe: func(ctx context.Context) error {
 			if cfg.Configure == nil {
 				return fmt.Errorf("%w: incomplete native ACP binding for %s",
