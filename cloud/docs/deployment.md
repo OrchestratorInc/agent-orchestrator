@@ -461,7 +461,7 @@ Also before production lists Freestyle: create the
 `ao-cloud-production-execution-role` `secretsmanager:GetSecretValue` on each
 new secret, including `support`: a task whose execution role cannot read a
 referenced secret never starts, and the deploy rolls back. Register the production Stripe webhook endpoint against
-`https://api.aoagents.dev` and use its signing secret as `webhook_secret`.
+`https://api.aoagents.dev` and use its signing secret as `webhook_secret`. Subscribe it to all events the control plane handles: `checkout.session.completed`, `checkout.session.expired`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `product.updated` (staging was missing the last two until 2026-10-11).
 
 ### 2. WorkOS organization metadata
 
