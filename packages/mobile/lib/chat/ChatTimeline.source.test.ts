@@ -18,6 +18,11 @@ describe("chat turn summary styling", () => {
 		expect(source).toContain("extraData={openWorked}");
 		expect(turnSummarySource).toContain("accessibilityState={foldable ? { expanded: open } : undefined}");
 	});
+
+	it("holds the working indicator still under Reduce Motion", () => {
+		expect(turnSummarySource).toContain('<Spinning enabled><Feather name="loader"');
+		expect(turnSummarySource).not.toContain("<ActivityIndicator");
+	});
 });
 
 describe("streaming response layout", () => {

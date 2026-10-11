@@ -22,7 +22,7 @@ import { haptics } from "../haptics";
 import { useApp } from "../store";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { MascotLamp } from "../ui";
+import { MascotLamp, Spinning } from "../ui";
 import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { HighlightedCodeText } from "./HighlightedCodeText";
@@ -690,7 +690,8 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 		onPress={() => { haptics.tap(); onToggle(); }}
 		style={styles.statusRow}
 	>
-		{running ? <StatusSpinner><ActivityIndicator size="small" color={t.textTertiary} /></StatusSpinner> : null}
+		{/* Spinning holds the glyph still under Reduce Motion; loader still reads as in progress. */}
+		{running ? <StatusSpinner><Spinning enabled><Feather name="loader" size={12} color={t.textTertiary} /></Spinning></StatusSpinner> : null}
 		<StatusLabel>{text}</StatusLabel>
 		{foldable ? <FoldChevron open={open} color={t.textFaint} /> : null}
 	</Pressable>;
