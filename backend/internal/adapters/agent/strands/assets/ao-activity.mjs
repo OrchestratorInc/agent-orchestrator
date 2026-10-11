@@ -62,16 +62,18 @@ function report(event, agent) {
 export function bridgePermissionActivity(agent, emit) {
   const pending = new Map();
   const blocked = new Set();
+  let batchReported = false;
 
   agent.addHook(BeforeToolCallEvent, (event) => {
     const id = event.toolUse.toolUseId;
-    const candidate = { reported: false, timer: undefined };
+    const candidate = { timer: undefined };
     candidate.timer = setTimeout(() => {
       if (pending.get(id) !== candidate) return;
-      candidate.reported = true;
-      const first = blocked.size === 0;
       blocked.add(id);
-      if (first) emit("permission-request");
+      if (!batchReported) {
+        batchReported = true;
+        emit("permission-request");
+      }
     }, 0);
     pending.set(id, candidate);
   }, { order: HookOrder.INTERVENTION_INPUT - 1 });
@@ -83,7 +85,8 @@ export function bridgePermissionActivity(agent, emit) {
     clearTimeout(candidate.timer);
     pending.delete(id);
     blocked.delete(id);
-    if (candidate.reported && blocked.size === 0 && pending.size === 0) {
+    if (batchReported && blocked.size === 0 && pending.size === 0) {
+      batchReported = false;
       emit("active");
     }
   }, { order: HookOrder.INTERVENTION_INPUT + 1 });
@@ -92,6 +95,7 @@ export function bridgePermissionActivity(agent, emit) {
     for (const candidate of pending.values()) clearTimeout(candidate.timer);
     pending.clear();
     blocked.clear();
+    batchReported = false;
   };
 }
 

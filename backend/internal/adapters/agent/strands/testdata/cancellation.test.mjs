@@ -131,6 +131,16 @@ test("permission activity reports a native broker wait and its resolution", { sk
   assert.deepEqual(events, ["permission-request"]);
   await callbacks[1].callback({toolUse: {toolUseId: "prompted"}});
   assert.deepEqual(events, ["permission-request", "active"]);
+
+  events.splice(0);
+  await callbacks[0].callback({toolUse: {toolUseId: "prompted-parallel"}});
+  await delay(5);
+  await callbacks[0].callback({toolUse: {toolUseId: "allowed-parallel"}});
+  assert.deepEqual(events, ["permission-request"]);
+  await callbacks[1].callback({toolUse: {toolUseId: "prompted-parallel"}});
+  assert.deepEqual(events, ["permission-request"], "pending auto-allowed tool must defer recovery");
+  await callbacks[1].callback({toolUse: {toolUseId: "allowed-parallel"}});
+  assert.deepEqual(events, ["permission-request", "active"]);
   reset();
 });
 
