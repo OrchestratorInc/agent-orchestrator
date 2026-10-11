@@ -566,8 +566,14 @@ async function interruptViaMux({ baseURL, sessionId, activeState, timeoutMs, spe
         websocket.processStoppedAt = now();
         websocket.processStopEvidence = processState;
       }
-      lateWitness = await workspaceFile(baseURL, sessionId, witnessSpec.latePath, Math.max(1, proofDeadline - performance.now()));
-      if (!missingWorkspaceFile(lateWitness)) throw new Error("cancelled foreground command produced its delayed side effect");
+      const remainingMs = proofDeadline - performance.now();
+      if (remainingMs <= 25) {
+        if (remainingMs > 0) await sleep(remainingMs);
+        break;
+      }
+      lateWitness = await workspaceFile(baseURL, sessionId, witnessSpec.latePath, remainingMs);
+      if (lateWitness.ok) throw new Error("cancelled foreground command produced its delayed side effect");
+      if (!missingWorkspaceFile(lateWitness)) websocket.lateWitnessProbeError = apiEvidence(lateWitness);
       await sleep(Math.min(50, Math.max(5, proofDeadline - performance.now())));
     }
     const finalProcess = await cancellationProcessState(commandWitness.pid, commandWitness.processIdentitySha256);
