@@ -1254,6 +1254,28 @@ func TestCatalogFingerprintKeepsTheExecutableOnlyValueForConfiglessAgents(t *tes
 	}
 }
 
+func TestTauCatalogFingerprintTracksProjectHome(t *testing.T) {
+	homeA := t.TempDir()
+	homeB := t.TempDir()
+	for home, provider := range map[string]string{homeA: "provider-a", homeB: "provider-b"} {
+		tauHome := filepath.Join(home, ".tau")
+		if err := os.MkdirAll(tauHome, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(tauHome, "providers.json"), []byte(provider), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env := func(home string) map[string]string {
+		return map[string]string{"HOME": home, "USERPROFILE": home}
+	}
+
+	first := CatalogFingerprint(context.Background(), "tau", "", "", env(homeA))
+	if second := CatalogFingerprint(context.Background(), "tau", "", "", env(homeB)); second == first {
+		t.Fatalf("fingerprint unchanged (%q) across project home overrides", second)
+	}
+}
+
 // TestACPOnlyHarnessReportsDiscoveryFailure guards the difference between the
 // ACP harnesses. Cline keeps configured provider selections, so an ACP
 // failure falls back to those. DeepSeek Harness and Devin have no second

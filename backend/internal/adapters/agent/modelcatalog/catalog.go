@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1415,7 +1416,14 @@ func parseTauModels(output []byte) ([]ports.AgentModelInfo, error) {
 func tauConfigPaths(env map[string]string) []string {
 	home := envValue(env, "TAU_HOME")
 	if home == "" {
-		userHome, _ := os.UserHomeDir()
+		homeKey := "HOME"
+		if runtime.GOOS == "windows" {
+			homeKey = "USERPROFILE"
+		}
+		userHome := envValue(env, homeKey)
+		if userHome == "" {
+			userHome, _ = os.UserHomeDir()
+		}
 		home = filepath.Join(userHome, ".tau")
 	}
 	return []string{filepath.Join(home, "providers.json"), filepath.Join(home, "catalog.toml"), filepath.Join(home, "models-store.json"), filepath.Join(home, "codex-models-store.json")}
