@@ -342,10 +342,20 @@ type workspaceHealth struct {
 }
 
 type workspaceBuild struct {
+	ID        string              `json:"id"`
 	Status    string              `json:"status"`
+	Job       workspaceBuildJob   `json:"job"`
 	Reason    string              `json:"reason"`
 	Deadline  *time.Time          `json:"deadline"`
 	Resources []workspaceResource `json:"resources"`
+}
+
+// workspaceBuildJob is the provisioner job behind a build; its error explains
+// a failed build (a template error, a cloud quota) in the provider's words.
+type workspaceBuildJob struct {
+	Status    string `json:"status"`
+	Error     string `json:"error"`
+	ErrorCode string `json:"error_code"`
 }
 
 type workspaceResource struct {
@@ -432,6 +442,13 @@ func (c *Client) workspaceName(sessionID string) string {
 
 // Create provisions a Coder workspace from the configured template.
 func (c *Client) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Environment, error) {
+	finish := sandbox.BeginStage(ctx, sandbox.StageWorkspaceCreate)
+	environment, err := c.create(ctx, spec)
+	finish(err, c.stageAttrs(string(environment.ID), ""))
+	return environment, err
+}
+
+func (c *Client) create(ctx context.Context, spec sandbox.Spec) (sandbox.Environment, error) {
 	name := strings.TrimSpace(spec.Name)
 	if spec.SessionID != "" {
 		name = c.workspaceName(spec.SessionID)
@@ -540,7 +557,10 @@ func (c *Client) validateWorkspaceIdentity(view workspace, expectedName string) 
 }
 
 func (c *Client) Start(ctx context.Context, id sandbox.ID) error {
-	return c.transition(ctx, id, "start")
+	finish := sandbox.BeginStage(ctx, sandbox.StageWorkspaceStart)
+	err := c.transition(ctx, id, "start")
+	finish(err, c.stageAttrs(string(id), ""))
+	return err
 }
 
 func (c *Client) Stop(ctx context.Context, id sandbox.ID) error {
@@ -656,12 +676,21 @@ func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap s
 		return err
 	}
 	agent, ok := c.selectAgent(view)
+	agentAttrs := c.stageAttrs(string(id), agent.ID)
+	agentAttrs["agent_status"] = agent.Status
+	agentAttrs["agent_lifecycle"] = agent.LifecycleState
+	agentAttrs["agent_architecture"] = agent.Architecture
+	agentAttrs["build_status"] = view.LatestBuild.Status
+	finishAgentWait := sandbox.BeginStage(ctx, sandbox.StageAgentWait)
 	if !ok || !agentReady(agent) {
 		// Never bootstrap while the agent is still starting: the template's
 		// startup script has not finished preparing the workspace yet.
-		return fmt.Errorf("coder: workspace agent is not ready (status %q, lifecycle %q): %w",
+		err := fmt.Errorf("coder: workspace agent is not ready (status %q, lifecycle %q): %w",
 			agent.Status, agent.LifecycleState, sandbox.ErrWorkspaceNotReady)
+		finishAgentWait(err, agentAttrs)
+		return err
 	}
+	finishAgentWait(nil, agentAttrs)
 	ptyURL, err := url.Parse(c.baseURL + "/api/v2/workspaceagents/" + url.PathEscape(agent.ID) + "/pty")
 	if err != nil {
 		return fmt.Errorf("coder: build PTY URL: %w", err)
@@ -680,10 +709,16 @@ func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap s
 	}
 	home := ""
 	if sandbox.NormalizeCoderDurableRoot(bootstrap.DurableRoot) == sandbox.CoderHomeDurableRoot {
+		finishProbe := sandbox.BeginStage(ctx, sandbox.StageDurableRootProbe)
 		probe, err := c.probeWorkspace(ctx, id, ptyURL)
 		if err != nil {
-			return classifyBootstrapError(err, bootstrap.DurableRoot)
+			err = classifyBootstrapError(err, bootstrap.DurableRoot)
+			finishProbe(err, agentAttrs)
+			return err
 		}
+		probeAttrs := c.stageAttrs(string(id), agent.ID)
+		probeAttrs["machine"] = probe.machine
+		finishProbe(nil, probeAttrs)
 		arch = normalizeArchitecture(probe.machine)
 		if arch == "" {
 			return unsupportedArchitectureError(probe.machine)
@@ -694,6 +729,10 @@ func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap s
 	if err != nil {
 		return err
 	}
+	finishInstall := sandbox.BeginStage(ctx, sandbox.StageWorkerInstall)
+	installAttrs := c.stageAttrs(string(id), agent.ID)
+	installAttrs["arch"] = arch
+	installAttrs["durable_root"] = resolved.DurableRoot
 	err = c.bootstrapResolvedWorker(ctx, id, ptyURL, resolved, arch)
 	var mismatch *architectureMismatchError
 	if errors.As(err, &mismatch) {
@@ -704,14 +743,20 @@ func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap s
 		if resolved, err = resolveWorkerBootstrap(bootstrap, detected, home); err != nil {
 			return err
 		}
+		installAttrs["arch"] = detected
 		err = c.bootstrapResolvedWorker(ctx, id, ptyURL, resolved, detected)
 		if errors.As(err, &mismatch) {
-			return unsupportedArchitectureError(mismatch.machine)
+			err = unsupportedArchitectureError(mismatch.machine)
+			finishInstall(err, installAttrs)
+			return err
 		}
 	}
 	if err != nil {
-		return classifyBootstrapError(err, resolved.DurableRoot)
+		err = classifyBootstrapError(err, resolved.DurableRoot)
+		finishInstall(err, installAttrs)
+		return err
 	}
+	finishInstall(nil, installAttrs)
 	return nil
 }
 

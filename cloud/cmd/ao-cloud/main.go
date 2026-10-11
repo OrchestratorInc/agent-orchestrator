@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/billing"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/cifeedback"
@@ -21,6 +22,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/httpapi"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/idlepause"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/interfacereconcile"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/logctx"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/notification"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/projectsnapshot"
@@ -261,7 +263,9 @@ func errorString(err error) string {
 }
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	// logctx stamps request/user/org/session/provider identifiers from the
+	// context onto every *Context log call (see cloud/docs/support-runbook.md).
+	logger := slog.New(logctx.NewHandler(slog.NewJSONHandler(os.Stdout, nil)))
 	if err := run(logger); err != nil {
 		logger.Error("ao-cloud stopped", "error", err)
 		os.Exit(1)
@@ -406,9 +410,18 @@ func run(logger *slog.Logger) error {
 			githubapp.NewRESTClient("", nil), store,
 		)
 	}
+	// The support trail (ao_activity_events): one fire-and-forget writer per
+	// replica, plus a 90-day retention prune.
+	activityRecorder := activity.NewRecorder(store, logger, activity.Options{})
+	store.SetActivityLogger(activityRecorder.Log)
+	go activityRecorder.Run(ctx)
+	go activity.RunPruner(ctx, store, activity.Retention, activity.DefaultPruneInterval, logger)
 	reconciler, err := newSandboxReconciler(cfg, store, providerCipher, logger)
 	if err != nil {
 		return err
+	}
+	if reconciler != nil {
+		reconciler.SetActivityRecorder(activityRecorder)
 	}
 	// The scanner only has anything to do where sandboxes exist to pause, and
 	// only when idle-pause is enabled. With AO_CLOUD_IDLE_PAUSE_THRESHOLD=0
@@ -492,6 +505,8 @@ func run(logger *slog.Logger) error {
 		TerminalStreamEnabled:     cfg.TerminalStreamEnabled,
 		TerminalRelayEnabled:      cfg.TerminalRelayEnabled,
 		NotificationWake:          notificationProcessor.Wake,
+		Activity:                  activityRecorder,
+		SupportToken:              cfg.SupportToken,
 	}
 	if cfg.Environment == "development" &&
 		os.Getenv("AO_CLOUD_DEVELOPMENT_SKIP_CREDENTIAL_VALIDATION") == "true" {
@@ -530,7 +545,7 @@ func run(logger *slog.Logger) error {
 			ReturnURL:           cfg.BillingReturn(),
 			PortalConfiguration: cfg.StripePortalConfiguration,
 		}
-		go (&billing.Enforcer{Store: store, Logger: logger}).Run(ctx)
+		go (&billing.Enforcer{Store: store, Logger: logger, Activity: activityRecorder}).Run(ctx)
 		logger.Info("Stripe billing enabled", "plans", len(cfg.StripePriceIDs))
 	}
 	api := httpapi.New(apiOptions)

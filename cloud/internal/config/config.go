@@ -63,6 +63,9 @@ type Config struct {
 	RepositoryBrokerURL      string
 	RepositoryBrokerToken    string
 	EnvironmentControlToken  string
+	// SupportToken gates the operator support lookup endpoint
+	// (AO_CLOUD_SUPPORT_TOKEN). Empty disables the endpoint.
+	SupportToken string
 
 	// PublicURL is the origin a sandbox worker dials back to. A worker opens
 	// no inbound port, so this is the only way it can reach the control plane.
@@ -282,6 +285,7 @@ func Load() (Config, error) {
 		EnvironmentControlToken: strings.TrimSpace(
 			os.Getenv("AO_CLOUD_ENV_CONTROL_TOKEN"),
 		),
+		SupportToken: strings.TrimSpace(os.Getenv("AO_CLOUD_SUPPORT_TOKEN")),
 
 		PublicURL:              strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_PUBLIC_URL")), "/"),
 		WorkerSigningKey:       strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_SIGNING_KEY")),
@@ -690,6 +694,9 @@ func Load() (Config, error) {
 		if len(cfg.RepositoryBrokerToken) < 32 {
 			return Config{}, errors.New("AO_CLOUD_REPOSITORY_BROKER_TOKEN must be at least 32 characters when GitHub is configured")
 		}
+	}
+	if cfg.SupportToken != "" && len(cfg.SupportToken) < 32 {
+		return Config{}, errors.New("AO_CLOUD_SUPPORT_TOKEN must be at least 32 characters")
 	}
 	brokerConfigured := cfg.RepositoryBrokerURL != "" ||
 		cfg.EnvironmentControlToken != ""

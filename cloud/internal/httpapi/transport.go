@@ -59,6 +59,7 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, code, messag
 }
 
 func (s *Server) writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
+	s.recordPlanRefusal(r, err)
 	if writePlanError(w, r, err) {
 		return
 	}

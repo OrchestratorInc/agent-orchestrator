@@ -100,6 +100,11 @@ type Session struct {
 	StartupErrorCode    string
 	StartupErrorMessage string
 	StartupErrorAt      *time.Time
+	// StartupErrorDetail is the redacted operator detail behind the startup
+	// error (failed stage, provider error, Coder build and agent log tails). It
+	// is filled only for bring-your-own compute, whose operators are the
+	// organization's own.
+	StartupErrorDetail string
 	// WorkerEpoch is the highest worker epoch the session has minted for its
 	// agent terminal. It advances every time a fresh worker connects (a resume
 	// from idle-pause, a restore, or any re-provision), so a client can key its

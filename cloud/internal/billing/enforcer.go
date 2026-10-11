@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
 
 const (
@@ -29,7 +31,12 @@ type UsageStore interface {
 type Enforcer struct {
 	Store  UsageStore
 	Logger *slog.Logger
-	now    func() time.Time
+	// Activity, when set, records each enforcement pause on the
+	// organization's support trail (billing.limit_hit).
+	Activity interface {
+		Record(context.Context, domain.ActivityEvent)
+	}
+	now func() time.Time
 }
 
 // Run samples and enforces once a minute until ctx ends.
@@ -83,6 +90,12 @@ func (e *Enforcer) Tick(ctx context.Context) {
 		}
 		if paused > 0 {
 			e.Logger.Info("paused sessions over plan limits", "org_id", orgID, "paused", paused)
+			if e.Activity != nil {
+				e.Activity.Record(ctx, domain.ActivityEvent{
+					OrgID: orgID, Kind: domain.ActivityLimitHit,
+					Attrs: map[string]any{"source": "enforcer", "paused_sessions": paused},
+				})
+			}
 		}
 	}
 }

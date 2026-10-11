@@ -204,6 +204,8 @@ func (s *Server) createBillingCheckout(w http.ResponseWriter, r *http.Request) {
 		s.writeBillingProviderError(w, r, "create Stripe checkout session", err)
 		return
 	}
+	s.recordActivity(r, domain.ActivityEvent{OrgID: orgID, Kind: domain.ActivityCheckoutStarted,
+		Attrs: map[string]any{"plan": input.Plan}})
 	writeJSON(w, http.StatusOK, map[string]string{"url": link})
 }
 
@@ -311,6 +313,7 @@ func (s *Server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		subscriptionID = object.Subscription
+		s.recordCheckoutCompleted(ctx, object.ClientReferenceID)
 	case "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted":
 		subscriptionID = object.ID
 	case "invoice.paid", "invoice.payment_failed":
@@ -357,13 +360,17 @@ func (s *Server) syncSubscription(ctx context.Context, subscriptionID string) er
 		s.logger.Error("Stripe product metadata is not a valid AO plan; keeping previous limits",
 			"subscription_id", subscription.ID, "org_id", orgID, "error", subscription.LimitsErr)
 	}
-	return s.billingStore.ApplySubscription(ctx, orgID, postgres.SubscriptionUpdate{
+	if err := s.billingStore.ApplySubscription(ctx, orgID, postgres.SubscriptionUpdate{
 		SubscriptionID: subscription.ID,
 		Status:         subscription.Status,
 		Limits:         subscription.Limits,
 		PeriodStart:    subscription.PeriodStart,
 		PeriodEnd:      subscription.PeriodEnd,
-	})
+	}); err != nil {
+		return err
+	}
+	s.recordPlanChanged(ctx, orgID, subscription.Status, subscription.Limits)
+	return nil
 }
 
 func (s *Server) writeWebhookFailure(w http.ResponseWriter, r *http.Request, event billing.Event, step string, err error) {

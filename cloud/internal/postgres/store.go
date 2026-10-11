@@ -31,6 +31,9 @@ var (
 type Store struct {
 	pool    *pgxpool.Pool
 	billing billingPolicy
+	// activityLog is told about activity rows the store writes itself, inside
+	// the transaction they describe (see commitWithActivity).
+	activityLog func(context.Context, domain.ActivityEvent)
 }
 
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
