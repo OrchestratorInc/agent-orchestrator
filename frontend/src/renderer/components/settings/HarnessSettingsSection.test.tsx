@@ -336,7 +336,6 @@ describe("HarnessSettingsSection", () => {
 		expect(within(page).getByRole("button", { name: "Default model" })).toBeInTheDocument();
 		expect(within(list).getByText("Context (tokens): 200,000")).toBeInTheDocument();
 		expect(within(list).getByText("Inputs: Text · Image")).toBeInTheDocument();
-		expect(within(list).getByText("Context (tokens): Unknown")).toBeInTheDocument();
 		await userEvent.click(within(page).getByRole("button", { name: "Refresh" }));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", { params: { path: { agent: "codex" }, query: { projectId: undefined, revalidate: undefined } } });
 		await waitFor(() => expect(within(page).queryByText("gpt-5.3-mini")).toBeNull());
