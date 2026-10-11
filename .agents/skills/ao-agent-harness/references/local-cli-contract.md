@@ -266,3 +266,25 @@ upstream, or edit native history to erase these failures. Keep Stakpak
 unregistered pending a released native fix, then requalify actual AO. ACP load
 flags alone still do not prove history replay. See the
 [qualification hold](../../../../docs/research/stakpak-tui-hold-2026-10-11.md).
+
+
+### Stakpak recovery source boundary
+
+Release0.3.88 and upstream main were rechecked in recovery; foreground executor
+ownership is unchanged. `--tool` filters advertised definitions, while dispatch
+retains the full native tool list; empty selection means no filtering. Reserved
+native MCP servers cannot be replaced. Do not claim an AO command broker enforces
+exclusion based on those controls. ACP uses the same command executor. Deny-all
+permissions cannot qualify a workspace-edit coding surface.
+
+Native cancellation notifications return before process cleanup acknowledgement.
+A repair must own jobs independently of cancellable stream futures, cover both
+cancel branches/timeout/drop/disconnect, fence process identities and acknowledge
+bounded reaping before admitting the next turn. Merely sending group kill is not
+a complete drop/PID-reuse repair. AO Kill terminates the session and cannot stand
+in for same-session turn cancellation. Fresh-only scope removes restore claims
+but retains this ownership prerequisite. Keep prior failures; do not rerun the
+same Escape probe without a changed source-grounded hypothesis.
+
+See the [source patch and regression proposal](../../../../docs/research/stakpak-recovery-proposal-2026-10-12.md).
+It is a proposal, not an installed patch or a passing stock-native proof.
