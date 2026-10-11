@@ -157,6 +157,12 @@ func run(logger *slog.Logger) error {
 			return fmt.Errorf("set worker tooling environment %s: %w", key, err)
 		}
 	}
+	// An agent that outlived the previous worker still has that worker's epoch
+	// in its environment; its hooks read the current one from this file, so
+	// the notifications they queue are delivered rather than discarded.
+	if err := notificationoutbox.WriteWorkerEpoch(dataDir, bootstrap.Epoch); err != nil {
+		logger.Warn("record worker epoch for agent hooks", "error", err)
+	}
 	if !worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
 		if err := os.Setenv("PATH", worker.ToolingBinDir(dataDir)+string(os.PathListSeparator)+os.Getenv("PATH")); err != nil {
 			return fmt.Errorf("activate worker tooling: %w", err)
@@ -333,6 +339,9 @@ func run(logger *slog.Logger) error {
 			defer outbox.Close()
 			results <- (&notificationoutbox.Flusher{
 				Outbox: outbox, WorkerEpoch: bootstrap.Epoch, Logger: logger,
+				// A persisted agent survives worker restarts; what it queued under
+				// an earlier epoch is still its live state, so deliver it here.
+				AdoptPriorEpochs: transportSupervisor.PersistsAgent(),
 				Deliver: func(deliveryCtx context.Context, event notificationoutbox.Event) error {
 					if err := transportSupervisor.DeliverNotification(deliveryCtx, event); err == nil {
 						return nil

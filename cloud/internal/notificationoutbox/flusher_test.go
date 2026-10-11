@@ -67,6 +67,59 @@ func TestFlusherDiscardsRowsFromSupersededEpochWithoutDelivery(t *testing.T) {
 	}
 }
 
+// A Freestyle wake restarts the worker but keeps the agent: what that agent
+// queued under the earlier epoch (before the pause, or before the new worker
+// recorded its epoch) is delivered by the new worker, not discarded.
+func TestFlusherAdoptsPriorEpochEventsOfAPersistedAgent(t *testing.T) {
+	t.Parallel()
+	outbox := openTestOutbox(t)
+	for _, event := range []Event{
+		{EventID: "evt-old", EventType: "needs_input", Payload: []byte(`{}`), OccurredAt: time.Now(), WorkerEpoch: 4},
+		{EventID: "evt-future", EventType: "needs_input", Payload: []byte(`{}`), OccurredAt: time.Now(), WorkerEpoch: 9},
+	} {
+		if err := outbox.Enqueue(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var delivered []string
+	flusher := Flusher{
+		Outbox: outbox, WorkerEpoch: 5, AdoptPriorEpochs: true,
+		Deliver: func(_ context.Context, event Event) error { delivered = append(delivered, event.EventID); return nil },
+		Clock:   fixedClock{now: time.Now().Add(time.Second)},
+	}
+	for range 2 {
+		if _, err := flusher.FlushOne(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(delivered) != 1 || delivered[0] != "evt-old" {
+		t.Fatalf("delivered = %v, want only the adopted earlier-epoch event", delivered)
+	}
+	if count := outboxRowCount(t, outbox); count != 0 {
+		t.Fatalf("outbox retained %d rows", count)
+	}
+}
+
+func TestWorkerEpochFileOverridesTheLaunchEpoch(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if got := CurrentWorkerEpoch(dir, 4); got != 4 {
+		t.Fatalf("no file: epoch = %d, want the fallback 4", got)
+	}
+	if err := WriteWorkerEpoch(dir, 7); err != nil {
+		t.Fatal(err)
+	}
+	if got := CurrentWorkerEpoch(dir, 4); got != 7 {
+		t.Fatalf("epoch = %d, want the recorded 7", got)
+	}
+	if err := WriteWorkerEpoch(dir, 8); err != nil {
+		t.Fatal(err)
+	}
+	if got := CurrentWorkerEpoch(dir, 4); got != 8 {
+		t.Fatalf("epoch = %d, want the rewritten 8", got)
+	}
+}
+
 func TestFlusherRunStopsOnCancellation(t *testing.T) {
 	t.Parallel()
 	outbox := openTestOutbox(t)

@@ -1103,6 +1103,13 @@ func (s *Supervisor) persistentAgent() *persistentAgent {
 	return s.persist
 }
 
+// PersistsAgent reports whether this worker keeps the interactive agent
+// running under dtach, so the agent can outlive the worker (and a later worker
+// adopts it, along with the notifications it queued meanwhile).
+func (s *Supervisor) PersistsAgent() bool {
+	return s.persistentAgent() != nil
+}
+
 // persistsAgent reports whether a terminal launch runs the interactive agent
 // under dtach. Review and reviewer terminals are always plain processes.
 func (s *Supervisor) persistsAgent(input worker.TerminalCommand) bool {
