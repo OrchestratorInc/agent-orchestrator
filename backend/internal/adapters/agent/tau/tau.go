@@ -74,7 +74,7 @@ func (*Plugin) InterruptInput() string { return "\x1b" }
 
 // PromptReadinessHints requires the mounted native composer before typing.
 func (*Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
-	return ports.PromptReadinessHints{RequireReady: true, Patterns: []string{"Ask Tau…"}, PollInterval: 100 * time.Millisecond, Timeout: 20 * time.Second, Lines: 80}, ctx.Err()
+	return ports.PromptReadinessHints{RequireReady: true, RequireCurrentLaunchSignal: true, Patterns: []string{"Ask Tau…"}, PollInterval: 100 * time.Millisecond, Timeout: 20 * time.Second, Lines: 80}, ctx.Err()
 }
 
 // GetLaunchCommand starts a new foreground native TUI session.

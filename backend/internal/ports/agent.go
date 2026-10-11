@@ -540,11 +540,14 @@ type WaitingTerminalActivityDetector interface {
 type PromptReadinessHints struct {
 	// RequireReady refuses delivery when startup markers are absent or the wait budget expires.
 	RequireReady bool
-	InitialDelay time.Duration
-	Patterns     []string
-	PollInterval time.Duration
-	Timeout      time.Duration
-	Lines        int
+	// RequireCurrentLaunchSignal requires the lifecycle's first signal for this launch in addition
+	// to a terminal marker. This prevents preserved pane history from proving current readiness.
+	RequireCurrentLaunchSignal bool
+	InitialDelay               time.Duration
+	Patterns                   []string
+	PollInterval               time.Duration
+	Timeout                    time.Duration
+	Lines                      int
 }
 
 // AgentResolver maps a session's harness onto the Agent adapter that drives it,

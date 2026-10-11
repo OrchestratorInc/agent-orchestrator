@@ -6333,7 +6333,14 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 	for {
 		output, err := m.runtime.GetOutput(ctx, handle, lines)
 		if err == nil && promptOutputContains(output, hints.Patterns) {
-			return nil
+			currentLaunchReady := true
+			if hints.RequireCurrentLaunchSignal {
+				rec, ok, getErr := m.store.GetSession(ctx, domain.SessionID(cfg.SessionID))
+				currentLaunchReady = getErr == nil && ok && !rec.FirstSignalAt.IsZero()
+			}
+			if currentLaunchReady {
+				return nil
+			}
 		}
 		select {
 		case <-ctx.Done():

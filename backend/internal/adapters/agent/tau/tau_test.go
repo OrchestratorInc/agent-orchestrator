@@ -41,6 +41,10 @@ func TestLaunchKeepsTasksOutOfArgvAndRequiresExplicitBypass(t *testing.T) {
 			if strategy != ports.PromptDeliveryAfterStart || !p.FirstSignalProvesInputReady() {
 				t.Fatal("task must wait for native mounted TUI readiness")
 			}
+			hints, err := p.PromptReadinessHints(context.Background(), cfg)
+			if err != nil || !hints.RequireReady || !hints.RequireCurrentLaunchSignal {
+				t.Fatalf("prompt readiness hints = %#v, %v; want required current-launch readiness", hints, err)
+			}
 		})
 	}
 	for _, mode := range []ports.PermissionMode{"", ports.PermissionModeDefault, ports.PermissionModeAcceptEdits, ports.PermissionModeAuto, "unknown"} {

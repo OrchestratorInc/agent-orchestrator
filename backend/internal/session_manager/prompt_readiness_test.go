@@ -1,6 +1,7 @@
 package sessionmanager
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -10,6 +11,18 @@ import (
 
 // Tau's cursor styles the first placeholder character separately in PTY output.
 const tauStyledComposer = "\x1b[38;2;0;0;0;48;2;216;222;233mA\x1b[0m\x1b[38;2;111;114;117;48;2;16;20;25msk Tau…  Enter submits\x1b[0m"
+
+type promptReadinessRuntime struct {
+	*fakeRuntime
+	beforeOutput func(call int)
+}
+
+func (r *promptReadinessRuntime) GetOutput(ctx context.Context, handle ports.RuntimeHandle, lines int) (string, error) {
+	if r.beforeOutput != nil {
+		r.beforeOutput(r.outputCalls + 1)
+	}
+	return r.fakeRuntime.GetOutput(ctx, handle, lines)
+}
 
 func TestPromptOutputContainsVisibleReadinessMarker(t *testing.T) {
 	for _, tc := range []struct {
@@ -64,5 +77,38 @@ func TestSpawn_RequiredComposerAcceptsCursorStyledMarker(t *testing.T) {
 	}
 	if len(msg.msgs) != 1 || msg.msgs[0] != "fix the button" {
 		t.Fatalf("delivered prompts = %#v, want one original prompt", msg.msgs)
+	}
+}
+
+func TestPromptReadinessIgnoresStaleComposerUntilCurrentLaunchSignal(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1"}
+	rt := &promptReadinessRuntime{fakeRuntime: &fakeRuntime{outputs: []string{tauStyledComposer, tauStyledComposer}}}
+	rt.beforeOutput = func(call int) {
+		if call != 2 {
+			return
+		}
+		rec := st.sessions["mer-1"]
+		rec.FirstSignalAt = time.Now()
+		st.sessions["mer-1"] = rec
+	}
+	m := New(Deps{Runtime: rt, Store: st})
+	agent := readinessAgent{
+		afterStartAgent: afterStartAgent{recordingAgent: &recordingAgent{}},
+		hints: ports.PromptReadinessHints{
+			RequireReady:               true,
+			RequireCurrentLaunchSignal: true,
+			Patterns:                   []string{"Ask Tau…"},
+			PollInterval:               time.Millisecond,
+			Timeout:                    50 * time.Millisecond,
+		},
+	}
+
+	err := m.waitForPromptReadiness(ctx, agent, ports.LaunchConfig{SessionID: "mer-1"}, ports.RuntimeHandle{ID: "h1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.outputCalls != 2 {
+		t.Fatalf("GetOutput calls = %d, want 2 so the stale marker alone is rejected", rt.outputCalls)
 	}
 }
