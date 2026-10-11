@@ -162,8 +162,7 @@ func (p *Plugin) command(ctx context.Context, dataDir, id string, mode ports.Per
 	if err != nil {
 		return nil, err
 	}
-	plugins := append([]json.RawMessage{guard}, native.Profile.Plugins...)
-	plugins = append(plugins, json.RawMessage(plugin))
+	plugins := []json.RawMessage{guard, plugin}
 	pluginJSON, err := json.Marshal(plugins)
 	if err != nil {
 		return nil, err

@@ -11,14 +11,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func TestHooksPreservePluginsAndStayOutsideWorkspace(t *testing.T) {
-	p, cfg := setup(t, `{"profile":{"plugins":[{"kind":"plugin","module":"./user.mjs"}]}}`)
+func TestHooksStayOutsideWorkspace(t *testing.T) {
+	p, cfg := setup(t, `{}`)
 	cmd, err := p.GetLaunchCommand(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(cmd, " ")
-	if !strings.Contains(joined, "./user.mjs") || !strings.Contains(joined, hookPath(cfg.DataDir)) {
+	if !strings.Contains(joined, hookPath(cfg.DataDir)) {
 		t.Fatal(cmd)
 	}
 	before, err := os.ReadFile(hookPath(cfg.DataDir))
