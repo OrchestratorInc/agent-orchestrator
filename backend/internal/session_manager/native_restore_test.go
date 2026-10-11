@@ -3,10 +3,12 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
@@ -99,6 +101,26 @@ func interactiveManager(t *testing.T, terminated bool, a *interactiveTestAgent) 
 	m.messenger.SetInputLease(m)
 	return m, st, rt, msg
 }
+
+func TestMemcodeNativeLaunchUsesProcessSupervisor(t *testing.T) {
+	m := New(Deps{
+		DataDir:    "/ao-data",
+		Executable: func() (string, error) { return "/opt/ao", nil },
+	})
+	env := map[string]string{}
+	argv, err := m.wrapAgentProcessWithLaunchID(memcode.New(), "mer-1", env, []string{"memcode", "run"}, "launch-1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/opt/ao", "agent-process", "supervise", "--session", "mer-1", "--launch", "launch-1", "--", "memcode", "run"}
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("Memcode runtime argv = %#v, want %#v", argv, want)
+	}
+	if env[EnvSupervisedProcess] != "1" || env[EnvRuntimeLaunchID] != "launch-1" || env["AO_MEMCODE_GENERATION"] != "launch-1" {
+		t.Fatalf("Memcode supervised launch env = %#v", env)
+	}
+}
+
 func TestInteractiveNativeRestoreAndResume(t *testing.T) {
 	for _, terminated := range []bool{true, false} {
 		name := "resume"
