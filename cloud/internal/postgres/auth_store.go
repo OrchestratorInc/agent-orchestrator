@@ -35,22 +35,28 @@ func (s *Store) UpsertWorkOSUser(
 	if err != nil {
 		return domain.Principal{}, err
 	}
-	if err := s.ensureWorkOSOrganization(ctx, principal); err != nil {
+	teamOrgID, err := s.ensureWorkOSOrganization(ctx, principal)
+	if err != nil {
 		return domain.Principal{}, err
 	}
+	principal.TeamOrgID = teamOrgID
 	return principal, nil
 }
 
+// ensureWorkOSOrganization makes sure the principal's organization and
+// membership exist. It returns the AO organization ID of the token's WorkOS
+// organization, or "" when the token carries none (the personal organization
+// is ensured instead).
 func (s *Store) ensureWorkOSOrganization(
 	ctx context.Context,
 	principal domain.Principal,
-) error {
+) (string, error) {
 	if principal.ExternalOrgID == "" {
-		return s.ensurePersonalOrganization(ctx, principal)
+		return "", s.ensurePersonalOrganization(ctx, principal)
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(
@@ -60,14 +66,14 @@ func (s *Store) ensureWorkOSOrganization(
 		principal.UserID,
 		principal.ExternalOrgID,
 	); err != nil {
-		return err
+		return "", err
 	}
 	if _, err := tx.Exec(
 		ctx,
 		`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
 		principal.ExternalOrgID,
 	); err != nil {
-		return err
+		return "", err
 	}
 	orgName := strings.TrimSpace(principal.OrgName)
 	if orgName == "" {
@@ -102,14 +108,14 @@ func (s *Store) ensureWorkOSOrganization(
 		ownerUserID,
 		principal.UserID,
 	).Scan(&orgID); err != nil {
-		return err
+		return "", err
 	}
 	if _, err := tx.Exec(
 		ctx,
 		`SELECT set_config('ao.org_id', $1, true)`,
 		orgID,
 	); err != nil {
-		return err
+		return "", err
 	}
 	if _, err := tx.Exec(
 		ctx,
@@ -121,9 +127,9 @@ func (s *Store) ensureWorkOSOrganization(
 		principal.UserID,
 		role,
 	); err != nil {
-		return err
+		return "", err
 	}
-	return tx.Commit(ctx)
+	return orgID, tx.Commit(ctx)
 }
 
 func (s *Store) ensurePersonalOrganization(

@@ -5,11 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/coder"
 	"github.com/go-chi/chi/v5"
 )
@@ -46,45 +44,44 @@ type coderTemplateResponse struct {
 // template, which the client selects by sending no templateId). When the caller's
 // organization brings its own Coder connection, the templates come from that
 // deployment; otherwise they come from the shared, env-configured deployment. The
-// list is empty when the deployment does not offer coder or the caller's
-// organization is not entitled to it, so the picker simply shows "Default".
+// endpoint is 403 provider_forbidden when the deployment does not offer coder or
+// the caller's organization is not entitled to it.
 func (s *Server) listCoderTemplates(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 	if requireUUID(orgID, "orgId") != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId must be a UUID.")
 		return
 	}
+	if !s.requireOrgCoder(w, r, orgID) {
+		return
+	}
 	templates := []coderTemplateResponse{}
-	entitled := slices.Contains(s.availableSandboxProviders, sandbox.ProviderCoder) &&
-		s.orgAllowsProvider(principalFrom(r), sandbox.ProviderCoder)
-	if entitled {
-		lister, err := s.coderTemplateListerForOrg(r.Context(), orgID)
+	lister, err := s.coderTemplateListerForOrg(r.Context(), orgID)
+	if err != nil {
+		s.logger.Error("resolve coder template lister", "error", err, "request_id", requestID(r))
+		writeError(w, r, http.StatusBadGateway, "coder_unavailable", "Could not load Coder templates.")
+		return
+	}
+	if lister != nil {
+		raw, err := lister.ListTemplates(r.Context())
 		if err != nil {
-			s.logger.Error("resolve coder template lister", "error", err, "request_id", requestID(r))
+			s.logger.Error("list coder templates", "error", err, "request_id", requestID(r))
 			writeError(w, r, http.StatusBadGateway, "coder_unavailable", "Could not load Coder templates.")
 			return
 		}
-		if lister != nil {
-			raw, err := lister.ListTemplates(r.Context())
-			if err != nil {
-				s.logger.Error("list coder templates", "error", err, "request_id", requestID(r))
-				writeError(w, r, http.StatusBadGateway, "coder_unavailable", "Could not load Coder templates.")
-				return
+		for _, t := range raw {
+			params := t.Parameters
+			if params == nil {
+				params = []string{}
 			}
-			for _, t := range raw {
-				params := t.Parameters
-				if params == nil {
-					params = []string{}
-				}
-				templates = append(templates, coderTemplateResponse{
-					ID:          t.ID,
-					Name:        t.Name,
-					DisplayName: t.DisplayName,
-					Description: t.Description,
-					Icon:        t.Icon,
-					Parameters:  params,
-				})
-			}
+			templates = append(templates, coderTemplateResponse{
+				ID:          t.ID,
+				Name:        t.Name,
+				DisplayName: t.DisplayName,
+				Description: t.Description,
+				Icon:        t.Icon,
+				Parameters:  params,
+			})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"templates": templates})

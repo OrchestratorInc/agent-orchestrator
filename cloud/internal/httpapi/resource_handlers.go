@@ -255,6 +255,9 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
+	if !s.validateProjectSandboxProvider(w, r, principalFrom(r), orgID, config) {
+		return
+	}
 	// Store the coder dev-kit config (template + size/startup + extra repos)
 	// under the project's config, so every coder session of the project inherits
 	// it. Absent = default template, single repo (unchanged behavior).
@@ -502,8 +505,10 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	providerFromProject := false
 	if projectProvider := domain.DecodeProjectSandboxProvider(project.Config); projectProvider != "" {
 		request.Provider = projectProvider
+		providerFromProject = true
 	}
 	// A top-level worker created for a project that already has an active
 	// orchestrator is auto-linked to it: the orchestrator then sees, drives, and
@@ -526,7 +531,20 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			if found {
 				parentSessionID = orchestratorID
 				request.Provider = orchestratorProvider
+				providerFromProject = false
 			}
+		}
+	}
+	// With nothing choosing a provider, the session gets the organization's
+	// default: the deployment default when the organization may use it,
+	// otherwise its first allowed provider. An organization with no allowed
+	// provider cannot run cloud sessions at all.
+	principal := principalFrom(r)
+	if request.Provider == "" {
+		request.Provider = s.defaultProviderForOrg(principal, orgID)
+		if request.Provider == "" {
+			writeProviderForbidden(w, r, "", false)
+			return
 		}
 	}
 	// Validate the sandbox provider AFTER the auto-link override above: an
@@ -534,86 +552,39 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	// availability check must run on the final value, not the client-sent one.
 	// Otherwise a UI-created worker whose stale client selection differs from the
 	// orchestrator's provider is rejected before the override can take effect.
-	if request.Provider != "" && !slices.Contains(s.availableSandboxProviders, request.Provider) {
+	if !slices.Contains(s.availableSandboxProviders, request.Provider) {
 		writeError(
 			w, r, http.StatusUnprocessableEntity, "provider_unavailable",
 			"The selected sandbox provider is not available on this control plane.",
 		)
 		return
 	}
-	// The active organization must be entitled to the (final, post-override)
-	// provider: coder is gated on a WorkOS org capability. Enforced here so the
-	// gate holds even when a client bypasses the org-filtered list returned by
-	// /me and posts a gated provider directly.
-	if request.Provider != "" && !s.orgAllowsProvider(principalFrom(r), request.Provider) {
-		writeError(
-			w, r, http.StatusForbidden, "provider_forbidden",
-			"Your organization is not enabled for the selected sandbox provider.",
-		)
+	// The organization must be entitled to the (final, post-override) provider,
+	// whether the client sent it, the project saved it, or it is the default.
+	// Enforced here so the gate holds even when a client bypasses the
+	// org-filtered list returned by /me and posts a gated provider directly.
+	if !s.orgAllowsProvider(principal, orgID, request.Provider) {
+		writeProviderForbidden(w, r, request.Provider, providerFromProject)
 		return
 	}
 	// Coder sessions inherit the project's dev-kit config (template + size +
-	// startup), chosen once at project setup and stored on the project. Non-coder
-	// providers, and projects without a coder config, keep the default-template
-	// behavior. (Extra repos also live on the project config; the worker reads
-	// them from the project at launch — see launchContextFrom.)
-	effectiveProvider := request.Provider
-	if effectiveProvider == "" {
-		effectiveProvider = s.sandboxProvider
-	}
+	// startup), chosen once at project setup and stored on the project, and run
+	// on the organization's bring-your-own Coder deployment when it has one: the
+	// session binds to that connection (so the row carries
+	// provider_connection_id and the resolver decrypts the org's token). (Extra
+	// repos also live on the project config; the worker reads them from the
+	// project at launch, see launchContextFrom.)
 	var coderOpts *sandbox.CoderSessionOptions
 	var coderOverride *sandbox.CoderDeploymentOverride
-	if effectiveProvider == sandbox.ProviderCoder {
-		project, projectErr := s.store.GetProject(r.Context(), principalFrom(r), orgID, request.ProjectID)
-		if projectErr != nil {
-			s.writeStoreError(w, r, projectErr)
+	if request.Provider == sandbox.ProviderCoder {
+		placement, placementErr := s.orgCoderPlacement(r.Context(), principal, orgID, project.Config)
+		if placementErr != nil {
+			s.writeCoderPlacementError(w, r, placementErr)
 			return
 		}
-		if cfg, ok := domain.DecodeProjectCoderConfig(project.Config); ok {
-			coderOpts = &sandbox.CoderSessionOptions{
-				TemplateID:          cfg.TemplateID,
-				Size:                cfg.Size,
-				StartupScript:       cfg.StartupScript,
-				WorkspaceNamePrefix: cfg.WorkspaceNamePrefix,
-			}
-		}
-		// A bring-your-own-Coder organization points its coder sessions at its own
-		// Coder deployment. When one is configured, bind the session to that
-		// connection (so the row carries provider_connection_id and the resolver
-		// decrypts the org's token) and stamp the org's non-secret coder fields
-		// into the plan in place of the deployment default. With no org connection
-		// the deployment default is kept — existing deployment-level coder is
-		// untouched.
-		if pcStore, ok := s.store.(providerConnectionStore); ok {
-			connections, connErr := pcStore.ListProviderConnections(r.Context(), principalFrom(r), orgID)
-			if connErr != nil {
-				s.writeStoreError(w, r, connErr)
-				return
-			}
-			for _, connection := range connections {
-				if connection.Provider != sandbox.ProviderCoder ||
-					connection.Label != defaultAgentConnectionLabel {
-					continue
-				}
-				cfg, decodeErr := domain.DecodeOrgCoderConfig(connection.Config)
-				if decodeErr != nil {
-					s.logger.Error("decode organization coder config", "error", decodeErr, "request_id", requestID(r))
-					writeError(w, r, http.StatusInternalServerError, "internal_error", "The organization's Coder configuration is invalid.")
-					return
-				}
-				request.SandboxProviderConnectionID = connection.ID
-				coderOverride = &sandbox.CoderDeploymentOverride{
-					BaseURL:                   cfg.BaseURL,
-					Owner:                     cfg.Owner,
-					TemplateID:                cfg.TemplateID,
-					AgentName:                 cfg.AgentName,
-					Parameters:                cfg.Parameters,
-					DurableRoot:               cfg.DurableRoot,
-					RequireMountedDurableRoot: cfg.RequireMountedDurableRoot,
-					StartupTimeoutSeconds:     cfg.StartupTimeoutSeconds,
-				}
-				break
-			}
+		coderOpts, coderOverride = placement.options, placement.override
+		if placement.connectionID != "" {
+			request.SandboxProviderConnectionID = placement.connectionID
 		}
 	}
 	// The plan is resolved once, here, and stamped onto the sandbox row. The
@@ -621,27 +592,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	// a later config change cannot disturb a session already in flight.
 	plan, err := s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts, coderOverride)
 	if err != nil {
-		// A bring-your-own-Coder org with no org-default template must pick one per
-		// project; that is user-fixable, so surface it as a clear 422 rather than a
-		// deployment-misconfiguration 500.
-		if errors.Is(err, sandbox.ErrCoderTemplateRequired) {
-			s.logger.Warn(
-				"session create rejected: coder template required",
-				"org_id", orgID,
-				"user_id", principalFrom(r).UserID,
-				"project_id", request.ProjectID,
-			)
-			writeError(
-				w, r, http.StatusUnprocessableEntity, "coder_template_required",
-				"Choose a Coder template for this project before starting a session.",
-			)
-			return
-		}
-		s.logger.Error("resolve sandbox provisioning plan", "error", err, "request_id", requestID(r))
-		writeError(
-			w, r, http.StatusInternalServerError, "internal_error",
-			"Sandbox provisioning is misconfigured on this deployment.",
-		)
+		s.writeSessionPlanError(w, r, orgID, request.ProjectID, err)
 		return
 	}
 	// A Freestyle session boots from its project's prepared snapshot (the

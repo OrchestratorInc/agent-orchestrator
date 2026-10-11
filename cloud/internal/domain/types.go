@@ -24,6 +24,16 @@ type Principal struct {
 	// optional features such as the coder sandbox provider. Empty for personal or
 	// local organizations.
 	OrgCapabilities []string
+	// OrgBilling is the active organization's billing arrangement from WorkOS
+	// organization metadata (metadata.billing), normalized by
+	// NormalizeOrgBilling. Empty when the metadata does not set it.
+	OrgBilling string
+	// TeamOrgID is the AO organization ID the token's WorkOS organization maps
+	// to, set when the principal is resolved. OrgCapabilities and OrgBilling
+	// describe only that organization: a request that targets any other
+	// organization (such as the user's personal one) uses the deployment
+	// defaults instead. Empty without a WorkOS organization.
+	TeamOrgID string
 }
 
 type Membership struct {

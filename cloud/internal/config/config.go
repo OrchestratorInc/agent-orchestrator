@@ -57,12 +57,21 @@ type Config struct {
 	// (comma-separated, e.g. "coder") to turn the gate on once the entitled
 	// organizations have been flagged in WorkOS.
 	CapabilityGatedProviders []string
-	AllowAnonymousCheckout   bool
-	ProviderSecretKey        []byte
-	Release                  string
-	RepositoryBrokerURL      string
-	RepositoryBrokerToken    string
-	EnvironmentControlToken  string
+	// DefaultOrgCapabilities are the capabilities of an organization that has
+	// none of its own: a personal organization, or a WorkOS organization whose
+	// metadata has no capabilities key (AO_CLOUD_DEFAULT_ORG_CAPABILITIES,
+	// comma-separated, e.g. "freestyle"). Empty by default.
+	DefaultOrgCapabilities []string
+	// DefaultOrgBilling is the billing arrangement of an organization whose
+	// WorkOS metadata sets none (AO_CLOUD_DEFAULT_ORG_BILLING): "self_serve"
+	// (the default) or "contract".
+	DefaultOrgBilling       string
+	AllowAnonymousCheckout  bool
+	ProviderSecretKey       []byte
+	Release                 string
+	RepositoryBrokerURL     string
+	RepositoryBrokerToken   string
+	EnvironmentControlToken string
 
 	// PublicURL is the origin a sandbox worker dials back to. A worker opens
 	// no inbound port, so this is the only way it can reach the control plane.
@@ -272,6 +281,8 @@ func Load() (Config, error) {
 			envOrDefault("AO_CLOUD_SANDBOX_PROVIDER", defaultSandboxProvider(hosted)),
 		),
 		CapabilityGatedProviders: lowerCSVList(os.Getenv("AO_CLOUD_CAPABILITY_GATED_PROVIDERS")),
+		DefaultOrgCapabilities:   lowerCSVList(os.Getenv("AO_CLOUD_DEFAULT_ORG_CAPABILITIES")),
+		DefaultOrgBilling:        strings.ToLower(envOrDefault("AO_CLOUD_DEFAULT_ORG_BILLING", "self_serve")),
 		Release:                  strings.TrimSpace(os.Getenv("AO_CLOUD_RELEASE")),
 		RepositoryBrokerURL: strings.TrimRight(
 			strings.TrimSpace(os.Getenv("AO_CLOUD_REPOSITORY_BROKER_URL")), "/",
@@ -449,6 +460,9 @@ func Load() (Config, error) {
 	}
 	if cfg.LocalSessionTTL <= 0 {
 		return Config{}, errors.New("AO_CLOUD_LOCAL_SESSION_TTL must be positive")
+	}
+	if cfg.DefaultOrgBilling != "self_serve" && cfg.DefaultOrgBilling != "contract" {
+		return Config{}, errors.New("AO_CLOUD_DEFAULT_ORG_BILLING must be self_serve or contract")
 	}
 	switch cfg.SandboxProvider {
 	case "ecs", "daytona", "docker", "nodeops", "coder", "freestyle":
