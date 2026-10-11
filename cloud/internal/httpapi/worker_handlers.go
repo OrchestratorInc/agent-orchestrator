@@ -423,6 +423,17 @@ func (s *Server) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	if input.Busy {
+		if store, ok := s.store.(interface {
+			MarkSandboxBusy(ctx context.Context, orgID, sessionID string) error
+		}); ok {
+			// Best effort: a missed mark only makes idle pause slightly eager,
+			// and the next busy heartbeat records it again.
+			if err := store.MarkSandboxBusy(r.Context(), claims.OrgID, claims.SessionID); err != nil {
+				s.logger.Warn("record sandbox activity", "session_id", claims.SessionID, "error", err)
+			}
+		}
+	}
 	renewed, err := s.workerTokens.Issue(claims, s.workerTokenTTL())
 	if err != nil {
 		s.logger.Error("renew worker token", "error", err, "request_id", requestID(r))

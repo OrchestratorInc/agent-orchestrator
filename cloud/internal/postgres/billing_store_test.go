@@ -405,3 +405,34 @@ func TestOrganizationsCreatedBeforeTheCutoffAreExempt(t *testing.T) {
 		t.Fatalf("an org created after the cutoff: err = %v, want ErrPlanRequired", err)
 	}
 }
+
+// Recent worker-reported activity (a build, a dev server, terminal output)
+// keeps a session from idle pause even when nobody is typing.
+func TestRecentSandboxActivityDefersIdlePause(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	if _, err := admin.Exec(ctx,
+		`UPDATE ao_sandboxes SET desired_state = 'running', observed_state = 'running',
+			interactive_until = now() - interval '1 hour', last_interaction_at = now() - interval '1 hour'
+		WHERE session_id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx,
+		`UPDATE ao_sessions SET created_at = now() - interval '2 hours', activity_state = 'idle' WHERE id = $1`,
+		fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkSandboxBusy(ctx, fixture.orgID, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if paused, err := store.PauseIfIdle(ctx, fixture.orgID, fixture.sessionID, 15*time.Minute); err != nil || paused {
+		t.Fatalf("busy 0 minutes ago: paused = %v, err = %v", paused, err)
+	}
+	if _, err := admin.Exec(ctx,
+		`UPDATE ao_sandboxes SET last_busy_at = now() - interval '16 minutes' WHERE session_id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if paused, err := store.PauseIfIdle(ctx, fixture.orgID, fixture.sessionID, 15*time.Minute); err != nil || !paused {
+		t.Fatalf("idle for 16 minutes: paused = %v, err = %v", paused, err)
+	}
+}

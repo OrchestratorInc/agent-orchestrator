@@ -72,6 +72,10 @@ type BootstrapResponse struct {
 type HeartbeatRequest struct {
 	Version      string   `json:"version"`
 	Capabilities []string `json:"capabilities"`
+	// Busy reports activity since the previous heartbeat (terminal output, a
+	// process under a workspace shell, CPU use), so idle pause only stops a
+	// session that is truly idle.
+	Busy bool `json:"busy,omitempty"`
 }
 
 // HeartbeatResponse renews the worker's short-lived token.

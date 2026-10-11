@@ -108,6 +108,7 @@ type Supervisor struct {
 	persist                  *persistentAgent
 	mu                       sync.Mutex
 	terminals                map[string]*terminalProcess
+	activity                 activity
 	iface                    InterfaceTransition
 	notificationStreams      map[*terminalStream]struct{}
 	holdAgentInput           bool
@@ -174,8 +175,11 @@ type terminalProcess struct {
 	// persistent marks the interactive agent running under dtach: the process
 	// here is only a client, and the agent outlives it.
 	persistent bool
-	stream     atomic.Pointer[terminalStream]
-	done       chan struct{}
+	// shellPID is the workspace shell's process id (0 for agent and reviewer
+	// terminals); a process under it keeps the session from idling.
+	shellPID int
+	stream   atomic.Pointer[terminalStream]
+	done     chan struct{}
 	// outputID belongs to the terminal rather than a WebSocket connection. A
 	// stream redial must continue its sequence so direct relay frames and the
 	// durable replay log use the same cursor.
@@ -725,6 +729,9 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 		done:       make(chan struct{}),
 		persistent: s.persistsAgent(input),
 	}
+	if input.Kind == "workspace" && command.Process != nil {
+		terminal.shellPID = command.Process.Pid
+	}
 	if input.NextOutputSequence > 1 {
 		terminal.outputID.Store(input.NextOutputSequence - 1)
 	}
@@ -882,6 +889,7 @@ func (s *Supervisor) copyTerminalOutput(
 	for {
 		count, err := terminal.pty.Read(buffer)
 		if count > 0 {
+			s.activity.noteOutput(time.Now())
 			data := append([]byte(nil), buffer[:count]...)
 			if clearPreviousDisplay {
 				// A handoff resumes the conversation in a new PTY but reuses its
@@ -1163,4 +1171,21 @@ func transportError(err error) (string, string) {
 	default:
 		return "WORKER_OPERATION_FAILED", "The worker could not complete the operation."
 	}
+}
+
+// Busy reports whether anything happened in the sandbox since the previous
+// call: terminal output, a process running under a workspace shell, or CPU
+// use beyond the worker's own. The worker sends it with each heartbeat; the
+// control plane only idle-pauses a session that stayed un-busy for the whole
+// idle threshold.
+func (s *Supervisor) Busy() bool {
+	s.mu.Lock()
+	shells := make([]int, 0, len(s.terminals))
+	for _, terminal := range s.terminals {
+		if terminal.shellPID > 0 {
+			shells = append(shells, terminal.shellPID)
+		}
+	}
+	s.mu.Unlock()
+	return s.activity.busySince(time.Now(), shells)
 }

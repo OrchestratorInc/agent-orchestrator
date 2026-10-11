@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -275,6 +276,8 @@ func run(logger *slog.Logger) error {
 		SelectedEffort: bootstrap.Launch.ReasoningEffort,
 		SelectionAt:    bootstrap.Launch.SelectionAt,
 	}
+	busyProbe := transportSupervisor.Busy
+	client.busy.Store(&busyProbe)
 	transportSupervisor.ProjectReviewCommand = func(ctx context.Context, input worker.TerminalCommand) (workerexec.Command, error) {
 		launch, err := reviewerLaunch(bootstrap.Launch, input)
 		if err != nil {
@@ -636,6 +639,9 @@ type client struct {
 	credentialPrefetch *prefetch[worker.CredentialResponse]
 	transcriptPrefetch *prefetch[transcriptLookup]
 	grantPrefetch      *prefetch[worker.CheckoutGrantResponse]
+	// busy reports sandbox activity for the next heartbeat; set once the
+	// transport supervisor exists.
+	busy atomic.Pointer[func() bool]
 }
 
 // startStartupPrefetch begins the lookups the coding agent's launch needs but
@@ -781,9 +787,14 @@ func (c *client) reconnect(ctx context.Context) (worker.BootstrapResponse, error
 
 func (c *client) heartbeat(ctx context.Context) (string, error) {
 	var response worker.HeartbeatResponse
+	busy := false
+	if probe := c.busy.Load(); probe != nil {
+		busy = (*probe)()
+	}
 	err := c.do(ctx, "/worker/heartbeat", worker.HeartbeatRequest{
 		Version:      workerVersion,
 		Capabilities: workerCapabilities,
+		Busy:         busy,
 	}, &response)
 	if err != nil {
 		return "", err

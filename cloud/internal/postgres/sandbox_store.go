@@ -549,7 +549,8 @@ func (s *Store) PauseIfIdle(
 						-- chat message does.
 						AND greatest(
 							coalesce(ao_sessions.last_user_message_at, ao_sessions.created_at),
-							coalesce(ao_sandboxes.last_interaction_at, ao_sessions.created_at)
+							coalesce(ao_sandboxes.last_interaction_at, ao_sessions.created_at),
+							coalesce(ao_sandboxes.last_busy_at, ao_sessions.created_at)
 						) <= now() - $3::interval
 						AND ao_sessions.activity_state <> 'active'
 				)
@@ -582,6 +583,17 @@ func (s *Store) PauseIfIdle(
 		return false, err
 	}
 	return paused, nil
+}
+
+// MarkSandboxBusy records that the worker saw activity in the sandbox during
+// its last heartbeat interval. Only the worker's own session is touched.
+func (s *Store) MarkSandboxBusy(ctx context.Context, orgID, sessionID string) error {
+	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`UPDATE ao_sandboxes SET last_busy_at = now() WHERE org_id = $1 AND session_id = $2`,
+			orgID, sessionID)
+		return err
+	})
 }
 
 // TouchSessionPresence records that a person is looking at a running session
