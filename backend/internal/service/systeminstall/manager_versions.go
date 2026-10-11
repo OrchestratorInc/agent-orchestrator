@@ -16,75 +16,60 @@ import (
 
 const maxRegistryMetadataBytes = 1 << 20
 
-var errUpdateChannelUnconfirmed = errors.New("update channel could not be confirmed")
+// errLatestUnparseable means the package source answered with a release AO
+// cannot compare. It is not a lookup failure, so no fallback source is tried.
+var errLatestUnparseable = errors.New("latest release version could not be parsed")
 
 type managedVersionResult struct {
-	Latest  string
-	Channel string
+	Latest string
 }
 
-type managedVersionChecker func(context.Context, Plan, updateVersion) (managedVersionResult, error)
+// managedVersionChecker reads the release the package source publishes as
+// latest. Updates always install that release, so a prerelease install is
+// compared with it rather than with its own prerelease channel.
+type managedVersionChecker func(context.Context, Plan) (managedVersionResult, error)
 
 func newManagedVersionChecker(commands ports.CommandRunner, client *http.Client) managedVersionChecker {
 	if client == nil {
 		client = &http.Client{Timeout: 4 * time.Second}
 	}
-	return func(ctx context.Context, plan Plan, current updateVersion) (managedVersionResult, error) {
+	return func(ctx context.Context, plan Plan) (managedVersionResult, error) {
 		plan.Package = packageWithoutLatest(plan.Package)
 		scheme := versionSchemeFor(plan.Target)
-		channel, err := updateChannel(current)
-		if err != nil {
-			return managedVersionResult{}, err
-		}
 		switch plan.Method {
 		case "npm", "pnpm", "yarn", "bun":
 			// The public registry answers without starting a package manager. Ask
 			// the manager, which honours the user's configured registry, only when
 			// that registry is unreachable, e.g. behind a corporate mirror.
-			result, registryErr := npmRegistryVersion(ctx, client, plan.Package, channel, scheme)
-			if registryErr == nil || errors.Is(registryErr, errUpdateChannelUnconfirmed) {
+			result, registryErr := npmRegistryVersion(ctx, client, plan.Package, scheme)
+			if registryErr == nil || errors.Is(registryErr, errLatestUnparseable) {
 				return result, registryErr
 			}
-			if result, ok := nodeManagerVersion(ctx, commands, plan, channel, scheme); ok {
+			if result, ok := nodeManagerVersion(ctx, commands, plan, scheme); ok {
 				return result, nil
 			}
 			return managedVersionResult{}, fmt.Errorf("%s registry lookup failed: %w", plan.Method, registryErr)
 		case "homebrew":
-			return homebrewManagedVersion(ctx, commands, client, plan, channel, scheme)
+			return homebrewManagedVersion(ctx, commands, client, plan, scheme)
 		case "winget":
-			return wingetManagedVersion(ctx, commands, plan, channel, scheme)
+			return wingetManagedVersion(ctx, commands, plan, scheme)
 		case "uv", "pipx":
-			return pypiManagedVersion(ctx, client, plan.Package, channel, scheme)
+			return pypiManagedVersion(ctx, client, plan.Package, scheme)
 		default:
 			return managedVersionResult{}, fmt.Errorf("unsupported version source %s", plan.Method)
 		}
 	}
 }
 
-func updateChannel(current updateVersion) (string, error) {
-	if len(current.prerelease) == 0 {
-		return "latest", nil
-	}
-	channel := prereleaseChannel(current.prerelease)
-	if channel == "" {
-		return "", fmt.Errorf("%w: installed prerelease has no named channel", errUpdateChannelUnconfirmed)
-	}
-	return channel, nil
-}
-
-func nodeManagerVersion(ctx context.Context, commands ports.CommandRunner, plan Plan, channel string, scheme versionScheme) (managedVersionResult, bool) {
+func nodeManagerVersion(ctx context.Context, commands ports.CommandRunner, plan Plan, scheme versionScheme) (managedVersionResult, bool) {
 	if plan.Method != "bun" {
-		return checkNodeManager(ctx, commands, plan, channel, scheme)
+		return checkNodeManager(ctx, commands, plan, scheme)
 	}
-	packageSpec := plan.Package
-	if channel != "latest" {
-		packageSpec += "@" + channel
-	}
-	output, _ := runManagedVersionCommand(ctx, commands, []string{"bun", "pm", "view", packageSpec, "version"})
-	return managedResult(output, channel, scheme)
+	output, _ := runManagedVersionCommand(ctx, commands, []string{"bun", "pm", "view", plan.Package, "version"})
+	return managedResult(output, scheme)
 }
 
-func checkNodeManager(ctx context.Context, commands ports.CommandRunner, plan Plan, channel string, scheme versionScheme) (managedVersionResult, bool) {
+func checkNodeManager(ctx context.Context, commands ports.CommandRunner, plan Plan, scheme versionScheme) (managedVersionResult, bool) {
 	if commands == nil {
 		return managedVersionResult{}, false
 	}
@@ -96,23 +81,23 @@ func checkNodeManager(ctx context.Context, commands ports.CommandRunner, plan Pl
 			outdated = append(outdated, "--prefix", plan.PackagePrefix)
 		}
 		outdated = append(outdated, plan.Package)
-		view = []string{"npm", "view", plan.Package + "@" + channel, "version", "--json"}
+		view = []string{"npm", "view", plan.Package + "@latest", "version", "--json"}
 	case "pnpm":
 		outdated = []string{"pnpm", "outdated", "--global", "--format", "json", plan.Package}
-		view = []string{"pnpm", "view", plan.Package + "@" + channel, "version", "--json"}
+		view = []string{"pnpm", "view", plan.Package + "@latest", "version", "--json"}
 	case "yarn":
 		outdated = []string{"yarn", "global", "outdated", "--json", plan.Package}
-		view = []string{"yarn", "info", plan.Package + "@" + channel, "version", "--json"}
+		view = []string{"yarn", "info", plan.Package + "@latest", "version", "--json"}
 	}
 	out, _ := runManagedVersionCommand(ctx, commands, outdated)
 	if latest := parseNodeOutdated(plan.Method, plan.Package, out); latest != "" {
-		if result, ok := managedResult(latest, channel, scheme); ok {
+		if result, ok := managedResult(latest, scheme); ok {
 			return result, true
 		}
 	}
 	out, _ = runManagedVersionCommand(ctx, commands, view)
 	if latest := parseNodeView(plan.Method, out); latest != "" {
-		if result, ok := managedResult(latest, channel, scheme); ok {
+		if result, ok := managedResult(latest, scheme); ok {
 			return result, true
 		}
 	}
@@ -176,17 +161,17 @@ func parseNodeView(method, raw string) string {
 	return strings.Trim(strings.TrimSpace(raw), `"`)
 }
 
-func homebrewManagedVersion(ctx context.Context, commands ports.CommandRunner, client *http.Client, plan Plan, channel string, scheme versionScheme) (managedVersionResult, error) {
+func homebrewManagedVersion(ctx context.Context, commands ports.CommandRunner, client *http.Client, plan Plan, scheme versionScheme) (managedVersionResult, error) {
 	// brew outdated and brew info read local metadata that is only as fresh as
 	// the last brew update, so they can report a stale release as current.
 	// Core formulae and casks are read from the live Homebrew API first; tap
 	// packages (owner/tap/name) are not published there.
 	if !strings.Contains(plan.Package, "/") {
 		if latest, err := homebrewAPIVersion(ctx, client, plan.Package, plan.PackageCask); err == nil {
-			if result, ok := managedResult(latest, channel, scheme); ok {
+			if result, ok := managedResult(latest, scheme); ok {
 				return result, nil
 			}
-			return managedVersionResult{}, fmt.Errorf("%w: Homebrew API version", errUpdateChannelUnconfirmed)
+			return managedVersionResult{}, fmt.Errorf("%w: Homebrew API version", errLatestUnparseable)
 		}
 	}
 	if commands == nil {
@@ -199,18 +184,18 @@ func homebrewManagedVersion(ctx context.Context, commands ports.CommandRunner, c
 	outdatedArgv := []string{"brew", "outdated", "--json=v2", selector, plan.Package}
 	out, outdatedErr := runManagedVersionCommand(ctx, commands, outdatedArgv)
 	if latest := parseHomebrewVersion(out, plan.Package, plan.PackageCask, true); latest != "" {
-		if result, ok := managedResult(latest, channel, scheme); ok {
+		if result, ok := managedResult(latest, scheme); ok {
 			return result, nil
 		}
-		return managedVersionResult{}, fmt.Errorf("%w: Homebrew outdated version", errUpdateChannelUnconfirmed)
+		return managedVersionResult{}, fmt.Errorf("%w: Homebrew outdated version", errLatestUnparseable)
 	}
 	infoArgv := []string{"brew", "info", "--json=v2", selector, plan.Package}
 	out, infoErr := runManagedVersionCommand(ctx, commands, infoArgv)
 	if latest := parseHomebrewVersion(out, plan.Package, plan.PackageCask, false); latest != "" {
-		if result, ok := managedResult(latest, channel, scheme); ok {
+		if result, ok := managedResult(latest, scheme); ok {
 			return result, nil
 		}
-		return managedVersionResult{}, fmt.Errorf("%w: Homebrew current version", errUpdateChannelUnconfirmed)
+		return managedVersionResult{}, fmt.Errorf("%w: Homebrew current version", errLatestUnparseable)
 	}
 	if infoErr != nil {
 		return managedVersionResult{}, infoErr
@@ -270,7 +255,7 @@ func parseHomebrewVersion(raw, pkg string, cask, outdated bool) string {
 	return ""
 }
 
-func wingetManagedVersion(ctx context.Context, commands ports.CommandRunner, plan Plan, channel string, scheme versionScheme) (managedVersionResult, error) {
+func wingetManagedVersion(ctx context.Context, commands ports.CommandRunner, plan Plan, scheme versionScheme) (managedVersionResult, error) {
 	if commands == nil {
 		return managedVersionResult{}, fmt.Errorf("winget command runner unavailable")
 	}
@@ -280,10 +265,10 @@ func wingetManagedVersion(ctx context.Context, commands ports.CommandRunner, pla
 	out, commandErr := runManagedVersionCommand(ctx, commands, argv)
 	latest, matches := parseWingetUpgrade(out, plan.Package)
 	if matches == 1 {
-		if result, ok := managedResult(latest, channel, scheme); ok {
+		if result, ok := managedResult(latest, scheme); ok {
 			return result, nil
 		}
-		return managedVersionResult{}, fmt.Errorf("%w: Winget version for %s", errUpdateChannelUnconfirmed, plan.Package)
+		return managedVersionResult{}, fmt.Errorf("%w: Winget version for %s", errLatestUnparseable, plan.Package)
 	}
 	if matches > 1 {
 		return managedVersionResult{}, fmt.Errorf("winget returned ambiguous rows for %s", plan.Package)
@@ -291,7 +276,7 @@ func wingetManagedVersion(ctx context.Context, commands ports.CommandRunner, pla
 	showArgv := []string{"winget", "show", "--id", plan.Package, "--exact", "--source", "winget", "--versions", "--accept-source-agreements", "--disable-interactivity"}
 	showOutput, showErr := runManagedVersionCommand(ctx, commands, showArgv)
 	if latest := latestVersionLine(showOutput); latest != "" {
-		if result, ok := managedResult(latest, channel, scheme); ok {
+		if result, ok := managedResult(latest, scheme); ok {
 			return result, nil
 		}
 	}
@@ -349,7 +334,7 @@ func latestVersionLine(raw string) string {
 	return latest.display
 }
 
-func npmRegistryVersion(ctx context.Context, client *http.Client, pkg, channel string, scheme versionScheme) (managedVersionResult, error) {
+func npmRegistryVersion(ctx context.Context, client *http.Client, pkg string, scheme versionScheme) (managedVersionResult, error) {
 	// The dist-tags endpoint returns only the tag map. The full package
 	// document lists every published version and exceeds the metadata limit
 	// for popular harnesses such as Claude Code (1.5 MB).
@@ -357,34 +342,13 @@ func npmRegistryVersion(ctx context.Context, client *http.Client, pkg, channel s
 	if err := fetchRegistryJSON(ctx, client, "https://registry.npmjs.org/-/package/"+url.PathEscape(pkg)+"/dist-tags", &distTags); err != nil {
 		return managedVersionResult{}, err
 	}
-	latest := distTags[channel]
-	if latest == "" && channel != "latest" {
-		// The prerelease identifier need not be the dist-tag: e.g. next may
-		// publish beta versions. Only accept an unambiguous matching family.
-		for tag, version := range distTags {
-			if tag == "latest" {
-				continue
-			}
-			candidate, ok := managedResult(version, channel, scheme)
-			if !ok {
-				continue
-			}
-			if latest != "" && latest != candidate.Latest {
-				return managedVersionResult{}, fmt.Errorf("%w: multiple dist-tags match %s", errUpdateChannelUnconfirmed, channel)
-			}
-			latest = candidate.Latest
-		}
-	}
-	if latest == "" {
-		return managedVersionResult{}, fmt.Errorf("%w: npm package %s has no %s dist-tag", errUpdateChannelUnconfirmed, pkg, channel)
-	}
-	if result, ok := managedResult(latest, channel, scheme); ok {
+	if result, ok := managedResult(distTags["latest"], scheme); ok {
 		return result, nil
 	}
-	return managedVersionResult{}, fmt.Errorf("%w: npm %s dist-tag is incompatible with installed version", errUpdateChannelUnconfirmed, channel)
+	return managedVersionResult{}, fmt.Errorf("%w: npm package %s latest dist-tag %q", errLatestUnparseable, pkg, distTags["latest"])
 }
 
-func pypiManagedVersion(ctx context.Context, client *http.Client, pkg, channel string, scheme versionScheme) (managedVersionResult, error) {
+func pypiManagedVersion(ctx context.Context, client *http.Client, pkg string, scheme versionScheme) (managedVersionResult, error) {
 	var metadata struct {
 		Info struct {
 			Version string `json:"version"`
@@ -393,10 +357,10 @@ func pypiManagedVersion(ctx context.Context, client *http.Client, pkg, channel s
 	if err := fetchRegistryJSON(ctx, client, "https://pypi.org/pypi/"+url.PathEscape(pkg)+"/json", &metadata); err != nil {
 		return managedVersionResult{}, err
 	}
-	if result, ok := managedResult(metadata.Info.Version, channel, scheme); ok {
+	if result, ok := managedResult(metadata.Info.Version, scheme); ok {
 		return result, nil
 	}
-	return managedVersionResult{}, fmt.Errorf("%w: PyPI version is incompatible with installed channel", errUpdateChannelUnconfirmed)
+	return managedVersionResult{}, fmt.Errorf("%w: PyPI version for %s", errLatestUnparseable, pkg)
 }
 
 func fetchRegistryJSON(ctx context.Context, client *http.Client, endpoint string, destination any) error {
@@ -425,19 +389,12 @@ func fetchRegistryJSON(ctx context.Context, client *http.Client, endpoint string
 	return json.Unmarshal(body, destination)
 }
 
-func managedResult(raw, channel string, scheme versionScheme) (managedVersionResult, bool) {
+func managedResult(raw string, scheme versionScheme) (managedVersionResult, bool) {
 	latest, ok := scheme.parse(strings.TrimSpace(raw))
 	if !ok {
 		return managedVersionResult{}, false
 	}
-	if channel == "latest" {
-		if len(latest.prerelease) != 0 {
-			return managedVersionResult{}, false
-		}
-	} else if prereleaseChannel(latest.prerelease) != channel {
-		return managedVersionResult{}, false
-	}
-	return managedVersionResult{Latest: latest.display, Channel: channel}, true
+	return managedVersionResult{Latest: latest.display}, true
 }
 
 func runManagedVersionCommand(ctx context.Context, commands ports.CommandRunner, argv []string) (string, error) {

@@ -3,6 +3,7 @@ package systeminstall
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -142,23 +143,27 @@ func TestWingetInventoryRequiresTheExactPackageDirectory(t *testing.T) {
 	}
 }
 
-func TestPrereleaseRegistryAliasesMustBeUnambiguous(t *testing.T) {
+func TestNpmRegistryVersionReadsOnlyLatestDistTag(t *testing.T) {
 	for _, tt := range []struct {
-		name, tags string
-		wantOK     bool
+		name, tags, want string
 	}{
-		{"next publishes beta", `{"latest":"1.9.0","next":"2.0.0-beta.3"}`, true},
-		{"aliases agree", `{"preview":"2.0.0-beta.3","next":"2.0.0-beta.3"}`, true},
-		{"different family", `{"next":"2.0.0-rc.3"}`, false},
-		{"aliases disagree", `{"preview":"2.0.0-beta.4","next":"2.0.0-beta.3"}`, false},
-		{"only stable tag", `{"latest":"2.0.0-beta.3"}`, false},
+		{"ignores prerelease tags", `{"latest":"1.9.0","next":"2.0.0-beta.3"}`, "1.9.0"},
+		// Some packages publish prereleases on latest (DeepSeek ships 0.2.0-rc.2 there).
+		{"prerelease on latest", `{"latest":"2.0.0-rc.2"}`, "2.0.0-rc.2"},
+		{"no latest tag", `{"next":"2.0.0-rc.3"}`, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &http.Client{Transport: managerRoundTripFunc(func(*http.Request) (*http.Response, error) {
 				return managerHTTPResponse(http.StatusOK, tt.tags), nil
 			})}
-			result, err := npmRegistryVersion(context.Background(), client, "@openai/codex", "beta", versionSemver)
-			if (err == nil) != tt.wantOK || tt.wantOK && result.Latest != "2.0.0-beta.3" {
+			result, err := npmRegistryVersion(context.Background(), client, "@openai/codex", versionSemver)
+			if tt.want == "" {
+				if !errors.Is(err, errLatestUnparseable) {
+					t.Fatalf("result=%+v err=%v", result, err)
+				}
+				return
+			}
+			if err != nil || result.Latest != tt.want {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
 		})

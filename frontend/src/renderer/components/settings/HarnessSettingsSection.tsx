@@ -990,7 +990,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				>
 					{isInstalled ? <span className="break-all font-mono text-xs text-settings-label">{details.versionText}{details.versionUnverified && details.currentVersion ? ` · ${t("settings.harness.unverified")}` : ""}</span> : null}
 					{isInstalled && details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-(--color-brand-logo)">{t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}</span> : null}
-					{isInstalled && !details.updateUnknown && !details.updateAvailable && !details.busy ? <span className="text-xs text-settings-muted">{t("settings.harness.latest")}</span> : null}
+					{isInstalled && !details.updateUnknown && !details.updateAvailable && !details.busy ? <span className="text-xs text-settings-muted">{t(details.advisory?.status === "ahead_of_latest" ? "settings.harness.aheadOfLatest" : "settings.harness.latest")}</span> : null}
 					{details.installationAction}
 				</HarnessDetailRow>
 				{isInstalled && details.updatedAt ? <HarnessDetailRow label={t("settings.harness.lastUpdated")}>

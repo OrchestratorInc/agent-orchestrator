@@ -2,9 +2,7 @@ package systeminstall
 
 import (
 	"context"
-	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -60,23 +58,8 @@ func TestLiveHarnessReleaseFeeds(t *testing.T) {
 				var lookup func() (string, error)
 				switch {
 				case plan.Method == "npm" || plan.Method == "bun":
-					// Some packages publish prereleases on latest (DeepSeek ships
-					// 0.2.0-rc.2 there). Check what a user who installed the
-					// published release would see: a definitive answer on its channel.
 					lookup = func() (string, error) {
-						var distTags map[string]string
-						if err := fetchRegistryJSON(ctx, client, "https://registry.npmjs.org/-/package/"+url.PathEscape(pkg)+"/dist-tags", &distTags); err != nil {
-							return "", err
-						}
-						installed, ok := scheme.parse(distTags["latest"])
-						if !ok {
-							return "", fmt.Errorf("latest dist-tag %q is not comparable", distTags["latest"])
-						}
-						channel, err := updateChannel(installed)
-						if err != nil {
-							return "", err
-						}
-						result, err := npmRegistryVersion(ctx, client, pkg, channel, scheme)
+						result, err := npmRegistryVersion(ctx, client, pkg, scheme)
 						return result.Latest, err
 					}
 				case plan.Method == "homebrew" && !strings.Contains(pkg, "/"):
@@ -85,7 +68,7 @@ func TestLiveHarnessReleaseFeeds(t *testing.T) {
 					lookup = func() (string, error) { return homebrewAPIVersion(ctx, client, pkg, cask) }
 				case plan.Method == "uv" || plan.Method == "pipx":
 					lookup = func() (string, error) {
-						result, err := pypiManagedVersion(ctx, client, pkg, "latest", scheme)
+						result, err := pypiManagedVersion(ctx, client, pkg, scheme)
 						return result.Latest, err
 					}
 				default:

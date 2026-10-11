@@ -22,6 +22,10 @@ const (
 	UpdateStatusCurrent UpdateStatus = "current"
 	// UpdateStatusBehindLatest means a newer package release is available.
 	UpdateStatusBehindLatest UpdateStatus = "behind_latest"
+	// UpdateStatusAheadOfLatest means the installed release is newer than the
+	// published latest, e.g. a prerelease. Updates install latest, so none is
+	// offered: it would be a downgrade.
+	UpdateStatusAheadOfLatest UpdateStatus = "ahead_of_latest"
 )
 
 // UpdateUnknownReason gives a stable diagnostic category when Status is unknown.
@@ -34,7 +38,8 @@ const (
 	UpdateReasonUnsupportedSource UpdateUnknownReason = "unsupported_source"
 	// UpdateReasonVersionUnparseable means a reported version could not be compared safely.
 	UpdateReasonVersionUnparseable UpdateUnknownReason = "version_unparseable"
-	// UpdateReasonChannelUnconfirmed means AO could not match the installed release channel.
+	// UpdateReasonChannelUnconfirmed means the installed and latest releases
+	// are prereleases of different channels, which have no order.
 	UpdateReasonChannelUnconfirmed UpdateUnknownReason = "channel_unconfirmed"
 	// UpdateReasonLookupFailed means the latest-version lookup failed.
 	UpdateReasonLookupFailed UpdateUnknownReason = "lookup_failed"
@@ -211,7 +216,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	if source.Package != "" {
 		advisory.Source = source.Method
 		var result managedVersionResult
-		result, err = s.managedVersion(ctx, source, current)
+		result, err = s.managedVersion(ctx, source)
 		latest = result.Latest
 	} else {
 		// No package manager provably owns the binary, so compare against the
@@ -226,15 +231,11 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 			return advisory, nil
 		}
 		advisory.Source = officialReleaseSource
-		if len(current.prerelease) != 0 {
-			advisory.Reason = UpdateReasonChannelUnconfirmed
-			return advisory, nil
-		}
 		latest, err = s.officialVersion(ctx, target)
 	}
 	if err != nil {
-		if errors.Is(err, errUpdateChannelUnconfirmed) {
-			advisory.Reason = UpdateReasonChannelUnconfirmed
+		if errors.Is(err, errLatestUnparseable) {
+			advisory.Reason = UpdateReasonVersionUnparseable
 		} else if errors.Is(err, errNoOfficialSource) {
 			advisory.Reason = UpdateReasonUnsupportedSource
 		} else {
@@ -264,7 +265,8 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		advisory.Status = UpdateStatusCurrent
 		advisory.Reason = ""
 	default:
-		advisory.Reason = UpdateReasonChannelUnconfirmed
+		advisory.Status = UpdateStatusAheadOfLatest
+		advisory.Reason = ""
 	}
 	return advisory, nil
 }

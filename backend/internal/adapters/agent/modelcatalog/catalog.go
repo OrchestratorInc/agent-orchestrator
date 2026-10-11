@@ -131,6 +131,25 @@ var commandSpecs = map[string]commandSpec{
 	"command-code": {args: []string{"--list-models"}, parser: parseAgyModels},
 }
 
+// Accepts reports whether model may launch agentID. It rejects a model only
+// when AO owns a complete static catalog that does not list it; dynamic
+// catalogs and direct-entry agents defer validation to the agent at launch.
+func Accepts(agentID, model string) bool {
+	if strings.TrimSpace(model) == "" {
+		return true
+	}
+	catalog := Base(agentID)
+	if catalog.AllowCustom || len(catalog.Models) == 0 {
+		return true
+	}
+	for _, item := range catalog.Models {
+		if strings.EqualFold(item.ID, model) {
+			return true
+		}
+	}
+	return false
+}
+
 // Base returns the picker behavior AO can provide without executing a CLI.
 func Base(agentID string) ports.AgentModelCatalog {
 	now := time.Now().UTC()

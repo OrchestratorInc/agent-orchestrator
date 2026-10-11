@@ -2241,6 +2241,7 @@
 	"settings.harness.installedWith": "{{method}}(으)로 설치됨",
 	"settings.harness.notInstalled": "설치되지 않음",
 	"settings.harness.latest": "최신",
+	"settings.harness.aheadOfLatest": "최신 버전보다 새로움",
 	"settings.harness.models.pagination": "모델 페이지",
 	"settings.harness.models.pageRange": "{{total}}개 중 {{start}}–{{end}}",
 	"settings.harness.models.previousPage": "이전 모델",

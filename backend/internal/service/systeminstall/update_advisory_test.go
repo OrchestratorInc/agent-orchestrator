@@ -23,10 +23,10 @@ func TestUpdateAdvisoryComparesKnownNPMInstallationAndCachesResult(t *testing.T)
 	calls := 0
 	var gotMethod, gotPackage string
 	var gotCask bool
-	s.managedVersion = func(_ context.Context, plan Plan, _ updateVersion) (managedVersionResult, error) {
+	s.managedVersion = func(_ context.Context, plan Plan) (managedVersionResult, error) {
 		calls++
 		gotMethod, gotPackage, gotCask = plan.Method, packageWithoutLatest(plan.Package), plan.PackageCask
-		return managedVersionResult{Latest: "1.3.0", Channel: "latest"}, nil
+		return managedVersionResult{Latest: "1.3.0"}, nil
 	}
 	for range 2 {
 		advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
@@ -109,12 +109,12 @@ func TestUpdateAdvisoryPageRequestCanCancelWhileStartupJoinsSameCheck(t *testing
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var lookups atomic.Int32
-	s.managedVersion = func(context.Context, Plan, updateVersion) (managedVersionResult, error) {
+	s.managedVersion = func(context.Context, Plan) (managedVersionResult, error) {
 		if lookups.Add(1) == 1 {
 			close(started)
 		}
 		<-release
-		return managedVersionResult{Latest: "1.3.0", Channel: "latest"}, nil
+		return managedVersionResult{Latest: "1.3.0"}, nil
 	}
 	pageCtx, cancelPage := context.WithCancel(context.Background())
 	pageDone := make(chan error, 1)
@@ -166,7 +166,8 @@ func TestUpdateAdvisoryUnknownWhenOwnershipVersionOrLookupUnproven(t *testing.T)
 	}{
 		{name: "unparseable installed", job: &Job{Status: StatusSucceeded, Method: "npm"}, output: "codex development", latest: "1.3.0", reason: "version_unparseable"},
 		{name: "registry failure", job: &Job{Status: StatusSucceeded, Method: "npm"}, output: "codex 1.2.3", err: errors.New("offline"), reason: "lookup_failed"},
-		{name: "ahead of registry", job: &Job{Status: StatusSucceeded, Method: "npm"}, output: "codex 1.4.0", latest: "1.3.0", reason: "channel_unconfirmed"},
+		{name: "different prerelease channels", job: &Job{Status: StatusSucceeded, Method: "npm"}, output: "codex 1.3.0-beta.1", latest: "1.3.0-rc.1", reason: "channel_unconfirmed"},
+		{name: "unparseable latest", job: &Job{Status: StatusSucceeded, Method: "npm"}, output: "codex 1.2.3", err: errLatestUnparseable, reason: "version_unparseable"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newTestService("darwin", "npm")
@@ -187,6 +188,24 @@ func TestUpdateAdvisoryUnknownWhenOwnershipVersionOrLookupUnproven(t *testing.T)
 	}
 }
 
+func TestUpdateAdvisoryReportsInstallAheadOfLatest(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	s.jobs[TargetCodex] = &Job{Status: StatusSucceeded, Method: "npm"}
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{Output: "codex 1.4.0-beta.2"}, nil
+	})
+	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
+	s.managedVersion = fixedManagedVersion("1.3.0", nil)
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Updates install latest, so offering one here would be a downgrade.
+	if advisory.Status != UpdateStatusAheadOfLatest || advisory.LatestVersion != "1.3.0" || advisory.Reason != "" {
+		t.Fatalf("advisory = %+v", advisory)
+	}
+}
+
 func TestUpdateAdvisoryCurrentAndHomebrewPackage(t *testing.T) {
 	s := newTestService("darwin", "brew")
 	s.jobs[TargetCodex] = &Job{Target: TargetCodex, Status: StatusSucceeded, Method: "homebrew"}
@@ -194,9 +213,9 @@ func TestUpdateAdvisoryCurrentAndHomebrewPackage(t *testing.T) {
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
 	var gotMethod, gotPackage string
 	var gotCask bool
-	s.managedVersion = func(_ context.Context, plan Plan, _ updateVersion) (managedVersionResult, error) {
+	s.managedVersion = func(_ context.Context, plan Plan) (managedVersionResult, error) {
 		gotMethod, gotPackage, gotCask = plan.Method, packageWithoutLatest(plan.Package), plan.PackageCask
-		return managedVersionResult{Latest: "1.3.0", Channel: "latest"}, nil
+		return managedVersionResult{Latest: "1.3.0"}, nil
 	}
 	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
 	if err != nil {
@@ -217,9 +236,9 @@ func TestUpdateAdvisoryDetectsPackageOwnerWithoutAOInstallRecord(t *testing.T) {
 	})
 	s.ownsInstallation = func(_ context.Context, _ string, method, _ string, _ bool) (bool, error) { return method == "npm", nil }
 	var gotMethod, gotPackage string
-	s.managedVersion = func(_ context.Context, plan Plan, _ updateVersion) (managedVersionResult, error) {
+	s.managedVersion = func(_ context.Context, plan Plan) (managedVersionResult, error) {
 		gotMethod, gotPackage = plan.Method, packageWithoutLatest(plan.Package)
-		return managedVersionResult{Latest: "1.3.0", Channel: "latest"}, nil
+		return managedVersionResult{Latest: "1.3.0"}, nil
 	}
 	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
 	if err != nil {
@@ -263,9 +282,9 @@ func TestUpdateAdvisoryRequiresVerifiedPackageOwnership(t *testing.T) {
 	})
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return false, nil }
 	var latestCalled atomic.Bool
-	s.managedVersion = func(context.Context, Plan, updateVersion) (managedVersionResult, error) {
+	s.managedVersion = func(context.Context, Plan) (managedVersionResult, error) {
 		latestCalled.Store(true)
-		return managedVersionResult{Latest: "1.3.0", Channel: "latest"}, nil
+		return managedVersionResult{Latest: "1.3.0"}, nil
 	}
 	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
 	if err != nil {
@@ -280,8 +299,8 @@ func TestUpdateAdvisoryRequiresVerifiedPackageOwnership(t *testing.T) {
 }
 
 func fixedManagedVersion(latest string, err error) managedVersionChecker {
-	return func(context.Context, Plan, updateVersion) (managedVersionResult, error) {
-		return managedVersionResult{Latest: latest, Channel: "latest"}, err
+	return func(context.Context, Plan) (managedVersionResult, error) {
+		return managedVersionResult{Latest: latest}, err
 	}
 }
 

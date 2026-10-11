@@ -2307,6 +2307,7 @@
 	"settings.harness.installedWith": "通过 {{method}} 安装",
 	"settings.harness.notInstalled": "未安装",
 	"settings.harness.latest": "最新",
+	"settings.harness.aheadOfLatest": "比最新版更新",
 	"settings.harness.models.pagination": "模型分页",
 	"settings.harness.models.pageRange": "第 {{start}}–{{end}} 个，共 {{total}} 个",
 	"settings.harness.models.previousPage": "上一页模型",

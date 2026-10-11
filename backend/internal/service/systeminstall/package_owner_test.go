@@ -126,7 +126,7 @@ func TestNPMInstallerHarnessUpdatesThroughVendorCommand(t *testing.T) {
 	s.ownsInstallation = func(_ context.Context, path, method, pkg string, cask bool) (bool, error) {
 		return managerOwnsBinary(commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error { return errors.New("no npm") }))(context.Background(), path, method, pkg, cask)
 	}
-	s.managedVersion = func(context.Context, Plan, updateVersion) (managedVersionResult, error) {
+	s.managedVersion = func(context.Context, Plan) (managedVersionResult, error) {
 		t.Fatal("Prime Agent's tarball install was looked up in the npm registry")
 		return managedVersionResult{}, nil
 	}

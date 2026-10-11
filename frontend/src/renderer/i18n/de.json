@@ -2241,6 +2241,7 @@
 	"settings.harness.installedWith": "Installiert mit {{method}}",
 	"settings.harness.notInstalled": "Nicht installiert",
 	"settings.harness.latest": "Aktuell",
+	"settings.harness.aheadOfLatest": "Neuer als neueste Version",
 	"settings.harness.models.pagination": "Modellseiten",
 	"settings.harness.models.pageRange": "{{start}}–{{end}} von {{total}}",
 	"settings.harness.models.previousPage": "Vorherige Modelle",

@@ -106,13 +106,12 @@ func TestManagedVersionCheckerUsesNativeCommandsWhenRegistryIsUnreachable(t *tes
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			current, _ := parseUpdateVersion("1.2.0")
 			checker := newManagedVersionChecker(managerCommandRunner(t, tt.response), offlineManagerClient())
-			got, err := checker(context.Background(), tt.plan, current)
+			got, err := checker(context.Background(), tt.plan)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Latest != "1.3.0" || got.Channel != "latest" {
+			if got.Latest != "1.3.0" {
 				t.Fatalf("result = %+v", got)
 			}
 		})
@@ -169,9 +168,8 @@ func TestManagedVersionCheckerFallsBackWhenOutdatedResultIsEmpty(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			current, _ := parseUpdateVersion("1.3.0")
 			checker := newManagedVersionChecker(managerCommandRunner(t, tt.responses...), offlineManagerClient())
-			got, err := checker(context.Background(), tt.plan, current)
+			got, err := checker(context.Background(), tt.plan)
 			if err != nil || got.Latest != "1.3.0" {
 				t.Fatalf("result=%+v err=%v", got, err)
 			}
@@ -179,7 +177,7 @@ func TestManagedVersionCheckerFallsBackWhenOutdatedResultIsEmpty(t *testing.T) {
 	}
 }
 
-func TestManagedVersionCheckerReadsRegistryFirstForInstalledPrereleaseChannel(t *testing.T) {
+func TestManagedVersionCheckerReadsLatestDistTagForPrereleaseInstall(t *testing.T) {
 	requests := 0
 	client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		requests++
@@ -188,26 +186,24 @@ func TestManagedVersionCheckerReadsRegistryFirstForInstalledPrereleaseChannel(t 
 		}
 		return managerHTTPResponse(http.StatusOK, `{"latest":"1.3.0","beta":"2.0.0-beta.3"}`), nil
 	})}
-	commands := managerCommandRunner(t)
-	current, _ := parseUpdateVersion("2.0.0-beta.1")
-	got, err := newManagedVersionChecker(commands, client)(context.Background(), Plan{Method: "npm", Package: "@openai/codex"}, current)
+	// Updates install @latest, so the beta tag is never the update target.
+	got, err := newManagedVersionChecker(managerCommandRunner(t), client)(context.Background(), Plan{Method: "npm", Package: "@openai/codex"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Latest != "2.0.0-beta.3" || got.Channel != "beta" || requests != 1 {
+	if got.Latest != "1.3.0" || requests != 1 {
 		t.Fatalf("result=%+v requests=%d", got, requests)
 	}
 }
 
-func TestManagedVersionCheckerRejectsMissingPrereleaseChannel(t *testing.T) {
+func TestManagedVersionCheckerRejectsUnparseableLatestDistTag(t *testing.T) {
 	client := &http.Client{Transport: managerRoundTripFunc(func(*http.Request) (*http.Response, error) {
-		return managerHTTPResponse(http.StatusOK, `{"latest":"1.3.0","next":"2.0.0-next.2"}`), nil
+		return managerHTTPResponse(http.StatusOK, `{"next":"2.0.0-next.2"}`), nil
 	})}
 	// A definitive registry answer is final; the package manager is not asked again.
-	commands := managerCommandRunner(t)
-	current, _ := parseUpdateVersion("2.0.0-beta.1")
-	if _, err := newManagedVersionChecker(commands, client)(context.Background(), Plan{Method: "npm", Package: "@openai/codex"}, current); err == nil {
-		t.Fatal("missing beta dist-tag unexpectedly produced an advisory")
+	_, err := newManagedVersionChecker(managerCommandRunner(t), client)(context.Background(), Plan{Method: "npm", Package: "@openai/codex"})
+	if !errors.Is(err, errLatestUnparseable) {
+		t.Fatalf("err = %v, want errLatestUnparseable", err)
 	}
 }
 
@@ -225,8 +221,7 @@ func TestManagedVersionCheckerQueriesPyPIForOwnedPythonTools(t *testing.T) {
 				commandsCalled = true
 				return nil
 			})
-			current, _ := parseUpdateVersion("1.0.0")
-			got, err := newManagedVersionChecker(commands, client)(context.Background(), Plan{Method: method, Package: "mistral-vibe"}, current)
+			got, err := newManagedVersionChecker(commands, client)(context.Background(), Plan{Method: method, Package: "mistral-vibe"})
 			if err != nil || got.Latest != "2.0.0" {
 				t.Fatalf("result=%+v err=%v", got, err)
 			}
@@ -252,8 +247,7 @@ func TestManagedVersionCheckerRejectsBadRegistryResponses(t *testing.T) {
 			client := &http.Client{Transport: managerRoundTripFunc(func(*http.Request) (*http.Response, error) {
 				return managerHTTPResponse(tt.status, tt.body), nil
 			})}
-			current, _ := parseUpdateVersion("1.0.0")
-			if _, err := newManagedVersionChecker(nil, client)(context.Background(), Plan{Method: "uv", Package: "mistral-vibe"}, current); err == nil {
+			if _, err := newManagedVersionChecker(nil, client)(context.Background(), Plan{Method: "uv", Package: "mistral-vibe"}); err == nil {
 				t.Fatal("bad registry response unexpectedly succeeded")
 			}
 		})
@@ -265,8 +259,7 @@ func TestManagedVersionCheckerRejectsAmbiguousWingetRows(t *testing.T) {
 		argv:   []string{"winget", "upgrade", "--disable-interactivity"},
 		output: "GitHub Copilot  GitHub.Copilot  1.2.0  1.3.0  winget\nGitHub Copilot Preview  GitHub.Copilot  2.0.0  2.1.0  winget\n",
 	})
-	current, _ := parseUpdateVersion("1.2.0")
-	if _, err := newManagedVersionChecker(commands, &http.Client{})(context.Background(), Plan{Method: "winget", Package: "GitHub.Copilot"}, current); err == nil {
+	if _, err := newManagedVersionChecker(commands, &http.Client{})(context.Background(), Plan{Method: "winget", Package: "GitHub.Copilot"}); err == nil {
 		t.Fatal("ambiguous Winget output unexpectedly succeeded")
 	}
 }
@@ -311,8 +304,7 @@ func TestHomebrewCoreVersionReadsLiveAPIBeforeLocalMetadata(t *testing.T) {
 				return managerHTTPResponse(http.StatusOK, tt.body), nil
 			})}
 			// Local brew metadata would still report the stale release; it must not be consulted.
-			current, _ := parseUpdateVersion("2.1.200")
-			got, err := newManagedVersionChecker(managerCommandRunner(t), client)(context.Background(), tt.plan, current)
+			got, err := newManagedVersionChecker(managerCommandRunner(t), client)(context.Background(), tt.plan)
 			if err != nil || got.Latest != "2.1.285" {
 				t.Fatalf("result=%+v err=%v", got, err)
 			}
@@ -329,8 +321,7 @@ func TestHomebrewTapVersionUsesLocalMetadataOnly(t *testing.T) {
 		argv:   []string{"brew", "outdated", "--json=v2", "--formula", "anomalyco/tap/opencode"},
 		output: `{"formulae":[{"name":"anomalyco/tap/opencode","installed_versions":["1.18.34"],"current_version":"1.18.35"}],"casks":[]}`,
 	})
-	current, _ := parseUpdateVersion("1.18.34")
-	got, err := newManagedVersionChecker(commands, client)(context.Background(), Plan{Method: "homebrew", Package: "anomalyco/tap/opencode"}, current)
+	got, err := newManagedVersionChecker(commands, client)(context.Background(), Plan{Method: "homebrew", Package: "anomalyco/tap/opencode"})
 	if err != nil || got.Latest != "1.18.35" {
 		t.Fatalf("result=%+v err=%v", got, err)
 	}
@@ -345,8 +336,7 @@ func TestNodeManagersReadRegistryWithoutStartingManager(t *testing.T) {
 				}
 				return managerHTTPResponse(http.StatusOK, `{"latest":"1.3.0"}`), nil
 			})}
-			current, _ := parseUpdateVersion("1.2.0")
-			got, err := newManagedVersionChecker(managerCommandRunner(t), client)(context.Background(), Plan{Method: method, Package: "@openai/codex"}, current)
+			got, err := newManagedVersionChecker(managerCommandRunner(t), client)(context.Background(), Plan{Method: method, Package: "@openai/codex"})
 			if err != nil || got.Latest != "1.3.0" {
 				t.Fatalf("result=%+v err=%v", got, err)
 			}

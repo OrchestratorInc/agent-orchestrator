@@ -25,7 +25,7 @@ export async function fetchInstallJobs(hostId?: string): Promise<HarnessInstallJ
 }
 
 export function hasDefinitiveUpdateStatus(advisory?: AgentUpdateAdvisory): boolean {
-	return advisory?.status === "current" || hasConfirmedHarnessUpdate(advisory);
+	return advisory?.status === "current" || advisory?.status === "ahead_of_latest" || hasConfirmedHarnessUpdate(advisory);
 }
 
 export function hasConfirmedHarnessUpdate(advisory?: AgentUpdateAdvisory): boolean {

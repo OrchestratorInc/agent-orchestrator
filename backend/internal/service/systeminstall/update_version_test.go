@@ -150,10 +150,7 @@ func TestBuildSuffixSchemeOrdersByCoreOnly(t *testing.T) {
 }
 
 func TestBuildSuffixSchemeAcceptsHashedRegistryRelease(t *testing.T) {
-	if _, ok := managedResult("0.0.1791388870-g4d32fb", "latest", versionSemver); ok {
-		t.Fatal("semver scheme accepted a hashed release on the stable channel")
-	}
-	result, ok := managedResult("0.0.1791388870-g4d32fb", "latest", versionSchemeFor(TargetAmp))
+	result, ok := managedResult("0.0.1791388870-g4d32fb", versionSchemeFor(TargetAmp))
 	if !ok || result.Latest != "0.0.1791388870-g4d32fb" {
 		t.Fatalf("result = %+v, %t", result, ok)
 	}

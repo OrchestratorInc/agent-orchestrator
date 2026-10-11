@@ -1392,6 +1392,7 @@
 	"settings.harness.installedWith": "Installed with {{method}}",
 	"settings.harness.notInstalled": "Not installed",
 	"settings.harness.latest": "Latest",
+	"settings.harness.aheadOfLatest": "Newer than latest",
 	"settings.harness.models.pagination": "Model pages",
 	"settings.harness.models.pageRange": "{{start}}–{{end}} of {{total}}",
 	"settings.harness.models.previousPage": "Previous models",

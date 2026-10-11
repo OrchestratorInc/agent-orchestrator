@@ -1028,7 +1028,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex) {
-		resolved, err := m.resolveAgentConfig(ctx, cfg, project.Config)
+		resolved, err := m.resolveTUIAgentConfig(ctx, cfg, project.Config, agentConfig)
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
 		}
@@ -1501,14 +1501,51 @@ func replayClientRequest(rec domain.SessionRecord, hash string) (domain.SessionR
 	return rec, nil
 }
 
+// resolveTUIAgentConfig validates a terminal launch against the model
+// catalog. Claude Code requires it. The Codex CLI validates its own model and
+// effort, so for Codex the catalog only refines the launch: when it is
+// unavailable, stale, lacks a custom model or lists other efforts, the session
+// launches with the unvalidated config, as it would without a catalog.
+func (m *Manager) resolveTUIAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig, unvalidated ports.AgentConfig) (ports.AgentConfig, error) {
+	resolved, err := m.resolveAgentConfig(ctx, cfg, project)
+	if err == nil || cfg.Harness != domain.HarnessCodex || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return resolved, err
+	}
+	m.logger.Warn("spawn: Codex model catalog could not validate the launch; leaving it to the CLI",
+		"model", unvalidated.Model, "effort", unvalidated.Effort, "error", err)
+	return unvalidated, nil
+}
+
 func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig) (ports.AgentConfig, error) {
+	preference := m.harnessDefault(ctx, cfg.Harness)
+	resolved, err := m.resolveAgentConfigWith(ctx, cfg, project, preference)
+	if preference.Model != "" && errors.Is(err, ErrUnsupportedModel) {
+		// A saved default can leave the provider catalog after it was chosen
+		// (a rename or entitlement change). Fall back to the harness's own
+		// default instead of failing every new session; a project or task
+		// model that is unsupported still fails the same way without it.
+		if fallback, fallbackErr := m.resolveAgentConfigWith(ctx, cfg, project, domain.HarnessDefault{}); fallbackErr == nil {
+			m.logger.Warn("spawn: saved harness default model is not in the provider catalog; using the harness default",
+				"harness", cfg.Harness, "model", preference.Model, "error", err)
+			return fallback, nil
+		}
+	}
+	return resolved, err
+}
+
+func (m *Manager) resolveAgentConfigWith(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig, preference domain.HarnessDefault) (ports.AgentConfig, error) {
 	base := effectiveAgentConfig(cfg.Harness, cfg.Kind, project)
 	requested := cfg.AgentConfig
-	preference := m.harnessDefault(ctx, cfg.Harness)
-	resolved := preference.Apply(applySpawnAgentConfig(base, requested))
+	merged := applySpawnAgentConfig(base, requested)
+	resolved := preference.Apply(merged)
 	base = preference.Apply(base)
 	modelChangedWithoutExplicitEffort := requested.Model != "" && requested.Model != base.Model &&
 		!cfg.EffortOverride && requested.Effort == ""
+	// An effort set without a model was chosen for the harness's own default
+	// model. When the saved default model fills in, the effort is kept only if
+	// that model lists it; otherwise the default's own effort applies.
+	effortChosenForOtherModel := merged.Model == "" && merged.Mode == "" && preference.Model != "" &&
+		merged.Effort != "" && !cfg.EffortOverride
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
 	}
@@ -1538,6 +1575,9 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if err != nil {
 		if modelChangedWithoutExplicitEffort {
 			resolved.Effort = ""
+		}
+		if effortChosenForOtherModel {
+			resolved.Effort = preference.Effort
 		}
 		if validateClaudeModel || resolved.Effort != "" {
 			return ports.AgentConfig{}, fmt.Errorf("%w: %w", ports.ErrModelCapabilitiesUnavailable, err)
@@ -1576,6 +1616,9 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		if selected == nil || !containsString(selected.Efforts, base.Effort) {
 			resolved.Effort = ""
 		}
+	}
+	if effortChosenForOtherModel && (selected == nil || !containsString(selected.Efforts, resolved.Effort)) {
+		resolved.Effort = preference.Effort
 	}
 	if resolved.Effort == "" {
 		return resolved, nil
@@ -2233,17 +2276,8 @@ func resolvedModelForMetadata(harness domain.AgentHarness, effective, adapter po
 // static catalog. Dynamic catalogs and direct-entry agents defer authoritative
 // model validation to the selected agent at launch time.
 func validateSpawnModel(harness domain.AgentHarness, model string) error {
-	if strings.TrimSpace(model) == "" {
+	if modelcatalog.Accepts(string(harness), model) {
 		return nil
-	}
-	catalog := modelcatalog.Base(string(harness))
-	if catalog.AllowCustom || len(catalog.Models) == 0 {
-		return nil
-	}
-	for _, item := range catalog.Models {
-		if strings.EqualFold(item.ID, model) {
-			return nil
-		}
 	}
 	return fmt.Errorf("model %q is not supported by harness %q", model, harness)
 }

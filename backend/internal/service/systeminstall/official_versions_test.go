@@ -73,9 +73,9 @@ func TestUpdateAdvisoryFallsBackToOfficialReleaseForUnownedBinary(t *testing.T) 
 	})
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return false, nil }
 	var packageLookup atomic.Bool
-	s.managedVersion = func(context.Context, Plan, updateVersion) (managedVersionResult, error) {
+	s.managedVersion = func(context.Context, Plan) (managedVersionResult, error) {
 		packageLookup.Store(true)
-		return managedVersionResult{Latest: "9.9.9", Channel: "latest"}, nil
+		return managedVersionResult{Latest: "9.9.9"}, nil
 	}
 	s.officialVersion = func(_ context.Context, target Target) (string, error) {
 		if target != TargetClaudeCode {
@@ -128,18 +128,28 @@ func TestUpdateAdvisoryUnknownWithoutOfficialSource(t *testing.T) {
 	}
 }
 
-func TestUpdateAdvisoryDoesNotMoveOfficialPrereleaseToStableChannel(t *testing.T) {
-	s := newTestService("darwin")
-	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
-		return VerifyResult{ResolvedPath: "/Users/test/.local/bin/claude", Output: "claude 2.0.0-beta.1"}, nil
-	})
-	s.officialVersion = func(context.Context, Target) (string, error) { return "2.0.0", nil }
-	advisory, err := s.UpdateAdvisory(context.Background(), TargetClaudeCode)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if advisory.Status != UpdateStatusUnknown || advisory.LatestVersion != "" || advisory.Reason != "channel_unconfirmed" {
-		t.Fatalf("advisory = %+v", advisory)
+func TestUpdateAdvisoryComparesOfficialPrereleaseWithLatest(t *testing.T) {
+	for _, tt := range []struct {
+		installed string
+		want      UpdateStatus
+	}{
+		{installed: "2.0.0-beta.1", want: UpdateStatusBehindLatest},
+		{installed: "2.1.0-beta.1", want: UpdateStatusAheadOfLatest},
+	} {
+		t.Run(tt.installed, func(t *testing.T) {
+			s := newTestService("darwin")
+			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+				return VerifyResult{ResolvedPath: "/Users/test/.local/bin/claude", Output: "claude " + tt.installed}, nil
+			})
+			s.officialVersion = func(context.Context, Target) (string, error) { return "2.0.0", nil }
+			advisory, err := s.UpdateAdvisory(context.Background(), TargetClaudeCode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if advisory.Status != tt.want || advisory.LatestVersion != "2.0.0" || advisory.Reason != "" {
+				t.Fatalf("advisory = %+v", advisory)
+			}
+		})
 	}
 }
 
