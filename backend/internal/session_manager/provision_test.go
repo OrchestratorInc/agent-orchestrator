@@ -462,9 +462,9 @@ func TestResolveCodexTUIAgentConfigFallsBackWhenCatalogCannotValidate(t *testing
 		AgentConfig: domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}}
 	unvalidated := domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}
 	for name, catalog := range map[string]tuningCatalog{
-		"lookup failed": {err: errors.New("not logged in")},
-		"stale":         {catalog: ports.AgentModelCatalog{Stale: true, Models: []ports.AgentModelInfo{{ID: "gpt-custom", Efforts: []string{"xhigh"}}}}},
-		"custom model":  {catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "gpt-5", Efforts: []string{"low"}}}}},
+		"lookup failed":   {err: errors.New("not logged in")},
+		"stale":           {catalog: ports.AgentModelCatalog{Stale: true, Models: []ports.AgentModelInfo{{ID: "gpt-custom", Efforts: []string{"xhigh"}}}}},
+		"custom model":    {catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "gpt-5", Efforts: []string{"low"}}}}},
 		"unlisted effort": {catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "gpt-custom", Efforts: []string{"low"}}}}},
 	} {
 		t.Run(name, func(t *testing.T) {
