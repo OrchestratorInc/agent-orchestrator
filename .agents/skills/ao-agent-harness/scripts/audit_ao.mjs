@@ -43,7 +43,18 @@ const LOCAL_GATES = [
 ];
 
 const SETTLED_STATES = new Set(["idle", "waiting_input", "blocked"]);
-const CANCELLATION_PROMPT = "For cancellation testing, run a foreground command that waits for 120 seconds. Do not modify files. Wait for the command to finish.";
+const CANCELLATION_WITNESS = Object.freeze({
+  startPath: "AO_AUDIT_CANCEL_STARTED.json",
+  latePath: "AO_AUDIT_CANCEL_LATE.json",
+  token: "AO_CANCEL_WITNESS_V1",
+  lateSideEffectDelayMs: 3_000,
+});
+const CANCELLATION_COMMAND = `node -e "const fs=require('node:fs');const token='${CANCELLATION_WITNESS.token}';fs.writeFileSync('${CANCELLATION_WITNESS.startPath}',JSON.stringify({token,pid:process.pid}));setTimeout(()=>fs.writeFileSync('${CANCELLATION_WITNESS.latePath}',JSON.stringify({token,pid:process.pid})),${CANCELLATION_WITNESS.lateSideEffectDelayMs});setTimeout(()=>{},120000)"`;
+const CANCELLATION_PROMPT = [
+  "For cancellation testing, run the following command exactly as one foreground command (not detached):",
+  CANCELLATION_COMMAND,
+  `The command must create ${CANCELLATION_WITNESS.startPath} itself and remain in the foreground. Do not create ${CANCELLATION_WITNESS.latePath} yourself, do not run a substitute command, and do not return until the command exits.`,
+].join("\n");
 
 function now() {
   return new Date().toISOString();
@@ -268,29 +279,92 @@ async function sessionState(baseURL, sessionId, timeoutMs) {
   return request({ baseURL, path: `sessions/${encodeURIComponent(sessionId)}`, timeoutMs });
 }
 
-export async function interruptActiveTurn({ baseURL, sessionId, startResponse, timeoutMs = 30_000, interruptSpec = null }) {
-  if (!interruptSpec) return { passed: false, status: "NOT_RUN", observedActive: false, reason: "native interrupt contract is missing; no cancellation input was sent" };
-  if (!startResponse?.ok) return { passed: false, observedActive: false, reason: "cancellation test message was not accepted" };
-  const boundedTimeout = Math.min(timeoutMs, 30_000);
-  const active = await waitUntil(async () => {
-    const stateResponse = await sessionState(baseURL, sessionId, boundedTimeout);
-    return {
-      done: stateResponse.response?.session?.activity?.state === "active",
-      stateResponse,
-    };
-  }, boundedTimeout, Math.min(250, Math.max(10, Math.floor(boundedTimeout / 10))));
-  if (!active.done) {
-    return {
-      passed: false,
-      observedActive: false,
-      reason: "the cancellation turn was never observed active",
-      activeState: active.stateResponse,
-    };
+function cancellationProcessState(pid) {
+  try {
+    process.kill(pid, 0);
+    return { running: true };
+  } catch (error) {
+    if (error?.code === "ESRCH") return { running: false };
+    return { running: true, probeError: error instanceof Error ? error.message : String(error) };
   }
-  return interruptViaMux({ baseURL, sessionId, activeState: active.stateResponse, timeoutMs, spec: interruptSpec });
 }
 
-async function interruptViaMux({ baseURL, sessionId, activeState, timeoutMs, spec }) {
+function parseCancellationStart(response, spec) {
+  const parsed = parseProof(response);
+  if (parsed?.token !== spec?.token || !Number.isSafeInteger(parsed?.pid) || parsed.pid < 1) return null;
+  return { tokenSha256: hash(parsed.token), pid: parsed.pid };
+}
+
+function missingWorkspaceFile(response) {
+  return response?.ok === false && response.status === 404;
+}
+
+async function cancellationWitnessPreflight({ baseURL, sessionId, spec, timeoutMs }) {
+  if (!spec || typeof spec.startPath !== "string" || typeof spec.latePath !== "string"
+    || typeof spec.token !== "string" || !spec.token
+    || !Number.isInteger(spec.lateSideEffectDelayMs) || spec.lateSideEffectDelayMs < 1) {
+    return { passed: false, reason: "cancellation command witness contract is missing or invalid" };
+  }
+  const [start, late] = await Promise.all([
+    workspaceFile(baseURL, sessionId, spec.startPath, timeoutMs),
+    workspaceFile(baseURL, sessionId, spec.latePath, timeoutMs),
+  ]);
+  const passed = missingWorkspaceFile(start) && missingWorkspaceFile(late);
+  return {
+    passed,
+    reason: passed ? "cancellation witness paths were absent before the turn" : "cancellation witness paths were not proven absent before the turn",
+    start: apiEvidence(start),
+    late: apiEvidence(late),
+  };
+}
+
+export async function interruptActiveTurn({ baseURL, sessionId, startResponse, timeoutMs = 30_000, interruptSpec = null, witnessSpec = null }) {
+  if (!interruptSpec) return { passed: false, status: "NOT_RUN", observedActive: false, reason: "native interrupt contract is missing; no cancellation input was sent" };
+  if (!witnessSpec) return { passed: false, observedActive: false, reason: "cancellation command witness contract is missing; no cancellation input was sent" };
+  if (!startResponse?.ok) return { passed: false, observedActive: false, reason: "cancellation test message was not accepted" };
+  const boundedTimeout = Math.min(timeoutMs, 30_000);
+  let observedActive = false;
+  const active = await waitUntil(async () => {
+    const [stateResponse, startWitness, lateWitness] = await Promise.all([
+      sessionState(baseURL, sessionId, boundedTimeout),
+      workspaceFile(baseURL, sessionId, witnessSpec.startPath, boundedTimeout),
+      workspaceFile(baseURL, sessionId, witnessSpec.latePath, boundedTimeout),
+    ]);
+    const state = stateResponse.response?.session?.activity?.state;
+    if (state === "active") observedActive = true;
+    const witness = parseCancellationStart(startWitness, witnessSpec);
+    return {
+      done: Boolean(witness) || SETTLED_STATES.has(state),
+      stateResponse,
+      startWitness,
+      lateWitness,
+      witness,
+    };
+  }, boundedTimeout, Math.min(250, Math.max(10, Math.floor(boundedTimeout / 10))));
+  const processState = active.witness ? cancellationProcessState(active.witness.pid) : null;
+  if (!active.done || !observedActive || !active.witness || !processState?.running
+    || !missingWorkspaceFile(active.lateWitness)
+    || active.stateResponse?.response?.session?.activity?.state !== "active") {
+    return {
+      passed: false,
+      observedActive,
+      reason: active.witness
+        ? "the witnessed foreground cancellation command was not still running in an active turn before input"
+        : "the cancellation turn settled or timed out without a valid command-start witness",
+      activeState: active.stateResponse,
+      witness: {
+        start: active.startWitness ? apiEvidence(active.startWitness) : undefined,
+        late: active.lateWitness ? apiEvidence(active.lateWitness) : undefined,
+        command: active.witness,
+        process: processState,
+      },
+    };
+  }
+  return interruptViaMux({ baseURL, sessionId, activeState: active.stateResponse, timeoutMs, spec: interruptSpec,
+    witnessSpec, commandWitness: active.witness });
+}
+
+async function interruptViaMux({ baseURL, sessionId, activeState, timeoutMs, spec, witnessSpec, commandWitness }) {
   const state = activeState.response?.session;
   const terminalId = state?.terminalHandleId;
   const generation = state?.terminalGeneration;
@@ -302,7 +376,9 @@ async function interruptViaMux({ baseURL, sessionId, activeState, timeoutMs, spe
     transport: "websocket", sessionId, terminalHandleId: terminalId,
     terminalGeneration: generation, startedAt: now(), opened: false,
     inputBytes: 0, pongObserved: false, frames: [], timedOut: false,
-    qualification: "A system pong acknowledges mux processing, not provider cancellation; cancellation also requires the same session to settle.",
+    qualification: "A system pong acknowledges mux processing, not provider cancellation; cancellation also requires a live command-start witness, the same session settling, the witnessed PID stopping, and no delayed side effect.",
+    commandWitness: { ...commandWitness, startPath: witnessSpec.startPath, latePath: witnessSpec.latePath,
+      lateSideEffectDelayMs: witnessSpec.lateSideEffectDelayMs },
   };
   let socket;
   let failure = "";
@@ -368,6 +444,16 @@ async function interruptViaMux({ baseURL, sessionId, activeState, timeoutMs, spe
     if (!preInput.ok || current?.id !== sessionId || current.isTerminated !== false
       || current.terminalHandleId !== terminalId || current.terminalGeneration !== generation
       || current.activity?.state !== "active") throw new Error("session ceased to be active or its terminal handle/generation changed before input");
+    const [freshStart, preInputLate] = await Promise.all([
+      workspaceFile(baseURL, sessionId, witnessSpec.startPath, Math.max(1, deadline - performance.now())),
+      workspaceFile(baseURL, sessionId, witnessSpec.latePath, Math.max(1, deadline - performance.now())),
+    ]);
+    const freshWitness = parseCancellationStart(freshStart, witnessSpec);
+    if (!freshWitness || freshWitness.pid !== commandWitness.pid || !cancellationProcessState(commandWitness.pid).running) {
+      throw new Error("foreground command witness changed or its process exited before cancellation input");
+    }
+    if (!missingWorkspaceFile(preInputLate)) throw new Error("delayed side effect appeared before cancellation input");
+    websocket.preInputWitness = { start: apiEvidence(freshStart), late: apiEvidence(preInputLate), processRunning: true };
     if (failure) throw new Error(failure);
     const data = { ch: "terminal", type: "data", id: terminalId, data: input.toString("base64") };
     socket.send(JSON.stringify(data)); trace("sent", data);
@@ -407,8 +493,34 @@ async function interruptViaMux({ baseURL, sessionId, activeState, timeoutMs, spe
       websocket.timedOut = true;
       throw new Error("the same active TUI session did not settle after mux input");
     }
+    const proofDeadline = Math.min(started + timeoutMs, inputSent + witnessSpec.lateSideEffectDelayMs + 250);
+    let processStopped = false;
+    let lateWitness;
+    while (performance.now() < proofDeadline) {
+      const processState = cancellationProcessState(commandWitness.pid);
+      if (!processState.running && !processStopped) {
+        processStopped = true;
+        websocket.processStoppedAt = now();
+      }
+      lateWitness = await workspaceFile(baseURL, sessionId, witnessSpec.latePath, Math.max(1, proofDeadline - performance.now()));
+      if (!missingWorkspaceFile(lateWitness)) throw new Error("cancelled foreground command produced its delayed side effect");
+      await sleep(Math.min(50, Math.max(5, proofDeadline - performance.now())));
+    }
+    const finalProcess = cancellationProcessState(commandWitness.pid);
+    const finalLate = await workspaceFile(baseURL, sessionId, witnessSpec.latePath, Math.max(1, timeoutMs));
+    if (!finalProcess.running && !processStopped) {
+      processStopped = true;
+      websocket.processStoppedAt = now();
+    }
+    if (finalProcess.running || !processStopped) throw new Error("foreground command process remained alive after cancellation");
+    if (!missingWorkspaceFile(finalLate)) throw new Error("delayed side effect was not proven absent after cancellation");
+    websocket.postInterruptWitness = {
+      processRunning: false,
+      late: apiEvidence(finalLate),
+      checkedAt: now(),
+    };
     return { passed: true, observedActive: true,
-      reason: "AO terminal mux sent configured input to the observed active session and the same terminal settled",
+      reason: "AO terminal mux interrupted the witnessed foreground command; the same terminal settled, its PID stopped, and no delayed side effect appeared",
       activeState, settledState, confirmationWindowMs, websocket };
   } catch (error) {
     websocket.error = redactOutput(error.message);
@@ -494,10 +606,10 @@ async function waitForDraftPersistence(witness, wanted, deadline) {
 
 // Only completeLifecycle calls this, for its new exclusive audit session and
 // just-submitted cancellation turn. This is not a general draft-clearing tool.
-async function cleanupCancelledAuditDraft({ baseURL, sessionId, dataDir, workspacePath, nativeSessionId, cancellation, startResponse, spec, readySpec, timeoutMs }) {
+async function cleanupCancelledAuditDraft({ baseURL, sessionId, dataDir, workspacePath, nativeSessionId, cancellation, startResponse, spec, readySpec, timeoutMs, cancellationPrompt = CANCELLATION_PROMPT }) {
   try {
     if (!cancellation.passed || !cancellation.observedActive || !startResponse?.ok
-      || startResponse.requestBody?.message !== CANCELLATION_PROMPT) {
+      || startResponse.requestBody?.message !== cancellationPrompt) {
       throw new Error("successful cancellation of the runner's own turn is required before draft cleanup");
     }
     if (spec?.input !== "\x03") throw new Error("postCancelCleanup.input must be exactly one Ctrl+C");
@@ -505,7 +617,7 @@ async function cleanupCancelledAuditDraft({ baseURL, sessionId, dataDir, workspa
       || !spec.draftPattern.includes("{prompt}") || !/^[imsu]*$/.test(spec.flags || "")) {
       throw new Error("postCancelCleanup requires a bounded current-composer draftPattern containing {prompt} and valid flags");
     }
-    const draftSource = spec.draftPattern.replaceAll("{prompt}", CANCELLATION_PROMPT.replace(/[.*+?^$()|[\]{}\\]/g, "\\$&"));
+    const draftSource = spec.draftPattern.replaceAll("{prompt}", cancellationPrompt.replace(/[.*+?^$()|[\]{}\\]/g, "\\$&"));
     const draftExpression = new RegExp(draftSource, spec.flags || "");
     const draftPattern = new RegExp("(?:" + draftExpression.source + ")(?![\\s\\S])", draftExpression.flags);
     const active = cancellation.activeState?.response?.session;
@@ -523,6 +635,7 @@ async function cleanupCancelledAuditDraft({ baseURL, sessionId, dataDir, workspa
     return await observeNativeTerminalReady({
       baseURL, sessionId, restoredState: cancellation.settledState, spec: readySpec, timeoutMs,
       cleanup: { draftPattern, lastUserMessageAt: active.lastUserMessageAt ?? null,
+        cancellationPrompt,
         persistence: Object.hasOwn(spec, "persistence") ? draftPersistencePath(spec.persistence, { dataDir, sessionId, workspacePath, nativeSessionId }) : null,
         patternSha256: hash(JSON.stringify({ draftPattern: spec.draftPattern, flags: spec.flags || "" })) },
     });
@@ -544,7 +657,7 @@ async function observeNativeTerminalReady({ baseURL, sessionId, restoredState, s
     inputSent: false, inputBytes: 0, timedOut: false,
     ...(cleanup ? { outputFramesAfterInput: 0 } : {}),
     ...(cleanup?.persistence ? { persistence: {} } : {}),
-    ...(cleanup ? { auditPromptSha256: hash(CANCELLATION_PROMPT), draftPatternSha256: cleanup.patternSha256,
+    ...(cleanup ? { auditPromptSha256: hash(cleanup.cancellationPrompt), draftPatternSha256: cleanup.patternSha256,
       lastUserMessageAtObserved: cleanup.lastUserMessageAt !== null } : {}),
     qualification: "Native terminal cue from the runtime contract; API idle/readiness alone is insufficient.",
   };
@@ -608,7 +721,7 @@ async function observeNativeTerminalReady({ baseURL, sessionId, restoredState, s
       const emptyComposer = (!cleanup || (visible.trim().length > 0 && (!evidence.inputSent || evidence.outputFramesAfterInput > 0)))
         && patterns.every(pattern => pattern.test(visible));
       if (cleanup && evidence.opened && evidence.outputFrames && !evidence.inputSent
-        && !emptyComposer && cleanup.draftPattern.exec(visible)?.[0].includes(CANCELLATION_PROMPT)) {
+        && !emptyComposer && cleanup.draftPattern.exec(visible)?.[0].includes(cleanup.cancellationPrompt)) {
         if (cleanup.persistence) evidence.persistence.beforeInput = await waitForDraftPersistence(cleanup.persistence, "present", deadline);
         const preInput = await sessionState(baseURL, sessionId, Math.max(1, deadline - performance.now()));
         evidence.preInputState = apiEvidence(preInput);
@@ -623,7 +736,7 @@ async function observeNativeTerminalReady({ baseURL, sessionId, restoredState, s
         if (performance.now() >= deadline) throw new Error("post-cancel cleanup deadline elapsed before input");
         // Recheck the composer after the awaited metadata and API reads, before any input.
         const latestVisible = stripVTControlCharacters(output).replaceAll("\r\n", "\n").replaceAll("\r", "\n").slice(-65536);
-        if (patterns.every(pattern => pattern.test(latestVisible)) || !cleanup.draftPattern.exec(latestVisible)?.[0].includes(CANCELLATION_PROMPT)) continue;
+        if (patterns.every(pattern => pattern.test(latestVisible)) || !cleanup.draftPattern.exec(latestVisible)?.[0].includes(cleanup.cancellationPrompt)) continue;
         evidence.draftCueSha256 = hash(latestVisible);
         evidence.draftMatchedAt = now();
         // Never allow earlier empty frames to satisfy the post-input check.
@@ -1536,14 +1649,20 @@ async function completeLifecycle({
     nativeBefore.native ? { sha256: nativeBefore.native.sha256, database: nativeBefore.native.db } : undefined,
   ));
 
-  const cancellationStart = interruptSpec ? await request({
+  const witnessPreflight = interruptSpec ? await cancellationWitnessPreflight({
+    baseURL, sessionId, spec: CANCELLATION_WITNESS, timeoutMs: Math.min(timeoutMs, 30_000),
+  }) : null;
+  const cancellationStart = interruptSpec && witnessPreflight.passed ? await request({
     baseURL,
     method: "POST",
     path: `sessions/${encodeURIComponent(sessionId)}/send`,
     body: { message: CANCELLATION_PROMPT },
     timeoutMs,
   }) : null;
-  const cancellation = await interruptActiveTurn({ baseURL, sessionId, startResponse: cancellationStart, timeoutMs, interruptSpec });
+  const cancellation = interruptSpec && !witnessPreflight.passed
+    ? { passed: false, observedActive: false, reason: witnessPreflight.reason, witnessPreflight }
+    : await interruptActiveTurn({ baseURL, sessionId, startResponse: cancellationStart, timeoutMs, interruptSpec,
+      witnessSpec: CANCELLATION_WITNESS });
   await record(gate(
     "cancellation",
     cancellation.passed ? "PASS" : cancellation.status || "FAIL",
@@ -1554,6 +1673,8 @@ async function completeLifecycle({
       interrupt: cancellation.interrupt ? apiEvidence(cancellation.interrupt) : undefined,
       settled: cancellation.settledState ? apiEvidence(cancellation.settledState) : undefined,
       confirmationWindowMs: cancellation.confirmationWindowMs,
+      witnessPreflight,
+      ...(cancellation.witness ? { witness: cancellation.witness } : {}),
       ...(cancellation.websocket ? { websocket: cancellation.websocket } : {}),
     },
   ));

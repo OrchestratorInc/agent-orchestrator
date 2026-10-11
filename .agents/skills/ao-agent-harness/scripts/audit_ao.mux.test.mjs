@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, delimiter, resolve } from "node:path";
 import test from "node:test";
@@ -10,6 +11,30 @@ const { auditAgent, interruptActiveTurn, waitForRestoredTerminalReady } = auditM
 
 // Real RFC6455 transport with AO's documented /mux JSON messages.
 async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
+  const witnessRoot = mkdtempSync(join(tmpdir(), "ao-cancel-witness-"));
+  const witnessSpec = {
+    startPath: "AO_AUDIT_CANCEL_STARTED.json",
+    latePath: "AO_AUDIT_CANCEL_LATE.json",
+    token: "AO_CANCEL_WITNESS_V1",
+    lateSideEffectDelayMs: 80,
+  };
+  const startWitnessPath = join(witnessRoot, witnessSpec.startPath);
+  const lateWitnessPath = join(witnessRoot, witnessSpec.latePath);
+  let witnessChild;
+  const startWitness = (mode = "running") => {
+    if (mode === "natural-settle") {
+      writeFileSync(startWitnessPath, JSON.stringify({ token: witnessSpec.token, pid: 2147483647 }));
+      return witnessSpec;
+    }
+    if (!witnessChild) {
+      const program = `const fs=require("node:fs");const token=${JSON.stringify(witnessSpec.token)};fs.writeFileSync(${JSON.stringify(startWitnessPath)},JSON.stringify({token,pid:process.pid}));setTimeout(()=>fs.writeFileSync(${JSON.stringify(lateWitnessPath)},JSON.stringify({token,pid:process.pid})),${witnessSpec.lateSideEffectDelayMs});setTimeout(()=>{},10000);`;
+      witnessChild = spawn(process.execPath, ["-e", program], { stdio: "ignore" });
+    }
+    return witnessSpec;
+  };
+  const stopWitness = () => {
+    if (witnessChild && witnessChild.exitCode === null) witnessChild.kill();
+  };
   const received = [];
   const sockets = new Set();
   let opened = false;
@@ -35,6 +60,15 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
     socket.write(Buffer.concat([header, payload]));
   }
   const server = createServer((req, res) => {
+    const requestURL = new URL(req.url, "http://127.0.0.1");
+    if (requestURL.pathname === "/api/v1/sessions/fixture/workspace/file"
+      && [witnessSpec.startPath, witnessSpec.latePath].includes(requestURL.searchParams.get("path"))) {
+      const path = requestURL.searchParams.get("path") === witnessSpec.startPath ? startWitnessPath : lateWitnessPath;
+      if (!existsSync(path)) { res.writeHead(404); res.end(JSON.stringify({ code: "NOT_FOUND" })); return; }
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ content: readFileSync(path, "utf8") }));
+      return;
+    }
     if (scenario.startsWith("lifecycle") && req.url === "/api/v1/projects/project") {
       res.end(JSON.stringify({ project: { id: "project", config: projectConfig } })); return;
     }
@@ -67,6 +101,7 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
         req.on("end", () => {
           messages.push(JSON.parse(raw).message);
           if (JSON.parse(raw).message.startsWith("For cancellation testing")) {
+            startWitness();
             cancellationStarted = true; res.end("{}");
           } else if (scenario === "lifecycle-retains-old-instructions") {
             if (JSON.parse(raw).message.startsWith("Update the existing")) continued = true;
@@ -86,7 +121,7 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
     if (scenario === "state-http-error" && opened) {
       res.writeHead(503); res.end("{}"); return;
     }
-    const active = !scenario.startsWith("ready-") && (!scenario.startsWith("lifecycle") || cancellationStarted || scenario === "lifecycle-activity-active") && scenario !== "never-active" && !(opened && scenario === "inactive-before-input")
+    const active = !["refusal", "natural-settle"].includes(scenario) && !scenario.startsWith("ready-") && (!scenario.startsWith("lifecycle") || cancellationStarted || scenario === "lifecycle-activity-active") && scenario !== "never-active" && !(opened && scenario === "inactive-before-input")
       && !(inputReceived && !["never-settles", "lifecycle-cleanup-never-settles"].includes(scenario)
         && !(scenario === "delayed-settle" && Date.now() - inputReceivedAt < 5200));
     res.setHeader("content-type", "application/json");
@@ -129,7 +164,8 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
           opened = true;
           if (cleanupScenario && upgrades > 1) {
             send(socket, { ch: "terminal", id: target, type: "opened" });
-            const draft = "> For cancellation testing, run a foreground command that waits for 120 seconds. Do not modify files. Wait for the command to finish.\n────────\n  [model] | native session\n";
+            const cancellationPrompt = messages.findLast(message => message.startsWith("For cancellation testing"));
+            const draft = `> ${cancellationPrompt}\n────────\n  [model] | native session\n`;
             const ready = ">  \n────────\n  [model] | native session\n";
             send(socket, { ch: "terminal", id: target, type: "data",
               data: Buffer.from((scenario.endsWith("-stale-cue") ? ready : "") + (scenario.endsWith("-already-empty") ? ready : draft + (scenario.endsWith("-foreign-draft") ? "> unrelated user draft\n────────\n  [model] | native session\n" : ""))).toString("base64") });
@@ -178,6 +214,7 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
           assert.deepEqual(Buffer.from(frame.data, "base64"), Buffer.from(scenario === "ctrl-c" ? "\x03" : "\x1b"));
           inputReceived = true;
           inputReceivedAt = Date.now();
+          stopWitness();
           if (scenario === "input-error") send(socket, { ch: "terminal", id: target, type: "error", error: "session input is disabled" });
         } else if (frame.ch === "system" && frame.type === "ping") {
           if (scenario !== "no-pong") send(socket, { ch: "system", type: "pong" });
@@ -191,19 +228,23 @@ async function withMuxFixture(scenario, run, lifecycleHooks = {}) {
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   try {
     await run({ baseURL: "http://127.0.0.1:" + server.address().port,
-      received, messages, get cleanupInputs() { return cleanupInputs; }, get killRequests() { return killRequests; }, get projectConfig() { return projectConfig; }, get nativeCueSent() { return nativeCueSent; }, get inputReceived() { return inputReceived; }, get upgrades() { return upgrades; } });
+      received, messages, witnessSpec, startWitness,
+      get cleanupInputs() { return cleanupInputs; }, get killRequests() { return killRequests; }, get projectConfig() { return projectConfig; }, get nativeCueSent() { return nativeCueSent; }, get inputReceived() { return inputReceived; }, get upgrades() { return upgrades; } });
   } finally {
+    stopWitness();
     for (const timer of timers) clearTimeout(timer);
     for (const socket of sockets) socket.destroy();
     await new Promise(resolve => server.close(resolve));
+    rmSync(witnessRoot, { recursive: true, force: true });
   }
 }
 
 for (const scenario of ["escape", "ctrl-c"]) {
   test("mux cancellation sends configured " + scenario + " to the exact active terminal and observes settling", async () => {
     await withMuxFixture(scenario, async fixture => {
+      const witnessSpec = fixture.startWitness();
       const result = await interruptActiveTurn({ baseURL: fixture.baseURL, sessionId: "fixture",
-        startResponse: { ok: true }, timeoutMs: 500, interruptSpec: { input: scenario === "ctrl-c" ? "\x03" : "\x1b" } });
+        startResponse: { ok: true }, timeoutMs: 500, interruptSpec: { input: scenario === "ctrl-c" ? "\x03" : "\x1b" }, witnessSpec });
       assert.equal(result.passed, true, JSON.stringify(result));
       assert.equal(fixture.inputReceived, true);
       assert.equal(result.interrupt, undefined, "do not manufacture HTTP interruption evidence");
@@ -216,11 +257,35 @@ for (const scenario of ["escape", "ctrl-c"]) {
   });
 }
 
+test("mux cancellation refuses a naturally settled command even when a start file exists", async () => {
+  await withMuxFixture("natural-settle", async fixture => {
+    const witnessSpec = fixture.startWitness("natural-settle");
+    const result = await interruptActiveTurn({ baseURL: fixture.baseURL, sessionId: "fixture",
+      startResponse: { ok: true }, timeoutMs: 200, interruptSpec: { input: "\x1b" }, witnessSpec });
+    assert.equal(result.passed, false);
+    assert.equal(fixture.inputReceived, false);
+    assert.equal(result.witness.command.pid, 2147483647);
+    assert.match(result.reason, /not still running|active turn/);
+  });
+});
+
+test("mux cancellation refuses a settled native refusal without a command-start witness", async () => {
+  await withMuxFixture("refusal", async fixture => {
+    const result = await interruptActiveTurn({ baseURL: fixture.baseURL, sessionId: "fixture",
+      startResponse: { ok: true }, timeoutMs: 200, interruptSpec: { input: "\x1b" }, witnessSpec: fixture.witnessSpec });
+    assert.equal(result.passed, false);
+    assert.equal(fixture.inputReceived, false);
+    assert.equal(result.witness.command, null);
+    assert.match(result.reason, /without a valid command-start witness/);
+  });
+});
+
 for (const scenario of ["open-error", "socket-close", "wrong-opened", "changed-handle", "changed-generation", "inactive-before-input", "state-http-error", "never-active"]) {
   test("mux cancellation sends no input for " + scenario, async () => {
     await withMuxFixture(scenario, async fixture => {
+      const witnessSpec = fixture.startWitness();
       const result = await interruptActiveTurn({ baseURL: fixture.baseURL, sessionId: "fixture",
-        startResponse: { ok: true }, timeoutMs: 120, interruptSpec: { input: "\x1b" } });
+        startResponse: { ok: true }, timeoutMs: 120, interruptSpec: { input: "\x1b" }, witnessSpec });
       assert.equal(result.passed, false);
       assert.equal(fixture.inputReceived, false, JSON.stringify(fixture.received));
       if (scenario === "never-active") assert.equal(fixture.upgrades, 0);
@@ -232,8 +297,9 @@ for (const scenario of ["open-error", "socket-close", "wrong-opened", "changed-h
 for (const scenario of ["input-error", "no-pong", "never-settles"]) {
   test("mux cancellation fails with retained WS evidence for " + scenario, async () => {
     await withMuxFixture(scenario, async fixture => {
+      const witnessSpec = fixture.startWitness();
       const result = await interruptActiveTurn({ baseURL: fixture.baseURL, sessionId: "fixture",
-        startResponse: { ok: true }, timeoutMs: 120, interruptSpec: { input: "\x1b" } });
+        startResponse: { ok: true }, timeoutMs: 120, interruptSpec: { input: "\x1b" }, witnessSpec });
       assert.equal(result.passed, false);
       assert.equal(fixture.inputReceived, true);
       assert.equal(result.websocket.inputBytes, 1);
@@ -342,8 +408,9 @@ test("an active session with a proof file but no settled completion cannot pass 
 test("mux cancellation keeps the default confirmation window and accepts a bounded 60s contract", async () => {
   for (const [settleTimeoutMs, expected] of [[undefined, 5000], [60000, 60000]]) {
     await withMuxFixture("escape", async fixture => {
+      const witnessSpec = fixture.startWitness();
       const result = await interruptActiveTurn({ baseURL: fixture.baseURL, sessionId: "fixture",
-        startResponse: { ok: true }, timeoutMs: 90000, interruptSpec: { input: "\x1b", ...(settleTimeoutMs === undefined ? {} : { settleTimeoutMs }) } });
+        startResponse: { ok: true }, timeoutMs: 90000, interruptSpec: { input: "\x1b", ...(settleTimeoutMs === undefined ? {} : { settleTimeoutMs }) }, witnessSpec });
       assert.equal(result.passed, true, JSON.stringify(result));
       assert.equal(result.confirmationWindowMs, expected);
       assert.equal(typeof result.websocket.settleDurationMs, "number");
@@ -354,8 +421,9 @@ test("mux cancellation keeps the default confirmation window and accepts a bound
 for (const value of [0, -1, 60001, 1.5, "60000", null]) {
   test("mux cancellation refuses invalid settleTimeoutMs " + JSON.stringify(value), async () => {
     await withMuxFixture("escape", async fixture => {
+      const witnessSpec = fixture.startWitness();
       const result = await interruptActiveTurn({ baseURL: fixture.baseURL, sessionId: "fixture",
-        startResponse: { ok: true }, timeoutMs: 500, interruptSpec: { input: "\x1b", settleTimeoutMs: value } });
+        startResponse: { ok: true }, timeoutMs: 500, interruptSpec: { input: "\x1b", settleTimeoutMs: value }, witnessSpec });
       assert.equal(result.passed, false);
       assert.match(result.reason, /settleTimeoutMs.*integer.*1.*60000/);
       assert.equal(fixture.inputReceived, false);
@@ -366,8 +434,9 @@ for (const value of [0, -1, 60001, 1.5, "60000", null]) {
 
 test("mux cancellation fails when the configured window expires without settling", async () => {
   await withMuxFixture("never-settles", async fixture => {
+    const witnessSpec = fixture.startWitness();
     const result = await interruptActiveTurn({ baseURL: fixture.baseURL, sessionId: "fixture",
-      startResponse: { ok: true }, timeoutMs: 500, interruptSpec: { input: "\x1b", settleTimeoutMs: 80 } });
+      startResponse: { ok: true }, timeoutMs: 500, interruptSpec: { input: "\x1b", settleTimeoutMs: 80 }, witnessSpec });
     assert.equal(result.passed, false);
     assert.equal(result.confirmationWindowMs, 80);
     assert.equal(result.websocket.timedOut, true);
@@ -377,8 +446,9 @@ test("mux cancellation fails when the configured window expires without settling
 
 test("mux cancellation bounds the configured window by the run timeout", async () => {
   await withMuxFixture("never-settles", async fixture => {
+    const witnessSpec = fixture.startWitness();
     const result = await interruptActiveTurn({ baseURL: fixture.baseURL, sessionId: "fixture",
-      startResponse: { ok: true }, timeoutMs: 120, interruptSpec: { input: "\x1b", settleTimeoutMs: 60000 } });
+      startResponse: { ok: true }, timeoutMs: 120, interruptSpec: { input: "\x1b", settleTimeoutMs: 60000 }, witnessSpec });
     assert.equal(result.passed, false);
     assert.equal(result.confirmationWindowMs, 120);
     assert.equal(result.websocket.timedOut, true);
@@ -387,8 +457,9 @@ test("mux cancellation bounds the configured window by the run timeout", async (
 
 test("mux cancellation preserves active evidence after 5s before a later bounded settle", async () => {
   await withMuxFixture("delayed-settle", async fixture => {
+    const witnessSpec = fixture.startWitness();
     const result = await interruptActiveTurn({ baseURL: fixture.baseURL, sessionId: "fixture",
-      startResponse: { ok: true }, timeoutMs: 8000, interruptSpec: { input: "\x1b", settleTimeoutMs: 6500 } });
+      startResponse: { ok: true }, timeoutMs: 8000, interruptSpec: { input: "\x1b", settleTimeoutMs: 6500 }, witnessSpec });
     assert.equal(result.passed, true, JSON.stringify(result));
     assert.ok(result.websocket.settleDurationMs >= 5200);
     assert.ok(result.websocket.unsettledAfterDefaultWindow.observedAfterInputMs >= 5000);

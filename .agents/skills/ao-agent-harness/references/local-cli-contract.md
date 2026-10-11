@@ -77,12 +77,17 @@ not this illustrative `example-agent` contract.
 
 `interrupt.input` is 1–64 UTF-8 bytes, such as `"\u001b"` for Escape or
 `"\u0003"` for Ctrl-C when documented by the native agent. The runner first
-observes an active AO session, opens its exact `terminalHandleId` as a secondary
-WebSocket attachment at `/mux`, checks the terminal generation, and sends the
-input without resizing. A mux pong proves transport processing only. The same
-live session/terminal must then settle. There is no fabricated HTTP interrupt
-endpoint. With no interrupt contract, cancellation is `NOT_RUN` and the long
-cancellation turn is not started.
+requires the cancellation turn's exact foreground Node command to create a
+tokenized start witness containing its PID while AO still reports the turn
+active. It then opens the exact `terminalHandleId` as a secondary WebSocket
+attachment at `/mux`, checks the terminal generation, reconfirms that witnessed
+PID is alive, and sends the input without resizing. A mux pong proves transport
+processing only. The same live session/terminal must settle, the witnessed PID
+must stop, and the command's delayed side-effect file must remain absent past
+its scheduled write time. Natural settlement, command refusal, or a surviving
+child process therefore cannot pass cancellation. There is no fabricated HTTP
+interrupt endpoint. With no interrupt contract, cancellation is `NOT_RUN` and
+the cancellation turn is not started.
 
 `interrupt.settleTimeoutMs` defaults to 5,000 ms and accepts an integer from
 1 through 60,000, bounded by the run's timeout. Set a longer window only when

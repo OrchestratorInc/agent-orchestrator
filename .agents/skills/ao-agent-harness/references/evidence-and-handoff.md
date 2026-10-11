@@ -41,7 +41,7 @@ record dependent gates as `NOT_RUN`. A complete strict path covers:
 | AO preflight | Registered harness, installed executable, fresh probe, verified authentication, effective launch readiness, non-empty AO model catalog |
 | Cross-check | At least one exact model ID shared by native and AO catalogs |
 | Initial TUI turn | Spawn, correct workspace, initial prompt handled once, hidden instructions consumed, project `AGENTS.md` consumed, proof file, observed active-to-settled completion |
-| Messaging and cancellation | Second message changes the proof, cancellation of an observed active turn through the native terminal input contract |
+| Messaging and cancellation | Second message changes the proof; cancellation requires a tokenized foreground-command PID witness while active, terminal input through the native contract, the same terminal settling, the witnessed PID stopping, and absence of its scheduled late side effect |
 | Native restore | Persisted native identity, confirmed termination, exact native-ID restore, same AO session/workspace, initialized native terminal, post-restore mutation, history/file continuity, refreshed hidden instructions |
 
 The native ID is not in the public session DTO. The runner reads
