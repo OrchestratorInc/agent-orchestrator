@@ -44,6 +44,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
+	TargetHermes:      "https://github.com/NousResearch/hermes-agent",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -253,6 +254,8 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
+	case TargetHermes:
+		plans = []Plan{manualPlan(target, "Install official Hermes Agent v0.21.6 from the pinned upstream release; AO supports the classic CLI on Linux. AO does not execute a remote shell installer.", agentDocumentationURLs[target])}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
 	default:

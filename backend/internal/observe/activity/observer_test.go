@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/crush"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -330,5 +331,46 @@ func TestPollReturnsSessionListFailure(t *testing.T) {
 	observer := New(fakeSessions{err: want}, &fakeSink{}, &fakeRuntime{}, nil, Config{Logger: testLogger()})
 	if err := observer.Poll(context.Background()); !errors.Is(err, want) {
 		t.Fatalf("error = %v, want %v", err, want)
+	}
+}
+
+type renderedRuntime struct {
+	fakeRuntime
+	rendered    string
+	renderedErr error
+}
+
+func (r *renderedRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+	return r.rendered, r.renderedErr
+}
+func TestRenderedAdapterNeverUsesOldRingComposer(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	rec := activeSession(now, domain.HarnessHermes)
+	sink := &fakeSink{}
+	runtime := &renderedRuntime{fakeRuntime: fakeRuntime{output: "❯ \n"}, renderedErr: errors.New("surface unavailable")}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{rec}}, sink, runtime, fakeAgents{domain.HarnessHermes: hermes.New()}, Config{Clock: func() time.Time { return now }, Logger: testLogger()})
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 0 || runtime.calls != 0 {
+		t.Fatal("fell back to stale output ring")
+	}
+	runtime.renderedErr = nil
+	runtime.rendered = "Confirm: Allow this command?\n[1] Allow once"
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityBlocked {
+		t.Fatalf("signals=%+v", sink.signals)
+	}
+	rec.Activity.State = domain.ActivityBlocked
+	observer.sessions = fakeSessions{rows: []domain.SessionRecord{rec}}
+	runtime.rendered = "❯ \n"
+	sink.signals = nil
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityIdle || sink.signals[0].Event != "permission-resolved" {
+		t.Fatalf("blocked recovery=%+v", sink.signals)
 	}
 }

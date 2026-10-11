@@ -79,7 +79,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		lifecycle.WithDataDir(dataDir),
 	)
 	rp := reaper.New(lcm, store, runtime, reaper.Config{Logger: logger})
-	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger})
+	activityPoller := activityobserver.New(store, lcm, runtime, agents, activityobserver.Config{Logger: logger, DataDir: dataDir})
 	herdrServer, err := herdr.Start(ctx, dataDir, lcm, logger)
 	if err != nil {
 		// fx treats reporting as best effort; an occupied or unavailable socket

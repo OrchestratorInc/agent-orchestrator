@@ -200,6 +200,7 @@ var shippedMigrations = map[int64]string{
 	195: "0195_session_requested_output.sql",
 	196: "0196_session_artifact_versions.sql",
 	197: "0197_detach_split_orchestrator_conversations.sql",
+	203: "0203_allow_hermes_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

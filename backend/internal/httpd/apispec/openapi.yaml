@@ -13280,6 +13280,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - hermes
           - fake
           type: string
         approvalMode:
@@ -13941,6 +13942,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - hermes
           - cloudflared
           type: string
         updatedAt:
@@ -17062,6 +17064,7 @@ components:
           - deepseek-harness
           - openhands
           - command-code
+          - hermes
           type: string
         issueId:
           type: string

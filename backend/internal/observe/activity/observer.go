@@ -19,6 +19,7 @@ const (
 
 // Config controls activity reconciliation polling.
 type Config struct {
+	DataDir     string
 	Tick        time.Duration
 	StaleAfter  time.Duration
 	OutputLines int
@@ -40,6 +41,7 @@ type outputReader interface {
 
 // Observer reconciles stale hook activity from adapter-owned terminal markers.
 type Observer struct {
+	dataDir     string
 	sessions    sessionSource
 	sink        activitySink
 	runtime     outputReader
@@ -54,6 +56,7 @@ type Observer struct {
 // New builds an activity observer.
 func New(sessions sessionSource, sink activitySink, runtime outputReader, agents ports.AgentResolver, cfg Config) *Observer {
 	o := &Observer{
+		dataDir:     cfg.DataDir,
 		sessions:    sessions,
 		sink:        sink,
 		runtime:     runtime,
@@ -130,24 +133,49 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		}
 	} else if session.Activity.State != domain.ActivityActive &&
 		session.Activity.State != domain.ActivityIdle &&
-		session.Activity.State != domain.ActivityWaitingInput {
+		session.Activity.State != domain.ActivityWaitingInput &&
+		session.Activity.State != domain.ActivityBlocked {
 		return
 	}
-	output, err := o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	var output string
+	var err error
+	if rendered, ok := agent.(interface{ RequiresRenderedActivity() bool }); ok && rendered.RequiresRenderedActivity() {
+		reader, ok := o.runtime.(interface {
+			GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error)
+		})
+		if !ok {
+			return
+		}
+		output, err = reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	} else {
+		output, err = o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	}
 	if err != nil {
 		o.logger.Debug("activity observer: terminal output unavailable", "session", session.ID, "err", err)
 		return
 	}
 	state, ok := detector.DetectTerminalActivity(output)
-	if !ok || state == session.Activity.State ||
-		(state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput) {
+	nativeID := ""
+	if resolver, supports := agent.(ports.AgentNativeSessionResolver); supports && o.dataDir != "" {
+		id, found, resolveErr := resolver.ResolveNativeSessionID(ctx, ports.NativeSessionResolveConfig{DataDir: o.dataDir, SessionID: session.ID, LaunchID: session.Metadata.RuntimeLaunchID})
+		if resolveErr == nil && found {
+			nativeID = id
+		}
+	}
+	if !ok || (state == session.Activity.State && (nativeID == "" || nativeID == session.Metadata.AgentSessionID)) ||
+		(state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput && state != domain.ActivityBlocked) {
 		return
 	}
 	event := "terminal-" + string(state)
+	if rendered, ok := agent.(interface{ RequiresRenderedActivity() bool }); ok && rendered.RequiresRenderedActivity() && session.Activity.State == domain.ActivityBlocked && state != domain.ActivityBlocked {
+		// A current native composer/busy frame positively resolves the prior modal.
+		event = "permission-resolved"
+	}
 	if state == domain.ActivityWaitingInput {
 		event = "terminal-waiting-input"
 	}
 	err = o.sink.ApplyActivitySignal(ctx, session.ID, ports.ActivitySignal{
+		AgentSessionID:   nativeID,
 		Valid:            true,
 		State:            state,
 		Timestamp:        now,
