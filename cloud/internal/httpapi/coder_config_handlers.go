@@ -61,6 +61,9 @@ func (s *Server) getOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId must be a UUID.")
 		return
 	}
+	if !s.requireOrgCoder(w, r, orgID) {
+		return
+	}
 	store, ok := s.store.(providerConnectionStore)
 	if !ok {
 		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Provider connections are unavailable.")
@@ -110,8 +113,7 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, "provider_connections_unavailable", "Provider credential storage is not configured.")
 		return
 	}
-	if !s.orgAllowsProvider(principalFrom(r), sandbox.ProviderCoder) {
-		writeError(w, r, http.StatusForbidden, "provider_forbidden", "Your organization is not enabled for the Coder sandbox provider.")
+	if !s.requireOrgCoder(w, r, orgID) {
 		return
 	}
 	var request putOrgCoderConfigRequest
@@ -262,8 +264,7 @@ func (s *Server) deleteOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId must be a UUID.")
 		return
 	}
-	if !s.orgAllowsProvider(principalFrom(r), sandbox.ProviderCoder) {
-		writeError(w, r, http.StatusForbidden, "provider_forbidden", "Your organization is not enabled for the Coder sandbox provider.")
+	if !s.requireOrgCoder(w, r, orgID) {
 		return
 	}
 	store, ok := s.store.(providerConnectionStore)

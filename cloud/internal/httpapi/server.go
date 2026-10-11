@@ -174,6 +174,13 @@ type Server struct {
 	// capabilityGatedProviders is the set of providers that additionally require
 	// a matching organization capability. Empty by default (no gating).
 	capabilityGatedProviders map[string]bool
+	// defaultOrgCapabilities apply to any organization without capabilities of
+	// its own (AO_CLOUD_DEFAULT_ORG_CAPABILITIES): personal organizations, and
+	// WorkOS organizations whose metadata has no capabilities key.
+	defaultOrgCapabilities []string
+	// defaultOrgBilling is the billing arrangement of an organization whose
+	// WorkOS metadata sets none (AO_CLOUD_DEFAULT_ORG_BILLING).
+	defaultOrgBilling string
 	// coderTemplates lists the Coder templates a client may pick from. Nil when
 	// the deployment does not offer the coder provider.
 	coderTemplates CoderTemplateLister
@@ -226,6 +233,12 @@ type Options struct {
 	SandboxProvider           string
 	AvailableSandboxProviders []string
 	CapabilityGatedProviders  []string
+	// DefaultOrgCapabilities are the capabilities of an organization that has
+	// none of its own; see Server.defaultOrgCapabilities.
+	DefaultOrgCapabilities []string
+	// DefaultOrgBilling is domain.OrgBillingSelfServe (the default when blank)
+	// or domain.OrgBillingContract.
+	DefaultOrgBilling string
 	// CoderTemplates lists templates available from the configured Coder provider.
 	CoderTemplates     CoderTemplateLister
 	Provisioning       sandbox.ProvisioningDefaults
@@ -317,6 +330,17 @@ func New(options Options) *Server {
 			capabilityGatedProviders[provider] = true
 		}
 	}
+	defaultOrgCapabilities := make([]string, 0, len(options.DefaultOrgCapabilities))
+	for _, capability := range options.DefaultOrgCapabilities {
+		if capability = strings.ToLower(strings.TrimSpace(capability)); capability != "" &&
+			!slices.Contains(defaultOrgCapabilities, capability) {
+			defaultOrgCapabilities = append(defaultOrgCapabilities, capability)
+		}
+	}
+	defaultOrgBilling := domain.NormalizeOrgBilling(options.DefaultOrgBilling)
+	if defaultOrgBilling == "" {
+		defaultOrgBilling = domain.OrgBillingSelfServe
+	}
 	server := &Server{
 		store:                     options.Store,
 		transcripts:               options.Transcripts,
@@ -327,6 +351,8 @@ func New(options Options) *Server {
 		sandboxProvider:           sandboxProvider,
 		availableSandboxProviders: availableSandboxProviders,
 		capabilityGatedProviders:  capabilityGatedProviders,
+		defaultOrgCapabilities:    defaultOrgCapabilities,
+		defaultOrgBilling:         defaultOrgBilling,
 		coderTemplates:            options.CoderTemplates,
 		provisioning:              options.Provisioning,
 		workerTokens:              options.WorkerTokens,

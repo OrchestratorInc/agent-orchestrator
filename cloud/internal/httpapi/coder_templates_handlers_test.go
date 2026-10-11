@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -171,5 +172,55 @@ func TestListCoderTemplatesEmptyWhenNothingConfigured(t *testing.T) {
 	templates := decodeTemplatesResponse(t, rec)
 	if len(templates) != 0 {
 		t.Fatalf("templates = %+v, want empty", templates)
+	}
+}
+
+// Every Coder-only endpoint is 403 provider_forbidden for an organization whose
+// effective providers exclude coder: either the gate refuses it, or the
+// deployment does not offer coder at all.
+func TestCoderOnlyEndpointsForbiddenWithoutCoder(t *testing.T) {
+	t.Parallel()
+	gated := func() *Server {
+		return New(Options{
+			Store:                     &coderConfigFakeStore{},
+			SecretCipher:              newTestCipher(t),
+			SandboxProvider:           sandbox.ProviderCoder,
+			AvailableSandboxProviders: []string{sandbox.ProviderCoder, sandbox.ProviderFreestyle},
+			CapabilityGatedProviders:  []string{sandbox.ProviderCoder, sandbox.ProviderFreestyle},
+			Logger:                    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		})
+	}
+	noCoder := func() *Server {
+		return New(Options{
+			Store:                     &coderConfigFakeStore{},
+			SecretCipher:              newTestCipher(t),
+			SandboxProvider:           sandbox.ProviderFreestyle,
+			AvailableSandboxProviders: []string{sandbox.ProviderFreestyle},
+			Logger:                    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		})
+	}
+	endpoints := map[string]func(*Server, http.ResponseWriter, *http.Request){
+		"GET coder-config":    (*Server).getOrgCoderConfig,
+		"PUT coder-config":    (*Server).putOrgCoderConfig,
+		"DELETE coder-config": (*Server).deleteOrgCoderConfig,
+		"GET coder templates": (*Server).listCoderTemplates,
+	}
+	servers := map[string]struct {
+		build func() *Server
+		caps  []string
+	}{
+		"b2c org on a gated deployment": {gated, []string{sandbox.ProviderFreestyle}},
+		"deployment without coder":      {noCoder, []string{sandbox.ProviderCoder}},
+	}
+	for serverName, server := range servers {
+		for endpointName, handler := range endpoints {
+			t.Run(serverName+"/"+endpointName, func(t *testing.T) {
+				rec := httptest.NewRecorder()
+				handler(server.build(), rec, coderConfigRequest(t, http.MethodGet, validCoderConfigBody(), server.caps))
+				if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "provider_forbidden") {
+					t.Fatalf("status = %d, body = %s; want 403 provider_forbidden", rec.Code, rec.Body.String())
+				}
+			})
+		}
 	}
 }

@@ -2350,6 +2350,63 @@ components:
           type: string
         role:
           $ref: "#/components/schemas/OrganizationRole"
+        offering:
+          $ref: "#/components/schemas/Offering"
+    Offering:
+      type: object
+      additionalProperties: false
+      description: >-
+        What an organization may use and how it is billed. The control plane is
+        the source of truth; clients shape their UI from it and the server
+        enforces the same rules on create.
+      required: [providers, defaultProvider, billingMode, kind, features]
+      properties:
+        providers:
+          type: array
+          description: >-
+            Sandbox providers the organization may use: the deployment's
+            providers filtered by the capability gate against the
+            organization's effective capabilities.
+          items:
+            type: string
+        defaultProvider:
+          type: string
+          description: >-
+            Provider a session gets when none is chosen: the deployment default
+            when allowed, otherwise the first allowed provider, otherwise empty
+            (no cloud sessions).
+        billingMode:
+          type: string
+          enum: [self_serve, contract, "off"]
+          description: >-
+            off when the deployment has no Stripe configured; contract when the
+            organization is billed under an agreement, runs on the internal
+            plan, or is grandfathered; self_serve otherwise. Only self_serve
+            organizations are subject to plan limits.
+        kind:
+          type: string
+          enum: [b2b, b2c, both, none]
+          description: >-
+            b2b when coder is the only allowed provider, b2c when only other
+            providers are allowed, both for a mix, none when no provider is
+            allowed.
+        features:
+          type: array
+          description: Plan feature flags; empty when none apply.
+          items:
+            type: string
+    SandboxProviders:
+      type: object
+      additionalProperties: false
+      description: Legacy provider selector data; the same values as offering.providers and offering.defaultProvider.
+      required: [available, default]
+      properties:
+        available:
+          type: array
+          items:
+            type: string
+        default:
+          type: string
     CurrentAccount:
       type: object
       additionalProperties: false
@@ -2361,6 +2418,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OrganizationMembership"
+        offering:
+          # The offering of the first organization, the one the desktop app works in.
+          $ref: "#/components/schemas/Offering"
+        sandboxProviders:
+          $ref: "#/components/schemas/SandboxProviders"
     AgentCapability:
       type: string
       enum:

@@ -1440,10 +1440,37 @@ export interface components {
             slug: string;
             displayName: string;
             role: components["schemas"]["OrganizationRole"];
+            offering?: components["schemas"]["Offering"];
+        };
+        /** @description What an organization may use and how it is billed. The control plane is the source of truth; clients shape their UI from it and the server enforces the same rules on create. */
+        Offering: {
+            /** @description Sandbox providers the organization may use: the deployment's providers filtered by the capability gate against the organization's effective capabilities. */
+            providers: string[];
+            /** @description Provider a session gets when none is chosen: the deployment default when allowed, otherwise the first allowed provider, otherwise empty (no cloud sessions). */
+            defaultProvider: string;
+            /**
+             * @description off when the deployment has no Stripe configured; contract when the organization is billed under an agreement, runs on the internal plan, or is grandfathered; self_serve otherwise. Only self_serve organizations are subject to plan limits.
+             * @enum {string}
+             */
+            billingMode: "self_serve" | "contract" | "off";
+            /**
+             * @description b2b when coder is the only allowed provider, b2c when only other providers are allowed, both for a mix, none when no provider is allowed.
+             * @enum {string}
+             */
+            kind: "b2b" | "b2c" | "both" | "none";
+            /** @description Plan feature flags; empty when none apply. */
+            features: string[];
+        };
+        /** @description Legacy provider selector data; the same values as offering.providers and offering.defaultProvider. */
+        SandboxProviders: {
+            available: string[];
+            default: string;
         };
         CurrentAccount: {
             user: components["schemas"]["CurrentUser"];
             organizations: components["schemas"]["OrganizationMembership"][];
+            offering?: components["schemas"]["Offering"];
+            sandboxProviders?: components["schemas"]["SandboxProviders"];
         };
         /** @enum {string} */
         AgentCapability: "interface.chat" | "interface.tui" | "model.catalog" | "model.custom" | "attachments" | "browser.preview" | "review.execute" | "session.resume";

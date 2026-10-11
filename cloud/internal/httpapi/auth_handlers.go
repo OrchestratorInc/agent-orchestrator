@@ -42,6 +42,9 @@ type organizationResponse struct {
 	Slug        string `json:"slug"`
 	DisplayName string `json:"displayName"`
 	Role        string `json:"role"`
+	// Offering is this organization's sandbox providers and billing mode. Only
+	// /me reports it; the auth responses leave it out.
+	Offering *offeringResponse `json:"offering,omitempty"`
 }
 
 type authResponse struct {
@@ -180,18 +183,37 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	organizations := toOrganizations(memberships)
+	for i := range organizations {
+		offering, err := s.offeringForOrg(r.Context(), principal, organizations[i].ID)
+		if err != nil {
+			s.writeStoreError(w, r, err)
+			return
+		}
+		organizations[i].Offering = &offering
+	}
+	// offering describes the first organization, the one the desktop app works
+	// in. With no organization it reports the deployment defaults.
+	var offering offeringResponse
+	if len(organizations) > 0 {
+		offering = *organizations[0].Offering
+	} else if offering, err = s.offeringForOrg(r.Context(), principal, ""); err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user":          toUserResponse(principal),
-		"organizations": toOrganizations(memberships),
+		"organizations": organizations,
+		"offering":      offering,
 		// sandboxProviders lets the client render a provider selector limited to
-		// what this control plane offers AND what the active organization is
-		// entitled to (e.g. coder is filtered out unless the org has the
-		// capability), defaulting to the deployment default. The server enforces
-		// the same filter on create, so the UI never offers a provider that would
-		// be refused.
+		// what this control plane offers AND what the organization is entitled
+		// to, defaulting to the organization's default provider. It carries the
+		// same values as offering.providers/defaultProvider for older clients.
+		// The server enforces the same filter on create, so the UI never offers
+		// a provider that would be refused.
 		"sandboxProviders": map[string]any{
-			"available": s.providersForOrg(principal, s.availableSandboxProviders),
-			"default":   s.sandboxProvider,
+			"available": offering.Providers,
+			"default":   offering.DefaultProvider,
 		},
 	})
 }
