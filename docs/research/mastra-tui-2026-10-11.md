@@ -69,3 +69,10 @@ and its failed aggregator. The untouched autoreview test deadlocked its notifica
 sender during shutdown; failed jobs rerun in GitHub with original log preserved.
 Current exact-head CI and cleanup are recorded in the integration PR handoff.
 No Mac, release, deployment, merge or production daemon changes occurred.
+
+Cleanup: all three owned AO sessions returned200/ok and terminated readback true.
+Control session reported freed=true; dirty main/fresh worktrees were preserved.
+All recorded host/supervisor/native kernel identities are gone. Owned daemon913150
+returned202/shutting_down and exited. Previous Electron/X display had already exited.
+[Exact cleanup receipts](assets/mastra-20261011/cleanup.json). Production daemon and
+all user data remain untouched.

@@ -1,0 +1,154 @@
+{
+  "responses": [
+    {
+      "session": "mastra-tui-proof-002-1",
+      "status": 200,
+      "body": {
+        "ok": true,
+        "sessionId": "mastra-tui-proof-002-1"
+      },
+      "readback": true
+    },
+    {
+      "session": "mastra-tui-proof-002-2",
+      "status": 200,
+      "body": {
+        "ok": true,
+        "sessionId": "mastra-tui-proof-002-2",
+        "freed": true
+      },
+      "readback": true
+    },
+    {
+      "session": "mastra-tui-proof-002-3",
+      "status": 200,
+      "body": {
+        "ok": true,
+        "sessionId": "mastra-tui-proof-002-3"
+      },
+      "readback": true
+    }
+  ],
+  "ownershipBefore": [
+    {
+      "session": "mastra-tui-proof-002-1",
+      "processes": {
+        "host": {
+          "pid": 913276,
+          "kernelStart": "76819911"
+        },
+        "supervisor": {
+          "pid": 913282,
+          "kernelStart": "76819913"
+        },
+        "agent": {
+          "pid": 913289,
+          "kernelStart": "76819921"
+        }
+      }
+    },
+    {
+      "session": "mastra-tui-proof-002-2",
+      "processes": {
+        "host": {
+          "pid": 905238,
+          "kernelStart": "76543581"
+        },
+        "supervisor": {
+          "pid": 905244,
+          "kernelStart": "76543583"
+        },
+        "agent": {
+          "pid": 905256,
+          "kernelStart": "76543590"
+        }
+      }
+    },
+    {
+      "session": "mastra-tui-proof-002-3",
+      "processes": {
+        "host": {
+          "pid": 913382,
+          "kernelStart": "76821344"
+        },
+        "supervisor": {
+          "pid": 913388,
+          "kernelStart": "76821350"
+        },
+        "agent": {
+          "pid": 913401,
+          "kernelStart": "76821353"
+        }
+      }
+    }
+  ],
+  "processReadback": [
+    {
+      "session": "mastra-tui-proof-002-1",
+      "processes": {
+        "host": {
+          "pid": 913276,
+          "kernelStart": "76819911",
+          "alive": false
+        },
+        "supervisor": {
+          "pid": 913282,
+          "kernelStart": "76819913",
+          "alive": false
+        },
+        "agent": {
+          "pid": 913289,
+          "kernelStart": "76819921",
+          "alive": false
+        }
+      }
+    },
+    {
+      "session": "mastra-tui-proof-002-2",
+      "processes": {
+        "host": {
+          "pid": 905238,
+          "kernelStart": "76543581",
+          "alive": false
+        },
+        "supervisor": {
+          "pid": 905244,
+          "kernelStart": "76543583",
+          "alive": false
+        },
+        "agent": {
+          "pid": 905256,
+          "kernelStart": "76543590",
+          "alive": false
+        }
+      }
+    },
+    {
+      "session": "mastra-tui-proof-002-3",
+      "processes": {
+        "host": {
+          "pid": 913382,
+          "kernelStart": "76821344",
+          "alive": false
+        },
+        "supervisor": {
+          "pid": 913388,
+          "kernelStart": "76821350",
+          "alive": false
+        },
+        "agent": {
+          "pid": 913401,
+          "kernelStart": "76821353",
+          "alive": false
+        }
+      }
+    }
+  ],
+  "daemonShutdown": {
+    "pid": 913150,
+    "status": 202,
+    "body": "{\"pid\":913150,\"service\":\"agent-orchestrator-daemon\",\"status\":\"shutting_down\"}\n",
+    "processExists": false
+  },
+  "preserved": "dirty worktrees, native profiles, source and all prior evidence; production PID625660 untouched"
+}
