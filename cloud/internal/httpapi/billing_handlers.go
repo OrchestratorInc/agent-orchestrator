@@ -349,6 +349,8 @@ func (s *Server) createBillingCheckout(w http.ResponseWriter, r *http.Request) {
 	case pending == nil:
 		s.writeStoreError(w, r, errors.New("checkout started without a session"))
 	default:
+		s.recordActivity(r, domain.ActivityEvent{OrgID: orgID, Kind: domain.ActivityCheckoutStarted,
+			Attrs: map[string]any{"plan": input.Plan}})
 		writeJSON(w, http.StatusOK, map[string]string{"url": pending.URL})
 	}
 }
@@ -479,6 +481,9 @@ func (s *Server) handleStripeEvent(ctx context.Context, event billing.Event) (st
 		if err := s.billingStore.ClearPendingCheckout(ctx, orgID, object.ID); err != nil {
 			return "clear pending checkout", err
 		}
+		if event.Type == "checkout.session.completed" {
+			s.recordCheckoutCompleted(ctx, orgID)
+		}
 		if event.Type == "checkout.session.completed" && object.Subscription != "" {
 			return "sync subscription", s.syncSubscription(ctx, event, object.Subscription, object.Customer)
 		}
@@ -580,6 +585,8 @@ func (s *Server) syncSubscription(ctx context.Context, event billing.Event, subs
 			orgID = subscription.OrgID
 		}
 	}
+	var appliedStatus string
+	var appliedLimits *domain.PlanLimits
 	outcome, err := s.billingStore.ApplySubscriptionLocked(ctx, orgID,
 		func(ctx context.Context, current domain.OrgBilling) (postgres.SubscriptionUpdate, error) {
 			subscription, err := stripe.GetSubscription(ctx, subscriptionID)
@@ -592,6 +599,7 @@ func (s *Server) syncSubscription(ctx context.Context, event billing.Event, subs
 				s.logger.Error("Stripe product metadata is not a valid AO plan; keeping previous limits",
 					"subscription_id", subscription.ID, "org_id", orgID, "error", subscription.LimitsErr)
 			}
+			appliedStatus, appliedLimits = subscription.Status, subscription.Limits
 			return postgres.SubscriptionUpdate{
 				SubscriptionID: subscription.ID,
 				CustomerID:     subscription.CustomerID,
@@ -609,6 +617,9 @@ func (s *Server) syncSubscription(ctx context.Context, event billing.Event, subs
 	}
 	if err != nil {
 		return err
+	}
+	if outcome == postgres.SubscriptionApplied || outcome == postgres.SubscriptionReplaced {
+		s.recordPlanChanged(ctx, orgID, appliedStatus, appliedLimits)
 	}
 	switch {
 	case outcome.Duplicate():

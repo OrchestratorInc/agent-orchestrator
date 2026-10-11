@@ -107,6 +107,9 @@ type sessionStartupError struct {
 	Code    string    `json:"code"`
 	Message string    `json:"message"`
 	At      time.Time `json:"at"`
+	// Detail is the redacted operator detail, present only for an
+	// organization's own (BYO Coder) compute.
+	Detail string `json:"detail,omitempty"`
 }
 
 type sessionResponse struct {
@@ -338,6 +341,8 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		"user_id", principalFrom(r).UserID,
 		"project_id", project.ID,
 	)
+	s.recordActivity(r, domain.ActivityEvent{OrgID: orgID, Kind: domain.ActivityProjectCreated,
+		Attrs: map[string]any{"project_id": project.ID}})
 	writeJSON(w, http.StatusCreated, map[string]any{"project": toProjectResponse(project)})
 }
 
@@ -649,6 +654,8 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		"provider", plan.Provider,
 		"harness", request.Harness,
 	)
+	s.recordSessionCreateRequested(r, orgID, session.ID, plan.Provider, request.SandboxProviderConnectionID,
+		request.ProjectID, request.Kind, request.Harness, projectSnapshot != nil)
 	// The sandbox row is committed, so the reconciler can start provisioning
 	// now rather than at its next tick.
 	if s.sandboxWake != nil {
@@ -778,6 +785,9 @@ func (s *Server) resumeSession(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	s.recordActivity(r, domain.ActivityEvent{OrgID: orgID, SessionID: sessionID,
+		Kind: domain.ActivitySessionResumeRequested, Provider: lifecycle.Provider,
+		Attrs: map[string]any{"observed_state": lifecycle.ObservedState}})
 	writeJSON(w, http.StatusAccepted, map[string]any{"session": map[string]any{
 		"id": lifecycle.SessionID, "sandboxProvider": lifecycle.Provider,
 		"desiredState": lifecycle.DesiredState, "observedState": lifecycle.ObservedState,
@@ -1239,6 +1249,7 @@ func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionRe
 			Code:    session.StartupErrorCode,
 			Message: session.StartupErrorMessage,
 			At:      session.StartupErrorAt.UTC(),
+			Detail:  session.StartupErrorDetail,
 		}
 	}
 	return sessionResponse{

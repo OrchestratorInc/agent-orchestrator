@@ -90,6 +90,7 @@ func (s *Store) ensureWorkOSOrganization(
 	digest := sha256.Sum256([]byte(principal.ExternalOrgID))
 	slug := "workos-" + hex.EncodeToString(digest[:8])
 	var orgID string
+	var orgCreated bool
 	if err := tx.QueryRow(
 		ctx,
 		`INSERT INTO ao_organizations (
@@ -101,13 +102,13 @@ func (s *Store) ensureWorkOSOrganization(
 			display_name = EXCLUDED.display_name,
 			owner_user_id = COALESCE(ao_organizations.owner_user_id, EXCLUDED.owner_user_id),
 			updated_at = now()
-		RETURNING id`,
+		RETURNING id, (xmax = 0)`,
 		principal.ExternalOrgID,
 		slug,
 		orgName,
 		ownerUserID,
 		principal.UserID,
-	).Scan(&orgID); err != nil {
+	).Scan(&orgID, &orgCreated); err != nil {
 		return "", err
 	}
 	if _, err := tx.Exec(
@@ -117,19 +118,30 @@ func (s *Store) ensureWorkOSOrganization(
 	); err != nil {
 		return "", err
 	}
-	if _, err := tx.Exec(
+	var joined bool
+	if err := tx.QueryRow(
 		ctx,
 		`INSERT INTO ao_org_memberships (org_id, user_id, role)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (org_id, user_id)
-		DO UPDATE SET role = EXCLUDED.role, updated_at = now()`,
+		DO UPDATE SET role = EXCLUDED.role, updated_at = now()
+		RETURNING (xmax = 0)`,
 		orgID,
 		principal.UserID,
 		role,
-	); err != nil {
+	).Scan(&joined); err != nil {
 		return "", err
 	}
-	return orgID, tx.Commit(ctx)
+	var events []domain.ActivityEvent
+	if orgCreated {
+		events = append(events, domain.ActivityEvent{OrgID: orgID, UserID: principal.UserID,
+			Kind: domain.ActivityOrgCreated, Attrs: map[string]any{"org_kind": "team", "auth_provider": "workos"}})
+	}
+	if joined {
+		events = append(events, domain.ActivityEvent{OrgID: orgID, UserID: principal.UserID,
+			Kind: domain.ActivityMemberJoined, Attrs: map[string]any{"role": role, "first_member": orgCreated}})
+	}
+	return orgID, s.commitWithActivity(ctx, tx, events)
 }
 
 func (s *Store) ensurePersonalOrganization(
@@ -204,7 +216,8 @@ func (s *Store) ensurePersonalOrganization(
 	); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return s.commitWithActivity(ctx, tx, []domain.ActivityEvent{{OrgID: orgID, UserID: principal.UserID,
+		Kind: domain.ActivityOrgCreated, Attrs: map[string]any{"org_kind": "personal", "auth_provider": "workos"}}})
 }
 
 func (s *Store) RegisterLocal(
@@ -289,7 +302,8 @@ func (s *Store) RegisterLocal(
 	); err != nil {
 		return domain.Principal{}, "", err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := s.commitWithActivity(ctx, tx, []domain.ActivityEvent{{OrgID: orgID, UserID: principal.UserID,
+		Kind: domain.ActivityOrgCreated, Attrs: map[string]any{"org_kind": "personal", "auth_provider": "local"}}}); err != nil {
 		return domain.Principal{}, "", err
 	}
 	return principal, orgID, nil

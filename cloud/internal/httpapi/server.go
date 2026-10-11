@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/logctx"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/projectsnapshot"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
@@ -223,6 +225,8 @@ type Server struct {
 	// so a worker with a stale baked copy can heal itself to this exact build.
 	workerBinariesBySHA map[string][]byte
 	handler             http.Handler
+	activity            *activity.Recorder
+	supportToken        string
 }
 
 type Options struct {
@@ -276,6 +280,11 @@ type Options struct {
 	ProjectSnapshots ProjectSnapshotter
 	// Billing configures Stripe billing; nil leaves it off.
 	Billing *BillingOptions
+	// Activity records the per-organization support trail; nil records nothing.
+	Activity *activity.Recorder
+	// SupportToken enables the operator support lookup route
+	// (AO_CLOUD_SUPPORT_TOKEN); empty leaves the route unregistered.
+	SupportToken string
 }
 
 // ProjectSnapshotter looks up and builds a project's prepared snapshot.
@@ -383,6 +392,8 @@ func New(options Options) *Server {
 		projectSnapshots:          options.ProjectSnapshots,
 		billingOptions:            options.Billing,
 		notificationWaiters:       newNotificationWaiters(),
+		activity:                  options.Activity,
+		supportToken:              options.SupportToken,
 	}
 	workerBinaries := [][]byte{options.WorkerBinary, options.WorkerHelperBinary}
 	for _, build := range options.WorkerBuilds {
@@ -437,6 +448,10 @@ func New(options Options) *Server {
 	}
 	if server.environmentControlToken != "" {
 		router.Post("/api/cloud/v1/control/github/scratch-projects", server.createEnvironmentScratchProject)
+	}
+	// Operator-only support lookup (cloud/docs/support-runbook.md).
+	if server.supportToken != "" {
+		router.Get("/api/cloud/v1/control/support/lookup", server.supportLookup)
 	}
 	// Stripe signs its webhooks; the handler verifies the signature.
 	router.Post("/api/cloud/v1/billing/stripe/webhook", server.stripeWebhook)
@@ -655,7 +670,12 @@ func (s *Server) requestID(next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Request-ID", requestID)
 		w.Header().Set("X-AO-Release", s.release)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDKey, requestID)))
+		ctx := context.WithValue(r.Context(), requestIDKey, requestID)
+		// One log scope per request: middleware and handlers annotate it with the
+		// user, organization, session and provider as they learn them, and the
+		// access-log line and every *Context log call carry them.
+		ctx = logctx.Begin(ctx, logctx.Fields{RequestID: requestID})
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -718,11 +738,17 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 			"request_id", requestID(r),
 			"release", s.release,
 		}
-		// Stamp the URL-scoped organization so the access log is greppable by
-		// tenant for fast RCA (empty on non-org routes like worker/health).
-		if orgID := chi.URLParam(r, "orgId"); orgID != "" {
-			attrs = append(attrs, "org_id", orgID)
-		}
+		// Stamp the URL-scoped organization and session so the access log is
+		// greppable by tenant for fast RCA (empty on non-org routes like
+		// worker/health), plus everything the request scope learned: the
+		// authenticated user, a worker's session, the sandbox provider.
+		logctx.Annotate(r.Context(), logctx.Fields{
+			OrgID:     chi.URLParam(r, "orgId"),
+			SessionID: chi.URLParam(r, "sessionId"),
+		})
+		fields := logctx.From(r.Context())
+		fields.RequestID = "" // already stamped above
+		attrs = append(attrs, fields.Args()...)
 		s.logger.Log(r.Context(), level, "HTTP request complete", attrs...)
 	})
 }
@@ -746,6 +772,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			writeError(w, r, http.StatusServiceUnavailable, "authentication_unavailable", "Authentication is temporarily unavailable.")
 			return
 		}
+		logctx.Annotate(r.Context(), logctx.Fields{UserID: principal.UserID})
 		ctx := context.WithValue(r.Context(), principalKey, principal)
 		ctx = context.WithValue(ctx, bearerKey, token)
 		next.ServeHTTP(w, r.WithContext(ctx))

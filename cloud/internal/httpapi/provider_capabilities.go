@@ -310,6 +310,10 @@ func (s *Server) writeSessionPlanError(w http.ResponseWriter, r *http.Request, o
 			"user_id", principalFrom(r).UserID,
 			"project_id", projectID,
 		)
+		s.recordActivity(r, domain.ActivityEvent{OrgID: orgID, Kind: domain.ActivitySessionCreateRefused,
+			Provider: sandbox.ProviderCoder, Attrs: map[string]any{
+				"code": "coder_template_required", "project_id": projectID,
+			}})
 		writeError(
 			w, r, http.StatusUnprocessableEntity, "coder_template_required",
 			"Choose a Coder template for this project before starting a session.",

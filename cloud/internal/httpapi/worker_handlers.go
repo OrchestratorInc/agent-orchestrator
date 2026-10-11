@@ -16,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/logctx"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/roleprompt"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -139,6 +140,9 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workerID := worker.NextWorkerID(ticket.SessionID, ticket.WorkerEpoch)
+	// Read the startup timing before the registration and first heartbeat
+	// clear it, so the support trail can measure time-to-ready.
+	readiness, readinessErr := s.sandboxReadiness(r.Context(), ticket.OrgID, ticket.SessionID)
 	if err := s.store.RegisterWorkerBootstrap(
 		r.Context(),
 		ticket.OrgID,
@@ -172,6 +176,7 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 	); err != nil {
 		s.logger.Warn("append worker.connected event", "error", err, "request_id", requestID(r))
 	}
+	s.recordWorkerReady(r, ticket.OrgID, ticket.SessionID, workerID, input.Version, ticket.WorkerEpoch, readiness, readinessErr)
 
 	writeJSON(w, http.StatusOK, worker.BootstrapResponse{
 		WorkerToken: token,
@@ -384,6 +389,11 @@ func (s *Server) workerAuth(next http.Handler) http.Handler {
 			writeError(w, r, http.StatusUnauthorized, "STALE_WORKER_TOKEN", "The worker credential has been replaced.")
 			return
 		}
+		logctx.Annotate(r.Context(), logctx.Fields{
+			OrgID:     claims.OrgID,
+			SessionID: claims.SessionID,
+			WorkerID:  claims.WorkerID,
+		})
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), workerContextKey{}, claims)))
 	})
 }
@@ -480,11 +490,13 @@ func (s *Server) workerCheckoutGrant(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
+			s.recordGitGrantFailure(r, claims, "checkout", "CHECKOUT_NOT_AUTHORIZED", err)
 			writeError(w, r, http.StatusForbidden, "CHECKOUT_NOT_AUTHORIZED", "This session does not have an active repository grant.")
 			return
 		}
 		if err != nil {
 			s.logger.Error("issue worker checkout grant", "error", err, "request_id", requestID(r))
+			s.recordGitGrantFailure(r, claims, "checkout", "SCM_BROKER_FAILED", err)
 			writeError(w, r, http.StatusBadGateway, "SCM_BROKER_FAILED", "A repository checkout grant could not be issued.")
 			return
 		}

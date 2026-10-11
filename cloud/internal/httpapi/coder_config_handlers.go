@@ -124,6 +124,10 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 	token := []byte(strings.TrimSpace(request.Token))
 	defer clear(token)
 	request.Token = ""
+	// Every save is a connection test: trail its outcome so support can see
+	// why a BYO Coder connection was rejected without asking the customer.
+	validation := &coderValidation{result: "rejected", baseURL: request.BaseURL}
+	defer s.recordCoderValidation(r, orgID, validation)
 	if len(token) == 0 || len(token) > 64<<10 {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "A Coder API token is required.")
 		return
@@ -160,6 +164,7 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 	// project, so neither is required here.
 	probe, err := coder.New(coder.Config{BaseURL: normalized.BaseURL, Token: string(token)})
 	if err != nil {
+		validation.reason, validation.err = "invalid_config", err
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The Coder configuration is invalid: "+err.Error())
 		return
 	}
@@ -194,10 +199,12 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		owner, resolveErr := probe.CurrentUser(r.Context())
 		if resolveErr != nil {
 			s.logger.Error("resolve coder owner from token", "error", resolveErr, "request_id", requestID(r))
+			validation.reason, validation.err = "coder_unreachable", resolveErr
 			writeError(w, r, http.StatusBadGateway, "coder_unavailable", "Could not reach your Coder to resolve the workspace owner. Check the URL and API token.")
 			return
 		}
 		normalized.Owner = owner
+		validation.ownerResolved = true
 	}
 	// The PrivateLink fields are optional (blank for a directly reachable Coder).
 	// When present, apply only a loose shape check — AO ops provisions the endpoint
@@ -243,6 +250,7 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	validation.result, validation.connectionID = "ok", connection.ID
 	validatedAt := connection.ValidatedAt
 	updatedAt := connection.UpdatedAt
 	writeJSON(w, http.StatusOK, orgCoderConfigResponse{
