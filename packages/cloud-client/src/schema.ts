@@ -400,6 +400,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/startup-retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Retries a session whose worker never started (its startupError explains why). The startup window, repair count and startup error are reset and the worker bootstrap runs again against the existing sandbox; a bring-your-own workspace is never recreated. Returns 409 startup_retry_unavailable when the worker has already checked in or the session is not meant to be running. */
+        post: operations["retrySessionStartup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/children": {
         parameters: {
             query?: never;
@@ -1503,9 +1523,30 @@ export interface components {
             reviewers?: components["schemas"]["ProjectReviewer"][];
             /** @description Defaults to enabled when absent. Independent of session autoInjectReview feedback delivery. */
             autoReview?: boolean;
+            coder?: components["schemas"]["ProjectCoderConfig"];
         } & {
             [key: string]: unknown;
         };
+        /** @description Coder dev-kit settings inherited by every Coder session of the project. */
+        ProjectCoderConfig: {
+            /**
+             * Format: uuid
+             * @description Coder template; absent uses the organization or deployment default.
+             */
+            templateId?: string;
+            /** @enum {string} */
+            size?: "small" | "medium" | "large";
+            startupScript?: string;
+            extraRepos?: components["schemas"]["ProjectCoderRepository"][];
+            workspaceNamePrefix?: components["schemas"]["CoderWorkspaceNamePrefix"];
+        };
+        ProjectCoderRepository: {
+            /** Format: uri */
+            url: string;
+            branch?: string;
+        };
+        /** @description Names new Coder workspaces <prefix>-<short session id> (at most 32 characters). Lowercase letters, digits and single hyphens, starting with a letter and not ending with a hyphen. Empty keeps the default ao-<id>; existing sessions keep their workspace. */
+        CoderWorkspaceNamePrefix: string;
         ProjectSettingsConfigPatch: {
             /** @description Prefix for new session branches. Empty uses ao; existing sessions are unchanged. */
             sessionPrefix?: string;
@@ -1515,6 +1556,10 @@ export interface components {
             orchestrator?: components["schemas"]["ProjectRoleConfigPatch"] | null;
             reviewers?: components["schemas"]["ProjectReviewer"][];
             autoReview?: boolean;
+            /** @description Only the workspace name prefix is editable after the project is created. */
+            coder?: {
+                workspaceNamePrefix?: components["schemas"]["CoderWorkspaceNamePrefix"];
+            };
         };
         ProjectSettingsInput: {
             displayName?: string;
@@ -1549,6 +1594,7 @@ export interface components {
             config?: {
                 [key: string]: unknown;
             };
+            coder?: components["schemas"]["ProjectCoderConfig"];
         };
         UpdateProjectInput: {
             displayName: string;
@@ -2138,12 +2184,22 @@ export interface components {
             runtimeConnected: boolean;
             runtimeState?: string;
             runtimeError?: string;
+            startupError?: components["schemas"]["SessionStartupError"];
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. */
+        SessionStartupError: {
+            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, or bootstrap_failed. Clients must tolerate codes added later. */
+            code: string;
+            /** @description Human-readable explanation suitable for display as-is. */
+            message: string;
+            /** Format: date-time */
+            at: string;
         };
         CreateSessionInput: {
             /** Format: uuid */
@@ -3488,6 +3544,32 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    retrySessionStartup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The retry was accepted for asynchronous processing. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        session: components["schemas"]["Session"];
+                    };
                 };
             };
             default: components["responses"]["Error"];

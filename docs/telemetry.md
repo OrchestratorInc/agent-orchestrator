@@ -19,7 +19,7 @@ Orchestrator.inc sends structured events in a few broad categories:
 - App usage, such as launching Orchestrator.inc, viewing a coarse area of the interface, or
   starting a task or agent session
 - Feature outcomes, such as whether creating a project, starting an agent,
-  connecting the mobile app, or installing an update succeeded
+  creating an automation, connecting the mobile app, or installing an update succeeded
 - The GitHub organization or account that owns a project's configured remote,
   recorded on project-add events. Only the owner segment is sent, never the
   repository name, path, or URL. For a personal repository this owner is the
@@ -60,6 +60,43 @@ group events for the same project or session without sending those identifiers
 in plain text. These identifiers are distinct from the explicit GitHub account
 attribution on session-start events, but events that share an installation
 identifier can still be associated with that attribution in PostHog.
+
+## Automation usage and creation
+
+When desktop product telemetry is enabled, Orchestrator.inc records visits to the
+Automations page with `ao.v2.renderer.route_viewed` and `surface: automations`.
+It also records these events when you create an automation:
+
+| Event | When it is sent | Automation-specific properties |
+| --- | --- | --- |
+| `ao.renderer.automation_create_opened` | You open the create dialog | None |
+| `ao.renderer.automation_create_requested` | You submit a form that passes local validation | `project_id_hash`, `schedule_preset`, `prompt_length_bucket` |
+| `ao.renderer.automation_create_succeeded` | The create request succeeds | The same properties as the request event |
+| `ao.renderer.automation_create_failed` | The create request fails | The same properties as the request event |
+
+These events also include the standard installation and environment information
+described above. The project identifier is hashed before transmission.
+`schedule_preset` is limited to `daily`, `weekly`, or `custom`. The
+`prompt_length_bucket` describes the UTF-8 byte size of the prompt after trimming
+leading and trailing whitespace:
+
+| Bucket | Prompt size |
+| --- | --- |
+| `xs` | Up to 80 bytes |
+| `s` | 81 to 240 bytes |
+| `m` | 241 to 800 bytes |
+| `l` | 801 to 2,000 bytes |
+| `xl` | More than 2,000 bytes |
+
+The automation events do not include the prompt text, automation name, raw
+project identifier, exact schedule, timezone, selected agent, or error message.
+Editing an existing automation does not emit these creation events. Closing the
+create dialog or failing local validation does not emit a separate event.
+Orchestrator.inc uses the creation events to understand completion and abandonment
+of the create flow and which schedule presets people choose.
+
+The desktop product-telemetry controls described under "Turn desktop and daemon
+telemetry off" also control these events.
 
 ## What Orchestrator.inc does not intentionally send
 

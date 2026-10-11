@@ -44,6 +44,8 @@ type fakeShellRuntime struct {
 	outputMu     sync.RWMutex
 	outputErr    error
 	outputReady  <-chan struct{}
+	styledOutput string
+	styledErr    error
 	// aliveByHandle answers IsAlive; a handle absent from the map is dead.
 	aliveByHandle map[string]bool
 	aliveErr      error
@@ -130,6 +132,10 @@ func (f *fakeShellRuntime) GetOutput(_ context.Context, _ ports.RuntimeHandle, _
 	f.outputMu.RLock()
 	defer f.outputMu.RUnlock()
 	return f.output, f.outputErr
+}
+
+func (f *fakeShellRuntime) GetStyledOutput(_ context.Context, _ ports.RuntimeHandle, _ int) (string, error) {
+	return f.styledOutput, f.styledErr
 }
 
 func (f *fakeShellRuntime) setOutput(output string) {
@@ -534,6 +540,34 @@ func TestOpenCommandTerminalSkipsReadyTimeoutFallbackForExitedTerminal(t *testin
 	case got := <-rt.sentCh:
 		t.Fatalf("initial input sent to an exited terminal: %#v", got)
 	case <-time.After(svc.initialInputTimeout + 4*initialInputPollInterval):
+	}
+}
+
+func TestOpenCommandTerminalFindsReadinessMarkerInRenderedTerminalSurface(t *testing.T) {
+	rt := newFakeShellRuntime()
+	// Full-screen TUIs can keep their current footer out of the raw line ring,
+	// and rendered styling may split a visible marker with SGR sequences.
+	rt.output = "startup bytes without the current footer"
+	rt.styledOutput = "Interactive · Manual Approval · \x1b[1m/\x1b[m commands · ? help"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                    []string{"copilot"},
+		Title:                   "Log in to GitHub Copilot",
+		InitialInput:            "/login",
+		InitialInputReadyStates: readyStates("/ commands"),
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: "/login"}); got != want {
+			t.Fatalf("sent = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("automatic login input was not sent after the rendered terminal became ready")
 	}
 }
 

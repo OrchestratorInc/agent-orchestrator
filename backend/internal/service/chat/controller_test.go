@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -77,6 +78,10 @@ func fullSnapshotReader(st *sqlite.Store) chatsvc.SnapshotReader {
 /* ---- a fake conversation the controller can drive ---------------------- */
 
 type fakeConversation struct {
+	// noNetwork makes SandboxAllowsNetwork report a sandbox with no network.
+	noNetwork bool
+	// networkMode, when set, is the one approval mode whose sandbox has network.
+	networkMode            ports.PermissionMode
 	events                 chan ports.ChatEvent
 	providerConversationID string
 
@@ -255,6 +260,15 @@ func newFakeConversation() *fakeConversation {
 }
 
 func (f *fakeConversation) ProviderConversationID() string { return f.providerConversationID }
+
+// SandboxAllowsNetwork is the agent sandbox's network, as Codex reports it;
+// noNetwork plays a Codex thread in accept-edits or auto.
+func (f *fakeConversation) SandboxAllowsNetwork(mode ports.PermissionMode) bool {
+	if f.networkMode != "" {
+		return mode == f.networkMode
+	}
+	return !f.noNetwork
+}
 func (f *fakeConversation) Capabilities() ports.ChatCapabilities {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -3099,12 +3113,18 @@ func TestFreshProjectControllerStartFailureKeepsPreviousHistoryHidden(t *testing
 /* ---- harness ----------------------------------------------------------- */
 
 type harness struct {
-	svc       *chatsvc.Service
-	st        *sqlite.Store
-	conv      *fakeConversation
-	ctrl      *chatsvc.Controller
-	activity  *recordingActivity
-	hostStops atomic.Int32
+	svc        *chatsvc.Service
+	st         *sqlite.Store
+	conv       *fakeConversation
+	ctrl       *chatsvc.Controller
+	activity   *recordingActivity
+	hostStops  atomic.Int32
+	renders    *attachmentstore.Store
+	rendersDir string
+	// reconciled lists the sessions whose output type a save asked to update;
+	// reconcileErr is what that update returns.
+	reconciled   []domain.SessionID
+	reconcileErr error
 
 	clockMu sync.Mutex
 	clock   time.Time
@@ -3171,6 +3191,8 @@ func newHarnessWithConversationAndStoreForHarness(
 		activity: &recordingActivity{},
 		clock:    time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC),
 	}
+	h.rendersDir = t.TempDir()
+	h.renders = attachmentstore.New(h.rendersDir)
 
 	// Guarded because the id factory is called from both the projection goroutine and
 	// whichever goroutine a test drives commands from, and an unsynchronized counter
@@ -3196,7 +3218,13 @@ func newHarnessWithConversationAndStoreForHarness(
 			counter++
 			return fmt.Sprintf("id-%03d", counter)
 		},
-		Now: h.now,
+		Now:     h.now,
+		Renders: h.renders,
+		DataDir: h.rendersDir,
+		ReconcileOutputType: func(_ context.Context, id domain.SessionID) error {
+			h.reconciled = append(h.reconciled, id)
+			return h.reconcileErr
+		},
 	})
 
 	ctrl, err := svc.Start(context.Background(), chatsvc.StartConfig{
@@ -3264,6 +3292,67 @@ func TestStaleControllerEventsDoNotReachTheTimeline(t *testing.T) {
 }
 
 /* ---- tests ------------------------------------------------------------- */
+
+func TestSendVerifiesExcerptAndFallsBackToTextForProvider(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	seed, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "seed", ClientMessageID: "excerpt-seed", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatalf("send seed: %v", err)
+	}
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: seed.ProviderTurnID},
+		ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: seed.ProviderTurnID,
+			ProviderItemID: "excerpt-source", Delta: "Keep this exact sentence."},
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: seed.ProviderTurnID,
+			ProviderItemID: "excerpt-source", Text: "Keep this exact sentence."},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: seed.ProviderTurnID,
+			TurnState: domain.TurnStateCompleted},
+	)
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Messages) == 2 && len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateCompleted
+	})
+	source := snapshot.Messages[1]
+
+	_, err = h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "Use it", ClientMessageID: "excerpt-followup", Origin: domain.MessageOriginHuman,
+		Excerpts: []ports.ChatExcerptReference{{
+			ConversationID: h.ctrl.ConversationID(), MessageID: source.ID,
+			Revision: source.Revision, Text: "exact sentence",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("send with excerpt: %v", err)
+	}
+	sent := h.conv.sentMessages()
+	if len(sent) != 2 || !strings.Contains(sent[1].Text, "Referenced chat excerpt") ||
+		!strings.Contains(sent[1].Text, "exact sentence") || len(sent[1].Content) != 0 {
+		t.Fatalf("provider delivery = %#v", sent)
+	}
+	duplicate, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "Use it", ClientMessageID: "excerpt-followup", Origin: domain.MessageOriginHuman,
+		Excerpts: []ports.ChatExcerptReference{{
+			ConversationID: h.ctrl.ConversationID(), MessageID: source.ID,
+			Revision: source.Revision + 1, Text: "no longer relevant to the accepted retry",
+		}},
+	})
+	if err != nil || duplicate.ID != "" {
+		t.Fatalf("idempotent excerpt retry = (%+v, %v), want duplicate success", duplicate, err)
+	}
+
+	_, err = h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "stale", Origin: domain.MessageOriginHuman,
+		Excerpts: []ports.ChatExcerptReference{{
+			ConversationID: h.ctrl.ConversationID(), MessageID: source.ID,
+			Revision: source.Revision + 1, Text: "exact sentence",
+		}},
+	})
+	if !errors.Is(err, chatsvc.ErrExcerptStale) {
+		t.Fatalf("stale excerpt error = %v, want ErrExcerptStale", err)
+	}
+}
 
 func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 	h := newHarness(t)

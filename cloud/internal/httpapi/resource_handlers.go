@@ -55,6 +55,9 @@ type coderConfigInput struct {
 	// ExtraRepos are additional repositories every session of the project clones
 	// alongside the primary repo.
 	ExtraRepos []createSessionRepo `json:"extraRepos,omitempty"`
+	// WorkspaceNamePrefix names the project's Coder workspaces
+	// <prefix>-<short session id>; empty keeps ao-<id>.
+	WorkspaceNamePrefix string `json:"workspaceNamePrefix,omitempty"`
 }
 
 type updateProjectRequest struct {
@@ -99,28 +102,37 @@ type createSessionRepo struct {
 	Branch string `json:"branch,omitempty"`
 }
 
+type sessionStartupError struct {
+	Code    string    `json:"code"`
+	Message string    `json:"message"`
+	At      time.Time `json:"at"`
+}
+
 type sessionResponse struct {
-	ID                 string                   `json:"id"`
-	OrgID              string                   `json:"orgId"`
-	ProjectID          string                   `json:"projectId"`
-	Kind               string                   `json:"kind"`
-	Harness            string                   `json:"harness"`
-	ReviewerHarness    string                   `json:"reviewerHarness,omitempty"`
-	AutoReviewEnabled  bool                     `json:"autoReviewEnabled"`
-	DisplayName        string                   `json:"displayName"`
-	Branch             string                   `json:"branch"`
-	Mode               string                   `json:"mode"`
-	Model              string                   `json:"model,omitempty"`
-	DeniedCommands     []string                 `json:"deniedCommands"`
-	InterfaceMode      string                   `json:"interfaceMode"`
-	ActivityState      string                   `json:"activityState"`
-	Status             string                   `json:"status"`
-	RuntimeConnected   bool                     `json:"runtimeConnected"`
-	SandboxProvider    string                   `json:"sandboxProvider,omitempty"`
-	DesiredState       string                   `json:"desiredState,omitempty"`
-	ObservedState      string                   `json:"observedState,omitempty"`
-	RuntimeState       string                   `json:"runtimeState,omitempty"`
-	RuntimeError       string                   `json:"runtimeError,omitempty"`
+	ID                string   `json:"id"`
+	OrgID             string   `json:"orgId"`
+	ProjectID         string   `json:"projectId"`
+	Kind              string   `json:"kind"`
+	Harness           string   `json:"harness"`
+	ReviewerHarness   string   `json:"reviewerHarness,omitempty"`
+	AutoReviewEnabled bool     `json:"autoReviewEnabled"`
+	DisplayName       string   `json:"displayName"`
+	Branch            string   `json:"branch"`
+	Mode              string   `json:"mode"`
+	Model             string   `json:"model,omitempty"`
+	DeniedCommands    []string `json:"deniedCommands"`
+	InterfaceMode     string   `json:"interfaceMode"`
+	ActivityState     string   `json:"activityState"`
+	Status            string   `json:"status"`
+	RuntimeConnected  bool     `json:"runtimeConnected"`
+	SandboxProvider   string   `json:"sandboxProvider,omitempty"`
+	DesiredState      string   `json:"desiredState,omitempty"`
+	ObservedState     string   `json:"observedState,omitempty"`
+	RuntimeState      string   `json:"runtimeState,omitempty"`
+	RuntimeError      string   `json:"runtimeError,omitempty"`
+	// StartupError is the latest user-facing reason the session's sandbox has
+	// not started; absent once the worker checks in.
+	StartupError       *sessionStartupError     `json:"startupError,omitempty"`
 	IsTerminated       bool                     `json:"isTerminated"`
 	AutoInjectCI       bool                     `json:"autoInjectCI"`
 	AutoInjectReview   bool                     `json:"autoInjectReview"`
@@ -236,6 +248,10 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	config, err := json.Marshal(request.Config)
 	if err != nil {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")
+		return
+	}
+	if err := validateProjectCoderConfig(config); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
 	// Store the coder dev-kit config (template + size/startup + extra repos)
@@ -543,9 +559,10 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		}
 		if cfg, ok := domain.DecodeProjectCoderConfig(project.Config); ok {
 			coderOpts = &sandbox.CoderSessionOptions{
-				TemplateID:    cfg.TemplateID,
-				Size:          cfg.Size,
-				StartupScript: cfg.StartupScript,
+				TemplateID:          cfg.TemplateID,
+				Size:                cfg.Size,
+				StartupScript:       cfg.StartupScript,
+				WorkspaceNamePrefix: cfg.WorkspaceNamePrefix,
 			}
 		}
 		// A bring-your-own-Coder organization points its coder sessions at its own
@@ -574,12 +591,14 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 				}
 				request.SandboxProviderConnectionID = connection.ID
 				coderOverride = &sandbox.CoderDeploymentOverride{
-					BaseURL:     cfg.BaseURL,
-					Owner:       cfg.Owner,
-					TemplateID:  cfg.TemplateID,
-					AgentName:   cfg.AgentName,
-					Parameters:  cfg.Parameters,
-					DurableRoot: cfg.DurableRoot,
+					BaseURL:                   cfg.BaseURL,
+					Owner:                     cfg.Owner,
+					TemplateID:                cfg.TemplateID,
+					AgentName:                 cfg.AgentName,
+					Parameters:                cfg.Parameters,
+					DurableRoot:               cfg.DurableRoot,
+					RequireMountedDurableRoot: cfg.RequireMountedDurableRoot,
+					StartupTimeoutSeconds:     cfg.StartupTimeoutSeconds,
 				}
 				break
 			}
@@ -717,6 +736,44 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 // resumeSession records one explicit user intent and lets the reconciler own
 // every slow provider/worker transition. The response is the accepted intent,
 // not a claim that the workspace is connected yet.
+// sessionStartupRetryStore re-arms startup for a session whose worker never
+// started. Optional so test stores need not implement it.
+type sessionStartupRetryStore interface {
+	RetrySessionStartup(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
+}
+
+// retrySessionStartup lets a user retry a session whose sandbox never started
+// (the startup ceiling parked it, or a bootstrap failed) without deleting it:
+// the reconciler re-runs the worker bootstrap against the existing compute.
+func (s *Server) retrySessionStartup(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgId")
+	sessionID := chi.URLParam(r, "sessionId")
+	if requireUUID(orgID, "orgId") != nil || requireUUID(sessionID, "sessionId") != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId and sessionId must be UUIDs.")
+		return
+	}
+	store, ok := s.store.(sessionStartupRetryStore)
+	if !ok {
+		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Retrying session startup is unavailable.")
+		return
+	}
+	if err := store.RetrySessionStartup(r.Context(), principalFrom(r), orgID, sessionID); err != nil {
+		if errors.Is(err, postgres.ErrConflict) {
+			writeError(w, r, http.StatusConflict, "startup_retry_unavailable",
+				"This session is not waiting on a failed startup, so there is nothing to retry.")
+			return
+		}
+		s.writeStoreError(w, r, err)
+		return
+	}
+	session, err := s.store.GetSession(r.Context(), principalFrom(r), orgID, sessionID)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"session": toSessionResponse(session, nil)})
+}
+
 func (s *Server) resumeSession(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 	sessionID := chi.URLParam(r, "sessionId")
@@ -992,6 +1049,16 @@ func (s *Server) sanitizeCoderConfig(ctx context.Context, cfg domain.ProjectCode
 	return cfg
 }
 
+// validateProjectCoderConfig rejects a free-form project config whose coder
+// settings carry a workspace name prefix Coder would refuse: every session of
+// the project would otherwise fail to provision.
+func validateProjectCoderConfig(config json.RawMessage) error {
+	if cfg, ok := domain.DecodeProjectCoderConfig(config); ok {
+		return domain.ValidateCoderWorkspaceNamePrefix(cfg.WorkspaceNamePrefix)
+	}
+	return nil
+}
+
 func parseCoderConfigInput(in *coderConfigInput) (domain.ProjectCoderConfig, error) {
 	cfg := domain.ProjectCoderConfig{}
 	if id := strings.TrimSpace(in.TemplateID); id != "" {
@@ -1033,6 +1100,10 @@ func parseCoderConfigInput(in *coderConfigInput) (domain.ProjectCoderConfig, err
 	}
 	if len(repos) > 0 {
 		cfg.ExtraRepos = repos
+	}
+	cfg.WorkspaceNamePrefix = strings.TrimSpace(in.WorkspaceNamePrefix)
+	if err := domain.ValidateCoderWorkspaceNamePrefix(cfg.WorkspaceNamePrefix); err != nil {
+		return domain.ProjectCoderConfig{}, err
 	}
 	return cfg, nil
 }
@@ -1172,6 +1243,14 @@ func toProjectResponse(project domain.Project) projectResponse {
 // facts, used to derive PR-lifecycle status (pr_open, ci_failed, ...) —
 // pass nil only for a session that provably has none yet (just created).
 func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionResponse {
+	var startupError *sessionStartupError
+	if session.StartupErrorCode != "" && session.StartupErrorAt != nil {
+		startupError = &sessionStartupError{
+			Code:    session.StartupErrorCode,
+			Message: session.StartupErrorMessage,
+			At:      session.StartupErrorAt.UTC(),
+		}
+	}
 	return sessionResponse{
 		ID:                 session.ID,
 		OrgID:              session.OrgID,
@@ -1194,6 +1273,7 @@ func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionRe
 		ObservedState:      session.ObservedState,
 		RuntimeState:       session.RuntimeState,
 		RuntimeError:       session.RuntimeError,
+		StartupError:       startupError,
 		IsTerminated:       session.IsTerminated,
 		AutoInjectCI:       session.AutoInjectCI,
 		AutoInjectReview:   session.AutoInjectReview,

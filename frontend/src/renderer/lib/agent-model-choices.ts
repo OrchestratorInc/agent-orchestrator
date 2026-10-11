@@ -35,7 +35,13 @@ function compareVersionsDesc(a: number[], b: number[]) {
 	return 0;
 }
 
-/** The newest model of each Claude family, in Fable, Opus, Sonnet, Haiku order, then everything else, newest first. Models without a family and version stay current. */
+// A context variant ("opus[1m]", "Opus 5.5 (1M context)") is its own choice,
+// not an older release of its family.
+function claudeVariant(model: { id: string; label: string }): string {
+	return (model.id.match(/\[.*?\]/)?.[0] ?? model.label.match(/\(.*?\)/)?.[0] ?? "").toLowerCase();
+}
+
+/** The newest model of each Claude family (and context variant), in Fable, Opus, Sonnet, Haiku order, then everything else, newest first. Models without a family and version stay current. */
 export function splitClaudeModels<T extends { id: string; label: string }>(models: T[]): { current: T[]; other: T[] } {
 	const ranked = models.flatMap((model) => {
 		const parsed = claudeFamilyVersion(model);
@@ -44,10 +50,11 @@ export function splitClaudeModels<T extends { id: string; label: string }>(model
 	ranked.sort((a, b) => a.family - b.family || compareVersionsDesc(a.version, b.version));
 	const current: T[] = [];
 	const other: T[] = [];
-	const seen = new Set<number>();
+	const seen = new Set<string>();
 	for (const { model, family } of ranked) {
-		(seen.has(family) ? other : current).push(model);
-		seen.add(family);
+		const slot = `${family}${claudeVariant(model)}`;
+		(seen.has(slot) ? other : current).push(model);
+		seen.add(slot);
 	}
 	current.push(...models.filter((model) => !claudeFamilyVersion(model)));
 	return { current, other };
@@ -59,6 +66,6 @@ export function foldClaudeAliasDefault<T extends { id: string; label: string; is
 	if (!alias) return models;
 	const rest = models.filter((model) => model !== alias);
 	const family = CLAUDE_FAMILIES.indexOf(alias.id);
-	const newest = splitClaudeModels(rest).current.find((model) => claudeFamilyVersion(model)?.family === family);
+	const newest = splitClaudeModels(rest).current.find((model) => claudeFamilyVersion(model)?.family === family && claudeVariant(model) === "");
 	return newest ? rest.map((model) => (model === newest ? { ...model, isDefault: true } : model)) : models;
 }

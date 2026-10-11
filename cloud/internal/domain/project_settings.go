@@ -33,6 +33,9 @@ type ProjectSettingsConfig struct {
 	Orchestrator  *ProjectRoleConfig `json:"orchestrator,omitempty"`
 	Reviewers     []ProjectReviewer  `json:"reviewers,omitempty"`
 	AutoReview    *bool              `json:"autoReview,omitempty"`
+	// Coder is the project's Coder dev-kit config. Settings may patch only its
+	// workspaceNamePrefix; the rest is chosen when the project is created.
+	Coder *ProjectCoderConfig `json:"coder,omitempty"`
 }
 
 // Config contains a partial object. Arrays replace; nested role objects merge.
@@ -89,6 +92,11 @@ func DecodeProjectSettings(raw json.RawMessage) (ProjectSettingsConfig, error) {
 	}
 	if err := validateSessionPrefix(settings.SessionPrefix); err != nil {
 		return settings, err
+	}
+	if settings.Coder != nil {
+		if err := ValidateCoderWorkspaceNamePrefix(settings.Coder.WorkspaceNamePrefix); err != nil {
+			return settings, err
+		}
 	}
 	for _, role := range []*ProjectRoleConfig{settings.Worker, settings.Orchestrator} {
 		if role != nil {
@@ -221,7 +229,8 @@ func validateSettingsPatchObject(raw json.RawMessage, kind string) error {
 		return fmt.Errorf("%s must be an object", kind)
 	}
 	allowed := map[string][]string{
-		"config":      {"worker", "orchestrator", "reviewers", "autoReview", "sessionPrefix"},
+		"config":      {"worker", "orchestrator", "reviewers", "autoReview", "sessionPrefix", "coder"},
+		"coder":       {"workspaceNamePrefix"},
 		"role":        {"agent", "agentConfig"},
 		"reviewer":    {"harness", "agentConfig"},
 		"agentConfig": {"model", "mode", "effort", "permissions"},
@@ -243,6 +252,18 @@ func validateSettingsPatchObject(raw json.RawMessage, kind string) error {
 			}
 		case "agentConfig":
 			if err := validateSettingsPatchObject(value, "agentConfig"); err != nil {
+				return err
+			}
+		case "coder":
+			if err := validateSettingsPatchObject(value, "coder"); err != nil {
+				return err
+			}
+		case "workspaceNamePrefix":
+			var prefix string
+			if json.Unmarshal(value, &prefix) != nil {
+				return fmt.Errorf("coder.workspaceNamePrefix must be a string")
+			}
+			if err := ValidateCoderWorkspaceNamePrefix(prefix); err != nil {
 				return err
 			}
 		case "reviewers":

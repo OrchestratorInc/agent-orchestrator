@@ -1080,6 +1080,9 @@ const sessionSelect = `
 		COALESCE(sandbox.observed_state, ''),
 		COALESCE(sandbox.observed_state, ''),
 		COALESCE(sandbox.last_error, ''),
+		COALESCE(sandbox.startup_error_code, ''),
+		COALESCE(sandbox.startup_error_message, ''),
+		sandbox.startup_error_at,
 		COALESCE((
 			SELECT MAX(terminal.worker_epoch)
 			FROM ao_terminal_sessions terminal
@@ -1105,7 +1108,7 @@ const sessionInsertReturning = `id, org_id, project_id, kind, harness,
 	display_name, branch, mode, model, denied_commands, interface,
 	activity_state, is_terminated, auto_inject_ci, auto_inject_review,
 	terminate_on_pr_merge, false, NULL::timestamptz, 0,
-	'', '', '', '', '', 0, created_at, updated_at`
+	'', '', '', '', '', '', '', NULL::timestamptz, 0, created_at, updated_at`
 
 func getSession(
 	ctx context.Context,
@@ -1179,6 +1182,9 @@ func scanSession(row scanner, session *domain.Session) error {
 		&session.ObservedState,
 		&session.RuntimeState,
 		&session.RuntimeError,
+		&session.StartupErrorCode,
+		&session.StartupErrorMessage,
+		&session.StartupErrorAt,
 		&session.WorkerEpoch,
 		&session.CreatedAt,
 		&session.UpdatedAt,

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { rememberedFileDisplayMode, sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "./ui-store";
 import { sessionUiKey } from "../lib/hosts";
+import { previewDocumentThemeStyle } from "../lib/theme";
 
 describe("sidebar visibility", () => {
 	beforeEach(() => {
@@ -23,6 +24,36 @@ describe("sidebar visibility", () => {
 		expect(sidebarIsVisible(state)).toBe(true);
 		expect(sidebarOccupiesLayout(state)).toBe(true);
 		expect(window.localStorage.getItem("ao.sidebar.open")).toBe("true");
+	});
+});
+
+describe("color theme selection", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+		useUiStore.setState({ themeStyle: "orchestrate" });
+		delete document.documentElement.dataset.styleTheme;
+	});
+
+	it("persists a previewed theme without a View Transition", () => {
+		const startViewTransition = vi.fn();
+		Object.defineProperty(document, "startViewTransition", {
+			configurable: true,
+			writable: true,
+			value: startViewTransition,
+		});
+		try {
+			previewDocumentThemeStyle("nord", "orchestrate");
+			useUiStore.getState().setThemeStyle("nord");
+			previewDocumentThemeStyle(null, useUiStore.getState().themeStyle);
+
+			expect(startViewTransition).not.toHaveBeenCalled();
+			expect(useUiStore.getState().themeStyle).toBe("nord");
+			expect(window.localStorage.getItem("ao.theme-style")).toBe("nord");
+			expect(document.documentElement.dataset.styleTheme).toBe("nord");
+		} finally {
+			Reflect.deleteProperty(document, "startViewTransition");
+			delete document.documentElement.dataset.styleTheme;
+		}
 	});
 });
 

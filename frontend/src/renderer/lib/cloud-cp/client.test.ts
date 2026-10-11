@@ -371,6 +371,42 @@ describe("cloud control-plane session lifecycle", () => {
 		);
 	});
 
+	it("posts a startup retry for one encoded session without a body", async () => {
+		const fetchMock = vi.fn(async () =>
+			new Response(JSON.stringify({ session: { id: "session/1", runtimeState: "bootstrapping" } }), {
+				status: 202,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test/", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+
+		const response = await client.retrySessionStartup("org/1", "session/1");
+
+		expect(response.session.runtimeState).toBe("bootstrapping");
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/startup-retry",
+			expect.objectContaining({ method: "POST" }),
+		);
+		const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1];
+		expect(init.body).toBeUndefined();
+	});
+
+	it("surfaces an unavailable startup retry as a typed control-plane error", async () => {
+		const fetchMock = vi.fn(async () =>
+			new Response(JSON.stringify({ error: "conflict", code: "startup_retry_unavailable", message: "session is not retryable", requestId: "req-1" }), {
+				status: 409,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test/", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+
+		await expect(client.retrySessionStartup("org", "session")).rejects.toMatchObject({
+			name: "CloudCpError",
+			status: 409,
+			code: "startup_retry_unavailable",
+		});
+	});
+
 	it("patches automatic CI feedback for one cloud session", async () => {
 		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ session: { id: "session/1", autoInjectCI: false } }), { status: 200, headers: { "Content-Type": "application/json" } }));
 		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test/", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });

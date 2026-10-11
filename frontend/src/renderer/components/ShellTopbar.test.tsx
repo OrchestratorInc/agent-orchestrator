@@ -14,6 +14,7 @@ import {
 } from "../types/workspace";
 import { ShellTopbar, TopbarArchiveButton } from "./ShellTopbar";
 import { TooltipProvider } from "./ui/tooltip";
+import { appShortcutBus } from "../test/app-shortcut-bus";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
 
@@ -229,6 +230,20 @@ beforeEach(() => {
 	useWorkspaceQueryMock.mockReset();
 	useWorkspaceQueryMock.mockReturnValue({ data: [], isError: false, isLoading: false, isSuccess: true });
 	useUiStore.setState({ inspectorSessions: {}, settingsModal: null, newTaskRequest: null });
+});
+
+describe("optimistic orchestrator topbar", () => {
+	it("uses the actual orchestrator actions before a session exists", () => {
+		useWorkspaceQueryMock.mockReturnValue({ data: [], isError: false, isLoading: false, isSuccess: true });
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider><ShellTopbar embedded startingOrchestrator /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByRole("button", { name: "New task" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Open Kanban" })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
+	});
 });
 
 describe("ShellTopbar route identity", () => {
@@ -469,7 +484,7 @@ describe("ShellTopbar orchestrator actions", () => {
 		if (!pulses) expect(indicator).not.toHaveClass("animate-status-pulse");
 	});
 
-	it("shows a rejected orchestrator resume request", async () => {
+	it("opens an exited orchestrator at once and shows a rejected resume request", async () => {
 		postMock.mockRejectedValueOnce(new Error("resume request failed"));
 		const exitedOrchestrator = {
 			...orchestrator,
@@ -481,7 +496,7 @@ describe("ShellTopbar orchestrator actions", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Orchestrator, Exited" }));
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("resume request failed");
-		expect(navigateMock).not.toHaveBeenCalled();
+		expect(navigateMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows a clear Kanban button on embedded orchestrator sessions", async () => {
@@ -691,6 +706,21 @@ describe("ShellTopbar open-in-editor control", () => {
 });
 
 describe("TopbarArchiveButton", () => {
+	it("opens the same confirmation from the archive shortcut, and archives only after Confirm", async () => {
+		renderKill();
+
+		act(() => appShortcutBus.emit({ id: "archive-session" }));
+
+		const dialog = await screen.findByRole("dialog", { name: "Are you sure you want to archive this session?" });
+		expect(postMock).not.toHaveBeenCalled();
+		await userEvent.click(within(dialog).getByRole("button", { name: "No" }));
+		expect(postMock).not.toHaveBeenCalled();
+
+		act(() => appShortcutBus.emit({ id: "archive-session" }));
+		await clickKillDialogConfirm();
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+	});
+
 	it("asks for confirmation in the shared modal before archiving", async () => {
 		renderKill();
 
@@ -792,7 +822,9 @@ describe("TopbarArchiveButton", () => {
 			response: { status: 500 },
 		});
 
-		expect(await screen.findByRole("alert")).toHaveTextContent("do the thing: runtime teardown failed");
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("runtime teardown failed");
+		expect(alert).toHaveAttribute("title", "do the thing: runtime teardown failed");
 	});
 
 	it("falls back to the project board when no orchestrator is available", async () => {

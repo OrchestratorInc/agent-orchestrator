@@ -889,12 +889,23 @@ describe("SessionInspector PR section", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("omits the pull request section and PR policies until a PR is known, even for PR output", () => {
+  it("omits PR cards and PR policies until a PR is known, even for PR output", () => {
     renderWithQuery(<SessionInspector session={session([], { outputType: "pr" })} />);
-    expect(screen.queryByText("Pull request")).not.toBeInTheDocument();
+    expect(screen.queryByText(/PR #\d+/)).not.toBeInTheDocument();
     expect(screen.queryByText("No pull request opened yet.")).not.toBeInTheDocument();
     expect(screen.queryByText("Session controls")).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "Automatically fix CI failures" })).not.toBeInTheDocument();
+  });
+
+  it("titles the branch block Branch without a PR and Pull request with one", () => {
+    const { unmount } = renderWithQuery(<SessionInspector session={session([], { outputType: "none" })} />);
+    expect(screen.getByRole("button", { name: "Branch" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByText("Pull request")).not.toBeInTheDocument();
+    unmount();
+
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")], { outputType: "none" })} />);
+    expect(screen.getByRole("button", { name: "Pull request" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Branch" })).not.toBeInTheDocument();
   });
 
   it("hides the section entirely when the session has no known output type", () => {
@@ -2075,11 +2086,9 @@ describe("SessionInspector Activity section", () => {
     );
 
     for (const title of ["Pull request", "Session controls", "Activity"]) {
-      const heading = screen.getByText(title).parentElement;
-      expect(heading?.parentElement).toHaveAttribute(
-        "data-testid",
-        "inspector-section",
-      );
+      expect(
+        screen.getByText(title).closest('[data-testid="inspector-section"]'),
+      ).toBeInTheDocument();
     }
   });
 
@@ -2318,10 +2327,19 @@ describe("SessionInspector tabs", () => {
     expect(screen.queryByText("View review details")).not.toBeInTheDocument();
   });
 
+  it("collapses and expands a section from its heading", async () => {
+    renderWithQuery(<SessionInspector session={session([])} />);
+    const heading = screen.getByRole("button", { name: "Activity" });
+    await userEvent.click(heading);
+    expect(heading).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(heading);
+    expect(heading).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("does not render the overview card in the summary", () => {
     renderWithQuery(
       <SessionInspector
-        session={{ ...session([]), issueId: "github:acme/project-one#42" }}
+        session={{ ...session([], { outputType: "pr" }), issueId: "github:acme/project-one#42" }}
       />,
     );
 

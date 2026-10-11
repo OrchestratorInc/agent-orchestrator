@@ -3,6 +3,7 @@
 ARG BUILDPLATFORM
 ARG TARGETOS=linux
 ARG TARGETARCH
+ARG EXPAT_BUILD_IMAGE=debian:trixie-slim
 
 FROM --platform=${BUILDPLATFORM} golang:1.27.1-bookworm AS build
 ARG TARGETOS
@@ -21,15 +22,19 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go build -trimpath -ldflags="-s -w" -o /out/ao-cloud-migrate ./cmd/ao-cloud-migrate && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/ao-cloud-healthcheck ./cmd/ao-cloud-healthcheck && \
-    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/ao-worker ./cmd/ao-worker && \
-    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/ao ./cmd/ao-cloud-agent
+    for worker_arch in amd64 arm64; do \
+        CGO_ENABLED=0 GOOS=linux GOARCH="${worker_arch}" \
+        go build -trimpath -ldflags="-s -w" -o "/out/linux-${worker_arch}/ao-worker" ./cmd/ao-worker && \
+        CGO_ENABLED=0 GOOS=linux GOARCH="${worker_arch}" \
+        go build -trimpath -ldflags="-s -w" -o "/out/linux-${worker_arch}/ao" ./cmd/ao-cloud-agent || exit 1; \
+    done && \
+    cp "/out/linux-${TARGETARCH}/ao-worker" /out/ao-worker && \
+    cp "/out/linux-${TARGETARCH}/ao" /out/ao
 
 # Trixie has no fix for CVE-2026-77214 yet. Rebuild Debian's pinned Expat
 # 2.9.0 source on Trixie instead of mixing unstable runtime dependencies.
 # Remove this stage once Trixie's libexpat1 includes the upstream bounds check.
-FROM debian:trixie-slim AS expat-build
+FROM ${EXPAT_BUILD_IMAGE} AS expat-build
 WORKDIR /build
 RUN apt-get update && \
     apt-get install --yes --no-install-recommends \
@@ -123,7 +128,13 @@ FROM gcr.io/distroless/static-debian12:nonroot AS control-plane
 COPY --from=build --chown=nonroot:nonroot /out/ao-cloud /ao-cloud
 COPY --from=build --chown=nonroot:nonroot /out/ao-cloud-migrate /ao-cloud-migrate
 COPY --from=build --chown=nonroot:nonroot /out/ao-cloud-healthcheck /ao-cloud-healthcheck
-COPY --from=build --chown=nonroot:nonroot /out/ao-worker /ao-worker
-COPY --from=build --chown=nonroot:nonroot /out/ao /ao
+# Workers are uploaded into sandboxes, not run here. /ao-worker and /ao are
+# always the linux/amd64 build (the contract every provider and bake script
+# relies on); the linux/arm64 build sits beside them for Coder workspaces on
+# arm64 hosts, which the control plane detects and serves per architecture.
+COPY --from=build --chown=nonroot:nonroot /out/linux-amd64/ao-worker /ao-worker
+COPY --from=build --chown=nonroot:nonroot /out/linux-amd64/ao /ao
+COPY --from=build --chown=nonroot:nonroot /out/linux-arm64/ao-worker /ao-worker-linux-arm64
+COPY --from=build --chown=nonroot:nonroot /out/linux-arm64/ao /ao-linux-arm64
 EXPOSE 8080
 ENTRYPOINT ["/ao-cloud"]

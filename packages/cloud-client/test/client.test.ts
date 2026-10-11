@@ -85,6 +85,25 @@ describe("CloudClient", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("DELETE");
   });
 
+  it("retries a session whose startup failed", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse({ session: { id: "session one" } }, 202),
+    );
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await client.retrySessionStartup("org one", "session one");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/org%20one/sessions/session%20one/startup-retry",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+  });
+
   it("updates editable project settings on the project resource", async () => {
     const project = {
       id: "project one",

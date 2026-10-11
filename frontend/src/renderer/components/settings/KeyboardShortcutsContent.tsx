@@ -58,11 +58,17 @@ const ignoredRecordingKeys = new Set([
 	"Unidentified",
 ]);
 
-function eventBinding(event: KeyboardEvent): ShortcutBinding | null {
+const codeMatchedKeys: ReadonlySet<string> = new Set(["Backquote", "BracketLeft", "BracketRight"]);
+
+export function eventBinding(event: KeyboardEvent): ShortcutBinding | null {
 	if (ignoredRecordingKeys.has(event.key) || event.getModifierState?.("AltGraph")) return null;
 	return {
 		key: event.key.length === 1 ? event.key.toLowerCase() : event.key,
-		...(event.code === "Backquote" ? { code: event.code } : {}),
+		// Keys whose `key` shifts with modifiers or layout are matched by physical code too.
+		// Option also rewrites letters on macOS (⌥B types "∫"), so those keep their code.
+		...(codeMatchedKeys.has(event.code) || (event.altKey && /^(Key[A-Z]|Digit\d)$/.test(event.code))
+			? { code: event.code }
+			: {}),
 		ctrl: event.ctrlKey,
 		meta: event.metaKey,
 		shift: event.shiftKey,
@@ -293,7 +299,7 @@ export function KeyboardShortcutsContent({
 	return (
 		<>
 			<div className="relative flex flex-col gap-3">
-				<div className="sticky top-0 z-10 flex flex-col gap-3 bg-(--color-bg-settings-dialog) pb-2">
+				<div className="sticky top-0 z-10 -mt-[18px] flex flex-col gap-3 bg-(--color-bg-primary) pb-2 pt-[18px]">
 					<label className="flex h-9! min-w-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3">
 						<Search
 							className="size-4 shrink-0 text-settings-muted"

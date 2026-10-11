@@ -136,3 +136,40 @@ func TestProjectSessionPrefix(t *testing.T) {
 		t.Fatalf("merged settings = %+v, %v", settings, err)
 	}
 }
+
+func TestProjectSettingsPatchesCoderWorkspaceNamePrefix(t *testing.T) {
+	existing := json.RawMessage(`{"coder":{"templateId":"2a2e262c-b31c-4202-946d-a19ad45d1fd2","size":"large"}}`)
+	patch, err := ParseProjectSettingsPatch(json.RawMessage(`{"config":{"coder":{"workspaceNamePrefix":"ahmad"}}}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	merged, err := MergeProjectSettingsConfig(existing, patch.Config)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	coder, ok := DecodeProjectCoderConfig(merged)
+	if !ok || coder.WorkspaceNamePrefix != "ahmad" || coder.TemplateID == "" || coder.Size != "large" {
+		t.Fatalf("merged coder config = %+v, want prefix added and template kept", coder)
+	}
+	for _, raw := range []string{
+		`{"config":{"coder":{"workspaceNamePrefix":"Bad"}}}`,
+		`{"config":{"coder":{"workspaceNamePrefix":"team-"}}}`,
+		`{"config":{"coder":{"templateId":"2a2e262c-b31c-4202-946d-a19ad45d1fd2"}}}`,
+		`{"config":{"coder":null}}`,
+	} {
+		patch, err := ParseProjectSettingsPatch(json.RawMessage(raw))
+		if err == nil {
+			_, err = MergeProjectSettingsConfig(existing, patch.Config)
+		}
+		if err == nil {
+			t.Errorf("patch %s was accepted", raw)
+		}
+	}
+	cleared, err := MergeProjectSettingsConfig(merged, json.RawMessage(`{"coder":{"workspaceNamePrefix":""}}`))
+	if err != nil {
+		t.Fatalf("clear prefix: %v", err)
+	}
+	if coder, _ := DecodeProjectCoderConfig(cleared); coder.WorkspaceNamePrefix != "" {
+		t.Fatalf("prefix not cleared: %+v", coder)
+	}
+}

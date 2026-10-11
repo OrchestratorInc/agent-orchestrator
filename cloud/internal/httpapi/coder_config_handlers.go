@@ -33,6 +33,12 @@ type putOrgCoderConfigRequest struct {
 	// stored in the config JSONB and left blank for a directly reachable Coder.
 	EndpointServiceName string `json:"endpointServiceName"`
 	Region              string `json:"region"`
+	// RequireMountedDurableRoot keeps the strict mounted-volume check for the
+	// durable root; off by default for a bring-your-own template.
+	RequireMountedDurableRoot bool `json:"requireMountedDurableRoot"`
+	// StartupTimeoutSeconds bounds how long AO waits for a workspace to become
+	// ready and its worker to start. Zero uses the 20-minute default.
+	StartupTimeoutSeconds int `json:"startupTimeoutSeconds"`
 }
 
 // orgCoderConfigResponse is the secret-dropping view of an organization's Coder
@@ -123,14 +129,16 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 	// Normalize once through the domain codec: it trims every field and fills the
 	// durable-root default, so validation and storage see the same canonical form.
 	configJSON, err := domain.EncodeOrgCoderConfig(domain.OrgCoderConfig{
-		BaseURL:             request.BaseURL,
-		Owner:               request.Owner,
-		TemplateID:          request.TemplateID,
-		AgentName:           request.AgentName,
-		Parameters:          request.Parameters,
-		DurableRoot:         request.DurableRoot,
-		EndpointServiceName: request.EndpointServiceName,
-		Region:              request.Region,
+		BaseURL:                   request.BaseURL,
+		Owner:                     request.Owner,
+		TemplateID:                request.TemplateID,
+		AgentName:                 request.AgentName,
+		Parameters:                request.Parameters,
+		DurableRoot:               request.DurableRoot,
+		EndpointServiceName:       request.EndpointServiceName,
+		Region:                    request.Region,
+		RequireMountedDurableRoot: request.RequireMountedDurableRoot,
+		StartupTimeoutSeconds:     request.StartupTimeoutSeconds,
 	})
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "The Coder configuration could not be stored.")
@@ -157,6 +165,13 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 	// default when the request omits it, which the slimmed form always does).
 	if _, err := sandbox.NewCoderWorkspaceLayout(normalized.DurableRoot); err != nil {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The Coder configuration is invalid: "+err.Error())
+		return
+	}
+	if normalized.StartupTimeoutSeconds != 0 &&
+		(normalized.StartupTimeoutSeconds < domain.MinOrgCoderStartupTimeoutSeconds ||
+			normalized.StartupTimeoutSeconds > domain.MaxOrgCoderStartupTimeoutSeconds) {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error",
+			"The Coder startup timeout must be between 60 seconds and 2 hours.")
 		return
 	}
 	// A template is optional at the org level — it is chosen per project now — but a

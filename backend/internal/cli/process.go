@@ -14,7 +14,7 @@ type processStartConfig struct {
 }
 
 func startProcess(cfg processStartConfig) error {
-	cmd := exec.Command(cfg.Path, cfg.Args...)
+	cmd := exec.Command(cfg.Path, cfg.Args...) //nolint:forbidigo // foreground CLI process must inherit the caller's console.
 	cmd.Env = cfg.Env
 	cmd.Stdout = cfg.Stdout
 	cmd.Stderr = cfg.Stderr

@@ -221,12 +221,15 @@ type Options struct {
 	AvailableSandboxProviders []string
 	CapabilityGatedProviders  []string
 	// CoderTemplates lists templates available from the configured Coder provider.
-	CoderTemplates          CoderTemplateLister
-	Provisioning            sandbox.ProvisioningDefaults
-	WorkerTokens            WorkerTokens
-	WorkerTokenTTL          time.Duration
-	WorkerBinary            []byte
-	WorkerHelperBinary      []byte
+	CoderTemplates     CoderTemplateLister
+	Provisioning       sandbox.ProvisioningDefaults
+	WorkerTokens       WorkerTokens
+	WorkerTokenTTL     time.Duration
+	WorkerBinary       []byte
+	WorkerHelperBinary []byte
+	// WorkerBuilds are additional architectures' worker/helper binaries served
+	// from the same content-addressed self-update route.
+	WorkerBuilds            map[string]sandbox.WorkerBuild
 	WorkerRequestTimeout    time.Duration
 	MaxSandboxes            int
 	Environment             string
@@ -331,7 +334,11 @@ func New(options Options) *Server {
 		notificationWake:          options.NotificationWake,
 		notificationWaiters:       newNotificationWaiters(),
 	}
-	server.workerBinariesBySHA = indexWorkerBinaries(options.WorkerBinary, options.WorkerHelperBinary)
+	workerBinaries := [][]byte{options.WorkerBinary, options.WorkerHelperBinary}
+	for _, build := range options.WorkerBuilds {
+		workerBinaries = append(workerBinaries, build.Binary, build.HelperBinary)
+	}
+	server.workerBinariesBySHA = indexWorkerBinaries(workerBinaries...)
 	if server.credentialValidator == nil {
 		server.credentialValidator = newAgentCredentialValidator(nil)
 	}
@@ -503,6 +510,7 @@ func New(options Options) *Server {
 			router.Patch("/sessions/{sessionId}/merge-policy", server.setCloudSessionMergePolicy)
 			router.Post("/sessions/wake", server.wakePausedSessions)
 			router.Post("/sessions/{sessionId}/resume", server.resumeSession)
+			router.Post("/sessions/{sessionId}/startup-retry", server.retrySessionStartup)
 			router.Post("/sessions/{sessionId}/restore", server.restoreSession)
 			router.Get("/sessions/{sessionId}/children", server.listSessionChildren)
 			router.Delete("/sessions/{sessionId}", server.deleteSession)

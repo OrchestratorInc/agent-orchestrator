@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, type ReactNode } from "react";
+import { useEffect } from "react";
 import { Info } from "lucide-react";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -9,6 +9,8 @@ import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../
 import { LOCAL_HOST } from "../../lib/hosts";
 import { AgentModelCombobox } from "./AgentModelCombobox";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
+import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
+import { cn } from "../../lib/utils";
 
 export function AgentModelField({
 	role,
@@ -98,7 +100,7 @@ export function AgentModelField({
 							options={options}
 							placeholder={t("settings.models.modeNotReported")}
 							action={selectedMode && !defaultMode ? { label: t("settings.models.useAgentMode"), onSelect: () => onModeChange("") } : undefined}
-							triggerClassName="w-full justify-between"
+							triggerClassName="w-fit"
 							disabled={options.length === 0 && !(selectedMode && !defaultMode)}
 							onChange={(value) => {
 								onModeChange(value === defaultMode ? "" : value);
@@ -114,7 +116,7 @@ export function AgentModelField({
 
 	const models = (catalog?.models ?? []).map((item) => ({
 		...item,
-		label: agentModelDisplayLabel(agentId, item.label),
+		label: item.id === "auto" ? t("settings.models.autoRouteLabel") : agentModelDisplayLabel(agentId, item.label),
 		...(supportedEfforts ? { efforts: item.efforts ? item.efforts.filter((value) => supportedEfforts.includes(value)) : [...supportedEfforts] } : {}),
 		...(!followCatalogDefaults ? { isDefault: false, defaultEffort: undefined } : {}),
 	}));
@@ -158,8 +160,10 @@ export function AgentModelField({
 						disabled={(query.isFetching && !catalog) || agentId === ""}
 						onChange={selectCatalogModel}
 						onCustom={selectCustomModel}
-						triggerClassName="w-full justify-between"
-						compact={agentId === "codex"}
+						triggerClassName={cn(MENU_TRIGGER_CHROME, "w-fit")}
+						compact
+						recentScope={agentId}
+						menuAlign="start"
 						tuning={{
 							effort,
 							effortsWithoutModel: supportedEfforts,
@@ -172,27 +176,6 @@ export function AgentModelField({
 			</div>
 			{warning && <p className="px-1 text-xs leading-row text-warning">{warning}</p>}
 		</>
-	);
-}
-
-export function ProjectAgentRoleRow({ label, agent, model }: { label: string; agent: ReactNode; model: ReactNode }) {
-	return (
-		<div className="grid min-h-16 grid-cols-[6rem_minmax(0,0.85fr)_minmax(0,1.25fr)] items-center gap-3 py-2">
-			<span className="text-sm font-medium text-settings-label">{label}</span>
-			<div className="min-w-0">{agent}</div>
-			<div className="min-w-0">{model}</div>
-		</div>
-	);
-}
-
-export function ProjectAgentRoleHeader() {
-	const { t } = useTranslation();
-	return (
-		<div className="grid grid-cols-[6rem_minmax(0,0.85fr)_minmax(0,1.25fr)] gap-3 py-2 text-xs font-medium text-settings-muted">
-			<span />
-			<span>{t("settings.project.agent")}</span>
-			<span>{t("settings.project.modelOverride")}</span>
-		</div>
 	);
 }
 

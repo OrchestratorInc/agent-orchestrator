@@ -202,8 +202,10 @@ credential for `AO_CLOUD_MIGRATION_DATABASE_URL`.
 
 Database migrations in `internal/postgres/migrations` are embedded in the same
 immutable control-plane image as the API and migration binary. That image also
-packages `/ao-worker` for sandbox upload; a separate worker runtime image
-contains the identical binary. The release flow is:
+packages the linux/amd64 `/ao-worker` and `/ao` for sandbox upload (a separate
+worker runtime image contains the identical worker), plus linux/arm64 builds at
+`/ao-worker-linux-arm64` and `/ao-linux-arm64` for Coder workspaces on arm64
+hosts. The release flow is:
 
 1. Add a forward, backward-compatible Goose migration to the repository.
 2. Run the migration and integration tests locally.

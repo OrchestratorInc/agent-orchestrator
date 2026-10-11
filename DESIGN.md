@@ -95,8 +95,8 @@ The layout is desktop-first. On constrained widths, preserve task content first,
 - **Home:** intentionally minimal. It introduces the next meaningful action, not a fake dashboard.
   - One centered column (`max-w-[640px]`); no decorative upward translate.
   - "Star us" is a quiet text link with dashed underline on hover — never a TopbarButton, accent pill, or bordered card.
-  - Primary actions are a 2×2 grid; standalone agent is a grid cell, not a full-width hero CTA above. Connect Mobile stays in settings — not on home.
-  - Recent project rows use shared `NavRowHighlight` (same growing pill as sidebar), not a flat `hover:bg-interactive-hover` wash.
+  - Primary actions are a 2×2 grid; standalone agent is a grid cell (Clone to the cloud takes that cell when Developer Mode and Cloud are on), never a full-width extra row. Card labels follow verb + source: Clone a repo, Open a local folder, Open a workspace, Clone to the cloud, Start a standalone agent. Connect Mobile stays in settings — not on home.
+  - Recent project rows use shared `NavRowHighlight` (same growing pill as sidebar), not a flat `hover:bg-interactive-hover` wash. On home the pill fills with `bg-card` so a hovered row matches the action cards.
 - **Board:** the operational overview. Each lane has a semantic reason to exist and derived status determines placement.
 - **Session:** the working room. The conversation or terminal is primary; tabs, files, PRs, and inspector are supporting context.
 - **Terminals:** a dedicated surface for standalone shells; do not accidentally route users here from unrelated project-board shortcuts.
@@ -106,10 +106,10 @@ The layout is desktop-first. On constrained widths, preserve task content first,
 
 Sidebar and inspector share `ResizeHandle`. Do not regress:
 
-- Grip is a fixed, hover/active-only pill on the **center-pane border** (sidebar: `.center-panel-surface` left; inspector: panel `border-l`) — not inset into the panel, not a CSS `::after` on the hit strip, not always-visible.
-- Height is **80vh**, vertically centered — not full inset-y / not titlebar-tall.
-- While dragging, the grip moves 1:1 with width delta and **must stop at the same min/max as the panel**. Never follow raw `clientX` past limits. Inspector also clamps against computed CSS `max-width` (`--session-inspector-max-width`); prop/`rangeRef` max alone is insufficient.
-- Call sites must pass the same `minWidth`/`maxWidth` as `useResizable`. No unclamped grip fallback.
+- On hover only, a 2px line is drawn over the **center-pane border** (sidebar: `.center-panel-surface` left; inspector: panel `border-l`), fading out at the top and bottom, with a short opacity fade in/out. No pill, nothing painted on click/drag, not always-visible.
+- The line is pure CSS inside the hit strip (no JS positioning); `useResizable` stays the only width integrator.
+- While dragging, width **must stop at the same min/max as the panel**. Never follow raw `clientX` past limits. Inspector also clamps against computed CSS `max-width` (`--session-inspector-max-width`); prop/`rangeRef` max alone is insufficient.
+- Call sites must pass the same `minWidth`/`maxWidth` as `useResizable`.
 
 ### Brand → home
 
@@ -187,10 +187,10 @@ Do not introduce one-off hex values, arbitrary radius, or unreviewed spacing. Us
 
 ## 7. Typography
 
-Use the loaded Geist families. Do not add a new web font or substitute a generic font for visual novelty.
+Use the font tokens. On macOS they resolve to the system faces (SF Pro / SF Mono); elsewhere to the bundled Geist families. Do not add a new web font or substitute a generic font for visual novelty.
 
-- **UI and body:** `--font-family-base` (`Geist Variable` first).
-- **Code, terminal, compact labels:** `--font-family-mono` (`Geist Mono Variable` first).
+- **UI and body:** `--font-family-base` (`-apple-system` on macOS, `Geist Variable` elsewhere).
+- **Code, terminal, compact labels:** `--font-family-mono` (`SF Mono` on macOS, `Geist Mono Variable` elsewhere).
 - **Weights:** 500 medium for controls and small hierarchy; 600 only for headings, selected values, and genuinely primary emphasis.
 - **Numbers:** use tabular figures for metrics, timestamps, diffs, and columns where alignment matters.
 
@@ -412,6 +412,7 @@ Approve only when the answer to every applicable check is yes. Otherwise classif
 | --- | --- | --- |
 | 2026-09-03 | Dark-first, token-led, compact operational UI | Matches AO's long-running desktop workflow and renderer source of truth. |
 | 2026-09-03 | Geist/Geist Mono remain the typographic system | They are bundled, legible at dense sizes, and already define renderer hierarchy. |
+| 2026-10-09 | macOS uses SF Pro / SF Mono; Geist stays the bundled default elsewhere | System faces match native macOS chrome and get optical sizing for free. |
 | 2026-09-03 | Color is reserved for semantics and active focus | Parallel-agent supervision depends on fast, trustworthy scanning. |
 | 2026-09-03 | Shared list containers with dividers are preferred over spaced sibling cards | Better density and clearer grouping for projects and sessions. |
 | 2026-09-03 | Existing platform shell behavior is part of the design system | macOS traffic lights, Windows titlebar, and collapsible inspector are product behavior, not incidental CSS. |
@@ -424,3 +425,5 @@ Approve only when the answer to every applicable check is yes. Otherwise classif
 | 2026-09-16 | Home: quiet Star-us link; 2×2 action grid with standalone in-grid; recent rows use NavRowHighlight | Rejected accent CTAs, Connect Mobile on home, and flat hover washes — keep home minimal and aligned with sidebar row chrome. |
 | 2026-09-16 | Brand mark clicks to home with no hover/focus fill | Separate home affordance and sidebar focus wash on the brand were rejected. |
 | 2026-09-16 | Resize grips: fixed 80vh hover pill on center-pane border; clamp to panel min/max ∩ CSS max-width | Rejected always-on/`::after`/inset grips and unclamped pointer-following (inspector flew past both limits). |
+| 2026-10-08 | Resize grips: replaced the 80vh pill with a hover-only 2px line on the edge that fades out at both ends | The pill (including active/click state and cursor-following variants) looked bad; JS border tracking removed. |
+| 2026-10-09 | Home: with Developer Mode and Cloud on, Clone to the cloud replaces the standalone cell; card labels use verb + source; cards rest on `bg-card` and hover to `bg-accent`; recent rows sit under the grid with no heading of their own, one 40px line each (no path), hover pill on `bg-card` | A fifth full-width row broke the 2×2 grid; the old translucent hover made cards darker instead of lifting them; the separate recent-projects title and two-line rows made home taller than it needs to be. |

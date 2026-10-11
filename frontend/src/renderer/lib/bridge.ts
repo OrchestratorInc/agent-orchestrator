@@ -33,7 +33,7 @@ export const aoBridge: AoBridge =
 			onNextSessionShortcut: () => () => undefined,
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
-			onFocusTerminalShortcut: () => () => undefined,
+			onShortcut: () => () => undefined,
 		},
 		terminal: {
 			saveDroppedFile: async () => "",
@@ -51,6 +51,7 @@ export const aoBridge: AoBridge =
 		theme: {
 			set: async () => undefined,
 			persistTerminal: async () => undefined,
+			setWindowBackground: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
@@ -83,6 +84,9 @@ export const aoBridge: AoBridge =
 			}),
 			open: async () => {
 				throw new Error("Desktop app is required to open a workspace.");
+			},
+			copyWorkspacePath: async () => {
+				throw new Error("Desktop app is required to copy a workspace path.");
 			},
 		},
 		telemetry: {

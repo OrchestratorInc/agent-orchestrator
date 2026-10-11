@@ -46,6 +46,8 @@ export type ProjectSettingsSaveState = {
 	requestPending?: boolean;
 	error?: string;
 	replacementError?: string;
+	/** The draft is dirty but cannot be saved as it stands (e.g. an invalid name). */
+	unsaveable?: boolean;
 	retry?: () => void;
 };
 

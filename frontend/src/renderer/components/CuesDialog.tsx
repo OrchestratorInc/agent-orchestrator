@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, Loader2, MessageSquare, Pencil, Plus, TerminalSquare, Trash2, X } from "lucide-react";
+import { Loader2, MessageSquare, Pencil, Plus, TerminalSquare, Trash2, X } from "lucide-react";
 import { apiErrorMessage } from "../lib/api-client";
 import { useUiStore } from "../stores/ui-store";
 import {
@@ -184,17 +184,17 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 
 	const renderList = () => {
 		if (!cuesQuery.isFetchedAfterMount || cuesQuery.isFetching) {
+			// Hold the list's footprint while loading so nothing flashes before the real rows.
 			return (
-				<div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-					<Loader2 className="size-4 animate-spin" aria-hidden="true" />
-					{t("cues.loading")}
+				<div className="project-settings-form" aria-busy="true" aria-label={t("cues.loading")}>
+					<section><div className="settings-grouped-rows flex w-full flex-col"><div className="settings-row-bar" /></div></section>
 				</div>
 			);
 		}
 		if (cuesQuery.isError) {
 			return (
 				<div className="flex flex-col items-center gap-3 py-8 text-center">
-					<p role="alert" className="text-sm text-destructive">
+					<p role="alert" className="text-sm text-error">
 						{apiErrorMessage(cuesQuery.error, t("cues.loadFailed"))}
 					</p>
 					<Button type="button" variant="outline" size="sm" onClick={() => void cuesQuery.refetch()}>
@@ -206,13 +206,18 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 		const cues = cuesQuery.data ?? [];
 		if (cues.length === 0) {
 			return (
-				<div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
-					<h3 className="text-base font-medium leading-6 text-foreground">{t("cues.empty")}</h3>
-					<p className="mt-2 max-w-xs text-sm leading-6 text-settings-muted">{t("cues.settingsDescription")}</p>
-					<Button type="button" className="mt-6" disabled={busy} onClick={openNew}>
-						<Plus aria-hidden="true" />
-						{t("cues.newCue")}
-					</Button>
+				<div className="project-settings-form">
+					<section>
+						<div className="settings-grouped-rows flex w-full flex-col">
+							<div className="settings-row-bar">
+								<span className="text-sm leading-5 text-settings-label">{t("cues.empty")}</span>
+								<Button type="button" variant="ghost" disabled={busy} onClick={openNew}>
+									<Plus aria-hidden="true" />
+									{t("cues.newCue")}
+								</Button>
+							</div>
+						</div>
+					</section>
 				</div>
 			);
 		}
@@ -270,10 +275,6 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 		const command = draft.type === "command";
 		const contentId = command ? "cue-command" : "cue-prompt";
 		return <div className="flex flex-col gap-(--size-settings-section-inner-gap)">
-			{!createOnly && formOpen === "new" ? <button type="button" className="flex w-fit items-center gap-1.5 text-sm font-medium text-settings-muted hover:text-foreground" onClick={() => { if (!pending.current) { setFormError(null); setFormOpen(null); } }}>
-				<ArrowLeft aria-hidden="true" className="size-4" />
-				{t("cues.backToCues")}
-			</button> : null}
 			<div className="flex flex-col gap-1.5">
 				<label htmlFor="cue-name" className="settings-field-label">
 					{t("cues.nameLabel")}
@@ -289,7 +290,7 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 			</div>
 
 			<div className="flex flex-col gap-1.5">
-				<label className="settings-field-label">{t("cues.typeLabel")}</label>
+				<span className="settings-field-label">{t("cues.typeLabel")}</span>
 				<SettingsOptionMenu
 					aria-label={t("cues.typeLabel")}
 					value={draft.type}
@@ -329,11 +330,12 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 		</div>;
 	};
 
-	const empty = !formOpen && cuesQuery.isFetchedAfterMount && !cuesQuery.isFetching && !cuesQuery.isError && (cuesQuery.data ?? []).length === 0;
+	// The footer action only exists once a list is showing; an empty list carries its own button.
+	const empty = !formOpen && !cuesQuery.isError && (!cuesQuery.isFetchedAfterMount || (cuesQuery.data ?? []).length === 0);
 	return (
-		<div className={empty ? "flex h-full min-h-0 flex-1 flex-col" : "flex flex-col gap-(--size-settings-section-inner-gap)"}>
-			{empty ? null : <p className="text-sm leading-5 text-settings-muted">{t("cues.settingsDescription")}</p>}
-			<fieldset className={empty ? "flex min-h-0 min-w-0 flex-1 flex-col" : "min-w-0"} disabled={busy}>{formOpen ? renderForm() : renderList()}</fieldset>
+		<div className="flex flex-col gap-(--size-settings-section-inner-gap)">
+			<p className="text-sm leading-5 text-settings-muted">{t("cues.settingsDescription")}</p>
+			<fieldset className="min-w-0" disabled={busy}>{formOpen ? renderForm() : renderList()}</fieldset>
 			{empty ? null : (
 			<div className="flex items-center justify-end gap-2">
 				{formOpen ? (

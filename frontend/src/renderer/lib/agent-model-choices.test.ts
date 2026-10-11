@@ -33,6 +33,15 @@ describe("splitClaudeModels", () => {
 		expect(current.map((item) => item.label)).toEqual(["Opus 5.5", "Opus (1M context)", "My gateway model"]);
 		expect(other).toEqual([]);
 	});
+
+	// Fallback aliases now carry the version discovery resolved, so a context
+	// variant of the newest Opus must stay a current choice, not an older one.
+	it("keeps a versioned context variant alongside its family's newest model", () => {
+		const aliases = [model("Sonnet 5.5", "sonnet"), model("Fable 5.1", "fable"), model("Opus 5.5", "opus"), model("Haiku 5.5", "haiku"), model("Opus 5.5 (1M context)", "opus[1m]")];
+		const { current, other } = splitClaudeModels(aliases);
+		expect(current.map((item) => item.id)).toEqual(["fable", "opus", "opus[1m]", "sonnet", "haiku"]);
+		expect(other).toEqual([]);
+	});
 });
 
 describe("foldClaudeAliasDefault", () => {
@@ -43,5 +52,10 @@ describe("foldClaudeAliasDefault", () => {
 		expect(folded.find((item) => item.isDefault)?.label).toBe("Sonnet 5.5");
 		const noSibling = [alias, model("Opus 5.5")];
 		expect(foldClaudeAliasDefault(noSibling)).toBe(noSibling);
+	});
+
+	it("never folds a configured alias into a context variant", () => {
+		const models = [model("Opus 5.5", "opus", { isDefault: true }), model("Opus 5.5 (1M context)", "opus[1m]"), model("Sonnet 5.5", "sonnet")];
+		expect(foldClaudeAliasDefault(models)).toBe(models);
 	});
 });

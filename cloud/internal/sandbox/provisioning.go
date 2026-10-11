@@ -8,6 +8,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
 
 const (
@@ -81,6 +83,25 @@ type CoderSessionProfile struct {
 	AgentName   string            `json:"agentName"`
 	Parameters  map[string]string `json:"parameters"`
 	DurableRoot string            `json:"durableRoot"`
+	// WorkspaceNamePrefix replaces the default "ao" workspace name prefix.
+	WorkspaceNamePrefix string `json:"workspaceNamePrefix,omitempty"`
+	// RequireMountedDurableRoot is nil on rows written before the field
+	// existed; RequiresMountedDurableRoot supplies the historical default.
+	RequireMountedDurableRoot *bool `json:"requireMountedDurableRoot,omitempty"`
+	// StartupTimeoutSeconds overrides the deployment startup budget for this
+	// session's ready wait and startup ceiling. Zero keeps the deployment value.
+	StartupTimeoutSeconds int `json:"startupTimeoutSeconds,omitempty"`
+}
+
+// RequiresMountedDurableRoot reports whether bootstrap must find a mounted
+// volume at the durable root. Profiles written before the flag existed keep
+// the strict check for the deployment Coder and drop it for a bring-your-own
+// connection, whose templates commonly keep home on the root filesystem.
+func (p CoderSessionProfile) RequiresMountedDurableRoot(byoConnection bool) bool {
+	if p.RequireMountedDurableRoot != nil {
+		return *p.RequireMountedDurableRoot
+	}
+	return !byoConnection
 }
 
 // CoderSessionOptions are the per-session Coder choices a client may make when
@@ -94,6 +115,9 @@ type CoderSessionOptions struct {
 	TemplateID    string
 	Size          string
 	StartupScript string
+	// WorkspaceNamePrefix names the session's workspace <prefix>-<id> instead
+	// of the default ao-<id>. It applies with or without a picked template.
+	WorkspaceNamePrefix string
 }
 
 // CoderDeploymentOverride redirects a session's Coder provisioning to a specific
@@ -109,6 +133,33 @@ type CoderDeploymentOverride struct {
 	AgentName   string
 	Parameters  map[string]string
 	DurableRoot string
+	// RequireMountedDurableRoot opts a bring-your-own connection back into the
+	// deployment's strict mounted-volume check. Off by default.
+	RequireMountedDurableRoot bool
+	// StartupTimeoutSeconds is the connection's startup budget. Zero selects
+	// DefaultBYOCoderStartupTimeout.
+	StartupTimeoutSeconds int
+}
+
+// DefaultBYOCoderStartupTimeout is the startup budget for a bring-your-own
+// Coder connection that does not set one. Customer templates routinely clone
+// several repositories in a blocking startup script before accepting terminals.
+const DefaultBYOCoderStartupTimeout = 20 * time.Minute
+
+// CoderHomeDurableRoot resolves the durable root to the workspace user's home
+// directory at bootstrap time. A bring-your-own template may not run as the
+// "coder" user, so AO cannot know the absolute path in advance.
+const CoderHomeDurableRoot = "$HOME"
+
+// NormalizeCoderDurableRoot maps the accepted spellings of the home-directory
+// root ("$HOME", "~") onto CoderHomeDurableRoot and trims anything else.
+func NormalizeCoderDurableRoot(value string) string {
+	value = strings.TrimSpace(value)
+	switch value {
+	case CoderHomeDurableRoot, "~", "${HOME}":
+		return CoderHomeDurableRoot
+	}
+	return value
 }
 
 // CoderWorkspaceLayout is the provider-specific filesystem contract between AO
@@ -127,16 +178,16 @@ type CoderWorkspaceLayout struct {
 // NewCoderWorkspaceLayout validates and expands the configured Coder volume
 // mount. Bootstrap separately verifies that DurableRoot is an actual mount point
 // inside the workspace before AO writes anything beneath it.
+//
+// CoderHomeDurableRoot is accepted as a symbolic root: every derived path keeps
+// the "$HOME/" prefix and the provider substitutes the workspace user's real
+// home directory before it writes anything.
 func NewCoderWorkspaceLayout(durableRoot string) (CoderWorkspaceLayout, error) {
-	durableRoot = strings.TrimSpace(durableRoot)
+	durableRoot = NormalizeCoderDurableRoot(durableRoot)
 	if durableRoot == "" {
 		return CoderWorkspaceLayout{}, errors.New("AO_CLOUD_CODER_DURABLE_ROOT is required")
 	}
-	if len(durableRoot) > 1024 || !strings.HasPrefix(durableRoot, "/") ||
-		path.Clean(durableRoot) != durableRoot || durableRoot == "/" ||
-		strings.IndexFunc(durableRoot, func(character rune) bool {
-			return character < ' ' || character == 0x7f
-		}) >= 0 {
+	if durableRoot != CoderHomeDurableRoot && !SafeCoderDurableRoot(durableRoot) {
 		return CoderWorkspaceLayout{}, errors.New(
 			"AO_CLOUD_CODER_DURABLE_ROOT must be a safe absolute non-root path",
 		)
@@ -152,6 +203,16 @@ func NewCoderWorkspaceLayout(durableRoot string) (CoderWorkspaceLayout, error) {
 		CodexHome:       path.Join(home, ".codex"),
 		DurableIdentity: path.Join(aoRoot, "durable-session-id"),
 	}, nil
+}
+
+// SafeCoderDurableRoot reports whether an absolute durable root is safe to
+// splice into the bootstrap shell and derive workspace paths from.
+func SafeCoderDurableRoot(durableRoot string) bool {
+	return len(durableRoot) <= 1024 && strings.HasPrefix(durableRoot, "/") &&
+		path.Clean(durableRoot) == durableRoot && durableRoot != "/" &&
+		strings.IndexFunc(durableRoot, func(character rune) bool {
+			return character < ' ' || character == 0x7f
+		}) < 0
 }
 
 // DecodeCoderSessionProfile reads and validates the Coder contract stored in a
@@ -195,6 +256,13 @@ func DecodeCoderSessionProfile(raw json.RawMessage) (CoderSessionProfile, error)
 		return CoderSessionProfile{}, err
 	}
 	profile.DurableRoot = layout.DurableRoot
+	profile.WorkspaceNamePrefix = strings.TrimSpace(profile.WorkspaceNamePrefix)
+	if err := domain.ValidateCoderWorkspaceNamePrefix(profile.WorkspaceNamePrefix); err != nil {
+		return CoderSessionProfile{}, err
+	}
+	if profile.StartupTimeoutSeconds < 0 {
+		return CoderSessionProfile{}, errors.New("Coder session startup timeout must not be negative")
+	}
 	return profile, nil
 }
 
@@ -391,6 +459,12 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 		// deployment may leave the deployment default unset, so borrow a sane TTL
 		// when the override supplies one and the default did not.
 		coderCfg := d.Coder
+		// The deployment Coder is AO-operated: its templates mount a dedicated
+		// volume at the durable root and boot inside the deployment budget. A
+		// bring-your-own connection relaxes the mount check (unless it opts back
+		// in) and carries its own, longer startup budget.
+		requireMountedDurableRoot := true
+		startupTimeoutSeconds := 0
 		if override != nil {
 			coderCfg.BaseURL = override.BaseURL
 			coderCfg.Owner = override.Owner
@@ -401,6 +475,18 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 			if coderCfg.WorkerTokenTTL <= 0 {
 				coderCfg.WorkerTokenTTL = DefaultWorkerTokenTTL
 			}
+			requireMountedDurableRoot = override.RequireMountedDurableRoot
+			startupTimeoutSeconds = override.StartupTimeoutSeconds
+			if startupTimeoutSeconds <= 0 {
+				startupTimeoutSeconds = int(DefaultBYOCoderStartupTimeout / time.Second)
+			}
+		}
+		workspaceNamePrefix := ""
+		if coder != nil {
+			workspaceNamePrefix = strings.TrimSpace(coder.WorkspaceNamePrefix)
+		}
+		if err := domain.ValidateCoderWorkspaceNamePrefix(workspaceNamePrefix); err != nil {
+			return Plan{}, err
 		}
 		// Resolve the effective template first: a per-project pick wins, otherwise
 		// the org/deployment default. A bring-your-own-Coder org leaves its default
@@ -436,20 +522,29 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 				parameters["startup_script"] = startup
 			}
 		}
-		resourceProfile["coder"] = map[string]any{
-			"baseUrl":               strings.TrimRight(strings.TrimSpace(coderCfg.BaseURL), "/"),
-			"owner":                 strings.TrimSpace(coderCfg.Owner),
-			"templateId":            templateID,
-			"agentName":             strings.TrimSpace(coderCfg.AgentName),
-			"parameters":            parameters,
-			"durableRoot":           strings.TrimSpace(coderCfg.DurableRoot),
-			"workerTokenTtlSeconds": int64(coderCfg.WorkerTokenTTL / time.Second),
+		durableRoot := NormalizeCoderDurableRoot(coderCfg.DurableRoot)
+		coderProfile := map[string]any{
+			"baseUrl":                   strings.TrimRight(strings.TrimSpace(coderCfg.BaseURL), "/"),
+			"owner":                     strings.TrimSpace(coderCfg.Owner),
+			"templateId":                templateID,
+			"agentName":                 strings.TrimSpace(coderCfg.AgentName),
+			"parameters":                parameters,
+			"durableRoot":               durableRoot,
+			"workerTokenTtlSeconds":     int64(coderCfg.WorkerTokenTTL / time.Second),
+			"requireMountedDurableRoot": requireMountedDurableRoot,
 		}
+		if workspaceNamePrefix != "" {
+			coderProfile["workspaceNamePrefix"] = workspaceNamePrefix
+		}
+		if startupTimeoutSeconds > 0 {
+			coderProfile["startupTimeoutSeconds"] = startupTimeoutSeconds
+		}
+		resourceProfile["coder"] = coderProfile
 		bootstrapContext["coder"] = map[string]any{
 			"owner":       strings.TrimSpace(coderCfg.Owner),
 			"templateId":  templateID,
 			"agentName":   strings.TrimSpace(coderCfg.AgentName),
-			"durableRoot": strings.TrimSpace(coderCfg.DurableRoot),
+			"durableRoot": durableRoot,
 		}
 	}
 	resourceJSON, err := json.Marshal(resourceProfile)

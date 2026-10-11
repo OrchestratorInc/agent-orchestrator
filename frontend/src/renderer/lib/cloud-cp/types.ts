@@ -156,7 +156,16 @@ import type { ProjectConfig, ProjectAgentConfig, ProjectSettingsInput, ProjectRo
 export type CloudCpProjectAgentConfig = ProjectAgentConfig;
 export type CloudCpProjectRoleConfig = ProjectRoleConfig;
 export type CloudCpProjectReviewer = ProjectReviewer;
-export type CloudCpProjectSettingsRequest = ProjectSettingsInput;
+/**
+ * PATCH /orgs/{orgId}/projects/{projectId}/settings. `config.coder` accepts
+ * only `workspaceNamePrefix` (an empty string returns to the default `ao`);
+ * the rest of a project's coder config is fixed at creation.
+ */
+export type CloudCpProjectSettingsRequest = ProjectSettingsInput & {
+	config?: NonNullable<ProjectSettingsInput["config"]> & {
+		coder?: { workspaceNamePrefix: string };
+	};
+};
 
 export interface CloudCpProject {
 	id: string;
@@ -196,6 +205,12 @@ export interface CloudCpProjectCoderConfig {
 	startupScript?: string;
 	/** Additional repositories every session of the project clones alongside the primary repo. */
 	extraRepos?: CloudCpSessionRepo[];
+	/**
+	 * Prefix for the project's new Coder workspace names (`<prefix>-<short id>`).
+	 * Empty/absent keeps the default `ao`. Must match `^[a-z][a-z0-9-]{0,19}$`
+	 * without a trailing `-` or a `--` run.
+	 */
+	workspaceNamePrefix?: string;
 }
 
 /** PATCH /orgs/{orgId}/projects/{projectId} */
@@ -358,6 +373,12 @@ export interface CloudCpSession {
 	observedState?: string;
 	runtimeState?: string;
 	runtimeError?: string;
+	/**
+	 * Why the session's worker has not started yet. Set while AO is retrying
+	 * startup and kept once it gives up (`runtimeState === "terminated"`);
+	 * cleared once the worker connects. `message` is user-facing text.
+	 */
+	startupError?: CloudCpSessionStartupError;
 	isTerminated: boolean;
 	autoInjectCI?: boolean;
 	autoInjectReview?: boolean;
@@ -373,6 +394,23 @@ export interface CloudCpSession {
 	workerEpoch?: number;
 	createdAt: string;
 	updatedAt: string;
+}
+
+/**
+ * A cloud session's startup failure. Known codes: workspace_not_ready,
+ * terminal_unavailable, unsupported_architecture, durable_root_unavailable,
+ * worker_never_started, bootstrap_failed; treat any other code generically.
+ */
+export interface CloudCpSessionStartupError {
+	code: string;
+	message: string;
+	/** RFC 3339 time the failure was recorded. */
+	at: string;
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/startup-retry responds 202. */
+export interface CloudCpRetrySessionStartupResponse {
+	session: CloudCpSession;
 }
 
 export interface CloudCpInterfaceTransition {

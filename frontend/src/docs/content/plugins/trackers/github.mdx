@@ -7,9 +7,9 @@ This guide uses the GitHub tracker and your existing GitHub authentication. GitL
 
 ## Configure intake
 
-Intake needs two opt-ins, and both default to off: enable it on the daemon and configure a project with an assignee filter. Each matching issue can start a worker session, so use the filter to limit which issues AO handles.
+Intake needs two opt-ins, and both default to off: enable it on the daemon and configure a project with an assignee filter. Each matching issue can start a worker session, so use the filter to limit which issues Orchestrator handles.
 
-For the desktop app, add `AO_TRACKER_INTAKE=on` to the environment your login shell exports, such as `~/.zshrc`, then relaunch AO. The app passes that environment to its daemon. For a standalone daemon, set the variable in its launch environment and restart it.
+For the desktop app, add `AO_TRACKER_INTAKE=on` to the environment your login shell exports, such as `~/.zshrc`, then relaunch Orchestrator. The app passes that environment to its daemon. For a standalone daemon, set the variable in its launch environment and restart it.
 
 Then configure the project. `ao project set-config` replaces the full project config, so read the [full-config warning](/configuration/projects#update-from-the-cli) before using it.
 
@@ -20,7 +20,7 @@ ao project set-config my-app \
   --tracker-assignee alice
 ```
 
-When `trackerIntake.provider` is omitted, AO infers the provider from the project's Git remote. GitHub hosts select `github`; other remote hosts select `gitlab`. An empty or unparseable remote falls back to `github`. When the repository is omitted, AO can also derive it from that remote.
+When `trackerIntake.provider` is omitted, Orchestrator infers the provider from the project's Git remote. GitHub hosts select `github`; other remote hosts select `gitlab`. An empty or unparseable remote falls back to `github`. When the repository is omitted, Orchestrator can also derive it from that remote.
 
 For an explicit GitLab intake configuration, set `trackerIntake.provider` to `gitlab` in the full configuration object through the daemon API. The CLI has no `--tracker-provider` flag on `project set-config`; that flag belongs to `spawn`. If you use `--config-json`, preserve all other project settings and heed the effort-loss warning above. The intake portion of the object is:
 
@@ -43,4 +43,4 @@ For one GitLab issue without enabling intake, use `ao spawn --project my-app --n
 
 ## Current boundary
 
-Matching issues may create sessions and provide issue context. The current intake path is read-only: it does not post comments, assign workflow states, or close issues after a session finishes. PR and CI observation belongs to AO's separate [source-control capability](/plugins/scm).
+Matching issues may create sessions and provide issue context. The current intake path is read-only: it does not post comments, assign workflow states, or close issues after a session finishes. PR and CI observation belongs to Orchestrator's separate [source-control capability](/plugins/scm).

@@ -159,6 +159,16 @@ func (p *Plugin) probeResolvedAuthStatus(ctx context.Context, resolved claudePro
 		return ports.AgentAuthStatusUnknown, false
 	}
 
+	// A stored login whose access token is past its recorded expiry would be
+	// rejected by the provider, but that rejection is not a sign-out: Claude
+	// Code renews the token from its refresh token the next time it runs. AO
+	// does not perform that refresh itself (Claude Code serializes it behind a
+	// cross-process lock and rotates the refresh token), so the honest verdict
+	// is "configured" — present, not verified — and nothing is sent.
+	if resolved.found && resolved.credential.ExpiredButRenewable(claudeNow()) {
+		return ports.AgentAuthStatusConfigured, true
+	}
+
 	// The cache is read before anything is sent, and is keyed on the
 	// credential's fingerprint: a verdict about a credential the agent no
 	// longer uses is not evidence about anything.
@@ -227,6 +237,9 @@ var claudeValidator = func() *agentcreds.Validator { return agentcreds.New(nil) 
 func (p *Plugin) authCache() *authCache { return claudeAuthCache }
 
 var claudeAuthCache = newAuthCache(defaultAuthCacheTTL)
+
+// claudeNow is the clock used to compare stored token expiry; tests pin it.
+var claudeNow = time.Now
 
 // InvalidateAuthCache drops the cached verdict. The runtime 401 handler calls
 // it: the provider has just contradicted whatever was stored.
@@ -405,8 +418,30 @@ func ProviderModels(ctx context.Context, binary, workingDir string, env map[stri
 	probeCtx, cancel := context.WithTimeout(ctx, agentcreds.DefaultTimeout)
 	defer cancel()
 	resolved := (&Plugin{}).resolveProviderContext(probeCtx, binary, workingDir, env, claudeModelAuthReport)
+	return providerModelsFor(probeCtx, resolved)
+}
+
+// modelDiscoveryAuthError keeps the provider's own wording while letting the
+// catalog service classify the failure with errors.Is.
+type modelDiscoveryAuthError struct {
+	kind    error
+	message string
+}
+
+func (e modelDiscoveryAuthError) Error() string { return e.message }
+func (e modelDiscoveryAuthError) Unwrap() error { return e.kind }
+
+func providerModelsFor(probeCtx context.Context, resolved claudeProviderContext) ([]ports.AgentModelInfo, error) {
 	if !resolved.providerOK {
 		return nil, errors.New("claude-code: model discovery: configured provider is unsupported")
+	}
+	// An expired stored login cannot list models until Claude Code renews it,
+	// and asking would only earn a 401 that reads like a sign-out.
+	if resolved.found && resolved.credential.ExpiredButRenewable(claudeNow()) {
+		return nil, modelDiscoveryAuthError{
+			kind:    ports.ErrAgentModelDiscoveryCredentialExpired,
+			message: "claude-code: model discovery: the saved Claude Code login token expired; Claude Code renews it the next time it runs",
+		}
 	}
 	result := agentcreds.Result{}
 	if resolved.found {
@@ -422,7 +457,11 @@ func ProviderModels(ctx context.Context, binary, workingDir string, env map[stri
 		claudeAuthCache.put(result)
 	}
 	if result.State != agentcreds.StateValid && len(result.Models) == 0 {
-		return nil, fmt.Errorf("claude-code: model discovery: %s", result.Detail)
+		message := fmt.Sprintf("claude-code: model discovery: %s", result.Detail)
+		if result.State == agentcreds.StateInvalid {
+			return nil, modelDiscoveryAuthError{kind: ports.ErrAgentModelDiscoveryCredentialRejected, message: message}
+		}
+		return nil, errors.New(message)
 	}
 	if len(result.Models) == 0 {
 		return nil, errors.New("claude-code: provider reported no Claude models")

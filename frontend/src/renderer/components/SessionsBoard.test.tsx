@@ -38,6 +38,8 @@ const {
 	boardActionsInPanelMock: vi.fn(() => false),
 }));
 
+vi.mock("./ShellTopbar", async (importOriginal) => ({ ...(await importOriginal<typeof import("./ShellTopbar")>()), ShellTopbar: () => null }));
+
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
 }));
@@ -86,6 +88,12 @@ vi.mock("../lib/api-client", () => ({
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
+		app: {
+			onCloseShellTerminalShortcut: () => () => {},
+			onPreviousTabShortcut: () => () => {},
+			onNextTabShortcut: () => () => {},
+			setCloseShellTerminalShortcutEnabled: () => {},
+		},
 		cloud: {
 			getSession: vi.fn().mockResolvedValue(null),
 			onSessionChanged: vi.fn(() => () => {}),
@@ -153,6 +161,19 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
+	it("shows the orchestrator launch surface immediately after project setup", () => {
+		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "New project", path: "/tmp/new-project", sessions: [] }], isSuccess: true });
+		useUiStore.getState().setProjectProvisioning("p1", true);
+		try {
+			renderBoard("p1");
+			expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+			expect(screen.getByLabelText("Message the agent")).toBeInTheDocument();
+			expect(screen.getByTestId("session-workspace-topbar")).toBeInTheDocument();
+		} finally {
+			useUiStore.getState().setProjectProvisioning("p1", false);
+		}
+	});
+
 	it("says a session's status could not be verified, without offering a retry", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([boardSession({ id: "unverified", title: "Unverified task", status: "unknown", displayStatus: "Working", statusReadiness: "unavailable" })])],
@@ -782,6 +803,25 @@ describe("SessionsBoard", () => {
 		expect(within(card).getByText("Starting Claude Code…")).toBeInTheDocument();
 		expect(within(card).queryByText("Working")).not.toBeInTheDocument();
 		expect(within(card).queryByText("Exited")).not.toBeInTheDocument();
+	});
+
+	it("shows start failure instead of Awaiting PR on a failed card", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({
+				id: "s-setup-failed",
+				title: "failed-setup-task",
+				status: "idle",
+				displayStatus: "Awaiting PR",
+				provisionState: "failed",
+			})])],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+		const card = screen.getByText("failed-setup-task").closest('[data-testid="board-session-card"]') as HTMLElement;
+		expect(within(card).getByTestId("session-status")).toHaveTextContent("Start failed");
+		expect(within(card).queryByText("Awaiting PR")).not.toBeInTheDocument();
 	});
 
 	it("shows switch progress instead of the exited source on a card", () => {

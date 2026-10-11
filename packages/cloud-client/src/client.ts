@@ -340,6 +340,21 @@ export class CloudClient {
     );
   }
 
+  /** Retries a session whose worker never started (see Session.startupError). */
+  retrySessionStartup(
+    orgId: string,
+    sessionId: string,
+    options: RequestOptions = {},
+  ): Promise<{ session: Session }> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/startup-retry`,
+      ),
+      { method: "POST", signal: options.signal },
+    );
+  }
+
   getSessionInterfaceTransition(
     orgId: string,
     sessionId: string,
