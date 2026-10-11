@@ -198,6 +198,9 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		}
 		instructions = string(b)
 	}
+	if cfg.WorkspacePath != "" {
+		instructions += fmt.Sprintf("\n\nYour actual AO session workspace is %q. Use this workspace for coding and tool paths, rather than the original repository checkout. Verify current process cwd when reporting it.", cfg.WorkspacePath)
+	}
 	sp, _ := config["system_prompt"].(map[string]any)
 	if sp == nil {
 		sp = map[string]any{}
