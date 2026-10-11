@@ -32,7 +32,7 @@ func (*Plugin) Manifest() adapters.Manifest {
 }
 func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, binaryutil.BinarySpec{Label: "openjarvis", Names: []string{"jarvis"}, UnixHomePaths: [][]string{{".local", "bin", "jarvis"}}, ValidateIdentity: func(ctx context.Context, path string) bool {
-		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		cmd := aoprocess.CommandContext(ctx, path, "--version")
 		cmd.WaitDelay = 100 * time.Millisecond
