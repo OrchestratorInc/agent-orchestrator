@@ -160,7 +160,11 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 		return fmt.Errorf("openjarvis: invalid native configuration: %w", err)
 	}
 	tools, _ := config["tools"].(map[string]any)
-	enabled, _ := tools["enabled"].([]any)
+	enabled := nativeTools(tools["enabled"])
+	if len(enabled) == 0 {
+		agent, _ := config["agent"].(map[string]any)
+		enabled = nativeTools(agent["tools"])
+	}
 	required := map[string]bool{"file_read": false, "file_write": false, "shell_exec": false, "code_interpreter": false}
 	for _, tool := range enabled {
 		if _, ok := required[fmt.Sprint(tool)]; ok {
@@ -322,4 +326,23 @@ func resolveNativePath(path, workspace string, env map[string]string) (string, e
 // ExitDetectionMode implements the scoped native adapter contract.
 func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 	return ports.AgentExitDetectionSupervisor
+}
+
+func nativeTools(value any) []string {
+	var names []string
+	switch v := value.(type) {
+	case string:
+		names = strings.Split(v, ",")
+	case []any:
+		for _, item := range v {
+			names = append(names, fmt.Sprint(item))
+		}
+	}
+	var clean []string
+	for _, name := range names {
+		if name = strings.TrimSpace(name); name != "" {
+			clean = append(clean, name)
+		}
+	}
+	return clean
 }

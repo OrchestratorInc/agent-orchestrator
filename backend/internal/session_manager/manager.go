@@ -6206,7 +6206,19 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 	defer ticker.Stop()
 
 	for {
-		output, err := m.runtime.GetOutput(ctx, handle, lines)
+		var output string
+		var err error
+		if rendered, ok := agent.(interface{ RequiresRenderedActivity() bool }); ok && rendered.RequiresRenderedActivity() {
+			reader, ok := m.runtime.(interface {
+				GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error)
+			})
+			if !ok {
+				return fmt.Errorf("prompt readiness: current rendered terminal unavailable")
+			}
+			output, err = reader.GetStyledOutput(ctx, handle, lines)
+		} else {
+			output, err = m.runtime.GetOutput(ctx, handle, lines)
+		}
 		if err == nil && promptOutputContains(output, hints.Patterns) {
 			return nil
 		}
