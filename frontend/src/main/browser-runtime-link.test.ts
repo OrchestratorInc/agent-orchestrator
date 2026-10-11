@@ -331,4 +331,61 @@ describe("browser runtime link", () => {
 			}),
 		);
 	});
+
+	// Like the daemon's broker refusing a stale token: read the hello, then close.
+	async function refusingDaemon(acceptAfter = Number.POSITIVE_INFINITY) {
+		const daemon = { connections: 0 };
+		const server = net.createServer((socket) => {
+			daemon.connections += 1;
+			const attempt = daemon.connections;
+			socket.once("data", () => {
+				if (attempt <= acceptAfter) socket.destroy();
+			});
+		});
+		servers.push(server);
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const address = server.address() as net.AddressInfo;
+		return { daemon, address: { host: address.address, port: address.port } };
+	}
+
+	it("backs off on a refused handshake instead of reporting connected every 200 ms (#6466)", async () => {
+		const { daemon, address } = await refusingDaemon();
+		const states: Array<[boolean, boolean]> = [];
+		const logs: string[] = [];
+		const handle = connectBrowserRuntime(address, {
+			execute: async () => ({}),
+			token: "stale-token",
+			log: (message) => logs.push(message),
+			onStateChange: (connected, rejected) => states.push([connected, rejected]),
+		});
+		handles.push(handle);
+
+		await new Promise((resolve) => setTimeout(resolve, 1_500));
+
+		// Redials at 0, 200, 600 and 1,400 ms. Before the fix every refused attempt
+		// reported connected and reset the backoff, so it redialed every 200 ms.
+		expect(states.some(([connected]) => connected)).toBe(false);
+		expect(daemon.connections).toBeLessThanOrEqual(5);
+		await vi.waitFor(() => expect(handle.rejected).toBe(true));
+		expect(states).toEqual([[false, true]]);
+		expect(logs.filter((line) => line.includes("connected"))).toEqual([]);
+		expect(logs.filter((line) => line.includes("rejecting the handshake"))).toHaveLength(1);
+	});
+
+	it("clears the rejection once the daemon accepts the hello again", async () => {
+		const { address } = await refusingDaemon(3);
+		const states: Array<[boolean, boolean]> = [];
+		const handle = connectBrowserRuntime(address, {
+			execute: async () => ({}),
+			onStateChange: (connected, rejected) => states.push([connected, rejected]),
+		});
+		handles.push(handle);
+
+		await vi.waitFor(() => expect(handle.connected).toBe(true), { timeout: 5_000 });
+		expect(handle.rejected).toBe(false);
+		expect(states).toEqual([
+			[false, true],
+			[true, false],
+		]);
+	});
 });

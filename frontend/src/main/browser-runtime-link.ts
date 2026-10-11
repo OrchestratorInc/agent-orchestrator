@@ -4,6 +4,16 @@ import { StringDecoder } from "node:string_decoder";
 const PROTOCOL_VERSION = 2;
 const BACKOFF_INIT_MS = 200;
 const BACKOFF_MAX_MS = 2_000;
+// The daemon answers a valid hello with nothing and an invalid one by closing
+// the socket as soon as it reads it, so a link still open this long after its
+// hello (or one that has received a frame) was accepted.
+const ACCEPT_AFTER_MS = 250;
+// Only a link that stayed up this long earns a fast reconnect. A link that keeps
+// closing early backs off even if it was briefly taken for accepted (#6466).
+const STABLE_LINK_MS = 5_000;
+// Consecutive handshakes the daemon closed before accepting. This many means it
+// is refusing this app (for example, it holds another app launch's token).
+const REJECTED_AFTER_ATTEMPTS = 3;
 const MAX_COMMAND_BYTES = 1 << 20;
 const MAX_RESULT_BYTES = 8 << 20;
 
@@ -27,6 +37,8 @@ export type BrowserRuntimeCommandError = {
 
 export interface BrowserRuntimeLinkHandle {
 	readonly connected: boolean;
+	/** The daemon keeps closing the link before accepting its hello. */
+	readonly rejected: boolean;
 	dispose(): void;
 }
 
@@ -34,7 +46,7 @@ type BrowserRuntimeLinkOptions = {
 	execute: (command: BrowserRuntimeCommand, signal: AbortSignal) => Promise<unknown>;
 	token?: string;
 	log?: (message: string) => void;
-	onStateChange?: (connected: boolean) => void;
+	onStateChange?: (connected: boolean, rejected: boolean) => void;
 };
 
 export function connectBrowserRuntime(
@@ -44,6 +56,8 @@ export function connectBrowserRuntime(
 	const log = options.log ?? (() => undefined);
 	let disposed = false;
 	let connected = false;
+	let rejected = false;
+	let rejectedStreak = 0;
 	let socket: net.Socket | null = null;
 	let retryTimer: ReturnType<typeof setTimeout> | null = null;
 	let backoff = BACKOFF_INIT_MS;
@@ -56,10 +70,11 @@ export function connectBrowserRuntime(
 		string,
 		{ command: BrowserRuntimeCommand; target: net.Socket; epoch: number }
 	>();
-	const setConnected = (value: boolean) => {
-		if (connected === value) return;
-		connected = value;
-		options.onStateChange?.(value);
+	const setState = (nextConnected: boolean, nextRejected: boolean) => {
+		if (connected === nextConnected && rejected === nextRejected) return;
+		connected = nextConnected;
+		rejected = nextRejected;
+		options.onStateChange?.(connected, rejected);
 	};
 
 	const sendCancelledResultOnTarget = (command: BrowserRuntimeCommand, target: net.Socket) => {
@@ -255,26 +270,59 @@ export function connectBrowserRuntime(
 		const epoch = ++connectionEpoch;
 		const next = typeof address === "string" ? net.connect(address) : net.connect(address);
 		socket = next;
+		let helloSent = false;
+		let acceptedAt = 0;
+		let acceptTimer: ReturnType<typeof setTimeout> | null = null;
+		// A TCP connect is not an accepted link: the daemon validates the hello and
+		// closes the socket if it refuses it. Treating connect as success flipped the
+		// state and reset the backoff on every refused attempt (#6466).
+		const accept = () => {
+			if (acceptedAt !== 0 || socket !== next || connectionEpoch !== epoch) return;
+			acceptedAt = Date.now();
+			if (acceptTimer !== null) clearTimeout(acceptTimer);
+			acceptTimer = null;
+			rejectedStreak = 0;
+			setState(true, false);
+			log("browser-runtime-link: connected");
+		};
 		next.on("connect", () => {
 			if (disposed) {
 				next.destroy();
 				return;
 			}
-			setConnected(true);
-			backoff = BACKOFF_INIT_MS;
+			helloSent = true;
 			void send({ type: "hello", version: PROTOCOL_VERSION, token: options.token }, next, epoch).catch((error) => {
 				log(`browser-runtime-link: hello failed: ${String(error)}`);
 				next.destroy();
 			});
-			log("browser-runtime-link: connected");
+			acceptTimer = setTimeout(accept, ACCEPT_AFTER_MS);
 		});
-		next.on("data", (chunk) => consume(chunk, next, epoch));
+		next.on("data", (chunk) => {
+			// The daemon only writes to a runtime whose hello it accepted.
+			accept();
+			consume(chunk, next, epoch);
+		});
 		next.on("error", (error) => log(`browser-runtime-link: error: ${error.message}`));
 		let connectionTornDown = false;
 		const tearDownConnection = () => {
 			if (connectionTornDown || socket !== next || connectionEpoch !== epoch) return;
 			connectionTornDown = true;
-			setConnected(false);
+			if (acceptTimer !== null) clearTimeout(acceptTimer);
+			acceptTimer = null;
+			if (acceptedAt !== 0) {
+				if (Date.now() - acceptedAt >= STABLE_LINK_MS) backoff = BACKOFF_INIT_MS;
+				setState(false, false);
+			} else if (helloSent) {
+				rejectedStreak += 1;
+				if (rejectedStreak === 1) {
+					log("browser-runtime-link: daemon closed the link before accepting the hello; backing off");
+				} else if (rejectedStreak === REJECTED_AFTER_ATTEMPTS) {
+					log("browser-runtime-link: daemon keeps rejecting the handshake; restart the AO daemon to relink the browser runtime");
+				}
+				setState(false, rejectedStreak >= REJECTED_AFTER_ATTEMPTS);
+			} else {
+				setState(false, rejected);
+			}
 			cancelConnectionCommands();
 			socket = null;
 			connectionEpoch += 1;
@@ -290,9 +338,12 @@ export function connectBrowserRuntime(
 		get connected() {
 			return connected;
 		},
+		get rejected() {
+			return rejected;
+		},
 		dispose() {
 			disposed = true;
-			setConnected(false);
+			setState(false, false);
 			clearRetry();
 			destroySocket();
 		},

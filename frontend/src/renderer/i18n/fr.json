@@ -244,6 +244,7 @@
 	"browser.reload": "Actualiser",
 	"browser.retryAnnotation": "Réessayer l'annotation",
 	"browser.runtimeDisconnected": "Le moteur du navigateur est déconnecté.",
+	"browser.runtimeRejected": "Le daemon AO a refusé le moteur du navigateur. Redémarrez AO pour le reconnecter.",
 	"browser.reconnectRuntime": "Reconnecter",
 	"browser.returnToPanel": "Retour au panneau",
 	"browser.sending": "Envoi",

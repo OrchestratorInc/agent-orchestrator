@@ -1441,8 +1441,8 @@ function disposeBrowserRuntimeLink(): void {
 	browserRuntimeLinkIdentity = null;
 }
 
-function publishBrowserRuntimeState(connected: boolean): void {
-	getShellWebContents()?.send("browser:runtimeState", { connected } satisfies BrowserRuntimeState);
+function publishBrowserRuntimeState(connected: boolean, rejected: boolean): void {
+	getShellWebContents()?.send("browser:runtimeState", { connected, rejected } satisfies BrowserRuntimeState);
 }
 
 function reconnectBrowserRuntimeLink(): void {
@@ -2259,7 +2259,7 @@ ipcMain.handle("browser:runtime:reconnect", (event) => {
 
 ipcMain.handle("browser:runtime:state", (event): BrowserRuntimeState => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted browser runtime request.");
-	return { connected: browserRuntimeLink?.connected ?? false };
+	return { connected: browserRuntimeLink?.connected ?? false, rejected: browserRuntimeLink?.rejected ?? false };
 });
 
 ipcMain.on("browser:overlay", (event, open: unknown) => {

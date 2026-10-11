@@ -243,6 +243,7 @@
 	"browser.reload": "再読み込み",
 	"browser.retryAnnotation": "注釈を再試行",
 	"browser.runtimeDisconnected": "ブラウザランタイムが切断されました。",
+	"browser.runtimeRejected": "AO デーモンがブラウザランタイムを拒否しました。再接続するには AO を再起動してください。",
 	"browser.reconnectRuntime": "再接続",
 	"browser.returnToPanel": "パネルに戻る",
 	"browser.sending": "送信中",

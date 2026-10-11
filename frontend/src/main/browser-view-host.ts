@@ -171,6 +171,8 @@ export type BrowserAgentActivityState = {
 
 export type BrowserRuntimeState = {
 	connected: boolean;
+	/** The daemon keeps refusing this app's handshake; reconnecting alone won't fix it. */
+	rejected: boolean;
 };
 
 export type BrowserDevToolsState = {

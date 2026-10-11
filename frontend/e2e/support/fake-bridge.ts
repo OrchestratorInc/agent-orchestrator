@@ -159,7 +159,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				browser: {
 					reconnectRuntime: async () => undefined,
-					getRuntimeState: async () => ({ connected: false }),
+					getRuntimeState: async () => ({ connected: false, rejected: false }),
 					nativeCompositionEnabled: true,
 					ensure: async (sessionId: string) => navState(`preview:${sessionId}`),
 					setBounds: () => undefined,
@@ -774,7 +774,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				browser: {
 					reconnectRuntime: async () => undefined,
-					getRuntimeState: async () => ({ connected: false }),
+					getRuntimeState: async () => ({ connected: false, rejected: false }),
 					nativeCompositionEnabled: true,
 					ensure: async (sessionId: string) => navState(`preview:${sessionId}`),
 					setBounds: () => undefined,

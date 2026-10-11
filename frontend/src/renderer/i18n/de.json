@@ -243,6 +243,7 @@
 	"browser.reload": "Neu laden",
 	"browser.retryAnnotation": "Annotation erneut versuchen",
 	"browser.runtimeDisconnected": "Browser-Laufzeit getrennt.",
+	"browser.runtimeRejected": "Browser-Laufzeit vom AO-Daemon abgelehnt. Starte AO neu, um sie wieder zu verbinden.",
 	"browser.reconnectRuntime": "Neu verbinden",
 	"browser.returnToPanel": "Zurück zum Panel",
 	"browser.sending": "Wird gesendet",

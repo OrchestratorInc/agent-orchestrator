@@ -244,6 +244,7 @@
 	"browser.reload": "Recargar",
 	"browser.retryAnnotation": "Reintentar anotación",
 	"browser.runtimeDisconnected": "El entorno del navegador está desconectado.",
+	"browser.runtimeRejected": "El daemon de AO rechazó el entorno del navegador. Reinicia AO para volver a conectarlo.",
 	"browser.reconnectRuntime": "Volver a conectar",
 	"browser.returnToPanel": "Volver al panel",
 	"browser.sending": "Enviando",

@@ -65,6 +65,7 @@ import {
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useBrowserView, type BrowserViewModel } from "../hooks/useBrowserView";
+import { reconnectBrowserRuntime, useBrowserRuntimeState } from "../hooks/useBrowserRuntimeState";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { formatBrowserAnnotationMessage, type BrowserAnnotationSubmitPayload } from "../../shared/browser-annotations";
 import type { BrowserProfile } from "../../shared/browser-profiles";
@@ -436,8 +437,6 @@ export function BrowserPanelView({
 		reopenClosedTab,
 		agentBrowserActive,
 		agentBrowserActivity,
-		browserRuntimeConnected,
-		reconnectBrowserRuntime = async () => undefined,
 		devtoolsState = { viewId: "", open: false, activeTabId: "" },
 		profileState = { viewId: "", profileId: null, temporary: true },
 		openDevTools = async () => undefined,
@@ -933,7 +932,8 @@ export function BrowserPanelView({
 							? error
 							: "";
 	const agentStatusLabel = agentActivityLabel(agentBrowserActivity, agentBrowserActive);
-	const runtimeDisconnected = hasNativeBrowser && browserRuntimeConnected === false;
+	const runtimeState = useBrowserRuntimeState();
+	const runtimeDisconnected = hasNativeBrowser && runtimeState?.connected === false;
 	const reconnectRuntime = useCallback(async () => {
 		setRuntimeReconnectPending(true);
 		try {
@@ -941,7 +941,7 @@ export function BrowserPanelView({
 		} finally {
 			setRuntimeReconnectPending(false);
 		}
-	}, [reconnectBrowserRuntime]);
+	}, []);
 	const suggestionsOpen = urlEditing && historySuggestions.length > 0;
 	const currentURLIsWeb = isWebLink(navState.url);
 	const copyURLLabel = t(urlCopied ? "browser.urlCopied" : "browser.copyUrl");
@@ -1287,7 +1287,9 @@ export function BrowserPanelView({
 				<div className="browser-panel__toolbar" data-testid="browser-toolbar">
 							{runtimeDisconnected ? (
 								<div className="flex min-w-0 items-center gap-1.5 text-2xs text-destructive" data-testid="browser-runtime-alert" role="alert">
-									<span className="truncate">{t("browser.runtimeDisconnected")}</span>
+									<span className="truncate">
+										{runtimeState?.rejected ? t("browser.runtimeRejected") : t("browser.runtimeDisconnected")}
+									</span>
 									<Button
 										className="shrink-0"
 										disabled={runtimeReconnectPending}
