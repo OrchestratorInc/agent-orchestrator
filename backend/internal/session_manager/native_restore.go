@@ -103,11 +103,18 @@ func (m *Manager) rollbackNativeInitialization(ctx context.Context, original dom
 	if rec.Metadata.RuntimeHandleID != handle.ID || rec.Metadata.RuntimeLaunchID != launchID {
 		return errors.New("native restore cleanup ownership lost")
 	}
-	if err := m.runtime.Destroy(ctx, handle); err != nil {
-		return fmt.Errorf("native restore cleanup: %w", err)
+	destroyErr := m.runtime.Destroy(ctx, handle)
+	if destroyErr != nil {
+		destroyErr = fmt.Errorf("native restore cleanup: %w", destroyErr)
 	}
+	var rollbackErr error
 	if original.IsTerminated {
-		return m.lcm.MarkTerminated(ctx, original.ID)
+		rollbackErr = m.lcm.MarkTerminated(ctx, original.ID)
+	} else {
+		rollbackErr = m.recordAgentExited(ctx, rec)
 	}
-	return m.recordAgentExited(ctx, rec)
+	if rollbackErr != nil {
+		rollbackErr = fmt.Errorf("native restore quarantine: %w", rollbackErr)
+	}
+	return errors.Join(destroyErr, rollbackErr)
 }
