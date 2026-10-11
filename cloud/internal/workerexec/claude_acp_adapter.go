@@ -21,6 +21,9 @@ const (
 	claudeACPAdapterPackage = "@agentclientprotocol/claude-agent-acp"
 	claudeACPAdapterVersion = "0.70.0"
 	claudeACPInstallTimeout = 4 * time.Minute
+	// claudeACPRetryAfter spaces out installs after one fails, so every Chat UI
+	// request does not rerun npm against a registry that is down.
+	claudeACPRetryAfter = time.Minute
 )
 
 var (
@@ -40,10 +43,11 @@ type claudeACPAdapter struct {
 	homeDir  func() (string, error)
 	install  func(ctx context.Context, npm, prefix string) error
 
-	mu      sync.Mutex
-	path    string
-	err     error
-	pending chan struct{}
+	mu       sync.Mutex
+	path     string
+	err      error
+	failedAt time.Time
+	pending  chan struct{}
 }
 
 var defaultClaudeACPAdapter = &claudeACPAdapter{
@@ -89,6 +93,11 @@ func (a *claudeACPAdapter) ensure(ctx context.Context) (string, error) {
 		a.mu.Unlock()
 		return local, nil
 	}
+	if a.pending == nil && a.err != nil && time.Since(a.failedAt) < claudeACPRetryAfter {
+		err := a.err
+		a.mu.Unlock()
+		return "", err
+	}
 	if a.pending == nil {
 		npm, lookErr := a.lookPath("npm")
 		if lookErr != nil {
@@ -110,6 +119,9 @@ func (a *claudeACPAdapter) ensure(ctx context.Context) (string, error) {
 				a.err = fmt.Errorf("%w: npm finished but %s is missing", ErrChatAdapterUnavailable, local)
 			default:
 				a.path, a.err = local, nil
+			}
+			if a.err != nil {
+				a.failedAt = time.Now()
 			}
 			a.pending = nil
 			a.mu.Unlock()

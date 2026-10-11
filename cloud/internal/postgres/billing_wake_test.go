@@ -65,6 +65,17 @@ func billedPaused(t *testing.T, admin *pgxpool.Pool, fixture notificationFixture
 	}
 }
 
+// recordSelfServe records the organization as self-serve, as a member's
+// request would, so the usage enforcer applies its plan.
+func recordSelfServe(t *testing.T, admin *pgxpool.Pool, orgID string) {
+	t.Helper()
+	if _, err := admin.Exec(context.Background(),
+		`UPDATE ao_organizations SET settings = settings || jsonb_build_object('billing_mode', $2::text) WHERE id = $1`,
+		orgID, domain.BillingModeSelfServe); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func desiredState(t *testing.T, admin *pgxpool.Pool, sessionID string) string {
 	t.Helper()
 	var desired string
@@ -277,6 +288,31 @@ func TestWakesOutsideSelfServeBillingAreUntouched(t *testing.T) {
 	}
 }
 
+// Freestyle sessions that ran before billing was enabled belong to an
+// organization whose billing no request has recorded yet; it may be a contract
+// one, so the enforcer leaves it alone until a member's request records it.
+func TestEnforcerLeavesUnrecordedOrganizationsAlone(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	store.EnableBilling(7*24*time.Hour, time.Time{})
+	ctx := context.Background()
+	if _, err := admin.Exec(ctx,
+		`UPDATE ao_sandboxes SET provider = 'freestyle', desired_state = 'running', observed_state = 'running' WHERE session_id = $1`,
+		fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if paused, err := store.PauseOverLimit(ctx, fixture.orgID); err != nil || paused != 0 {
+		t.Fatalf("enforcer paused an organization with unrecorded billing: %d %v", paused, err)
+	}
+	selfServe := domain.Principal{UserID: fixture.userID, Provider: "local", OrgBilling: domain.BillingModeSelfServe, TeamOrgID: fixture.orgID}
+	if _, err := store.BillingSummary(ctx, selfServe, fixture.orgID); err != nil {
+		t.Fatal(err)
+	}
+	if paused, err := store.PauseOverLimit(ctx, fixture.orgID); err != nil || paused != 1 {
+		t.Fatalf("enforcer on a recorded self-serve organization without a plan: %d %v", paused, err)
+	}
+}
+
 // A share grantee (editor) may wake within the plan and is refused beyond it
 // like a member; the grantee's own organization billing does not apply.
 func TestShareGranteeWakesUnderTheSessionOrganizationsPlan(t *testing.T) {
@@ -404,6 +440,7 @@ func TestEnforcerPausesBusySessionsAfterTheGrace(t *testing.T) {
 	store.EnableBilling(7*24*time.Hour, time.Time{})
 	store.SetBillingBusyGrace(5 * time.Minute)
 	ctx := context.Background()
+	recordSelfServe(t, admin, fixture.orgID)
 	// No plan at all: over the plan. The fixture runs busy on Freestyle.
 	if _, err := admin.Exec(ctx,
 		`UPDATE ao_sandboxes SET provider = 'freestyle', desired_state = 'running', observed_state = 'running' WHERE session_id = $1`,
@@ -458,6 +495,7 @@ func TestEnforcerPausesTheNewestSessionsBeyondTheRunningSlots(t *testing.T) {
 	limits := starterLimits()
 	limits.MaxActiveSandboxes, limits.MaxRunningSandboxes, limits.OrchestratorSlots = 8, 4, 0
 	subscribe(t, store, fixture.orgID, "active", limits)
+	recordSelfServe(t, admin, fixture.orgID)
 	if _, err := admin.Exec(ctx,
 		`UPDATE ao_sandboxes SET provider = 'freestyle', desired_state = 'running', observed_state = 'running' WHERE session_id = $1`,
 		fixture.sessionID); err != nil {

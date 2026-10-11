@@ -276,6 +276,7 @@ func TestUsageSamplingAndOverLimitPause(t *testing.T) {
 	billFixtureSandbox(t, admin, fixture)
 	ctx := context.Background()
 	store.EnableBilling(7*24*time.Hour, time.Time{})
+	recordSelfServe(t, admin, fixture.orgID)
 	if _, err := admin.Exec(ctx,
 		`UPDATE ao_sandboxes SET desired_state = 'running', observed_state = 'running' WHERE session_id = $1`,
 		fixture.sessionID); err != nil {

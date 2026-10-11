@@ -41,7 +41,7 @@ const (
 	// An agent ticket request waits up to agentTicketWait for the agent
 	// terminal to open, checking every agentTicketPoll.
 	agentTicketWait = 8 * time.Second
-	agentTicketPoll = 100 * time.Millisecond
+	agentTicketPoll = 250 * time.Millisecond
 )
 
 var errTerminalProcessUnavailable = errors.New("terminal process unavailable")

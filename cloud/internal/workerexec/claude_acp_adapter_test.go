@@ -95,10 +95,26 @@ func TestClaudeACPAdapterWithoutNpmIsUnavailable(t *testing.T) {
 }
 
 func TestClaudeACPAdapterFailedInstallIsUnavailable(t *testing.T) {
+	var installs atomic.Int32
 	adapter := testAdapter(t.TempDir(), map[string]string{"npm": "/usr/bin/npm"},
-		func(context.Context, string, string) error { return errors.New("registry unreachable") })
-	if _, err := adapter.ensure(context.Background()); !errors.Is(err, ErrChatAdapterUnavailable) {
-		t.Fatalf("err = %v, want ErrChatAdapterUnavailable", err)
+		func(context.Context, string, string) error {
+			installs.Add(1)
+			return errors.New("registry unreachable")
+		})
+	for i := 0; i < 3; i++ {
+		if _, err := adapter.ensure(context.Background()); !errors.Is(err, ErrChatAdapterUnavailable) {
+			t.Fatalf("err = %v, want ErrChatAdapterUnavailable", err)
+		}
+	}
+	if got := installs.Load(); got != 1 {
+		t.Fatalf("installs = %d, want 1 until the retry delay passes", got)
+	}
+	adapter.mu.Lock()
+	adapter.failedAt = time.Now().Add(-claudeACPRetryAfter)
+	adapter.mu.Unlock()
+	_, _ = adapter.ensure(context.Background())
+	if got := installs.Load(); got != 2 {
+		t.Fatalf("installs = %d, want a retry after the delay", got)
 	}
 }
 
