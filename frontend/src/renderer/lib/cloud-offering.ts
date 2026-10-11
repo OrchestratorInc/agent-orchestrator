@@ -59,9 +59,15 @@ export function billingModeFromSummary(summary: CloudCpBillingSummary | undefine
  * oldest first, and each carries its own offering. A user in both a team org
  * and a personal org gets the team org: the one whose offering includes coder
  * (kind b2b or both). Otherwise, and on a control plane without per-org
- * offerings, the first org.
+ * offerings, the first org. A control plane that reports
+ * activeOrganizationId (the token's WorkOS org) decides instead.
  */
-export function selectActiveOrganization<T extends Pick<CloudCpOrganization, "offering">>(organizations: readonly T[]): T | undefined {
+export function selectActiveOrganization<T extends Pick<CloudCpOrganization, "id" | "offering">>(
+	organizations: readonly T[],
+	activeOrganizationId?: string,
+): T | undefined {
+	const reported = activeOrganizationId ? organizations.find((org) => org.id === activeOrganizationId) : undefined;
+	if (reported) return reported;
 	return organizations.find((org) => org.offering?.kind === "b2b" || org.offering?.kind === "both") ?? organizations[0];
 }
 
@@ -82,8 +88,9 @@ export function resolveCloudOffering(
 ): ResolvedCloudOffering | undefined {
 	if (!me) return undefined;
 	const organizations = me.organizations ?? [];
-	const org = organizations.find((candidate) => candidate.id === activeOrgId) ?? selectActiveOrganization(organizations);
-	const offering = org?.offering ?? (org === undefined || org === organizations[0] ? me.offering : undefined);
+	const org = organizations.find((candidate) => candidate.id === activeOrgId) ?? selectActiveOrganization(organizations, me.activeOrganizationId);
+	const describedByTopLevel = me.activeOrganizationId ? org?.id === me.activeOrganizationId : org === organizations[0];
+	const offering = org?.offering ?? (org === undefined || describedByTopLevel ? me.offering : undefined);
 	if (offering) {
 		const providers = offering.providers ?? [];
 		return {

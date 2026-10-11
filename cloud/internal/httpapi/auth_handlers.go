@@ -192,19 +192,31 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		}
 		organizations[i].Offering = &offering
 	}
-	// offering describes the first organization, the one the desktop app works
-	// in. With no organization it reports the deployment defaults.
+	// activeOrganizationID is the organization the desktop app works in: the
+	// one the token's WorkOS organization maps to when listed, else the first.
+	// offering describes it; with no organization it reports the deployment
+	// defaults.
 	var offering offeringResponse
+	activeOrganizationID := ""
 	if len(organizations) > 0 {
-		offering = *organizations[0].Offering
+		active := 0
+		for i := range organizations {
+			if principal.TeamOrgID != "" && organizations[i].ID == principal.TeamOrgID {
+				active = i
+				break
+			}
+		}
+		activeOrganizationID = organizations[active].ID
+		offering = *organizations[active].Offering
 	} else if offering, err = s.offeringForOrg(r.Context(), principal, ""); err != nil {
 		s.writeStoreError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user":          toUserResponse(principal),
-		"organizations": organizations,
-		"offering":      offering,
+		"user":                 toUserResponse(principal),
+		"organizations":        organizations,
+		"activeOrganizationId": activeOrganizationID,
+		"offering":             offering,
 		// sandboxProviders lets the client render a provider selector limited to
 		// what this control plane offers AND what the organization is entitled
 		// to, defaulting to the organization's default provider. It carries the

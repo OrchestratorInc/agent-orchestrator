@@ -72,7 +72,7 @@ export async function spawnCloudOrchestrator(queryClient: QueryClient, projectId
 	// project can only exist inside an org, so signed-in users spawning from one
 	// always have it.
 	const me = await client.me();
-	const orgId = selectActiveOrganization(me.organizations)?.id;
+	const orgId = selectActiveOrganization(me.organizations, me.activeOrganizationId)?.id;
 	if (orgId === undefined) throw new Error("No cloud organization is available.");
 	// Pick the orchestrator harness. Prefer the agent the user configured for
 	// this project (config.orchestrator.agent); only when the project has not

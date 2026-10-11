@@ -197,8 +197,9 @@ func newOfferingServer(store Store, defaultCapabilities ...string) *Server {
 }
 
 type meOfferingBody struct {
-	Offering         offeringResponse `json:"offering"`
-	SandboxProviders struct {
+	ActiveOrganizationID string           `json:"activeOrganizationId"`
+	Offering             offeringResponse `json:"offering"`
+	SandboxProviders     struct {
 		Available []string `json:"available"`
 		Default   string   `json:"default"`
 	} `json:"sandboxProviders"`
@@ -259,15 +260,19 @@ func TestMeOfferingKinds(t *testing.T) {
 
 // The personal organization listed first does not inherit the team org's coder
 // capability: it is offered the deployment defaults, while the team org entry
-// keeps coder.
+// keeps coder. The token's team org is the active one, which the top-level
+// offering describes.
 func TestMeOfferingIsPerOrganization(t *testing.T) {
 	store := &offeringStore{memberships: []domain.Membership{
 		{OrgID: offeringPersonalOrgID, Role: "owner"},
 		{OrgID: offeringTeamOrgID, Role: "member"},
 	}}
 	body := getMe(t, newOfferingServer(store, "nodeops"), teamPrincipal("coder"))
-	if body.Offering.Kind != domain.OfferingKindB2C || body.Offering.DefaultProvider != "nodeops" {
-		t.Fatalf("top-level offering = %+v, want the personal org's b2c defaults", body.Offering)
+	if body.Organizations[0].Offering.Kind != domain.OfferingKindB2C || body.Organizations[0].Offering.DefaultProvider != "nodeops" {
+		t.Fatalf("personal org offering = %+v, want the b2c defaults", body.Organizations[0].Offering)
+	}
+	if body.ActiveOrganizationID != offeringTeamOrgID || body.Offering.Kind != domain.OfferingKindB2B {
+		t.Fatalf("active org = %q offering = %+v, want the team org's b2b offering", body.ActiveOrganizationID, body.Offering)
 	}
 	if body.Organizations[1].Offering.Kind != domain.OfferingKindB2B {
 		t.Fatalf("team org offering = %+v, want b2b", body.Organizations[1].Offering)

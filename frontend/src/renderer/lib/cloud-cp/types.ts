@@ -77,7 +77,13 @@ export interface CloudCpMeResponse {
 	 */
 	sandboxProviders?: CloudCpSandboxProviders;
 	/**
-	 * The offering of organizations[0] (each org also carries its own). Absent
+	 * The organization the app works in: the one the sign-in token's WorkOS
+	 * organization maps to, else organizations[0]. Absent on an older control
+	 * plane.
+	 */
+	activeOrganizationId?: string;
+	/**
+	 * The offering of the active organization (each org also carries its own). Absent
 	 * on a control plane that predates it; the renderer then derives it (see
 	 * hooks/useCloudOffering).
 	 */

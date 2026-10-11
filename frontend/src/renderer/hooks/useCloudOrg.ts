@@ -54,7 +54,7 @@ export function useCloudOrg(): UseCloudOrgResult {
 		retry: 1,
 		queryFn: async (): Promise<CloudCpOrganization> => {
 			const me = await client.me();
-			const active = selectActiveOrganization(me.organizations);
+			const active = selectActiveOrganization(me.organizations, me.activeOrganizationId);
 			if (active !== undefined) return active;
 			const created = await client.createOrganization({
 				displayName: orgDisplayNameForAccount(me.user),
