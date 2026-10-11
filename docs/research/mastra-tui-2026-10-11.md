@@ -52,7 +52,7 @@ recovery. Background or embedding operation cancellation is not qualified.
 The actual Electron final14 screenshot below is secret-free and shows AO navigation,
 Mastra native permissions and model footer. Serving daemon913150 executable SHA
 ca138b346a75811da43791ab82281ac9d0ce66692d653a2e14808afc0e707221,
-UI and daemon VCS14fedd56b, captured12:45:43 UTC. Before/after provenance records
+UI and daemon VCS14fedd56b, captured12:46:26 UTC. Before/after provenance records
 carry session, generation, runfile, native digest, exact build, UTC and PNG SHA.
 The light-theme image and earlier restored screenshot are preserved separately;
 the dark screenshot is the legible primary evidence. A recovery recapture failed
