@@ -17,7 +17,9 @@ import (
 )
 
 var (
+	// ErrQualificationRequired prevents launch before native conformance.
 	ErrQualificationRequired = errors.New("freebuff: released native launch, profile isolation, instructions and readiness require qualification")
+	// ErrRestoreUnsupported prevents missing history from becoming fresh replay.
 	ErrRestoreUnsupported = errors.New("freebuff: exact restore and renewed standing instructions are not qualified; refusing fresh replay")
 )
 
@@ -26,15 +28,17 @@ type Plugin struct {
 	agentbase.Base
 }
 
+// New returns an unregistered, qualification-gated adapter.
 func New() *Plugin { return &Plugin{} }
 
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 
+// Manifest identifies the unregistered candidate.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID: "freebuff", Name: "Freebuff", Version: "0.0.1",
-		Description: "Unqualified Freebuff native TUI preparation.",
+		Description:  "Unqualified Freebuff native TUI preparation.",
 		Capabilities: []adapters.Capability{adapters.CapabilityAgent},
 	}
 }
@@ -84,6 +88,7 @@ func candidateLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]stri
 	return []string{"freebuff", "--cwd", cfg.WorkspacePath}, nil
 }
 
+// GetPromptDeliveryStrategy keeps user task text out of native argv.
 func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -92,6 +97,7 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchCo
 	return ports.PromptDeliveryAfterStart, nil
 }
 
+// GetAgentHooks refuses unqualified standing instruction delivery.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
