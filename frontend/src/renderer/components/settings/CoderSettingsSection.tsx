@@ -6,7 +6,6 @@ import { aoBridge } from "../../lib/bridge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
-import { Switch } from "../ui/switch";
 import type { CloudCpOrgCoderConfig, CloudCpPutOrgCoderConfigRequest } from "../../lib/cloud-cp";
 import { useCloudGate } from "../../hooks/useCloudGate";
 import { useCloudCp } from "../../hooks/useCloudCp";
@@ -83,10 +82,11 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 
 	// A save sends a new token when one is pasted: the control plane re-derives the
 	// workspace owner from it and the form never round-trips the stored secret.
-	// Without one, Save is only for dev-environment edits on a stored connection,
-	// which keep the stored token. So once a connection is saved and its templates
-	// are loaded, Save is not clickable until something changes; re-fetching
-	// templates is the refresh button on the Templates section, not Save.
+	// Without one there is nothing to save: the dev-environment settings are not
+	// edited here (onboarding sets them) and are carried through unchanged. So
+	// once a connection is saved and its templates are loaded, Save is not
+	// clickable until a token is pasted; re-fetching templates is the refresh
+	// button on the Templates section, not Save.
 	const timeoutInvalid = devEnv.readyProbe.trim() !== "" && !isValidReadyProbeTimeout(devEnv.readyProbeTimeout);
 	const devEnvDirty = loaded != null && !sameDevEnv(devEnv, devEnvDraftOf(loaded));
 	const canSave = !busy && orgId !== "" && baseUrl.trim() !== "" && !timeoutInvalid
@@ -175,78 +175,10 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 					</div>
 				</div>
 
-				<div className="flex flex-col gap-4 border-t border-border pt-4">
-					<Label className={onboardingFormLabelClass}>{t("settings.coder.devEnvTitle")}</Label>
-					<div className="flex flex-col gap-1">
-						<div className="flex items-center justify-between gap-3">
-							<Label htmlFor="coder-worker-user" className="text-[13px] text-foreground">{t("settings.coder.workerUserLabel")}</Label>
-							<Switch
-								id="coder-worker-user"
-								checked={devEnv.workspaceUser}
-								disabled={busy}
-								aria-describedby="coder-worker-user-hint"
-								onCheckedChange={(workspaceUser) => setDevEnv((current) => ({ ...current, workspaceUser }))}
-							/>
-						</div>
-						<p id="coder-worker-user-hint" className={onboardingFieldHintClass}>{t("settings.coder.workerUserHint")}</p>
-					</div>
-					<div className="flex flex-col gap-1">
-						<div className="flex items-center justify-between gap-3">
-							<Label htmlFor="coder-reuse-checkout" className="text-[13px] text-foreground">{t("settings.coder.reuseCheckoutLabel")}</Label>
-							<Switch
-								id="coder-reuse-checkout"
-								// Only meaningful for the workspace user: shown off and locked otherwise.
-								checked={devEnv.workspaceUser && devEnv.reuseCheckout}
-								disabled={busy || !devEnv.workspaceUser}
-								aria-describedby="coder-reuse-checkout-hint"
-								onCheckedChange={(reuseCheckout) => setDevEnv((current) => ({ ...current, reuseCheckout }))}
-							/>
-						</div>
-						<p id="coder-reuse-checkout-hint" className={onboardingFieldHintClass}>{t("settings.coder.reuseCheckoutHint")}</p>
-					</div>
-					<div className="flex flex-col gap-1.5">
-						<Label htmlFor="coder-ready-probe" className="text-[13px] text-foreground">{t("settings.coder.readyProbeLabel")}</Label>
-						<p id="coder-ready-probe-hint" className={onboardingFieldHintClass}>{t("settings.coder.readyProbeHint")}</p>
-						<Input
-							id="coder-ready-probe"
-							type="text"
-							autoComplete="off"
-							spellCheck={false}
-							maxLength={READY_PROBE_MAX_LENGTH}
-							className="font-mono text-[13px]"
-							placeholder="grep -q '^Ready' ~/.bootstrap-status"
-							aria-describedby="coder-ready-probe-hint"
-							disabled={busy}
-							value={devEnv.readyProbe}
-							onChange={(event) => setDevEnv((current) => ({ ...current, readyProbe: event.target.value }))}
-						/>
-					</div>
-					<div className="flex flex-col gap-1.5">
-						<Label htmlFor="coder-ready-probe-timeout" className="text-[13px] text-foreground">{t("settings.coder.readyProbeTimeoutLabel")}</Label>
-						<Input
-							id="coder-ready-probe-timeout"
-							type="number"
-							inputMode="numeric"
-							min={READY_PROBE_TIMEOUT_MIN}
-							max={READY_PROBE_TIMEOUT_MAX}
-							className="w-32 font-mono text-[13px]"
-							placeholder={String(READY_PROBE_TIMEOUT_DEFAULT)}
-							aria-invalid={timeoutInvalid || undefined}
-							aria-describedby="coder-ready-probe-timeout-hint"
-							disabled={busy || devEnv.readyProbe.trim() === ""}
-							value={devEnv.readyProbeTimeout}
-							onChange={(event) => setDevEnv((current) => ({ ...current, readyProbeTimeout: event.target.value }))}
-						/>
-						<p
-							id="coder-ready-probe-timeout-hint"
-							className={timeoutInvalid ? onboardingFieldErrorClass : onboardingFieldHintClass}
-							role={timeoutInvalid ? "alert" : undefined}
-						>
-							{timeoutInvalid ? t("settings.coder.readyProbeTimeoutInvalid") : t("settings.coder.readyProbeTimeoutHint")}
-						</p>
-					</div>
-				</div>
-
+				{/* The dev-environment settings (workerUser, reuseExistingCheckout,
+				    readyProbe) are set per customer during onboarding, not here; the
+				    form still carries the stored values through every save so a
+				    token change never resets them. */}
 				{tokenStored ? (
 					// Read-only catalog of every template on the connected Coder — so the
 					// whole Coder story lives inside AO. Same tidy name + one-line-spec
@@ -331,10 +263,8 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	);
 }
 
-const READY_PROBE_MAX_LENGTH = 1000;
 const READY_PROBE_TIMEOUT_MIN = 30;
 const READY_PROBE_TIMEOUT_MAX = 3600;
-const READY_PROBE_TIMEOUT_DEFAULT = 900;
 
 /** The dev-environment fields as the form edits them. */
 interface DevEnvDraft {
