@@ -90,7 +90,7 @@ func (*Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchConf
 	return ports.PromptDeliveryAfterStart, ctx.Err()
 }
 func (*Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
-	return ports.PromptReadinessHints{Patterns: []string{"You> "}, Timeout: 60 * time.Second, PollInterval: 100 * time.Millisecond, Lines: 40}, ctx.Err()
+	return ports.PromptReadinessHints{Patterns: []string{"You>"}, Timeout: 60 * time.Second, PollInterval: 100 * time.Millisecond, Lines: 40}, ctx.Err()
 }
 func (*Plugin) GetRestoreCommand(ctx context.Context, _ ports.RestoreConfig) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
