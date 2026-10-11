@@ -46,11 +46,20 @@ export function ChatLinkProvider({ onLinkOpen, children }: { onLinkOpen: (url: s
  * readable text; the renderer never hides content because a provider used
  * syntax it does not know.
  */
-export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
+export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, continuousSelection = false }: { text: string; streaming?: boolean; continuousSelection?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const selectionColor = Platform.OS === "android" ? t.accentBorder : t.accent;
 	const blocks = parseBlocks(text);
+	if (continuousSelection) {
+		// Native selection cannot cross sibling views. Keep every response text block
+		// in one text surface, then show image previews without repeating captions.
+		const images = blocks.filter((block): block is Extract<MarkdownBlock, { kind: "image" }> => block.kind === "image");
+		return <View style={styles.root}>
+			<SelectableResponseText text={text} />
+			{images.map((image, index) => <MarkdownImage key={`${image.url}-${index}`} alt={image.alt} url={image.url} selectionColor={selectionColor} showCaption={false} />)}
+		</View>;
+	}
 	const content: ReactNode[] = [];
 	let prose: Array<Extract<MarkdownBlock, { kind: "paragraph" | "heading" }>> = [];
 	const flushProse = () => {
@@ -102,11 +111,11 @@ export function SelectableResponseText({ text }: { text: string }) {
 	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body}>
 		{parseBlocks(text).map((block, index) => {
 			const separator = index > 0 ? "\n\n" : "";
-			if (block.kind === "heading") return <Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>{separator}{inline(block.text, styles, false)}</Text>;
-			if (block.kind === "paragraph") return <Text key={index}>{separator}{inline(block.text, styles, false)}</Text>;
-			if (block.kind === "quote") return <Text key={index} style={styles.quoteText}>{separator}{inline(block.text, styles, false)}</Text>;
-			if (block.kind === "list") return <Text key={index}>{separator}{block.items.map((item, itemIndex) => <Text key={itemIndex} style={item.checked ? styles.taskDone : undefined}>{itemIndex > 0 ? "\n" : ""}{item.checked !== undefined ? (item.checked ? "☑ " : "☐ ") : block.ordered ? `${itemIndex + 1}. ` : "• "}{inline(item.text, styles, false)}</Text>)}</Text>;
-			if (block.kind === "code") return <Text key={index} style={styles.selectionCode}>{separator}{block.text}</Text>;
+			if (block.kind === "heading") return <Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>{separator}{inline(block.text, styles)}</Text>;
+			if (block.kind === "paragraph") return <Text key={index}>{separator}{inline(block.text, styles)}</Text>;
+			if (block.kind === "quote") return <Text key={index} style={styles.quoteText}>{separator}{inline(block.text, styles)}</Text>;
+			if (block.kind === "list") return <Text key={index}>{separator}{block.items.map((item, itemIndex) => <Text key={itemIndex} style={item.checked ? styles.taskDone : undefined}>{itemIndex > 0 ? "\n" : ""}{item.checked !== undefined ? (item.checked ? "☑ " : "☐ ") : block.ordered ? `${itemIndex + 1}. ` : "• "}{inline(item.text, styles)}</Text>)}</Text>;
+			if (block.kind === "code") return <Text key={index} style={styles.selectionCode}>{separator}{block.language ? `${block.language}\n` : ""}{block.text}</Text>;
 			if (block.kind === "table") return <Text key={index}>{separator}{[block.headers, ...block.rows].map((row) => row.join("  |  ")).join("\n")}</Text>;
 			if (block.kind === "image") return <Text key={index} style={styles.imageCaption}>{separator}{block.alt || block.url}</Text>;
 			return <Text key={index}>{separator}────────</Text>;
@@ -124,11 +133,11 @@ function SelectableInlineText({ value, selectionColor, style, styles }: { value:
 
 let preferredCodeWrap = false;
 
-function MarkdownImage({ alt, url, selectionColor }: { alt: string; url: string; selectionColor: string }) {
+function MarkdownImage({ alt, url, selectionColor, showCaption = true }: { alt: string; url: string; selectionColor: string; showCaption?: boolean }) {
 	const styles = useThemedStyles(makeStyles);
 	const [failed, setFailed] = useState(false);
 	if (failed) return <Text selectable uiTextView selectionColor={selectionColor} style={styles.imageFallback}>Image unavailable: {alt || url}</Text>;
-	return <View style={styles.imageCard}><Image accessibilityLabel={alt || "Conversation image"} accessibilityIgnoresInvertColors source={{ uri: url }} resizeMode="contain" onError={() => setFailed(true)} style={styles.image} />{alt ? <Text selectable uiTextView selectionColor={selectionColor} style={styles.imageCaption}>{alt}</Text> : null}</View>;
+	return <View style={styles.imageCard}><Image accessibilityLabel={alt || "Conversation image"} accessibilityIgnoresInvertColors source={{ uri: url }} resizeMode="contain" onError={() => setFailed(true)} style={styles.image} />{alt && showCaption ? <Text selectable uiTextView selectionColor={selectionColor} style={styles.imageCaption}>{alt}</Text> : null}</View>;
 }
 
 function MarkdownTable({ headers, rows, selectionColor }: { headers: string[]; rows: string[][]; selectionColor: string }) {

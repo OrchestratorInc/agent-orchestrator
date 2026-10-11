@@ -27,7 +27,7 @@ vi.mock("../ThemeProvider", () => ({
 	useThemedStyles: (factory: (theme: Record<string, string>) => unknown) => factory(theme),
 }));
 
-import { ChatMarkdown, SelectableResponseText } from "./ChatMarkdown";
+import { ChatLinkProvider, ChatMarkdown, SelectableResponseText } from "./ChatMarkdown";
 
 function textOf(node: { children: Array<string | { children: unknown[] }> }): string {
 	return node.children.map((child) => typeof child === "string" ? child : textOf(child as typeof node)).join("");
@@ -62,11 +62,39 @@ it.each(["ios", "android"])("offers one continuous selection across all response
 		expect(selectable[0].props.uiTextView).toBe(true);
 		const selectedText = textOf(selectable[0]);
 		for (const part of ["Title", "Body link.", "List item", "Quoted text", "Code text", "Column", "Cell", "Caption"]) expect(selectedText).toContain(part);
-		expect(renderer.root.findAll((node) => node.props.accessibilityRole === "link")).toHaveLength(0);
+		expect(renderer.root.findAll((node) => node.props.accessibilityRole === "link")).toHaveLength(1);
 		act(() => renderer.unmount());
 	} finally {
 		platform.OS = "ios";
 	}
+});
+
+it.each(["ios", "android"])("renders the agent reply as one in-place selection across headings, bullets, and code on %s", (os) => {
+	platform.OS = os;
+	let renderer!: ReactTestRenderer;
+	try {
+		act(() => { renderer = create(<ChatMarkdown continuousSelection text={[
+			"# Release steps", "", "Build the app.", "", "- Check iOS", "- Check Android", "",
+			"```sh", "npm test", "```", "", "| Result |", "| --- |", "| Passed |",
+		].join("\n")} />); });
+		const selectable = renderer.root.findAll((node) => node.props.selectable === true);
+		expect(selectable).toHaveLength(1);
+		expect(selectable[0].props.uiTextView).toBe(true);
+		expect(textOf(selectable[0])).toBe("Release steps\n\nBuild the app.\n\n• Check iOS\n• Check Android\n\nsh\nnpm test\n\nResult\nPassed");
+		act(() => renderer.unmount());
+	} finally {
+		platform.OS = "ios";
+	}
+});
+
+it("keeps inline links operable in the continuously selectable response", () => {
+	const onLinkOpen = vi.fn();
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatLinkProvider onLinkOpen={onLinkOpen}><ChatMarkdown continuousSelection text="Read [the docs](https://example.com/docs)" /></ChatLinkProvider>); });
+	const link = renderer.root.find((node) => node.props.accessibilityRole === "link");
+	act(() => link.props.onPress());
+	expect(onLinkOpen).toHaveBeenCalledWith("https://example.com/docs");
+	act(() => renderer.unmount());
 });
 
 it("lets readers select response prose in every rendered Markdown block", () => {

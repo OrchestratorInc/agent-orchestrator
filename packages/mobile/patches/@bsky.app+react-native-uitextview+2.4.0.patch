@@ -1,8 +1,42 @@
 diff --git a/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm b/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm
-index 45700cd..5d1798b 100644
+index 45700cd..bf4a7be 100644
 --- a/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm
 +++ b/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextView.mm
-@@ -203,3 +203,7 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+@@ -59,6 +59,8 @@ - (instancetype)initWithFrame:(CGRect)frame
+     _textView.selectable = false;
+     _textView.textContainerInset = UIEdgeInsetsZero;
+     _textView.textContainer.lineFragmentPadding = 0;
++    // Preserve each inline link's attributed color instead of UIKit's blue.
++    _textView.linkTextAttributes = @{};
+     // Keep UIKit's initial state in sync with the Codegen prop default. Since
+     // both oldProps and newProps default to `tail`, updateProps will not apply
+     // this value on the first render.
+@@ -136,7 +138,20 @@ - (void)drawRect:(CGRect)rect
+   const auto &props = *std::static_pointer_cast<RNUITextViewProps const>(_props);
+ 
+   const auto attrString = _state->getData().attributedString;
+-  const auto convertedAttrString = RCTNSAttributedStringFromAttributedString(attrString);
++  NSMutableAttributedString *convertedAttrString = [RCTNSAttributedStringFromAttributedString(attrString) mutableCopy];
++  NSUInteger offset = 0;
++  for (const auto &fragment : attrString.getFragments()) {
++    NSString *fragmentText = [NSString stringWithUTF8String:fragment.string.c_str()];
++    const NSUInteger length = fragmentText.length;
++    if (length > 0 && fragment.parentShadowView.props) {
++      const auto &childProps = *std::static_pointer_cast<const RNUITextViewChildProps>(fragment.parentShadowView.props);
++      if (childProps.accessibilityRole == "link") {
++        NSURL *link = [NSURL URLWithString:[NSString stringWithFormat:@"ao-link://%d", fragment.parentShadowView.tag]];
++        [convertedAttrString addAttribute:NSLinkAttributeName value:link range:NSMakeRange(offset, length)];
++      }
++    }
++    offset += length;
++  }
+ 
+   // Setting attributedText clears any active text selection, and re-assigning
+   // the frame triggers a layout flush that has the same effect. Bail out
+@@ -200,6 +215,10 @@ - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &
+     _textView.selectable = newViewProps.selectable;
+   }
+ 
 +  if (oldViewProps.selectionColor != newViewProps.selectionColor) {
 +    _textView.tintColor = RCTUIColorFromSharedColor(newViewProps.selectionColor);
 +  }
@@ -10,6 +44,63 @@ index 45700cd..5d1798b 100644
    if (oldViewProps.allowFontScaling != newViewProps.allowFontScaling) {
      if (@available(iOS 11.0, *)) {
        _textView.adjustsFontForContentSizeCategory = newViewProps.allowFontScaling;
+@@ -310,6 +329,14 @@ - (CGPoint)getLocationOfPress:(UIGestureRecognizer*)sender
+ - (void)handlePressIfNecessary:(UITapGestureRecognizer*)sender
+ {
+   const auto location = [self getLocationOfPress:sender];
++  const auto characterIndex = [_textView.layoutManager characterIndexForPoint:location
++                                                              inTextContainer:_textView.textContainer
++                                     fractionOfDistanceBetweenInsertionPoints:nil];
++  if (characterIndex < _textView.attributedText.length &&
++      [_textView.attributedText attribute:NSLinkAttributeName atIndex:characterIndex effectiveRange:nil]) {
++    // UIKit handles native links, including VoiceOver activation, below.
++    return;
++  }
+   const auto eventEmitter = [self getTouchEventEmitter:location];
+ 
+   if (eventEmitter) {
+@@ -337,6 +364,25 @@ - (void)handleLongPressIfNecessary:(UILongPressGestureRecognizer*)sender
+ 
+ // MARK: - UITextViewDelegate
+ 
++- (BOOL)textView:(UITextView *)textView shouldInteractWithURL:(NSURL *)URL inRange:(NSRange)characterRange interaction:(UITextItemInteraction)interaction
++{
++  if (characterRange.location >= textView.attributedText.length ||
++      ![URL.scheme isEqualToString:@"ao-link"]) {
++    return NO;
++  }
++  NSData *eventEmitterWrapper =
++      (NSData *)[textView.attributedText attribute:RCTAttributedStringEventEmitterKey
++                                         atIndex:characterRange.location
++                                  effectiveRange:nullptr];
++  const auto eventEmitter = std::dynamic_pointer_cast<const RNUITextViewChildEventEmitter>(
++      RCTUnwrapEventEmitter(eventEmitterWrapper));
++  if (eventEmitter) {
++    const auto eventTarget = eventEmitter->getEventTarget();
++    eventEmitter->onPress(RNUITextViewChildEventEmitter::OnPress{eventTarget ? eventTarget->getTag() : 0});
++  }
++  return NO;
++}
++
+ - (void)textViewDidChangeSelection:(UITextView *)textView
+ {
+   if (_suppressSelectionChange) {
+diff --git a/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextViewShadowNode.cpp b/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextViewShadowNode.cpp
+index 15b5c6b..e7f8e76 100644
+--- a/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextViewShadowNode.cpp
++++ b/node_modules/@bsky.app/react-native-uitextview/ios/RNUITextViewShadowNode.cpp
+@@ -9,9 +9,8 @@ namespace facebook::react {
+ 
+ static ShadowView shadowViewFromShadowNode(const ShadowNode& shadowNode) {
+   auto shadowView = ShadowView{shadowNode};
+-  // The attributed string only needs the component identity and event emitter.
+-  // Dropping props and state avoids retaining the shadow tree through state.
+-  shadowView.props = nullptr;
++  // Keep child props so the native text view can preserve inline link traits.
++  // State remains detached to avoid retaining the shadow tree through state.
+   shadowView.state = nullptr;
+   return shadowView;
+ }
 diff --git a/node_modules/@bsky.app/react-native-uitextview/lib/commonjs/RNUITextViewNativeComponent.ts b/node_modules/@bsky.app/react-native-uitextview/lib/commonjs/RNUITextViewNativeComponent.ts
 index 30b49b0..44da022 100644
 --- a/node_modules/@bsky.app/react-native-uitextview/lib/commonjs/RNUITextViewNativeComponent.ts
