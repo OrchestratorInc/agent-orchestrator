@@ -3,9 +3,10 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"testing"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"testing"
 )
 
 func TestPoolRejectsTerminalBeforeAllocation(t *testing.T) {

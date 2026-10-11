@@ -11,11 +11,12 @@ import (
 	"runtime"
 	"strings"
 
+	acpsdk "github.com/coder/acp-go-sdk"
+
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	acpsdk "github.com/coder/acp-go-sdk"
 )
 
 // New uses Pool's own tools, permissions and durable session history.
@@ -30,14 +31,14 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 
 func validateInitialize(init acpsdk.InitializeResponse) error {
 	if init.AgentInfo == nil || init.AgentInfo.Name != "pool-acp" || init.AgentInfo.Version != "1.0.16" || !init.AgentCapabilities.LoadSession {
-		return fmt.Errorf("Pool Chat requires the qualified native pool-acp 1.0.16 with session/load")
+		return fmt.Errorf("pool Chat requires the qualified native pool-acp 1.0.16 with session/load")
 	}
 	return nil
 }
 
 func hookDirectory(cfg acpdriver.LaunchConfig) (string, error) {
 	if !filepath.IsAbs(cfg.DataDir) || cfg.SessionID == "" || strings.ContainsAny(string(cfg.SessionID), "/\\") {
-		return "", fmt.Errorf("Pool instructions require an absolute AO data directory and session identity")
+		return "", fmt.Errorf("pool instructions require an absolute AO data directory and session identity")
 	}
 	return filepath.Join(cfg.DataDir, "prompts", string(cfg.SessionID), "pool"), nil
 }
@@ -47,7 +48,7 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 		return nil, nil, err
 	}
 	if runtime.GOOS == "windows" {
-		return nil, nil, fmt.Errorf("Pool Chat private hooks currently require Unix")
+		return nil, nil, fmt.Errorf("pool Chat private hooks currently require Unix")
 	}
 	if err := validateTurnSettings(cfg.Permissions, ports.ChatTurnSettings{Approval: cfg.Permissions}); err != nil {
 		return nil, nil, err
@@ -90,7 +91,7 @@ func validateSessionReady(ctx context.Context, cfg acpdriver.LaunchConfig, nativ
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "started.json"))
 	if err != nil {
-		return fmt.Errorf("Pool standing hook did not run: %w", err)
+		return fmt.Errorf("pool standing hook did not run: %w", err)
 	}
 	var event struct {
 		Event   string `json:"hook_event_name"`
@@ -98,10 +99,10 @@ func validateSessionReady(ctx context.Context, cfg acpdriver.LaunchConfig, nativ
 		Cwd     string `json:"cwd"`
 	}
 	if err := json.Unmarshal(data, &event); err != nil {
-		return fmt.Errorf("Pool standing hook witness: %w", err)
+		return fmt.Errorf("pool standing hook witness: %w", err)
 	}
 	if event.Event != "SessionStart" || event.Session != nativeID || filepath.Clean(event.Cwd) != filepath.Clean(cfg.WorkspacePath) {
-		return fmt.Errorf("Pool standing hook witness does not match the initialized native session/workspace")
+		return fmt.Errorf("pool standing hook witness does not match the initialized native session/workspace")
 	}
 	return nil
 }
@@ -120,7 +121,7 @@ func sessionMode(mode ports.PermissionMode) string {
 }
 func validateTurnSettings(_ ports.PermissionMode, settings ports.ChatTurnSettings) error {
 	if sessionMode(settings.Approval) == "" {
-		return fmt.Errorf("Pool Chat does not support approval mode %q", settings.Approval)
+		return fmt.Errorf("pool Chat does not support approval mode %q", settings.Approval)
 	}
 	return nil
 }

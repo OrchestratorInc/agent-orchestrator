@@ -40,7 +40,7 @@ func (*Plugin) GetLaunchCommand(ctx context.Context, _ ports.LaunchConfig) ([]st
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, errors.New("Pool is available in Chat mode only")
+	return nil, errors.New("pool is available in Chat mode only")
 }
 
 // GetRestoreCommand hard-refuses restore so missing history cannot launch fresh.
@@ -48,7 +48,7 @@ func (*Plugin) GetRestoreCommand(ctx context.Context, _ ports.RestoreConfig) ([]
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
-	return nil, false, errors.New("Pool terminal restore is unsupported; use Chat")
+	return nil, false, errors.New("pool terminal restore is unsupported; use Chat")
 }
 
 // AuthStatus reports credential presence without claiming remote authorization.
