@@ -403,7 +403,10 @@ func (s *Server) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input worker.HeartbeatRequest
-	if err := decodeJSON(w, r, &input); err != nil {
+	// Unknown fields are ignored here, unlike other requests: a worker newer
+	// than this control plane (a rollback) may report more, and rejecting
+	// its heartbeat would take every such session offline.
+	if err := decodeJSONTolerant(w, r, &input); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -444,6 +447,7 @@ func (s *Server) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		OK:          true,
 		WorkerToken: renewed,
 		ExpiresIn:   int(s.workerTokenTTL().Seconds()),
+		Features:    []string{worker.HeartbeatFeatureBusy},
 	})
 }
 

@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -652,6 +653,11 @@ type client struct {
 	// busy reports sandbox activity for the next heartbeat; set once the
 	// transport supervisor exists.
 	busy atomic.Pointer[func() bool]
+	// busyAccepted records that the control plane's last heartbeat response
+	// advertised worker.HeartbeatFeatureBusy. Until then (and after a
+	// control-plane rollback) the field is not sent: an older control plane
+	// rejects unknown heartbeat fields.
+	busyAccepted atomic.Bool
 }
 
 // startStartupPrefetch begins the lookups the coding agent's launch needs but
@@ -796,23 +802,41 @@ func (c *client) reconnect(ctx context.Context) (worker.BootstrapResponse, error
 }
 
 func (c *client) heartbeat(ctx context.Context) (string, error) {
-	var response worker.HeartbeatResponse
-	busy := false
-	if probe := c.busy.Load(); probe != nil {
-		busy = (*probe)()
-	}
-	err := c.do(ctx, "/worker/heartbeat", worker.HeartbeatRequest{
+	request := worker.HeartbeatRequest{
 		Version:      workerVersion,
 		Capabilities: workerCapabilities,
-		Busy:         busy,
-	}, &response)
+	}
+	if c.busyAccepted.Load() {
+		if probe := c.busy.Load(); probe != nil {
+			request.Busy = (*probe)()
+		}
+	}
+	var response worker.HeartbeatResponse
+	err := c.do(ctx, "/worker/heartbeat", request, &response)
+	if err != nil && request.Busy && rejectedUnknownField(err) {
+		// The control plane was rolled back to a release that rejects the
+		// field. Drop it and retry once; the next response says whether to
+		// send it again.
+		c.busyAccepted.Store(false)
+		request.Busy = false
+		response = worker.HeartbeatResponse{}
+		err = c.do(ctx, "/worker/heartbeat", request, &response)
+	}
 	if err != nil {
 		return "", err
 	}
+	c.busyAccepted.Store(slices.Contains(response.Features, worker.HeartbeatFeatureBusy))
 	if response.WorkerToken == "" {
 		return "", errors.New("control plane returned no renewed worker token")
 	}
 	return response.WorkerToken, nil
+}
+
+// rejectedUnknownField reports a 400 from a control plane that refused a
+// request field it does not know (its decoder disallows unknown fields).
+func rejectedUnknownField(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, " returned 400") && strings.Contains(message, "unknown field")
 }
 
 func (c *client) heartbeatLoop(ctx context.Context, logger *slog.Logger) error {
