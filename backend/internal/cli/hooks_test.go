@@ -917,6 +917,7 @@ func TestHookSemanticAcceptanceFacts(t *testing.T) {
 		domain.HarnessPi,
 		domain.HarnessAmp,
 		domain.HarnessPrimeAgent,
+		domain.HarnessMiniMaxCode,
 	} {
 		t.Run(string(harness), func(t *testing.T) {
 			got := hookSemanticAcceptanceFacts(
@@ -2244,21 +2245,25 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 }
 
 func TestHooksSessionDeliveryPreservesCoordinationOrigin(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "ao-worker")
-	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
-	cfg := setConfigEnv(t)
-	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
-	writeRunFileFor(t, cfg, srv)
-	payload, _ := json.Marshal(map[string]string{"session_id": "native-1", "prompt": domain.WrapSessionDelivery("session-send:1", "orchestrator direction")})
-	_, _, err := executeCLI(t, Deps{In: strings.NewReader(string(payload)), ProcessAlive: func(int) bool { return true }}, "hooks", "claude-code", "user-prompt-submit")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var req setActivityAPIRequest
-	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
-		t.Fatal(err)
-	}
-	if req.ConversationCheckpointOrigin != "coordination" || req.CoordinationID != "session-send:1" || req.LatestUserPrompt != "" {
-		t.Fatalf("hook facts=%+v", req)
+	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessMiniMaxCode} {
+		t.Run(string(harness), func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-worker")
+			t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			payload, _ := json.Marshal(map[string]string{"session_id": "native-1", "prompt": domain.WrapSessionDelivery("session-send:1", "orchestrator direction")})
+			_, _, err := executeCLI(t, Deps{In: strings.NewReader(string(payload)), ProcessAlive: func(int) bool { return true }}, "hooks", string(harness), "user-prompt-submit")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if req.ConversationCheckpointOrigin != "coordination" || req.CoordinationID != "session-send:1" || req.LatestUserPrompt != "" {
+				t.Fatalf("hook facts=%+v", req)
+			}
+		})
 	}
 }
