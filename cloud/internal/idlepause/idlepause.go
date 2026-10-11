@@ -5,15 +5,20 @@ import (
 	"context"
 	"log/slog"
 	"time"
-
-	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
+
+// SandboxRef identifies a running session sandbox and its provider.
+type SandboxRef struct {
+	OrgID     string
+	SessionID string
+	Provider  string
+}
 
 // Store is the durable state the scanner reads and pauses.
 type Store interface {
 	// RunningSandboxSessions lists every session whose sandbox is fully up,
 	// across every organization.
-	RunningSandboxSessions(ctx context.Context) ([]domain.SandboxRef, error)
+	RunningSandboxSessions(ctx context.Context) ([]SandboxRef, error)
 	// PauseIfIdle pauses one session's sandbox if it is still idle by the time
 	// the check runs, and reports whether it did.
 	PauseIfIdle(ctx context.Context, orgID, sessionID string, idleThreshold time.Duration) (bool, error)

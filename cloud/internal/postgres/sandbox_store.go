@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/idlepause"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/jackc/pgx/v5"
 )
@@ -489,8 +490,8 @@ func (s *Store) WakePausedSessions(
 }
 
 // RunningSandboxSessions lists running session sandboxes across organizations.
-func (s *Store) RunningSandboxSessions(ctx context.Context) ([]domain.SandboxRef, error) {
-	var refs []domain.SandboxRef
+func (s *Store) RunningSandboxSessions(ctx context.Context) ([]idlepause.SandboxRef, error) {
+	var refs []idlepause.SandboxRef
 	err := s.withService(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(
 			ctx,
@@ -502,7 +503,7 @@ func (s *Store) RunningSandboxSessions(ctx context.Context) ([]domain.SandboxRef
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var ref domain.SandboxRef
+			var ref idlepause.SandboxRef
 			if err := rows.Scan(&ref.SessionID, &ref.OrgID, &ref.Provider); err != nil {
 				return err
 			}

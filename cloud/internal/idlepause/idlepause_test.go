@@ -4,16 +4,14 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
 
 type recordingStore struct {
-	refs   []domain.SandboxRef
+	refs   []SandboxRef
 	checks map[string]time.Duration
 }
 
-func (s *recordingStore) RunningSandboxSessions(context.Context) ([]domain.SandboxRef, error) {
+func (s *recordingStore) RunningSandboxSessions(context.Context) ([]SandboxRef, error) {
 	return s.refs, nil
 }
 
@@ -23,7 +21,7 @@ func (s *recordingStore) PauseIfIdle(_ context.Context, _, sessionID string, thr
 }
 
 func TestProviderThresholdsOverrideTheDefaultAndZeroKeepsWarm(t *testing.T) {
-	store := &recordingStore{checks: map[string]time.Duration{}, refs: []domain.SandboxRef{
+	store := &recordingStore{checks: map[string]time.Duration{}, refs: []SandboxRef{
 		{SessionID: "fs", Provider: "freestyle"},
 		{SessionID: "coder", Provider: "coder"},
 	}}

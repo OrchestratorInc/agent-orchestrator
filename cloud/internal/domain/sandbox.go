@@ -105,7 +105,6 @@ type SandboxLifecycle struct {
 type SandboxRef struct {
 	OrgID     string
 	SessionID string
-	Provider  string
 }
 
 // AccessTicket is a one-time, capability-scoped grant. Only its SHA-256 hash is
