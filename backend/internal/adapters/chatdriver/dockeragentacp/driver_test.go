@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -16,6 +17,9 @@ import (
 )
 
 func TestPrivateHookPreservesNativeConfigAndRefreshesRestoreContext(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("qualified native hook binding is Unix only")
+	}
 	dir := t.TempDir()
 	config := filepath.Join(dir, "user's config.yaml")
 	original := []byte("agents:\n  root:\n    instruction: User instructions\n    hooks:\n      session_start: []\n")
@@ -48,7 +52,7 @@ func TestPrivateHookPreservesNativeConfigAndRefreshesRestoreContext(t *testing.T
 				Context string `json:"additional_context"`
 			} `json:"hook_specific_output"`
 		}
-		if err := json.Unmarshal(data, &hook); err != nil || hook.Output.Context != prompt {
+		if err := json.Unmarshal(data, &hook); err != nil || !strings.HasPrefix(hook.Output.Context, prompt+"\n\nAO session working directory: ") || !strings.Contains(hook.Output.Context, cfg.WorkspacePath) {
 			t.Fatalf("hook=%s err=%v", data, err)
 		}
 		info, _ := os.Stat(files[0])

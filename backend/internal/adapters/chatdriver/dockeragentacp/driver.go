@@ -49,6 +49,9 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
+	if runtime.GOOS == "windows" {
+		return nil, nil, fmt.Errorf("Docker Agent private hook binding currently supports Unix only")
+	}
 	config := os.Getenv(dockeragent.ConfigEnv)
 	if value, ok := cfg.Env[dockeragent.ConfigEnv]; ok {
 		config = value
@@ -74,7 +77,7 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, nil, err
 	}
-	contextBytes, err := json.Marshal(map[string]any{"hook_specific_output": map[string]string{"additional_context": cfg.SystemPrompt}})
+	contextBytes, err := json.Marshal(map[string]any{"hook_specific_output": map[string]string{"additional_context": cfg.SystemPrompt + "\n\nAO session working directory: " + cfg.WorkspacePath + ". Use this directory for workspace tools and task files; do not use the repository source checkout."}})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -101,9 +104,6 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 		return nil, nil, err
 	}
 	hook := "cat -- " + shellQuote(contextPath)
-	if runtime.GOOS == "windows" {
-		return nil, nil, fmt.Errorf("Docker Agent private hook binding currently supports Unix only")
-	}
 	args := []string{"--data-dir", dir, "--cache-dir", filepath.Join(dir, "cache"), "serve", "acp", config, "--session-db", filepath.Join(dir, "session.db"), "--working-dir", cfg.WorkspacePath, "--hook-session-start", hook}
 	return args, map[string]string{"TELEMETRY_ENABLED": "false"}, nil
 }
