@@ -297,12 +297,13 @@ func (b *BridgeService) Status() MobileStatusResponse {
 		lan, ts = nil, nil
 	}
 	res := MobileStatusResponse{
-		Enabled:       enabled,
-		LoopbackOnly:  st.LoopbackOnly,
-		Host:          first(lan),
-		TailscaleHost: first(ts),
-		Port:          b.LAN.BoundPort(),
-		Warning:       mobileUnencryptedWarning,
+		Enabled:        enabled,
+		LoopbackOnly:   st.LoopbackOnly,
+		NoPublicTunnel: st.NoPublicTunnel,
+		Host:           first(lan),
+		TailscaleHost:  first(ts),
+		Port:           b.LAN.BoundPort(),
+		Warning:        mobileUnencryptedWarning,
 		Endpoints: mobilebridge.Endpoints(mobilebridge.EndpointInputs{
 			LANHosts:       lan,
 			TailscaleHosts: ts,

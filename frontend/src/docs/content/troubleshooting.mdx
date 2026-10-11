@@ -5,7 +5,9 @@ description: Diagnose desktop, daemon, agent, session, GitHub, preview, and mobi
 
 ## Start with the desktop app
 
-The desktop app owns the local daemon. First quit and reopen Orchestrator, then confirm the project and selected session still appear. The app discovers or restarts its daemon and reconnects live event and terminal streams.
+The desktop app owns the local daemon. First quit completely and reopen Orchestrator, then confirm the project and selected session still appear. On macOS, use the menu-bar tray's **Quit AO Completely** action for this restart. The app discovers or restarts its daemon and reconnects live event and terminal streams.
+
+On macOS, closing the window or using **Quit / Cmd+Q** destroys the desktop window but leaves Orchestrator in the Dock and menu-bar tray. Its daemon and enabled mobile/remote access keep running while the Mac stays awake and reachable. Click the Dock icon or **Show Agent Orchestrator** in the tray to reopen the window. Existing unsaved-draft warnings still apply; desktop browser previews and browser automation stop until the window reopens. Windows and Linux quit behavior is unchanged.
 
 If you use the optional CLI, `ao status` and `ao doctor` provide additional local diagnostics:
 

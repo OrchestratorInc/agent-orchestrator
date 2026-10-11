@@ -240,12 +240,25 @@ export type BrowserShortcutAction =
   | "close-tab"
   | "focus-location"
   | "find"
-  | "reload";
+  | "reload"
+  | "back"
+  | "forward";
 
 export function browserShortcutAction(
   input: BrowserShortcutInput,
   isMac: boolean,
 ): BrowserShortcutAction | null {
+  // Page history, not AO's route history: ⌘[ / ⌘] on macOS, Alt+←/→ elsewhere.
+  if (!input.shift) {
+    if (isMac && input.meta && !input.control && !input.alt) {
+      if (input.key === "[") return "back";
+      if (input.key === "]") return "forward";
+    }
+    if (!isMac && input.alt && !input.control && !input.meta) {
+      if (input.key === "ArrowLeft") return "back";
+      if (input.key === "ArrowRight") return "forward";
+    }
+  }
   const primaryModifier = isMac
     ? input.meta && !input.control
     : input.control && !input.meta;
@@ -1724,6 +1737,17 @@ export function createBrowserViewHost(
         activeEntry(session).view.webContents.reload();
         return;
       }
+      if (action === "back" || action === "forward") {
+        invokeNav(
+          session.viewId,
+          (contents) => {
+            if (action === "back" && contents.canGoBack()) contents.goBack();
+            if (action === "forward" && contents.canGoForward()) contents.goForward();
+          },
+          true,
+        );
+        return;
+      }
       if (action === "new-tab") {
         void openUserTab(session)
           .then(() => {
@@ -2276,13 +2300,16 @@ export function createBrowserViewHost(
     rendererOwnersByViewId.delete(viewId);
     forgetNativeFocus(viewId);
     forgetBrowserShortcutTarget(viewId);
-    // When the window is already gone (dispose fired from mainWindow "closed"),
-    // Electron has torn down contentView and the child WebContentsViews. Touching
-    // them throws "Object has been destroyed", so just drop our reference.
+    // BaseWindow close leaves child WebContents alive, but destroys contentView.
     if (options.mainWindow.isDestroyed?.()) {
       for (const entry of session.tabs.values()) {
         tabsByWebContentsId.delete(entry.view.webContents.id);
         disposeNetworkCapture(entry, "session-closed");
+        try {
+          entry.view.webContents.close?.();
+        } catch {
+          // The tab may already have closed before the window teardown.
+        }
       }
       if (partitionToClear) clearTemporaryPartition(partitionToClear);
       return;

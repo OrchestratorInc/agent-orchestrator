@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
 
 describe("SettingsOptionMenu", () => {
@@ -29,6 +29,51 @@ describe("SettingsOptionMenu", () => {
 		await userEvent.type(search, "openai/gpt");
 		expect(screen.getByRole("menuitem", { name: "GPT Five" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Claude Sonnet" })).not.toBeInTheDocument();
+	});
+
+	it("reports the highlighted option and clears it when the menu closes", async () => {
+		const onHighlight = vi.fn();
+		render(
+			<SettingsOptionMenu
+				aria-label="Color theme"
+				value="github"
+				options={[
+					{ value: "github", label: "GitHub" },
+					{ value: "nord", label: "Nord" },
+				]}
+				onChange={() => {}}
+				onHighlight={onHighlight}
+			/>,
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: "Color theme" }));
+		await userEvent.hover(screen.getByRole("menuitem", { name: "Nord" }));
+		expect(onHighlight).toHaveBeenLastCalledWith("nord");
+
+		await userEvent.keyboard("{Escape}");
+		expect(onHighlight).toHaveBeenLastCalledWith(null);
+	});
+
+	it("clears the highlight when the menu unmounts while open", async () => {
+		const onHighlight = vi.fn();
+		const { unmount } = render(
+			<SettingsOptionMenu
+				aria-label="Color theme"
+				value="github"
+				options={[
+					{ value: "github", label: "GitHub" },
+					{ value: "nord", label: "Nord" },
+				]}
+				onChange={() => {}}
+				onHighlight={onHighlight}
+			/>,
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: "Color theme" }));
+		await userEvent.hover(screen.getByRole("menuitem", { name: "Nord" }));
+		unmount();
+
+		expect(onHighlight).toHaveBeenLastCalledWith(null);
 	});
 
 	it("keeps an action footer outside the shrinking options region", async () => {

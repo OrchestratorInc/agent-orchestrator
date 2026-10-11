@@ -17,6 +17,29 @@ Turning mobile access off closes the authenticated listener. Regenerating its pa
 
 Where available, Orchestrator can manage a remote-access connector using `cloudflared`. If Connect Mobile says remote access is unavailable, use its **Install cloudflared** control and wait for the connector status to become ready. A LAN code can be ready first; scan the refreshed QR after the remote endpoint appears. Test once with the phone off the home Wi-Fi. A successful home-network connection alone does not prove away-from-home access. The managed connector's address can change when it restarts, so use a refreshed offer if the old endpoint stops working.
 
+## Use this desktop from another machine
+
+Open Orchestrator on the machine you want to connect to. With the current `ao` CLI, show its existing connection address and password without changing remote access:
+
+```bash
+ao remote-host status
+```
+
+If `status` reports **Remote host disabled**, install `cloudflared` using **Connect Mobile → Install cloudflared**, then run:
+
+```bash
+ao remote-host enable --tunnel-only
+ao remote-host status
+```
+
+The tunnel starts asynchronously; run `status` again until an HTTPS address appears. On the other desktop, sign in to Orchestrator and open **Settings → Remote hosts → Add host**, then enter that address and connection password. Treat these details as credentials. Cloudflare terminates TLS and can read tunneled traffic; quick-tunnel addresses can change on restart.
+
+If the host already has LAN access enabled, its displayed HTTP address works only on a trusted reachable network. Use `ao remote-host enable --tunnel` to add HTTPS access while retaining that LAN listener; switching to tunnel-only mode requires disabling it first and invalidates the old password.
+
+If `ao` is missing from your Mac's PATH or points to an old install, use the current desktop app's bundled CLI instead: `"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao" remote-host status`. Adjust the app path if you installed or named it differently; the same binary supports `remote-host enable --tunnel-only`.
+
+On macOS, **Quit / Cmd+Q** closes the desktop window while its tray, daemon, and enabled remote access keep running. Use the tray's **Quit AO Completely** to stop the app-owned server. The host must stay awake and reachable; closing the window does not enable remote access by itself.
+
 ## Tailscale
 
 iPhones cannot connect through the current raw Tailscale endpoint. Use a managed HTTPS endpoint instead. iOS blocks cleartext requests to `100.64.0.0/10`, and the current v2 offer does not advertise Tailscale HTTPS endpoints. The current desktop panel has no connection-method selector or separate visible TLS control, and automatic TLS setup is incomplete. Android behavior for a raw Tailscale endpoint is unverified.
@@ -52,7 +75,7 @@ Mobile also exposes pull request, workspace review, and reviewer-run views. Push
 | Works on Wi-Fi but not elsewhere | Confirm a managed HTTPS endpoint is ready, rescan the refreshed QR, and test off Wi-Fi. A plain LAN or raw Tailscale address is not an iOS remote endpoint. |
 | Wrong computer or contract-version error | Check the computer name shown by the phone and update both apps. QR pairing checks the offered host identity before sending the password. |
 | Password rejected | Copy the current password from Connect Mobile or scan a new QR. Regeneration invalidates old credentials. Repeated wrong attempts can trigger a temporary lockout. |
-| Connection drops after sleep or app exit | Wake the desktop and reopen Orchestrator. On supported Macs, enable keep-awake if appropriate; the app and daemon still need to run. Reopen the session after the network returns. |
+| Connection drops after sleep or full app exit | Wake the desktop and reopen Orchestrator. On supported Macs, enable keep-awake if appropriate; ordinary Quit/Cmd+Q leaves the server running, but **Quit AO Completely** stops it. Reopen the session after the network returns. |
 | No push alerts | Allow phone notifications, check that the device is not muted, and confirm the daemon can reach its push service. Open the app directly for interactive work. |
 
 <details>

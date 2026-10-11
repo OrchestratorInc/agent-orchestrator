@@ -18,7 +18,7 @@ To connect a self-managed GitLab host:
 
 1. Add its hostname to the daemon's `AO_GITLAB_ALLOWED_HOSTS` setting. Include the port if the host uses one; omit `https://`. GitLab.com is already allowed.
 2. If the host needs a separate token, add a `host=token` entry to `AO_GITLAB_HOST_TOKENS`.
-3. Restart Orchestrator so its daemon reads the new settings. If the desktop app manages the daemon, quit and reopen Orchestrator.
+3. Restart Orchestrator so its daemon reads the new settings. If the desktop app manages the daemon, quit completely and reopen Orchestrator; on macOS, use **Quit AO Completely** in the menu-bar tray.
 
 For example, in a shell that launches Orchestrator:
 

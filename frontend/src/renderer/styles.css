@@ -1099,16 +1099,11 @@ button.settings-row-bar {
 }
 
 .composer-run-controls {
-	display: grid;
+	display: flex;
 	min-width: 0;
-	grid-template-columns: minmax(max-content, 1fr) minmax(0, 1fr);
 	align-items: center;
+	justify-content: flex-start;
 	column-gap: var(--space-2);
-}
-
-.composer-run-controls-with-effort {
-	/* Agent and model share free room; effort keeps enough width for its selected label. */
-	grid-template-columns: minmax(max-content, 1fr) minmax(0, 1fr) minmax(max-content, 0.5fr);
 }
 
 .composer-toolbar-slot {
@@ -1116,7 +1111,7 @@ button.settings-row-bar {
 }
 
 .composer-toolbar .composer-toolbar-option {
-	height: var(--size-settings-action-height);
+	height: var(--size-composer-toolbar-height);
 	/* Same mix formula as the settings-modal dropdown trigger, but anchored to
 	   --card (an opaque color) instead of --color-bg-settings-row. */
 	border-radius: var(--radius-md) !important;
@@ -3154,6 +3149,22 @@ html.sidebar-reordering * {
 	vertical-align: -0.06em;
 }
 
+.chat-transcript-reveal {
+	animation: chat-transcript-reveal 360ms ease-out both;
+}
+
+@keyframes chat-transcript-reveal {
+	from {
+		opacity: 0;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-transcript-reveal {
+		animation: none;
+	}
+}
+
 .chat-scroll-viewport {
 	scrollbar-width: none;
 	/* Spacer-driven prompt pinning fights the browser's own scroll anchoring. */
@@ -4066,6 +4077,10 @@ html.sidebar-reordering * {
  * (gap width + x-transform). Dragging updates --ao-inspector-w directly. */
 
 .session-inspector__topbar {
+	/* Width the tab list can need (four tabs, their gaps and the leading pad).
+	   The centered field never grows past what is left once both side tracks
+	   hold that much, so it cannot overlap the last tab. */
+	--inspector-tabs-reserve: calc(4 * var(--size-control-md) + 3 * var(--space-1) + var(--space-1));
 	background: var(--bg);
 	color: var(--fg);
 	user-select: none;
@@ -4076,13 +4091,13 @@ html.sidebar-reordering * {
    which shifts it right because the tab controls are wider than the actions. */
 .session-inspector__topbar--browser {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 240px) minmax(0, 1fr);
+	grid-template-columns: minmax(0, 1fr) minmax(0, clamp(120px, calc(100cqw - 2 * var(--inspector-tabs-reserve)), 240px)) minmax(0, 1fr);
 	padding-left: 0;
 	transition: grid-template-columns var(--duration-fast) ease;
 }
 
 .session-inspector__topbar--browser:has(.browser-panel__address-bar--editing) {
-	grid-template-columns: minmax(0, 1fr) clamp(240px, 52cqw, 560px) minmax(0, 1fr);
+	grid-template-columns: minmax(0, 1fr) clamp(120px, min(52cqw, calc(100cqw - 2 * var(--inspector-tabs-reserve))), 560px) minmax(0, 1fr);
 }
 
 .session-inspector__topbar--browser > .session-inspector__tablist {
@@ -4093,10 +4108,6 @@ html.sidebar-reordering * {
 .session-inspector__topbar > .browser-panel__topbar-host {
 	grid-column: 2;
 	width: 100%;
-}
-
-.session-inspector__topbar > .browser-panel__topbar-host > .browser-panel__address-bar {
-	transform: translateX(clamp(32px, 6cqw, 48px));
 }
 
 .session-inspector__topbar--browser > .session-inspector-actions-spacer {
@@ -4132,12 +4143,6 @@ html.sidebar-reordering * {
 		transition: width var(--duration-fast) ease;
 	}
 
-	.session-inspector__topbar--browser
-		> .browser-panel__topbar-host
-		> .browser-panel__address-bar {
-		transform: none;
-	}
-
 	.session-inspector__topbar--browser:has(.browser-panel__address-bar--editing)
 		> .browser-panel__topbar-host {
 		width: min(400px, calc(100cqw - 16px));
@@ -4150,9 +4155,9 @@ html.sidebar-reordering * {
 	width: 100%;
 	box-sizing: border-box;
 	height: var(--size-control-md);
-	border-color: var(--color-border);
+	border-color: transparent;
 	border-radius: var(--radius-md);
-	background: var(--bg);
+	background: var(--color-interactive-active);
 	font-family: var(--font-family-base);
 	font-size: 12px;
 	transition:
@@ -4178,13 +4183,13 @@ html.sidebar-reordering * {
    widening, and drops to its own row at the same narrow width (below). */
 .session-inspector__topbar:has(> .files-panel__topbar-host) {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 240px) minmax(0, 1fr);
+	grid-template-columns: minmax(0, 1fr) minmax(0, clamp(120px, calc(100cqw - 2 * var(--inspector-tabs-reserve)), 240px)) minmax(0, 1fr);
 	padding-left: 0;
 	transition: grid-template-columns var(--duration-fast) ease;
 }
 
 .session-inspector__topbar:has(> .files-panel__topbar-host :focus) {
-	grid-template-columns: minmax(0, 1fr) clamp(240px, 52cqw, 560px) minmax(0, 1fr);
+	grid-template-columns: minmax(0, 1fr) clamp(120px, min(52cqw, calc(100cqw - 2 * var(--inspector-tabs-reserve))), 560px) minmax(0, 1fr);
 }
 
 .session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector__tablist {
@@ -4195,10 +4200,6 @@ html.sidebar-reordering * {
 .session-inspector__topbar > .files-panel__topbar-host {
 	grid-column: 2;
 	width: 100%;
-}
-
-.session-inspector__topbar > .files-panel__topbar-host > * {
-	transform: translateX(clamp(32px, 6cqw, 48px));
 }
 
 .session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector-actions-spacer {
@@ -4234,10 +4235,6 @@ html.sidebar-reordering * {
 		width: 180px;
 		justify-self: center;
 		transition: width var(--duration-fast) ease;
-	}
-
-	.session-inspector__topbar > .files-panel__topbar-host > * {
-		transform: none;
 	}
 
 	.session-inspector__topbar > .files-panel__topbar-host:focus-within {
@@ -5730,9 +5727,9 @@ body:has(#root .platform-linux) > .files-popout-overlay {
 	width: 100%;
 	box-sizing: border-box;
 	height: var(--size-control-md);
-	border-color: var(--color-border);
+	border-color: transparent;
 	border-radius: var(--radius-md);
-	background: var(--bg);
+	background: var(--color-interactive-active);
 	font-family: var(--font-family-base);
 	font-size: 12px;
 	text-align: center;

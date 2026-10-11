@@ -12,23 +12,27 @@ async function expectAddressCentered(page: Page) {
 		.toBeLessThanOrEqual(1);
 }
 
-async function expectAddressShiftedRight(page: Page) {
-	await expect
-		.poll(async () => {
-			const inspectorTopbar = await page.locator("#inspector .session-inspector__topbar").boundingBox();
-			const address = await page.getByTestId("browser-address-bar").boundingBox();
-			if (!inspectorTopbar || !address) return false;
-			const offset = address.x + address.width / 2 - (inspectorTopbar.x + inspectorTopbar.width / 2);
-			return offset >= 32 && offset <= 48;
-		})
-		.toBe(true);
-}
-
 async function expectAddressWidth(page: Page, width: number) {
 	await expect
 		.poll(async () => {
 			const measuredWidth = (await page.getByTestId("browser-address-bar").boundingBox())?.width;
 			return measuredWidth !== undefined && Math.abs(measuredWidth - width) <= 0.1;
+		})
+		.toBe(true);
+}
+
+async function expectAddressClearOfTabs(page: Page) {
+	await expect
+		.poll(async () => {
+			const address = await page.getByTestId("browser-address-bar").boundingBox();
+			if (!address) return false;
+			for (const tab of await page.locator("#inspector .session-inspector__tablist").getByRole("tab").all()) {
+				const box = await tab.boundingBox();
+				if (!box || box.x < address.x + address.width) {
+					if (box && box.x + box.width > address.x) return false;
+				}
+			}
+			return true;
 		})
 		.toBe(true);
 }
@@ -44,13 +48,14 @@ async function expectAddressBelowInspectorTabs(page: Page) {
 		.toBe(true);
 }
 
-test("@P0 browser address shifts clear of wide tabs and remains centered in the compact inspector", async ({ page }) => {
+test("@P0 browser address stays centered, clear of the tabs, and drops below them in the compact inspector", async ({ page }) => {
 	await page.goto("/#/projects/ao-demo/sessions/demo-working");
 	await openInspector(page);
 	await page.locator("#inspector").getByRole("tab", { name: "Browser" }).click();
 	await expect(page.getByTestId("browser-address-bar")).toBeVisible();
 
-	await expectAddressShiftedRight(page);
+	await expectAddressCentered(page);
+	await expectAddressClearOfTabs(page);
 	await expectAddressWidth(page, 240);
 	await page.setViewportSize({ width: 1100, height: 720 });
 	await expectAddressCentered(page);

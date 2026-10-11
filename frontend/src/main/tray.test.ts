@@ -60,14 +60,20 @@ function entry(overrides: Partial<TraySessionEntry> & { sessionId: string }): Tr
 function setup() {
 	const openSession = vi.fn();
 	const focusWindow = vi.fn();
-	const controller = createTrayController({ focusWindow, openSession, locale: "en" });
+	const quitCompletely = vi.fn();
+	const controller = createTrayController({ focusWindow, openSession, quitCompletely, locale: "en" });
 	if (!controller) throw new Error("expected a tray controller");
 	const tray = trayInstances[trayInstances.length - 1];
-	return { controller, tray, openSession, focusWindow };
+	return { controller, tray, openSession, focusWindow, quitCompletely };
 }
 
 const sessionItems = (tray: { template: MenuItem[] }) =>
-	tray.template.filter((item) => typeof item.click === "function" && item.label !== "Show Agent Orchestrator");
+	tray.template.filter(
+		(item) =>
+			typeof item.click === "function" &&
+			item.label !== "Show Agent Orchestrator" &&
+			item.label !== "Quit AO Completely",
+	);
 
 afterEach(() => {
 	trayInstances.length = 0;
@@ -79,7 +85,21 @@ describe("createTrayController", () => {
 		const { tray } = setup();
 		expect(tray.title).toBe("");
 		expect(tray.template.some((i) => i.label === "No sessions need attention" && i.enabled === false)).toBe(true);
-		expect(tray.template.some((i) => i.role === "quit")).toBe(true);
+		expect(tray.template.some((i) => i.label === "Quit AO Completely")).toBe(true);
+	});
+
+	it("hands the explicit quit action to the quitCompletely delegate", () => {
+		const { tray, quitCompletely } = setup();
+		const quit = tray.template.find((item) => item.label === "Quit AO Completely");
+		expect(quit?.role).toBeUndefined();
+		quit?.click?.();
+		expect(quitCompletely).toHaveBeenCalledTimes(1);
+	});
+
+	it("hands the show action to the focusWindow delegate", () => {
+		const { tray, focusWindow } = setup();
+		tray.template.find((item) => item.label === "Show Agent Orchestrator")?.click?.();
+		expect(focusWindow).toHaveBeenCalledTimes(1);
 	});
 
 	it("uses grammatically correct singular for exactly one attention session", () => {
@@ -150,5 +170,6 @@ describe("createTrayController", () => {
 		expect(tray.tooltip).toBe("1 个会话需要关注");
 		expect(tray.template.some((i) => i.label === "需要你处理")).toBe(true);
 		expect(tray.template.some((i) => i.label === "显示 Agent Orchestrator")).toBe(true);
+		expect(tray.template.some((i) => i.label === "完全退出 AO")).toBe(true);
 	});
 });

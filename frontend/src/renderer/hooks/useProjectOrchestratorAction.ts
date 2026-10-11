@@ -84,10 +84,16 @@ export function useProjectOrchestratorAction({
 		mutationFn: async (mode?: "tui") => {
 			if (!projectId) return;
 			setStartupError(projectId, null, hostId);
+			// A known orchestrator opens at once; its composer shows the startup
+			// shimmer while the resume runs, instead of the click waiting for it.
+			const earlyResume = !hostId && resumableOrchestrator ? resumeOrchestrator(resumableOrchestrator.id) : undefined;
+			if (earlyResume && resumableOrchestrator && activeRoute.current === routeKey) {
+				void navigate(sessionNavigateTarget(projectId, resumableOrchestrator.id, hostId));
+			}
 			const openedSessionId = hostId
 				? await openRemoteOrchestrator(hostId, projectId, orchestrator, mode, false, source)
 				: resumableOrchestrator
-				? (await resumeOrchestrator(resumableOrchestrator.id), resumableOrchestrator.id)
+				? (await earlyResume, resumableOrchestrator.id)
 				: project?.kind === CLOUD_PROJECT_KIND
 					? await spawnCloudOrchestrator(queryClient, projectId)
 					: await spawnOrchestrator(projectId, source, false, mode);
@@ -97,7 +103,7 @@ export function useProjectOrchestratorAction({
 			setStartupError(projectId, null, hostId);
 			// A completed request belongs to its original route, even if this
 			// component survived a project or session change while it was pending.
-			if (activeRoute.current === routeKey) {
+			if (!earlyResume && activeRoute.current === routeKey) {
 				void navigate(sessionNavigateTarget(projectId, openedSessionId, hostId));
 			}
 		},

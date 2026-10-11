@@ -195,10 +195,18 @@ func (s *Service) PromoteQueuedTurn(
 	if err != nil {
 		return PromoteQueuedTurnResult{}, err
 	}
-	if _, ok := controller.conv.(ports.ChatSteerer); !ok {
+	if _, ok := controller.steerer(); !ok {
 		return PromoteQueuedTurnResult{}, ErrSteerUnsupported
 	}
 	return controller.PromoteQueuedTurn(ctx, turnID)
+}
+
+// steerer returns the provider's steering port only when the conversation
+// negotiated it. The ACP driver implements Steer for every agent, so the type
+// alone does not say the agent can take guidance mid-turn.
+func (c *Controller) steerer() (ports.ChatSteerer, bool) {
+	steerer, ok := c.conv.(ports.ChatSteerer)
+	return steerer, ok && c.Capabilities().Has(ports.ChatCapabilitySteer)
 }
 
 // PromoteQueuedTurn reserves a durable queue item, asks the provider to absorb
@@ -207,7 +215,7 @@ func (c *Controller) PromoteQueuedTurn(
 	ctx context.Context,
 	turnID string,
 ) (PromoteQueuedTurnResult, error) {
-	steerer, ok := c.conv.(ports.ChatSteerer)
+	steerer, ok := c.steerer()
 	if !ok {
 		return PromoteQueuedTurnResult{}, ErrSteerUnsupported
 	}
@@ -389,7 +397,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 				persistContext: "persist interface-transition refusal",
 			})
 	}
-	steerer, ok := c.conv.(ports.ChatSteerer)
+	steerer, ok := c.steerer()
 	if !ok {
 		return c.rejectSteerBeforeDispatch(ctx, msg.ClientMessageID, requestJSON,
 			durableSteerRefusal{

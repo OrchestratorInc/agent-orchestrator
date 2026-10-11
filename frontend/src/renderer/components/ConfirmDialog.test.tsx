@@ -1,6 +1,27 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 import { ConfirmDialog } from "./ConfirmDialog";
+
+test("starts on Cancel for destructive confirms and restores focus on close", async () => {
+	const opener = document.createElement("button");
+	document.body.appendChild(opener);
+	opener.focus();
+	const props = { title: "Kill?", description: "Sure?", confirmLabel: "Kill it", onConfirm: vi.fn(), onOpenChange: vi.fn() };
+	const { rerender } = render(<ConfirmDialog {...props} open destructive />);
+	await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus());
+	expect(screen.getByRole("button", { name: "Close dialog" })).toHaveAttribute("tabindex", "-1");
+
+	rerender(<ConfirmDialog {...props} open={false} destructive />);
+	await waitFor(() => expect(opener).toHaveFocus());
+	opener.remove();
+});
+
+test("ignores Escape while busy", () => {
+	const onOpenChange = vi.fn();
+	render(<ConfirmDialog open busy title="Kill?" description="Sure?" confirmLabel="Kill it" onConfirm={vi.fn()} onOpenChange={onOpenChange} />);
+	fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+	expect(onOpenChange).not.toHaveBeenCalled();
+});
 
 test("uses the same centered settings-dialog layout as nearby app dialogs", () => {
 	render(

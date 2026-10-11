@@ -3,6 +3,7 @@
 ARG BUILDPLATFORM
 ARG TARGETOS=linux
 ARG TARGETARCH
+ARG EXPAT_BUILD_IMAGE=debian:trixie-slim
 
 FROM --platform=${BUILDPLATFORM} golang:1.27.1-bookworm AS build
 ARG TARGETOS
@@ -33,7 +34,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Trixie has no fix for CVE-2026-77214 yet. Rebuild Debian's pinned Expat
 # 2.9.0 source on Trixie instead of mixing unstable runtime dependencies.
 # Remove this stage once Trixie's libexpat1 includes the upstream bounds check.
-FROM debian:trixie-slim AS expat-build
+FROM ${EXPAT_BUILD_IMAGE} AS expat-build
 WORKDIR /build
 RUN apt-get update && \
     apt-get install --yes --no-install-recommends \

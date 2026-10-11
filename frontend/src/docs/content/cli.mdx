@@ -143,7 +143,7 @@ Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the 
 | `ao session restore <id>` | Relaunch a terminated session when recovery is supported. |
 | `ao session exit-agent <id>` | Stop the controller while retaining the session. |
 | `ao session resume-agent <id>` | Start the controller again in that session. |
-| `ao session rename <id> <name>` | Change its display name. |
+| `ao session rename <id> <name>` | Change its display name. The project orchestrator cannot be renamed. |
 | `ao session cleanup` | Reclaim eligible terminated workspaces; supports `--dry-run`. |
 | `ao session claim-pr [<session-id>] <pr-ref>` | Attach an existing PR; omitting the session uses `AO_SESSION_ID`. |
 | `ao session switch-agent <id> <target-harness>` | Switch a compatible session to another harness. |

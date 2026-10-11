@@ -99,7 +99,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onNextSessionShortcut: unsubscribe,
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
-					onFocusTerminalShortcut: unsubscribe,
+					onShortcut: unsubscribe,
 				},
 				terminal: {
 					saveDroppedFile: async () => "",
@@ -135,6 +135,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					},
 				},
 				editorHandoff: {
+					copyWorkspacePath: async () => undefined,
 					getState: async () => ({
 						targets: [
 							{ id: "cursor" as const, name: "Cursor", kind: "editor" as const },
@@ -715,7 +716,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onNextSessionShortcut: unsubscribe,
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
-					onFocusTerminalShortcut: unsubscribe,
+					onShortcut: unsubscribe,
 				},
 				terminal: {
 					saveDroppedFile: async () => "",
@@ -748,6 +749,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					},
 				},
 				editorHandoff: {
+					copyWorkspacePath: async () => undefined,
 					getState: async () => ({
 						targets: [
 							{ id: "cursor" as const, name: "Cursor", kind: "editor" as const },

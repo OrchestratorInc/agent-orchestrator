@@ -5,6 +5,7 @@ import {
 	TriangleAlert,
 	X,
 } from "lucide-react";
+import { isSettingsPageOpen } from "../hooks/useAppShortcut";
 import { Reorder, useDragControls } from "motion/react";
 import {
 	useCallback,
@@ -25,6 +26,7 @@ import {
 } from "../hooks/useAgentSwitches";
 import { useObservedAgentSwitchLifecycle } from "../hooks/useObservedAgentSwitchLifecycle";
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility";
+import { useTabListTabStop } from "../hooks/useTabListTabStop";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useHostConnection } from "../hooks/useHostConnection";
@@ -100,6 +102,8 @@ type CenterPaneProps = {
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** Stop forwarding the agent pane's keystrokes while its controller drains. */
 	agentInputDisabled?: boolean;
+	/** The agent terminal is coming up after an interface switch. */
+	terminalBooting?: boolean;
 	/** Reports attachment of the session's own agent terminal. */
 	onSessionTerminalAttached?: (attached: boolean) => void;
 };
@@ -175,10 +179,12 @@ export function CenterPane({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	agentInputDisabled = false,
+	terminalBooting = false,
 	onSessionTerminalAttached,
 }: CenterPaneProps) {
 	const { t } = useTranslation();
 	const paneRef = useRef<HTMLDivElement | null>(null);
+	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const wheelZoomRemainderRef = useRef(0);
 	const lastWheelZoomAtRef = useRef(0);
 	const [fontSize, setFontSize] = useState(initialTerminalFontSize);
@@ -497,8 +503,8 @@ export function CenterPane({
 	);
 
 	useEffect(() => {
-		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => selectAdjacentTab(-1));
-		const disposeNext = aoBridge.app.onNextTabShortcut(() => selectAdjacentTab(1));
+		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(-1));
+		const disposeNext = aoBridge.app.onNextTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(1));
 		return () => {
 			disposePrevious();
 			disposeNext();
@@ -647,6 +653,7 @@ export function CenterPane({
 							aria-label={t("terminal.tabsAria")}
 							className="flex h-full min-w-0 flex-1 items-stretch"
 							onKeyDown={handleTerminalTabListKeyDown}
+							ref={tabListRef}
 							role="tablist"
 						>
 							<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
@@ -769,6 +776,7 @@ export function CenterPane({
 							focusRequested={target.kind !== "worker" || !workerInputDisabled}
 							isFullscreen={isFullscreen}
 							inputDisabled={workerInputDisabled}
+							booting={terminalBooting && target.kind === "worker"}
 							onChangeFontSize={updateFontSize}
 							onTerminalContentReadyChange={target.kind === "worker" && session?.cloud ? onSessionTerminalAttached : undefined}
 							onToggleFullscreen={toggleFullscreen}
@@ -1000,8 +1008,9 @@ export function SessionPaneTab({
 	const connected = appearance === "connected";
 	// A session object supplies the tab presentation; refresh wiring explicitly
 	// opts the owning surface into rename so shared preview/cloud tabs cannot
-	// persist a title without updating their query cache.
-	const renameSession = onRenamed ? session : undefined;
+	// persist a title without updating their query cache. The project
+	// orchestrator's tab shows its role, not a name, so it is never renamable.
+	const renameSession = onRenamed && session && !isOrchestratorSession(session) ? session : undefined;
 	const rename = useSessionRename(renameSession, onRenamed);
 	const editingContent = renameSession && rename.isEditing ? (
 		<div className="flex h-full min-w-0 flex-1 items-center gap-2 px-2">

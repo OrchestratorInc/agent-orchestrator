@@ -35,7 +35,7 @@ func Spawn(ctx context.Context, argv, env []string, rows, cols uint16) (ports.St
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd := exec.Command(argv[0], argv[1:]...) //nolint:forbidigo // interactive PTY child requires direct exec.Cmd ownership
 	if env != nil {
 		cmd.Env = env
 	}

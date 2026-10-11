@@ -1,11 +1,9 @@
 import { create } from "zustand";
 import {
 	effectiveShortcutBindings,
-	matchesAppShortcut,
 	type AppShortcutId,
 	type KeybindingOverrides,
 	type ShortcutBinding,
-	type ShortcutChord,
 } from "../../shared/shortcuts";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform } from "../lib/platform";
@@ -51,21 +49,6 @@ export const useKeybindingsStore = create<KeybindingsState>((set, get) => ({
 		set({ overrides, loaded: true });
 	},
 }));
-
-export function keyboardEventChord(event: KeyboardEvent): ShortcutChord {
-	return {
-		key: event.key,
-		code: event.code,
-		ctrl: event.ctrlKey,
-		meta: event.metaKey,
-		shift: event.shiftKey,
-		alt: event.altKey,
-	};
-}
-
-export function matchesRendererShortcut(id: AppShortcutId, event: KeyboardEvent): boolean {
-	return matchesAppShortcut(id, keyboardEventChord(event), isMacPlatform(), useKeybindingsStore.getState().overrides);
-}
 
 export function currentShortcutBindings(id: AppShortcutId): readonly ShortcutBinding[] {
 	return effectiveShortcutBindings(id, isMacPlatform(), useKeybindingsStore.getState().overrides);

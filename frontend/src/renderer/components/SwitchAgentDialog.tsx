@@ -495,7 +495,7 @@ export function SwitchAgentDialog({ agentSwitch, container, open, session, onOpe
 									<span className="inline-flex">
 										<Button
 											aria-label={admissionPending ? t("newTask.starting") : t("switchAgent.confirm")}
-											className="size-(--size-settings-action-height)"
+											className="size-(--size-composer-toolbar-height)"
 											disabled={admissionPending}
 											size="none"
 											type="submit"

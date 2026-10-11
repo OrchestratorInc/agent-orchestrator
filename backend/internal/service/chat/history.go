@@ -38,6 +38,9 @@ var (
 	ErrForkUnsupported = errors.New("chat driver cannot fork a conversation")
 	// ErrRenameUnsupported reports a provider whose thread carries no title.
 	ErrRenameUnsupported = errors.New("chat driver cannot set a thread title")
+	// ErrOrchestratorRename refuses a title for the project orchestrator's
+	// conversation: the orchestrator is never renamed.
+	ErrOrchestratorRename = errors.New("the project orchestrator cannot be renamed")
 	// ErrTurnRunning refuses a rollback while the agent is working. Retryable once
 	// the turn ends, which is why it is separate from every other refusal here.
 	ErrTurnRunning = errors.New("cannot roll back while a turn is running")
@@ -1125,6 +1128,9 @@ func (s *Service) SetTitle(ctx context.Context, id domain.SessionID, title strin
 		return "", err
 	}
 	defer release()
+	if controller.conversation.Scope == domain.ConversationScopeProject {
+		return "", ErrOrchestratorRename
+	}
 	renamer, ok := controller.conv.(ports.ChatRenamer)
 	if !ok {
 		return "", ErrRenameUnsupported

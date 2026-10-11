@@ -36,14 +36,22 @@ jobs:
           fi
           echo "Scanning $(wc -l < "${commits_file}") commit(s)"
 
-      # Run the same license-free gitleaks v7.4 image used by the old v1 action,
-      # pinned to the digest observed in that action's Dockerfile build.
+      # Keep the license-free v7.4 scanner, but avoid Docker Hub pull limits.
+      - name: Install pinned gitleaks
+        shell: bash
+        run: |
+          curl --fail --location --retry 3 \
+            https://github.com/gitleaks/gitleaks/releases/download/v7.4.0/gitleaks-linux-amd64 \
+            --output "${RUNNER_TEMP}/gitleaks"
+          echo "97019efe504f729cc2f73fb467784448af22909d3ad58ade57665e97254c64a3  ${RUNNER_TEMP}/gitleaks" | sha256sum --check
+          chmod +x "${RUNNER_TEMP}/gitleaks"
+
       - name: Scan selected commits for secrets
-        uses: docker://zricethezav/gitleaks:v7.4.0@sha256:ffe35a0d42974c19da37b3fb5ca1ff1e781ae6dffaf80164568129a2714eca61
-        with:
-          args: >-
-            --path=/github/workspace
-            --verbose
-            --redact
-            --commits-file=/github/workspace/.git/gitleaks-commits.txt
-            --config-path=/github/workspace/.github/.gitleaks.toml
+        shell: bash
+        run: |
+          "${RUNNER_TEMP}/gitleaks" \
+            --path="${GITHUB_WORKSPACE}" \
+            --verbose \
+            --redact \
+            --commits-file="${GITHUB_WORKSPACE}/.git/gitleaks-commits.txt" \
+            --config-path="${GITHUB_WORKSPACE}/.github/.gitleaks.toml"

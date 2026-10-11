@@ -702,7 +702,12 @@ describe("Sidebar", () => {
 		// the footer content while the sidebar slides away and leave its border behind.
 		expect(expandedButton?.closest("[hidden]")).toBeNull();
 		expect(collapsedButton).toHaveAttribute("tabindex", "0");
-		expect(collapsedButton?.closest('[aria-hidden="true"]')).toBeNull();
+		// The sidebar content is off-screen while collapsed: inert + aria-hidden, but the
+		// edge rail that reopens it stays live.
+		const inertRegion = collapsedButton?.closest("[inert]");
+		expect(inertRegion).toHaveAttribute("aria-hidden", "true");
+		expect(inertRegion?.closest('[data-slot="sidebar-container"]')).not.toBeNull();
+		expect(document.querySelector('[data-sidebar="rail"]')?.closest("[inert]")).toBeNull();
 	});
 
 	it("keeps sidebar scrolling functional without a layout gutter", () => {
@@ -738,7 +743,7 @@ describe("Sidebar", () => {
 		expect(spawnMock).not.toHaveBeenCalled();
 	});
 
-	it("does not open an exited orchestrator when resume fails", async () => {
+	it("opens an exited orchestrator at once and reports a failed resume", async () => {
 		const user = userEvent.setup();
 		const error = new Error("resume request failed");
 		useUiStore.getState().clearGlobalToast();
@@ -748,8 +753,11 @@ describe("Sidebar", () => {
 
 		await user.click(screen.getByRole("button", { name: "Open Project One orchestrator" }));
 
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "proj-1-orch" },
+		});
 		await waitFor(() => expect(console.error).toHaveBeenCalledWith("Failed to resume orchestrator:", error));
-		expect(navigateMock).not.toHaveBeenCalled();
 		expect(useUiStore.getState().globalToast).toMatchObject({
 			title: "Resume agent",
 			body: "resume request failed",
@@ -1167,12 +1175,13 @@ describe("Sidebar", () => {
 		expect(screen.getByLabelText("Project actions for Project One")).toBeInTheDocument();
 	});
 
-	it("keeps project disclosure and row actions in the keyboard tab order", () => {
+	it("keeps project row actions in the keyboard tab order without a duplicate disclosure stop", () => {
 		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
 
-		const disclosure = screen.getByRole("button", { name: "Toggle Project One sessions" });
+		const disclosure = screen.getByLabelText("Toggle Project One sessions");
 		expect(disclosure.tagName).toBe("BUTTON");
-		expect(disclosure).toHaveProperty("tabIndex", 0);
+		// The overlay folder button duplicates the project row's tab stop.
+		expect(disclosure).toHaveProperty("tabIndex", -1);
 		expect(screen.getByLabelText("Spawn Project One orchestrator")).toHaveProperty("tabIndex", 0);
 		expect(screen.getByLabelText("Project actions for Project One")).toHaveProperty("tabIndex", 0);
 		expect(screen.getByLabelText("Pin session")).toHaveProperty("tabIndex", 0);
@@ -1257,7 +1266,7 @@ describe("Sidebar", () => {
 		expect(screen.getByText("fix login")).toBeInTheDocument();
 		expect(screen.getByText("other task")).toBeInTheDocument();
 
-		const folder = screen.getByRole("button", { name: "Toggle Project Two sessions" });
+		const folder = screen.getByLabelText("Toggle Project Two sessions");
 		expect(folder).toBeTruthy();
 		await user.click(folder);
 
@@ -1359,11 +1368,18 @@ describe("Sidebar", () => {
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId", params: { projectId: "proj-1" } });
 	});
 
-	it.each([false, true])("opens an empty project's orchestrator (existing: %s)", async (existing) => {
+	it("opens the board, not the orchestrator, when an empty project row is clicked", async () => {
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [] }] });
+		await userEvent.click(screen.getByText("Project One"));
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId", params: { projectId: "proj-1" } });
+		expect(spawnMock).not.toHaveBeenCalled();
+	});
+
+	it.each([false, true])("opens an empty project's orchestrator from its button (existing: %s)", async (existing) => {
 		const orchestrator: WorkspaceSession = { ...session, id: "proj-1-orc", kind: "orchestrator", title: "Orchestrator" };
 		spawnMock.mockResolvedValue(orchestrator.id);
 		renderSidebar({ workspaces: [{ ...workspace, sessions: existing ? [orchestrator] : [] }] });
-		await userEvent.click(screen.getByText("Project One"));
+		await userEvent.click(screen.getByRole("button", { name: existing ? "Open Project One orchestrator" : "Spawn Project One orchestrator" }));
 		await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "proj-1", sessionId: orchestrator.id },
@@ -1423,7 +1439,7 @@ describe("Sidebar", () => {
 			workspaces: [{ ...workspace, sessions: [orchestrator, session] }],
 		});
 
-		await user.click(screen.getByRole("button", { name: "Toggle Project One sessions" }));
+		await user.click(screen.getByLabelText("Toggle Project One sessions"));
 		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
 		expect(screen.getByText("Project One").closest("button")).toHaveAttribute("aria-expanded", "false");
 
@@ -2509,7 +2525,7 @@ describe("Sidebar", () => {
 		// The sidebar slides away (offcanvas); it has no icon rail, so its lists
 		// must not lift their caps just because it is collapsed.
 		expect(screen.queryByText("Project 11")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /more projects/ })).toBeInTheDocument();
+		expect(screen.getByRole("button", { hidden: true, name: /more projects/ })).toBeInTheDocument();
 	});
 
 	it("does not reopen a closed Projects section when the sidebar is toggled off and on", async () => {
@@ -2523,7 +2539,7 @@ describe("Sidebar", () => {
 		await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
 		// While the sidebar is off, the closed section must not be forced open.
 		expect(screen.queryByText(workspace.name)).not.toBeInTheDocument();
-		await user.click(screen.getAllByRole("button", { name: "Expand sidebar" })[0]);
+		await user.click(screen.getAllByRole("button", { hidden: true, name: "Expand sidebar" })[0]);
 
 		expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "false");
 		expect(screen.queryByText(workspace.name)).not.toBeInTheDocument();
@@ -2740,7 +2756,7 @@ describe("Sidebar", () => {
 		expect(screen.getByLabelText("Open second task")).toBeInTheDocument();
 
 		// Collapse via folder icon
-		const folder = screen.getByRole("button", { name: "Toggle Project One sessions" });
+		const folder = screen.getByLabelText("Toggle Project One sessions");
 		expect(folder).toBeTruthy();
 		await user.click(folder);
 
@@ -2755,7 +2771,7 @@ describe("Sidebar", () => {
 		});
 
 		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Toggle Project One sessions" })).toHaveAttribute(
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute(
 			"aria-expanded",
 			"false",
 		);
@@ -2771,14 +2787,14 @@ describe("Sidebar", () => {
 		});
 
 		expect(screen.getByLabelText("Open fix login")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Toggle Project One sessions" })).toHaveAttribute(
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute(
 			"aria-expanded",
 			"true",
 		);
 
-		await user.click(screen.getByRole("button", { name: "Toggle Project One sessions" }));
+		await user.click(screen.getByLabelText("Toggle Project One sessions"));
 		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Toggle Project One sessions" })).toHaveAttribute(
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute(
 			"aria-expanded",
 			"false",
 		);
@@ -2800,7 +2816,7 @@ describe("Sidebar", () => {
 		expect(screen.getByLabelText("Open fix login")).toBeInTheDocument();
 		expect(screen.queryByLabelText("Open second task")).not.toBeInTheDocument();
 
-		await user.click(screen.getByRole("button", { name: "Toggle Project One sessions" }));
+		await user.click(screen.getByLabelText("Toggle Project One sessions"));
 		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.expanded-projects") ?? "null")).toEqual([]);
 	});
 
@@ -2824,7 +2840,7 @@ describe("Sidebar", () => {
 		expect(projectRow).toHaveAttribute("aria-expanded", "true");
 
 		// Collapse via folder icon
-		const folder = screen.getByRole("button", { name: "Toggle Project One sessions" });
+		const folder = screen.getByLabelText("Toggle Project One sessions");
 		expect(folder).toBeTruthy();
 		await user.click(folder);
 
@@ -3473,5 +3489,83 @@ describe("resolveNextNavigationAfterSessionKill", () => {
 	it("falls back to project board if workspace is undefined", () => {
 		const route = resolveNextNavigationAfterSessionKill(undefined, "s-1");
 		expect(route).toEqual({ target: "project" });
+	});
+});
+
+describe("Sidebar active-session reveal", () => {
+	const noop = () => vi.fn().mockResolvedValue(undefined);
+	const other: WorkspaceSession = { ...session, id: "proj-1-2", title: "second task" };
+
+	function mount(expandedProjectIds: string[]) {
+		window.localStorage.setItem("ao.sidebar.expanded-projects", JSON.stringify(expandedProjectIds));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const tree = () => (
+			<QueryClientProvider client={client}>
+				<TooltipProvider>
+					<SidebarProvider>
+						<Sidebar
+							workspaces={[{ ...workspace, sessions: [session, other] }]}
+							onCloneProject={noop()}
+							onCreateProject={noop()}
+							onInitializeProject={noop()}
+							onRemoveProject={noop()}
+							onCreateRemoteProject={noop()}
+							onInitializeRemoteProject={noop()}
+						/>
+					</SidebarProvider>
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		const view = render(tree());
+		return {
+			go: (sessionId: string | undefined) => {
+				mockParams.projectId = sessionId ? workspace.id : undefined;
+				mockParams.sessionId = sessionId;
+				view.rerender(tree());
+			},
+		};
+	}
+
+	it("expands the collapsed project and scrolls the active row into view when the session changes", async () => {
+		const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+		const { go } = mount([]);
+		expect(screen.queryByLabelText("Open second task")).not.toBeInTheDocument();
+
+		go(other.id);
+
+		const row = await screen.findByLabelText("Open second task");
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "true");
+		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.expanded-projects") ?? "null")).toEqual([workspace.id]);
+		await waitFor(() => expect(scroll).toHaveBeenCalledWith({ block: "nearest" }));
+		expect(scroll.mock.contexts.at(-1)).toBe(row);
+	});
+
+	it("reopens a closed Projects section to reveal the active session", async () => {
+		const user = userEvent.setup();
+		const { go } = mount([workspace.id]);
+		await user.click(screen.getByRole("button", { name: "Projects" }));
+		expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "false");
+
+		go(session.id);
+
+		await waitFor(() => expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "true"));
+		expect(await screen.findByLabelText("Open fix login")).toHaveAttribute("aria-current", "page");
+	});
+
+	it("does not re-expand a project the user collapses while staying on the same session", async () => {
+		const user = userEvent.setup();
+		const { go } = mount([workspace.id]);
+		go(session.id);
+		await screen.findByLabelText("Open fix login");
+
+		await user.click(screen.getByLabelText("Toggle Project One sessions"));
+		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+
+		go(session.id);
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		});
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
 	});
 });

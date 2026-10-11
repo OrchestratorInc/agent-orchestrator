@@ -87,7 +87,7 @@ export function EffortMenuItems({ value, choices, onChange, defaultValue = "", d
 	</>;
 }
 
-export function EffortPicker(props: EffortMenuProps & { disabled?: boolean; label?: string; triggerClassName?: string }) {
+export function EffortPicker(props: EffortMenuProps & { disabled?: boolean; label?: string; triggerClassName?: string; menuClassName?: string }) {
 	const { t } = useTranslation();
 	const following = props.value === (props.defaultValue ?? "") || (!props.value && props.defaultValue === "default");
 	const label = effortDisplayLabel({
@@ -102,6 +102,6 @@ export function EffortPicker(props: EffortMenuProps & { disabled?: boolean; labe
 		<OptionMenuTrigger disabled={props.disabled} aria-label={props.label || t("settings.models.effort")} className={props.triggerClassName}>
 			<span className="min-w-0 truncate">{label}</span>
 		</OptionMenuTrigger>
-		<OptionMenuContent align="end" className="w-[min(16rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!"><EffortMenuItems {...props} /></OptionMenuContent>
+		<OptionMenuContent align="end" className={cn("w-[min(16rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!", props.menuClassName)}><EffortMenuItems {...props} /></OptionMenuContent>
 	</OptionMenu>;
 }

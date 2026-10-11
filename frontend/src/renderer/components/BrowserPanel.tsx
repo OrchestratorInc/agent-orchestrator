@@ -461,6 +461,7 @@ export function BrowserPanelView({
 	const canRetryAnnotation = status === "error" && queuedCount > 0;
 	const [devicePreset, setDevicePreset] = useState<string | null>(null);
 	const [customDeviceWidth, setCustomDeviceWidth] = useState("390");
+	const customWidthInputRef = useRef<HTMLInputElement>(null);
 	const [controlsView, setControlsView] = useState<"root" | "devices" | "profiles">("root");
 	const [controlsOpen, setControlsOpen] = useState(false);
 	const [runtimeReconnectPending, setRuntimeReconnectPending] = useState(false);
@@ -1197,6 +1198,15 @@ export function BrowserPanelView({
 							aria-label={t("browser.annotationOriginalPage")}
 							disabled={annotationIdle}
 							onBlur={() => void annotationAction("restore-preview")}
+							onKeyDown={(event) => {
+								if ((event.key !== "Enter" && event.key !== " ") || event.repeat) return;
+								event.preventDefault();
+								void annotationAction("preview-original");
+							}}
+							onKeyUp={(event) => {
+								if (event.key !== "Enter" && event.key !== " ") return;
+								void annotationAction("restore-preview");
+							}}
 							onPointerCancel={() => void annotationAction("restore-preview")}
 							onPointerDown={() => void annotationAction("preview-original")}
 							onPointerLeave={() => void annotationAction("restore-preview")}
@@ -1504,12 +1514,24 @@ export function BrowserPanelView({
 							})}
 						</div>
 						<div className="my-1 h-px bg-border" role="separator" />
-						<label className="flex items-center gap-1.5 px-2 py-1.5 text-body">
+						<DropdownMenuItem
+							className="gap-1.5"
+							// Radix re-focuses an item on pointer move/leave, which would pull focus
+							// out of the width field while the mouse drifts over the row.
+							onPointerMove={(event) => event.preventDefault()}
+							onPointerLeave={(event) => event.preventDefault()}
+							onSelect={(event) => {
+								event.preventDefault();
+								customWidthInputRef.current?.focus();
+							}}
+						>
 							<span className="flex size-4 shrink-0 items-center justify-center">
 								{devicePreset === CUSTOM_DEVICE_PRESET_ID ? <Check aria-hidden="true" className="text-accent" /> : null}
 							</span>
 							<span className="flex-1">{t("browser.deviceCustomWidth")}</span>
 							<Input
+								aria-label={t("browser.deviceCustomWidth")}
+								ref={customWidthInputRef}
 								className="h-6 w-16 shrink-0 px-1.5 text-right font-mono text-caption"
 								inputMode="numeric"
 								max={MAX_DEVICE_FRAME_WIDTH}
@@ -1519,10 +1541,14 @@ export function BrowserPanelView({
 									setDevicePreset(CUSTOM_DEVICE_PRESET_ID);
 								}}
 								onClick={(event) => event.stopPropagation()}
+								onKeyDown={(event) => {
+									// Escape still closes the menu; everything else is typing.
+									if (event.key !== "Escape") event.stopPropagation();
+								}}
 								type="number"
 								value={customDeviceWidth}
 							/>
-						</label>
+						</DropdownMenuItem>
 							</>
 						) : controlsView === "profiles" ? (
 							<>

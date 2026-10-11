@@ -7,6 +7,7 @@ import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { migrationOfferQueryKey, useMigrationOffer } from "../hooks/useMigrationOffer";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { Button } from "./ui/button";
 import {
 	settingsDialogBodyClass,
@@ -29,6 +30,7 @@ export function MigrationPopup() {
 	const [error, setError] = useState<string | undefined>();
 
 	const open = (offer.data?.show ?? false) && !skipped;
+	const restoreFocusOnClose = useRestoreFocusOnClose(open);
 	if (!open) return null;
 
 	const legacyRoot = offer.data?.legacyRoot || "your earlier AO";
@@ -75,6 +77,7 @@ export function MigrationPopup() {
 			<Dialog.Portal>
 				<Dialog.Overlay className="dialog-overlay data-[state=open]:animate-overlay-in" />
 				<Dialog.Content
+					onCloseAutoFocus={restoreFocusOnClose}
 					className={`${settingsDialogContentClass} fixed left-1/2 top-1/2 w-dialog-lg -translate-x-1/2 -translate-y-1/2 data-[state=open]:animate-modal-in`}
 				>
 					<button

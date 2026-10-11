@@ -11,6 +11,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 type process struct {
@@ -47,7 +48,7 @@ func (r *gatedReader) Open() { r.once.Do(func() { close(r.ready) }) }
 type spawnFunc func(Launch, string) (*process, error)
 
 func spawnAgent(launch Launch, workdir string) (*process, error) {
-	cmd := exec.Command(launch.Command, launch.Args...)
+	cmd := aoprocess.Command(launch.Command, launch.Args...)
 	cmd.Dir = workdir
 	cmd.Env = processenv.Merge(launch.Env)
 	configureProcessGroup(cmd)

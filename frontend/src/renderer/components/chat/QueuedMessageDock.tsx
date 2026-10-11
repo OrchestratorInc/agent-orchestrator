@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProper
 import { flushSync } from "react-dom";
 import {
 	DndContext,
+	KeyboardSensor,
 	PointerSensor,
 	closestCenter,
 	type DragEndEvent,
@@ -10,7 +11,7 @@ import {
 	useSensor,
 	useSensors,
 } from "@dnd-kit/core";
-import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronDown, Circle, CornerDownLeft, GripVertical, Pencil, Trash2 } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -344,6 +345,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		useSensor(PointerSensor, {
 			activationConstraint: { distance: REORDER_ACTIVATION_DISTANCE },
 		}),
+		useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
 	);
 
 	const runAction = useCallback(

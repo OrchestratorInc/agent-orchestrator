@@ -921,6 +921,17 @@ describe("BrowserPanel", () => {
 		expect(frame.style.width).toBe("240px");
 	});
 
+	it("reaches the custom width input from the keyboard", async () => {
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		await openDevicePresets();
+		const item = screen.getByRole("menuitem", { name: /Custom width/ });
+		item.focus();
+		await userEvent.keyboard("{Enter}");
+		const input = screen.getByLabelText("Custom width");
+		expect(input).toHaveFocus();
+		expect(screen.getByRole("menu")).toBeInTheDocument();
+	});
+
 	// Regression: the reviewer flagged that the original 6-device list should
 	// match Chrome DevTools' own "Standard" device list rather than a
 	// hand-picked subset.
@@ -1441,6 +1452,22 @@ describe("BrowserPanel", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Discard all comments" }));
 		expect(hookState.annotationAction).toHaveBeenCalledWith("discard-all");
+	});
+
+	it("previews the original page while Enter or Space is held on the eye button", async () => {
+		hookState.navState = { ...hookState.navState, url: "https://example.test/docs" };
+		hookState.annotationMode = true;
+		hookState.annotationState = { count: 2, screenshotCount: 0, hasDraft: false };
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		const eye = screen.getAllByRole("button").find((b) => /original/i.test(b.getAttribute("aria-label") ?? ""))!;
+		eye.focus();
+		hookState.annotationAction.mockClear();
+
+		fireEvent.keyDown(eye, { key: "Enter" });
+		fireEvent.keyDown(eye, { key: "Enter", repeat: true });
+		expect(hookState.annotationAction.mock.calls).toEqual([["preview-original"]]);
+		fireEvent.keyUp(eye, { key: "Enter" });
+		expect(hookState.annotationAction).toHaveBeenLastCalledWith("restore-preview");
 	});
 
 	it("sends submitted annotation instructions to the session agent", async () => {

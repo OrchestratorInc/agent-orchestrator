@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { IncompatibleRemoteVersionError, probeRemote, readRemoteIdentity } from "./remote-request";
+import { createLocalHostIdentity, IncompatibleRemoteVersionError, probeRemote, readRemoteIdentity } from "./remote-request";
 
 const entry = { label: "workbox", url: "http://192.0.2.1:3011", password: "pw" };
 
@@ -15,6 +15,40 @@ function fakeTextFetch(status: number, text: string) {
 }
 
 const daemonProbe = { status: "ok", service: "agent-orchestrator-daemon", pid: 1234 };
+
+describe("createLocalHostIdentity", () => {
+	it("uses only the confirmed loopback port and caches until the attachment changes", async () => {
+		let attachment: { port: number; pid?: number; generation: number } | null = null;
+		const identity = vi.fn().mockResolvedValueOnce("h_first").mockRejectedValueOnce(new Error("restarting")).mockResolvedValueOnce("h_second");
+		const localIdentity = createLocalHostIdentity(() => attachment, identity);
+		await expect(localIdentity()).resolves.toBeNull();
+		expect(identity).not.toHaveBeenCalled();
+		attachment = { port: 4001, generation: 1 };
+		await expect(localIdentity()).resolves.toBe("h_first");
+		await expect(localIdentity()).resolves.toBe("h_first");
+		expect(identity).toHaveBeenCalledExactlyOnceWith({ url: "http://127.0.0.1:4001" });
+		attachment = { port: 4001, generation: 2 };
+		await expect(localIdentity()).resolves.toBeNull();
+		await expect(localIdentity()).resolves.toBe("h_second");
+		expect(identity).toHaveBeenCalledTimes(3);
+	});
+
+	it("ignores an identity response from an attachment that ended while the request was pending", async () => {
+		let attachment: { port: number; pid: number; generation: number } | null = { port: 4001, pid: 1, generation: 1 };
+		let finish!: (hostId: string) => void;
+		const identity = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+		const localIdentity = createLocalHostIdentity(() => attachment, identity);
+		const pending = localIdentity();
+		attachment = { port: 4001, pid: 2, generation: 2 };
+		finish("h_first");
+		await expect(pending).resolves.toBeNull();
+		const fresh = localIdentity();
+		finish("h_second");
+		await expect(fresh).resolves.toBe("h_second");
+		attachment = null;
+		await expect(localIdentity()).resolves.toBeNull();
+	});
+});
 
 describe("readRemoteIdentity", () => {
 	it("learns the host ID without sending a credential", async () => {

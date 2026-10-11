@@ -15,8 +15,9 @@ import (
 // they asked for the wrong thing, that difference is the whole feature.
 //
 // Optional, like every other capability that not all providers have: a driver that
-// cannot do it simply does not implement ChatSteerer, and AO hides the affordance
-// rather than offering a control that fails.
+// cannot do it does not implement ChatSteerer or does not report
+// ChatCapabilitySteer, and AO hides the affordance rather than offering a control
+// that fails.
 
 // ChatSteerer is implemented by drivers whose provider accepts guidance into a
 // running turn.

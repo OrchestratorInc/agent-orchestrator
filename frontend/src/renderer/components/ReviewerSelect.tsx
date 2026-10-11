@@ -280,14 +280,14 @@ function ReviewerHarnessOption({
 				/>
 			</OptionMenuSubTrigger>
 			<OptionMenuSubContent className="w-[15rem]">
-				{!catalogKnown ? (
-					<OptionMenuItem disabled>{t("common.loading", { defaultValue: "Loading…" })}</OptionMenuItem>
-				) : null}
-				{isCurrentHarness && !isCurrentDefaultSelection && !defaultModel && (
+				{(!isCurrentHarness || (!isCurrentDefaultSelection && !defaultModel)) && (
 					<OptionMenuItem onSelect={selectDefault}>
 						{t(catalog?.selectionMode === "mode" ? "settings.models.useAgentMode" : "settings.models.useAgentModel")}
 					</OptionMenuItem>
 				)}
+				{!catalogKnown ? (
+					<OptionMenuItem disabled>{t("common.loading", { defaultValue: "Loading…" })}</OptionMenuItem>
+				) : null}
 				{options.map((option) => {
 					const config = option.value === defaultModel ? {} : option.kind === "mode" ? { mode: option.value } : { model: option.value };
 					const selected =

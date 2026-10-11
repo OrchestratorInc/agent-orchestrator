@@ -37,9 +37,15 @@ describe("ChatAnnotationSummary", () => {
 		expect(onSelect).toHaveBeenCalledWith({ id: "one", text: "first selected text" });
 	});
 
-	it("opens when the count receives focus", () => {
+	it("does not open on focus; Enter opens it", async () => {
+		const user = userEvent.setup();
 		render(<ChatAnnotationSummary annotations={[{ id: "one", text: "selected text" }]} />);
-		fireEvent.focus(screen.getByRole("button", { name: "1 annotation" }));
+		await user.tab();
+		const trigger = screen.getByRole("button", { name: "1 annotation" });
+		expect(trigger).toHaveFocus();
+		expect(trigger).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByRole("button", { name: "selected text" })).not.toBeInTheDocument();
+		await user.keyboard("{Enter}");
 		expect(screen.getByRole("button", { name: "selected text" })).toBeInTheDocument();
 	});
 });

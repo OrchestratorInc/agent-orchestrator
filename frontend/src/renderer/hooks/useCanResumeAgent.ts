@@ -15,14 +15,19 @@ const resumesInFlight = new Map<string, Promise<void>>();
  * request instead of being refused as a second resume.
  */
 export function resumeAgentOnOpen(sessionId: string): Promise<void> {
-	const existing = resumesInFlight.get(sessionId);
-	if (existing) return existing;
-	const request = (async () => {
+	return resumeOnce(sessionId, async () => {
 		const { error, response } = await clientForSessionHost().POST("/api/v1/sessions/{sessionId}/resume-agent", {
 			params: { path: { sessionId } },
 		});
 		if (error) throw new Error(apiErrorMessage(error, `Failed to resume agent (${response.status})`));
-	})().finally(() => resumesInFlight.delete(sessionId));
+	});
+}
+
+/** Run one resume per local session; later callers join the request in flight. */
+export function resumeOnce(sessionId: string, run: () => Promise<void>): Promise<void> {
+	const existing = resumesInFlight.get(sessionId);
+	if (existing) return existing;
+	const request = run().finally(() => resumesInFlight.delete(sessionId));
 	resumesInFlight.set(sessionId, request);
 	return request;
 }

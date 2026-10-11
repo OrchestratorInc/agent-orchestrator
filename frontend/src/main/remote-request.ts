@@ -19,6 +19,29 @@ export class IncompatibleRemoteVersionError extends Error {
 
 type FetchImpl = typeof fetch;
 
+/** Cache only the identity of the daemon attachment confirmed by the supervisor. */
+export function createLocalHostIdentity(
+	attachment: () => { port: number; pid?: number; generation: number } | null,
+	identity = readRemoteIdentity,
+): () => Promise<string | null> {
+	let cached: { key: string; hostId: string } | undefined;
+	const key = (value: NonNullable<ReturnType<typeof attachment>>) => `${value.generation}:${value.port}:${value.pid ?? ""}`;
+	return async () => {
+		const current = attachment();
+		if (!current) { cached = undefined; return null; }
+		const currentKey = key(current);
+		if (cached?.key === currentKey) return cached.hostId;
+		cached = undefined;
+		try {
+			const hostId = await identity({ url: `http://127.0.0.1:${current.port}` });
+			const confirmed = attachment();
+			if (!confirmed || key(confirmed) !== currentKey) return null;
+			cached = { key: currentKey, hostId };
+			return hostId;
+		} catch { return null; }
+	};
+}
+
 /** This is the only remote probe allowed before a saved password is sent. */
 export async function readRemoteIdentity(
 	entry: Pick<RemoteEntry, "url">,

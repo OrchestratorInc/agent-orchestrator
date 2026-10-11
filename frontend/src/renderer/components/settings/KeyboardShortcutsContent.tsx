@@ -58,11 +58,17 @@ const ignoredRecordingKeys = new Set([
 	"Unidentified",
 ]);
 
-function eventBinding(event: KeyboardEvent): ShortcutBinding | null {
+const codeMatchedKeys: ReadonlySet<string> = new Set(["Backquote", "BracketLeft", "BracketRight"]);
+
+export function eventBinding(event: KeyboardEvent): ShortcutBinding | null {
 	if (ignoredRecordingKeys.has(event.key) || event.getModifierState?.("AltGraph")) return null;
 	return {
 		key: event.key.length === 1 ? event.key.toLowerCase() : event.key,
-		...(event.code === "Backquote" ? { code: event.code } : {}),
+		// Keys whose `key` shifts with modifiers or layout are matched by physical code too.
+		// Option also rewrites letters on macOS (⌥B types "∫"), so those keep their code.
+		...(codeMatchedKeys.has(event.code) || (event.altKey && /^(Key[A-Z]|Digit\d)$/.test(event.code))
+			? { code: event.code }
+			: {}),
 		ctrl: event.ctrlKey,
 		meta: event.metaKey,
 		shift: event.shiftKey,

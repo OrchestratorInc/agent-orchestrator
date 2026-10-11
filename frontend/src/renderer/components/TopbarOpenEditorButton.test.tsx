@@ -3,6 +3,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorHandoffState, OpenSessionTargetInput } from "../../shared/editor-handoff";
+import { appShortcutBus } from "../test/app-shortcut-bus";
 import { TopbarOpenEditorButton } from "./TopbarOpenEditorButton";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -347,6 +348,46 @@ describe("TopbarOpenEditorButton", () => {
 		);
 		expect(vscode.querySelector("svg")?.style.color).toBe("rgb(31, 156, 240)");
 		expect(cursor.querySelector("svg")?.style.color).toBe("");
+	});
+
+	it("opens the preferred editor from the open-in-editor shortcut", async () => {
+		openMock.mockClear();
+		setState(availableState);
+		renderButton();
+		await screen.findByRole("button", { name: "Open in Cursor" });
+
+		act(() => appShortcutBus.emit({ id: "open-in-editor" }));
+
+		await waitFor(() => expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1" }));
+	});
+
+	it("falls back to the first available target when no editor is installed", async () => {
+		openMock.mockClear();
+		setState({
+			targets: [{ id: "file-manager", name: "Finder", kind: "file_manager" }],
+			preferredEditorId: "cursor",
+			workspaceAvailable: true,
+		});
+		renderButton();
+		await waitFor(() => expect(window.ao!.editorHandoff.getState).toHaveBeenCalled());
+		await screen.findByRole("button", { name: "No editor installed" });
+
+		act(() => appShortcutBus.emit({ id: "open-in-editor" }));
+
+		await waitFor(() =>
+			expect(openMock).toHaveBeenCalledWith({ sessionId: "sess-1", targetId: "file-manager" }),
+		);
+	});
+
+	it("ignores the open-in-editor shortcut while the workspace is unavailable", async () => {
+		openMock.mockClear();
+		setState({ ...availableState, workspaceAvailable: false, unavailableReason: "Workspace removed" });
+		renderButton();
+		await screen.findByRole("button", { name: "Workspace removed" });
+
+		act(() => appShortcutBus.emit({ id: "open-in-editor" }));
+
+		expect(openMock).not.toHaveBeenCalled();
 	});
 
 	it("surfaces an Electron launch failure", async () => {

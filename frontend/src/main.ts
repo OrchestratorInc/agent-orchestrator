@@ -15,6 +15,7 @@ import {
 	net,
 	nativeImage,
 	Notification as ElectronNotification,
+	powerMonitor,
 	protocol,
 	shell,
 	session,
@@ -90,6 +91,7 @@ import {
 } from "./shared/shortcuts";
 import { createTrayController, type TrayController } from "./main/tray";
 import { createTrayLifecycle, isTrayEnabled } from "./main/tray-lifecycle";
+import { createDesktopQuitController } from "./main/desktop-quit";
 import {
 	TRAY_RENDERER_READY_CHANNEL,
 	TRAY_SET_ATTENTION_STATE_CHANNEL,
@@ -184,6 +186,7 @@ import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenu
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
 import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
+import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
 import { AGENT_SWITCH_VISIBILITY_IPC_CHANNEL } from "./shared/agent-switch-observability";
@@ -318,6 +321,7 @@ let daemonRestartAfterExitProcess: ChildProcess | null = null;
 let daemonStartPromise: Promise<DaemonStatus> | null = null;
 let daemonStartEpoch = 0;
 let daemonStatus: DaemonStatus = { state: "stopped" };
+let daemonAttachmentGeneration = 0;
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
 let browserProfileIpc: BrowserProfileIpc | null = null;
@@ -328,12 +332,26 @@ let browserQuitCleanupPromise: Promise<void> | null = null;
 let browserCleanupComplete = false;
 let browserQuitRequested = false;
 let createWindowPromise: Promise<void> | null = null;
+const desktopQuit = createDesktopQuitController({
+	platform: process.platform,
+	hasTray: () => trayController !== null && !browserQuitRequested,
+	isUpdateRestartRequested,
+	closeWindow: () => {
+		if (mainWindow) mainWindow.close();
+		else if (createWindowPromise) {
+			void createWindowPromise.then(() => mainWindow?.close())
+				.catch((error) => console.error("failed to close pending main window:", error));
+		}
+	},
+	quit: () => app.quit(),
+});
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
 let browserRuntimeLinkIdentity: BrowserRuntimeIdentity | null = null;
 let keybindingOverrides: KeybindingOverrides = {};
 let keybindingRecordingActive = false;
 let closeShellTerminalShortcutEnabled = false;
 let terminalFocused = false;
+let terminalFontSizeFocused = false;
 let chatDraftRisks: ChatDraftBoundaryKind[] = [];
 let chatDraftDialog: ChatDraftDialogCopy | undefined;
 let chatDraftQuitConfirmed = false;
@@ -520,6 +538,7 @@ function focusMainWindow(): void {
 }
 
 function setDaemonStatus(nextStatus: DaemonStatus): void {
+	if (nextStatus.state !== "ready" || daemonStatus.state !== "ready" || nextStatus.port !== daemonStatus.port || nextStatus.pid !== daemonStatus.pid) daemonAttachmentGeneration++;
 	if (nextStatus.state !== "ready") disposeBrowserRuntimeLink();
 	daemonStatus = nextStatus;
 	getShellWebContents()?.send("daemon:status", daemonStatus);
@@ -815,6 +834,7 @@ async function createWindowInternal(): Promise<void> {
 			void toggleAppDevTools(browserViewHost, getShellWebContents);
 		},
 		() => terminalFocused,
+		() => terminalFontSizeFocused,
 	);
 
 	browserViewHost = createBrowserViewHost({
@@ -917,9 +937,11 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.on("render-process-gone", () => {
 		keybindingRecordingActive = false;
 		terminalFocused = false;
+		terminalFontSizeFocused = false;
 	});
 	shellWebContents.on("did-start-loading", () => {
 		terminalFocused = false;
+		terminalFontSizeFocused = false;
 		trayLifecycle.clear();
 	});
 	shellWebContents.on("render-process-gone", () => trayLifecycle.clear());
@@ -1051,6 +1073,7 @@ const editorHandoff = createEditorHandoff({
 		const error = await shell.openPath(workspacePath);
 		if (error) throw new Error(error);
 	},
+	copyText: (text) => clipboard.writeText(text),
 	logError: (message, error) => console.error(message, error),
 });
 
@@ -1324,7 +1347,7 @@ function daemonIdentityError(launch: DaemonLaunchSpec, probe: DaemonProbe): stri
 /**
  * Establish (or re-establish) the OS-native liveness link to the daemon's
  * supervisor socket. Holding this connection keeps the daemon alive: when
- * Electron exits for any reason (Cmd+Q, crash, SIGKILL), the OS closes the fd
+ * Electron exits completely (tray quit, crash, SIGKILL), the OS closes the fd
  * and the daemon detects EOF, then self-stops after its ~5s grace period.
  *
  * Called unconditionally on the spawn path (we always own that daemon).
@@ -1848,7 +1871,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 		if (portConfirmed || daemonProcess !== child || daemonStoppingProcess === child) return;
 		portConfirmed = true;
 		stopDiscovery();
-		setDaemonStatus({ state: "ready", port });
+		setDaemonStatus({ state: "ready", port, pid: child.pid });
 
 		// Establish the OS-native liveness link on the spawn path (we own this
 		// daemon). Holding the connection keeps the daemon alive; when Electron
@@ -2082,6 +2105,10 @@ ipcMain.handle("editorHandoff:open", (event, input) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.open(input && typeof input === "object" ? input : { sessionId: "" });
 });
+ipcMain.handle("editorHandoff:copyWorkspacePath", (event, sessionId: string) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	return editorHandoff.copyWorkspacePath(typeof sessionId === "string" ? sessionId : "");
+});
 ipcMain.handle("app:getVersion", () => app.getVersion());
 ipcMain.handle("app:openExternal", async (_event, url: string) => {
 	await openAllowedAppExternalURL(url, shell);
@@ -2149,9 +2176,10 @@ ipcMain.on(SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, (_event, enabled: 
 	closeShellTerminalShortcutEnabled = enabled === true;
 });
 
-ipcMain.on(SET_TERMINAL_FOCUSED_CHANNEL, (event, focused: unknown) => {
+ipcMain.on(SET_TERMINAL_FOCUSED_CHANNEL, (event, focused: unknown, handlesFontSize: unknown) => {
 	if (event.sender !== getShellWebContents() || typeof focused !== "boolean") return;
 	terminalFocused = focused;
+	terminalFontSizeFocused = focused && handlesFontSize === true;
 });
 
 ipcMain.on(SET_CHAT_DRAFT_RISK_CHANNEL, (event, risks: unknown, dialogCopy: unknown) => {
@@ -2305,6 +2333,9 @@ registerRemotesIpc(ipcMain, {
 		if (!await getCloudSession(cloudDataDir())) throw new Error("Sign in to AO Cloud to use remote hosts.");
 	},
 	getAccountId: async () => (await getCloudSession(cloudDataDir()))?.user.id ?? "",
+	localIdentity: createLocalHostIdentity(() => daemonStatus.state === "ready" && daemonStatus.port
+		? { port: daemonStatus.port, pid: daemonStatus.pid, generation: daemonAttachmentGeneration }
+		: null),
 });
 
 ipcMain.handle("app:chooseDirectory", async (_event, input?: string | { title?: string; defaultPath?: string }) => {
@@ -2525,7 +2556,7 @@ ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAnd
 // already off on the failed path, so quitting can't apply a half-prepared build.
 ipcMain.handle("updates:relaunch", () => {
 	app.relaunch();
-	app.quit();
+	desktopQuit.quitCompletely();
 });
 
 // Whether THIS boot is a post-update relaunch, so the startup loader can show
@@ -3001,14 +3032,20 @@ app.whenReady().then(async () => {
 		: { ...DEFAULT_UI_SETTINGS };
 	soundNotificationsEnabled = initialUiSettings.soundNotificationsEnabled;
 	terminalShellPreference = initialUiSettings.terminalShell;
-	if (isTrayEnabled(process.platform, app.isPackaged, app.getVersion())) {
+	if (browserQuitRequested) return;
+	if (isTrayEnabled(process.platform)) {
 		trayController = createTrayController({
 			focusWindow: focusMainWindow,
 			openSession: trayLifecycle.openSession,
+			quitCompletely: desktopQuit.quitCompletely,
 			locale: initialUiSettings.locale,
 		});
 	}
+	if (process.platform === "darwin") {
+		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());
+	}
 	await createWindow();
+	if (browserQuitRequested) return;
 	void startDaemon();
 	initAutoUpdates();
 
@@ -3036,14 +3073,15 @@ app.whenReady().then(async () => {
 
 // Daemon teardown is now handled via the OS-native supervisor socket: the daemon
 // self-stops ~5s after the last client (this process) drops its connection.
-// The supervisorLink fd is NOT explicitly closed on quit; the OS closes it when
-// the process exits for any reason (Cmd+Q, crash, SIGKILL). Sessions survive.
+// Ordinary macOS Quit closes only the window. Full exit drops the supervisor
+// socket, stopping the app-owned daemon after its grace period. Sessions survive.
 setUpdateRestartFailureHandler(() => {
 	if (!browserQuitRequested) focusMainWindow();
 });
 
 let updateQuitDeadlineArmed = false;
 app.on("before-quit", (event) => {
+	if (desktopQuit.handleBeforeQuit(event)) return;
 	if (chatDraftRisks.length > 0 && !chatDraftQuitConfirmed) {
 		event.preventDefault();
 		if (confirmUnsafeChatDraftLeave(
@@ -3053,6 +3091,8 @@ app.on("before-quit", (event) => {
 		)) {
 			chatDraftQuitConfirmed = true;
 			app.quit();
+		} else {
+			desktopQuit.cancelQuit();
 		}
 		return;
 	}

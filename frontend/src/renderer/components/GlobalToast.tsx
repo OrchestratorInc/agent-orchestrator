@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { type GlobalToast as Toast, useUiStore } from "../stores/ui-store";
 
 const TOAST_DISMISS_MS = 3_500;
+const ERROR_TOAST_DISMISS_MS = 8_000;
 
 export function GlobalToast() {
 	const toasts = useUiStore((state) => state.globalToasts);
@@ -38,16 +39,19 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 	const [exiting, setExiting] = useState(false);
 	const dismissGlobalToast = useUiStore((state) => state.dismissGlobalToast);
 	const isError = toast.tone === "error";
-	const dismissMs = toast.durationMs ?? TOAST_DISMISS_MS;
+	const dismissMs = toast.durationMs ?? (isError ? ERROR_TOAST_DISMISS_MS : TOAST_DISMISS_MS);
+	// Hovering or focusing a toast pauses its timer so it can be read and acted on.
+	const [paused, setPaused] = useState(false);
 
 	useEffect(() => {
+		if (paused) return;
 		const exitTimer = window.setTimeout(() => setExiting(true), Math.max(0, dismissMs - 180));
 		const dismissTimer = window.setTimeout(() => dismissGlobalToast(toast.nonce), dismissMs);
 		return () => {
 			window.clearTimeout(exitTimer);
 			window.clearTimeout(dismissTimer);
 		};
-	}, [dismissGlobalToast, dismissMs, toast.nonce]);
+	}, [dismissGlobalToast, dismissMs, paused, toast.nonce]);
 
 	return (
 		<section
@@ -56,6 +60,10 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 				isError ? "border border-destructive/40 bg-destructive/10" : "border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)]"
 			}`}
 			role={isError ? "alert" : "status"}
+			onMouseEnter={() => setPaused(true)}
+			onMouseLeave={() => setPaused(false)}
+			onFocus={() => setPaused(true)}
+			onBlur={() => setPaused(false)}
 		>
 			<div className="min-w-0 flex-1">
 				<p className={`wrap-break-word font-medium ${isError ? "text-destructive" : "text-(--color-text-import-title)"}`}>{toast.title}</p>

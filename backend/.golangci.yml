@@ -41,6 +41,7 @@ linters:
     - usestdlibvars # use stdlib consts (http.MethodGet, etc.)
     - predeclared # shadowing predeclared identifiers
     - nakedret # naked returns in long funcs
+    - forbidigo # keep daemon subprocesses on the centralized hidden-process path
     # --- security ---
     - gosec
 
@@ -81,6 +82,10 @@ linters:
         - unnamedResult # named returns are a style choice, not a defect
     dupl:
       threshold: 140
+    forbidigo:
+      forbid:
+        - pattern: '^exec\.Command(Context)?$'
+          msg: use internal/process Command or CommandContext for daemon subprocesses
     gosec:
       excludes:
         - G104 # unchecked errors — errcheck owns this
@@ -94,7 +99,12 @@ linters:
       # Tests: relax the noisiest checks (deliberate error-drops, repeated setup,
       # preallocation, and upgrade-response bodies that don't need closing).
       - path: _test\.go
-        linters: [errcheck, dupl, gosec, unparam, gocritic, prealloc, bodyclose]
+        linters: [errcheck, dupl, gosec, unparam, gocritic, prealloc, bodyclose, forbidigo]
+      # This package is the sole implementation boundary for raw os/exec
+      # command construction. Production exceptions must use a documented
+      # nolint at the call site.
+      - path: internal/process/
+        linters: [forbidigo]
       # status.go deliberately reports probe failures in the result struct
       # (st.State/st.Error) and returns nil — a down daemon is the status being
       # reported, not a failure of the status command itself.

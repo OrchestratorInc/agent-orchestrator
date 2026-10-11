@@ -2,8 +2,8 @@ import type { BrowserWindow, IpcMainEvent, WebContents } from "electron";
 import type { TrayController } from "./tray";
 import { TRAY_OPEN_SESSION_CHANNEL, type TrayAttentionState, type TrayOpenSessionTarget } from "../shared/tray";
 
-export function isTrayEnabled(platform: NodeJS.Platform, isPackaged: boolean, appVersion: string): boolean {
-	return platform === "darwin" && (!isPackaged || appVersion.includes("-nightly."));
+export function isTrayEnabled(platform: NodeJS.Platform): boolean {
+	return platform === "darwin";
 }
 
 export type TrayLifecycleDeps = {

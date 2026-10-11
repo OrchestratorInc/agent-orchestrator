@@ -748,7 +748,7 @@ it("opens a shell tab on Box B without attaching a local or Box A terminal", asy
 	expect(localPost).not.toHaveBeenCalled();
 });
 
-it("switches a remote Terminal session through its host and fences worker input while pending", async () => {
+it("switches a remote Terminal session through its host and leaves the terminal for Chat at once", async () => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -777,7 +777,8 @@ it("switches a remote Terminal session through its host and fences worker input 
 	await userEvent.click(await screen.findByRole("button", { name: "Session actions" }));
 	await userEvent.click(await screen.findByRole("menuitem", { name: "Switch to chat UI" }));
 	await waitFor(() => expect(posts).toEqual([{ url: "http://127.0.0.1:4000/api/v1/sessions/session-1/interface-transition", body: { targetMode: "chat", policy: "drain", historyPolicy: "strict" } }]));
-	await waitFor(() => expect(terminal).toHaveAttribute("data-input-disabled", "true"));
+	await waitFor(() => expect(terminal).not.toBeInTheDocument());
+	expect(await screen.findByRole("combobox", { name: "Message the agent" })).toBeInTheDocument();
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });

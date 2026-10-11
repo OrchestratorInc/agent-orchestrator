@@ -42,6 +42,7 @@ import { StatusPill } from "./StatusPill";
 import { TopbarActionError, TopbarButton, topbarHeaderClass, topbarProjectLabelClass } from "./TopbarButton";
 import { SessionArchiveDialog } from "./SessionArchiveDialog";
 import { TopbarOpenEditorButton } from "./TopbarOpenEditorButton";
+import { useSessionShortcut } from "../hooks/useAppShortcut";
 import {
 	agentSwitchStatusVisual,
 	deriveSessionAgentSwitchPresentation,
@@ -441,6 +442,12 @@ export function TopbarArchiveButton({
 		kill.mutate(session);
 		onKilled(session.workspaceId, orchestratorId);
 	};
+	// ⌘⇧A opens the same confirmation the button does.
+	useSessionShortcut("archive-session", () => {
+		if (isPending) return;
+		clearTerminateSessionState(queryClient, session.id, session.hostId);
+		setConfirmOpen(true);
+	});
 
 	return (
 		<div className="inline-flex items-center gap-1.5" style={noDragStyle}>

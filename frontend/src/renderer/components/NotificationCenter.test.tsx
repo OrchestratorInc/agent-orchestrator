@@ -713,6 +713,19 @@ describe("NotificationCenter", () => {
 		openExternal.mockRestore();
 	});
 
+	it("lets Enter on the nested PR link act on the link without opening the session", async () => {
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		renderNotificationCenter();
+		await clickOpen();
+
+		screen.getByRole("link", { name: "Open PR #67" }).focus();
+		await userEvent.keyboard("{Enter}");
+
+		expect(openExternal).toHaveBeenCalledWith("https://github.com/acme/app/pull/67");
+		expect(navigateMock).not.toHaveBeenCalled();
+		openExternal.mockRestore();
+	});
+
 	it("shows the PR title prominently and does not repeat the session name in metadata", async () => {
 		renderNotificationCenter();
 		await clickOpen();

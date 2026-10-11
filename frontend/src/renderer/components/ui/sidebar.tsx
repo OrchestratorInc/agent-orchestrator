@@ -229,6 +229,9 @@ function Sidebar({
 	// Cast once so callers can keep passing through plain div props.
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const motionSafeProps = props as any;
+	const childList = React.Children.toArray(children);
+	const rail = childList.filter((child) => React.isValidElement(child) && child.type === SidebarRail);
+	const rest = childList.filter((child) => !rail.includes(child));
 
 	return (
 		<div
@@ -277,7 +280,13 @@ function Sidebar({
 					data-slot="sidebar-inner"
 					className="flex h-full w-full flex-col bg-sidebar group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm"
 				>
-					{children}
+					{/* The expand rail stays live while the rest is off-screen: a collapsed
+					    sidebar's controls must not be tabbable or readable, but its edge
+					    strip is how the pointer reopens it. */}
+					{rail}
+					<div aria-hidden={isOffcanvasCollapsed ? true : undefined} className="contents" inert={isOffcanvasCollapsed}>
+						{rest}
+					</div>
 				</div>
 			</motion.div>
 		</div>

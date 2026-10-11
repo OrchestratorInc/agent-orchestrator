@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -27,6 +28,44 @@ func loadLANOnlyState(t *testing.T, path string) mobilebridge.State {
 	return state
 }
 
+func TestMobileStatusReportsPublicTunnelIntentWithoutNetwork(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		enable         func(*BridgeService) (MobileStatusResponse, error)
+		noPublicTunnel bool
+	}{
+		{"LAN-only", (*BridgeService).EnableLANOnly, true},
+		{"LAN and tunnel", (*BridgeService).Enable, false},
+		{"tunnel-only", (*BridgeService).EnableTunnelOnly, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bridge := lanOnlyBridge(t, &fakeTunnel{})
+			bridge.PickLANHosts = func() []string { return nil }
+			bridge.PickTailscaleHosts = func() []string { return nil }
+			if _, err := tt.enable(bridge); err != nil {
+				t.Fatal(err)
+			}
+			status := bridge.Status()
+			if !status.Enabled || len(status.Endpoints) != 0 || !status.Tunnel.Supported || status.Tunnel.Running {
+				t.Fatal("expected an enabled bridge with no network and an installed, not-yet-running connector")
+			}
+			data, err := json.Marshal(status)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire struct {
+				NoPublicTunnel *bool `json:"noPublicTunnel"`
+			}
+			if err := json.Unmarshal(data, &wire); err != nil {
+				t.Fatal(err)
+			}
+			if wire.NoPublicTunnel == nil || *wire.NoPublicTunnel != tt.noPublicTunnel {
+				t.Fatalf("noPublicTunnel = %v, want %t", wire.NoPublicTunnel, tt.noPublicTunnel)
+			}
+		})
+	}
+}
+
 func TestLANOnlyRestoreDoesNotStartPublicTunnel(t *testing.T) {
 	bridge := lanOnlyBridge(t, &fakeTunnel{})
 	if _, err := bridge.EnableLANOnly(); err != nil {
@@ -38,7 +77,7 @@ func TestLANOnlyRestoreDoesNotStartPublicTunnel(t *testing.T) {
 	if err := restarted.RestoreOnBoot(state); err != nil {
 		t.Fatal(err)
 	}
-	if !restarted.LAN.Running() || tunnel.startedOn != 0 {
+	if !restarted.LAN.Running() || tunnel.startedOn != 0 || !restarted.Status().NoPublicTunnel {
 		t.Fatal("restored LAN-only listener started a public tunnel or failed to bind")
 	}
 }
@@ -105,7 +144,7 @@ func TestLANOnlyStartRemoteAccessEnablesPublicTunnel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.Password != before.Password || tunnel.startedOn != 3011 || loadLANOnlyState(t, bridge.ConfigPath).NoPublicTunnel {
+	if !before.NoPublicTunnel || after.NoPublicTunnel || after.Password != before.Password || tunnel.startedOn != 3011 || loadLANOnlyState(t, bridge.ConfigPath).NoPublicTunnel {
 		t.Fatal("explicit remote access did not persist tunnel mode and start the connector without rotating the password")
 	}
 }
