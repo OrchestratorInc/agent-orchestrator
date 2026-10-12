@@ -119,18 +119,19 @@ context_window = 128000
 max_tokens = 1024
 `, server.URL+"/v1"))
 	writeConformanceFile(t, filepath.Join(workspace, "AGENTS.md"), "AO_PROJECT_RULE_PRESERVED")
-	// These discovered extensions must stay disabled while the explicit AO
-	// observer loads. Executing either would leave evidence in the hook log.
-	discoveryTripwire := "import os\nfrom pathlib import Path\nPath(os.environ['AO_TEST_DISCOVERY_MARKER']).write_text('unrelated extension executed')\n"
-	writeConformanceFile(t, filepath.Join(tauHome, "extensions", "unrelated.py"), discoveryTripwire)
-	writeConformanceFile(t, filepath.Join(workspace, ".tau", "extensions", "unrelated.py"), discoveryTripwire)
+	// Native extension instructions must remain additive beside the AO observer.
+	userExtension := "import os\nfrom pathlib import Path\ndef setup(tau):\n    Path(os.environ['AO_TEST_USER_EXTENSION_MARKER']).write_text('loaded')\n    tau.add_prompt_guideline('AO_USER_EXTENSION_RULE_PRESERVED')\n"
+	projectExtension := "import os\nfrom pathlib import Path\ndef setup(tau):\n    Path(os.environ['AO_TEST_PROJECT_EXTENSION_MARKER']).write_text('loaded')\n    tau.add_prompt_guideline('AO_PROJECT_EXTENSION_RULE_PRESERVED')\n"
+	writeConformanceFile(t, filepath.Join(tauHome, "extensions", "user_default.py"), userExtension)
+	writeConformanceFile(t, filepath.Join(workspace, ".tau", "extensions", "project_default.py"), projectExtension)
 	hookLog, recorder := installConformanceHookRecorder(t, home)
 	envMap := map[string]string{
 		"HOME": home, "USERPROFILE": home, "TAU_HOME": tauHome,
 		"PATH": filepath.Dir(recorder) + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"TERM": "xterm-256color", "LANG": "C.UTF-8", "AO_TEST_API_KEY": "local-test-only",
 		"AO_SESSION_ID": "ao-tau-conformance", "AO_TEST_HOOK_LOG": hookLog,
-		"AO_TEST_DISCOVERY_MARKER": filepath.Join(home, "unexpected-extension"),
+		"AO_TEST_USER_EXTENSION_MARKER":    filepath.Join(home, "user-extension"),
+		"AO_TEST_PROJECT_EXTENSION_MARKER": filepath.Join(home, "project-extension"),
 	}
 	var env []string
 	for key, value := range envMap {
@@ -195,8 +196,10 @@ max_tokens = 1024
 	waitConformanceEvent(t, hookLog, "agent-start", 4, restored)
 	waitConformanceEvent(t, hookLog, "stop", 4, restored)
 	restored.stop()
-	if _, err := os.Stat(envMap["AO_TEST_DISCOVERY_MARKER"]); !os.IsNotExist(err) {
-		t.Fatalf("unrelated discovered extension executed: %v", err)
+	for _, key := range []string{"AO_TEST_USER_EXTENSION_MARKER", "AO_TEST_PROJECT_EXTENSION_MARKER"} {
+		if data, err := os.ReadFile(envMap[key]); err != nil || string(data) != "loaded" {
+			t.Fatalf("native extension did not initialize: %s, %v", key, err)
+		}
 	}
 	for _, event := range readConformanceEvents(t, hookLog) {
 		if event.Payload.SessionID != started.Payload.SessionID {
@@ -204,9 +207,9 @@ max_tokens = 1024
 		}
 	}
 	for _, process := range []*conformanceTUI{first, restored} {
-		for _, private := range []string{"AO_HIDDEN_FIRST", "AO_HIDDEN_RESTORED", "AO_UNEXPECTED_EXTENSION_DISCOVERY"} {
+		for _, private := range []string{"AO_HIDDEN_FIRST", "AO_HIDDEN_RESTORED"} {
 			if strings.Contains(process.output(), private) {
-				t.Fatalf("private context leaked or unrelated extension loaded: %s", private)
+				t.Fatalf("private context leaked into the terminal: %s", private)
 			}
 		}
 	}
@@ -249,7 +252,7 @@ func countRequestText(request conformanceRequest, needle string) int {
 
 func assertConformancePrompt(t *testing.T, request conformanceRequest, task, hidden string) {
 	t.Helper()
-	if request.Model != "test" || countRequestText(request, task) != 1 || countRequestText(request, hidden) != 1 || countRequestText(request, "AO_PROJECT_RULE_PRESERVED") == 0 {
+	if request.Model != "test" || countRequestText(request, task) != 1 || countRequestText(request, hidden) != 1 || countRequestText(request, "AO_PROJECT_RULE_PRESERVED") == 0 || countRequestText(request, "AO_USER_EXTENSION_RULE_PRESERVED") == 0 || countRequestText(request, "AO_PROJECT_EXTENSION_RULE_PRESERVED") == 0 {
 		t.Fatalf("model, task, private instructions or project rules changed: %#v", request)
 	}
 	found := false

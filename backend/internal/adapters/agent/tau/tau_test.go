@@ -30,6 +30,9 @@ func TestLaunchKeepsTasksOutOfArgvAndRequiresExplicitBypass(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, arg := range cmd {
+				if arg == "--no-extensions" {
+					t.Fatal("launch suppressed native user/project extension instructions")
+				}
 				if arg == prompt {
 					t.Fatalf("task escaped into argv: %#v", cmd)
 				}
@@ -67,7 +70,7 @@ func TestRestoreUsesExactNativeIDAndReappliesPrivateInstructions(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("restore = %#v, %v, %v", cmd, ok, err)
 	}
-	want := []string{"/test/tau", "--cwd", work, "--approve", "--no-extensions", "--extension", extensionPath(work), "--append-system-prompt", instructions, "--provider", "openrouter", "--model", "vendor/model", "--session", id}
+	want := []string{"/test/tau", "--cwd", work, "--approve", "--extension", extensionPath(work), "--append-system-prompt", instructions, "--provider", "openrouter", "--model", "vendor/model", "--session", id}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("argv = %#v, want %#v", cmd, want)
 	}

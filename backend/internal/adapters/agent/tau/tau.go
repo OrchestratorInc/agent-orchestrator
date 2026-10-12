@@ -172,7 +172,7 @@ func (p *Plugin) command(ctx context.Context, workspace string, cfg ports.AgentC
 	if len(match) != 2 || match[1] != SupportedVersion {
 		return nil, fmt.Errorf("tau: this adapter requires tau-ai %s; update AO before changing the Tau contract", SupportedVersion)
 	}
-	cmd := []string{binary, "--cwd", workspace, "--approve", "--no-extensions", "--extension", extensionPath(workspace)}
+	cmd := []string{binary, "--cwd", workspace, "--approve", "--extension", extensionPath(workspace)}
 	// --approve admits project AGENTS.md for this process; it is not a tool grant.
 	// Core owns a session-specific file, including on restore. Only standalone
 	// callers need a fallback; its content address keeps shared-workspace
