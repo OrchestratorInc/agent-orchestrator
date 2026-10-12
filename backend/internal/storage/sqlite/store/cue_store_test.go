@@ -111,11 +111,18 @@ func TestCueUpdateReplacesDefinition(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	seedProject(t, s, "mer")
-	if err := s.InsertCue(ctx, sampleCue("cue-1", "mer", "Test", domain.CueTypeCommand)); err != nil {
+	original := sampleCue("cue-1", "mer", "Test", domain.CueTypeCommand)
+	if err := s.InsertCue(ctx, original); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 
-	updated := sampleCue("cue-1", "mer", "Run Tests", domain.CueTypeAgent)
+	updated := original
+	updated.Name = "Run Tests"
+	updated.Type = domain.CueTypeAgent
+	updated.Command = ""
+	// Update must retain the persisted creation timestamp even if the caller
+	// supplies a different one; do not sample wall time twice under CI load.
+	updated.CreatedAt = original.CreatedAt.Add(24 * time.Hour)
 	updated.Prompt = "Run tests in watch mode."
 	updated.UpdatedAt = updated.UpdatedAt.Add(time.Minute)
 
@@ -125,7 +132,7 @@ func TestCueUpdateReplacesDefinition(t *testing.T) {
 	}
 	if got.Name != "Run Tests" || got.Type != domain.CueTypeAgent ||
 		got.Command != "" || got.Prompt != "Run tests in watch mode." ||
-		!got.UpdatedAt.Equal(updated.UpdatedAt) || !got.CreatedAt.Equal(updated.CreatedAt) {
+		!got.UpdatedAt.Equal(updated.UpdatedAt) || !got.CreatedAt.Equal(original.CreatedAt) {
 		t.Fatalf("updated cue = %+v", got)
 	}
 
