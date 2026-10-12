@@ -3,6 +3,7 @@
 This records no authenticated vendor traffic and is not live provider evidence.
 """
 import argparse
+import fcntl
 import http.server
 import json
 import os
@@ -12,6 +13,8 @@ import select
 import signal
 import subprocess
 import tempfile
+import termios
+import struct
 import threading
 import time
 
@@ -71,24 +74,32 @@ def main():
         thread.start()
         env = os.environ.copy()
         env.pop("MEMCODE_API_TOKEN", None)
+        env.pop("CI", None)
         env.update({"XDG_CONFIG_HOME": str(root / "xdg"), "MEMCODE_AUTO_UPDATE": "off",
                     "MEMCODE_ENDPOINT_URL": f"http://127.0.0.1:{server.server_port}/v1",
                     "MEMCODE_ENDPOINT_MODEL": "glm-4.7", "MEMCODE_ENDPOINT_KEY": "synthetic-only",
                     "TERM": "xterm-256color"})
         master, slave = pty.openpty()
-        process = subprocess.Popen([str(Path(args.binary).resolve()), "run", "--allow-all", "--",
-                                    "-Ordinary role fixture task: answer briefly."], cwd=workspace, env=env,
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 140, 0, 0))
+        process = subprocess.Popen([str(Path(args.binary).resolve()), "run", "--allow-all"], cwd=workspace, env=env,
                                    stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
         os.close(slave)
         try:
             deadline = time.monotonic() + 90
+            raw = b""
+            submitted = False
             while not captured.is_set() and time.monotonic() < deadline and process.poll() is None:
                 if select.select([master], [], [], 0.1)[0]:
                     try:
-                        os.read(master, 65536)
+                        raw = (raw + os.read(master, 65536))[-65536:]
+                        if not submitted and b"Ask memcode" in raw:
+                            os.write(master, b"-Ordinary role fixture task: answer briefly.\r")
+                            submitted = True
                     except OSError:
                         break
-            assert captured.is_set(), "released native never sent private hook context"
+            assert captured.is_set(), ("released native never sent private hook context; exit=" +
+                                       str(process.poll()) + "; synthetic native output=" +
+                                       raw.decode(errors="replace")[-6000:])
             request = next(request for request in requests if any(
                 "PRIVATE_NATIVE_ROLE_6515" in json.dumps(message) for message in request["messages"]))
             messages = request["messages"]
