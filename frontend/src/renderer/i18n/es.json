@@ -2266,6 +2266,8 @@
 	"settings.harness.instructions": "Instructions",
 	"settings.harness.interrupted": "Interrupted",
 	"settings.harness.loggedIn": "Connected",
+	"settings.harness.signedInAs": "Sesión iniciada como {{account}}",
+	"settings.harness.usingApiKey": "Con una clave de API",
 	"settings.harness.configured": "Configured",
 	"settings.harness.loginUnknown": "Unknown",
 	"settings.harness.configurationUnknown": "Unknown",

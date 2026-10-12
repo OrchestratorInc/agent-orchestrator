@@ -2232,6 +2232,8 @@
 	"settings.harness.instructions": "Instructions",
 	"settings.harness.interrupted": "Interrupted",
 	"settings.harness.loggedIn": "Connected",
+	"settings.harness.signedInAs": "{{account}}(으)로 로그인됨",
+	"settings.harness.usingApiKey": "API 키 사용 중",
 	"settings.harness.configured": "Configured",
 	"settings.harness.loginUnknown": "Unknown",
 	"settings.harness.configurationUnknown": "Unknown",

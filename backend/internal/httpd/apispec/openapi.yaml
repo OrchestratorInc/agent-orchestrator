@@ -10588,6 +10588,22 @@ components:
       required:
       - path
       type: object
+    AgentAccountIdentity:
+      properties:
+        email:
+          type: string
+        method:
+          enum:
+          - account
+          - api_key
+          type: string
+        name:
+          type: string
+        organization:
+          type: string
+        plan:
+          type: string
+      type: object
     AgentAuthPlan:
       properties:
         action:
@@ -10620,6 +10636,8 @@ components:
       type: object
     AgentAuthenticationObservation:
       properties:
+        account:
+          $ref: '#/components/schemas/AgentAccountIdentity'
         attemptedAt:
           format: date-time
           type:

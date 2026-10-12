@@ -46,6 +46,7 @@ export { updateAdvisoryRefreshInterval } from "../../hooks/useHarnessUpdates";
 type AgentInstallPlan = components["schemas"]["AgentInstallPlan"];
 type InstallJob = components["schemas"]["InstallJob"];
 type AgentUpdateAdvisory = components["schemas"]["AgentUpdateAdvisory"];
+type AgentAccountIdentity = components["schemas"]["AgentAccountIdentity"];
 type AgentOperation = "install" | "reinstall" | "update";
 type AgentInstallMethod = AgentInstallPlan["methods"][number];
 const POLL_INTERVAL_MS = 1_000;
@@ -873,6 +874,14 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const isDocumentationAction = isSetupAction && authPlan?.launchMode === "documentation";
 		const authState = authStates[agentId];
 		const authStatus = readinessAgent?.authentication.state;
+		// Who the harness is signed in as, when its own login check names it.
+		const account: AgentAccountIdentity | undefined = authStatus === "authorized" || authStatus === "configured" ? readinessAgent?.authentication.account : undefined;
+		const accountWho = account?.email || account?.name;
+		const accountDescription = account ? [
+			accountWho ? t("settings.harness.signedInAs", { account: accountWho }) : account.method === "api_key" ? t("settings.harness.usingApiKey") : undefined,
+			account.plan ? account.plan.charAt(0).toUpperCase() + account.plan.slice(1) : undefined,
+			account.organization,
+		].filter(Boolean).join(" · ") || undefined : undefined;
 		const rowAuthWorkflow = authWorkflow?.agentId === agentId ? authWorkflow : null;
 		const authBusy = Boolean(rowAuthWorkflow || authState?.pending);
 		const needsLogin = needsAuthentication(agentId);
@@ -951,7 +960,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		return {
 			agentId, plan, job, isInstalled, methodId, maintenanceMethod, canUpdate, manualOnly, updateReason,
 			advisoryQuery, advisory, updateUnknown, updateAvailable, currentVersion, busy, failed, jobFailed, currentOperation, readinessAgent,
-			authPlan, authStatus, authSummary, rowAuthWorkflow, authBusy, showUpdate, hasDiagnostics, rowError, versionText, versionUnverified,
+			authPlan, authStatus, authSummary, accountDescription, rowAuthWorkflow, authBusy, showUpdate, hasDiagnostics, rowError, versionText, versionUnverified,
 			updatedAt, installationAction, accountAction, progressLabel, installationPending, installNote, listTone, statusLabel,
 		};
 	};
@@ -1006,7 +1015,10 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 			{isInstalled && details.manualOnly && plan?.reason && !(details.showUpdate && !details.canUpdate) ? <p className="-mt-3 text-xs text-settings-muted">{plan.reason}</p> : null}
 
 			{showAccount || rowAuthWorkflow ? <HarnessDetailGroup title={t("settings.harness.account")}>
-				<HarnessDetailRow label={authBusy && rowAuthWorkflow ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.logoutInProgress" : "settings.harness.loginInProgress") : details.authSummary}>
+				<HarnessDetailRow
+					label={authBusy && rowAuthWorkflow ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.logoutInProgress" : "settings.harness.loginInProgress") : details.authSummary}
+					description={authBusy ? undefined : details.accountDescription}
+				>
 					{details.accountAction}
 					{isInstalled && authPlan?.logoutCommand && authPlan.available && details.authStatus !== "unauthorized" ? <Button type="button" size="sm" variant="outline" disabled={details.busy || Boolean(authWorkflow)} onClick={() => setLogoutRequest(agentId)}><LogOut aria-hidden="true" />{t("settings.harness.logout")}</Button> : null}
 				</HarnessDetailRow>

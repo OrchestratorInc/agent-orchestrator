@@ -2298,6 +2298,8 @@
 	"settings.harness.instructions": "Instructions",
 	"settings.harness.interrupted": "Interrupted",
 	"settings.harness.loggedIn": "Connected",
+	"settings.harness.signedInAs": "已登录为 {{account}}",
+	"settings.harness.usingApiKey": "正在使用 API 密钥",
 	"settings.harness.configured": "Configured",
 	"settings.harness.loginUnknown": "Unknown",
 	"settings.harness.configurationUnknown": "Unknown",

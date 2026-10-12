@@ -587,7 +587,14 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, timeout)
 	defer cancel()
-	status, err := checker.AuthStatus(ctx)
+	var status ports.AgentAuthStatus
+	var account domain.AgentAccountIdentity
+	var err error
+	if accountChecker, ok := item.Agent.(ports.AgentAuthAccountChecker); ok {
+		status, account, err = accountChecker.AuthStatusWithAccount(ctx)
+	} else {
+		status, err = checker.AuthStatus(ctx)
+	}
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return failedAuthentication(attempted, domain.AgentReadinessReasonAuthCheckTimeout, "Authentication check timed out."), true
@@ -596,15 +603,19 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	}
 	switch status {
 	case ports.AgentAuthStatusAuthorized:
-		return successfulAuthentication(attempted, domain.AgentAuthenticationAuthorized, domain.AgentReadinessReasonAuthorized, item.Manifest.Name+" appears signed in."), false
+		observation := successfulAuthentication(attempted, domain.AgentAuthenticationAuthorized, domain.AgentReadinessReasonAuthorized, item.Manifest.Name+" appears signed in.")
+		observation.Account = account.Sanitized()
+		return observation, false
 	case ports.AgentAuthStatusUnauthorized:
 		return successfulAuthentication(attempted, domain.AgentAuthenticationUnauthorized, domain.AgentReadinessReasonUnauthorized, item.Manifest.Name+" needs authentication."), false
 	case ports.AgentAuthStatusConfigured:
 		// A definite observation — a credential exists — but not a verified
 		// one. It is recorded as a success so the coordinator does not retry
 		// it as a failure, and it derives to unknown readiness, not ready.
-		return successfulAuthentication(attempted, domain.AgentAuthenticationConfigured, domain.AgentReadinessReasonAuthConfigured,
-			item.Manifest.Name+" has credentials configured, but AO could not verify them."), false
+		observation := successfulAuthentication(attempted, domain.AgentAuthenticationConfigured, domain.AgentReadinessReasonAuthConfigured,
+			item.Manifest.Name+" has credentials configured, but AO could not verify them.")
+		observation.Account = account.Sanitized()
+		return observation, false
 	default:
 		return failedAuthentication(attempted, domain.AgentReadinessReasonAuthCheckInconclusive, "Authentication check was inconclusive."), true
 	}

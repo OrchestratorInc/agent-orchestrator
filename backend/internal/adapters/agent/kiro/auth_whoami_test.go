@@ -86,3 +86,15 @@ func TestKiroWhoamiWithoutBinaryIsUnknown(t *testing.T) {
 		t.Fatalf("status = %q, want unknown", got)
 	}
 }
+
+func TestKiroWhoamiAccount(t *testing.T) {
+	withWhoami(t, signedInWhoami, nil)
+	status, account, err := kiroWhoamiAuth(context.Background(), "kiro-cli")
+	if err != nil || status != ports.AgentAuthStatusAuthorized || account.Email != "user@example.com" {
+		t.Fatalf("status=%s account=%+v err=%v", status, account, err)
+	}
+	withWhoami(t, signedOutWhoami, errors.New("exit status 1"))
+	if _, account, _ := kiroWhoamiAuth(context.Background(), "kiro-cli"); account.Email != "" {
+		t.Fatalf("signed-out account = %+v", account)
+	}
+}

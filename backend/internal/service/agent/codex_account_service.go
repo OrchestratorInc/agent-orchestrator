@@ -13,6 +13,40 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// codexAuthenticationWithAccount adds the active account's identity to a
+// structured Codex verdict that found it signed in.
+func (s *Service) codexAuthenticationWithAccount(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
+	observation, handled := s.structuredCodexAuthentication(ctx, agentID, purpose)
+	if handled && (observation.State == domain.AgentAuthenticationAuthorized || observation.State == domain.AgentAuthenticationConfigured) {
+		observation.Account = s.activeCodexAccountIdentity()
+	}
+	return observation, handled
+}
+
+func (s *Service) activeCodexAccountIdentity() *domain.AgentAccountIdentity {
+	if s.codexAccounts == nil {
+		return nil
+	}
+	record, ok := s.codexAccounts.catalog.record(s.codexAccounts.activeAccountID())
+	if !ok {
+		return nil
+	}
+	var identity domain.AgentAccountIdentity
+	if record.Snapshot.AccountEmail != nil {
+		identity.Email = *record.Snapshot.AccountEmail
+	}
+	switch record.Snapshot.AuthMethod {
+	case domain.CodexAuthMethodChatGPT:
+		identity.Method = domain.AgentAccountMethodAccount
+	case domain.CodexAuthMethodAPIKey:
+		identity.Method = domain.AgentAccountMethodAPIKey
+	}
+	if record.Snapshot.Capacity.Plan != nil {
+		identity.Plan = *record.Snapshot.Capacity.Plan
+	}
+	return identity.Sanitized()
+}
+
 // Service integration.
 func (s *Service) structuredCodexAuthentication(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
 	if agentID != string(domain.HarnessCodex) || s.codexAccounts == nil || s.codexAccounts.factory == nil {

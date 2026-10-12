@@ -225,6 +225,49 @@ func TestReadinessCoordinatorNormalizesConfiguredAuthentication(t *testing.T) {
 	}
 }
 
+type accountReadinessAgent struct {
+	readinessTestAgent
+	status  ports.AgentAuthStatus
+	account domain.AgentAccountIdentity
+}
+
+func (a *accountReadinessAgent) AuthStatusWithAccount(context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, error) {
+	return a.status, a.account, nil
+}
+
+func TestReadinessCoordinatorReportsSignedInAccount(t *testing.T) {
+	t.Parallel()
+	account := domain.AgentAccountIdentity{Email: " dev@example.com ", Organization: "Acme", Plan: "pro", Method: domain.AgentAccountMethodAccount}
+	for _, tt := range []struct {
+		status ports.AgentAuthStatus
+		want   *domain.AgentAccountIdentity
+	}{
+		{ports.AgentAuthStatusAuthorized, &domain.AgentAccountIdentity{Email: "dev@example.com", Organization: "Acme", Plan: "pro", Method: domain.AgentAccountMethodAccount}},
+		{ports.AgentAuthStatusConfigured, &domain.AgentAccountIdentity{Email: "dev@example.com", Organization: "Acme", Plan: "pro", Method: domain.AgentAccountMethodAccount}},
+		{ports.AgentAuthStatusUnauthorized, nil},
+	} {
+		t.Run(string(tt.status), func(t *testing.T) {
+			agent := &accountReadinessAgent{
+				readinessTestAgent: readinessTestAgent{resolve: func(context.Context) (string, error) { return "/bin/claude", nil }},
+				status:             tt.status, account: account,
+			}
+			coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+				Agents: []agentregistry.HarnessAgent{readinessHarness("claude-code", "Claude Code", agent)},
+				Factory: func() []agentregistry.HarnessAgent {
+					return []agentregistry.HarnessAgent{readinessHarness("claude-code", "Claude Code", agent)}
+				},
+			})
+			got, err := coordinator.Ensure(context.Background(), []string{"claude-code"}, domain.AgentReadinessPurposeLaunch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if account := got[0].Authentication.Account; (account == nil) != (tt.want == nil) || account != nil && *account != *tt.want {
+				t.Fatalf("account = %+v, want %+v", account, tt.want)
+			}
+		})
+	}
+}
+
 func TestReadinessCoordinatorSingleFlightAndCallerCancellation(t *testing.T) {
 	t.Parallel()
 	started := make(chan struct{})

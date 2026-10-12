@@ -71,6 +71,13 @@ const (
 	AgentAuthStatusConfigured AgentAuthStatus = "configured"
 )
 
+// AgentAuthAccountChecker is an AgentAuthChecker whose check also observes
+// the signed-in account. The readiness coordinator prefers it, so the account
+// comes from the same probe as the verdict rather than a second one.
+type AgentAuthAccountChecker interface {
+	AuthStatusWithAccount(ctx context.Context) (AgentAuthStatus, domain.AgentAccountIdentity, error)
+}
+
 // Agent is the contract every CLI coding agent adapter (claude-code, codex, …)
 // must satisfy. It supplies the argv and process configuration the Session
 // Manager needs to launch, restore, and read back a native agent session.

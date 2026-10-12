@@ -141,7 +141,7 @@ func NewWithDeps(deps Deps) *Service {
 	}
 	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{
 		Agents: agents, Factory: agentregistry.Harnessed, Context: deps.Context, Logger: deps.Logger,
-		AuthenticationCheck: svc.structuredCodexAuthentication,
+		AuthenticationCheck: svc.codexAuthenticationWithAccount,
 		// A catalog built while the agent was signed out carries that failure
 		// (a rejected-credential warning or bare fallback aliases). A detected
 		// login must rediscover it without anyone pressing refresh.

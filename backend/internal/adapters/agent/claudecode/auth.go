@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
@@ -56,6 +57,14 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return p.authStatusFor(ctx, "", nil, false)
 }
 
+// AuthStatusWithAccount reports the same verdict as AuthStatus plus the
+// account `claude auth status` names, when the CLI answered for the provider
+// the agent actually uses.
+func (p *Plugin) AuthStatusWithAccount(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, error) {
+	status, report, err := p.authStatusAndReport(ctx, "", nil, false)
+	return status, report.account(), err
+}
+
 // ValidateLaunchAuth checks the credential in the exact cwd/environment that
 // will be handed to Claude. Launch validation always bypasses the success cache:
 // a provider can revoke a credential without changing anything on disk.
@@ -64,14 +73,21 @@ func (p *Plugin) ValidateLaunchAuth(ctx context.Context, workingDir string, env 
 }
 
 func (p *Plugin) authStatusFor(ctx context.Context, workingDir string, env map[string]string, fresh bool) (ports.AgentAuthStatus, error) {
+	status, _, err := p.authStatusAndReport(ctx, workingDir, env, fresh)
+	return status, err
+}
+
+// authStatusAndReport runs the ladder and also returns the CLI report when it
+// describes the credential the agent uses; otherwise the report is empty.
+func (p *Plugin) authStatusAndReport(ctx context.Context, workingDir string, env map[string]string, fresh bool) (ports.AgentAuthStatus, claudeAuthReport, error) {
 	// Rung 0 — installed? A missing binary is not an auth failure; saying so
 	// would point the user at a login when they need an install.
 	binary, err := p.claudeBinary(ctx)
 	if err != nil {
 		if errors.Is(err, ports.ErrAgentBinaryNotFound) {
-			return ports.AgentAuthStatusUnknown, nil
+			return ports.AgentAuthStatusUnknown, claudeAuthReport{}, nil
 		}
-		return ports.AgentAuthStatusUnknown, err
+		return ports.AgentAuthStatusUnknown, claudeAuthReport{}, err
 	}
 
 	// Rung 3 runs first among the evidence rungs, even though rung 2 outranks
@@ -81,29 +97,37 @@ func (p *Plugin) authStatusFor(ctx context.Context, workingDir string, env map[s
 	// Bedrock credential at api.anthropic.com.
 	//
 	resolved := p.resolveProviderContext(ctx, binary, workingDir, env, p.claudeCLIAuthReport)
+	reportedProvider, _ := agentcreds.ParseProvider(resolved.report.APIProvider)
+	// The CLI report speaks for the agent's credential only when it answered
+	// for the same provider.
+	reportApplies := resolved.cliOK && (resolved.provider == agentcreds.ProviderFirstParty || resolved.provider == reportedProvider)
+	report := claudeAuthReport{}
+	if reportApplies {
+		report = resolved.report
+	}
 
 	// Rungs 1 and 2 — the provider gate and the network probe. This is the
 	// only rung that can prove a credential works, so it is the only one
 	// allowed to return Authorized.
 	if status, ok := p.probeResolvedAuthStatus(ctx, resolved, fresh); ok {
-		return status, nil
+		return status, report, nil
 	}
 
 	// Rung 3's own verdict. It cannot prove success, but it is the only local
 	// check that can observe a definite "signed out".
 	// A first-party account report cannot reject a configured gateway or cloud
 	// provider when its own probe was inconclusive.
-	reportedProvider, _ := agentcreds.ParseProvider(resolved.report.APIProvider)
-	if resolved.cliOK && (resolved.provider == agentcreds.ProviderFirstParty || resolved.provider == reportedProvider) {
+	if reportApplies {
 		status := resolved.report.status()
 		if status != ports.AgentAuthStatusUnknown {
-			return status, nil
+			return status, report, nil
 		}
 	}
 
 	// Rung 4 — local heuristic. Lowest confidence, and the last word only
 	// because it never blocks anything.
-	return claudeLocalAuthStatus(ctx, resolved.opts)
+	status, err := claudeLocalAuthStatus(ctx, resolved.opts)
+	return status, report, err
 }
 
 type claudeProviderContext struct {
@@ -248,8 +272,29 @@ func InvalidateAuthCache() { claudeAuthCache.invalidate() }
 // claudeAuthReport is the parsed shape of `claude auth status --json`. Only
 // LoggedIn drives the verdict; the rest is diagnostics.
 type claudeAuthReport struct {
-	LoggedIn    *bool  `json:"loggedIn"`
-	APIProvider string `json:"apiProvider"`
+	LoggedIn         *bool  `json:"loggedIn"`
+	APIProvider      string `json:"apiProvider"`
+	AuthMethod       string `json:"authMethod"`
+	Email            string `json:"email"`
+	OrgName          string `json:"orgName"`
+	SubscriptionType string `json:"subscriptionType"`
+}
+
+// account is the display identity of a signed-in report. A signed-out or
+// unparsed report names no account.
+func (r claudeAuthReport) account() domain.AgentAccountIdentity {
+	if r.LoggedIn == nil || !*r.LoggedIn {
+		return domain.AgentAccountIdentity{}
+	}
+	identity := domain.AgentAccountIdentity{Email: r.Email, Organization: r.OrgName, Plan: r.SubscriptionType}
+	method := strings.ToLower(strings.TrimSpace(r.AuthMethod))
+	switch {
+	case method == "claude.ai" || strings.Contains(method, "oauth"):
+		identity.Method = domain.AgentAccountMethodAccount
+	case strings.Contains(method, "key"):
+		identity.Method = domain.AgentAccountMethodAPIKey
+	}
+	return identity
 }
 
 // verdict maps a CLI report onto a verdict. loggedIn:true is credentials

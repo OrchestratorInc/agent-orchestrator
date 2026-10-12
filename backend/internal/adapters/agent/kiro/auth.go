@@ -8,32 +8,76 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-var _ ports.AgentAuthChecker = (*Plugin)(nil)
+var (
+	_ ports.AgentAuthChecker        = (*Plugin)(nil)
+	_ ports.AgentAuthAccountChecker = (*Plugin)(nil)
+)
 
 // AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
+	status, _, err := p.AuthStatusWithAccount(ctx)
+	return status, err
+}
+
+// AuthStatusWithAccount also names the account `whoami` reports.
+func (p *Plugin) AuthStatusWithAccount(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, error) {
 	binary, err := p.kiroBinary(ctx)
 	if err != nil {
-		return ports.AgentAuthStatusUnknown, err
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, err
 	}
 	if strings.TrimSpace(os.Getenv("KIRO_API_KEY")) != "" {
-		return ports.AgentAuthStatusAuthorized, nil
+		return ports.AgentAuthStatusAuthorized, domain.AgentAccountIdentity{Method: domain.AgentAccountMethodAPIKey}, nil
 	}
-	return kiroWhoamiAuthStatus(ctx, binary)
+	return kiroWhoamiAuth(ctx, binary)
 }
 
 func kiroWhoamiAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStatus, error) {
+	status, _, err := kiroWhoamiAuth(ctx, binary)
+	return status, err
+}
+
+func kiroWhoamiAuth(ctx context.Context, binary string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, error) {
 	if binary == "" {
-		return ports.AgentAuthStatusUnknown, nil
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil
 	}
 	// Kiro documents `whoami` as its authentication-status command. Keep the
 	// probe bounded so catalog refresh cannot hang on a broken CLI install.
+	var account domain.AgentAccountIdentity
 	status, err := authprobe.CLIStatusWithClassifier(
-		ctx, binary, [][]string{{"whoami", "--format", "json"}}, kiroStatusFromWhoami)
-	return status, err
+		ctx, binary, [][]string{{"whoami", "--format", "json"}}, func(out []byte) (ports.AgentAuthStatus, bool) {
+			status, ok := kiroStatusFromWhoami(out)
+			if ok && status == ports.AgentAuthStatusAuthorized {
+				account = kiroWhoamiAccount(out)
+			}
+			return status, ok
+		})
+	if status != ports.AgentAuthStatusAuthorized {
+		account = domain.AgentAccountIdentity{}
+	}
+	return status, account, err
+}
+
+// kiroWhoamiAccount reads the email from a signed-in `whoami`, inline or
+// under "account". The start URL and profile ARN are provider identity.
+func kiroWhoamiAccount(out []byte) domain.AgentAccountIdentity {
+	var payload struct {
+		Email   string `json:"email"`
+		Account *struct {
+			Email string `json:"email"`
+		} `json:"account"`
+	}
+	if json.NewDecoder(bytes.NewReader(out)).Decode(&payload) != nil {
+		return domain.AgentAccountIdentity{}
+	}
+	email := payload.Email
+	if email == "" && payload.Account != nil {
+		email = payload.Account.Email
+	}
+	return domain.AgentAccountIdentity{Email: email, Method: domain.AgentAccountMethodAccount}
 }
 
 // kiroStatusFromWhoami reads `kiro-cli whoami --format json`.

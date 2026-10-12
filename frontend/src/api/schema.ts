@@ -3538,6 +3538,14 @@ export interface components {
             path: string;
             projectId?: null | string;
         };
+        AgentAccountIdentity: {
+            email?: string;
+            /** @enum {string} */
+            method?: "account" | "api_key";
+            name?: string;
+            organization?: string;
+            plan?: string;
+        };
         AgentAuthPlan: {
             action: string;
             agentId: string;
@@ -3551,6 +3559,7 @@ export interface components {
             reason?: string;
         };
         AgentAuthenticationObservation: {
+            account?: components["schemas"]["AgentAccountIdentity"];
             /** Format: date-time */
             attemptedAt: null | string;
             /** Format: date-time */

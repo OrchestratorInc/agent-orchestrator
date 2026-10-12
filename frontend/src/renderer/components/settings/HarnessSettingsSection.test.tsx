@@ -441,6 +441,19 @@ describe("HarnessSettingsSection", () => {
 		expect(await screen.findByRole("button", { name: "Complete login terminal" })).toBeInTheDocument();
 	});
 
+	it("shows the account a signed-in harness reports", async () => {
+		const readiness = readyCatalog();
+		const codex = readiness.agents.find((agent) => agent.id === "codex")!;
+		codex.authentication = { ...codex.authentication, account: { email: "dev@example.com", organization: "Acme", plan: "pro", method: "account" } };
+		const cursor = readiness.agents.find((agent) => agent.id === "cursor")!;
+		cursor.authentication = { ...cursor.authentication, account: { method: "api_key" } };
+		mockInstalledOperations("npm", readiness);
+		renderSection();
+		expect(await within(await findAgentRow("codex")).findByText("Signed in as dev@example.com · Pro · Acme")).toBeInTheDocument();
+		backToList();
+		expect(await within(await findAgentRow("cursor")).findByText("Using an API key")).toBeInTheDocument();
+	});
+
 	it("keeps the list beside the open harness when there is room", async () => {
 		mockInstalledOperations("npm");
 		const original = window.ResizeObserver;

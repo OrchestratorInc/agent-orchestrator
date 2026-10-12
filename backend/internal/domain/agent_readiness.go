@@ -1,6 +1,11 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+)
 
 // AgentInstallationState is the normalized result of locating a harness CLI.
 type AgentInstallationState string
@@ -111,6 +116,68 @@ type AgentAuthenticationObservation struct {
 	AttemptedAt *time.Time               `json:"attemptedAt" format:"date-time"`
 	ReasonCode  string                   `json:"reasonCode"`
 	Reason      string                   `json:"reason"`
+	// Account names the account the check observed, when the harness reports
+	// one. It is display-only and present only with authorized or configured.
+	Account *AgentAccountIdentity `json:"account,omitempty"`
+}
+
+// AgentAccountMethod is how a harness is signed in.
+type AgentAccountMethod string
+
+const (
+	// AgentAccountMethodAccount is a sign-in to the provider's account.
+	AgentAccountMethodAccount AgentAccountMethod = "account"
+	// AgentAccountMethodAPIKey is an API key.
+	AgentAccountMethodAPIKey AgentAccountMethod = "api_key"
+)
+
+// AgentAccountIdentity is what a harness reports about its signed-in account.
+// Every field is optional. None of it proves the credential works, and none of
+// it is provider or storage identity: no account ids, tokens or paths.
+type AgentAccountIdentity struct {
+	Email        string             `json:"email,omitempty"`
+	Name         string             `json:"name,omitempty"`
+	Organization string             `json:"organization,omitempty"`
+	Plan         string             `json:"plan,omitempty"`
+	Method       AgentAccountMethod `json:"method,omitempty" enum:"account,api_key"`
+}
+
+// maxAccountIdentityRunes bounds each display field; 254 is the longest
+// deliverable email address.
+const maxAccountIdentityRunes = 254
+
+// Sanitized trims each field, drops values with control characters or past
+// the length bound, and returns nil when nothing displayable remains.
+func (a AgentAccountIdentity) Sanitized() *AgentAccountIdentity {
+	clean := AgentAccountIdentity{
+		Email:        displayAccountField(a.Email),
+		Name:         displayAccountField(a.Name),
+		Organization: displayAccountField(a.Organization),
+		Plan:         displayAccountField(a.Plan),
+	}
+	if a.Method == AgentAccountMethodAccount || a.Method == AgentAccountMethodAPIKey {
+		clean.Method = a.Method
+	}
+	if !strings.Contains(clean.Email, "@") {
+		clean.Email = ""
+	}
+	if clean == (AgentAccountIdentity{}) {
+		return nil
+	}
+	return &clean
+}
+
+func displayAccountField(value string) string {
+	value = strings.TrimSpace(value)
+	if !utf8.ValidString(value) || utf8.RuneCountInString(value) > maxAccountIdentityRunes {
+		return ""
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) || r == utf8.RuneError {
+			return ""
+		}
+	}
+	return value
 }
 
 // AgentReadinessSnapshot is the daemon-owned readiness view for one harness.
