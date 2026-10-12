@@ -30,8 +30,8 @@ import { ThemeProvider, useTheme, useThemeState } from "../lib/ThemeProvider";
 // explicit detents — `fitToContents` cannot measure a scroll view. The theme
 // sheet renders a plain view, so it wraps its content exactly.
 //
-// `sheets/connect` is registered separately below: it is the only one with text
-// inputs, so its heights are chosen around the keyboard.
+// Input sheets are registered separately below so their heights can respond to
+// the keyboard.
 const SHEET_ROUTES = [
 	{ name: "sheets/project", detents: [0.5, 0.95] },
 	{ name: "sheets/agent", detents: [0.5, 0.95] },
@@ -174,9 +174,19 @@ function Shell() {
 					options={{
 						presentation: "formSheet",
 						headerShown: false,
-						sheetAllowedDetents: Platform.OS === "ios" ? [0.92] : [0.9, 1],
+						// Settings contains long, dynamically collapsing forms. Letting the
+						// native sheet own vertical gestures means a scroll released near the
+						// bottom can dismiss the whole flow after an editor collapses. Settings
+						// already has an explicit close control, so keep list gestures inside it.
+						gestureEnabled: false,
+						// Android measures this nested stack at the largest detent, so
+						// opening at 90% translates its fixed Save/Cancel footer below
+						// the visible screen. Match iOS with one 92% detent so the
+						// measured and visible heights agree without a swipe. The
+						// editor handles the keyboard itself inside that viewport.
+						sheetAllowedDetents: [0.92],
 						sheetInitialDetentIndex: 0,
-						sheetGrabberVisible: true,
+						sheetGrabberVisible: false,
 						sheetCornerRadius: 24,
 						contentStyle: { backgroundColor: t.bgBase },
 					}}
@@ -251,6 +261,19 @@ function Shell() {
 				<Stack.Screen
 					name="sheets/connect"
 					options={{ ...CONNECT_SHEET_OPTIONS, contentStyle: { backgroundColor: t.bgSurface } }}
+				/>
+				<Stack.Screen
+					name="sheets/machine-name"
+					options={Platform.OS === "android" ? {
+						presentation: "transparentModal",
+						animation: "none",
+						headerShown: false,
+						contentStyle: { backgroundColor: "transparent" },
+					} : {
+						...CONNECT_SHEET_OPTIONS,
+						sheetAllowedDetents: "fitToContents",
+						contentStyle: { backgroundColor: t.bgSurface },
+					}}
 				/>
 			</Stack>
 			</NavigationThemeProvider>

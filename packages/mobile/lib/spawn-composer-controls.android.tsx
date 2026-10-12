@@ -8,9 +8,12 @@ import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-co
 import { type, space } from "./tokens";
 import { MicKey } from "./voice/MicKey";
 
-type OpenMenu = "project" | "harness" | "model" | null;
+type OpenMenu = "host" | "project" | "harness" | "model" | null;
 
 export function SpawnComposerControls({
+	hosts,
+	hostId,
+	onSelectHost,
 	projects,
 	projectId,
 	onSelectProject,
@@ -30,15 +33,18 @@ export function SpawnComposerControls({
 	const t = useTheme();
 	const styles = makeStyles(t);
 	const [openMenu, setOpenMenu] = useState<OpenMenu>(null);
+	const selectedHost = hosts.find((host) => host.id === hostId);
 	const selectedProject = projects.find((project) => project.id === projectId);
+	const hostLabel = selectedHost?.label ?? "Choose machine";
 	const projectLabel = selectedProject?.label ?? "Choose project";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
 	const modelOptions = [{ id: "__auto__", label: "Automatic" }, ...models];
-	const options = openMenu === "project" ? projects : openMenu === "harness" ? agents : modelOptions;
-	const selectedValue = openMenu === "project" ? (projectId ?? "") : openMenu === "harness" ? harness : modelSelection;
-	const menuTitle = openMenu === "project" ? "Project" : openMenu === "harness" ? "Agent" : "Model";
+	const options = openMenu === "host" ? hosts : openMenu === "project" ? projects : openMenu === "harness" ? agents : modelOptions;
+	const selectedValue = openMenu === "host" ? (hostId ?? "") : openMenu === "project" ? (projectId ?? "") : openMenu === "harness" ? harness : modelSelection;
+	const menuTitle = openMenu === "host" ? "Run on" : openMenu === "project" ? "Project" : openMenu === "harness" ? "Agent" : "Model";
 
 	const selectOption = (value: string) => {
+		if (openMenu === "host") onSelectHost(value);
 		if (openMenu === "project") onSelectProject(value);
 		if (openMenu === "harness") onSelectHarness(value);
 		if (openMenu === "model") onSelectModel(value);
@@ -63,7 +69,10 @@ export function SpawnComposerControls({
 
 	return (
 		<View style={styles.stack}>
-			<SelectorButton label={projectLabel} icon={selectedProject?.icon ?? "folder"} onPress={() => setOpenMenu("project")} style={styles.projectButton} />
+			<View style={styles.destinationRow}>
+				<SelectorButton label={`Run on ${hostLabel}`} icon="monitor" onPress={() => setOpenMenu("host")} style={styles.destinationButton} />
+				<SelectorButton label={projectLabel} icon={selectedProject?.icon ?? "folder"} onPress={() => setOpenMenu("project")} style={styles.destinationButton} />
+			</View>
 
 			<View style={styles.rail}>
 				<Pressable
@@ -182,7 +191,8 @@ function OptionList({ title, options, selectedValue, showAgentLogos, onSelect, o
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	stack: { gap: space.sm },
-	projectButton: { alignSelf: "flex-start", maxWidth: "72%", height: 36, paddingHorizontal: space.sm, backgroundColor: "transparent" },
+	destinationRow: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.xs },
+	destinationButton: { flex: 1, minWidth: 0, height: 36, paddingHorizontal: space.sm, backgroundColor: "transparent" },
 	rail: {
 		height: 52,
 		flexDirection: "row",

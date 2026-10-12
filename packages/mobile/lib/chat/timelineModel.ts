@@ -30,7 +30,7 @@ export type ActivityNode = {
 
 export type ConversationTimelineRenderPlan =
 	| { kind: "empty"; inverted: false; groups: [] }
-	| { kind: "list"; inverted: true; groups: ConversationGroup[] };
+	| { kind: "list"; inverted: boolean; groups: ConversationGroup[] };
 
 export type QueuedConversationMessage = { turnId: string; message: ConversationMessage };
 
@@ -92,6 +92,67 @@ export function groupConversationByTurn(
 	return groups.sort((left, right) => left.anchor - right.anchor);
 }
 
+export type TurnItemPartition = {
+	/** Settled turns fold their work behind a "Worked for" header; a running turn shows it inline. */
+	settled: boolean;
+	/** Only the prompt that opened the turn sits above the status row. */
+	prompt: ConversationItem[];
+	/** The work between prompt and answer: tool calls, interim prose, later steers. */
+	work: ConversationItem[];
+	/** Errors and system warnings, which stay readable after the work folds away. */
+	notices: ConversationItem[];
+	/** The agent's last non-empty reply, shown below the folded work. */
+	final: ConversationItem[];
+};
+
+function isSteerItem(item: ConversationItem): boolean {
+	return item.kind === "activity" && item.activityKind === "system" && item.detail?.event === "steer";
+}
+
+function isHumanItem(item: ConversationItem): boolean {
+	return (item.kind === "message" && item.role === "user") || isSteerItem(item);
+}
+
+function isNoticeItem(item: ConversationItem): boolean {
+	if (item.kind !== "activity") return false;
+	if (item.activityKind === "error") return true;
+	return item.detail?.event !== undefined && !isSteerItem(item) && item.detail.event !== "compaction" && item.activityKind !== "plan";
+}
+
+/** Blank assistant messages are the only items the timeline draws nothing for;
+ * approval and user-input cards always render, so they fold with the work. */
+function rendersNothing(item: ConversationItem): boolean {
+	return item.kind === "message" && item.role === "assistant" && item.text.trim() === "";
+}
+
+/**
+ * Split one turn's items for the Working / Worked presentation, matching desktop.
+ * A running turn keeps its work inline under a live "Working" row; once the turn
+ * settles the work folds behind "Worked for", leaving the final reply and any
+ * notices visible. Queued turns (and turns with no daemon record) stay flat.
+ */
+export function partitionTurnItems(items: ConversationItem[], turn: ConversationTurn | undefined): TurnItemPartition | undefined {
+	if (!turn || turn.state === "queued") return undefined;
+	const settled = turn.state !== "running";
+	const firstWork = items.findIndex((item) => !isHumanItem(item));
+	const leading = firstWork < 0 ? items.length : firstWork;
+	const prompt = items.slice(0, leading);
+	let rest = items.slice(leading);
+	if (!settled) return { settled, prompt, work: rest, notices: [], final: [] };
+	let final: ConversationItem[] = [];
+	for (let index = rest.length - 1; index >= 0; index -= 1) {
+		const item = rest[index];
+		if (item.kind === "message" && item.role === "assistant" && item.text.trim() !== "") {
+			final = [item];
+			rest = rest.filter((_, i) => i !== index);
+			break;
+		}
+	}
+	const notices = rest.filter(isNoticeItem);
+	const work = rest.filter((item) => !isNoticeItem(item) && !rendersNothing(item));
+	return { settled, prompt, work, notices, final };
+}
+
 /** Latest-first data lets an inverted virtualized list paint the live edge first. */
 export function latestFirstConversationGroups(
 	snapshot: ConversationSnapshot,
@@ -103,11 +164,15 @@ export function latestFirstConversationGroups(
 export function conversationTimelineRenderPlan(
 	snapshot: ConversationSnapshot,
 	items = readableConversationItems(snapshot),
+	platform: "android" | "ios" = "ios",
 ): ConversationTimelineRenderPlan {
-	const groups = latestFirstConversationGroups(snapshot, items);
+	// Android's native text-selection toolbar needs untransformed screen
+	// coordinates. FlatList's inverted transform detaches it from selected text.
+	const inverted = platform !== "android";
+	const groups = inverted ? latestFirstConversationGroups(snapshot, items) : groupConversationByTurn(snapshot, items);
 	return groups.length === 0
 		? { kind: "empty", inverted: false, groups: [] }
-		: { kind: "list", inverted: true, groups };
+		: { kind: "list", inverted, groups };
 }
 
 export function conversationMarkers(snapshot: ConversationSnapshot): ConversationMarker[] {
@@ -130,7 +195,7 @@ function humanMessageTitle(text: string): string {
 }
 
 export function canRollbackTurn(snapshot: ConversationSnapshot, turn: ConversationTurn): boolean {
-	return snapshot.capabilities?.includes("rollback") === true &&
+	return snapshot.controller.state !== "hibernated" && snapshot.capabilities?.includes("rollback") === true &&
 		!snapshot.turns.some((candidate) => candidate.state === "running" || candidate.state === "queued") &&
 		turn.state !== "running" && turn.state !== "queued" &&
 		Boolean(turn.providerTurnId) &&

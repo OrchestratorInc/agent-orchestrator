@@ -46,7 +46,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"muse", "Log in to Muse", "muse", "Native login flow", "https://ai.meta.com/llama/", "", ActionLogin, []string{"muse", "login"}},
 		{"agy", "Log in to Agy", "agy", "Native first-run browser sign-in", "https://github.com/google-antigravity/antigravity-cli", "", ActionLogin, []string{"agy"}},
 		{"autohand", "Log in to Autohand", "autohand", "Native Autohand account sign-in", "https://docs.autohand.ai/working-with-autohand-code/cli-reference", "", ActionLogin, []string{"autohand", "login"}},
-		{"kimchi", "Log in to Kimchi", "kimchi", "Native browser login flow", "https://docs.kimchi.dev/docs/service-keys", "", ActionLogin, []string{"kimchi", "login"}},
+		{"kimchi", "Log in to Kimchi", "kimchi", "Kimchi opens the authentication method picker in the PTY", "https://docs.kimchi.dev/docs/service-keys", "", ActionLogin, []string{"kimchi"}},
 		{"prime-agent", "Log in to Prime Agent", "prime-agent", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md", "/login\r", ActionLogin, []string{"prime-agent"}},
 		{"omp", "Log in to OMP", "omp", "Select Open login after OMP finishes starting", "https://github.com/can1357/oh-my-pi", "/login\r", ActionLogin, []string{"omp"}},
 		{"fx", "Log in to fx", "fx", "Select Vercel, Codex, or Grok in fx's native login flow", "https://fx.sh/docs", "", ActionLogin, []string{"fx", "login"}},

@@ -25,7 +25,11 @@ func DiscoverClaudeModels(ctx context.Context, command Command, nativeConversati
 	if command.Path == "" {
 		return worker.ChatModelsResponse{}, errors.New("Claude executable is unavailable")
 	}
-	process := exec.CommandContext(ctx, "claude-agent-acp")
+	adapter, err := EnsureClaudeACPAdapter(ctx)
+	if err != nil {
+		return worker.ChatModelsResponse{}, err
+	}
+	process := exec.CommandContext(ctx, adapter)
 	configureProviderProcess(process)
 	process.Dir = command.Dir
 	provider := discoverClaudeProviderModels(ctx, command)

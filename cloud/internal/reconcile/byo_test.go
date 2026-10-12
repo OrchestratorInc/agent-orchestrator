@@ -43,7 +43,7 @@ func (p *byoProvider) BootstrapWorker(_ context.Context, _ sandbox.ID, bootstrap
 func coderRecord(t *testing.T, connectionID string, profile map[string]any, startedAgo time.Duration) domain.Sandbox {
 	t.Helper()
 	coder := map[string]any{
-		"baseUrl": "https://coder.example.com", "owner": "ahmad",
+		"baseUrl": "https://coder.example.com", "owner": "dev",
 		"templateId": "2a2e262c-b31c-4202-946d-a19ad45d1fd2", "durableRoot": "$HOME",
 	}
 	for key, value := range profile {
@@ -227,6 +227,34 @@ func TestUnsupportedArchitectureParksImmediately(t *testing.T) {
 	}
 	if len(store.startupErrors) != 1 || store.startupErrors[0].code != sandbox.StartupErrorUnsupportedArchitecture {
 		t.Fatalf("startup errors = %+v", store.startupErrors)
+	}
+}
+
+// A workspace ready check that timed out will not pass on a retry (its budget
+// is anchored to the agent's ready time), so the session parks with the
+// check's explanation and the customer's workspace is left running.
+func TestReadyCheckTimeoutParksWithoutStopping(t *testing.T) {
+	store := &lifecycleStore{}
+	provider := &byoProvider{
+		lifecycleProvider: lifecycleProvider{environment: sandbox.Environment{ID: "workspace-1", State: sandbox.StateRunning}},
+		bootstrapErr: &sandbox.StartupError{
+			Code:    sandbox.StartupErrorWorkspaceSetupNotReady,
+			Message: "The workspace's own setup didn't finish within 15 minutes.",
+			Err:     errors.New("coder: ready check did not pass"),
+		},
+	}
+	record := coderRecord(t, "connection-1", byoBudget, time.Minute)
+	if err := byoReconciler(store, provider).reconcileSandbox(context.Background(), record); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(store.observations) != 1 || store.observations[0] != domain.SandboxObservedTerminated || provider.stops != 0 {
+		t.Fatalf("observations = %v, stops = %d; want parked without a stop", store.observations, provider.stops)
+	}
+	if len(store.failures) != 0 {
+		t.Fatalf("failures = %v, want none (parked, not failed)", store.failures)
+	}
+	if len(store.startupErrors) != 1 || store.startupErrors[0].code != sandbox.StartupErrorWorkspaceSetupNotReady {
+		t.Fatalf("startup errors = %+v, want workspace_setup_not_ready", store.startupErrors)
 	}
 }
 

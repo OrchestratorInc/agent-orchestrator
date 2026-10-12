@@ -50,7 +50,6 @@ describe("selectCloudOrchestratorHarness", () => {
 
 describe("spawnCloudOrchestrator", () => {
 	beforeEach(() => {
-		window.localStorage.removeItem("ao.cloud.sandboxProvider");
 		cloudMocks.me.mockReset();
 		cloudMocks.listUserProviderConnections.mockReset();
 		cloudMocks.listProjects.mockReset();
@@ -85,13 +84,12 @@ describe("spawnCloudOrchestrator", () => {
 		});
 	});
 
-	it("does not send a saved provider absent from this control plane", async () => {
-		window.localStorage.setItem("ao.cloud.sandboxProvider", "coder");
-		const queryClient = primeClient({ id: "project-1" });
+	it("leaves the provider to the project and org default on the control plane", async () => {
+		const queryClient = primeClient({ id: "project-1", config: { sandboxProvider: "coder" } });
 		cloudMocks.listUserProviderConnections.mockResolvedValue({ providerConnections: [connection("codex")] });
 
 		await spawnCloudOrchestrator(queryClient, "project-1");
-		expect(cloudMocks.createSession).toHaveBeenCalledWith("org-1", expect.not.objectContaining({ provider: "coder" }));
+		expect(cloudMocks.createSession.mock.calls[0]?.[1]).not.toHaveProperty("provider");
 	});
 
 	it("honors the project's configured orchestrator agent over the Codex-first fallback", async () => {

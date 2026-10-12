@@ -9,6 +9,14 @@ const unpairTargets: (typeof active | null)[] = [];
 let unpairThrows: Error | null = null;
 let removeHostThrows: Error | null = null;
 let activeHostThrows: Error | null = null;
+let accountId: string | null = null;
+let ignoreThrows: Error | null = null;
+vi.mock("./account", () => ({ loadAccount: async () => accountId ? { id: accountId, email: "person@example.com" } : null }));
+vi.mock("./accountHostPreferences", () => ({ ignoreAccountHost: async (account: string, hostId: string) => {
+	calls.push(`ignore:${account}:${hostId}`);
+	if (ignoreThrows) throw ignoreThrows;
+} }));
+beforeEach(() => { accountId = null; ignoreThrows = null; });
 
 const active = {
 	id: "h_active",
@@ -16,6 +24,12 @@ const active = {
 	platform: "darwin",
 	endpoints: [{ kind: "lan" as const, host: "192.168.1.42", port: 3011, secure: false }],
 	lastConnected: 1,
+};
+const other = {
+	...active,
+	id: "h_other",
+	name: "other",
+	endpoints: [{ kind: "lan" as const, host: "192.168.1.99", port: 3011, secure: false }],
 };
 
 vi.mock("./push", () => ({
@@ -27,8 +41,11 @@ vi.mock("./push", () => ({
 		calls.push("unpairFromServer");
 		if (unpairThrows) throw unpairThrows;
 	}),
+	retryPendingUnpairs: vi.fn(async () => {}),
 }));
+vi.mock("./pendingUnpair", () => ({ markMachineUnpaired: vi.fn(async () => {}) }));
 vi.mock("./config", () => ({
+	loadConfig: async () => ({ host: "", httpPort: "3011", password: "" }),
 	clearConfig: vi.fn(async () => {
 		calls.push("clearConfig");
 	}),
@@ -54,7 +71,56 @@ vi.mock("./onboardingStore", () => ({
 	}),
 }));
 
-const { forgetServer } = await import("./disconnect");
+const { forgetPairedHost, forgetServer } = await import("./disconnect");
+
+describe("forgetPairedHost", () => {
+	beforeEach(() => {
+		calls.length = 0;
+		unpairTargets.length = 0;
+		unpairThrows = null;
+		removeHostThrows = null;
+	});
+
+	it("unpairs and removes only the requested machine", async () => {
+		await forgetPairedHost(other);
+
+		expect(unpairTargets).toEqual([other]);
+		expect(calls).toEqual([
+			"unpairFromServer",
+			"removeHost:h_other",
+			"clearEventCursor:h_other",
+		]);
+		expect(calls).not.toContain("clearConfig");
+		expect(calls).not.toContain("clearOnboardingSkipped");
+	});
+
+	it("keeps the credential when durable cleanup cannot be saved", async () => {
+		unpairThrows = new Error("SecureStore unavailable");
+
+		await expect(forgetPairedHost(other)).rejects.toThrow("SecureStore unavailable");
+		expect(calls).not.toContain("removeHost:h_other");
+		expect(calls).not.toContain("clearEventCursor:h_other");
+	});
+
+	it("hides a manually paired machine from the signed-in account before removing it", async () => {
+		accountId = "user-a";
+		await forgetPairedHost(other);
+		expect(calls).toEqual(["unpairFromServer", "ignore:user-a:h_other", "removeHost:h_other", "clearEventCursor:h_other"]);
+	});
+
+	it("preserves pairing when hiding it from account sync cannot be persisted", async () => {
+		accountId = "user-a";
+		ignoreThrows = new Error("storage unavailable");
+		await expect(forgetPairedHost(other)).rejects.toThrow("storage unavailable");
+		expect(calls).not.toContain("removeHost:h_other");
+	});
+
+	it("unpairs sign-out removals without hiding them on the next sign-in", async () => {
+		accountId = "user-a";
+		await forgetPairedHost(other, { ignoreAccount: false });
+		expect(calls).toEqual(["unpairFromServer", "removeHost:h_other", "clearEventCursor:h_other"]);
+	});
+});
 
 describe("forgetServer", () => {
 	beforeEach(() => {
@@ -79,21 +145,34 @@ describe("forgetServer", () => {
 		]);
 	});
 
-	// The unpair call needs the selected host's token before removeHost deletes it.
-	it("unpairs before the credentials are thrown away", async () => {
+	// The local queue captures the credential before removeHost deletes it.
+	it("persists remote cleanup before the credentials are thrown away", async () => {
 		await forgetServer();
 		expect(calls.indexOf("unpairFromServer")).toBeLessThan(calls.indexOf("removeHost:h_active"));
 	});
 
-	// unpairFromServer catches its own network failures, but its SecureStore
-	// writes are unguarded. A throw there used to abort the disconnect with the
-	// host and password still on disk — the phone looked disconnected and was not.
-	it("still clears credentials when the push step throws", async () => {
+	it("hides the default machine from account sync before deleting its credentials", async () => {
+		accountId = "user-a";
+		await forgetServer();
+		expect(calls.indexOf("ignore:user-a:h_active")).toBeGreaterThan(calls.indexOf("unpairFromServer"));
+		expect(calls.indexOf("ignore:user-a:h_active")).toBeLessThan(calls.indexOf("removeHost:h_active"));
+	});
+
+	it("remembers Forget for an account-owned default machine after sign-in expires", async () => {
+		const { activeHostMetadata } = await import("./hosts");
+		vi.mocked(activeHostMetadata).mockResolvedValueOnce({ ...active, accountUserId: "expired-account" });
+		await forgetServer();
+		expect(calls.indexOf("ignore:expired-account:h_active")).toBeGreaterThan(calls.indexOf("unpairFromServer"));
+		expect(calls.indexOf("ignore:expired-account:h_active")).toBeLessThan(calls.indexOf("removeHost:h_active"));
+	});
+
+	it("keeps the default pairing if secure cleanup persistence fails", async () => {
 		unpairThrows = new Error("SecureStore unavailable");
 		await expect(forgetServer()).rejects.toThrow("SecureStore unavailable");
 		expect(unpairTargets).toEqual([active]);
-		expect(calls).toContain("clearConfig");
-		expect(calls).toContain("clearOnboardingSkipped");
+		expect(calls).not.toContain("removeHost:h_active");
+		expect(calls).not.toContain("clearConfig");
+		expect(calls).not.toContain("clearOnboardingSkipped");
 	});
 
 	it("still performs safe local cleanup when active-host lookup throws", async () => {
@@ -125,17 +204,11 @@ describe("forgetServer and the host list", () => {
 		expect(calls).toContain("removeHost:h_active");
 	});
 
-	// Same reasoning as the existing finally: whatever fails upstream, the
-	// pairing must not survive a disconnect.
-	it("removes the machine even when unpairing fails", async () => {
-		unpairThrows = new Error("daemon unreachable");
-
-		// The error still surfaces — the caller decides what to show — but the
-		// pairing is gone regardless, which is the whole point of the finally.
-		await expect(forgetServer()).rejects.toThrow("daemon unreachable");
-
-		expect(calls).toContain("removeHost:h_active");
-		expect(calls).toContain("clearConfig");
+	it("forgets the machine the caller chose even if the selection moved", async () => {
+		await forgetServer(other);
+		expect(unpairTargets).toEqual([other]);
+		expect(calls).toContain("removeHost:h_other");
+		expect(calls).not.toContain("removeHost:h_active");
 	});
 
 	it("finishes local cleanup when removing the host token fails", async () => {

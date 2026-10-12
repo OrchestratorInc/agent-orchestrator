@@ -426,9 +426,10 @@ func (s *Server) createEnvironmentScratchProject(
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")
 		return
 	}
-	plan, err := s.provisioning.SessionPlan(request.Orchestrator.Harness)
-	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, "internal_error", "Sandbox provisioning is misconfigured.")
+	plan, connectionID, ok := s.scratchSessionPlan(
+		w, r, principal, request.OrgID, request.Orchestrator.Harness, configJSON,
+	)
+	if !ok {
 		return
 	}
 	store, ok := s.store.(environmentScratchProjectStore)
@@ -455,16 +456,17 @@ func (s *Server) createEnvironmentScratchProject(
 			DisplayName:             request.DisplayName,
 			Config:                  configJSON,
 			Session: domain.CreateSession{
-				Kind:             "orchestrator",
-				Harness:          request.Orchestrator.Harness,
-				DisplayName:      "Orchestrator",
-				Prompt:           request.Orchestrator.Prompt,
-				Mode:             "trusted",
-				DeniedCommands:   []string{},
-				Provider:         plan.Provider,
-				ResourceProfile:  plan.ResourceProfile,
-				BootstrapContext: plan.BootstrapContext,
-				Release:          s.release,
+				Kind:                "orchestrator",
+				Harness:             request.Orchestrator.Harness,
+				DisplayName:         "Orchestrator",
+				Prompt:              request.Orchestrator.Prompt,
+				Mode:                "trusted",
+				DeniedCommands:      []string{},
+				Provider:            plan.Provider,
+				SandboxConnectionID: connectionID,
+				ResourceProfile:     plan.ResourceProfile,
+				BootstrapContext:    plan.BootstrapContext,
+				Release:             s.release,
 			},
 		},
 	)

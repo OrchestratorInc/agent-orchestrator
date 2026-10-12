@@ -402,7 +402,7 @@ describe("mobile Chat API boundaries", () => {
 		vi.mocked(fetch)
 			.mockResolvedValueOnce(response(wire))
 			.mockResolvedValueOnce(response({ turnId: "turn-1", duplicate: false }, 202))
-			.mockResolvedValue(response({}));
+			.mockImplementation(async () => response({}));
 
 		const page = await getReviewerConversationPage(cfg, "review/1");
 		await sendReviewerConversationMessage(cfg, "review/1", { text: "fix this", clientMessageId: "mobile-1" });

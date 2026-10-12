@@ -218,4 +218,14 @@ title = "gitleaks config"
         "2a0c8a0f3e27ae78612b9896f07e0a79b181a431",
         "d1d4092df1adfe6f9581b03484845485dfb91b76",
         "423f0de6fa12d55785f2cc254e033edb94773a84",
+        # Fake AWS key and OpenSSH key literals in the activity-redaction test
+        # fixtures (cloud/internal/activity/activity_test.go), split in
+        # c434c6a1b; these two PR commits still carry the literals.
+        "213c6439d8b7178a74db853f14b9b054754907cb",
+        "da484ff31ef03c5fca4c25d0376f8bb83fe0a47a",
+        # Fake GitHub token in the ready-probe redaction test
+        # (cloud/internal/sandbox/coder/devenv_test.go), split in b6561be85;
+        # these two PR commits still carry the literal.
+        "d5dfe1adb5ce3c001390a81be010c5d2381517a1",
+        "8a5cf736b15a22e163555a79d01db44e13de0067",
     ]

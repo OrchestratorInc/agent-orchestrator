@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { paidPlanBadge, useCloudBilling } from "../hooks/useCloudBilling";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { useNavigate, useParams, useRouterState } from "@tanstack/react-router";
@@ -20,6 +21,7 @@ import {
 	CalendarClock,
 	ChevronRight,
 	Download,
+	FileText,
 	Folder,
 	FolderOpen,
 	LogIn,
@@ -57,6 +59,7 @@ import {
 import { flushSync } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { UpdateStatus } from "../../main/update-settings";
+import { artifactCount, groupArtifactsByProject } from "../lib/artifacts";
 import { parseNightlyVersion } from "../lib/build-channel";
 import {
 	hasConfiguredOrchestratorAgent,
@@ -521,6 +524,7 @@ function useSelection() {
 	});
 	const goHome = useCallback(() => void navigate({ to: "/" }), [navigate]);
 	const goAutomations = useCallback(() => void navigate({ to: "/automations" }), [navigate]);
+	const goArtifacts = useCallback(() => void navigate({ to: "/artifacts" }), [navigate]);
 	const goStandaloneBoard = useCallback(() => void navigate({ to: "/sessions" }), [navigate]);
 	const goGlobalSettings = useCallback(() => openGlobalSettings(), [openGlobalSettings]);
 	const goConnectMobile = useCallback(() => openGlobalSettings("mobile"), [openGlobalSettings]);
@@ -545,6 +549,7 @@ function useSelection() {
 	return useMemo(() => ({
 		isHome: pathname === "/",
 		isAutomations: pathname === "/automations",
+		isArtifacts: pathname === "/artifacts",
 		activeRemoteHostId: params.hostId,
 		activeRemoteProjectId: params.hostId ? params.projectId : undefined,
 		activeRemoteSessionId: params.hostId ? params.sessionId : undefined,
@@ -552,6 +557,7 @@ function useSelection() {
 		activeSessionId: params.hostId ? undefined : params.sessionId,
 		goHome,
 		goAutomations,
+		goArtifacts,
 		goStandaloneBoard,
 		// Settings is a modal — open it in place so the current page (session
 		// terminal, board, etc.) stays underneath.
@@ -560,7 +566,7 @@ function useSelection() {
 		goSettings,
 		goProject,
 		goSession,
-	}), [goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
+	}), [goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
 // Colour tracks the session's board section, preserving SCM state while the
@@ -634,6 +640,7 @@ export function Sidebar({
 	const commandPaletteEnabled = useCommandPaletteEnabled();
 	const settingsPage = useSettingsPage();
 	const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
+	const artifactTotal = useMemo(() => artifactCount(groupArtifactsByProject(workspaces)), [workspaces]);
 	const existingProjectPaths = useMemo(
 		() => workspaces
 			.filter((workspace) => workspace.kind !== STANDALONE_PROJECT_KIND)
@@ -1015,6 +1022,16 @@ export function Sidebar({
 							label={t("automations.title")}
 							onClick={selection.goAutomations}
 							tooltip={isCollapsed ? t("automations.title") : undefined}
+						/>
+					</SidebarMenuItem>
+					<SidebarMenuItem>
+						<SidebarTopNavRow
+							active={selection.isArtifacts}
+							icon={<FileText aria-hidden="true" />}
+							label={t("artifacts.title")}
+							onClick={selection.goArtifacts}
+							tooltip={isCollapsed ? t("artifacts.title") : undefined}
+							trailing={artifactTotal > 0 ? String(artifactTotal) : undefined}
 						/>
 					</SidebarMenuItem>
 				</SidebarMenu>
@@ -2715,7 +2732,11 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	const { cloudEnabled } = useCloudGate();
 	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, session, status, signOut } = useCloudSession();
+	// The plan badge is self-serve billing only; a contract org has no plan to show.
+	const billing = useCloudBilling();
+	const plan = billing.offering.selfServeBilling ? paidPlanBadge(billing.data) : null;
 	if (!configured || (!cloudEnabled && !developerMode) || status !== "authenticated") return null;
+	const name = accountName(session?.user);
 
 	return (
 		<DropdownMenu>
@@ -2726,14 +2747,18 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 					})}
 					className={FOOTER_NAV_BUTTON_CLASS}
 					tabIndex={tabIndex}
+					title={session?.user.email}
 					type="button"
 				>
 					<NavRowHighlight />
 					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
-						<User aria-hidden="true" />
-						<span className="min-w-0 flex-1 truncate tracking-tight">
-							{session?.user.email ?? "AO Cloud"}
-						</span>
+						<AccountAvatar user={session?.user} />
+						<span className="min-w-0 truncate tracking-tight">{name}</span>
+						{plan ? (
+							<span className="shrink-0 rounded-full bg-[var(--color-status-working)] px-1.5 py-px text-[length:var(--font-size-xs)] font-medium leading-4 text-white">
+								{plan}
+							</span>
+						) : null}
 					</span>
 				</button>
 			</DropdownMenuTrigger>
@@ -2747,6 +2772,40 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 				</DropdownMenuItem>
 			</DropdownMenuContent>
 		</DropdownMenu>
+	);
+}
+
+/** The signed-in person's name, falling back to their email. */
+function accountName(user: { displayName?: string; email?: string } | undefined): string {
+	const display = user?.displayName?.trim();
+	if (display && display !== user?.email) return display;
+	return user?.email ?? "AO Cloud";
+}
+
+/** The profile picture from the sign-in provider, or the person's initials. */
+function AccountAvatar({ user }: { user: { displayName?: string; email?: string; avatarUrl?: string } | undefined }) {
+	const [broken, setBroken] = useState(false);
+	if (user?.avatarUrl && !broken) {
+		return (
+			<img
+				src={user.avatarUrl}
+				alt=""
+				aria-hidden="true"
+				referrerPolicy="no-referrer"
+				className="size-icon-md shrink-0 rounded-full object-cover"
+				onError={() => setBroken(true)}
+			/>
+		);
+	}
+	const source = accountName(user);
+	const initials = source.includes("@")
+		? source.charAt(0).toUpperCase()
+		: source.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part.charAt(0).toUpperCase()).join("");
+	if (!initials) return <User aria-hidden="true" />;
+	return (
+		<span aria-hidden="true" className="grid size-icon-md shrink-0 place-items-center rounded-full bg-[var(--color-bg-tertiary)] text-[length:var(--font-size-xs)] font-medium leading-none text-settings-label">
+			{initials}
+		</span>
 	);
 }
 
@@ -2772,7 +2831,7 @@ function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 				>
 					<NavRowHighlight />
 					<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
-						<User aria-hidden="true" />
+						<AccountAvatar user={session?.user} />
 					</span>
 				</button>
 			</TooltipTrigger>

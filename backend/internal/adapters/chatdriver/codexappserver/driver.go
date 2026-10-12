@@ -735,3 +735,62 @@ func codexProcessEnv(ctx context.Context, bin string, env map[string]string) []s
 	agentlaunch.AugmentRuntimePATHForLaunchBinary(ctx, overlay, []string{bin}, exec.LookPath, agentlaunch.PinnedDir(os.Executable, overlay["AO_DATA_DIR"]))
 	return envSlice(overlay)
 }
+
+// ForkIntoHost starts an inclusive native fork in an independent provider host.
+func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	if sourceProviderConversationID == "" || lastProviderTurnID == "" {
+		return nil, errors.New("source thread and completed turn are required")
+	}
+	if !filepath.IsAbs(cfg.WorkspacePath) {
+		return nil, fmt.Errorf("workspace path must be absolute, got %q", cfg.WorkspacePath)
+	}
+	conv, reconnected, err := d.connectSession(ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false)
+	if err != nil {
+		return nil, err
+	}
+	if reconnected {
+		_ = conv.Close()
+		return nil, errors.New("side provider host already owns a conversation")
+	}
+	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
+	conv.readOnly = cfg.ReadOnly
+	conv.launchMode = cfg.Permissions
+	params := map[string]any{
+		"threadId":          sourceProviderConversationID,
+		"lastTurnId":        conv.nativeID(lastProviderTurnID),
+		"cwd":               cfg.WorkspacePath,
+		"approvalPolicy":    policy,
+		"approvalsReviewer": reviewer,
+		"sandbox":           sandbox,
+	}
+	if cfg.Model != "" {
+		params["model"] = cfg.Model
+	}
+	// Same overrides as thread/start and thread/resume: without the MCP servers
+	// a fresh fork has no AO tools until a restart resumes it.
+	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
+		params["config"] = config
+	}
+	if cfg.SystemPrompt != "" {
+		params["developerInstructions"] = cfg.SystemPrompt
+	}
+	openCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
+	var resp struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+		Model           string `json:"model"`
+		ReasoningEffort string `json:"reasoningEffort"`
+	}
+	if err := conv.conn.request(openCtx, "thread/fork", params, &resp); err != nil {
+		_ = conv.Terminate()
+		return nil, fmt.Errorf("thread/fork in side host: %w", err)
+	}
+	if resp.Thread.ID == "" {
+		_ = conv.Terminate()
+		return nil, errors.New("thread/fork returned no thread id")
+	}
+	conv.start(resp.Thread.ID, resp.Model, resp.ReasoningEffort)
+	return conv, nil
+}

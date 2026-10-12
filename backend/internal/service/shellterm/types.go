@@ -52,11 +52,13 @@ type OpenShellTerminalInput struct {
 	Title string `json:"title,omitempty"`
 }
 
-// InitialInputReadyState describes a terminal state that is ready to receive
-// the command's initial input.
+// InitialInputReadyState describes a terminal state relevant to the command's
+// initial input. SkipInput marks a state where the requested action is already
+// open, so the command should not be sent.
 type InitialInputReadyState struct {
 	Text      string
 	RawPrefix string
+	SkipInput bool
 }
 
 // OpenCommandTerminalInput is a daemon-trusted command terminal request. It

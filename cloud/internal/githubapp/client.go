@@ -49,6 +49,8 @@ type Client struct {
 	webBaseURL   string
 	httpClient   *http.Client
 	now          func() time.Time
+	// readTokens reuses contents:read checkout tokens (see readTokenCache).
+	readTokens readTokenCache
 }
 
 type HTTPError struct {
@@ -734,8 +736,34 @@ func (c *Client) repositoryToken(
 	if installationID <= 0 || repositoryID <= 0 {
 		return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
 	}
+	return c.readToken(ctx, installationID, []int64{repositoryID})
+}
+
+// readToken returns a contents:read installation token for exactly the given
+// repositories, reusing a cached one for the same scope while it has enough
+// lifetime left.
+func (c *Client) readToken(
+	ctx context.Context,
+	installationID int64,
+	repositoryIDs []int64,
+) (installationAccessToken, error) {
+	return c.readTokens.get(ctx, readTokenKey(installationID, repositoryIDs), c.now,
+		func(ctx context.Context) (installationAccessToken, error) {
+			return c.mintReadToken(ctx, installationID, repositoryIDs)
+		})
+}
+
+// mintReadToken always asks GitHub for a new contents:read token. Callers that
+// use the mint as a live permission check (is this repository still granted to
+// the installation?) call it directly so a cached token cannot vouch for
+// access that has since been removed.
+func (c *Client) mintReadToken(
+	ctx context.Context,
+	installationID int64,
+	repositoryIDs []int64,
+) (installationAccessToken, error) {
 	response, err := c.createInstallationToken(ctx, installationID, map[string]any{
-		"repository_ids": []int64{repositoryID},
+		"repository_ids": repositoryIDs,
 		"permissions": map[string]string{
 			"contents": "read",
 		},
@@ -821,7 +849,8 @@ func (c *Client) resolveInstallationRepositoryIDs(
 			// instead of 422ing the whole checkout token mint (which would fail the
 			// primary clone). This keeps every returned ID one the installation can
 			// mint, exactly as the listing-only path guaranteed.
-			if _, mintErr := c.repositoryToken(ctx, installationID, resolvedID); mintErr != nil {
+			// A live check, so never from the read-token cache.
+			if _, mintErr := c.mintReadToken(ctx, installationID, []int64{resolvedID}); mintErr != nil {
 				unresolved = append(unresolved, normalized)
 				continue
 			}
@@ -889,19 +918,7 @@ func (c *Client) repositoryReadTokenForRepos(
 			return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
 		}
 	}
-	response, err := c.createInstallationToken(ctx, installationID, map[string]any{
-		"repository_ids": repositoryIDs,
-		"permissions": map[string]string{
-			"contents": "read",
-		},
-	})
-	if err != nil {
-		return installationAccessToken{}, err
-	}
-	if response.ExpiresAt.IsZero() || !response.ExpiresAt.After(c.now()) {
-		return installationAccessToken{}, errors.New("GitHub returned an expired installation token")
-	}
-	return response, nil
+	return c.readToken(ctx, installationID, repositoryIDs)
 }
 
 // repositoryWriteToken mints a short-lived installation token scoped to one

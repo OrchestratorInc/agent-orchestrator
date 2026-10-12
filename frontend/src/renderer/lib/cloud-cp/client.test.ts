@@ -63,6 +63,19 @@ describe("Cloud control-plane interface transitions", () => {
 	});
 });
 
+describe("cloud control-plane Coder template parameters", () => {
+	it("reads one template's parameters from the encoded coder-templates route", async () => {
+		const parameters = [{ name: "region", type: "string", mutable: true, required: false, defaultValue: "eu" }];
+		const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ parameters }), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await expect(client.getCoderTemplateParameters("org/a", "tpl 1")).resolves.toEqual({ parameters });
+		expect(fetchImpl).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2Fa/coder-templates/tpl%201/parameters",
+			expect.objectContaining({ method: "GET" }),
+		);
+	});
+});
+
 describe("cloud control-plane session lifecycle", () => {
 	it("uses the cloud review endpoints for an encoded session", async () => {
 		const fetchMock = vi.fn(

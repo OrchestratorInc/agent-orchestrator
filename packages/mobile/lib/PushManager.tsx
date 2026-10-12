@@ -8,12 +8,12 @@ import { useRootNavigationState, useRouter, type Href } from "expo-router";
 import { useOpenPage } from "./pageNavigation";
 import { useEffect, useRef } from "react";
 import { AppState, Platform } from "react-native";
-import { announceDevice, markNotificationRead } from "./api";
+import { markNotificationRead } from "./api";
 import { shouldPoll } from "./appStatePoll";
 import { getInstallId } from "./installId";
 import { findHost } from "./hosts";
 import { notificationTarget } from "./notificationView";
-import { configurePushHandler, ensureAndroidChannel, onManualPushRegistration, registerForPush } from "./push";
+import { announcePairedDevice, configurePushHandler, ensureAndroidChannel, onManualPushRegistration, registerForPush, retryPendingUnpairs } from "./push";
 import { useApp } from "./store";
 import { MOBILE_EVENTS } from "./telemetry/events";
 import { mobileTelemetry } from "./telemetry/runtime";
@@ -53,6 +53,18 @@ export function PushManager(): null {
 		void ensureAndroidChannel();
 	}, []);
 
+	// Runs even with zero paired hosts, including onboarding after forgetting
+	// the last machine. The durable outbox also survives an app restart.
+	useEffect(() => {
+		const retry = (immediate: boolean) => {
+			if (shouldPoll(AppState.currentState)) void retryPendingUnpairs({ immediate }).catch(() => {});
+		};
+		retry(true);
+		const timer = setInterval(() => retry(false), 30_000);
+		const sub = AppState.addEventListener("change", (state) => { if (shouldPoll(state)) retry(true); });
+		return () => { clearInterval(timer); sub.remove(); };
+	}, []);
+
 	// Each daemon keeps its own device roster and push registration. Reconnect
 	// re-verifies identity before a foreground refresh can use a bearer.
 	useEffect(() => {
@@ -61,7 +73,7 @@ export function PushManager(): null {
 			const configs = connectedRef.current;
 			void getInstallId().then((installId) => {
 				for (const config of configs) {
-					void announceDevice(config, {
+					void announcePairedDevice(config, {
 						installId,
 						platform: Platform.OS,
 						deviceName: Device.deviceName ?? undefined,

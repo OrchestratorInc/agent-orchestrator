@@ -208,3 +208,40 @@ describe("createCloudTerminalMux cloud notification hints", () => {
 		mux.dispose();
 	});
 });
+
+describe("createCloudTerminalMux ticket refusals", () => {
+	function refusingMux(error: object) {
+		const mux = createCloudTerminalMux({
+			wsBaseUrl: "wss://cp.example.com/api/cloud/v1",
+			kind: "agent",
+			mintTicket: async () => {
+				throw error;
+			},
+			WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+		});
+		const errors: string[] = [];
+		const states: string[] = [];
+		mux.onError("pane", (message) => errors.push(message));
+		mux.onConnectionChange((state) => states.push(state));
+		return { mux, errors, states };
+	}
+
+	it("reports a plan refusal once as a pane error instead of polling", async () => {
+		FakeWebSocket.instances = [];
+		const { mux, errors, states } = refusingMux({ code: "WEEKLY_LIMIT_REACHED", message: "Weekly usage limit reached." });
+		await settle();
+		expect(errors).toEqual(["Weekly usage limit reached."]);
+		expect(states).toEqual([]);
+		expect(FakeWebSocket.instances).toHaveLength(0);
+		mux.dispose();
+	});
+
+	it("keeps waiting while the worker is still starting", async () => {
+		FakeWebSocket.instances = [];
+		const { mux, errors, states } = refusingMux({ code: "WORKER_UNAVAILABLE", message: "Worker is starting." });
+		await settle();
+		expect(errors).toEqual([]);
+		expect(states).toEqual(["waiting"]);
+		mux.dispose();
+	});
+});

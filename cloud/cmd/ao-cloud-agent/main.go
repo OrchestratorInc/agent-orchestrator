@@ -195,9 +195,14 @@ func runHook(ctx context.Context, c *client, args []string, input io.Reader) err
 	return nil
 }
 
+// workerEpochFromEnvironment is the epoch of the worker now running beside
+// this agent. An agent that survived a worker restart (Freestyle wake) still
+// carries its launch epoch in AO_CLOUD_WORKER_EPOCH, so the epoch the current
+// worker recorded in the data directory wins; the environment is the fallback
+// for workers that do not record it.
 func workerEpochFromEnvironment() int64 {
 	epoch, _ := strconv.ParseInt(strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_EPOCH")), 10, 64)
-	return epoch
+	return notificationoutbox.CurrentWorkerEpoch(os.Getenv("AO_DATA_DIR"), epoch)
 }
 
 func notificationFromActivity(sessionID string, epoch int64, activity worker.ActivityEvent) (notificationoutbox.Event, bool) {

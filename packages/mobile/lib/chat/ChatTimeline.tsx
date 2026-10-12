@@ -1,12 +1,13 @@
 import { Feather } from "../icons";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActivityIndicator,
 	FlatList,
 	Image,
 	Modal,
+	Platform,
 	Pressable,
 	ScrollView,
 	StyleSheet,
@@ -22,7 +23,8 @@ import { haptics } from "../haptics";
 import { useApp } from "../store";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { MascotLamp } from "../ui";
+import { MascotLamp, Spinning } from "../ui";
+import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { caretNotation, commandOutputText } from "./ansi";
@@ -60,12 +62,14 @@ import {
 	canRollbackTurn,
 	conversationTimelineRenderPlan,
 	countActivityNodes,
+	partitionTurnItems,
 	readableConversationItems,
 	type ActivityNode,
 	type ConversationGroup,
 } from "./timelineModel";
 import { type, space } from "../tokens";
 import { userFacingError } from "../connectionError";
+import { SentResponseQuotes } from "./SentResponseQuotes";
 
 type TimelineRow =
 	| { kind: "single"; key: string; items: [ConversationItem] }
@@ -106,11 +110,26 @@ export const ChatTimeline = memo(function ChatTimeline({
 	const listRef = useRef<FlatList<ConversationGroup>>(null);
 	const followsTail = useRef(true);
 	const [showJump, setShowJump] = useState(false);
+	// Held above the virtualized list so a "Worked for" fold keeps its state when its row scrolls away and back.
+	const [openWorked, setOpenWorked] = useState<ReadonlySet<string>>(() => new Set());
+	const toggleWorked = useCallback((key: string) => {
+		setOpenWorked((current) => {
+			const next = new Set(current);
+			if (!next.delete(key)) next.add(key);
+			return next;
+		});
+	}, []);
 	// Usage is snapshot state, not conversation. Reasoning stays available in the
 	// durable record but hidden on mobile: prose and work are the primary surface.
 	const items = useMemo(() => readableConversationItems(snapshot), [snapshot]);
-	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items), [items, snapshot.turns]);
+	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items, Platform.OS === "android" ? "android" : "ios"), [items, snapshot.turns]);
 	const groups = plan.groups;
+	const inverted = plan.inverted;
+	const jumpViewPosition = inverted ? 0.82 : 0.18;
+	const scrollToLatest = (animated: boolean) => {
+		if (inverted) listRef.current?.scrollToOffset({ offset: 0, animated });
+		else listRef.current?.scrollToEnd({ animated });
+	};
 
 	useEffect(() => {
 		if (jumpToSequence === undefined) return;
@@ -119,12 +138,12 @@ export const ChatTimeline = memo(function ChatTimeline({
 		// turn never matched and the jump silently did nothing.
 		const index = groups.findIndex((group) => group.anchor === jumpToSequence || group.items.some((item) => item.sequence === jumpToSequence));
 		if (index >= 0) {
-			followsTail.current = index === 0;
+			followsTail.current = index === (inverted ? 0 : groups.length - 1);
 			setShowJump(!followsTail.current);
-			requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.82 }));
+			requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }));
 		}
 		onJumpHandled?.();
-	}, [groups, jumpToSequence, onJumpHandled]);
+	}, [groups, inverted, jumpToSequence, jumpViewPosition, onJumpHandled]);
 
 	if (plan.kind === "empty") {
 		return (
@@ -135,12 +154,24 @@ export const ChatTimeline = memo(function ChatTimeline({
 			</View>
 		);
 	}
+	const olderControl = snapshot.hasMoreBefore ? (
+		<Pressable
+			accessibilityRole="button"
+			disabled={loadingOlder}
+			onPress={() => { haptics.tap(); void onLoadOlder(); }}
+			style={styles.older}
+		>
+			{loadingOlder ? <ActivityIndicator size="small" /> : <Feather name="clock" size={12} />}
+			<Text style={styles.olderText}>{loadingOlder ? "Loading history…" : "Load earlier messages"}</Text>
+		</Pressable>
+	) : null;
 
 	return (
 		<View style={styles.timelineWrap}>
 			<FlatList<ConversationGroup>
 				ref={listRef}
 				data={groups}
+				extraData={openWorked}
 				inverted={plan.inverted}
 				keyExtractor={(group) => group.key}
 				style={styles.list}
@@ -150,33 +181,24 @@ export const ChatTimeline = memo(function ChatTimeline({
 				maxToRenderPerBatch={4}
 				updateCellsBatchingPeriod={32}
 				windowSize={5}
-				maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+				maintainVisibleContentPosition={inverted ? { minIndexForVisible: 0 } : undefined}
 				onScroll={(event) => {
-					const { contentOffset } = event.nativeEvent;
-					followsTail.current = Math.abs(contentOffset.y) < 120;
+					const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+					followsTail.current = inverted
+						? Math.abs(contentOffset.y) < 120
+						: contentSize.height - layoutMeasurement.height - contentOffset.y < 120;
 					setShowJump(!followsTail.current);
 				}}
 				scrollEventThrottle={100}
 				onContentSizeChange={() => {
-					if (followsTail.current) requestAnimationFrame(() => listRef.current?.scrollToOffset({ offset: 0, animated: false }));
+					if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
 				}}
 				onScrollToIndexFailed={({ index, averageItemLength }) => {
 					listRef.current?.scrollToOffset({ offset: Math.max(0, index * averageItemLength), animated: true });
-					setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.82 }), 120);
+					setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }), 120);
 				}}
-				ListFooterComponent={
-					snapshot.hasMoreBefore ? (
-						<Pressable
-							accessibilityRole="button"
-							disabled={loadingOlder}
-							onPress={() => { haptics.tap(); void onLoadOlder(); }}
-							style={styles.older}
-						>
-							{loadingOlder ? <ActivityIndicator size="small" /> : <Feather name="clock" size={12} />}
-							<Text style={styles.olderText}>{loadingOlder ? "Loading history…" : "Load earlier messages"}</Text>
-						</Pressable>
-					) : null
-				}
+				ListHeaderComponent={inverted ? null : olderControl}
+				ListFooterComponent={inverted ? olderControl : null}
 				renderItem={({ item: group }) => <ConversationTurnGroup
 					group={group}
 					snapshot={snapshot}
@@ -186,14 +208,16 @@ export const ChatTimeline = memo(function ChatTimeline({
 					onResolveInput={onResolveInput}
 					onRollback={onRollback}
 					answeredBelow={answeredBelow}
+					workedOpen={openWorked.has(group.key)}
+					onToggleWorked={toggleWorked}
 				/>}
 			/>
-			{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); listRef.current?.scrollToOffset({ offset: 0, animated: true }); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}
+			{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); scrollToLatest(true); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}
 		</View>
 	);
 });
 
-function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, answeredBelow }: {
+function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, answeredBelow, workedOpen, onToggleWorked }: {
 	group: ConversationGroup;
 	snapshot: ConversationSnapshot;
 	approvalPending: boolean;
@@ -202,6 +226,8 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	onResolveInput(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>): Promise<void>;
 	onRollback?(turnId: string): Promise<number>;
 	answeredBelow?: number;
+	workedOpen: boolean;
+	onToggleWorked(key: string): void;
 }) {
 	// A provider failure arrives twice: as an error activity, and again as the
 	// turn's errorMessage below it. The turn keeps it — that line carries the
@@ -210,17 +236,28 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	const items = turnError
 		? group.items.filter((item) => !(item.kind === "activity" && errorActivityDuplicatesTurn(item, turnError)))
 		: group.items;
-	const rows = activityRuns(items);
-	return <View>{rows.map((row) => row.kind === "activities"
+	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
-		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} answeredBelow={answeredBelow} />)}
-		{group.turn ? <TurnSummary turn={group.turn} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null}
+		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} answeredBelow={answeredBelow} />);
+	const partition = partitionTurnItems(items, group.turn);
+	const summary = group.turn ? <TurnSummary turn={group.turn} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
+	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
+	// Running: the prompt, a live Working row, then the work as it streams in.
+	// Settled: the same row becomes "Worked for", folding the work away and
+	// leaving the notices and the final reply in view.
+	return <View>
+		{renderRows(partition.prompt)}
+		<TurnStatusRow turn={group.turn} foldable={partition.settled && partition.work.length > 0} open={workedOpen} onToggle={() => onToggleWorked(group.key)} />
+		{partition.settled ? (workedOpen ? <FoldBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</FoldBody> : null) : renderRows(partition.work)}
+		<FoldLayout>{renderRows(partition.notices)}{renderRows(partition.final)}{summary}</FoldLayout>
 	</View>;
 }
 
 const TimelineItem = memo(function TimelineItem({
 	item,
 	sessionId,
+	conversationId,
+	completed,
 	approvalPending,
 	inputPending,
 	onDecide,
@@ -229,6 +266,8 @@ const TimelineItem = memo(function TimelineItem({
 }: {
 	item: ConversationItem;
 	sessionId: string;
+	conversationId: string;
+	completed: boolean;
 	approvalPending: boolean;
 	inputPending: boolean;
 	onDecide(requestId: string, decisionId: string): Promise<void>;
@@ -243,7 +282,8 @@ const TimelineItem = memo(function TimelineItem({
 			const { body, attachments } = stagedAttachmentParts(item.text);
 			return (
 				<View style={styles.userRow}>
-					<View style={styles.userBubble}>
+					<View style={[styles.userBubble, item.content?.some((content) => content.type === "excerpt" && content.text) && styles.quotedBubble]}>
+						<SentResponseQuotes content={item.content} />
 						{body ? <Text selectable style={styles.userText}>{body}</Text> : null}
 						{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}
 						{delivery ? <Text style={styles.delivery}>{delivery}</Text> : null}
@@ -257,8 +297,10 @@ const TimelineItem = memo(function TimelineItem({
 		return (
 			<View style={styles.assistantRow}>
 				{item.senderLabel ? <Text style={styles.sender}>{item.senderLabel}</Text> : null}
-				<ChatMarkdown text={item.streaming ? `${item.text || ""} ▍` : item.text} streaming={item.streaming} />
-				{!item.streaming && item.text ? <Pressable accessibilityRole="button" accessibilityLabel="Copy response" hitSlop={10} onPress={() => { void Clipboard.setStringAsync(item.text); haptics.success(); }} style={styles.copy}><Feather name="copy" size={12} color={t.textFaint} /></Pressable> : null}
+				<ChatMarkdown text={item.streaming ? `${item.text || ""} ▍` : item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
+				{!item.streaming && item.text ? <View style={styles.responseActions}>
+					<Pressable accessibilityRole="button" accessibilityLabel="Copy response" hitSlop={10} onPress={() => { void Clipboard.setStringAsync(item.text); haptics.success(); }} style={styles.copy}><Feather name="copy" size={12} color={t.textFaint} /></Pressable>
+				</View> : null}
 			</View>
 		);
 	}
@@ -292,6 +334,7 @@ function SystemSignal({ icon, title, detail, danger }: { icon: keyof typeof Feat
  * daemon's preview-files route with the connection's Bearer header, the same
  * credential every other mobile request uses; anything else stays a name chip.
  * Images sit in the bubble as center-cropped tiles and open full-screen on tap.
+ * RN 0.86 Android forwards HTTP headers only for array sources, on both surfaces.
  * Render it only for messages that carry attachments: it subscribes to the app
  * store, and doing that for every bubble would defeat TimelineItem's memo.
  */
@@ -323,7 +366,7 @@ function StagedAttachment({ name, source, tileSize }: { name: string; source?: A
 		// Cover-cropping a square reads as a deliberate thumbnail; the viewer shows the whole image.
 		return <>
 			<Pressable accessibilityRole="imagebutton" accessibilityLabel={`Open ${name}`} onPress={() => { haptics.tap(); setViewerOpen(true); }} style={[styles.attachmentTile, { width: tileSize, height: tileSize }]}>
-				<Image accessibilityIgnoresInvertColors source={source} resizeMode="cover" onError={() => setFailedLoad(source)} style={styles.attachmentTileImage} />
+				<Image accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [source] : source} resizeMode="cover" onError={() => setFailedLoad(source)} style={styles.attachmentTileImage} />
 			</Pressable>
 			<AttachmentViewer visible={viewerOpen} name={name} source={source} onClose={() => setViewerOpen(false)} />
 		</>;
@@ -343,7 +386,7 @@ function AttachmentViewer({ visible, name, source, onClose }: { visible: boolean
 	return <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={onClose}>
 		<View style={styles.viewer}>
 			<ScrollView maximumZoomScale={4} minimumZoomScale={1} centerContent bouncesZoom showsHorizontalScrollIndicator={false} showsVerticalScrollIndicator={false}>
-				<Image accessibilityLabel={name} accessibilityIgnoresInvertColors source={source} resizeMode="contain" style={{ width, height }} />
+				<Image accessibilityLabel={name} accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [source] : source} resizeMode="contain" style={{ width, height }} />
 			</ScrollView>
 			<Pressable accessibilityRole="button" accessibilityLabel="Close image" hitSlop={10} onPress={() => { haptics.tap(); onClose(); }} style={[styles.viewerClose, { top: insets.top + 12 }]}>
 				<Feather name="x" size={20} color="#fff" />
@@ -368,7 +411,7 @@ function OriginMessage({ message }: { message: Extract<ConversationItem, { kind:
 	const long = message.text.length > 600;
 	const [expanded, setExpanded] = useState(false);
 	return <View style={styles.originMessage}>
-		<View style={styles.originHeader}><Feather name="radio" size={12} color={t.textTertiary} /><Text style={styles.originLabel}>{message.senderLabel || (message.origin === "automation" ? "Automation" : "AO")}</Text></View>
+		<View style={styles.originHeader}><Feather name="radio" size={12} color={t.textTertiary} /><Text style={styles.originLabel}>{message.senderLabel || (message.origin === "automation" ? "Automation" : "Orchestrator")}</Text></View>
 		{long && expanded ? <ChatMarkdown text={message.text} /> : <Text selectable numberOfLines={long ? 5 : undefined} style={styles.originText}>{message.text}</Text>}
 		{long ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => { haptics.tap(); setExpanded((value) => !value); }} style={styles.originMore}><Feather name={expanded ? "chevron-up" : "chevron-right"} size={12} color={t.accent} /><Text style={styles.originMoreText}>{expanded ? "Hide report" : "Show full report"}</Text></Pressable> : null}
 	</View>;
@@ -438,7 +481,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 					{detail.arguments !== undefined ? <CodeOutput value={printable(detail.arguments)} /> : null}
 					{detail.terminalInput ? <TerminalInput text={detail.terminalInput} truncated={detail.terminalInputTruncated} /> : null}
 					{output ? <CodeOutput value={output} /> : null}
-					{detail.outputTruncated || detail.patchOutputTruncated ? <Text style={[styles.partial, { color: t.amber }]}>This output is longer than AO stores, so it stops early. Open the worktree shell for the full run.</Text> : detail.outputMayBePartial ? <Text style={styles.partial}>{detail.outputSource === "stream" ? "Streamed live; the provider may have omitted the beginning." : "The provider's rolled-up output may omit the beginning."} Open the worktree shell for the full run.</Text> : null}
+					{detail.outputTruncated || detail.patchOutputTruncated ? <Text style={[styles.partial, { color: t.amber }]}>This output is longer than Orchestrator stores, so it stops early. Open the worktree shell for the full run.</Text> : detail.outputMayBePartial ? <Text style={styles.partial}>{detail.outputSource === "stream" ? "Streamed live; the provider may have omitted the beginning." : "The provider's rolled-up output may omit the beginning."} Open the worktree shell for the full run.</Text> : null}
 					{Array.isArray(detail.files) ? <FileList files={detail.files} /> : null}
 				</View>
 			) : null}
@@ -449,7 +492,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 function TerminalInput({ text, truncated }: { text: string; truncated?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	return <View style={styles.terminalInput}><View style={styles.terminalInputTitle}><Feather name="corner-down-right" size={12} color={t.textTertiary} /><Text style={styles.detailLabel}>AGENT TYPED</Text></View><CodeOutput value={caretNotation(text)} />{truncated ? <Text style={styles.partial}>AO stopped recording keystrokes at its cap; more were sent.</Text> : null}</View>;
+	return <View style={styles.terminalInput}><View style={styles.terminalInputTitle}><Feather name="corner-down-right" size={12} color={t.textTertiary} /><Text style={styles.detailLabel}>AGENT TYPED</Text></View><CodeOutput value={caretNotation(text)} />{truncated ? <Text style={styles.partial}>Orchestrator stopped recording keystrokes at its cap; more were sent.</Text> : null}</View>;
 }
 
 function McpToolRow({ activity }: { activity: ConversationActivity }) {
@@ -467,7 +510,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 			{detail.progress ? <Text numberOfLines={1} style={styles.activityProgress}>{lastLine(detail.progress)}</Text> : null}
 			{activity.status === "running" ? <ActivityIndicator size="small" color={t.orange} /> : activity.status === "cancelled" ? <Text style={styles.activityStopped}>stopped</Text> : body ? <Feather name={open ? "chevron-up" : "chevron-right"} size={12} color={t.textFaint} /> : null}
 		</Pressable>
-		{open && body ? <View style={styles.activityDetail}>{detail.error ? <Text style={[styles.detailCopy, { color: t.red }]}>{detail.error}</Text> : null}{detail.arguments !== undefined ? <JsonPayload label="Arguments" value={detail.arguments} /> : null}{detail.result !== undefined ? <JsonPayload label="Result" value={detail.result} /> : null}{detail.progress ? <View><Text style={styles.detailLabel}>PROGRESS</Text><CodeOutput value={detail.progress} />{detail.progressTruncated ? <Text style={styles.partial}>Progress was longer than AO stores.</Text> : null}</View> : null}</View> : null}
+		{open && body ? <View style={styles.activityDetail}>{detail.error ? <Text style={[styles.detailCopy, { color: t.red }]}>{detail.error}</Text> : null}{detail.arguments !== undefined ? <JsonPayload label="Arguments" value={detail.arguments} /> : null}{detail.result !== undefined ? <JsonPayload label="Result" value={detail.result} /> : null}{detail.progress ? <View><Text style={styles.detailLabel}>PROGRESS</Text><CodeOutput value={detail.progress} />{detail.progressTruncated ? <Text style={styles.partial}>Progress was longer than Orchestrator stores.</Text> : null}</View> : null}</View> : null}
 	</View>;
 }
 
@@ -514,7 +557,7 @@ function FileChangeRow({ file, live }: { file: ReturnType<typeof fileChanges>[nu
 function PatchBlock({ patch, truncated }: { patch: string; truncated?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	return <View><Pressable onLongPress={() => { void Clipboard.setStringAsync(patch); haptics.success(); }}><HighlightedCodeText code={patch} language="diff" style={styles.output} /></Pressable>{truncated ? <Text style={[styles.partial, { color: t.amber }]}>This patch is longer than AO stores. The complete change remains in the worktree.</Text> : null}</View>;
+	return <View><Pressable onLongPress={() => { void Clipboard.setStringAsync(patch); haptics.success(); }}><HighlightedCodeText code={patch} language="diff" style={styles.output} /></Pressable>{truncated ? <Text style={[styles.partial, { color: t.amber }]}>This patch is longer than Orchestrator stores. The complete change remains in the worktree.</Text> : null}</View>;
 }
 
 function PlanActivity({ activity }: { activity: ConversationActivity }) {
@@ -628,12 +671,14 @@ function commandCategory(text: string): "read" | "search" | "vcs" | "run" {
 const READ_COMMANDS = new Set(["cat", "sed", "nl", "head", "tail", "bat", "less", "more", "wc", "jq"]);
 const SEARCH_COMMANDS = new Set(["rg", "grep", "find", "fd", "ls", "tree", "glob", "ag"]);
 
-function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?(turnId: string): Promise<number> }) {
+/**
+ * The turn's status row, which sits between the prompt and the work: a ticking
+ * "Working · 12s" while the turn runs, then "Worked for 20s" once it settles. When
+ * there is folded work the settled row is the toggle that reveals it.
+ */
+function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationTurn; foldable: boolean; open: boolean; onToggle(): void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const [confirming, setConfirming] = useState(false);
-	const [rollingBack, setRollingBack] = useState(false);
-	const [rollbackError, setRollbackError] = useState<string>();
 	const running = turn.state === "running";
 	const [nowMs, setNowMs] = useState(() => Date.now());
 	useEffect(() => {
@@ -644,8 +689,7 @@ function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?
 	}, [running, turn.id]);
 	const duration = elapsed(turn.startedAt ?? turn.requestedAt, turn.completedAt);
 	const workingDuration = running ? workingElapsedLabel(turn.startedAt ?? turn.requestedAt, nowMs) : undefined;
-	const settled = turn.state !== "running" && turn.state !== "queued";
-	const summary = turn.rolledBack
+	const label = turn.rolledBack
 		? "Rolled back"
 		: turn.state === "completed"
 			? duration ? `Worked for ${duration}` : "Work completed"
@@ -653,19 +697,41 @@ function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?
 				? duration ? `Failed after ${duration}` : "Turn failed"
 				: turn.state === "interrupted"
 					? duration ? `Stopped after ${duration}` : "Turn stopped"
-					: turn.state === "queued" ? "Queued" : workingDuration ? `Working · ${workingDuration}` : "Working";
+					: workingDuration ? `Working · ${workingDuration}` : "Working";
+	const text = <Text style={[styles.turnState, turn.state === "failed" && { color: t.red }]}>{label}</Text>;
+	// One element throughout, so the spinner can leave and the label slide into
+	// its place when the turn settles instead of the whole row remounting.
+	return <Pressable
+		accessibilityRole={foldable ? "button" : undefined}
+		accessibilityState={foldable ? { expanded: open } : undefined}
+		disabled={!foldable}
+		onPress={() => { haptics.tap(); onToggle(); }}
+		style={styles.statusRow}
+	>
+		{/* Spinning holds the glyph still under Reduce Motion; loader still reads as in progress. */}
+		{running ? <StatusSpinner><Spinning enabled><Feather name="loader" size={12} color={t.textTertiary} /></Spinning></StatusSpinner> : null}
+		<StatusLabel>{text}</StatusLabel>
+		{foldable ? <FoldChevron open={open} color={t.textFaint} /> : null}
+	</Pressable>;
+}
+
+function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?(turnId: string): Promise<number> }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const [confirming, setConfirming] = useState(false);
+	const [rollingBack, setRollingBack] = useState(false);
+	const [rollbackError, setRollbackError] = useState<string>();
+	const settled = turn.state !== "running" && turn.state !== "queued";
+	const canRollBack = Boolean(onRollback && settled && turn.providerTurnId && !turn.rolledBack);
 	return (
 		<View style={styles.turnWrap}>
 			{turn.plan?.steps.length ? <TurnPlan turn={turn} /> : null}
 			{turn.diff?.files.length ? <ChangedFiles turn={turn} /> : null}
-			<View style={styles.turnLine}>
-				<Text style={[styles.turnState, turn.state === "failed" && { color: t.red }]}>{summary}</Text>
-				{onRollback && settled && turn.providerTurnId && !turn.rolledBack ? (
-					<Pressable accessibilityLabel="Roll back to before this turn" hitSlop={8} onPress={() => { haptics.warning(); setConfirming(true); }}>
-						<Feather name="rotate-ccw" size={12} color={t.textTertiary} />
-					</Pressable>
-				) : null}
-			</View>
+			{canRollBack ? <View style={styles.turnLine}>
+				<Pressable accessibilityLabel="Roll back to before this turn" hitSlop={8} onPress={() => { haptics.warning(); setConfirming(true); }}>
+					<Feather name="rotate-ccw" size={12} color={t.textTertiary} />
+				</Pressable>
+			</View> : null}
 			{turn.errorMessage ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
 			{confirming ? (
 				<View style={styles.rollbackConfirm}>
@@ -743,7 +809,7 @@ function ChangedFiles({ turn }: { turn: ConversationTurn }) {
 			<Text style={[styles.fileMark, { color: file.status === "deleted" ? t.red : file.status === "added" ? t.green : t.accent }]}>{file.status[0].toUpperCase()}</Text>
 			<Text selectable style={styles.filePath}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</Text>
 			<Text style={styles.fileStat}>+{file.additions} −{file.deletions}</Text>
-		</View>)}{turn.diff?.truncated ? <Text style={[styles.partial, { color: t.amber }]}>This turn changed more files than AO lists here. Open the worktree shell for the complete diff.</Text> : null}</View> : null}
+		</View>)}{turn.diff?.truncated ? <Text style={[styles.partial, { color: t.amber }]}>This turn changed more files than Orchestrator lists here. Open the worktree shell for the complete diff.</Text> : null}</View> : null}
 	</View>;
 }
 
@@ -790,7 +856,7 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 				setSubmitError(undefined);
 				void onDecide(activity.requestId ?? "", decision.id).catch((cause) => setSubmitError(userFacingError(cause))).finally(() => setSubmitting(undefined));
 			}} />;
-		})}</View> : <Text style={[styles.partial, { color: t.amber }]}>The agent offered no decisions AO can present. Open diagnostics from the host.</Text>}
+		})}</View> : <Text style={[styles.partial, { color: t.amber }]}>The agent offered no decisions Orchestrator can present. Open diagnostics from the host.</Text>}
 		{submitError ? <Text accessibilityRole="alert" selectable style={styles.validation}>{submitError}</Text> : null}
 	</View>;
 }
@@ -857,7 +923,7 @@ function UserInputCard({ activity, busy, onResolve, handledBelow }: { activity: 
 					.then(() => resolve("accept"))
 					.catch(() => setValidationError("This link could not be opened on this device."));
 			}} /> : <ElicitationAction label={submitting ? "Sending…" : step.primaryLabel} primary disabled={busy || submitting} onPress={submit} />}
-		</View> : pending ? <Text style={[styles.partial, { color: t.amber }]}>This request has no provider identity, so AO cannot answer it safely. Open diagnostics on the host.</Text> : <Text style={styles.partial}>Already answered. This card is kept for the record.</Text>}
+		</View> : pending ? <Text style={[styles.partial, { color: t.amber }]}>This request has no provider identity, so Orchestrator cannot answer it safely. Open diagnostics on the host.</Text> : <Text style={styles.partial}>Already answered. This card is kept for the record.</Text>}
 	</View>;
 }
 
@@ -945,7 +1011,7 @@ function truncationNote(value: unknown): string | undefined {
 	const record = value as { truncated?: unknown; bytes?: unknown };
 	if (record.truncated !== true) return undefined;
 	const bytes = typeof record.bytes === "number" ? ` (${formatBytes(record.bytes)})` : "";
-	return `This payload${bytes} was larger than AO stores, so it was not kept.`;
+	return `This payload${bytes} was larger than Orchestrator stores, so it was not kept.`;
 }
 
 function formatBytes(bytes: number): string {
@@ -977,6 +1043,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	olderText: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption1.fontSize },
 	userRow: { alignItems: "flex-end", paddingTop: space.lg, paddingBottom: space.sm },
 	userBubble: { maxWidth: "88%", backgroundColor: userMessageSurfaceStyle(t).backgroundColor, borderRadius: 20, borderCurve: "continuous", paddingHorizontal: space.lg, paddingVertical: space.md },
+	quotedBubble: { width: "88%" },
 	userText: { fontFamily: "Geist_400Regular", color: userMessageSurfaceStyle(t).foregroundColor, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
 	delivery: { fontFamily: "Geist_400Regular", marginTop: space.xxs, color: t.amber, fontSize: type.caption2.fontSize },
 	attachments: { flexDirection: "row", flexWrap: "wrap", gap: space.xs },
@@ -1000,6 +1067,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	steerLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, letterSpacing: 1, fontWeight: "600", marginBottom: space.hair },
 	assistantRow: { paddingVertical: space.lg },
 	sender: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600", marginBottom: space.xxs },
+	responseActions: { flexDirection: "row", alignItems: "center", gap: space.md },
 	copy: { alignSelf: "flex-start", alignItems: "center", justifyContent: "center", width: 28, height: 28, marginTop: space.hair, marginLeft: -7 },
 	jump: { position: "absolute", right: 14, bottom: 12, minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.md, borderRadius: 16, backgroundColor: jumpToLatestColors(t).backgroundColor, borderWidth: 1, borderColor: t.borderStrong },
 	jumpText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption2.fontSize, fontWeight: "600" },
@@ -1034,7 +1102,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	output: { color: t.textSecondary, backgroundColor: t.bgColumn, borderRadius: 8, padding: space.sm, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
 	partial: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize },
 	turnWrap: { paddingTop: space.sm, paddingBottom: space.lg, gap: space.sm },
-	turnLine: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
+	turnLine: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.sm },
+	statusRow: { alignSelf: "flex-start", minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs },
 	turnState: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "500" },
 	turnError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, textAlign: "right" },
 	rollbackConfirm: { marginTop: space.xxs, backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderDefault, borderRadius: 12, padding: space.md, gap: space.xs },

@@ -28,6 +28,8 @@ const cloudCpClientMock = vi.hoisted(() => ({
 	getSession: vi.fn(),
 	getSessionReviewState: cloudReviewGetMock,
 	retrySessionStartup: vi.fn(),
+	// The presence heartbeat beats once the test document has focus.
+	touchSessionPresence: vi.fn(async () => undefined),
 }));
 const cloudResumeMock = cloudCpClientMock.resumeSession;
 const cloudRetryStartupMock = cloudCpClientMock.retrySessionStartup;
@@ -1039,9 +1041,23 @@ describe("SessionView", () => {
 		expect(screen.queryByText("selected report.html")).not.toBeInTheDocument();
 
 		fireEvent.click(screen.getByRole("button", { name: "open files" }));
-		expect(screen.getByText("selected report.html")).toBeInTheDocument();
+		expect(screen.queryByText("selected report.html")).not.toBeInTheDocument();
 		expect(screen.queryByText("feedback request 1")).not.toBeInTheDocument();
 		expect(artifactFeedbackConsumes).toEqual([1]);
+	});
+
+	it("opens the workspace changes from Summary after an artifact was opened", async () => {
+		render(<SessionView sessionId="sess-1" />);
+
+		fireEvent.click(screen.getByRole("button", { name: "open artifact feedback" }));
+		await waitFor(() => expect(screen.getByText("selected report.html")).toBeInTheDocument());
+		useUiStore.getState().setFilesSource("sess-1", { kind: "artifact" });
+
+		fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesSource).toEqual({ kind: "workspace" });
+		expect(screen.queryByText("selected report.html")).not.toBeInTheDocument();
 	});
 
 	it("resumes only the opened stopped session once, including in StrictMode", async () => {
@@ -1125,6 +1141,7 @@ describe("SessionView", () => {
 		expect(screen.queryByText("session not found")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Switch to chat UI" })).not.toBeInTheDocument();
 		expect(workspaceSessionLookup).toHaveBeenCalledWith("cloud-session", undefined, false);
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
 	});
 
 	it("uses the project route to distinguish local and Cloud sessions with the same ID", () => {
@@ -1848,6 +1865,20 @@ describe("SessionView", () => {
 			type: "agent.ready", sessionId: "sess-2", sequence: 1, createdAt: new Date().toISOString(), payload: {},
 		}));
 		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal");
+	});
+
+	it("waits for a Cloud orchestrator's terminal content after the worker connects", () => {
+		autoAttachSessionTerminal.current = false;
+		const session = workerSession("sess-orch");
+		session.mode = "tui";
+		session.runtimeConnected = true;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "running", observedState: "running" };
+		const view = render(<SessionView sessionId="sess-orch" />);
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+		autoAttachSessionTerminal.current = true;
+		session.terminalGeneration = "ready";
+		view.rerender(<SessionView sessionId="sess-orch" />);
+		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
 	});
 
 	it("checks the final step when terminal content is ready, then reveals it", () => {
@@ -5185,6 +5216,46 @@ describe("SessionView", () => {
 		expect(screen.getByRole("tab", { name: "from-command.ts" })).toHaveAttribute("aria-selected", "true");
 		expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
 		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("summary");
+	});
+
+	it("opens a requested markdown artifact in the Files artifact viewer", () => {
+		const worker = workspaces[0].sessions[0];
+		worker.artifactFiles = [{ kind: "markdown", name: "report.md", path: "out/report.md", size: 10, updatedAt: "2026-06-10T00:00:00Z" }];
+		try {
+			act(() => useUiStore.getState().requestWorkspaceFileOpen("sess-1", "out/report.md", undefined, "artifact"));
+
+			render(<SessionView sessionId="sess-1" />);
+
+			expect(screen.getByText("selected out/report.md")).toBeInTheDocument();
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("files");
+			expect(inspectorOpen("sess-1")).toBe(true);
+			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("opens a requested HTML artifact in the Browser panel", async () => {
+		const worker = workspaces[0].sessions[0];
+		const previewUrl = "http://ao-preview-artifact.abc.localhost:3001/report.html";
+		worker.artifactFiles = [{ kind: "html", name: "report.html", path: "report.html", previewUrl, size: 10, updatedAt: "2026-06-10T00:00:00Z" }];
+		try {
+			act(() => useUiStore.getState().requestWorkspaceFileOpen("sess-1", "report.html", undefined, "artifact"));
+
+			render(<SessionView sessionId="sess-1" />);
+
+			await waitFor(() =>
+				expect(chatViewPostMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", {
+					params: { path: { sessionId: "sess-1" } },
+					body: { url: previewUrl },
+				}),
+			);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("browser");
+			expect(inspectorOpen("sess-1")).toBe(true);
+			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
+		} finally {
+			delete worker.artifactFiles;
+		}
 	});
 
 	it("resolves a basename against workspace files before opening on a cold cache", async () => {

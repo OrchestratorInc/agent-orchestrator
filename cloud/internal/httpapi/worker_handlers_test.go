@@ -1,10 +1,14 @@
 package httpapi
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
 var allTicketScopes = []string{
@@ -19,6 +23,29 @@ var allTicketScopes = []string{
 	"worker:report",
 	"worker:transport",
 	"worker:notification",
+}
+
+// The heartbeat decoder ignores fields this control plane does not know, so a
+// worker newer than it (after a rollback) keeps its session alive; every other
+// request stays strict.
+func TestHeartbeatDecodingToleratesUnknownFields(t *testing.T) {
+	body := `{"version":"v","capabilities":["pty"],"busy":true,"addedLater":1}`
+	var heartbeat worker.HeartbeatRequest
+	request := httptest.NewRequest(http.MethodPost, "/worker/heartbeat", strings.NewReader(body))
+	if err := decodeJSONTolerant(httptest.NewRecorder(), request, &heartbeat); err != nil {
+		t.Fatalf("tolerant decode: %v", err)
+	}
+	if heartbeat.Version != "v" || !heartbeat.Busy {
+		t.Fatalf("heartbeat = %+v", heartbeat)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/worker/heartbeat", strings.NewReader(body))
+	if err := decodeJSON(httptest.NewRecorder(), request, &heartbeat); err == nil {
+		t.Fatal("strict decode accepted an unknown field")
+	}
+	request = httptest.NewRequest(http.MethodPost, "/worker/heartbeat", strings.NewReader(`{"version":"v"}{}`))
+	if err := decodeJSONTolerant(httptest.NewRecorder(), request, &heartbeat); err == nil {
+		t.Fatal("tolerant decode accepted trailing data")
+	}
 }
 
 func TestIssuedWorkerScopes(t *testing.T) {

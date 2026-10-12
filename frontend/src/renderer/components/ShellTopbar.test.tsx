@@ -263,6 +263,22 @@ describe("ShellTopbar route identity", () => {
 	});
 });
 
+describe("ShellTopbar Artifacts identity", () => {
+	it("identifies the Artifacts route instead of presenting it as the board", () => {
+		locationMock.pathname = "/artifacts";
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider>
+					<ShellTopbar />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+
+		expect(screen.getByTestId("artifacts-topbar-label")).toHaveTextContent("Artifacts");
+		expect(screen.queryByTestId("board-topbar-label")).not.toBeInTheDocument();
+	});
+});
+
 describe("ShellTopbar status pill", () => {
 	it("matches the session action edge inset to the toolbar spacing", () => {
 		renderTopbar(sessionWith());

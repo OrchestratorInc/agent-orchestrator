@@ -1,3 +1,7 @@
+import { createPortal } from "react-dom";
+import { useIndependentSideChats } from "./IndependentSideChats";
+import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
+import { useSideChatsAvailable } from "../../lib/side-chats";
 /**
  * The central surface for a chat-mode session.
  *
@@ -8,7 +12,7 @@
  */
 
 import { AlertTriangle, CheckCircle2, Loader2, X } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	findActiveAgentSwitch,
@@ -92,6 +96,7 @@ function firstBrowserLink(text: string, workspacePaths: string[]): string | unde
 }
 
 export const SessionChatSurface = memo(function SessionChatSurface({
+	sideChatContainer,
 	session,
 	hostId,
 	assetBaseUrl,
@@ -134,6 +139,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	arriving,
 	onConversationWorkChange,
 }: {
+	sideChatContainer?: HTMLDivElement | null;
 	session: WorkspaceSession;
 	/** Owning daemon for a remote session; omitted for the local daemon. */
 	hostId?: string;
@@ -213,6 +219,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		pendingAcceptedTurnId,
 	} = commands;
 	const conversationWorkKnown = Boolean(snapshot);
+	const [sideWork, setSideWork] = useState(false);
 	const acceptedLocalTurnObserved = Boolean(
 		pendingAcceptedTurnId && snapshot?.turns.some((turn) => turn.id === pendingAcceptedTurnId),
 	);
@@ -245,8 +252,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}, [acknowledgeLocalEcho, localEchos, snapshot]);
 	useEffect(() => {
 		if (!conversationWorkKnown) return;
-		onConversationWorkChange?.({ controllerBusy, hasRunningTurn, queuedTurnCount });
-	}, [controllerBusy, conversationWorkKnown, hasRunningTurn, onConversationWorkChange, queuedTurnCount]);
+		onConversationWorkChange?.({ controllerBusy: controllerBusy || sideWork, hasRunningTurn: hasRunningTurn || sideWork, queuedTurnCount });
+	}, [controllerBusy, conversationWorkKnown, hasRunningTurn, onConversationWorkChange, queuedTurnCount, sideWork]);
 	const targetChatControllerReady =
 		snapshot?.harness === session.provider &&
 		(snapshot.controller?.state === "ready" || snapshot.controller?.state === "busy");
@@ -382,6 +389,33 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
+	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<{ id: string; text: string; messageId?: string; revision?: number }>();
+	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
+	const openSideInspector = () => {
+		const ui = useUiStore.getState();
+		ui.setInspectorView(uiSessionId, "sideChat");
+		ui.setInspectorOpen(uiSessionId, true);
+	};
+	const sideChats = useIndependentSideChats(
+		session.id, models, skills, stageAttachments, Boolean(snapshot && can(snapshot, "images")), sideEnabled,
+		(annotation) => {
+			onSelectChat?.();
+			setAnnotationNavigationRequest({ ...annotation, id: crypto.randomUUID() });
+		},
+		() => useUiStore.getState().setInspectorOpen(uiSessionId, false),
+	);
+	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
+	useEffect(() => setSideWork(sideChats.sides.some((side) => side.hasWork)), [sideChats.sides]);
+	const attachToSide = async (excerpt: ChatDraftExcerptReference) => {
+		openSideInspector();
+		if (sideChats.activeId) {
+			sideChats.addReference(sideChats.activeId, excerpt);
+			sideChats.show(sideChats.activeId);
+		} else {
+			await sideChats.create(excerpt);
+		}
+	};
+
 	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths);
 	const openSessionLink = useSessionLinkNavigation(hostId);
 	const conversationLinkBaselines = useRef(new Map<string, ConversationLinkBaseline>());
@@ -540,7 +574,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	return (
 		<div className="relative h-full min-h-0">
 			{refreshError ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
+			{sideChatContainer ? createPortal(sideChats.panel, sideChatContainer) : null}
 			<ChatWorkspace
+				onAddToSideChat={sideEnabled ? attachToSide : undefined}
+				annotationNavigationRequest={annotationNavigationRequest}
 				key={uiSessionId}
 				uiSessionId={uiSessionId}
 				assetBaseUrl={assetBaseUrl}
@@ -585,8 +622,22 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onLoadOlder={loadOlder}
 				busy={commands.busy}
 				excerptsEnabled
-				onSend={(text, attachments, clientMessageId, excerpts) =>
-					commands.send({
+				onSend={async (text, attachments, clientMessageId, excerpts) => {
+					// Only claim /btw and /side where side chats can open. Elsewhere the
+					// text goes to the agent as typed (it may be the harness's own skill),
+					// so a failed side launch can never strand the main draft.
+					const btw = sideEnabled ? /^\/(?:btw|side)(?:\s+|$)/i.exec(text) : null;
+					if (btw) {
+						openSideInspector();
+						const side = await sideChats.create(undefined, true, clientMessageId);
+						const question = text.slice(btw[0].length).trim();
+						if (question || excerpts?.length || attachments?.length) {
+							// Retain the main draft if handing the request to the side fails.
+							await sideChats.send(side.id, question, attachments, excerpts, true, clientMessageId);
+						}
+						return;
+					}
+					return commands.send({
 						text,
 						attachments,
 						clientMessageId,
@@ -596,7 +647,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 							revision: excerpt.revision,
 							text: excerpt.text,
 						})),
-					})}
+					}); }}
 				commandError={commands.error}
 				onDecide={commands.resolve}
 				onResolveInput={commands.resolveInput}
@@ -636,7 +687,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onActivateBranch={commands.activateBranch}
 				activateBranchPending={commands.activateBranchPending}
 				activateBranchError={commands.activateBranchError}
-				skills={skills}
+				skills={sideEnabled ? [...(["btw", "side"].map((name) => ({ name, displayName: name, description: "Open a new side chat", source: "AO" }))), ...skills.filter((skill) => skill.name !== "btw" && skill.name !== "side")] : skills}
 				filePaths={paths}
 				filePathsTruncated={truncated}
 				localEchos={localEchos}

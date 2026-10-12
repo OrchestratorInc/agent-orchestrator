@@ -23,7 +23,9 @@ const systemImage = (icon: NativeHeaderButtonIcon) =>
 					? "chevron.left"
 					: icon === "more"
 						? "ellipsis"
-						: "bell";
+						: icon === "add"
+							? "plus"
+							: "bell";
 
 // Every glass circle is this size. Not a preference: the four corner controls
 // were three different sizes, and the reason was that a SwiftUI glass *button*

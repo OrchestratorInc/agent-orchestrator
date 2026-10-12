@@ -6,11 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -330,7 +329,7 @@ func (s *Store) CreateSession(
 	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		var err error
 		session, err = createSessionTx(
-			ctx, tx, orgID, idempotencyKey, maxActiveSandboxes, input, input.ParentSessionID, principal.UserID,
+			ctx, tx, orgID, idempotencyKey, maxActiveSandboxes, s.billing.forPrincipal(principal, orgID), input, input.ParentSessionID, principal.UserID,
 		)
 		return err
 	})
@@ -569,6 +568,7 @@ func (s *Store) CreateGitHubScratchProject(
 			orgID,
 			"github-scratch:"+commandID,
 			maxActiveSandboxes,
+			s.billing.forPrincipal(principal, orgID),
 			input.Session,
 			"",
 			principal.UserID,
@@ -615,6 +615,7 @@ func createSessionTx(
 	tx pgx.Tx,
 	orgID, idempotencyKey string,
 	maxActiveSandboxes int,
+	billing billingPolicy,
 	input domain.CreateSession,
 	parentSessionID, actorUserID string,
 ) (domain.Session, error) {
@@ -695,6 +696,15 @@ func createSessionTx(
 	if maxActiveSandboxes < 1 || activeSandboxes >= maxActiveSandboxes {
 		return domain.Session{}, ErrSandboxQuotaExceeded
 	}
+	// The plan's slots and usage limits, checked under the same organization
+	// lock as the quota above, so concurrent creators cannot both take the
+	// last slot. This covers sessions an orchestrator spawns too. Only
+	// Freestyle sandboxes are billed.
+	if billedProvider(sessionProvider(input.Provider)) {
+		if err := billing.planAdmissionTx(ctx, tx, orgID, input.Kind, admitCreate, time.Now()); err != nil {
+			return domain.Session{}, err
+		}
+	}
 	var projectConfig json.RawMessage
 	if err := tx.QueryRow(ctx, `SELECT config FROM ao_projects WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
 		orgID, input.ProjectID).Scan(&projectConfig); err != nil {
@@ -757,10 +767,7 @@ func createSessionTx(
 		return domain.Session{}, normalizeConstraintError(err)
 	}
 
-	provider := strings.ToLower(strings.TrimSpace(input.Provider))
-	if provider == "" {
-		provider = sandbox.DefaultProvider
-	}
+	provider := sessionProvider(input.Provider)
 	if input.SandboxConnectionID != "" {
 		var connectionProvider string
 		if err := tx.QueryRow(
@@ -1083,6 +1090,20 @@ const sessionSelect = `
 		COALESCE(sandbox.startup_error_code, ''),
 		COALESCE(sandbox.startup_error_message, ''),
 		sandbox.startup_error_at,
+		-- Operator detail is shown only for an organization's own (BYO) compute.
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL
+			THEN COALESCE(sandbox.startup_error_detail, '') ELSE '' END,
+		-- The workspace link is shown only for an organization's own (BYO)
+		-- Coder (customers have no login on AO's managed deployment). The
+		-- origin, owner and prefix are recorded when AO plans the workspace,
+		-- so the link is known from the session's creation and names the
+		-- workspace AO creates.
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
+			THEN COALESCE(sandbox.resource_profile->'coder'->>'baseUrl', '') ELSE '' END,
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
+			THEN COALESCE(sandbox.resource_profile->'coder'->>'owner', '') ELSE '' END,
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
+			THEN COALESCE(sandbox.resource_profile->'coder'->>'workspaceNamePrefix', '') ELSE '' END,
 		COALESCE((
 			SELECT MAX(terminal.worker_epoch)
 			FROM ao_terminal_sessions terminal
@@ -1108,7 +1129,7 @@ const sessionInsertReturning = `id, org_id, project_id, kind, harness,
 	display_name, branch, mode, model, denied_commands, interface,
 	activity_state, is_terminated, auto_inject_ci, auto_inject_review,
 	terminate_on_pr_merge, false, NULL::timestamptz, 0,
-	'', '', '', '', '', '', '', NULL::timestamptz, 0, created_at, updated_at`
+	'', '', '', '', '', '', '', NULL::timestamptz, '', '', '', '', 0, created_at, updated_at`
 
 func getSession(
 	ctx context.Context,
@@ -1155,6 +1176,7 @@ func scanProject(row scanner, project *domain.Project) error {
 func scanSession(row scanner, session *domain.Session) error {
 	var activity string
 	var interfaceValue string
+	var coderWorkspace domain.CoderWorkspaceRef
 	err := row.Scan(
 		&session.ID,
 		&session.OrgID,
@@ -1185,10 +1207,18 @@ func scanSession(row scanner, session *domain.Session) error {
 		&session.StartupErrorCode,
 		&session.StartupErrorMessage,
 		&session.StartupErrorAt,
+		&session.StartupErrorDetail,
+		&coderWorkspace.BaseURL,
+		&coderWorkspace.Owner,
+		&coderWorkspace.NamePrefix,
 		&session.WorkerEpoch,
 		&session.CreatedAt,
 		&session.UpdatedAt,
 	)
+	session.BYOCoderWorkspace = nil
+	if coderWorkspace.BaseURL != "" && coderWorkspace.Owner != "" {
+		session.BYOCoderWorkspace = &coderWorkspace
+	}
 	session.Interface = domain.SessionInterface(interfaceValue).Normalized()
 	session.ActivityState = contract.ActivityState(activity)
 	return err

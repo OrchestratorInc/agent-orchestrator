@@ -1,10 +1,12 @@
 import { Feather } from "./icons";
 import { useFocusEffect } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactElement, type RefObject } from "react";
 import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { LayoutAnimationConfig } from "react-native-reanimated";
 import {
+	absorbNewHosts,
 	groupSessions,
+	hasNewHost,
 	holdOrder,
 	shouldResnapshot,
 	snapshotOrder,
@@ -13,14 +15,14 @@ import {
 	type OrderSnapshot,
 } from "./agentsView";
 import type { DashboardSession } from "./api";
-import { BoardRowTransition } from "./BoardRowTransition";
 import { haptics } from "./haptics";
-import { hostedProjectKey, hostedRowKey, hostedSessionKey, sessionHostId } from "./hostedRows";
+import { hostedProjectKey, hostedRowKey, hostedSessionKey, sessionHostId, sessionMachineIdentity } from "./hostedRows";
 import { useApp } from "./store";
 import type { Theme } from "./theme";
 import { statusVisual } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { ListSectionHeader } from "./ui";
+import { archiveSessionMessage } from "./worker-action-model";
 import { WorkerListRow } from "./worker-list-row";
 import { filterWorkerSessions } from "./worker-search";
 import { type, space } from "./tokens";
@@ -39,22 +41,19 @@ type ListSection =
  * Sections that never fold, whatever the user has toggled.
  *
  * Search results are a transient answer — folding the thing you just asked for
- * is a way to lose it. `needs_you` is the reason the app was opened at all, and
- * `pinned` is what someone deliberately put at the top; a board that can hide
- * either of those behind a chevron can hide the two things that matter most.
- * Everything else folds and stays folded, because the shape of a long board is
- * the user's call.
+ * is a way to lose it. `needs_you` is the reason the app was opened at all,
+ * `pinned` is what someone deliberately put at the top, and `recent` is the
+ * ordinary list beneath a plain text separator. Archive has its own disclosure
+ * control below the live board.
  */
-const ALWAYS_OPEN = new Set<ListSection["zone"]>(["search", "needs_you", "pinned"]);
+const ALWAYS_OPEN = new Set<ListSection["zone"]>(["search", "needs_you", "pinned", "recent"]);
+const boardRowKey = (item: BoardRow) => item.key;
 
 /**
  * One flat list, not a SectionList, and that is load-bearing.
  *
- * A row moving between sections has to stay mounted for its layout animation to
- * run. In a SectionList it changes parent, which unmounts and remounts it — so a
- * pinned row vanished from one section and reappeared in the other instead of
- * travelling there. Flattened, the same move is a reorder within one array,
- * which is exactly what LinearTransition animates.
+ * Flattening gives every host-qualified worker one stable key across sections,
+ * including pin/unpin and status changes, without native row reflow animations.
  */
 export type BoardRow =
 	| { kind: "header"; key: string; label: string; open: boolean; collapsible: boolean }
@@ -109,16 +108,15 @@ export function WorkerBoardList({
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { projects, allProjects, hostStates, kill, renameWorker, setWorkerPinned, restore, resumeAgent } = useApp();
+	const { projects, allProjects, currentHostId, kill, renameWorker, setWorkerPinned, restore, resumeAgent } = useApp();
 	const [renamingWorkerId, setRenamingWorkerId] = useState<string>();
 	const [activeSwipeId, setActiveSwipeId] = useState<string>();
 	const activeSwipeRef = useRef<{ id: string; close(): void } | undefined>(undefined);
 	// Collapsed by default, like desktop's archive strip: it is history, and on a
 	// long-running project it is most of the sessions.
 	const [archiveOpen, setArchiveOpen] = useState(initialArchiveOpen);
-	// Every group can be folded away as well. Open by default — the board is a
-	// working view, and a section nobody opened is a section nobody saw — but a
-	// collapsed group keeps its header, so the shape of the board stays readable.
+	// Any future optional group may be folded away. The current live groups stay
+	// open; Archive has its own disclosure row below them.
 	const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
 	// Minute-granular, so a memoised row still updates its relative timestamp even
 	// when nothing about the session itself has changed.
@@ -128,16 +126,12 @@ export function WorkerBoardList({
 		() => new Map([...projects, ...allProjects].map((project) => [hostedProjectKey(project), project.name])),
 		[projects, allProjects],
 	);
-	const multipleHosts = hostStates.length > 1;
 	const projectNameFor = useCallback((session: DashboardSession) => {
 		const hostId = sessionHostId(session);
-		const name = session.projectId
+		return session.projectId
 			? projectNames.get(hostId ? hostedRowKey(hostId, session.projectId) : session.projectId) ?? session.projectId
 			: "Standalone";
-		const hostName = "hostName" in session && typeof session.hostName === "string" ? session.hostName : undefined;
-		const offline = hostStates.find((host) => host.hostId === hostId)?.connection === "closed";
-		return multipleHosts && hostName ? `${name ? `${name} · ` : ""}${hostName}${offline ? " (offline)" : ""}` : name;
-	}, [hostStates, multipleHosts, projectNames]);
+	}, [projectNames]);
 	const filteredSessions = useMemo(
 		() =>
 			filterWorkerSessions(
@@ -149,30 +143,44 @@ export function WorkerBoardList({
 		[sessions, query, projectNameFor, t],
 	);
 	const fresh = useMemo(() => groupSessions(t, sessions), [t, sessions]);
-	const filteredGroups = useMemo(() => groupSessions(t, filteredSessions), [t, filteredSessions]);
+	const filteredGroups = useMemo(() => query.trim() ? groupSessions(t, filteredSessions) : fresh, [t, filteredSessions, query, fresh]);
 	const archived = fresh.archived;
 
 	// The order is held still while the user looks (see OrderSnapshot): rows
-	// update in place and news waits behind the "N updated" pill. Clearing the
-	// snapshot re-sorts; the effect below takes a new one from the fresh order.
-	const [snapshot, setSnapshot] = useState<OrderSnapshot | null>(null);
+	// update in place and news waits behind the "N updated" pill. Accepting news
+	// installs the new snapshot atomically, without an intermediate empty one.
 	const freshLive = useMemo(() => [...fresh.pinned, ...fresh.sections.flatMap((section) => section.data)], [fresh]);
+	const [snapshot, setSnapshot] = useState<OrderSnapshot>(() => snapshotOrder(freshLive, hostedSessionKey));
+	const freshLiveRef = useRef(freshLive);
+	freshLiveRef.current = freshLive;
+	const scrollAfterResort = useRef(false);
 	const held = useMemo(() => {
-		if (!snapshot) return { pinned: fresh.pinned, sections: fresh.sections, stale: false, updated: 0 };
-		const pinned = holdOrder(snapshot, fresh.pinned, hostedSessionKey);
-		const sections = fresh.sections.map((section) => ({ ...section, data: holdOrder(snapshot, section.data, hostedSessionKey) }));
+		// Another machine's first load joins the held order rather than replacing
+		// it, so news already waiting behind the pill neither jumps nor vanishes.
+		const order = absorbNewHosts(snapshot, freshLive, hostedSessionKey);
+		const pinned = holdOrder(order, fresh.pinned, hostedSessionKey);
+		const sections = fresh.sections.map((section) => ({ ...section, data: holdOrder(order, section.data, hostedSessionKey) }));
 		const shown = [...pinned, ...sections.flatMap((section) => section.data)];
 		const stale = shown.some((session, i) => session !== freshLive[i]);
-		return { pinned, sections, stale, updated: stale ? updatedSince(snapshot, freshLive, hostedSessionKey) : 0 };
+		return { pinned, sections, stale, updated: stale ? updatedSince(order, freshLive, hostedSessionKey) : 0 };
 	}, [snapshot, fresh, freshLive]);
 	const { pinned, sections } = held;
 	useEffect(() => {
 		if (freshLive.length === 0) return;
+		if (hasNewHost(snapshot, freshLive)) {
+			setSnapshot((previous) => absorbNewHosts(previous, freshLive, hostedSessionKey));
+			return;
+		}
 		if (shouldResnapshot(snapshot, freshLive, held.stale, hostedSessionKey)) {
-			setSnapshot(snapshotOrder(freshLive, hostedSessionKey));
+			setSnapshot(previous => snapshotOrder(freshLive, hostedSessionKey, previous));
 		}
 	}, [snapshot, freshLive, held.stale]);
-	const resort = useCallback(() => setSnapshot(null), []);
+	const resort = useCallback(() => setSnapshot(previous => snapshotOrder(freshLiveRef.current, hostedSessionKey, previous)), []);
+	useLayoutEffect(() => {
+		if (!scrollAfterResort.current) return;
+		scrollAfterResort.current = false;
+		listRef?.current?.scrollToOffset({ offset: 0, animated: false });
+	}, [snapshot, listRef]);
 	// Opening the board, coming back to the app, or a different set of workers
 	// is looking again, so each re-sorts.
 	useFocusEffect(resort);
@@ -193,9 +201,9 @@ export function WorkerBoardList({
 	}, [onRefresh, resort]);
 	const showLatest = useCallback(() => {
 		haptics.select();
+		scrollAfterResort.current = true;
 		resort();
-		listRef?.current?.scrollToOffset({ offset: 0, animated: true });
-	}, [resort, listRef]);
+	}, [resort]);
 
 	// The archive is the last section, rendered only when expanded so a collapsed
 	// strip costs nothing to scroll past.
@@ -287,83 +295,88 @@ export function WorkerBoardList({
 	const confirmDeleteSession = useCallback((session: DashboardSession) => {
 		haptics.warning();
 		Alert.alert(
-			"Delete session?",
-			`This terminates ${session.displayName?.trim() || "this worker"}. Its conversation and worktree are preserved.`,
+			"Archive session?",
+			archiveSessionMessage(session.displayName?.trim() || "this worker"),
 			[
 				{ text: "Cancel", style: "cancel" },
-				{ text: "Delete session", style: "destructive", onPress: () => void kill(session.id, sessionHostId(session)).catch(() => {}) },
+				{ text: "Archive session", style: "destructive", onPress: () => void kill(session.id, sessionHostId(session)).catch(() => {}) },
 			],
 		);
 	}, [kill]);
 
+	// Recycled list cells must never carry animated offsets across reordering.
+	const toggleArchive = useCallback(() => setArchiveOpen((value) => !value), []);
+	const actions = useMemo(() => ({
+		renameStart: setRenamingWorkerId,
+		rename: renameWorker,
+		pin: updateWorkerPin,
+		archive: confirmDeleteSession,
+		recover: runWorkerRecovery,
+	}), [renameWorker, updateWorkerPin, confirmDeleteSession, runWorkerRecovery]);
+	const renderItem = useCallback(({ item }: { item: BoardRow }) => {
+		if (item.kind === "archive") return <ArchiveHeader count={archived.length} open={archiveOpen} onToggle={toggleArchive} />;
+		if (item.kind === "header") return <ListSectionHeader label={item.label} open={item.open}
+			onToggle={item.collapsible ? () => toggleSection(item.key.replace("header:", "")) : undefined} />;
+		return <BoundWorkerRow session={item.session} hostId={currentHostId} nowBucket={nowBucket}
+			projectName={showProject ? projectNameFor(item.session) : item.session.harness || "Agent"}
+			isRenaming={renamingWorkerId === item.key} activeSwipeId={activeSwipeId}
+			onSwipeOpen={openExclusiveSwipe} onSwipeClose={closeExclusiveSwipe} actions={actions} />;
+	}, [archived.length, archiveOpen, toggleArchive, toggleSection, currentHostId, nowBucket, showProject, projectNameFor,
+		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions]);
+
 	return (
 		<View style={styles.listWrap}>
-			{/* skipEntering so the first render and every poll-driven rebuild do not
-			    cascade one animation per row. Only rows that arrive after the list is
-			    already on screen animate in — which is the only case worth seeing. */}
-			<LayoutAnimationConfig skipEntering>
+			{/* A filter/search scope is a wholesale replacement, not rows moving
+			    inside one board. Key this boundary and suppress both sides of that
+			    replacement so outgoing native cells cannot overlap the new list or
+			    retain invisible height. Same-board row changes still animate below. */}
+			<LayoutAnimationConfig key={identityKey} skipEntering skipExiting>
 				<FlatList
 					ref={listRef}
-					key={identityKey}
 					data={listData}
-					keyExtractor={(item) => item.key}
+					keyExtractor={boardRowKey}
+					removeClippedSubviews={false}
 					contentContainerStyle={{ paddingBottom: contentBottomInset }}
 					keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
 					keyboardShouldPersistTaps="handled"
 					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAndResort} tintColor={t.accent} />}
 					ListHeaderComponent={ListHeaderComponent}
 					ListEmptyComponent={ListEmptyComponent}
-					renderItem={({ item }) => {
-						// Headers animate too, so a section appearing or emptying reflows
-						// with the rows rather than snapping around them.
-						if (item.kind === "archive") {
-							return (
-								<BoardRowTransition>
-									<ArchiveHeader count={archived.length} open={archiveOpen} onToggle={() => setArchiveOpen((v) => !v)} />
-								</BoardRowTransition>
-							);
-						}
-						if (item.kind === "header") {
-							return (
-								<BoardRowTransition>
-									<ListSectionHeader
-										label={item.label}
-										open={item.open}
-										onToggle={item.collapsible ? () => toggleSection(item.key.replace("header:", "")) : undefined}
-									/>
-								</BoardRowTransition>
-							);
-						}
-					const session = item.session;
-					const rowKey = hostedSessionKey(session);
-					return (
-						<BoardRowTransition>
-							<WorkerListRow
-								nowBucket={nowBucket}
-								session={session}
-								rowKey={rowKey}
-								projectName={showProject ? projectNameFor(session) : session.harness || "Agent"}
-								isRenaming={renamingWorkerId === rowKey}
-								activeSwipeId={activeSwipeId}
-								onSwipeOpen={openExclusiveSwipe}
-								onSwipeClose={closeExclusiveSwipe}
-								onRenameStart={() => setRenamingWorkerId(rowKey)}
-								onRenameCancel={() => setRenamingWorkerId(undefined)}
-								onRename={(title) => renameWorker(session.id, title, sessionHostId(session))}
-								onSetPinned={(next) => updateWorkerPin(session, next)}
-								onDelete={() => confirmDeleteSession(session)}
-								onResume={() => runWorkerRecovery(session, "resume")}
-								onRestore={() => runWorkerRecovery(session, "restore")}
-							/>
-						</BoardRowTransition>
-					);
-					}}
+					renderItem={renderItem}
 				/>
 			</LayoutAnimationConfig>
 		{held.updated > 0 && !query.trim() ? <UpdatesPill count={held.updated} onPress={showLatest} /> : null}
 		</View>
 	);
 }
+
+type BoundWorkerRowProps = Pick<ComponentProps<typeof WorkerListRow>,
+	"session" | "hostId" | "projectName" | "nowBucket" | "isRenaming" | "activeSwipeId" | "onSwipeOpen" | "onSwipeClose"> & {
+	actions: {
+		renameStart(id: string | undefined): void;
+		rename(id: string, title: string, hostId?: string): Promise<void>;
+		pin(session: DashboardSession, pinned: boolean): Promise<void>;
+		archive(session: DashboardSession): void;
+		recover(session: DashboardSession, kind: "resume" | "restore"): Promise<void>;
+	};
+};
+
+// Bind once per changed session, not once per whole-board context publication.
+const BoundWorkerRow = memo(function BoundWorkerRow({ actions, ...props }: BoundWorkerRowProps) {
+	const session = props.session;
+	const rowKey = hostedSessionKey(session);
+	const machine = useMemo(() => sessionMachineIdentity(session), [session]);
+	const handlers = useMemo(() => ({
+		onRenameStart: () => actions.renameStart(rowKey),
+		onRenameCancel: () => actions.renameStart(undefined),
+		onRename: (title: string) => actions.rename(session.id, title, sessionHostId(session)),
+		onSetPinned: (pinned: boolean) => actions.pin(session, pinned),
+		onDelete: () => actions.archive(session),
+		onResume: () => { void actions.recover(session, "resume"); },
+		onRestore: () => { void actions.recover(session, "restore"); },
+	}), [actions, session, rowKey]);
+	return <WorkerListRow {...props} rowKey={rowKey} machine={machine} {...handlers} />;
+});
 
 // News that arrived while the board was held still. Tapping re-sorts and goes
 // to the top, where the news now is.

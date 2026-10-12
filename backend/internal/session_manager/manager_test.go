@@ -5957,7 +5957,7 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 			lookPath := func(string) (string, error) { return "/bin/true", nil }
 			m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 
-			sp, err := m.buildSystemPrompt(ctx, tc.kind, "mer", "mer-1", false)
+			sp, err := m.buildSystemPrompt(ctx, tc.kind, "mer", "mer-1", "", false)
 			if err != nil {
 				t.Fatalf("buildSystemPrompt: %v", err)
 			}
@@ -6009,7 +6009,7 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 		LookPath:  lookPath,
 	})
 
-	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", false)
+	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", "", false)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
@@ -6037,12 +6037,126 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	if strings.Contains(sp, "html_render") {
 		t.Fatalf("terminal session prompt names html_render:\n%s", sp)
 	}
-	chatPrompt, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", true)
+	chatPrompt, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", "", true)
 	if err != nil {
 		t.Fatalf("buildSystemPrompt chat: %v", err)
 	}
 	if !strings.Contains(chatPrompt, inThread) {
 		t.Fatalf("chat session prompt missing %q", inThread)
+	}
+}
+
+func TestSystemPrompt_ArtifactRequestedOutput(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: t.TempDir(), LookPath: lookPath})
+
+	cases := []struct {
+		name            string
+		kind            domain.SessionKind
+		projectID       domain.ProjectID
+		requestedOutput domain.RequestedOutput
+		want            bool
+	}{
+		{name: "ordinary worker", kind: domain.KindWorker, projectID: "mer"},
+		{name: "artifact worker", kind: domain.KindWorker, projectID: "mer", requestedOutput: domain.RequestedOutputArtifact, want: true},
+		{name: "artifact standalone worker", kind: domain.KindWorker, requestedOutput: domain.RequestedOutputArtifact, want: true},
+		{name: "orchestrator ignores artifact", kind: domain.KindOrchestrator, projectID: "mer", requestedOutput: domain.RequestedOutputArtifact},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sp, err := m.buildSystemPrompt(ctx, tc.kind, tc.projectID, "mer-7", tc.requestedOutput, true)
+			if err != nil {
+				t.Fatalf("buildSystemPrompt: %v", err)
+			}
+			if got := strings.Contains(sp, "## Artifact Output"); got != tc.want {
+				t.Fatalf("artifact output section present = %v, want %v:\n%s", got, tc.want, sp)
+			}
+			if tc.want && !strings.Contains(sp, "Do not open a pull request") {
+				t.Fatalf("artifact output section missing the no-PR rule:\n%s", sp)
+			}
+		})
+	}
+}
+
+func TestSystemPrompt_ArtifactRequestedOutputWithoutArtifactDir(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	// No DataDir: artifactPrompt has no directory to name.
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+
+	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", domain.RequestedOutputArtifact, false)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt: %v", err)
+	}
+	if strings.Contains(sp, "## Session Artifacts") {
+		t.Fatalf("expected no artifact dir section without a data dir:\n%s", sp)
+	}
+	if !strings.Contains(sp, "## Artifact Output") {
+		t.Fatalf("artifact output section dropped without an artifact dir:\n%s", sp)
+	}
+}
+
+func TestSpawnWorker_ArtifactOutputRequiresArtifactDir(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	agent := &recordingAgent{}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, RequestedOutput: domain.RequestedOutputArtifact})
+	if !errors.Is(err, ErrArtifactOutputUnavailable) {
+		t.Fatalf("Spawn err = %v, want ErrArtifactOutputUnavailable", err)
+	}
+	if len(st.sessions) != 0 {
+		t.Fatalf("rejected spawn created sessions: %v", st.sessions)
+	}
+	if agent.lastLaunch.SystemPrompt != "" {
+		t.Fatal("rejected spawn launched an agent")
+	}
+}
+
+func TestSpawnWorker_ArtifactRequestedOutputPersistsAndReachesPrompt(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	agent := &recordingAgent{}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: t.TempDir(), LookPath: lookPath})
+
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, RequestedOutput: domain.RequestedOutputArtifact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.RequestedOutput != domain.RequestedOutputArtifact {
+		t.Fatalf("RequestedOutput = %q, want artifact", rec.RequestedOutput)
+	}
+	if !strings.Contains(agent.lastLaunch.SystemPrompt, "## Artifact Output") {
+		t.Fatalf("spawn system prompt missing artifact output section:\n%s", agent.lastLaunch.SystemPrompt)
+	}
+	if strings.Contains(agent.lastLaunch.Prompt, "## Artifact Output") {
+		t.Fatalf("artifact output section must not be in the task prompt:\n%s", agent.lastLaunch.Prompt)
+	}
+}
+
+func TestRestore_WorkerKeepsArtifactOutputPrompt(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		RequestedOutput: domain.RequestedOutputArtifact,
+		Metadata:        domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"},
+	}
+	agent := &recordingAgent{}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: t.TempDir(), LookPath: lookPath})
+
+	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(agent.lastRestore.SystemPrompt, "## Artifact Output") {
+		t.Fatalf("restore system prompt missing artifact output section:\n%s", agent.lastRestore.SystemPrompt)
 	}
 }
 

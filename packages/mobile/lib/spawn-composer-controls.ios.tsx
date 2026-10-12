@@ -36,12 +36,16 @@ const MIC_KEY_SIZE = 38;
 // Keep the project trigger compact and left-anchored. A max-width frame makes
 // the native Menu fill the host, which centers its popup over the whole sheet.
 const PROJECT_MENU_WIDTH = 224;
+const HOST_MENU_WIDTH = 144;
 // Reserve the harness slot so a different agent name cannot move the model
 // selector sideways. The model still uses the remaining width of the rail,
 // but common harness names should not truncate while "Automatic" has slack.
 const HARNESS_MENU_WIDTH = 124;
 
 export function SpawnComposerControls({
+	hosts,
+	hostId,
+	onSelectHost,
 	projects,
 	projectId,
 	onSelectProject,
@@ -61,7 +65,9 @@ export function SpawnComposerControls({
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const logoUris = useHarnessLogoUris(agents);
+	const selectedHost = hosts.find((host) => host.id === hostId);
 	const selectedProject = projects.find((project) => project.id === projectId);
+	const hostLabel = selectedHost?.label ?? "Choose machine";
 	const projectLabel = selectedProject?.label ?? "Choose project";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
 
@@ -69,30 +75,46 @@ export function SpawnComposerControls({
 		<View style={styles.stack}>
 			<Host style={styles.controlsHost} colorScheme={scheme} seedColor={t.accent}>
 				<VStack alignment="leading" spacing={10} modifiers={[frame({ height: 104, maxWidth: 1000 })]}>
-				<Menu
-					label={
-						<HStack spacing={7}>
-							<Image systemName={projectSystemImage(selectedProject)} size={iconSize.sm} />
-							<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{projectLabel}</Text>
-							<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
-						</HStack>
-					}
-					modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), padding({ horizontal: 4 }), frame({ width: PROJECT_MENU_WIDTH, alignment: "leading" }), accessibilityIdentifier("spawn-project")]}
-				>
-					{projects.map((project) => (
-						<Group key={project.id}>
-							{project.sectionBreakBefore ? <Divider /> : null}
-							<Button onPress={() => { haptics.select(); onSelectProject(project.id); }}>
-								<HStack spacing={9}>
-									<Image systemName={projectSystemImage(project)} size={iconSize.sm} />
-									<Text>{project.label}</Text>
-									<Spacer />
-									{project.id === projectId ? <Image systemName="checkmark" size={iconSize.xs} /> : null}
+					<HStack spacing={8}>
+						<Menu
+							label={
+								<HStack spacing={7}>
+									<Image systemName="desktopcomputer" size={iconSize.sm} />
+									<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>Run on {hostLabel}</Text>
+									<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
 								</HStack>
-							</Button>
-						</Group>
-					))}
-				</Menu>
+							}
+							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), padding({ horizontal: 4 }), frame({ width: HOST_MENU_WIDTH, alignment: "leading" }), accessibilityIdentifier("spawn-host")]}
+						>
+							{hosts.map((host) => (
+								<Button key={host.id} label={host.label} systemImage={host.id === hostId ? "checkmark" : undefined} onPress={() => { haptics.select(); onSelectHost(host.id); }} />
+							))}
+						</Menu>
+						<Menu
+							label={
+								<HStack spacing={7}>
+									<Image systemName={projectSystemImage(selectedProject)} size={iconSize.sm} />
+									<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{projectLabel}</Text>
+									<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
+								</HStack>
+							}
+							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), padding({ horizontal: 4 }), frame({ width: PROJECT_MENU_WIDTH - 42, alignment: "leading" }), accessibilityIdentifier("spawn-project")]}
+						>
+							{projects.map((project) => (
+								<Group key={project.id}>
+									{project.sectionBreakBefore ? <Divider /> : null}
+									<Button onPress={() => { haptics.select(); onSelectProject(project.id); }}>
+										<HStack spacing={9}>
+											<Image systemName={projectSystemImage(project)} size={iconSize.sm} />
+											<Text>{project.label}</Text>
+											<Spacer />
+											{project.id === projectId ? <Image systemName="checkmark" size={iconSize.xs} /> : null}
+										</HStack>
+									</Button>
+								</Group>
+							))}
+						</Menu>
+					</HStack>
 
 				<HStack
 					spacing={6}

@@ -58,6 +58,10 @@ type SpawnConfig struct {
 	// fails the spawn rather than falling back to the other mode.
 	RequestedMode domain.SessionMode
 
+	// RequestedOutput is the deliverable the caller asks for. Empty is the ordinary
+	// task flow; artifact adds an artifact-delivery section to the worker prompt.
+	RequestedOutput domain.RequestedOutput
+
 	// DisplayName is the user-facing sidebar label. Empty falls back to the
 	// session id in the read model (e.g. orchestrator sessions).
 	DisplayName string

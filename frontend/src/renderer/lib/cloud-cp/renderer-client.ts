@@ -1,5 +1,9 @@
+import { useUiStore } from "../../stores/ui-store";
 import { createCloudCpClient, type CloudCpClient } from "./index";
 import { queryClient } from "../query-client";
+import { cachedCloudBillingMode, cloudMeQueryKey } from "../cloud-offering";
+import { appI18n } from "../../i18n";
+import { instrumentCloudClient, reportPlanRefusal } from "../cloud-telemetry";
 
 type CloudCpBridgeRequest = (init: {
 	baseUrl: string;
@@ -37,12 +41,43 @@ export const cloudCpFetch: typeof fetch = async (input, init) => {
 };
 
 export function createRendererCloudCpClient(baseUrl: string): CloudCpClient {
-	return createCloudCpClient({
+	// Funnel telemetry (cloud-telemetry.ts) wraps the client; it passes results
+	// and errors through unchanged.
+	return instrumentCloudClient(createCloudCpClient({
 		baseUrl,
 		getToken: async () => MAIN_PROCESS_TOKEN,
 		fetchImpl: cloudCpFetch,
 		onForbidden: () => {
 			void queryClient.invalidateQueries({ queryKey: ["cloud-org"] });
+			void queryClient.invalidateQueries({ queryKey: cloudMeQueryKey });
 		},
-	});
+		onPlanRefused: (code) => reportPlanRefusal(code, openUpgradeAfterPlanRefusal()),
+	}));
+}
+
+/** How often a plan refusal may open the Upgrade page; retries must not keep reopening it. */
+const PLAN_REFUSAL_COOLDOWN_MS = 60_000;
+let lastUpgradePrompt = 0;
+
+/**
+ * The control plane refused work because of the org's plan. A self-serve org
+ * gets its plan refreshed and Settings opened on Upgrade, where the plans and
+ * usage explain why. Any other org (contract, billing off, or not yet known)
+ * has no plans to buy, so it gets a neutral notice to ask its admin instead.
+ */
+export function openUpgradeAfterPlanRefusal(now = Date.now()): boolean {
+	const selfServe = cachedCloudBillingMode(queryClient) === "self_serve";
+	if (selfServe) void queryClient.invalidateQueries({ queryKey: ["cloud-billing"] });
+	if (now - lastUpgradePrompt < PLAN_REFUSAL_COOLDOWN_MS) return false;
+	lastUpgradePrompt = now;
+	if (selfServe) {
+		useUiStore.getState().openGlobalSettings("billing");
+	} else {
+		useUiStore.getState().showGlobalToast(
+			appI18n.t("cloud.planLimit.title"),
+			appI18n.t("cloud.planLimit.contactAdmin"),
+			{ dedupeKey: "cloud.planLimit" },
+		);
+	}
+	return true;
 }

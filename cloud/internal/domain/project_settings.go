@@ -34,7 +34,8 @@ type ProjectSettingsConfig struct {
 	Reviewers     []ProjectReviewer  `json:"reviewers,omitempty"`
 	AutoReview    *bool              `json:"autoReview,omitempty"`
 	// Coder is the project's Coder dev-kit config. Settings may patch only its
-	// workspaceNamePrefix; the rest is chosen when the project is created.
+	// workspaceNamePrefix and template parameters; the rest is chosen when the
+	// project is created.
 	Coder *ProjectCoderConfig `json:"coder,omitempty"`
 }
 
@@ -95,6 +96,9 @@ func DecodeProjectSettings(raw json.RawMessage) (ProjectSettingsConfig, error) {
 	}
 	if settings.Coder != nil {
 		if err := ValidateCoderWorkspaceNamePrefix(settings.Coder.WorkspaceNamePrefix); err != nil {
+			return settings, err
+		}
+		if err := ValidateCoderTemplateParameterValues(settings.Coder.Parameters); err != nil {
 			return settings, err
 		}
 	}
@@ -230,7 +234,7 @@ func validateSettingsPatchObject(raw json.RawMessage, kind string) error {
 	}
 	allowed := map[string][]string{
 		"config":      {"worker", "orchestrator", "reviewers", "autoReview", "sessionPrefix", "coder"},
-		"coder":       {"workspaceNamePrefix"},
+		"coder":       {"workspaceNamePrefix", "parameters"},
 		"role":        {"agent", "agentConfig"},
 		"reviewer":    {"harness", "agentConfig"},
 		"agentConfig": {"model", "mode", "effort", "permissions"},
@@ -256,6 +260,14 @@ func validateSettingsPatchObject(raw json.RawMessage, kind string) error {
 			}
 		case "coder":
 			if err := validateSettingsPatchObject(value, "coder"); err != nil {
+				return err
+			}
+		case "parameters":
+			var parameters map[string]string
+			if json.Unmarshal(value, &parameters) != nil || parameters == nil {
+				return fmt.Errorf("coder.parameters must be an object of string values")
+			}
+			if err := ValidateCoderTemplateParameterValues(parameters); err != nil {
 				return err
 			}
 		case "workspaceNamePrefix":
@@ -326,6 +338,10 @@ func mergeSettingsObjects(existing, patch json.RawMessage) json.RawMessage {
 	for key, value := range updates {
 		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			delete(result, key)
+		} else if key == "parameters" {
+			// Template parameters replace as a whole, so a value reset to the
+			// template default (and therefore omitted) is removed.
+			result[key] = value
 		} else if bytes.HasPrefix(bytes.TrimSpace(value), []byte("{")) {
 			result[key] = mergeSettingsObjects(result[key], value)
 		} else {

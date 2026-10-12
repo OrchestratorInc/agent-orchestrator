@@ -13,6 +13,7 @@ import claudeLogo from "../assets/agents/claude.svg";
 import claudeCodeLogo from "../assets/agents/claude-code.svg";
 import codexLogo from "../assets/agents/codex.svg";
 import codewhaleLogo from "../assets/agents/codewhale.svg";
+import commandCodeLogo from "../assets/agents/command-code.png";
 import continueLogo from "../assets/agents/continue.png";
 import copilotLogo from "../assets/agents/copilot.svg";
 import crushLogo from "../assets/agents/crush.png";
@@ -35,7 +36,7 @@ import openhandsLogo from "../assets/agents/openhands.svg";
 import opencodeLogo from "../assets/agents/opencode.svg";
 import piLogo from "../assets/agents/pi.png";
 import primeAgentLogo from "../assets/agents/prime-agent.png";
-import qwenLogo from "../assets/agents/qwen.png";
+import qwenLogo from "../assets/agents/qwen.svg";
 import unrealAgentLogo from "../assets/agents/unreal-agent.png";
 import vibeLogo from "../assets/agents/vibe.png";
 
@@ -44,6 +45,7 @@ import vibeLogo from "../assets/agents/vibe.png";
 const LOGOS: AgentLogoSources = {
 	codex: codexLogo,
 	codewhale: codewhaleLogo,
+	"command-code": commandCodeLogo,
 	"claude-code": claudeCodeLogo,
 	claude: claudeLogo,
 	cursor: cursorLogo,

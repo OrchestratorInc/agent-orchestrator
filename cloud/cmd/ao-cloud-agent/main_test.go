@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/notificationoutbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
@@ -21,6 +22,23 @@ func TestRunHookDoesNotPublishReviewerActivity(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// An agent that survived a worker restart carries its launch epoch in the
+// environment; its hooks must stamp the current worker's recorded epoch.
+func TestHookEpochPrefersTheCurrentWorkersRecordedEpoch(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AO_DATA_DIR", dataDir)
+	t.Setenv("AO_CLOUD_WORKER_EPOCH", "4")
+	if got := workerEpochFromEnvironment(); got != 4 {
+		t.Fatalf("epoch = %d, want the launch epoch 4 with no recorded epoch", got)
+	}
+	if err := notificationoutbox.WriteWorkerEpoch(dataDir, 6); err != nil {
+		t.Fatal(err)
+	}
+	if got := workerEpochFromEnvironment(); got != 6 {
+		t.Fatalf("epoch = %d, want the current worker's 6", got)
 	}
 }
 

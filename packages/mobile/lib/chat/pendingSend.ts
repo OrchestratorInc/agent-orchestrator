@@ -1,10 +1,14 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+import type { ChatExcerpt } from "./types";
+import { isChatExcerpt } from "./responseQuotes";
+
 export type PendingSendRecord = {
 	id: string;
 	draftText: string;
 	text: string;
 	hasAttachments: boolean;
+	excerpts?: ChatExcerpt[];
 	/** Absent on records saved by older builds, where every delivery was a send. */
 	kind?: "send" | "steer";
 };
@@ -31,7 +35,8 @@ export async function readPendingSend(key: string): Promise<PendingSendRecord | 
 	if (!raw) return null;
 	const saved = JSON.parse(raw) as PendingSendRecord;
 	if (!saved.id || typeof saved.draftText !== "string" || typeof saved.text !== "string" || typeof saved.hasAttachments !== "boolean" ||
-		(saved.kind !== undefined && saved.kind !== "send" && saved.kind !== "steer")) {
+		(saved.kind !== undefined && saved.kind !== "send" && saved.kind !== "steer") ||
+		(saved.excerpts !== undefined && (!Array.isArray(saved.excerpts) || saved.excerpts.length > 8 || !saved.excerpts.every(isChatExcerpt)))) {
 		throw new Error("The previous message's retry record is damaged. Discard it before sending another message.");
 	}
 	return saved;

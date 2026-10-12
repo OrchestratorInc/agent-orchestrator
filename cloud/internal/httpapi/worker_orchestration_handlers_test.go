@@ -291,7 +291,9 @@ func TestCreateWorkerChildForbiddenWhenParentNotActiveOrchestrator(t *testing.T)
 // falling back to another provider.
 func TestCreateWorkerChildMisconfiguredInheritedProvider(t *testing.T) {
 	t.Parallel()
-	// Provisioning has no Coder config, so building a Coder plan fails validation.
+	// Provisioning's Coder config names a template but no deployment, so building
+	// a Coder plan fails validation. (A config with no template at all is the
+	// user-fixable coder_template_required case instead.)
 	provisioning := sandbox.ProvisioningDefaults{
 		Provider: sandbox.ProviderNodeOps,
 		Release:  "test",
@@ -300,6 +302,7 @@ func TestCreateWorkerChildMisconfiguredInheritedProvider(t *testing.T) {
 			DefaultShape: "s-1vcpu-1gb", DefaultRootFS: "devbox:1",
 			WorkerTokenTTL: 15 * time.Minute,
 		},
+		Coder: sandbox.CoderConfig{TemplateID: "2a2e262c-b31c-4202-946d-a19ad45d1fd2"},
 	}
 	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderCoder}
 	srv := newChildServer(store, provisioning, sandbox.ProviderNodeOps)

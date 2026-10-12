@@ -219,7 +219,7 @@ func TestCursorACPLaunchApprovalFlags(t *testing.T) {
 		{"bypass-permissions", []string{"--trust", "--force", "acp"}},
 	} {
 		t.Run(test.approval, func(t *testing.T) {
-			path, args, _, err := acpLaunch(worker.Turn{Harness: "cursor", ApprovalMode: test.approval}, Command{Path: "cursor-agent"})
+			path, args, _, err := acpLaunch(context.Background(), worker.Turn{Harness: "cursor", ApprovalMode: test.approval}, Command{Path: "cursor-agent"})
 			if err != nil {
 				t.Fatal(err)
 			}

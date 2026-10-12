@@ -28,3 +28,27 @@ func TestParseOrganizationCapabilities(t *testing.T) {
 		})
 	}
 }
+
+func TestParseOrganizationBilling(t *testing.T) {
+	cases := []struct {
+		name     string
+		metadata map[string]string
+		want     string
+	}{
+		{"nil metadata", nil, ""},
+		{"no billing key", map[string]string{"capabilities": "coder"}, ""},
+		{"blank", map[string]string{"billing": "  "}, ""},
+		{"contract", map[string]string{"billing": "contract"}, "contract"},
+		{"contract any case", map[string]string{"billing": " Contract "}, "contract"},
+		{"self serve", map[string]string{"billing": "self_serve"}, "self_serve"},
+		{"self-serve spelling", map[string]string{"billing": "self-serve"}, "self_serve"},
+		{"unknown reads as unset", map[string]string{"billing": "invoice"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseOrganizationBilling(tc.metadata); got != tc.want {
+				t.Fatalf("parseOrganizationBilling(%v) = %q, want %q", tc.metadata, got, tc.want)
+			}
+		})
+	}
+}

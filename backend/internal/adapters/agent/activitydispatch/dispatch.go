@@ -99,6 +99,8 @@ const (
 // inferred from a same-named Derivers entry. Aider has only a completion
 // callback. Continue's Claude-compatible hooks vary by installed CLI version,
 // so its terminal fallback is useful without treating hook silence as broken.
+// Command Code exposes no permission-request hook, so hook silence cannot
+// prove an idle pipeline either.
 var signalCoverageOverrides = map[domain.AgentHarness]SignalCoverage{
 	domain.HarnessAider:       SignalCoveragePartial,
 	domain.HarnessCommandCode: SignalCoveragePartial,

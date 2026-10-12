@@ -66,9 +66,35 @@ func (ExecGitRunner) Run(ctx context.Context, dir string, env map[string]string,
 	return output.String(), nil
 }
 
+// CheckoutOptions tunes how PrepareCheckout clones a fresh workspace.
+type CheckoutOptions struct {
+	// PartialClone clones history without the contents of older file versions
+	// (--filter=blob:none). Only Freestyle sets it (AO_WORKER_PARTIAL_CLONE=1),
+	// matching the partial clone its project snapshots bake. Every other
+	// provider (Coder, BYO Coder, Docker) keeps a full clone, so offline history
+	// operations never need a lazy blob fetch.
+	PartialClone bool
+}
+
+// PartialCloneEnv is the worker environment variable a provider sets to "1"
+// to opt its sessions into partial clones (see CheckoutOptions.PartialClone).
+const PartialCloneEnv = "AO_WORKER_PARTIAL_CLONE"
+
 // PrepareCheckout clones once, then validates and fetches the persistent
-// workspace. The token exists only in the network command's askpass environment.
+// workspace. The token exists only in the network command's askpass
+// environment. A fresh clone is a full clone; see PrepareCheckoutWithOptions.
 func PrepareCheckout(ctx context.Context, runner GitRunner, workspace string, grant CheckoutGrantResponse) error {
+	return PrepareCheckoutWithOptions(ctx, runner, workspace, grant, CheckoutOptions{})
+}
+
+// PrepareCheckoutWithOptions is PrepareCheckout with explicit clone options.
+func PrepareCheckoutWithOptions(
+	ctx context.Context,
+	runner GitRunner,
+	workspace string,
+	grant CheckoutGrantResponse,
+	options CheckoutOptions,
+) error {
 	if runner == nil {
 		return errors.New("git runner is required")
 	}
@@ -99,8 +125,10 @@ func PrepareCheckout(ctx context.Context, runner GitRunner, workspace string, gr
 				return err
 			}
 			return withGitCredential(grant.Token, func(env map[string]string) error {
-				_, err := runner.Run(ctx, workspace, env, "fetch", "--prune", "--", "origin")
-				return err
+				if _, err := runner.Run(ctx, workspace, env, "fetch", "--prune", "--", "origin"); err != nil {
+					return err
+				}
+				return adoptProjectSnapshot(ctx, runner, workspace, env)
 			})
 		} else {
 			// The workspace is non-empty but not a Git checkout. This happens
@@ -109,7 +137,7 @@ func PrepareCheckout(ctx context.Context, runner GitRunner, workspace string, gr
 			// staging directory and merge the result in, so a bare git clone into
 			// a non-empty directory does not fail and checkout no longer depends
 			// on agent-vs-checkout startup ordering.
-			return cloneIntoNonEmptyWorkspace(ctx, runner, workspace, grant, expected)
+			return cloneIntoNonEmptyWorkspace(ctx, runner, workspace, grant, expected, options)
 		}
 	}
 	if !errors.Is(statErr, os.ErrNotExist) {
@@ -120,7 +148,7 @@ func PrepareCheckout(ctx context.Context, runner GitRunner, workspace string, gr
 	}
 	if err := withGitCredential(grant.Token, func(env map[string]string) error {
 		_, err := runner.Run(ctx, filepath.Dir(workspace), env,
-			"clone", "--origin", "origin", "--no-tags", "--", grant.CloneURL, workspace)
+			cloneArgs(options, grant.CloneURL, workspace)...)
 		return err
 	}); err != nil {
 		return err
@@ -203,7 +231,14 @@ func EnsureWorkspaceReviewBase(ctx context.Context, runner GitRunner, workspace,
 // the clone did not produce are preserved; the clone's .git directory and
 // tracked files are moved in. This removes the ordering dependency between
 // agent startup and repository checkout.
-func cloneIntoNonEmptyWorkspace(ctx context.Context, runner GitRunner, workspace string, grant CheckoutGrantResponse, expected string) error {
+func cloneIntoNonEmptyWorkspace(
+	ctx context.Context,
+	runner GitRunner,
+	workspace string,
+	grant CheckoutGrantResponse,
+	expected string,
+	options CheckoutOptions,
+) error {
 	// Stage inside the workspace itself, not its parent. The parent is the
 	// provider's durable root (e.g. Coder's /home/coder), which is owned by the
 	// provider's own user and is not writable by the AO worker user, so a
@@ -219,8 +254,7 @@ func cloneIntoNonEmptyWorkspace(ctx context.Context, runner GitRunner, workspace
 	defer os.RemoveAll(staging)
 	clone := filepath.Join(staging, "repository")
 	if err := withGitCredential(grant.Token, func(env map[string]string) error {
-		_, err := runner.Run(ctx, staging, env,
-			"clone", "--origin", "origin", "--no-tags", "--", grant.CloneURL, clone)
+		_, err := runner.Run(ctx, staging, env, cloneArgs(options, grant.CloneURL, clone)...)
 		return err
 	}); err != nil {
 		return err
@@ -247,6 +281,23 @@ func cloneIntoNonEmptyWorkspace(ctx context.Context, runner GitRunner, workspace
 	return nil
 }
 
+// partialCloneFilter clones history without the contents of older file
+// versions. The checked-out tree is still complete; an older version is fetched
+// on demand (blame, log -p, checking out another commit) through the repo's
+// credential helper, which brokers a fresh token for every network operation.
+// For a mature repository this cuts the clone to a fraction of its full size.
+// It is applied only when CheckoutOptions.PartialClone is set (Freestyle).
+const partialCloneFilter = "--filter=blob:none"
+
+// cloneArgs builds the primary-checkout clone command.
+func cloneArgs(options CheckoutOptions, cloneURL, destination string) []string {
+	args := []string{"clone", "--origin", "origin", "--no-tags"}
+	if options.PartialClone {
+		args = append(args, partialCloneFilter)
+	}
+	return append(args, "--", cloneURL, destination)
+}
+
 // ConfigureWorkerGit prepares the assigned branch and a repo-local credential
 // helper that brokers a fresh scoped token for each GitHub network operation.
 // The helper stores only the rotating worker-token path, never a GitHub token.
@@ -261,6 +312,36 @@ func ConfigureWorkerGit(
 	for label, value := range map[string]string{
 		"workspace": workspace, "data directory": dataDir, "public URL": publicURL,
 		"session ID": sessionID, "branch": branch,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s is required", label)
+		}
+	}
+	if err := writeWorkerGitTooling(dataDir, publicURL, sessionID); err != nil {
+		return err
+	}
+	helperPath := GitCredentialHelperPath(dataDir)
+	commands := [][]string{
+		{"config", "--local", "--replace-all", "credential.helper", ""},
+		{"config", "--local", "--add", "credential.helper", helperPath},
+		{"config", "--local", "--replace-all", "credential.useHttpPath", "true"},
+		{"config", "--local", "--replace-all", "user.name", cloudGitAuthorName},
+		{"config", "--local", "--replace-all", "user.email", cloudGitAuthorEmail},
+		{"checkout", "-B", branch},
+	}
+	for _, command := range commands {
+		if _, err := runner.Run(ctx, workspace, nil, command...); err != nil {
+			return fmt.Errorf("configure worker Git repository: %w", err)
+		}
+	}
+	return nil
+}
+
+// writeWorkerGitTooling writes the session's git credential helper and gh
+// wrapper into the worker data directory.
+func writeWorkerGitTooling(dataDir, publicURL, sessionID string) error {
+	for label, value := range map[string]string{
+		"data directory": dataDir, "public URL": publicURL, "session ID": sessionID,
 	} {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("%s is required", label)
@@ -401,19 +482,6 @@ GH_TOKEN="$github_token" exec "$real_gh" "$@"
 	if err := os.WriteFile(filepath.Join(binDir, "gh"), []byte(githubWrapper), 0o700); err != nil {
 		return fmt.Errorf("write worker GitHub CLI wrapper: %w", err)
 	}
-	commands := [][]string{
-		{"config", "--local", "--replace-all", "credential.helper", ""},
-		{"config", "--local", "--add", "credential.helper", helperPath},
-		{"config", "--local", "--replace-all", "credential.useHttpPath", "true"},
-		{"config", "--local", "--replace-all", "user.name", cloudGitAuthorName},
-		{"config", "--local", "--replace-all", "user.email", cloudGitAuthorEmail},
-		{"checkout", "-B", branch},
-	}
-	for _, command := range commands {
-		if _, err := runner.Run(ctx, workspace, nil, command...); err != nil {
-			return fmt.Errorf("configure worker Git repository: %w", err)
-		}
-	}
 	return nil
 }
 
@@ -444,6 +512,7 @@ func CloneExtraRepo(
 	if runner == nil {
 		return errors.New("git runner is required")
 	}
+	// Extra repos are always full clones, whatever the provider.
 	args := []string{"clone", "--origin", "origin", "--no-tags"}
 	if strings.TrimSpace(branch) != "" {
 		args = append(args, "--branch", branch)
@@ -573,6 +642,33 @@ func PrepareScratchWorkspace(
 	return nil
 }
 
+// ProjectSnapshotMarker, inside .git, marks a pristine checkout baked into a
+// project snapshot. Its commit is as old as the snapshot, so the first
+// checkout moves it to the latest origin/HEAD. The marker is then removed, so a
+// worker restarting on a session's own workspace never resets its work.
+const ProjectSnapshotMarker = "ao-project-snapshot"
+
+func adoptProjectSnapshot(ctx context.Context, runner GitRunner, workspace string, env map[string]string) error {
+	marker := filepath.Join(workspace, ".git", ProjectSnapshotMarker)
+	if _, err := os.Stat(marker); err != nil {
+		return nil
+	}
+	// An empty repository (or a remote that reports no default branch) has no
+	// origin/HEAD: there is nothing newer to move to, so keep the checkout as
+	// baked rather than fail the session.
+	if _, err := runner.Run(ctx, workspace, env, "rev-parse", "--verify", "--quiet", "origin/HEAD^{commit}"); err == nil {
+		// A partial clone downloads the new tree's file contents here, so this
+		// runs with the same credential as the fetch.
+		if _, err := runner.Run(ctx, workspace, env, "reset", "--hard", "--quiet", "origin/HEAD"); err != nil {
+			return fmt.Errorf("move project snapshot checkout to origin/HEAD: %w", err)
+		}
+	}
+	if err := os.Remove(marker); err != nil {
+		return fmt.Errorf("clear project snapshot marker: %w", err)
+	}
+	return nil
+}
+
 func validateOrigin(ctx context.Context, runner GitRunner, workspace, expected string) error {
 	if info, err := os.Stat(filepath.Join(workspace, ".git")); err != nil || !info.IsDir() {
 		return errors.New("existing workspace is not a Git repository")
@@ -613,6 +709,12 @@ func withAskpass(token string, operation func(map[string]string) error) error {
 		"GIT_ASKPASS": path, "GIT_ASKPASS_REQUIRE": "force",
 		"GIT_TERMINAL_PROMPT": "0", "AO_GIT_TOKEN": token,
 	})
+}
+
+// GitHubRepositoryIdentity returns the lower-case owner/name a GitHub URL
+// names: the identity the checkout's origin is validated against.
+func GitHubRepositoryIdentity(raw string) (string, error) {
+	return githubRepositoryIdentity(raw)
 }
 
 func githubRepositoryIdentity(raw string) (string, error) {

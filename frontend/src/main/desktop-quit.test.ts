@@ -8,7 +8,9 @@ function setup(overrides: Partial<QuitOptions> = {}) {
 		platform: "darwin",
 		hasTray: () => true,
 		isUpdateRestartRequested: () => false,
+		hasWindow: () => true,
 		closeWindow: vi.fn(),
+		hideDock: vi.fn(),
 		quit: vi.fn(),
 		...overrides,
 	};
@@ -24,11 +26,34 @@ describe("desktop quit", () => {
 		expect(options.quit).not.toHaveBeenCalled();
 	});
 
-	it("keeps repeated quits in the background even when the window is already gone", () => {
+	it("leaves the Dock once the quit-closed window is gone", () => {
 		const { options, controller, event } = setup();
 		controller.handleBeforeQuit(event);
+		expect(options.hideDock).not.toHaveBeenCalled();
+		controller.windowClosed();
+		expect(options.hideDock).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the Dock icon when the draft guard cancels the close", () => {
+		const { options, controller, event } = setup();
 		controller.handleBeforeQuit(event);
-		expect(event.preventDefault).toHaveBeenCalledTimes(2);
+		controller.windowCloseCanceled();
+		controller.windowClosed();
+		expect(options.hideDock).not.toHaveBeenCalled();
+	});
+
+	it("keeps the Dock icon when the window is closed without quitting", () => {
+		const { options, controller } = setup();
+		controller.windowClosed();
+		expect(options.hideDock).not.toHaveBeenCalled();
+	});
+
+	it("leaves the Dock right away when quitting with no window, without exiting", () => {
+		const { options, controller, event } = setup({ hasWindow: () => false });
+		expect(controller.handleBeforeQuit(event)).toBe(true);
+		expect(event.preventDefault).toHaveBeenCalledOnce();
+		expect(options.hideDock).toHaveBeenCalledOnce();
+		expect(options.closeWindow).not.toHaveBeenCalled();
 		expect(options.quit).not.toHaveBeenCalled();
 	});
 

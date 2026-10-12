@@ -72,13 +72,27 @@ type BootstrapResponse struct {
 type HeartbeatRequest struct {
 	Version      string   `json:"version"`
 	Capabilities []string `json:"capabilities"`
+	// Busy reports activity since the previous heartbeat (terminal output, a
+	// process under a workspace shell, CPU use), so idle pause only stops a
+	// session that is truly idle. A worker sends it only to a control plane
+	// that advertised HeartbeatFeatureBusy: an older control plane rejects
+	// unknown heartbeat fields, which would fail every heartbeat after a
+	// control-plane rollback.
+	Busy bool `json:"busy,omitempty"`
 }
+
+// HeartbeatFeatureBusy, in HeartbeatResponse.Features, means the control plane
+// accepts HeartbeatRequest.Busy.
+const HeartbeatFeatureBusy = "busy"
 
 // HeartbeatResponse renews the worker's short-lived token.
 type HeartbeatResponse struct {
 	OK          bool   `json:"ok"`
 	WorkerToken string `json:"workerToken"`
 	ExpiresIn   int    `json:"expiresIn"`
+	// Features lists the optional heartbeat request fields this control plane
+	// accepts (HeartbeatFeatureBusy). Older control planes omit it.
+	Features []string `json:"features,omitempty"`
 }
 
 // CheckoutGrantResponse carries a repository-scoped, short-lived GitHub App

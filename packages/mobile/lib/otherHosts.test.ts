@@ -190,4 +190,67 @@ describe("another paired host's live runner", () => {
 			expect(getSessions).toHaveBeenCalledWith(lanConfig, "all");
 		} finally { runner.stop(); }
 	});
+
+	it("adopts a verified open primary without racing its identity again", async () => {
+		const { connectToHost } = await import("./connectRuntime");
+		const { getSessions, getNotifications } = await import("./api");
+		const otherHosts = await import("./otherHosts") as typeof import("./otherHosts") & {
+			startVerifiedOtherHost?: typeof import("./otherHosts")["startOtherHost"];
+		};
+		expect(otherHosts.startVerifiedOtherHost).toBeTypeOf("function");
+		if (!otherHosts.startVerifiedOtherHost) return;
+
+		vi.mocked(getSessions).mockResolvedValue({ projects: [], sessions: [], orchestrators: [], orchestratorId: null, stats: {} });
+		vi.mocked(getNotifications).mockResolvedValue({ notifications: [], unreadCount: 0, nextCursor: undefined });
+		let snapshot: HostSnapshot = { ...otherHosts.emptyHostSnapshot(host), config, connection: "open", loading: false };
+		const runner = otherHosts.startVerifiedOtherHost(host, snapshot, (patch) => { snapshot = { ...snapshot, ...patch }; });
+		expect(runner).not.toBeNull();
+		try {
+			await runner!.refresh();
+			expect(connectToHost).not.toHaveBeenCalled();
+			expect(getSessions).toHaveBeenCalledWith(config, "all");
+			expect(snapshot.connection).toBe("open");
+		} finally { runner?.stop(); }
+	});
+
+	it("refuses to adopt a verified snapshot whose config belongs to another host", async () => {
+		const { connectToHost } = await import("./connectRuntime");
+		const otherHosts = await import("./otherHosts") as typeof import("./otherHosts") & {
+			startVerifiedOtherHost?: typeof import("./otherHosts")["startOtherHost"];
+		};
+		expect(otherHosts.startVerifiedOtherHost).toBeTypeOf("function");
+		if (!otherHosts.startVerifiedOtherHost) return;
+
+		const wrong: HostSnapshot = {
+			...otherHosts.emptyHostSnapshot(host),
+			config: { ...config, hostId: "different-host" },
+			connection: "open",
+			loading: false,
+		};
+		expect(otherHosts.startVerifiedOtherHost(host, wrong, vi.fn())).toBeNull();
+		expect(connectToHost).not.toHaveBeenCalled();
+	});
+
+	it("ignores a verified runner's in-flight result after ownership stops", async () => {
+		const { getSessions } = await import("./api");
+		const otherHosts = await import("./otherHosts") as typeof import("./otherHosts") & {
+			startVerifiedOtherHost?: typeof import("./otherHosts")["startOtherHost"];
+		};
+		expect(otherHosts.startVerifiedOtherHost).toBeTypeOf("function");
+		if (!otherHosts.startVerifiedOtherHost) return;
+
+		let finish!: (value: Awaited<ReturnType<typeof getSessions>>) => void;
+		vi.mocked(getSessions).mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+		const publish = vi.fn();
+		const runner = otherHosts.startVerifiedOtherHost(
+			host,
+			{ ...otherHosts.emptyHostSnapshot(host), config, connection: "open", loading: false },
+			publish,
+		)!;
+		const pending = runner.refresh();
+		runner.stop();
+		finish({ projects: [], sessions: [], orchestrators: [], orchestratorId: null, stats: {} });
+		await pending;
+		expect(publish).not.toHaveBeenCalled();
+	});
 });

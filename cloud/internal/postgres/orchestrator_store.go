@@ -141,7 +141,7 @@ func (s *Store) CreateOrchestratorChild(
 			creator = *createdByUserID
 		}
 		child, err = createSessionTx(
-			ctx, tx, orgID, idempotencyKey, maxActiveSandboxes,
+			ctx, tx, orgID, idempotencyKey, maxActiveSandboxes, s.billing,
 			input, orchestratorSessionID, creator,
 		)
 		return err
@@ -176,9 +176,15 @@ func (s *Store) SendOrchestratorChildMessage(
 		if !allowed {
 			return ErrForbidden
 		}
+		// Waking a paused billed child is refused beyond the plan, so the
+		// orchestrator learns why its worker did not start.
+		wake, err := s.billing.replayOrMessageWakeTx(ctx, tx, orgID, childSessionID, idempotencyKey, true)
+		if err != nil {
+			return err
+		}
 		event, err = sendMessageTx(
 			ctx, tx, orgID, childSessionID, idempotencyKey, text, "", orchestratorSessionID,
-			"", nil, domain.ChatTurnSettings{},
+			"", nil, domain.ChatTurnSettings{}, wake,
 		)
 		if err != nil {
 			return err
@@ -222,9 +228,15 @@ func (s *Store) ReportToOrchestrator(
 		prefixed := fmt.Sprintf(
 			"[from worker %s %q] %s", shortSessionID(childSessionID), childName, text,
 		)
+		// A report reaches a paused orchestrator even beyond the plan: it is
+		// queued, and runs when the orchestrator is woken within the plan.
+		wake, err := s.billing.messageWakeTx(ctx, tx, orgID, parentID, false)
+		if err != nil {
+			return err
+		}
 		event, err = sendMessageTx(
 			ctx, tx, orgID, parentID, idempotencyKey, prefixed, "", childSessionID,
-			"", nil, domain.ChatTurnSettings{},
+			"", nil, domain.ChatTurnSettings{}, wake,
 		)
 		if err != nil {
 			return err

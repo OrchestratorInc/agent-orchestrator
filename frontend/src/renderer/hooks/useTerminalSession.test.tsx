@@ -1230,6 +1230,32 @@ describe("cloud connect breaker (issue #4668)", () => {
 		expect(view.result.current.error).toBeUndefined();
 	});
 
+	it("polls fast while the worker starts, then falls back to the flat 1s poll", () => {
+		const { muxes } = setup({ attachedSession: cloudSession, coverInitialReplay: false });
+		// A mint 409 ("waiting") early in a cold start retries after 250ms.
+		act(() => latest(muxes).emitConnection("waiting"));
+		act(() => void vi.advanceTimersByTime(249));
+		expect(muxes).toHaveLength(1);
+		act(() => void vi.advanceTimersByTime(1));
+		expect(muxes).toHaveLength(2);
+		// Past the startup window the poll is the flat 1s one again.
+		act(() => void vi.advanceTimersByTime(15_000));
+		act(() => latest(muxes).emitConnection("waiting"));
+		act(() => void vi.advanceTimersByTime(999));
+		expect(muxes).toHaveLength(2);
+		act(() => void vi.advanceTimersByTime(1));
+		expect(muxes).toHaveLength(3);
+	});
+
+	it("keeps genuine socket failures on the 1s poll so the breaker still needs ~8s", () => {
+		const { muxes } = setup({ attachedSession: cloudSession, coverInitialReplay: false });
+		act(() => latest(muxes).emitConnection("closed"));
+		act(() => void vi.advanceTimersByTime(999));
+		expect(muxes).toHaveLength(1);
+		act(() => void vi.advanceTimersByTime(1));
+		expect(muxes).toHaveLength(2);
+	});
+
 	it("resets the failure count after a successful attach", () => {
 		const { view, muxes } = setup({ attachedSession: cloudSession, coverInitialReplay: false });
 		for (let i = 0; i < 5; i++) cycle(muxes, "closed");

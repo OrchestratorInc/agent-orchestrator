@@ -220,6 +220,19 @@ describe("workspace file open requests", () => {
 		expect(second?.nonce).toBe((first?.nonce ?? 0) + 1);
 	});
 
+	it("stores the artifact source only when one is given", () => {
+		useUiStore.getState().requestWorkspaceFileOpen("session-1", "out/report.md", "host-a", "artifact");
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({
+			sessionId: "session-1",
+			hostId: "host-a",
+			path: "out/report.md",
+			source: "artifact",
+		});
+
+		useUiStore.getState().requestWorkspaceFileOpen("session-1", "src/App.tsx");
+		expect(useUiStore.getState().workspaceFileOpenRequest).not.toHaveProperty("source");
+	});
+
 	it("clears only the matching request generation", () => {
 		useUiStore.getState().requestWorkspaceFileOpen("session-1", "old.ts");
 		const oldNonce = useUiStore.getState().workspaceFileOpenRequest!.nonce;

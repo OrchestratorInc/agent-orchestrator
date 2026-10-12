@@ -56,10 +56,15 @@ func (s *Store) SendMessage(
 		if access.Role == "viewer" {
 			return ErrForbidden
 		}
-		var err error
+		// A message wakes a paused session, which a billed session may do
+		// only within its plan: refuse it here so the sender sees why.
+		wake, err := s.billing.forAccess(principal, access, orgID).replayOrMessageWakeTx(ctx, tx, orgID, sessionID, idempotencyKey, true)
+		if err != nil {
+			return err
+		}
 		event, err = sendMessageTx(
 			ctx, tx, orgID, sessionID, idempotencyKey, text, principal.UserID, "",
-			access.ModeCap, access.DeniedCommands, settings,
+			access.ModeCap, access.DeniedCommands, settings, wake,
 		)
 		return err
 	})
@@ -73,6 +78,11 @@ func sendMessageTx(
 	modeCap string,
 	deniedCommands []string,
 	settings domain.ChatTurnSettings,
+	// wake lets the message wake a paused sandbox. Billed sessions decide it
+	// with messageWakeTx, at the start of the transaction (it may take the
+	// organization lock); without it a paused session keeps the message
+	// queued until it is woken.
+	wake bool,
 ) (domain.ClientEvent, error) {
 	payload, err := json.Marshal(chatMessagePayload{Text: text, ChatTurnSettings: settings})
 	if err != nil {
@@ -117,8 +127,8 @@ func sendMessageTx(
 			END,
 			reconcile_after = now(), updated_at = now()
 		WHERE session_id = $1 AND org_id = $2
-			AND desired_state IN ('running', 'paused')`,
-		sessionID, orgID,
+			AND (desired_state = 'running' OR ($3 AND desired_state = 'paused'))`,
+		sessionID, orgID, wake,
 	); err != nil {
 		return domain.ClientEvent{}, err
 	}

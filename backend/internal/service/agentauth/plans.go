@@ -43,7 +43,7 @@ var plans = []Plan{
 	plan("muse", ActionLogin, "Log in to Muse", []string{"muse", "login"}, "Native login flow", "https://ai.meta.com/llama/"),
 	plan("agy", ActionLogin, "Log in to Agy", []string{"agy"}, "Native first-run browser sign-in", "https://github.com/google-antigravity/antigravity-cli"),
 	plan("autohand", ActionLogin, "Log in to Autohand", []string{"autohand", "login"}, "Native Autohand account sign-in", "https://docs.autohand.ai/working-with-autohand-code/cli-reference"),
-	plan("kimchi", ActionLogin, "Log in to Kimchi", []string{"kimchi", "login"}, "Native browser login flow", "https://docs.kimchi.dev/docs/service-keys"),
+	kimchiLoginPlan(),
 	terminalInputPlan("prime-agent", ActionLogin, "Log in to Prime Agent", []string{"prime-agent"}, "/login\r", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md"),
 	terminalInputPlan("omp", ActionLogin, "Log in to OMP", []string{"omp"}, "/login\r", "Select Open login after OMP finishes starting", "https://github.com/can1357/oh-my-pi"),
 	plan("fx", ActionLogin, "Log in to fx", []string{"fx", "login"}, "Select Vercel, Codex, or Grok in fx's native login flow", "https://fx.sh/docs"),
@@ -62,6 +62,19 @@ var plans = []Plan{
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {
 	p := plan(agentID, action, title, command, guidance, docs)
 	p.terminalInput = terminalInput
+	return p
+}
+
+// kimchiLoginPlan starts Kimchi's TUI, which opens the authentication picker
+// on first launch. If the picker is not already open, /login is sent once the
+// TUI is ready.
+func kimchiLoginPlan() Plan {
+	p := plan("kimchi", ActionLogin, "Log in to Kimchi", []string{"kimchi"}, "Kimchi opens the authentication method picker in the PTY", "https://docs.kimchi.dev/docs/service-keys")
+	p.initialInput = "/login"
+	p.initialInputReadyStates = []shellterm.InitialInputReadyState{
+		{Text: "Select authentication method:", SkipInput: true},
+		{Text: "/ for commands"},
+	}
 	return p
 }
 

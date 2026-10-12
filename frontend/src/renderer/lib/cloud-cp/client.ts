@@ -15,6 +15,7 @@ import type {
 	CloudCpChatEventsQuery,
 	CloudCpChatEventsResponse,
 	CloudCpChatModelsResponse,
+	CloudCpCoderTemplateParametersResponse,
 	CloudCpCoderTemplatesResponse,
 	CloudCpClientEvent,
 	CloudCpCreateOrganizationRequest,
@@ -31,6 +32,8 @@ import type {
 	CloudCpNotificationListQuery,
 	CloudCpNotificationListResponse,
 	CloudCpOrgCoderConfigResponse,
+	CloudCpBillingLinkResponse,
+	CloudCpBillingSummary,
 	CloudCpPutOrgCoderConfigRequest,
 	CloudCpProjectDeletedResponse,
 	CloudCpProjectListResponse,
@@ -104,6 +107,8 @@ export interface CloudCpClientOptions {
 	 * re-resolve the current org so callers stop hammering a dead org.
 	 */
 	onForbidden?: () => void;
+	/** Called when the control plane refuses work for plan reasons (no plan, slots full, usage limit). */
+	onPlanRefused?: (code: string) => void;
 }
 
 export interface CloudCpRequestOptions {
@@ -220,8 +225,30 @@ export interface CloudCpClient {
 	setSessionMergePolicy(orgId: string, sessionId: string, terminateOnPrMerge: boolean, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
 	/** Lists the Coder templates the picker offers (empty when coder is unavailable/unentitled). */
 	listCoderTemplates(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpCoderTemplatesResponse>;
+	/**
+	 * Lists the rich parameters of a Coder template's active version. An older
+	 * control plane without the route answers 404.
+	 */
+	getCoderTemplateParameters(
+		orgId: string,
+		templateId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpCoderTemplateParametersResponse>;
 	/** Reads the org's bring-your-own-Coder connection (non-secret fields only; the API token is never returned). */
 	getOrgCoderConfig(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpOrgCoderConfigResponse>;
+	/** The org's plan, its limits, and usage against them. */
+	getBilling(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
+	/** A Stripe Checkout URL that subscribes the org to `plan`. Admins only. */
+	createBillingCheckout(orgId: string, plan: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingLinkResponse>;
+	/**
+	 * A Stripe Customer Portal URL for changing plan, card, or cancelling. Admins only.
+	 * `flow: "cancel"` opens the portal straight on cancelling the plan (downgrading to Free).
+	 */
+	createBillingPortal(orgId: string, flow?: "cancel", options?: CloudCpRequestOptions): Promise<CloudCpBillingLinkResponse>;
+	/** Spend one of the plan's manual resets of the weekly usage limit. Admins only. */
+	resetBillingUsage(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpBillingSummary>;
+	/** Heartbeat while a session is on screen, so reading it keeps it awake. */
+	touchSessionPresence(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<void>;
 	/** Saves the org's bring-your-own-Coder connection. Omit the token to keep the stored one. */
 	putOrgCoderConfig(
 		orgId: string,
@@ -422,6 +449,16 @@ function seg(value: string): string {
 	return encodeURIComponent(value);
 }
 
+/** Error codes the control plane uses when a plan does not allow the request. */
+export const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
+	"PLAN_REQUIRED",
+	"ORCHESTRATOR_SLOTS_FULL",
+	"WORKER_SLOTS_FULL",
+	"SESSION_LIMIT_REACHED",
+	"WINDOW_LIMIT_REACHED",
+	"WEEKLY_LIMIT_REACHED",
+]);
+
 async function errorFromResponse(response: Response): Promise<CloudCpError> {
 	let message = `Cloud control plane request failed with status ${response.status}.`;
 	let code: string | undefined;
@@ -457,7 +494,7 @@ function newIdempotencyKey(): string {
 }
 
 export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClient {
-	const { baseUrl, getToken, onForbidden } = options;
+	const { baseUrl, getToken, onForbidden, onPlanRefused } = options;
 	// Wrap the default so the global fetch is never invoked detached from its
 	// realm (Chromium throws "Illegal invocation" for a bare fetch reference).
 	const doFetch: typeof fetch = options.fetchImpl ?? ((input, init) => fetch(input, init));
@@ -487,7 +524,9 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			// the renderer re-resolves the current org instead of stranding every
 			// org-scoped call. Fire before throwing so callers still see the error.
 			if (response.status === 403) onForbidden?.();
-			throw await errorFromResponse(response);
+			const error = await errorFromResponse(response);
+			if (error.code && PLAN_REFUSAL_CODES.has(error.code)) onPlanRefused?.(error.code);
+			throw error;
 		}
 		return response;
 	}
@@ -668,8 +707,19 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		listCoderTemplates: (orgId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sandbox/coder/templates`, { signal: o?.signal }),
+		getCoderTemplateParameters: (orgId, templateId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/coder-templates/${seg(templateId)}/parameters`, { signal: o?.signal }),
 		getOrgCoderConfig: (orgId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/coder-config`, { signal: o?.signal }),
+		getBilling: (orgId, o) => requestJson("GET", `/orgs/${seg(orgId)}/billing`, { signal: o?.signal }),
+		createBillingCheckout: (orgId, plan, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/billing/checkout`, { body: { plan }, signal: o?.signal }),
+		createBillingPortal: (orgId, flow, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/billing/portal`, { body: flow ? { flow } : {}, signal: o?.signal }),
+		resetBillingUsage: (orgId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/billing/usage/reset`, { body: {}, signal: o?.signal }),
+		touchSessionPresence: (orgId, sessionId, o) =>
+			requestVoid("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/presence`, { signal: o?.signal }),
 		putOrgCoderConfig: (orgId, body, o) =>
 			requestJson("PUT", `/orgs/${seg(orgId)}/coder-config`, { body, signal: o?.signal }),
 		deleteOrgCoderConfig: (orgId, o) =>

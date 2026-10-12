@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { aoBridge } from "./bridge";
+import { noteCloudSession } from "./cloud-telemetry";
 import type { CloudAccount } from "../../shared/cloud-account";
 
 export type { CloudAccount };
@@ -44,6 +45,7 @@ export function useCloudSession(): UseCloudSessionResult {
       };
     }
     cloud.getSession().then((s) => {
+      noteCloudSession(s, true);
       if (!active) return;
       setSession(s);
       setStatus(s ? "authenticated" : "unauthenticated");
@@ -54,6 +56,9 @@ export function useCloudSession(): UseCloudSessionResult {
     });
 
     const unsub = cloud.onSessionChanged((s) => {
+      // A change that brings a new signed-in user is a completed sign-in;
+      // token refreshes re-send the same user and are not counted.
+      noteCloudSession(s, false);
       setSession(s);
       setStatus(s ? "authenticated" : "unauthenticated");
     });

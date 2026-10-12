@@ -2289,6 +2289,45 @@ func TestRememberProjectPermissionsPinsExistingSessions(t *testing.T) {
 	}
 }
 
+func TestSessionRequestedOutputRoundTripsAndSurvivesUpdate(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "outputs")
+	rec := sampleRecord("outputs")
+	rec.RequestedOutput = domain.RequestedOutputArtifact
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("load: %v %v", ok, err)
+	}
+	if got.RequestedOutput != domain.RequestedOutputArtifact {
+		t.Fatalf("RequestedOutput = %q, want artifact", got.RequestedOutput)
+	}
+	// A generic update from a record without the field must not clear it.
+	got.RequestedOutput = ""
+	got.DisplayName = "renamed"
+	if err := s.UpdateSession(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, _, err := s.GetSession(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.RequestedOutput != domain.RequestedOutputArtifact {
+		t.Fatalf("RequestedOutput after update = %q, want artifact", reloaded.RequestedOutput)
+	}
+	plain, err := s.CreateSession(ctx, sampleRecord("outputs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.RequestedOutput != "" {
+		t.Fatalf("default RequestedOutput = %q, want empty", plain.RequestedOutput)
+	}
+}
+
 func TestClaimChatControllerGenerationPreservesRecency(t *testing.T) {
 	st := newTestStore(t)
 	seedProject(t, st, "restart")

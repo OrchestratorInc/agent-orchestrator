@@ -320,7 +320,7 @@ export function MascotLamp({ status, size = 40 }: { status?: ConnStatus; size?: 
 			style={[s.mascotWrap, { width: size, height: 35 * k }]}
 			accessible
 			accessibilityRole="image"
-			accessibilityLabel={status ? `AO mascot, ${label}` : "AO mascot"}
+			accessibilityLabel={status ? `Orchestrator mascot, ${label}` : "Orchestrator mascot"}
 		>
 			<Image source={MASCOT} style={{ width: size, height: 35 * k }} resizeMode="contain" />
 			{status ? (
@@ -352,8 +352,8 @@ export function ScreenHeader({
 	return (
 		<View style={s.screenHeader}>
 			{left ?? (sidebar ? <HeaderIconButton icon="menu" label="Open navigation" onPress={sidebar.openSidebar} /> : null)}
-			<View style={{ flex: 1 }}>
-				<Text maxFontSizeMultiplier={fontScaleCap.title} style={s.screenTitle}>
+			<View style={{ flex: 1, minWidth: 0 }}>
+				<Text maxFontSizeMultiplier={fontScaleCap.title} numberOfLines={1} ellipsizeMode="tail" style={s.screenTitle}>
 					{title}
 				</Text>
 			</View>

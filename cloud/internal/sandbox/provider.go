@@ -16,6 +16,23 @@ var ErrNotFound = errors.New("sandbox environment not found")
 // ErrAtCapacity indicates that a provider has no capacity for a new sandbox.
 var ErrAtCapacity = errors.New("sandbox provider at capacity")
 
+// ErrSnapshotNotFound indicates that Create was asked to boot from a snapshot
+// (root filesystem) the provider no longer has.
+var ErrSnapshotNotFound = errors.New("sandbox snapshot not found")
+
+// ErrAlreadyExists indicates that Create found the session's sandbox already
+// present: the provider enforces one sandbox per session name. The caller
+// adopts that sandbox through FindBySession instead of creating another.
+var ErrAlreadyExists = errors.New("sandbox environment already exists")
+
+// DuplicateRejectingCreator marks a provider whose Create fails with
+// ErrAlreadyExists rather than making a second sandbox for the same session.
+// For such a provider the reconciler creates first and looks up only on that
+// conflict, saving the lookup round trip on every normal provision.
+type DuplicateRejectingCreator interface {
+	CreateRejectsDuplicates()
+}
+
 // ID uniquely identifies a provider sandbox.
 type ID string
 
@@ -27,9 +44,14 @@ type Spec struct {
 	ResourceProfile domain.ResourceProfile
 	Shape           string
 	RootFS          string
-	Ingress         string
-	Environment     map[string]string
-	Labels          map[string]string
+	// FallbackRootFS is booted instead when RootFS no longer exists at the
+	// provider, e.g. a Freestyle project snapshot collected or replaced after
+	// the session was planned on it. It is the harness base snapshot the
+	// project snapshot was built on; empty means no fallback.
+	FallbackRootFS string
+	Ingress        string
+	Environment    map[string]string
+	Labels         map[string]string
 	// DurableRoot is provider-specific persisted workspace storage. It remains
 	// empty for providers whose established contract already owns persistence.
 	DurableRoot       string
@@ -73,6 +95,10 @@ const (
 	StartupErrorDurableRootUnavailable  = "durable_root_unavailable"
 	StartupErrorWorkerNeverStarted      = "worker_never_started"
 	StartupErrorBootstrapFailed         = "bootstrap_failed"
+	// StartupErrorWorkspaceSetupNotReady means a bring-your-own Coder
+	// connection's workspace ready check never passed within its timeout: the
+	// template's own setup did not finish, so AO did not start its worker.
+	StartupErrorWorkspaceSetupNotReady = "workspace_setup_not_ready"
 )
 
 // StartupError attaches a stable code and a human message to a provider
@@ -131,6 +157,12 @@ type WorkerBootstrap struct {
 	// case the root is created if missing and the identity marker alone guards
 	// against reusing another session's state.
 	RequireMountedDurableRoot bool
+	// RunAsWorkspaceUser (Coder only) runs the worker as the workspace's own
+	// login user instead of User: no account is created and nothing is
+	// launched through sudo, so the worker and its agent keep that user's
+	// HOME, groups and environment. The Coder provider sets it from the
+	// session profile; callers leave it false.
+	RunAsWorkspaceUser bool
 }
 
 // Bootstrapper installs and starts an AO worker in an existing sandbox.

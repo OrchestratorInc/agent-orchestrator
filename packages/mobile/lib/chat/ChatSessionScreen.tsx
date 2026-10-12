@@ -35,6 +35,7 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { getWorkspacePaths, openSessionShell } from "./api";
 import { requestDockModel } from "./requestDockModel";
+import type { ResponseQuoteRequest } from "./responseQuotes";
 import { ChatComposer } from "./ChatComposer";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
@@ -48,12 +49,14 @@ import { conversationMarkers } from "./timelineModel";
 import { turnSettingsModelLabel } from "./turnSettingsModel";
 import { brokenMcpServers, can } from "./types";
 import { useMobileConversation } from "./useConversation";
+import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
 import { usePRSummaries } from "../usePRSummaries";
 import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
 import { iconSize, type, space } from "../tokens";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
+import { archiveSessionMessage } from "../worker-action-model";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
@@ -93,6 +96,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	);
 	const { config, currentHostId, connection, unreachable, projects, refresh: refreshBoard, setWorkerPinned, renameWorker, kill } = useApp();
 	const conversation = useMobileConversation(config, session.id);
+	useChatViewLease(config, session.id);
 	// A load that failed while the desktop was unreachable retries as soon as the
 	// board's poll reconnects, which is what the offline state promises.
 	// Keyed on a failed load, not a missing one, so the first mount doesn't send a
@@ -170,7 +174,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 	const interfaceTransitionNoticeText =
 		interfaceTransitionNotice?.errorDetail ||
 		(interfaceTransitionRecovered
-			? "AO restored the session in its last committed interface."
+			? "Orchestrator restored the session in its last committed interface."
 			: interfaceTransitionNotice?.phase === "recovery_required"
 				? "The interface switch needs recovery before more work is sent."
 				: "The interface switch failed; the current interface remains available.");
@@ -303,6 +307,16 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 		);
 	}, [expandReviewPrompt, headerRightReady, navigation, reviewPromptCollapsed, reviewPromptPR, t]);
 
+	const composerKey = config ? JSON.stringify([machineIdentity(config), session.id]) : session.id;
+	const [quoteRequest, setQuoteRequest] = useState<ResponseQuoteRequest>();
+	const quoteSequence = useRef(0);
+	const addResponseToChat = useCallback((text: string, source?: ResponseQuoteRequest["source"]) => {
+		if (!text.length || !source) return;
+		setDismissedRequest(request?.sequence);
+		setQuoteRequest({ id: `${Date.now()}-${++quoteSequence.current}`, text, source, composerKey });
+	}, [composerKey, request?.sequence]);
+	const quoteHandled = useCallback((id: string) => setQuoteRequest((current) => current?.id === id ? undefined : current), []);
+
 	const loadWorkspaceFiles = useCallback(async () => {
 		if (!config || !conversation.snapshot) return { paths: filePaths, truncated: filePathsTruncated };
 		if (filePathsRequest.current) return filePathsRequest.current;
@@ -416,7 +430,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			"Switch to Terminal UI?",
 			turnWaiting
 				? "This turn is waiting for your input. Finish waits for your answer; stop cancels it and switches now."
-				: "Keep the same AO session, worktree, and native agent conversation.",
+				: "Keep the same Orchestrator session, worktree, and native agent conversation.",
 			[
 				{ text: "Keep Chat", style: "cancel" },
 				{ text: "Finish, then switch", onPress: () => void startInterfaceSwitch("drain") },
@@ -482,13 +496,13 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			onDelete: () => {
 				haptics.warning();
 				Alert.alert(
-					"Delete session?",
-					`This terminates ${sessionName}. Its conversation and worktree are preserved.`,
+					"Archive session?",
+					archiveSessionMessage(sessionName),
 					[
 						{ text: "Cancel", style: "cancel" },
 						// Leave first: the session this screen is showing is about to stop
 						// existing, and the board is where its row disappears from.
-						{ text: "Delete session", style: "destructive", onPress: () => { backOr(router); void kill(session.id).catch(() => {}); } },
+						{ text: "Archive session", style: "destructive", onPress: () => { backOr(router); void kill(session.id).catch(() => {}); } },
 					],
 				);
 			},
@@ -611,7 +625,7 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="alert-circle" /> : null}
 			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon="rotate-ccw" /> : null}
 			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="send" title="Message delivery uncertain" body={pendingSend.error || "Delivery failed"} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /> : null)}
-			<ChatLinkProvider onLinkOpen={openLink}>
+			<ChatLinkProvider onLinkOpen={openLink} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
 				<ChatTimeline
 					snapshot={snapshot}
 					loadingOlder={conversation.loadingOlder}
@@ -627,7 +641,9 @@ export function ChatSessionScreen({ session }: { session: MobileChatSession }) {
 				/>
 			</ChatLinkProvider>
 			<ChatComposer
-				key={config ? JSON.stringify([machineIdentity(config), session.id]) : session.id}
+				key={composerKey}
+				quoteRequest={quoteRequest?.composerKey === composerKey ? quoteRequest : undefined}
+				onQuoteHandled={quoteHandled}
 				reviewPR={reviewPromptPR}
 				reviewPRSummary={reviewPromptSummary}
 				reviewPRCollapsed={reviewPromptCollapsed}

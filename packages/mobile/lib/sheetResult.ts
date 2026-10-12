@@ -82,8 +82,28 @@ export function modelSheetRoute(opts: { agentId: string; projectId: string; sele
 	};
 }
 
-export function connectSheetRoute(onConnected: () => void) {
-	return { pathname: "/sheets/connect" as const, params: { resultKey: parkSheetResult(onConnected) } };
+export function connectSheetRoute(onConnected: () => void, hostId?: string) {
+	return {
+		pathname: "/sheets/connect" as const,
+		params: {
+			resultKey: parkSheetResult(onConnected),
+			...(hostId ? { hostId } : {}),
+		},
+	};
+}
+
+/** Opens the required-name prompt used after a new QR code is verified. */
+export function machineNameSheetRoute(opts: {
+	suggested: string;
+	onSelect: (name: string | null) => void;
+}) {
+	return {
+		pathname: "/sheets/machine-name" as const,
+		params: {
+			resultKey: parkSheetResult(opts.onSelect),
+			suggested: opts.suggested,
+		},
+	};
 }
 
 /**

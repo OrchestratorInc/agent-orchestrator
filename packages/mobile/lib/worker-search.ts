@@ -20,9 +20,11 @@ export function filterWorkerSessions(
 	if (!needle) return [...sessions];
 
 	return sessions.filter((session) => {
+		const hostName = "hostName" in session && typeof session.hostName === "string" ? session.hostName : undefined;
 		const fields = [
 			sessionTitle(session),
 			projectNameFor(session.projectId, session),
+			hostName,
 			session.branch,
 			statusLabelFor(session.status),
 		];

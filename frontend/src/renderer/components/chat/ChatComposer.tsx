@@ -126,6 +126,16 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	// references can only fail again; return them to the draft for removal.
 	"CHAT_EXCERPT_INVALID",
 	"CHAT_EXCERPT_STALE",
+	// A /btw or /side request the daemon refused never opened a side chat, so a
+	// retry cannot succeed; return the draft instead of locking the composer.
+	"CHAT_SIDE_UNAVAILABLE",
+	"CHAT_SIDE_UNSUPPORTED",
+	"CHAT_SIDE_ANCHOR_UNAVAILABLE",
+	"CHAT_SIDE_INVALID_REQUEST",
+	"CHAT_SIDE_NOT_READY",
+	"CHAT_SIDE_RECREATE_REQUIRED",
+	"CHAT_SIDE_CLOSED",
+	"CHAT_SIDE_IDEMPOTENCY_CONFLICT",
 ]);
 
 // Native image blocks are persisted with the chat turn and sent to the provider.
@@ -157,7 +167,12 @@ function restoredDeliveryNotice(delivery: ChatComposerDelivery | undefined): str
 }
 /** A retained server-owned attachment; image bytes stay in durable storage. */
 export type StoredComposerAttachment = ChatDraftRetainedAttachment & { dataUrl?: string };
-export type ChatComposerHandle = { focus(): void; isEmpty(): boolean };
+export type ChatComposerHandle = {
+	focus(): void;
+	isEmpty(): boolean;
+	/** Replaces the draft with text, saved like typed input, and focuses the editor. */
+	setDraft(text: string): void;
+};
 
 export const ChatComposer = memo(function ChatComposer({
 	focusRef,
@@ -187,6 +202,7 @@ export const ChatComposer = memo(function ChatComposer({
 	editingQueuedTurnId,
 	onCancelQueuedEdit,
 	onQueuedDraftChange,
+	onDraftEmptyChange,
 	queuedDraftScope,
 	onQueuedAttachmentsChange,
 	onQueuedRetainedAttachmentsChange,
@@ -272,6 +288,8 @@ export const ChatComposer = memo(function ChatComposer({
 	editingQueuedTurnId?: string;
 	onCancelQueuedEdit?: () => void;
 	onQueuedDraftChange?: (text: string) => void;
+	/** Called when the draft turns empty or non-empty, including after a restore. */
+	onDraftEmptyChange?: (empty: boolean) => void;
 	queuedDraftScope?: ChatDraftScope;
 	onQueuedAttachmentsChange?: (attachments: ChatDraftAttachment[]) => void;
 	onQueuedRetainedAttachmentsChange?: (attachments: ChatDraftRetainedAttachment[]) => void;
@@ -543,6 +561,9 @@ export const ChatComposer = memo(function ChatComposer({
 		path && IMAGE_ATTACHMENT_PATH.test(path) ? [{ path, name: file.name, src: preview }] : []);
 	const controlsDisabled = Boolean(disabled || submitting);
 	const hasDraft = hasText || staged || contextReferences.length > 0;
+	useEffect(() => {
+		onDraftEmptyChange?.(!hasDraft);
+	}, [hasDraft, onDraftEmptyChange]);
 	const savingQueuedEdit = Boolean(editingQueuedTurnId);
 	const acceptedMutationWaiting = Boolean(
 		composerMutation.accepted &&
@@ -682,7 +703,6 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!autoFocus || disabled) return;
 		editor.current?.focus();
 	}, [autoFocus, disabled]);
-	useImperativeHandle(focusRef, () => ({ focus: focusEditor, isEmpty: () => !hasDraft }), [focusEditor, hasDraft]);
 
 	useEffect(() => {
 		focusEditor();
@@ -1028,6 +1048,20 @@ export const ChatComposer = memo(function ChatComposer({
 			setDismissedKey(null);
 		}
 	}, [draftScope, onQueuedDraftChange, optimisticSend]);
+	useImperativeHandle(
+		focusRef,
+		() => ({
+			focus: focusEditor,
+			isEmpty: () => !hasDraft,
+			setDraft: (text: string) => {
+				editor.current?.setText(text);
+				const snapshot = editor.current?.getSnapshot();
+				if (snapshot) onEditorChange(snapshot);
+				editor.current?.focus();
+			},
+		}),
+		[focusEditor, hasDraft, onEditorChange],
+	);
 
 	const pick = useCallback((value: string) => {
 		const currentTrigger = triggerRef.current;
@@ -1073,6 +1107,7 @@ export const ChatComposer = memo(function ChatComposer({
 		(snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab"): string | undefined => {
 			const currentTrigger = snapshot.trigger;
 			if (!currentTrigger) return undefined;
+			if (key === "Enter" && /^\/(btw|side)$/.test(snapshot.text.trim()) && skills.some((skill) => skill.name === snapshot.text.trim().slice(1) && skill.source === "AO")) return undefined;
 			if (key === "Enter" && snapshot.text.trim() === "/compact" && onCompact) {
 				return undefined;
 			}
@@ -1084,7 +1119,7 @@ export const ChatComposer = memo(function ChatComposer({
 			dismissedKeyRef.current = null;
 			return chosen.value;
 		},
-		[onCompact, suggestionsFor],
+		[onCompact, skills, suggestionsFor],
 	);
 
 	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {

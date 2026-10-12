@@ -173,6 +173,12 @@ func (s *Store) OpenReviewTerminal(
 				return err
 			}
 		}
+		// A review wakes a paused session, which a billed session may do only
+		// within its plan. Nothing above inserted rows that reference the
+		// organization, so the plan check may take its lock.
+		if err := s.billing.wakeAdmissionTx(ctx, tx, orgID, sessionID, wakeFromPaused); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(
 			ctx,
 			`UPDATE ao_sandboxes
@@ -502,7 +508,16 @@ func (s *Store) CompleteAndDeliverReviewRun(
 		}
 		if autoInject && pr.HeadSHA == run.TargetSHA && pr.State == contract.PRStateOpen && result.Verdict == contract.AOReviewVerdictChangesRequested {
 			text := fmt.Sprintf("AO review requested changes on %s#%d (%s), commit %s:\n\n%s\n\nAddress these findings, run the relevant tests, commit, and push the correction.", pr.Repository, pr.Number, pr.URL, run.TargetSHA, result.Body)
-			_, err = sendMessageTx(ctx, tx, orgID, reviewSessionID, "ao-review:"+run.ID, text, "", reviewSessionID, "", nil, domain.ChatTurnSettings{})
+			// This transaction already inserted rows that reference the
+			// organization, so it cannot take the organization lock: check the
+			// plan without it. Beyond the plan the findings are queued and run
+			// when the session is woken within it.
+			wakeErr := s.billing.wakeCheckTx(ctx, tx, orgID, reviewSessionID, wakeFromPaused, false)
+			if wakeErr != nil && !IsPlanRefusal(wakeErr) {
+				return wakeErr
+			}
+			_, err = sendMessageTx(ctx, tx, orgID, reviewSessionID, "ao-review:"+run.ID, text, "", reviewSessionID, "", nil,
+				domain.ChatTurnSettings{}, wakeErr == nil)
 		}
 		return err
 	})

@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, View } from "react-native";
 import { type Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { iconSize, press, type } from "./tokens";
+import { workerActionGlyph } from "./worker-action-model";
 
 const ACTION_WIDTH = 64;
 const CONTROL_SIZE = 44;
@@ -20,6 +21,7 @@ export function WorkerRowActions({
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const archiveGlyph = workerActionGlyph("delete");
 
 	return (
 		<View style={styles.actions}>
@@ -29,11 +31,11 @@ export function WorkerRowActions({
 				onPress={() => onSetPinned(!pinned)}
 			/>
 			<Action
-				accessibilityLabel={`Delete ${title}`}
-				icon="trash-2"
-				iconColor={t.red}
-				rippleColor={t.tintRed}
-				style={styles.deleteControl}
+				accessibilityLabel={`Archive ${title}`}
+				icon={archiveGlyph.name}
+				iconColor={t.textSecondary}
+				rippleColor={t.accentTint}
+				style={styles.archiveControl}
 				onPress={onDelete}
 			/>
 		</View>
@@ -117,6 +119,6 @@ const makeStyles = (t: Theme) =>
 			overflow: "hidden",
 		},
 		pinControl: { borderColor: t.accent, backgroundColor: t.accentTint },
-		deleteControl: { borderColor: t.red, backgroundColor: t.tintRed },
+		archiveControl: { borderColor: t.borderSubtle, backgroundColor: t.bgElevated },
 		pressed: { opacity: press.opacity },
 	});

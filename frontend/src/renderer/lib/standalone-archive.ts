@@ -5,7 +5,7 @@ import {
 	type WorkspaceSummary,
 } from "../types/workspace";
 
-function isArchivedSession(session: WorkspaceSession): boolean {
+export function isArchivedSession(session: WorkspaceSession): boolean {
 	return (
 		session.kanbanColumn === "archive" ||
 		session.isTerminated === true ||

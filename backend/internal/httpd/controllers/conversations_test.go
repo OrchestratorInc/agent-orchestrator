@@ -72,6 +72,28 @@ func (f *fakeConversationService) SetChatView(_ context.Context, sessionID domai
 	return nil
 }
 
+func TestConversationAdvertisesVerifiedExcerpts(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	response, err := http.Get(server.URL + "/api/v1/sessions/p1-1/conversation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	var body struct {
+		SupportsExcerpts bool `json:"supportsExcerpts"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.SupportsExcerpts {
+		t.Fatal("daemon did not advertise verified excerpt support")
+	}
+}
+
 func TestChatViewRouteValidatesAndForwardsLease(t *testing.T) {
 	service := &fakeConversationService{}
 	server := conversationTestServer(t, service)

@@ -1353,6 +1353,8 @@ func mapSessionError(err error) error {
 		return apierr.Invalid("UNKNOWN_HARNESS", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrMissingHarness):
 		return apierr.Invalid("AGENT_REQUIRED", err.Error(), nil)
+	case errors.Is(err, sessionmanager.ErrArtifactOutputUnavailable):
+		return apierr.Invalid("ARTIFACT_OUTPUT_UNAVAILABLE", "Artifact output needs a daemon data directory to hold the session's artifacts", nil)
 	case errors.Is(err, sessionmanager.ErrHarnessInstallActive):
 		return apierr.Conflict("HARNESS_INSTALL_ACTIVE", "The selected harness is currently being installed", nil)
 	case errors.Is(err, sessionmanager.ErrUnsupportedModel):

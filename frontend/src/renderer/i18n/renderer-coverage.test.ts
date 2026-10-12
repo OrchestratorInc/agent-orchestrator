@@ -43,6 +43,7 @@ const approvedLiterals: Record<string, readonly string[]> = {
 		"Ctrl+Shift+I",
 		"Ctrl+/",
 	],
+	"components/settings/CoderSettingsSection.tsx": ["grep -q '^Ready' ~/.bootstrap-status"],
 	"components/settings/ConnectMobileSetup.tsx": ["tailscale ip -4"],
 	"components/settings/UpdatesSection.tsx": ["PR #"],
 };

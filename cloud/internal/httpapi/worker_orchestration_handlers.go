@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/go-chi/chi/v5"
 )
@@ -16,6 +17,45 @@ import (
 // pattern so the concrete store carries the method without widening Store.
 type orchestratorProviderStore interface {
 	OrchestratorSandboxProvider(context.Context, string, string) (string, error)
+}
+
+// orchestratorPlacementStore reads everything a child needs to land where its
+// parent orchestrator runs: provider, bring-your-own connection, and the
+// project's Coder config. The Postgres store implements it; a store with only
+// orchestratorProviderStore inherits the provider alone.
+type orchestratorPlacementStore interface {
+	OrchestratorPlacement(context.Context, string, string) (domain.OrchestratorPlacement, error)
+}
+
+// orchestratorPlacement returns the parent orchestrator's placement, writing
+// the error response and returning false on failure.
+func (s *Server) orchestratorPlacement(
+	w http.ResponseWriter,
+	r *http.Request,
+	claims worker.Claims,
+) (domain.OrchestratorPlacement, bool) {
+	if store, ok := s.store.(orchestratorPlacementStore); ok {
+		placement, err := store.OrchestratorPlacement(r.Context(), claims.OrgID, claims.SessionID)
+		if err != nil {
+			s.writeStoreError(w, r, err)
+			return domain.OrchestratorPlacement{}, false
+		}
+		return placement, true
+	}
+	store, ok := s.store.(orchestratorProviderStore)
+	if !ok {
+		writeError(
+			w, r, http.StatusNotImplemented, "not_implemented",
+			"Sandbox provider inheritance is unavailable.",
+		)
+		return domain.OrchestratorPlacement{}, false
+	}
+	provider, err := store.OrchestratorSandboxProvider(r.Context(), claims.OrgID, claims.SessionID)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return domain.OrchestratorPlacement{}, false
+	}
+	return domain.OrchestratorPlacement{Provider: provider}, true
 }
 
 // orchestratorWorkerAgentStore resolves the worker agent the parent
@@ -187,31 +227,45 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
-	providerStore, ok := s.store.(orchestratorProviderStore)
-	if !ok {
-		writeError(
-			w, r, http.StatusNotImplemented, "not_implemented",
-			"Sandbox provider inheritance is unavailable.",
-		)
-		return
-	}
-	parentProvider, err := providerStore.OrchestratorSandboxProvider(
-		r.Context(), claims.OrgID, claims.SessionID,
-	)
-	if err != nil {
-		s.writeStoreError(w, r, err)
-		return
-	}
-	// A child always runs on its orchestrator's provider, never the control
-	// plane default: a NodeOps orchestrator spawns NodeOps workers and a Coder
+	// A child always runs where its orchestrator runs, never the control plane
+	// default: a Freestyle orchestrator spawns Freestyle workers and a Coder
 	// orchestrator spawns Coder workers, even on a control plane that offers
 	// both. The provider is read from the parent's immutable sandbox row, so it
 	// is unaffected by the client-side provider toggle (which only stamps the
-	// provider for top-level sessions the app creates).
-	plan, err := s.provisioning.SessionPlanForProvider(request.Harness, parentProvider)
+	// provider for top-level sessions the app creates). A Coder child also
+	// inherits the parent's bring-your-own Coder connection and the project's
+	// dev-kit config, so a bring-your-own organization's children never fall
+	// back to the managed Coder deployment.
+	parent, ok := s.orchestratorPlacement(w, r, claims)
+	if !ok {
+		return
+	}
+	var placement coderPlacement
+	if parent.Provider == sandbox.ProviderCoder {
+		preferred := request.SandboxProviderConnectionID
+		if preferred == "" {
+			preferred = parent.ConnectionID
+		}
+		connections := parent.CoderConnections
+		if preferred == "" {
+			// The orchestrator runs on the deployment's Coder (it has no
+			// connection of its own), so its children do too.
+			connections = nil
+		}
+		placement, err = resolveCoderPlacement(parent.ProjectConfig, connections, preferred)
+		if err != nil {
+			s.writeCoderPlacementError(w, r, err)
+			return
+		}
+		if placement.connectionID != "" {
+			request.SandboxProviderConnectionID = placement.connectionID
+		}
+	}
+	plan, err := s.provisioning.SessionPlanForProviderWithCoder(
+		request.Harness, parent.Provider, placement.options, placement.override,
+	)
 	if err != nil {
-		s.logger.Error("resolve child sandbox provisioning plan", "error", err, "request_id", requestID(r))
-		writeError(w, r, http.StatusInternalServerError, "internal_error", "Sandbox provisioning is misconfigured.")
+		s.writeSessionPlanError(w, r, claims.OrgID, "", err)
 		return
 	}
 	child, err := s.store.CreateOrchestratorChild(

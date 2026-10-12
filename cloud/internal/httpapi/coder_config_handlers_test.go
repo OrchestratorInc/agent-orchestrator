@@ -108,7 +108,7 @@ func coderConfigRequest(t *testing.T, method, body string, caps []string) *http.
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("orgId", coderCfgOrgID)
 	ctx := context.WithValue(req.Context(), chi.RouteCtxKey, rctx)
-	ctx = context.WithValue(ctx, principalKey, domain.Principal{UserID: coderCfgUserID, OrgCapabilities: caps})
+	ctx = context.WithValue(ctx, principalKey, domain.Principal{UserID: coderCfgUserID, TeamOrgID: coderCfgOrgID, OrgCapabilities: caps})
 	return req.WithContext(ctx)
 }
 

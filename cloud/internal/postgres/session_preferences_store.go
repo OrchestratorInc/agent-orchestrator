@@ -31,10 +31,19 @@ func (s *Store) ApplyPullRequestAutomation(ctx context.Context, pr domain.PullRe
 		if fingerprint == "" {
 			fingerprint = fmt.Sprintf("pr-%d", pr.Number)
 		}
+		wake := true
+		if (autoInjectCI && pr.CIState == "failing") || (autoInjectReview && pr.ReviewState == "changes_requested") {
+			// Feedback reaches a paused billed session even beyond the plan:
+			// it is queued, and runs when the session is woken within it.
+			var err error
+			if wake, err = s.billing.messageWakeTx(ctx, tx, pr.OrgID, pr.SessionID, false); err != nil {
+				return err
+			}
+		}
 		if autoInjectCI && pr.CIState == "failing" {
 			text := fmt.Sprintf("CI is failing on pull request #%d (%s). Inspect the failing checks, fix the issue, run the relevant tests, commit, and push the branch.", pr.Number, pr.URL)
 			if _, err := sendMessageTx(ctx, tx, pr.OrgID, pr.SessionID,
-				fmt.Sprintf("pr-feedback:%s:%s:ci-failing", pr.ID, fingerprint), text, "", "", "", nil, domain.ChatTurnSettings{},
+				fmt.Sprintf("pr-feedback:%s:%s:ci-failing", pr.ID, fingerprint), text, "", "", "", nil, domain.ChatTurnSettings{}, wake,
 			); err != nil {
 				return err
 			}
@@ -42,7 +51,7 @@ func (s *Store) ApplyPullRequestAutomation(ctx context.Context, pr domain.PullRe
 		if autoInjectReview && pr.ReviewState == "changes_requested" {
 			text := fmt.Sprintf("Review changes were requested on pull request #%d (%s). Address the feedback, run the relevant tests, commit, and push the branch.", pr.Number, pr.URL)
 			if _, err := sendMessageTx(ctx, tx, pr.OrgID, pr.SessionID,
-				fmt.Sprintf("pr-feedback:%s:%s:review-changes", pr.ID, fingerprint), text, "", "", "", nil, domain.ChatTurnSettings{},
+				fmt.Sprintf("pr-feedback:%s:%s:review-changes", pr.ID, fingerprint), text, "", "", "", nil, domain.ChatTurnSettings{}, wake,
 			); err != nil {
 				return err
 			}

@@ -23,7 +23,7 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
-export type InspectorView = "summary" | "reviews" | "browser" | "files";
+export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files";
 
 export type InspectorTab = {
 	badge?: boolean;
@@ -45,6 +45,7 @@ export function SessionInspectorShellView({
 	ariaLabel,
 	browserPoppedOut,
 	browserView,
+	sideChatView,
 	filesView,
 	headerActions,
 	isVisible = true,
@@ -58,6 +59,7 @@ export function SessionInspectorShellView({
 	ariaLabel: string;
 	browserPoppedOut: boolean;
 	browserView?: ReactNode;
+	sideChatView?: ReactNode;
 	filesView?: ReactNode;
 	headerActions?: ReactNode;
 	isVisible?: boolean;
@@ -188,7 +190,8 @@ export function SessionInspectorShellView({
 				className={cn(
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
-					activeView !== "browser" && activeView !== "files" && inspectorScrollableBodyClass,
+					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && inspectorScrollableBodyClass,
+					activeView === "sideChat" && "p-0 overflow-hidden",
 					activeView === "browser" &&
 						!browserPoppedOut &&
 						"session-inspector__body--browser p-0 overflow-hidden [&>[role=tabpanel]]:border-0 [&>[role=tabpanel]]:rounded-none",
@@ -199,6 +202,7 @@ export function SessionInspectorShellView({
 				{activeView === "summary" ? summaryView : null}
 				{activeView === "reviews" ? reviewsView : null}
 				{activeView === "browser" ? browserView : null}
+				{activeView === "sideChat" ? sideChatView : null}
 				{activeView === "files" ? filesView : null}
 			</div>
 		</aside>

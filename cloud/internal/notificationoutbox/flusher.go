@@ -26,10 +26,17 @@ func (realClock) After(duration time.Duration) <-chan time.Time { return time.Af
 type Flusher struct {
 	Outbox      *Outbox
 	WorkerEpoch int64
-	Deliver     func(context.Context, Event) error
-	Clock       Clock
-	Jitter      func(time.Duration) time.Duration
-	Logger      *slog.Logger
+	// AdoptPriorEpochs delivers events stamped with an earlier worker epoch
+	// instead of discarding them. It is set where the interactive agent
+	// outlives its worker (a Freestyle wake keeps the agent and restarts the
+	// worker): that agent's events, including any it queued before or during
+	// the restart, belong to this worker now. Without it, events from a
+	// superseded epoch are dropped undelivered.
+	AdoptPriorEpochs bool
+	Deliver          func(context.Context, Event) error
+	Clock            Clock
+	Jitter           func(time.Duration) time.Duration
+	Logger           *slog.Logger
 }
 
 func (f *Flusher) defaults() {
@@ -80,7 +87,8 @@ func (f *Flusher) FlushOne(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	event := events[0]
-	if event.WorkerEpoch != f.WorkerEpoch {
+	adopted := f.AdoptPriorEpochs && event.WorkerEpoch < f.WorkerEpoch
+	if event.WorkerEpoch != f.WorkerEpoch && !adopted {
 		return true, f.Outbox.Delete(ctx, event.EventID, event.WorkerEpoch)
 	}
 	if err := f.Deliver(ctx, event); err != nil {

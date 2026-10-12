@@ -150,9 +150,9 @@ export function describeConnectionFailure(
 	switch (reason) {
 		case "incompatible-host":
 			return {
-				title: "AO versions are incompatible",
+				title: "Orchestrator versions are incompatible",
 				icon: "download-cloud",
-				message: "Update AO on this phone and the machine, then reconnect.",
+				message: "Update Orchestrator on this phone and the machine, then reconnect.",
 				showLocalNetworkHint: false,
 			};
 		case "tunnel-rotated":
@@ -160,22 +160,22 @@ export function describeConnectionFailure(
 				title: "Your machine's address changed",
 				icon: "route-off",
 				message:
-					"AO restarted on that machine, so it has a new address. Open AO \u2192 Settings \u2192 Connect Mobile there and scan the new code.",
+					"Orchestrator restarted on that machine, so it has a new address. Open Orchestrator \u2192 Settings \u2192 Connect Mobile there and scan the new code.",
 				showLocalNetworkHint: false,
 			};
 		case "outdated-desktop":
 			return {
-				title: "Update AO on your machine",
+				title: "Update Orchestrator on your machine",
 				icon: "download-cloud",
 				message:
-					"That code came from an older version of AO. Update AO on that machine, then generate a new code.",
+					"That code came from an older version of Orchestrator. Update Orchestrator on that machine, then generate a new code.",
 				showLocalNetworkHint: false,
 			};
 		case "not-ao-qr":
 			return {
-				title: "Not an AO pairing code",
+				title: "Not an Orchestrator pairing code",
 				icon: "alert-circle",
-				message: "That QR code isn't an AO pairing code.",
+				message: "That QR code isn't an Orchestrator pairing code.",
 				showLocalNetworkHint: false,
 			};
 		case "unreachable": {
@@ -190,7 +190,7 @@ export function describeConnectionFailure(
 					: "Check you're on the same Wi-Fi.",
 				message: isTailscaleHost(target.host)
 					? messagePrefix +
-						"Make sure Tailscale is connected on this phone and that machine, and that AO is running there."
+						"Make sure Tailscale is connected on this phone and that machine, and that Orchestrator is running there."
 					: messagePrefix +
 						"Is Connect Mobile still on, and is your phone on the same Wi-Fi?",
 				showLocalNetworkHint,
@@ -221,7 +221,7 @@ export function describeConnectionFailure(
 			return {
 				title: "Your machine returned an error",
 				icon: "monitor-cog",
-				message: `${target.host}:${target.port} answered, but with an error. Check the AO logs on that machine.`,
+				message: `${target.host}:${target.port} answered, but with an error. Check the Orchestrator logs on that machine.`,
 				showLocalNetworkHint: false,
 			};
 	}
@@ -229,7 +229,7 @@ export function describeConnectionFailure(
 
 /** The extra line shown when {@link ConnectionErrorCopy.showLocalNetworkHint} is set. */
 export const LOCAL_NETWORK_HINT =
-	"If you denied the Local Network prompt, enable it in Settings › Privacy & Security › Local Network › AO.";
+	"If you denied the Local Network prompt, enable it in Settings › Privacy & Security › Local Network › Orchestrator.";
 
 // ---- Failed actions ----------------------------------------------------------
 
@@ -251,11 +251,11 @@ export class UnreachableError extends Error {
 
 /** Shown when a request never reached the desktop. */
 export const UNREACHABLE_ACTION_COPY =
-	"Couldn't reach your machine. Make sure AO is running there, then try again.";
+	"Couldn't reach your machine. Make sure Orchestrator is running there, then try again.";
 
 /** Shown in place of a missing server config ("No AO server configured"). */
 export const NOT_PAIRED_ACTION_COPY =
-	"This phone isn't paired with a machine. Scan its AO pairing code.";
+	"This phone isn't paired with a machine. Scan its Orchestrator pairing code.";
 
 // The fields an ApiError carries, read structurally so this module stays free of
 // `api.ts` (and with it AsyncStorage) and remains unit-testable.
@@ -323,7 +323,7 @@ export function userFacingError(error: unknown, fallback = "Something went wrong
 		if (status >= 500) {
 			if (status === 503) return "Your machine is busy or still starting up. Try again in a moment.";
 			const ref = typeof failure.requestId === "string" && failure.requestId ? ` (Reference: ${failure.requestId})` : "";
-			return `Something went wrong on your machine. Try again, or check the AO logs there.${ref}`;
+			return `Something went wrong on your machine. Try again, or check the Orchestrator logs there.${ref}`;
 		}
 		const detail = daemonDetail(error);
 		if (detail) return sentence(detail);

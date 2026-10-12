@@ -34,7 +34,7 @@ export function reauthBanner(reauthRequiredAt: string, command?: string): Banner
 	return {
 		key: `reauth:${reauthRequiredAt}`,
 		title: "Sign in again to keep going",
-		body: command ? `Run “${command}” on the AO host, then send again.` : "Sign in with the agent's CLI on the AO host, then send again.",
+		body: command ? `Run “${command}” on the Orchestrator host, then send again.` : "Sign in with the agent's CLI on the Orchestrator host, then send again.",
 	};
 }
 
@@ -43,7 +43,7 @@ export function threadBanner(status: string | undefined): BannerCopy | undefined
 		return { key: "thread:system_error", title: "The agent's thread hit an internal error", body: "New turns will usually fail. The conversation and worktree are kept." };
 	}
 	if (status === "closed") {
-		return { key: "thread:closed", title: "The agent closed this thread", body: "AO kept the history, but the agent no longer holds it." };
+		return { key: "thread:closed", title: "The agent closed this thread", body: "Orchestrator kept the history, but the agent no longer holds it." };
 	}
 	return undefined;
 }

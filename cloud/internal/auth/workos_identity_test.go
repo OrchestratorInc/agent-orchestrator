@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -171,6 +172,65 @@ func TestFallbackWorkOSVerifier(t *testing.T) {
 				t.Fatalf("previous verifier calls = %d, want used=%v", previousVerifier.calls, tc.previousUsed)
 			}
 		})
+	}
+}
+
+func TestWorkOSOrganizationResolverReadsCapabilitiesAndBilling(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		records := map[string]map[string]any{
+			"/organizations/org_b2b": {"id": "org_b2b", "name": "Acme", "metadata": map[string]string{
+				"capabilities": "coder", "billing": "contract",
+			}},
+			"/organizations/org_bare": {"id": "org_bare", "name": "Solo"},
+		}
+		record, ok := records[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(record)
+	}))
+	defer server.Close()
+	organizations, err := newWorkOSOrganizationResolver("sk_test", server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b2b, err := organizations(context.Background(), "org_b2b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(b2b.Capabilities, []string{"coder"}) || b2b.Billing != domain.OrgBillingContract {
+		t.Fatalf("org_b2b = %+v, want coder capability and contract billing", b2b)
+	}
+	bare, err := organizations(context.Background(), "org_bare")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bare.Capabilities != nil || bare.Billing != "" {
+		t.Fatalf("org_bare = %+v, want no capabilities and unset billing", bare)
+	}
+}
+
+func TestOIDCVerifierCarriesOrganizationBilling(t *testing.T) {
+	issuer := newTestTokenIssuer(t)
+	profiles := func(context.Context, string) (WorkOSProfile, error) {
+		return WorkOSProfile{Email: "ada@example.com"}, nil
+	}
+	organizations := func(context.Context, string) (WorkOSOrganization, error) {
+		return WorkOSOrganization{DisplayName: "Acme", Capabilities: []string{"coder"}, Billing: domain.OrgBillingContract}, nil
+	}
+	verifier, err := NewOIDCVerifier(context.Background(), testIssuer, "client_current", issuer.jwksURL, profiles, organizations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, err := verifier.Verify(context.Background(), issuer.token(t, map[string]any{
+		"sub": "user_1", "org_id": "org_acme",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if principal.OrgBilling != domain.OrgBillingContract || !slices.Equal(principal.OrgCapabilities, []string{"coder"}) {
+		t.Fatalf("principal = %+v, want contract billing and coder capability", principal)
 	}
 }
 

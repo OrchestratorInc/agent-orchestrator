@@ -24,9 +24,8 @@ import { type FileAttachmentPayload, useFileAttachments } from "../hooks/useFile
 import { useSettings } from "../hooks/useSettings";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
-import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
 import { useProviderConnections } from "../hooks/useProviderConnections";
-import { cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
+import { cloudAgentInfos, connectedCredentialType, credentialModelScope, isCloudHarnessConnected } from "../lib/cloud-agents";
 import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
 import { fallbackEffort } from "../lib/effort";
 import {
@@ -35,7 +34,6 @@ import {
 	isLaunchableAgent,
 	isReadyAgent,
 } from "../lib/agent-select-options";
-import { resolveSandboxProviderPreference, useSandboxProviderStore } from "../stores/sandbox-provider-store";
 import { cloudSessionsQueryKey, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
 import {
 	agentModelsQueryKey,
@@ -167,11 +165,6 @@ export function TaskComposer({
 	// project keeps the existing daemon flow untouched.
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
-	// The user's client-side sandbox-provider preference (when the control plane
-	// offers more than one); omitted lets the control plane use its default.
-	const selectedProvider = useSandboxProviderStore((s) => s.selectedProvider);
-	const { available: availableSandboxProviders } = useCloudSandboxProviders();
-	const provider = resolveSandboxProviderPreference(selectedProvider, availableSandboxProviders);
 	const cloudProjects = useCloudProjectsQuery();
 	const cloudProject = (cloudProjects.data ?? []).find((project) => project.id === projectId);
 	const isCloudProject = !hostId && Boolean(cloudProject);
@@ -190,6 +183,8 @@ export function TaskComposer({
 			void captureRendererEvent("ao.renderer.task_create_requested", { project_id: input.projectId });
 			if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 			try {
+				// No provider: the control plane runs the session on the project's
+				// stored provider (config.sandboxProvider), else the org's default.
 				const { session } = await cloudClient.createSession(cloudOrg.id, {
 					projectId: input.projectId,
 					kind: "worker",
@@ -198,7 +193,6 @@ export function TaskComposer({
 					prompt: input.brief,
 					...(input.model ? { model: input.model } : {}),
 					...(input.effort ? { reasoningEffort: input.effort } : {}),
-					...(provider ? { provider } : {}),
 				});
 				// The control plane provisions the sandbox asynchronously; surface the
 				// new session on the board immediately.
@@ -210,7 +204,7 @@ export function TaskComposer({
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
-		[cloudClient, cloudOrg, provider, queryClient, t],
+		[cloudClient, cloudOrg, queryClient, t],
 	);
 
 	const createDaemonTask = useCallback(
@@ -569,12 +563,17 @@ export function TaskComposer({
 		openGlobalSettings("harness", {
 			focusAgentId: selectedAgent,
 			...(hostId ? { hostId } : {}),
-			harnessView: "local",
+			// A cloud task runs on the cloud connection, so that is the login to fix.
+			harnessView: isCloudProject ? "cloud" : "local",
 			startLogin: true,
 			preserveProject: true,
 		});
-	}, [hostId, openGlobalSettings, selectedAgent]);
-	const modelWarning = modelAuthIssue ? (
+	}, [hostId, isCloudProject, openGlobalSettings, selectedAgent]);
+	// The catalog is read through this computer's login, but a cloud task runs on
+	// the cloud connection: once that is connected, this computer's login state is
+	// irrelevant to the task and the notice only confuses.
+	const cloudHarnessReady = isCloudProject && isCloudHarnessConnected(cloudConnectionsQuery.data, selectedAgent);
+	const modelWarning = modelAuthIssue && cloudHarnessReady ? undefined : modelAuthIssue ? (
 		<ModelCatalogNotice
 			agentLabel={selectedAgentLabel}
 			issue={modelAuthIssue}

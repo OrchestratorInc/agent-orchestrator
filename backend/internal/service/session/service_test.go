@@ -3622,6 +3622,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"cleanup script failed", fmt.Errorf("kill mer-1: %w: secret output", sessionmanager.ErrCleanupScript), apierr.KindConflict, "WORKSPACE_CLEANUP_FAILED"},
 		{"unknown harness", fmt.Errorf("spawn: %w: %q", sessionmanager.ErrUnknownHarness, "bogus"), apierr.KindInvalid, "UNKNOWN_HARNESS"},
 		{"missing harness", fmt.Errorf("spawn: %w: configure project worker.agent or pass --harness", sessionmanager.ErrMissingHarness), apierr.KindInvalid, "AGENT_REQUIRED"},
+		{"artifact output unavailable", fmt.Errorf("spawn: %w", sessionmanager.ErrArtifactOutputUnavailable), apierr.KindInvalid, "ARTIFACT_OUTPUT_UNAVAILABLE"},
 		{"harness install active", fmt.Errorf("spawn: %w", sessionmanager.ErrHarnessInstallActive), apierr.KindConflict, "HARNESS_INSTALL_ACTIVE"},
 		{"awaiting decision", fmt.Errorf("send mer-1: %w", sessionmanager.ErrAwaitingDecision), apierr.KindConflict, "SESSION_AWAITING_DECISION"},
 		{"startup pending", fmt.Errorf("send mer-1: %w", sessionmanager.ErrStartupPending), apierr.KindConflict, "SESSION_STARTUP_PENDING"},
@@ -3725,6 +3726,12 @@ func TestToSpawnAPIErrorMapsSpawnStageSentinels(t *testing.T) {
 			fmt.Errorf("spawn mer-1: %w: %w", sessionmanager.ErrWorkspaceCreate, ports.ErrWorkspaceBranchNotFetched),
 			apierr.KindInvalid,
 			"BRANCH_NOT_FETCHED",
+		},
+		{
+			"artifact output without a data dir",
+			fmt.Errorf("spawn: %w", sessionmanager.ErrArtifactOutputUnavailable),
+			apierr.KindInvalid,
+			"ARTIFACT_OUTPUT_UNAVAILABLE",
 		},
 		{
 			"unclassified fallback",

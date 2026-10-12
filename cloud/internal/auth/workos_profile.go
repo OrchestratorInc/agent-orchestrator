@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
 
 const (
@@ -216,6 +218,7 @@ func newWorkOSOrganizationResolver(
 		resolved := WorkOSOrganization{
 			DisplayName:  displayName,
 			Capabilities: parseOrganizationCapabilities(organization.Metadata),
+			Billing:      parseOrganizationBilling(organization.Metadata),
 			LegacyID:     legacyWorkOSID(organization.ExternalID, "org_", organizationID),
 		}
 		mutex.Lock()
@@ -254,6 +257,14 @@ func parseOrganizationCapabilities(metadata map[string]string) []string {
 		return nil
 	}
 	return capabilities
+}
+
+// parseOrganizationBilling reads the organization's billing arrangement from
+// the WorkOS metadata "billing" key: "contract" exempts it from self-serve
+// plans, "self_serve" opts it in explicitly. Anything else reads as unset, so
+// the deployment default (AO_CLOUD_DEFAULT_ORG_BILLING) applies.
+func parseOrganizationBilling(metadata map[string]string) string {
+	return domain.NormalizeOrgBilling(metadata["billing"])
 }
 
 func trimCache[T any](cache map[string]T, expired func(T) bool) {

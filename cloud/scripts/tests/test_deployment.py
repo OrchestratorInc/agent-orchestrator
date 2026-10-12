@@ -7,13 +7,19 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from lib.deployment import (
     CODER_SECRET_ENV,
+    FREESTYLE_SECRET_ENV,
     NODEOPS_SECRET_ENV,
+    STRIPE_SECRET_ENV,
     WORKER_SECRET_ENV,
     build_task_definition,
     resolve_sandbox_providers,
     secret_environment,
+    stale_harness_snapshots,
+    task_definition_freestyle_snapshots,
     validate_hosted_settings,
+    validate_offering,
     validate_service,
+    validate_stripe_settings,
     validate_task_artifacts,
 )
 
@@ -86,6 +92,28 @@ def coder_settings():
             "parameters_json": '{"instance_type":"t3.medium"}',
             "durable_root": "/home/coder",
             "worker_token_ttl": "15m",
+        },
+        hosted_settings()[1],
+    )
+
+
+def freestyle_secret_overrides(environment="staging"):
+    return secret_environment(
+        f"arn:secret:ao-cloud/{environment}/freestyle", FREESTYLE_SECRET_ENV
+    ) | secret_environment(
+        f"arn:secret:ao-cloud/{environment}/worker", WORKER_SECRET_ENV
+    )
+
+
+def freestyle_settings():
+    return (
+        {
+            "api_key": "freestyle-secret",
+            "default_snapshot": "snap-claude",
+            "worker_token_ttl": "15m",
+            "snapshot_by_harness": (
+                '{"claude-code":"snap-claude","codex":"snap-codex","cursor":"snap-cursor"}'
+            ),
         },
         hosted_settings()[1],
     )
@@ -468,7 +496,101 @@ class TaskDefinitionTests(unittest.TestCase):
             resolve_sandbox_providers("nodeops", ["nodeops", "bogus"])
 
 
+class FreestyleTaskDefinitionTests(unittest.TestCase):
+    def test_renders_freestyle_secrets_and_snapshot_map(self):
+        payload = build_task_definition(
+            task_source("staging"),
+            family="ao-cloud-staging-api",
+            container_name="control-plane",
+            image=CONTROL_IMAGE,
+            release="rel",
+            environment="staging",
+            log_group="/ao-cloud/staging/control-plane",
+            region="eu-north-1",
+            worker_image=WORKER_IMAGE,
+            sandbox_provider="freestyle",
+            sandbox_providers=["nodeops", "freestyle"],
+            environment_overrides={
+                "AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS": '{"codex":"snap-codex"}'
+            },
+            secret_overrides=multi_provider_secret_overrides("staging")
+            | freestyle_secret_overrides("staging"),
+        )
+        container = payload["containerDefinitions"][0]
+        environment = {item["name"]: item["value"] for item in container["environment"]}
+        secrets = {item["name"] for item in container["secrets"]}
+        self.assertEqual(environment["AO_CLOUD_SANDBOX_PROVIDER"], "freestyle")
+        self.assertEqual(environment["AO_CLOUD_SANDBOX_PROVIDERS"], "nodeops,freestyle")
+        self.assertIn("AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS", environment)
+        self.assertTrue(set(FREESTYLE_SECRET_ENV) <= secrets)
+        self.assertTrue(set(NODEOPS_SECRET_ENV) <= secrets)
+
+    def test_prunes_freestyle_settings_when_not_served(self):
+        source = task_source("staging")
+        container = source["taskDefinition"]["containerDefinitions"][0]
+        container["environment"].append(
+            {"name": "AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS", "value": "{}"}
+        )
+        container["secrets"].append(
+            {
+                "name": "AO_CLOUD_FREESTYLE_API_KEY",
+                "valueFrom": "arn:secret:ao-cloud/staging/freestyle:api_key::",
+            }
+        )
+        payload = build_task_definition(
+            source,
+            family="ao-cloud-staging-api",
+            container_name="control-plane",
+            image=CONTROL_IMAGE,
+            release="rel",
+            environment="staging",
+            log_group="/ao-cloud/staging/control-plane",
+            region="eu-north-1",
+            worker_image=WORKER_IMAGE,
+            secret_overrides=hosted_secret_overrides("staging"),
+        )
+        rendered = payload["containerDefinitions"][0]
+        names = {item["name"] for item in rendered["environment"]} | {
+            item["name"] for item in rendered["secrets"]
+        }
+        self.assertNotIn("AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS", names)
+        self.assertNotIn("AO_CLOUD_FREESTYLE_API_KEY", names)
+
+    def test_rejects_freestyle_auto_pause_override(self):
+        with self.assertRaisesRegex(ValueError, "auto-pause"):
+            build_task_definition(
+                task_source("staging"),
+                family="ao-cloud-staging-api",
+                container_name="control-plane",
+                image=CONTROL_IMAGE,
+                release="rel",
+                environment="staging",
+                log_group="/ao-cloud/staging/control-plane",
+                region="eu-north-1",
+                worker_image=WORKER_IMAGE,
+                sandbox_provider="freestyle",
+                environment_overrides={"AO_CLOUD_FREESTYLE_AUTO_PAUSE_SECONDS": "300"},
+                secret_overrides=freestyle_secret_overrides("staging"),
+            )
+
+
 class HostedSettingsTests(unittest.TestCase):
+    def test_accepts_freestyle_settings(self):
+        freestyle, worker = freestyle_settings()
+        validate_hosted_settings(freestyle, worker, provider="freestyle")
+
+    def test_rejects_freestyle_without_every_harness_snapshot(self):
+        freestyle, worker = freestyle_settings()
+        freestyle["snapshot_by_harness"] = '{"claude-code":"snap-claude"}'
+        with self.assertRaisesRegex(ValueError, "codex, cursor"):
+            validate_hosted_settings(freestyle, worker, provider="freestyle")
+
+    def test_rejects_freestyle_auto_pause_setting(self):
+        freestyle, worker = freestyle_settings()
+        freestyle["auto_pause_seconds"] = "300"
+        with self.assertRaisesRegex(ValueError, "auto-pause"):
+            validate_hosted_settings(freestyle, worker, provider="freestyle")
+
     def test_accepts_complete_environment_scoped_settings(self):
         nodeops, worker = hosted_settings()
         validate_hosted_settings(nodeops, worker)
@@ -577,6 +699,424 @@ class ServiceValidationTests(unittest.TestCase):
                 targets=targets,
                 alarm_state="OK",
             )
+
+    def test_ignores_draining_targets_only_when_asked(self):
+        service, tasks, targets = healthy_service()
+        targets.append({"TargetHealth": {"State": "draining"}})
+        with self.assertRaisesRegex(ValueError, "target count"):
+            validate_service(
+                service=service,
+                tasks=tasks,
+                targets=targets,
+                alarm_state="OK",
+            )
+        validate_service(
+            service=service,
+            tasks=tasks,
+            targets=targets,
+            alarm_state="OK",
+            ignore_draining=True,
+        )
+
+    def test_draining_does_not_hide_an_unhealthy_target(self):
+        service, tasks, _ = healthy_service()
+        targets = [
+            {"TargetHealth": {"State": "unhealthy"}},
+            {"TargetHealth": {"State": "draining"}},
+        ]
+        with self.assertRaisesRegex(ValueError, "unhealthy"):
+            validate_service(
+                service=service,
+                tasks=tasks,
+                targets=targets,
+                alarm_state="OK",
+                ignore_draining=True,
+            )
+
+
+def offering(**overrides):
+    values = {
+        "providers": ["coder", "freestyle"],
+        "default_provider": "coder",
+        "gated_providers": ["coder", "freestyle"],
+        "default_org_capabilities": ["freestyle"],
+        "default_org_billing": "self_serve",
+        "paywalled_features": [],
+        "idle_pause_threshold": "0",
+        "freestyle_idle_pause_threshold": "15m",
+    }
+    values.update(overrides)
+    return values
+
+
+class OfferingTests(unittest.TestCase):
+    def test_accepts_staging_defaults(self):
+        self.assertEqual(validate_offering(**offering()), ["coder", "freestyle"])
+
+    def test_production_may_serve_a_subset_of_staging(self):
+        served = validate_offering(
+            **offering(providers=["coder"]),
+            staging_providers=["coder", "freestyle"],
+        )
+        self.assertEqual(served, ["coder"])
+
+    def test_production_rejects_a_provider_staging_does_not_run(self):
+        with self.assertRaisesRegex(ValueError, "not exercised in staging: freestyle"):
+            validate_offering(**offering(), staging_providers=["coder"])
+
+    def test_production_rejects_nodeops_once_staging_dropped_it(self):
+        with self.assertRaisesRegex(ValueError, "nodeops"):
+            validate_offering(
+                **offering(providers=["nodeops", "coder"]),
+                staging_providers=["coder", "freestyle"],
+            )
+
+    def test_rejects_default_outside_providers(self):
+        with self.assertRaisesRegex(ValueError, "must be one of"):
+            validate_offering(**offering(providers=["coder"], default_provider="freestyle"))
+
+    def test_rejects_unknown_gated_provider(self):
+        with self.assertRaisesRegex(ValueError, "unknown providers: daytona"):
+            validate_offering(**offering(gated_providers=["coder", "daytona"]))
+
+    def test_rejects_unknown_billing_mode(self):
+        with self.assertRaisesRegex(ValueError, "AO_CLOUD_DEFAULT_ORG_BILLING"):
+            validate_offering(**offering(default_org_billing="free"))
+
+    def test_rejects_malformed_capability_or_feature(self):
+        with self.assertRaisesRegex(ValueError, "DEFAULT_ORG_CAPABILITIES"):
+            validate_offering(**offering(default_org_capabilities=["Free Style"]))
+        with self.assertRaisesRegex(ValueError, "PAYWALLED_FEATURES"):
+            validate_offering(**offering(paywalled_features=["multi repo"]))
+
+    def test_accepts_empty_gate_and_capabilities(self):
+        validate_offering(**offering(gated_providers=[], default_org_capabilities=[]))
+
+    def test_idle_thresholds_are_zero_or_at_least_a_minute(self):
+        validate_offering(**offering(idle_pause_threshold="1h", freestyle_idle_pause_threshold="0"))
+        for bad in ("30s", "15", "soon", ""):
+            with self.subTest(value=bad), self.assertRaisesRegex(
+                ValueError, "AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD"
+            ):
+                validate_offering(**offering(freestyle_idle_pause_threshold=bad))
+
+    def test_checked_in_offering_files_validate(self):
+        files = {
+            name: offering_file(name) for name in ("staging", "production")
+        }
+        staging = validate_offering(**offering_arguments(files["staging"]))
+        validate_offering(
+            **offering_arguments(files["production"]), staging_providers=staging
+        )
+        self.assertNotIn("nodeops", files["staging"]["AO_CLOUD_SANDBOX_PROVIDERS"])
+        self.assertEqual(files["staging"]["AO_CLOUD_SANDBOX_PROVIDER"], "coder")
+        self.assertEqual(files["production"]["AO_CLOUD_SANDBOX_PROVIDER"], "coder")
+
+
+def offering_file(environment):
+    path = Path(__file__).parents[1] / "offering" / f"{environment}.env"
+    values = {}
+    for line in path.read_text().splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            name, _, value = line.partition("=")
+            values[name] = value
+    return values
+
+
+def offering_arguments(values):
+    def split(name):
+        return [part for part in values[name].split(",") if part]
+
+    return {
+        "providers": split("AO_CLOUD_SANDBOX_PROVIDERS"),
+        "default_provider": values["AO_CLOUD_SANDBOX_PROVIDER"],
+        "gated_providers": split("AO_CLOUD_CAPABILITY_GATED_PROVIDERS"),
+        "default_org_capabilities": split("AO_CLOUD_DEFAULT_ORG_CAPABILITIES"),
+        "default_org_billing": values["AO_CLOUD_DEFAULT_ORG_BILLING"],
+        "paywalled_features": split("AO_CLOUD_PAYWALLED_FEATURES"),
+        "idle_pause_threshold": values["AO_CLOUD_IDLE_PAUSE_THRESHOLD"],
+        "freestyle_idle_pause_threshold": values["AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD"],
+    }
+
+
+def stripe_settings():
+    return {
+        "secret_key": "sk_test_abc",
+        "webhook_secret": "whsec_abc",
+        "price_ids": {"starter": "price_1", "pro": "price_2"},
+        "portal_configuration": "bpc_1",
+        "exempt_orgs_created_before": "2026-10-01T00:00:00Z",
+    }
+
+
+class StripeSettingsTests(unittest.TestCase):
+    def test_accepts_complete_settings(self):
+        validate_stripe_settings(stripe_settings(), environment="staging")
+
+    def test_accepts_price_ids_as_json_string_and_optional_fields_absent(self):
+        stripe = stripe_settings()
+        stripe["price_ids"] = '{"starter":"price_1"}'
+        del stripe["portal_configuration"]
+        del stripe["exempt_orgs_created_before"]
+        validate_stripe_settings(stripe, environment="staging")
+
+    def test_rejects_missing_webhook_secret(self):
+        stripe = stripe_settings()
+        del stripe["webhook_secret"]
+        with self.assertRaisesRegex(ValueError, "webhook_secret"):
+            validate_stripe_settings(stripe, environment="staging")
+
+    def test_rejects_missing_or_malformed_price_ids(self):
+        for price_ids in (None, {}, {"starter": "prod_1"}, "not json"):
+            stripe = stripe_settings()
+            stripe["price_ids"] = price_ids
+            with self.subTest(price_ids=price_ids), self.assertRaisesRegex(
+                ValueError, "price"
+            ):
+                validate_stripe_settings(stripe, environment="staging")
+
+    def test_rejects_key_from_the_wrong_mode(self):
+        with self.assertRaisesRegex(ValueError, "live key"):
+            validate_stripe_settings(stripe_settings(), environment="production")
+        stripe = stripe_settings()
+        stripe["secret_key"] = "sk_live_abc"
+        validate_stripe_settings(stripe, environment="production")
+        with self.assertRaisesRegex(ValueError, "must not be a live key"):
+            validate_stripe_settings(stripe, environment="staging")
+
+    def test_rejects_malformed_portal_or_cutoff(self):
+        stripe = stripe_settings()
+        stripe["portal_configuration"] = "portal"
+        with self.assertRaisesRegex(ValueError, "bpc_"):
+            validate_stripe_settings(stripe, environment="staging")
+        for cutoff in ("2026-10-01", "yesterday", "2026-10-01T00:00:00"):
+            stripe = stripe_settings()
+            stripe["exempt_orgs_created_before"] = cutoff
+            with self.subTest(cutoff=cutoff), self.assertRaisesRegex(ValueError, "RFC 3339"):
+                validate_stripe_settings(stripe, environment="staging")
+
+
+def stripe_secret_overrides(environment="staging"):
+    return secret_environment(f"arn:secret:ao-cloud/{environment}/stripe", STRIPE_SECRET_ENV)
+
+
+def render_coder(source, environment="staging", **kwargs):
+    return build_task_definition(
+        source,
+        family=f"ao-cloud-{environment}-api",
+        container_name="control-plane",
+        image=CONTROL_IMAGE,
+        release="rel",
+        environment=environment,
+        log_group=f"/ao-cloud/{environment}/control-plane",
+        region="eu-north-1",
+        worker_image=WORKER_IMAGE,
+        sandbox_provider="coder",
+        **kwargs,
+    )
+
+
+def rendered_names(payload):
+    container = payload["containerDefinitions"][0]
+    return (
+        {item["name"]: item["value"] for item in container["environment"]},
+        {item["name"]: item["valueFrom"] for item in container["secrets"]},
+    )
+
+
+class BillingAndOfferingTaskDefinitionTests(unittest.TestCase):
+    def inherited_stripe_source(self, environment="staging"):
+        source = task_source(environment)
+        container = source["taskDefinition"]["containerDefinitions"][0]
+        container["environment"] += [
+            {"name": "AO_CLOUD_STRIPE_PRICE_IDS", "value": '{"pro":"price_1"}'},
+            {"name": "AO_CLOUD_STRIPE_PORTAL_CONFIGURATION", "value": "bpc_1"},
+            {"name": "AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE", "value": "2026-01-01T00:00:00Z"},
+            {"name": "AO_CLOUD_SANDBOX_DEFAULT_PROVIDER", "value": "nodeops"},
+        ]
+        container["secrets"] += [
+            {"name": name, "valueFrom": value}
+            for name, value in stripe_secret_overrides(environment).items()
+        ]
+        return source
+
+    def test_removing_the_stripe_secret_strips_inherited_billing(self):
+        payload = render_coder(
+            self.inherited_stripe_source(),
+            secret_overrides=coder_secret_overrides("staging"),
+        )
+        environment, secrets = rendered_names(payload)
+        for name in (
+            "AO_CLOUD_STRIPE_PRICE_IDS",
+            "AO_CLOUD_STRIPE_PORTAL_CONFIGURATION",
+            "AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE",
+            "AO_CLOUD_SANDBOX_DEFAULT_PROVIDER",
+        ):
+            self.assertNotIn(name, environment)
+        self.assertFalse(set(STRIPE_SECRET_ENV) & secrets.keys())
+
+    def test_renders_billing_when_the_deploy_sets_it(self):
+        payload = render_coder(
+            self.inherited_stripe_source(),
+            environment_overrides={
+                "AO_CLOUD_STRIPE_PRICE_IDS": '{"pro":"price_2"}',
+                "AO_CLOUD_STRIPE_PORTAL_CONFIGURATION": "",
+                "AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE": "",
+            },
+            secret_overrides=coder_secret_overrides("staging") | stripe_secret_overrides(),
+        )
+        environment, secrets = rendered_names(payload)
+        self.assertEqual(environment["AO_CLOUD_STRIPE_PRICE_IDS"], '{"pro":"price_2"}')
+        # An empty override removes the name rather than rendering "".
+        self.assertNotIn("AO_CLOUD_STRIPE_PORTAL_CONFIGURATION", environment)
+        self.assertNotIn("AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE", environment)
+        self.assertTrue(set(STRIPE_SECRET_ENV) <= secrets.keys())
+
+    def test_rejects_partial_billing(self):
+        with self.assertRaisesRegex(ValueError, "needs both"):
+            render_coder(
+                task_source("staging"),
+                environment_overrides={"AO_CLOUD_STRIPE_PRICE_IDS": '{"pro":"price_2"}'},
+                secret_overrides=coder_secret_overrides("staging")
+                | {"AO_CLOUD_STRIPE_SECRET_KEY": "arn:secret:ao-cloud/staging/stripe:secret_key::"},
+            )
+        with self.assertRaisesRegex(ValueError, "needs AO_CLOUD_STRIPE_PRICE_IDS"):
+            render_coder(
+                task_source("staging"),
+                secret_overrides=coder_secret_overrides("staging") | stripe_secret_overrides(),
+            )
+        with self.assertRaisesRegex(ValueError, "without a Stripe secret"):
+            render_coder(
+                task_source("staging"),
+                environment_overrides={"AO_CLOUD_STRIPE_PRICE_IDS": '{"pro":"price_2"}'},
+                secret_overrides=coder_secret_overrides("staging"),
+            )
+
+    def test_support_token_is_managed_and_secret_only(self):
+        source = task_source("staging")
+        container = source["taskDefinition"]["containerDefinitions"][0]
+        container["secrets"].append(
+            {"name": "AO_CLOUD_SUPPORT_TOKEN", "valueFrom": "arn:secret:ao-cloud/staging/support:token::"}
+        )
+        # Inherited without the secret this deploy: stripped, not left dangling.
+        _, secrets = rendered_names(render_coder(source, secret_overrides=coder_secret_overrides("staging")))
+        self.assertNotIn("AO_CLOUD_SUPPORT_TOKEN", secrets)
+        # Set by the deploy: rendered as a secret reference.
+        _, secrets = rendered_names(render_coder(
+            task_source("staging"),
+            secret_overrides=coder_secret_overrides("staging")
+            | {"AO_CLOUD_SUPPORT_TOKEN": "arn:secret:ao-cloud/staging/support:token::"},
+        ))
+        self.assertIn("AO_CLOUD_SUPPORT_TOKEN", secrets)
+        with self.assertRaisesRegex(ValueError, "plaintext"):
+            render_coder(
+                task_source("staging"),
+                environment_overrides={"AO_CLOUD_SUPPORT_TOKEN": "x" * 40},
+                secret_overrides=coder_secret_overrides("staging"),
+            )
+
+    def test_rejects_stripe_key_as_plaintext(self):
+        with self.assertRaisesRegex(ValueError, "plaintext"):
+            render_coder(
+                task_source("staging"),
+                environment_overrides={"AO_CLOUD_STRIPE_SECRET_KEY": "sk_test_abc"},
+                secret_overrides=coder_secret_overrides("staging"),
+            )
+
+    def test_production_coder_only_drops_nodeops_and_renders_offering(self):
+        source = task_source("production")
+        container = source["taskDefinition"]["containerDefinitions"][0]
+        container["environment"].append({"name": "AO_CLOUD_SANDBOX_PROVIDERS", "value": "nodeops,coder"})
+        container["secrets"] += [
+            {"name": name, "valueFrom": value}
+            for name, value in multi_provider_secret_overrides("production").items()
+        ]
+        payload = render_coder(
+            source,
+            environment="production",
+            sandbox_providers=["coder"],
+            environment_overrides={
+                "AO_CLOUD_CAPABILITY_GATED_PROVIDERS": "coder,freestyle",
+                "AO_CLOUD_DEFAULT_ORG_CAPABILITIES": "freestyle",
+                "AO_CLOUD_DEFAULT_ORG_BILLING": "self_serve",
+                "AO_CLOUD_PAYWALLED_FEATURES": "",
+                "AO_CLOUD_IDLE_PAUSE_THRESHOLD": "0",
+                "AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD": "15m",
+            },
+            secret_overrides=coder_secret_overrides("production"),
+        )
+        environment, secrets = rendered_names(payload)
+        self.assertEqual(environment["AO_CLOUD_SANDBOX_PROVIDERS"], "coder")
+        self.assertEqual(environment["AO_CLOUD_CAPABILITY_GATED_PROVIDERS"], "coder,freestyle")
+        self.assertEqual(environment["AO_CLOUD_IDLE_PAUSE_THRESHOLD"], "0")
+        self.assertNotIn("AO_CLOUD_PAYWALLED_FEATURES", environment)
+        self.assertFalse(set(NODEOPS_SECRET_ENV) & secrets.keys())
+        self.assertFalse(set(FREESTYLE_SECRET_ENV) & secrets.keys())
+
+    def test_rejects_malformed_offering_values(self):
+        for name, value in (
+            ("AO_CLOUD_CAPABILITY_GATED_PROVIDERS", "coder,daytona"),
+            ("AO_CLOUD_DEFAULT_ORG_BILLING", "free"),
+            ("AO_CLOUD_IDLE_PAUSE_THRESHOLD", "30s"),
+            ("AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD", "15"),
+        ):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, name):
+                render_coder(
+                    task_source("staging"),
+                    environment_overrides={name: value},
+                    secret_overrides=coder_secret_overrides("staging"),
+                )
+
+
+def snapshot(harness, created, ident):
+    return {
+        "id": ident,
+        "slug": f"ao-{harness}-{'c' * 12}-{created}",
+        "createdAt": f"2026-10-{created[6:8]}T00:00:00Z",
+    }
+
+
+class FreestyleSnapshotPruneTests(unittest.TestCase):
+    def listing(self):
+        return {
+            "snapshots": [
+                snapshot("codex", "20261001000000", "codex-1"),
+                snapshot("codex", "20261002000000", "codex-2"),
+                snapshot("codex", "20261003000000", "codex-3"),
+                snapshot("codex", "20261004000000", "codex-4"),
+                snapshot("claude-code", "20261001000000", "claude-1"),
+                {"id": "project-1", "slug": "ao-project-x", "createdAt": "2026-01-01T00:00:00Z"},
+            ]
+        }
+
+    def test_keeps_the_two_newest_per_harness(self):
+        stale = stale_harness_snapshots(self.listing(), ["claude-code", "codex", "cursor"], set())
+        self.assertEqual(stale, ["codex-2", "codex-1"])
+
+    def test_never_prunes_a_protected_snapshot(self):
+        stale = stale_harness_snapshots(self.listing(), ["codex"], {"codex-1"})
+        self.assertEqual(stale, ["codex-2"])
+
+    def test_reads_snapshots_a_task_definition_boots_from(self):
+        source = task_source("staging")
+        source["taskDefinition"]["containerDefinitions"][0]["environment"].append(
+            {
+                "name": "AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS",
+                "value": '{"codex":"codex-1","claude-code":"claude-1"}',
+            }
+        )
+        self.assertEqual(
+            task_definition_freestyle_snapshots(source), {"codex-1", "claude-1"}
+        )
+        self.assertEqual(task_definition_freestyle_snapshots(task_source()), set())
+
+    def test_malformed_task_snapshot_map_fails_rather_than_unprotecting(self):
+        source = task_source("staging")
+        source["taskDefinition"]["containerDefinitions"][0]["environment"].append(
+            {"name": "AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS", "value": "{not json"}
+        )
+        with self.assertRaises(ValueError):
+            task_definition_freestyle_snapshots(source)
 
 
 if __name__ == "__main__":

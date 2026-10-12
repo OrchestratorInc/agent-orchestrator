@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	ARCHIVE_SESSION_HINT,
+	archiveSessionMessage,
 	hasWorkerActionDrawable,
 	workerActionGlyph,
 	workerActionSymbol,
@@ -62,14 +64,22 @@ describe("workerContextActions", () => {
 		expect(everything).not.toContain("pause");
 	});
 
-	it("keeps the destructive action last and marked", () => {
+	// Archive calls killSession, which deletes a clean worktree folder.
+	it("keeps Archive last and marks it as the only destructive action", () => {
 		for (const over of [{}, { pinned: true, hasPr: true }, { terminated: true }]) {
 			const actions = workerContextActions(state(over));
-			const last = actions.at(-1);
-			expect(last?.id).toBe("delete");
-			expect(last?.destructive).toBe(true);
+			expect(actions.at(-1)).toEqual({ id: "delete", title: "Archive session", destructive: true });
 			expect(actions.filter((a) => a.destructive)).toHaveLength(1);
 		}
+	});
+
+	it("tells the user Archive deletes a clean worktree but keeps what Restore needs", () => {
+		const message = archiveSessionMessage("Fix login");
+		expect(message).toContain("Fix login");
+		expect(message).toMatch(/worktree folder is deleted unless it has uncommitted changes/);
+		expect(message).toMatch(/conversation and committed work on its branch are kept/);
+		expect(message).not.toMatch(/worktree (is|are) preserved/);
+		expect(ARCHIVE_SESSION_HINT).toMatch(/Deletes the worktree folder unless it has uncommitted changes/);
 	});
 
 	it("opens with Open, so the menu's first item is the row's own tap", () => {
@@ -86,6 +96,10 @@ describe("workerActionSymbol", () => {
 
 	it("distinguishes pin from unpin", () => {
 		expect(workerActionSymbol("pin")).not.toBe(workerActionSymbol("unpin"));
+	});
+
+	it("uses the archive box for the restorable session action", () => {
+		expect(workerActionSymbol("delete")).toBe("archivebox");
 	});
 });
 
@@ -106,6 +120,10 @@ describe("workerActionGlyph", () => {
 	it("pins with the same pushpin the desktop uses", () => {
 		expect(workerActionGlyph("pin")).toEqual({ family: "feather", name: "pin" });
 		expect(workerActionGlyph("unpin")).toEqual({ family: "feather", name: "pin-off" });
+	});
+
+	it("uses the archive glyph for the restorable session action", () => {
+		expect(workerActionGlyph("delete")).toEqual({ family: "feather", name: "archive" });
 	});
 
 	// Destructive and recovery actions are the ones you must not confuse.

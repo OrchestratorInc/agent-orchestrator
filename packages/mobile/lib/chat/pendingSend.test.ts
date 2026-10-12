@@ -14,6 +14,16 @@ import { afterDraftWrites, clearPendingSend, needsAttachmentRecovery, pendingSen
 beforeEach(() => saved.clear());
 
 describe("pending Chat send", () => {
+	it("persists exact excerpt references through relaunch and reuses the original delivery", async () => {
+		const key = pendingSendKey("host", "session");
+		const excerpts = [{ conversationId: "conversation", messageId: "response", revision: 3, text: "Title\n• Bullet" }];
+		const candidate = { id: "first", draftText: JSON.stringify({ text: "Explain", excerpts }), text: "Explain", excerpts, hasAttachments: false };
+		await reservePendingSend(key, candidate);
+		expect(await readPendingSend(key)).toEqual(candidate);
+		expect(await reservePendingSend(key, { ...candidate, id: "new" })).toEqual(candidate);
+		await expect(reservePendingSend(key, { ...candidate, draftText: "different reference" })).rejects.toThrow("previous message");
+	});
+
 	it("reuses a host-scoped steer ID after acceptance, response loss, and app relaunch", async () => {
 		const key = pendingSendKey("host-A", "session-1");
 		const accepted = new Set<string>();

@@ -35,7 +35,7 @@ export const PROBE_TIMEOUT_MS = 3_000;
  * is safe to send a credential to, so it has to come first. See
  * docs/adr/0003-unauthenticated-identity-probe.md.
  */
-export async function probeEndpoint(endpoint: Endpoint, signal: AbortSignal): Promise<ProbeAnswer> {
+export async function probeEndpoint(endpoint: Endpoint, signal: AbortSignal, options: { retryTunnel?: boolean } = {}): Promise<ProbeAnswer> {
 	// A tunnel hostname may simply not have propagated yet; see probeRetry.
 	const startedAt = Date.now();
 	for (;;) {
@@ -44,7 +44,7 @@ export async function probeEndpoint(endpoint: Endpoint, signal: AbortSignal): Pr
 		} catch (e) {
 			if (signal.aborted) throw e; // The race already has a winner.
 			if (e instanceof IncompatibleHostVersionError) throw e;
-			if (!shouldRetryProbe(endpoint.kind, Date.now() - startedAt)) throw e;
+			if (options.retryTunnel === false || !shouldRetryProbe(endpoint.kind, Date.now() - startedAt)) throw e;
 			await waitOrAbort(TUNNEL_PROBE_RETRY_DELAY_MS, signal);
 		}
 	}

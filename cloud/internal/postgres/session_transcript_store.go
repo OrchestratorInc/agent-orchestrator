@@ -177,6 +177,12 @@ func (s *Store) RestoreSession(
 			}
 			return nil
 		}
+		// A restore provisions a new VM: for a billed session that is a new
+		// sandbox under the plan (total VMs, a running slot, usage), checked
+		// here so it commits or fails with the restore.
+		if err := s.billing.forPrincipal(principal, orgID).wakeAdmissionTx(ctx, tx, orgID, sessionID, wakeAny); err != nil {
+			return err
+		}
 		// Re-arm the sandbox for reconciliation. A deleted sandbox row survives
 		// with observed_state='deleted' and reconcile_after ~100 years out, so
 		// resetting desired_state, the startup window, and the deletion/failure

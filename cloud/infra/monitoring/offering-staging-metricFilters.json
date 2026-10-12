@@ -1,0 +1,222 @@
+[
+  {
+    "filterName": "ao-offering-staging-signups",
+    "filterPattern": "{ $.activity_kind = \"org.created\" }",
+    "logGroupName": "/ao-cloud/staging/control-plane",
+    "metricTransformations": [
+      {
+        "defaultValue": 0,
+        "metricName": "staging-Signups",
+        "metricNamespace": "AOCloud/Offering",
+        "metricValue": "1",
+        "unit": "Count"
+      }
+    ]
+  },
+  {
+    "filterName": "ao-offering-staging-checkout-started",
+    "filterPattern": "{ $.activity_kind = \"billing.checkout_started\" }",
+    "logGroupName": "/ao-cloud/staging/control-plane",
+    "metricTransformations": [
+      {
+        "defaultValue": 0,
+        "metricName": "staging-CheckoutStarted",
+        "metricNamespace": "AOCloud/Offering",
+        "metricValue": "1",
+        "unit": "Count"
+      }
+    ]
+  },
+  {
+    "filterName": "ao-offering-staging-checkout-completed",
+    "filterPattern": "{ $.activity_kind = \"billing.checkout_completed\" }",
+    "logGroupName": "/ao-cloud/staging/control-plane",
+    "metricTransformations": [
+      {
+        "defaultValue": 0,
+        "metricName": "staging-CheckoutCompleted",
+        "metricNamespace": "AOCloud/Offering",
+        "metricValue": "1",
+        "unit": "Count"
+      }
+    ]
+  },
+  {
+    "filterName": "ao-offering-staging-plan-refused",
+    "filterPattern": "{ $.activity_kind = \"billing.plan_refused\" }",
+    "logGroupName": "/ao-cloud/staging/control-plane",
+    "metricTransformations": [
+      {
+        "defaultValue": 0,
+        "metricName": "staging-PlanRefused",
+        "metricNamespace": "AOCloud/Offering",
+        "metricValue": "1",
+        "unit": "Count"
+      }
+    ]
+  },
+  {
+    "filterName": "ao-offering-staging-limit-hit",
+    "filterPattern": "{ $.activity_kind = \"billing.limit_hit\" }",
+    "logGroupName": "/ao-cloud/staging/control-plane",
+    "metricTransformations": [
+      {
+        "defaultValue": 0,
+        "metricName": "staging-LimitHit",
+        "metricNamespace": "AOCloud/Offering",
+        "metricValue": "1",
+        "unit": "Count"
+      }
+    ]
+  },
+  {
+    "filterName": "ao-offering-staging-session-requested",
+    "filterPattern": "{ $.activity_kind = \"session.create_requested\" }",
+    "logGroupName": "/ao-cloud/staging/control-plane",
+    "metricTransformations": [
+      {
+        "dimensions": {
+          "Provider": "$.sandbox_provider"
+        },
+        "metricName": "staging-SessionCreateRequested",
+        "metricNamespace": "AOCloud/Offering",
+        "metricValue": "1",
+        "unit": "Count"
+      }
+    ]
+  },
+  {
+    "filterName": "ao-offering-staging-sandbox-ready-create",
+    "filterPattern": "{ $.activity_kind = \"sandbox.ready\" && $.activity.phase = \"create\" }",
+    "logGroupName": "/ao-cloud/staging/control-plane",
+    "metricTransformations": [
+      {
+        "dimensions": {
+          "Provider": "$.sandbox_provider"
+        },
+        "metricName": "staging-SandboxReady",
+        "metricNamespace": "AOCloud/Offering",
+        "metricValue": "1",
+        "unit": "Count"
+      }
+    ]
+  },
+  {
+    "filterName": "ao-offering-staging-time-to-ready",
+    "filterPattern": "{ $.activity_kind = \"sandbox.ready\" && $.activity.phase = \"create\" }",
+    "logGroupName": "/ao-cloud/staging/control-plane",
+    "metricTransformations": [
+      {
+        "dimensions": {
+          "Provider": "$.sandbox_provider"
+        },
+        "metricName": "staging-TimeToReady",
+        "metricNamespace": "AOCloud/Offering",
+        "metricValue": "$.activity.ttr_ms",
+        "unit": "Milliseconds"
+      }
+    ]
+  },
+  {
+    "filterName": "ao-offering-staging-time-to-resume",
+    "filterPattern": "{ $.activity_kind = \"sandbox.ready\" && $.activity.phase = \"resume\" }",
+    "logGroupName": "/ao-cloud/staging/control-plane",
+    "metricTransformations": [
+      {
+        "dimensions": {
+          "Provider": "$.sandbox_provider"
+        },
+        "metricName": "staging-TimeToResume",
+        "metricNamespace": "AOCloud/Offering",
+        "metricValue": "$.activity.ttr_ms",
+        "unit": "Milliseconds"
+      }
+    ]
+  },
+  {
+    "filterName": "ao-offering-staging-session-start-failed",
+    "filterPattern": "{ $.activity_kind = \"session.start_failed\" }",
+    "logGroupName": "/ao-cloud/staging/control-plane",
+    "metricTransformations": [
+      {
+        "dimensions": {
+          "Provider": "$.sandbox_provider"
+        },
+        "metricName": "staging-SessionStartFailed",
+        "metricNamespace": "AOCloud/Offering",
+        "metricValue": "1",
+        "unit": "Count"
+      }
+    ]
+  },
+  {
+    "filterName": "ao-offering-staging-byo-bootstrap-failed",
+    "filterPattern": "{ $.activity_kind = \"session.start_failed\" && $.activity.customer_owned IS TRUE }",
+    "logGroupName": "/ao-cloud/staging/control-plane",
+    "metricTransformations": [
+      {
+        "defaultValue": 0,
+        "metricName": "staging-BYOBootstrapFailed",
+        "metricNamespace": "AOCloud/Offering",
+        "metricValue": "1",
+        "unit": "Count"
+      }
+    ]
+  },
+  {
+    "filterName": "ao-offering-staging-freestyle-errors",
+    "filterPattern": "{ $.sandbox_provider = \"freestyle\" && ($.level = \"ERROR\" || $.level = \"WARN\") }",
+    "logGroupName": "/ao-cloud/staging/control-plane",
+    "metricTransformations": [
+      {
+        "defaultValue": 0,
+        "metricName": "staging-FreestyleErrors",
+        "metricNamespace": "AOCloud/Offering",
+        "metricValue": "1",
+        "unit": "Count"
+      }
+    ]
+  },
+  {
+    "filterName": "ao-offering-staging-stripe-webhook-failures",
+    "filterPattern": "{ $.msg = \"Stripe webhook failed\" }",
+    "logGroupName": "/ao-cloud/staging/control-plane",
+    "metricTransformations": [
+      {
+        "defaultValue": 0,
+        "metricName": "staging-StripeWebhookFailures",
+        "metricNamespace": "AOCloud/Offering",
+        "metricValue": "1",
+        "unit": "Count"
+      }
+    ]
+  },
+  {
+    "filterName": "ao-offering-staging-stripe-request-failures",
+    "filterPattern": "{ $.msg = \"Stripe request failed\" }",
+    "logGroupName": "/ao-cloud/staging/control-plane",
+    "metricTransformations": [
+      {
+        "defaultValue": 0,
+        "metricName": "staging-StripeRequestFailures",
+        "metricNamespace": "AOCloud/Offering",
+        "metricValue": "1",
+        "unit": "Count"
+      }
+    ]
+  },
+  {
+    "filterName": "ao-offering-staging-activity-dropped",
+    "filterPattern": "{ $.msg = \"activity queue full; dropping events\" || $.msg = \"record activity event\" }",
+    "logGroupName": "/ao-cloud/staging/control-plane",
+    "metricTransformations": [
+      {
+        "defaultValue": 0,
+        "metricName": "staging-ActivityWriteProblems",
+        "metricNamespace": "AOCloud/Offering",
+        "metricValue": "1",
+        "unit": "Count"
+      }
+    ]
+  }
+]

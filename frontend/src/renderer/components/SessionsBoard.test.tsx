@@ -121,7 +121,7 @@ vi.mock("../lib/platform", async (importOriginal) => {
 import { archiveToggleHeightClassName, archiveToggleOffsetClassName } from "@aoagents/product-ui";
 import { useUiStore } from "../stores/ui-store";
 import { SessionsBoard } from "./SessionsBoard";
-import { toBoardSessionPresentation } from "./SessionsBoardAdapters";
+import { latestSessionArtifacts, toBoardSessionPresentation } from "./SessionsBoardAdapters";
 import { TooltipProvider } from "./ui/tooltip";
 
 function renderBoard(projectId?: string) {
@@ -161,6 +161,18 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
+	it("shows the Cloud loader instead of Chat while a cloud orchestrator is starting", () => {
+		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
+		useUiStore.getState().setProjectProvisioning("p1", true);
+		try {
+			renderBoard("p1");
+			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+			expect(screen.queryByLabelText("Message the agent")).not.toBeInTheDocument();
+		} finally {
+			useUiStore.getState().setProjectProvisioning("p1", false);
+		}
+	});
+
 	it("shows the orchestrator launch surface immediately after project setup", () => {
 		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "New project", path: "/tmp/new-project", sessions: [] }], isSuccess: true });
 		useUiStore.getState().setProjectProvisioning("p1", true);
@@ -1798,6 +1810,91 @@ describe("SessionsBoard", () => {
 		});
 		renderBoard("p1");
 		expect(screen.queryByText(appI18n.t("home.folderMissing"))).not.toBeInTheDocument();
+	});
+});
+
+describe("SessionsBoard artifacts", () => {
+	const artifact = (name: string, updatedAt: string, kind: "html" | "markdown" = "markdown") => ({
+		kind,
+		name,
+		path: `out/${name}`,
+		size: 10,
+		updatedAt,
+	});
+
+	it("shows only the latest artifacts and opens the session with the clicked one", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				workspaceWithSessions([
+					boardSession({
+						id: "s-art",
+						title: "Write the report",
+						status: "working",
+						outputType: "artifact",
+						artifactFiles: [
+							artifact("old.md", "2026-01-01T00:00:00Z"),
+							artifact("newest.html", "2026-01-03T00:00:00Z", "html"),
+							artifact("middle.md", "2026-01-02T00:00:00Z"),
+							artifact("oldest.md", "2025-12-01T00:00:00Z"),
+						],
+					}),
+				]),
+			],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		const list = await screen.findByTestId("board-session-artifacts");
+		const links = within(list).getAllByRole("button");
+		expect(links.map((link) => link.textContent)).toEqual(["newest.html", "middle.md"]);
+		expect(list).toHaveTextContent("+2 more");
+
+		await userEvent.click(screen.getByRole("button", { name: "Open artifact middle.md" }));
+
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({
+			sessionId: "s-art",
+			path: "out/middle.md",
+			source: "artifact",
+		});
+		expect(navigateMock).toHaveBeenCalledTimes(1);
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "p1", sessionId: "s-art" },
+		});
+	});
+
+	it("orders artifacts with equal or unparseable timestamps by path", () => {
+		const latest = latestSessionArtifacts(
+			[
+				artifact("b.md", "2026-01-01T00:00:00Z"),
+				artifact("bad.md", "not-a-date"),
+				artifact("a.md", "2026-01-01T00:00:00Z"),
+			],
+			3,
+		);
+		expect(latest.map((file) => file.name)).toEqual(["a.md", "b.md", "bad.md"]);
+	});
+
+	it("shows no artifacts for sessions whose output is not artifacts", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				workspaceWithSessions([
+					boardSession({
+						id: "s-pr",
+						title: "Fix the bug",
+						status: "working",
+						artifactFiles: [artifact("notes.md", "2026-01-01T00:00:00Z")],
+					}),
+				]),
+			],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		await screen.findByText("Fix the bug");
+		expect(screen.queryByTestId("board-session-artifacts")).not.toBeInTheDocument();
 	});
 });
 

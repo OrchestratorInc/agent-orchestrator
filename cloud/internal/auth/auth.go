@@ -41,7 +41,10 @@ type WorkOSProfile struct {
 type WorkOSOrganization struct {
 	DisplayName  string
 	Capabilities []string
-	LegacyID     string
+	// Billing is the organization's billing arrangement from metadata.billing,
+	// normalized by domain.NormalizeOrgBilling ("" when unset).
+	Billing  string
+	LegacyID string
 }
 
 type ProfileResolver func(ctx context.Context, userID string) (WorkOSProfile, error)
@@ -155,6 +158,7 @@ func (v *OIDCVerifier) Verify(ctx context.Context, token string) (domain.Princip
 		OrgName:         strings.TrimSpace(organization.DisplayName),
 		OrgRole:         normalizeOrganizationRole(claims.Role),
 		OrgCapabilities: organization.Capabilities,
+		OrgBilling:      organization.Billing,
 	}, nil
 }
 

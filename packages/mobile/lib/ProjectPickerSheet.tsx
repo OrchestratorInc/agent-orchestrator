@@ -65,7 +65,7 @@ export function ProjectPickerSheet({
 			nestedScrollEnabled
 			contentContainerStyle={SHEET_SCROLL_CONTENT}
 			ListHeaderComponent={<SheetHeader title={title} subtitle={subtitle} />}
-			ListEmptyComponent={<Text style={s.empty}>No projects yet. Add one from the AO dashboard on your computer.</Text>}
+			ListEmptyComponent={<Text style={s.empty}>No projects yet. Add one from the Orchestrator dashboard on your computer.</Text>}
 			renderItem={({ item }) => (
 				<Option
 					label={item.label}
