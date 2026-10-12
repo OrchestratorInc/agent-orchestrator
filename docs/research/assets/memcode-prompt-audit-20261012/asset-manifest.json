@@ -1,0 +1,137 @@
+{
+  "at": "2026-10-12T23:21:05.305933+00:00",
+  "assets": [
+    {
+      "path": "README.md",
+      "SHA256": "0414bda95e9a8a5e82c61ae503996a580b2955ee698634e56690ab3002ce50f9",
+      "bytes": 4028,
+      "mtimeUTC": "2026-10-12T23:21:05.302153+00:00"
+    },
+    {
+      "path": "initial-binary-admission-failure.json",
+      "SHA256": "1115aaefe08ed55d50b6d5e31080f39b841adf5db6e08545a3a460033a4a6c27",
+      "bytes": 555,
+      "mtimeUTC": "2026-10-12T23:21:05.294708+00:00"
+    },
+    {
+      "path": "main-reconciliation-002.json",
+      "SHA256": "5107af7097cf25688b7d59f3e5b4f6ba77c27b0a069b6f678dc9eaf12369d5e1",
+      "bytes": 771,
+      "mtimeUTC": "2026-10-12T23:00:45.499470+00:00"
+    },
+    {
+      "path": "memcode-artifact.json",
+      "SHA256": "c614631ae8458880ac407b07cf54f5b32e4c5e6a7cdc20d37304a7fd31af4bb0",
+      "bytes": 5328,
+      "mtimeUTC": "2026-10-12T23:21:05.301951+00:00"
+    },
+    {
+      "path": "memcode-cleanup.json",
+      "SHA256": "fcd333da57e1a11c8ec657012cb5fb45fe12c5a8372224485f354cc4cb0da4a0",
+      "bytes": 1143,
+      "mtimeUTC": "2026-10-12T23:21:05.302071+00:00"
+    },
+    {
+      "path": "memcode-focused-002/initial-native-viewport.png",
+      "SHA256": "813a3bab77347bf3c93ab4717e0a20c48e25e0168a9b7b7b69d382ad206cf68c",
+      "bytes": 83633,
+      "mtimeUTC": "2026-10-12T23:21:05.295672+00:00"
+    },
+    {
+      "path": "memcode-focused-002/receipt.json",
+      "SHA256": "79ba2f23f9e185508010f33d7c5da669fe0c1ce6f860e5af9c410b5b97e17cdc",
+      "bytes": 1268,
+      "mtimeUTC": "2026-10-12T23:21:05.295268+00:00"
+    },
+    {
+      "path": "memcode-focused-003/executing-cancel.json",
+      "SHA256": "6217e4cd746ac3db91f9f8b3b3da8257e12afffcac71a5beb913c26482ced3bc",
+      "bytes": 15188,
+      "mtimeUTC": "2026-10-12T23:21:05.296805+00:00"
+    },
+    {
+      "path": "memcode-focused-003/executing-escape-native-settled.png",
+      "SHA256": "320224e86f144a04a2914b66f8631675dc1d45e68bc93233a3186bae7847c2a5",
+      "bytes": 117719,
+      "mtimeUTC": "2026-10-12T23:21:05.300122+00:00"
+    },
+    {
+      "path": "memcode-focused-003/executing-kill.json",
+      "SHA256": "74a6bcf03f5be88f4e1d581b2ae1c7f00dbc5ce1770165d85f06454fd7935e0f",
+      "bytes": 871,
+      "mtimeUTC": "2026-10-12T23:21:05.296357+00:00"
+    },
+    {
+      "path": "memcode-focused-003/fresh-native-control.png",
+      "SHA256": "933c52ff79a99bb01cfc99432e3019618d80f7a7b10abf86f9e6dda905b05bd3",
+      "bytes": 98816,
+      "mtimeUTC": "2026-10-12T23:21:05.300667+00:00"
+    },
+    {
+      "path": "memcode-focused-003/missing-history.json",
+      "SHA256": "00bf3e6422c723cef105147f2df620f65f597848ec96f14cc95348a777feb547",
+      "bytes": 949,
+      "mtimeUTC": "2026-10-12T23:21:05.297765+00:00"
+    },
+    {
+      "path": "memcode-focused-003/native-callback-executable-assessment.json",
+      "SHA256": "1bf4d75c590b32205f64ec913dfe5e4c3428fa28cb2b632723c0864c559b1f22",
+      "bytes": 270,
+      "mtimeUTC": "2026-10-12T23:21:05.299534+00:00"
+    },
+    {
+      "path": "memcode-focused-003/receipt.json",
+      "SHA256": "e907c28a1c938c0e8f5d3800a5983c77e4674e38a2dcefa9cef80eced9639c43",
+      "bytes": 3472,
+      "mtimeUTC": "2026-10-12T23:21:05.297246+00:00"
+    },
+    {
+      "path": "memcode-focused-003/restore-managed-hook-assessment.json",
+      "SHA256": "4089e4c5792ea8d777b50c2eccaac6eb126bb05bcd4634aab629a359c6e89d0e",
+      "bytes": 549,
+      "mtimeUTC": "2026-10-12T23:21:05.301086+00:00"
+    },
+    {
+      "path": "memcode-focused-003/restore-separate-newfile-assessment.json",
+      "SHA256": "71b4708bfb19cd56c38b8b2df72c875bc9c685e5880dfa211bd55c0eb747d9a0",
+      "bytes": 475,
+      "mtimeUTC": "2026-10-12T23:21:05.299101+00:00"
+    },
+    {
+      "path": "memcode-focused-003/restored-native-empty-composer.png",
+      "SHA256": "4c4077ab1ab9d635b39e5a35b0c460e197a2d38cd36e70ff784030e35ddf9a4e",
+      "bytes": 69794,
+      "mtimeUTC": "2026-10-12T23:21:05.298697+00:00"
+    },
+    {
+      "path": "memcode-focused-003/serving-before-final-screenshot.json",
+      "SHA256": "7e0dfc403794a315c1c496c2c8adcfbe8cb11c936a0f16fb310791e7dcd01b1d",
+      "bytes": 982,
+      "mtimeUTC": "2026-10-12T23:21:05.295955+00:00"
+    },
+    {
+      "path": "memcode-focused-003/unrelated-control-after-primary-kill.png",
+      "SHA256": "f07d5cb391ad5b518484b465f82a1a46721300b64d61dee38651ddf896379a1f",
+      "bytes": 105657,
+      "mtimeUTC": "2026-10-12T23:21:05.297371+00:00"
+    },
+    {
+      "path": "memcode-focused-003/unrelated-control-followup.json",
+      "SHA256": "13b33a62c0c8ea6b7d1a5cab21862ef8c402b8cb3a3ec119401652e6cfde2068",
+      "bytes": 265,
+      "mtimeUTC": "2026-10-12T23:21:05.298154+00:00"
+    },
+    {
+      "path": "memcode-native-provenance.json",
+      "SHA256": "922cfad004883ff9757541bcac9a3bd07afe46d894efe9aa153efc6b21c1d4c5",
+      "bytes": 313,
+      "mtimeUTC": "2026-10-12T23:21:05.301510+00:00"
+    },
+    {
+      "path": "reconciliation.json",
+      "SHA256": "986dc6b681c94fb8181c3181a92af5b73e450938f78db761f80706b4a12a661c",
+      "bytes": 710,
+      "mtimeUTC": "2026-10-12T23:00:45.500304+00:00"
+    }
+  ]
+}

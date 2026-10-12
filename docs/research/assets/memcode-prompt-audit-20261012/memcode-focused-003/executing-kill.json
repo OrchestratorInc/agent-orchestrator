@@ -1,0 +1,25 @@
+{
+  "at": "2026-10-12T23:17:05.134939+00:00",
+  "source": "a3a4ef82e565b4d0c47d67bed68525e7c111b956",
+  "status": "PASS",
+  "witness": {
+    "pid": 1095683,
+    "kernelIdentity": "linux-proc-startticks:89274565",
+    "startMs": 1791846992956,
+    "tokenSHA256": "182560e07acafa293a47d943eb0909bf6f5c0908f970c746384ecdd23044100c"
+  },
+  "generationBeforeKill": "99558cf1-cca0-469d-bc31-7a998d9b23a4",
+  "killHTTP": 200,
+  "killReply": {
+    "ok": true,
+    "sessionId": "prompt-memcode-c7a83b5e-1"
+  },
+  "terminatedConfirmed": true,
+  "childReaped": true,
+  "lateDelayMs": 30000,
+  "lateSideEffectAbsentBeyondDeadline": true,
+  "unrelatedControlAliveImmediately": true,
+  "unrelatedControlAliveLater": true,
+  "unrelatedControlGenerationUnchanged": true,
+  "independence": "A distinct new child command after completed Escape; unrelated existing control remains alive"
+}

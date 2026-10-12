@@ -1,0 +1,8 @@
+[
+  {
+    "pid": 1093692,
+    "aoExecutableResolved": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/prompt-audit/memcode/bin/ao",
+    "aoExecutableSHA256": "24491e59cfc8d72b19ad0dd2cb1059e12d120c8db38a634e9647bed39ca8b58f",
+    "sameAsServingBinary": true
+  }
+]
