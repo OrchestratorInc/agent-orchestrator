@@ -1114,6 +1114,8 @@ export type SpawnAttachmentInput = {
 // An options object rather than four optional positionals: `spawn(a, b, c, d)`
 // with every argument optional and same-typed is where call-site mistakes live.
 export type SpawnOptions = {
+	clientRequestId?: string;
+	reasoningEffort?: import("@aoagents/cloud-client").CreateSessionInput["reasoningEffort"];
 	/** Falls back to the active project, or the only project. */
 	projectId?: string;
 	prompt?: string;

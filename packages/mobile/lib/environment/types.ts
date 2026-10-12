@@ -16,6 +16,8 @@ export type EnvironmentKind = "local" | "cloud";
  */
 export interface SessionSource {
 	readonly kind: EnvironmentKind;
+	/** Deployment/account/org identity; never a daemon credential. */
+	readonly scopeKey?: string;
 	listProjects(): Promise<ProjectInfo[]>;
 	listSessions(): Promise<DashboardSession[]>;
 	createSession(options: SpawnOptions): Promise<{ id: string }>;

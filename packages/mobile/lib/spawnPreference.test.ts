@@ -13,6 +13,15 @@ import { loadSpawnPreference, saveSpawnPreference } from "./spawnPreference";
 beforeEach(() => storage.clear());
 
 describe("spawn preference", () => {
+	it("never restores another Cloud account's project", async () => {
+		await saveSpawnPreference({ source: { kind: "cloud", id: "o1" }, projectId: "p1", scopeKey: "account-one" });
+		expect(await loadSpawnPreference("account-two")).toBeNull();
+		expect(await loadSpawnPreference("account-one")).toMatchObject({ projectId: "p1", scopeKey: "account-one" });
+	});
+	it("does not adopt an unscoped legacy Cloud preference", async () => {
+		storage.set("ao.spawnPreference", JSON.stringify({ source: { kind: "cloud", id: "o1" }, projectId: "p1" }));
+		expect(await loadSpawnPreference("account-one")).toBeNull();
+	});
 	it("restores the last host and project after reopening the sheet", async () => {
 		const preference = { source: { kind: "local" as const, id: "desktop-1" }, projectId: "project-1" };
 		await saveSpawnPreference(preference);

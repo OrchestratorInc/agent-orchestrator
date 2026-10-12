@@ -6,11 +6,13 @@ import { File } from "expo-file-system";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	InteractionManager,
+	Alert,
 	Platform,
 	Pressable,
 	ScrollView,
 	StyleSheet,
 	Text,
+	TextInput,
 	View,
 } from "react-native";
 import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-controller";
@@ -24,7 +26,9 @@ import { useCloudAuth } from "../lib/cloud/authStore";
 import { sourceKey, type SourceRef } from "../lib/environment/scopedBoard";
 import { haptics } from "../lib/haptics";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
-import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
+import { cloudRoleDefaults, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged, spawnRequestFingerprint } from "../lib/spawnModel";
+import { clearCloudOperation, readCloudOperation, type CloudOperation } from "../lib/cloud/operation";
+import type { CreateSessionInput } from "@aoagents/cloud-client";
 import { appendSpawnAttachments, readSpawnAttachments, type SpawnAttachment } from "../lib/spawn-attachments";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { canSubmitSpawn, initialSpawnDestination, spawnRequestIsCurrent } from "../lib/spawnDestination";
@@ -52,7 +56,12 @@ function SpawnModalContent() {
 	const router = useRouter();
 	const { projectId: routeProjectId, source: routeKind, sourceId: routeSourceId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; source?: string; sourceId?: string; hostId?: string }>();
 	const { scopedBoard, availableSources, sourceFor, spawnOn, configForHost, hostStates, configResolved, switchHost, setActiveProject } = useApp();
-	const { client: cloudClient, orgId: cloudOrgId } = useCloudAuth();
+	const cloudAuth = useCloudAuth();
+	const { client: cloudClient, orgId: cloudOrgId } = cloudAuth;
+	const cloudScopeKey = cloudOrgId ? sourceFor({ kind: "cloud", id: cloudOrgId })?.scopeKey : undefined;
+	const mounted = useRef(true);
+	const submitting = useRef(false);
+	useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 	const routeDestination = routeSource({ source: routeKind, sourceId: routeSourceId }) ?? (routeHostId ? { kind: "local" as const, id: routeHostId } : null);
 	const sourceResolutionComplete = configResolved;
 	const [destination, setDestination] = useState<SourceRef | null>(null);
@@ -83,6 +92,10 @@ function SpawnModalContent() {
 	const [attachmentError, setAttachmentError] = useState<string>();
 	const [model, setModel] = useState("");
 	const [modelTouched, setModelTouched] = useState(false);
+	const [customModelOpen, setCustomModelOpen] = useState(false);
+	const [customModel, setCustomModel] = useState("");
+	const [reservedWorker, setReservedWorker] = useState<CloudOperation<CreateSessionInput> | null>(null);
+	const [operationLoading, setOperationLoading] = useState(false);
 	const [modelCatalog, setModelCatalog] = useState<AgentModelCatalog>();
 	const [projectDetail, setProjectDetail] = useState<ProjectDetail>();
 	const [projectDetailLoadedFor, setProjectDetailLoadedFor] = useState<string | null>(null);
@@ -107,32 +120,60 @@ function SpawnModalContent() {
 	// the attachments and messages makes that entire region reflow instead.
 	const [promptRoom, setPromptRoom] = useState<number>();
 	const keyboardHeight = useKeyboardState((state) => state.height);
+	const previousCloudScope = useRef(cloudScopeKey);
+	useEffect(() => {
+		if (previousCloudScope.current === cloudScopeKey) return;
+		previousCloudScope.current = cloudScopeKey;
+		catalogGeneration.current += 1;
+		setReservedWorker(null); requestRef.current = undefined;
+		if (destinationRef.current?.kind === "cloud") {
+			destinationRef.current = null; setDestination(null); setProjectId(null);
+			setHarness(""); setAgentTouched(false); setModel(""); setModelTouched(false); setPrompt("");
+		}
+	}, [cloudScopeKey]);
+	useEffect(() => {
+		let cancelled = false;
+		setReservedWorker(null);
+		if (!cloudSpawn || !cloudScopeKey || !projectId) { setOperationLoading(false); return; }
+		setOperationLoading(true);
+		void readCloudOperation<CreateSessionInput>(cloudScopeKey, `worker-create/${projectId}`).then((operation) => {
+			if (cancelled || !cloudAuth.isCurrentSession() || !operation) return;
+			setReservedWorker(operation);
+			const payload = operation.payload;
+			setPrompt(payload.prompt ?? ""); setHarness(payload.harness); setAgentTouched(true);
+			setModel(payload.model ?? ""); setModelTouched(true);
+			requestRef.current = { payload: spawnRequestFingerprint(cloudScopeKey, `cloud/${destination!.id}`, { ...payload, mode: "chat" }), attachments: attachmentsRef.current, id: operation.key };
+		}).catch((cause) => { if (!cancelled) setError(userFacingError(cause)); })
+			.finally(() => { if (!cancelled) setOperationLoading(false); });
+		return () => { cancelled = true; };
+	}, [cloudSpawn, cloudScopeKey, projectId]);
 
 
 
 	useEffect(() => {
 		let cancelled = false;
-		void loadSpawnPreference().then((preference) => {
+		void loadSpawnPreference(cloudScopeKey).then((preference) => {
 			if (cancelled) return;
 			setSavedPreference(preference);
 			setPreferenceLoaded(true);
 		});
 		return () => { cancelled = true; };
-	}, []);
+	}, [cloudScopeKey]);
 
 	useEffect(() => {
 		if (!sourceResolutionComplete || !preferenceLoaded) return;
 		const routed = routeDestination && routeDestination.kind !== "invalid" ? routeDestination : null;
 		if (routeDestination?.kind === "invalid") return;
-		const next = initialSpawnDestination(routed, availableSources, savedPreference?.source);
+		const validPreference = savedPreference?.source.kind !== "cloud" || savedPreference.scopeKey === cloudScopeKey ? savedPreference : null;
+		const next = initialSpawnDestination(routed, availableSources, validPreference?.source);
 		if (destinationRef.current && availableSources.some((source) => sourceKey(source) === sourceKey(destinationRef.current!))) return;
 		if (next) { destinationRef.current = next; setDestination(next); }
-	}, [sourceResolutionComplete, preferenceLoaded, routeKind, routeSourceId, routeHostId, availableSources, savedPreference?.source]);
+	}, [sourceResolutionComplete, preferenceLoaded, routeKind, routeSourceId, routeHostId, availableSources, savedPreference?.source, cloudScopeKey]);
 
 	// A project prefill belongs only to the source named by its route.
 	useEffect(() => {
 		if (!preferenceLoaded) return;
-		const savedProject = savedPreference && destination && sourceKey(savedPreference.source) === sourceKey(destination)
+		const savedProject = savedPreference && (savedPreference.source.kind !== "cloud" || savedPreference.scopeKey === cloudScopeKey) && destination && sourceKey(savedPreference.source) === sourceKey(destination)
 			? savedPreference.projectId : null;
 		const nextProjectId = resolveSpawnProject(
 			projectId,
@@ -143,7 +184,7 @@ function SpawnModalContent() {
 			savedProject,
 		);
 		if (nextProjectId !== projectId) changeProject(nextProjectId);
-	}, [destination, preferenceLoaded, savedPreference, projects, projectsKnown, projectId, routeProjectId, routeKind, routeSourceId]);
+	}, [destination, preferenceLoaded, savedPreference, projects, projectsKnown, projectId, routeProjectId, routeKind, routeSourceId, cloudScopeKey]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -155,8 +196,6 @@ function SpawnModalContent() {
 		if (requested.kind === "cloud") {
 			setMode("chat");
 			setAttachments([]);
-			setModel("");
-			setModelTouched(false);
 			if (!cloudOrgId) {
 				setCatalog(null);
 				setChatHarnesses([]);
@@ -169,7 +208,7 @@ function SpawnModalContent() {
 				const harnesses = readyHarnesses(available);
 				const agents = harnesses.map(cloudAgentInfo);
 				setCatalog({ supported: agents, installed: agents, authorized: agents });
-				setChatHarnesses(harnesses);
+				setChatHarnesses(harnesses.filter((harness) => harness !== "opencode"));
 				setCatalogError(null);
 			}).catch((cause) => {
 				if (cancelled || !spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current)) return;
@@ -210,7 +249,7 @@ function SpawnModalContent() {
 	// Refreshing the catalog moved into the agent sheet route, which owns its own
 	// copy of it — see app/sheets/agent.tsx.
 	const allAgents = useMemo(() => rankAgents(catalog), [catalog]);
-	const agents = useMemo(() => mode === "chat" ? allAgents.filter((agent) => chatHarnesses.includes(agent.id)) : allAgents, [allAgents, chatHarnesses, mode]);
+	const agents = useMemo(() => !cloudSpawn && mode === "chat" ? allAgents.filter((agent) => chatHarnesses.includes(agent.id)) : allAgents, [allAgents, chatHarnesses, mode, cloudSpawn]);
 	const projectWorkerAgent = projectDetail?.config?.worker?.agent ?? projectDetail?.agent ?? "";
 	const projectWorkerModel = projectDetail?.config?.worker?.agentConfig?.model ?? projectDetail?.config?.agentConfig?.model ?? "";
 	const resolvedModel = resolveSpawnModel({ selectedAgent: harness, projectWorkerAgent, projectWorkerModel });
@@ -219,6 +258,10 @@ function SpawnModalContent() {
 	// provider picks, and naming a model here promised one the session never ran.
 	const displayedModelLabel = displayedModel ? modelCatalog?.models.find((item) => item.id === displayedModel)?.label ?? displayedModel : "Automatic";
 	const modelSelection = modelTouched ? model : "__auto__";
+	const cloudDefaults = cloudRoleDefaults(projectDetail?.config as Record<string, unknown> ?? {}, "worker", harness);
+	const modelOptions = cloudSpawn
+		? [...new Map([...(resolvedModel ? [{ id: resolvedModel, label: resolvedModel }] : []), ...(modelTouched && model ? [{ id: model, label: model }] : []), { id: "__custom__", label: "Custom model…" }].map((option) => [option.id, option])).values()]
+		: modelCatalog?.models.map((item) => ({ id: item.id, label: item.label })) ?? [];
 	const sourceNotices = !destination && sourceResolutionComplete
 		? [availableSources.length === 0 ? "Pair a desktop or sign in to Cloud to start a task." : "Choose where to run this task."]
 		: [];
@@ -245,24 +288,29 @@ function SpawnModalContent() {
 		|| (Platform.OS === "android" && listening)
 		|| voice.error
 		|| error
-		|| offerTUI,
+		|| offerTUI
+		|| reservedWorker
+		|| customModelOpen,
 	);
 
 	useEffect(() => {
-		if (destination?.kind !== "local" || !config || !projectId || projectId === STANDALONE_PROJECT) { setProjectDetail(undefined); setProjectDetailLoadedFor(projectId); return; }
+		if (!destination || !projectId || projectId === STANDALONE_PROJECT || (destination.kind === "local" && !config)) { setProjectDetail(undefined); setProjectDetailLoadedFor(projectId); return; }
 		let cancelled = false;
 		const generation = catalogGeneration.current;
 		setProjectDetailLoadedFor(null);
-		getProject(config, projectId)
+		const request = destination.kind === "cloud" && cloudOrgId
+			? cloudClient.getProject(cloudOrgId, projectId).then(({ project }) => ({ id: project.id, name: project.displayName, kind: "single_repo", config: project.config } as ProjectDetail))
+			: getProject(config!, projectId);
+		request
 			.then((nextProject) => { if (!cancelled && generation === catalogGeneration.current) setProjectDetail(nextProject); })
 			.catch((cause) => { if (!cancelled && generation === catalogGeneration.current) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled && generation === catalogGeneration.current) setProjectDetailLoadedFor(projectId); });
 		return () => { cancelled = true; };
-	}, [destination, config, projectId, reloadKey]);
+	}, [destination, config, projectId, reloadKey, cloudClient, cloudOrgId, cloudScopeKey]);
 
 	useEffect(() => {
 		if (agentTouched || loading || !catalog) return;
-		if (destination?.kind === "local" && projectId && projectId !== STANDALONE_PROJECT && projectDetailLoadedFor !== projectId) return;
+		if (projectId && projectId !== STANDALONE_PROJECT && projectDetailLoadedFor !== projectId) return;
 		const nextHarness = resolveSpawnAgent({
 			projectWorkerAgent: projectDetail?.config?.worker?.agent,
 			projectAgent: projectDetail?.agent,
@@ -298,7 +346,7 @@ function SpawnModalContent() {
 		catalogGeneration.current += 1;
 		destinationRef.current = next;
 		setDestination(next);
-		const preference = { source: next, projectId: null };
+		const preference = { source: next, projectId: null, ...(next.kind === "cloud" ? { scopeKey: cloudScopeKey } : {}) };
 		setSavedPreference(preference);
 		void saveSpawnPreference(preference);
 		setProjectId(null);
@@ -312,6 +360,7 @@ function SpawnModalContent() {
 		setProjectDetailLoadedFor(null);
 		setModel("");
 		setModelTouched(false);
+		setCustomModelOpen(false); setReservedWorker(null);
 		setModelCatalog(undefined);
 		setModelError(undefined);
 		attachmentsRef.current = [];
@@ -327,7 +376,7 @@ function SpawnModalContent() {
 	};
 
 	const clearModelOverride = () => { setModel(""); setModelTouched(false); };
-	const resetModelSource = () => { clearModelOverride(); setModelCatalog(undefined); setModelError(undefined); };
+	const resetModelSource = () => { clearModelOverride(); setModelCatalog(undefined); setModelError(undefined); setCustomModelOpen(false); };
 	const changeProject = (nextProjectId: string | null) => {
 		if (!spawnModelSourceChanged({ projectId, agentId: harness }, { projectId: nextProjectId, agentId: harness })) return;
 		resetModelSource();
@@ -336,7 +385,7 @@ function SpawnModalContent() {
 		setAgentTouched(false);
 		setProjectId(nextProjectId);
 		if (destinationRef.current) {
-			const preference = { source: destinationRef.current, projectId: nextProjectId };
+			const preference = { source: destinationRef.current, projectId: nextProjectId, ...(destinationRef.current.kind === "cloud" ? { scopeKey: cloudScopeKey } : {}) };
 			setSavedPreference(preference);
 			void saveSpawnPreference(preference);
 		}
@@ -360,6 +409,7 @@ function SpawnModalContent() {
 		setHarness(nextHarness);
 	};
 	const selectModel = (nextModel: string) => {
+		if (nextModel === "__custom__") { setCustomModel(modelTouched ? model : ""); setCustomModelOpen(true); return; }
 		if (nextModel === "__auto__") {
 			clearModelOverride();
 			return;
@@ -411,8 +461,36 @@ function SpawnModalContent() {
 		}
 	};
 
+	const openWorker = (session: { id: string; projectId: string }, requested: SourceRef, generation: number) => {
+		if (!mounted.current || !spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current) || (requested.kind === "cloud" && !cloudAuth.isCurrentSession())) return;
+		haptics.success(); backOr(router);
+		InteractionManager.runAfterInteractions(() => {
+			if (!spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current) || (requested.kind === "cloud" && !cloudAuth.isCurrentSession())) return;
+			router.push({ pathname: "/session/[id]", params: { id: session.id, projectId: session.projectId, source: requested.kind, sourceId: requested.id, ...(requested.kind === "cloud" ? { startup: "spawn" } : {}) } });
+			if (requested.kind === "cloud" && cloudScopeKey && requestRef.current) {
+				void clearCloudOperation(cloudScopeKey, `worker-create/${session.projectId}`, requestRef.current.id).catch(() => {});
+			}
+		});
+	};
+	const discardWorkerRetry = () => {
+		if (!reservedWorker || !projectId) return;
+		const operation = reservedWorker;
+		Alert.alert("Discard retry record?", "This does not delete a worker. Check existing workers first if the request may have completed.", [
+			{ text: "Keep record", style: "cancel" },
+			{ text: "Discard record", style: "destructive", onPress: () => {
+				void clearCloudOperation(operation.scopeKey, `worker-create/${projectId}`, operation.key).then(() => {
+					if (!mounted.current || !cloudAuth.isCurrentSession()) return;
+					setReservedWorker(null); requestRef.current = undefined; setError(null);
+				}).catch((cause) => { if (mounted.current) setError(userFacingError(cause)); });
+			} },
+		]);
+	};
 	const onSpawn = async () => {
+		if (submitting.current || operationLoading || !mounted.current) return;
 		if (!canSubmitSpawn(destination, projectId, harness, sourceFor) || !destination) return;
+		if (cloudSpawn && !cloudAuth.isCurrentSession()) return;
+		if (cloudSpawn && (projectDetailLoadedFor !== projectId || modelError)) return;
+		if (reservedWorker?.acceptedId && projectId) { openWorker({ id: reservedWorker.acceptedId, projectId }, destination, catalogGeneration.current); return; }
 		if (pickingAttachments.current) {
 			setAttachmentError("Wait for attachments to finish loading.");
 			return;
@@ -420,6 +498,9 @@ function SpawnModalContent() {
 		// Validated on submit rather than by disabling the button — desktop's
 		// choice, and the better one: a disabled button with no explanation is
 		// worse than a message naming what is missing.
+		submitting.current = true;
+		const generation = catalogGeneration.current;
+		const requested = destination;
 		setBusy(true);
 		setError(null);
 		setOfferTUI(false);
@@ -428,38 +509,29 @@ function SpawnModalContent() {
 				projectId: projectId ?? undefined,
 				prompt: prompt.trim() || undefined,
 				harness: harness || undefined,
-				model: modelOverride(displayedModel, modelTouched),
+				model: cloudSpawn ? displayedModel || undefined : modelOverride(displayedModel, modelTouched),
+				...(cloudSpawn ? { reasoningEffort: reservedWorker ? reservedWorker.payload.reasoningEffort : cloudDefaults.reasoningEffort } : {}),
 				mode,
 				attachments: attachmentsRef.current.map(({ mimeType, data }) => ({ mimeType, data })),
 			};
-			const { attachments: _, ...requestFields } = request;
-			const payload = JSON.stringify(requestFields);
+			const payload = spawnRequestFingerprint(cloudSpawn ? cloudScopeKey ?? "" : "", `${destination.kind}/${destination.id}`, request);
+			if (reservedWorker && requestRef.current?.payload !== payload) throw new Error("Resolve the previous Cloud request before starting a changed request. Check workers or discard its retry record.");
 			if (requestRef.current?.payload !== payload || requestRef.current?.attachments !== attachmentsRef.current) {
 				requestRef.current = { payload, attachments: attachmentsRef.current, id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
 			}
 			const session = await spawnOn(destination, { ...request, clientRequestId: requestRef.current.id });
+			if (!mounted.current || !spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current) || (cloudSpawn && !cloudAuth.isCurrentSession())) return;
 			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
-			haptics.success();
-			// Dismiss the modal first, then open the freshly spawned session's mode-aware surface
-			// once the dismiss transition has settled. Firing both navigations in the
-			// same tick overlaps their animations (the modal retracts while the session
-			// is already sliding in); runAfterInteractions waits for the modal's
-			// transition to finish so the two happen back-to-back, not on top of each
-			// other. The session screen shows its own "connecting" state while the
-			// terminal attaches, so landing on it before the PTY is ready is expected.
-			backOr(router);
-			InteractionManager.runAfterInteractions(() => {
-				router.push({
-					pathname: "/session/[id]",
-					params: { id: session.id, projectId: session.projectId, source: destination.kind, sourceId: destination.id, ...(destination.kind === "cloud" ? { startup: "spawn" } : {}) },
-				});
-			});
+			openWorker(session, requested, generation);
 		} catch (e) {
+			if (!mounted.current || !spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current) || (cloudSpawn && !cloudAuth.isCurrentSession())) return;
 			haptics.error();
 			setError(spawnErrorCopy(e, destination.kind));
+			if (cloudSpawn && cloudScopeKey && projectId) {
+				try { setReservedWorker(await readCloudOperation(cloudScopeKey, `worker-create/${projectId}`)); } catch {}
+			}
 			setOfferTUI(!cloudSpawn && mode === "chat" && isChatPreflightError(e));
-			setBusy(false);
-		}
+		} finally { submitting.current = false; if (mounted.current && spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current)) setBusy(false); }
 	};
 
 	const content = (
@@ -497,6 +569,19 @@ function SpawnModalContent() {
 				) : null}
 
 		{hasComposerMessage ? <View style={styles.messages}>
+					{cloudSpawn && (catalogError || modelError) ? <Button title="Retry setup" variant="ghost" onPress={() => { setModelError(undefined); setReloadKey((key) => key + 1); }} /> : null}
+					{reservedWorker ? <View>
+						<Text style={styles.warn}>{reservedWorker.acceptedId ? "Worker created. Open it without starting another." : "A previous request may have completed. Retry with the same request or check workers."}</Text>
+						{reservedWorker.acceptedId && destination && projectId ? <Button title="Open worker" onPress={() => openWorker({ id: reservedWorker.acceptedId!, projectId }, destination, catalogGeneration.current)} /> : null}
+						<Button title="Check workers" variant="ghost" onPress={() => backOr(router, "/workers")} />
+						<Button title="Discard retry record" variant="ghost" onPress={discardWorkerRetry} />
+					</View> : null}
+					{customModelOpen ? <View>
+						<Text style={styles.warn}>Enter a model ID supported by this Cloud agent.</Text>
+						<TextInput accessibilityLabel="Custom model ID" value={customModel} onChangeText={setCustomModel} autoCapitalize="none" autoCorrect={false} returnKeyType="done" style={[styles.customModel, { color: t.textPrimary, backgroundColor: t.bgElevated }]} />
+						<Button title="Use model" disabled={!customModel.trim()} onPress={() => { selectModel(customModel.trim()); setCustomModelOpen(false); }} />
+						<Button title="Cancel model entry" variant="ghost" onPress={() => setCustomModelOpen(false)} />
+					</View> : null}
 					{notices.map((notice) => <Text key={notice} style={styles.warn}>{notice}</Text>)}
 					{attachmentError ? <Text style={styles.warn}>{attachmentError}</Text> : null}
 					{Platform.OS === "android" ? voiceFeedback : null}
@@ -532,17 +617,17 @@ function SpawnModalContent() {
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
 					harness={harness}
 					onSelectHarness={selectAgent}
-					models={modelCatalog?.models.map((item) => ({ id: item.id, label: item.label })) ?? []}
+					models={modelOptions}
 					modelSelection={modelSelection}
 					modelLabel={displayedModelLabel}
 					onSelectModel={selectModel}
 					onAttach={() => { void pickAttachments(); }}
 					showAttachments={!cloudSpawn}
-					showModels={!cloudSpawn}
+					showModels={true}
 					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut }}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
-					disabled={!canSubmitSpawn(destination, projectId, harness, sourceFor) || busy || modelLoading || loading || listening || voice.state === "transcribing"}
+					disabled={!canSubmitSpawn(destination, projectId, harness, sourceFor) || busy || modelLoading || loading || listening || voice.state === "transcribing" || operationLoading || (cloudSpawn && (projectDetailLoadedFor !== projectId || !!modelError))}
 				/>
 				</KeyboardStickyView>
 		</View>
@@ -608,6 +693,7 @@ const makeStyles = (t: Theme) =>
 		},
 		androidContent: { flex: 0, paddingTop: space.md, paddingBottom: space.none },
 		messages: { gap: space.xs },
+		customModel: { minHeight: 44, borderRadius: 12, paddingHorizontal: space.md, fontSize: type.body.fontSize },
 		voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: 8, paddingHorizontal: space.sm, paddingVertical: space.xs },
 		voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
 		promptHost: { width: "100%", height: PROMPT_MIN_HEIGHT },

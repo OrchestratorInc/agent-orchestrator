@@ -1,10 +1,12 @@
-import type { CloudClient, Turn } from "@aoagents/cloud-client";
-import type { DashboardSession, ProjectInfo } from "../api";
+import type { CloudClient, CreateSessionInput, Turn } from "@aoagents/cloud-client";
+import type { DashboardSession, ProjectInfo, SpawnOptions } from "../api";
 import type { ConversationEvent } from "../chat/sse";
 import type { ConversationTurn, TurnSettings } from "../chat/types";
 import type { SessionSource } from "../environment/types";
 import { fetchConversationReplay, pollCloudEvents, toConversationItems, toConversationTurns } from "./events";
 import { toDashboardSession, toProjectInfo } from "./mapping";
+import { cloudRoleDefaults } from "../spawnModel";
+import { acceptCloudOperation, prepareCloudOperation, readCloudOperation, reserveCloudOperation } from "./operation";
 
 /** How often the cloud transcript is polled for new events. Matches the
  * tunnel-path conversation poll interval mobile already uses elsewhere. */
@@ -62,37 +64,60 @@ async function collect<T>(
 export function createCloudSessionSource(input: {
 	client: CloudClient;
 	orgId: string;
+	scopeKey: string;
+	isCurrent: () => boolean;
 }): SessionSource {
-	const { client, orgId } = input;
+	const { client, orgId, scopeKey, isCurrent } = input;
 	const settingsBySession = new Map<string, TurnSettings>();
+	const pendingSpawns = new Map<string, Promise<{ id: string }>>();
+	const acceptedSpawns = new Map<string, string>();
+	const createWorker = async (options: SpawnOptions): Promise<{ id: string }> => {
+		if (!options.projectId) throw new Error("Pick a project first");
+		if (!options.clientRequestId) throw new Error("This Cloud task has no request identity. Reopen the task sheet.");
+		if (!isCurrent()) throw new Error("Cloud account changed. Reopen the task sheet.");
+		const slot = `worker-create/${options.projectId}`;
+		const existing = await readCloudOperation<CreateSessionInput>(scopeKey, slot);
+		if (existing && existing.key !== options.clientRequestId) throw new Error("Resolve the previous Cloud request before starting a changed request.");
+		const acceptedId = existing?.acceptedId ?? acceptedSpawns.get(options.clientRequestId);
+		if (acceptedId) return { id: acceptedId };
+		let operation = existing;
+		if (!operation) {
+			const { project } = await client.getProject(orgId, options.projectId);
+			const harness = options.harness ?? "claude-code";
+			const defaults = cloudRoleDefaults(project.config, "worker", harness);
+			operation = prepareCloudOperation(undefined, scopeKey, {
+				projectId: options.projectId, kind: "worker", harness,
+				displayName: (options.prompt ?? "New session").slice(0, 80), prompt: options.prompt ?? "",
+				mode: "trusted", deniedCommands: [], model: options.model ?? defaults.model,
+				reasoningEffort: options.reasoningEffort ?? defaults.reasoningEffort,
+			} satisfies CreateSessionInput, () => options.clientRequestId!);
+		}
+		if (!isCurrent()) throw new Error("Cloud account changed. Reopen the task sheet.");
+		await reserveCloudOperation(slot, operation);
+		if (!isCurrent()) throw new Error("Cloud account changed. Reopen the task sheet.");
+		const { session } = await client.createSession(orgId, operation.payload, { idempotencyKey: operation.key });
+		// Acceptance precedes board refresh. Storage failure cannot undo a server
+		// acceptance; its reserved key still makes a future retry safe.
+		acceptedSpawns.set(operation.key, session.id);
+		try { await acceptCloudOperation(scopeKey, slot, operation.key, session.id); } catch {}
+		return { id: session.id };
+	};
 	return {
 		kind: "cloud",
+		scopeKey,
 		listProjects: async (): Promise<ProjectInfo[]> =>
 			(await collect((cursor) => client.listProjects(orgId, { cursor }))).map(toProjectInfo),
 		listSessions: async (): Promise<DashboardSession[]> => {
 			const sessions = await collect((cursor) => client.listSessions(orgId, { cursor }));
 			return sessions.map(toDashboardSession);
 		},
-		createSession: async (options) => {
-			if (!options.projectId) throw new Error("Pick a project first");
-			const response = await client.createSession(
-				orgId,
-				{
-					projectId: options.projectId,
-					kind: "worker",
-					harness: options.harness ?? "claude-code",
-					displayName: (options.prompt ?? "New session").slice(0, 80),
-					prompt: options.prompt ?? "",
-					// Cloud's `mode` is a trust level, distinct from mobile's chat/tui
-					// controller mode; a spawned session starts fully trusted, matching
-					// desktop's default for worker sessions.
-					mode: "trusted",
-					deniedCommands: [],
-				},
-				// Idempotent: a retry on a flaky phone network must not spawn twice.
-				{ idempotencyKey: `spawn-${Date.now()}-${Math.random().toString(36).slice(2)}` },
-			);
-			return { id: response.session.id };
+		createSession: (options) => {
+			const key = JSON.stringify([options.projectId, options.clientRequestId]);
+			const pending = pendingSpawns.get(key);
+			if (pending) return pending;
+			const request = createWorker(options).finally(() => pendingSpawns.delete(key));
+			pendingSpawns.set(key, request);
+			return request;
 		},
 		deleteSession: async (id) => { await client.deleteSession(orgId, id); },
 		getConversationPage: async (id) => {

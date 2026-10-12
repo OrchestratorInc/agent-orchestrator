@@ -91,6 +91,14 @@ describe("loadSessionSourceBoard", () => {
 });
 
 describe("spawnSessionThroughSource", () => {
+	it("keeps an accepted session when refreshing fails", async () => {
+		const failure = new Error("Board offline");
+		const report = vi.fn();
+		const sessionSource = source({ createSession: vi.fn(async () => ({ id: "accepted" })) });
+		expect(await board.spawnSessionThroughSource(sessionSource, { projectId: "p1" }, async () => { throw failure; }, report))
+			.toEqual({ id: "accepted", projectId: "p1" });
+		expect(report).toHaveBeenCalledWith(failure);
+	});
 	it("creates through the active source, refreshes its board, and returns a routable identity", async () => {
 		let received: unknown;
 		let refreshes = 0;

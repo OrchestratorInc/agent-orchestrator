@@ -7,10 +7,11 @@ function connection(provider: string, validationState = "valid") {
 }
 
 function fakeClient(config: Record<string, unknown> = { orchestrator: { agent: "claude-code" } }) {
-	const createSession = vi.fn(async () => ({ session: { id: "session-1" } }));
+	const createSession = vi.fn(async (_orgId: string, _input: import("@aoagents/cloud-client").CreateSessionInput, _options: { idempotencyKey: string }) => ({ session: { id: "session-1" } }));
 	const client = {
 		listProviderConnections: vi.fn(async () => [connection("codex")]),
 		listUserProviderConnections: vi.fn(async () => [connection("claude-code"), connection("codex")]),
+		listSessions: vi.fn(async () => ({ items: [], page: { hasMore: false } })),
 		getProject: vi.fn(async () => ({ project: { id: "project-1", config } })),
 		listProjects: vi.fn(async () => ({ items: [{ id: "project-1", config }], page: { hasMore: false } })),
 		createSession,
@@ -19,6 +20,25 @@ function fakeClient(config: Record<string, unknown> = { orchestrator: { agent: "
 }
 
 describe("Cloud project orchestrator", () => {
+	it("allows the configured OpenCode agent without pretending create selects Chat", async () => {
+		const { client, createSession } = fakeClient({ orchestrator: { agent: "opencode" } });
+		vi.mocked(client.listUserProviderConnections).mockResolvedValue([connection("opencode")] as never);
+		await spawnCloudOrchestrator(client, "org-1", "project-1", "request-open");
+		expect(createSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ harness: "opencode" }), { idempotencyKey: "request-open" });
+		expect(createSession.mock.calls[0]?.[1]).not.toHaveProperty("interfaceMode");
+	});
+	it("opens the existing project orchestrator without creating or requiring new credentials", async () => {
+		const { client, createSession } = fakeClient();
+		vi.mocked(client.listSessions).mockResolvedValue({ items: [{ id: "existing", projectId: "project-1", kind: "orchestrator", isTerminated: false }], page: { hasMore: false } } as never);
+		vi.mocked(client.listUserProviderConnections).mockResolvedValue([]);
+		expect(await spawnCloudOrchestrator(client, "org-1", "project-1", "request-1")).toBe("existing");
+		expect(createSession).not.toHaveBeenCalled();
+	});
+	it("applies model and effort only to the matching orchestrator agent", async () => {
+		const { client, createSession } = fakeClient({ orchestrator: { agent: "claude-code", agentConfig: { model: "configured", reasoningEffort: "high" } } });
+		await spawnCloudOrchestrator(client, "org-1", "project-1", "request-1");
+		expect(createSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "configured", reasoningEffort: "high" }), { idempotencyKey: "request-1" });
+	});
 	it("does not treat organization-only agent credentials as personal readiness", async () => {
 		const { client, createSession } = fakeClient();
 		vi.mocked(client.listUserProviderConnections).mockResolvedValue([]);

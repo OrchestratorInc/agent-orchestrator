@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "./spawnModel";
+import { cloudRoleDefaults, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged, spawnRequestFingerprint } from "./spawnModel";
+
+it("changes request identity for account, source, model or effort edits", () => {
+	const request = { projectId: "p1", prompt: "Inspect", harness: "codex", model: "model", reasoningEffort: "high" as const };
+	const fingerprint = spawnRequestFingerprint("scope-one", "cloud/o1", request);
+	for (const input of [spawnRequestFingerprint("scope-two", "cloud/o1", request), spawnRequestFingerprint("scope-one", "local/h1", request), spawnRequestFingerprint("scope-one", "cloud/o1", { ...request, model: "other" }), spawnRequestFingerprint("scope-one", "cloud/o1", { ...request, reasoningEffort: "low" })]) expect(input).not.toBe(fingerprint);
+});
+it("uses only matching project role defaults and rejects invalid effort values", () => {
+	const config = { worker: { agent: "codex", agentConfig: { model: " pinned ", reasoningEffort: "high" } } };
+	 expect(cloudRoleDefaults(config, "worker", "codex")).toEqual({ model: "pinned", reasoningEffort: "high" });
+	 expect(cloudRoleDefaults(config, "worker", "claude-code")).toEqual({});
+	 expect(cloudRoleDefaults({ worker: { agent: "codex", agentConfig: { reasoningEffort: "unknown" } } }, "worker", "codex")).toEqual({});
+});
 
 describe("spawn agent resolution", () => {
 	it("prefers the project's worker agent when it is available", () => {

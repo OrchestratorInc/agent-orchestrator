@@ -56,3 +56,20 @@ export function modelOverride(value: string, touched: boolean): string | undefin
 	const clean = value.trim();
 	return clean && clean !== "__auto__" ? clean : undefined;
 }
+
+export function spawnRequestFingerprint(scopeKey: string, source: string, request: import("./api").SpawnOptions): string {
+	return JSON.stringify([scopeKey, source, request.projectId ?? "", request.prompt?.trim() ?? "", request.harness ?? "",
+		request.model?.trim() ?? "", request.reasoningEffort ?? "", source.startsWith("local/") ? request.mode : undefined]);
+}
+
+/** Role defaults apply only to the agent that owns that configuration. */
+export function cloudRoleDefaults(config: Record<string, unknown>, role: "worker" | "orchestrator", harness: string): {
+	model?: string; reasoningEffort?: import("@aoagents/cloud-client").CreateSessionInput["reasoningEffort"];
+} {
+	const roleConfig = config[role] as { agent?: unknown; agentConfig?: { model?: unknown; reasoningEffort?: unknown } } | undefined;
+	if (roleConfig?.agent !== harness) return {};
+	const model = typeof roleConfig.agentConfig?.model === "string" ? roleConfig.agentConfig.model.trim() : undefined;
+	const effort = roleConfig.agentConfig?.reasoningEffort;
+	return { ...(model ? { model } : {}), ...(typeof effort === "string" && ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(effort)
+		? { reasoningEffort: effort as import("@aoagents/cloud-client").CreateSessionInput["reasoningEffort"] } : {}) };
+}

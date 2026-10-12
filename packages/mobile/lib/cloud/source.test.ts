@@ -1,5 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
-import { createCloudSessionSource } from "./source";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+const storage = vi.hoisted(() => ({ data: new Map<string, string>(), setItem: vi.fn() }));
+vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
+	getItem: async (key: string) => storage.data.get(key) ?? null,
+	setItem: storage.setItem, removeItem: async (key: string) => { storage.data.delete(key); },
+} }));
+beforeEach(() => { storage.data.clear(); storage.setItem.mockReset().mockImplementation(async (key: string, value: string) => { storage.data.set(key, value); }); });
+import { createCloudSessionSource as createSource } from "./source";
+function createCloudSessionSource(input: { client: never; orgId: string; scopeKey?: string; isCurrent?: () => boolean }) {
+	return createSource({ scopeKey: "test-scope", isCurrent: () => true, ...input });
+}
 
 function fullSession(id: string) {
 	return {
@@ -25,13 +34,53 @@ function clientStub<T extends Record<string, unknown> = Record<string, never>>(o
 	return {
 		listProjects: vi.fn(async () => ({ items: [], page: { hasMore: false } })),
 		listSessions: vi.fn(async () => ({ items: [], page: { hasMore: false } })),
-		createSession: vi.fn(async () => ({ session: { id: "s-new" } })),
+		createSession: vi.fn(async (_orgId: string, _input: import("@aoagents/cloud-client").CreateSessionInput, _options: { idempotencyKey: string }) => ({ session: { id: "s-new" } })),
+		getProject: vi.fn(async () => ({ project: { config: {} } })),
 		deleteSession: vi.fn(async () => ({ session: { id: "x", desiredState: "deleted" } })),
 		...overrides,
 	};
 }
 
 describe("createCloudSessionSource", () => {
+	it("restores an uncertain spawn with its frozen wire payload and records acceptance before returning", async () => {
+		const client = clientStub({ createSession: vi.fn().mockRejectedValueOnce(new Error("Response lost")).mockResolvedValue({ session: { id: "accepted" } }) });
+		const options = { projectId: "p1", harness: "codex", clientRequestId: "one" };
+		vi.mocked(client.getProject).mockResolvedValue({ project: { config: { worker: { agent: "codex", agentConfig: { model: "first" } } } } } as never);
+		await expect(createCloudSessionSource({ client: client as never, orgId: "o1" }).createSession(options)).rejects.toThrow("Response lost");
+		vi.mocked(client.getProject).mockResolvedValue({ project: { config: { worker: { agent: "codex", agentConfig: { model: "changed" } } } } } as never);
+		const restored = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		expect(await restored.createSession(options)).toEqual({ id: "accepted" });
+		expect(client.createSession.mock.calls[0]).toEqual(client.createSession.mock.calls[1]);
+		expect(await createCloudSessionSource({ client: client as never, orgId: "o1" }).createSession(options)).toEqual({ id: "accepted" });
+		expect(client.createSession).toHaveBeenCalledTimes(2);
+	});
+	it("blocks double taps and stops before POST if the retry record cannot be stored", async () => {
+		const client = clientStub();
+		storage.setItem.mockRejectedValueOnce(new Error("Storage unavailable"));
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		await expect(source.createSession({ projectId: "p1", clientRequestId: "one" })).rejects.toThrow("Storage unavailable");
+		expect(client.createSession).not.toHaveBeenCalled();
+		const options = { projectId: "p1", clientRequestId: "one" };
+		await Promise.all([source.createSession(options), source.createSession(options)]);
+		expect(client.createSession).toHaveBeenCalledOnce();
+	});
+	it("carries model, effort, and reserved request identity to Cloud", async () => {
+		const client = clientStub();
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1", scopeKey: "scope-one", isCurrent: () => true });
+		await source.createSession({ projectId: "p1", prompt: "Inspect", harness: "codex", model: "model-test", reasoningEffort: "high", clientRequestId: "spawn-one" });
+		expect(source.scopeKey).toBe("scope-one");
+		expect(client.createSession).toHaveBeenCalledWith("o1", expect.objectContaining({ model: "model-test", reasoningEffort: "high" }), { idempotencyKey: "spawn-one" });
+		expect(client.createSession.mock.calls[0][1]).not.toHaveProperty("interfaceMode");
+	});
+	it("rejects a Cloud spawn without reserved identity or after account change", async () => {
+		const client = clientStub();
+		let current = true;
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1", scopeKey: "scope-one", isCurrent: () => current });
+		await expect(source.createSession({ projectId: "p1" })).rejects.toThrow("request identity");
+		current = false;
+		await expect(source.createSession({ projectId: "p1", clientRequestId: "spawn-one" })).rejects.toThrow("account changed");
+		expect(client.createSession).not.toHaveBeenCalled();
+	});
 	it("identifies as the cloud environment", () => {
 		expect(createCloudSessionSource({ client: clientStub() as never, orgId: "o1" }).kind).toBe("cloud");
 	});
@@ -69,7 +118,7 @@ describe("createCloudSessionSource", () => {
 	it("spawns a worker session in the bound org, idempotently", async () => {
 		const client = clientStub();
 		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
-		expect(await source.createSession({ projectId: "p1", prompt: "fix it", harness: "codex" }))
+		expect(await source.createSession({ projectId: "p1", prompt: "fix it", harness: "codex", clientRequestId: "spawn-1" }))
 			.toEqual({ id: "s-new" });
 		expect(client.createSession).toHaveBeenCalledWith("o1", expect.objectContaining({
 			projectId: "p1", kind: "worker", harness: "codex", prompt: "fix it",

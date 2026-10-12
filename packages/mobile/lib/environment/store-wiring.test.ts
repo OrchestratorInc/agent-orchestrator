@@ -67,7 +67,7 @@ describe("resolveSessionSource", () => {
 				resolveSessionSource({
 					environment: "cloud",
 					cfg: null,
-					cloud: { client: fakeClient, signedIn: false, orgId: null },
+					cloud: { client: fakeClient, signedIn: false, scopeKey: "test-account", isCurrent: () => true, orgId: null },
 				}),
 			).toBeUndefined();
 		});
@@ -77,7 +77,7 @@ describe("resolveSessionSource", () => {
 				resolveSessionSource({
 					environment: "cloud",
 					cfg: null,
-					cloud: { client: fakeClient, signedIn: true, orgId: null },
+					cloud: { client: fakeClient, signedIn: true, scopeKey: "test-account", isCurrent: () => true, orgId: null },
 				}),
 			).toBeUndefined();
 		});
@@ -90,13 +90,13 @@ describe("resolveSessionSource", () => {
 			const result = resolveSessionSource({
 				environment: "cloud",
 				cfg: null,
-				cloud: { client: fakeClient, signedIn: true, orgId: "org1" },
+				cloud: { client: fakeClient, signedIn: true, scopeKey: "test-account", isCurrent: () => true, orgId: "org1" },
 			});
 			expect(result?.kind).toBe("cloud");
 		});
 
 		it("returns the same instance for an unchanged org id", () => {
-			const cloud = { client: fakeClient, signedIn: true, orgId: "org1" };
+			const cloud = { client: fakeClient, signedIn: true, scopeKey: "test-account", isCurrent: () => true, orgId: "org1" };
 			expect(resolveSessionSource({ environment: "cloud", cfg: null, cloud })).toBe(
 				resolveSessionSource({ environment: "cloud", cfg: null, cloud }),
 			);
@@ -106,12 +106,12 @@ describe("resolveSessionSource", () => {
 			const first = resolveSessionSource({
 				environment: "cloud",
 				cfg: null,
-				cloud: { client: fakeClient, signedIn: true, orgId: "org1" },
+				cloud: { client: fakeClient, signedIn: true, scopeKey: "test-account", isCurrent: () => true, orgId: "org1" },
 			});
 			const second = resolveSessionSource({
 				environment: "cloud",
 				cfg: null,
-				cloud: { client: fakeClient, signedIn: true, orgId: "org2" },
+				cloud: { client: fakeClient, signedIn: true, scopeKey: "test-account", isCurrent: () => true, orgId: "org2" },
 			});
 			expect(first).not.toBe(second);
 		});
@@ -120,12 +120,12 @@ describe("resolveSessionSource", () => {
 			const first = resolveSessionSource({
 				environment: "cloud",
 				cfg: null,
-				cloud: { client: {} as CloudClient, signedIn: true, orgId: "org1", sessionEpoch: 1 },
+				cloud: { client: {} as CloudClient, signedIn: true, scopeKey: "test-account", isCurrent: () => true, orgId: "org1", sessionEpoch: 1 },
 			});
 			const second = resolveSessionSource({
 				environment: "cloud",
 				cfg: null,
-				cloud: { client: {} as CloudClient, signedIn: true, orgId: "org1", sessionEpoch: 1 },
+				cloud: { client: {} as CloudClient, signedIn: true, scopeKey: "test-account", isCurrent: () => true, orgId: "org1", sessionEpoch: 1 },
 			});
 			expect(first).not.toBe(second);
 		});
@@ -135,19 +135,19 @@ describe("resolveSessionSource", () => {
 			const first = resolveSessionSource({
 				environment: "cloud",
 				cfg: null,
-				cloud: { client, signedIn: true, orgId: "org1", sessionEpoch: 1 },
+				cloud: { client, signedIn: true, scopeKey: "test-account", isCurrent: () => true, orgId: "org1", sessionEpoch: 1 },
 			});
 			const second = resolveSessionSource({
 				environment: "cloud",
 				cfg: null,
-				cloud: { client, signedIn: true, orgId: "org1", sessionEpoch: 2 },
+				cloud: { client, signedIn: true, scopeKey: "test-account", isCurrent: () => true, orgId: "org1", sessionEpoch: 2 },
 			});
 			expect(first).not.toBe(second);
 		});
 	});
 
 	it("returns a new instance when switching environments even if the org id repeats", () => {
-		const cloud = { client: fakeClient, signedIn: true, orgId: "org1" };
+		const cloud = { client: fakeClient, signedIn: true, scopeKey: "test-account", isCurrent: () => true, orgId: "org1" };
 		const cloudSource = resolveSessionSource({ environment: "cloud", cfg: null, cloud });
 		const cfg: ServerConfig = { ...DEFAULT_CONFIG, host: "10.0.0.2", password: "pw" };
 		const localSource = resolveSessionSource({ environment: "local", cfg });
@@ -160,7 +160,7 @@ describe("resolveSessionSource", () => {
 
 	it("keeps Local source stable while Cloud resolves", () => {
 		const cfg: ServerConfig = { ...DEFAULT_CONFIG, host: "10.0.0.2", password: "pw" };
-		const cloud = { client: fakeClient, signedIn: true, orgId: "org1" };
+		const cloud = { client: fakeClient, signedIn: true, scopeKey: "test-account", isCurrent: () => true, orgId: "org1" };
 		const firstLocal = resolveSessionSource({ environment: "local", cfg });
 		expect(firstLocal?.kind).toBe("local");
 		const cloudSource = resolveSessionSource({ environment: "cloud", cfg: null, cloud });
@@ -185,7 +185,7 @@ describe("resolveSessionSource", () => {
 		});
 
 		it("returns undefined even with a signed-in cloud session", () => {
-			const cloud = { client: fakeClient, signedIn: true, orgId: "org1" };
+			const cloud = { client: fakeClient, signedIn: true, scopeKey: "test-account", isCurrent: () => true, orgId: "org1" };
 			expect(resolveSessionSource({ environment: null, cfg: null, cloud })).toBeUndefined();
 		});
 

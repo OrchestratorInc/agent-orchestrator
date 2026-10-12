@@ -77,7 +77,7 @@ describe("SpawnComposerControls", () => {
 		await act(async () => cloud?.props.onPress());
 		expect(onSelectDestination).toHaveBeenCalledWith({ kind: "cloud", id: "org-1" });
 	});
-	it("hides local-only attachment and model controls for a Cloud spawn", async () => {
+	it("shows Cloud models but not unsupported attachments", async () => {
 		const props = {
 			destinations: [{ source: { kind: "cloud", id: "org-1" }, label: "Cloud", available: true }],
 			destination: { kind: "cloud", id: "org-1" },
@@ -98,7 +98,7 @@ describe("SpawnComposerControls", () => {
 			busy: false,
 			disabled: false,
 			showAttachments: false,
-			showModels: false,
+			showModels: true,
 		} as unknown as Parameters<typeof SpawnComposerControls>[0];
 
 		await act(async () => { renderer = create(<SpawnComposerControls {...props} />); });
@@ -109,7 +109,7 @@ describe("SpawnComposerControls", () => {
 			.filter(Boolean);
 		expect(labels).toContain("Claude Code");
 		expect(labels).not.toContain("Attach a file");
-		expect(labels).not.toContain("Automatic");
+		expect(labels).toContain("Automatic");
 	});
 });
 

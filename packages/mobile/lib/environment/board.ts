@@ -59,9 +59,10 @@ export async function spawnSessionThroughSource(
 	source: SessionSource,
 	options: SpawnOptions,
 	refresh: () => Promise<void>,
+	onRefreshError?: (cause: unknown) => void,
 ): Promise<{ id: string; projectId: string }> {
 	if (!options.projectId) throw new Error("Pick a project first");
 	const session = await source.createSession(options);
-	await refresh();
+	try { await refresh(); } catch (cause) { onRefreshError?.(cause); }
 	return { id: session.id, projectId: options.projectId };
 }

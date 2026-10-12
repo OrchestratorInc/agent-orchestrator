@@ -3,20 +3,21 @@ import type { SourceRef } from "./environment/scopedBoard";
 
 const KEY = "ao.spawnPreference";
 
-export type SpawnPreference = { source: SourceRef; projectId: string | null };
+export type SpawnPreference = { source: SourceRef; projectId: string | null; scopeKey?: string };
 
-export async function loadSpawnPreference(): Promise<SpawnPreference | null> {
+export async function loadSpawnPreference(cloudScopeKey?: string): Promise<SpawnPreference | null> {
 	try {
 		const raw = await AsyncStorage.getItem(KEY);
 		if (!raw) return null;
 		const value: unknown = JSON.parse(raw);
 		if (!value || typeof value !== "object") return null;
-		const { source, projectId } = value as Record<string, unknown>;
+		const { source, projectId, scopeKey } = value as Record<string, unknown>;
 		if (!source || typeof source !== "object") return null;
 		const { kind, id } = source as Record<string, unknown>;
 		if ((kind !== "local" && kind !== "cloud") || typeof id !== "string" || !id) return null;
 		if (projectId !== null && typeof projectId !== "string") return null;
-		return { source: { kind, id }, projectId };
+		if (kind === "cloud" && (!cloudScopeKey || scopeKey !== cloudScopeKey)) return null;
+		return { source: { kind, id }, projectId, ...(kind === "cloud" ? { scopeKey: cloudScopeKey } : {}) };
 	} catch {
 		return null;
 	}

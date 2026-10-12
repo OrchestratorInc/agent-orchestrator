@@ -30,6 +30,8 @@ import {
 } from "./api";
 import { isConfigured, machineIdentity, type ServerConfig } from "./config";
 import { useCloudAuth } from "./cloud/authStore";
+import { CLOUD_BASE_URL } from "./cloud/config";
+import { cloudAccountScopeKey } from "./cloud/deployment";
 import { loadEnvironment, saveEnvironment } from "./environment/store";
 import { loadSessionSourceBoard, spawnSessionThroughSource } from "./environment/board";
 import {
@@ -353,7 +355,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		signedIn: cloudAuth.signedIn === true,
 		orgId: cloudAuth.orgId,
 		sessionEpoch: cloudAuth.sessionEpoch,
-	}), [cloudAuth.client, cloudAuth.signedIn, cloudAuth.orgId, cloudAuth.sessionEpoch]);
+		scopeKey: cloudAuth.accountId && cloudAuth.orgId ? cloudAccountScopeKey({ baseUrl: CLOUD_BASE_URL, userId: cloudAuth.accountId, orgId: cloudAuth.orgId }) : undefined,
+		isCurrent: cloudAuth.isCurrentSession,
+	}), [cloudAuth.client, cloudAuth.signedIn, cloudAuth.orgId, cloudAuth.sessionEpoch, cloudAuth.accountId, cloudAuth.isCurrentSession]);
 	const sessionSource = environment === "cloud" ? cloudSource : environment === "local" ? localSource : undefined;
 	const cloudOrgId = cloudSource ? cloudAuth.orgId : null;
 	const cfgRef = useRef<ServerConfig | null>(null);
@@ -1246,7 +1250,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			await refreshSource(ref);
 			return { id: session.id, projectId: session.projectId };
 		}
-		return spawnSessionThroughSource(source, options, () => refreshSource(ref));
+		return spawnSessionThroughSource(source, options, () => refreshSource(ref), (cause) => {
+			if (cloudBoardRequestRef.current?.source !== source) return;
+			setCloudBoard((board) => ({ ...board, error: userFacingError(cause, "Worker started, but the board could not refresh. Pull to refresh.") }));
+		});
 	}, [sourceFor, refreshSource, assertLocalSource]);
 	const launchConductorOn = useCallback(async (ref: SourceRef, projectId: string, clean = false, mode: SessionMode = "chat") => {
 		const link = await apiLaunchOrchestrator(assertLocalSource(ref), projectId, clean, mode);

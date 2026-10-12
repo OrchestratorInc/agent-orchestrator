@@ -14,6 +14,8 @@ export type CloudResolveInput = {
 	orgId: string | null;
 	/** Increments whenever the authenticated Cloud account session changes. */
 	sessionEpoch?: number;
+	scopeKey?: string;
+	isCurrent?: () => boolean;
 };
 
 // Separate slots keep one source's resolution from evicting the other. The
@@ -24,6 +26,7 @@ let cachedOrgId: string | undefined;
 let cachedCloudClient: CloudClient | undefined;
 let cachedCloudSessionEpoch: number | undefined;
 let cachedCloudSource: SessionSource | undefined;
+let cachedCloudScopeKey: string | undefined;
 
 export function resolveLocalSource(cfg: ServerConfig | null): SessionSource | undefined {
 	if (!cfg || !isConfigured(cfg)) {
@@ -39,7 +42,7 @@ export function resolveLocalSource(cfg: ServerConfig | null): SessionSource | un
 }
 
 export function resolveCloudSource(cloud: CloudResolveInput | undefined): SessionSource | undefined {
-	if (!cloud || !cloud.signedIn || !cloud.orgId) {
+	if (!cloud || !cloud.signedIn || !cloud.orgId || !cloud.scopeKey || !cloud.isCurrent) {
 		cachedOrgId = undefined;
 		cachedCloudClient = undefined;
 		cachedCloudSessionEpoch = undefined;
@@ -47,11 +50,12 @@ export function resolveCloudSource(cloud: CloudResolveInput | undefined): Sessio
 		return undefined;
 	}
 	if (!cachedCloudSource || cachedOrgId !== cloud.orgId || cachedCloudClient !== cloud.client ||
-		cachedCloudSessionEpoch !== (cloud.sessionEpoch ?? 0)) {
+		cachedCloudSessionEpoch !== (cloud.sessionEpoch ?? 0) || cachedCloudScopeKey !== cloud.scopeKey) {
 		cachedOrgId = cloud.orgId;
 		cachedCloudClient = cloud.client;
 		cachedCloudSessionEpoch = cloud.sessionEpoch ?? 0;
-		cachedCloudSource = createCloudSessionSource({ client: cloud.client, orgId: cloud.orgId });
+		cachedCloudScopeKey = cloud.scopeKey;
+		cachedCloudSource = createCloudSessionSource({ client: cloud.client, orgId: cloud.orgId, scopeKey: cloud.scopeKey, isCurrent: cloud.isCurrent });
 	}
 	return cachedCloudSource;
 }

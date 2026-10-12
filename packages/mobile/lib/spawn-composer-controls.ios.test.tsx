@@ -114,7 +114,7 @@ describe("SpawnComposerControls on iOS", () => {
 		await act(async () => projectButton!.props.onPress());
 		expect(onSelectProject).toHaveBeenCalledWith("project-1");
 	});
-	it("keeps the Cloud harness picker while hiding attachment and model controls", async () => {
+	it("keeps Cloud agent and model choices while hiding unsupported attachments", async () => {
 		await act(async () => {
 			renderer = create(<SpawnComposerControls
 				destinations={[{ source: { kind: "cloud", id: "org-1" }, label: "Cloud", available: true }]}
@@ -126,7 +126,7 @@ describe("SpawnComposerControls on iOS", () => {
 				agents={[{ id: "claude-code", label: "Claude Code" }]}
 				harness="claude-code"
 				onSelectHarness={vi.fn()}
-				models={[]}
+				models={[{ id: "configured", label: "Configured model" }, { id: "__custom__", label: "Custom model…" }]}
 				modelSelection="__auto__"
 				modelLabel="Automatic"
 				onSelectModel={vi.fn()}
@@ -136,7 +136,7 @@ describe("SpawnComposerControls on iOS", () => {
 				busy={false}
 				disabled={false}
 				showAttachments={false}
-				showModels={false}
+				showModels={true}
 			/>);
 		});
 
@@ -144,8 +144,9 @@ describe("SpawnComposerControls on iOS", () => {
 			.findAll((node) => String(node.type) === "Text")
 			.map((node) => node.props.children);
 		expect(text).toContain("Claude Code");
-		expect(text).not.toContain("Automatic");
+		expect(renderer!.root.findAll((node) => String(node.type) === "Button").some((node) => node.props.label === "Automatic")).toBe(true);
 		const buttons = renderer!.root.findAll((node) => String(node.type) === "Button");
+		expect(buttons.some((node) => node.props.label === "Custom model…")).toBe(true);
 		expect(buttons.some((node) => node.props.label === "Attach file")).toBe(false);
 	});
 });
