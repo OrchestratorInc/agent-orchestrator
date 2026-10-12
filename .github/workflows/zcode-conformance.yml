@@ -53,9 +53,25 @@ jobs:
       - name: Archive pinned unmodified native runtime
         working-directory: upstream-zcode
         run: |
-          git rev-parse HEAD > SOURCE_COMMIT
-          node --version > NODE_VERSION
-          tar -czf ../zcode-native-runtime.tar.gz SOURCE_COMMIT NODE_VERSION package.json node_modules apps/zcode-cli/package.json apps/zcode-cli/node_modules apps/zcode-cli/packages
+          node --input-type=module <<'NODE'
+          import { collectSeaTuiAssets, seaTuiAssetPrefix } from './apps/zcode-cli/packages/cli/scripts/sea-tui-assets.mjs';
+          import { cp, mkdir } from 'node:fs/promises';
+          import { dirname, resolve } from 'node:path';
+          const runtime = resolve('../zcode-native-runtime');
+          await mkdir(runtime, { recursive: true });
+          const { assets, manifest } = await collectSeaTuiAssets({ root: resolve('apps/zcode-cli'), stagingDirectory: resolve('../zcode-staging'), target: 'linux-x64' });
+          for (const file of manifest.files) {
+            const destination = resolve(runtime, file.path);
+            await mkdir(dirname(destination), { recursive: true });
+            await cp(assets[seaTuiAssetPrefix + file.path], destination);
+          }
+          for (const name of ['zcode.cjs', 'provider', 'THIRD-PARTY-NOTICES.md']) {
+            await cp(resolve('apps/zcode-cli/packages/cli/dist', name), resolve(runtime, name), { recursive: true });
+          }
+          NODE
+          git rev-parse HEAD > ../zcode-native-runtime/SOURCE_COMMIT
+          node --version > ../zcode-native-runtime/NODE_VERSION
+          tar -czf ../zcode-native-runtime.tar.gz -C .. zcode-native-runtime
           sha256sum ../zcode-native-runtime.tar.gz > ../zcode-native-runtime.sha256
       - uses: actions/upload-artifact@v4
         with:
