@@ -1,0 +1,12 @@
+{
+  "source": "c5615c8494821d572649ae3847977b8aaa4fd4b8",
+  "historicalAssetRevision": "019e960a15d6356110213f776d885c556e0ca32e",
+  "images": {
+    "hermes-004-token-refusal.png": "bfc26fbc9afecb2279594ba34d3340aa00c537ef7fd4a385553c78d095384eca",
+    "hermes-004-incomplete-blank.png": "69357385236d871e424abec46a7cbc715300d4cbae15c1cb177190b3af410214",
+    "hermes-006-restored.png": "fa4ddfe9c1f728670a42281b9306bbe78e14467d19318aee8fef5c79cbe201ad",
+    "hermes-008-restored.png": "7f93912f6137220510d84bc15eabb9f0ac8b8b2e714d1a7e795fef61a16b71e0"
+  },
+  "relocatedFrom": "eaeed697f2e92fda214b9847443ef941f80ab2ae",
+  "evidenceScope": "Historical exact-source proof; relocation is not a new audit"
+}
