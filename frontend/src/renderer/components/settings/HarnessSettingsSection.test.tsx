@@ -135,22 +135,12 @@ const plans = {
 };
 
 describe("updateAdvisoryRefreshInterval", () => {
-	it("retries missing advisory data after five minutes", () => {
-		expect(updateAdvisoryRefreshInterval()).toBe(5 * 60_000);
+	it("reads the daemon's cached advisory every fifteen minutes", () => {
+		expect(updateAdvisoryRefreshInterval()).toBe(15 * 60_000);
 	});
 
-	it.each([
-		["unknown", 5 * 60_000],
-		["future_status", 5 * 60_000],
-		["", 5 * 60_000],
-		["current", 60 * 60_000],
-		["behind_latest", 60 * 60_000],
-	] as const)("uses the expected cadence for %s advisories", (status, expected) => {
-		expect(updateAdvisoryRefreshInterval({ agentId: "codex", status, currentVersion: "1.2.3", latestVersion: "1.3.0", checkedAt: "2026-10-06T00:00:00Z" })).toBe(expected);
-	});
-
-	it("retries a failed refresh even when an old current result remains cached", () => {
-		expect(updateAdvisoryRefreshInterval({ agentId: "codex", status: "current", checkedAt: "2026-10-06T00:00:00Z" }, true)).toBe(5 * 60_000);
+	it("retries a failed fetch after five minutes", () => {
+		expect(updateAdvisoryRefreshInterval(true)).toBe(5 * 60_000);
 	});
 });
 

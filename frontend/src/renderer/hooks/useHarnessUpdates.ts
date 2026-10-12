@@ -33,8 +33,10 @@ export function hasConfirmedHarnessUpdate(advisory?: AgentUpdateAdvisory): boole
 		&& Boolean(advisory.latestVersion?.trim()) && advisory.currentVersion?.trim() !== advisory.latestVersion?.trim();
 }
 
-export function updateAdvisoryRefreshInterval(advisory?: AgentUpdateAdvisory, hasError = false): number {
-	return !hasError && hasDefinitiveUpdateStatus(advisory) ? 60 * 60_000 : 5 * 60_000;
+// The daemon checks harnesses on its own schedule and serves cached results,
+// so polling only reads that cache; it never starts a CLI probe by itself.
+export function updateAdvisoryRefreshInterval(hasError = false): number {
+	return hasError ? 5 * 60_000 : 15 * 60_000;
 }
 
 export function useHarnessUpdates(installed: ReadonlySet<AgentId>, hostId?: string, enabled = true) {
@@ -42,8 +44,10 @@ export function useHarnessUpdates(installed: ReadonlySet<AgentId>, hostId?: stri
 		queryKey: updateAdvisoryQueryKey(agentId, hostId),
 		queryFn: () => fetchUpdateAdvisory(agentId, hostId),
 		enabled: enabled && installed.has(agentId),
-		staleTime: (query) => updateAdvisoryRefreshInterval(query.state.data, query.state.status === "error"),
-		refetchInterval: (query) => updateAdvisoryRefreshInterval(query.state.data, query.state.status === "error"),
+		staleTime: (query) => updateAdvisoryRefreshInterval(query.state.status === "error"),
+		refetchInterval: (query) => updateAdvisoryRefreshInterval(query.state.status === "error"),
+		// Keep the update badge current while the window is hidden or minimized.
+		refetchIntervalInBackground: true,
 		retry: false,
 	})) });
 	return new Map(AGENT_OPTIONS.map((agentId, index) => [agentId, queries[index]] as const));

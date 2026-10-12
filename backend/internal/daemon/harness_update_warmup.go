@@ -3,21 +3,30 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 )
 
-// warmInstalledHarnessUpdates runs only after the startup readiness passes,
-// using their cached installation observations rather than probing every
-// adapter again. The HTTP endpoint can start the same check earlier; the
-// installer service shares in-flight work and cached results with this pass.
-func warmInstalledHarnessUpdates(
+// watchInstalledHarnessUpdates checks installed harnesses for updates once
+// the startup readiness passes, then again every interval for as long as the
+// daemon runs, so a long-lived daemon notices new releases without a restart.
+// Each pass reads the cached installation observations rather than probing
+// every adapter again, so it also covers harnesses installed since the last
+// pass. The first pass shares in-flight work and cached results with the HTTP
+// endpoint. Later passes force a fresh lookup: a result cached just under one
+// interval ago would otherwise be served again for another interval. A pass
+// submits every installed harness at once; the installer service runs at most
+// two checks at a time, so a pass costs about two CLI version probes of memory.
+func watchInstalledHarnessUpdates(
 	ctx context.Context,
 	readinessDone <-chan struct{},
+	interval time.Duration,
 	readiness func(context.Context) (agentsvc.Readiness, error),
-	check func(context.Context, systeminstall.Target) (systeminstall.UpdateAdvisory, error),
+	check func(ctx context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error),
 	log *slog.Logger,
 ) {
 	select {
@@ -25,24 +34,48 @@ func warmInstalledHarnessUpdates(
 	case <-ctx.Done():
 		return
 	}
+	checkInstalledHarnessUpdates(ctx, false, readiness, check, log)
+	if interval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			checkInstalledHarnessUpdates(ctx, true, readiness, check, log)
+		}
+	}
+}
+
+func checkInstalledHarnessUpdates(
+	ctx context.Context,
+	refresh bool,
+	readiness func(context.Context) (agentsvc.Readiness, error),
+	check func(ctx context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error),
+	log *slog.Logger,
+) {
 	if ctx.Err() != nil {
 		return
 	}
 	known, err := readiness(ctx)
 	if err != nil {
-		log.Warn("harness update warm-up skipped: readiness unavailable", "err", err)
+		log.Warn("harness update check skipped: readiness unavailable", "err", err)
 		return
 	}
+	var wg sync.WaitGroup
 	for _, agent := range known.Agents {
-		if ctx.Err() != nil {
-			return
-		}
 		target := systeminstall.Target(agent.ID)
 		if agent.Installation.State != domain.AgentInstallationInstalled || !systeminstall.IsAgentTarget(target) {
 			continue
 		}
-		if _, err := check(ctx, target); err != nil && ctx.Err() == nil {
-			log.Warn("harness update warm-up failed", "agent", agent.ID, "err", err)
-		}
+		wg.Go(func() {
+			if _, err := check(ctx, target, refresh); err != nil && ctx.Err() == nil {
+				log.Warn("harness update check failed", "agent", agent.ID, "err", err)
+			}
+		})
 	}
+	wg.Wait()
 }

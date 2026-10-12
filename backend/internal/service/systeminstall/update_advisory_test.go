@@ -155,6 +155,102 @@ func TestUpdateAdvisoryPageRequestCanCancelWhileStartupJoinsSameCheck(t *testing
 	}
 }
 
+func TestUpdateAdvisoryRunsAtMostTwoChecksAtOnce(t *testing.T) {
+	s := newTestService("darwin")
+	var running, peak, verified atomic.Int32
+	release := make(chan struct{})
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		now := running.Add(1)
+		for {
+			old := peak.Load()
+			if now <= old || peak.CompareAndSwap(old, now) {
+				break
+			}
+		}
+		verified.Add(1)
+		<-release
+		running.Add(-1)
+		return VerifyResult{ResolvedPath: "/opt/bin/harness", Output: "1.0.0"}, nil
+	})
+	s.officialVersion = func(context.Context, Target) (string, error) { return "1.0.0", nil }
+	targets := []Target{TargetCodex, TargetClaudeCode, TargetGrok, TargetPi, TargetMuse, TargetGemini}
+	done := make(chan error, len(targets))
+	for _, target := range targets {
+		go func() {
+			_, err := s.UpdateAdvisory(context.Background(), target)
+			done <- err
+		}()
+	}
+	deadline := time.After(time.Second)
+	for verified.Load() < maxConcurrentUpdateChecks {
+		select {
+		case <-deadline:
+			t.Fatalf("only %d checks started", verified.Load())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := verified.Load(); got != maxConcurrentUpdateChecks {
+		t.Fatalf("checks started while slots were full = %d, want %d", got, maxConcurrentUpdateChecks)
+	}
+	close(release)
+	for range targets {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("update checks did not finish")
+		}
+	}
+	if got := peak.Load(); got != maxConcurrentUpdateChecks {
+		t.Fatalf("peak concurrent checks = %d, want %d", got, maxConcurrentUpdateChecks)
+	}
+	if got := verified.Load(); got != int32(len(targets)) {
+		t.Fatalf("checks run = %d, want %d", got, len(targets))
+	}
+}
+
+func TestUpdateAdvisoryServesOldResultsAndRetriesOnlyStaleLookupFailures(t *testing.T) {
+	now := time.Now().UTC()
+	for _, tt := range []struct {
+		name       string
+		cached     UpdateAdvisory
+		wantChecks int32
+	}{
+		{"definitive result from days ago", UpdateAdvisory{Status: UpdateStatusCurrent, CheckedAt: now.Add(-72 * time.Hour)}, 0},
+		{"permanent unknown from days ago", UpdateAdvisory{Status: UpdateStatusUnknown, Reason: UpdateReasonUnsupportedSource, CheckedAt: now.Add(-72 * time.Hour)}, 0},
+		{"recent lookup failure", UpdateAdvisory{Status: UpdateStatusUnknown, Reason: UpdateReasonLookupFailed, CheckedAt: now.Add(-lookupFailedRetryAfter + time.Minute)}, 0},
+		{"stale lookup failure", UpdateAdvisory{Status: UpdateStatusUnknown, Reason: UpdateReasonLookupFailed, CheckedAt: now.Add(-lookupFailedRetryAfter - time.Minute)}, 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newTestService("darwin")
+			var checks atomic.Int32
+			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+				checks.Add(1)
+				return VerifyResult{ResolvedPath: "/opt/bin/codex", Output: "1.0.0"}, nil
+			})
+			s.officialVersion = func(context.Context, Target) (string, error) { return "1.0.0", nil }
+			tt.cached.AgentID = string(TargetCodex)
+			s.updateAdvisories = map[Target]UpdateAdvisory{TargetCodex: tt.cached}
+			advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := checks.Load(); got != tt.wantChecks {
+				t.Fatalf("checks = %d, want %d", got, tt.wantChecks)
+			}
+			if tt.wantChecks == 0 && advisory != tt.cached {
+				t.Fatalf("advisory = %+v, want cached %+v", advisory, tt.cached)
+			}
+			if tt.wantChecks == 1 && !advisory.CheckedAt.After(tt.cached.CheckedAt) {
+				t.Fatalf("advisory = %+v, want a fresh check", advisory)
+			}
+		})
+	}
+}
+
 func TestUpdateAdvisoryUnknownWhenOwnershipVersionOrLookupUnproven(t *testing.T) {
 	for _, tt := range []struct {
 		name   string

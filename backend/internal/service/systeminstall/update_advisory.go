@@ -64,6 +64,18 @@ type UpdateAdvisory struct {
 	CheckedAt         time.Time           `json:"checkedAt"`
 }
 
+// maxConcurrentUpdateChecks caps checks running at once, whoever starts them.
+// Each check launches the harness CLI to read its version (up to ~240 MB for a
+// Node-based CLI while it runs), so an unbounded burst across every installed
+// harness could briefly take over a gigabyte.
+const maxConcurrentUpdateChecks = 2
+
+// lookupFailedRetryAfter is how long a result whose release lookup failed (a
+// network or registry error) is served before a read checks again. Other
+// results wait for the daemon's next periodic pass: their cause, such as a
+// harness without a release feed, does not clear on its own.
+const lookupFailedRetryAfter = 30 * time.Minute
+
 type updateAdvisoryCall struct {
 	done     chan struct{}
 	advisory UpdateAdvisory
@@ -75,6 +87,12 @@ type updateAdvisoryCall struct {
 // package manager owns are compared with the vendor's release channel. A
 // harness with neither, and failed probes, remain unknown; they never
 // masquerade as up-to-date.
+//
+// A cached result is served however old it is: the daemon's periodic pass and
+// an explicit refresh are the only things that check again. A harness with no
+// result yet (first request, or after an install or update job) is checked
+// once on demand, as is one whose release lookup failed over
+// lookupFailedRetryAfter ago.
 func (s *Service) UpdateAdvisory(ctx context.Context, target Target, refresh ...bool) (UpdateAdvisory, error) {
 	if !IsAgentTarget(target) {
 		return UpdateAdvisory{}, fmt.Errorf("systeminstall: unknown harness %q", target)
@@ -93,16 +111,9 @@ func (s *Service) UpdateAdvisory(ctx context.Context, target Target, refresh ...
 		// in-flight read may finish for its callers, but may not cache over it.
 		delete(s.updateAdvisoryCalls, target)
 	}
-	cached, found := s.updateAdvisories[target]
-	if found {
-		ttl := time.Hour
-		if cached.Status == UpdateStatusUnknown {
-			ttl = 5 * time.Minute
-		}
-		if now.Sub(cached.CheckedAt) < ttl {
-			s.mu.Unlock()
-			return cached, nil
-		}
+	if cached, found := s.updateAdvisories[target]; found && !lookupRetryDue(cached, now) {
+		s.mu.Unlock()
+		return cached, nil
 	}
 	call := s.updateAdvisoryCalls[target]
 	if call == nil {
@@ -115,8 +126,11 @@ func (s *Service) UpdateAdvisory(ctx context.Context, target Target, refresh ...
 			s.updateAdvisoryCalls = make(map[Target]*updateAdvisoryCall)
 		}
 		s.updateAdvisoryCalls[target] = call
+		if s.updateCheckSlots == nil {
+			s.updateCheckSlots = make(chan struct{}, maxConcurrentUpdateChecks)
+		}
 		s.workers.Add(1)
-		go s.runUpdateAdvisory(target, call)
+		go s.runUpdateAdvisory(target, call, s.updateCheckSlots)
 	}
 	s.mu.Unlock()
 	select {
@@ -127,9 +141,21 @@ func (s *Service) UpdateAdvisory(ctx context.Context, target Target, refresh ...
 	}
 }
 
-func (s *Service) runUpdateAdvisory(target Target, call *updateAdvisoryCall) {
+func lookupRetryDue(cached UpdateAdvisory, now time.Time) bool {
+	return cached.Reason == UpdateReasonLookupFailed && now.Sub(cached.CheckedAt) >= lookupFailedRetryAfter
+}
+
+func (s *Service) runUpdateAdvisory(target Target, call *updateAdvisoryCall, slots chan struct{}) {
 	defer s.workers.Done()
-	advisory, err := s.computeUpdateAdvisory(s.backgroundContext, target)
+	var advisory UpdateAdvisory
+	var err error
+	select {
+	case slots <- struct{}{}:
+		advisory, err = s.computeUpdateAdvisory(s.backgroundContext, target)
+		<-slots
+	case <-s.backgroundContext.Done():
+		err = s.backgroundContext.Err()
+	}
 	s.mu.Lock()
 	call.advisory, call.err = advisory, err
 	if s.updateAdvisoryCalls[target] == call {

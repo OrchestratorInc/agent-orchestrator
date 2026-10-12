@@ -1037,8 +1037,8 @@ func Run() error {
 		// migration and fencing reconcile that gate the port bind.
 		readinessDone := agentSvc.WarmReadiness()
 		if cfg.HarnessUpdateChecks {
-			go warmInstalledHarnessUpdates(ctx, readinessDone, agentSvc.CachedReadiness, func(ctx context.Context, target systeminstall.Target) (systeminstall.UpdateAdvisory, error) {
-				return systemInstall.UpdateAdvisory(ctx, target)
+			go watchInstalledHarnessUpdates(ctx, readinessDone, cfg.HarnessUpdateInterval, agentSvc.CachedReadiness, func(ctx context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error) {
+				return systemInstall.UpdateAdvisory(ctx, target, refresh)
 			}, log)
 		}
 		done := make(chan struct{})

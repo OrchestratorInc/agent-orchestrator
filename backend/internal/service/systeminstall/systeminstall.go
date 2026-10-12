@@ -356,6 +356,9 @@ type Service struct {
 	updateChecksDisabled bool
 	derivedOwners        map[Target]derivedOwner
 	updateAdvisoryCalls  map[Target]*updateAdvisoryCall
+	// updateCheckSlots bounds concurrent update checks to
+	// maxConcurrentUpdateChecks; created on first use.
+	updateCheckSlots chan struct{}
 	// officialVersion reads a vendor release channel when no package manager
 	// owns the harness binary.
 	officialVersion func(context.Context, Target) (string, error)
