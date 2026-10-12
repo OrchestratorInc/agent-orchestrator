@@ -1,4 +1,4 @@
-import { Code2, Download, ExternalLink, FilePlus, Globe2, Loader2, Maximize2 } from "lucide-react";
+import { Code2, Download, ExternalLink, FilePlus, FileText, Globe2, Loader2, Maximize2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { useOpenArtifactPreview } from "../../hooks/useOpenArtifactPreview";
@@ -306,10 +306,23 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 	};
 	return (
 		<div className="group/render relative min-w-0">
+			{"artifact" in props ? (
+				<div className="flex h-8 items-center gap-1.5 text-xs" data-testid="artifact-card-header">
+					<FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+					<span className="shrink-0 font-medium text-foreground">{t("chat.artifact.label")}</span>
+					<span className="min-w-0 flex-1 truncate text-muted-foreground">{page.title}</span>
+					{links?.previewUrl ? (
+						<OpenInPanelAction sessionId={links.sessionId} previewUrl={links.previewUrl} onOpen={() => undefined} />
+					) : null}
+				</div>
+			) : null}
 			<RenderDocument page={page} displayMode="inline" />
 			<RenderAction
 				label={t("chat.render.expand")}
-				className="absolute end-1 top-1 opacity-0 transition-opacity group-hover/render:opacity-100 focus-visible:opacity-100"
+				className={cn(
+					"absolute end-1 opacity-0 transition-opacity group-hover/render:opacity-100 focus-visible:opacity-100",
+					"artifact" in props ? "top-9" : "top-1",
+				)}
 				onClick={() => {
 					setShowSource(false);
 					setExpanded(true);

@@ -352,8 +352,8 @@ export function ScreenHeader({
 	return (
 		<View style={s.screenHeader}>
 			{left ?? (sidebar ? <HeaderIconButton icon="menu" label="Open navigation" onPress={sidebar.openSidebar} /> : null)}
-			<View style={{ flex: 1 }}>
-				<Text maxFontSizeMultiplier={fontScaleCap.title} style={s.screenTitle}>
+			<View style={{ flex: 1, minWidth: 0 }}>
+				<Text maxFontSizeMultiplier={fontScaleCap.title} numberOfLines={1} ellipsizeMode="tail" style={s.screenTitle}>
 					{title}
 				</Text>
 			</View>

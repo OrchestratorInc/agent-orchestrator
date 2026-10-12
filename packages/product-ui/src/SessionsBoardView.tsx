@@ -217,6 +217,8 @@ function BoardColumnView<TSession extends BoardSessionPresentation>({
 
 export type SessionCardViewProps = {
 		action?: ReactNode;
+	/** Latest session artifacts, shown as evidence below the PRs. */
+	artifacts?: ReactNode;
 	branchAction?: ReactNode;
 	branchIcon?: ReactNode;
 	error?: string;
@@ -244,6 +246,7 @@ export type SessionCardViewProps = {
 
 export function SessionCardView({
 	action,
+	artifacts,
 	branchAction,
 	branchIcon,
 	error,
@@ -380,6 +383,7 @@ export function SessionCardView({
 					)}
 				</div>
 			)}
+			{artifacts ? <div className="relative z-10 min-w-0 px-3.5 pb-2">{artifacts}</div> : null}
 			<div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 border-t border-border px-3.5 py-2.5">
 				<div className="flex min-w-0 flex-1">
 					<span

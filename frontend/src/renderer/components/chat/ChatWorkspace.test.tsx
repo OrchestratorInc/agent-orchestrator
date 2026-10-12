@@ -18,7 +18,7 @@ import { appI18n } from "../../i18n";
 import type { ConversationMessage, ConversationSnapshot } from "../../types/conversation";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
-import type { WorkspaceSession } from "../../types/workspace";
+import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
 import {
 	getChatComposerMutation,
 	getChatInlineEditMutation,
@@ -1935,6 +1935,40 @@ describe("ChatWorkspace timeline", () => {
 	] as const)("shows the actual %s setup step in the placeholder", (id, message) => {
 		render(<ChatWorkspace snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} sessionRole="orchestrator" startingSteps={[{ id, status: "running" }]} />);
 		expect(screen.getByText(message)).toBeInTheDocument();
+	});
+
+	it("offers sample artifact requests in an empty artifact session, fills the composer with one, and hides them", async () => {
+		const user = userEvent.setup();
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, workspaceId: STANDALONE_WORKSPACE_ID, requestedOutput: "artifact" }} />);
+
+		expect(screen.getByRole("heading", { name: "What do you want to create?" })).toBeInTheDocument();
+		expect(screen.getByText("Describe the page or document you want")).toBeInTheDocument();
+		const prompts = within(screen.getByRole("list", { name: "Sample artifact requests" })).getAllByRole("button");
+		expect(prompts.map((prompt) => prompt.textContent)).toEqual([
+			"Write a one-page plan for a new feature",
+			"Build an HTML page comparing three options side by side",
+			"Turn my rough notes into a polished Markdown document",
+		]);
+
+		await user.click(prompts[1]);
+		await waitFor(() => expect(screen.getByLabelText("Message the agent")).toHaveTextContent("Build an HTML page comparing three options side by side"));
+		expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+		expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument();
+
+	});
+
+	it("keeps the ordinary welcome without artifact suggestions for other sessions", () => {
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={chatSession} />);
+
+		expect(screen.getByRole("heading", { name: "What do you want to work on?" })).toBeInTheDocument();
+		expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument();
+	});
+
+	it("keeps the sample artifact requests to Scratchpad sessions", () => {
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, requestedOutput: "artifact" }} />);
+
+		expect(screen.getByRole("heading", { name: "What do you want to create?" })).toBeInTheDocument();
+		expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument();
 	});
 
 	it("waits for provider settings before showing composer dropdowns", () => {

@@ -83,7 +83,7 @@ func TestStartTransitionWaitsForMessageAdmission(t *testing.T) {
 	}
 	if _, err := sendMessageTx(ctx, messageTx, fixture.orgID, fixture.sessionID,
 		"concurrent-message", "queued before switch", fixture.userID, "", "", nil,
-		domain.ChatTurnSettings{}); err != nil {
+		domain.ChatTurnSettings{}, true); err != nil {
 		t.Fatal(err)
 	}
 

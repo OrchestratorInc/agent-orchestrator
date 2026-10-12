@@ -8,6 +8,7 @@ import type {
 	ActivityStatus,
 	ApprovalMode,
 	ChatConfigOption,
+	ChatExcerpt,
 	ChatImage,
 	ChatModel,
 	ChatResource,
@@ -118,7 +119,7 @@ type WireSnapshot = Omit<ConversationSnapshot, "items" | "controller"> & {
 	activities?: Array<Omit<ConversationActivity, "detail" | "decisions"> & { detail?: Record<string, unknown> }>;
 };
 
-export type SendMessageInput = { text: string; clientMessageId: string; attachments?: ChatImage[]; resources?: ChatResource[] };
+export type SendMessageInput = { text: string; clientMessageId: string; attachments?: ChatImage[]; resources?: ChatResource[]; excerpts?: ChatExcerpt[] };
 export type SendMessageResult = { turnId?: string; providerTurnId?: string; state?: string; duplicate: boolean };
 
 export async function getConversationPage(

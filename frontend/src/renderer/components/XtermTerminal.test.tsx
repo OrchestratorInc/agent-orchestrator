@@ -803,11 +803,6 @@ describe("XtermTerminal", () => {
 				--color-text-terminal: #d7d7d2;
 				--color-working: #60a5fa;
 			}
-			:root[data-style-theme="github"] {
-				--background: #0d1117;
-				--foreground: #ccd3d8;
-				--primary: #58a6ff;
-			}
 		`;
 		document.head.appendChild(style);
 		delete document.documentElement.dataset.styleTheme;
@@ -819,10 +814,12 @@ describe("XtermTerminal", () => {
 
 			act(() => useUiStore.getState().setThemeStyle("github"));
 
+			// Named palettes come from the injected theme catalog stylesheet.
 			expect(state.lastTerminal!.options.theme).toMatchObject({
 				background: "#0d1117",
-				cursor: "#58a6ff",
-				foreground: "#ccd3d8",
+				cursor: "#4493f8",
+				foreground: "#e6edf3",
+				red: "#f85149",
 			});
 		} finally {
 			style.remove();
@@ -1000,17 +997,23 @@ describe("XtermTerminal", () => {
 		const textarea = container.querySelector("textarea")!;
 
 		textarea.focus();
-		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(true);
+		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(true, true);
 		fontSizeShortcut?.(1);
 		expect(onChangeFontSize).toHaveBeenCalledWith(1);
 
 		const outside = document.createElement("button");
 		document.body.appendChild(outside);
 		outside.focus();
-		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(false);
+		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(false, false);
 		fontSizeShortcut?.(-1);
 		expect(onChangeFontSize).toHaveBeenCalledTimes(1);
 		outside.remove();
+	});
+
+	it("reports focus for a terminal that does not resize its font, without claiming the zoom chords", () => {
+		const { container } = render(<XtermTerminal theme="dark" />);
+		container.querySelector("textarea")!.focus();
+		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(true, false);
 	});
 
 	it("handles native copy events from inside the terminal", () => {

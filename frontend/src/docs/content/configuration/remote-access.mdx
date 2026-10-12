@@ -38,7 +38,7 @@ If the host already has LAN access enabled, its displayed HTTP address works onl
 
 If `ao` is missing from your Mac's PATH or points to an old install, use the current desktop app's bundled CLI instead: `"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao" remote-host status`. Adjust the app path if you installed or named it differently; the same binary supports `remote-host enable --tunnel-only`.
 
-On macOS, **Quit / Cmd+Q** closes the desktop window while its tray, daemon, and enabled remote access keep running. Use the tray's **Quit AO Completely** to stop the app-owned server. The host must stay awake and reachable; closing the window does not enable remote access by itself.
+On macOS, **Quit / Cmd+Q** closes the desktop window and removes AO from the Dock while its tray, daemon, and enabled remote access keep running. Use the tray's **Quit AO Completely** to stop the app-owned server. The host must stay awake and reachable; closing the window does not enable remote access by itself.
 
 ## Tailscale
 

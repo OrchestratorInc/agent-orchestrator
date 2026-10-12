@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { orchestratorProjectSections, projectDetailSessions, projectPageStats } from "../../lib/orchestratorView";
-import { ProjectPageHeader } from "../../lib/project-card";
+import { ProjectMachineIndicator, ProjectPageHeader } from "../../lib/project-card";
 import { StaleBanner } from "../../lib/StaleBanner";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
@@ -34,7 +34,7 @@ function ProjectScreenContent() {
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
 	const { id, hostId: routeHostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
-	const { config, currentHostId, connection, loading, error, refresh, projects, sessions, orchestrators } = useApp();
+	const { config, currentHostId, hostStates, connection, loading, error, refresh, projects, sessions, orchestrators } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
 	const [refreshing, setRefreshing] = useState(false);
@@ -80,6 +80,7 @@ function ProjectScreenContent() {
 						onPress={() => backOr(router, "/projects")}
 					/>
 				}
+				right={<ProjectMachineIndicator hostId={currentHostId} hosts={hostStates} />}
 			/>
 			{hostMatches ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
 
