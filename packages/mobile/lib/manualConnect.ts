@@ -21,7 +21,7 @@ export type PersistManualHostEditDeps = {
  * Cloud directory, so a hand edit would silently revert within one sync. */
 export class AccountManagedHostError extends Error {
 	constructor() {
-		super("This machine's address and password come from your AO Cloud account. Scan a new code with Reconnect to connect another way.");
+		super("This machine's address and password come from your Orchestrator Cloud account. Scan a new code with Reconnect to connect another way.");
 		this.name = "AccountManagedHostError";
 	}
 }

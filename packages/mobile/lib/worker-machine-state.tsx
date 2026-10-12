@@ -27,8 +27,8 @@ export function WorkerMachineState({ host, environments, onSelectEnvironment, on
 			</View>
 			<Text testID="worker-machine-hint" style={styles.hint}>
 				{connecting ? "Workers will appear once this machine connects."
-					: host.errorStatus === 426 ? "Update AO on this phone and the machine to load its workers."
-						: "Check that AO is running and this machine is reachable to load its workers."}
+					: host.errorStatus === 426 ? "Update Orchestrator on this phone and the machine to load its workers."
+						: "Check that Orchestrator is running and this machine is reachable to load its workers."}
 			</Text>
 			<View style={styles.actions}>
 				{!connecting ? <Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRetry} /> : null}

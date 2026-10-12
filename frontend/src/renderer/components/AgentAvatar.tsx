@@ -36,7 +36,7 @@ import openhandsLogo from "../assets/agents/openhands.svg";
 import opencodeLogo from "../assets/agents/opencode.svg";
 import piLogo from "../assets/agents/pi.png";
 import primeAgentLogo from "../assets/agents/prime-agent.png";
-import qwenLogo from "../assets/agents/qwen.png";
+import qwenLogo from "../assets/agents/qwen.svg";
 import unrealAgentLogo from "../assets/agents/unreal-agent.png";
 import vibeLogo from "../assets/agents/vibe.png";
 

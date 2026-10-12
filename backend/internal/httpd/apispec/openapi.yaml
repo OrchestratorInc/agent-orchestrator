@@ -12780,6 +12780,8 @@ components:
           type: string
         settings:
           $ref: '#/components/schemas/ConversationTurnSettingsPayload'
+        supportsExcerpts:
+          type: boolean
         threadState:
           $ref: '#/components/schemas/ConversationThreadStatePayload'
         title:

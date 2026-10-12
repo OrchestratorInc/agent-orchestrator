@@ -397,7 +397,7 @@ export function EnvironmentMachineRow({ host, activeConfig, isDefault, expanded,
 						// Account sync rewrites the route and credential from AO Cloud, so an
 						// edit here would silently revert. Name and icon stay phone-local.
 						<Text testID={`environment-account-managed-${host.id}`} style={styles.accountManagedNote}>
-							This machine's address and password come from your AO Cloud account and update automatically. To connect another way, use Reconnect to scan a new code.
+							This machine's address and password come from your Orchestrator Cloud account and update automatically. To connect another way, use Reconnect to scan a new code.
 						</Text>
 					) : <>
 						<EditField label="Host" testID={`environment-host-${host.id}`} value={config.host} onChangeText={set("host")} autoCapitalize="none" autoCorrect={false} keyboardType="url" editable={!saving} />

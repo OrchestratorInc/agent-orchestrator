@@ -65,6 +65,8 @@
 	"agentSelector.needsSetup": "Needs setup",
 	"session.statusChecking": "Checking…",
 	"session.statusUnavailable": "Unable to verify",
+	"artifactLink.unavailable": "Artifact unavailable",
+	"artifactLink.noPreview": "No preview available",
 	"session.agentTerminated": "Agent terminated",
 	"activity.active": "Working",
 	"activity.blocked": "Awaiting Decision",
