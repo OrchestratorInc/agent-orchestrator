@@ -65,6 +65,8 @@
 	"agentSelector.needsSetup": "需要设置",
 	"session.statusChecking": "正在检查…",
 	"session.statusUnavailable": "无法验证",
+	"artifactLink.unavailable": "工件不可用",
+	"artifactLink.noPreview": "无可用预览",
 	"session.agentTerminated": "代理已终止",
 	"activity.active": "工作中",
 	"activity.blocked": "等待决策",

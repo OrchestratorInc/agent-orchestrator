@@ -692,6 +692,17 @@ type Session struct {
 	RequestedOutput                  string
 }
 
+type SessionArtifactVersion struct {
+	SessionID   domain.SessionID
+	Path        string
+	Version     int64
+	Sha256      string
+	Size        int64
+	ContentType string
+	Mtime       int64
+	CreatedAt   time.Time
+}
+
 type SessionCleanupFact struct {
 	SessionID            domain.SessionID
 	SessionGeneration    int64
