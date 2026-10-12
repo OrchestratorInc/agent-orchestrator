@@ -2226,6 +2226,8 @@
 	"settings.harness.updateCheckUnavailable": "La disponibilité des mises à jour n’a pas pu être vérifiée.",
 	"settings.harness.apiVersionNotReported": "Version de l’API non communiquée",
 	"settings.harness.updateFailed": "Could not start the harness update.",
+	"settings.harness.updateMethodChanged": "L’installation de {{agent}} a changé depuis le chargement de cette page. Vérifiez-la, puis réessayez.",
+	"settings.harness.updateTargetChanged": "{{version}} est désormais la dernière version. Sélectionnez à nouveau Mettre à jour pour l’installer.",
 	"settings.harness.working": "Working…",
 	"settings.harness.expandOptions": "Développer les options de {{agent}}",
 	"settings.harness.collapseOptions": "Réduire les options de {{agent}}",

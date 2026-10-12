@@ -1556,3 +1556,39 @@ func TestOpenCodeVendorUpdatePinsApprovedReleaseOverAdvisory(t *testing.T) {
 		t.Fatalf("ran %v, want the approved release %v", ran, want)
 	}
 }
+
+func TestOpenCodeVendorUpdateNeverPinsUnvettedApprovedRelease(t *testing.T) {
+	newService := func(ran *[]string) *Service {
+		s := newTestService("darwin", "bash")
+		s.updateAdvisories = map[Target]UpdateAdvisory{TargetOpencode: {AgentID: string(TargetOpencode), Status: UpdateStatusBehindLatest, CurrentVersion: "1.18.34", LatestVersion: "1.18.36", CheckedAt: time.Now()}}
+		s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+			return VerifyResult{ResolvedPath: "/Users/test/.opencode/bin/opencode", Output: "1.18.34"}, nil
+		})
+		s.commands = commandRunnerFunc(func(_ context.Context, argv []string, _, _ io.Writer) error {
+			*ran = argv
+			return nil
+		})
+		return s
+	}
+	for _, downgrade := range []string{"0.1.0", "1.18.34"} {
+		var ran []string
+		s := newService(&ran)
+		if _, err := s.StartAgentOperation(context.Background(), TargetOpencode, "official-installer", AgentOperationUpdate, downgrade); !errors.Is(err, ErrUpdateVersion) {
+			t.Fatalf("expectedVersion %s: err = %v, want ErrUpdateVersion", downgrade, err)
+		}
+		s.workers.Wait()
+		if ran != nil {
+			t.Fatalf("expectedVersion %s ran %v", downgrade, ran)
+		}
+	}
+	// A release the advisory has not seen is a verification floor only.
+	var ran []string
+	s := newService(&ran)
+	if _, err := s.StartAgentOperation(context.Background(), TargetOpencode, "official-installer", AgentOperationUpdate, "9.9.9"); err != nil {
+		t.Fatal(err)
+	}
+	s.workers.Wait()
+	if want := []string{"/Users/test/.opencode/bin/opencode", "upgrade", "1.18.36", "--method", "curl"}; !slices.Equal(ran, want) {
+		t.Fatalf("ran %v, want the advisory release %v", ran, want)
+	}
+}

@@ -228,7 +228,18 @@ func nodeShimTargetsPackage(binaryPath, packageRoot string) (bool, error) {
 }
 
 func nodeShimLaunchLine(line string) bool {
-	line = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(line, "exec "), "& "))
+	// npm's cmd shim chains its launch after other commands:
+	// endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" ...
+	for _, command := range strings.FieldsFunc(line, func(r rune) bool { return r == '&' || r == '|' }) {
+		if nodeShimLaunchCommand(command) {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeShimLaunchCommand(line string) bool {
+	line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "exec "))
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
 		return false

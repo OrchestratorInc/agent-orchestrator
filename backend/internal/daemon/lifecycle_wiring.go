@@ -28,6 +28,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/reaper"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
+	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
@@ -343,8 +344,11 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		return nil, nil, nil, fmt.Errorf("reviewer resolver: %w", err)
 	}
 	reviewerChat, _ := chat.(reviewcore.ReviewerChatController)
+	// The agent service is both the readiness provider and the model catalog.
+	reviewerModels, _ := agentReadiness.(reviewcore.ModelCatalog)
 	reviewEngine := reviewcore.New(reviewcore.Deps{
 		Defaults: defaults,
+		Models:   reviewerModels,
 		Store:    store,
 		Sessions: store,
 		PRs:      store,
@@ -759,3 +763,5 @@ func (r reviewPRRefresher) RefreshPR(ctx context.Context, workerID domain.Sessio
 		return err
 	}
 }
+
+var _ reviewcore.ModelCatalog = (*agentsvc.Service)(nil)

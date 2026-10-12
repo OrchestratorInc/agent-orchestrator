@@ -6035,7 +6035,7 @@ export interface components {
             terminalInput?: string;
         };
         StartAgentInstallRequest: {
-            /** @description For updates, the available version explicitly approved by the user. Used only as a verification floor, never as a command argument. */
+            /** @description For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found, and a version at or below the installed one is rejected. */
             expectedVersion?: string;
             /** @description Server-issued installation method id. Omit to use the recommended viable method. */
             method?: string;

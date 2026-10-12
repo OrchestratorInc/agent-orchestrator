@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -537,6 +538,43 @@ func TestResolveFallsBackWhenSavedDefaultModelLeftCatalog(t *testing.T) {
 	project := domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "project-model"}}}
 	if _, err := m.resolveAgentConfig(context.Background(), cfg, project); !errors.Is(err, ErrUnsupportedModel) {
 		t.Fatalf("err = %v, want ErrUnsupportedModel", err)
+	}
+}
+
+func TestResolveFallsBackWhenSavedDefaultModelCannotBeValidated(t *testing.T) {
+	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}
+	for name, catalog := range map[string]tuningCatalog{
+		"lookup failed": {err: errors.New("not logged in")},
+		"stale":         {catalog: ports.AgentModelCatalog{Stale: true, Models: []ports.AgentModelInfo{{ID: "opus"}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := &Manager{modelCatalog: catalog, defaults: harnessDefaultOnly{Model: "opus", Effort: "high"}, logger: slog.New(slog.DiscardHandler)}
+			got, err := m.resolveAgentConfig(context.Background(), cfg, domain.ProjectConfig{})
+			if err != nil || got.Model != "" || got.Effort != "" {
+				t.Fatalf("got %+v, %v; want the harness's own default", got, err)
+			}
+			// A model the project chose still needs the catalog.
+			project := domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "project-model"}}}
+			if _, err := m.resolveAgentConfig(context.Background(), cfg, project); !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
+				t.Fatalf("err = %v, want ErrModelCapabilitiesUnavailable", err)
+			}
+		})
+	}
+}
+
+func TestResolveCodexTUIAgentConfigFallsBackWhenCatalogLookupTimesOut(t *testing.T) {
+	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+		AgentConfig: domain.AgentConfig{Model: "gpt-custom", Effort: "xhigh"}}
+	m := &Manager{modelCatalog: tuningCatalog{err: fmt.Errorf("codex model/list: %w", context.DeadlineExceeded)}, logger: slog.New(slog.DiscardHandler)}
+	got, err := m.resolveTUIAgentConfig(context.Background(), cfg, domain.ProjectConfig{}, cfg.AgentConfig)
+	if err != nil || got != cfg.AgentConfig {
+		t.Fatalf("got %+v, %v; want unvalidated launch", got, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m.modelCatalog = tuningCatalog{err: context.Canceled}
+	if _, err := m.resolveTUIAgentConfig(ctx, cfg, domain.ProjectConfig{}, cfg.AgentConfig); err == nil {
+		t.Fatal("cancelled spawn launched")
 	}
 }
 

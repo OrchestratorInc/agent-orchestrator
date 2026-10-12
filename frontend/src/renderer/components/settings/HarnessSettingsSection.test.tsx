@@ -608,6 +608,22 @@ describe("HarnessSettingsSection", () => {
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
+	it("says why an update did not start when a newer release appeared", async () => {
+		mockInstalledOperations("npm");
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/{agent}/update-advisory" && (options as { params?: { query?: { refresh?: boolean } } })?.params?.query?.refresh) return { data: {
+				agentId: "codex", status: "behind_latest", currentVersion: "1.2.3", latestVersion: "2.0.0", maintenanceMethod: "npm",
+			} } as never;
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		renderSection();
+		const row = await findAgentRow("codex");
+		await userEvent.click(await within(row).findByRole("button", { name: "Update" }));
+		expect(await within(row).findByText("v2.0.0 is now the latest release. Select Update again to install it.")).toBeInTheDocument();
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
+	});
+
 	it("consumes a popup update once through the existing workflow", async () => {
 		mockInstalledOperations("npm");
 		useHarnessActionRequest.getState().setRequest({ agentId: "codex", latestVersion: "1.3.0", action: "update" });
@@ -1601,6 +1617,21 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(apiClient.POST).toHaveBeenLastCalledWith("/api/v1/agents/{agent}/install", {
 			params: { path: { agent: "codex" } },
 			body: { method: "homebrew", operation: "install" },
+		}));
+	});
+
+	it("lets a failed install retry through another available method", async () => {
+		const user = userEvent.setup();
+		renderSection();
+		const codexRow = await findAgentRow("codex");
+		await user.click(await within(codexRow).findByRole("button", { name: "Install" }));
+		await waitFor(() => expect(codexRow).toHaveTextContent("npm failed"));
+		await user.click(within(codexRow).getByRole("button", { name: "Installation method" }));
+		await user.click(await screen.findByRole("menuitem", { name: "npm" }));
+		await user.click(within(codexRow).getByRole("button", { name: "Retry install" }));
+		await waitFor(() => expect(apiClient.POST).toHaveBeenLastCalledWith("/api/v1/agents/{agent}/install", {
+			params: { path: { agent: "codex" } },
+			body: { method: "npm", operation: "install" },
 		}));
 	});
 

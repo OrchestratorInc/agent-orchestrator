@@ -99,6 +99,43 @@ func TestUpdateAdvisoryExplicitRefreshReprobesCurrentBinary(t *testing.T) {
 	}
 }
 
+func TestUpdateAdvisoryRefreshKeepsServingPreviousResult(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/opt/bin/codex", Output: "1.2.3"}, nil
+	})
+	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	s.managedVersion = func(context.Context, Plan) (managedVersionResult, error) {
+		started <- struct{}{}
+		<-release
+		return managedVersionResult{Latest: "1.4.0"}, nil
+	}
+	previous := UpdateAdvisory{AgentID: string(TargetCodex), Status: UpdateStatusBehindLatest, CurrentVersion: "1.2.3", LatestVersion: "1.3.0", CheckedAt: time.Now().Add(-time.Hour)}
+	s.updateAdvisories = map[Target]UpdateAdvisory{TargetCodex: previous}
+	refreshed := make(chan UpdateAdvisory, 1)
+	go func() {
+		advisory, _ := s.UpdateAdvisory(context.Background(), TargetCodex, true)
+		refreshed <- advisory
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("refresh did not start a check")
+	}
+	if advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex); err != nil || advisory != previous {
+		t.Fatalf("read during refresh = %+v err=%v, want previous %+v", advisory, err, previous)
+	}
+	close(release)
+	if advisory := <-refreshed; advisory.LatestVersion != "1.4.0" {
+		t.Fatalf("refresh = %+v, want latest 1.4.0", advisory)
+	}
+	if advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex); err != nil || advisory.LatestVersion != "1.4.0" {
+		t.Fatalf("read after refresh = %+v err=%v", advisory, err)
+	}
+}
+
 func TestUpdateAdvisoryPageRequestCanCancelWhileStartupJoinsSameCheck(t *testing.T) {
 	s := newTestService("darwin", "npm")
 	s.jobs[TargetCodex] = &Job{Target: TargetCodex, Status: StatusSucceeded, Method: "npm"}
@@ -223,6 +260,10 @@ func TestUpdateAdvisoryServesOldResultsAndRetriesOnlyStaleLookupFailures(t *test
 		{"permanent unknown from days ago", UpdateAdvisory{Status: UpdateStatusUnknown, Reason: UpdateReasonUnsupportedSource, CheckedAt: now.Add(-72 * time.Hour)}, 0},
 		{"recent lookup failure", UpdateAdvisory{Status: UpdateStatusUnknown, Reason: UpdateReasonLookupFailed, CheckedAt: now.Add(-lookupFailedRetryAfter + time.Minute)}, 0},
 		{"stale lookup failure", UpdateAdvisory{Status: UpdateStatusUnknown, Reason: UpdateReasonLookupFailed, CheckedAt: now.Add(-lookupFailedRetryAfter - time.Minute)}, 1},
+		{"recent probe failure", UpdateAdvisory{Status: UpdateStatusUnknown, Reason: UpdateReasonOwnershipUnconfirmed, probeFailed: true, CheckedAt: now.Add(-lookupFailedRetryAfter + time.Minute)}, 0},
+		{"stale probe failure", UpdateAdvisory{Status: UpdateStatusUnknown, Reason: UpdateReasonOwnershipUnconfirmed, probeFailed: true, CheckedAt: now.Add(-lookupFailedRetryAfter - time.Minute)}, 1},
+		{"stale unparseable probe", UpdateAdvisory{Status: UpdateStatusUnknown, Reason: UpdateReasonVersionUnparseable, probeFailed: true, CheckedAt: now.Add(-lookupFailedRetryAfter - time.Minute)}, 1},
+		{"stale unproven ownership", UpdateAdvisory{Status: UpdateStatusUnknown, Reason: UpdateReasonOwnershipUnconfirmed, CheckedAt: now.Add(-lookupFailedRetryAfter - time.Minute)}, 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newTestService("darwin")

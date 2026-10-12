@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +37,31 @@ func TestNodeShimTargetsPackage(t *testing.T) {
 	}
 	if owned, err := nodeShimTargetsPackage(bad, packageRoot); err != nil || owned {
 		t.Fatalf("wrong shim owned=%t err=%v", owned, err)
+	}
+}
+
+// npm's cmd-shim chains the launch after endLocal/goto/title on one line.
+func TestNodeShimTargetsPackageReadsNPMCmdShim(t *testing.T) {
+	root := t.TempDir()
+	packageRoot := filepath.Join(root, "node_modules", "@openai", "codex")
+	if err := os.MkdirAll(filepath.Join(packageRoot, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packageRoot, "bin", "codex.js"), []byte("cli"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	shim := filepath.Join(root, "codex.cmd")
+	body := "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\n" +
+		"IF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\n" +
+		"endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n"
+	if err := os.WriteFile(shim, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if owned, err := nodeShimTargetsPackage(shim, packageRoot); err != nil || !owned {
+		t.Fatalf("npm cmd shim owned=%t err=%v", owned, err)
+	}
+	if got, want := nodeShimTarget(shim), filepath.Join(packageRoot, "bin", "codex.js"); got != want {
+		t.Fatalf("nodeShimTarget = %q, want %q", got, want)
 	}
 }
 
@@ -330,5 +356,28 @@ func TestVendorUpdateRunsFromTheBinarySessionsRun(t *testing.T) {
 	plan := targetInstalledCopy(Plan{Method: "official-installer", Command: []string{"grok", "update"}}, TargetGrok, "/home/u/.grok/downloads/grok-1.0.13")
 	if want := []string{"/home/u/.grok/downloads/grok-1.0.13", "update"}; !slices.Equal(plan.Command, want) {
 		t.Fatalf("command = %v, want %v", plan.Command, want)
+	}
+}
+
+func TestNPMUpdateRequiresWritableOwningPrefix(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	var checked []string
+	writable := map[string]bool{"/daemon/npm": true, "/Users/u/.nvm/versions/node/v22.0.0": true}
+	s.pathWritable = pathWritableProbeFunc(func(_ context.Context, path string) (bool, error) {
+		checked = append(checked, path)
+		return writable[path], nil
+	})
+	plan := Plan{Target: TargetCodex, Method: "npm", PackagePrefix: "/daemon/npm"}
+	if got := s.requireWritableOwningPrefix(context.Background(), plan, "/daemon/npm"); got.Unsupported || len(checked) != 0 {
+		t.Fatalf("daemon prefix re-checked: plan=%+v checked=%v", got, checked)
+	}
+	plan.PackagePrefix = "/Users/u/.nvm/versions/node/v22.0.0"
+	if got := s.requireWritableOwningPrefix(context.Background(), plan, "/daemon/npm"); got.Unsupported {
+		t.Fatalf("writable owning prefix rejected: %+v", got)
+	}
+	plan.PackagePrefix = "/usr/local"
+	got := s.requireWritableOwningPrefix(context.Background(), plan, "/daemon/npm")
+	if !got.Unsupported || !strings.Contains(got.Reason, "/usr/local") {
+		t.Fatalf("unwritable owning prefix = %+v, want unsupported naming /usr/local", got)
 	}
 }

@@ -104,6 +104,17 @@ func (scheme versionScheme) compare(installed, latest updateVersion) (int, bool)
 	return comparison, canCompare
 }
 
+// versionAtMost reports whether left is provably no newer than right.
+func versionAtMost(scheme versionScheme, left, right string) bool {
+	l, leftOK := scheme.parse(left)
+	r, rightOK := scheme.parse(right)
+	if !leftOK || !rightOK {
+		return false
+	}
+	comparison, canCompare := scheme.compare(l, r)
+	return canCompare && comparison <= 0
+}
+
 func unorderedBuilds(installed, latest updateVersion) bool {
 	return installed.build != "" && latest.build != "" && installed.build != latest.build
 }

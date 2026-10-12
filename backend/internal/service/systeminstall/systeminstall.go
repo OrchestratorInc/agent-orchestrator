@@ -679,22 +679,30 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 			return Job{}, err
 		}
 		if baseline != nil && baseline.path != "" {
+			plannedPrefix := plan.PackagePrefix
 			plan = targetInstalledCopy(plan, target, baseline.path)
+			plan = s.requireWritableOwningPrefix(ctx, plan, plannedPrefix)
 		}
 	}
 	if operation == AgentOperationUpdate && expected != "" {
 		if baseline == nil {
 			baseline = &installedBaseline{scheme: versionSchemeFor(target)}
 		}
+		// An update never moves the installed copy backwards.
+		if versionAtMost(baseline.scheme, expected, baseline.version) {
+			return Job{}, ErrUpdateVersion
+		}
 		// Pin the version the user approved into this job's immutable baseline.
 		// Concurrent advisory refreshes cannot erase this verification floor.
 		baseline.expected = expected
 	}
 	if operation == AgentOperationUpdate && baseline != nil {
-		// Install the release the user approved, else the one the advisory announced.
-		pin := baseline.expected
-		if pin == "" {
-			pin = baseline.latest
+		// Install the release the user approved when it is one the advisory
+		// knows exists, else the one the advisory announced. The client value
+		// never reaches the command unless it lies between installed and latest.
+		pin := baseline.latest
+		if baseline.expected != "" && baseline.version != "" && versionAtMost(baseline.scheme, baseline.expected, baseline.latest) {
+			pin = baseline.expected
 		}
 		plan = pinVendorUpdate(plan, pin)
 	}

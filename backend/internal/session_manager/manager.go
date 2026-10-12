@@ -1508,7 +1508,9 @@ func replayClientRequest(rec domain.SessionRecord, hash string) (domain.SessionR
 // launches with the unvalidated config, as it would without a catalog.
 func (m *Manager) resolveTUIAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig, unvalidated ports.AgentConfig) (ports.AgentConfig, error) {
 	resolved, err := m.resolveAgentConfig(ctx, cfg, project)
-	if err == nil || cfg.Harness != domain.HarnessCodex || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	// Only the spawn's own cancellation stops the launch; a catalog lookup's
+	// internal timeout is one more way the catalog can be unavailable.
+	if err == nil || cfg.Harness != domain.HarnessCodex || ctx.Err() != nil {
 		return resolved, err
 	}
 	m.logger.Warn("spawn: Codex model catalog could not validate the launch; leaving it to the CLI",
@@ -1519,13 +1521,14 @@ func (m *Manager) resolveTUIAgentConfig(ctx context.Context, cfg ports.SpawnConf
 func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig) (ports.AgentConfig, error) {
 	preference := m.harnessDefault(ctx, cfg.Harness)
 	resolved, err := m.resolveAgentConfigWith(ctx, cfg, project, preference)
-	if preference.Model != "" && errors.Is(err, ErrUnsupportedModel) {
+	if preference.Model != "" && ctx.Err() == nil && (errors.Is(err, ErrUnsupportedModel) || errors.Is(err, ports.ErrModelCapabilitiesUnavailable)) {
 		// A saved default can leave the provider catalog after it was chosen
-		// (a rename or entitlement change). Fall back to the harness's own
-		// default instead of failing every new session; a project or task
-		// model that is unsupported still fails the same way without it.
+		// (a rename or entitlement change), and validating it needs a catalog
+		// that may be stale or unreachable (offline, signed out). Fall back to
+		// the harness's own default instead of failing every new session; a
+		// project or task model still fails the same way without it.
 		if fallback, fallbackErr := m.resolveAgentConfigWith(ctx, cfg, project, domain.HarnessDefault{}); fallbackErr == nil {
-			m.logger.Warn("spawn: saved harness default model is not in the provider catalog; using the harness default",
+			m.logger.Warn("spawn: saved harness default model could not be validated; using the harness default",
 				"harness", cfg.Harness, "model", preference.Model, "error", err)
 			return fallback, nil
 		}

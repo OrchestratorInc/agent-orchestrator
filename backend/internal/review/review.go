@@ -86,9 +86,17 @@ type HarnessDefaults interface {
 	HarnessDefault(ctx stdctx.Context, agent domain.AgentHarness) domain.HarnessDefault
 }
 
+// ModelCatalog lists the models a harness's provider currently offers.
+type ModelCatalog interface {
+	Models(ctx stdctx.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error)
+}
+
 // Deps wires the engine.
 type Deps struct {
 	Defaults HarnessDefaults
+	// Models, when set, drops a saved default model the provider no longer
+	// lists, as session spawns do, instead of launching reviewers with it.
+	Models   ModelCatalog
 	Store    Store
 	Sessions Sessions
 	PRs      PRs
@@ -105,6 +113,7 @@ type Deps struct {
 // Engine is the core code-review engine.
 type Engine struct {
 	defaults HarnessDefaults
+	models   ModelCatalog
 	store    Store
 	sessions Sessions
 	prs      PRs
@@ -137,6 +146,7 @@ func New(d Deps) *Engine {
 	return &Engine{
 		store:        d.Store,
 		defaults:     d.Defaults,
+		models:       d.Models,
 		sessions:     d.Sessions,
 		prs:          d.PRs,
 		projects:     d.Projects,
@@ -376,7 +386,11 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		hasConfigOverride = config != resolvedConfig
 	}
 	if e.defaults != nil {
-		config = e.defaults.HarnessDefault(ctx, domain.AgentHarness(harness)).Apply(config)
+		preference := e.defaults.HarnessDefault(ctx, domain.AgentHarness(harness))
+		if e.retiredDefaultModel(ctx, harness, worker.ProjectID, preference, config) {
+			preference = domain.HarnessDefault{}
+		}
+		config = preference.Apply(config)
 	}
 	reviewRows, err := e.store.ListReviewsBySession(ctx, workerID)
 	if err != nil {
@@ -2005,4 +2019,23 @@ func (e *Engine) stopReviewChatWork(ctx stdctx.Context, review domain.Review) er
 		return fmt.Errorf("stop previous reviewer Chat: %w", err)
 	}
 	return e.store.SettleReviewChatWork(ctx, review.ID, e.clock())
+}
+
+// retiredDefaultModel reports whether the saved default would fill in a model
+// that the provider's current catalog no longer lists. Only a definitive
+// answer counts: an unavailable or stale catalog leaves the choice to the CLI.
+func (e *Engine) retiredDefaultModel(ctx stdctx.Context, harness domain.ReviewerHarness, projectID domain.ProjectID, preference domain.HarnessDefault, config domain.AgentConfig) bool {
+	if e.models == nil || preference.Model == "" || preference.Apply(config).Model != preference.Model || config.Model == preference.Model {
+		return false
+	}
+	catalog, err := e.models.Models(ctx, string(harness), string(projectID), false)
+	if err != nil || catalog.Stale || len(catalog.Models) == 0 {
+		return false
+	}
+	for _, model := range catalog.Models {
+		if model.ID == preference.Model {
+			return false
+		}
+	}
+	return true
 }

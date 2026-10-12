@@ -553,3 +553,21 @@ func targetInstalledCopy(plan Plan, target Target, binaryPath string) Plan {
 	}
 	return plan
 }
+
+// requireWritableOwningPrefix re-checks writability when an npm update was
+// pointed at the prefix that owns the binary instead of the daemon's own
+// prefix, which is the one planNPM validated.
+func (s *Service) requireWritableOwningPrefix(ctx context.Context, plan Plan, plannedPrefix string) Plan {
+	if plan.Method != "npm" || plan.Unsupported || plan.PackagePrefix == "" || samePath(plan.PackagePrefix, plannedPrefix) {
+		return plan
+	}
+	writable := false
+	if s.pathWritable != nil {
+		writable, _ = s.pathWritable.PathWritable(ctx, plan.PackagePrefix)
+	}
+	if !writable {
+		plan.Unsupported = true
+		plan.Reason = fmt.Sprintf("The npm prefix %s that holds the %s sessions run is not writable by the current user. Update it manually; AO will not use sudo.", plan.PackagePrefix, plan.Target)
+	}
+	return plan
+}

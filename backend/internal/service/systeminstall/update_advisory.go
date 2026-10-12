@@ -62,6 +62,11 @@ type UpdateAdvisory struct {
 	MaintenanceMethod string              `json:"maintenanceMethod,omitempty"`
 	Reason            UpdateUnknownReason `json:"reason,omitempty"`
 	CheckedAt         time.Time           `json:"checkedAt"`
+
+	// probeFailed marks an unknown result whose version probe failed or
+	// printed no version, which a busy machine or slow CLI start can cause
+	// once. It is retried like a failed release lookup.
+	probeFailed bool
 }
 
 // maxConcurrentUpdateChecks caps checks running at once, whoever starts them.
@@ -70,10 +75,10 @@ type UpdateAdvisory struct {
 // harness could briefly take over a gigabyte.
 const maxConcurrentUpdateChecks = 2
 
-// lookupFailedRetryAfter is how long a result whose release lookup failed (a
-// network or registry error) is served before a read checks again. Other
-// results wait for the daemon's next periodic pass: their cause, such as a
-// harness without a release feed, does not clear on its own.
+// lookupFailedRetryAfter is how long a result whose release lookup or version
+// probe failed is served before a read checks again. Other results wait for
+// the daemon's next periodic pass: their cause, such as a harness without a
+// release feed, does not clear on its own.
 const lookupFailedRetryAfter = 30 * time.Minute
 
 type updateAdvisoryCall struct {
@@ -91,8 +96,9 @@ type updateAdvisoryCall struct {
 // A cached result is served however old it is: the daemon's periodic pass and
 // an explicit refresh are the only things that check again. A harness with no
 // result yet (first request, or after an install or update job) is checked
-// once on demand, as is one whose release lookup failed over
-// lookupFailedRetryAfter ago.
+// once on demand, as is one whose release lookup or version probe failed over
+// lookupFailedRetryAfter ago. A refresh re-checks while other readers keep
+// getting the previous result until the new one replaces it.
 func (s *Service) UpdateAdvisory(ctx context.Context, target Target, refresh ...bool) (UpdateAdvisory, error) {
 	if !IsAgentTarget(target) {
 		return UpdateAdvisory{}, fmt.Errorf("systeminstall: unknown harness %q", target)
@@ -105,17 +111,17 @@ func (s *Service) UpdateAdvisory(ctx context.Context, target Target, refresh ...
 		return UpdateAdvisory{AgentID: string(target), Status: UpdateStatusUnknown, Reason: UpdateReasonDisabled, CheckedAt: now, BinaryPath: s.advisoryBinaryPath(ctx, target)}, nil
 	}
 	s.mu.Lock()
-	if len(refresh) > 0 && refresh[0] {
-		delete(s.updateAdvisories, target)
-		// An explicit click needs evidence gathered after the click. An older
-		// in-flight read may finish for its callers, but may not cache over it.
-		delete(s.updateAdvisoryCalls, target)
-	}
-	if cached, found := s.updateAdvisories[target]; found && !lookupRetryDue(cached, now) {
+	forced := len(refresh) > 0 && refresh[0]
+	if cached, found := s.updateAdvisories[target]; found && !forced && !lookupRetryDue(cached, now) {
 		s.mu.Unlock()
 		return cached, nil
 	}
 	call := s.updateAdvisoryCalls[target]
+	if forced {
+		// An explicit click needs evidence gathered after the click. An older
+		// in-flight read may finish for its callers, but may not cache over it.
+		call = nil
+	}
 	if call == nil {
 		if s.stopping {
 			s.mu.Unlock()
@@ -142,7 +148,7 @@ func (s *Service) UpdateAdvisory(ctx context.Context, target Target, refresh ...
 }
 
 func lookupRetryDue(cached UpdateAdvisory, now time.Time) bool {
-	return cached.Reason == UpdateReasonLookupFailed && now.Sub(cached.CheckedAt) >= lookupFailedRetryAfter
+	return (cached.Reason == UpdateReasonLookupFailed || cached.probeFailed) && now.Sub(cached.CheckedAt) >= lookupFailedRetryAfter
 }
 
 func (s *Service) runUpdateAdvisory(target Target, call *updateAdvisoryCall, slots chan struct{}) {
@@ -203,6 +209,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	advisory.BinaryPath = displayBinaryPath(verified.ResolvedPath)
 	if err != nil {
 		advisory.Reason = UpdateReasonOwnershipUnconfirmed
+		advisory.probeFailed = true
 		return advisory, nil //nolint:nilerr // An unverified binary cannot establish update availability.
 	}
 	layout := packageLayout(verified.ResolvedPath)
@@ -230,6 +237,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	current, ok := scheme.find(verified.Output)
 	if !ok {
 		advisory.Reason = UpdateReasonVersionUnparseable
+		advisory.probeFailed = true
 		return advisory, nil
 	}
 	advisory.CurrentVersion = current.display

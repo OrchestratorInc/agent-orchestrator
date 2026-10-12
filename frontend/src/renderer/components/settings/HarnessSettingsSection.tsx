@@ -286,6 +286,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 	const [logoutRequest, setLogoutRequest] = useState<AgentId | null>(null);
 	const [authStates, setAuthStates] = useState<AgentAuthStates>({});
 	const [actionErrors, setActionErrors] = useState<Partial<Record<AgentId, string>>>({});
+	const [selectedMethods, setSelectedMethods] = useState<Partial<Record<AgentId, string>>>({});
 	const [expandedDiagnostics, setExpandedDiagnostics] = useState<Partial<Record<AgentId, boolean>>>({});
 	const [copiedAgent, setCopiedAgent] = useState<AgentId | null>(null);
 	const [authWorkflow, setAuthWorkflow] = useState<AuthTerminalWorkflow | null>(null);
@@ -578,7 +579,16 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				await queryClient.cancelQueries({ queryKey: key });
 				const fresh = await fetchUpdateAdvisory(agentId, hostId, true);
 				queryClient.setQueryData(key, fresh);
-				if (!mountedRef.current || !hasConfirmedHarnessUpdate(fresh) || fresh.latestVersion !== target || maintenanceMethodId(fresh) !== method) return false;
+				// No longer behind: the refreshed advisory already shows why.
+				if (!mountedRef.current || !hasConfirmedHarnessUpdate(fresh)) return false;
+				// Never install a release or through a method the user did not see.
+				if (fresh.latestVersion !== target || maintenanceMethodId(fresh) !== method) {
+					setActionErrors((current) => ({ ...current, [agentId]: fresh.latestVersion !== target
+						? t("settings.harness.updateTargetChanged", { version: versionLabel(fresh.latestVersion!) })
+						: t("settings.harness.updateMethodChanged", { agent: agentLabel(agentId) }) }));
+					revealAgent(agentId);
+					return false;
+				}
 				expectedVersion = fresh.latestVersion;
 			}
 			const { data, error } = await client.POST("/api/v1/agents/{agent}/install", {
@@ -824,7 +834,10 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const job = jobMap.get(agentId);
 		const isInstalled = installed.has(agentId);
 		const availableMethods = plan?.methods.filter((method) => method.available) ?? [];
-		const installMethod = availableMethods.find((method) => method.recommended) ?? availableMethods[0];
+		// The recommended method unless the user picked another, so an install
+		// that fails one way can be retried through another available method.
+		const installMethod = availableMethods.find((method) => method.id === selectedMethods[agentId])
+			?? availableMethods.find((method) => method.recommended) ?? availableMethods[0];
 		const methodId = operationMethodId(agentId);
 		const maintenanceMethod = plan?.methods.find((method) => method.id === methodId);
 		const canUpdate = supportsUpdate(maintenanceMethod);
@@ -903,9 +916,20 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const installationAction = busy ? progressAction
 			: authBusy ? null
 			: !isInstalled ? (
-				!installationPending && installMethod ? <Button type="button" data-harness-primary-action="" size="sm" className={actionClass} onClick={() => void startAgentOperation(agentId, installMethod.id, "install")}>
-					{failed ? t("settings.harness.retryInstall") : t("settings.harness.install")}
-				</Button> : !installationPending && plan?.command ? <Button type="button" size="sm" variant="outline" className={actionClass} onClick={() => void copyText(agentId, plan.command!)}>
+				!installationPending && installMethod ? <span className="flex items-center gap-2">
+					{/* One click installs the recommended method; after a failure the
+					    user can retry through another available method. */}
+					{failed && availableMethods.length > 1 ? <SettingsOptionMenu
+						aria-label={t("settings.harness.installMethod")}
+						value={installMethod.id}
+						options={availableMethods.map((method) => ({ value: method.id, label: method.label }))}
+						onChange={(value) => setSelectedMethods((current) => ({ ...current, [agentId]: value }))}
+						triggerClassName="h-8 w-fit"
+					/> : null}
+					<Button type="button" data-harness-primary-action="" size="sm" className={actionClass} onClick={() => void startAgentOperation(agentId, installMethod.id, "install")}>
+						{failed ? t("settings.harness.retryInstall") : t("settings.harness.install")}
+					</Button>
+				</span> : !installationPending && plan?.command ? <Button type="button" size="sm" variant="outline" className={actionClass} onClick={() => void copyText(agentId, plan.command!)}>
 					{copiedAgent === agentId ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{t(copiedAgent === agentId ? "settings.harness.copied" : "settings.harness.copyCommand")}
 				</Button> : !installationPending && plan?.documentationUrl ? <Button type="button" data-harness-primary-action="" size="sm" variant="outline" className={actionClass} onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>
 					<ExternalLink aria-hidden="true" />{t("settings.harness.installGuide")}

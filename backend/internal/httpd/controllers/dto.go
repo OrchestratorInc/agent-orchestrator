@@ -2015,7 +2015,7 @@ type AgentUpdateAdvisoryQuery struct {
 type StartAgentInstallRequest struct {
 	Method          string                       `json:"method,omitempty" description:"Server-issued installation method id. Omit to use the recommended viable method."`
 	Operation       systeminstall.AgentOperation `json:"operation,omitempty" enum:"install,reinstall,update" description:"Requested operation. Defaults to install for older clients."`
-	ExpectedVersion string                       `json:"expectedVersion,omitempty" description:"For updates, the available version explicitly approved by the user. Used only as a verification floor, never as a command argument."`
+	ExpectedVersion string                       `json:"expectedVersion,omitempty" description:"For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found, and a version at or below the installed one is rejected."`
 }
 
 // AgentInstallJobsResponse hydrates Settings with the latest durable job for
