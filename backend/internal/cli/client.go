@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
@@ -186,6 +187,9 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	}
 	for name, value := range headers {
 		req.Header.Set(name, value)
+	}
+	if sideID := os.Getenv("AO_SIDE_CONVERSATION_ID"); sideID != "" {
+		req.Header.Set("X-AO-Side-Conversation", sideID)
 	}
 
 	// Reuse the injected client's transport (keeps it stubbable in tests) but

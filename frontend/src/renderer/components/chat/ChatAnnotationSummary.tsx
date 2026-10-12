@@ -6,6 +6,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 
 export interface ChatAnnotationSummaryItem {
 	text: string;
+	conversationId?: string;
 	id?: string;
 	messageId?: string;
 	revision?: number;

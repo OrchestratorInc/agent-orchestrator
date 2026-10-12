@@ -796,3 +796,112 @@ func TestInvalidateBinaryResolutionClearsCachedPath(t *testing.T) {
 		t.Fatalf("resolvedBinary = %q, want empty after invalidation", p.resolvedBinary)
 	}
 }
+
+func TestGetLaunchCommandAppliesToolRestrictions(t *testing.T) {
+	p := &Plugin{resolvedBinary: "qwen"}
+
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Permissions: ports.PermissionModeDefault,
+		AllowedTools: []string{
+			" read_file ", "search_file_content", "glob",
+		},
+		DisallowedTools: []string{
+			"run_shell_command", "write_file", "edit", "",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"--core-tools", "read_file"},
+		{"--core-tools", "search_file_content"},
+		{"--core-tools", "glob"},
+		{"--exclude-tools", "run_shell_command"},
+		{"--exclude-tools", "write_file"},
+		{"--exclude-tools", "edit"},
+	}
+	for _, pair := range want {
+		if !containsSubsequence(cmd, pair) {
+			t.Fatalf("command %#v missing %#v", cmd, pair)
+		}
+	}
+}
+
+// TestGetLaunchCommandKeepsReadOnlyToolsOutOfAutoApproval guards the read-only
+// contract: an allowlisted tool must reach Qwen's fail-closed allowlist, never
+// `--allowed-tools`, which only auto-approves and would leave the tool set
+// unrestricted.
+func TestGetLaunchCommandKeepsReadOnlyToolsOutOfAutoApproval(t *testing.T) {
+	p := &Plugin{resolvedBinary: "qwen"}
+
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Permissions:     ports.PermissionModeAcceptEdits,
+		AllowedTools:    []string{"read_file", "search_file_content"},
+		DisallowedTools: []string{"run_shell_command", "write_file", "edit"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsSubsequence(cmd, []string{"--allowed-tools"}) {
+		t.Fatalf("command %#v used --allowed-tools, which auto-approves instead of restricting", cmd)
+	}
+	for _, tool := range []string{"run_shell_command", "write_file", "edit"} {
+		if !containsSubsequence(cmd, []string{"--exclude-tools", tool}) {
+			t.Fatalf("command %#v does not exclude %s", cmd, tool)
+		}
+	}
+	for _, tool := range []string{"read_file", "search_file_content"} {
+		if !containsSubsequence(cmd, []string{"--core-tools", tool}) {
+			t.Fatalf("command %#v does not allowlist %s", cmd, tool)
+		}
+		if containsSubsequence(cmd, []string{"--exclude-tools", tool}) {
+			t.Fatalf("command %#v excludes %s while allowing it", cmd, tool)
+		}
+	}
+}
+
+func TestGetLaunchCommandOmitsToolFlagsWhenUnrestricted(t *testing.T) {
+	p := &Plugin{resolvedBinary: "qwen"}
+
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Permissions: ports.PermissionModeAcceptEdits,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"--core-tools", "--exclude-tools", "--allowed-tools"} {
+		if containsSubsequence(cmd, []string{flag}) {
+			t.Fatalf("command %#v emitted %s with no restrictions configured", cmd, flag)
+		}
+	}
+}
+
+func TestGetRestoreCommandAppliesToolRestrictions(t *testing.T) {
+	p := &Plugin{resolvedBinary: "qwen"}
+
+	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Permissions:     ports.PermissionModeDefault,
+		AllowedTools:    []string{"read_file"},
+		DisallowedTools: []string{"run_shell_command", "write_file", "edit"},
+		Session:         ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "sess-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected a restorable session")
+	}
+	for _, pair := range [][]string{
+		{"--core-tools", "read_file"},
+		{"--exclude-tools", "run_shell_command"},
+		{"--exclude-tools", "write_file"},
+		{"--exclude-tools", "edit"},
+	} {
+		if !containsSubsequence(cmd, pair) {
+			t.Fatalf("restore command %#v missing %#v", cmd, pair)
+		}
+	}
+	if containsSubsequence(cmd, []string{"--allowed-tools"}) {
+		t.Fatalf("restore command %#v used --allowed-tools, which auto-approves instead of restricting", cmd)
+	}
+}

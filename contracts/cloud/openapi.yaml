@@ -1210,6 +1210,87 @@ paths:
           description: The coding-agent credential was disconnected.
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/coder-config:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    get:
+      operationId: getOrgCoderConfig
+      tags: [Providers]
+      description: The organization's bring-your-own Coder connection, without its token. 403 provider_forbidden when the organization is not entitled to Coder.
+      responses:
+        "200":
+          description: The connection, or configured=false when there is none.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgCoderConfigResponse"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: putOrgCoderConfig
+      tags: [Providers]
+      description: >-
+        Create or replace the organization's bring-your-own Coder connection
+        (org admins). The token is required on first save and when baseUrl
+        changes; otherwise an omitted token keeps the stored one. An omitted
+        owner is derived from the token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutOrgCoderConfigInput"
+      responses:
+        "200":
+          description: The validated connection was stored; the token is never returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgCoderConfigResponse"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteOrgCoderConfig
+      tags: [Providers]
+      responses:
+        "204":
+          description: The connection was removed.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/coder-templates/{templateId}/parameters:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: templateId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: getCoderTemplateParameters
+      tags: [Providers]
+      description: >-
+        The coder_parameter inputs the template's active version declares, read
+        from the organization's own Coder connection (or the deployment's Coder
+        when it has none). 403 provider_forbidden for organizations without
+        Coder; 404 coder_template_not_found for an unknown template; 502
+        coder_unavailable when Coder cannot be read.
+      responses:
+        "200":
+          description: The template's parameters in Coder's order.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [parameters]
+                properties:
+                  parameters:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CoderTemplateParameter"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/worker/bootstrap:
     post:
       operationId: bootstrapWorker
@@ -2350,6 +2431,63 @@ components:
           type: string
         role:
           $ref: "#/components/schemas/OrganizationRole"
+        offering:
+          $ref: "#/components/schemas/Offering"
+    Offering:
+      type: object
+      additionalProperties: false
+      description: >-
+        What an organization may use and how it is billed. The control plane is
+        the source of truth; clients shape their UI from it and the server
+        enforces the same rules on create.
+      required: [providers, defaultProvider, billingMode, kind, features]
+      properties:
+        providers:
+          type: array
+          description: >-
+            Sandbox providers the organization may use: the deployment's
+            providers filtered by the capability gate against the
+            organization's effective capabilities.
+          items:
+            type: string
+        defaultProvider:
+          type: string
+          description: >-
+            Provider a session gets when none is chosen: the deployment default
+            when allowed, otherwise the first allowed provider, otherwise empty
+            (no cloud sessions).
+        billingMode:
+          type: string
+          enum: [self_serve, contract, "off"]
+          description: >-
+            off when the deployment has no Stripe configured; contract when the
+            organization is billed under an agreement, runs on the internal
+            plan, or is grandfathered; self_serve otherwise. Only self_serve
+            organizations are subject to plan limits.
+        kind:
+          type: string
+          enum: [b2b, b2c, both, none]
+          description: >-
+            b2b when coder is the only allowed provider, b2c when only other
+            providers are allowed, both for a mix, none when no provider is
+            allowed.
+        features:
+          type: array
+          description: Plan feature flags; empty when none apply.
+          items:
+            type: string
+    SandboxProviders:
+      type: object
+      additionalProperties: false
+      description: Legacy provider selector data; the same values as offering.providers and offering.defaultProvider.
+      required: [available, default]
+      properties:
+        available:
+          type: array
+          items:
+            type: string
+        default:
+          type: string
     CurrentAccount:
       type: object
       additionalProperties: false
@@ -2361,6 +2499,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OrganizationMembership"
+        offering:
+          # The offering of the first organization, the one the desktop app works in.
+          $ref: "#/components/schemas/Offering"
+        sandboxProviders:
+          $ref: "#/components/schemas/SandboxProviders"
     AgentCapability:
       type: string
       enum:
@@ -2533,6 +2676,168 @@ components:
             $ref: "#/components/schemas/ProjectCoderRepository"
         workspaceNamePrefix:
           $ref: "#/components/schemas/CoderWorkspaceNamePrefix"
+        parameters:
+          $ref: "#/components/schemas/CoderTemplateParameterValues"
+    CoderTemplateParameterValues:
+      type: object
+      maxProperties: 50
+      additionalProperties:
+        type: string
+        maxLength: 4096
+      description: >-
+        Values for the chosen template's coder_parameter inputs, by parameter
+        name. A list(string) value is a JSON array string and a bool is "true"
+        or "false". Requires a chosen template; names must be parameters the
+        template declares. At workspace create they override the
+        organization connection's parameters and are overridden by size and
+        startupScript.
+    CoderTemplateParameter:
+      type: object
+      additionalProperties: false
+      required: [name, displayName, description, type, formType, mutable, required, defaultValue, options, order]
+      properties:
+        name:
+          type: string
+        displayName:
+          type: string
+        description:
+          type: string
+        type:
+          type: string
+          description: 'Coder parameter type: "string", "number", "bool" or "list(string)".'
+        formType:
+          type: string
+          description: Coder's form hint (for example dropdown, multi-select, switch); may be empty.
+        mutable:
+          type: boolean
+          description: False when the value can only be set when a workspace is created.
+        required:
+          type: boolean
+        defaultValue:
+          type: string
+        options:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, value, description]
+            properties:
+              name:
+                type: string
+              value:
+                type: string
+              description:
+                type: string
+        order:
+          type: integer
+    OrgCoderConfig:
+      type: object
+      additionalProperties: false
+      required: [baseUrl, owner, templateId, workerUser, reuseExistingCheckout]
+      properties:
+        baseUrl:
+          type: string
+        owner:
+          type: string
+        templateId:
+          type: string
+        agentName:
+          type: string
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+        durableRoot:
+          type: string
+        endpointServiceName:
+          type: string
+        region:
+          type: string
+        requireMountedDurableRoot:
+          type: boolean
+        startupTimeoutSeconds:
+          type: integer
+        workerUser:
+          $ref: "#/components/schemas/CoderWorkerUser"
+        readyProbe:
+          type: string
+          maxLength: 1000
+          description: Shell command run as the workspace user after the Coder agent is ready and before AO starts its worker; polled every 5 seconds until it exits 0.
+        readyProbeTimeoutSeconds:
+          type: integer
+          minimum: 30
+          maximum: 3600
+          description: Ready check budget, measured from the agent becoming ready. 900 when a ready check is set without one. On timeout the session fails with startup error workspace_setup_not_ready.
+        reuseExistingCheckout:
+          type: boolean
+          description: Work in the checkout of the project repository the template already cloned (under $HOME/work/* or $HOME/*) instead of cloning into ~/repository. Always false for the ao-worker user; defaults to true for the workspace user.
+    CoderWorkerUser:
+      type: string
+      enum: [ao-worker, workspace]
+      description: >-
+        Who runs AO's worker and agent in the workspace: a dedicated ao-worker
+        user (default; added to the docker group when one exists), or the
+        workspace's own login user with its real HOME, groups and environment.
+    OrgCoderConfigResponse:
+      type: object
+      additionalProperties: false
+      required: [configured]
+      properties:
+        configured:
+          type: boolean
+        coderConfig:
+          $ref: "#/components/schemas/OrgCoderConfig"
+        validationState:
+          type: string
+        validatedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    PutOrgCoderConfigInput:
+      type: object
+      additionalProperties: false
+      required: [baseUrl]
+      properties:
+        token:
+          type: string
+          description: Coder API token. Required on first save and when baseUrl changes; omit to keep the stored token.
+        baseUrl:
+          type: string
+        owner:
+          type: string
+          description: Omit to derive from the token.
+        templateId:
+          type: string
+        agentName:
+          type: string
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+        durableRoot:
+          type: string
+        endpointServiceName:
+          type: string
+        region:
+          type: string
+        requireMountedDurableRoot:
+          type: boolean
+        startupTimeoutSeconds:
+          type: integer
+          description: 0 (default 20 minutes) or 60..7200.
+        workerUser:
+          $ref: "#/components/schemas/CoderWorkerUser"
+        readyProbe:
+          type: string
+          maxLength: 1000
+        readyProbeTimeoutSeconds:
+          type: integer
+          description: 0 (default 900 when readyProbe is set) or 30..3600.
+        reuseExistingCheckout:
+          type: boolean
+          description: Omit for the default (true with the workspace user).
     ProjectCoderRepository:
       type: object
       additionalProperties: false
@@ -2582,10 +2887,15 @@ components:
         coder:
           type: object
           additionalProperties: false
-          description: Only the workspace name prefix is editable after the project is created.
+          description: >-
+            Only the workspace name prefix and the template parameters are
+            editable after the project is created. parameters replaces the
+            stored values as a whole and needs a project with a chosen template.
           properties:
             workspaceNamePrefix:
               $ref: "#/components/schemas/CoderWorkspaceNamePrefix"
+            parameters:
+              $ref: "#/components/schemas/CoderTemplateParameterValues"
     ProjectSettingsInput:
       type: object
       additionalProperties: false
@@ -3942,6 +4252,16 @@ components:
           type: string
         startupError:
           $ref: "#/components/schemas/SessionStartupError"
+        coderWorkspaceUrl:
+          type: string
+          format: uri
+          description: >-
+            The session's workspace page on the organization's own
+            (bring-your-own) Coder deployment, as
+            <baseUrl>/@<owner>/<workspace name>. Present only for sessions on
+            a bring-your-own Coder connection, from the session's creation
+            (the workspace may not exist yet); never set for AO's managed
+            Coder or other providers.
         activeTurn:
           $ref: "#/components/schemas/Turn"
         isTerminated:
@@ -3967,7 +4287,9 @@ components:
           description: >-
             Stable reason code: workspace_not_ready, terminal_unavailable,
             unsupported_architecture, durable_root_unavailable,
-            worker_never_started, or bootstrap_failed. Clients must tolerate
+            worker_never_started, bootstrap_failed, or
+            workspace_setup_not_ready (a Coder connection's workspace ready
+            check never passed). Clients must tolerate
             codes added later.
         message:
           type: string

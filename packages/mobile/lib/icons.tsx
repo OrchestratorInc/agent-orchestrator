@@ -55,6 +55,7 @@ import Inbox from "lucide-react-native/icons/inbox";
 import Info from "lucide-react-native/icons/info";
 import Italic from "lucide-react-native/icons/italic";
 import KeyRound from "lucide-react-native/icons/key-round";
+import Laptop from "lucide-react-native/icons/laptop";
 import Layers from "lucide-react-native/icons/layers";
 import Link from "lucide-react-native/icons/link";
 import List from "lucide-react-native/icons/list";
@@ -178,6 +179,7 @@ export const glyphs = {
 	"info": Info,
 	"italic": Italic,
 	"key": KeyRound,
+	"laptop": Laptop,
 	"layers": Layers,
 	"link": Link,
 	"list": List,

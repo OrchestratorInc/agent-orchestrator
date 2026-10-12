@@ -411,3 +411,47 @@ func TestReviewerTerminalCannotReceiveWorkerFeedback(t *testing.T) {
 		t.Fatalf("review panel attachment broke: %+v, %v", attached, err)
 	}
 }
+
+// AgentTerminalLive must agree with the agent-ticket gate in
+// IssueTerminalTicket: false until the worker's own agent terminal is open,
+// even when a reviewer terminal is.
+func TestAgentTerminalLiveMatchesTheTicketGate(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	assertLive := func(want bool) {
+		t.Helper()
+		live, err := store.AgentTerminalLive(ctx, principal, fixture.orgID, fixture.sessionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, ticketErr := store.IssueTerminalTicket(ctx, principal, fixture.orgID, fixture.sessionID, "agent", "", time.Minute)
+		if live != want || (ticketErr == nil) != want {
+			t.Fatalf("live = %v, ticket err = %v; want live %v", live, ticketErr, want)
+		}
+	}
+	assertLive(false)
+	pr, err := store.CreatePullRequestRecord(ctx, fixture.orgID, fixture.sessionID, "github", "owner/repo", "author", 25, "https://github.test/owner/repo/pull/25", "feature", "main", "sha", "Review", 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, _, err := store.CreateReviewRun(ctx, fixture.orgID, pr.ID, fixture.sessionID, pr.HeadSHA, "codex", "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewerID, err := store.OpenReviewTerminal(ctx, fixture.orgID, fixture.sessionID, run.ID, "Review", "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.withOrg(ctx, fixture.orgID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE ao_terminal_sessions SET state='open' WHERE org_id=$1 AND id=$2`, fixture.orgID, reviewerID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertLive(false)
+	if _, err := store.EnsureWorkerAgentTerminal(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	assertLive(true)
+}

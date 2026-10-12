@@ -486,6 +486,12 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
+	if !s.validateProjectSandboxProvider(w, r, principalFrom(r), orgID, config) {
+		return
+	}
+	if !s.validateProjectCoderParameters(w, r, orgID, config) {
+		return
+	}
 	store, ok := s.store.(githubProjectStore)
 	if !ok {
 		writeError(w, r, http.StatusNotImplemented, "not_implemented", "GitHub project creation is unavailable.")
@@ -559,10 +565,11 @@ func (s *Server) createGitHubScratchProject(
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The scratch project request is invalid.")
 		return
 	}
-	plan, err := s.provisioning.SessionPlan(request.Orchestrator.Harness)
-	if err != nil {
-		s.logger.Error("resolve scratch provisioning plan", "error", err, "request_id", requestID(r))
-		writeError(w, r, http.StatusInternalServerError, "internal_error", "Sandbox provisioning is misconfigured.")
+	scratchConfig := json.RawMessage(`{"source":"scratch"}`)
+	plan, connectionID, ok := s.scratchSessionPlan(
+		w, r, principalFrom(r), orgID, request.Orchestrator.Harness, scratchConfig,
+	)
+	if !ok {
 		return
 	}
 	grant, err := s.github.PrepareScratchCapability(
@@ -608,18 +615,19 @@ func (s *Server) createGitHubScratchProject(
 			AuthorityEnvironment:    "production",
 			CapabilityHash:          grant.Authority.CapabilityHash,
 			DisplayName:             request.DisplayName,
-			Config:                  json.RawMessage(`{"source":"scratch"}`),
+			Config:                  scratchConfig,
 			Session: domain.CreateSession{
-				Kind:             "orchestrator",
-				Harness:          request.Orchestrator.Harness,
-				DisplayName:      "Orchestrator",
-				Prompt:           request.Orchestrator.Prompt,
-				Mode:             "trusted",
-				DeniedCommands:   []string{},
-				Provider:         plan.Provider,
-				ResourceProfile:  plan.ResourceProfile,
-				BootstrapContext: plan.BootstrapContext,
-				Release:          s.release,
+				Kind:                "orchestrator",
+				Harness:             request.Orchestrator.Harness,
+				DisplayName:         "Orchestrator",
+				Prompt:              request.Orchestrator.Prompt,
+				Mode:                "trusted",
+				DeniedCommands:      []string{},
+				Provider:            plan.Provider,
+				SandboxConnectionID: connectionID,
+				ResourceProfile:     plan.ResourceProfile,
+				BootstrapContext:    plan.BootstrapContext,
+				Release:             s.release,
 			},
 		},
 	)

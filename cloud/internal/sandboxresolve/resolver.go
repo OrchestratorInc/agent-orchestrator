@@ -28,6 +28,7 @@ type Resolver struct {
 	nodeOps          sandbox.Provider
 	docker           sandbox.Provider
 	coder            sandbox.Provider
+	freestyle        sandbox.Provider
 	coderConnections coderConnectionStore
 	cipher           *secrets.Cipher
 }
@@ -41,7 +42,7 @@ type sessionScopedProvider interface {
 // Coder deployment (a sandbox row carries a provider_connection_id); both may be
 // nil for a deployment that offers only the shared, env-configured Coder.
 func New(
-	nodeOps, docker, coder sandbox.Provider,
+	nodeOps, docker, coder, freestyle sandbox.Provider,
 	coderConnections coderConnectionStore,
 	cipher *secrets.Cipher,
 ) *Resolver {
@@ -49,6 +50,7 @@ func New(
 		nodeOps:          nodeOps,
 		docker:           docker,
 		coder:            coder,
+		freestyle:        freestyle,
 		coderConnections: coderConnections,
 		cipher:           cipher,
 	}
@@ -95,6 +97,14 @@ func (r *Resolver) Resolve(ctx context.Context, record domain.Sandbox) (sandbox.
 			return nil, fmt.Errorf("coder sandbox provider does not support durable session profiles")
 		}
 		return scoped.ForSandbox(record)
+	case sandbox.ProviderFreestyle:
+		if record.ProviderConnectionID != "" {
+			return nil, fmt.Errorf("per-organization Freestyle connections are not supported")
+		}
+		if r.freestyle == nil {
+			return nil, fmt.Errorf("freestyle sandbox provider is not configured")
+		}
+		return r.freestyle, nil
 	case sandbox.ProviderDaytona, sandbox.ProviderECS:
 		return nil, fmt.Errorf("sandbox provider %q is not configured", record.Provider)
 	default:

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { notificationAction, notificationRowsForHost, notificationSections, notificationTarget, notificationVisual, relativeTime } from "./notificationView";
+import { notificationAction, notificationsAcrossHosts, notificationRowsForHost, notificationSections, notificationTarget, notificationVisual, relativeTime } from "./notificationView";
 import { darkTheme } from "./theme";
 
 describe("notificationVisual", () => {
@@ -113,6 +113,23 @@ describe("notificationSections", () => {
 			{ key: "earlier", data: [read] },
 		]);
 		expect(notificationSections([])).toEqual([]);
+	});
+});
+
+describe("notificationsAcrossHosts", () => {
+	it("adds machine identity and sorts all machines into one recent-first timeline", () => {
+		const oldest = { id: "old", status: "read", createdAt: "2026-10-08T08:00:00Z" };
+		const newest = { id: "new", status: "unread", createdAt: "2026-10-08T10:00:00Z" };
+		const middle = { id: "middle", status: "read", createdAt: "2026-10-08T09:00:00Z" };
+
+		expect(notificationsAcrossHosts([
+			{ hostId: "host-a", hostName: "Laptop", hostAppearance: { symbol: "laptop" }, items: [oldest, newest] },
+			{ hostId: "host-b", hostName: "Desktop", hostAppearance: { symbol: "desktop" }, items: [middle] },
+		])).toEqual([
+			{ ...newest, hostId: "host-a", hostName: "Laptop", hostAppearance: { symbol: "laptop" } },
+			{ ...middle, hostId: "host-b", hostName: "Desktop", hostAppearance: { symbol: "desktop" } },
+			{ ...oldest, hostId: "host-a", hostName: "Laptop", hostAppearance: { symbol: "laptop" } },
+		]);
 	});
 });
 
