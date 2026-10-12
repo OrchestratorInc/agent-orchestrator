@@ -129,6 +129,21 @@ func (s *Store) ListPendingReportSchedule(ctx context.Context, limit int64) ([]d
 	return s.reportsWithOutputs(ctx, rows)
 }
 
+// ListPendingDoneReports returns every pending done report regardless of its
+// settlement deadline so the coordinator can flush a batch early once the
+// project's other workers have stopped.
+func (s *Store) ListPendingDoneReports(ctx context.Context) ([]domain.ReportRecord, error) {
+	rows, err := s.qr.ListPendingDoneReports(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list pending done reports: %w", err)
+	}
+	out := make([]domain.ReportRecord, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, reportFromGen(row))
+	}
+	return out, nil
+}
+
 // ClaimPendingReportBatch atomically claims every pending report for a project.
 // A due, attention, or piggyback trigger therefore includes earlier batch work.
 func (s *Store) ClaimPendingReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time) ([]domain.ReportRecord, error) {
