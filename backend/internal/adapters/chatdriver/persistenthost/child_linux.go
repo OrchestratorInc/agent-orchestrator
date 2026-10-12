@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,7 +43,53 @@ func startProviderProcess(cmd *exec.Cmd) (func(), error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	return func() {}, nil
+	if !providerSubreaperEnabled {
+		return func() {}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				reapAdoptedProviderZombies(cmd.Process.Pid)
+			}
+		}
+	}()
+	return func() { cancel(); <-done }, nil
+}
+
+// Interrupt can orphan already-dead native shell descendants while the provider
+// remains live. Reap only direct adopted zombies; exec.Cmd.Wait owns providerPID.
+func reapAdoptedProviderZombies(providerPID int) {
+	tasks, err := os.ReadDir("/proc/self/task")
+	if err != nil {
+		return
+	}
+	for _, task := range tasks {
+		data, err := os.ReadFile(filepath.Join("/proc/self/task", task.Name(), "children"))
+		if err != nil {
+			continue
+		}
+		for _, value := range strings.Fields(string(data)) {
+			pid, err := strconv.Atoi(value)
+			if err != nil || pid == providerPID {
+				continue
+			}
+			identity, err := readProcessIdentity(pid)
+			if err != nil || identity.parent != os.Getpid() || identity.state != "Z" {
+				continue
+			}
+			// An unreaped direct child cannot have its PID reused before Wait4.
+			var status unix.WaitStatus
+			_, _ = unix.Wait4(pid, &status, unix.WNOHANG, nil)
+		}
+	}
 }
 
 type ownedProcess struct {

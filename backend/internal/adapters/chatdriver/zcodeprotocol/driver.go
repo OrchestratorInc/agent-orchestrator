@@ -147,7 +147,7 @@ func (d *Driver) open(ctx context.Context, cfg ports.ChatStartConfig, nativeID s
 	if err != nil {
 		return nil, err
 	}
-	owner, _ := json.Marshal([]any{"zcode-owned-tree-v1", filepath.Clean(cfg.WorkspacePath), domain.HarnessZCode, cfg.ProviderScopeID, mode, mcp})
+	owner, _ := json.Marshal([]any{"zcode-owned-tree-v2", filepath.Clean(cfg.WorkspacePath), domain.HarnessZCode, cfg.ProviderScopeID, mode, mcp})
 	fingerprint := sha256.Sum256(owner)
 	hostCfg := persistenthost.Config{SessionID: string(cfg.SessionID), DataDir: cfg.DataDir, Workdir: cfg.WorkspacePath, Protocol: persistenthost.ProtocolZCode, OwnershipFingerprint: hex.EncodeToString(fingerprint[:]), ReconnectOnly: reconnectOnly,
 		Prepare: func(prepareCtx context.Context) (persistenthost.PreparedProvider, error) {
