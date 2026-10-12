@@ -37,23 +37,28 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { getWorkspacePaths, openSessionShell } from "./api";
 import { requestDockModel } from "./requestDockModel";
+import type { ResponseQuoteRequest } from "./responseQuotes";
 import { ChatComposer } from "./ChatComposer";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
 import { ConversationTitle } from "./ConversationTitle";
 import { chatSheetRoute, type ConversationActionsEntry } from "./chatSheetRegistry";
 import { quotaWarning } from "./conversationChrome";
+import { shouldAutoResume } from "./autoResume";
 import { cloudLifecycleBanner, controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { conversationMarkers } from "./timelineModel";
+import { turnSettingsModelLabel } from "./turnSettingsModel";
 import { brokenMcpServers, can } from "./types";
 import { useMobileConversation } from "./useConversation";
+import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
 import { usePRSummaries } from "../usePRSummaries";
 import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
 import { iconSize, type, space } from "../tokens";
 import { backOr } from "../backNavigation";
 import { userFacingError } from "../connectionError";
+import { archiveSessionMessage } from "../worker-action-model";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
@@ -101,6 +106,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 	const cloudSession = source.kind === "cloud";
 	const refreshBoard = useCallback(() => refreshSource(source), [refreshSource, source.kind, source.id]);
 	const conversation = useMobileConversation(cloudSession ? null : config, session.id, sessionSource);
+	useChatViewLease(cloudSession ? null : config, session.id);
 	// A load that failed while the desktop was unreachable retries as soon as the
 	// board's poll reconnects, which is what the offline state promises.
 	// Keyed on a failed load, not a missing one, so the first mount doesn't send a
@@ -127,6 +133,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 	const filePathsRequest = useRef<Promise<{ paths: string[]; truncated: boolean }> | null>(null);
 	const [openingShell, setOpeningShell] = useState(false);
 	const [resuming, setResuming] = useState(false);
+	const [resumeError, setResumeError] = useState<string | undefined>();
 	// Banners closed this visit, by what they report. See conversationBanners.
 	const [dismissedBanners, setDismissedBanners] = useState<ReadonlySet<string>>(() => new Set());
 	const dismissBanner = useCallback((key: string) => setDismissedBanners((current) => new Set(current).add(key)), []);
@@ -156,6 +163,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 		const liveEntry = {
 			...entry,
 			snapshot,
+			modelLabel: turnSettingsModelLabel(snapshot, conversation.models, conversation.configOptions),
 			openingShell,
 			compacting: conversation.pendingActions.includes("compact"),
 			mcpReloading: conversation.pendingActions.includes("mcp"),
@@ -168,7 +176,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 		};
 		actionsEntryRef.current = liveEntry;
 		actionsListeners.current.forEach((listener) => listener(liveEntry));
-	}, [cloudSession, conversation.snapshot, conversation.pendingActions, conversation.refreshing, conversation.actionCodes, openingShell, interfaceSwitch.status, interfaceSwitch.error, interfaceSwitch.starting, interfaceTransitionActive, session.id, terminated]);
+	}, [cloudSession, conversation.snapshot, conversation.models, conversation.configOptions, conversation.pendingActions, conversation.refreshing, conversation.actionCodes, openingShell, interfaceSwitch.status, interfaceSwitch.error, interfaceSwitch.starting, interfaceTransitionActive, session.id, terminated]);
 	const interfaceTransitionNotice =
 		!interfaceTransitionActive &&
 		!interfaceSwitch.transition?.noticeAcknowledgedAt &&
@@ -182,7 +190,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 	const interfaceTransitionNoticeText =
 		interfaceTransitionNotice?.errorDetail ||
 		(interfaceTransitionRecovered
-			? "AO restored the session in its last committed interface."
+			? "Orchestrator restored the session in its last committed interface."
 			: interfaceTransitionNotice?.phase === "recovery_required"
 				? "The interface switch needs recovery before more work is sent."
 				: "The interface switch failed; the current interface remains available.");
@@ -318,6 +326,16 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 		);
 	}, [cloudSession, expandReviewPrompt, headerRightReady, navigation, reviewPromptCollapsed, reviewPromptPR, router, session.id, source.kind, source.id, styles.reviewHeaderPRButton, t, terminated]);
 
+	const composerKey = config ? JSON.stringify([machineIdentity(config), session.id]) : JSON.stringify([source.kind, source.id, session.id]);
+	const [quoteRequest, setQuoteRequest] = useState<ResponseQuoteRequest>();
+	const quoteSequence = useRef(0);
+	const addResponseToChat = useCallback((text: string, source?: ResponseQuoteRequest["source"]) => {
+		if (!text.length || !source) return;
+		setDismissedRequest(request?.sequence);
+		setQuoteRequest({ id: `${Date.now()}-${++quoteSequence.current}`, text, source, composerKey });
+	}, [composerKey, request?.sequence]);
+	const quoteHandled = useCallback((id: string) => setQuoteRequest((current) => current?.id === id ? undefined : current), []);
+
 	const loadWorkspaceFiles = useCallback(async () => {
 		if (!config || !conversation.snapshot) return { paths: filePaths, truncated: filePathsTruncated };
 		if (filePathsRequest.current) return filePathsRequest.current;
@@ -378,15 +396,18 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 		void openGitHub(mobileReachablePreviewURL(url, config?.host ?? "")?.href ?? url);
 	}, [config?.host]);
 
-	const resume = useCallback(async () => {
+	const resume = useCallback(async (quiet = false) => {
 		if (resuming) return;
 		setResuming(true);
+		setResumeError(undefined);
 		try {
 			if (terminated) await restoreOn(source, session.id);
 			else await resumeAgentOn(source, session.id);
 			await conversation.refresh();
 		} catch (cause) {
-			Alert.alert("Couldn't resume the agent", userFacingError(cause));
+			// An automatic attempt has no alert; the stopped banner carries the reason.
+			if (quiet) setResumeError(userFacingError(cause));
+			else Alert.alert("Couldn't resume the agent", userFacingError(cause));
 		} finally { setResuming(false); }
 	}, [conversation.refresh, resuming, restoreOn, resumeAgentOn, session.id, source, terminated]);
 
@@ -409,6 +430,18 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 			setCloudResuming(false);
 		}
 	}, [cloudResuming, sessionSource, refreshBoard, conversation.refresh, session.id]);
+
+	// The daemon leaves agents stopped after a restart; opening the session here
+	// starts them, as the desktop does. One attempt per opening: a failure or a
+	// later exit stays stopped behind the Resume banner, which shows the reason.
+	const autoResumeTried = useRef<string | undefined>(undefined);
+	useEffect(() => {
+		if (cloudSession) return;
+		if (autoResumeTried.current === session.id) return;
+		if (!shouldAutoResume(session, terminated, Boolean(config))) return;
+		autoResumeTried.current = session.id;
+		void resume(true);
+	}, [cloudSession, config, resume, session, terminated]);
 
 	const startInterfaceSwitch = useCallback(
 		async (policy: "drain" | "interrupt") => {
@@ -439,7 +472,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 			"Switch to Terminal UI?",
 			turnWaiting
 				? "This turn is waiting for your input. Finish waits for your answer; stop cancels it and switches now."
-				: "Keep the same AO session, worktree, and native agent conversation.",
+				: "Keep the same Orchestrator session, worktree, and native agent conversation.",
 			[
 				{ text: "Keep Chat", style: "cancel" },
 				{ text: "Finish, then switch", onPress: () => void startInterfaceSwitch("drain") },
@@ -462,6 +495,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 				return () => { actionsListeners.current.delete(listener); };
 			},
 			sessionTitle: sessionName,
+			modelLabel: turnSettingsModelLabel(current, conversation.models, conversation.configOptions),
 			openingShell,
 			compacting: conversation.pendingActions.includes("compact"),
 			mcpReloading: conversation.pendingActions.includes("mcp"),
@@ -473,6 +507,8 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 			interfaceSwitching: !cloudSession && (interfaceTransitionActive || interfaceSwitch.starting),
 			// Orchestrators are not deleted from here; the board owns their lifecycle.
 			canDelete: !cloudSession && !("projectName" in session),
+			// The daemon refuses to rename the project orchestrator.
+			canRename: !cloudSession && !("projectName" in session),
 			canPin: !cloudSession && !("projectName" in session),
 			pinned: "projectName" in session ? false : Boolean(session.isPinned),
 			onMap: () => router.push(chatSheetRoute({ kind: "conversation-map", markers: conversationMarkers(actionsEntryRef.current?.snapshot ?? current), onSelect: setJumpToSequence })),
@@ -502,13 +538,13 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 			onDelete: () => {
 				haptics.warning();
 				Alert.alert(
-					"Delete session?",
-					`This terminates ${sessionName}. Its conversation and worktree are preserved.`,
+					"Archive session?",
+					archiveSessionMessage(sessionName),
 					[
 						{ text: "Cancel", style: "cancel" },
 						// Leave first: the session this screen is showing is about to stop
 						// existing, and the board is where its row disappears from.
-						{ text: "Delete session", style: "destructive", onPress: () => { backOr(router); void killOn(source, session.id).catch(() => {}); } },
+						{ text: "Archive session", style: "destructive", onPress: () => { backOr(router); void killOn(source, session.id).catch(() => {}); } },
 					],
 				);
 			},
@@ -616,6 +652,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 				startFailure={failedStart}
 				brokenServers={brokenServers}
 				resuming={resuming}
+				resumeError={resumeError}
 				terminated={terminated}
 				mcpReloading={conversation.pendingActions.includes("mcp")}
 				mcpError={conversation.actionErrors.mcp}
@@ -643,7 +680,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="alert-circle" /> : null}
 			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon="rotate-ccw" /> : null}
 			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="send" title="Message delivery uncertain" body={pendingSend.error || "Delivery failed"} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /> : null)}
-			<ChatLinkProvider onLinkOpen={openLink}>
+			<ChatLinkProvider onLinkOpen={openLink} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
 				<ChatTimeline
 					snapshot={snapshot}
 					loadingOlder={conversation.loadingOlder}
@@ -659,7 +696,9 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 				/>
 			</ChatLinkProvider>
 			<ChatComposer
-				key={config ? JSON.stringify([machineIdentity(config), session.id]) : session.id}
+				key={composerKey}
+				quoteRequest={quoteRequest?.composerKey === composerKey ? quoteRequest : undefined}
+				onQuoteHandled={quoteHandled}
 				reviewPR={reviewPromptPR}
 				reviewPRSummary={reviewPromptSummary}
 				reviewPRCollapsed={reviewPromptCollapsed}
@@ -703,12 +742,12 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 	);
 }
 
-function ConversationBanners({ snapshot, cloudPaused, startFailure, brokenServers, resuming, terminated, mcpReloading, mcpError, mcpReloadSupported, turnInFlight, onResume, onReload, onOpenShell, dismissed, onDismiss }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; cloudPaused: boolean; startFailure?: string; brokenServers: ReturnType<typeof brokenMcpServers>; resuming: boolean; terminated: boolean; mcpReloading: boolean; mcpError?: string; mcpReloadSupported: boolean; turnInFlight: boolean; onResume(): void; onReload(): void; onOpenShell(): void; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {
+function ConversationBanners({ snapshot, cloudPaused, startFailure, brokenServers, resuming, resumeError, terminated, mcpReloading, mcpError, mcpReloadSupported, turnInFlight, onResume, onReload, onOpenShell, dismissed, onDismiss }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; cloudPaused: boolean; startFailure?: string; brokenServers: ReturnType<typeof brokenMcpServers>; resuming: boolean; resumeError?: string; terminated: boolean; mcpReloading: boolean; mcpError?: string; mcpReloadSupported: boolean; turnInFlight: boolean; onResume(): void; onReload(): void; onOpenShell(): void; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {
 	const thread = snapshot.threadState;
 	const reauthAt = snapshot.account?.reauthRequiredAt;
 	return <>
 		{reauthAt ? <DismissibleBanner copy={reauthBanner(reauthAt, signInCommand(snapshot.harness))} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="key" action="Open shell" onPress={onOpenShell} /> : null}
-		{startFailure ? <DismissibleBanner copy={{ key: `start:${startFailure}`, title: "Session failed to start", body: startFailure }} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="alert-triangle" action={resuming ? "Retrying…" : "Retry"} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : !cloudPaused && snapshot.controller.state === "stopped" ? <DismissibleBanner copy={controllerStoppedBanner(terminated, snapshot.controller.error)} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="power" action={terminated ? (resuming ? "Restoring…" : "Restore") : (resuming ? "Resuming…" : "Resume")} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : null}
+		{startFailure ? <DismissibleBanner copy={{ key: `start:${startFailure}`, title: "Session failed to start", body: startFailure }} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="alert-triangle" action={resuming ? "Retrying…" : "Retry"} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : !cloudPaused && snapshot.controller.state === "stopped" ? <DismissibleBanner copy={controllerStoppedBanner(terminated, resumeError ?? snapshot.controller.error)} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="power" action={terminated ? (resuming ? "Restoring…" : "Restore") : (resuming ? "Resuming…" : "Resume")} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : null}
 		{/* Passing states clear themselves, so there is nothing to close. */}
 		{!cloudPaused && !startFailure && (snapshot.controller.state === "recovering" || snapshot.controller.state === "connecting") ? <InlineBanner tone="warning" icon="loader" title={snapshot.controller.state === "recovering" ? "Reconnecting to the agent…" : "Starting the agent…"} /> : null}
 		{threadBanner(thread?.status) ? <DismissibleBanner copy={threadBanner(thread?.status)!} dismissed={dismissed} onDismiss={onDismiss} tone={thread?.status === "system_error" ? "danger" : "warning"} icon="alert-triangle" /> : null}

@@ -20,7 +20,7 @@ vi.mock("./orchestratorView", () => ({
 	projectDetailSessions: () => [],
 	projectPageStats: () => ({ workers: 0, needsYou: 0, ready: 0, archived: 0 }),
 }));
-vi.mock("./project-card", () => ({ ProjectPageHeader: "ProjectPageHeader" }));
+vi.mock("./project-card", () => ({ ProjectPageHeader: "ProjectPageHeader", ProjectMachineIndicator: () => null }));
 vi.mock("./StaleBanner", () => ({ StaleBanner: "StaleBanner" }));
 vi.mock("./UnpairedState", () => ({ CloudUnreadyState: "CloudUnreadyState" }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ bgBase: "#000", blue: "#00f" }), useThemedStyles: (makeStyles: (theme: unknown) => unknown) => makeStyles({ bgBase: "#000", blue: "#00f" }) }));
@@ -55,7 +55,7 @@ describe("Cloud project page", () => {
 	it("places worker spawn at the bottom, not in the header, and keeps the project selected", async () => {
 		await act(async () => { renderer = create(<ProjectScreen />); });
 		const root = renderer!.root;
-		expect(root.find((node) => String(node.type) === "ScreenHeader").props.right).toBeNull();
+		expect(root.find((node) => String(node.type) === "ScreenHeader").props.right.props.hostId).toBeUndefined();
 		const dock = root.find((node) => String(node.type) === "WorkerDock");
 		await act(async () => dock.props.onSpawn());
 		expect(state.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { projectId: "project-1", source: "cloud", sourceId: "org-1" } });

@@ -2,8 +2,10 @@ import type { DashboardSession, ProjectInfo } from "./api";
 import { resourceKey, type Scoped } from "./environment/scopedBoard";
 import type { EnvironmentKind } from "./environment/types";
 import { hostedProjectKey } from "./hostedRows";
+import type { MachineAppearance } from "./machineAppearance";
 
 export const ALL_WORKER_PROJECTS = "all";
+export const ALL_WORKER_ENVIRONMENTS = "all";
 
 export const boardWorkerKey = (entry: Scoped<DashboardSession>): string => resourceKey(entry.source, entry.value.id);
 
@@ -20,6 +22,7 @@ export function scopedWorkerProjectOptions(projects: readonly Scoped<ProjectInfo
 }
 
 type WorkerProject = { id: string; name: string; hostId?: string; hostName?: string };
+export type WorkerEnvironment = { id: string; name: string; appearance?: MachineAppearance };
 
 export function spawnProjectParam(projectId: string, projects?: readonly WorkerProject[]): { projectId: string; hostId?: string } | undefined {
 	if (projectId === ALL_WORKER_PROJECTS) return undefined;
@@ -39,6 +42,18 @@ export function filterWorkersByProject<T extends { projectId: string; hostId?: s
 	return workers.filter((worker) => worker.projectId === projectId);
 }
 
+export function filterWorkersByEnvironmentAndProject<T extends { projectId: string; hostId?: string }>(
+	workers: readonly T[],
+	environmentId: string,
+	projectId: string,
+	projects: readonly WorkerProject[] = [],
+): T[] {
+	const environmentWorkers = environmentId === ALL_WORKER_ENVIRONMENTS
+		? workers
+		: workers.filter((worker) => worker.hostId === environmentId);
+	return filterWorkersByProject(environmentWorkers, projectId, projects);
+}
+
 export function workerSearchPresentation(
 	requestedOpen: boolean,
 	query: string,
@@ -49,20 +64,44 @@ export function workerSearchPresentation(
 export function workerProjectLabel(
 	projects: readonly WorkerProject[],
 	projectId: string,
+	environmentId: string = ALL_WORKER_ENVIRONMENTS,
 ): string {
 	if (projectId === ALL_WORKER_PROJECTS) return "All projects";
-	return workerProjectOptions(projects).find((project) => project.id === projectId)?.label ?? "All projects";
+	return workerProjectOptions(projects, environmentId).find((project) => project.id === projectId)?.label ?? "All projects";
 }
 
 export function workerProjectOptions(
 	projects: readonly WorkerProject[],
+	environmentId: string = ALL_WORKER_ENVIRONMENTS,
 ): { id: string; label: string }[] {
-	const multipleHosts = new Set(projects.map((project) => project.hostId).filter(Boolean)).size > 1;
+	const visibleProjects = environmentId === ALL_WORKER_ENVIRONMENTS
+		? projects
+		: projects.filter((project) => project.hostId === environmentId);
+	const multipleHosts = new Set(visibleProjects.map((project) => project.hostId).filter(Boolean)).size > 1;
 	return [
 		{ id: ALL_WORKER_PROJECTS, label: "All projects" },
-		...projects.map((project) => ({
+		...visibleProjects.map((project) => ({
 			id: hostedProjectKey(project),
 			label: multipleHosts && project.hostName ? `${project.name} · ${project.hostName}` : project.name,
 		})),
+	];
+}
+
+export function workerProjectForEnvironment(
+	projects: readonly WorkerProject[],
+	environmentId: string,
+	projectId: string,
+): string {
+	return workerProjectOptions(projects, environmentId).some((project) => project.id === projectId)
+		? projectId
+		: ALL_WORKER_PROJECTS;
+}
+
+export function workerEnvironmentOptions(
+	environments: readonly WorkerEnvironment[],
+): { id: string; label: string; appearance?: MachineAppearance }[] {
+	return [
+		{ id: ALL_WORKER_ENVIRONMENTS, label: "All environments" },
+		...environments.map((environment) => ({ id: environment.id, label: environment.name, ...(environment.appearance ? { appearance: environment.appearance } : {}) })),
 	];
 }

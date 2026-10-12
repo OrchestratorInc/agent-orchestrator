@@ -108,6 +108,7 @@ func TestBuildSystemPrompt_OrchestratorRequiresConfirmationAndAOOnlyDelegation(t
 		"ask the human to choose an alternative",
 		"## In-App Session Links",
 		"ao://sessions/{project-id}/{session-id}",
+		"ao://sessions/{project-id}/{session-id}/artifacts/{path}",
 		"Use stable project and session IDs",
 		"operating-system deep links",
 	} {
@@ -215,6 +216,9 @@ func TestBuildSystemPrompt_WorkerRequiresDurableReports(t *testing.T) {
 		"ao report --stuck --note <text>",
 		"ao report --done --note <text>",
 		"Do not narrate routine commands",
+		"Keep routine test logs",
+		"Summarize validation in the report note",
+		"not external publishing authorization",
 		"`--done` does not terminate the session",
 	} {
 		if !strings.Contains(got, want) {

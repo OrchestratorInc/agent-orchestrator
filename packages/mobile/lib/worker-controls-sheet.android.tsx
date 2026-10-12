@@ -1,3 +1,4 @@
+import { useLayoutEffect, useState } from "react";
 import { Feather } from "./icons";
 import BottomSheet, { BottomSheetScrollView, BottomSheetView } from "@expo/ui/community/bottom-sheet";
 import { Pressable, StyleSheet, Text, View } from "react-native";
@@ -6,15 +7,23 @@ import type { ProjectInfo } from "./api";
 import type { Scoped } from "./environment/scopedBoard";
 import type { EnvironmentKind } from "./environment/types";
 import { haptics } from "./haptics";
+import { MachineAvatar } from "./MachineIdentity";
+import { machineAppearance } from "./machineAppearance";
+import { useWorkerControlsDraft } from "./useWorkerControlsDraft";
 import type { Theme } from "./theme";
 import { useTheme } from "./ThemeProvider";
-import { ALL_WORKER_PROJECTS, scopedWorkerProjectOptions } from "./worker-controls";
+import { ALL_WORKER_ENVIRONMENTS, ALL_WORKER_PROJECTS, workerEnvironmentOptions, scopedWorkerProjectOptions, type WorkerEnvironment } from "./worker-controls";
 import { iconSize, space, type } from "./tokens";
+
+const ANDROID_SHEET_HIDE_MS = 180;
 
 export function WorkerControlsSheet({
 	open,
 	onDismiss,
 	onSearch,
+	environments = [],
+	selectedEnvironmentId = "all",
+	onSelectMachine,
 	projects,
 	environmentFilter,
 	onSelectEnvironment,
@@ -24,6 +33,9 @@ export function WorkerControlsSheet({
 	open: boolean;
 	onDismiss: () => void;
 	onSearch: () => void;
+	environments?: readonly WorkerEnvironment[];
+	selectedEnvironmentId?: string;
+	onSelectMachine?: (machineId: string) => void;
 	projects: readonly Scoped<ProjectInfo>[];
 	environmentFilter: "all" | EnvironmentKind;
 	onSelectEnvironment: (environment: "all" | EnvironmentKind) => void;
@@ -33,7 +45,16 @@ export function WorkerControlsSheet({
 	const t = useTheme();
 	const styles = makeStyles(t);
 	const insets = useSafeAreaInsets();
-	const options = scopedWorkerProjectOptions(projects, environmentFilter);
+	// @expo/ui fires Android onClose as soon as the sheet is told to close, while
+	// its window is still animating out. Focusing search then leaves the field
+	// focused without a keyboard (reproduced on a Samsung M31), so wait for the
+	// hide to finish, as the sheet did before it moved to onClose.
+	const [machineId, setMachineId] = useState(selectedEnvironmentId);
+	useLayoutEffect(() => { if (open) setMachineId(selectedEnvironmentId); }, [open, selectedEnvironmentId]);
+	const scopedProjects = projects.filter((entry) => entry.source.kind === "cloud" || machineId === "all" || entry.source.id === machineId);
+	const projectOptions = scopedWorkerProjectOptions(scopedProjects, environmentFilter);
+	const draft = useWorkerControlsDraft({ open, selectedEnvironmentId: "all", selectedProjectId, projects: projectOptions.map((project) => ({ id: project.id, name: project.label })), onSelectEnvironment: () => {}, onSelectProject, onDismiss, onSearch, searchDelayMs: ANDROID_SHEET_HIDE_MS });
+	const environmentOptions = workerEnvironmentOptions(environments);
 
 	return (
 		<BottomSheet
@@ -43,7 +64,7 @@ export function WorkerControlsSheet({
 			enableDynamicSizing={false}
 			backgroundStyle={{ backgroundColor: t.bgSurface }}
 			handleIndicatorStyle={{ backgroundColor: t.borderStrong }}
-			onClose={onDismiss}
+			onClose={draft.didClose}
 		>
 			<BottomSheetView style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 16) }]}>
 				<View style={styles.header}>
@@ -51,7 +72,7 @@ export function WorkerControlsSheet({
 						<Text style={styles.title}>Workers</Text>
 						<Text style={styles.subtitle}>Find and scope this list.</Text>
 					</View>
-					<Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onDismiss} hitSlop={12}>
+					<Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={draft.close} hitSlop={12}>
 						<Feather name="x" size={iconSize.lg} color={t.textSecondary} />
 					</Pressable>
 				</View>
@@ -63,8 +84,7 @@ export function WorkerControlsSheet({
 					android_ripple={{ color: t.accentTint }}
 					onPress={() => {
 						haptics.tap();
-						onDismiss();
-						setTimeout(onSearch, 180);
+						draft.search();
 					}}
 					style={styles.searchRow}
 				>
@@ -77,16 +97,54 @@ export function WorkerControlsSheet({
 				<View style={styles.environmentOptions}>
 					{(["all", "local", "cloud"] as const).map((option) => (
 						<Pressable key={option} accessibilityRole="button" accessibilityState={{ selected: environmentFilter === option }}
-							onPress={() => { haptics.select(); onSelectEnvironment(option); }}
+							onPress={() => {
+								haptics.select();
+								if (option !== environmentFilter) onSelectEnvironment(option);
+								if (!scopedWorkerProjectOptions(scopedProjects, option).some((project) => project.id === selectedProjectId)) onSelectProject(ALL_WORKER_PROJECTS);
+								onDismiss();
+							}}
 							style={[styles.environmentOption, environmentFilter === option && styles.selectedRow]}>
-							<Text style={[styles.projectLabel, environmentFilter === option && styles.selectedLabel]}>{option === "all" ? "All" : option === "local" ? "Local" : "Cloud"}</Text>
+							<Text style={[styles.environmentLabel, environmentFilter === option && styles.selectedLabel]}>{option === "all" ? "All" : option === "local" ? "Local" : "Cloud"}</Text>
 						</Pressable>
 					))}
 				</View>
+				{onSelectMachine && environmentFilter !== "cloud" ? <>
+				<Text style={styles.sectionLabel}>MACHINES</Text>
+				<View style={styles.optionList}>
+					{environmentOptions.map((environment, index) => {
+						const selected = environment.id === machineId;
+						return (
+							<Pressable
+								key={environment.id}
+								accessibilityRole="button"
+								accessibilityState={{ selected }}
+								testID={environment.id === ALL_WORKER_ENVIRONMENTS ? "worker-environment-filter" : undefined}
+								android_ripple={{ color: t.accentTint }}
+								onPress={() => {
+									haptics.select();
+									setMachineId(environment.id);
+									if (environment.id !== machineId) onSelectMachine(environment.id);
+									const nextProjects = projects.filter((entry) => entry.source.kind === "cloud" || environment.id === "all" || entry.source.id === environment.id);
+									if (!scopedWorkerProjectOptions(nextProjects, environmentFilter).some((project) => project.id === selectedProjectId)) onSelectProject(ALL_WORKER_PROJECTS);
+									onDismiss();
+								}}
+								style={[styles.optionRow, index > 0 && styles.separator, selected && styles.selectedRow]}
+							>
+								{environment.id === ALL_WORKER_ENVIRONMENTS
+									? <Feather name="server" size={iconSize.md} color={t.textSecondary} />
+									: <MachineAvatar appearance={machineAppearance({ id: environment.id, name: environment.label, appearance: environment.appearance })} size={30} />}
+								<Text numberOfLines={1} style={[styles.optionLabel, selected && styles.selectedLabel]}>{environment.label}</Text>
+								{selected ? <Feather name="check" size={iconSize.lg} color={t.accent} /> : null}
+							</Pressable>
+						);
+					})}
+				</View>
+
+				</> : null}
 				<Text style={styles.sectionLabel}>PROJECTS</Text>
 				<BottomSheetScrollView style={styles.projectList} showsVerticalScrollIndicator={false}>
-					{options.map((project, index) => {
-						const selected = project.id === selectedProjectId;
+					{projectOptions.map((project, index) => {
+							const selected = project.id === draft.projectId;
 						return (
 							<Pressable
 								key={project.id}
@@ -96,13 +154,12 @@ export function WorkerControlsSheet({
 								android_ripple={{ color: t.accentTint }}
 								onPress={() => {
 									haptics.select();
-									onSelectProject(project.id);
-									onDismiss();
+									draft.selectProject(project.id);
 								}}
-								style={[styles.projectRow, index > 0 && styles.separator, selected && styles.selectedRow]}
+								style={[styles.optionRow, index > 0 && styles.separator, selected && styles.selectedRow]}
 							>
 								<Feather name={project.id === ALL_WORKER_PROJECTS ? "layers" : "folder"} size={iconSize.md} color={selected ? t.accent : t.textSecondary} />
-								<Text numberOfLines={1} style={[styles.projectLabel, selected && styles.selectedLabel]}>{project.label}</Text>
+								<Text numberOfLines={1} style={[styles.optionLabel, selected && styles.selectedLabel]}>{project.label}</Text>
 								{selected ? <Feather name="check" size={iconSize.lg} color={t.accent} /> : null}
 							</Pressable>
 						);
@@ -121,12 +178,14 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	searchRow: { height: 52, marginTop: space.sm, paddingHorizontal: space.lg, flexDirection: "row", alignItems: "center", gap: space.md, borderRadius: 16, borderCurve: "continuous", backgroundColor: t.bgElevated, overflow: "hidden" },
 	searchLabel: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600" },
 	sectionLabel: { fontFamily: "Geist_600SemiBold", marginTop: space.xl, marginBottom: space.sm, paddingHorizontal: space.xxs, color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, letterSpacing: 1, fontWeight: "600" },
+	optionList: { borderRadius: 16, borderCurve: "continuous", backgroundColor: t.bgElevated, overflow: "hidden" },
 	projectList: { flex: 1, borderRadius: 16, borderCurve: "continuous", backgroundColor: t.bgElevated, overflow: "hidden" },
+	environmentLabel: { color: t.textPrimary, fontSize: type.callout.fontSize },
 	environmentOptions: { flexDirection: "row", gap: space.sm },
 	environmentOption: { flex: 1, minHeight: 44, alignItems: "center", justifyContent: "center", borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
-	projectRow: { minHeight: 52, paddingHorizontal: space.lg, flexDirection: "row", alignItems: "center", gap: space.md },
+	optionRow: { minHeight: 52, paddingHorizontal: space.lg, flexDirection: "row", alignItems: "center", gap: space.md },
 	separator: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle },
 	selectedRow: { backgroundColor: t.accentTint },
-	projectLabel: { fontFamily: "Geist_400Regular", flex: 1, color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
+	optionLabel: { fontFamily: "Geist_400Regular", flex: 1, color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
 	selectedLabel: { fontFamily: "Geist_600SemiBold", color: t.accent, fontWeight: "600" },
 });

@@ -16,8 +16,8 @@ vi.mock("../lib/cloud-session", () => ({
 vi.mock("./useCloudCp", () => ({
 	useCloudCp: () => ({ client: { getUserPreferences: state.get, putUserPreferences: state.put }, ready: state.status === "authenticated", baseUrl: "https://cloud.test" }),
 }));
-vi.mock("./useCloudSandboxProviders", () => ({
-	useCloudSandboxProviders: () => ({ available: ["nodeops", "coder"], isSuccess: true }),
+vi.mock("./useCloudOffering", () => ({
+	useCloudOffering: () => ({ providers: ["nodeops", "coder"], loaded: true }),
 }));
 
 import { cloudProviderPreferenceQueryKey, useCloudProviderPreference } from "./useCloudProviderPreference";

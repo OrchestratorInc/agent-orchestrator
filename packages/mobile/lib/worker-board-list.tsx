@@ -1,18 +1,29 @@
 import { Feather } from "./icons";
-import { useCallback, useMemo, useRef, useState, type ReactElement, type RefObject } from "react";
-import { Alert, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text } from "react-native";
+import { useFocusEffect } from "expo-router";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type RefObject } from "react";
+import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { LayoutAnimationConfig } from "react-native-reanimated";
-import { groupSessions, type BoardSection } from "./agentsView";
+import {
+	absorbNewHosts,
+	groupSessions,
+	hasNewHost,
+	shouldResnapshot,
+	snapshotOrder,
+	updatedSince,
+	type BoardSection,
+	type OrderSnapshot,
+} from "./agentsView";
 import type { DashboardSession } from "./api";
 import type { BoardInteractionMode } from "./board-presentation";
-import { resourceKey, type Scoped } from "./environment/scopedBoard";
-import { BoardRowTransition } from "./BoardRowTransition";
+import { resourceKey, sourceKey, type Scoped } from "./environment/scopedBoard";
 import { haptics } from "./haptics";
+import { machineAppearance } from "./machineAppearance";
 import { useApp } from "./store";
 import type { Theme } from "./theme";
 import { statusVisual } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { ListSectionHeader } from "./ui";
+import { archiveSessionMessage } from "./worker-action-model";
 import { WorkerListRow } from "./worker-list-row";
 import { filterWorkerSessions } from "./worker-search";
 import { type, space } from "./tokens";
@@ -42,22 +53,25 @@ function groupScopedSessions(t: Theme, entries: readonly Scoped<DashboardSession
  * Sections that never fold, whatever the user has toggled.
  *
  * Search results are a transient answer — folding the thing you just asked for
- * is a way to lose it. `needs_you` is the reason the app was opened at all, and
- * `pinned` is what someone deliberately put at the top; a board that can hide
- * either of those behind a chevron can hide the two things that matter most.
- * Everything else folds and stays folded, because the shape of a long board is
- * the user's call.
+ * is a way to lose it. `needs_you` is the reason the app was opened at all,
+ * `pinned` is what someone deliberately put at the top, and `recent` is the
+ * ordinary list beneath a plain text separator. Archive has its own disclosure
+ * control below the live board.
  */
-const ALWAYS_OPEN = new Set<ListSection["zone"]>(["search", "needs_you", "pinned"]);
+const ALWAYS_OPEN = new Set<ListSection["zone"]>(["search", "needs_you", "pinned", "recent"]);
+const boardRowKey = (item: BoardRow) => item.key;
+
+const orderSessionKey = (session: DashboardSession): string => "orderKey" in session ? String(session.orderKey) : session.id;
+function holdScopedOrder(snapshot: OrderSnapshot, entries: Scoped<DashboardSession>[]): Scoped<DashboardSession>[] {
+	return [...entries].sort((a, b) => (snapshot.rank[resourceKey(a.source, a.value.id)] ?? -1) - (snapshot.rank[resourceKey(b.source, b.value.id)] ?? -1));
+}
+
 
 /**
  * One flat list, not a SectionList, and that is load-bearing.
  *
- * A row moving between sections has to stay mounted for its layout animation to
- * run. In a SectionList it changes parent, which unmounts and remounts it — so a
- * pinned row vanished from one section and reappeared in the other instead of
- * travelling there. Flattened, the same move is a reorder within one array,
- * which is exactly what LinearTransition animates.
+ * Flattening gives every host-qualified worker one stable key across sections,
+ * including pin/unpin and status changes, without native row reflow animations.
  */
 export type BoardRow =
 	| { kind: "header"; key: string; label: string; open: boolean; collapsible: boolean }
@@ -65,7 +79,7 @@ export type BoardRow =
 	| { kind: "session"; key: string; entry: Scoped<DashboardSession> };
 
 /**
- * The Workers board's grouped list: Pinned, the kanban sections, and a
+ * The Workers board's grouped list: Pinned, Needs you, Recent, and a
  * collapsible Archive, with every row action wired.
  *
  * Extracted so a project's own page shows its workers exactly as the Workers tab
@@ -94,7 +108,7 @@ export function WorkerBoardList({
 	listRef?: RefObject<FlatList<BoardRow> | null>;
 	contentBottomInset: number;
 	refreshing: boolean;
-	onRefresh(): void;
+	onRefresh(): void | Promise<void>;
 	ListHeaderComponent?: ReactElement | null;
 	ListEmptyComponent?: ReactElement | null;
 	initialArchiveOpen?: boolean;
@@ -113,16 +127,17 @@ export function WorkerBoardList({
 	identityKey?: string;
 }) {
 	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
 	const { scopedBoard, hostStates, killOn, renameWorkerOn, setWorkerPinnedOn, restoreOn, resumeAgentOn } = useApp();
+	const machines = useMemo(() => new Map(hostStates.map((host) => [host.hostId, { name: `${host.name}${host.connection === "closed" ? " (offline)" : ""}`, appearance: machineAppearance({ id: host.hostId, name: host.name, appearance: host.appearance }) }])), [hostStates]);
 	const [renamingWorkerId, setRenamingWorkerId] = useState<string>();
 	const [activeSwipeId, setActiveSwipeId] = useState<string>();
 	const activeSwipeRef = useRef<{ id: string; close(): void } | undefined>(undefined);
 	// Collapsed by default, like desktop's archive strip: it is history, and on a
 	// long-running project it is most of the sessions.
 	const [archiveOpen, setArchiveOpen] = useState(initialArchiveOpen);
-	// Every group can be folded away as well. Open by default — the board is a
-	// working view, and a section nobody opened is a section nobody saw — but a
-	// collapsed group keeps its header, so the shape of the board stays readable.
+	// Any future optional group may be folded away. The current live groups stay
+	// open; Archive has its own disclosure row below them.
 	const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
 	// Minute-granular, so a memoised row still updates its relative timestamp even
 	// when nothing about the session itself has changed.
@@ -132,12 +147,9 @@ export function WorkerBoardList({
 		() => new Map(scopedBoard.projects.map((entry) => [resourceKey(entry.source, entry.value.id), entry.value.name])),
 		[scopedBoard.projects],
 	);
-	const multipleHosts = hostStates.length > 1;
-	const projectNameFor = useCallback((entry: Scoped<DashboardSession>) => {
-		const name = entry.value.projectId ? projectNames.get(resourceKey(entry.source, entry.value.projectId)) ?? entry.value.projectId : "Standalone";
-		const host = entry.source.kind === "local" ? hostStates.find((item) => item.hostId === entry.source.id) : undefined;
-		return multipleHosts && host ? `${name} · ${host.name}${host.connection === "closed" ? " (offline)" : ""}` : name;
-	}, [hostStates, multipleHosts, projectNames]);
+	const projectNameFor = useCallback((entry: Scoped<DashboardSession>) => entry.value.projectId
+		? projectNames.get(resourceKey(entry.source, entry.value.projectId)) ?? entry.value.projectId
+		: "Standalone", [projectNames]);
 	const filteredSessions = useMemo(
 		() =>
 			sessions.filter((entry) => filterWorkerSessions(
@@ -148,8 +160,69 @@ export function WorkerBoardList({
 			).length > 0),
 		[sessions, query, projectNameFor, t],
 	);
-	const { pinned, sections, archived } = useMemo(() => groupScopedSessions(t, sessions), [t, sessions]);
-	const filteredGroups = useMemo(() => groupScopedSessions(t, filteredSessions), [t, filteredSessions]);
+	const fresh = useMemo(() => groupScopedSessions(t, sessions), [t, sessions]);
+	const filteredGroups = useMemo(() => query.trim() ? groupScopedSessions(t, filteredSessions) : fresh, [t, filteredSessions, query, fresh]);
+	const archived = fresh.archived;
+
+	// The order is held still while the user looks (see OrderSnapshot): rows
+	// update in place and news waits behind the "N updated" pill. Accepting news
+	// installs the new snapshot atomically, without an intermediate empty one.
+	const freshLiveEntries = useMemo(() => [...fresh.pinned, ...fresh.sections.flatMap((section) => section.data)], [fresh]);
+	const freshLive = useMemo(() => freshLiveEntries.map((entry) => ({ ...entry.value, hostId: sourceKey(entry.source), orderKey: resourceKey(entry.source, entry.value.id) })), [freshLiveEntries]);
+	const [snapshot, setSnapshot] = useState<OrderSnapshot>(() => snapshotOrder(freshLive, orderSessionKey));
+	const freshLiveRef = useRef(freshLive);
+	freshLiveRef.current = freshLive;
+	const scrollAfterResort = useRef(false);
+	const held = useMemo(() => {
+		// Another machine's first load joins the held order rather than replacing
+		// it, so news already waiting behind the pill neither jumps nor vanishes.
+		const order = absorbNewHosts(snapshot, freshLive, orderSessionKey);
+		const pinned = holdScopedOrder(order, fresh.pinned);
+		const sections = fresh.sections.map((section) => ({ ...section, data: holdScopedOrder(order, section.data) }));
+		const shown = [...pinned, ...sections.flatMap((section) => section.data)];
+		const stale = shown.some((session, i) => session !== freshLiveEntries[i]);
+		return { pinned, sections, stale, updated: stale ? updatedSince(order, freshLive, orderSessionKey) : 0 };
+	}, [snapshot, fresh, freshLive, freshLiveEntries]);
+	const { pinned, sections } = held;
+	useEffect(() => {
+		if (freshLive.length === 0) return;
+		if (hasNewHost(snapshot, freshLive)) {
+			setSnapshot((previous) => absorbNewHosts(previous, freshLive, orderSessionKey));
+			return;
+		}
+		if (shouldResnapshot(snapshot, freshLive, held.stale, orderSessionKey)) {
+			setSnapshot(previous => snapshotOrder(freshLive, orderSessionKey, previous));
+		}
+	}, [snapshot, freshLive, held.stale]);
+	const resort = useCallback(() => setSnapshot(previous => snapshotOrder(freshLiveRef.current, orderSessionKey, previous)), []);
+	useLayoutEffect(() => {
+		if (!scrollAfterResort.current) return;
+		scrollAfterResort.current = false;
+		listRef?.current?.scrollToOffset({ offset: 0, animated: false });
+	}, [snapshot, listRef]);
+	// Opening the board, coming back to the app, or a different set of workers
+	// is looking again, so each re-sorts.
+	useFocusEffect(resort);
+	useEffect(() => {
+		const sub = AppState.addEventListener("change", (state) => {
+			if (state === "active") resort();
+		});
+		return () => sub.remove();
+	}, [resort]);
+	useEffect(resort, [resort, identityKey]);
+	// Pulling to refresh is asking for the latest order too.
+	const refreshAndResort = useCallback(async () => {
+		try {
+			await onRefresh();
+		} finally {
+			resort();
+		}
+	}, [onRefresh, resort]);
+	const showLatest = useCallback(() => {
+		haptics.select();
+		scrollAfterResort.current = true;
+		resort();
+	}, [resort]);
 
 	// The archive is the last section, rendered only when expanded so a collapsed
 	// strip costs nothing to scroll past.
@@ -241,82 +314,113 @@ export function WorkerBoardList({
 	const confirmDeleteSession = useCallback((entry: Scoped<DashboardSession>) => {
 		haptics.warning();
 		Alert.alert(
-			"Delete session?",
-			`This terminates ${entry.value.displayName?.trim() || "this worker"}. Its conversation and worktree are preserved.`,
+			"Archive session?",
+			archiveSessionMessage(entry.value.displayName?.trim() || "this worker"),
 			[
 				{ text: "Cancel", style: "cancel" },
-				{ text: "Delete session", style: "destructive", onPress: () => void killOn(entry.source, entry.value.id).catch(() => {}) },
+				{ text: "Archive session", style: "destructive", onPress: () => void killOn(entry.source, entry.value.id).catch(() => {}) },
 			],
 		);
 	}, [killOn]);
 
+	// Recycled list cells must never carry animated offsets across reordering.
+	const toggleArchive = useCallback(() => setArchiveOpen((value) => !value), []);
+	const actions = useMemo(() => ({
+		renameStart: setRenamingWorkerId,
+		rename: renameWorkerOn,
+		pin: updateWorkerPin,
+		archive: confirmDeleteSession,
+		recover: runWorkerRecovery,
+	}), [renameWorkerOn, updateWorkerPin, confirmDeleteSession, runWorkerRecovery]);
+	const renderItem = useCallback(({ item }: { item: BoardRow }) => {
+		if (item.kind === "archive") return <ArchiveHeader count={archived.length} open={archiveOpen} onToggle={toggleArchive} />;
+		if (item.kind === "header") return <ListSectionHeader label={item.label} open={item.open}
+			onToggle={item.collapsible ? () => toggleSection(item.key.replace("header:", "")) : undefined} />;
+		return <BoundWorkerRow entry={item.entry} nowBucket={nowBucket}
+			machine={item.entry.source.kind === "local" ? machines.get(item.entry.source.id) : undefined}
+			projectName={showProject ? projectNameFor(item.entry) : item.entry.value.harness || "Agent"}
+			isRenaming={renamingWorkerId === item.key} activeSwipeId={activeSwipeId}
+			onSwipeOpen={openExclusiveSwipe} onSwipeClose={closeExclusiveSwipe} actions={actions} />;
+	}, [archived.length, archiveOpen, toggleArchive, toggleSection, machines, nowBucket, showProject, projectNameFor,
+		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions]);
+
 	return (
-		/* skipEntering so the first render and every poll-driven rebuild do not
-		   cascade one animation per row. Only rows that arrive after the list is
-		   already on screen animate in — which is the only case worth seeing. */
-		<LayoutAnimationConfig skipEntering>
-			<FlatList
-				ref={listRef}
-				key={identityKey}
-				data={listData}
-				keyExtractor={(item) => item.key}
-				contentContainerStyle={{ paddingBottom: contentBottomInset }}
-				keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
-				keyboardShouldPersistTaps="handled"
-				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.accent} />}
-				ListHeaderComponent={ListHeaderComponent}
-				ListEmptyComponent={ListEmptyComponent}
-				renderItem={({ item }) => {
-					// Headers animate too, so a section appearing or emptying reflows
-					// with the rows rather than snapping around them.
-					if (item.kind === "archive") {
-						return (
-							<BoardRowTransition>
-								<ArchiveHeader count={archived.length} open={archiveOpen} onToggle={() => setArchiveOpen((v) => !v)} />
-							</BoardRowTransition>
-						);
-					}
-					if (item.kind === "header") {
-						return (
-							<BoardRowTransition>
-								<ListSectionHeader
-									label={item.label}
-									open={item.open}
-									onToggle={item.collapsible ? () => toggleSection(item.key.replace("header:", "")) : undefined}
-								/>
-							</BoardRowTransition>
-						);
-					}
-					const entry = item.entry;
-					const session = entry.value;
-					const rowKey = resourceKey(entry.source, entry.value.id);
-					return (
-						<BoardRowTransition>
-							<WorkerListRow
-								nowBucket={nowBucket}
-								session={session}
-								source={entry.source}
-								rowKey={rowKey}
-								projectName={showProject ? projectNameFor(entry) : session.harness || "Agent"}
-								{...(entry.source.kind === "local" ? { interactionMode: "full" as const,
-									isRenaming: renamingWorkerId === rowKey,
-									activeSwipeId,
-									onSwipeOpen: openExclusiveSwipe,
-									onSwipeClose: closeExclusiveSwipe,
-									onRenameStart: () => setRenamingWorkerId(rowKey),
-									onRenameCancel: () => setRenamingWorkerId(undefined),
-									onRename: (title: string) => renameWorkerOn(entry.source, session.id, title),
-									onSetPinned: (next: boolean) => updateWorkerPin(entry, next),
-									onDelete: () => confirmDeleteSession(entry),
-									onResume: () => runWorkerRecovery(entry, "resume"),
-									onRestore: () => runWorkerRecovery(entry, "restore"),
-								} : { interactionMode: "open-only" as const })}
-							/>
-						</BoardRowTransition>
-					);
-				}}
-			/>
-		</LayoutAnimationConfig>
+		<View style={styles.listWrap}>
+			{/* A filter/search scope is a wholesale replacement, not rows moving
+			    inside one board. Key this boundary and suppress both sides of that
+			    replacement so outgoing native cells cannot overlap the new list or
+			    retain invisible height. Same-board row changes still animate below. */}
+			<LayoutAnimationConfig key={identityKey} skipEntering skipExiting>
+				<FlatList
+					ref={listRef}
+					data={listData}
+					keyExtractor={boardRowKey}
+					removeClippedSubviews={false}
+					contentContainerStyle={{ paddingBottom: contentBottomInset }}
+					keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+					keyboardShouldPersistTaps="handled"
+					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAndResort} tintColor={t.accent} />}
+					ListHeaderComponent={ListHeaderComponent}
+					ListEmptyComponent={ListEmptyComponent}
+					renderItem={renderItem}
+				/>
+			</LayoutAnimationConfig>
+		{held.updated > 0 && !query.trim() ? <UpdatesPill count={held.updated} onPress={showLatest} /> : null}
+		</View>
+	);
+}
+
+type BoundWorkerRowProps = {
+	entry: Scoped<DashboardSession>;
+	machine?: { name: string; appearance: ReturnType<typeof machineAppearance> };
+	projectName: string;
+	nowBucket: number;
+	isRenaming: boolean;
+	activeSwipeId?: string;
+	onSwipeOpen(id: string, close: () => void): void;
+	onSwipeClose(id: string): void;
+	actions: {
+		renameStart(id: string | undefined): void;
+		rename(source: Scoped<DashboardSession>["source"], id: string, title: string): Promise<void>;
+		pin(entry: Scoped<DashboardSession>, pinned: boolean): Promise<void>;
+		archive(entry: Scoped<DashboardSession>): void;
+		recover(entry: Scoped<DashboardSession>, kind: "resume" | "restore"): Promise<void>;
+	};
+};
+
+// Bind callbacks to the row's source, retaining their identity across board publications.
+const BoundWorkerRow = memo(function BoundWorkerRow({ entry, actions, ...props }: BoundWorkerRowProps) {
+	const session = entry.value;
+	const rowKey = resourceKey(entry.source, entry.value.id);
+	const handlers = useMemo(() => ({
+		onRenameStart: () => actions.renameStart(rowKey),
+		onRenameCancel: () => actions.renameStart(undefined),
+		onRename: (title: string) => actions.rename(entry.source, session.id, title),
+		onSetPinned: (pinned: boolean) => actions.pin(entry, pinned),
+		onDelete: () => actions.archive(entry),
+		onResume: () => { void actions.recover(entry, "resume"); },
+		onRestore: () => { void actions.recover(entry, "restore"); },
+	}), [actions, entry, session, rowKey]);
+	return entry.source.kind === "local" ? <WorkerListRow {...props} interactionMode="full" session={session} source={entry.source} rowKey={rowKey} {...handlers} />
+		: <WorkerListRow interactionMode="open-only" session={session} source={entry.source} projectName={props.projectName} nowBucket={props.nowBucket} rowKey={rowKey} />;
+});
+
+// News that arrived while the board was held still. Tapping re-sorts and goes
+// to the top, where the news now is.
+function UpdatesPill({ count, onPress }: { count: number; onPress: () => void }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const label = `${count} updated`;
+	return (
+		<Pressable
+			accessibilityRole="button"
+			accessibilityLabel={`${label}. Show latest.`}
+			onPress={onPress}
+			style={({ pressed }) => [styles.updatesPill, pressed && { opacity: 0.85 }]}
+		>
+			<Feather name="arrow-up" size={14} color={t.onAccent} />
+			<Text style={styles.updatesLabel}>{label}</Text>
+		</Pressable>
 	);
 }
 
@@ -343,6 +447,25 @@ function ArchiveHeader({ count, open, onToggle }: { count: number; open: boolean
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
+		listWrap: { flex: 1 },
+		updatesPill: {
+			position: "absolute",
+			top: space.sm,
+			alignSelf: "center",
+			flexDirection: "row",
+			alignItems: "center",
+			gap: space.xs,
+			paddingHorizontal: space.md,
+			paddingVertical: space.xs + 2,
+			borderRadius: 20,
+			backgroundColor: t.accent,
+			shadowColor: "#000",
+			shadowOpacity: 0.3,
+			shadowRadius: 8,
+			shadowOffset: { width: 0, height: 2 },
+			elevation: 6,
+		},
+		updatesLabel: { fontFamily: "Geist_600SemiBold", color: t.onAccent, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		archiveHeader: {
 			flexDirection: "row",
 			alignItems: "center",

@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { createRendererCloudCpClient } from "../hooks/useCloudCp";
 import type { CloudCpAgentProvider, CloudCpProviderConnection } from "./cloud-cp";
 import { CLOUD_AGENT_PROVIDERS } from "./cloud-agents";
+import { selectActiveOrganization } from "./cloud-offering";
 import { settingsQueryKey, type Settings } from "../hooks/useSettings";
 import { captureRendererEvent } from "./telemetry";
 
@@ -67,10 +68,11 @@ export async function spawnCloudOrchestrator(queryClient: QueryClient, projectId
 	const baseUrl = settings?.cloudControlPlaneUrl ?? "";
 	if (baseUrl === "") throw new Error("The cloud control plane is not configured.");
 	const client = createRendererCloudCpClient(baseUrl);
-	// First-org mirrors useCloudOrg's v0 rule. A cloud project can only exist
-	// inside an org, so signed-in users spawning from one always have it.
+	// The active org mirrors useCloudOrg (selectActiveOrganization). A cloud
+	// project can only exist inside an org, so signed-in users spawning from one
+	// always have it.
 	const me = await client.me();
-	const orgId = me.organizations[0]?.id;
+	const orgId = selectActiveOrganization(me.organizations, me.activeOrganizationId)?.id;
 	if (orgId === undefined) throw new Error("No cloud organization is available.");
 	// Pick the orchestrator harness. Prefer the agent the user configured for
 	// this project (config.orchestrator.agent); only when the project has not
@@ -88,6 +90,8 @@ export async function spawnCloudOrchestrator(queryClient: QueryClient, projectId
 	const harness = resolveConfiguredOrchestratorHarness(project, connections) ?? selectCloudOrchestratorHarness(connections);
 	if (!harness) throw new Error("Connect a Cloud coding agent before spawning an orchestrator.");
 	try {
+		// No provider: the control plane runs the session on the project's stored
+		// provider (config.sandboxProvider), else the org's default.
 		const { session } = await client.createSession(orgId, {
 			projectId,
 			kind: "orchestrator",

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
@@ -72,6 +73,9 @@ type Plan struct {
 	// state, instead of waiting for the user to trigger terminalInput.
 	initialInput            string
 	initialInputReadyStates []shellterm.InitialInputReadyState
+	// sendInitialInputOnReadyTimeout delivers initialInput even when no ready
+	// state appears in time, for harnesses whose input is safe once started.
+	sendInitialInputOnReadyTimeout bool
 	// prepareWorkspace, when set, runs reviewed harness-specific setup against
 	// the plan's stable auth workspace before the terminal launches (for
 	// example pre-recording workspace trust so a first-run dialog cannot
@@ -171,10 +175,18 @@ func (s *Service) Start(ctx context.Context, agentID string) (StartResult, error
 		argv = append([]string{self, plan.launcher, "--executable", plan.command[0]}, plan.launcherArgs...)
 	}
 	input := shellterm.OpenCommandTerminalInput{
-		Argv:                    argv,
-		Title:                   plan.title,
-		InitialInput:            plan.initialInput,
-		InitialInputReadyStates: plan.initialInputReadyStates,
+		Argv:                           argv,
+		Title:                          plan.title,
+		InitialInput:                   plan.initialInput,
+		InitialInputReadyStates:        plan.initialInputReadyStates,
+		SendInitialInputOnReadyTimeout: plan.sendInitialInputOnReadyTimeout,
+	}
+	if plan.AgentID == "opencode-v2" {
+		dataHome, err := opencodev2.DataHome(ctx)
+		if err != nil {
+			return StartResult{}, apierr.Internal("AGENT_AUTH_DATA_HOME_UNAVAILABLE", err.Error())
+		}
+		input.Env = map[string]string{"XDG_DATA_HOME": dataHome}
 	}
 	if plan.prepareWorkspace != nil {
 		workingDir, err := s.prepareAuthWorkspace(ctx, plan)

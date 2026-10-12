@@ -1,13 +1,24 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
+import { appShortcutBus } from "../test/app-shortcut-bus";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
-import { SettingsDialog } from "./SettingsDialog";
+import { SettingsDialog } from "./SettingsPageTestHarness";
 import { globalSettingsItemsFor, visibleGlobalSettings } from "./settings/settingsCatalog";
 
-const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
+const { postMock, cloudProjectsState, localWorkspacesState } = vi.hoisted(() => ({
+	postMock: vi.fn(),
+	cloudProjectsState: {
+		data: [] as Array<{ id: string; orgId?: string; displayName: string }> | undefined,
+		isLoading: false,
+		isError: false,
+		error: null as Error | null,
+		refetch: vi.fn(),
+	},
+	localWorkspacesState: { ids: [] as string[] },
+}));
 
 const accountsResponse = {
 	accountRevision: 0,
@@ -25,11 +36,14 @@ vi.mock("../lib/api-client", () => ({
 
 vi.mock("./ProjectSettingsForm", () => ({
 	ProjectSettingsForm: ({
+		cloudOrgId,
 		onSaveState,
 	}: {
+		cloudOrgId?: string;
 		onSaveState?: (state: ProjectSettingsSaveState) => void;
 	}) => (
 		<>
+			{cloudOrgId ? <div data-testid="cloud-project-settings">{cloudOrgId}</div> : null}
 			<button
 				type="button"
 				onClick={() =>
@@ -64,8 +78,24 @@ vi.mock("./GlobalSettingsForm", () => ({
 	),
 }));
 
+// Cloud projects come from the control plane; none by default, so the
+// local-daemon form stays in play unless a test seeds one.
+vi.mock("../hooks/useWorkspaceQuery", () => ({
+	useCloudProjectsQuery: () => cloudProjectsState,
+	workspaceQueryOptions: {
+		queryKey: ["workspaces"],
+		queryFn: () => Promise.resolve(localWorkspacesState.ids.map((id: string) => ({ id }))),
+	},
+}));
+
 vi.mock("./CuesDialog", () => ({
-	CuesSettings: ({ projectId }: { projectId: string }) => <div data-testid="project-cues-settings">{projectId}</div>,
+	CuesSettings: ({ projectId, onBusyChange }: { projectId: string; onBusyChange?: (busy: boolean) => void }) => (
+		<div data-testid="project-cues-settings">{projectId}<button onClick={() => onBusyChange?.(true)} type="button">Make cues busy</button></div>
+	),
+}));
+
+vi.mock("./ProjectScriptsSettings", () => ({
+	ProjectScriptsSettings: ({ projectId }: { projectId: string }) => <div data-testid="project-scripts-settings">{projectId}</div>,
 }));
 
 // The dialog reads the cloud gate to decide whether the Cloud nav page exists;
@@ -74,8 +104,11 @@ vi.mock("../hooks/useCloudGate", () => ({
 	useCloudGate: () => ({ cloudEnabled: false, localEnabled: true }),
 }));
 
-// The dialog reads the cloud session email to gate the 11x-only Coder page.
-// Signed out here, so that page is never visible.
+// The dialog reads the org's offering to gate the Coder and Upgrade pages.
+// Nothing resolved here (signed out), so neither page is visible.
+vi.mock("../hooks/useCloudOffering", () => ({
+	useCloudOffering: () => ({ hasCoder: false, selfServeBilling: false }),
+}));
 vi.mock("../lib/cloud-session", () => ({
 	useCloudSession: () => ({ status: "unauthenticated", session: null }),
 }));
@@ -86,12 +119,27 @@ describe("SettingsDialog", () => {
 			? Promise.resolve({ data: accountsResponse })
 			: Promise.resolve({ data: { operationId: "login-1", status: "cancelled" } }));
 		useUiStore.setState({ developerMode: false, settingsModal: null });
+		cloudProjectsState.data = [];
+		cloudProjectsState.isLoading = false;
+		cloudProjectsState.isError = false;
+		cloudProjectsState.error = null;
+		cloudProjectsState.refetch.mockReset();
+		localWorkspacesState.ids = [];
 	});
 
 	function renderSettingsDialog() {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		return render(<QueryClientProvider client={queryClient}><SettingsDialog /></QueryClientProvider>);
 	}
+
+	it("offers setup and cleanup through one local Scripts page", async () => {
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderSettingsDialog();
+		await userEvent.click(await screen.findByRole("button", { name: "Scripts" }));
+		expect(screen.getByTestId("project-scripts-settings")).toHaveTextContent("proj-1");
+		expect(screen.queryByRole("button", { name: "Workspace setup" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Workspace cleanup" })).not.toBeInTheDocument();
+	});
 
 	it("does not dismiss project settings while a save is pending", async () => {
 		useUiStore.getState().openProjectSettings("proj-1");
@@ -125,7 +173,7 @@ describe("SettingsDialog", () => {
 		await userEvent.click(cuesSection);
 
 		expect(screen.getByTestId("project-cues-settings")).toHaveTextContent("proj-1");
-		expect(cuesSection).toHaveAttribute("aria-current", "page");
+		expect(cuesSection).toHaveAttribute("data-active", "true");
 		expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
 	});
 
@@ -134,7 +182,64 @@ describe("SettingsDialog", () => {
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("project-cues-settings")).toHaveTextContent("proj-1");
-		expect(screen.getByRole("button", { name: "Cues" })).toHaveAttribute("aria-current", "page");
+		expect(screen.getByRole("button", { name: "Cues" })).toHaveAttribute("data-active", "true");
+	});
+
+	it("loads a cloud project's settings from the control plane, not the local daemon", async () => {
+		cloudProjectsState.data = [{ id: "cloud-1", orgId: "org-1", displayName: "ao-landing" }];
+		useUiStore.getState().openProjectSettings("cloud-1");
+		renderSettingsDialog();
+
+		// Opened without a Cloud org, the project is still routed to its control-plane settings.
+		expect(await screen.findByTestId("cloud-project-settings")).toHaveTextContent("org-1");
+		expect(screen.getByRole("button", { name: "General" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Agents" })).toBeInTheDocument();
+		for (const section of ["Scripts", "Environment", "Cues"]) {
+			expect(screen.queryByRole("button", { name: section })).not.toBeInTheDocument();
+		}
+		expect(screen.queryByTestId("project-scripts-settings")).not.toBeInTheDocument();
+	});
+
+	it("waits for the cloud project list before falling back to local project settings", async () => {
+		cloudProjectsState.isLoading = true;
+		useUiStore.getState().openProjectSettings("cloud-1");
+		renderSettingsDialog();
+
+		expect(await screen.findByText("Loading project settings…")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Start pending save" })).not.toBeInTheDocument();
+	});
+
+	it("surfaces a failed cloud lookup instead of asking the local daemon for a cloud project", async () => {
+		cloudProjectsState.data = undefined;
+		cloudProjectsState.isError = true;
+		cloudProjectsState.error = new Error("Cloud control plane request failed with status 503.");
+		useUiStore.getState().openProjectSettings("cloud-1");
+		renderSettingsDialog();
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't load this cloud project. Cloud control plane request failed with status 503.");
+		expect(screen.queryByRole("button", { name: "Start pending save" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(cloudProjectsState.refetch).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps local project settings when the cloud lookup fails for a project the daemon lists", async () => {
+		cloudProjectsState.data = undefined;
+		cloudProjectsState.isError = true;
+		cloudProjectsState.error = new Error("offline");
+		localWorkspacesState.ids = ["proj-1"];
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderSettingsDialog();
+
+		expect(await screen.findByRole("button", { name: "Start pending save" })).toBeInTheDocument();
+	});
+
+	it("does not offer local environment or workspace scripts for a remote project", async () => {
+		useUiStore.getState().openProjectSettings("proj-1", "box-a");
+		renderSettingsDialog();
+
+		expect(await screen.findByRole("button", { name: "Agents" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Scripts" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Environment" })).not.toBeInTheDocument();
 	});
 
 	it("opens the requested global settings page", async () => {
@@ -142,7 +247,7 @@ describe("SettingsDialog", () => {
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("mobile");
-		expect(screen.getByRole("button", { name: "Mobile" })).toHaveAttribute("aria-current", "page");
+		expect(screen.getByRole("button", { name: "Mobile" })).toHaveAttribute("data-active", "true");
 		await vi.waitFor(() => expect(postMock).toHaveBeenCalledWith(
 			"/api/v1/agents/codex/accounts/ensure",
 			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
@@ -155,7 +260,7 @@ describe("SettingsDialog", () => {
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("remoteHosts");
-		expect(screen.getByRole("button", { name: "Remote hosts" })).toHaveAttribute("aria-current", "page");
+		expect(screen.getByRole("button", { name: "Remote hosts" })).toHaveAttribute("data-active", "true");
 	});
 
 	it("hides Remote hosts and redirects its settings page when Developer mode is off", async () => {
@@ -167,30 +272,6 @@ describe("SettingsDialog", () => {
 		expect(screen.queryByRole("button", { name: "Remote hosts" })).not.toBeInTheDocument();
 	});
 
-	it("keeps the settings surface above its blurred backdrop", async () => {
-		useUiStore.getState().openGlobalSettings("mobile");
-		renderSettingsDialog();
-
-		const overlay = screen.getByTestId("settings-dialog-overlay");
-		const dialog = await screen.findByRole("dialog");
-		expect(overlay).toHaveClass("dialog-overlay");
-		// Keep the scrim below Settings so Chromium never composites its backdrop
-		// blur over the dialog at fractional display scaling. Settings itself stays
-		// on z-overlay: later-portaled confirms and menus can still paint above it.
-		expect(overlay).toHaveClass("z-[calc(var(--z-overlay)-1)]");
-		expect(dialog).toHaveClass("z-overlay");
-		expect(dialog).not.toHaveClass("z-[calc(var(--z-overlay)+1)]");
-	});
-
-	it("keeps the backdrop blur on the layer below settings", async () => {
-		useUiStore.getState().openGlobalSettings("mobile");
-		renderSettingsDialog();
-
-		const overlay = screen.getByTestId("settings-dialog-overlay");
-		expect(overlay).toHaveClass("dialog-overlay");
-		expect(overlay.style.backdropFilter).toBe("");
-	});
-
 	it("opens Harness and forwards its agent focus target without redirecting to Codex Accounts", async () => {
 		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "claude-code" });
 		renderSettingsDialog();
@@ -198,8 +279,8 @@ describe("SettingsDialog", () => {
 		const form = await screen.findByTestId("global-settings-section");
 		expect(form).toHaveTextContent("harness");
 		expect(form).toHaveAttribute("data-focus-agent", "claude-code");
-		expect(screen.getByRole("button", { name: "Harness" })).toHaveAttribute("aria-current", "page");
-		expect(screen.getByRole("button", { name: "Subscriptions" })).not.toHaveAttribute("aria-current", "page");
+		expect(screen.getByRole("button", { name: "Harness" })).toHaveAttribute("data-active", "true");
+		expect(screen.getByRole("button", { name: "Subscriptions" })).not.toHaveAttribute("data-active", "true");
 	});
 
 	it("forwards the remote host from a Manage agents action to Harness", async () => {
@@ -248,29 +329,64 @@ describe("SettingsDialog", () => {
 	});
 
 	it("opens Diagnostics as its own page, and leaves it out of the whole-settings view", async () => {
-		useUiStore.setState({ developerMode: true });
+		useUiStore.setState({ developerMode: true, diagnostics: true });
 		useUiStore.getState().openGlobalSettings("diagnostics");
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("diagnostics");
 		expect(screen.getByRole("button", { name: "Diagnostics" })).toBeInTheDocument();
 		// The live monitor is a page of its own: the aggregate view never mounts it.
-		expect(globalSettingsItemsFor("all", { cloudEnabled: true, developerMode: true, is11x: false }).map((item) => item.id)).not.toContain("diagnostics");
-		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, is11x: false }).map((item) => item.id)).toContain("diagnostics");
+		expect(globalSettingsItemsFor("all", { cloudEnabled: true, developerMode: true, diagnostics: true, hasCoder: false, selfServeBilling: false }).map((item) => item.id)).not.toContain("diagnostics");
+		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: true, hasCoder: false, selfServeBilling: false }).map((item) => item.id)).toContain("diagnostics");
 	});
 
-	it("hides Diagnostics outside Developer mode, falling back to General if asked for", async () => {
-		useUiStore.setState({ developerMode: false });
+	it("hides Diagnostics until its toggle is on in Developer mode, falling back to General if asked for", async () => {
+		useUiStore.setState({ developerMode: true, diagnostics: false });
 		useUiStore.getState().openGlobalSettings("diagnostics");
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
 		expect(screen.queryByRole("button", { name: "Diagnostics" })).not.toBeInTheDocument();
-		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: false, is11x: false }).map((item) => item.id)).not.toContain("diagnostics");
+		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: false, hasCoder: false, selfServeBilling: false }).map((item) => item.id)).not.toContain("diagnostics");
+	});
+
+	it("hides Diagnostics outside Developer mode even with its toggle left on", async () => {
+		useUiStore.setState({ developerMode: false, diagnostics: true });
+		useUiStore.getState().openGlobalSettings("diagnostics");
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
+		expect(screen.queryByRole("button", { name: "Diagnostics" })).not.toBeInTheDocument();
+	});
+
+	describe("offering gates", () => {
+		const pages = (context: { hasCoder: boolean; selfServeBilling: boolean; cloudEnabled?: boolean }) =>
+			visibleGlobalSettings({ cloudEnabled: true, developerMode: false, diagnostics: false, ...context }).map((item) => item.id);
+
+		it("a B2C self-serve org sees Upgrade and no Coder page", () => {
+			expect(pages({ hasCoder: false, selfServeBilling: true })).toContain("billing");
+			expect(pages({ hasCoder: false, selfServeBilling: true })).not.toContain("coder");
+		});
+
+		it("a B2B contract org sees the Coder page and no Upgrade", () => {
+			expect(pages({ hasCoder: true, selfServeBilling: false })).toContain("coder");
+			expect(pages({ hasCoder: true, selfServeBilling: false })).not.toContain("billing");
+		});
+
+		it("an org on both sees both, and Upgrade only while self-serve", () => {
+			expect(pages({ hasCoder: true, selfServeBilling: true })).toEqual(expect.arrayContaining(["coder", "billing"]));
+			expect(pages({ hasCoder: true, selfServeBilling: false })).not.toContain("billing");
+		});
+
+		it("shows neither cloud page with cloud off", () => {
+			const ids = pages({ hasCoder: true, selfServeBilling: true, cloudEnabled: false });
+			expect(ids).not.toContain("coder");
+			expect(ids).not.toContain("billing");
+		});
 	});
 
 	it("falls back to General when the Coder page is unavailable", async () => {
-		useUiStore.getState().openGlobalSettings("coder11x");
+		useUiStore.getState().openGlobalSettings("coder");
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
@@ -283,24 +399,22 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("agents");
 		expect(screen.getByRole("button", { name: "General" })).toBeEnabled();
-		await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+		await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 		expect(postMock.mock.calls.map(([path]) => path)).toEqual(["/api/v1/agents/codex/accounts/ensure"]);
 	});
 
-	it("traps focus and closes from Escape or the backdrop", async () => {
+	it("renders inside the page and closes from Escape or Back", async () => {
 		useUiStore.getState().openGlobalSettings("general");
 		renderSettingsDialog();
 
-		const dialog = await screen.findByRole("dialog");
-		expect(dialog).toHaveAttribute("aria-modal", "true");
-		await vi.waitFor(() => expect(screen.getByRole("button", { name: "Close settings" })).toHaveFocus());
+		expect(await screen.findByTestId("settings-page")).toBeInTheDocument();
 		await userEvent.keyboard("{Escape}");
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 
 		useUiStore.getState().openGlobalSettings("general");
-		fireEvent.pointerDown(await screen.findByTestId("settings-dialog-overlay"));
+		await userEvent.click(await screen.findByRole("button", { name: "Back" }));
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 	});
 
@@ -308,7 +422,7 @@ describe("SettingsDialog", () => {
 		useUiStore.getState().openGlobalSettings("general");
 		renderSettingsDialog();
 
-		await screen.findByRole("dialog");
+		await screen.findByTestId("settings-page");
 		const nestedMenu = document.createElement("div");
 		nestedMenu.setAttribute("role", "menu");
 		const nestedItem = document.createElement("button");
@@ -320,7 +434,7 @@ describe("SettingsDialog", () => {
 		expect(useUiStore.getState().settingsModal).not.toBeNull();
 		nestedMenu.remove();
 
-		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		fireEvent.keyDown(screen.getByTestId("settings-page"), { key: "Escape" });
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 	});
 
@@ -328,7 +442,7 @@ describe("SettingsDialog", () => {
 		useUiStore.getState().openGlobalSettings("browserProfiles");
 		renderSettingsDialog();
 
-		const dialog = await screen.findByRole("dialog");
+		const dialog = await screen.findByTestId("settings-page");
 		const inlineEdit = document.createElement("input");
 		inlineEdit.setAttribute("data-settings-inline-edit", "");
 		dialog.append(inlineEdit);
@@ -337,7 +451,7 @@ describe("SettingsDialog", () => {
 		expect(useUiStore.getState().settingsModal).not.toBeNull();
 		inlineEdit.remove();
 
-		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		fireEvent.keyDown(screen.getByTestId("settings-page"), { key: "Escape" });
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 	});
 
@@ -345,9 +459,79 @@ describe("SettingsDialog", () => {
 		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "stale-agent" });
 		renderSettingsDialog();
 
-		await screen.findByRole("dialog");
+		await screen.findByTestId("settings-page");
 		document.body.focus();
 		fireEvent.keyDown(document.body, { key: "Escape" });
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+	});
+
+	describe("section navigation chords", () => {
+		type Listener = () => void;
+		const listeners: Record<string, Set<Listener>> = {};
+		const channels = ["onPreviousSessionShortcut", "onNextSessionShortcut", "onPreviousTabShortcut", "onNextTabShortcut"] as const;
+		const fire = (channel: (typeof channels)[number]) => act(() => [...(listeners[channel] ?? [])].forEach((listener) => listener()));
+		const navButtons = () => within(screen.getByRole("navigation", { name: "Settings sections" })).getAllByRole("button");
+		const activeIndex = () => navButtons().findIndex((button) => button.getAttribute("aria-current") === "page");
+		const jump = (index?: number) => act(() => appShortcutBus.emit({ id: "jump-to-session", index }));
+
+		beforeEach(() => {
+			for (const channel of channels) {
+				listeners[channel] = new Set();
+				(window.ao!.app as unknown as Record<string, unknown>)[channel] = (listener: Listener) => {
+					listeners[channel].add(listener);
+					return () => listeners[channel].delete(listener);
+				};
+			}
+		});
+
+		it.each([
+			["onNextSessionShortcut", 1],
+			["onNextTabShortcut", 1],
+			["onPreviousSessionShortcut", -1],
+			["onPreviousTabShortcut", -1],
+		] as const)("%s steps the global section list and wraps", async (channel, direction) => {
+			useUiStore.getState().openGlobalSettings();
+			renderSettingsDialog();
+			await screen.findByRole("navigation", { name: "Settings sections" });
+			const count = navButtons().length;
+			expect(count).toBeGreaterThan(2);
+			const start = activeIndex();
+			expect(start).toBe(0);
+			fire(channel);
+			expect(activeIndex()).toBe((start + direction + count) % count);
+			// A full lap lands back on the starting section.
+			for (let i = 1; i < count; i += 1) fire(channel);
+			expect(activeIndex()).toBe(start);
+		});
+
+		it("jumps to the Nth section and ignores an out-of-range or missing index", async () => {
+			useUiStore.getState().openGlobalSettings();
+			renderSettingsDialog();
+			await screen.findByRole("navigation", { name: "Settings sections" });
+			jump(2);
+			expect(activeIndex()).toBe(2);
+			jump(999);
+			expect(activeIndex()).toBe(2);
+			jump();
+			expect(activeIndex()).toBe(2);
+			jump(0);
+			expect(activeIndex()).toBe(0);
+		});
+
+		it("stands down for project settings, which are a dialog without these chords", async () => {
+			useUiStore.getState().openProjectSettings("proj-1");
+			renderSettingsDialog();
+			await screen.findByRole("navigation", { name: "Settings sections" });
+			for (const channel of channels) expect(listeners[channel].size).toBe(0);
+		});
+
+		it("does not listen while settings are closed, and unsubscribes when they close", async () => {
+			renderSettingsDialog();
+			for (const channel of channels) expect(listeners[channel].size).toBe(0);
+			act(() => useUiStore.getState().openGlobalSettings());
+			for (const channel of channels) expect(listeners[channel].size).toBe(1);
+			act(() => useUiStore.getState().closeSettings());
+			for (const channel of channels) expect(listeners[channel].size).toBe(0);
+		});
 	});
 });

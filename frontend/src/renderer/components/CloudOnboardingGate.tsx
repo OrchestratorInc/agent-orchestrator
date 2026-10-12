@@ -4,6 +4,8 @@ import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudProviderPreference } from "../hooks/useCloudProviderPreference";
 import { useCloudSession } from "../lib/cloud-session";
 import { cloudOrgQueryKey } from "../hooks/useCloudOrg";
+import { cloudBillingQueryKey } from "../hooks/useCloudOffering";
+import { cloudMeQueryKey } from "../lib/cloud-offering";
 import { cloudProjectsQueryKey, cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
 import { providerConnectionsQueryKey } from "../hooks/useProviderConnections";
 import { CloudLocalSignInDialog } from "./CloudLocalSignInDialog";
@@ -25,6 +27,8 @@ export function CloudOnboardingGate() {
 		queryClient.removeQueries({ queryKey: cloudProjectsQueryKey });
 		queryClient.removeQueries({ queryKey: cloudSessionsQueryKey });
 		queryClient.removeQueries({ queryKey: cloudOrgQueryKey });
+		queryClient.removeQueries({ queryKey: cloudMeQueryKey });
+		queryClient.removeQueries({ queryKey: cloudBillingQueryKey });
 		queryClient.removeQueries({ queryKey: providerConnectionsQueryKey });
 		queryClient.removeQueries({ queryKey: ["cloud-provider-preference"] });
 	}, [status, queryClient]);

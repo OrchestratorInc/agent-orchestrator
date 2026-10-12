@@ -4,6 +4,7 @@ import type { DashboardSession, ProjectInfo } from "../api";
 import type { SessionSourceBoard } from "./board";
 import {
 	composeBoards,
+	createScopedBoardComposer,
 	filterScopedWorkers,
 	resolveUnscopedId,
 	resourceKey,
@@ -28,6 +29,36 @@ const board = (projectId: string, sessionId: string): SessionSourceBoard => ({
 });
 
 describe("source-qualified board", () => {
+	it("keeps fleet rows stable when only source connection status changes", () => {
+		const compose = createScopedBoardComposer();
+		const snapshot = { board: board("p", "s") };
+		const before = compose([{ source: local, status: ready, snapshot }]);
+		const after = compose([{ source: { ...local }, status: { ...ready, stale: true, error: "offline" }, snapshot }]);
+		expect(after.sessions).toBe(before.sessions);
+		expect(after.projects).toBe(before.projects);
+		expect(after.sources[sourceKey(local)].error).toBe("offline");
+	});
+	it("updates changed fleet rows without rebuilding their unchanged peer", () => {
+		const compose = createScopedBoardComposer();
+		const localSnapshot = { board: board("same", "same") };
+		const cloudSnapshot = { board: board("same", "same") };
+		const before = compose([{ source: local, status: ready, snapshot: localSnapshot }, { source: cloud, status: ready, snapshot: cloudSnapshot }]);
+		const changed = { board: { ...localSnapshot.board, sessions: [{ ...localSnapshot.board.sessions[0], displayName: "new" }] } };
+		const after = compose([{ source: local, status: ready, snapshot: changed }, { source: cloud, status: ready, snapshot: cloudSnapshot }]);
+		expect(after.sessions[0]).not.toBe(before.sessions[0]);
+		expect(after.sessions[1]).toBe(before.sessions[1]);
+		expect(after.sessions[0].value.displayName).toBe("new");
+	});
+	it("does not retain rows for a source removed from the fleet", () => {
+		const compose = createScopedBoardComposer();
+		const snapshot = { board: board("p", "s") };
+		const before = compose([{ source: local, status: ready, snapshot }]);
+		const cleared = compose([]);
+		expect(cleared.sessions).toEqual([]);
+		expect(cleared.sources).toEqual({});
+		const returned = compose([{ source: local, status: ready, snapshot }]);
+		expect(returned.sessions[0]).not.toBe(before.sessions[0]);
+	});
 	it("keeps two local hosts and cloud separate even when their raw IDs collide", () => {
 		const offline: SourceStatus = { ...ready, available: false, stale: true, error: "Host unreachable" };
 		const result = composeBoards([

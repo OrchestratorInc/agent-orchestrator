@@ -21,7 +21,7 @@ describe("retained-stack host routes", () => {
 
 	it("never loads a terminal preview URL with another endpoint's credential", () => {
 		const terminal = source("./session/TerminalSessionScreen.tsx");
-		expect(terminal).toContain("previewForConfig(loadedPreview, activeConfig, params.hostId)");
+		expect(terminal).toContain("previewForConfig(loadedPreview, activeConfig, hostId)");
 		expect(terminal).toContain("setLoadedPreview({ config: activeConfig, id, value: p })");
 		expect(terminal).toContain("headers: preview.authenticated && activeConfig ? authHeaders(activeConfig) : undefined");
 	});

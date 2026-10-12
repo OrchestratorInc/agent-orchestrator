@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const source = readFileSync(
-	fileURLToPath(new URL("../app/settings.tsx", import.meta.url)),
+	fileURLToPath(new URL("../app/settings/index.tsx", import.meta.url)),
 	"utf8",
 );
 
@@ -13,14 +13,17 @@ describe("settings desktop section", () => {
 	it("shows both connection controls without a global Environment row", () => {
 		expect(source).not.toContain("<EnvironmentRow />");
 		expect(source).toContain("<CloudAccountRow />");
-		expect(source).toContain("<DesktopStatusRow />");
+		expect(source).toContain("<MachineSelector");
+		expect(source).toContain("signInToAccount()");
 	});
 	it("reports live connection state rather than a saved-address flag", () => {
 		expect(source).not.toMatch(/"Paired"/);
-		expect(source).toMatch(/<DesktopStatusRow \/>/);
+		expect(source).not.toMatch(/label="Selected machine"/);
+		expect(source).toMatch(/<MachineSelector/);
+		expect(source).toMatch(/statusLabel=\{machineStatus\.label\}/);
 	});
 
-	it("only offers Disconnect while a desktop is paired", () => {
-		expect(source).toMatch(/\{paired \? \(\s*<DisconnectRow/);
+	it("leaves destructive management in Environments", () => {
+		expect(source).not.toMatch(/DisconnectRow|forgetServer|forgetPairedHost/);
 	});
 });

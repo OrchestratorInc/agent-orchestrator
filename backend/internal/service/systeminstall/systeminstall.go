@@ -39,42 +39,45 @@ type Target string
 
 // The exhaustive set of installable targets. No other value is ever accepted.
 const (
-	TargetTmux       Target = "tmux"
-	TargetGH         Target = "gh"
-	TargetClaude     Target = "claude"
-	TargetClaudeCode Target = "claude-code"
-	TargetCodex      Target = "codex"
-	TargetCursor     Target = "cursor"
-	TargetOpencode   Target = "opencode"
-	TargetOpencodeV2 Target = "opencode-v2"
-	TargetAider      Target = "aider"
-	TargetCopilot    Target = "copilot"
-	TargetGrok       Target = "grok"
-	TargetKimi       Target = "kimi"
-	TargetPi         Target = "pi"
-	TargetAmp        Target = "amp"
-	TargetAuggie     Target = "auggie"
-	TargetDroid      Target = "droid"
-	TargetCrush      Target = "crush"
-	TargetCline      Target = "cline"
-	TargetGoose      Target = "goose"
-	TargetQwen       Target = "qwen"
-	TargetGemini     Target = "gemini"
-	TargetContinue   Target = "continue"
-	TargetDevin      Target = "devin"
-	TargetKiro       Target = "kiro"
-	TargetKilocode   Target = "kilocode"
-	TargetVibe       Target = "vibe"
-	TargetMuse       Target = "muse"
-	TargetAgy        Target = "agy"
-	TargetAutohand   Target = "autohand"
-	TargetKimchi     Target = "kimchi"
-	TargetPrimeAgent Target = "prime-agent"
-	TargetOMP        Target = "omp"
-	TargetFX         Target = "fx"
-	TargetUnreal     Target = "unreal-agent"
-	TargetMiMoCode   Target = "mimo-code"
-	TargetDeepSeek   Target = "deepseek-harness"
+	TargetTmux        Target = "tmux"
+	TargetGH          Target = "gh"
+	TargetClaude      Target = "claude"
+	TargetClaudeCode  Target = "claude-code"
+	TargetCodex       Target = "codex"
+	TargetCursor      Target = "cursor"
+	TargetOpencode    Target = "opencode"
+	TargetOpencodeV2  Target = "opencode-v2"
+	TargetAider       Target = "aider"
+	TargetCopilot     Target = "copilot"
+	TargetGrok        Target = "grok"
+	TargetKimi        Target = "kimi"
+	TargetPi          Target = "pi"
+	TargetAmp         Target = "amp"
+	TargetAuggie      Target = "auggie"
+	TargetDroid       Target = "droid"
+	TargetCrush       Target = "crush"
+	TargetCline       Target = "cline"
+	TargetGoose       Target = "goose"
+	TargetQwen        Target = "qwen"
+	TargetGemini      Target = "gemini"
+	TargetContinue    Target = "continue"
+	TargetDevin       Target = "devin"
+	TargetKiro        Target = "kiro"
+	TargetKilocode    Target = "kilocode"
+	TargetVibe        Target = "vibe"
+	TargetMuse        Target = "muse"
+	TargetAgy         Target = "agy"
+	TargetAutohand    Target = "autohand"
+	TargetKimchi      Target = "kimchi"
+	TargetPrimeAgent  Target = "prime-agent"
+	TargetOMP         Target = "omp"
+	TargetFX          Target = "fx"
+	TargetUnreal      Target = "unreal-agent"
+	TargetCodewhale   Target = "codewhale"
+	TargetMiMoCode    Target = "mimo-code"
+	TargetDeepSeek    Target = "deepseek-harness"
+	TargetOpenHands   Target = "openhands"
+	TargetCommandCode Target = "command-code"
 	// TargetCloudflared is the optional connector that makes a paired phone
 	// reachable from outside the local network.
 	TargetCloudflared Target = "cloudflared"
@@ -87,7 +90,8 @@ var agentTargets = []Target{
 	TargetDroid, TargetCrush, TargetCline, TargetGoose, TargetQwen, TargetGemini,
 	TargetContinue, TargetDevin, TargetKiro, TargetKilocode, TargetVibe,
 	TargetMuse, TargetAgy, TargetAutohand, TargetKimchi, TargetPrimeAgent,
-	TargetOMP, TargetFX, TargetUnreal, TargetMiMoCode, TargetDeepSeek,
+	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetDeepSeek, TargetOpenHands,
+	TargetCommandCode,
 }
 
 var agentTargetSet = func() map[Target]bool {
@@ -262,7 +266,7 @@ var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/de
 
 // Job is the tracked state of one install run for a Target.
 type Job struct {
-	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,mimo-code,deepseek-harness,cloudflared" description:"Fixed install target this job ran (or is running) for."`
+	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,cloudflared" description:"Fixed install target this job ran (or is running) for."`
 	Status              Status `json:"status" enum:"idle,running,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job."`
 	Method              string `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
 	Command             string `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
@@ -294,9 +298,10 @@ type SessionLister interface {
 
 // Deps are the durable and adapter-backed dependencies used for harness jobs.
 type Deps struct {
-	JobStore ports.AgentInstallJobStore
-	Verifier HarnessVerifier
-	Sessions SessionLister
+	JobStore           ports.AgentInstallJobStore
+	Verifier           HarnessVerifier
+	Sessions           SessionLister
+	PrivateNPMPrefixes map[Target]string
 }
 
 // Service runs real install commands for the fixed Target allowlist.
@@ -315,6 +320,8 @@ type Service struct {
 	installCommands     ports.InstallCommandRunner
 	installScripts      ports.InstallScriptRunner
 	installCapabilities ports.InstallCapabilityProbe
+	pathWritable        ports.PathWritableProbe
+	privateNPMPrefixes  map[Target]string
 	jobStore            ports.AgentInstallJobStore
 	verifier            HarnessVerifier
 	sessions            SessionLister
@@ -372,6 +379,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 	installCommands, _ := commands.(ports.InstallCommandRunner)
 	installScripts, _ := commands.(ports.InstallScriptRunner)
 	installCapabilities, _ := executables.(ports.InstallCapabilityProbe)
+	pathWritable, _ := executables.(ports.PathWritableProbe)
 	backgroundContext, stop := context.WithCancel(context.Background())
 	return &Service{
 		jobs:                make(map[Target]*Job),
@@ -380,6 +388,8 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		installCommands:     installCommands,
 		installScripts:      installScripts,
 		installCapabilities: installCapabilities,
+		pathWritable:        pathWritable,
+		privateNPMPrefixes:  deps.PrivateNPMPrefixes,
 		jobStore:            deps.JobStore,
 		verifier:            deps.Verifier,
 		sessions:            deps.Sessions,
@@ -1286,13 +1296,32 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 		}
 	}
 	plan := Plan{Target: target, Command: []string{"npm", "install", "-g", pkg}, Method: "npm"}
+	privatePrefix := ""
+	if target == TargetOpencodeV2 {
+		privatePrefix = strings.TrimSpace(s.privateNPMPrefixes[target])
+		if privatePrefix == "" {
+			plan.Unsupported = true
+			plan.Reason = "OpenCode 2's private npm prefix could not be resolved."
+			return plan
+		}
+		plan.Command = []string{"npm", "install", "-g", "--prefix", privatePrefix, pkg}
+	}
 	if IsAgentTarget(target) {
-		if p.capabilities == nil || p.capabilities.NPM.Err != nil {
+		if p.capabilities == nil {
 			plan.Unsupported = true
 			plan.Reason = "npm and Node.js capabilities could not be inspected."
 			return plan
 		}
 		npm := p.capabilities.NPM
+		capabilityErr := npm.Err
+		if privatePrefix != "" {
+			capabilityErr = npm.RuntimeErr
+		}
+		if capabilityErr != nil {
+			plan.Unsupported = true
+			plan.Reason = "npm and Node.js capabilities could not be inspected."
+			return plan
+		}
 		nodeVersion, nodeOK := parseToolVersion(npm.NodeVersion)
 		_, npmOK := parseToolVersion(npm.NPMVersion)
 		if !nodeOK || !npmOK {
@@ -1307,14 +1336,34 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 			return plan
 		}
 		prefix := npm.GlobalPrefix
+		prefixWritable := npm.PrefixWritable
+		if privatePrefix != "" {
+			prefix = privatePrefix
+			if s.pathWritable == nil {
+				plan.Unsupported = true
+				plan.Reason = "OpenCode 2's private npm prefix could not be validated."
+				return plan
+			}
+			var err error
+			prefixWritable, err = s.pathWritable.PathWritable(p.ctx, prefix)
+			if err != nil {
+				plan.Unsupported = true
+				plan.Reason = "OpenCode 2's private npm prefix could not be validated."
+				return plan
+			}
+		}
 		if prefix == "" {
 			plan.Unsupported = true
 			plan.Reason = "npm's global install prefix could not be resolved."
 			return plan
 		}
-		if !npm.PrefixWritable {
+		if !prefixWritable {
 			plan.Unsupported = true
-			plan.Reason = fmt.Sprintf("npm's global prefix %s is not writable by the current user. Configure a user-owned prefix; AO will not use sudo.", prefix)
+			if privatePrefix != "" {
+				plan.Reason = fmt.Sprintf("OpenCode 2's private npm prefix %s is not writable by the current user.", prefix)
+			} else {
+				plan.Reason = fmt.Sprintf("npm's global prefix %s is not writable by the current user. Configure a user-owned prefix; AO will not use sudo.", prefix)
+			}
 			return plan
 		}
 		if s.goos == "windows" {

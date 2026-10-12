@@ -129,6 +129,14 @@ type conversation struct {
 	// credential mid-turn. Nil when the binding does not supply one.
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
+	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
+	// preamble is standing context attached to the first prompt that actually
+	// reaches the provider. It is the delivery channel for agents that accept no
+	// system-prompt launch flag and ignore session/new _meta but do execute
+	// prompt content blocks. It is consumed in StartDeferredTurn, not SendTurn,
+	// so a rejected or discarded turn leaves it armed for the next one.
+	preamble      []acpsdk.ContentBlock
+	preambleSpent bool
 
 	contextTokens     int64
 	contextWindow     int64
@@ -163,6 +171,7 @@ var _ ports.ChatSteerer = (*conversation)(nil)
 var _ ports.ChatInputResponder = (*conversation)(nil)
 var _ ports.ChatProviderPreserver = (*conversation)(nil)
 var _ ports.ChatProviderTerminator = (*conversation)(nil)
+var _ ports.ChatProviderHibernator = (*conversation)(nil)
 var _ ports.ChatLiveReconnector = (*conversation)(nil)
 var _ ports.ChatLiveReconnectActivator = (*conversation)(nil)
 var _ ports.ChatProviderEventAcknowledger = (*conversation)(nil)
@@ -316,6 +325,18 @@ func (c *conversation) ProviderConversationID() string {
 func (c *conversation) setReportedProviderConversationID(sessionID string) {
 	c.mu.Lock()
 	c.reportedSessionID = sessionID
+	c.mu.Unlock()
+}
+
+// setSessionPreamble arms standing context for the next prompt that actually
+// reaches the provider. Any earlier preamble is dropped: the newest launch
+// context is the one that should be delivered, which is how a recomputed system
+// prompt replaces the original. It is consumed in StartDeferredTurn so a turn
+// that never starts leaves it armed.
+func (c *conversation) setSessionPreamble(blocks []acpsdk.ContentBlock) {
+	c.mu.Lock()
+	c.preamble = blocks
+	c.preambleSpent = len(blocks) == 0
 	c.mu.Unlock()
 }
 
@@ -554,6 +575,17 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	}
 	turn := *c.prepared
 	c.prepared = nil
+	// Standing context leads the first prompt so the provider reads it as
+	// context rather than as part of what the user asked. It is consumed here,
+	// not in SendTurn, because this is the first point at which a prompt is
+	// guaranteed to reach the provider: settings validation, a busy conversation
+	// and a discarded prepared turn all fail in SendTurn, and spending the
+	// preamble on any of them would silently drop AO's instructions from the
+	// session's first real turn.
+	if !c.preambleSpent && len(c.preamble) > 0 {
+		turn.prompt = append(append([]acpsdk.ContentBlock(nil), c.preamble...), turn.prompt...)
+		c.preambleSpent = true
+	}
 	c.activeTurn = turn.id
 	c.settlingTurn = ""
 	turnCtx, cancel := context.WithCancel(context.Background())
@@ -679,9 +711,15 @@ func (c *conversation) finishPrompt(
 			c.mu.Unlock()
 		}
 	}
-	c.mu.Lock()
-	c.terminalEventID = eventID
-	c.mu.Unlock()
+	// Only a durable host receipt replaces the outstanding one. A host-local
+	// rejection carries no event ID; erasing the receipt here would make the
+	// controller's later ACK of that receipt a no-op and leave the host refusing
+	// every prompt until restart.
+	if eventID != "" {
+		c.mu.Lock()
+		c.terminalEventID = eventID
+		c.mu.Unlock()
+	}
 	c.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderEventID: eventID,
 		ProviderTurnID: turnID, TurnState: state, Err: turnErr,
@@ -937,16 +975,32 @@ func (c *conversation) discard() {
 }
 
 func (c *conversation) Close() error {
-	return c.closeProvider(false)
+	return c.closeProvider(false, false)
 }
 
 // Terminate destroys the provider host. Close deliberately only detaches during
 // daemon shutdown or updater replacement.
 func (c *conversation) Terminate() error {
-	return c.closeProvider(true)
+	return c.closeProvider(true, true)
 }
 
-func (c *conversation) closeProvider(terminate bool) error {
+func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
+	if c.hibernationCheck == nil {
+		return true, nil
+	}
+	c.mu.Lock()
+	id := c.sessionID
+	c.mu.Unlock()
+	return c.hibernationCheck(ctx, c.conn, acpsdk.SessionId(id))
+}
+
+// Hibernate releases the bridge and its provider without closing the native
+// ACP session. session/close can delete the resume state on some agents.
+func (c *conversation) Hibernate() error {
+	return c.closeProvider(true, false)
+}
+
+func (c *conversation) closeProvider(terminate, closeSession bool) error {
 	var closeErr error
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
@@ -965,7 +1019,7 @@ func (c *conversation) closeProvider(terminate bool) error {
 		}
 		c.failPendingPermissions()
 		c.failPendingInputs()
-		if sessionID != "" {
+		if closeSession && sessionID != "" {
 			closeCtx, cancelClose := context.WithTimeout(context.Background(), 2*time.Second)
 			_, _ = c.conn.CloseSession(closeCtx, acpsdk.CloseSessionRequest{SessionId: acpsdk.SessionId(sessionID)})
 			cancelClose()

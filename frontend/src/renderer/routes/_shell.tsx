@@ -1,9 +1,10 @@
+import { OrchestratorStartingChat } from "../components/chat/OrchestratorStartingChat";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
-import { createFileRoute, Outlet, useMatchRoute, useNavigate, useParams } from "@tanstack/react-router";
+import { createFileRoute, Outlet, useMatchRoute, useNavigate, useParams, useRouter } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
-import { memo, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CommandPalette } from "../components/CommandPalette";
@@ -14,7 +15,7 @@ import { NotificationRuntime } from "../components/NotificationCenter";
 import { TrayRuntime } from "../components/TrayRuntime";
 import { GlobalNewTaskDialog } from "../components/GlobalNewTaskDialog";
 import { GlobalToast } from "../components/GlobalToast";
-import { SettingsDialog } from "../components/SettingsDialog";
+import { SettingsPane, SettingsProvider } from "../components/SettingsDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { KeyboardShortcutsSettingsDialog } from "../components/settings/KeyboardShortcutsSettingsDialog";
 import { ShellTopbar } from "../components/ShellTopbar";
@@ -33,10 +34,12 @@ import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
 import { useDaemonStatus } from "../hooks/useDaemonStatus";
 import { useOpenShellTerminal } from "../hooks/useShellTerminals";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
-import { cloudProjectsQueryKey, cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKey, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
+import { cloudProjectsQueryKey, cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKey, toWorkspaceSession, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { apiClient, apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId, hasTrustedApiBaseUrl } from "../lib/api-client";
+import { cachedCloudBillingMode } from "../lib/cloud-offering";
+import { resolveCssColorToHex } from "../lib/css-color";
 import { refreshDaemonStatus } from "../lib/daemon-status";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
@@ -56,15 +59,19 @@ import {
 	hidesShellTopbar,
 } from "../lib/platform";
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
-import { matchesRendererShortcut } from "../stores/keybindings-store";
-import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSummary } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
 import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
+import { useCloudSession } from "../lib/cloud-session";
+import { useCloudAccountSwitchReset } from "../hooks/useCloudAccountSwitchReset";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
+import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
+import { useSidebarOrderStore } from "../stores/sidebar-order-store";
+import { useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 
 export const Route = createFileRoute("/_shell")({
@@ -76,8 +83,33 @@ export const Route = createFileRoute("/_shell")({
 		if (!usesPreviewWorkspaceData && !hasTrustedApiBaseUrl()) return;
 		return context.queryClient.fetchQuery({ ...workspaceQueryOptions, staleTime: 0 });
 	},
-	component: ShellLayout,
+	component: ShellLayoutWithSettings,
 });
+
+function ShellLayoutWithSettings() {
+	return (
+		<SettingsProvider>
+			<ShellLayout />
+		</SettingsProvider>
+	);
+}
+
+/**
+ * The routed page stays mounted while settings is open (so a session's scroll,
+ * drafts, and terminal survive) and is only hidden behind the settings page.
+ */
+function ShellOutlet({ startingChat }: { startingChat: ReactNode }) {
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
+	return (
+		<>
+			<div className={cn("relative flex min-h-0 flex-1 flex-col", settingsOpen && "hidden")}>
+				<div className={startingChat ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingChat ? true : undefined}><Outlet /></div>
+				{startingChat}
+			</div>
+			<SettingsPane />
+		</>
+	);
+}
 
 function errorMessage(error: unknown) {
 	return error instanceof Error ? error.message : "Could not load projects";
@@ -131,42 +163,49 @@ const ShellCenter = memo(function ShellCenter({
 	hideShellTopbar,
 	isSessionRoute,
 	selfFramedCenterPanel,
+	startingOrchestrator,
+	startingCloudOrchestrator,
+	startingSteps,
+	startingCoderWorkspaceUrl,
 }: {
 	hideShellTopbar: boolean;
 	isSessionRoute: boolean;
 	selfFramedCenterPanel: boolean;
+	startingOrchestrator: boolean;
+	startingCloudOrchestrator: boolean;
+	startingSteps?: WorkspaceSession["provisionSteps"];
+	startingCoderWorkspaceUrl?: string;
 }) {
-	const panelClassName = isSessionRoute ? "center-panel-shell--session" : undefined;
+	const panelClassName = isSessionRoute || startingOrchestrator ? "center-panel-shell--session" : undefined;
 	// Linux retains an outer drag strip. macOS uses the shared header itself;
 	// an extra strip there would displace session tabs from the native controls.
 	// Windows already owns a separate WindowTitlebar.
-	const draggableSessionFrame = isSessionRoute && isLinux;
+	const draggableSessionFrame = (isSessionRoute || startingOrchestrator) && isLinux;
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
+	const startingChat = startingOrchestrator ? <OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} /> : null;
+	// Settings is a self-framed route, so its starting chat gets its own panel.
+	const selfFramedOutlet = <>
+		<div className={startingOrchestrator ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingOrchestrator || undefined}><Outlet /></div>
+		{startingChat ? <CenterPanelShell>{startingChat}</CenterPanelShell> : null}
+	</>;
 	if (hideShellTopbar) {
-		return selfFramedCenterPanel ? (
-			<Outlet />
-		) : (
+		return selfFramedCenterPanel ? selfFramedOutlet : (
 			<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
-				<div className="flex min-h-0 flex-1 flex-col">
-					<Outlet />
-				</div>
+				<ShellOutlet startingChat={startingChat} />
 			</CenterPanelShell>
 		);
 	}
 	if (framedAppTopbar) {
 		return (
 			<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
-				{isSessionRoute ? null : <ShellTopbar />}
-				<div className="flex min-h-0 flex-1 flex-col">
-					<Outlet />
-				</div>
+				{isSessionRoute || startingOrchestrator || settingsOpen ? null : <ShellTopbar />}
+				<ShellOutlet startingChat={startingChat} />
 			</CenterPanelShell>
 		);
 	}
 	return (
 		<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
-			<div className="flex min-h-0 flex-1 flex-col">
-				<Outlet />
-			</div>
+			<ShellOutlet startingChat={startingChat} />
 		</CenterPanelShell>
 	);
 });
@@ -180,6 +219,7 @@ function ShellLayout() {
 	useAgentInventoryTelemetry();
 	const { t } = useTranslation();
 	const navigate = useNavigate();
+	const router = useRouter();
 	const matchRoute = useMatchRoute();
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp();
@@ -205,8 +245,11 @@ function ShellLayout() {
 	const themePreference = useUiStore((state) => state.themePreference);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const themeStyle = useUiStore((state) => state.themeStyle);
+	const developerMode = useUiStore((state) => state.developerMode);
+	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const sidebarHasLayout = useUiStore(sidebarOccupiesLayout);
 	// The drag strip above the sidebar must be exactly as wide as the sidebar.
 	// `--ao-sidebar-w` only reaches the strip if it already exists when the
@@ -266,10 +309,21 @@ function ShellLayout() {
 	const [isKeyboardShortcutsOpen, setIsKeyboardShortcutsOpen] = useState(false);
 	const [isKeyboardShortcutsSettingsOpen, setIsKeyboardShortcutsSettingsOpen] = useState(false);
 	const routeParams = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
+	const routeParamsRef = useRef(routeParams);
+	routeParamsRef.current = routeParams;
 	const remoteHostsEnabled = useUiStore((state) => state.developerMode && state.remoteHosts);
+	const { status: accountStatus, session: cloudAccount } = useCloudSession();
 	useEffect(() => {
-		if (!remoteHostsEnabled && routeParams.hostId) void navigate({ to: "/", replace: true });
-	}, [navigate, remoteHostsEnabled, routeParams.hostId]);
+		if ((!remoteHostsEnabled || accountStatus === "unauthenticated") && routeParams.hostId) void navigate({ to: "/", replace: true });
+	}, [accountStatus, navigate, remoteHostsEnabled, routeParams.hostId]);
+	useCloudAccountSwitchReset({
+		userId: cloudAccount?.user.id ?? null,
+		ready: accountStatus !== "loading",
+		queryClient,
+		onLocalPage: !routeParams.projectId ||
+			workspaces.some((workspace) => workspace.id === routeParams.projectId && workspace.kind !== CLOUD_PROJECT_KIND),
+		leavePage: () => void navigate({ to: "/", replace: true }),
+	});
 	const linkSession = routeParams.hostId ? undefined : workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === routeParams.sessionId);
 	const openBrowserLink = useSessionBrowserLink(linkSession);
 	const canOpenBrowserLink = linkSession?.kind === "worker" && sessionIsActive(linkSession);
@@ -357,7 +411,7 @@ function ShellLayout() {
 	// looking at the project, so the picker never shows a loading flash the
 	// first time they actually open the dialog.
 	useEffect(() => {
-		if (!scopedProjectId) return;
+		if (!scopedProjectId || scopedProjectId === STANDALONE_WORKSPACE_ID) return;
 		const projectQueryKey = ["project", scopedProjectId];
 		void queryClient
 			.prefetchQuery({
@@ -403,41 +457,58 @@ function ShellLayout() {
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);
 	const setProjectProvisioning = useUiStore((state) => state.setProjectProvisioning);
+	const openingOrchestrator = useUiStore((state) =>
+		state.projectCreationPending || Boolean(
+			routeParams.projectId && state.provisioningProjectIds.has(sessionUiKey(routeParams.projectId, routeParams.hostId)),
+		),
+	);
+	const startingWorkspace = workspaces.find((workspace) => workspace.id === routeParams.projectId);
+	const startingOrchestratorSession = openingOrchestrator
+		? startingWorkspace?.sessions.find((session) => session.kind === "orchestrator")
+		: undefined;
+	const startingSteps = startingOrchestratorSession?.provisionSteps;
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const replacementErrorProjectId = Object.keys(orchestratorReplacementErrors)[0] ?? null;
 	const isStartupLoading =
 		!usesPreviewWorkspaceData &&
 		!daemonStatus.code &&
 		(daemonStatus.state !== "ready" || workspaceStartupState === "loading" || (!workspaceQuery.isSuccess && !workspaceQuery.isError));
-	const navigateSession = useCallback(
-		(direction: -1 | 1) => {
-			const hostId = routeParams.hostId;
-			const projectId = hostId
-				? routeParams.projectId ??
-					remoteWorkspacesRef.current.find(
-						(workspace) =>
-							workspace.hostId === hostId && workspace.sessions.some((session) => session.id === routeParams.sessionId),
-					)?.id
-				: scopedProjectId;
-			if (!projectId) return;
-			const workspace = hostId
-				? remoteWorkspacesRef.current.find((item) => item.hostId === hostId && item.id === projectId)
-				: workspacesRef.current.find((item) => item.id === projectId);
-			const sessions = (workspace?.sessions ?? []).filter(sessionIsActive);
-			if (sessions.length === 0) return;
-			const currentIndex = sessions.findIndex((session) => session.id === routeParams.sessionId);
-			const nextIndex =
-				currentIndex === -1
-					? direction === 1
-						? 0
-						: sessions.length - 1
-					: (currentIndex + direction + sessions.length) % sessions.length;
-			const session = sessions[nextIndex];
-			if (!session || session.id === routeParams.sessionId) return;
-			if (session.kind === "worker") recordManualWorkerOpen(sessionUiKey(session.id, hostId));
-			void navigate(sessionNavigateTarget(projectId, session.id, hostId));
+	// Session shortcuts walk the sidebar's own order (pinned, projects in the
+	// user's drag order, scratchpad), not the daemon's raw list, so "next" always
+	// means the row below the current one on screen.
+	const sidebarSessionOrder = useCallback(() => {
+		const { projectOrder, sessionOrders } = useSidebarOrderStore.getState();
+		return buildSidebarSessionOrder({
+			workspaces: workspacesRef.current,
+			remoteWorkspaces: remoteWorkspacesRef.current,
+			projectOrder,
+			sessionOrders,
+		});
+	}, []);
+	const openNavSession = useCallback(
+		(entry: SidebarNavSession) => {
+			if (entry.session.kind === "worker") recordManualWorkerOpen(sessionUiKey(entry.sessionId, entry.hostId));
+			void navigate(sessionNavigateTarget(entry.projectId, entry.sessionId, entry.hostId));
 		},
-		[navigate, routeParams.hostId, routeParams.projectId, routeParams.sessionId, scopedProjectId],
+		[navigate],
+	);
+	const navigateSession = useCallback(
+		(direction: -1 | 1, onlyNeedingAttention = false) => {
+			// The settings page owns these chords while it is open (they step its sections).
+			if (useUiStore.getState().settingsModal?.scope === "global") return;
+			const target = stepSessionNav(
+				sidebarSessionOrder(),
+				{ sessionId: routeParams.sessionId, hostId: routeParams.hostId },
+				direction,
+				onlyNeedingAttention ? (entry) => sessionWantsAttention(entry.session) : undefined,
+			);
+			if (target) {
+				openNavSession(target);
+			} else if (onlyNeedingAttention) {
+				useUiStore.getState().showGlobalToast(t("shortcut.noAttentionSessions"));
+			}
+		},
+		[openNavSession, routeParams.hostId, routeParams.sessionId, sidebarSessionOrder, t],
 	);
 
 	const updateWorkspaces = useCallback(
@@ -461,6 +532,7 @@ function ShellLayout() {
 		// surface the retry banner; a late success still navigates below and
 		// the board clears the banner once the orchestrator appears.
 		const provisioningGuard = window.setTimeout(() => {
+			if (!useUiStore.getState().provisioningProjectIds.has(workspace.id)) return;
 			setProjectProvisioning(workspace.id, false);
 			setOrchestratorStartupError(
 				workspace.id,
@@ -494,17 +566,26 @@ function ShellLayout() {
 				source,
 			});
 			const sessionId = spawnData.session.id;
+			// Publish before navigating so Chat does not wait for a list refresh.
+			await queryClient.cancelQueries({ queryKey: workspaceQueryKey });
+			queryClient.setQueryData<WorkspaceSummary[]>(workspaceQueryKey, (current = []) =>
+				current.map((item) => item.id === workspace.id
+					? { ...item, sessions: [toWorkspaceSession(spawnData.session, { id: workspace.id, name: workspace.name }), ...item.sessions.filter((session) => session.id !== sessionId)] }
+					: item),
+			);
+			// The session now exists, so the sidebar button can open it even if
+			// the user left while it spawned.
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
-			// Wait for the refetch so the session route never renders before
-			// the new session is in the workspace query (which would flash
-			// the session-not-found state). The daemon just created it, so
-			// one invalidate is enough — no polling loop.
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-			void navigate({
-				to: "/projects/$projectId/sessions/$sessionId",
-				params: { projectId: workspace.id, sessionId },
-			});
+			// Follow the new orchestrator only if the user is still waiting on
+			// this project's board; do not pull them back from another page.
+			const current = routeParamsRef.current;
+			if (current.projectId === workspace.id && !current.sessionId && !current.hostId) {
+				void navigate({
+					to: "/projects/$projectId/sessions/$sessionId",
+					params: { projectId: workspace.id, sessionId },
+				});
+			}
 		} catch (spawnError) {
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
@@ -537,17 +618,15 @@ function ShellLayout() {
 				sessions: [],
 			};
 			void captureRendererEvent(`ao.renderer.${source}_succeeded`, { project_id: workspace.id });
+			// A pre-create list request must not erase the newly registered project.
+			await queryClient.cancelQueries({ queryKey: workspaceQueryKey });
 			updateWorkspaces((current) => [workspace, ...current.filter((item) => item.id !== workspace.id)]);
 			setOrchestratorStartupError(workspace.id, null);
 			setProjectProvisioning(workspace.id, true);
-			// Navigate to the project board immediately so the IDE paints, then
-			// hand off to the detached provisioning flow. Resolving here (rather
-			// than after the spawn) is what closes the setup modal and makes
-			// the board usable while the orchestrator starts in the background.
-			void navigate({ to: "/projects/$projectId", params: { projectId: workspace.id } });
+			await navigate({ to: "/projects/$projectId", params: { projectId: workspace.id } });
 			void provisionOrchestrator(workspace, input, source);
 		},
-		[navigate, provisionOrchestrator, setOrchestratorStartupError, setProjectProvisioning, updateWorkspaces],
+		[navigate, provisionOrchestrator, queryClient, setOrchestratorStartupError, setProjectProvisioning, updateWorkspaces],
 	);
 
 	const createProject = useCallback(
@@ -875,6 +954,31 @@ function ShellLayout() {
 		applyDocumentThemeStyle(themeStyle);
 	}, [themeStyle]);
 
+	// The renderer owns Developer Mode; the daemon must know its value before
+	// either the view-close path or the idle sweep can hibernate a provider.
+	useEffect(() => {
+		if (usesPreviewWorkspaceData || daemonStatus.state !== "ready" || !daemonStatus.port) return;
+		let cancelled = false;
+		let retry: ReturnType<typeof setTimeout> | undefined;
+		const sync = () => {
+			// Serialize toggles so an older enable request cannot finish after disable.
+			chatHibernationSyncRef.current = chatHibernationSyncRef.current.then(async () => {
+				if (cancelled) return;
+				const { error } = await apiClient.PATCH("/api/v1/settings/chat-hibernation", {
+					body: { enabled: developerMode },
+				});
+				if (error) throw error;
+			}).catch(() => {
+				if (!cancelled) retry = setTimeout(sync, 5_000);
+			});
+		};
+		sync();
+		return () => {
+			cancelled = true;
+			clearTimeout(retry);
+		};
+	}, [daemonStatus.pid, daemonStatus.port, daemonStatus.state, developerMode]);
+
 	// A daemon port is not enough to render a trustworthy empty state: the
 	// route loader may have cached [] before Electron reported the port. Fetch
 	// against each ready daemon before the board decides between projects and the
@@ -949,6 +1053,16 @@ function ShellLayout() {
 		void aoBridge.theme?.persistTerminal(resolvedTheme);
 	}, [resolvedTheme]);
 
+	// Match the native window background to the sidebar fill. Deferred a frame so
+	// data-theme has been applied before the token is read.
+	useEffect(() => {
+		const frame = requestAnimationFrame(() => {
+			const color = resolveCssColorToHex("--sidebar");
+			if (color) void aoBridge.theme?.setWindowBackground(color);
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [resolvedTheme]);
+
 	// Follow OS appearance while the user keeps Theme on System — updates
 	// resolvedTheme (and thus React consumers) without writing light/dark to storage.
 	useEffect(() => {
@@ -960,27 +1074,22 @@ function ShellLayout() {
 		return () => mediaQuery.removeEventListener("change", handleChange);
 	}, [themePreference, syncSystemTheme]);
 
-	useEffect(() => {
-		const handleKeyDown = (event: KeyboardEvent) => {
-			if (matchesRendererShortcut("toggle-sidebar", event)) {
-				event.preventDefault();
-				toggleSidebar();
-				return;
-			}
-			if (matchesRendererShortcut("open-project", event)) {
-				const workspacesWithoutStandalone = workspacesRef.current.filter(
-					(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID,
-				);
-				const workspace = workspacesWithoutStandalone[Number(event.key) - 1];
-				if (workspace) {
-					event.preventDefault();
-					void navigate({ to: "/projects/$projectId", params: { projectId: workspace.id } });
-				}
-			}
-		};
-		window.addEventListener("keydown", handleKeyDown);
-		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [navigate, toggleSidebar]);
+	// These arrive from the main process (see main/app-shortcuts.ts) so they also
+	// fire while xterm or a native Browser view holds focus.
+	useAppShortcut("toggle-sidebar", () => toggleSidebar());
+	useAppShortcut("jump-to-session", ({ index }) => {
+		// The palette's own list claims the digits while it is open.
+		if (useUiStore.getState().isCommandPaletteOpen) return;
+		if (useUiStore.getState().settingsModal?.scope === "global") return;
+		const target = index === undefined ? undefined : sidebarSessionOrder()[index];
+		if (target) openNavSession(target);
+	});
+	useAppShortcut("previous-attention-session", () => navigateSession(-1, true));
+	useAppShortcut("next-attention-session", () => navigateSession(1, true));
+	useAppShortcut("history-back", () => {
+		if (router.history.canGoBack()) router.history.back();
+	});
+	useAppShortcut("history-forward", () => router.history.forward());
 
 	// New session (⌘N / Ctrl+Shift+N) is detected in the main process and
 	// delivered here, so it fires even when focus is inside xterm or a native
@@ -1003,7 +1112,8 @@ function ShellLayout() {
 		[routeParams.hostId, routeParams.projectId, scopedProjectId, requestNewTask],
 	);
 
-	useEffect(() => aoBridge.app.onKeyboardShortcutsHelp(() => setIsKeyboardShortcutsOpen(true)), []);
+	// ⌘/ toggles: a second press closes the sheet.
+	useEffect(() => aoBridge.app.onKeyboardShortcutsHelp(() => setIsKeyboardShortcutsOpen((open) => !open)), []);
 
 	// A folder was dropped on the app's taskbar icon/shortcut (main process,
 	// cold start or an already-running instance) — feeds the same drop flow as
@@ -1064,9 +1174,14 @@ function ShellLayout() {
 		setActiveShellTerminal,
 	]);
 
+	// ao-app://billing (Stripe's return page) opens Upgrade only for a
+	// self-serve org; any other org has no plans and lands on general settings.
 	useEffect(
-		() => aoBridge.app.onOpenSettingsShortcut(() => useUiStore.getState().openGlobalSettings()),
-		[],
+		() => aoBridge.app.onOpenSettingsShortcut((section) =>
+			useUiStore.getState().openGlobalSettings(
+				section === "billing" && cachedCloudBillingMode(queryClient) === "self_serve" ? "billing" : undefined,
+			)),
+		[queryClient],
 	);
 
 	useEffect(() => {
@@ -1078,18 +1193,6 @@ function ShellLayout() {
 		};
 	}, [navigateSession]);
 
-	useEffect(
-		() =>
-			aoBridge.app.onFocusTerminalShortcut(() => {
-				document
-					.querySelector<HTMLElement>(
-						"[data-terminal-activation-phase='visible'] .xterm-helper-textarea, " +
-							"[data-testid='session-terminal-slot'] .xterm-helper-textarea",
-					)
-					?.focus();
-			}),
-		[],
-	);
 	const openProject = useCallback(
 		(projectId: string) => void navigate({ to: "/projects/$projectId", params: { projectId } }),
 		[navigate],
@@ -1149,7 +1252,6 @@ function ShellLayout() {
 				) : null}
 				<GlobalNewTaskDialog />
 				<GlobalToast />
-				<SettingsDialog />
 				<RestartToUpdateDialog />
 				<TelemetryConsentRenewalDialog />
 				<KeyboardShortcutsDialog
@@ -1190,7 +1292,7 @@ function ShellLayout() {
             macOS/Linux. */}
 				<WindowTitlebar />
 				{/* App routes render their topbar inside the framed panel, matching the board chrome across platforms while leaving OS titlebars native. */}
-				{!framedAppTopbar && !hideShellTopbar && !routeParams.sessionId ? <ShellTopbar /> : null}
+				{!framedAppTopbar && !hideShellTopbar && !routeParams.sessionId && !openingOrchestrator && !settingsOpen ? <ShellTopbar /> : null}
 				{/* Controlled by the ui-store so TitlebarNav / Topbar toggles (which
 			    call the store directly) stay in sync. Direct dragging scopes its
 			    width override to the sidebar's layout consumers. */}
@@ -1241,12 +1343,16 @@ function ShellLayout() {
 						remoteFailedHostIds={remoteFailedHostIds}
 					/>
 					<main className={cn("flex min-w-0 flex-1 flex-col overflow-x-hidden", !sidebarHasLayout && "sidebar-hidden")}>
-						<div className="min-h-0 flex-1 overflow-x-hidden">
+						<div className="relative min-h-0 flex-1 overflow-x-hidden">
 							{/* Board/session routes render inside the same inset box the welcome board and settings paint for themselves, so every screen sits within the app's outer boundary. */}
 							<ShellCenter
 								hideShellTopbar={hideShellTopbar}
 								isSessionRoute={Boolean(routeParams.sessionId)}
 								selfFramedCenterPanel={selfFramedCenterPanel}
+								startingOrchestrator={openingOrchestrator}
+								startingCloudOrchestrator={!routeParams.hostId && startingWorkspace?.kind === CLOUD_PROJECT_KIND}
+								startingSteps={startingSteps}
+								startingCoderWorkspaceUrl={startingOrchestratorSession?.cloud?.coderWorkspaceUrl}
 							/>
 						</div>
 						</main>
@@ -1260,7 +1366,10 @@ function ShellLayout() {
 							aria-hidden="true"
 							data-slot="titlebar-drag-region"
 							className={cn(
-								"fixed top-0 left-0 z-chrome transition-[height] duration-200 ease-out motion-reduce:transition-none",
+								// Own opaque fill: the shell root goes transparent while a live native
+								// browser page shows, so this strip would otherwise reveal the darker
+								// native window background.
+								"fixed top-0 left-0 z-chrome bg-sidebar transition-[height] duration-200 ease-out motion-reduce:transition-none",
 								sidebarHasLayout ? "w-(--ao-sidebar-w,var(--size-sidebar-default))" : "w-titlebar-content-offset",
 								isFullScreen ? "pointer-events-none h-0" : "h-traffic-light-clearance",
 							)}

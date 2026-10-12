@@ -25,8 +25,8 @@ import { useSettings } from "../hooks/useSettings";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
-import { cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
-import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
+import { cloudAgentInfos, connectedCredentialType, credentialModelScope, isCloudHarnessConnected } from "../lib/cloud-agents";
+import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
 import { fallbackEffort } from "../lib/effort";
 import {
 	buildRankedAgentOptions,
@@ -38,9 +38,13 @@ import { cloudSessionsQueryKey, useCloudProjectsQuery } from "../hooks/useWorksp
 import {
 	agentModelsQueryKey,
 	agentModelsQueryOptions,
+	modelCatalogAuthIssue,
 	refreshAgentModels,
 	revalidateAgentModels,
 } from "../hooks/useAgentModelsQuery";
+import { useModelCatalogAuthRecovery } from "../hooks/useModelCatalogAuthRecovery";
+import { useUiStore } from "../stores/ui-store";
+import { ModelCatalogNotice } from "./ModelCatalogNotice";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
 import { EffortPicker, type EffortAvailability } from "./settings/EffortPicker";
@@ -179,6 +183,8 @@ export function TaskComposer({
 			void captureRendererEvent("ao.renderer.task_create_requested", { project_id: input.projectId });
 			if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 			try {
+				// No provider: the control plane runs the session on the project's
+				// stored provider (config.sandboxProvider), else the org's default.
 				const { session } = await cloudClient.createSession(cloudOrg.id, {
 					projectId: input.projectId,
 					kind: "worker",
@@ -423,18 +429,25 @@ export function TaskComposer({
 			);
 		}
 	}, [hostId, modelsProjectId, queryClient, revalidationQuery.data, selectedAgent]);
-	const modelWarning =
-		(revalidationQuery.isError
-			? revalidationQuery.error instanceof Error
-				? revalidationQuery.error.message
-				: t("settings.models.validateFailed")
-			: undefined) ??
+	const revalidationWarning = revalidationQuery.isError
+		? revalidationQuery.error instanceof Error
+			? revalidationQuery.error.message
+			: t("settings.models.validateFailed")
+		: undefined;
+	const modelWarningText =
+		revalidationWarning ??
 		modelCatalogQuery.data?.warning ??
 		(modelCatalogQuery.isError
 			? modelCatalogQuery.error instanceof Error
 				? modelCatalogQuery.error.message
 				: t("settings.models.loadFailed")
 			: undefined);
+	// A login problem behind the catalog warning gets a plain-language notice
+	// with the fix in place. Discovery runs against this computer's login even
+	// for a cloud project, whose task runs with the cloud connection instead,
+	// so there the notice is informational and never reads as blocking.
+	const modelAuthIssue = revalidationWarning === undefined ? modelCatalogAuthIssue(modelCatalogQuery.data) : undefined;
+	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
 	const modelCatalog: TaskComposerModelCatalog | undefined = modelCatalogQuery.data
 		? {
 				allowCustom: modelCatalogQuery.data.allowCustom,
@@ -451,6 +464,16 @@ export function TaskComposer({
 	const catalogDefaultOption =
 		catalogModels.find((item) => item.isDefault)?.id ?? "";
 	const catalogUsesModes = modelCatalogQuery.data?.selectionMode === "mode";
+	// The model this user ran most recently.
+	const lastUsedOption =
+		catalogModels
+			.filter((item) => item.lastUsedAt)
+			.sort((a, b) => Date.parse(b.lastUsedAt ?? "") - Date.parse(a.lastUsedAt ?? ""))[0]?.id ?? "";
+	// With nothing remembered, run, or configured, Claude Code opens on the newest Opus.
+	const claudeFallbackOption =
+		selectedAgent === "claude-code" && !catalogUsesModes
+			? (splitClaudeModels(catalogModels).current.find((item) => /opus/i.test(modelChoiceLabel(item)))?.id ?? "")
+			: "";
 	const rememberedConfigForSelectedAgent = agentDrafts[selectedAgent];
 	const rememberedModel = rememberedConfigForSelectedAgent?.model ?? "";
 	const rememberedMode = rememberedConfigForSelectedAgent?.mode ?? "";
@@ -465,10 +488,13 @@ export function TaskComposer({
 	const defaultModelForSelectedAgent =
 		(rememberedModelIsValid ? rememberedModel : "") ||
 		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
-		(catalogUsesModes ? "" : catalogDefaultOption);
+		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
+		(catalogUsesModes ? "" : catalogDefaultOption) ||
+		claudeFallbackOption;
 	const defaultModeForSelectedAgent =
 		(rememberedModeIsValid ? rememberedMode : "") ||
 		(isConcreteModelID(projectModeForSelectedAgent) ? projectModeForSelectedAgent : "") ||
+		(catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? catalogDefaultOption : "");
 	const selectedModel = model || (modelTouched ? (catalogUsesModes ? "" : catalogDefaultOption) : defaultModelForSelectedAgent);
 	const selectedMode = mode || (modelTouched ? (catalogUsesModes ? catalogDefaultOption : "") : defaultModeForSelectedAgent);
@@ -532,6 +558,31 @@ export function TaskComposer({
 		const refreshed = await refreshAgentModels(selectedAgent, modelsProjectId, hostId);
 		queryClient.setQueryData(agentModelsQueryKey(selectedAgent, modelsProjectId, hostId), refreshed);
 	}, [hostId, modelsProjectId, queryClient, selectedAgent]);
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	const startAgentLogin = useCallback(() => {
+		openGlobalSettings("harness", {
+			focusAgentId: selectedAgent,
+			...(hostId ? { hostId } : {}),
+			// A cloud task runs on the cloud connection, so that is the login to fix.
+			harnessView: isCloudProject ? "cloud" : "local",
+			startLogin: true,
+			preserveProject: true,
+		});
+	}, [hostId, isCloudProject, openGlobalSettings, selectedAgent]);
+	// The catalog is read through this computer's login, but a cloud task runs on
+	// the cloud connection: once that is connected, this computer's login state is
+	// irrelevant to the task and the notice only confuses.
+	const cloudHarnessReady = isCloudProject && isCloudHarnessConnected(cloudConnectionsQuery.data, selectedAgent);
+	const modelWarning = modelAuthIssue && cloudHarnessReady ? undefined : modelAuthIssue ? (
+		<ModelCatalogNotice
+			agentLabel={selectedAgentLabel}
+			issue={modelAuthIssue}
+			detail={modelWarningText}
+			cloud={isCloudProject}
+			onLogin={startAgentLogin}
+			onRetry={refreshSelectedModels}
+		/>
+	) : modelWarningText;
 	useEffect(() => {
 		if (!agentTouched) setAgent(defaultWorkerAgent);
 	}, [agentTouched, defaultWorkerAgent]);
@@ -747,6 +798,9 @@ export function TaskComposer({
 	);
 }
 
+// The agent, model and effort menus share one compact width.
+const COMPOSER_MENU_WIDTH = "w-[min(14rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!";
+
 function TaskEffortPicker({
 	disabled,
 	label,
@@ -765,7 +819,8 @@ function TaskEffortPicker({
 			defaultEffort={defaultEffort}
 			availability={availability}
 			onChange={onChange}
-			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
+			triggerClassName="composer-chip composer-toolbar-option w-fit"
+			menuClassName={COMPOSER_MENU_WIDTH}
 		/>
 	);
 }
@@ -781,7 +836,8 @@ function DesktopAgentControl({ hostId, manageView, ...control }: TaskComposerAge
 			manageView={manageView}
 			managementLabel={(manageView === "cloud" ? t("agentSelector.manageCloud") : t("agentSelector.manage")).replace(/[.…]+$/u, "")}
 			variant="chip"
-			triggerClassName="composer-toolbar-option w-full justify-between"
+			triggerClassName="composer-toolbar-option w-fit"
+			contentClassName={COMPOSER_MENU_WIDTH}
 		/>
 	);
 }
@@ -807,7 +863,7 @@ function TaskModelPicker({
 	if (agentId === "") {
 		return (
 			<span
-				className="composer-chip composer-toolbar-option w-full cursor-not-allowed justify-start opacity-50"
+				className="composer-chip composer-toolbar-option w-fit cursor-not-allowed justify-start opacity-50"
 				aria-disabled="true"
 				aria-label={t("newTask.model")}
 			>
@@ -819,7 +875,7 @@ function TaskModelPicker({
 	if (loading) {
 		return (
 			<span
-				className="composer-chip composer-toolbar-option w-full cursor-not-allowed justify-start opacity-50"
+				className="composer-chip composer-toolbar-option w-fit cursor-not-allowed justify-start opacity-50"
 				aria-label={t("newTask.model")}
 			>
 				<span
@@ -853,8 +909,9 @@ function TaskModelPicker({
 				action={explicitMode && !defaultMode && showFollowAgentAction
 					? { label: t("settings.models.useAgentMode"), onSelect: () => onModeChange("") }
 					: undefined}
-				triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
+				triggerClassName="composer-chip composer-toolbar-option w-fit"
 				menuAlign="start"
+				menuClassName={COMPOSER_MENU_WIDTH}
 				renderTrigger={() => (
 					<span className="min-w-0 truncate text-control text-foreground" title={visibleModeLabel}>
 						{visibleModeLabel}
@@ -865,15 +922,11 @@ function TaskModelPicker({
 		);
 	}
 
-	const customModelEntry = catalog?.customModelEntry ?? (catalog?.allowCustom ? "direct" : "none");
 	const displayModels = (catalog?.models ?? []).map((item) => {
 		if (item.id === "auto") return { ...item, label: t("settings.models.autoRouteLabel") };
 		return { ...item, label: agentModelDisplayLabel(agentId, item.label) };
 	});
 	const selectCatalogModel = (nextModel: string) => {
-		onModelChange(nextModel);
-	};
-	const selectCustomModel = (nextModel: string) => {
 		onModelChange(nextModel);
 	};
 
@@ -883,21 +936,21 @@ function TaskModelPicker({
 			aria-label={t("newTask.model")}
 			value={value}
 			models={displayModels}
-			allowCustom={catalog?.allowCustom}
-			customModelEntry={customModelEntry}
+			allowCustom={false}
+			customModelEntry={catalog?.customModelEntry === "configured" ? "configured" : "none"}
 			agentLabel={agentLabel}
 			onRefresh={onRefresh}
 			refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
 			refreshError={catalog?.refreshError}
 			retryAt={catalog?.retryAt}
 			disabled={disabled || agentId === ""}
-			showFollowAgentAction={showFollowAgentAction}
+			agentId={agentId}
 			onChange={selectCatalogModel}
-			onCustom={selectCustomModel}
 			compact
 			recentScope={agentId}
-			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
+			triggerClassName="composer-chip composer-toolbar-option w-fit"
 			menuAlign="start"
+			menuClassName={COMPOSER_MENU_WIDTH}
 			renderTrigger={(label) => <span className="min-w-0 truncate text-control text-foreground" title={label}>{label}</span>}
 		/>
 	);

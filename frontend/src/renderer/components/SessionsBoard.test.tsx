@@ -38,6 +38,8 @@ const {
 	boardActionsInPanelMock: vi.fn(() => false),
 }));
 
+vi.mock("./ShellTopbar", async (importOriginal) => ({ ...(await importOriginal<typeof import("./ShellTopbar")>()), ShellTopbar: () => null }));
+
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
 }));
@@ -86,6 +88,12 @@ vi.mock("../lib/api-client", () => ({
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
+		app: {
+			onCloseShellTerminalShortcut: () => () => {},
+			onPreviousTabShortcut: () => () => {},
+			onNextTabShortcut: () => () => {},
+			setCloseShellTerminalShortcutEnabled: () => {},
+		},
 		cloud: {
 			getSession: vi.fn().mockResolvedValue(null),
 			onSessionChanged: vi.fn(() => () => {}),
@@ -113,7 +121,7 @@ vi.mock("../lib/platform", async (importOriginal) => {
 import { archiveToggleHeightClassName, archiveToggleOffsetClassName } from "@aoagents/product-ui";
 import { useUiStore } from "../stores/ui-store";
 import { SessionsBoard } from "./SessionsBoard";
-import { toBoardSessionPresentation } from "./SessionsBoardAdapters";
+import { latestSessionArtifacts, toBoardSessionPresentation } from "./SessionsBoardAdapters";
 import { TooltipProvider } from "./ui/tooltip";
 
 function renderBoard(projectId?: string) {
@@ -139,8 +147,8 @@ async function expandArchive() {
 }
 
 beforeEach(() => {
-	// The memory light and card chips are Developer mode tools.
-	useUiStore.setState({ developerMode: true });
+	// The memory light and card chips are Developer mode tools behind the Diagnostics toggle.
+	useUiStore.setState({ developerMode: true, diagnostics: true });
 	navigateMock.mockReset();
 	notificationShowMock.mockReset().mockResolvedValue(undefined);
 	postMock.mockReset().mockResolvedValue({ data: {} });
@@ -153,6 +161,31 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
+	it("shows the Cloud loader instead of Chat while a cloud orchestrator is starting", () => {
+		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
+		useUiStore.getState().setProjectProvisioning("p1", true);
+		try {
+			renderBoard("p1");
+			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+			expect(screen.queryByLabelText("Message the agent")).not.toBeInTheDocument();
+		} finally {
+			useUiStore.getState().setProjectProvisioning("p1", false);
+		}
+	});
+
+	it("shows the orchestrator launch surface immediately after project setup", () => {
+		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "New project", path: "/tmp/new-project", sessions: [] }], isSuccess: true });
+		useUiStore.getState().setProjectProvisioning("p1", true);
+		try {
+			renderBoard("p1");
+			expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+			expect(screen.getByLabelText("Message the agent")).toBeInTheDocument();
+			expect(screen.getByTestId("session-workspace-topbar")).toBeInTheDocument();
+		} finally {
+			useUiStore.getState().setProjectProvisioning("p1", false);
+		}
+	});
+
 	it("says a session's status could not be verified, without offering a retry", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([boardSession({ id: "unverified", title: "Unverified task", status: "unknown", displayStatus: "Working", statusReadiness: "unavailable" })])],
@@ -185,8 +218,11 @@ describe("SessionsBoard", () => {
 		expect(screen.getByTestId("session-resource")).toHaveAttribute("data-resource-tone", "neutral");
 	});
 
-	it("shows no memory light or card memory outside Developer mode", async () => {
-		useUiStore.setState({ developerMode: false });
+	it.each([
+		["outside Developer mode", { developerMode: false, diagnostics: true }],
+		["with Diagnostics off in Developer mode", { developerMode: true, diagnostics: false }],
+	])("shows no memory light or card memory %s", async (_case, flags) => {
+		useUiStore.setState(flags);
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([boardSession({ id: "running", title: "Running task", status: "idle", activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" } })])],
 			isSuccess: true, isError: false,
@@ -779,6 +815,25 @@ describe("SessionsBoard", () => {
 		expect(within(card).getByText("Starting Claude Code…")).toBeInTheDocument();
 		expect(within(card).queryByText("Working")).not.toBeInTheDocument();
 		expect(within(card).queryByText("Exited")).not.toBeInTheDocument();
+	});
+
+	it("shows start failure instead of Awaiting PR on a failed card", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({
+				id: "s-setup-failed",
+				title: "failed-setup-task",
+				status: "idle",
+				displayStatus: "Awaiting PR",
+				provisionState: "failed",
+			})])],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+		const card = screen.getByText("failed-setup-task").closest('[data-testid="board-session-card"]') as HTMLElement;
+		expect(within(card).getByTestId("session-status")).toHaveTextContent("Start failed");
+		expect(within(card).queryByText("Awaiting PR")).not.toBeInTheDocument();
 	});
 
 	it("shows switch progress instead of the exited source on a card", () => {
@@ -1755,6 +1810,91 @@ describe("SessionsBoard", () => {
 		});
 		renderBoard("p1");
 		expect(screen.queryByText(appI18n.t("home.folderMissing"))).not.toBeInTheDocument();
+	});
+});
+
+describe("SessionsBoard artifacts", () => {
+	const artifact = (name: string, updatedAt: string, kind: "html" | "markdown" = "markdown") => ({
+		kind,
+		name,
+		path: `out/${name}`,
+		size: 10,
+		updatedAt,
+	});
+
+	it("shows only the latest artifacts and opens the session with the clicked one", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				workspaceWithSessions([
+					boardSession({
+						id: "s-art",
+						title: "Write the report",
+						status: "working",
+						outputType: "artifact",
+						artifactFiles: [
+							artifact("old.md", "2026-01-01T00:00:00Z"),
+							artifact("newest.html", "2026-01-03T00:00:00Z", "html"),
+							artifact("middle.md", "2026-01-02T00:00:00Z"),
+							artifact("oldest.md", "2025-12-01T00:00:00Z"),
+						],
+					}),
+				]),
+			],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		const list = await screen.findByTestId("board-session-artifacts");
+		const links = within(list).getAllByRole("button");
+		expect(links.map((link) => link.textContent)).toEqual(["newest.html", "middle.md"]);
+		expect(list).toHaveTextContent("+2 more");
+
+		await userEvent.click(screen.getByRole("button", { name: "Open artifact middle.md" }));
+
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({
+			sessionId: "s-art",
+			path: "out/middle.md",
+			source: "artifact",
+		});
+		expect(navigateMock).toHaveBeenCalledTimes(1);
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "p1", sessionId: "s-art" },
+		});
+	});
+
+	it("orders artifacts with equal or unparseable timestamps by path", () => {
+		const latest = latestSessionArtifacts(
+			[
+				artifact("b.md", "2026-01-01T00:00:00Z"),
+				artifact("bad.md", "not-a-date"),
+				artifact("a.md", "2026-01-01T00:00:00Z"),
+			],
+			3,
+		);
+		expect(latest.map((file) => file.name)).toEqual(["a.md", "b.md", "bad.md"]);
+	});
+
+	it("shows no artifacts for sessions whose output is not artifacts", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				workspaceWithSessions([
+					boardSession({
+						id: "s-pr",
+						title: "Fix the bug",
+						status: "working",
+						artifactFiles: [artifact("notes.md", "2026-01-01T00:00:00Z")],
+					}),
+				]),
+			],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		await screen.findByText("Fix the bug");
+		expect(screen.queryByTestId("board-session-artifacts")).not.toBeInTheDocument();
 	});
 });
 

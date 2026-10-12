@@ -16,6 +16,7 @@ const screenRoutes = [
 	"(tabs)/index.tsx",
 	"(tabs)/projects.tsx",
 	"(tabs)/prs.tsx",
+	"settings/environments.tsx",
 	"notifications.tsx",
 	"onboarding.tsx",
 	"pair.tsx",
@@ -24,7 +25,7 @@ const screenRoutes = [
 	"review/[sessionId].tsx",
 	"reviewer/[reviewId].tsx",
 	"session/[id].tsx",
-	"settings.tsx",
+	"settings/index.tsx",
 	"shell/[handleId].tsx",
 ];
 
@@ -39,6 +40,7 @@ const sheetRoutes = [
 	"sheets/conversation-actions.tsx",
 	"sheets/conversation-map.tsx",
 	"sheets/conversation-rename.tsx",
+	"sheets/machine-name.tsx",
 	"sheets/model.tsx",
 	"sheets/project.tsx",
 	"sheets/review-actions.tsx",
@@ -47,7 +49,7 @@ const sheetRoutes = [
 
 // The tab navigator alone: it renders no screen of its own, and a fallback there
 // would swallow the failure of whichever tab is mounted inside it.
-const deferredRoutes = ["(tabs)/_layout.tsx"];
+const deferredRoutes = ["(tabs)/_layout.tsx", "settings/_layout.tsx"];
 
 describe("route error boundaries", () => {
 	it("places every route file on exactly one list", () => {

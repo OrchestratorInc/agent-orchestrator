@@ -21,7 +21,9 @@ permissions:
 
 jobs:
   mac-update-helper:
-    runs-on: macos-14
+    # Keep this on Intel to exercise the x64 release target natively while
+    # Swift cross-compiles and lipo-verifies the arm64 helper.
+    runs-on: macos-26-intel
     timeout-minutes: 15
     defaults:
       run:
@@ -54,6 +56,13 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Match the source-build runtime in bootstrap-self-hosted.sh.
+          node-version: 22.23.2
+      - name: Check self-hosted npm lockfile compatibility
+        run: npm ci --ignore-scripts --dry-run --no-audit --no-fund
 
       - uses: actions/setup-node@v4
         with:

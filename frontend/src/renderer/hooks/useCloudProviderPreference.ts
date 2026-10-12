@@ -4,7 +4,7 @@ import type { CloudCpClient } from "../lib/cloud-cp";
 import { useCloudSession } from "../lib/cloud-session";
 import { clearLegacySandboxProvider, readSelectedSandboxProvider } from "../stores/sandbox-provider-store";
 import { useCloudCp } from "./useCloudCp";
-import { useCloudSandboxProviders } from "./useCloudSandboxProviders";
+import { useCloudOffering } from "./useCloudOffering";
 
 export const cloudProviderPreferenceQueryKey = (baseUrl: string, userId: string) =>
 	["cloud-provider-preference", baseUrl, userId] as const;
@@ -64,7 +64,7 @@ export async function migrateLegacyCloudProvider(
 export function useCloudProviderPreference({ migrateLegacy = false }: { migrateLegacy?: boolean } = {}) {
 	const { session, status } = useCloudSession();
 	const { client, ready, baseUrl } = useCloudCp();
-	const { available, isSuccess: providersLoaded } = useCloudSandboxProviders();
+	const { providers: available, loaded: providersLoaded } = useCloudOffering();
 	const queryClient = useQueryClient();
 	const userId = status === "authenticated" ? (session?.user.id ?? "") : "";
 	const queryKey = cloudProviderPreferenceQueryKey(baseUrl, userId);

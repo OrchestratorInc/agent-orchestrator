@@ -69,8 +69,8 @@ describe("SpawnComposerControls", () => {
 		const selectorRow = renderer!.root.findAll((node) => String(node.type) === "View")
 			.find((node) => node.props.style?.flexDirection === "row" && node.findAll((child) => String(child.type) === "Pressable" && ["Run on Choose where to run", "Choose project"].includes(child.props.accessibilityLabel)).length === 2);
 		expect(selectorRow?.props.style).toMatchObject({ flexDirection: "row" });
-		expect(runOn.props.style).toContainEqual(expect.objectContaining({ flex: 2, minWidth: 0 }));
-		expect(project.props.style).toContainEqual(expect.objectContaining({ flex: 3, minWidth: 0 }));
+		expect(runOn.props.style).toContainEqual(expect.objectContaining({ flex: 1, minWidth: 0 }));
+		expect(project.props.style).toContainEqual(expect.objectContaining({ flex: 1, minWidth: 0 }));
 		await act(async () => runOn.props.onPress());
 		expect(renderer!.root.findAll((node) => String(node.type) === "Text").some((node) => node.props.children === "Run on")).toBe(true);
 		const cloud = renderer!.root.findAll((node) => String(node.type) === "Pressable").find((node) => node.findAll((child) => String(child.type) === "Text" && child.props.children === "Cloud").length > 0);
@@ -110,5 +110,29 @@ describe("SpawnComposerControls", () => {
 		expect(labels).toContain("Claude Code");
 		expect(labels).not.toContain("Attach a file");
 		expect(labels).not.toContain("Automatic");
+	});
+});
+
+describe("Android spawn machine selector", () => {
+	it("shows the connected default and selects another machine", async () => {
+		const onSelectDestination = vi.fn();
+		const props = {
+			destinations: [{ source: { kind: "local", id: "host-a" }, label: "Alpha", available: true }, { source: { kind: "local", id: "host-b" }, label: "Beta", available: true }],
+			destination: { kind: "local", id: "host-a" },
+			onSelectDestination,
+			projects: [{ id: "project-1", label: "Project" }], projectId: "project-1", onSelectProject: vi.fn(),
+			agents: [], harness: "", onSelectHarness: vi.fn(), models: [], modelSelection: "__auto__", modelLabel: "Automatic", onSelectModel: vi.fn(),
+			onAttach: vi.fn(), voice: { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn() }, onSpawn: vi.fn(), busy: false, disabled: true,
+		} as unknown as Parameters<typeof SpawnComposerControls>[0];
+		await act(async () => { renderer = create(<SpawnComposerControls {...props} />); });
+
+		const runOn = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Run on Alpha")[0];
+		expect(runOn).toBeDefined();
+		await act(async () => runOn.props.onPress());
+		const beta = renderer!.root.findAll((node) => String(node.type) === "Pressable").find((node) =>
+			node.findAll((child) => String(child.type) === "Text" && child.props.children === "Beta").length > 0,
+		);
+		await act(async () => beta?.props.onPress());
+		expect(onSelectDestination).toHaveBeenCalledWith({ kind: "local", id: "host-b" });
 	});
 });

@@ -15,7 +15,9 @@ import { WorkerBoardList, type BoardRow } from "../../lib/worker-board-list";
 import { WorkerDock } from "../../lib/worker-dock";
 import { workerDockKeyboardLayout, workerDockLift, workerListBottomInset } from "../../lib/worker-dock-layout";
 import { WorkerControlsSheet } from "../../lib/worker-controls-sheet";
+import { WorkerMachineState } from "../../lib/worker-machine-state";
 import {
+	ALL_WORKER_ENVIRONMENTS,
 	ALL_WORKER_PROJECTS,
 	scopedWorkerProjectOptions,
 	workerSearchPresentation,
@@ -32,19 +34,28 @@ export default function FleetScreen() {
 
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { scopedBoard, refreshAll, notificationsUnread, hostStates } = useApp();
+	const { scopedBoard, refreshAll, refreshHost, notificationsUnread, hostStates } = useApp();
 	const { sessions, projects, sources } = scopedBoard;
 	const sourceStatuses = Object.entries(sources);
-	const unreadCount = hostStates.length > 1
-		? hostStates.reduce((count, host) => count + host.notificationsUnread, 0)
-		: notificationsUnread;
+	const unreadCount = hostStates.reduce((count, host) => count + host.notificationsUnread, 0);
 	const [refreshing, setRefreshing] = useState(false);
 	const [query, setQuery] = useState("");
 	const [searchRequested, setSearchRequested] = useState(false);
 	const [controlsOpen, setControlsOpen] = useState(false);
+	const [workerEnvironmentId, setWorkerEnvironmentId] = useState(ALL_WORKER_ENVIRONMENTS);
 	const [workerProjectId, setWorkerProjectId] = useState(ALL_WORKER_PROJECTS);
 	const [environmentFilter, setEnvironmentFilter] = useState<"all" | EnvironmentKind>("all");
-	const projectOptions = useMemo(() => scopedWorkerProjectOptions(projects, environmentFilter), [projects, environmentFilter]);
+	// hostStates is replaced on every poll (each machine stamps lastSyncAt), but
+	// the memoised dock only needs who the machines are. Rebuilding this on every
+	// tick re-rendered the dock mid-tap, the bug the stable handlers below avoid.
+	const environmentsKey = JSON.stringify(hostStates.map((host) => [host.hostId, host.name, host.appearance.symbol]));
+	const environments = useMemo(
+		() => hostStates.map((host) => ({ id: host.hostId, name: host.name, appearance: host.appearance })),
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- environmentsKey covers every field read here
+		[environmentsKey],
+	);
+	const machineProjects = useMemo(() => projects.filter((entry) => workerEnvironmentId === ALL_WORKER_ENVIRONMENTS || (entry.source.kind === "local" && entry.source.id === workerEnvironmentId)), [projects, workerEnvironmentId]);
+	const projectOptions = useMemo(() => scopedWorkerProjectOptions(machineProjects, environmentFilter), [machineProjects, environmentFilter]);
 	// Stable identities so the memoised dock is not rebuilt on every poll — a
 	// re-render mid-tap is what made the filter menu open only sometimes.
 	const openSearch = useCallback(() => setSearchRequested(true), []);
@@ -62,8 +73,9 @@ export default function FleetScreen() {
 		Keyboard.dismiss();
 		haptics.tap();
 		const selected = projects.find((entry) => resourceKey(entry.source, entry.value.id) === workerProjectId);
-		router.push({ pathname: "/spawn", params: selected ? { projectId: selected.value.id, source: selected.source.kind, sourceId: selected.source.id } : {} });
-	}, [router, workerProjectId, projects]);
+		const selectedHostId = workerEnvironmentId === ALL_WORKER_ENVIRONMENTS ? undefined : workerEnvironmentId;
+		router.push({ pathname: "/spawn", params: selected ? { projectId: selected.value.id, source: selected.source.kind, sourceId: selected.source.id } : selectedHostId ? { source: "local", sourceId: selectedHostId } : {} });
+	}, [router, workerProjectId, projects, workerEnvironmentId]);
 	// Two selectors rather than the whole state object, so the board re-renders
 	// only when one of these two values actually changes.
 	//
@@ -79,9 +91,27 @@ export default function FleetScreen() {
 	const keyboardAnimation = useReanimatedKeyboardAnimation();
 	const listRef = useTabScrollToTop<FlatList<BoardRow>>();
 
-	const projectSessions = useMemo(() => filterScopedWorkers(sessions, environmentFilter, workerProjectId), [sessions, environmentFilter, workerProjectId]);
+	const projectSessions = useMemo(() => filterScopedWorkers(sessions, environmentFilter, workerProjectId).filter((entry) => workerEnvironmentId === ALL_WORKER_ENVIRONMENTS || (entry.source.kind === "local" && entry.source.id === workerEnvironmentId)), [sessions, environmentFilter, workerProjectId, workerEnvironmentId]);
 	const searchOpen = workerSearchPresentation(searchRequested, query) === "expanded";
 	const selectedProjectLabel = projectOptions.find((project) => project.id === workerProjectId)?.label ?? "All projects";
+	const boardIdentityKey = `${environmentFilter}|${workerEnvironmentId}|${workerProjectId}|${query.trim()}`;
+	const selectedEnvironmentLabel = environments.find((environment) => environment.id === workerEnvironmentId)?.name;
+	const selectedHost = hostStates.find((host) => host.hostId === workerEnvironmentId);
+	const selectEnvironment = useCallback((environmentId: string) => {
+		// Resolve both selectors in one React event. Letting the project reset in the
+		// effect below creates an intermediate empty board and a second remount.
+		setWorkerEnvironmentId(environmentId);
+		setWorkerProjectId((projectId) => projectId === ALL_WORKER_PROJECTS || projects.some((entry) => resourceKey(entry.source, entry.value.id) === projectId && (environmentId === ALL_WORKER_ENVIRONMENTS || (entry.source.kind === "local" && entry.source.id === environmentId))) ? projectId : ALL_WORKER_PROJECTS);
+	}, [projects]);
+
+	useEffect(() => {
+		if (
+			workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS &&
+			!environments.some((environment) => environment.id === workerEnvironmentId)
+		) {
+			setWorkerEnvironmentId(ALL_WORKER_ENVIRONMENTS);
+		}
+	}, [environments, workerEnvironmentId]);
 
 	useEffect(() => {
 		if (
@@ -95,9 +125,12 @@ export default function FleetScreen() {
 	const onRefresh = useCallback(async () => {
 		haptics.tap();
 		setRefreshing(true);
-		try { await refreshAll(); }
+		try {
+			if (selectedHost) await refreshHost(selectedHost.hostId);
+			else await refreshAll();
+		}
 		finally { setRefreshing(false); }
-	}, [refreshAll]);
+	}, [refreshAll, refreshHost, selectedHost?.hostId]);
 
 	const keyboardLayout = workerDockKeyboardLayout(keyboardHeight, insets.bottom, keyboardVisible);
 	// `progress`, not the animated `height`: that value is the keyboard's frame
@@ -132,21 +165,29 @@ export default function FleetScreen() {
 				<StaleBanner key={key} sourceLabel={key.startsWith('["cloud"') ? "Cloud" : "Local"} sourceStatus={status} onRetry={onRefresh} />
 			))}
 
-			{initialLoading && sessions.length === 0 ? (
+			{!selectedHost && initialLoading && sessions.length === 0 ? (
 				<View style={styles.center}>
 					<ActivityIndicator color={t.accent} />
 				</View>
 			) : (
 				<WorkerBoardList
+					key={boardIdentityKey}
 					sessions={projectSessions}
 					query={query}
-					identityKey={`${environmentFilter}|${workerProjectId}|${query.trim()}`}
+					identityKey={boardIdentityKey}
 					listRef={listRef}
 					contentBottomInset={workerListBottomInset(keyboardLayout.dockBottom)}
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListEmptyComponent={
-						query.trim() ? (
+						selectedHost && selectedHost.connection !== "open" ? (
+							<WorkerMachineState
+								host={selectedHost}
+								environments={environments}
+								onSelectEnvironment={selectEnvironment}
+								onRetry={onRefresh}
+							/>
+						) : query.trim() ? (
 							<EmptyState icon="search" title="No workers found" message={`No workers match “${query.trim()}”.`} />
 						) : !anyAvailable ? (
 							<EmptyState
@@ -165,6 +206,12 @@ export default function FleetScreen() {
 								icon="folder"
 								title={`No workers in ${selectedProjectLabel}`}
 								message="Choose another project from the Workers controls."
+							/>
+						) : workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS ? (
+							<EmptyState
+								icon="monitor"
+								title={`No workers on ${selectedEnvironmentLabel ?? "this environment"}`}
+								message="Choose another environment from the Workers controls."
 							/>
 						) : (
 							<EmptyState
@@ -189,10 +236,13 @@ export default function FleetScreen() {
 					onSearchOpen={openSearch}
 					onSearchClose={closeSearch}
 					onOpenControls={openControls}
-					projectFiltered={workerProjectId !== ALL_WORKER_PROJECTS || environmentFilter !== "all"}
+					projectFiltered={workerProjectId !== ALL_WORKER_PROJECTS || environmentFilter !== "all" || workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS}
 					environmentFilter={environmentFilter}
 					onSelectEnvironment={setEnvironmentFilter}
 					projectOptions={projectOptions}
+					environments={environments}
+					selectedEnvironmentId={workerEnvironmentId}
+					onSelectMachine={selectEnvironment}
 					selectedProjectId={workerProjectId}
 					selectedProjectLabel={selectedProjectLabel}
 					onSelectProject={setWorkerProjectId}
@@ -204,9 +254,12 @@ export default function FleetScreen() {
 				open={controlsOpen}
 				onDismiss={() => setControlsOpen(false)}
 				onSearch={() => setSearchRequested(true)}
-				projects={projects}
+				projects={machineProjects}
 				environmentFilter={environmentFilter}
 				onSelectEnvironment={setEnvironmentFilter}
+				environments={environments}
+				selectedEnvironmentId={workerEnvironmentId}
+				onSelectMachine={selectEnvironment}
 				selectedProjectId={workerProjectId}
 				onSelectProject={setWorkerProjectId}
 			/>
@@ -218,7 +271,7 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
-		errorActions: { flexDirection: "row", gap: space.sm, alignItems: "center" },
+		errorActions: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: space.sm, alignItems: "center" },
 		dock: {
 			position: "absolute",
 			left: 16,

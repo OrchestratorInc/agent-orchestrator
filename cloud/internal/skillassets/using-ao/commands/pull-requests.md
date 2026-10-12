@@ -2,7 +2,7 @@
 
 Workers do not push with personal credentials. The sandbox provides two socket
 helpers (their exact invocations are in the `$AO_PULL_REQUEST_HELP` and
-`$AO_REVIEW_HELP` environment variables) plus one `ao` command.
+`$AO_REVIEW_HELP` environment variables) plus two `ao` commands.
 
 ## Opening a pull request
 
@@ -28,6 +28,19 @@ ao claim-pr <number-or-url>
 
 Use when a PR for this work already exists (for example, opened in an earlier
 session) and this session should own it. Prints `claimed PR #<n> <url>`.
+
+## ao review trigger — start an AO review
+
+```
+ao review trigger
+```
+
+Use when asked to review this session's PR or to request an AO review. It
+starts AO's reviewer on every open, non-draft PR this session owns, in its own
+reviewer terminal that the human watches in the desktop app. Prints one line
+per PR: `started AO review of PR #<n> <url>`, or `AO review of PR #<n> is
+already running <url>`. The reviewer's findings arrive in this session as PR
+review comments. Do not review the PR yourself instead.
 
 ## Submitting an AO review verdict
 

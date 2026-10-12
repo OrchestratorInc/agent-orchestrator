@@ -5,14 +5,17 @@ import { describe, expect, it } from "vitest";
 const source = readFileSync(fileURLToPath(new URL("./spawn-composer-controls.ios.tsx", import.meta.url)), "utf8");
 
 describe("iOS spawn menu layout", () => {
-	it("shares one selector row while keeping the harness and model controls intact", () => {
+	it("keeps the project trigger compact and gives the harness enough label room", () => {
 		expect(source).toContain("const HARNESS_MENU_WIDTH = 124");
 		expect(source).toContain('frame({ width: HARNESS_MENU_WIDTH })');
-		expect(source).toContain('<Host style={styles.destinationHost}');
-		expect(source).toContain('<Host style={styles.projectHost}');
+		expect(source).toContain('const PROJECT_MENU_WIDTH = 224');
 		expect(source).toContain('{projectLabel}</Text>');
+		expect(source).toContain('<Image systemName="chevron.up.chevron.down"');
+		expect(source).toContain('padding({ horizontal: 4 }), frame({ width: PROJECT_MENU_WIDTH - 42, alignment: "leading" })');
 		expect(source).toContain('layoutPriority(1)');
 		expect(source).toContain('accessibilityIdentifier("spawn-project")');
+		expect(source).toContain('accessibilityIdentifier("spawn-destination")');
+		expect(source).toContain("sourceKey(option.source)");
 		expect(source).toContain('accessibilityIdentifier("spawn-model")');
 	});
 

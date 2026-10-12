@@ -5,11 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
+	"fmt"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -20,8 +20,13 @@ func (s *Store) CreateProject(
 	idempotencyKey string,
 	input domain.CreateProject,
 ) (domain.Project, error) {
+	config, err := domain.NormalizeProjectConfig(input.Config)
+	if err != nil {
+		return domain.Project{}, ErrInvalid
+	}
+	input.Config = config
 	var project domain.Project
-	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		payload, err := json.Marshal(input)
 		if err != nil {
 			return err
@@ -224,7 +229,7 @@ func loadIdempotentProject(
 		return err
 	}
 	if kind != expectedKind || status != "succeeded" ||
-		!jsonEqual(storedPayload, payload) || projectID == "" {
+		!projectCreatePayloadEqual(storedPayload, payload, "Config") || projectID == "" {
 		return ErrIdempotencyMismatch
 	}
 	return scanProject(tx.QueryRow(
@@ -324,7 +329,7 @@ func (s *Store) CreateSession(
 	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		var err error
 		session, err = createSessionTx(
-			ctx, tx, orgID, idempotencyKey, maxActiveSandboxes, input, input.ParentSessionID, principal.UserID,
+			ctx, tx, orgID, idempotencyKey, maxActiveSandboxes, s.billing.forPrincipal(principal, orgID), input, input.ParentSessionID, principal.UserID,
 		)
 		return err
 	})
@@ -372,9 +377,17 @@ func (s *Store) CreateGitHubScratchProject(
 	maxActiveSandboxes int,
 	input domain.CreateGitHubScratchProject,
 ) (domain.Project, domain.Session, error) {
+	if len(input.Config) == 0 {
+		input.Config = json.RawMessage(`{"source":"scratch"}`)
+	}
+	config, err := domain.NormalizeProjectConfig(input.Config)
+	if err != nil {
+		return domain.Project{}, domain.Session{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	input.Config = config
 	var project domain.Project
 	var session domain.Session
-	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		payload, err := json.Marshal(struct {
 			RepositoryID            int64                `json:"repositoryId"`
 			InstallationID          int64                `json:"installationId"`
@@ -426,7 +439,7 @@ func (s *Store) CreateGitHubScratchProject(
 				return err
 			}
 			if kind != "github.scratch.create" || status != "succeeded" ||
-				!jsonEqual(storedPayload, payload) ||
+				!projectCreatePayloadEqual(storedPayload, payload, "config") ||
 				projectID == "" || sessionID == "" {
 				return ErrIdempotencyMismatch
 			}
@@ -555,6 +568,7 @@ func (s *Store) CreateGitHubScratchProject(
 			orgID,
 			"github-scratch:"+commandID,
 			maxActiveSandboxes,
+			s.billing.forPrincipal(principal, orgID),
 			input.Session,
 			"",
 			principal.UserID,
@@ -601,6 +615,7 @@ func createSessionTx(
 	tx pgx.Tx,
 	orgID, idempotencyKey string,
 	maxActiveSandboxes int,
+	billing billingPolicy,
 	input domain.CreateSession,
 	parentSessionID, actorUserID string,
 ) (domain.Session, error) {
@@ -681,21 +696,56 @@ func createSessionTx(
 	if maxActiveSandboxes < 1 || activeSandboxes >= maxActiveSandboxes {
 		return domain.Session{}, ErrSandboxQuotaExceeded
 	}
+	// The plan's slots and usage limits, checked under the same organization
+	// lock as the quota above, so concurrent creators cannot both take the
+	// last slot. This covers sessions an orchestrator spawns too. Only
+	// Freestyle sandboxes are billed.
+	if billedProvider(sessionProvider(input.Provider)) {
+		if err := billing.planAdmissionTx(ctx, tx, orgID, input.Kind, admitCreate, time.Now()); err != nil {
+			return domain.Session{}, err
+		}
+	}
+	var projectConfig json.RawMessage
+	if err := tx.QueryRow(ctx, `SELECT config FROM ao_projects WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
+		orgID, input.ProjectID).Scan(&projectConfig); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Session{}, ErrNotFound
+		}
+		return domain.Session{}, err
+	}
+	harness, agentConfig, err := domain.SessionAgentConfig(projectConfig, input.Kind, input.Harness, input.Model)
+	if err != nil {
+		return domain.Session{}, ErrInvalid
+	}
+	input.Harness, input.Model = harness, agentConfig.Model
+	agentConfigJSON, err := json.Marshal(agentConfig)
+	if err != nil {
+		return domain.Session{}, err
+	}
+	// The project's auto-review setting seeds each new worker's own toggle, as
+	// local projects do. The session toggle alone decides afterwards.
+	settings, err := domain.DecodeProjectSettings(projectConfig)
+	if err != nil {
+		return domain.Session{}, ErrInvalid
+	}
+	autoReview := input.Kind == "worker" && settings.AutoReview != nil && *settings.AutoReview
 
+	prefix, err := domain.ProjectSessionPrefix(projectConfig)
+	if err != nil {
+		return domain.Session{}, ErrInvalid
+	}
 	err = scanSession(tx.QueryRow(
 		ctx,
 		`WITH generated AS (SELECT gen_random_uuid() AS id)
 		INSERT INTO ao_sessions (
 			id, org_id, project_id, kind, harness, display_name, branch,
-			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id, reasoning_effort
+			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id, reasoning_effort, agent_config,
+			auto_review_enabled
 		)
-		SELECT id, $1, $2, $3, $4, $5, 'ao/' || left(id::text, 8),
-			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13
+		SELECT id, $1, $2, $3, $4, $5, $15 || '/' || left(id::text, 8),
+			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $16
 		FROM generated
-		RETURNING id, org_id, project_id, kind, harness, display_name, branch,
-			mode, model, denied_commands, interface, activity_state, is_terminated,
-			auto_inject_ci, auto_inject_review, terminate_on_pr_merge,
-			false, NULL::timestamptz, 0, '', '', '', '', '', 0, created_at, updated_at`,
+		RETURNING `+sessionInsertReturning,
 		orgID,
 		input.ProjectID,
 		input.Kind,
@@ -709,15 +759,15 @@ func createSessionTx(
 		parentSessionID,
 		actorUserID,
 		input.ReasoningEffort,
+		agentConfigJSON,
+		prefix,
+		autoReview,
 	), &session)
 	if err != nil {
 		return domain.Session{}, normalizeConstraintError(err)
 	}
 
-	provider := strings.ToLower(strings.TrimSpace(input.Provider))
-	if provider == "" {
-		provider = sandbox.DefaultProvider
-	}
+	provider := sessionProvider(input.Provider)
 	if input.SandboxConnectionID != "" {
 		var connectionProvider string
 		if err := tx.QueryRow(
@@ -1011,9 +1061,17 @@ func (s *Store) setCloudSessionBooleanPolicy(
 
 const sessionSelect = `
 	SELECT session.id, session.org_id, session.project_id, session.kind,
-		session.harness, session.display_name, session.branch,
+		session.harness, session.reviewer_harness, session.auto_review_enabled,
+		session.display_name, session.branch,
 		session.mode, session.model, session.denied_commands, session.interface,
-		session.activity_state,
+		CASE
+			WHEN EXISTS (
+				SELECT 1 FROM ao_turns turn
+				WHERE turn.org_id = session.org_id AND turn.session_id = session.id
+					AND turn.state IN ('queued', 'claimed', 'running')
+			) THEN 'active'
+			ELSE session.activity_state
+		END AS activity_state,
 		session.is_terminated,
 		session.auto_inject_ci,
 		session.auto_inject_review,
@@ -1029,18 +1087,49 @@ const sessionSelect = `
 		COALESCE(sandbox.observed_state, ''),
 		COALESCE(sandbox.observed_state, ''),
 		COALESCE(sandbox.last_error, ''),
+		COALESCE(sandbox.startup_error_code, ''),
+		COALESCE(sandbox.startup_error_message, ''),
+		sandbox.startup_error_at,
+		-- Operator detail is shown only for an organization's own (BYO) compute.
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL
+			THEN COALESCE(sandbox.startup_error_detail, '') ELSE '' END,
+		-- The workspace link is shown only for an organization's own (BYO)
+		-- Coder (customers have no login on AO's managed deployment). The
+		-- origin, owner and prefix are recorded when AO plans the workspace,
+		-- so the link is known from the session's creation and names the
+		-- workspace AO creates.
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
+			THEN COALESCE(sandbox.resource_profile->'coder'->>'baseUrl', '') ELSE '' END,
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
+			THEN COALESCE(sandbox.resource_profile->'coder'->>'owner', '') ELSE '' END,
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
+			THEN COALESCE(sandbox.resource_profile->'coder'->>'workspaceNamePrefix', '') ELSE '' END,
 		COALESCE((
 			SELECT MAX(terminal.worker_epoch)
 			FROM ao_terminal_sessions terminal
 			WHERE terminal.org_id = session.org_id
 				AND terminal.session_id = session.id
-				AND terminal.kind = 'agent'
+				AND terminal.kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = terminal.org_id
+				  AND review_terminal_run.review_terminal_id = terminal.id
+			)
 		), 0),
 		session.created_at, session.updated_at
 	FROM ao_sessions session
 	LEFT JOIN ao_sandboxes sandbox
 		ON sandbox.org_id = session.org_id AND sandbox.session_id = session.id
 `
+
+// sessionInsertReturning matches scanSession exactly. Keep the persisted
+// preference defaults explicit here: INSERT ... RETURNING cannot use the
+// joined sessionSelect used by subsequent reads.
+const sessionInsertReturning = `id, org_id, project_id, kind, harness,
+	'' AS reviewer_harness, auto_review_enabled,
+	display_name, branch, mode, model, denied_commands, interface,
+	activity_state, is_terminated, auto_inject_ci, auto_inject_review,
+	terminate_on_pr_merge, false, NULL::timestamptz, 0,
+	'', '', '', '', '', '', '', NULL::timestamptz, '', '', '', '', 0, created_at, updated_at`
 
 func getSession(
 	ctx context.Context,
@@ -1066,7 +1155,7 @@ type scanner interface {
 }
 
 func scanProject(row scanner, project *domain.Project) error {
-	return row.Scan(
+	if err := row.Scan(
 		&project.ID,
 		&project.OrgID,
 		&project.DisplayName,
@@ -1076,18 +1165,26 @@ func scanProject(row scanner, project *domain.Project) error {
 		&project.Config,
 		&project.CreatedAt,
 		&project.UpdatedAt,
-	)
+	); err != nil {
+		return err
+	}
+	var err error
+	project.Config, err = domain.NormalizeProjectConfig(project.Config)
+	return err
 }
 
 func scanSession(row scanner, session *domain.Session) error {
 	var activity string
 	var interfaceValue string
+	var coderWorkspace domain.CoderWorkspaceRef
 	err := row.Scan(
 		&session.ID,
 		&session.OrgID,
 		&session.ProjectID,
 		&session.Kind,
 		&session.Harness,
+		&session.ReviewerHarness,
+		&session.AutoReviewEnabled,
 		&session.DisplayName,
 		&session.Branch,
 		&session.Mode,
@@ -1107,13 +1204,51 @@ func scanSession(row scanner, session *domain.Session) error {
 		&session.ObservedState,
 		&session.RuntimeState,
 		&session.RuntimeError,
+		&session.StartupErrorCode,
+		&session.StartupErrorMessage,
+		&session.StartupErrorAt,
+		&session.StartupErrorDetail,
+		&coderWorkspace.BaseURL,
+		&coderWorkspace.Owner,
+		&coderWorkspace.NamePrefix,
 		&session.WorkerEpoch,
 		&session.CreatedAt,
 		&session.UpdatedAt,
 	)
+	session.BYOCoderWorkspace = nil
+	if coderWorkspace.BaseURL != "" && coderWorkspace.Owner != "" {
+		session.BYOCoderWorkspace = &coderWorkspace
+	}
 	session.Interface = domain.SessionInterface(interfaceValue).Normalized()
 	session.ActivityState = contract.ActivityState(activity)
 	return err
+}
+
+// Creation commands written before nested settings retain their original
+// payload. Compare canonical configs without rewriting that durable history.
+func projectCreatePayloadEqual(left, right []byte, configKey string) bool {
+	normalize := func(payload []byte) ([]byte, error) {
+		var request map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &request); err != nil || request == nil {
+			return nil, ErrInvalid
+		}
+		config := request[configKey]
+		if bytes.Equal(bytes.TrimSpace(config), []byte("null")) {
+			config = nil
+		}
+		var err error
+		request[configKey], err = domain.NormalizeProjectConfig(config)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(request)
+	}
+	left, err := normalize(left)
+	if err != nil {
+		return false
+	}
+	right, err = normalize(right)
+	return err == nil && jsonEqual(left, right)
 }
 
 func jsonEqual(left, right []byte) bool {

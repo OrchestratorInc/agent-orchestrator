@@ -51,7 +51,7 @@ function SpawnModalContent() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const { projectId: routeProjectId, source: routeKind, sourceId: routeSourceId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; source?: string; sourceId?: string; hostId?: string }>();
-	const { scopedBoard, availableSources, sourceFor, spawnOn, configForHost, hostStates, configResolved, setActiveProject } = useApp();
+	const { scopedBoard, availableSources, sourceFor, spawnOn, configForHost, hostStates, configResolved, switchHost, setActiveProject } = useApp();
 	const { client: cloudClient, orgId: cloudOrgId } = useCloudAuth();
 	const routeDestination = routeSource({ source: routeKind, sourceId: routeSourceId }) ?? (routeHostId ? { kind: "local" as const, id: routeHostId } : null);
 	const sourceResolutionComplete = configResolved;
@@ -327,6 +327,11 @@ function SpawnModalContent() {
 		setAttachmentError(undefined);
 		setError(null);
 		setOfferTUI(false);
+		setModelLoading(false);
+		requestRef.current = undefined;
+		if (next.kind === "local") {
+			void switchHost(next.id).catch(() => setError("Could not make that machine the default. Try again."));
+		}
 	};
 
 	const clearModelOverride = () => { setModel(""); setModelTouched(false); };

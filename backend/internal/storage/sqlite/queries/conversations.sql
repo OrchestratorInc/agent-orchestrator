@@ -35,13 +35,74 @@ SELECT * FROM conversations WHERE id = ? LIMIT 1;
 -- name: HasConversationTurns :one
 SELECT EXISTS (SELECT 1 FROM conversation_turns WHERE conversation_id = ?);
 
+-- Hibernation only needs the latest visible user prompt's outcome. Match the
+-- active-branch and discarded-turn filters used by SelectConversationMessages
+-- without loading the entire conversation timeline.
+-- name: LatestVisibleUserTurnSettled :one
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = sqlc.arg(conversation_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+), latest_user AS (
+    SELECT turn.handled_by_session_id, turn.state, turn.completed_at
+    FROM conversation_messages AS message
+    JOIN active_path AS path ON path.branch_id = message.branch_id
+    LEFT JOIN conversation_turns AS turn ON turn.id = message.turn_id
+    WHERE message.conversation_id = sqlc.arg(conversation_id)
+      AND message.role = 'user'
+      AND (path.max_sequence IS NULL OR message.sequence <= path.max_sequence)
+      AND (message.turn_id IS NULL OR turn.id IS NULL OR (
+          turn.rolled_back_at IS NULL AND turn.promoted_to_turn_id IS NULL AND turn.state <> 'cancelled'
+      ))
+    ORDER BY message.sequence DESC
+    LIMIT 1
+)
+SELECT EXISTS (
+    SELECT 1 FROM latest_user
+    WHERE handled_by_session_id = sqlc.arg(session_id)
+      AND completed_at IS NOT NULL
+      AND state IN ('completed', 'failed', 'interrupted', 'recovered')
+);
+
 -- name: ReleaseUntouchedConversationProvider :execrows
+-- The conversation's current session is the owner. A project conversation
+-- (orchestrator) has no owning session_id, and its root branch's session_id
+-- records the orchestrator that created it, not the one that holds it now.
 UPDATE conversation_branches
 SET provider_conversation_id = '', provider_scope_id = sqlc.arg(provider_scope_id)
-WHERE conversation_branches.session_id = sqlc.arg(session_id) AND parent_branch_id IS NULL
+WHERE parent_branch_id IS NULL
   AND conversation_branches.id = (
       SELECT c.active_branch_id FROM conversations AS c
-      WHERE c.session_id = sqlc.arg(session_id) AND c.current_session_id = sqlc.arg(session_id)
+      WHERE c.current_session_id = sqlc.arg(session_id)
+        AND (c.session_id = sqlc.arg(session_id) OR (c.scope = 'project' AND c.session_id IS NULL))
+        AND c.latest_sequence = 0
+        AND NOT EXISTS (
+            SELECT 1 FROM conversation_turns WHERE conversation_id = c.id
+        )
+  );
+
+-- name: ReplaceUntouchedConversationProvider :execrows
+-- Same proof as ReleaseUntouchedConversationProvider, but rebinds the empty
+-- root to a fresh provider id and keeps its provider scope, which is part of
+-- the persistent provider host's identity.
+UPDATE conversation_branches
+SET provider_conversation_id = sqlc.arg(provider_conversation_id)
+WHERE parent_branch_id IS NULL
+  AND conversation_branches.provider_conversation_id = sqlc.arg(expected_provider_conversation_id)
+  AND conversation_branches.id = (
+      SELECT c.active_branch_id FROM conversations AS c
+      WHERE c.current_session_id = sqlc.arg(session_id)
+        AND (c.session_id = sqlc.arg(session_id) OR (c.scope = 'project' AND c.session_id IS NULL))
         AND c.latest_sequence = 0
         AND NOT EXISTS (
             SELECT 1 FROM conversation_turns WHERE conversation_id = c.id
@@ -985,8 +1046,9 @@ WHERE id = ?
 INSERT INTO conversation_messages (
     id, conversation_id, turn_id, sequence, revision, role, origin,
     text, streaming, provider_item_id, client_message_id, client_payload_hash,
-    delivery_content_json, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    delivery_content_json, sender_session_id, sender_project_id, sender_display_name,
+    created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- Folding a streaming delta: append to the existing text and bump the revision
 -- so a client can detect a gap. The provider item id is the correlation key

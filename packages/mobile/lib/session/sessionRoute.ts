@@ -58,6 +58,19 @@ export type SessionRouteView =
 	| { kind: "missing" }
 	| { kind: "failed" };
 
+/**
+ * Whether a session's runtime is gone, so its terminal screen should offer
+ * Restore instead of attaching.
+ *
+ * Decided on the runtime, not the outcome: a merged (or errored) session whose
+ * agent is still running keeps a live terminal. Same rule as the board's
+ * archive and the chat screen.
+ */
+export function isRuntimeGone(session: RouteSession): boolean {
+	if ("projectName" in session) return session.isTerminal === true || session.hasRuntime === false;
+	return session.isTerminated === true || session.status === "terminated";
+}
+
 const pending: SessionLookup = { state: "pending" };
 
 /** Cloud Terminal is a view of the running agent PTY, not a Local controller-mode handoff. */

@@ -1,6 +1,6 @@
 import { Host, RNHostView } from "@expo/ui";
 import { Asset } from "expo-asset";
-import { Button, Divider, Group, HStack, Image, Menu, Spacer, Text } from "@expo/ui/swift-ui";
+import { Button, Divider, Group, HStack, Image, Menu, Spacer, Text, VStack } from "@expo/ui/swift-ui";
 import {
 	accessibilityIdentifier,
 	aspectRatio,
@@ -34,6 +34,10 @@ import { MicKey } from "./voice/MicKey";
 
 // The paperclip's frame, so the rail's two icon buttons match.
 const MIC_KEY_SIZE = 38;
+// Keep the project trigger compact and left-anchored. A max-width frame makes
+// the native Menu fill the host, which centers its popup over the whole sheet.
+const PROJECT_MENU_WIDTH = 224;
+const HOST_MENU_WIDTH = 144;
 // Reserve the harness slot so a different agent name cannot move the model
 // selector sideways. The model still uses the remaining width of the rail,
 // but common harness names should not truncate while "Automatic" has slack.
@@ -64,26 +68,31 @@ export function SpawnComposerControls({
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const logoUris = useHarnessLogoUris(agents);
+	const selectedDestination = destinations.find((option) => destination && sourceKey(option.source) === sourceKey(destination));
 	const selectedProject = projects.find((project) => project.id === projectId);
+	const destinationLabel = selectedDestination?.label ?? "Choose where to run";
 	const projectLabel = selectedProject?.label ?? "Choose project";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
-	const destinationLabel = destinations.find((option) => destination && sourceKey(option.source) === sourceKey(destination))?.label ?? "Choose where to run";
 
 	return (
 		<View style={styles.stack}>
-			<View style={styles.controls}>
-				<View style={styles.selectorRow}>
-					<Host style={styles.destinationHost} colorScheme={scheme} seedColor={t.accent}>
+			<Host style={styles.controlsHost} colorScheme={scheme} seedColor={t.accent}>
+				<VStack alignment="leading" spacing={10} modifiers={[frame({ height: 104, maxWidth: 1000 })]}>
+					<HStack spacing={8}>
 						<Menu
-							label={<HStack spacing={7}><Image systemName="desktopcomputer" size={iconSize.sm} /><Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>Run on {destinationLabel}</Text><Image systemName="chevron.up.chevron.down" size={iconSize.xs} /></HStack>}
-							modifiers={[buttonStyle("plain"), tint(t.textPrimary), padding({ horizontal: 4 }), frame({ maxWidth: 1000, alignment: "leading" }), accessibilityIdentifier("spawn-destination")]}
+							label={
+								<HStack spacing={7}>
+									<Image systemName="desktopcomputer" size={iconSize.sm} />
+									<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>Run on {destinationLabel}</Text>
+									<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
+								</HStack>
+							}
+							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), padding({ horizontal: 4 }), frame({ width: HOST_MENU_WIDTH, alignment: "leading" }), accessibilityIdentifier("spawn-destination")]}
 						>
 							{destinations.map((option) => (
 								<Button key={sourceKey(option.source)} label={option.available ? option.label : `${option.label} · Unavailable`} systemImage={destination && sourceKey(option.source) === sourceKey(destination) ? "checkmark" : undefined} onPress={() => { if (option.available) { haptics.select(); onSelectDestination(option.source); } }} />
 							))}
 						</Menu>
-					</Host>
-					<Host style={styles.projectHost} colorScheme={scheme} seedColor={t.accent}>
 						<Menu
 							label={
 								<HStack spacing={7}>
@@ -92,7 +101,7 @@ export function SpawnComposerControls({
 									<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
 								</HStack>
 							}
-							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), padding({ horizontal: 4 }), frame({ maxWidth: 1000, alignment: "leading" }), accessibilityIdentifier("spawn-project")]}
+							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), padding({ horizontal: 4 }), frame({ width: PROJECT_MENU_WIDTH - 42, alignment: "leading" }), accessibilityIdentifier("spawn-project")]}
 						>
 							{projects.map((project) => (
 								<Group key={project.id}>
@@ -108,10 +117,8 @@ export function SpawnComposerControls({
 								</Group>
 							))}
 						</Menu>
-					</Host>
-				</View>
+					</HStack>
 
-				<Host style={styles.railHost} colorScheme={scheme} seedColor={t.accent}>
 				<HStack
 					spacing={6}
 					modifiers={[
@@ -206,8 +213,9 @@ export function SpawnComposerControls({
 						</View>
 					</RNHostView>
 				</HStack>
-				</Host>
-			</View>
+
+				</VStack>
+			</Host>
 
 			<Pressable
 				accessibilityRole="button"
@@ -235,12 +243,8 @@ function projectSystemImage(project?: SpawnComposerOption): "plus.bubble" | "fol
 }
 
 const styles = StyleSheet.create({
-	stack: { width: "100%", height: 146, gap: space.hair },
-	controls: { width: "100%", height: 100, gap: 8 },
-	selectorRow: { width: "100%", height: 36, flexDirection: "row", gap: 8 },
-	destinationHost: { flex: 2, minWidth: 0, height: 36 },
-	projectHost: { flex: 3, minWidth: 0, height: 36 },
-	railHost: { width: "100%", height: 56 },
+	stack: { width: "100%", height: 150, gap: space.hair },
+	controlsHost: { width: "100%", height: 104 },
 	micSlot: { width: MIC_KEY_SIZE, height: MIC_KEY_SIZE, alignItems: "center", justifyContent: "center" },
 	spawnButton: {
 		height: 44,

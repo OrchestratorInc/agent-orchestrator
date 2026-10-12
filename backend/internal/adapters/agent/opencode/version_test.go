@@ -25,6 +25,8 @@ func versionBinary(t *testing.T, script string) string {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	return path
 }
 
@@ -94,10 +96,28 @@ func TestResolveBinaryForMajorBoundedAndCanceled(t *testing.T) {
 			if !errors.Is(err, want) {
 				t.Fatalf("error = %v, want %v", err, want)
 			}
-			if time.Since(started) > 5*time.Second {
+			if time.Since(started) > 12*time.Second {
 				t.Fatal("version probe was not bounded")
 			}
 		})
+	}
+}
+
+func TestResolveBinaryForMajorAcceptsSlowShim(t *testing.T) {
+	dir := t.TempDir()
+	name, body := "opencode", "#!/bin/sh\nsleep 4\nprintf '2.0.0\\n'\n"
+	if runtime.GOOS == "windows" {
+		name = "opencode.cmd"
+		body = "@echo off\r\nping -n 5 127.0.0.1 >nul\r\necho 2.0.0\r\n"
+	}
+	binary := filepath.Join(dir, name)
+	if err := os.WriteFile(binary, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	got, err := ResolveBinaryForMajor(context.Background(), 2)
+	if err != nil || got != binary {
+		t.Fatalf("resolve slow shim = (%q, %v), want %q", got, err, binary)
 	}
 }
 
@@ -135,5 +155,113 @@ func TestV1RejectsWrongMajorBeforeOverlay(t *testing.T) {
 		if _, err := os.Stat(dir); !os.IsNotExist(err) {
 			t.Fatalf("restore=%v: wrote config before rejecting version", restore)
 		}
+	}
+}
+
+func TestResolveBinaryForMajorPicksMatchingBinaryFromSeveralOnPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	first, second := t.TempDir(), t.TempDir()
+	for dir, version := range map[string]string{first: "2.0.20", second: "1.18.30"} {
+		script := "#!/bin/sh\nprintf '%s\n' '" + version + "'\n"
+		if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", first+string(os.PathListSeparator)+second)
+	for major, want := range map[int]string{2: filepath.Join(first, "opencode"), 1: filepath.Join(second, "opencode")} {
+		got, err := ResolveBinaryForMajor(context.Background(), major)
+		if err != nil || got != want {
+			t.Fatalf("major %d resolved (%q, %v), want %q", major, got, err, want)
+		}
+	}
+	if _, err := ResolveBinaryForMajor(context.Background(), 3); err == nil || !strings.Contains(err.Error(), "requires OpenCode 3") {
+		t.Fatalf("major 3 err = %v, want first-candidate mismatch", err)
+	}
+}
+
+func TestResolveBinaryForMajorPrefersMismatchOverEarlierProbeFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	broken, mismatch := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(broken, "opencode"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mismatch, "opencode"), []byte("#!/bin/sh\nprintf '1.18.33\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", broken+string(os.PathListSeparator)+mismatch)
+	_, err := ResolveBinaryForMajor(context.Background(), 2)
+	var incompatible *IncompatibleVersionError
+	if !errors.As(err, &incompatible) || incompatible.Path != filepath.Join(mismatch, "opencode") {
+		t.Fatalf("error = %#v, want mismatch from later candidate", err)
+	}
+}
+
+func TestResolveBinaryForMajorSharesOneProbeDeadline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	oldTimeout := versionProbeTimeout
+	versionProbeTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { versionProbeTimeout = oldTimeout })
+	first, second := t.TempDir(), t.TempDir()
+	for _, dir := range []string{first, second} {
+		if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte("#!/bin/sh\n/bin/sleep 0.1\nprintf 'development\\n'\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", first+string(os.PathListSeparator)+second)
+	if _, err := ResolveBinaryForMajor(context.Background(), 1); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want one overall deadline", err)
+	}
+}
+
+func TestResolveBinaryForMajorReturnsCancellationOverEarlierMismatch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	first, second := t.TempDir(), t.TempDir()
+	firstRan, secondRan := filepath.Join(t.TempDir(), "first"), filepath.Join(t.TempDir(), "second")
+	if err := os.WriteFile(filepath.Join(first, "opencode"), []byte("#!/bin/sh\nprintf hit > '"+firstRan+"'\nprintf '1.18.33\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(second, "opencode"), []byte("#!/bin/sh\nprintf hit > '"+secondRan+"'\nexec /bin/sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", first+string(os.PathListSeparator)+second)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("VOLTA_HOME", t.TempDir())
+	t.Setenv("FNM_DIR", t.TempDir())
+	oldPaths := opencodeUnixPaths
+	opencodeUnixPaths = nil
+	t.Cleanup(func() { opencodeUnixPaths = oldPaths })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := ResolveBinaryForMajor(ctx, 2)
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(secondRan); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("second candidate was not probed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	err := <-done
+	if _, statErr := os.Stat(firstRan); statErr != nil {
+		t.Fatalf("first candidate was not probed: %v", statErr)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want cancellation instead of earlier mismatch", err)
 	}
 }

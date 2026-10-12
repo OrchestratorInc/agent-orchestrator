@@ -44,4 +44,7 @@ describe("spawn composer", () => {
 		expect(spawn).toContain("source: destination.kind, sourceId: destination.id");
 		expect(spawn).not.toContain("const { environment, projects, projectsKnown, activeProjectId");
 	});
+	it("clears model loading when changing to a destination without a ready model request", () => {
+		expect(spawn).toMatch(/setModelCatalog\(undefined\);\s*setModelLoading\(false\);\s*return;/);
+	});
 });

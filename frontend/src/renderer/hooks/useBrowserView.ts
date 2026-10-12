@@ -6,6 +6,7 @@ import type {
 	BrowserFindState,
 	BrowserNavState,
 	BrowserRect,
+	BrowserRuntimeState,
 	BrowserTabState,
 	BrowserTabsState,
 } from "../../main/browser-view-host";
@@ -108,6 +109,8 @@ export type BrowserViewModel = {
 	setDevToolsPlacement: (placement: BrowserDevToolsPlacement) => Promise<void>;
 	agentBrowserActive: boolean;
 	agentBrowserActivity: BrowserAgentActivityState | null;
+	browserRuntimeConnected: boolean | null;
+	reconnectBrowserRuntime: () => Promise<void>;
 	destroy: () => void;
 	annotationMode: boolean;
 	annotationState?: Pick<BrowserAnnotationStatePayload, "count" | "screenshotCount" | "hasDraft">;
@@ -267,6 +270,7 @@ export function useBrowserView({
 	const [closedTabs, setClosedTabs] = useState<ClosedBrowserTab[]>([]);
 	const [agentBrowserActive, setAgentBrowserActive] = useState(false);
 	const [agentBrowserActivity, setAgentBrowserActivity] = useState<BrowserAgentActivityState | null>(null);
+	const [browserRuntimeConnected, setBrowserRuntimeConnected] = useState<boolean | null>(null);
 	const [stateSessionId, setStateSessionId] = useState(sessionId);
 	const slotNodeRef = useRef<HTMLDivElement | null>(null);
 	const viewIdRef = useRef("");
@@ -604,6 +608,23 @@ export function useBrowserView({
 			setAgentBrowserActive(state.active);
 			setAgentBrowserActivity(state);
 		});
+	}, []);
+
+	useEffect(() => {
+		let disposed = false;
+		const applyState = (state: BrowserRuntimeState) => {
+			if (!disposed) setBrowserRuntimeConnected(state.connected);
+		};
+		const unsubscribe = window.ao?.browser.onRuntimeState(applyState);
+		void window.ao?.browser.getRuntimeState().then(applyState);
+		return () => {
+			disposed = true;
+			unsubscribe?.();
+		};
+	}, []);
+
+	const reconnectBrowserRuntime = useCallback(async () => {
+		await window.ao?.browser.reconnectRuntime();
 	}, []);
 
 	useEffect(
@@ -1107,6 +1128,8 @@ export function useBrowserView({
 		setDevToolsPlacement: (placement) => runDevtools("setPlacement", placement),
 		agentBrowserActive: stateBelongsToSession && agentBrowserActive,
 		agentBrowserActivity: stateBelongsToSession ? agentBrowserActivity : null,
+		browserRuntimeConnected,
+		reconnectBrowserRuntime,
 		destroy,
 		annotationMode,
 		annotationState,

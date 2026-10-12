@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { machineIdentity, type ServerConfig } from "../config";
 import type { SessionSource } from "../environment/types";
+import { createLocalSessionSource } from "../environment/local";
 import {
 	compactConversation,
 	getConversationConfigOptions,
@@ -14,6 +15,7 @@ import {
 	resolveInput,
 	resolveReviewerInput,
 	rollbackConversation,
+	requireConversationExcerptSupport,
 	sendReviewerConversationMessage,
 	setConversationConfigOption,
 	setConversationSettings,
@@ -26,7 +28,7 @@ import {
 	recoverSentConversationMessage,
 	type ConversationPage,
 } from "./api";
-import type { ChatConfigOption, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
+import type { ChatConfigOption, ChatExcerpt, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
 import { cachedConversationState, createMobileConversationPageCache, discardHistoricalPages } from "./snapshot";
 import { conversationActionError, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
 import { conversationAccess } from "./conversation-access";
@@ -37,6 +39,7 @@ import { createRequestGate } from "./requestGate";
 import { withAttachmentReferences } from "./messageAttachments";
 import { loadTurnOptionCatalog } from "./turnOptionsCatalog";
 import { NOT_PAIRED_ACTION_COPY } from "../connectionError";
+import { excerptDraftText } from "./responseQuotes";
 import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
 
 const REFRESH_DEBOUNCE_MS = 120;
@@ -53,6 +56,7 @@ export type PendingSend = {
 	error?: string;
 	attachments?: ChatImage[];
 	resources?: ChatResource[];
+	excerpts?: ChatExcerpt[];
 	hasAttachments: boolean;
 	restored?: boolean;
 };
@@ -90,7 +94,7 @@ export type MobileConversation = {
 	loadOlder(): Promise<void>;
 	loadTurnOptions(options?: { refresh?: boolean }): Promise<{ models: ChatModel[]; configOptions: ChatConfigOption[] }>;
 	loadSkills(): Promise<ChatSkill[]>;
-	send(text: string, attachments?: ChatImage[], resources?: ChatResource[]): Promise<string>;
+	send(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]): Promise<string>;
 	retrySend(id: string): Promise<void>;
 	discardSend(id: string): Promise<void>;
 	acknowledgeSend(id: string): Promise<void>;
@@ -113,8 +117,11 @@ export function useMobileConversation(
 	sessionId: string,
 	sourceOrOptions?: SessionSource | { reviewId?: string; eventSessionId?: string },
 ): MobileConversation {
-	const sessionSource = sourceOrOptions && "kind" in sourceOrOptions ? sourceOrOptions : undefined;
 	const options = sourceOrOptions && !("kind" in sourceOrOptions) ? sourceOrOptions : undefined;
+	const sessionSource = useMemo(() => {
+		if (sourceOrOptions && "kind" in sourceOrOptions) return sourceOrOptions;
+		return !options && cfg ? createLocalSessionSource(cfg) : undefined;
+	}, [cfg, options, sourceOrOptions]);
 	const access = useMemo(
 		() => conversationAccess({ config: cfg, source: sessionSource, sessionId }),
 		[cfg, sessionId, sessionSource],
@@ -325,6 +332,7 @@ export function useMobileConversation(
 					clientMessageId: pending.id,
 					attachments: pending.attachments,
 					resources: pending.resources,
+					excerpts: pending.excerpts,
 				};
 				if (sessionSource?.kind === "cloud") {
 					if (needsAttachmentRecovery(Boolean(pending.restored), pending.hasAttachments, Boolean(pending.attachments?.length || pending.resources?.length))) {
@@ -363,19 +371,22 @@ export function useMobileConversation(
 	);
 
 	const send = useCallback(
-		async (text: string, attachments?: ChatImage[], resources?: ChatResource[]) => {
+		async (text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]) => {
 			if (!pendingKey) throw new Error(NOT_PAIRED_ACTION_COPY);
 			const id = clientMessageId();
 			let message = text;
 			let nativeAttachments = attachments;
 			if (attachments?.length) {
 				if (options?.reviewId && !sessionId.trim()) throw new Error("Attachments are unavailable until the worker session is linked.");
+				if (excerpts?.length && !options?.reviewId) {
+					await requireConfig(cfg, (c) => requireConversationExcerptSupport(c, sessionId));
+				}
 				const paths = await requireConfig(cfg, (c) => stageConversationAttachments(c, sessionId, attachments));
 				message = withAttachmentReferences(message, paths);
 				if (!snapshot?.capabilities?.includes("images")) nativeAttachments = undefined;
 			}
 			const saved = await reservePendingSend(pendingKey, {
-				id, draftText: text, text: message, hasAttachments: Boolean(attachments?.length || resources?.length), kind: "send",
+				id, draftText: excerptDraftText(text, excerpts), text: message, excerpts, hasAttachments: Boolean(attachments?.length || resources?.length), kind: "send",
 			});
 			await deliver({
 				...saved, text: attachments?.length || resources?.length ? message : saved.text,

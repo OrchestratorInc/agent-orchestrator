@@ -78,7 +78,7 @@ afterEach(async () => {
 });
 
 describe("SpawnComposerControls on iOS", () => {
-	it("gives destination and project separate native touch hosts and selects a project", async () => {
+	it("shares a native controls host with compact destination and project menus", async () => {
 		const onSelectProject = vi.fn();
 		await act(async () => {
 			renderer = create(<SpawnComposerControls
@@ -104,9 +104,8 @@ describe("SpawnComposerControls on iOS", () => {
 		});
 		const menus = renderer!.root.findAll((node) => String(node.type) === "Menu");
 		expect(menus.length).toBeGreaterThanOrEqual(2);
-		const selectorRow = renderer!.root.findAll((node) => String(node.type) === "View")
-			.find((node) => node.findAll((child) => String(child.type) === "Host" && child.findAll((descendant) => String(descendant.type) === "Menu").length === 1).length === 2);
-		expect(selectorRow).toBeDefined();
+		const controlsHost = renderer!.root.findAll((node) => String(node.type) === "Host").find((node) => node.findAll((child) => String(child.type) === "Menu").length >= 2);
+		expect(controlsHost).toBeDefined();
 		const labels = menus[0].findAll((node) => String(node.type) === "Button").map((node) => node.props.label);
 		expect(labels).toEqual(["Local · Paired desktop", "Cloud"]);
 		const projectButton = menus[1].findAll((node) => String(node.type) === "Button")
@@ -148,5 +147,43 @@ describe("SpawnComposerControls on iOS", () => {
 		expect(text).not.toContain("Automatic");
 		const buttons = renderer!.root.findAll((node) => String(node.type) === "Button");
 		expect(buttons.some((node) => node.props.label === "Attach file")).toBe(false);
+	});
+});
+
+describe("iOS spawn machine selector", () => {
+	it("places a checked Run on menu beside the project selector", async () => {
+		const onSelectDestination = vi.fn();
+		await act(async () => {
+			renderer = create(<SpawnComposerControls
+				destinations={[{ source: { kind: "local", id: "host-a" }, label: "Alpha", available: true }, { source: { kind: "local", id: "host-b" }, label: "Beta", available: true }]}
+				destination={{ kind: "local", id: "host-a" }}
+				onSelectDestination={onSelectDestination}
+				projects={[{ id: "project-1", label: "Project" }]}
+				projectId="project-1"
+				onSelectProject={vi.fn()}
+				agents={[]}
+				harness=""
+				onSelectHarness={vi.fn()}
+				models={[]}
+				modelSelection="__auto__"
+				modelLabel="Automatic"
+				onSelectModel={vi.fn()}
+				onAttach={vi.fn()}
+				voice={{ state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn() }}
+				onSpawn={vi.fn()}
+				busy={false}
+				disabled
+			/>);
+		});
+
+		const menus = renderer!.root.findAll((node) => String(node.type) === "Menu");
+		expect(menus).toHaveLength(4);
+		const hostButtons = menus[0].findAll((node) => String(node.type) === "Button");
+		expect(hostButtons.map((node) => [node.props.label, node.props.systemImage])).toEqual([
+			["Alpha", "checkmark"],
+			["Beta", undefined],
+		]);
+		await act(async () => hostButtons[1].props.onPress());
+		expect(onSelectDestination).toHaveBeenCalledWith({ kind: "local", id: "host-b" });
 	});
 });

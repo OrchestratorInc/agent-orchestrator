@@ -74,6 +74,20 @@ const configState = vi.hoisted(() => ({
 	options: [] as ChatConfigOption[], loaded: false, error: undefined as string | undefined,
 }));
 
+const sideMocks = vi.hoisted(() => ({
+	create: vi.fn(),
+	send: vi.fn(),
+	show: vi.fn(),
+	addReference: vi.fn(),
+	sides: [] as { hasWork: boolean }[],
+	workspaceSend: undefined as
+		| undefined
+		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<void>),
+}));
+vi.mock("./IndependentSideChats", () => ({
+	useIndependentSideChats: () => ({ ...sideMocks, panel: null, activeId: "existing-side" }),
+}));
+
 const visibilityMocks = vi.hoisted(() => ({
 	presentation: vi.fn(),
 	route: vi.fn(),
@@ -82,6 +96,7 @@ const visibilityMocks = vi.hoisted(() => ({
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
 	getApiBaseUrl: () => "",
+	subscribeApiBaseUrl: () => () => {},
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }));
 
@@ -122,9 +137,12 @@ vi.mock("./ChatWorkspace", async () => {
 			onLinkOpen,
 			onRememberPermissions,
 			onChooseSettings,
+			configOptionError,
 			snapshot,
 			shellTarget,
+			onSend,
 		}: {
+			onSend: typeof sideMocks.workspaceSend;
 			agentInputDisabled?: boolean;
 			headerActions?: ReactNode;
 			sessionTabAction?: ReactNode;
@@ -132,9 +150,11 @@ vi.mock("./ChatWorkspace", async () => {
 			onLinkOpen?: (url: string) => void;
 			onRememberPermissions?: unknown;
 			onChooseSettings?: unknown;
+			configOptionError?: string;
 			snapshot: { sessionId?: string };
 			shellTarget?: { handleId: string };
 		}) => {
+			sideMocks.workspaceSend = onSend;
 			const [mountedSessionId] = useState(snapshot.sessionId);
 			return (
 				<div>
@@ -150,6 +170,7 @@ vi.mock("./ChatWorkspace", async () => {
 					{snapshot.sessionId ? <div>Rendered {snapshot.sessionId}</div> : null}
 					<div data-testid="remember-available">{String(Boolean(onRememberPermissions))}</div>
 					<div data-testid="turn-settings-available">{String(Boolean(onChooseSettings))}</div>
+					<div data-testid="config-option-error">{configOptionError}</div>
 					{headerActions}
 					{sessionTabAction}
 					<button type="button" onClick={() => onLinkOpen?.(LINK)}>
@@ -219,6 +240,36 @@ afterEach(() => {
 });
 
 describe("SessionChatSurface link routing", () => {
+	it("keeps orchestrator chat mounted until its conversation and provisioning are ready", () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const orchestrator = { ...session, kind: "orchestrator" as const, provisionState: "provisioning" as const };
+		useUiStore.getState().setProjectProvisioning(session.workspaceId, true);
+		conversationState.snapshot = undefined;
+		conversationState.isLoading = true;
+		const tree = (provisionState: "provisioning" | "ready" = "provisioning") =>
+			<Wrapper client={queryClient}><SessionChatSurface session={{ ...orchestrator, provisionState }} /></Wrapper>;
+		const view = render(tree());
+		const mounted = screen.getByText(`Mounted ${session.id}`);
+		expect(screen.queryByText("Loading conversation…")).not.toBeInTheDocument();
+		view.rerender(tree("ready"));
+		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(true);
+		conversationState.snapshot = snapshotFor(session.id);
+		conversationState.isLoading = false;
+		view.rerender(tree());
+		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(true);
+		view.rerender(tree("ready"));
+		expect(screen.getByText(`Mounted ${session.id}`)).toBe(mounted);
+		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(false);
+	});
+
+	it("releases project loading to show a failed orchestrator's retry UI", () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		useUiStore.getState().setProjectProvisioning(session.workspaceId, true);
+		conversationState.snapshot = snapshotFor(session.id);
+		render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, kind: "orchestrator", provisionState: "failed", provisionError: "branch already checked out" }} /></Wrapper>);
+		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(false);
+	});
+
 	it("keeps OpenCode approvals writable when its provider supplies Build/Plan mode", () => {
 		conversationState.snapshot = { capabilities: ["config_options"], harness: "opencode" };
 		configState.options = [{
@@ -1088,6 +1139,13 @@ describe("SessionChatSurface link routing", () => {
 
 
 describe("controller catalogs during an interface handoff", () => {
+	it("hides a stale catalog error while a hibernated controller is offline", () => {
+		configState.error = "the agent controller for this session is not running";
+		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "hibernated" } };
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		expect(screen.getByTestId("config-option-error")).toBeEmptyDOMElement();
+	});
+
 	it.each(["stopped", "connecting", "ready"] as const)("waits through handoff with a %s snapshot, then loads catalogs", (state) => {
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state } };
 		const client = new QueryClient();
@@ -1133,4 +1191,78 @@ describe("project remembering waits for provider permissions", () => {
 		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
 		expect(screen.getByTestId("remember-available")).toHaveTextContent("true");
 	});
+});
+
+describe("side command routing", () => {
+	beforeEach(() => {
+		useUiStore.setState({ developerMode: true, sideChats: true });
+	});
+	afterEach(() => {
+		useUiStore.setState({ developerMode: false, sideChats: false });
+	});
+
+	it.each([
+		["side chats are off", { developerMode: true, sideChats: false }, "codex"],
+		["Developer mode is off", { developerMode: false, sideChats: true }, "codex"],
+		["the harness cannot run sides", { developerMode: true, sideChats: true }, "cursor"],
+	] as const)("sends /btw to the main chat when %s", async (_case, flags, provider) => {
+		useUiStore.setState(flags);
+		sideMocks.create.mockReset();
+		const mainSend = vi.fn().mockResolvedValue(undefined);
+		(conversationCommandState as { send?: unknown }).send = mainSend;
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<Wrapper client={queryClient}>
+				<SessionChatSurface session={{ ...session, provider }} />
+			</Wrapper>,
+		);
+		await act(async () => {
+			await sideMocks.workspaceSend!("/btw what is this?", undefined, "submission-main");
+		});
+		expect(sideMocks.create).not.toHaveBeenCalled();
+		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: "/btw what is this?", clientMessageId: "submission-main" }));
+		delete (conversationCommandState as { send?: unknown }).send;
+	});
+
+	it.each(["btw", "side"])(
+		"/%s creates a new side for every new submission and reuses a retry key",
+		async (command) => {
+			sideMocks.create.mockReset().mockImplementation(async (_excerpt, _force, key) => ({ id: `side-${key}` }));
+			sideMocks.send.mockReset().mockResolvedValue(undefined);
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			render(
+				<Wrapper client={queryClient}>
+					<SessionChatSurface session={session} />
+				</Wrapper>,
+			);
+			await act(async () => {
+				await sideMocks.workspaceSend!(`/${command} first`, undefined, "submission-1");
+				await sideMocks.workspaceSend!(`/${command} second`, undefined, "submission-2");
+				await sideMocks.workspaceSend!(`/${command} second`, undefined, "submission-2");
+			});
+			expect(sideMocks.create.mock.calls).toEqual([
+				[undefined, true, "submission-1"],
+				[undefined, true, "submission-2"],
+				[undefined, true, "submission-2"],
+			]);
+			expect(sideMocks.send).toHaveBeenNthCalledWith(
+				1,
+				"side-submission-1",
+				"first",
+				undefined,
+				undefined,
+				true,
+				"submission-1",
+			);
+			expect(sideMocks.send).toHaveBeenNthCalledWith(
+				2,
+				"side-submission-2",
+				"second",
+				undefined,
+				undefined,
+				true,
+				"submission-2",
+			);
+		},
+	);
 });

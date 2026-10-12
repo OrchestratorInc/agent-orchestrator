@@ -129,19 +129,33 @@ func newAutomationListCommand(ctx *commandContext) *cobra.Command {
 	var enabled, jsonOutput bool
 	cmd := &cobra.Command{Use: "list", Short: "List automations", Args: usageArgs(cobra.NoArgs), RunE: func(cmd *cobra.Command, _ []string) error {
 		query := url.Values{}
+		query.Set("limit", "100")
 		if project != "" {
 			query.Set("projectId", project)
 		}
 		if cmd.Flags().Changed("enabled") {
 			query.Set("enabled", strconv.FormatBool(enabled))
 		}
-		path := "automations"
-		if encoded := query.Encode(); encoded != "" {
-			path += "?" + encoded
-		}
-		var response automationListDTO
-		if err := ctx.getJSON(cmd.Context(), path, &response); err != nil {
-			return err
+		response := automationListDTO{Automations: []automationDTO{}}
+		seenCursors := make(map[string]bool)
+		for {
+			path := "automations"
+			if encoded := query.Encode(); encoded != "" {
+				path += "?" + encoded
+			}
+			var page automationListDTO
+			if err := ctx.getJSON(cmd.Context(), path, &page); err != nil {
+				return err
+			}
+			response.Automations = append(response.Automations, page.Automations...)
+			if page.NextCursor == "" {
+				break
+			}
+			if seenCursors[page.NextCursor] {
+				return errors.New("automation list pagination returned a repeated cursor")
+			}
+			seenCursors[page.NextCursor] = true
+			query.Set("cursor", page.NextCursor)
 		}
 		if jsonOutput {
 			return writeJSON(cmd.OutOrStdout(), response)

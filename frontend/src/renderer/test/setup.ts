@@ -3,6 +3,7 @@ import * as jestDomMatchers from "@testing-library/jest-dom/matchers";
 import { expect } from "vitest";
 import "../i18n";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
+import { appShortcutBus } from "./app-shortcut-bus";
 
 // Vitest 4 can load the convenience entry against a different matcher
 // instance. Register the matchers on the active test runtime as well.
@@ -123,7 +124,7 @@ if (typeof window !== "undefined") {
 			onNextSessionShortcut: () => () => undefined,
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
-			onFocusTerminalShortcut: () => () => undefined,
+			onShortcut: (listener: Parameters<typeof appShortcutBus.subscribe>[0]) => appShortcutBus.subscribe(listener),
 		},
 		terminal: {
 			saveDroppedFile: async () => "",
@@ -141,6 +142,7 @@ if (typeof window !== "undefined") {
 		theme: {
 			set: async () => undefined,
 			persistTerminal: async () => undefined,
+			setWindowBackground: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
@@ -157,7 +159,8 @@ if (typeof window !== "undefined") {
 			restart: async () => ({ state: "starting" }),
 			onStatus: () => () => undefined,
 		},
-		editorHandoff: {
+		sideChats: { capture: async () => undefined },
+	editorHandoff: {
 			getState: async () => ({
 				targets: [
 					{ id: "cursor", name: "Cursor", kind: "editor" },
@@ -172,6 +175,7 @@ if (typeof window !== "undefined") {
 				if (targetId === "terminal") return { id: "terminal", name: "Terminal", kind: "terminal" };
 				return { id: targetId ?? "cursor", name: "Cursor", kind: "editor" };
 			},
+			copyWorkspacePath: async () => undefined,
 		},
 		telemetry: {
 			getBootstrap: async () => null,
@@ -184,6 +188,8 @@ if (typeof window !== "undefined") {
 		},
 		browser: {
 			nativeCompositionEnabled: true,
+			reconnectRuntime: async () => undefined,
+			getRuntimeState: async () => ({ connected: false }),
 			ensure: async (sessionId: string) => ({
 				viewId: `test:${sessionId}`,
 				url: "",
@@ -273,6 +279,7 @@ if (typeof window !== "undefined") {
 			onFocusLocation: () => () => undefined,
 			onFindOpen: () => () => undefined,
 			onReopenClosedTab: () => () => undefined,
+			onClosePanel: () => () => undefined,
 			devtools: async ({ viewId, operation }) => ({
 				viewId,
 				open: operation !== "close",
@@ -288,6 +295,7 @@ if (typeof window !== "undefined") {
 			onPageFocus: () => () => undefined,
 			onTabsState: () => () => undefined,
 			onAgentActivity: () => () => undefined,
+			onRuntimeState: () => () => undefined,
 			onDevToolsState: () => () => undefined,
 			onProfileState: () => () => undefined,
 			onProfileManage: () => () => undefined,
@@ -358,6 +366,9 @@ if (typeof window !== "undefined") {
 		},
 		remotes: {
 			list: async () => [],
+			importAccountHost: async () => undefined,
+			pruneAccountHosts: async () => undefined,
+			issueAccountToken: async () => "",
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,

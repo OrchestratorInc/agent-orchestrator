@@ -13,6 +13,7 @@ const session: Session = {
 	displayName: "fix the build", branch: "ao/fix-build", mode: "trusted", interfaceMode: "chat",
 	deniedCommands: [], activityState: "active", status: "working",
 	runtimeConnected: true, isTerminated: false,
+	autoReviewEnabled: false, autoInjectCI: false, autoInjectReview: false, terminateOnPrMerge: false,
 	createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-02T00:00:00Z",
 };
 

@@ -76,9 +76,9 @@ export function SpawnComposerControls({
 
 	return (
 		<View style={styles.stack}>
-			<View style={styles.selectorRow}>
+			<View style={styles.destinationRow}>
 				<SelectorButton label={`Run on ${destinationLabel}`} icon="monitor" onPress={() => setOpenMenu("destination")} style={styles.destinationButton} />
-				<SelectorButton label={projectLabel} icon={selectedProject?.icon ?? "folder"} onPress={() => setOpenMenu("project")} style={styles.projectButton} />
+				<SelectorButton label={projectLabel} icon={selectedProject?.icon ?? "folder"} onPress={() => setOpenMenu("project")} style={styles.destinationButton} />
 			</View>
 
 			<View style={styles.rail}>
@@ -202,9 +202,8 @@ function OptionList({ title, options, selectedValue, showAgentLogos, onSelect, o
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	stack: { gap: space.sm },
-	selectorRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
-	destinationButton: { flex: 2, minWidth: 0, height: 36, paddingHorizontal: space.xs, backgroundColor: "transparent" },
-	projectButton: { flex: 3, minWidth: 0, height: 36, paddingHorizontal: space.xs, backgroundColor: "transparent" },
+	destinationRow: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.xs },
+	destinationButton: { flex: 1, minWidth: 0, height: 36, paddingHorizontal: space.sm, backgroundColor: "transparent" },
 	rail: {
 		height: 52,
 		flexDirection: "row",

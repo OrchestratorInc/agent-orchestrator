@@ -55,7 +55,7 @@ func (s *scmRefreshStore) RecordPullRequestOpened(context.Context, string, domai
 	return nil
 }
 
-func (s *scmRefreshStore) CreateReviewRun(context.Context, string, string, string, string) (domain.ReviewRun, bool, error) {
+func (s *scmRefreshStore) CreateReviewRun(context.Context, string, string, string, string, string, string) (domain.ReviewRun, bool, error) {
 	return domain.ReviewRun{}, false, postgres.ErrNotFound
 }
 

@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { haptics } from "../../lib/haptics";
 import { boardFailure } from "../../lib/board-presentation";
 import { orchestratorProjectSections, projectDetailSessions, projectPageStats } from "../../lib/orchestratorView";
-import { ProjectPageHeader } from "../../lib/project-card";
+import { ProjectMachineIndicator, ProjectPageHeader } from "../../lib/project-card";
 import { StaleBanner } from "../../lib/StaleBanner";
 import { useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
@@ -36,7 +36,7 @@ function ProjectScreenContent() {
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
 	const { id, source: sourceParam, sourceId, hostId } = useLocalSearchParams<{ id: string; source?: string; sourceId?: string; hostId?: string }>();
-	const { scopedBoard, sourceFor, refreshSource } = useApp();
+	const { scopedBoard, sourceFor, refreshSource, hostStates } = useApp();
 	const route = resolveSessionRouteSource({ id: id ?? "", source: sourceParam, sourceId, hostId }, scopedBoard.projects);
 	const source = route.kind === "found" ? route.source : null;
 	const status = source ? scopedBoard.sources[sourceKey(source)] : undefined;
@@ -90,7 +90,7 @@ function ProjectScreenContent() {
 						onPress={() => backOr(router, "/projects")}
 					/>
 				}
-				right={null}
+				right={<ProjectMachineIndicator hostId={source?.kind === "local" ? source.id : undefined} hosts={hostStates} />}
 			/>
 			{source && status && <StaleBanner sourceLabel={source.kind === "cloud" ? "Cloud" : "Local"} sourceStatus={status} onRetry={onRefresh} />}
 
@@ -111,7 +111,7 @@ function ProjectScreenContent() {
 					<EmptyState icon="wifi-off" title={cloudFailure.title} message={cloudFailure.message}
 						action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />} />
 				) : (
-					<EmptyState icon="folder" title="Project not found" message="It may have been removed from AO." />
+					<EmptyState icon="folder" title="Project not found" message="It may have been removed from Orchestrator." />
 				)
 			) : (
 				<WorkerBoardList

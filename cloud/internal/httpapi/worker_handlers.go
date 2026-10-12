@@ -16,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/logctx"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/roleprompt"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -139,6 +140,9 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workerID := worker.NextWorkerID(ticket.SessionID, ticket.WorkerEpoch)
+	// Read the startup timing before the registration and first heartbeat
+	// clear it, so the support trail can measure time-to-ready.
+	readiness, readinessErr := s.sandboxReadiness(r.Context(), ticket.OrgID, ticket.SessionID)
 	if err := s.store.RegisterWorkerBootstrap(
 		r.Context(),
 		ticket.OrgID,
@@ -172,6 +176,7 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 	); err != nil {
 		s.logger.Warn("append worker.connected event", "error", err, "request_id", requestID(r))
 	}
+	s.recordWorkerReady(r, ticket.OrgID, ticket.SessionID, workerID, input.Version, ticket.WorkerEpoch, readiness, readinessErr)
 
 	writeJSON(w, http.StatusOK, worker.BootstrapResponse{
 		WorkerToken: token,
@@ -237,6 +242,12 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 // launchContextFrom projects a stored launch spec onto the wire type shared by
 // bootstrap and reconnect.
 func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error) {
+	var agentConfig domain.ProjectAgentConfig
+	if len(launch.AgentConfig) > 0 {
+		if err := json.Unmarshal(launch.AgentConfig, &agentConfig); err != nil {
+			return worker.LaunchContext{}, err
+		}
+	}
 	agentRules, orchestratorRules, err := projectRoleRules(launch.ProjectConfig)
 	if err != nil {
 		return worker.LaunchContext{}, err
@@ -280,6 +291,7 @@ func launchContextFrom(launch domain.WorkerLaunch) (worker.LaunchContext, error)
 		ParentSessionID: launch.ParentSessionID,
 		Mode:            launch.Mode,
 		Model:           launch.Model,
+		AgentConfig:     agentConfig,
 		ReasoningEffort: launch.ReasoningEffort,
 		SelectionAt:     launch.SelectionAt,
 		DeniedCommands:  launch.DeniedCommands,
@@ -377,6 +389,11 @@ func (s *Server) workerAuth(next http.Handler) http.Handler {
 			writeError(w, r, http.StatusUnauthorized, "STALE_WORKER_TOKEN", "The worker credential has been replaced.")
 			return
 		}
+		logctx.Annotate(r.Context(), logctx.Fields{
+			OrgID:     claims.OrgID,
+			SessionID: claims.SessionID,
+			WorkerID:  claims.WorkerID,
+		})
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), workerContextKey{}, claims)))
 	})
 }
@@ -396,7 +413,10 @@ func (s *Server) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input worker.HeartbeatRequest
-	if err := decodeJSON(w, r, &input); err != nil {
+	// Unknown fields are ignored here, unlike other requests: a worker newer
+	// than this control plane (a rollback) may report more, and rejecting
+	// its heartbeat would take every such session offline.
+	if err := decodeJSONTolerant(w, r, &input); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -416,6 +436,17 @@ func (s *Server) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	if input.Busy {
+		if store, ok := s.store.(interface {
+			MarkSandboxBusy(ctx context.Context, orgID, sessionID string) error
+		}); ok {
+			// Best effort: a missed mark only makes idle pause slightly eager,
+			// and the next busy heartbeat records it again.
+			if err := store.MarkSandboxBusy(r.Context(), claims.OrgID, claims.SessionID); err != nil {
+				s.logger.Warn("record sandbox activity", "session_id", claims.SessionID, "error", err)
+			}
+		}
+	}
 	renewed, err := s.workerTokens.Issue(claims, s.workerTokenTTL())
 	if err != nil {
 		s.logger.Error("renew worker token", "error", err, "request_id", requestID(r))
@@ -426,6 +457,7 @@ func (s *Server) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		OK:          true,
 		WorkerToken: renewed,
 		ExpiresIn:   int(s.workerTokenTTL().Seconds()),
+		Features:    []string{worker.HeartbeatFeatureBusy},
 	})
 }
 
@@ -458,11 +490,13 @@ func (s *Server) workerCheckoutGrant(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
+			s.recordGitGrantFailure(r, claims, "checkout", "CHECKOUT_NOT_AUTHORIZED", err)
 			writeError(w, r, http.StatusForbidden, "CHECKOUT_NOT_AUTHORIZED", "This session does not have an active repository grant.")
 			return
 		}
 		if err != nil {
 			s.logger.Error("issue worker checkout grant", "error", err, "request_id", requestID(r))
+			s.recordGitGrantFailure(r, claims, "checkout", "SCM_BROKER_FAILED", err)
 			writeError(w, r, http.StatusBadGateway, "SCM_BROKER_FAILED", "A repository checkout grant could not be issued.")
 			return
 		}
@@ -617,7 +651,7 @@ func (s *Server) workerRaisePullRequest(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:git scope is required.")
 		return
 	}
-	if s.checkoutBroker == nil {
+	if s.checkoutBroker == nil && s.patWrites == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Raising a pull request is not available.")
 		return
 	}
@@ -654,12 +688,17 @@ func (s *Server) workerRaisePullRequest(w http.ResponseWriter, r *http.Request) 
 		pr  domain.PullRequest
 		err error
 	)
-	pr, err = s.checkoutBroker.RaisePullRequest(r.Context(), claims.OrgID, claims.SessionID, raiseInput)
-	if err != nil {
+	if s.checkoutBroker != nil {
+		pr, err = s.checkoutBroker.RaisePullRequest(r.Context(), claims.OrgID, claims.SessionID, raiseInput)
+	}
+	if err != nil || s.checkoutBroker == nil {
 		if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
 			pr, err = s.patWrites.RaisePullRequest(
 				r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, raiseInput,
 			)
+		} else if s.checkoutBroker == nil {
+			writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Raising a pull request is not available.")
+			return
 		}
 	}
 	if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
@@ -697,7 +736,7 @@ func (s *Server) workerClaimPullRequest(w http.ResponseWriter, r *http.Request) 
 		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:git scope is required.")
 		return
 	}
-	if s.checkoutBroker == nil {
+	if s.checkoutBroker == nil && s.patWrites == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Pull request tracking is not available.")
 		return
 	}
@@ -723,12 +762,17 @@ func (s *Server) workerClaimPullRequest(w http.ResponseWriter, r *http.Request) 
 		pr  domain.PullRequest
 		err error
 	)
-	pr, err = s.checkoutBroker.ClaimPullRequest(r.Context(), claims.OrgID, claims.SessionID, input.Reference)
-	if err != nil {
+	if s.checkoutBroker != nil {
+		pr, err = s.checkoutBroker.ClaimPullRequest(r.Context(), claims.OrgID, claims.SessionID, input.Reference)
+	}
+	if err != nil || s.checkoutBroker == nil {
 		if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
 			pr, err = s.patWrites.ClaimPullRequest(
 				r.Context(), claims.OrgID, claims.SessionID, grant.CloneURL, grant.Token, input.Reference,
 			)
+		} else if s.checkoutBroker == nil {
+			writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Pull request tracking is not available.")
+			return
 		}
 	}
 	if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
@@ -829,7 +873,7 @@ func (s *Server) workerSubmitReview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:git scope is required.")
 		return
 	}
-	if s.checkoutBroker == nil {
+	if s.checkoutBroker == nil && s.patWrites == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Submitting a review is not available.")
 		return
 	}
@@ -843,10 +887,19 @@ func (s *Server) workerSubmitReview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	run, err := s.checkoutBroker.SubmitReview(r.Context(), claims.OrgID, claims.SessionID, reviewRunID, domain.SubmitReviewResult{
-		Verdict: contract.AOReviewVerdict(strings.TrimSpace(input.Verdict)),
-		Body:    input.Body,
-	})
+	result := domain.SubmitReviewResult{Verdict: contract.AOReviewVerdict(strings.TrimSpace(input.Verdict)), Body: input.Body}
+	var (
+		run domain.ReviewRun
+		err error
+	)
+	if grant, ok := s.patWriteGrant(r.Context(), claims); ok {
+		run, err = s.patWrites.SubmitReview(r.Context(), claims.OrgID, claims.SessionID, reviewRunID, grant.Token, result)
+	} else if s.checkoutBroker != nil {
+		run, err = s.checkoutBroker.SubmitReview(r.Context(), claims.OrgID, claims.SessionID, reviewRunID, result)
+	} else {
+		writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "Submitting a review is not available.")
+		return
+	}
 	if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
 		writeError(w, r, http.StatusForbidden, "REVIEW_NOT_AUTHORIZED", "This session may not submit a verdict for this review.")
 		return
@@ -1158,6 +1211,10 @@ func (s *Server) workerFinishTurn(w http.ResponseWriter, r *http.Request, outcom
 	})
 }
 
+type workerReviewCredentialStore interface {
+	WorkerReviewCredential(context.Context, string, string, string, int64, string) (domain.WorkerCredential, error)
+}
+
 func (s *Server) workerCredential(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	claims := workerFrom(r)
@@ -1169,9 +1226,31 @@ func (s *Server) workerCredential(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, "CREDENTIALS_UNAVAILABLE", "Coding-agent credentials are unavailable.")
 		return
 	}
-	credential, err := s.store.WorkerAgentCredential(
-		r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch,
-	)
+	// A worker redeems only its own session's harness credential, or the
+	// snapshotted harness of a running review it owns. There is deliberately no
+	// arbitrary-provider selector: the worker token is readable by the agent, so
+	// one would let a compromised session pull every connected credential.
+	if r.URL.Query().Has("provider") {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "provider is not supported.")
+		return
+	}
+	reviewRunID := r.URL.Query().Get("reviewRunId")
+	var credential domain.WorkerCredential
+	var err error
+	if reviewRunID != "" {
+		if requireUUID(reviewRunID, "reviewRunId") != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "reviewRunId must be a UUID.")
+			return
+		}
+		store, ok := s.store.(workerReviewCredentialStore)
+		if !ok {
+			writeError(w, r, http.StatusNotImplemented, "not_implemented", "Reviewer credentials are unavailable.")
+			return
+		}
+		credential, err = store.WorkerReviewCredential(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch, reviewRunID)
+	} else {
+		credential, err = s.store.WorkerAgentCredential(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch)
+	}
 	if err != nil {
 		s.writeWorkerStoreError(w, r, err)
 		return

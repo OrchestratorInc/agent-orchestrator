@@ -159,15 +159,27 @@ function createFakeTerminal(): FakeTerminal {
 	return terminal;
 }
 
+type SetupOptions = {
+	coverInitialReplay?: boolean;
+	waitForInitialOutput?: boolean;
+	exitNotice?: string;
+	daemonReady?: boolean;
+	attachedSession?: WorkspaceSession;
+	isVisible?: boolean;
+	inputDisabled?: boolean;
+	hasMeasuredGrid?: boolean;
+};
+
 function setup({
 	coverInitialReplay = true,
 	waitForInitialOutput = false,
+	exitNotice,
 	daemonReady = true,
 	attachedSession = session as WorkspaceSession | undefined,
 	isVisible = true,
 	inputDisabled = false,
 	hasMeasuredGrid = true,
-} = {}) {
+}: SetupOptions = {}) {
 	const muxes: FakeMux[] = [];
 	const createMux = () => {
 		const fake = createFakeMux();
@@ -189,6 +201,7 @@ function setup({
 			useTerminalSession(attachedSession, {
 				coverInitialReplay,
 				waitForInitialOutput,
+				exitNotice,
 				daemonReady: ready,
 				createMux,
 				inputDisabled: blocked,
@@ -881,6 +894,13 @@ describe("useTerminalSession", () => {
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: workspaceQueryKey });
 	});
 
+	it("uses a contextual exit notice for intentionally short-lived terminals", () => {
+		const { terminal, muxes } = setup({ exitNotice: "[reviewer terminal finished]" });
+		act(() => muxes[0].emitExit("handle-1"));
+		expect(terminal.lines).toContain("[reviewer terminal finished]");
+		expect(terminal.lines.some((line) => line.includes("[process exited]"))).toBe(false);
+	});
+
 	it("reconnects when a merged terminated session is restored with the same terminal handle", () => {
 		const muxes: FakeMux[] = [];
 		const createMux = () => {
@@ -1208,6 +1228,32 @@ describe("cloud connect breaker (issue #4668)", () => {
 		// 7 closed < 8, plus 7 waits that don't count -> still retrying.
 		expect(view.result.current.state).toBe("reattaching");
 		expect(view.result.current.error).toBeUndefined();
+	});
+
+	it("polls fast while the worker starts, then falls back to the flat 1s poll", () => {
+		const { muxes } = setup({ attachedSession: cloudSession, coverInitialReplay: false });
+		// A mint 409 ("waiting") early in a cold start retries after 250ms.
+		act(() => latest(muxes).emitConnection("waiting"));
+		act(() => void vi.advanceTimersByTime(249));
+		expect(muxes).toHaveLength(1);
+		act(() => void vi.advanceTimersByTime(1));
+		expect(muxes).toHaveLength(2);
+		// Past the startup window the poll is the flat 1s one again.
+		act(() => void vi.advanceTimersByTime(15_000));
+		act(() => latest(muxes).emitConnection("waiting"));
+		act(() => void vi.advanceTimersByTime(999));
+		expect(muxes).toHaveLength(2);
+		act(() => void vi.advanceTimersByTime(1));
+		expect(muxes).toHaveLength(3);
+	});
+
+	it("keeps genuine socket failures on the 1s poll so the breaker still needs ~8s", () => {
+		const { muxes } = setup({ attachedSession: cloudSession, coverInitialReplay: false });
+		act(() => latest(muxes).emitConnection("closed"));
+		act(() => void vi.advanceTimersByTime(999));
+		expect(muxes).toHaveLength(1);
+		act(() => void vi.advanceTimersByTime(1));
+		expect(muxes).toHaveLength(2);
 	});
 
 	it("resets the failure count after a successful attach", () => {

@@ -3,6 +3,7 @@ import {
 	ProjectSetupFormView,
 	ProjectSetupHeaderView,
 } from "@aoagents/product-ui";
+import { useUiStore } from "../stores/ui-store";
 import { useTranslation } from "react-i18next";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery } from "@tanstack/react-query";
@@ -125,6 +126,8 @@ export function CreateProjectAgentSheet({
 	shake = false,
 }: CreateProjectAgentSheetProps) {
 	const { t } = useTranslation();
+	// Settings opens as a page in the center pane; step aside so it is not hidden behind this modal.
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const [isExiting, setIsExiting] = useState(false);
 	const contentOpen = open || isExiting;
 	const displayedAction = useRef(action);
@@ -218,9 +221,11 @@ export function CreateProjectAgentSheet({
 		}
 	}, [authorizedAgents, open, orchestratorAgentTouched, sessionHistory, workerAgentTouched]);
 
+	if (isBusy) return null;
+
 	return (
 		<Dialog.Root
-			open={open}
+			open={open && !settingsOpen}
 			onOpenChange={(next) => {
 				if (isBusy) return;
 				setIsExiting(!next);
@@ -476,7 +481,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 					onCloseAutoFocus={management.onCloseAutoFocus}
 					disabled={disabled}
 					onChange={onChange}
-					triggerClassName={cn(variant === "settings-control" && "w-full justify-between", invalid && "text-error")}
+					triggerClassName={cn(variant === "settings-control" && "w-fit", invalid && "text-error")}
 					menuClassName={cn("settings-agent-menu-surface", AGENT_MENU_WIDTH)}
 					menuItemClassName="settings-agent-menu-item"
 					renderTrigger={() => (

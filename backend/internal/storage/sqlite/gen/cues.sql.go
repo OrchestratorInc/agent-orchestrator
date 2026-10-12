@@ -28,20 +28,19 @@ func (q *Queries) DeleteCueByID(ctx context.Context, id domain.CueID) (int64, er
 const insertCue = `-- name: InsertCue :exec
 
 INSERT INTO cues (
-    id, project_id, name, description, type, command, prompt, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    id, project_id, name, type, command, prompt, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertCueParams struct {
-	ID          domain.CueID
-	ProjectID   domain.ProjectID
-	Name        string
-	Description string
-	Type        domain.CueType
-	Command     string
-	Prompt      string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID        domain.CueID
+	ProjectID domain.ProjectID
+	Name      string
+	Type      domain.CueType
+	Command   string
+	Prompt    string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // User-managed reusable quick actions (Cues) scoped to a project. The
@@ -52,7 +51,6 @@ func (q *Queries) InsertCue(ctx context.Context, arg InsertCueParams) error {
 		arg.ID,
 		arg.ProjectID,
 		arg.Name,
-		arg.Description,
 		arg.Type,
 		arg.Command,
 		arg.Prompt,
@@ -63,7 +61,7 @@ func (q *Queries) InsertCue(ctx context.Context, arg InsertCueParams) error {
 }
 
 const selectCueByID = `-- name: SelectCueByID :one
-SELECT id, project_id, name, description, type, command, prompt, created_at, updated_at
+SELECT id, project_id, name, type, command, prompt, created_at, updated_at
 FROM cues
 WHERE id = ?
 `
@@ -75,7 +73,6 @@ func (q *Queries) SelectCueByID(ctx context.Context, id domain.CueID) (Cue, erro
 		&i.ID,
 		&i.ProjectID,
 		&i.Name,
-		&i.Description,
 		&i.Type,
 		&i.Command,
 		&i.Prompt,
@@ -86,7 +83,7 @@ func (q *Queries) SelectCueByID(ctx context.Context, id domain.CueID) (Cue, erro
 }
 
 const selectCuesByProject = `-- name: SelectCuesByProject :many
-SELECT id, project_id, name, description, type, command, prompt, created_at, updated_at
+SELECT id, project_id, name, type, command, prompt, created_at, updated_at
 FROM cues
 WHERE project_id = ?
 ORDER BY name
@@ -105,7 +102,6 @@ func (q *Queries) SelectCuesByProject(ctx context.Context, projectID domain.Proj
 			&i.ID,
 			&i.ProjectID,
 			&i.Name,
-			&i.Description,
 			&i.Type,
 			&i.Command,
 			&i.Prompt,
@@ -127,25 +123,23 @@ func (q *Queries) SelectCuesByProject(ctx context.Context, projectID domain.Proj
 
 const updateCue = `-- name: UpdateCue :one
 UPDATE cues
-SET name = ?, description = ?, type = ?, command = ?, prompt = ?, updated_at = ?
+SET name = ?, type = ?, command = ?, prompt = ?, updated_at = ?
 WHERE id = ?
-RETURNING id, project_id, name, description, type, command, prompt, created_at, updated_at
+RETURNING id, project_id, name, type, command, prompt, created_at, updated_at
 `
 
 type UpdateCueParams struct {
-	Name        string
-	Description string
-	Type        domain.CueType
-	Command     string
-	Prompt      string
-	UpdatedAt   time.Time
-	ID          domain.CueID
+	Name      string
+	Type      domain.CueType
+	Command   string
+	Prompt    string
+	UpdatedAt time.Time
+	ID        domain.CueID
 }
 
 func (q *Queries) UpdateCue(ctx context.Context, arg UpdateCueParams) (Cue, error) {
 	row := q.db.QueryRowContext(ctx, updateCue,
 		arg.Name,
-		arg.Description,
 		arg.Type,
 		arg.Command,
 		arg.Prompt,
@@ -157,7 +151,6 @@ func (q *Queries) UpdateCue(ctx context.Context, arg UpdateCueParams) (Cue, erro
 		&i.ID,
 		&i.ProjectID,
 		&i.Name,
-		&i.Description,
 		&i.Type,
 		&i.Command,
 		&i.Prompt,

@@ -25,7 +25,7 @@ Register a parent directory containing direct child repositories as one workspac
 ao project add --path /absolute/path/to/product --as-workspace
 ```
 
-Scratch projects use plain directories managed by AO. For work without a project, run `ao spawn --standalone --agent codex --name notes`. Standalone sessions need an explicit agent and cannot use project, branch, issue, PR, or orchestrator options. Scratch projects do not support Git branches or PRs either.
+Scratch projects use plain directories managed by Orchestrator. For work without a project, run `ao spawn --standalone --agent codex --name notes`. Standalone sessions need an explicit agent and cannot use project, branch, issue, PR, or orchestrator options. Scratch projects do not support Git branches or PRs either.
 
 ## Give each project its own roles
 
@@ -38,7 +38,7 @@ ao spawn --project api --name api-issue --issue 42 --mode chat
 ao spawn --project web --name web-fix --prompt "Fix the header" --mode tui
 ```
 
-When `--project` is omitted, AO resolves `AO_PROJECT_ID`, the project of `AO_SESSION_ID`, then the closest registered project containing the current directory. It does not fall back to a sole Scratch project. Supplying the project explicitly is clearest in scripts.
+When `--project` is omitted, Orchestrator resolves `AO_PROJECT_ID`, the project of `AO_SESSION_ID`, then the closest registered project containing the current directory. It does not fall back to a sole Scratch project. Supplying the project explicitly is clearest in scripts.
 
 ## Inspect across projects
 

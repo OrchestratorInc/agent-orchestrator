@@ -42,6 +42,29 @@ export function composeBoards(inputs: readonly SourceBoardInput[]): ScopedBoard 
 	};
 }
 
+/** Preserve main's fleet row sharing across Local/Cloud source-status polls. */
+export function createScopedBoardComposer(): typeof composeBoards {
+	let previous: ScopedBoard = { projects: [], sessions: [], orchestrators: [], sources: {} };
+	const share = <T extends { id: string }>(rows: Scoped<T>[], before: Scoped<T>[]): Scoped<T>[] => {
+		const byKey = new Map(before.map((row) => [resourceKey(row.source, row.value.id), row]));
+		const next = rows.map((row) => {
+			const cached = byKey.get(resourceKey(row.source, row.value.id));
+			return cached?.value === row.value ? cached : row;
+		});
+		return next.length === before.length && next.every((row, index) => row === before[index]) ? before : next;
+	};
+	return (inputs) => {
+		const next = composeBoards(inputs);
+		previous = {
+			...next,
+			projects: share(next.projects, previous.projects),
+			sessions: share(next.sessions, previous.sessions),
+			orchestrators: share(next.orchestrators, previous.orchestrators),
+		};
+		return previous;
+	};
+}
+
 export function filterScopedWorkers(
 	workers: readonly Scoped<DashboardSession>[],
 	environment: "all" | EnvironmentKind,

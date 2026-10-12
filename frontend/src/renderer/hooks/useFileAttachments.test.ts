@@ -54,8 +54,8 @@ describe("useFileAttachments", () => {
 				}),
 		);
 		const { result } = renderHook(() => useFileAttachments({ prepareAttachments }));
-		let first!: Promise<void>;
-		let second!: Promise<void>;
+		let first!: Promise<unknown>;
+		let second!: Promise<unknown>;
 		act(() => {
 			first = result.current.addFiles([file("first.txt")]);
 			second = result.current.addFiles([file("second.txt")]);
@@ -89,8 +89,8 @@ describe("useFileAttachments", () => {
 				}),
 		);
 		const { result } = renderHook(() => useFileAttachments({ prepareAttachments }));
-		let first!: Promise<void>;
-		let second!: Promise<void>;
+		let first!: Promise<unknown>;
+		let second!: Promise<unknown>;
 		let settled: Awaited<ReturnType<typeof result.current.toSettledPayload>> | undefined;
 		act(() => {
 			first = result.current.addFiles([file("first.txt")]);
@@ -125,7 +125,7 @@ describe("useFileAttachments", () => {
 		const first = renderHook(() =>
 			useFileAttachments({ initialKey: sessionId, prepareAttachments }),
 		);
-		let pending!: Promise<void>;
+		let pending!: Promise<unknown>;
 		act(() => {
 			pending = first.result.current.addFiles([file("discard-me.txt")]);
 		});
@@ -174,7 +174,7 @@ describe("useFileAttachments", () => {
 					}),
 			}),
 		);
-		let oldPending!: Promise<void>;
+		let oldPending!: Promise<unknown>;
 		act(() => {
 			oldPending = first.result.current.addFiles([file("old.txt")]);
 		});
@@ -240,9 +240,9 @@ describe("useFileAttachments", () => {
 			chatDraftScopeKey({ sessionId: "other-session", incarnation: "2026-08-26T09:00:00.000Z" }),
 			"other",
 		);
-		let firstPending!: Promise<void>;
-		let replacementPending!: Promise<void>;
-		let otherPending!: Promise<void>;
+		let firstPending!: Promise<unknown>;
+		let replacementPending!: Promise<unknown>;
+		let otherPending!: Promise<unknown>;
 		act(() => {
 			firstPending = first.result.current.addFiles([file("first.txt")]);
 			replacementPending = replacement.result.current.addFiles([file("replacement.txt")]);
@@ -281,14 +281,14 @@ describe("useFileAttachments", () => {
 		const staging = renderHook(() =>
 			useFileAttachments({ initialKey: key, prepareAttachments }),
 		);
-		let beforeConfirmation!: Promise<void>;
+		let beforeConfirmation!: Promise<unknown>;
 		act(() => {
 			beforeConfirmation = staging.result.current.addFiles([file("before-confirmation.txt")]);
 		});
 		await waitFor(() => expect(prepareAttachments).toHaveBeenCalledTimes(1));
 
 		const confirmedWork = capturePendingFileAttachmentsForSession(sessionId);
-		let afterConfirmation!: Promise<void>;
+		let afterConfirmation!: Promise<unknown>;
 		act(() => {
 			afterConfirmation = staging.result.current.addFiles([file("after-confirmation.txt")]);
 			discardCapturedPendingFileAttachments(confirmedWork);
@@ -451,7 +451,7 @@ describe("useFileAttachments", () => {
 		});
 		try {
 			const { result } = renderHook(() => useFileAttachments());
-			let pending!: Promise<void>;
+			let pending!: Promise<unknown>;
 			act(() => {
 				pending = result.current.addFiles([file("discarded.png", 8, "image/png")]);
 			});

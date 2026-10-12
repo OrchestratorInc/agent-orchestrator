@@ -5,6 +5,7 @@ import { useTheme, useThemeState } from "./ThemeProvider";
 import type { EnvironmentKind } from "./environment/types";
 import { workerDockVisibility } from "./worker-dock-layout";
 import { space, type } from "./tokens";
+import type { WorkerEnvironment } from "./worker-controls";
 
 export type WorkerDockProps = {
 	/** Project detail reuses the dock for spawn without list controls. */
@@ -20,6 +21,9 @@ export type WorkerDockProps = {
 	environmentFilter: "all" | EnvironmentKind;
 	onSelectEnvironment: (environment: "all" | EnvironmentKind) => void;
 	projectOptions: readonly { id: string; label: string }[];
+	environments?: readonly WorkerEnvironment[];
+	selectedEnvironmentId?: string;
+	onSelectMachine?: (machineId: string) => void;
 	selectedProjectId: string;
 	selectedProjectLabel: string;
 	onSelectProject: (projectId: string) => void;
