@@ -78,6 +78,12 @@ type AgentAuthAccountChecker interface {
 	AuthStatusWithAccount(ctx context.Context) (AgentAuthStatus, domain.AgentAccountIdentity, error)
 }
 
+// AgentAuthDiagnosticsChecker adds evidence from the same check as the verdict.
+// The coordinator prefers this over separate account/status probes.
+type AgentAuthDiagnosticsChecker interface {
+	AuthStatusWithDiagnostics(context.Context) (AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error)
+}
+
 // Agent is the contract every CLI coding agent adapter (claude-code, codex, …)
 // must satisfy. It supplies the argv and process configuration the Session
 // Manager needs to launch, restore, and read back a native agent session.

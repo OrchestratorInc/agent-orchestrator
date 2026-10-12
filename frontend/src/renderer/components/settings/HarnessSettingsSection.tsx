@@ -2,6 +2,7 @@ import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-quer
 import { BookOpen, Check, CircleArrowUp, ChevronLeft, ChevronRight, Copy, ExternalLink, KeyRound, LoaderCircle, LogIn, LogOut, RefreshCw, Search, TriangleAlert, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { AgentCheckError } from "../../lib/agent-check-error";
 import type { components } from "../../../api/schema";
 import {
 	agentReadinessQueryKeyForHost,
@@ -286,6 +287,8 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 	const startAgentLogout = useStartAgentAuth(hostId, "logout");
 	const [logoutRequest, setLogoutRequest] = useState<AgentId | null>(null);
 	const [authStates, setAuthStates] = useState<AgentAuthStates>({});
+	const [checkingAuth, setCheckingAuth] = useState<AgentId[]>([]);
+	const [authCheckErrors, setAuthCheckErrors] = useState<Partial<Record<AgentId, string>>>({});
 	const [actionErrors, setActionErrors] = useState<Partial<Record<AgentId, string>>>({});
 	const [selectedMethods, setSelectedMethods] = useState<Partial<Record<AgentId, string>>>({});
 	const [expandedDiagnostics, setExpandedDiagnostics] = useState<Partial<Record<AgentId, boolean>>>({});
@@ -378,24 +381,16 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		() => (jobs.data ?? []).filter((job) => isActive(job)).map((job) => job.target).sort().join(","),
 		[jobs.data],
 	);
+	const checkAuthRef = useRef<(agentId: AgentId) => Promise<unknown>>(async () => undefined);
 	const refreshInstalledAgent = useCallback((agentId: AgentId) => {
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
-		void client.POST("/api/v1/agents/{agent}/probe", {
-			params: { path: { agent: agentId } },
-		}).finally(async () => {
-			try {
-				const readiness = await ensureAgentReadiness([agentId], "display", hostId);
-				cacheAgentReadiness(queryClient, readiness, hostId);
-			} catch {
-				await queryClient.invalidateQueries({ queryKey: readinessKey });
-			} finally {
-				await Promise.all([
-					queryClient.invalidateQueries({ queryKey: updateAdvisoryQueryKey(agentId, hostId) }),
-					queryClient.invalidateQueries({ queryKey: installerKey }),
-					queryClient.invalidateQueries({ queryKey: authPlansKey }),
-					invalidateAgentModelCatalogs(queryClient, agentId, hostId),
-				]);
-			}
+		void checkAuthRef.current(agentId).finally(async () => {
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: updateAdvisoryQueryKey(agentId, hostId) }),
+				queryClient.invalidateQueries({ queryKey: installerKey }),
+				queryClient.invalidateQueries({ queryKey: authPlansKey }),
+				invalidateAgentModelCatalogs(queryClient, agentId, hostId),
+			]);
 		});
 	}, [authPlansKey, client, hostId, installerKey, queryClient, readinessKey]);
 
@@ -645,7 +640,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 	/** Diagnostics plus the machine they were taken on. */
 	const copyDiagnostics = async (agentId: AgentId, job: InstallJob) => {
 		const machine = await machineText(queryClient, hostId ? client : undefined);
-		await copyText(agentId, [diagnosticsText(agentId, job), machine].filter(Boolean).join("\n\n"));
+		await copyText(agentId, [diagnosticsText(agentId, job), healthText(describe(agentId)), machine].filter(Boolean).join("\n\n"));
 	};
 
 	const copyText = async (agentId: AgentId, text: string) => {
@@ -718,6 +713,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 	): Promise<AgentAuthProbeResult | undefined> => {
 		const existing = authChecksInFlight.current.get(agentId);
 		if (existing && !fresh) return existing;
+		setCheckingAuth((current) => current.includes(agentId) ? current : [...current, agentId]);
 		const check = (async () => {
 			if (existing) await existing;
 			try {
@@ -728,18 +724,26 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				void invalidateAgentModelCatalogs(queryClient, agentId, hostId);
 				const readiness = await ensureAgentReadiness([agentId], "display", hostId);
 				cacheAgentReadiness(queryClient, readiness, hostId);
+				setAuthCheckErrors((current) => ({ ...current, [agentId]: undefined }));
 				return result;
-			} catch {
+			} catch (error) {
+				const reason = error instanceof AgentCheckError ? error.message : "Authentication verification request could not complete. Check the selected host connection and try again.";
+				setAuthCheckErrors((current) => ({ ...current, [agentId]: `${new Date().toISOString()} · ${reason}` }));
 				return undefined;
 			}
 		})();
 		authChecksInFlight.current.set(agentId, check);
 		const finishCheck = () => {
-			if (authChecksInFlight.current.get(agentId) === check) authChecksInFlight.current.delete(agentId);
+			if (authChecksInFlight.current.get(agentId) === check) {
+				authChecksInFlight.current.delete(agentId);
+				setCheckingAuth((current) => current.filter((id) => id !== agentId));
+			}
 		};
 		void check.then(finishCheck, finishCheck);
 		return check;
 	}, [hostId, queryClient]);
+
+	checkAuthRef.current = (agentId) => checkAuth(agentId, { fresh: true });
 
 	const finishAuth = useCallback(async (workflow: AuthTerminalWorkflow) => {
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId || authWorkflowRef.current.phase !== "running") return;
@@ -1045,10 +1049,26 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const { agentId, readinessAgent, advisory } = details;
 		return [
 			`${agentLabel(agentId)} health`,
+			`Host: ${hostId ?? "local"}`,
 			`Installation: ${readinessAgent?.installation.state ?? "unknown"}${readinessAgent?.installation.checkedAt ? ` (checked ${readinessAgent.installation.checkedAt})` : ""}`,
 			readinessAgent?.installation.reason ? `Installation reason: ${readinessAgent.installation.reason}` : "",
 			`Authentication: ${readinessAgent?.authentication.state ?? "unknown"}`,
 			readinessAgent?.authentication.reason ? `Authentication reason: ${readinessAgent.authentication.reason}` : "",
+			readinessAgent?.authentication.reasonCode ? `Authentication reason code: ${readinessAgent.authentication.reasonCode}` : "",
+			readinessAgent?.authentication.freshness ? `Authentication freshness: ${readinessAgent.authentication.freshness}` : "",
+			readinessAgent?.authentication.checkedAt ? `Authentication checked: ${readinessAgent.authentication.checkedAt}` : "",
+			readinessAgent?.authentication.attemptedAt ? `Authentication attempted: ${readinessAgent.authentication.attemptedAt}` : "",
+			authCheckErrors[agentId] ? `Authentication request error: ${authCheckErrors[agentId]}` : "",
+			...(readinessAgent?.authentication.diagnostics ?? []).map((step) => [
+				`Auth check: ${step.method} (${step.code})`,
+				`Observed: ${step.checkedAt} · ${step.cached ? "cached" : "fresh"} · ${step.durationMs} ms`,
+				step.provider ? `Provider: ${step.provider}` : "",
+				step.source ? `Credential source: ${step.source}` : "",
+				step.httpStatus ? `HTTP status: ${step.httpStatus}` : "",
+				step.exitCode !== undefined ? `Exit code: ${step.exitCode}` : "",
+				step.reason,
+				step.nextStep ? `Next step: ${step.nextStep}` : "",
+			].filter(Boolean).join("\n")),
 			`Installed version: ${details.currentVersion ?? "unknown"}`,
 			`Latest version: ${advisory?.latestVersion ?? "unknown"}`,
 			advisory?.status ? `Update status: ${advisory.status}${advisory.reason ? ` (${advisory.reason})` : ""}` : "",
@@ -1063,9 +1083,9 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const installState: { tone: HarnessTone; label: string } = installation?.state === "installed" ? { tone: "ok", label: t("settings.harness.installed") }
 			: installation?.state === "not_installed" ? { tone: "off", label: t("settings.harness.notInstalled") }
 			: { tone: "off", label: t("settings.harness.installationUnknown") };
-		const authState = details.authStatus === "authorized" || details.authStatus === "configured" || details.authStatus === "not_applicable" ? "ok"
+		const authState = authCheckErrors[agentId] || readinessAgent?.authentication.freshness !== "fresh" || details.authStatus === "configured" ? "off" : details.authStatus === "authorized" || details.authStatus === "not_applicable" ? "ok"
 			: details.authStatus === "unauthorized" ? "error" : "off";
-		const checking = agents.isFetching || Boolean(details.advisoryQuery?.isFetching);
+		const checking = checkingAuth.includes(agentId) || agents.isFetching || Boolean(details.advisoryQuery?.isFetching);
 		// Only facts AO has observed: a row with nothing to report is left out rather than filled with a placeholder.
 		const lastChecked = formatTimestamp(installation?.checkedAt);
 		const updateChecked = formatTimestamp(advisory?.checkedAt);
@@ -1076,13 +1096,29 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				<HarnessDetailRow label={t("settings.harness.installation")} description={installation?.state !== "installed" ? installation?.reason || undefined : undefined}>
 					<HarnessStateText tone={installState.tone}>{installState.label}</HarnessStateText>
 				</HarnessDetailRow>
-				{isInstalled ? <HarnessDetailRow label={t("settings.harness.health.authentication")} description={authState === "error" ? readinessAgent?.authentication.reason || undefined : undefined}>
-					<HarnessStateText tone={authState}>{details.authSummary}</HarnessStateText>
+				{isInstalled ? <HarnessDetailRow label={t("settings.harness.health.authentication")} description={readinessAgent?.authentication.reason || undefined}>
+					<HarnessStateText tone={authState}>{details.authStatus === "configured" ? t("settings.harness.health.authUnverified") : details.authSummary}</HarnessStateText>
 				</HarnessDetailRow> : null}
 				{lastChecked ? <HarnessDetailRow label={t("settings.harness.health.lastChecked")}>
 					<span className="text-xs text-settings-label">{lastChecked}{installation?.freshness === "stale" ? ` · ${t("settings.harness.health.stale")}` : ""}</span>
 				</HarnessDetailRow> : null}
 			</HarnessDetailGroup>
+			{isInstalled && (readinessAgent?.authentication.checkedAt || readinessAgent?.authentication.attemptedAt || readinessAgent?.authentication.diagnostics?.length || authCheckErrors[agentId]) ? <HarnessDetailGroup title={t("settings.harness.health.authDiagnostics")}>
+				{readinessAgent?.authentication.checkedAt ? <HarnessDetailRow label={t("settings.harness.health.authChecked")}>
+					<span className="text-xs text-settings-label">{formatTimestamp(readinessAgent.authentication.checkedAt)}{readinessAgent.authentication.freshness === "stale" ? ` · ${t("settings.harness.health.stale")}` : ""}</span>
+				</HarnessDetailRow> : null}
+				{readinessAgent?.authentication.attemptedAt ? <HarnessDetailRow label={t("settings.harness.health.authAttempted")}>
+					<span className="text-xs text-settings-label">{formatTimestamp(readinessAgent.authentication.attemptedAt)}</span>
+				</HarnessDetailRow> : null}
+				{(readinessAgent?.authentication.diagnostics ?? []).map((step, index) => <HarnessDetailRow key={`${step.method}-${index}`} label={step.method} description={step.reason}>
+					<div className="min-w-0 space-y-1 text-xs text-settings-muted">
+						<p className="break-words font-mono">{[step.code, step.provider, step.source, step.httpStatus ? `HTTP ${step.httpStatus}` : undefined, step.exitCode !== undefined ? `exit ${step.exitCode}` : undefined].filter(Boolean).join(" · ")}</p>
+						<p>{formatTimestamp(step.checkedAt)} · {step.cached ? t("settings.harness.health.authCached") : `${step.durationMs} ms`}</p>
+						{step.nextStep ? <p>{step.nextStep}</p> : null}
+					</div>
+				</HarnessDetailRow>)}
+				{authCheckErrors[agentId] ? <p role="alert" className="break-words p-3 text-xs text-error">{authCheckErrors[agentId]}</p> : null}
+			</HarnessDetailGroup> : null}
 			{hasDetails ? <HarnessDetailGroup title={t("settings.harness.health.details")}>
 				{executable ? <HarnessDetailRow label={t("settings.harness.health.executable")}>
 					<span className="min-w-0 break-all font-mono text-xs text-settings-label">{executable}</span>

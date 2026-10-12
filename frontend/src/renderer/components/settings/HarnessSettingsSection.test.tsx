@@ -221,6 +221,11 @@ function mockInstalledOperations(savedMethod?: string, readiness = readyCatalog(
 	});
 	vi.mocked(apiClient.POST).mockImplementation(async (path, options) => {
 		if (path === "/api/v1/agents/refresh" || path === "/api/v1/agents/readiness/ensure") return { data: readiness } as never;
+		if (path === "/api/v1/agents/{agent}/probe") {
+			const id = (options as { params: { path: { agent: string } } }).params.path.agent;
+			const agent = readiness.agents.find((item) => item.id === id);
+			return { data: { agent: { id, authStatus: agent?.authentication.state ?? "unknown" }, supported: true, installed: true } } as never;
+		}
 		if (path === "/api/v1/agents/{agent}/install") {
 			const request = options as { params: { path: { agent: string } }; body: { method: string } };
 			const job = { target: request.params.path.agent, method: request.body.method, status: "installing", startedAt: "2026-09-27T12:00:00Z" };
@@ -378,8 +383,72 @@ describe("HarnessSettingsSection", () => {
 		await userEvent.click(within(page).getByRole("button", { name: "Check again" }));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/probe", { params: { path: { agent: "codex" } } });
 		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
-		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("Codex health\nInstallation: installed")));
+		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("Codex health\nHost: local\nInstallation: installed")));
 		expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("Latest version: 1.3.0"));
+	});
+
+	it("shows and copies an inconclusive auth attempt separately from the retained login", async () => {
+		const readiness = readyCatalog();
+		Object.assign(readiness.agents[1].authentication, {
+			state: "authorized", freshness: "stale", reasonCode: "auth_check_timeout",
+			reason: "Authentication check timed out.",
+			checkedAt: "2026-10-10T10:00:00Z", attemptedAt: "2026-10-10T11:00:00Z",
+		});
+		mockInstalledOperations("npm", readiness);
+		renderSection();
+		const page = await findAgentRow("codex");
+		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
+		expect(within(page).getByText("Authentication check timed out.")).toBeInTheDocument();
+		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
+		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
+		const report = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0];
+		expect(report).toContain("Authentication reason code: auth_check_timeout");
+		expect(report).toContain("Authentication freshness: stale");
+		expect(report).toContain("Authentication checked: 2026-10-10T10:00:00Z");
+		expect(report).toContain("Authentication attempted: 2026-10-10T11:00:00Z");
+	});
+
+	it("copies provider evidence and renewal guidance without claiming credentials are verified", async () => {
+		const readiness = readyCatalog();
+		Object.assign(readiness.agents[1].authentication, {
+			state: "configured", reason: "Credentials are configured but not verified.",
+			diagnostics: [{ method: "provider_validation", code: "token_renewal_pending", source: "keychain", provider: "firstParty",
+				reason: "The stored token needs renewal.", nextStep: "Run the harness, then check again.",
+				checkedAt: "2026-10-10T10:00:00Z", cached: false, durationMs: 0 }],
+		});
+		mockInstalledOperations("npm", readiness);
+		renderSection();
+		const page = await findAgentRow("codex");
+		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
+		expect(within(page).getByText("Credentials not verified")).toBeInTheDocument();
+		expect(within(page).getByText("The stored token needs renewal.")).toBeInTheDocument();
+		expect(within(page).getByText("Run the harness, then check again.")).toBeInTheDocument();
+		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
+		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
+		const report = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0];
+		expect(report).toContain("Credential source: keychain");
+		expect(report).toContain("Auth check: provider_validation (token_renewal_pending)");
+		expect(report).toContain("Next step: Run the harness, then check again.");
+	});
+
+	it("retains a failed auth request's correlation facts without copying the server message", async () => {
+		mockInstalledOperations("npm");
+		renderSection();
+		const page = await findAgentRow("codex");
+		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
+		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/probe"
+			? { error: { code: "AGENT_CHECK_FAILED", requestId: "request-123", message: "secret-token" }, response: { status: 503 } } as never
+			: (post as (path: string, options: unknown) => Promise<never>)(path, options));
+		await userEvent.click(within(page).getByRole("button", { name: "Check again" }));
+		expect(await within(page).findByRole("alert")).toHaveTextContent("AGENT_CHECK_FAILED");
+		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
+		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
+		const report = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0];
+		expect(report).toContain("HTTP 503");
+		expect(report).toContain("request request-123");
+		expect(report).not.toContain("secret-token");
+		expect(report).toContain("Authentication: authorized");
 	});
 
 	it.each(["unauthorized", "configured"])("confirms logout and rechecks readiness without assuming success: %s", async (authStatus) => {

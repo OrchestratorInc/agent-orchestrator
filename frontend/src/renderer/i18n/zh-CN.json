@@ -1,4 +1,9 @@
 {
+	"settings.harness.health.authDiagnostics": "身份验证检查",
+	"settings.harness.health.authChecked": "上次完成的身份验证检查",
+	"settings.harness.health.authAttempted": "最近的身份验证尝试",
+	"settings.harness.health.authUnverified": "凭据尚未验证",
+	"settings.harness.health.authCached": "缓存结果",
 	"settings.harness.dismissAgentUpdate": "关闭 {{agent}} 更新通知",
 	"settings.harness.showUpdateStack": "显示全部（{{count}}）",
 	"settings.harness.hideUpdateStack": "收起",

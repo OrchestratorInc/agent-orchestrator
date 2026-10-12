@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -25,14 +26,22 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 
 // AuthStatusWithAccount also names the account `whoami` reports.
 func (p *Plugin) AuthStatusWithAccount(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, error) {
+	status, account, _, err := p.AuthStatusWithDiagnostics(ctx)
+	return status, account, err
+}
+
+// AuthStatusWithDiagnostics retains the evidence from the same auth check.
+func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
 	binary, err := p.kiroBinary(ctx)
 	if err != nil {
-		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, err
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, err
 	}
 	if strings.TrimSpace(os.Getenv("KIRO_API_KEY")) != "" {
-		return ports.AgentAuthStatusAuthorized, domain.AgentAccountIdentity{Method: domain.AgentAccountMethodAPIKey}, nil
+		d := domain.NewAgentAuthDiagnostic("environment", "credential_present")
+		d.Source = "KIRO_API_KEY"
+		return ports.AgentAuthStatusAuthorized, domain.AgentAccountIdentity{Method: domain.AgentAccountMethodAPIKey}, []domain.AgentAuthDiagnostic{d}, nil
 	}
-	return kiroWhoamiAuth(ctx, binary)
+	return kiroWhoamiAuthDiagnostics(ctx, binary)
 }
 
 func kiroWhoamiAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStatus, error) {
@@ -41,14 +50,19 @@ func kiroWhoamiAuthStatus(ctx context.Context, binary string) (ports.AgentAuthSt
 }
 
 func kiroWhoamiAuth(ctx context.Context, binary string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, error) {
+	status, account, _, err := kiroWhoamiAuthDiagnostics(ctx, binary)
+	return status, account, err
+}
+
+func kiroWhoamiAuthDiagnostics(ctx context.Context, binary string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
 	if binary == "" {
-		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, nil
 	}
 	// Kiro documents `whoami` as its authentication-status command. Keep the
 	// probe bounded so catalog refresh cannot hang on a broken CLI install.
 	var account domain.AgentAccountIdentity
-	status, err := authprobe.CLIStatusWithClassifier(
-		ctx, binary, [][]string{{"whoami", "--format", "json"}}, func(out []byte) (ports.AgentAuthStatus, bool) {
+	status, steps, err := authprobe.CLIStatusWithDiagnostics(
+		ctx, binary, [][]string{{"whoami", "--format", "json"}}, 3*time.Second, func(out []byte) (ports.AgentAuthStatus, bool) {
 			status, ok := kiroStatusFromWhoami(out)
 			if ok && status == ports.AgentAuthStatusAuthorized {
 				account = kiroWhoamiAccount(out)
@@ -58,7 +72,7 @@ func kiroWhoamiAuth(ctx context.Context, binary string) (ports.AgentAuthStatus, 
 	if status != ports.AgentAuthStatusAuthorized {
 		account = domain.AgentAccountIdentity{}
 	}
-	return status, account, err
+	return status, account, steps, err
 }
 
 // kiroWhoamiAccount reads the email from a signed-in `whoami`, inline or

@@ -2,9 +2,13 @@ package authprobe
 
 import (
 	"context"
+	"errors"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -41,51 +45,82 @@ func CLIStatusWithTimeout(ctx context.Context, binary string, commands [][]strin
 }
 
 func cliStatus(ctx context.Context, binary string, commands [][]string, timeout time.Duration, classify Classifier) (ports.AgentAuthStatus, error) {
-	if err := ctx.Err(); err != nil {
-		return ports.AgentAuthStatusUnknown, err
-	}
-	if binary == "" {
-		return ports.AgentAuthStatusUnknown, nil
-	}
-	if len(commands) == 0 {
-		return ports.AgentAuthStatusUnknown, nil
-	}
-	for _, args := range commands {
-		status, err := commandStatus(ctx, binary, args, timeout, classify)
-		if err != nil {
-			return ports.AgentAuthStatusUnknown, err
-		}
-		if status != ports.AgentAuthStatusUnknown {
-			return status, nil
-		}
-	}
-	return ports.AgentAuthStatusUnknown, nil
+	status, _, err := CLIStatusWithDiagnostics(ctx, binary, commands, timeout, classify)
+	return status, err
 }
 
-func commandStatus(ctx context.Context, binary string, args []string, timeout time.Duration, classify Classifier) (ports.AgentAuthStatus, error) {
+// CLIStatusWithDiagnostics retains each bounded probe's outcome without
+// changing the legacy verdict or exposing its stdout/stderr. Commands must be
+// adapter-owned status commands with no credentials in their arguments.
+func CLIStatusWithDiagnostics(ctx context.Context, binary string, commands [][]string, timeout time.Duration, classify Classifier) (ports.AgentAuthStatus, []domain.AgentAuthDiagnostic, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.AgentAuthStatusUnknown, nil, err
+	}
+	if binary == "" || len(commands) == 0 {
+		return ports.AgentAuthStatusUnknown, nil, nil
+	}
+	steps := make([]domain.AgentAuthDiagnostic, 0, len(commands))
+	for _, args := range commands {
+		status, step, err := commandStatus(ctx, binary, args, timeout, classify)
+		steps = append(steps, step)
+		if err != nil || status != ports.AgentAuthStatusUnknown {
+			return status, steps, err
+		}
+	}
+	return ports.AgentAuthStatusUnknown, steps, nil
+}
+
+func commandStatus(ctx context.Context, binary string, args []string, timeout time.Duration, classify Classifier) (ports.AgentAuthStatus, domain.AgentAuthDiagnostic, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-
+	started := time.Now()
 	out, err := CmdRunner(probeCtx, binary, args...)
+	status := ports.AgentAuthStatusUnknown
+	if probeCtx.Err() == nil {
+		recognized := false
+		if classify != nil {
+			status, recognized = classify(out)
+		}
+		if !recognized {
+			status = StatusFromText(string(out))
+		}
+	}
+	step := CommandDiagnostic(filepath.Base(binary)+" "+strings.Join(args, " "), status, err, probeCtx.Err(), started)
 	if probeCtx.Err() != nil {
 		if probeCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
-			return ports.AgentAuthStatusUnknown, nil
+			return status, step, nil
 		}
-		return ports.AgentAuthStatusUnknown, probeCtx.Err()
+		return status, step, probeCtx.Err()
 	}
-	if classify != nil {
-		if status, ok := classify(out); ok {
-			return status, nil
-		}
+	return status, step, nil
+}
+
+// CommandDiagnostic classifies execution facts; it never copies err.Error().
+func CommandDiagnostic(method string, status ports.AgentAuthStatus, err, contextErr error, started time.Time) domain.AgentAuthDiagnostic {
+	code := "output_unrecognized"
+	switch {
+	case errors.Is(contextErr, context.DeadlineExceeded):
+		code = "probe_timeout"
+	case contextErr != nil:
+		code = "probe_cancelled"
+	case status == ports.AgentAuthStatusUnauthorized:
+		code = "cli_signed_out"
+	case status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured:
+		code = "cli_signed_in"
+	case err != nil:
+		code = "command_failed"
 	}
-	status := StatusFromText(string(out))
-	if status != ports.AgentAuthStatusUnknown {
-		return status, nil
+	step := domain.NewAgentAuthDiagnostic(method, code)
+	step.DurationMs = time.Since(started).Milliseconds()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		code := exit.ExitCode()
+		step.ExitCode = &code
+	} else if err == nil {
+		code := 0
+		step.ExitCode = &code
 	}
-	if err != nil {
-		return ports.AgentAuthStatusUnknown, nil
-	}
-	return ports.AgentAuthStatusUnknown, nil
+	return step
 }
 
 // StatusFromText classifies common CLI auth/status output.

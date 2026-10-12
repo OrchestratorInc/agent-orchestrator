@@ -1,4 +1,9 @@
 {
+	"settings.harness.health.authDiagnostics": "Comprobaciones de autenticación",
+	"settings.harness.health.authChecked": "Última comprobación de autenticación completada",
+	"settings.harness.health.authAttempted": "Último intento de autenticación",
+	"settings.harness.health.authUnverified": "Credenciales sin verificar",
+	"settings.harness.health.authCached": "Resultado en caché",
 	"settings.harness.dismissAgentUpdate": "Descartar actualización de {{agent}}",
 	"settings.harness.showUpdateStack": "Mostrar todas ({{count}})",
 	"settings.harness.hideUpdateStack": "Mostrar menos",

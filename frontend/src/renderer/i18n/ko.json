@@ -1,4 +1,9 @@
 {
+	"settings.harness.health.authDiagnostics": "인증 확인",
+	"settings.harness.health.authChecked": "마지막으로 완료된 인증 확인",
+	"settings.harness.health.authAttempted": "최근 인증 시도",
+	"settings.harness.health.authUnverified": "검증되지 않은 인증 정보",
+	"settings.harness.health.authCached": "캐시된 결과",
 	"settings.harness.dismissAgentUpdate": "{{agent}} 업데이트 알림 닫기",
 	"settings.harness.showUpdateStack": "모두 보기 ({{count}})",
 	"settings.harness.hideUpdateStack": "접기",

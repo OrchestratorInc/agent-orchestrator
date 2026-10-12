@@ -565,7 +565,13 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 	return failedInstallation(attempted, domain.AgentReadinessReasonInstallCheckFailed, "Installation check failed."), true
 }
 
-func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAgent, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
+func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAgent, purpose domain.AgentReadinessPurpose) (observation domain.AgentAuthenticationObservation, failed bool) {
+	var diagnostics []domain.AgentAuthDiagnostic
+	defer func() {
+		if len(diagnostics) > 0 {
+			observation.Diagnostics = diagnostics
+		}
+	}()
 	attempted := c.now()
 	if c.authenticationCheck != nil {
 		ctx, cancel := context.WithTimeout(c.ctx, c.authTimeout)
@@ -590,7 +596,9 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	var status ports.AgentAuthStatus
 	var account domain.AgentAccountIdentity
 	var err error
-	if accountChecker, ok := item.Agent.(ports.AgentAuthAccountChecker); ok {
+	if diagnosticChecker, ok := item.Agent.(ports.AgentAuthDiagnosticsChecker); ok {
+		status, account, diagnostics, err = diagnosticChecker.AuthStatusWithDiagnostics(ctx)
+	} else if accountChecker, ok := item.Agent.(ports.AgentAuthAccountChecker); ok {
 		status, account, err = accountChecker.AuthStatusWithAccount(ctx)
 	} else {
 		status, err = checker.AuthStatus(ctx)

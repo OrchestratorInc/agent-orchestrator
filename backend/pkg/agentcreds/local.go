@@ -58,7 +58,7 @@ func (v *Validator) ValidateResolvedLocal(
 	if result.State == StateInvalid && IsResolverBug(result.Detail) {
 		return Result{
 			State: StateUnknown, Provider: provider, Source: cred.Source,
-			Fingerprint: cred.Fingerprint(), CheckedAt: result.CheckedAt,
+			Fingerprint: cred.Fingerprint(), CheckedAt: result.CheckedAt, HTTPStatus: result.HTTPStatus,
 			Detail: "the credential probe was malformed, so nothing can be concluded",
 			Err:    result.Err,
 		}

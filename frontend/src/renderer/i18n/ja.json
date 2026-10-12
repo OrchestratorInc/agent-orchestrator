@@ -1,4 +1,9 @@
 {
+	"settings.harness.health.authDiagnostics": "認証チェック",
+	"settings.harness.health.authChecked": "最後に完了した認証チェック",
+	"settings.harness.health.authAttempted": "最新の認証試行",
+	"settings.harness.health.authUnverified": "認証情報は未検証",
+	"settings.harness.health.authCached": "キャッシュされた結果",
 	"settings.harness.dismissAgentUpdate": "{{agent}} の更新を閉じる",
 	"settings.harness.showUpdateStack": "すべて表示（{{count}}）",
 	"settings.harness.hideUpdateStack": "折りたたむ",

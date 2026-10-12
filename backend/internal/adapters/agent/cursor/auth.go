@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -26,23 +27,31 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 // AuthStatusWithAccount also names the account: an API key, or the login
 // Cursor records in its CLI config once `cursor-agent status` confirms it.
 func (p *Plugin) AuthStatusWithAccount(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, error) {
+	status, account, _, err := p.AuthStatusWithDiagnostics(ctx)
+	return status, account, err
+}
+
+// AuthStatusWithDiagnostics retains the evidence from the same auth check.
+func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
-		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, err
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, err
 	}
 	if strings.TrimSpace(os.Getenv("CURSOR_API_KEY")) != "" {
-		return ports.AgentAuthStatusAuthorized, domain.AgentAccountIdentity{Method: domain.AgentAccountMethodAPIKey}, nil
+		d := domain.NewAgentAuthDiagnostic("environment", "credential_present")
+		d.Source = "CURSOR_API_KEY"
+		return ports.AgentAuthStatusAuthorized, domain.AgentAccountIdentity{Method: domain.AgentAccountMethodAPIKey}, []domain.AgentAuthDiagnostic{d}, nil
 	}
-	if status, err := cursorCLIAuthStatus(ctx, binary); err == nil && status != ports.AgentAuthStatusUnknown {
+	if status, steps, err := authprobe.CLIStatusWithDiagnostics(ctx, binary, [][]string{{"status"}}, 3*time.Second, nil); err == nil {
 		var account domain.AgentAccountIdentity
 		if status == ports.AgentAuthStatusAuthorized {
 			account = cursorLoginAccount(cursorConfigPath())
 		}
-		return status, account, nil
+		return status, account, steps, nil
 	} else if err != nil && ctx.Err() != nil {
-		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, err
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, err
 	}
-	return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil
+	return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, nil
 }
 
 func cursorCLIAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStatus, error) {
