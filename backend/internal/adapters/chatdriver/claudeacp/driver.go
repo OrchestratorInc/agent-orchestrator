@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -52,6 +53,7 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 		// credential, no network call, and no provider knowledge.
 		OnAuthRejected:        claudeAuthRejected(onAuthRejected),
 		PromptResponseFailure: claudePromptResponseFailure,
+		NormalizeRequestError: claudeNormalizeRequestError,
 		CanHibernate:          claudeCanHibernate,
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityStreaming:    true,
@@ -162,6 +164,48 @@ func claudeAuthRejected(notifyDaemon func()) func() {
 			notifyDaemon()
 		}
 	}
+}
+
+// claudeVersionIncompatRE matches the HTTP 400 message that Claude Code emits
+// when the installed binary is too old to run the selected model, e.g.:
+//
+//	"Claude Code 2.1.228 does not support this model; version 2.1.280 or newer is required."
+//
+// It captures the installed version (group 1) and the minimum required version
+// (group 2) so the error message can include both without re-parsing.
+var claudeVersionIncompatRE = regexp.MustCompile(
+	`Claude Code (\d+\.\d+\.\d+) does not support this model;\s+version (\d+\.\d+\.\d+) or newer is required`,
+)
+
+// claudeNormalizeRequestError intercepts the opaque -32603 JSON-RPC error that
+// the claude-agent-acp bridge emits when the installed Claude Code binary
+// rejects the selected model with an HTTP 400 version-incompatibility response.
+// It returns a clean, user-facing error that names the installed version, the
+// required minimum, and the remediation steps. All other errors pass through
+// as nil so the generic ACP wrapping applies.
+func claudeNormalizeRequestError(err error) error {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) {
+		return nil
+	}
+	// Auth rejections are handled upstream; do not intercept them here.
+	if requestErr.Code == -32000 {
+		return nil
+	}
+	// The version-incompatibility message is buried inside the -32603 message
+	// field as "Internal error: API Error: 400 Claude Code X.Y.Z does not
+	// support this model; version A.B.C or newer is required. ..."
+	m := claudeVersionIncompatRE.FindStringSubmatch(requestErr.Message)
+	if m == nil {
+		return nil
+	}
+	installed, required := m[1], m[2]
+	title := fmt.Sprintf("Claude Code %s does not support the selected model", installed)
+	detail := fmt.Sprintf(
+		"Version %s or newer is required. Update Claude Code by running 'claude update', or update the Claude desktop app, then try again.",
+		required,
+	)
+	return ports.NewChatProviderFailure(title, detail, nil)
 }
 
 func claudePromptResponseFailure(response acpsdk.PromptResponse) error {

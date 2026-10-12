@@ -98,6 +98,13 @@ type Config struct {
 	// correction that covers every credential source — including the Bedrock
 	// and Vertex chains AO cannot inspect at all. Optional.
 	OnAuthRejected func()
+	// NormalizeRequestError lets a provider binding translate an opaque
+	// JSON-RPC request error (typically -32603 "Internal error") into a
+	// user-facing error before the generic ACP wrapping is applied. When set,
+	// it is called for every non-auth request error. If it returns a non-nil
+	// error that value is used directly; if it returns nil the default path
+	// applies. Auth errors (code -32000) are handled before this hook runs.
+	NormalizeRequestError func(error) error
 }
 
 // TurnSettingsValidator validates live turn settings against launch-time state.
@@ -540,6 +547,7 @@ func (d *Driver) initialize(
 	)
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
+	conv.normalizeRequestError = d.cfg.NormalizeRequestError
 	conv.hibernationCheck = d.cfg.CanHibernate
 	if proc.reconnected {
 		state := proc.acpState

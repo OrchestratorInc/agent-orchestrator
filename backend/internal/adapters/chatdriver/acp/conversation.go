@@ -129,6 +129,10 @@ type conversation struct {
 	// credential mid-turn. Nil when the binding does not supply one.
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
+	// normalizeRequestError translates a provider-specific JSON-RPC request
+	// error into a user-facing error before the generic ACP wrapping is
+	// applied. Nil means the default path applies.
+	normalizeRequestError func(error) error
 	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 
 	contextTokens     int64
@@ -632,7 +636,15 @@ func (c *conversation) finishPrompt(
 			state = domain.TurnStateInterrupted
 		} else {
 			state = domain.TurnStateFailed
-			turnErr = normalizeACPError("ACP session/prompt", err)
+			if c.normalizeRequestError != nil {
+				if normalized := c.normalizeRequestError(err); normalized != nil {
+					turnErr = normalized
+				} else {
+					turnErr = normalizeACPError("ACP session/prompt", err)
+				}
+			} else {
+				turnErr = normalizeACPError("ACP session/prompt", err)
+			}
 		}
 	} else {
 		state = turnState(resp.StopReason)
