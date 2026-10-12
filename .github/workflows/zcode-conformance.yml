@@ -54,21 +54,19 @@ jobs:
         working-directory: upstream-zcode
         run: |
           node --input-type=module <<'NODE'
-          import { collectSeaTuiAssets, seaTuiAssetPrefix } from './apps/zcode-cli/packages/cli/scripts/sea-tui-assets.mjs';
-          import { cp, mkdir } from 'node:fs/promises';
-          import { dirname, resolve } from 'node:path';
+          import { cp, mkdir, realpath } from 'node:fs/promises';
+          import { resolve } from 'node:path';
           const runtime = resolve('../zcode-native-runtime');
-          await mkdir(runtime, { recursive: true });
-          const { assets, manifest } = await collectSeaTuiAssets({ root: resolve('apps/zcode-cli'), stagingDirectory: resolve('../zcode-staging'), target: 'linux-x64' });
-          for (const file of manifest.files) {
-            const destination = resolve(runtime, file.path);
-            await mkdir(dirname(destination), { recursive: true });
-            await cp(assets[seaTuiAssetPrefix + file.path], destination);
-          }
+          await mkdir(resolve(runtime, 'node_modules'), { recursive: true });
           for (const name of ['zcode.cjs', 'provider', 'THIRD-PARTY-NOTICES.md']) {
             await cp(resolve('apps/zcode-cli/packages/cli/dist', name), resolve(runtime, name), { recursive: true });
           }
+          // The protocol bundle keeps its external browser assets. The TUI is
+          // intentionally excluded: upstream's SEA collector requires a dist
+          // directory for the source-only root @zcode/shared package.
+          await cp(await realpath('apps/zcode-cli/packages/cli/node_modules/playwright-core'), resolve(runtime, 'node_modules/playwright-core'), { recursive: true });
           NODE
+          echo 'Stock app-server/headless runtime; TUI dependency closure excluded' > ../zcode-native-runtime/SCOPE
           git rev-parse HEAD > ../zcode-native-runtime/SOURCE_COMMIT
           node --version > ../zcode-native-runtime/NODE_VERSION
           tar -czf ../zcode-native-runtime.tar.gz -C .. zcode-native-runtime
@@ -81,6 +79,7 @@ jobs:
             zcode-native-runtime.sha256
           retention-days: 7
       - name: Verify source-built CLI lifecycle against localhost provider
+        if: always()
         working-directory: backend
         env:
           AO_ZCODE_ENTRY: ${{ github.workspace }}/upstream-zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs
