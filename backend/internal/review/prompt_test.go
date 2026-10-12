@@ -37,3 +37,27 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 		}
 	}
 }
+
+// The worker hears about a review only through the reviewer's inline GitHub
+// comments, each forwarded as a required change. Required findings must be
+// inline, and optional suggestions must not be.
+func TestReviewPromptRequiresInlineCommentsForRequiredChanges(t *testing.T) {
+	prompt, system := reviewTexts(LaunchSpec{WorkerID: "mer-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", RunID: "run-1"})
+	for _, want := range []string{
+		"The worker receives only your inline comments, never the summary",
+		"Put every finding that requires a change in \"comments\" as its own inline comment",
+		"including design-level findings",
+		"Leave optional or nice-to-have suggestions out of \"comments\"",
+		"Omit \"comments\" only when nothing needs to change.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("review prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if !strings.Contains(system, "Every finding that requires a change must be its own inline comment") {
+		t.Fatalf("reviewer system prompt must require inline findings:\n%s", system)
+	}
+	if strings.Contains(prompt, "omit the field for a review with no inline comments") {
+		t.Fatalf("review prompt still makes inline comments optional:\n%s", prompt)
+	}
+}

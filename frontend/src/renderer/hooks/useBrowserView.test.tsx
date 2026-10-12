@@ -8,6 +8,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPEN_BROWSER_OVERLAY_SELECTOR } from "../lib/dom-selectors";
+import { aoBridge } from "../lib/bridge";
 
 type Listener = (state: BrowserNavState) => void;
 type TabsListener = (state: import("../../main/browser-view-host").BrowserTabsState) => void;
@@ -115,7 +116,18 @@ function setupBridge() {
 		notifyPanelUsed: vi.fn(),
 		notifyPanelBlur: vi.fn(),
 		onFocusLocation: vi.fn(() => () => undefined),
+		getFindState: vi.fn(async (viewId: string) => ({
+			viewId, tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true,
+		})),
+		findInPage: vi.fn(async ({ viewId, query }: { viewId: string; query: string }) => ({
+			viewId, tabId: "t1", query, activeMatchOrdinal: 1, matches: 1, finalUpdate: true,
+		})),
+		stopFindInPage: vi.fn(async ({ viewId }: { viewId: string }) => ({
+			viewId, tabId: "t1", query: "", activeMatchOrdinal: 0, matches: 0, finalUpdate: true,
+		})),
+		onFindOpen: vi.fn(() => () => undefined),
 		onReopenClosedTab: vi.fn(() => () => undefined),
+		onClosePanel: vi.fn(() => () => undefined),
 		devtools: vi.fn(
 			async ({ viewId, operation, placement }: {
 				viewId: string;
@@ -135,6 +147,8 @@ function setupBridge() {
 		})),
 		showProfileMenu: vi.fn(),
 		selectProfile: vi.fn(),
+		reconnectRuntime: vi.fn(async () => undefined),
+		getRuntimeState: vi.fn(async () => ({ connected: false })),
 		historySuggestions: vi.fn(async () => []),
 		historyFavicon: vi.fn(async () => undefined),
 		captureScreenshot: vi.fn(async () => undefined),
@@ -153,6 +167,7 @@ function setupBridge() {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
 		}),
+		onFindState: vi.fn(() => () => undefined),
 		onPageFocus: vi.fn(() => () => undefined),
 		onTabsState: vi.fn((listener: TabsListener) => {
 			tabsListeners.add(listener);
@@ -166,6 +181,7 @@ function setupBridge() {
 			activityListeners.add(listener);
 			return () => activityListeners.delete(listener);
 		}),
+		onRuntimeState: vi.fn(() => () => undefined),
 		onProfileState: vi.fn((listener: ProfileListener) => {
 			profileListeners.add(listener);
 			return () => profileListeners.delete(listener);
@@ -253,6 +269,17 @@ describe("useBrowserView", () => {
 			),
 		).toBe(true);
 		expect(result.current.viewId).toBe("42:sess-1");
+	});
+
+	it("hydrates the runtime connection state for a late-mounted panel", async () => {
+		const bridge = setupBridge();
+		bridge.getRuntimeState.mockResolvedValueOnce({ connected: false });
+		const slot = createSlot();
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+
+		await waitFor(() => expect(bridge.getRuntimeState).toHaveBeenCalled());
+		await waitFor(() => expect(result.current.browserRuntimeConnected).toBe(false));
+		expect(slot).toBeInTheDocument();
 	});
 
 	it("keeps bounds revisions increasing when the same native view remounts", async () => {
@@ -1477,6 +1504,47 @@ describe("useBrowserView", () => {
 			}),
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(3);
+	});
+
+	it("never opens a disconnected remote localhost preview on this machine", async () => {
+		const browser = setupBridge();
+		const resolve = vi.spyOn(aoBridge.remotes, "previewUrl").mockRejectedValueOnce(new Error("disconnected"))
+			.mockResolvedValue("http://ao-preview-abc.localhost:4000/");
+		vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		const { rerender } = renderHook(({ proxyBase }) => useBrowserView({
+			sessionId: "remote:box-a:ao-1",
+			origin: { hostId: "box-a", sessionId: "ao-1", proxyBase },
+			active: true,
+			poppedOut: false,
+			previewUrl: "http://localhost:5173/",
+			previewRevision: 1,
+		}), { initialProps: { proxyBase: "" } });
+		await waitFor(() => expect(resolve).toHaveBeenCalledTimes(1));
+		expect(browser.navigate).not.toHaveBeenCalled();
+		rerender({ proxyBase: "http://127.0.0.1:4000/token" });
+		await waitFor(() => expect(browser.navigate).toHaveBeenCalledWith({
+			viewId: "42:remote:box-a:ao-1", url: "http://ao-preview-abc.localhost:4000/",
+		}));
+		expect(browser.navigate).not.toHaveBeenCalledWith(expect.objectContaining({ url: "http://localhost:5173/" }));
+	});
+
+	it("revokes a remote preview origin when its target clears or session terminates", async () => {
+		const browser = setupBridge();
+		const resolve = vi.spyOn(aoBridge.remotes, "previewUrl").mockImplementation(async (_hostId, _sessionId, source) =>
+			source ? "http://ao-preview-abc.localhost:4000/" : "");
+		const { rerender } = renderHook(({ previewUrl, previewRevision, terminated }) => useBrowserView({
+			sessionId: "remote:box-a:ao-1",
+			origin: { hostId: "box-a", sessionId: "ao-1", proxyBase: "http://127.0.0.1:4000/token" },
+			active: true, poppedOut: false, previewUrl, previewRevision, terminated,
+		}), { initialProps: { previewUrl: "http://localhost:5173/", previewRevision: 1, terminated: false } });
+		await waitFor(() => expect(resolve).toHaveBeenCalledWith("box-a", "ao-1", "http://localhost:5173/"));
+		rerender({ previewUrl: "", previewRevision: 2, terminated: false });
+		await waitFor(() => expect(resolve).toHaveBeenLastCalledWith("box-a", "ao-1", ""));
+		rerender({ previewUrl: "http://localhost:5173/", previewRevision: 3, terminated: false });
+		await waitFor(() => expect(resolve).toHaveBeenLastCalledWith("box-a", "ao-1", "http://localhost:5173/"));
+		rerender({ previewUrl: "http://localhost:5173/", previewRevision: 3, terminated: true });
+		await waitFor(() => expect(resolve).toHaveBeenLastCalledWith("box-a", "ao-1", ""));
+		expect(browser.navigate).not.toHaveBeenCalledWith(expect.objectContaining({ url: "http://localhost:5173/" }));
 	});
 
 	it("keeps the user's manual navigation on session switch-back and only re-navigates on a new preview", async () => {

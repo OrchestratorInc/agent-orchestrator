@@ -9,7 +9,7 @@
 import { useSettings } from "./useSettings";
 
 export interface CloudGate {
-	/** Whether the cloud offering is available (flag + entitled client + control plane). */
+	/** Whether the cloud offering is available (user toggle or flag, plus a control plane). */
 	cloudEnabled: boolean;
 	/** Whether the local offering is available on this daemon. */
 	localEnabled: boolean;
@@ -17,8 +17,8 @@ export interface CloudGate {
 	client: string;
 }
 
-export function useCloudGate(): CloudGate {
-	const { settings } = useSettings();
+export function useCloudGate(enabled = true): CloudGate {
+	const { settings } = useSettings(undefined, enabled);
 	return {
 		cloudEnabled: settings?.cloudEnabled ?? false,
 		localEnabled: settings?.localEnabled ?? true,

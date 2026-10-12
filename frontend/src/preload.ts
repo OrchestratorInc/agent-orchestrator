@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, FOCUS_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type KeybindingOverrides } from "./shared/shortcuts";
+import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type AppShortcutEvent, type KeybindingOverrides } from "./shared/shortcuts";
 import {
 	SET_CHAT_DRAFT_RISK_CHANNEL,
 	type ChatDraftBoundaryKind,
@@ -9,8 +9,12 @@ import type {
 	BrowserAgentActivityState,
 	BrowserDevToolsInput,
 	BrowserDevToolsState,
+	BrowserFindInput,
+	BrowserFindState,
+	BrowserFindStopInput,
 	BrowserNavState,
 	BrowserRect,
+	BrowserRuntimeState,
 	BrowserTabsState,
 } from "./main/browser-view-host";
 import {
@@ -22,7 +26,8 @@ import {
 } from "./shared/tray";
 import type { DaemonStatus } from "./shared/daemon-status";
 import type { RemoteHostView } from "./main/remotes-ipc";
-import type { RemoteHealth, RemoteRequestInit, RemoteResponse } from "./main/remote-request";
+import type { ConnectedHostView } from "./main/remote-registry";
+import type { RemoteHealth } from "./main/remote-request";
 import type {
 	EditorHandoffState,
 	OpenSessionTargetInput,
@@ -73,6 +78,7 @@ import type {
 import type {
 	BrowserHistorySuggestion,
 	BrowserImportDiscovery,
+	BrowserImportDiscoveryRequest,
 	BrowserImportProgress,
 	BrowserImportRequest,
 	BrowserImportResult,
@@ -249,8 +255,8 @@ const api = {
 		setChatDraftRisk: (risks: readonly ChatDraftBoundaryKind[], copy?: ChatDraftDialogCopy) => {
 			ipcRenderer.send(SET_CHAT_DRAFT_RISK_CHANNEL, risks, copy);
 		},
-		onOpenSettingsShortcut: (listener: () => void) => {
-			const wrapped = () => listener();
+		onOpenSettingsShortcut: (listener: (section?: string) => void) => {
+			const wrapped = (_event: unknown, section?: unknown) => listener(typeof section === "string" ? section : undefined);
 			ipcRenderer.on(OPEN_SETTINGS_SHORTCUT_CHANNEL, wrapped);
 			return () => {
 				ipcRenderer.off(OPEN_SETTINGS_SHORTCUT_CHANNEL, wrapped);
@@ -284,18 +290,19 @@ const api = {
 				ipcRenderer.off(NEXT_TAB_SHORTCUT_CHANNEL, wrapped);
 			};
 		},
-		onFocusTerminalShortcut: (listener: () => void) => {
-			const wrapped = () => listener();
-			ipcRenderer.on(FOCUS_TERMINAL_SHORTCUT_CHANNEL, wrapped);
+		onShortcut: (listener: (event: AppShortcutEvent) => void) => {
+			const wrapped = (_event: unknown, shortcut: AppShortcutEvent) => listener(shortcut);
+			ipcRenderer.on(APP_SHORTCUT_CHANNEL, wrapped);
 			return () => {
-				ipcRenderer.off(FOCUS_TERMINAL_SHORTCUT_CHANNEL, wrapped);
+				ipcRenderer.off(APP_SHORTCUT_CHANNEL, wrapped);
 			};
 		},
 	},
 	terminal: {
 		saveDroppedFile: (input: { name: string; bytes: Uint8Array }) =>
 			ipcRenderer.invoke("terminal:saveDroppedFile", input) as Promise<string>,
-		setFocused: (focused: boolean) => ipcRenderer.send(SET_TERMINAL_FOCUSED_CHANNEL, focused),
+		setFocused: (focused: boolean, handlesFontSize = false) =>
+			ipcRenderer.send(SET_TERMINAL_FOCUSED_CHANNEL, focused, handlesFontSize),
 		onFontSizeShortcut: (listener: (delta: -1 | 1) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, delta: -1 | 1) => listener(delta);
 			ipcRenderer.on(TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, wrapped);
@@ -305,6 +312,12 @@ const api = {
 		},
 	},
 	window: {
+		getZoomFactor: () => ipcRenderer.invoke("window:getZoomFactor") as Promise<number>,
+		onZoomFactor: (listener: (zoomFactor: number) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, zoomFactor: number) => listener(zoomFactor);
+			ipcRenderer.on("window:zoom", wrapped);
+			return () => { ipcRenderer.off("window:zoom", wrapped); };
+		},
 		isMaximized: () => ipcRenderer.invoke("window:isMaximized") as Promise<boolean>,
 		onMaximized: (listener: (maximized: boolean) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, maximized: boolean) => listener(maximized);
@@ -329,6 +342,9 @@ const api = {
 		set: (preference: "light" | "dark" | "system") => ipcRenderer.invoke("theme:set", preference) as Promise<void>,
 		persistTerminal: (scheme: "light" | "dark") =>
 			ipcRenderer.invoke("theme:persist-terminal", scheme) as Promise<void>,
+		// The shell goes transparent over a live native browser page, so whatever
+		// shows through its unpainted gutters is the native window background.
+		setWindowBackground: (color: string) => ipcRenderer.invoke("theme:set-window-background", color) as Promise<void>,
 	},
 	menu: {
 		action: (action: string) => ipcRenderer.invoke("menu:action", action) as Promise<void>,
@@ -351,11 +367,16 @@ const api = {
 			};
 		},
 	},
+	sideChats: {
+		capture: (closedSideId?: string, cancelClose = false) => ipcRenderer.invoke("sideChats:capture", closedSideId, cancelClose) as Promise<void>,
+	},
 	editorHandoff: {
 		getState: (sessionId: string) =>
 			ipcRenderer.invoke("editorHandoff:getState", sessionId) as Promise<EditorHandoffState>,
 		open: (input: OpenSessionTargetInput) =>
 			ipcRenderer.invoke("editorHandoff:open", input) as Promise<OpenSessionTargetResult>,
+		copyWorkspacePath: (sessionId: string) =>
+			ipcRenderer.invoke("editorHandoff:copyWorkspacePath", sessionId) as Promise<void>,
 	},
 	telemetry: {
 		getBootstrap: async () => {
@@ -383,6 +404,8 @@ const api = {
 		},
 	},
 	browser: {
+		reconnectRuntime: () => ipcRenderer.invoke("browser:runtime:reconnect") as Promise<void>,
+		getRuntimeState: () => ipcRenderer.invoke("browser:runtime:state") as Promise<BrowserRuntimeState>,
 		nativeCompositionEnabled: true,
 		ensure: (sessionId: string) => ipcRenderer.invoke("browser:ensure", sessionId) as Promise<BrowserNavState>,
 		setBounds: (input: BrowserBoundsInput) => ipcRenderer.send("browser:setBounds", input),
@@ -405,6 +428,12 @@ const api = {
 		goForward: (viewId: string) => ipcRenderer.invoke("browser:goForward", viewId) as Promise<BrowserNavState>,
 		reload: (viewId: string) => ipcRenderer.invoke("browser:reload", viewId) as Promise<BrowserNavState>,
 		stop: (viewId: string) => ipcRenderer.invoke("browser:stop", viewId) as Promise<BrowserNavState>,
+		getFindState: (viewId: string) =>
+			ipcRenderer.invoke("browser:find:get", viewId) as Promise<BrowserFindState>,
+		findInPage: (input: BrowserFindInput) =>
+			ipcRenderer.invoke("browser:find", input) as Promise<BrowserFindState>,
+		stopFindInPage: (input: BrowserFindStopInput) =>
+			ipcRenderer.invoke("browser:find:stop", input) as Promise<BrowserFindState>,
 		captureScreenshot: (viewId: string) => ipcRenderer.invoke("browser:captureScreenshot", viewId) as Promise<void>,
 		downloads: {
 			list: () => ipcRenderer.invoke("browser:downloads:list") as Promise<BrowserDownloadsState>,
@@ -441,11 +470,25 @@ const api = {
 				ipcRenderer.off("browser:focusLocation", wrapped);
 			};
 		},
+		onFindOpen: (listener: (state: BrowserFindState) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: BrowserFindState) => listener(state);
+			ipcRenderer.on("browser:findOpen", wrapped);
+			return () => {
+				ipcRenderer.off("browser:findOpen", wrapped);
+			};
+		},
 		onReopenClosedTab: (listener: (viewId: string) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, viewId: string) => listener(viewId);
 			ipcRenderer.on("browser:reopenClosedTab", wrapped);
 			return () => {
 				ipcRenderer.off("browser:reopenClosedTab", wrapped);
+			};
+		},
+		onClosePanel: (listener: (viewId: string) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, viewId: string) => listener(viewId);
+			ipcRenderer.on("browser:closePanel", wrapped);
+			return () => {
+				ipcRenderer.off("browser:closePanel", wrapped);
 			};
 		},
 		devtools: (input: BrowserDevToolsInput) =>
@@ -464,6 +507,13 @@ const api = {
 			ipcRenderer.on("browser:navState", wrapped);
 			return () => {
 				ipcRenderer.off("browser:navState", wrapped);
+			};
+		},
+		onFindState: (listener: (state: BrowserFindState) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: BrowserFindState) => listener(state);
+			ipcRenderer.on("browser:findState", wrapped);
+			return () => {
+				ipcRenderer.off("browser:findState", wrapped);
 			};
 		},
 		onPageFocus: (listener: (viewId: string) => void) => {
@@ -485,6 +535,13 @@ const api = {
 			ipcRenderer.on("browser:agentActivity", wrapped);
 			return () => {
 				ipcRenderer.off("browser:agentActivity", wrapped);
+			};
+		},
+		onRuntimeState: (listener: (state: BrowserRuntimeState) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: BrowserRuntimeState) => listener(state);
+			ipcRenderer.on("browser:runtimeState", wrapped);
+			return () => {
+				ipcRenderer.off("browser:runtimeState", wrapped);
 			};
 		},
 		onDevToolsState: (listener: (state: BrowserDevToolsState) => void) => {
@@ -539,8 +596,10 @@ const api = {
 			ipcRenderer.invoke("browserProfiles:rename", input) as Promise<BrowserProfile>,
 		clear: (id: string) => ipcRenderer.invoke("browserProfiles:clear", { id }) as Promise<void>,
 		delete: (id: string) => ipcRenderer.invoke("browserProfiles:delete", { id }) as Promise<void>,
-		discoverImportSources: () =>
-			ipcRenderer.invoke("browserProfiles:import:discover") as Promise<BrowserImportDiscovery>,
+		discoverImportSources: (input?: BrowserImportDiscoveryRequest) =>
+			(input === undefined
+				? ipcRenderer.invoke("browserProfiles:import:discover")
+				: ipcRenderer.invoke("browserProfiles:import:discover", input)) as Promise<BrowserImportDiscovery>,
 		import: (input: BrowserImportRequest) =>
 			ipcRenderer.invoke("browserProfiles:import:start", input) as Promise<BrowserImportResult>,
 		onImportProgress: (listener: (progress: BrowserImportProgress) => void) => {
@@ -637,9 +696,13 @@ const api = {
 	},
 	// Saved AO daemons, shared with the CLI's ~/.ao/remotes.json. Everything the
 	// renderer receives back is password-free (see main/remotes-ipc.ts); the
-	// plaintext password only ever travels renderer -> main, on `add`.
+	// plaintext password only travels renderer -> main on add or credential edit.
 	remotes: {
 		list: () => ipcRenderer.invoke("remotes:list") as Promise<RemoteHostView[]>,
+		importAccountHost: (accountId: string, input: { hostId: string; label: string; url: string; password: string }) =>
+			ipcRenderer.invoke("remotes:importAccountHost", accountId, input) as Promise<void>,
+		pruneAccountHosts: (accountId: string, hostIds: string[]) => ipcRenderer.invoke("remotes:pruneAccountHosts", accountId, hostIds) as Promise<void>,
+		issueAccountToken: (url: string) => ipcRenderer.invoke("remotes:issueAccountToken", url) as Promise<string>,
 		add: (input: { label: string; url: string; password: string }) =>
 			ipcRenderer.invoke("remotes:add", input) as Promise<RemoteHealth>,
 		// An edit carries only what changed: an omitted password keeps the saved
@@ -648,16 +711,19 @@ const api = {
 		update: (url: string, changes: { label?: string; url?: string; password?: string }) =>
 			ipcRenderer.invoke("remotes:update", url, changes) as Promise<RemoteHealth>,
 		remove: (url: string) => ipcRenderer.invoke("remotes:remove", url) as Promise<void>,
-		probe: (url: string) => ipcRenderer.invoke("remotes:probe", url) as Promise<RemoteHealth>,
-		request: (url: string, init: RemoteRequestInit) =>
-			ipcRenderer.invoke("remotes:request", url, init) as Promise<RemoteResponse>,
+		connect: (url: string, hostId?: string) => ipcRenderer.invoke("remotes:connect", url, hostId) as Promise<ConnectedHostView>,
+		disconnect: (url: string) => ipcRenderer.invoke("remotes:disconnect", url) as Promise<void>,
+		previewUrl: (hostId: string, sessionId: string, sourceUrl: string) =>
+			ipcRenderer.invoke("remotes:previewUrl", hostId, sessionId, sourceUrl) as Promise<string>,
+		resolvePreviewUrl: (hostId: string, sessionId: string, viewedUrl: string) =>
+			ipcRenderer.invoke("remotes:resolvePreviewUrl", hostId, sessionId, viewedUrl) as Promise<string>,
 	},
 	cloud: {
 		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,
 		signIn: () => ipcRenderer.invoke("cloud:signIn") as Promise<void>,
 		signOut: () => ipcRenderer.invoke("cloud:signOut") as Promise<void>,
 		cancelProviderAuth: () => ipcRenderer.invoke("cloud:cancelProviderAuth") as Promise<void>,
-		connectProviderAuth: (input: { baseUrl: string; orgId: string; provider: string }) =>
+		connectProviderAuth: (input: { baseUrl: string; provider: string; persistLocalClaudeToken?: boolean }) =>
 			ipcRenderer.invoke("cloud:connectProviderAuth", input) as Promise<
 				| string
 				| { secret: string; refreshToken?: string; expiresIn?: number; refreshTokenExpiresIn?: number }

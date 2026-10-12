@@ -2,9 +2,42 @@ package sandbox
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
+
+// Rewriting a plan onto a project snapshot keeps the harness snapshot it
+// replaced as baseSnapshot, the fallback if the project snapshot is collected.
+func TestWithFreestyleSnapshotKeepsTheBaseSnapshot(t *testing.T) {
+	plan := Plan{
+		Provider:         ProviderFreestyle,
+		ResourceProfile:  json.RawMessage(`{"freestyle":{"snapshot":"snap-codex"}}`),
+		BootstrapContext: json.RawMessage(`{"freestyle":{"snapshot":"snap-codex"}}`),
+	}
+	rewritten, err := WithFreestyleSnapshot(plan, "snap-project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := WithFreestyleSnapshot(rewritten, "snap-project-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []json.RawMessage{again.ResourceProfile, again.BootstrapContext} {
+		var document struct {
+			Freestyle struct {
+				Snapshot     string `json:"snapshot"`
+				BaseSnapshot string `json:"baseSnapshot"`
+			} `json:"freestyle"`
+		}
+		if err := json.Unmarshal(raw, &document); err != nil {
+			t.Fatal(err)
+		}
+		if document.Freestyle.Snapshot != "snap-project-2" || document.Freestyle.BaseSnapshot != "snap-codex" {
+			t.Fatalf("freestyle = %+v, want snap-project-2 on base snap-codex", document.Freestyle)
+		}
+	}
+}
 
 func TestNewCoderWorkspaceLayout(t *testing.T) {
 	t.Parallel()
@@ -158,7 +191,7 @@ func TestSessionPlanForProviderWithCoderOptions(t *testing.T) {
 	}
 
 	// nil options => default template, no size/startup params (unchanged behavior).
-	plan, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, nil)
+	plan, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +210,7 @@ func TestSessionPlanForProviderWithCoderOptions(t *testing.T) {
 	// rich parameters on.
 	plan, err = defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, &CoderSessionOptions{
 		TemplateID: chosenTemplate, Size: "large", StartupScript: "make dev",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +227,7 @@ func TestSessionPlanForProviderWithCoderOptions(t *testing.T) {
 
 	// Size without a chosen template is ignored: the default template does not
 	// declare it, so we must not send it (Coder would reject the build).
-	plan, err = defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, &CoderSessionOptions{Size: "large"})
+	plan, err = defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, &CoderSessionOptions{Size: "large"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,5 +259,139 @@ func TestDecodeCoderSessionProfileRejectsIncompleteContract(t *testing.T) {
 		if _, err := DecodeCoderSessionProfile(raw); err == nil {
 			t.Errorf("profile %d unexpectedly decoded: %s", index, raw)
 		}
+	}
+}
+
+// A per-organization override replaces the deployment-default Coder connection's
+// non-secret fields in the stamped session profile, while a nil override leaves
+// the deployment default untouched.
+func TestSessionPlanForProviderWithCoderOverride(t *testing.T) {
+	t.Parallel()
+	const (
+		deployTemplate = "2a2e262c-b31c-4202-946d-a19ad45d1fd2"
+		orgTemplate    = "3b3f373d-c42d-5313-a57e-b2abe56e2fe3"
+	)
+	defaults := ProvisioningDefaults{
+		Provider: ProviderCoder,
+		Release:  "test",
+		Coder: CoderConfig{
+			BaseURL: "https://coder.example.com", Owner: "deploy-owner", TemplateID: deployTemplate,
+			AgentName: "deploy-dev", DurableRoot: "/persistent/ao", WorkerTokenTTL: time.Minute,
+		},
+	}
+
+	plan, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, nil, &CoderDeploymentOverride{
+		BaseURL: "https://org-coder.example.com", Owner: "org-owner", TemplateID: orgTemplate,
+		AgentName: "org-dev", Parameters: map[string]string{"region": "eu"}, DurableRoot: "/srv/org",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := DecodeCoderSessionProfile(plan.ResourceProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.BaseURL != "https://org-coder.example.com" || profile.Owner != "org-owner" ||
+		profile.TemplateID != orgTemplate || profile.AgentName != "org-dev" ||
+		profile.DurableRoot != "/srv/org" || profile.Parameters["region"] != "eu" {
+		t.Fatalf("override not applied: %+v", profile)
+	}
+
+	// A nil override keeps the deployment default.
+	plan, err = defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err = DecodeCoderSessionProfile(plan.ResourceProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.BaseURL != "https://coder.example.com" || profile.Owner != "deploy-owner" ||
+		profile.TemplateID != deployTemplate {
+		t.Fatalf("nil override disturbed the deployment default: %+v", profile)
+	}
+}
+
+// A bring-your-own-Coder org carries no default template (it is chosen per
+// project). The per-project pick supplies the template; with neither the org nor
+// the project supplying one, the plan fails with ErrCoderTemplateRequired so the
+// edge can tell the user to choose a template.
+func TestSessionPlanForProviderWithCoderTemplatelessOverride(t *testing.T) {
+	t.Parallel()
+	const projectTemplate = "3b3f373d-c42d-5313-a57e-b2abe56e2fe3"
+	// A bring-your-own-only deployment may leave the deployment default unset.
+	defaults := ProvisioningDefaults{Provider: ProviderCoder, Release: "test"}
+	templateless := &CoderDeploymentOverride{
+		BaseURL: "https://org-coder.example.com", Owner: "org-owner",
+		DurableRoot: "/srv/org",
+	}
+
+	// Project supplies the template.
+	plan, err := defaults.SessionPlanForProviderWithCoder(
+		"codex", ProviderCoder, &CoderSessionOptions{TemplateID: projectTemplate}, templateless,
+	)
+	if err != nil {
+		t.Fatalf("project-supplied template: %v", err)
+	}
+	profile, err := DecodeCoderSessionProfile(plan.ResourceProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.TemplateID != projectTemplate || profile.Owner != "org-owner" {
+		t.Fatalf("project template not applied over templateless org: %+v", profile)
+	}
+
+	// No template anywhere => a clear, user-fixable error.
+	if _, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, nil, templateless); !errors.Is(err, ErrCoderTemplateRequired) {
+		t.Fatalf("templateless session error = %v, want ErrCoderTemplateRequired", err)
+	}
+	// An options object that carries only size (no template) still resolves nothing.
+	if _, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, &CoderSessionOptions{Size: "large"}, templateless); !errors.Is(err, ErrCoderTemplateRequired) {
+		t.Fatalf("size-only templateless session error = %v, want ErrCoderTemplateRequired", err)
+	}
+}
+
+// The deployment's own Coder offers only its allowed templates: a test or
+// bring-your-own template on the shared Coder is refused up front instead of
+// booting a workspace the deployment cannot use. The default template is
+// always allowed, and bring-your-own connections are not limited.
+func TestSessionPlanForProviderWithCoderAllowedTemplates(t *testing.T) {
+	t.Parallel()
+	const (
+		defaultTemplate = "d85825e0-6bd4-4fe4-853d-1b48891b8066"
+		devKit          = "f81b3138-f642-4746-ba51-11ef8ec718b0"
+		testTemplate    = "d7f2324d-51ea-4429-bfdc-c4a544535095"
+	)
+	defaults := ProvisioningDefaults{Provider: ProviderCoder, Release: "test", Coder: CoderConfig{
+		BaseURL: "https://coder.example.com", Owner: "aoadmin", TemplateID: defaultTemplate,
+		AgentName: "main", DurableRoot: "/home/coder", WorkerTokenTTL: DefaultWorkerTokenTTL,
+		AllowedTemplateIDs: []string{devKit},
+	}}
+	for name, options := range map[string]*CoderSessionOptions{
+		"deployment default": nil,
+		"default picked":     {TemplateID: defaultTemplate},
+		"allowed template":   {TemplateID: devKit},
+	} {
+		if _, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, options, nil); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if _, err := defaults.SessionPlanForProviderWithCoder(
+		"codex", ProviderCoder, &CoderSessionOptions{TemplateID: testTemplate}, nil,
+	); !errors.Is(err, ErrCoderTemplateUnavailable) {
+		t.Fatalf("test template error = %v, want ErrCoderTemplateUnavailable", err)
+	}
+	byo := &CoderDeploymentOverride{BaseURL: "https://org-coder.example.com", Owner: "dev", DurableRoot: "$HOME"}
+	if _, err := defaults.SessionPlanForProviderWithCoder(
+		"codex", ProviderCoder, &CoderSessionOptions{TemplateID: testTemplate}, byo,
+	); err != nil {
+		t.Fatalf("bring-your-own template: %v", err)
+	}
+	unlimited := defaults
+	unlimited.Coder.AllowedTemplateIDs = nil
+	if _, err := unlimited.SessionPlanForProviderWithCoder(
+		"codex", ProviderCoder, &CoderSessionOptions{TemplateID: testTemplate}, nil,
+	); err != nil {
+		t.Fatalf("no allowed list: %v", err)
 	}
 }

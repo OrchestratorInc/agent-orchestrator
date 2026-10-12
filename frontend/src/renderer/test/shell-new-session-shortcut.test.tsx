@@ -2,7 +2,9 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { CancelledError } from "@tanstack/react-query";
 import { Suspense, type ComponentType, type PropsWithChildren } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { KeybindingOverrides } from "../../shared/shortcuts";
+import type { AppShortcutEvent, KeybindingOverrides } from "../../shared/shortcuts";
+import { TooltipProvider } from "../components/ui/tooltip";
+import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSummary } from "../types/workspace";
 
@@ -14,12 +16,16 @@ const shellMocks = vi.hoisted(() => {
 		openSettingsListener: undefined as (() => void) | undefined,
 		previousSessionListener: undefined as (() => void) | undefined,
 		nextSessionListener: undefined as (() => void) | undefined,
-		focusTerminalListener: undefined as (() => void) | undefined,
+		appShortcutListeners: new Set<(event: AppShortcutEvent) => void>(),
 		openFolderPathListener: undefined as ((path: string) => void) | undefined,
-		routeParams: {} as { projectId?: string; sessionId?: string },
+		routeParams: {} as { hostId?: string; projectId?: string; sessionId?: string },
 		routeSearch: {} as Record<string, unknown>,
 		matchRouteTarget: null as string | null,
 		workspaces: [] as WorkspaceSummary[],
+		remoteWorkspaces: [] as WorkspaceSummary[],
+		remoteFailedHostIds: [] as string[],
+		removeRemoteProject: undefined as ((hostId: string, projectId: string) => Promise<void>) | undefined,
+		configureRemoteProject: undefined as ((hostId: string, projectId: string) => void) | undefined,
 		workspaceQuery: {
 			data: [] as WorkspaceSummary[],
 			dataUpdatedAt: 0,
@@ -29,6 +35,7 @@ const shellMocks = vi.hoisted(() => {
 		daemonStatus: { state: "stopped" } as {
 			state: "ready" | "starting" | "stopped" | "error";
 			port?: number;
+			pid?: number;
 			code?: "not_ready";
 		},
 		shellValue: undefined as
@@ -79,10 +86,13 @@ const shellMocks = vi.hoisted(() => {
 			state.nextSessionListener = listener;
 			return vi.fn();
 		}),
-		onFocusTerminalShortcut: vi.fn((listener: () => void) => {
-			state.focusTerminalListener = listener;
-			return vi.fn();
+		onShortcut: vi.fn((listener: (event: AppShortcutEvent) => void) => {
+			state.appShortcutListeners.add(listener);
+			return () => state.appShortcutListeners.delete(listener);
 		}),
+		router: {
+			history: { canGoBack: vi.fn(() => true), back: vi.fn(), forward: vi.fn() },
+		},
 		getPathForFile: vi.fn((file: File) => `/dropped/${file.name}`),
 		onOpenFolderPath: vi.fn((listener: (path: string) => void) => {
 			state.openFolderPathListener = listener;
@@ -97,9 +107,12 @@ const shellMocks = vi.hoisted(() => {
 			getQueryData: vi.fn(),
 			getQueryState: vi.fn(),
 			invalidateQueries: vi.fn(),
+			cancelQueries: vi.fn(),
 			prefetchQuery: vi.fn(async () => undefined),
 			setQueryData: vi.fn(),
 		},
+		remoteDelete: vi.fn(),
+		listRemoteHosts: vi.fn(async () => []),
 		state,
 	};
 });
@@ -118,6 +131,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	Outlet: () => null,
 	useMatchRoute: () => (options: { to: string }) => shellMocks.state.matchRouteTarget === options.to,
 	useNavigate: () => shellMocks.navigate,
+	useRouter: () => shellMocks.router,
 	useParams: () => shellMocks.state.routeParams,
 	useSearch: () => shellMocks.state.routeSearch,
 }));
@@ -125,13 +139,17 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
 		app: {
+			onCloseShellTerminalShortcut: () => () => {},
+			onPreviousTabShortcut: () => () => {},
+			onNextTabShortcut: () => () => {},
+			setCloseShellTerminalShortcutEnabled: () => {},
 			onNewSessionShortcut: shellMocks.onNewSessionShortcut,
 			onKeyboardShortcutsHelp: shellMocks.onKeyboardShortcutsHelp,
 			onNewShellTerminalShortcut: shellMocks.onNewShellTerminalShortcut,
 			onOpenSettingsShortcut: shellMocks.onOpenSettingsShortcut,
 			onPreviousSessionShortcut: shellMocks.onPreviousSessionShortcut,
 			onNextSessionShortcut: shellMocks.onNextSessionShortcut,
-			onFocusTerminalShortcut: shellMocks.onFocusTerminalShortcut,
+			onShortcut: shellMocks.onShortcut,
 			getPathForFile: shellMocks.getPathForFile,
 			onOpenFolderPath: shellMocks.onOpenFolderPath,
 		},
@@ -145,15 +163,32 @@ vi.mock("../lib/bridge", () => ({
 			setAttentionState: () => undefined,
 			onOpenSession: () => () => undefined,
 		},
+		remotes: { list: shellMocks.listRemoteHosts },
 	},
 }));
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => shellMocks.state.workspaceQuery,
+	useRemoteWorkspaces: () => ({ data: shellMocks.state.remoteWorkspaces, failedHostIds: shellMocks.state.remoteFailedHostIds, loadedProjectHostIds: [] }),
 	useWorkspaceTraySessions: () => ({ data: [] }),
 	workspaceQueryKey: ["workspaces"],
+	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
 	workspaceQueryOptions: {},
+	toWorkspaceSession: (session: { id: string }, project: { id: string; name: string }) => ({ ...session, workspaceId: project.id, workspaceName: project.name }),
 }));
+
+vi.mock("../lib/host-clients", () => ({
+	clientForHost: () => ({ DELETE: shellMocks.remoteDelete }),
+	connectHost: vi.fn(),
+	connectedHosts: () => [],
+	disconnectHost: vi.fn(),
+	subscribeConnectedHosts: () => () => undefined,
+}));
+
+vi.mock("../lib/cloud-session", () => ({
+	useCloudSession: () => ({ status: "authenticated", session: { user: { id: "test-user" } } }),
+}));
+vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }) }));
 
 vi.mock("../hooks/useDaemonStatus", () => ({
 	useDaemonStatus: () => shellMocks.state.daemonStatus,
@@ -161,7 +196,7 @@ vi.mock("../hooks/useDaemonStatus", () => ({
 
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../lib/api-client")>()),
-	apiClient: { POST: vi.fn(), DELETE: vi.fn() },
+	apiClient: { POST: vi.fn(), DELETE: vi.fn(), PATCH: vi.fn() },
 	apiErrorCode: (error: { code?: string } | undefined) => error?.code,
 	apiErrorMessage: (error: { message?: string } | undefined) => error?.message ?? "request failed",
 	hasTrustedApiBaseUrl: () => true,
@@ -227,7 +262,11 @@ vi.mock("../components/TitlebarNav", async () => {
 	};
 });
 vi.mock("../components/WindowTitlebar", () => ({ WindowTitlebar: () => null }));
-vi.mock("../components/SettingsDialog", () => ({ SettingsDialog: () => null }));
+vi.mock("../components/SettingsDialog", () => ({
+	SettingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+	SettingsPane: () => null,
+	useSettingsPage: () => null,
+}));
 vi.mock("../components/KeyboardShortcutsDialog", () => ({
 	KeyboardShortcutsDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="keyboard-shortcuts" /> : null),
 }));
@@ -269,7 +308,13 @@ vi.mock("../components/Sidebar", async () => {
 	const { useUiStore: useStore } = await vi.importActual<typeof import("../stores/ui-store")>("../stores/ui-store");
 	return {
 		SIDEBAR_DEFAULT_WIDTH: 240,
-		Sidebar: ({ topbarOffset }: { topbarOffset?: string }) => {
+		Sidebar: ({ topbarOffset, onRemoveRemoteProject, onConfigureRemoteProject }: {
+			topbarOffset?: string;
+			onRemoveRemoteProject: (hostId: string, projectId: string) => Promise<void>;
+			onConfigureRemoteProject: (hostId: string, projectId: string) => void;
+		}) => {
+			shellMocks.state.removeRemoteProject = onRemoveRemoteProject;
+			shellMocks.state.configureRemoteProject = onConfigureRemoteProject;
 			const nonce = useStore((state) => state.createProjectNonce);
 			const folderDropRequest = useStore((state) => state.folderDropRequest);
 			return (
@@ -294,7 +339,7 @@ const workspaces = [
 		path: "/one",
 		sessions: [
 			{ id: "sess-1", workspaceId: "proj-1", status: "working" },
-			{ id: "sess-2", workspaceId: "proj-1", status: "terminated" },
+			{ id: "sess-2", workspaceId: "proj-1", status: "terminated", isTerminated: true },
 			{ id: "sess-merged-terminated", workspaceId: "proj-1", status: "merged", isTerminated: true },
 			{ id: "sess-3", workspaceId: "proj-1", status: "idle" },
 		],
@@ -308,12 +353,12 @@ const workspaces = [
 ] as unknown as WorkspaceSummary[];
 
 async function renderShell() {
-	let view: ReturnType<typeof render> | undefined;
-	await act(async () => {
-		view = render(
+	const view = await act(async () => {
+		return render(
 			<Suspense fallback={null}>
 				<ShellRoute />
 			</Suspense>,
+			{ wrapper: TooltipProvider },
 		);
 	});
 	await waitFor(() => expect(shellMocks.onNewSessionShortcut).toHaveBeenCalledTimes(1), { timeout: 30_000 });
@@ -322,8 +367,20 @@ async function renderShell() {
 	await waitFor(() => expect(shellMocks.onOpenSettingsShortcut).toHaveBeenCalledTimes(1));
 	await waitFor(() => expect(shellMocks.onPreviousSessionShortcut).toHaveBeenCalledTimes(1));
 	await waitFor(() => expect(shellMocks.onNextSessionShortcut).toHaveBeenCalledTimes(1));
-	await waitFor(() => expect(shellMocks.onFocusTerminalShortcut).toHaveBeenCalledTimes(1));
-	return view!;
+	await waitFor(() => expect(shellMocks.onShortcut).toHaveBeenCalled());
+	return view;
+}
+
+function setWorkspaces(list: WorkspaceSummary[]) {
+	shellMocks.state.workspaces = list;
+	shellMocks.state.workspaceQuery = { data: list, dataUpdatedAt: 0, isError: false, isSuccess: true };
+}
+
+/** Delivers an application shortcut the way the main process does. */
+function emitAppShortcut(event: AppShortcutEvent) {
+	act(() => {
+		for (const listener of [...shellMocks.state.appShortcutListeners]) listener(event);
+	});
 }
 
 function emitShortcut() {
@@ -342,7 +399,12 @@ beforeEach(() => {
 	shellMocks.onOpenSettingsShortcut.mockClear();
 	shellMocks.onPreviousSessionShortcut.mockClear();
 	shellMocks.onNextSessionShortcut.mockClear();
-	shellMocks.onFocusTerminalShortcut.mockClear();
+	shellMocks.onShortcut.mockClear();
+	shellMocks.state.appShortcutListeners.clear();
+	shellMocks.router.history.canGoBack.mockReset().mockReturnValue(true);
+	shellMocks.router.history.back.mockClear();
+	shellMocks.router.history.forward.mockClear();
+	useSidebarOrderStore.setState({ projectOrder: [], sessionOrders: {} });
 	shellMocks.getPathForFile.mockClear();
 	shellMocks.onOpenFolderPath.mockClear();
 	shellMocks.state.newSessionListener = undefined;
@@ -350,12 +412,17 @@ beforeEach(() => {
 	shellMocks.state.openSettingsListener = undefined;
 	shellMocks.state.previousSessionListener = undefined;
 	shellMocks.state.nextSessionListener = undefined;
-	shellMocks.state.focusTerminalListener = undefined;
 	shellMocks.state.openFolderPathListener = undefined;
 	shellMocks.state.routeParams = {};
 	shellMocks.state.routeSearch = {};
 	shellMocks.state.matchRouteTarget = null;
 	shellMocks.state.workspaces = workspaces;
+	shellMocks.state.remoteWorkspaces = [];
+	shellMocks.state.remoteFailedHostIds = [];
+	shellMocks.listRemoteHosts.mockClear();
+	shellMocks.state.removeRemoteProject = undefined;
+	shellMocks.state.configureRemoteProject = undefined;
+	shellMocks.remoteDelete.mockReset().mockResolvedValue({});
 	shellMocks.state.workspaceQuery = {
 		data: workspaces,
 		dataUpdatedAt: 0,
@@ -364,15 +431,20 @@ beforeEach(() => {
 	};
 	shellMocks.state.daemonStatus = { state: "error", code: "not_ready" };
 	shellMocks.state.shellValue = undefined;
+	vi.mocked(apiClient.PATCH).mockReset().mockResolvedValue({ error: undefined });
 	shellMocks.queryClient.fetchQuery.mockReset().mockResolvedValue(workspaces);
 	shellMocks.queryClient.getQueryData.mockReset().mockReturnValue(workspaces);
 	shellMocks.queryClient.getQueryState.mockReset().mockReturnValue({ dataUpdatedAt: 0 });
 	useUiStore.setState({
+		projectCreationPending: false,
+		provisioningProjectIds: new Set(),
 		createProjectNonce: 0,
+		developerMode: false,
 		folderDropRequest: null,
 		globalToast: null,
 		isSidebarOpen: true,
 		newTaskRequest: null,
+		remoteHosts: false,
 		newShellTerminalNonce: 0,
 		activeShellTerminalHandleId: null,
 		settingsModal: null,
@@ -380,6 +452,73 @@ beforeEach(() => {
 });
 
 describe("shell workspace startup", () => {
+	it("rechecks a connected host when its session queries fail", async () => {
+		useUiStore.setState({ developerMode: true, remoteHosts: true });
+		const view = await renderShell();
+		await waitFor(() => expect(shellMocks.listRemoteHosts).toHaveBeenCalledTimes(1));
+
+		shellMocks.state.remoteFailedHostIds = ["box-a"];
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+		await waitFor(() => expect(shellMocks.listRemoteHosts).toHaveBeenCalledTimes(2));
+
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+		expect(shellMocks.listRemoteHosts).toHaveBeenCalledTimes(2);
+	});
+
+	it("opens the shared Project settings dialog for the selected remote host", async () => {
+		shellMocks.state.remoteWorkspaces = [
+			{ hostId: "box-a", id: "shared", name: "Shared", path: "/a", sessions: [] },
+			{ hostId: "box-b", id: "shared", name: "Shared", path: "/b", sessions: [] },
+		] as WorkspaceSummary[];
+		await renderShell();
+
+		act(() => shellMocks.state.configureRemoteProject?.("box-b", "shared"));
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "shared", hostId: "box-b" });
+	});
+
+	it("leaves a remote session only when removing its project on the same host", async () => {
+		useUiStore.setState({ developerMode: true, remoteHosts: true });
+		shellMocks.state.routeParams = { hostId: "box-a", sessionId: "same-session" };
+		shellMocks.state.remoteWorkspaces = [
+			{ hostId: "box-a", id: "project-a", sessions: [{ id: "same-session" }] },
+			{ hostId: "box-b", id: "project-b", sessions: [{ id: "same-session" }] },
+		] as WorkspaceSummary[];
+		await renderShell();
+
+		await shellMocks.state.removeRemoteProject?.("box-b", "project-b");
+		expect(shellMocks.navigate).not.toHaveBeenCalled();
+		await shellMocks.state.removeRemoteProject?.("box-a", "project-a");
+		expect(shellMocks.navigate).toHaveBeenCalledWith({ to: "/" });
+	});
+
+	it("resyncs Developer Mode when an attached daemon restarts on the same port", async () => {
+		useUiStore.setState({ developerMode: true });
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
+		const view = await renderShell();
+		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(1));
+		expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/chat-hibernation", {
+			body: { enabled: true },
+		});
+
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 202 };
+		view.rerender(
+			<Suspense fallback={null}>
+				<ShellRoute />
+			</Suspense>,
+		);
+
+		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(2));
+	});
+
+	it("keeps chat hibernation disabled when Developer Mode is off", async () => {
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
+		await renderShell();
+
+		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/chat-hibernation", {
+			body: { enabled: false },
+		}));
+	});
+
 	it("routes duplicate-path project adds to the registered project and shows a toast", async () => {
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
 		vi.mocked(apiClient.POST).mockResolvedValueOnce({
@@ -492,6 +631,67 @@ describe("shell workspace startup", () => {
 				},
 			},
 		});
+	});
+
+	it("shows the Cloud loader while opening a cloud orchestrator", async () => {
+		shellMocks.state.workspaces = [{ ...workspaces[0], kind: "cloud", sessions: [] }];
+		shellMocks.state.workspaceQuery.data = shellMocks.state.workspaces;
+		shellMocks.state.routeParams = { projectId: workspaces[0].id };
+		useUiStore.getState().setProjectProvisioning(workspaces[0].id, true);
+		await renderShell();
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+		expect(screen.queryByLabelText("Message the agent")).not.toBeInTheDocument();
+	});
+
+	it("opens optimistic chat during submission without a loading page", async () => {
+		useUiStore.getState().setProjectCreationPending(true);
+		const view = await renderShell();
+		const composer = screen.getByLabelText("Message the agent");
+		expect(composer.closest("form")).toHaveAttribute("data-starting", "true");
+		expect(screen.getByTestId("session-workspace-topbar")).toBeVisible();
+		shellMocks.state.routeParams = { projectId: "proj-1" };
+		act(() => {
+			useUiStore.getState().setProjectProvisioning("proj-1", true);
+			useUiStore.getState().setProjectCreationPending(false);
+		});
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+		expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+		shellMocks.state.routeParams = { projectId: "proj-1", sessionId: "sess-1" };
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+		expect(screen.getByLabelText("Message the agent")).toBe(composer);
+		expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+		act(() => useUiStore.getState().setProjectProvisioning("proj-1", false));
+		expect(screen.queryByText("Getting your project ready")).not.toBeInTheDocument();
+	});
+
+	const spawnNewProject = () => {
+		shellMocks.state.daemonStatus = { state: "ready", port: 3001 };
+		vi.mocked(apiClient.POST)
+			.mockResolvedValueOnce({ data: { project: { id: "proj-new", name: "New", kind: "single_repo", path: "/repo/new" } } })
+			.mockResolvedValueOnce({ data: { session: { id: "orch-new", projectId: "proj-new", kind: "orchestrator", mode: "chat", provisionState: "provisioning" } } });
+	};
+
+	it("opens the returned orchestrator without waiting for a workspace refetch", async () => {
+		spawnNewProject();
+		shellMocks.state.routeParams = { projectId: "proj-new" };
+		await renderShell();
+		await shellMocks.state.shellValue?.createProject?.({ path: "/repo/new", workerAgent: "codex", orchestratorAgent: "codex" });
+		await waitFor(() => expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-new", sessionId: "orch-new" },
+		}));
+		const publish = shellMocks.queryClient.setQueryData.mock.calls.at(-1)?.[1] as (current: WorkspaceSummary[]) => WorkspaceSummary[];
+		expect(publish([{ ...workspaces[0], id: "proj-new", name: "New", sessions: [] }])[0].sessions[0]).toMatchObject({ id: "orch-new", mode: "chat", provisionState: "provisioning" });
+		expect(useUiStore.getState().provisioningProjectIds.has("proj-new")).toBe(false);
+	});
+
+	it("does not pull the user back to a new orchestrator after they left the project", async () => {
+		spawnNewProject();
+		shellMocks.state.routeParams = { projectId: "other" };
+		await renderShell();
+		await shellMocks.state.shellValue?.createProject?.({ path: "/repo/new", workerAgent: "codex", orchestratorAgent: "codex" });
+		await waitFor(() => expect(useUiStore.getState().provisioningProjectIds.has("proj-new")).toBe(false));
+		expect(shellMocks.navigate).not.toHaveBeenCalledWith(expect.objectContaining({ to: "/projects/$projectId/sessions/$sessionId" }));
 	});
 
 	it("leaves the session topbar row to the session split instead of reserving a full-width shell row", async () => {
@@ -687,7 +887,6 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 
 		expect(shellMocks.openShellTerminal).toHaveBeenCalledWith(
 			expect.objectContaining({ projectId: "proj-1", sessionId: "sess-1" }),
-			expect.anything(),
 		);
 	});
 
@@ -705,7 +904,6 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 				sessionId: "sess-1",
 				cloud: { orgId: "cloud-org" },
 			}),
-			expect.anything(),
 		);
 		delete session.cloud;
 	});
@@ -720,7 +918,6 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 
 		expect(shellMocks.openShellTerminal).toHaveBeenCalledWith(
 			expect.objectContaining({ projectId: "proj-2", sessionId: "sess-cross" }),
-			expect.anything(),
 		);
 	});
 
@@ -788,7 +985,88 @@ describe("shell application shortcut subscriptions", () => {
 		expect(shellMocks.navigate).not.toHaveBeenCalled();
 	});
 
-	it("moves to the next active session in the current project", async () => {
+	// Sidebar order for the fixture: sess-3, sess-1 (newest first; terminated
+	// sessions are not listed), then proj-2's sess-cross.
+	it("moves to the next session in sidebar order, crossing into the next project", async () => {
+		shellMocks.state.routeParams = { sessionId: "sess-1" };
+		await renderShell();
+
+		act(() => shellMocks.state.nextSessionListener?.());
+
+		expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-2", sessionId: "sess-cross" },
+		});
+	});
+
+	it("moves to the previous session and skips terminated ones", async () => {
+		shellMocks.state.routeParams = { sessionId: "sess-1" };
+		await renderShell();
+
+		act(() => shellMocks.state.previousSessionListener?.());
+
+		expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "sess-3" },
+		});
+	});
+
+	it("wraps to the last session when moving previous from the first", async () => {
+		shellMocks.state.routeParams = { sessionId: "sess-3" };
+		await renderShell();
+
+		act(() => shellMocks.state.previousSessionListener?.());
+
+		expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-2", sessionId: "sess-cross" },
+		});
+	});
+
+	it("wraps to the first session when moving next from the last", async () => {
+		shellMocks.state.routeParams = { sessionId: "sess-cross" };
+		await renderShell();
+
+		act(() => shellMocks.state.nextSessionListener?.());
+
+		expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "sess-3" },
+		});
+	});
+
+	it("starts at the first session going forward and the last going backward from a project board", async () => {
+		shellMocks.state.routeParams = { projectId: "proj-1" };
+		await renderShell();
+
+		act(() => shellMocks.state.nextSessionListener?.());
+		expect(shellMocks.navigate).toHaveBeenLastCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "sess-3" },
+		});
+
+		act(() => shellMocks.state.previousSessionListener?.());
+		expect(shellMocks.navigate).toHaveBeenLastCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-2", sessionId: "sess-cross" },
+		});
+	});
+
+	it("follows the project order the user dragged the sidebar into", async () => {
+		useSidebarOrderStore.setState({ projectOrder: ["proj-2", "proj-1"] });
+		shellMocks.state.routeParams = { sessionId: "sess-cross" };
+		await renderShell();
+
+		act(() => shellMocks.state.nextSessionListener?.());
+
+		expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "sess-3" },
+		});
+	});
+
+	it("follows the session order the user dragged within a project", async () => {
+		useSidebarOrderStore.setState({ sessionOrders: { "proj-1": ["sess-1", "sess-3"] } });
 		shellMocks.state.routeParams = { sessionId: "sess-1" };
 		await renderShell();
 
@@ -800,16 +1078,119 @@ describe("shell application shortcut subscriptions", () => {
 		});
 	});
 
-	it("wraps to the last session when moving previous from the first", async () => {
-		shellMocks.state.routeParams = { sessionId: "sess-1" };
+	it("lists pinned sessions first, once", async () => {
+		setWorkspaces([
+			{
+				...workspaces[0],
+				sessions: [
+					{ id: "sess-1", workspaceId: "proj-1", status: "working" },
+					{ id: "sess-3", workspaceId: "proj-1", status: "idle", isPinned: true, pinnedAt: "2026-10-10T00:00:00Z" },
+				],
+			},
+			workspaces[1],
+		] as unknown as WorkspaceSummary[]);
+		shellMocks.state.routeParams = { sessionId: "sess-3" };
 		await renderShell();
 
-		act(() => shellMocks.state.previousSessionListener?.());
-
-		expect(shellMocks.navigate).toHaveBeenCalledWith({
+		// Pinned sess-3 is first; its project row would list it again at the end.
+		emitAppShortcut({ id: "jump-to-session", index: 0 });
+		expect(shellMocks.navigate).toHaveBeenLastCalledWith({
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "proj-1", sessionId: "sess-3" },
 		});
+		emitAppShortcut({ id: "jump-to-session", index: 1 });
+		expect(shellMocks.navigate).toHaveBeenLastCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "sess-1" },
+		});
+		emitAppShortcut({ id: "jump-to-session", index: 2 });
+		expect(shellMocks.navigate).toHaveBeenLastCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-2", sessionId: "sess-cross" },
+		});
+	});
+
+	it("jumps to the Nth session in sidebar order and ignores a digit past the end", async () => {
+		await renderShell();
+
+		emitAppShortcut({ id: "jump-to-session", index: 1 });
+		expect(shellMocks.navigate).toHaveBeenLastCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "sess-1" },
+		});
+
+		shellMocks.navigate.mockClear();
+		emitAppShortcut({ id: "jump-to-session", index: 8 });
+		expect(shellMocks.navigate).not.toHaveBeenCalled();
+	});
+
+	it("leaves the digits to the command palette while it is open", async () => {
+		await renderShell();
+		useUiStore.setState({ isCommandPaletteOpen: true });
+
+		emitAppShortcut({ id: "jump-to-session", index: 0 });
+
+		expect(shellMocks.navigate).not.toHaveBeenCalled();
+		useUiStore.setState({ isCommandPaletteOpen: false });
+	});
+
+	it("jumps between sessions that need attention, skipping the rest", async () => {
+		const working = (id: string) => ({ id, workspaceId: "proj-1", status: "working" });
+		const needsInput = (id: string) => ({ id, workspaceId: "proj-1", status: "needs_input" });
+		setWorkspaces([
+			{ ...workspaces[0], sessions: [working("a"), needsInput("b"), working("c"), needsInput("d")] },
+			{ ...workspaces[1], sessions: [working("e")] },
+		] as unknown as WorkspaceSummary[]);
+		shellMocks.state.routeParams = { sessionId: "d" };
+		await renderShell();
+		const ids = () => shellMocks.navigate.mock.calls.map(([target]) => target.params.sessionId);
+
+		emitAppShortcut({ id: "next-attention-session" });
+		emitAppShortcut({ id: "previous-attention-session" });
+
+		// Sidebar order is d, c, b, a (newest first) then e; the only other
+		// attention session from d is b, both ways round.
+		expect(ids().every((id) => id === "b")).toBe(true);
+		expect(ids().length).toBeGreaterThan(0);
+	});
+
+	it("says so when nothing needs attention", async () => {
+		shellMocks.state.routeParams = { sessionId: "sess-1" };
+		await renderShell();
+
+		emitAppShortcut({ id: "next-attention-session" });
+
+		expect(shellMocks.navigate).not.toHaveBeenCalled();
+		expect(useUiStore.getState().globalToast?.title).toBe("No other sessions need attention");
+	});
+
+	it("goes back and forward through route history", async () => {
+		await renderShell();
+
+		emitAppShortcut({ id: "history-back" });
+		emitAppShortcut({ id: "history-forward" });
+
+		expect(shellMocks.router.history.back).toHaveBeenCalledTimes(1);
+		expect(shellMocks.router.history.forward).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not go back past the first route", async () => {
+		shellMocks.router.history.canGoBack.mockReturnValue(false);
+		await renderShell();
+
+		emitAppShortcut({ id: "history-back" });
+
+		expect(shellMocks.router.history.back).not.toHaveBeenCalled();
+	});
+
+	it("toggles the sidebar from the main-process shortcut", async () => {
+		useUiStore.setState({ isSidebarOpen: true });
+		await renderShell();
+
+		emitAppShortcut({ id: "toggle-sidebar" });
+		expect(useUiStore.getState().isSidebarOpen).toBe(false);
+		emitAppShortcut({ id: "toggle-sidebar" });
+		expect(useUiStore.getState().isSidebarOpen).toBe(true);
 	});
 
 	it("moves between standalone sessions without constructing a project route", async () => {
@@ -833,7 +1214,8 @@ describe("shell application shortcut subscriptions", () => {
 		};
 		await renderShell();
 
-		act(() => shellMocks.state.nextSessionListener?.());
+		// The Scratchpad lists newest first (standalone-2, standalone-1).
+		act(() => shellMocks.state.previousSessionListener?.());
 
 		expect(shellMocks.navigate).toHaveBeenCalledWith({
 			to: "/sessions/$sessionId",
@@ -841,26 +1223,42 @@ describe("shell application shortcut subscriptions", () => {
 		});
 	});
 
-	it("focuses the active terminal without targeting an earlier parked xterm", async () => {
-		const parked = document.createElement("div");
-		parked.dataset.terminalActivationPhase = "parked";
-		parked.inert = true;
-		const parkedInput = document.createElement("textarea");
-		parkedInput.className = "xterm-helper-textarea";
-		parked.appendChild(parkedInput);
-		const active = document.createElement("div");
-		active.dataset.terminalActivationPhase = "visible";
-		const activeInput = document.createElement("textarea");
-		activeInput.className = "xterm-helper-textarea";
-		active.appendChild(activeInput);
-		document.body.append(parked, active);
+	it("cycles only sessions on the selected remote host when IDs collide", async () => {
+		shellMocks.state.routeParams = { hostId: "box-b", sessionId: "sess-1" };
+		shellMocks.state.remoteWorkspaces = [
+			{ hostId: "box-a", id: "proj-1", sessions: [
+				{ id: "sess-1", status: "working" }, { id: "box-a-next", status: "idle" },
+			] },
+			{ hostId: "box-b", id: "proj-1", sessions: [
+				{ id: "sess-1", status: "working" }, { id: "box-b-next", status: "idle" },
+			] },
+		] as WorkspaceSummary[];
 		await renderShell();
 
-		act(() => shellMocks.state.focusTerminalListener?.());
+		act(() => shellMocks.state.nextSessionListener?.());
 
-		expect(document.activeElement).toBe(activeInput);
-		parked.remove();
-		active.remove();
+		expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/host/$hostId/project/$projectId/session/$sessionId",
+			params: { hostId: "box-b", projectId: "proj-1", sessionId: "box-b-next" },
+		});
+	});
+
+	it("cycles remote standalone sessions on their host", async () => {
+		shellMocks.state.routeParams = { hostId: "box-b", sessionId: "standalone-1" };
+		shellMocks.state.remoteWorkspaces = [{
+			hostId: "box-b", id: "__standalone__", sessions: [
+				{ id: "standalone-1", status: "working" },
+				{ id: "standalone-2", status: "idle" },
+			],
+		}] as WorkspaceSummary[];
+		await renderShell();
+
+		act(() => shellMocks.state.previousSessionListener?.());
+
+		expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/host/$hostId/session/$sessionId",
+			params: { hostId: "box-b", sessionId: "standalone-2" },
+		});
 	});
 });
 

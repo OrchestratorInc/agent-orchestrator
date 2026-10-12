@@ -31,7 +31,7 @@ describe("palette parity", () => {
 	// A half-finished light palette is the likely failure mode: colours copied
 	// across unchanged look washed out on white, and nothing else would flag it.
 	it("darkens every semantic colour for light mode rather than reusing it", () => {
-		const semantic = ["accent", "orange", "amber", "red", "green"] as const;
+		const semantic = ["accent", "orange", "blue", "amber", "red", "green"] as const;
 		for (const token of semantic) {
 			expect(lightTheme[token], token).not.toBe(darkTheme[token]);
 		}
@@ -50,19 +50,22 @@ describe("palette parity", () => {
 	});
 
 	// Every hue in the palette means a state, and the interactive accent carries
-	// emphasis with contrast instead. Blue stays out — it meant nothing specific
-	// here, and the pin was carrying a stray one. Purple is in, meaning exactly
-	// one thing: a pull request that landed.
-	it("keeps blue out of the palette and purple to a single meaning", () => {
+	// emphasis with contrast instead. Blue means an exited worker; purple means
+	// exactly one thing: a pull request that landed.
+	it("keeps state hues distinct from the interactive accent", () => {
 		for (const t of [darkTheme, lightTheme]) {
-			for (const gone of ["blue", "tintBlue", "attention"]) {
+			for (const gone of ["attention"]) {
 				expect(t, gone).not.toHaveProperty(gone);
 			}
+			expect(t.blue, "blue").toBeTruthy();
+			expect(t.tintBlue, "tintBlue").toBeTruthy();
 			expect(t.purple, "purple").toBeTruthy();
 			// Not the accent, not the success hue: a merged PR must not read as
 			// either "selected" or "mergeable".
 			expect(t.purple).not.toBe(t.accent);
 			expect(t.purple).not.toBe(t.green);
+			expect(t.blue).not.toBe(t.accent);
+			expect(t.blue).not.toBe(t.red);
 			expect(t.accent).not.toBe(t.orange);
 			expect(t.accentBorder).toBeTruthy();
 		}
@@ -141,6 +144,12 @@ describe("theme-aware helpers", () => {
 		expect(statusVisual(lightTheme, "working").color).not.toBe(statusVisual(darkTheme, "working").color);
 	});
 
+	it("uses the desktop blue treatment for an exited worker", () => {
+		expect(statusVisual(darkTheme, "exited").color).toBe("#60a5fa");
+		expect(statusVisual(lightTheme, "exited").color).toBe("#2563eb");
+		expect(statusVisual(darkTheme, "exited").color).not.toBe(darkTheme.red);
+	});
+
 	it("keeps labels identical across themes", () => {
 		expect(statusVisual(lightTheme, "needs_input").label).toBe(statusVisual(darkTheme, "needs_input").label);
 	});
@@ -159,11 +168,19 @@ describe("theme-aware helpers", () => {
 		expect(statusVisual(darkTheme, "unknown").label).toBe("Unknown");
 	});
 
+	// Regression: an unresolved comment from a non-blocking review used to
+	// arrive as "changes_requested"; it now arrives as "commented" and must not
+	// fall through to the raw-wire-value default -- see agent-orchestrator#5765.
+	it("labels an unresolved comment distinctly from changes requested", () => {
+		expect(statusVisual(darkTheme, "commented").label).toBe("Commented");
+		expect(statusVisual(darkTheme, "commented").label).not.toBe(statusVisual(darkTheme, "changes_requested").label);
+	});
+
 	// A label that still contains an underscore is a wire value that leaked.
 	it("never renders a raw enum for a known status", () => {
 		const known = [
 			"working", "idle", "needs_input", "exited", "no_signal", "ci_failed",
-			"changes_requested", "review_pending", "draft", "pr_open", "approved",
+			"changes_requested", "commented", "review_pending", "draft", "pr_open", "approved",
 			"mergeable", "merged", "terminated", "unknown", "spawning", "detecting",
 			"stuck", "errored", "done", "cleanup", "killed",
 		];

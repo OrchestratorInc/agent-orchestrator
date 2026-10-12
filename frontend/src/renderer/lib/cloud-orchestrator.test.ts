@@ -6,7 +6,6 @@ import { selectCloudOrchestratorHarness, spawnCloudOrchestrator } from "./cloud-
 
 const cloudMocks = vi.hoisted(() => ({
 	me: vi.fn(),
-	listProviderConnections: vi.fn(),
 	listUserProviderConnections: vi.fn(),
 	listProjects: vi.fn(),
 	createSession: vi.fn(),
@@ -15,7 +14,6 @@ const cloudMocks = vi.hoisted(() => ({
 vi.mock("../hooks/useCloudCp", () => ({
 	createRendererCloudCpClient: () => ({
 		me: cloudMocks.me,
-		listProviderConnections: cloudMocks.listProviderConnections,
 		listUserProviderConnections: cloudMocks.listUserProviderConnections,
 		listProjects: cloudMocks.listProjects,
 		createSession: cloudMocks.createSession,
@@ -53,7 +51,6 @@ describe("selectCloudOrchestratorHarness", () => {
 describe("spawnCloudOrchestrator", () => {
 	beforeEach(() => {
 		cloudMocks.me.mockReset();
-		cloudMocks.listProviderConnections.mockReset();
 		cloudMocks.listUserProviderConnections.mockReset();
 		cloudMocks.listProjects.mockReset();
 		cloudMocks.createSession.mockReset();
@@ -64,7 +61,7 @@ describe("spawnCloudOrchestrator", () => {
 		queryClient.setQueryData<Settings>(settingsQueryKey, {
 			cloudControlPlaneUrl: "https://cloud.example.com",
 		} as Settings);
-		cloudMocks.me.mockResolvedValue({ organizations: [{ id: "org-1" }] });
+		cloudMocks.me.mockResolvedValue({ organizations: [{ id: "org-1" }], sandboxProviders: { available: ["docker"], default: "docker" } });
 		cloudMocks.listUserProviderConnections.mockResolvedValue({ providerConnections: [] });
 		cloudMocks.listProjects.mockResolvedValue({ items: project ? [project] : [] });
 		cloudMocks.createSession.mockResolvedValue({ session: { id: "session-1" } });
@@ -73,7 +70,7 @@ describe("spawnCloudOrchestrator", () => {
 
 	it("starts without a user kickoff prompt so the role comes only from the system prompt", async () => {
 		const queryClient = primeClient({ id: "project-1" });
-		cloudMocks.listProviderConnections.mockResolvedValue({
+		cloudMocks.listUserProviderConnections.mockResolvedValue({
 			providerConnections: [connection("claude-code")],
 		});
 
@@ -87,6 +84,14 @@ describe("spawnCloudOrchestrator", () => {
 		});
 	});
 
+	it("leaves the provider to the project and org default on the control plane", async () => {
+		const queryClient = primeClient({ id: "project-1", config: { sandboxProvider: "coder" } });
+		cloudMocks.listUserProviderConnections.mockResolvedValue({ providerConnections: [connection("codex")] });
+
+		await spawnCloudOrchestrator(queryClient, "project-1");
+		expect(cloudMocks.createSession.mock.calls[0]?.[1]).not.toHaveProperty("provider");
+	});
+
 	it("honors the project's configured orchestrator agent over the Codex-first fallback", async () => {
 		// The project picked Claude Code, but Codex is also connected (e.g. a
 		// ChatGPT login). The configured choice must win instead of Codex-first.
@@ -94,7 +99,7 @@ describe("spawnCloudOrchestrator", () => {
 			id: "project-1",
 			config: { orchestrator: { agent: "claude-code" } },
 		});
-		cloudMocks.listProviderConnections.mockResolvedValue({
+		cloudMocks.listUserProviderConnections.mockResolvedValue({
 			providerConnections: [connection("codex"), connection("claude-code")],
 		});
 
@@ -112,7 +117,7 @@ describe("spawnCloudOrchestrator", () => {
 			id: "project-1",
 			config: { orchestrator: { agent: "cursor" } },
 		});
-		cloudMocks.listProviderConnections.mockResolvedValue({
+		cloudMocks.listUserProviderConnections.mockResolvedValue({
 			providerConnections: [connection("codex")],
 		});
 

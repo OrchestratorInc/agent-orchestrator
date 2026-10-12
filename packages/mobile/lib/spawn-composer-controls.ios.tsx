@@ -1,6 +1,6 @@
-import { Host } from "@expo/ui";
+import { Host, RNHostView } from "@expo/ui";
 import { Asset } from "expo-asset";
-import { Button, Group, HStack, Image, Menu, Spacer, Text, VStack } from "@expo/ui/swift-ui";
+import { Button, Divider, Group, HStack, Image, Menu, Spacer, Text, VStack } from "@expo/ui/swift-ui";
 import {
 	accessibilityIdentifier,
 	aspectRatio,
@@ -11,10 +11,14 @@ import {
 	font,
 	frame,
 	labelStyle,
+	layoutPriority,
+	lineLimit,
+	menuOrder,
 	opacity,
 	padding,
 	resizable,
 	tint,
+	truncationMode,
 } from "@expo/ui/swift-ui/modifiers";
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text as RNText, View } from "react-native";
@@ -25,8 +29,23 @@ import { haptics } from "./haptics";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { iconSize, press, space, type } from "./tokens";
+import { MicKey } from "./voice/MicKey";
+
+// The paperclip's frame, so the rail's two icon buttons match.
+const MIC_KEY_SIZE = 38;
+// Keep the project trigger compact and left-anchored. A max-width frame makes
+// the native Menu fill the host, which centers its popup over the whole sheet.
+const PROJECT_MENU_WIDTH = 224;
+const HOST_MENU_WIDTH = 144;
+// Reserve the harness slot so a different agent name cannot move the model
+// selector sideways. The model still uses the remaining width of the rail,
+// but common harness names should not truncate while "Automatic" has slack.
+const HARNESS_MENU_WIDTH = 124;
 
 export function SpawnComposerControls({
+	hosts,
+	hostId,
+	onSelectHost,
 	projects,
 	projectId,
 	onSelectProject,
@@ -38,6 +57,7 @@ export function SpawnComposerControls({
 	modelLabel,
 	onSelectModel,
 	onAttach,
+	voice,
 	onSpawn,
 	busy,
 	disabled,
@@ -45,32 +65,56 @@ export function SpawnComposerControls({
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const logoUris = useHarnessLogoUris(agents);
-	const projectLabel = projects.find((project) => project.id === projectId)?.label ?? "Choose project";
+	const selectedHost = hosts.find((host) => host.id === hostId);
+	const selectedProject = projects.find((project) => project.id === projectId);
+	const hostLabel = selectedHost?.label ?? "Choose machine";
+	const projectLabel = selectedProject?.label ?? "Choose project";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
 
 	return (
 		<View style={styles.stack}>
 			<Host style={styles.controlsHost} colorScheme={scheme} seedColor={t.accent}>
 				<VStack alignment="leading" spacing={10} modifiers={[frame({ height: 104, maxWidth: 1000 })]}>
-				<Menu
-					label={
-						<HStack spacing={7}>
-							<Image systemName="folder" size={iconSize.sm} />
-							<Text modifiers={[font({ size: 14, weight: "medium" })]}>{projectLabel}</Text>
-							<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
-						</HStack>
-					}
-					modifiers={[buttonStyle("plain"), tint(t.textSecondary), padding({ horizontal: 4 }), accessibilityIdentifier("spawn-project")]}
-				>
-					{projects.map((project) => (
-						<Button
-							key={project.id}
-							label={project.label}
-							systemImage={project.id === projectId ? "checkmark" : "folder"}
-							onPress={() => { haptics.select(); onSelectProject(project.id); }}
-						/>
-					))}
-				</Menu>
+					<HStack spacing={8}>
+						<Menu
+							label={
+								<HStack spacing={7}>
+									<Image systemName="desktopcomputer" size={iconSize.sm} />
+									<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>Run on {hostLabel}</Text>
+									<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
+								</HStack>
+							}
+							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), padding({ horizontal: 4 }), frame({ width: HOST_MENU_WIDTH, alignment: "leading" }), accessibilityIdentifier("spawn-host")]}
+						>
+							{hosts.map((host) => (
+								<Button key={host.id} label={host.label} systemImage={host.id === hostId ? "checkmark" : undefined} onPress={() => { haptics.select(); onSelectHost(host.id); }} />
+							))}
+						</Menu>
+						<Menu
+							label={
+								<HStack spacing={7}>
+									<Image systemName={projectSystemImage(selectedProject)} size={iconSize.sm} />
+									<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{projectLabel}</Text>
+									<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
+								</HStack>
+							}
+							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), padding({ horizontal: 4 }), frame({ width: PROJECT_MENU_WIDTH - 42, alignment: "leading" }), accessibilityIdentifier("spawn-project")]}
+						>
+							{projects.map((project) => (
+								<Group key={project.id}>
+									{project.sectionBreakBefore ? <Divider /> : null}
+									<Button onPress={() => { haptics.select(); onSelectProject(project.id); }}>
+										<HStack spacing={9}>
+											<Image systemName={projectSystemImage(project)} size={iconSize.sm} />
+											<Text>{project.label}</Text>
+											<Spacer />
+											{project.id === projectId ? <Image systemName="checkmark" size={iconSize.xs} /> : null}
+										</HStack>
+									</Button>
+								</Group>
+							))}
+						</Menu>
+					</HStack>
 
 				<HStack
 					spacing={6}
@@ -98,11 +142,11 @@ export function SpawnComposerControls({
 						label={
 							<HStack spacing={6}>
 								<HarnessImage uri={logoUris[harness]} harness={harness} />
-								<Text modifiers={[font({ size: 14, weight: "medium" })]}>{harnessLabel}</Text>
+								<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{harnessLabel}</Text>
 								<Image systemName="chevron.down" size={iconSize.xs} />
 							</HStack>
 						}
-						modifiers={[buttonStyle("plain"), tint(t.textPrimary), accessibilityIdentifier("spawn-harness")]}
+						modifiers={[buttonStyle("plain"), frame({ width: HARNESS_MENU_WIDTH }), tint(t.textPrimary), accessibilityIdentifier("spawn-harness")]}
 					>
 						{agents.map((agent) => (
 							<Button key={agent.id} onPress={() => { haptics.select(); onSelectHarness(agent.id); }}>
@@ -119,7 +163,7 @@ export function SpawnComposerControls({
 					<Menu
 						label={
 							<HStack spacing={5} modifiers={[frame({ maxWidth: 1000, alignment: "leading" })]}>
-								<Text modifiers={[font({ size: 14, weight: "medium" })]}>{modelLabel}</Text>
+								<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{modelLabel}</Text>
 								<Spacer />
 								<Image systemName="chevron.down" size={iconSize.xs} />
 							</HStack>
@@ -127,6 +171,7 @@ export function SpawnComposerControls({
 						modifiers={[
 							buttonStyle("plain"),
 							frame({ maxWidth: 1000, alignment: "leading" }),
+							layoutPriority(1),
 							tint(t.textSecondary),
 							opacity(models.length || modelSelection === "__auto__" ? 1 : 0.45),
 							accessibilityIdentifier("spawn-model"),
@@ -146,6 +191,24 @@ export function SpawnComposerControls({
 							/>
 						))}
 					</Menu>
+
+					{/* Hold-to-talk needs press-in and press-out, which a SwiftUI
+					    Button doesn't expose, so the mic is the React Native key
+					    hosted inside the rail. Plain, like the paperclip: the rail's
+					    glass is the material, and a second disc would compete with it. */}
+					<RNHostView matchContents>
+						<View style={styles.micSlot}>
+							<MicKey
+								variant="plain"
+								size={MIC_KEY_SIZE}
+								glyphSize={iconSize.md}
+								state={voice.state}
+								mode={voice.mode}
+								onPressIn={voice.onPressIn}
+								onPressOut={voice.onPressOut}
+							/>
+						</View>
+					</RNHostView>
 				</HStack>
 
 				</VStack>
@@ -172,9 +235,14 @@ export function SpawnComposerControls({
 	);
 }
 
+function projectSystemImage(project?: SpawnComposerOption): "plus.bubble" | "folder" {
+	return project?.icon === "message-square-plus" ? "plus.bubble" : "folder";
+}
+
 const styles = StyleSheet.create({
 	stack: { width: "100%", height: 150, gap: space.hair },
 	controlsHost: { width: "100%", height: 104 },
+	micSlot: { width: MIC_KEY_SIZE, height: MIC_KEY_SIZE, alignItems: "center", justifyContent: "center" },
 	spawnButton: {
 		height: 44,
 		borderRadius: 16,
@@ -193,7 +261,7 @@ const MARK_SIZE = 20;
 const CHIP_INSET = Math.round(MARK_SIZE * 0.16);
 const CHIP_RADIUS = Math.round(MARK_SIZE * 0.28);
 
-function HarnessImage({ uri, harness }: { uri?: string; harness: string }) {
+export function HarnessImage({ uri, harness }: { uri?: string; harness: string }) {
 	if (!uri) return <Image systemName="terminal" size={iconSize.sm} />;
 	const mark = [resizable(), aspectRatio({ contentMode: "fit" }), frame({ width: MARK_SIZE - CHIP_INSET * 2, height: MARK_SIZE - CHIP_INSET * 2 })];
 	const chip = chipColorFor(harness);
@@ -209,7 +277,7 @@ function HarnessImage({ uri, harness }: { uri?: string; harness: string }) {
 		: <Image uiImage={uri} modifiers={[resizable(), aspectRatio({ contentMode: "fit" }), frame({ width: MARK_SIZE, height: MARK_SIZE })]} />;
 }
 
-function useHarnessLogoUris(agents: readonly SpawnComposerOption[]) {
+export function useHarnessLogoUris(agents: readonly SpawnComposerOption[]) {
 	const ids = useMemo(() => agents.map((agent) => agent.id), [agents]);
 	const [uris, setUris] = useState<Record<string, string>>({});
 	useEffect(() => {

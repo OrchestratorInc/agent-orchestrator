@@ -110,7 +110,7 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 // at it, and selects the generated agent with --agent. The initial task prompt
 // is delivered via --prompt (its argument, so a leading "-" is not read as a flag).
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
-	binary, err := p.opencodeBinary(ctx)
+	binary, err := ResolveBinaryForMajor(ctx, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +150,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, nil
 	}
 
-	binary, err := p.opencodeBinary(ctx)
+	binary, err := ResolveBinaryForMajor(ctx, 1)
 	if err != nil {
 		return nil, false, err
 	}
@@ -342,6 +342,7 @@ func opencodeDBAuthStatus(ctx context.Context, path string) (ports.AgentAuthStat
 
 func opencodeDBHasAuthorizedAccount(ctx context.Context, db *sql.DB) (authorized, known bool, err error) {
 	for _, query := range []string{
+		`SELECT COUNT(*) FROM credential WHERE active = 1 AND trim(value) != ''`,
 		`SELECT COUNT(*) FROM account_state WHERE active_account_id IS NOT NULL AND trim(active_account_id) != ''`,
 		`SELECT COUNT(*) FROM account WHERE trim(access_token) != ''`,
 		`SELECT COUNT(*) FROM control_account WHERE active = 1 AND trim(access_token) != ''`,
@@ -414,14 +415,10 @@ type opencodeAgentSettings struct {
 // `read` is never named, so OpenCode's default `.env` deny survives every mode
 // but bypass.
 func opencodePermissionConfig(mode ports.PermissionMode) map[string]string {
-	switch ports.NormalizePermissionMode(mode) {
-	case ports.PermissionModeAcceptEdits:
+	if ports.NormalizePermissionMode(mode) == ports.PermissionModeAcceptEdits {
 		return map[string]string{"edit": "allow"}
-	case ports.PermissionModeAuto:
-		return nil // the caller supplies OpenCode's --auto, or emulates it
-	default:
-		return nil
 	}
+	return nil
 }
 
 func opencodeConfigEnvPrefix(permissions ports.PermissionMode, inlinePrompt, promptFile, sessionID string) ([]string, string, error) {
@@ -482,47 +479,17 @@ func opencodeConfigEnvPrefix(permissions ports.PermissionMode, inlinePrompt, pro
 // session runs — a global `permission` rule could only be written at launch and
 // never taken back, so tightening a mode mid-session would change the label and
 // nothing else.
-const (
-	ACPAgentDefault     = "ao-default"
-	ACPAgentAcceptEdits = "ao-accept-edits"
-	ACPAgentAuto        = "ao-auto"
-	ACPAgentBypass      = "ao-bypass"
-)
-
-var acpAgentPermissions = map[string]ports.PermissionMode{
-	ACPAgentDefault:     ports.PermissionModeDefault,
-	ACPAgentAcceptEdits: ports.PermissionModeAcceptEdits,
-	ACPAgentAuto:        ports.PermissionModeAuto,
-	ACPAgentBypass:      ports.PermissionModeBypassPermissions,
-}
-
-// acpAgentPermission is the ruleset AO writes for one tier.
-//
-// Only bypass gets one. Accept edits and auto are answered per request instead,
-// the way OpenCode's own --auto is: its Auto handler replies to each permission
-// request rather than rewriting config, so a rule the user or repository denied
-// never raises a request and stays denied without AO having to know about it.
-// Reconstructing that policy here would mean reading every source OpenCode
-// merges — global, project, .opencode, managed, remote — and being wrong in
-// AO's favour whenever a source was unreadable.
-func acpAgentPermission(mode ports.PermissionMode) any {
-	if ports.NormalizePermissionMode(mode) == ports.PermissionModeBypassPermissions {
-		return "allow"
-	}
-	return nil
-}
-
-// ACPAgentForPermissions is the agent a session starts on.
-func ACPAgentForPermissions(permissions ports.PermissionMode) string {
+// acpAgentForPermissions is the agent a session starts on.
+func acpAgentForPermissions(permissions ports.PermissionMode) string {
 	switch ports.NormalizePermissionMode(permissions) {
 	case ports.PermissionModeAcceptEdits:
-		return ACPAgentAcceptEdits
+		return "ao-accept-edits"
 	case ports.PermissionModeAuto:
-		return ACPAgentAuto
+		return "ao-auto"
 	case ports.PermissionModeBypassPermissions:
-		return ACPAgentBypass
+		return "ao-bypass"
 	default:
-		return ACPAgentDefault
+		return "ao-default"
 	}
 }
 
@@ -550,14 +517,20 @@ func PrepareACPConfigContent(
 	if agents == nil {
 		agents = map[string]any{}
 	}
-	for name, mode := range acpAgentPermissions {
-		agents[name] = opencodeAgentSettings{
-			Mode: "primary", Prompt: systemPrompt,
-			Permission: acpAgentPermission(mode),
+	for _, mode := range []ports.PermissionMode{
+		ports.PermissionModeDefault, ports.PermissionModeAcceptEdits,
+		ports.PermissionModeAuto, ports.PermissionModeBypassPermissions,
+	} {
+		agent := opencodeAgentSettings{Mode: "primary", Prompt: systemPrompt}
+		// Only bypass writes a rule. Accept edits and auto answer requests,
+		// like OpenCode's --auto, so explicit provider denies stay denied.
+		if mode == ports.PermissionModeBypassPermissions {
+			agent.Permission = "allow"
 		}
+		agents[acpAgentForPermissions(mode)] = agent
 	}
 	config["agent"] = agents
-	config["default_agent"] = ACPAgentForPermissions(permissions)
+	config["default_agent"] = acpAgentForPermissions(permissions)
 	data, err := json.Marshal(config)
 	if err != nil {
 		return "", fmt.Errorf("opencode: encode ACP agent config: %w", err)
@@ -591,21 +564,70 @@ func opencodeAOAgentName(sessionID string) string {
 	return "ao-" + name
 }
 
-// ResolveOpenCodeBinary returns the path to the opencode binary on this machine,
+// ResolveOpenCodeBinary returns the first opencode binary on this machine,
 // searching PATH then a handful of well-known install locations (the install
 // script's ~/.opencode/bin, Homebrew, npm global).
 func ResolveOpenCodeBinary(ctx context.Context) (string, error) {
-	if err := ctx.Err(); err != nil {
+	candidates, err := BinaryCandidates(ctx)
+	if err != nil {
 		return "", err
 	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("opencode: %w", ports.ErrAgentBinaryNotFound)
+	}
+	return candidates[0], nil
+}
 
+// BinaryCandidates returns every distinct opencode executable in
+// resolution order: the LookPath winner, other PATH entries, then well-known
+// install locations. OpenCode 1 and 2 share an executable name, so a machine can
+// carry both and a harness must be able to pick the one matching its major.
+func BinaryCandidates(ctx context.Context) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var found []string
+	seen := map[string]bool{}
+	add := func(path string) {
+		if path == "" {
+			return
+		}
+		key := filepath.Clean(path)
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(key)
+		}
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		found = append(found, path)
+	}
+
+	names := []string{"opencode"}
 	if runtime.GOOS == "windows" {
-		for _, name := range []string{"opencode.cmd", "opencode.exe", "opencode"} {
-			if path, err := exec.LookPath(name); err == nil && path != "" {
-				return path, nil
+		names = []string{"opencode.cmd", "opencode.exe", "opencode"}
+	}
+	for _, name := range names {
+		if path, err := exec.LookPath(name); err == nil {
+			add(path)
+			break
+		}
+	}
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		for _, name := range names {
+			candidate := filepath.Join(dir, name)
+			if hookutil.IsExecutableFile(candidate) {
+				add(candidate)
+				break
 			}
 		}
-		candidates := []string{}
+	}
+
+	var candidates []string
+	if runtime.GOOS == "windows" {
 		if appData := os.Getenv("APPDATA"); appData != "" {
 			candidates = append(candidates,
 				filepath.Join(appData, "npm", "opencode.cmd"),
@@ -616,44 +638,39 @@ func ResolveOpenCodeBinary(ctx context.Context) (string, error) {
 		if home, err := os.UserHomeDir(); err == nil {
 			candidates = append(candidates, filepath.Join(home, ".opencode", "bin", "opencode.exe"))
 		}
-		for _, candidate := range candidates {
-			if hookutil.IsExecutableFile(candidate) {
-				return candidate, nil
+	} else {
+		candidates = append(candidates, opencodeUnixPaths...)
+		if home, err := os.UserHomeDir(); err == nil {
+			candidates = append(candidates,
+				filepath.Join(home, ".npm-global", "bin", "opencode"),
+				filepath.Join(home, ".npm", "bin", "opencode"),
+				filepath.Join(home, ".local", "bin", "opencode"),
+				filepath.Join(home, ".opencode", "bin", "opencode"),
+			)
+			candidates = append(candidates, binaryutil.UnixPackageManagerBinCandidates(home, "opencode")...)
+			nodeManagerCandidates, err := binaryutil.UnixNodeManagerBinCandidates(ctx, home, "opencode")
+			if err != nil {
+				return nil, err
 			}
+			candidates = append(candidates, nodeManagerCandidates...)
 		}
-		return "", fmt.Errorf("opencode: %w", ports.ErrAgentBinaryNotFound)
 	}
-
-	if path, err := exec.LookPath("opencode"); err == nil && path != "" {
-		return path, nil
-	}
-
-	candidates := append([]string(nil), opencodeUnixPaths...)
-	if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates,
-			filepath.Join(home, ".npm-global", "bin", "opencode"),
-			filepath.Join(home, ".npm", "bin", "opencode"),
-			filepath.Join(home, ".local", "bin", "opencode"),
-			filepath.Join(home, ".opencode", "bin", "opencode"),
-		)
-		candidates = append(candidates, binaryutil.UnixPackageManagerBinCandidates(home, "opencode")...)
-		nodeManagerCandidates, err := binaryutil.UnixNodeManagerBinCandidates(ctx, home, "opencode")
-		if err != nil {
-			return "", err
+	if dir, err := V2NPMBinDir(); err == nil {
+		if runtime.GOOS == "windows" {
+			candidates = append(candidates, filepath.Join(dir, "opencode.cmd"), filepath.Join(dir, "opencode.exe"))
+		} else {
+			candidates = append(candidates, filepath.Join(dir, "opencode"))
 		}
-		candidates = append(candidates, nodeManagerCandidates...)
 	}
-
 	for _, candidate := range candidates {
 		if hookutil.IsExecutableFile(candidate) {
-			return candidate, nil
+			add(candidate)
 		}
 		if err := ctx.Err(); err != nil {
-			return "", err
+			return nil, err
 		}
 	}
-
-	return "", fmt.Errorf("opencode: %w", ports.ErrAgentBinaryNotFound)
+	return found, nil
 }
 
 func (p *Plugin) opencodeBinary(ctx context.Context) (string, error) {

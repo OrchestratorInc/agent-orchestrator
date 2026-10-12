@@ -5,24 +5,32 @@ import { Keyboard, Pressable, StyleSheet, Text, TextInput, View } from "react-na
 import type { DashboardSession } from "./api";
 import { AgentLogo } from "./AgentLogo";
 import { haptics } from "./haptics";
+import { sessionHostId } from "./hostedRows";
 import { prLine, workerRowPresentation, workerStatusGlyph } from "./agentsView";
 import { toneColor } from "./prView";
 import { statusVisual, type Theme } from "./theme";
 import { rowDividerWidth } from "./divider";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { openGitHub } from "./openGitHub";
 import { workerContextActions, type WorkerActionId } from "./worker-action-model";
 import { WorkerRowActions } from "./worker-row-actions";
 import { WorkerRowInteraction } from "./worker-row-interaction";
 import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 import { Spinning } from "./ui";
 import { normalizeConversationTitle } from "./chat/conversationMenuModel";
+import { useOpenPage } from "./pageNavigation";
 import { iconSize, press, space, type } from "./tokens";
+import { userFacingError } from "./connectionError";
+import { reviewRouteForSession } from "./reviewView";
+import { MachineIdentity } from "./MachineIdentity";
+import type { MachineAppearance } from "./machineAppearance";
 
 export const WorkerListRow = memo(
 	function WorkerListRow({
 	session,
+	hostId,
+	rowKey,
 	projectName,
+	machine,
 	isRenaming,
 	activeSwipeId,
 	nowBucket,
@@ -37,7 +45,11 @@ export const WorkerListRow = memo(
 	onRestore,
 }: {
 	session: DashboardSession;
+	/** Fallback for primary-only rows; hosted sessions carry their own host ID. */
+	hostId?: string;
+	rowKey?: string;
 	projectName?: string;
+	machine?: { name: string; appearance: MachineAppearance };
 	isRenaming: boolean;
 	activeSwipeId?: string;
 	/**
@@ -61,6 +73,7 @@ export const WorkerListRow = memo(
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const openPage = useOpenPage();
 	const closeActionRailRef = useRef<() => void>(() => {});
 	const [renameTitle, setRenameTitle] = useState("");
 	const [renameSaving, setRenameSaving] = useState(false);
@@ -100,7 +113,7 @@ export const WorkerListRow = memo(
 			onRenameCancel();
 		} catch (cause) {
 			haptics.error();
-			setRenameError(cause instanceof Error ? cause.message : "Couldn't rename this worker.");
+			setRenameError(userFacingError(cause, "Couldn't rename this worker."));
 			setRenameSaving(false);
 		}
 	}, [onRename, onRenameCancel, renameSaving, renameTitle]);
@@ -121,16 +134,15 @@ export const WorkerListRow = memo(
 		),
 		[onDelete, onSetPinned, row.title, session.isPinned, styles.actionRail],
 	);
-	const openSession = () => {
+	const openSession = useCallback(() => {
 		haptics.tap();
 		router.push({
 			pathname: "/session/[id]",
-			params: { id: session.id, projectId: session.projectId },
+			params: { id: session.id, projectId: session.projectId, hostId: sessionHostId(session) ?? hostId },
 		});
-	};
+	}, [router, session, hostId]);
 
-	// prLine returns display text, not a link, so the url comes off the session.
-	const prUrl = (session.prs?.length ? session.prs[0] : session.pr)?.url ?? null;
+	const reviewRoute = reviewRouteForSession(session, sessionHostId(session) ?? hostId);
 	const terminated = session.isTerminated === true || session.status === "terminated";
 	const contextActions = workerContextActions({
 		pinned: Boolean(session.isPinned),
@@ -138,7 +150,7 @@ export const WorkerListRow = memo(
 		// A live session whose agent has stopped: exited or crashed, but the AO
 		// session around it is still intact, so resuming is the lighter fix.
 		stopped: !terminated && (session.status === "exited" || session.status === "errored"),
-		hasPr: Boolean(prUrl),
+		hasPr: Boolean(reviewRoute),
 	});
 
 	const runAction = useCallback((id: WorkerActionId) => {
@@ -159,17 +171,16 @@ export const WorkerListRow = memo(
 			case "restore":
 				return onRestore();
 			case "openPr":
-				if (prUrl) void openGitHub(prUrl);
+				if (reviewRoute) openPage(reviewRoute);
 				return;
 			default:
 				return onDelete();
 		}
-	// openSession closes over router and session, both stable enough for a row.
-	}, [onDelete, onRenameStart, onResume, onRestore, onSetPinned, prUrl, row.title]);
+	}, [onDelete, onRenameStart, onResume, onRestore, onSetPinned, openPage, reviewRoute, openSession, row.title]);
 
 	return (
 		<WorkerRowInteraction
-			sessionId={session.id}
+			sessionId={rowKey ?? session.id}
 			enabled={!isRenaming}
 			activeSwipeId={activeSwipeId}
 			rightActions={renderRightActions()}
@@ -194,6 +205,7 @@ export const WorkerListRow = memo(
 					details={details}
 					prsTone={prs?.tone}
 					harness={session.harness}
+					machine={machine}
 					isRenaming
 					renameTitle={renameTitle}
 					renameSaving={renameSaving}
@@ -212,6 +224,7 @@ export const WorkerListRow = memo(
 					details={details}
 					prsTone={prs?.tone}
 					harness={session.harness}
+					machine={machine}
 					styles={styles}
 					t={t}
 				/>
@@ -219,22 +232,22 @@ export const WorkerListRow = memo(
 		</WorkerRowInteraction>
 	);
 },
-	/**
-	 * Ignores the handler props on purpose. Every one of them is created inline by
-	 * the board and closes only over this row's own `session` (and store actions
-	 * that never change identity), so a row whose session, name and swipe state are
-	 * the same cannot be holding a stale handler. Comparing them would defeat the
-	 * memo — and re-rendering every row of a long board is what made folding heavy.
-	 */
+	// Polls retain unchanged session objects. Bound handlers are stable too, but
+	// must be compared so a changed connection never leaves stale actions behind.
 	(prev, next) =>
 		prev.nowBucket === next.nowBucket &&
+		prev.rowKey === next.rowKey &&
 		prev.projectName === next.projectName &&
+		prev.hostId === next.hostId &&
+		prev.machine?.name === next.machine?.name &&
+		prev.machine?.appearance.symbol === next.machine?.appearance.symbol &&
 		prev.isRenaming === next.isRenaming &&
 		prev.activeSwipeId === next.activeSwipeId &&
-		// By value, not identity: the store polls and publishes freshly parsed
-		// session objects each tick, so identity would fail for every row and put
-		// the whole board through a re-render on every poll.
-		(prev.session === next.session || JSON.stringify(prev.session) === JSON.stringify(next.session)),
+		prev.session === next.session &&
+		prev.onSwipeOpen === next.onSwipeOpen && prev.onSwipeClose === next.onSwipeClose &&
+		prev.onRenameStart === next.onRenameStart && prev.onRenameCancel === next.onRenameCancel &&
+		prev.onRename === next.onRename && prev.onSetPinned === next.onSetPinned &&
+		prev.onDelete === next.onDelete && prev.onResume === next.onResume && prev.onRestore === next.onRestore,
 );
 
 function WorkerRowContents({
@@ -244,6 +257,7 @@ function WorkerRowContents({
 	details,
 	prsTone,
 	harness,
+	machine,
 	isRenaming = false,
 	renameTitle = "",
 	renameSaving = false,
@@ -260,6 +274,7 @@ function WorkerRowContents({
 	details: string;
 	prsTone?: Parameters<typeof toneColor>[1];
 	harness: DashboardSession["harness"];
+	machine?: { name: string; appearance: MachineAppearance };
 	isRenaming?: boolean;
 	renameTitle?: string;
 	renameSaving?: boolean;
@@ -337,10 +352,15 @@ function WorkerRowContents({
 			)}
 
 			{renameError ? <Text accessibilityRole="alert" style={styles.renameError}>{renameError}</Text> : null}
-			{details ? (
-				<Text style={[styles.details, prsTone && { color: toneColor(t, prsTone) }]} numberOfLines={1}>
-					{details}
-				</Text>
+			{details || machine ? (
+				<View style={styles.metadata}>
+					{details ? (
+						<Text style={[styles.details, prsTone && { color: toneColor(t, prsTone) }]} numberOfLines={1}>
+							{details}
+						</Text>
+					) : <View style={styles.metadataSpacer} />}
+					{machine ? <MachineIdentity testID="worker-machine-identity" name={machine.name} appearance={machine.appearance} style={styles.machineIdentity} /> : null}
+				</View>
 			) : null}
 		</>
 	);
@@ -379,5 +399,8 @@ const makeStyles = (t: Theme) =>
 		project: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
 		trailing: { fontFamily: "Geist_500Medium", flexShrink: 0, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500", fontVariant: ["tabular-nums"] },
 		title: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
-		details: { color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontFamily: t.fontMono },
+		metadata: { minWidth: 0, flexDirection: "row", alignItems: "center", gap: space.sm },
+		metadataSpacer: { flex: 1 },
+		details: { flex: 1, minWidth: 0, color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontFamily: t.fontMono },
+		machineIdentity: { maxWidth: "52%", marginLeft: "auto" },
 	});

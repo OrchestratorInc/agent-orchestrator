@@ -4,6 +4,7 @@ import { StyleSheet, View } from "react-native";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { workerDockVisibility } from "./worker-dock-layout";
 import { space, type } from "./tokens";
+import type { WorkerEnvironment } from "./worker-controls";
 
 export type WorkerDockProps = {
 	query: string;
@@ -14,7 +15,10 @@ export type WorkerDockProps = {
 	onSearchClose: () => void;
 	onOpenControls: () => void;
 	projectFiltered: boolean;
-	projects: readonly { id: string; name: string }[];
+	environments: readonly WorkerEnvironment[];
+	selectedEnvironmentId: string;
+	onSelectEnvironment: (environmentId: string) => void;
+	projects: readonly { id: string; name: string; hostId?: string; hostName?: string }[];
 	selectedProjectId: string;
 	onSelectProject: (projectId: string) => void;
 };

@@ -13,6 +13,9 @@ var (
 	ErrUnsupportedEffort = errors.New("unsupported model effort")
 	// ErrModelCapabilitiesUnavailable reports tuning that cannot be validated safely.
 	ErrModelCapabilitiesUnavailable = errors.New("model capabilities unavailable")
+	// ErrAgentAuthRequired means a launch-fresh provider check rejected the
+	// credential selected by the session's cwd and environment.
+	ErrAgentAuthRequired = errors.New("agent requires authentication")
 )
 
 // ErrAgentBinaryNotFound is returned by agent adapters when neither PATH nor
@@ -28,6 +31,23 @@ var ErrAgentBinaryNotFound = errors.New("agent: binary not found on PATH")
 // callers must not present an unverified name-only match as installed.
 var ErrAgentBinaryIdentityUnknown = errors.New("agent: binary identity unknown")
 
+// ErrAgentModelDiscoverySignInRequired is returned by model discovery when the
+// agent's model-list command would start an interactive sign-in because the
+// CLI is not confirmed as signed in. It is not a discovery failure: callers
+// keep the last catalog and retry once the agent reports a login.
+var ErrAgentModelDiscoverySignInRequired = errors.New("agent: sign-in required to list models")
+
+// ErrAgentModelDiscoveryCredentialRejected marks a discovery failure caused by
+// the provider definitively rejecting the agent's credential. The catalog
+// service reports it as an auth problem so clients can offer a login instead
+// of a raw provider error.
+var ErrAgentModelDiscoveryCredentialRejected = errors.New("agent: credential rejected while listing models")
+
+// ErrAgentModelDiscoveryCredentialExpired marks a discovery failure caused by
+// a stored login whose access token expired while a refresh token remains.
+// The agent CLI renews such a login on its next run; it is not a sign-out.
+var ErrAgentModelDiscoveryCredentialExpired = errors.New("agent: stored login expired while listing models")
+
 // AgentAuthStatus describes the result of a short local auth probe for an
 // installed agent. It is advisory only: credentials, quota, selected model
 // availability, or CLI state can still fail at session spawn/model-call time.
@@ -42,6 +62,13 @@ const (
 	AgentAuthStatusUnauthorized AgentAuthStatus = "unauthorized"
 	// AgentAuthStatusUnknown means the daemon could not determine auth status.
 	AgentAuthStatusUnknown AgentAuthStatus = "unknown"
+	// AgentAuthStatusConfigured means a credential is present locally but no
+	// check has proven it valid. Presence is not validity: a key can be
+	// revoked, downgraded, or rate-limited with no change on disk, so only a
+	// provider round-trip may report AgentAuthStatusAuthorized. Local evidence
+	// (a config file, an env var, or a CLI that reports loggedIn) reports
+	// configured instead, and must never render as a ready state.
+	AgentAuthStatusConfigured AgentAuthStatus = "configured"
 )
 
 // Agent is the contract every CLI coding agent adapter (claude-code, codex, …)
@@ -78,10 +105,41 @@ type AgentAuthChecker interface {
 	AuthStatus(ctx context.Context) (AgentAuthStatus, error)
 }
 
+// AgentLaunchAuthValidator is the optional launch gate for adapters whose
+// credential source depends on the project cwd or environment. Implementations
+// must perform a fresh provider check instead of trusting display/readiness
+// caches; unknown or uncheckable credentials remain advisory.
+type AgentLaunchAuthValidator interface {
+	ValidateLaunchAuth(ctx context.Context, workingDir string, env map[string]string) (AgentAuthStatus, error)
+}
+
 // AgentBinaryResolver is the optional capability adapters expose when their
 // binary can be checked without constructing a real session launch command.
 type AgentBinaryResolver interface {
 	ResolveBinary(ctx context.Context) (path string, err error)
+}
+
+// AgentRuntimeLaunchEnv augments a terminal launch after its generation has
+// been assigned. Native reporters can then carry that generation in their
+// own protocol identity. Implementations only modify the supplied environment.
+type AgentRuntimeLaunchEnv interface {
+	AugmentRuntimeLaunchEnv(env map[string]string, dataDir string, sessionID domain.SessionID, launchID string)
+}
+
+// AgentNativeSessionResolver is an optional capability for adapters whose
+// lifecycle protocol reports a process-local correlation id rather than the
+// durable conversation id accepted by their resume command.
+type AgentNativeSessionResolver interface {
+	ResolveNativeSessionID(ctx context.Context, cfg NativeSessionResolveConfig) (sessionID string, ok bool, err error)
+}
+
+// NativeSessionResolveConfig identifies one supervised agent launch. DataDir
+// and the two AO ids locate adapter-owned launch metadata without trusting a
+// provider-supplied path.
+type NativeSessionResolveConfig struct {
+	DataDir   string
+	SessionID domain.SessionID
+	LaunchID  string
 }
 
 // AgentBinaryResolutionInvalidator is an optional capability for adapters that
@@ -176,12 +234,21 @@ const (
 
 // AgentModelInfo is one model or mode that an adapter reports as selectable.
 type AgentModelInfo struct {
-	ID            string   `json:"id"`
-	Label         string   `json:"label"`
-	Provider      string   `json:"provider,omitempty"`
-	IsDefault     bool     `json:"isDefault,omitempty"`
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Provider  string `json:"provider,omitempty"`
+	IsDefault bool   `json:"isDefault,omitempty"`
+	// Efforts are the reasoning levels this specific model accepts, in the
+	// provider's own ascending order. Empty means the model takes no effort
+	// setting, which is a real answer rather than a missing one — Sonnet 4.5
+	// and Haiku 4.5 accept none while the 5 family accepts five — so a picker
+	// must render no effort control at all rather than an empty one.
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"defaultEffort,omitempty"`
+	// LastUsedAt is the latest activity of a session in scope whose current model
+	// is this model. It is derived from session history on every read, never
+	// stored on the cached catalog, and absent for a model no session ran.
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
 }
 
 // AgentModelCatalog is AO's normalized model-picker response.
@@ -213,7 +280,19 @@ type AgentModelCatalog struct {
 	RefreshRecommended bool   `json:"refreshRecommended,omitempty"`
 	Stale              bool   `json:"stale"`
 	Warning            string `json:"warning,omitempty"`
+	// WarningCode classifies Warning when it is an authentication problem, so
+	// clients can offer the agent's login instead of showing provider text.
+	// auth_required: the agent is signed out or its credential was rejected.
+	// auth_expired: a stored login's access token expired; the agent CLI
+	// renews it on its next run.
+	WarningCode string `json:"warningCode,omitempty" enum:"auth_required,auth_expired"`
 }
+
+// Model catalog warning codes.
+const (
+	ModelCatalogWarningAuthRequired = "auth_required"
+	ModelCatalogWarningAuthExpired  = "auth_expired"
+)
 
 // CachedAgentModelCatalog is the persistence record used by the model-catalog
 // service. CatalogJSON contains a serialized AgentModelCatalog.
@@ -256,6 +335,12 @@ type AgentModelDiscoveryRequest struct {
 	Binary     string
 	WorkingDir string
 	Env        map[string]string
+	// CredentialType names a cloud credential kind (e.g. "anthropic_api_key")
+	// when discovery must reflect the models a *cloud* session's pushed
+	// credential can run rather than the local machine's own auth. Adapters that
+	// gate their catalog on provider presence (opencode) honor it; others ignore
+	// it. Empty for ordinary local, project-scoped discovery.
+	CredentialType string
 }
 
 // AgentModelDiscoverer isolates CLI execution and discovery-input
@@ -269,6 +354,15 @@ type AgentModelDiscoverer interface {
 	// stay cheap enough to compute before deciding to skip discovery.
 	CatalogFingerprint(ctx context.Context, request AgentModelDiscoveryRequest) string
 	Manual(agentID string) AgentModelCatalog
+}
+
+// AgentModelAliasLabeler is an optional AgentModelDiscoverer capability. When a
+// discovery fails and AO falls back to an agent's static alias list, it labels
+// those aliases with the versions a previous successful discovery reported
+// (reference), so "opus" can read "Opus 5.5" instead of a bare family name.
+// Implementations return models unchanged when reference cannot resolve them.
+type AgentModelAliasLabeler interface {
+	LabelAliases(agentID string, models, reference []AgentModelInfo) []AgentModelInfo
 }
 
 // AgentExitDetectionMode describes how AO learns that an agent CLI process
@@ -294,6 +388,14 @@ type AgentExitDetector interface {
 // detection takes precedence over the fallback text patterns.
 type AgentPromptReadinessProvider interface {
 	PromptReadinessHints(ctx context.Context, cfg LaunchConfig) (PromptReadinessHints, error)
+}
+
+// AgentAfterStartPromptBuilder is an optional capability for interactive
+// adapters that need to combine launch-only context with the first user turn.
+// AO calls it exactly once per after-start delivery and sends the returned
+// value only after the runtime is ready.
+type AgentAfterStartPromptBuilder interface {
+	BuildAfterStartPrompt(ctx context.Context, cfg LaunchConfig) (string, error)
 }
 
 // TerminalActivityDetector derives activity only from authoritative terminal UI markers.

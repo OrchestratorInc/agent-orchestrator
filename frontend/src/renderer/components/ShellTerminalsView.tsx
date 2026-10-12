@@ -1,9 +1,10 @@
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { isSettingsPageOpen } from "../hooks/useAppShortcut";
 import { useCallback, useEffect } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { defaultShortcutBindings, shortcutBindingLabel } from "../../shared/shortcuts";
 import { useOverflowScroll } from "../hooks/useOverflowScroll";
-import { useCloseShellTerminal, useRenameShellTerminal, useShellTerminals } from "../hooks/useShellTerminals";
+import { adoptedShellHandle, useCloseShellTerminal, useRenameShellTerminal, useShellTerminals } from "../hooks/useShellTerminals";
 import { useShell } from "../lib/shell-context";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform } from "../lib/platform";
@@ -40,7 +41,9 @@ export function ShellTerminalsView() {
 	// Keep the selection pointed at a shell that still exists: closing the active
 	// tab (or a daemon-side exit pruning it) would otherwise leave the pane bound
 	// to a dead handle.
-	const active = shellTerminals.find((s) => s.handleId === activeHandleId);
+	// A tab selected while it was pending follows it to the shell it became.
+	const selectedHandleId = activeHandleId ? (adoptedShellHandle(activeHandleId) ?? activeHandleId) : null;
+	const active = shellTerminals.find((s) => s.handleId === selectedHandleId);
 	const tabsOverflow = useOverflowScroll<HTMLDivElement>(shellTerminals.map((t) => t.handleId).join("|"));
 	const selectAdjacentTab = useCallback(
 		(direction: -1 | 1) => {
@@ -58,6 +61,7 @@ export function ShellTerminalsView() {
 			return;
 		}
 		if (!active) setActiveShellTerminal(shellTerminals[0].handleId);
+		else if (active.handleId !== activeHandleId) setActiveShellTerminal(active.handleId);
 	}, [shellTerminals, active, activeHandleId, setActiveShellTerminal]);
 
 	useEffect(
@@ -69,8 +73,8 @@ export function ShellTerminalsView() {
 	);
 
 	useEffect(() => {
-		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => selectAdjacentTab(-1));
-		const disposeNext = aoBridge.app.onNextTabShortcut(() => selectAdjacentTab(1));
+		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(-1));
+		const disposeNext = aoBridge.app.onNextTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(1));
 		return () => {
 			disposePrevious();
 			disposeNext();

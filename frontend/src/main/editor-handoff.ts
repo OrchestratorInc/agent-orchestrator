@@ -79,6 +79,8 @@ export type EditorHandoffDeps = {
 	writePreference: (editorId: EditorId) => Promise<void>;
 	launch: (command: string, args: readonly string[], cwd: string) => Promise<void>;
 	openDirectory: (workspacePath: string) => Promise<void>;
+	/** Puts text on the system clipboard. The workspace path never reaches the renderer. */
+	copyText?: (text: string) => void;
 	isExecutable?: (candidatePath: string) => boolean;
 	isDirectory?: (candidatePath: string) => boolean;
 	logError?: (message: string, error: unknown) => void;
@@ -87,6 +89,7 @@ export type EditorHandoffDeps = {
 export type EditorHandoff = {
 	getState(sessionId: string): Promise<EditorHandoffState>;
 	open(input: OpenSessionTargetInput): Promise<OpenSessionTargetResult>;
+	copyWorkspacePath(sessionId: string): Promise<void>;
 };
 
 function defaultIsExecutable(candidatePath: string, platform: Platform): boolean {
@@ -335,6 +338,10 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 
 	const workspaceUnavailable = (error: unknown) =>
 		error instanceof Error && error.message.trim() ? error.message : "Session workspace is not available.";
+	const workspaceUnavailableCode = (error: unknown) => {
+		const code = error instanceof Error ? (error as { code?: unknown }).code : undefined;
+		return typeof code === "string" && code ? code : undefined;
+	};
 
 	return {
 		async getState(sessionId) {
@@ -349,6 +356,7 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 					preferredEditorId,
 					workspaceAvailable: false,
 					unavailableReason: workspaceUnavailable(error),
+					unavailableCode: workspaceUnavailableCode(error),
 				};
 			}
 		},
@@ -384,6 +392,13 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 			}
 			if (target.kind === "editor") await deps.writePreference(target.id as EditorId);
 			return target;
+		},
+
+		async copyWorkspacePath(sessionId) {
+			const id = sessionId.trim();
+			if (!id) throw new Error("Session is required.");
+			if (!deps.copyText) throw new Error("Copying is not available.");
+			deps.copyText(await deps.resolveWorkspace(id));
 		},
 	};
 }

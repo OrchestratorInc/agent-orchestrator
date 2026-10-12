@@ -128,6 +128,14 @@ func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, erro
 	}
 
 	events := make([]ports.ChatEvent, 0, len(resp.Thread.Turns)*4)
+	citations := newCitationFormatter()
+	// Native history is a snapshot: collect references before projecting any
+	// message, regardless of where search items appear within its turns.
+	for _, turn := range resp.Thread.Turns {
+		for _, item := range turn.Items {
+			citations.observeItem(c.threadID, turn.ID, item)
+		}
+	}
 	for _, turn := range resp.Thread.Turns {
 		state := turnStateFrom(string(turn.Status))
 
@@ -180,6 +188,7 @@ func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, erro
 				return nil, fmt.Errorf("encode history item %s: %w", itemID, err)
 			}
 			for eventIndex, event := range normalizeItem(params, true) {
+				event, _ = citations.formatEvent(c.threadID, event)
 				event.ProviderEventID = historyEventID(
 					c.threadID, turn.ID, "item", eventItemID, string(event.Kind), fmt.Sprint(eventIndex))
 				events = append(events, event)
@@ -412,4 +421,13 @@ func (c *conversation) SetTitle(ctx context.Context, title string) error {
 		return asRefusal(fmt.Errorf("thread/name/set: %w", err))
 	}
 	return nil
+}
+
+func (c *conversation) DeleteFork(ctx context.Context, providerConversationID string) error {
+	id := strings.TrimSpace(providerConversationID)
+	if id == "" || id == c.threadID {
+		return errors.New("refusing to delete the active provider conversation")
+	}
+	return c.conn.request(ctx, codexproto.MethodThreadDelete,
+		codexproto.ThreadDeleteParams{ThreadID: id}, nil)
 }

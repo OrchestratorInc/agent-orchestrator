@@ -135,19 +135,21 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"port":  {},
 	},
 	"ao.http.5xx": {
-		"component":     {},
-		"duration":      {},
-		"error_code":    {},
-		"error_kind":    {},
-		"fingerprint":   {},
-		"method":        {},
-		"operation":     {},
-		"path":          {},
-		"status":        {},
-		"status_family": {},
-		"count":         {},
-		"window_start":  {},
-		"window_end":    {},
+		"component":          {},
+		"duration":           {},
+		"error_code":         {},
+		"error_kind":         {},
+		"fingerprint":        {},
+		"method":             {},
+		"operation":          {},
+		"path":               {},
+		"status":             {},
+		"status_family":      {},
+		"browser_command":    {},
+		"runtime_link_state": {},
+		"count":              {},
+		"window_start":       {},
+		"window_end":         {},
 	},
 	"ao.onboarding.first_project_added": {
 		"has_git_remote": {},
@@ -163,6 +165,7 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 	"ao.review.triggered": {
 		"created_runs": {},
 		"harness":      {},
+		"rerun":        {},
 		"reused":       {},
 		"trigger":      {},
 	},
@@ -479,10 +482,13 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 	// activity breakdowns stay complete.
 	if actor, ok := props["github_actor"]; ok && s.personProfileSet.CompareAndSwap(false, true) {
 		props["$set"] = map[string]any{"github_actor": actor}
+		props["$unset"] = stalePersonProperties
 		props["$process_person_profile"] = true
 	}
 	return props
 }
+
+var stalePersonProperties = []string{"ao_version", "app_version", "build_mode", "platform", "surface"}
 
 func remoteEventName(name string) string {
 	if alias, ok := remoteEventNameAliases[name]; ok {

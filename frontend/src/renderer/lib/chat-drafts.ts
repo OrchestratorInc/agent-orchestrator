@@ -95,6 +95,19 @@ export interface ChatComposerDelivery {
 	clientMessageId: string;
 	/** Exact API text, including durable attachment path references. */
 	requestText: string;
+	/** Sent draft, separate from the editable next draft during optimistic delivery. */
+	draft?: { text: string; attachments: ChatDraftAttachment[] };
+	/** Exact verified transcript excerpts attached to this delivery. */
+	excerpts?: ChatDraftExcerptReference[];
+}
+
+export interface ChatDraftExcerptReference {
+	id: string;
+	conversationId: string;
+	messageId: string;
+	revision: number;
+	text: string;
+	role: "user" | "assistant";
 }
 
 export interface ChatInlineEditDelivery {
@@ -118,6 +131,7 @@ export interface ChatSessionDraft {
 		revision: number;
 		text: string;
 		attachments: ChatDraftAttachment[];
+		excerpts?: ChatDraftExcerptReference[];
 		/** Durable delivery journal. Present until acceptance is durably cleared. */
 		delivery?: ChatComposerDelivery;
 	};
@@ -141,9 +155,11 @@ export type DraftDeliveryResult<Mutation> =
 
 export interface PrepareChatComposerDeliveryInput {
 	nativeImages?: boolean;
+	optimistic?: boolean;
 	kind: ChatComposerDelivery["kind"];
 	composerText: string;
 	attachments: ChatDraftAttachment[];
+	excerpts?: ChatDraftExcerptReference[];
 	requestText: string;
 	clientMessageId: string;
 }
@@ -265,6 +281,15 @@ function clearDraftMutationReceipt(
 
 function emitDraftRuntime(runtime: ChatDraftRuntime): void {
 	for (const listener of runtime.listeners) listener();
+}
+
+function emitComposerDraftChange(scope: ChatDraftScopeInput): void {
+	const runtime = draftRuntime(scope);
+	// useSyncExternalStore compares snapshots by identity. Excerpt changes can be
+	// initiated from the transcript rather than the composer, so publish a fresh
+	// snapshot even when no delivery mutation is pending.
+	runtime.composer = { ...runtime.composer };
+	emitDraftRuntime(runtime);
 }
 
 export function subscribeChatDraftRuntime(scope: ChatDraftScopeInput, listener: () => void): () => void {
@@ -689,6 +714,19 @@ function isAttachment(value: unknown): value is ChatDraftAttachment {
 	);
 }
 
+function isExcerptReference(value: unknown): value is ChatDraftExcerptReference {
+	if (!value || typeof value !== "object") return false;
+	const excerpt = value as Partial<ChatDraftExcerptReference>;
+	return (
+		typeof excerpt.id === "string" && excerpt.id.length > 0 &&
+		typeof excerpt.conversationId === "string" && excerpt.conversationId.length > 0 &&
+		typeof excerpt.messageId === "string" && excerpt.messageId.length > 0 &&
+		typeof excerpt.revision === "number" && Number.isSafeInteger(excerpt.revision) && excerpt.revision >= 0 &&
+		typeof excerpt.text === "string" && excerpt.text.trim().length > 0 &&
+		(excerpt.role === "user" || excerpt.role === "assistant")
+	);
+}
+
 function isInlineEdit(value: unknown): value is ChatDraftInlineEdit {
 	if (!value || typeof value !== "object") return false;
 	const edit = value as Partial<ChatDraftInlineEdit>;
@@ -721,7 +759,14 @@ function isComposerDelivery(value: unknown): value is ChatComposerDelivery {
 		typeof delivery.clientMessageId === "string" &&
 		delivery.clientMessageId.length > 0 &&
 		typeof delivery.requestText === "string" &&
-		(!("nativeImages" in delivery) || typeof delivery.nativeImages === "boolean")
+		(delivery.excerpts === undefined ||
+			(Array.isArray(delivery.excerpts) && delivery.excerpts.every(isExcerptReference))) &&
+		(!("nativeImages" in delivery) || typeof delivery.nativeImages === "boolean") &&
+		(delivery.draft === undefined || (delivery.draft !== null &&
+			typeof delivery.draft === "object" &&
+			typeof delivery.draft.text === "string" &&
+			Array.isArray(delivery.draft.attachments) &&
+			delivery.draft.attachments.every(isAttachment)))
 	);
 }
 
@@ -761,6 +806,8 @@ function isChatSessionDraft(value: unknown, scope: ChatDraftScope): value is Cha
 		typeof composer.text === "string" &&
 		Array.isArray(composer.attachments) &&
 		composer.attachments.every(isAttachment) &&
+		(composer.excerpts === undefined ||
+			(Array.isArray(composer.excerpts) && composer.excerpts.every(isExcerptReference))) &&
 		(composer.delivery === undefined || isComposerDelivery(composer.delivery)) &&
 		(draft.queuedEdit === undefined || (draft.queuedEdit !== null &&
 			typeof draft.queuedEdit.revision === "string" && draft.queuedEdit.revision.length > 0 &&
@@ -839,6 +886,7 @@ function hasContent(draft: ChatSessionDraft): boolean {
 	return (
 		draft.composer.text !== "" ||
 		draft.composer.attachments.length > 0 ||
+		(draft.composer.excerpts?.length ?? 0) > 0 ||
 		Boolean(draft.composer.delivery) ||
 		Boolean(draft.queuedEdit) ||
 		Boolean(draft.inlineEdit) ||
@@ -954,12 +1002,16 @@ export function prepareChatComposerDelivery(
 			? { ok: true, recovered: true, draft: proof.draft, mutation: existing }
 			: { ok: false, recovered: true, draft: loaded.draft };
 	}
+	const excerpts = input.excerpts ?? [];
 	const exact =
 		loaded.draft.composer.text === input.composerText &&
-		attachmentsEqual(loaded.draft.composer.attachments, input.attachments);
+		attachmentsEqual(loaded.draft.composer.attachments, input.attachments) &&
+		JSON.stringify(loaded.draft.composer.excerpts ?? []) === JSON.stringify(excerpts);
 	const revision = exact
 		? loaded.draft.composer.revision
 		: loaded.draft.composer.revision + 1;
+	// shortcut: excerpt sends stay locked, enable optimism when refused references can be edited separately.
+	const optimistic = input.optimistic && input.kind === "send" && excerpts.length === 0;
 	const mutation: ChatComposerDelivery = {
 		...(input.nativeImages === undefined ? {} : { nativeImages: input.nativeImages }),
 		kind: input.kind,
@@ -967,13 +1019,16 @@ export function prepareChatComposerDelivery(
 		revision,
 		clientMessageId: input.clientMessageId,
 		requestText: input.requestText,
+		...(optimistic ? { draft: { text: input.composerText, attachments: input.attachments } } : {}),
+		excerpts,
 	};
 	const next: ChatSessionDraft = {
 		...loaded.draft,
 		composer: {
-			revision,
-			text: input.composerText,
-			attachments: input.attachments,
+			revision: optimistic ? revision + 1 : revision,
+			text: optimistic ? "" : input.composerText,
+			attachments: optimistic ? [] : input.attachments,
+			excerpts,
 			delivery: mutation,
 		},
 	};
@@ -1015,9 +1070,8 @@ export function markChatComposerDeliveryAccepted(
 }
 
 /**
- * Remove a definitively refused delivery journal without consuming its text. The
- * daemon proved that this first attempt was not accepted, so the same composer
- * revision becomes an ordinary editable draft again.
+ * Restore a definitively refused draft, or keep its delivery beside newer input
+ * for retry. Legacy sends and steers only lose their delivery journal.
  */
 export function clearRejectedChatComposerDelivery(
 	scope: ChatDraftScopeInput,
@@ -1036,12 +1090,16 @@ export function clearRejectedChatComposerDelivery(
 	) {
 		return { ok: false, draft: loaded.draft };
 	}
+	if (delivery.draft && (loaded.draft.composer.text !== "" || loaded.draft.composer.attachments.length > 0)) {
+		return { ok: true, draft: loaded.draft };
+	}
 	const next: ChatSessionDraft = {
 		...loaded.draft,
 		composer: {
-			revision: loaded.draft.composer.revision,
-			text: loaded.draft.composer.text,
-			attachments: loaded.draft.composer.attachments,
+			revision: loaded.draft.composer.revision + (delivery.draft ? 1 : 0),
+			text: delivery.draft?.text ?? loaded.draft.composer.text,
+			attachments: delivery.draft?.attachments ?? loaded.draft.composer.attachments,
+			excerpts: loaded.draft.composer.excerpts,
 		},
 	};
 	const result = persistDraftProven(next, storage);
@@ -1078,6 +1136,7 @@ export function clearUncertainChatComposerDelivery(
 			revision: loaded.draft.composer.revision,
 			text: loaded.draft.composer.text,
 			attachments: loaded.draft.composer.attachments,
+			excerpts: loaded.draft.composer.excerpts,
 		},
 	};
 	const result = persistDraftProven(next, storage);
@@ -1221,8 +1280,13 @@ export function writeChatComposerText(
 	scope: ChatDraftScopeInput,
 	text: string,
 	storage: DraftStorage | undefined = rendererStorage(),
+	expectedRevision?: number,
 ): DraftWriteResult {
 	const loaded = loadChatSessionDraft(scope, storage);
+	// A delayed retry of a failed save must not overwrite a newer surface's draft.
+	if (loaded.ok && expectedRevision !== undefined && loaded.draft.composer.revision !== expectedRevision) {
+		return { ok: true, draft: loaded.draft };
+	}
 	if (loaded.ok && loaded.draft.composer.text === text) {
 		return { ok: true, draft: loaded.draft };
 	}
@@ -1267,6 +1331,35 @@ export function writeChatAttachments(
 		loaded,
 	);
 	if (result.ok) invalidateAcceptedDraftMutation(scope, "composer");
+	return result;
+}
+
+export function writeChatExcerptReferences(
+	scope: ChatDraftScopeInput,
+	excerpts: ChatDraftExcerptReference[],
+	storage: DraftStorage | undefined = rendererStorage(),
+): DraftWriteResult {
+	const loaded = loadChatSessionDraft(scope, storage);
+	if (loaded.ok && JSON.stringify(loaded.draft.composer.excerpts ?? []) === JSON.stringify(excerpts)) {
+		return { ok: true, draft: loaded.draft };
+	}
+	const result = mutateDraft(
+		scope,
+		(draft) => ({
+			...draft,
+			composer: {
+				...draft.composer,
+				revision: draft.composer.revision + 1,
+				excerpts,
+			},
+		}),
+		storage,
+		loaded,
+	);
+	if (result.ok) {
+		invalidateAcceptedDraftMutation(scope, "composer");
+		emitComposerDraftChange(scope);
+	}
 	return result;
 }
 
@@ -1352,16 +1445,18 @@ export function clearAcceptedChatInlineEdit(
  * Clear the composer accepted by the daemon only if it is still the same
  * revision. A keystroke or attachment change that happened while send awaited
  * acceptance must remain both on screen and in durable storage.
+ * Sent attachments belong to the accepted message, even if the next text is newer.
  */
 export function clearAcceptedChatComposer(
 	scope: ChatDraftScopeInput,
 	acceptedRevision: number,
 	storage: DraftStorage | undefined = rendererStorage(),
+	acceptedAttachmentIds: readonly string[] = [],
 ): DraftClearResult {
 	const loaded = loadChatSessionDraft(scope, storage);
 	const current = loaded.draft;
 	if (!loaded.ok) return { ok: false, cleared: false, draft: current };
-	if (current.composer.revision !== acceptedRevision) {
+	if (current.composer.delivery?.draft || current.composer.revision !== acceptedRevision) {
 		if (current.composer.delivery?.revision !== acceptedRevision) {
 			return { ok: true, cleared: false, draft: current };
 		}
@@ -1370,12 +1465,19 @@ export function clearAcceptedChatComposer(
 			composer: {
 				revision: current.composer.revision,
 				text: current.composer.text,
-				attachments: current.composer.attachments,
+				attachments: current.composer.delivery.draft
+					? current.composer.attachments
+					: current.composer.attachments.filter((attachment) => !acceptedAttachmentIds.includes(attachment.id)),
+				excerpts: current.composer.excerpts,
 			},
 		};
 		const result = persistDraftProven(next, storage);
 		return result.ok
-			? { ok: true, cleared: false, draft: result.draft }
+			? {
+				ok: true,
+				cleared: Boolean(current.composer.delivery.draft) && next.composer.text === "" && next.composer.attachments.length === 0,
+				draft: result.draft,
+			}
 			: { ok: false, cleared: false, draft: current };
 	}
 	const next: ChatSessionDraft = {
@@ -1384,6 +1486,7 @@ export function clearAcceptedChatComposer(
 			revision: current.composer.revision + 1,
 			text: "",
 			attachments: [],
+			excerpts: [],
 		},
 	};
 	const result = persistDraftProven(next, storage);

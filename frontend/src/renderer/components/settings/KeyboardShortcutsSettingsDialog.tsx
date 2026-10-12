@@ -34,6 +34,7 @@ import {
 } from "../ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { eventBinding } from "./KeyboardShortcutsContent";
 
 function shortcutLabel(id: AppShortcutId, t: TFunction): string {
 	return t(shortcutLabelKeys[id]);
@@ -55,32 +56,6 @@ type ToastState = {
 	body?: string;
 	undo?: () => Promise<void>;
 };
-
-const ignoredRecordingKeys = new Set([
-	"Alt",
-	"AltGraph",
-	"CapsLock",
-	"Control",
-	"Dead",
-	"Meta",
-	"NumLock",
-	"Process",
-	"ScrollLock",
-	"Shift",
-	"Unidentified",
-]);
-
-function eventBinding(event: KeyboardEvent): ShortcutBinding | null {
-	if (ignoredRecordingKeys.has(event.key) || event.getModifierState?.("AltGraph")) return null;
-	return {
-		key: event.key.length === 1 ? event.key.toLowerCase() : event.key,
-		...(event.code === "Backquote" ? { code: event.code } : {}),
-		ctrl: event.ctrlKey,
-		meta: event.metaKey,
-		shift: event.shiftKey,
-		alt: event.altKey,
-	};
-}
 
 function definition(id: AppShortcutId) {
 	return APP_SHORTCUTS.find((shortcut) => shortcut.id === id);
@@ -281,7 +256,7 @@ export function KeyboardShortcutsSettingsDialog({
 		await resetBinding(id);
 		showToast({
 			title: t("shortcut.restored"),
-			body: `${definition(id)?.label ?? id} now uses its default binding.`,
+			body: `${definition(id)?.label ?? id} now uses its original binding.`,
 			undo: async () => {
 				await setOverrides(before);
 				showToast({ title: t("shortcut.undone") });

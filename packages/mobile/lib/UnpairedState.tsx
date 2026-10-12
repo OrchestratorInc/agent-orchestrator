@@ -1,5 +1,7 @@
 import { useRouter } from "expo-router";
 
+import { unconfiguredView } from "./configLoading";
+import { useApp } from "./store";
 import { Button, EmptyState } from "./ui";
 
 /**
@@ -18,11 +20,36 @@ import { Button, EmptyState } from "./ui";
  */
 export function UnpairedState() {
 	const router = useRouter();
+	const { selectedHostName, loading, reloadConfig, configResolved } = useApp();
+	if (selectedHostName) {
+		const connecting = loading || !configResolved;
+		return (
+			<EmptyState
+				icon="server"
+				pulse={connecting}
+				title={connecting ? `Connecting to ${selectedHostName}` : `${selectedHostName} is unavailable`}
+				message={connecting ? "Checking saved addresses…" : "This machine is paired but cannot be reached right now."}
+				action={connecting ? undefined : <Button title="Retry connection" icon="refresh-cw" onPress={() => { void reloadConfig(); }} />}
+			/>
+		);
+	}
+	// On launch the store has no config until the endpoint race finishes, which
+	// on a slow network takes seconds. Offering the scanner during that window
+	// told a paired user their phone had forgotten the desktop, moments before it
+	// connected on its own.
+	if (unconfiguredView({ resolved: configResolved }) === "resolving") {
+		return (
+			<EmptyState
+				icon="monitor-smartphone"
+				pulse
+				title="Connecting to your machine…"
+			/>
+		);
+	}
 	return (
 		<EmptyState
-			icon="server"
-			title="No desktop paired"
-			message="Scan the pairing code from AO → Settings → Connect Mobile to drive your agents from here."
+			icon="monitor-smartphone"
+			title="No machine paired"
 			action={<Button title="Scan pairing code" icon="maximize" onPress={() => router.push("/pair")} />}
 		/>
 	);

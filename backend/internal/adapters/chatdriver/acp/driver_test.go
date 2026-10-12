@@ -130,7 +130,7 @@ func TestPersistentACPDriverSurvivesRealProcessDetach(t *testing.T) {
 	// These are protocol contract tests, not claims of authenticated E2E for
 	// every vendor. Each runs the real detached host with a fake ACP process.
 	for _, harness := range []domain.AgentHarness{
-		domain.HarnessClaudeCode, domain.HarnessCursor, domain.HarnessOpenCode,
+		domain.HarnessClaudeCode, domain.HarnessCursor, domain.HarnessOpenCode, domain.HarnessOpenCodeV2,
 		domain.HarnessDroid, domain.HarnessKimi, domain.HarnessKimchi,
 		domain.HarnessPi, domain.HarnessOMP,
 	} {
@@ -198,7 +198,7 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness) {
 		return Launch{}, errors.New("new provider installation is unavailable")
 	}
 	secondDriver := New(cfg, log)
-	second, err := secondDriver.Resume(context.Background(), ports.ChatResumeConfig{
+	second, err := secondDriver.Reconnect(context.Background(), ports.ChatResumeConfig{
 		SessionID: "persistent-acp-e2e", DataDir: dataDir, WorkspacePath: workdir,
 		ProviderConversationID: "persistent-provider-session", ProviderScopeID: "scope",
 		PrepareEnv: prepareEnv, Model: "changed-model", Permissions: ports.PermissionModeAuto,
@@ -264,6 +264,105 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness) {
 	for _, method := range []string{"initialize", "session/new", "session/prompt"} {
 		if got := strings.Count(string(calls), method+"\n"); got != 1 {
 			t.Fatalf("provider method %s called %d times; calls:\n%s", method, got, calls)
+		}
+	}
+}
+
+// A prompt attempted before the controller acknowledges the previous terminal
+// receipt is refused by the host without a receipt of its own. That refusal must
+// not erase the outstanding receipt, or the late ACK is dropped and the host
+// refuses every later prompt.
+func TestPersistentACPLateAckSurvivesHostLocalPromptRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		env           map[string]string
+		originalState domain.TurnState
+	}{
+		{name: "completed original", originalState: domain.TurnStateCompleted},
+		{name: "failed original", env: map[string]string{"AO_TEST_PERSISTENT_ACP_ERROR": "1"},
+			originalState: domain.TurnStateFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			callsPath := filepath.Join(t.TempDir(), "calls.log")
+			env := map[string]string{
+				"AO_TEST_PERSISTENT_ACP_PROVIDER": "1",
+				"AO_TEST_PERSISTENT_ACP_CALLS":    callsPath,
+			}
+			for key, value := range tc.env {
+				env[key] = value
+			}
+			driver := New(Config{
+				Harness: domain.HarnessOMP,
+				Capabilities: ports.ChatCapabilities{
+					ports.ChatCapabilityStreaming: true, ports.ChatCapabilityResume: true,
+				},
+				Launch: func(context.Context, LaunchConfig) (Launch, error) {
+					return Launch{
+						Command: os.Args[0], Args: []string{"-test.run=TestPersistentACPProviderHelper"}, Env: env,
+					}, nil
+				},
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+				SessionID: "persistent-acp-late-ack", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
+				ProviderScopeID: "scope",
+			})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer func() { _ = conv.(ports.ChatProviderTerminator).Terminate() }()
+			ack := conv.(ports.ChatProviderEventAcknowledger)
+			_ = nextEvent(t, conv.Events()) // controller.ready
+
+			original := runPersistentACPTurn(t, conv)
+			if original.TurnState != tc.originalState || original.ProviderEventID == "" {
+				t.Fatalf("original terminal = %#v, want %s with a durable receipt", original, tc.originalState)
+			}
+			replacement := runPersistentACPTurn(t, conv)
+			if replacement.TurnState != domain.TurnStateFailed || replacement.ProviderEventID != "" ||
+				replacement.Err == nil || !strings.Contains(replacement.Err.Error(), "not acknowledged") {
+				t.Fatalf("replacement terminal = %#v, want host-local unacknowledged rejection", replacement)
+			}
+			if err := ack.AcknowledgeProviderEvent(context.Background(), original.ProviderEventID); err != nil {
+				t.Fatalf("acknowledge original: %v", err)
+			}
+			next := runPersistentACPTurn(t, conv)
+			if next.TurnState != domain.TurnStateCompleted || next.ProviderEventID == "" {
+				t.Fatalf("turn after late ACK = %#v, want completed", next)
+			}
+			if err := ack.AcknowledgeProviderEvent(context.Background(), next.ProviderEventID); err != nil {
+				t.Fatalf("acknowledge next: %v", err)
+			}
+			calls, err := os.ReadFile(callsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(string(calls), "session/prompt\n"); got != 2 {
+				t.Fatalf("provider received %d prompts, want original and post-ACK turn only; calls:\n%s", got, calls)
+			}
+		})
+	}
+}
+
+// runPersistentACPTurn starts one turn and returns its terminal event once the
+// conversation reports it can accept the next turn.
+func runPersistentACPTurn(t *testing.T, conv ports.ChatConversation) ports.ChatEvent {
+	t.Helper()
+	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "turn"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	var terminal ports.ChatEvent
+	for {
+		event := nextEvent(t, conv.Events())
+		if event.Kind == ports.ChatEventTurnCompleted && event.ProviderTurnID == ref.ProviderTurnID {
+			terminal = event
+		}
+		if terminal.Kind != "" && event.Kind == ports.ChatEventControllerState &&
+			event.ControllerState == ports.ChatControllerReady {
+			return terminal
 		}
 	}
 }
@@ -677,6 +776,7 @@ type fakeAgent struct {
 	customPrompt        func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error)
 	mode                string
 	modeNotFound        bool // SetSessionMode returns -32601
+	modeRequiresOption  SessionOption
 	configNotFound      bool // SetSessionConfigOption returns -32601
 	configErr           error
 	newSessionUpdates   []acpsdk.SessionUpdate
@@ -689,6 +789,8 @@ type fakeAgent struct {
 	steerPrompt         []acpsdk.ContentBlock
 	steerMeta           map[string]any
 	steerOut            string
+	steerMethodNotFound bool // HandleExtensionMethod returns -32601 for steering
+	steerExtensionErr   error
 }
 
 type legacyKimiAgent struct {
@@ -854,6 +956,16 @@ func (a *fakeAgent) HandleExtensionMethod(_ context.Context, method string, raw 
 	if method != steeringMethod {
 		return nil, acpsdk.NewMethodNotFound(method)
 	}
+	a.mu.Lock()
+	methodNotFound := a.steerMethodNotFound
+	extensionErr := a.steerExtensionErr
+	a.mu.Unlock()
+	if methodNotFound {
+		return nil, acpsdk.NewMethodNotFound(method)
+	}
+	if extensionErr != nil {
+		return nil, extensionErr
+	}
 	var params struct {
 		Prompt []acpsdk.ContentBlock `json:"prompt"`
 		Meta   map[string]any        `json:"_meta"`
@@ -972,6 +1084,12 @@ func (a *fakeAgent) SetSessionConfigOption(_ context.Context, params acpsdk.SetS
 }
 func (a *fakeAgent) SetSessionMode(_ context.Context, params acpsdk.SetSessionModeRequest) (acpsdk.SetSessionModeResponse, error) {
 	a.mu.Lock()
+	if required := a.modeRequiresOption; required.ID != "" && a.options[required.ID] != required.Value {
+		a.mu.Unlock()
+		return acpsdk.SetSessionModeResponse{}, acpsdk.NewInternalError(map[string]any{
+			"details": "Mode auto is not available in this session",
+		})
+	}
 	if a.modeNotFound {
 		a.mu.Unlock()
 		return acpsdk.SetSessionModeResponse{}, acpsdk.NewMethodNotFound("session/set_mode")
@@ -1520,6 +1638,229 @@ func TestACPDriverReappliesLaunchContextWhenResuming(t *testing.T) {
 	}
 }
 
+// standingInstructions is the fixed preamble text used by the preamble tests.
+const standingInstructions = "AO standing instructions for this session"
+
+// runOneTurn sends a single text turn and returns the prompt the provider saw.
+// The caller must already have drained the controller.ready event emitted at
+// session setup.
+func runOneTurn(t *testing.T, agent *fakeAgent, conv ports.ChatConversation, text string) []acpsdk.ContentBlock {
+	t.Helper()
+	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{
+		Text: text, ClientMessageID: "ao-client-message-preamble",
+	})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	for {
+		if event := nextEvent(t, conv.Events()); event.Kind == ports.ChatEventTurnCompleted {
+			break
+		}
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	return append([]acpsdk.ContentBlock(nil), agent.promptParams.Prompt...)
+}
+
+// preambleText reads AO's standing instructions back out of a native prompt the
+// way the agent does: the resource block is what reaches the model.
+func preambleText(prompt []acpsdk.ContentBlock) string {
+	if len(prompt) == 0 || prompt[0].Resource == nil {
+		return ""
+	}
+	contents := prompt[0].Resource.Resource.TextResourceContents
+	if contents == nil {
+		return ""
+	}
+	return contents.Text
+}
+
+// preambleConfig is the binding shape under test: an agent with no
+// system-prompt launch flag that ignores session/new _meta and receives AO's
+// standing context only as an embedded resource on the first prompt.
+func preambleConfig() Config {
+	return Config{
+		Harness:      domain.HarnessCommandCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionPreamble: func(cfg LaunchConfig) []acpsdk.ContentBlock {
+			return []acpsdk.ContentBlock{acpsdk.ResourceBlock(acpsdk.EmbeddedResourceResource{
+				TextResourceContents: &acpsdk.TextResourceContents{
+					Uri:  "ao://agent-orchestrator/standing-instructions",
+					Text: cfg.SystemPrompt,
+				},
+			})}
+		},
+	}
+}
+
+// TestACPDriverDeliversSessionPreambleOnStartAndResume covers the channel AO
+// uses for agents that accept no system-prompt launch flag and ignore
+// session/new _meta: an embedded resource leading the first prompt. Standing
+// context is process input rather than transcript history, so a resumed session
+// must receive the recomputed instructions again.
+func TestACPDriverDeliversSessionPreambleOnStartAndResume(t *testing.T) {
+	newDriver := func(agent *fakeAgent) *Driver {
+		driver := New(preambleConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+		driver.useTestProcess(fakeSpawn(agent))
+		return driver
+	}
+
+	t.Run("start", func(t *testing.T) {
+		agent := &fakeAgent{promptNoPermission: true}
+		conv, err := newDriver(agent).Start(context.Background(), ports.ChatStartConfig{
+			WorkspacePath: t.TempDir(), SystemPrompt: standingInstructions,
+		})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		defer conv.Close()
+		_ = nextEvent(t, conv.Events()) // controller.ready
+		prompt := runOneTurn(t, agent, conv, "do the task")
+		if got := preambleText(prompt); got != standingInstructions {
+			t.Fatalf("first prompt standing context = %q, want %q (prompt %#v)", got, standingInstructions, prompt)
+		}
+		if len(prompt) < 2 || prompt[1].Text == nil || prompt[1].Text.Text != "do the task" {
+			t.Fatalf("standing context did not lead the user text: %#v", prompt)
+		}
+	})
+
+	t.Run("resume", func(t *testing.T) {
+		agent := &fakeAgent{promptNoPermission: true}
+		conv, err := newDriver(agent).Resume(context.Background(), ports.ChatResumeConfig{
+			SessionID:              "worker-1",
+			ProviderConversationID: "provider-session-1",
+			WorkspacePath:          t.TempDir(),
+			SystemPrompt:           standingInstructions,
+		})
+		if err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		defer conv.Close()
+		_ = nextEvent(t, conv.Events()) // controller.ready
+		prompt := runOneTurn(t, agent, conv, "continue the task")
+		if got := preambleText(prompt); got != standingInstructions {
+			t.Fatalf("resumed first prompt standing context = %q, want %q (prompt %#v)", got, standingInstructions, prompt)
+		}
+	})
+}
+
+// Standing context is process input, so it is delivered once per session rather
+// than repeated on every turn, which would grow the transcript and re-state the
+// same rules mid-conversation.
+func TestACPDriverDeliversSessionPreambleOncePerSession(t *testing.T) {
+	agent := &fakeAgent{promptNoPermission: true}
+	driver := New(preambleConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), SystemPrompt: standingInstructions,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conv.Close()
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	if got := preambleText(runOneTurn(t, agent, conv, "first")); got != standingInstructions {
+		t.Fatalf("first prompt standing context = %q", got)
+	}
+	agent.mu.Lock()
+	agent.promptParams = acpsdk.PromptRequest{}
+	agent.mu.Unlock()
+	if got := preambleText(runOneTurn(t, agent, conv, "second")); got != "" {
+		t.Fatalf("second prompt repeated standing context %q; want it delivered once per session", got)
+	}
+}
+
+// A first turn that never reaches the provider must not spend the standing
+// context. Both paths here fail in SendTurn, after the prompt is built but
+// before any session/prompt is sent: spending the preamble in SendTurn would
+// silently drop AO's instructions from the session's first real turn, which is
+// the failure these cases exist to prevent.
+func TestACPDriverPreservesSessionPreambleWhenFirstTurnNeverStarts(t *testing.T) {
+	newConversation := func(t *testing.T, agent *fakeAgent) ports.ChatConversation {
+		t.Helper()
+		driver := New(preambleConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+		driver.useTestProcess(fakeSpawn(agent))
+		conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+			WorkspacePath: t.TempDir(), SystemPrompt: standingInstructions,
+		})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		t.Cleanup(func() { conv.Close() })
+		_ = nextEvent(t, conv.Events()) // controller.ready
+		return conv
+	}
+
+	t.Run("rejected first-turn settings", func(t *testing.T) {
+		agent := &fakeAgent{promptNoPermission: true}
+		// Reject the first turn's settings, which fails SendTurn before the
+		// prompt is ever sent to the provider. Session setup is unaffected.
+		reject := false
+		driverConfig := preambleConfig()
+		driverConfig.ValidateTurnSettings = func(_ ports.PermissionMode, settings ports.ChatTurnSettings) error {
+			if reject && settings.Model == "rejected-model" {
+				return errors.New("settings rejected")
+			}
+			return nil
+		}
+		driver := New(driverConfig, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		driver.useTestProcess(fakeSpawn(agent))
+		conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+			WorkspacePath: t.TempDir(), SystemPrompt: standingInstructions,
+		})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		defer conv.Close()
+		_ = nextEvent(t, conv.Events()) // controller.ready
+
+		reject = true
+		if _, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{
+			Text:     "do the task",
+			Settings: ports.ChatTurnSettings{Model: "rejected-model"},
+		}); err == nil {
+			t.Fatal("SendTurn with rejected settings succeeded; want an error")
+		}
+		if agent.promptParams.Prompt != nil {
+			t.Fatal("a turn whose settings were rejected still reached the provider")
+		}
+
+		// The retried turn must carry the standing context AO never delivered.
+		reject = false
+		if got := preambleText(runOneTurn(t, agent, conv, "retry the task")); got != standingInstructions {
+			t.Fatalf("retry standing context = %q, want %q; a rejected turn must not spend it", got, standingInstructions)
+		}
+	})
+
+	t.Run("discarded prepared turn", func(t *testing.T) {
+		agent := &fakeAgent{promptNoPermission: true}
+		conv := newConversation(t, agent)
+
+		// A prepared turn the controller drops before starting, as it does when
+		// durable binding fails.
+		ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{
+			Text: "abandoned task", ClientMessageID: "ao-client-message-discarded",
+		})
+		if err != nil {
+			t.Fatalf("SendTurn: %v", err)
+		}
+		conv.(ports.ChatDeferredTurnStarter).DiscardDeferredTurn(ref.ProviderTurnID)
+		if agent.promptParams.Prompt != nil {
+			t.Fatal("a discarded turn still reached the provider")
+		}
+
+		if got := preambleText(runOneTurn(t, agent, conv, "the real task")); got != standingInstructions {
+			t.Fatalf("next prompt standing context = %q, want %q; a discarded turn must not spend it", got, standingInstructions)
+		}
+	})
+}
+
 func TestACPDriverRefreshesHistoryWithAnotherSessionLoad(t *testing.T) {
 	userOneID := "11111111-1111-4111-8111-111111111111"
 	answerOneID := "22222222-2222-4222-8222-222222222222"
@@ -2037,6 +2378,102 @@ func TestACPDriverKeepsPermissionPolicyWhenLaterTurnSettingFails(t *testing.T) {
 	}
 }
 
+func TestACPDriverAppliesModelBeforeModelDependentMode(t *testing.T) {
+	agent := &fakeAgent{modeRequiresOption: SessionOption{
+		ID: "model", Value: "claude-opus-4-6",
+	}}
+	driver := New(Config{
+		Harness: domain.HarnessClaudeCode,
+		Probe:   func(context.Context) error { return nil },
+		Launch:  func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionMode: func(permission ports.PermissionMode) string {
+			if ports.NormalizePermissionMode(permission) == ports.PermissionModeAuto {
+				return "auto"
+			}
+			return ""
+		},
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{
+				{ID: "model", Value: settings.Model},
+				{ID: "effort", Value: settings.Effort},
+			}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(),
+		Model:         "claude-opus-4-6",
+		Effort:        "low",
+		Permissions:   ports.PermissionModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("Start with a model-dependent Auto mode: %v", err)
+	}
+	defer opened.Close()
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.mode != "auto" {
+		t.Fatalf("mode = %q, want auto", agent.mode)
+	}
+	if agent.options["model"] != "claude-opus-4-6" || agent.options["effort"] != "low" {
+		t.Fatalf("options = %v, want selected model and effort", agent.options)
+	}
+}
+
+func TestACPDriverFallsBackFromModelUnsupportedAutoMode(t *testing.T) {
+	agent := &fakeAgent{
+		newConfig: []acpsdk.SessionConfigOption{
+			selectConfigOption("model", "Model", "model", "sonnet", "sonnet", "haiku"),
+			selectConfigOption("mode", "Mode", "mode", "auto", "auto", "default", "acceptEdits"),
+		},
+		setConfig: []acpsdk.SessionConfigOption{
+			selectConfigOption("model", "Model", "model", "haiku", "sonnet", "haiku"),
+			selectConfigOption("mode", "Mode", "mode", "default", "default", "acceptEdits"),
+		},
+	}
+	driver := New(Config{
+		Harness: domain.HarnessClaudeCode,
+		Probe:   func(context.Context) error { return nil },
+		Launch:  func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionMode: func(permission ports.PermissionMode) string {
+			if ports.NormalizePermissionMode(permission) == ports.PermissionModeAuto {
+				return "auto"
+			}
+			return ""
+		},
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(),
+		Model:         "haiku",
+		Permissions:   ports.PermissionModeAuto,
+	})
+	if err != nil {
+		t.Fatalf("Start with model-unsupported Auto mode: %v", err)
+	}
+	defer opened.Close()
+
+	agent.mu.Lock()
+	mode := agent.mode
+	agent.mu.Unlock()
+	if mode != "default" {
+		t.Fatalf("provider mode = %q, want default fallback", mode)
+	}
+	conv := opened.(*conversation)
+	conv.mu.Lock()
+	permissionMode := conv.permissionMode
+	conv.mu.Unlock()
+	if permissionMode != ports.PermissionModeDefault {
+		t.Fatalf("conversation permission mode = %q, want default fallback", permissionMode)
+	}
+}
+
 func TestACPDriverParksAndResolvesStructuredElicitation(t *testing.T) {
 	request := acpsdk.NewUnstableCreateElicitationRequestForm(acpsdk.UnstableElicitationSchema{
 		Type:       acpsdk.UnstableElicitationSchemaTypeObject,
@@ -2373,6 +2810,105 @@ func TestACPDriverExtractsCommandFromExecuteToolInput(t *testing.T) {
 	}
 	if detail["input"] == nil {
 		t.Fatalf("detail.input dropped: %#v", detail)
+	}
+}
+
+// A tool row's detail is rewritten on every update and carried by every
+// snapshot, so an html_render page and an html_preview screenshot are not
+// stored whole.
+func TestACPToolDetailCapsInputAndDropsImageData(t *testing.T) {
+	page := map[string]any{"html": strings.Repeat("<p>x</p>", 2000), "title": "Turns"}
+	shot := strings.Repeat("iVBORw0KGgo", 400)
+	tool := &toolState{
+		id: "mcp-1", kind: acpsdk.ToolKindOther, status: acpsdk.ToolCallStatusCompleted, rawInput: page,
+		content: []acpsdk.ToolCallContent{
+			acpsdk.ToolContent(acpsdk.ImageBlock(shot, "image/png")),
+			acpsdk.ToolContent(acpsdk.TextBlock(`{"width":720}`)),
+		},
+		rawOutput: []any{
+			map[string]any{"type": "image", "data": shot, "mimeType": "image/png"},
+			map[string]any{"type": "text", "text": `{"width":720}`},
+		},
+	}
+	event := (&conversation{}).toolEvent("turn-1", tool, true)
+	approval := approvalToolDetail(acpsdk.ToolCallUpdate{RawInput: page}, domain.ActivityKindMCPTool)
+
+	for name, raw := range map[string][]byte{"tool": event.Detail, "approval": approval} {
+		if strings.Contains(string(raw), `\u003cp\u003ex\u003c/p\u003e`) || strings.Contains(string(raw), shot) {
+			t.Fatalf("%s detail stored the page or the screenshot: %.300s", name, raw)
+		}
+		var detail struct {
+			Input map[string]any `json:"input"`
+		}
+		if err := json.Unmarshal(raw, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if detail.Input["truncated"] != true {
+			t.Fatalf("%s input = %v, want the truncation marker", name, detail.Input)
+		}
+	}
+	var detail struct {
+		Content []json.RawMessage `json:"content"`
+		Output  string            `json:"output"`
+	}
+	if err := json.Unmarshal(event.Detail, &detail); err != nil {
+		t.Fatal(err)
+	}
+	stub := fmt.Sprintf(`{"bytes":%d,"mimeType":"image/png","type":"image"}`, len(shot))
+	if len(detail.Content) != 2 || string(detail.Content[0]) != `{"content":`+stub+`,"type":"content"}` ||
+		string(detail.Content[1]) != `{"content":{"text":"{\"width\":720}","type":"text"},"type":"content"}` {
+		t.Fatalf("content = %s", detail.Content)
+	}
+	if want := `[` + stub + `,{"text":"{\"width\":720}","type":"text"}]`; detail.Output != want {
+		t.Fatalf("output = %s\nwant     %s", detail.Output, want)
+	}
+}
+
+// claude-agent-acp passes an MCP image result through as rawOutput in the
+// Anthropic shape, with the base64 under source.data.
+func TestACPToolDetailDropsAnthropicImageData(t *testing.T) {
+	shot := strings.Repeat("iVBORw0KGgo", 400)
+	tool := &toolState{
+		id: "mcp-2", kind: acpsdk.ToolKindOther, status: acpsdk.ToolCallStatusCompleted,
+		rawOutput: []any{
+			map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": "image/png", "data": shot}},
+			map[string]any{"type": "text", "text": "ok"},
+		},
+	}
+	event := (&conversation{}).toolEvent("turn-1", tool, true)
+	if strings.Contains(string(event.Detail), shot) {
+		t.Fatalf("detail stored the screenshot: %.300s", event.Detail)
+	}
+	var detail struct {
+		Output string `json:"output"`
+	}
+	if err := json.Unmarshal(event.Detail, &detail); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf(`[{"bytes":%d,"mimeType":"image/png","type":"image"},{"text":"ok","type":"text"}]`, len(shot))
+	if detail.Output != want {
+		t.Fatalf("output = %s\nwant     %s", detail.Output, want)
+	}
+}
+
+func TestACPToolDetailKeepsReadContentAndSmallInput(t *testing.T) {
+	file := strings.Repeat("line of a file\n", 2000)
+	tool := &toolState{
+		id: "read-1", kind: acpsdk.ToolKindRead, status: acpsdk.ToolCallStatusCompleted,
+		rawInput: map[string]any{"file_path": "/repo/main.go"},
+		content:  []acpsdk.ToolCallContent{acpsdk.ToolContent(acpsdk.TextBlock(file))},
+	}
+	var detail struct {
+		Input   map[string]any           `json:"input"`
+		Content []acpsdk.ToolCallContent `json:"content"`
+	}
+	if err := json.Unmarshal((&conversation{}).toolEvent("turn-1", tool, true).Detail, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Input["file_path"] != "/repo/main.go" || len(detail.Content) != 1 ||
+		detail.Content[0].Content == nil || detail.Content[0].Content.Content.Text == nil ||
+		detail.Content[0].Content.Content.Text.Text != file {
+		t.Fatalf("read detail changed: input=%v content=%+v", detail.Input, detail.Content)
 	}
 }
 
@@ -3201,6 +3737,79 @@ func TestACPDriverMapsAdvertisedSteeringOntoAO(t *testing.T) {
 	}
 }
 
+func TestACPSteerMethodNotFoundIsDefiniteRefusal(t *testing.T) {
+	agent := &fakeAgent{steering: true, steerMethodNotFound: true}
+	driver := New(Config{
+		Harness:      domain.HarnessOpenCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) {
+			return Launch{Command: "fake"}, nil
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+	conv := opened.(*conversation)
+	conv.mu.Lock()
+	conv.activeTurn = "turn-1"
+	conv.mu.Unlock()
+
+	_, err = conv.Steer(context.Background(), "turn-1", ports.ChatUserMessage{Text: "focus on the API"})
+	if err == nil {
+		t.Fatal("Steer: want method-not-found refusal")
+	}
+	var refusal interface{ ChatRefusal() bool }
+	if !errors.As(err, &refusal) || !refusal.ChatRefusal() {
+		t.Fatalf("Steer error = %v, want ChatRefusal", err)
+	}
+	if !isACPMethodNotFound(err) {
+		t.Fatalf("Steer error = %v, want wrapped JSON-RPC -32601", err)
+	}
+}
+
+func TestACPSteerTransportFailureIsNotARefusal(t *testing.T) {
+	agent := &fakeAgent{
+		steering:          true,
+		steerExtensionErr: &acpsdk.RequestError{Code: -32603, Message: "Internal error"},
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessOpenCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) {
+			return Launch{Command: "fake"}, nil
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+	conv := opened.(*conversation)
+	conv.mu.Lock()
+	conv.activeTurn = "turn-1"
+	conv.mu.Unlock()
+
+	_, err = conv.Steer(context.Background(), "turn-1", ports.ChatUserMessage{Text: "focus on the API"})
+	if err == nil {
+		t.Fatal("Steer: want transport-style failure")
+	}
+	var refusal interface{ ChatRefusal() bool }
+	if errors.As(err, &refusal) && refusal.ChatRefusal() {
+		t.Fatalf("Steer error = %v, must not be ChatRefusal", err)
+	}
+	if isACPMethodNotFound(err) {
+		t.Fatalf("Steer error = %v, must not look like method-not-found", err)
+	}
+}
+
 func selectConfigOption(id, name, category, current string, values ...string) acpsdk.SessionConfigOption {
 	categoryValue := acpsdk.SessionConfigOptionCategory(category)
 	choices := make(acpsdk.SessionConfigSelectOptionsUngrouped, 0, len(values))
@@ -3491,6 +4100,62 @@ func (d *Driver) useTestProcess(spawn spawnFunc) {
 		}
 		return spawn(launch, cfg.WorkspacePath)
 	}
+}
+
+// TestPR5208FreshStartAppliesSelectedEffort verifies that the selected effort
+// level is applied through ACP before the first prompt.
+func TestPR5208FreshStartAppliesSelectedEffort(t *testing.T) {
+	effortOption := selectConfigOption("effort", "Effort", "effort", "default", "default", "low", "high")
+	effortOptionLow := selectConfigOption("effort", "Effort", "effort", "low", "default", "low", "high")
+	agent := &fakeAgent{
+		newConfig: []acpsdk.SessionConfigOption{effortOption},
+		setConfig: []acpsdk.SessionConfigOption{effortOptionLow},
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			if settings.Effort == "" {
+				return nil
+			}
+			return []SessionOption{{ID: "effort", Value: settings.Effort}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(),
+		Effort:        "low",
+	})
+	if err != nil {
+		t.Fatalf("Start with effort=low: %v", err)
+	}
+	defer conv.Close()
+
+	agent.mu.Lock()
+	setCalls := agent.setCalls
+	effortValue := agent.options["effort"]
+	agent.mu.Unlock()
+	if setCalls == 0 || effortValue != "low" {
+		t.Fatalf("provider setter calls = %d, effort = %q; want at least one call with low", setCalls, effortValue)
+	}
+
+	configurer := conv.(ports.ChatConfigOptionController)
+	configOptions, err := configurer.ListConfigOptions(context.Background())
+	if err != nil {
+		t.Fatalf("ListConfigOptions: %v", err)
+	}
+	for _, option := range configOptions {
+		if option.ID == "effort" {
+			if option.Current.Select != "low" {
+				t.Fatalf("live effort option = %q, want low", option.Current.Select)
+			}
+			return
+		}
+	}
+	t.Fatal("effort option not found in live config")
 }
 
 func TestACPConversationImplementsCompactor(t *testing.T) {
@@ -3905,5 +4570,80 @@ func TestACPCompactionRestoredOnLiveReconnect(t *testing.T) {
 	}
 	if compacting != "durable-compaction-turn" {
 		t.Errorf("compactingTurnID = %q, want durable-compaction-turn", compacting)
+	}
+}
+
+func TestReconnectMissingHostNeverLaunchesProvider(t *testing.T) {
+	driver := New(Config{Harness: domain.HarnessClaudeCode, Launch: func(context.Context, LaunchConfig) (Launch, error) {
+		t.Fatal("health check tried to launch ACP provider")
+		return Launch{}, nil
+	}}, nil)
+	_, err := driver.Reconnect(context.Background(), ports.ChatResumeConfig{
+		SessionID: "stopped", ProviderConversationID: "native", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
+		PrepareEnv: func(context.Context) (map[string]string, error) {
+			t.Fatal("health check rotated launch credentials")
+			return nil, nil
+		},
+	})
+	if !errors.Is(err, ports.ErrChatHostNotRunning) {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+// A provider that never persisted the stored session reports it missing on
+// reload. Only a caller that proved the conversation never started may then
+// start fresh; every other reload failure keeps its existing error.
+func TestACPDriverResumeStartsFreshOnlyForMissingSessionWhenAllowed(t *testing.T) {
+	notFound := &acpsdk.RequestError{Code: -32002, Message: "Resource not found: provider-session-1"}
+	tests := []struct {
+		name           string
+		loadErr        error
+		freshIfMissing bool
+		wantFresh      bool
+	}{
+		{name: "missing and allowed", loadErr: notFound, freshIfMissing: true, wantFresh: true},
+		{name: "missing without proof", loadErr: notFound},
+		{name: "provider failure with proof", loadErr: errors.New("transcript replay failed"), freshIfMissing: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agent := &fakeAgent{
+				capabilities: &acpsdk.AgentCapabilities{LoadSession: true},
+				failLoadFrom: 1,
+				failLoadErr:  tt.loadErr,
+			}
+			driver := New(Config{
+				Harness:      domain.HarnessClaudeCode,
+				Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+				Probe:        func(context.Context) error { return nil },
+				Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			driver.useTestProcess(fakeSpawn(agent))
+
+			conv, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
+				ProviderConversationID: "provider-session-1",
+				WorkspacePath:          t.TempDir(),
+				FreshIfMissing:         tt.freshIfMissing,
+			})
+			if !tt.wantFresh {
+				if !errors.Is(err, ports.ErrChatResumeFailed) {
+					t.Fatalf("Resume error = %v, want ErrChatResumeFailed", err)
+				}
+				agent.mu.Lock()
+				newCwd := agent.newParams.Cwd
+				agent.mu.Unlock()
+				if newCwd != "" {
+					t.Fatal("a reload failure without proof started a fresh provider session")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			defer func() { _ = conv.Close() }()
+			if got := conv.ProviderConversationID(); got != "claude-session-1" {
+				t.Fatalf("provider conversation = %q, want the fresh session", got)
+			}
+		})
 	}
 }

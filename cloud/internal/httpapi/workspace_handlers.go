@@ -19,6 +19,23 @@ const (
 	maxWorkspaceFile = 1 << 20
 )
 
+// requestWorkspaceCheckout is an explicit session-open intent. The worker
+// acknowledges the request immediately and retries only if startup checkout
+// has not already completed.
+func (s *Server) requestWorkspaceCheckout(w http.ResponseWriter, r *http.Request) {
+	orgID, sessionID, ok := workspaceRoute(w, r)
+	if !ok {
+		return
+	}
+	result, ok := s.runWorkspaceRequest(w, r, orgID, sessionID, "workspace.checkout", json.RawMessage(`{}`))
+	if !ok {
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(result)
+}
+
 func (s *Server) listWorkspaceFiles(w http.ResponseWriter, r *http.Request) {
 	orgID, sessionID, ok := workspaceRoute(w, r)
 	if !ok {
@@ -200,6 +217,16 @@ func (s *Server) runWorkspaceRequest(
 	orgID, sessionID, kind string,
 	payload json.RawMessage,
 ) (json.RawMessage, bool) {
+	return s.runWorkerRequest(w, r, orgID, sessionID, kind, payload, s.workerRequestTimeout)
+}
+
+func (s *Server) runWorkerRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	orgID, sessionID, kind string,
+	payload json.RawMessage,
+	timeoutDuration time.Duration,
+) (json.RawMessage, bool) {
 	principal := principalFrom(r)
 	if strings.HasPrefix(kind, "workspace.") {
 		if _, err := s.store.ResumeSession(r.Context(), principal, orgID, sessionID); err != nil {
@@ -208,7 +235,7 @@ func (s *Server) runWorkspaceRequest(
 		}
 	}
 	request, err := s.store.CreateWorkspaceRequest(
-		r.Context(), principal, orgID, sessionID, kind, payload, s.workerRequestTimeout,
+		r.Context(), principal, orgID, sessionID, kind, payload, timeoutDuration,
 	)
 	if err != nil {
 		s.writeWorkspaceStoreError(w, r, err)
@@ -217,7 +244,7 @@ func (s *Server) runWorkspaceRequest(
 
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
-	timeout := time.NewTimer(s.workerRequestTimeout)
+	timeout := time.NewTimer(timeoutDuration)
 	defer timeout.Stop()
 	for {
 		select {

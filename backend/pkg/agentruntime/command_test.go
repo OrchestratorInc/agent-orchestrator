@@ -86,6 +86,36 @@ func TestBuildLaunchCommands(t *testing.T) {
 				"--", "-fix auth",
 			},
 		},
+		{
+			// opencode v2 carries the model, agent, and system prompt in the
+			// caller-written OPENCODE_CONFIG (v2 has no flags for them), so the argv
+			// is just the approval flag plus the task prompt. Auto and bypass both
+			// map to --auto.
+			name: "opencode auto",
+			cfg: LaunchConfig{
+				Harness:    HarnessOpenCode,
+				Binary:     "/usr/bin/opencode",
+				Permission: PermissionAuto,
+				Model:      "anthropic/claude-opus-4-8",
+				Prompt:     "fix auth",
+			},
+			want: []string{
+				"/usr/bin/opencode",
+				"--auto",
+				"--prompt", "fix auth",
+			},
+		},
+		{
+			// default carries no approval flag; the prompt still rides --prompt so a
+			// leading "-" is never read as a flag.
+			name: "opencode default no prompt flag",
+			cfg: LaunchConfig{
+				Harness:    HarnessOpenCode,
+				Binary:     "opencode",
+				Permission: PermissionDefault,
+			},
+			want: []string{"opencode"},
+		},
 	}
 
 	for _, test := range tests {
@@ -124,18 +154,20 @@ func TestBuildRestoreCommands(t *testing.T) {
 			},
 		},
 		{
-			name: "claude forwards configured model",
+			name: "claude forwards configured model and effort",
 			cfg: RestoreConfig{
 				Harness:    HarnessClaudeCode,
 				Binary:     "claude",
 				SessionID:  "session-1",
 				Model:      "  claude-opus-4-5  ",
+				Effort:     "  high  ",
 				Permission: PermissionBypassPermissions,
 			},
 			want: []string{
 				"claude",
 				"--permission-mode", "bypassPermissions",
 				"--model", "claude-opus-4-5",
+				"--effort", "high",
 				"--resume", ClaudeSessionID("session-1"),
 			},
 		},
@@ -165,6 +197,19 @@ func TestBuildRestoreCommands(t *testing.T) {
 				Permission: PermissionAuto,
 			},
 			want: []string{"cursor-agent", "--force", "--resume", "chat-1"},
+		},
+		{
+			// opencode resumes by its plugin-captured native id via --session; bypass
+			// maps to --auto with the full-access rule riding the caller's config.
+			name: "opencode metadata identity",
+			cfg: RestoreConfig{
+				Harness:    HarnessOpenCode,
+				Binary:     "opencode",
+				Metadata:   map[string]string{MetadataKeyAgentSessionID: "ses_abc"},
+				Permission: PermissionBypassPermissions,
+				Prompt:     "keep going",
+			},
+			want: []string{"opencode", "--auto", "--session", "ses_abc", "--prompt", "keep going"},
 		},
 	}
 
@@ -250,7 +295,7 @@ func TestBuildRestoreCommandAppliesModel(t *testing.T) {
 }
 
 func TestRestoreIdentityRequiresCapturedIDOutsideClaude(t *testing.T) {
-	for _, harness := range []Harness{HarnessCodex, HarnessCursor} {
+	for _, harness := range []Harness{HarnessCodex, HarnessCursor, HarnessOpenCode} {
 		cmd, ok, err := BuildRestoreCommand(RestoreConfig{
 			Harness:   harness,
 			Binary:    "agent",
@@ -302,4 +347,41 @@ func TestClaudeNativeSessionIDValidation(t *testing.T) {
 
 func writeTestFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
+}
+
+// Effort is a per-model capability, so the flag appears only when a level was
+// actually chosen — a model that accepts none must launch exactly as before.
+func TestClaudeEffortFlag(t *testing.T) {
+	tests := []struct {
+		name   string
+		effort string
+		want   bool
+	}{
+		{name: "chosen level is passed through", effort: "xhigh", want: true},
+		{name: "no level leaves the agent default", effort: "", want: false},
+		{name: "whitespace is not a level", effort: "   ", want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, err := BuildLaunchCommand(LaunchConfig{
+				Harness: HarnessClaudeCode, Binary: "claude",
+				Model: "claude-opus-5", Effort: tc.effort,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := ""
+			for i, arg := range cmd {
+				if arg == "--effort" && i+1 < len(cmd) {
+					found = cmd[i+1]
+				}
+			}
+			if tc.want && found != tc.effort {
+				t.Fatalf("--effort = %q, want %q in %v", found, tc.effort, cmd)
+			}
+			if !tc.want && found != "" {
+				t.Fatalf("--effort must be omitted entirely, got %q in %v", found, cmd)
+			}
+		})
+	}
 }

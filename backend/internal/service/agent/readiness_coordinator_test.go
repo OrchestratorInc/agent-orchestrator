@@ -1,18 +1,53 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func TestRecheckAgentLogsFailure(t *testing.T) {
+	var logs lockedBuffer
+	svc := NewWithDeps(Deps{Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	svc.RecheckAgent("not-a-real-agent")
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(logs.String(), "readiness recheck failed") {
+		time.Sleep(time.Millisecond)
+	}
+	if !strings.Contains(logs.String(), "readiness recheck failed") {
+		t.Fatalf("log = %q, want readiness failure", logs.String())
+	}
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Write(data)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.String()
+}
 
 type readinessTestAgent struct {
 	resolveCalls atomic.Int32
@@ -158,6 +193,35 @@ func TestReadinessCoordinatorEnsureNormalizesInstalledAndAuthorized(t *testing.T
 	}
 	if agent.resolveCalls.Load() != 1 || agent.authCalls.Load() != 1 {
 		t.Fatalf("probe calls = resolve %d auth %d, want one each", agent.resolveCalls.Load(), agent.authCalls.Load())
+	}
+}
+
+func TestReadinessCoordinatorNormalizesConfiguredAuthentication(t *testing.T) {
+	t.Parallel()
+	agent := &readinessTestAgent{
+		resolve: func(context.Context) (string, error) { return "/bin/fx", nil },
+		auth:    func(context.Context) (ports.AgentAuthStatus, error) { return ports.AgentAuthStatusConfigured, nil },
+	}
+	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents: []agentregistry.HarnessAgent{readinessHarness("fx", "fx", agent)},
+		Factory: func() []agentregistry.HarnessAgent {
+			return []agentregistry.HarnessAgent{readinessHarness("fx", "fx", agent)}
+		},
+	})
+
+	got, err := coordinator.Ensure(context.Background(), []string{"fx"}, domain.AgentReadinessPurposeLaunch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := got[0].Authentication
+	if auth.State != domain.AgentAuthenticationConfigured || auth.Freshness != domain.AgentReadinessFresh || auth.ReasonCode != domain.AgentReadinessReasonAuthConfigured {
+		t.Fatalf("authentication = %#v, want fresh configured observation", auth)
+	}
+	if auth.CheckedAt == nil || auth.AttemptedAt == nil {
+		t.Fatalf("authentication timestamps = (%v, %v), want both populated", auth.CheckedAt, auth.AttemptedAt)
+	}
+	if got[0].EffectiveReadiness != domain.AgentReadinessUnknown {
+		t.Fatalf("effective readiness = %q, want unknown", got[0].EffectiveReadiness)
 	}
 }
 
@@ -427,29 +491,177 @@ func TestReadinessCoordinatorClassifiesTimeouts(t *testing.T) {
 	}
 }
 
+func TestReadinessCoordinatorAllowsOpenCodeVersionProbeBudget(t *testing.T) {
+	for _, id := range []string{"opencode", "opencode-v2"} {
+		t.Run(id, func(t *testing.T) {
+			agent := &readinessTestAgent{resolve: func(ctx context.Context) (string, error) {
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) < 9*time.Second {
+					return "", context.DeadlineExceeded
+				}
+				return "opencode", nil
+			}, auth: func(context.Context) (ports.AgentAuthStatus, error) {
+				return ports.AgentAuthStatusUnknown, nil
+			}}
+			coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+				Agents: []agentregistry.HarnessAgent{readinessHarness(id, id, agent)},
+			})
+			items, err := coordinator.Ensure(context.Background(), nil, domain.AgentReadinessPurposeDisplay)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := items[0].Installation.State; got != domain.AgentInstallationInstalled {
+				t.Fatalf("installation = %#v, want installed", items[0].Installation)
+			}
+		})
+	}
+}
+
+func TestReadinessCoordinatorDoesNotSurfaceSeparateOpenCodeVersionAsMismatch(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		id                  string
+		label               string
+		expected, found     int
+		version, binaryPath string
+	}{
+		{"opencode", "OpenCode", 1, 2, "2.0.0", "/usr/local/bin/opencode"},
+		{"opencode-v2", "OpenCode 2", 2, 1, "1.18.33", "/opt/homebrew/bin/opencode"},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			t.Parallel()
+			testAgent := &readinessTestAgent{
+				resolve: func(context.Context) (string, error) {
+					return "", &opencode.IncompatibleVersionError{
+						ExpectedMajor: tc.expected,
+						FoundMajor:    tc.found,
+						FoundVersion:  tc.version,
+						Path:          tc.binaryPath,
+					}
+				},
+			}
+			coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+				Agents: []agentregistry.HarnessAgent{readinessHarness(tc.id, tc.label, testAgent)},
+			})
+
+			items, err := coordinator.Ensure(context.Background(), []string{tc.id}, domain.AgentReadinessPurposeDisplay)
+			if err != nil {
+				t.Fatal(err)
+			}
+			observation := items[0].Installation
+			if observation.State != domain.AgentInstallationNotInstalled || observation.Freshness != domain.AgentReadinessFresh {
+				t.Fatalf("installation = %#v, want fresh not_installed", observation)
+			}
+			if observation.ReasonCode != domain.AgentReadinessReasonNotInstalled {
+				t.Fatalf("installation reason code = %q, want not_installed", observation.ReasonCode)
+			}
+			wantReason := tc.label + " is not installed."
+			if observation.Reason != wantReason {
+				t.Fatalf("installation reason = %q, want %q", observation.Reason, wantReason)
+			}
+			if items[0].EffectiveReadiness != domain.AgentReadinessNotReady {
+				t.Fatalf("effective readiness = %q, want not_ready", items[0].EffectiveReadiness)
+			}
+			if got := testAgent.authCalls.Load(); got != 0 {
+				t.Fatalf("authentication checks = %d, want none", got)
+			}
+		})
+	}
+}
+
 func TestReadinessCoordinatorClassifiesAuthenticationTimeout(t *testing.T) {
 	t.Parallel()
-	agent := &readinessTestAgent{
-		resolve: func(context.Context) (string, error) { return "/bin/codex", nil },
-		auth: func(ctx context.Context) (ports.AgentAuthStatus, error) {
-			<-ctx.Done()
-			return ports.AgentAuthStatusUnknown, ctx.Err()
-		},
-	}
-	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
-		Agents:      []agentregistry.HarnessAgent{readinessHarness("codex", "Codex", agent)},
-		AuthTimeout: 10 * time.Millisecond,
-	})
+	for _, id := range []string{"codex", "opencode-v2"} {
+		t.Run(id, func(t *testing.T) {
+			agent := &readinessTestAgent{
+				resolve: func(context.Context) (string, error) { return "/bin/" + id, nil },
+				auth: func(ctx context.Context) (ports.AgentAuthStatus, error) {
+					<-ctx.Done()
+					return ports.AgentAuthStatusUnknown, ctx.Err()
+				},
+			}
+			coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+				Agents:      []agentregistry.HarnessAgent{readinessHarness(id, id, agent)},
+				AuthTimeout: 10 * time.Millisecond,
+			})
 
-	items, err := coordinator.Ensure(context.Background(), nil, domain.AgentReadinessPurposeDisplay)
-	if err != nil {
-		t.Fatal(err)
+			items, err := coordinator.Ensure(context.Background(), nil, domain.AgentReadinessPurposeDisplay)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := items[0].Authentication.ReasonCode; got != domain.AgentReadinessReasonAuthCheckTimeout {
+				t.Fatalf("authentication reason code = %q, want auth_check_timeout", got)
+			}
+			if items[0].Authentication.State != domain.AgentAuthenticationUnknown || items[0].Authentication.Freshness != domain.AgentReadinessStale {
+				t.Fatalf("authentication timeout snapshot = %#v", items[0].Authentication)
+			}
+		})
 	}
-	if got := items[0].Authentication.ReasonCode; got != domain.AgentReadinessReasonAuthCheckTimeout {
-		t.Fatalf("authentication reason code = %q, want auth_check_timeout", got)
-	}
-	if items[0].Authentication.State != domain.AgentAuthenticationUnknown || items[0].Authentication.Freshness != domain.AgentReadinessStale {
-		t.Fatalf("authentication timeout snapshot = %#v", items[0].Authentication)
+}
+
+func TestReadinessCoordinatorOpenCodeV2MigrationOutlivesWaiter(t *testing.T) {
+	for _, shutdown := range []bool{false, true} {
+		t.Run(fmt.Sprintf("shutdown=%t", shutdown), func(t *testing.T) {
+			daemonCtx, stop := context.WithCancel(context.Background())
+			defer stop()
+			release := make(chan struct{})
+			completed := make(chan error, 1)
+			testAgent := &readinessTestAgent{
+				resolve: func(context.Context) (string, error) { return "/bin/opencode", nil },
+				auth: func(ctx context.Context) (ports.AgentAuthStatus, error) {
+					select {
+					case <-release:
+						completed <- nil
+						return ports.AgentAuthStatusAuthorized, nil
+					case <-ctx.Done():
+						completed <- ctx.Err()
+						return ports.AgentAuthStatusUnknown, ctx.Err()
+					}
+				},
+			}
+			coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+				Context: daemonCtx,
+				Agents: []agentregistry.HarnessAgent{
+					readinessHarness("opencode-v2", "OpenCode 2", testAgent),
+				},
+			})
+			waitCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			if _, err := coordinator.Ensure(waitCtx, nil, domain.AgentReadinessPurposeLaunch); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("waiter error = %v, want deadline while migration continues", err)
+			}
+			if shutdown {
+				stop()
+			} else {
+				timer := time.NewTimer(defaultAuthCheckTimeout + 100*time.Millisecond)
+				defer timer.Stop()
+				select {
+				case err := <-completed:
+					t.Fatalf("migration ended at the ordinary auth deadline: %v", err)
+				case <-timer.C:
+				}
+				close(release)
+			}
+			select {
+			case err := <-completed:
+				if shutdown && !errors.Is(err, context.Canceled) || !shutdown && err != nil {
+					t.Fatalf("migration error = %v, shutdown=%t", err, shutdown)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("migration did not stop or complete")
+			}
+			if !shutdown {
+				finishCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				items, err := coordinator.Ensure(finishCtx, nil, domain.AgentReadinessPurposeLaunch)
+				if err != nil || items[0].Authentication.State != domain.AgentAuthenticationAuthorized {
+					t.Fatalf("readiness = %#v, %v, want authorized after migration", items, err)
+				}
+			}
+			if calls := testAgent.authCalls.Load(); calls != 1 {
+				t.Fatalf("authentication calls = %d, want one uninterrupted migration", calls)
+			}
+		})
 	}
 }
 
@@ -905,5 +1117,40 @@ func TestReadinessCoordinatorRejectsInvalidPurposeAndUnknownAgent(t *testing.T) 
 		if !errors.As(err, &unsupported) {
 			t.Fatalf("unknown agent error = %T, want unsupportedAgentError", err)
 		}
+	}
+}
+
+// A credential AO could not validate must sit between the two definite
+// answers: it is not ready, so nothing renders green, and it is not not_ready,
+// so nothing is blocked. The old behaviour collapsed it into authorized, which
+// is how a revoked key rendered as a working agent.
+func TestReadinessCoordinatorTreatsConfiguredAsUnverified(t *testing.T) {
+	t.Parallel()
+	agent := &readinessTestAgent{
+		resolve: func(context.Context) (string, error) { return "/bin/claude", nil },
+		auth: func(context.Context) (ports.AgentAuthStatus, error) {
+			return ports.AgentAuthStatusConfigured, nil
+		},
+	}
+	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents: []agentregistry.HarnessAgent{readinessHarness("claude-code", "Claude Code", agent)},
+	})
+
+	items, err := coordinator.Ensure(context.Background(), nil, domain.AgentReadinessPurposeDisplay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := items[0].Authentication.State; got != domain.AgentAuthenticationConfigured {
+		t.Fatalf("authentication state = %q, want %q", got, domain.AgentAuthenticationConfigured)
+	}
+	if got := items[0].Authentication.ReasonCode; got != domain.AgentReadinessReasonAuthConfigured {
+		t.Fatalf("reason code = %q, want %q", got, domain.AgentReadinessReasonAuthConfigured)
+	}
+	if got := items[0].EffectiveReadiness; got != domain.AgentReadinessUnknown {
+		t.Fatalf("effective readiness = %q, want %q — an unverified credential is neither ready nor blocked", got, domain.AgentReadinessUnknown)
+	}
+	// Recorded as an observation, not a failure, so it is not retried as one.
+	if items[0].Authentication.CheckedAt == nil {
+		t.Fatal("a configured verdict is a definite observation and must be marked checked")
 	}
 }

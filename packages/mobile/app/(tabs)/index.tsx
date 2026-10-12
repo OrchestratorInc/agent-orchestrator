@@ -1,14 +1,13 @@
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, FlatList, Keyboard, Platform, StyleSheet, View } from "react-native";
+import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { classifyConnectionFailure, describeConnectionFailure } from "../../lib/connectionError";
-import { tunnelMayHaveRotated } from "../../lib/staleTunnel";
 import { haptics } from "../../lib/haptics";
 import { StaleBanner } from "../../lib/StaleBanner";
 import { useApp } from "../../lib/store";
+import { useBoardFailure } from "../../lib/useBoardFailure";
 import { UnpairedState } from "../../lib/UnpairedState";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -18,11 +17,15 @@ import { WorkerBoardList, type BoardRow } from "../../lib/worker-board-list";
 import { WorkerDock } from "../../lib/worker-dock";
 import { workerDockKeyboardLayout, workerDockLift, workerListBottomInset } from "../../lib/worker-dock-layout";
 import { WorkerControlsSheet } from "../../lib/worker-controls-sheet";
+import { WorkerMachineState } from "../../lib/worker-machine-state";
 import {
+	ALL_WORKER_ENVIRONMENTS,
 	ALL_WORKER_PROJECTS,
-	filterWorkersByProject,
+	filterWorkersByEnvironmentAndProject,
 	spawnProjectParam,
+	workerProjectForEnvironment,
 	workerProjectLabel,
+	workerProjectOptions,
 	workerSearchPresentation,
 } from "../../lib/worker-controls";
 import { space } from "../../lib/tokens";
@@ -35,13 +38,33 @@ export default function FleetScreen() {
 
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
-	const { configured, loading, error, errorStatus, connection, config, refresh, sessions, projects, notificationsUnread, activeEndpoints } =
-		useApp();
+	const { config, configured, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, notificationsUnread } = useApp();
+	const fleetLoading = hostStates.length ? hostStates.some((host) => host.loading) : loading;
+	const fleetError = hostStates.length > 1
+		? hostStates.every((host) => host.connection === "closed" && !host.loading)
+		: Boolean(error);
+	const unreadCount = hostStates.length > 1
+		? hostStates.reduce((count, host) => count + host.notificationsUnread, 0)
+		: notificationsUnread;
 	const [refreshing, setRefreshing] = useState(false);
 	const [query, setQuery] = useState("");
 	const [searchRequested, setSearchRequested] = useState(false);
 	const [controlsOpen, setControlsOpen] = useState(false);
+	const [workerEnvironmentId, setWorkerEnvironmentId] = useState(ALL_WORKER_ENVIRONMENTS);
 	const [workerProjectId, setWorkerProjectId] = useState(ALL_WORKER_PROJECTS);
+	// hostStates is replaced on every poll (each machine stamps lastSyncAt), but
+	// the memoised dock only needs who the machines are. Rebuilding this on every
+	// tick re-rendered the dock mid-tap, the bug the stable handlers below avoid.
+	const environmentsKey = JSON.stringify(hostStates.map((host) => [host.hostId, host.name, host.appearance.symbol]));
+	const environments = useMemo(
+		() => hostStates.map((host) => ({ id: host.hostId, name: host.name, appearance: host.appearance })),
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- environmentsKey covers every field read here
+		[environmentsKey],
+	);
+	const projectOptions = useMemo(
+		() => workerProjectOptions(allProjects, workerEnvironmentId),
+		[allProjects, workerEnvironmentId],
+	);
 	// Stable identities so the memoised dock is not rebuilt on every poll — a
 	// re-render mid-tap is what made the filter menu open only sometimes.
 	const openSearch = useCallback(() => setSearchRequested(true), []);
@@ -58,8 +81,11 @@ export default function FleetScreen() {
 	const spawnWorker = useCallback(() => {
 		Keyboard.dismiss();
 		haptics.tap();
-		router.push({ pathname: "/spawn", params: spawnProjectParam(workerProjectId) });
-	}, [router, workerProjectId]);
+		const project = spawnProjectParam(workerProjectId, allProjects);
+		const connectedHostId = connection === "open" ? config?.hostId : hostStates.find((host) => host.connection === "open")?.hostId;
+		const selectedHostId = workerEnvironmentId === ALL_WORKER_ENVIRONMENTS ? undefined : workerEnvironmentId;
+		router.push({ pathname: "/spawn", params: { hostId: project?.hostId ?? selectedHostId ?? connectedHostId ?? config?.hostId, ...project } });
+	}, [allProjects, config?.hostId, connection, hostStates, router, workerEnvironmentId, workerProjectId]);
 	// Two selectors rather than the whole state object, so the board re-renders
 	// only when one of these two values actually changes.
 	//
@@ -76,49 +102,51 @@ export default function FleetScreen() {
 	const listRef = useTabScrollToTop<FlatList<BoardRow>>();
 
 	const projectSessions = useMemo(
-		() => filterWorkersByProject(sessions, workerProjectId),
-		[sessions, workerProjectId],
+		() => filterWorkersByEnvironmentAndProject(allSessions, workerEnvironmentId, workerProjectId, allProjects),
+		[allSessions, allProjects, workerEnvironmentId, workerProjectId],
 	);
 	const searchOpen = workerSearchPresentation(searchRequested, query) === "expanded";
-	const selectedProjectLabel = workerProjectLabel(projects, workerProjectId);
+	const boardIdentityKey = `${workerEnvironmentId}|${workerProjectId}|${query.trim()}`;
+	const selectedProjectLabel = workerProjectLabel(allProjects, workerProjectId, workerEnvironmentId);
+	const selectedEnvironmentLabel = environments.find((environment) => environment.id === workerEnvironmentId)?.name;
+	const selectedHost = hostStates.find((host) => host.hostId === workerEnvironmentId);
+	const selectEnvironment = useCallback((environmentId: string) => {
+		// Resolve both selectors in one React event. Letting the project reset in the
+		// effect below creates an intermediate empty board and a second remount.
+		setWorkerEnvironmentId(environmentId);
+		setWorkerProjectId((projectId) => workerProjectForEnvironment(allProjects, environmentId, projectId));
+	}, [allProjects]);
+
+	useEffect(() => {
+		if (
+			workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS &&
+			!environments.some((environment) => environment.id === workerEnvironmentId)
+		) {
+			setWorkerEnvironmentId(ALL_WORKER_ENVIRONMENTS);
+		}
+	}, [environments, workerEnvironmentId]);
 
 	useEffect(() => {
 		if (
 			workerProjectId !== ALL_WORKER_PROJECTS &&
-			!projects.some((project) => project.id === workerProjectId)
+			!projectOptions.some((project) => project.id === workerProjectId)
 		) {
 			setWorkerProjectId(ALL_WORKER_PROJECTS);
 		}
-	}, [projects, workerProjectId]);
+	}, [projectOptions, workerProjectId]);
 
-	// Turn the poll's raw failure ("401 - missing or invalid connection password")
-	// into the same human copy the pairing screens use, keyed on the cause.
-	const failure = useMemo(
-		() =>
-			describeConnectionFailure(
-				// A stored tunnel that no longer answers means the hostname
-				// rotated, which no amount of retrying fixes — rescanning does.
-				// Distinguished here rather than in the classifier because it
-				// depends on what the machine advertised, not on a status code.
-				classifyConnectionFailure(errorStatus ?? undefined) === "unreachable" &&
-					tunnelMayHaveRotated(activeEndpoints, connection === "open")
-					? "tunnel-rotated"
-					: classifyConnectionFailure(errorStatus ?? undefined),
-				{
-					host: config?.host ?? "",
-					port: config?.httpPort ?? "",
-					platform: Platform.OS,
-				},
-			),
-		[errorStatus, config?.host, config?.httpPort, activeEndpoints, connection],
-	);
+	// The poll's failure as the same human copy the pairing screens use.
+	const failure = useBoardFailure();
 
 	const onRefresh = useCallback(async () => {
 		haptics.tap();
 		setRefreshing(true);
-		await refresh();
-		setRefreshing(false);
-	}, [refresh]);
+		try {
+			if (selectedHost) await refreshHost(selectedHost.hostId);
+			else await refreshAll();
+		}
+		finally { setRefreshing(false); }
+	}, [refreshAll, refreshHost, selectedHost?.hostId]);
 
 	const keyboardLayout = workerDockKeyboardLayout(keyboardHeight, insets.bottom, keyboardVisible);
 	// `progress`, not the animated `height`: that value is the keyboard's frame
@@ -129,7 +157,7 @@ export default function FleetScreen() {
 		transform: [{ translateY: -keyboardAnimation.progress.value * workerDockLift(keyboardHeight, insets.bottom) }],
 	}));
 
-	if (!configured) {
+	if (!configured && hostStates.length === 0) {
 		return (
 			<View style={styles.screen}>
 				<View style={{ height: insets.top }} />
@@ -148,36 +176,44 @@ export default function FleetScreen() {
 					<HeaderIconButton
 						icon="bell"
 						label="Notifications"
-						badge={notificationsUnread}
+						badge={unreadCount}
 						onPress={() => router.navigate("/notifications")}
 					/>
 				}
 			/>
 			{/* Above the list rather than inside ListEmptyComponent: the case this
 			    exists for is a populated board whose poll has died. */}
-			<StaleBanner error={!!error} onRetry={onRefresh} />
+			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
 
-			{loading && sessions.length === 0 ? (
+			{!selectedHost && fleetLoading && allSessions.length === 0 ? (
 				<View style={styles.center}>
 					<ActivityIndicator color={t.accent} />
 				</View>
 			) : (
 				<WorkerBoardList
+					key={boardIdentityKey}
 					sessions={projectSessions}
 					query={query}
-					identityKey={`${workerProjectId}|${query.trim()}`}
+					identityKey={boardIdentityKey}
 					listRef={listRef}
 					contentBottomInset={workerListBottomInset(keyboardLayout.dockBottom)}
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListEmptyComponent={
-						query.trim() ? (
+						selectedHost && selectedHost.connection !== "open" ? (
+							<WorkerMachineState
+								host={selectedHost}
+								environments={environments}
+								onSelectEnvironment={selectEnvironment}
+								onRetry={onRefresh}
+							/>
+						) : query.trim() ? (
 							<EmptyState icon="search" title="No workers found" message={`No workers match “${query.trim()}”.`} />
-						) : error ? (
+						) : fleetError ? (
 							<EmptyState
-								icon="wifi-off"
-								title={failure.title}
-								message={failure.message}
+								icon={hostStates.length > 1 ? "unplug" : failure.icon}
+								title={hostStates.length > 1 ? "No machines connected" : failure.title}
+								message={hostStates.length > 1 ? undefined : failure.hint}
 								action={
 									<View style={styles.errorActions}>
 										<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />
@@ -194,12 +230,18 @@ export default function FleetScreen() {
 								title={`No workers in ${selectedProjectLabel}`}
 								message="Choose another project from the Workers controls."
 							/>
+						) : workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS ? (
+							<EmptyState
+								icon="monitor"
+								title={`No workers on ${selectedEnvironmentLabel ?? "this environment"}`}
+								message="Choose another environment from the Workers controls."
+							/>
 						) : (
 							<EmptyState
 								icon="moon"
 								title="No active workers"
 								message="Spawn a worker to get started."
-								action={<Button title="New agent" icon="plus" onPress={() => router.push({ pathname: "/spawn", params: spawnProjectParam(workerProjectId) })} />}
+								action={<Button title="New agent" icon="plus" onPress={spawnWorker} />}
 							/>
 						)
 					}
@@ -216,8 +258,11 @@ export default function FleetScreen() {
 					onSearchOpen={openSearch}
 					onSearchClose={closeSearch}
 					onOpenControls={openControls}
-					projectFiltered={workerProjectId !== ALL_WORKER_PROJECTS}
-					projects={projects}
+					projectFiltered={workerProjectId !== ALL_WORKER_PROJECTS || workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS}
+					environments={environments}
+					selectedEnvironmentId={workerEnvironmentId}
+					onSelectEnvironment={selectEnvironment}
+					projects={allProjects}
 					selectedProjectId={workerProjectId}
 					onSelectProject={setWorkerProjectId}
 					onSpawn={spawnWorker}
@@ -228,7 +273,10 @@ export default function FleetScreen() {
 				open={controlsOpen}
 				onDismiss={() => setControlsOpen(false)}
 				onSearch={() => setSearchRequested(true)}
-				projects={projects}
+				environments={environments}
+				selectedEnvironmentId={workerEnvironmentId}
+				onSelectEnvironment={selectEnvironment}
+				projects={allProjects}
 				selectedProjectId={workerProjectId}
 				onSelectProject={setWorkerProjectId}
 			/>
@@ -240,7 +288,7 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
-		errorActions: { flexDirection: "row", gap: space.sm, alignItems: "center" },
+		errorActions: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: space.sm, alignItems: "center" },
 		dock: {
 			position: "absolute",
 			left: 16,

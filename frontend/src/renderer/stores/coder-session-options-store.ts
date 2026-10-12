@@ -16,10 +16,17 @@ export interface CoderSessionOptionsState {
 	size: CoderSize;
 	startupScript: string;
 	extraRepos: CloudCpSessionRepo[];
+	// Project-level prefix for new Coder workspace names; "" keeps the default.
+	workspaceNamePrefix: string;
+	// "Template options" values the user changed from the chosen template's
+	// defaults (name -> encoded value). Cleared whenever the template changes.
+	parameters: Record<string, string>;
 	setTemplate: (templateId: string, supportedParams: string[]) => void;
+	setParameters: (parameters: Record<string, string>) => void;
 	setSize: (size: CoderSize) => void;
 	setStartupScript: (startupScript: string) => void;
 	setExtraRepos: (extraRepos: CloudCpSessionRepo[]) => void;
+	setWorkspaceNamePrefix: (workspaceNamePrefix: string) => void;
 	reset: () => void;
 }
 
@@ -29,34 +36,43 @@ const initialState = {
 	size: "medium" as CoderSize,
 	startupScript: "",
 	extraRepos: [] as CloudCpSessionRepo[],
+	workspaceNamePrefix: "",
+	parameters: {} as Record<string, string>,
 };
 
 export const useCoderSessionOptionsStore = create<CoderSessionOptionsState>((set) => ({
 	...initialState,
-	setTemplate: (templateId, supportedParams) => set({ templateId, supportedParams }),
+	setTemplate: (templateId, supportedParams) =>
+		set((state) => (state.templateId === templateId ? { supportedParams } : { templateId, supportedParams, parameters: {} })),
+	setParameters: (parameters) => set({ parameters }),
 	setSize: (size) => set({ size }),
 	setStartupScript: (startupScript) => set({ startupScript }),
 	setExtraRepos: (extraRepos) => set({ extraRepos }),
-	reset: () => set({ ...initialState, supportedParams: [], extraRepos: [] }),
+	setWorkspaceNamePrefix: (workspaceNamePrefix) => set({ workspaceNamePrefix }),
+	reset: () => set({ ...initialState, supportedParams: [], extraRepos: [], parameters: {} }),
 }));
 
 // buildCoderRequestOptions turns the picker state into the createProject `coder`
 // payload, or undefined when the choice is "Default with no extra repos" — in
 // which case the request omits `coder` entirely and the project behaves exactly
 // as before. Size and startup are only sent alongside a chosen (non-default)
-// template, mirroring the control plane's validation.
+// template, mirroring the control plane's validation. A workspace name prefix
+// is sent only when set (the caller validates it before create).
 export function buildCoderRequestOptions(state: {
 	templateId: string;
 	supportedParams: string[];
 	size: CoderSize;
 	startupScript: string;
 	extraRepos: CloudCpSessionRepo[];
+	workspaceNamePrefix?: string;
+	parameters?: Record<string, string>;
 }): CloudCpProjectCoderConfig | undefined {
 	const templateId = state.templateId.trim();
 	const extraRepos = state.extraRepos
 		.map((repo) => ({ url: repo.url.trim(), branch: repo.branch?.trim() || undefined }))
 		.filter((repo) => repo.url.length > 0);
-	if (!templateId && extraRepos.length === 0) return undefined;
+	const workspaceNamePrefix = state.workspaceNamePrefix?.trim() ?? "";
+	if (!templateId && extraRepos.length === 0 && !workspaceNamePrefix) return undefined;
 	const coder: CloudCpProjectCoderConfig = {};
 	if (templateId) {
 		coder.templateId = templateId;
@@ -65,7 +81,12 @@ export function buildCoderRequestOptions(state: {
 		if (state.supportedParams.includes("startup_script") && state.startupScript.trim().length > 0) {
 			coder.startupScript = state.startupScript;
 		}
+		// Template options belong to the chosen template; the map already holds
+		// only values changed from its defaults.
+		const parameters = state.parameters ?? {};
+		if (Object.keys(parameters).length > 0) coder.parameters = { ...parameters };
 	}
 	if (extraRepos.length > 0) coder.extraRepos = extraRepos;
+	if (workspaceNamePrefix) coder.workspaceNamePrefix = workspaceNamePrefix;
 	return coder;
 }
