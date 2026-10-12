@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
-import { cloudLifecycleStage, cloudStartupProblem } from "./cloud-lifecycle";
+import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage } from "./cloud-lifecycle";
 
 function session(
 	desiredState: string,
@@ -39,6 +39,15 @@ describe("cloudLifecycleStage", () => {
 		},
 	);
 
+	it("names Coder only for a paused Coder sandbox", () => {
+		const freestyle = session("paused", "stopped");
+		freestyle.cloud = { ...freestyle.cloud!, sandboxProvider: "freestyle" };
+		expect(cloudLifecycleStage(freestyle)).toBe("paused");
+		expect(isCloudPausedStage("paused")).toBe(true);
+		expect(isCloudPausedStage("paused_by_coder")).toBe(true);
+		expect(isCloudPausedStage("connected")).toBe(false);
+	});
+
 	it("does not invent lifecycle state for local sessions", () => {
 		const local = session("running", "running", true);
 		delete local.cloud;
@@ -55,7 +64,19 @@ describe("cloudStartupProblem", () => {
 	}
 
 	it("reports a final startup failure once AO gives up", () => {
-		expect(cloudStartupProblem(withRuntime("terminated", { startupError }))).toEqual({ phase: "failed", message: startupError.message });
+		expect(cloudStartupProblem(withRuntime("terminated", { startupError }))).toEqual({
+			phase: "failed",
+			message: startupError.message,
+			code: startupError.code,
+		});
+	});
+
+	it("carries bring-your-own diagnostics with a final failure", () => {
+		const withDetail = { ...startupError, detail: "coder build log:\nterraform: quota exceeded\n" };
+		expect(cloudStartupProblem(withRuntime("terminated", { startupError: withDetail }))).toMatchObject({
+			phase: "failed",
+			detail: "coder build log:\nterraform: quota exceeded",
+		});
 	});
 
 	it.each(["bootstrapping", "provisioning", "failed"])("keeps a startup error as a retrying note while AO is still trying (%s)", (runtimeState) => {

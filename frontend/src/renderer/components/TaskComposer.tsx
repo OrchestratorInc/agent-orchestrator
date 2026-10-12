@@ -24,9 +24,8 @@ import { type FileAttachmentPayload, useFileAttachments } from "../hooks/useFile
 import { useSettings } from "../hooks/useSettings";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
-import { useCloudSandboxProviders } from "../hooks/useCloudSandboxProviders";
 import { useProviderConnections } from "../hooks/useProviderConnections";
-import { cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
+import { cloudAgentInfos, connectedCredentialType, credentialModelScope, isCloudHarnessConnected } from "../lib/cloud-agents";
 import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
 import { fallbackEffort } from "../lib/effort";
 import {
@@ -35,7 +34,6 @@ import {
 	isLaunchableAgent,
 	isReadyAgent,
 } from "../lib/agent-select-options";
-import { resolveSandboxProviderPreference, useSandboxProviderStore } from "../stores/sandbox-provider-store";
 import { cloudSessionsQueryKey, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
 import {
 	agentModelsQueryKey,
@@ -167,11 +165,6 @@ export function TaskComposer({
 	// project keeps the existing daemon flow untouched.
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
-	// The user's client-side sandbox-provider preference (when the control plane
-	// offers more than one); omitted lets the control plane use its default.
-	const selectedProvider = useSandboxProviderStore((s) => s.selectedProvider);
-	const { available: availableSandboxProviders } = useCloudSandboxProviders();
-	const provider = resolveSandboxProviderPreference(selectedProvider, availableSandboxProviders);
 	const cloudProjects = useCloudProjectsQuery();
 	const cloudProject = (cloudProjects.data ?? []).find((project) => project.id === projectId);
 	const isCloudProject = !hostId && Boolean(cloudProject);
@@ -190,6 +183,8 @@ export function TaskComposer({
 			void captureRendererEvent("ao.renderer.task_create_requested", { project_id: input.projectId });
 			if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 			try {
+				// No provider: the control plane runs the session on the project's
+				// stored provider (config.sandboxProvider), else the org's default.
 				const { session } = await cloudClient.createSession(cloudOrg.id, {
 					projectId: input.projectId,
 					kind: "worker",
@@ -198,7 +193,6 @@ export function TaskComposer({
 					prompt: input.brief,
 					...(input.model ? { model: input.model } : {}),
 					...(input.effort ? { reasoningEffort: input.effort } : {}),
-					...(provider ? { provider } : {}),
 				});
 				// The control plane provisions the sandbox asynchronously; surface the
 				// new session on the board immediately.
@@ -210,7 +204,7 @@ export function TaskComposer({
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
-		[cloudClient, cloudOrg, provider, queryClient, t],
+		[cloudClient, cloudOrg, queryClient, t],
 	);
 
 	const createDaemonTask = useCallback(
@@ -569,12 +563,17 @@ export function TaskComposer({
 		openGlobalSettings("harness", {
 			focusAgentId: selectedAgent,
 			...(hostId ? { hostId } : {}),
-			harnessView: "local",
+			// A cloud task runs on the cloud connection, so that is the login to fix.
+			harnessView: isCloudProject ? "cloud" : "local",
 			startLogin: true,
 			preserveProject: true,
 		});
-	}, [hostId, openGlobalSettings, selectedAgent]);
-	const modelWarning = modelAuthIssue ? (
+	}, [hostId, isCloudProject, openGlobalSettings, selectedAgent]);
+	// The catalog is read through this computer's login, but a cloud task runs on
+	// the cloud connection: once that is connected, this computer's login state is
+	// irrelevant to the task and the notice only confuses.
+	const cloudHarnessReady = isCloudProject && isCloudHarnessConnected(cloudConnectionsQuery.data, selectedAgent);
+	const modelWarning = modelAuthIssue && cloudHarnessReady ? undefined : modelAuthIssue ? (
 		<ModelCatalogNotice
 			agentLabel={selectedAgentLabel}
 			issue={modelAuthIssue}
@@ -799,6 +798,9 @@ export function TaskComposer({
 	);
 }
 
+// The agent, model and effort menus share one compact width.
+const COMPOSER_MENU_WIDTH = "w-[min(14rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!";
+
 function TaskEffortPicker({
 	disabled,
 	label,
@@ -817,7 +819,8 @@ function TaskEffortPicker({
 			defaultEffort={defaultEffort}
 			availability={availability}
 			onChange={onChange}
-			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
+			triggerClassName="composer-chip composer-toolbar-option w-fit"
+			menuClassName={COMPOSER_MENU_WIDTH}
 		/>
 	);
 }
@@ -833,7 +836,8 @@ function DesktopAgentControl({ hostId, manageView, ...control }: TaskComposerAge
 			manageView={manageView}
 			managementLabel={(manageView === "cloud" ? t("agentSelector.manageCloud") : t("agentSelector.manage")).replace(/[.…]+$/u, "")}
 			variant="chip"
-			triggerClassName="composer-toolbar-option w-full justify-between"
+			triggerClassName="composer-toolbar-option w-fit"
+			contentClassName={COMPOSER_MENU_WIDTH}
 		/>
 	);
 }
@@ -859,7 +863,7 @@ function TaskModelPicker({
 	if (agentId === "") {
 		return (
 			<span
-				className="composer-chip composer-toolbar-option w-full cursor-not-allowed justify-start opacity-50"
+				className="composer-chip composer-toolbar-option w-fit cursor-not-allowed justify-start opacity-50"
 				aria-disabled="true"
 				aria-label={t("newTask.model")}
 			>
@@ -871,7 +875,7 @@ function TaskModelPicker({
 	if (loading) {
 		return (
 			<span
-				className="composer-chip composer-toolbar-option w-full cursor-not-allowed justify-start opacity-50"
+				className="composer-chip composer-toolbar-option w-fit cursor-not-allowed justify-start opacity-50"
 				aria-label={t("newTask.model")}
 			>
 				<span
@@ -905,8 +909,9 @@ function TaskModelPicker({
 				action={explicitMode && !defaultMode && showFollowAgentAction
 					? { label: t("settings.models.useAgentMode"), onSelect: () => onModeChange("") }
 					: undefined}
-				triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
+				triggerClassName="composer-chip composer-toolbar-option w-fit"
 				menuAlign="start"
+				menuClassName={COMPOSER_MENU_WIDTH}
 				renderTrigger={() => (
 					<span className="min-w-0 truncate text-control text-foreground" title={visibleModeLabel}>
 						{visibleModeLabel}
@@ -917,15 +922,11 @@ function TaskModelPicker({
 		);
 	}
 
-	const customModelEntry = catalog?.customModelEntry ?? (catalog?.allowCustom ? "direct" : "none");
 	const displayModels = (catalog?.models ?? []).map((item) => {
 		if (item.id === "auto") return { ...item, label: t("settings.models.autoRouteLabel") };
 		return { ...item, label: agentModelDisplayLabel(agentId, item.label) };
 	});
 	const selectCatalogModel = (nextModel: string) => {
-		onModelChange(nextModel);
-	};
-	const selectCustomModel = (nextModel: string) => {
 		onModelChange(nextModel);
 	};
 
@@ -935,8 +936,8 @@ function TaskModelPicker({
 			aria-label={t("newTask.model")}
 			value={value}
 			models={displayModels}
-			allowCustom={catalog?.allowCustom}
-			customModelEntry={customModelEntry}
+			allowCustom={false}
+			customModelEntry={catalog?.customModelEntry === "configured" ? "configured" : "none"}
 			agentLabel={agentLabel}
 			onRefresh={onRefresh}
 			refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
@@ -945,11 +946,11 @@ function TaskModelPicker({
 			disabled={disabled || agentId === ""}
 			agentId={agentId}
 			onChange={selectCatalogModel}
-			onCustom={selectCustomModel}
 			compact
 			recentScope={agentId}
-			triggerClassName="composer-chip composer-toolbar-option w-full justify-between"
+			triggerClassName="composer-chip composer-toolbar-option w-fit"
 			menuAlign="start"
+			menuClassName={COMPOSER_MENU_WIDTH}
 			renderTrigger={(label) => <span className="min-w-0 truncate text-control text-foreground" title={label}>{label}</span>}
 		/>
 	);

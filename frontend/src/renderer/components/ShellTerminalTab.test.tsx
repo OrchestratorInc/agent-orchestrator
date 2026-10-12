@@ -46,6 +46,14 @@ describe("ShellTerminalTab rename", () => {
 		expect(onRename).toHaveBeenCalledWith("deploy");
 	});
 
+	it("starts rename from the keyboard with F2", () => {
+		renderTab();
+		const tab = screen.getByRole("tab", { name: "ao" });
+		expect(tab).toHaveAttribute("aria-keyshortcuts", "F2");
+		fireEvent.keyDown(tab, { key: "F2" });
+		expect(screen.getByRole("textbox", { name: /rename terminal/i })).toBeInTheDocument();
+	});
+
 	it("commits on blur", () => {
 		const { onRename } = renderTab();
 		fireEvent.doubleClick(screen.getByRole("tab", { name: "ao" }));

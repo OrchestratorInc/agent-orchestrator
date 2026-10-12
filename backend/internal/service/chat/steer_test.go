@@ -56,7 +56,11 @@ func (s *cancelAfterSteerRecorder) Steer(
 }
 
 func newSteerRecorder() *steerRecorder {
-	return &steerRecorder{fakeConversation: newFakeConversation()}
+	conv := newFakeConversation()
+	caps := productionCaps()
+	caps[ports.ChatCapabilitySteer] = true
+	conv.setCapabilities(caps)
+	return &steerRecorder{fakeConversation: conv}
 }
 
 func (s *steerRecorder) Steer(
@@ -654,6 +658,81 @@ func TestSteerOfAnUnsteerableTurnKeepsItsOwnOutcome(t *testing.T) {
 	}
 }
 
+// A definitive provider refusal (for example ACP JSON-RPC method-not-found for
+// an optional steering extension) must settle the reserved delivery handle. Retry
+// and recover-only must replay that refusal without another provider call.
+func TestSteerProviderRefusalSettlesAndRecoversWithoutRedispatch(t *testing.T) {
+	h, provider := steerHarness(t)
+	provider.failWith(refusedError{msg: `"Method not found": _session/steering`})
+	msg := ports.ChatUserMessage{Text: "guidance", ClientMessageID: "steer-refused-provider"}
+
+	_, err := h.svc.Steer(context.Background(), testSession, msg)
+	if !errors.Is(err, chatsvc.ErrProviderRefused) {
+		t.Fatalf("err = %v, want ErrProviderRefused", err)
+	}
+	_, err = h.svc.Steer(context.Background(), testSession, msg)
+	if !errors.Is(err, chatsvc.ErrProviderRefused) {
+		t.Fatalf("retried err = %v, want ErrProviderRefused", err)
+	}
+	if calls := provider.steers(); len(calls) != 1 {
+		t.Fatalf("provider received %d refused steer attempts, want one", len(calls))
+	}
+
+	recovered, recoverErr := h.svc.RecoverSteer(context.Background(), testSession, msg.ClientMessageID)
+	if !errors.Is(recoverErr, chatsvc.ErrProviderRefused) {
+		t.Fatalf("RecoverSteer error = %v, want ErrProviderRefused", recoverErr)
+	}
+	if recovered != (chatsvc.SteerResult{}) {
+		t.Fatalf("RecoverSteer result = %+v, want empty settled refusal", recovered)
+	}
+	if calls := provider.steers(); len(calls) != 1 {
+		t.Fatalf("provider received %d attempts after recover, want one", len(calls))
+	}
+
+	restartedProvider := newSteerRecorder()
+	restarted := restartSteerService(t, h, restartedProvider)
+	_, err = restarted.Steer(context.Background(), testSession, msg)
+	if !errors.Is(err, chatsvc.ErrProviderRefused) {
+		t.Fatalf("restart retry error = %v, want ErrProviderRefused", err)
+	}
+	if calls := restartedProvider.steers(); len(calls) != 0 {
+		t.Fatalf("restarted provider received %d refused steer attempts, want none", len(calls))
+	}
+}
+
+// Ambiguous transport failures must leave the reserved handle uncertain so AO
+// neither claims delivery nor automatically resends guidance that may already
+// have reached the provider.
+func TestSteerTransportFailureStaysUncertain(t *testing.T) {
+	h, provider := steerHarness(t)
+	transportErr := errors.New("connection reset while waiting for steer reply")
+	provider.failWith(transportErr)
+	msg := ports.ChatUserMessage{Text: "guidance", ClientMessageID: "steer-transport"}
+
+	_, err := h.svc.Steer(context.Background(), testSession, msg)
+	if !errors.Is(err, chatsvc.ErrSteerDeliveryUncertain) {
+		t.Fatalf("err = %v, want ErrSteerDeliveryUncertain", err)
+	}
+	if !errors.Is(err, transportErr) {
+		t.Fatalf("err = %v, want transport cause preserved", err)
+	}
+	_, err = h.svc.Steer(context.Background(), testSession, msg)
+	if !errors.Is(err, chatsvc.ErrSteerDeliveryUncertain) {
+		t.Fatalf("retried err = %v, want ErrSteerDeliveryUncertain", err)
+	}
+	if calls := provider.steers(); len(calls) != 1 {
+		t.Fatalf("provider received %d steer attempts after retry, want one", len(calls))
+	}
+
+	_, recoverErr := h.svc.RecoverSteer(context.Background(), testSession, msg.ClientMessageID)
+	if !errors.Is(recoverErr, chatsvc.ErrSteerDeliveryUncertain) {
+		t.Fatalf("RecoverSteer error = %v, want ErrSteerDeliveryUncertain", recoverErr)
+	}
+	if calls := provider.steers(); len(calls) != 1 {
+		t.Fatalf("provider received %d attempts after recover, want one", len(calls))
+	}
+}
+
 // A provider with no steering at all: a permanent answer, so a client hides the
 // control instead of retrying.
 func TestSteerIsRefusedWhenTheDriverCannotDoIt(t *testing.T) {
@@ -681,6 +760,36 @@ func TestSteerIsRefusedWhenTheDriverCannotDoIt(t *testing.T) {
 	}
 	if calls := restartedProvider.steers(); len(calls) != 0 {
 		t.Fatalf("restarted capable provider received %d attempts for a prior refusal, want none", len(calls))
+	}
+}
+
+// The ACP driver implements Steer for every agent, but only an agent that
+// advertised the extension can take it. Without the capability AO refuses before
+// reserving a delivery, so the agent is never called and the answer is not
+// "uncertain".
+func TestSteerIsRefusedWhenTheProviderDidNotAdvertiseIt(t *testing.T) {
+	h, provider := steerHarness(t)
+	provider.setCapabilities(productionCaps())
+	ctx := context.Background()
+
+	_, err := h.svc.Steer(ctx, testSession, ports.ChatUserMessage{
+		Text: "guidance", ClientMessageID: "steer-unadvertised",
+	})
+	if !errors.Is(err, chatsvc.ErrSteerUnsupported) {
+		t.Fatalf("Steer err = %v, want ErrSteerUnsupported", err)
+	}
+
+	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "queued", ClientMessageID: "queued-1", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if _, err := h.svc.PromoteQueuedTurn(ctx, testSession, queued.ID); !errors.Is(err, chatsvc.ErrSteerUnsupported) {
+		t.Fatalf("PromoteQueuedTurn err = %v, want ErrSteerUnsupported", err)
+	}
+	if calls := provider.steers(); len(calls) != 0 {
+		t.Fatalf("provider received %d steer attempts, want none", len(calls))
 	}
 }
 

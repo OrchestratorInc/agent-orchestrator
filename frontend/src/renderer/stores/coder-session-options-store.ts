@@ -18,7 +18,11 @@ export interface CoderSessionOptionsState {
 	extraRepos: CloudCpSessionRepo[];
 	// Project-level prefix for new Coder workspace names; "" keeps the default.
 	workspaceNamePrefix: string;
+	// "Template options" values the user changed from the chosen template's
+	// defaults (name -> encoded value). Cleared whenever the template changes.
+	parameters: Record<string, string>;
 	setTemplate: (templateId: string, supportedParams: string[]) => void;
+	setParameters: (parameters: Record<string, string>) => void;
 	setSize: (size: CoderSize) => void;
 	setStartupScript: (startupScript: string) => void;
 	setExtraRepos: (extraRepos: CloudCpSessionRepo[]) => void;
@@ -33,16 +37,19 @@ const initialState = {
 	startupScript: "",
 	extraRepos: [] as CloudCpSessionRepo[],
 	workspaceNamePrefix: "",
+	parameters: {} as Record<string, string>,
 };
 
 export const useCoderSessionOptionsStore = create<CoderSessionOptionsState>((set) => ({
 	...initialState,
-	setTemplate: (templateId, supportedParams) => set({ templateId, supportedParams }),
+	setTemplate: (templateId, supportedParams) =>
+		set((state) => (state.templateId === templateId ? { supportedParams } : { templateId, supportedParams, parameters: {} })),
+	setParameters: (parameters) => set({ parameters }),
 	setSize: (size) => set({ size }),
 	setStartupScript: (startupScript) => set({ startupScript }),
 	setExtraRepos: (extraRepos) => set({ extraRepos }),
 	setWorkspaceNamePrefix: (workspaceNamePrefix) => set({ workspaceNamePrefix }),
-	reset: () => set({ ...initialState, supportedParams: [], extraRepos: [] }),
+	reset: () => set({ ...initialState, supportedParams: [], extraRepos: [], parameters: {} }),
 }));
 
 // buildCoderRequestOptions turns the picker state into the createProject `coder`
@@ -58,6 +65,7 @@ export function buildCoderRequestOptions(state: {
 	startupScript: string;
 	extraRepos: CloudCpSessionRepo[];
 	workspaceNamePrefix?: string;
+	parameters?: Record<string, string>;
 }): CloudCpProjectCoderConfig | undefined {
 	const templateId = state.templateId.trim();
 	const extraRepos = state.extraRepos
@@ -73,6 +81,10 @@ export function buildCoderRequestOptions(state: {
 		if (state.supportedParams.includes("startup_script") && state.startupScript.trim().length > 0) {
 			coder.startupScript = state.startupScript;
 		}
+		// Template options belong to the chosen template; the map already holds
+		// only values changed from its defaults.
+		const parameters = state.parameters ?? {};
+		if (Object.keys(parameters).length > 0) coder.parameters = { ...parameters };
 	}
 	if (extraRepos.length > 0) coder.extraRepos = extraRepos;
 	if (workspaceNamePrefix) coder.workspaceNamePrefix = workspaceNamePrefix;

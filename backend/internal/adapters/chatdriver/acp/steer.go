@@ -17,6 +17,16 @@ type steeringResponse struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
+// providerRefusal marks a request the ACP agent rejected on its own terms, as
+// opposed to one that never got through. The Chat service classifies errors that
+// implement ChatRefusal() as definitive, so a reserved steer delivery handle can
+// settle as rejected instead of remaining uncertain forever.
+type providerRefusal struct{ err error }
+
+func (e *providerRefusal) Error() string     { return e.err.Error() }
+func (e *providerRefusal) Unwrap() error     { return e.err }
+func (e *providerRefusal) ChatRefusal() bool { return true }
+
 // Steer maps AO's existing mid-turn guidance contract onto ACP's steering
 // extension. promptRequired is load-bearing: if the turn wins the race and ends
 // before this request arrives, the agent returns the text to AO instead of
@@ -57,7 +67,14 @@ func (c *conversation) Steer(
 		},
 	})
 	if err != nil {
-		return ports.ChatTurnRef{}, fmt.Errorf("ACP %s: %w", steeringMethod, err)
+		wrapped := fmt.Errorf("ACP %s: %w", steeringMethod, err)
+		// -32601 means the agent answered the JSON-RPC request and does not
+		// implement this optional extension. That is a definite refusal, not a
+		// lost transport reply that might have delivered the guidance.
+		if isACPMethodNotFound(err) {
+			return ports.ChatTurnRef{}, &providerRefusal{err: wrapped}
+		}
+		return ports.ChatTurnRef{}, wrapped
 	}
 	var response steeringResponse
 	if err := json.Unmarshal(raw, &response); err != nil {

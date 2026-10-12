@@ -2,10 +2,12 @@ import { Bot, KeyRound, Loader2, MonitorCog, Play, TriangleAlert, Wrench, X, typ
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { aoBridge } from "../lib/bridge";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
-import { useCloudSession } from "../lib/cloud-session";
+import { useCloudOffering } from "../hooks/useCloudOffering";
+import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { ensureCodexAccounts } from "../hooks/useCodexAccountsQuery";
 import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
@@ -17,6 +19,7 @@ import { CuesSettings } from "./CuesDialog";
 import { motion } from "motion/react";
 import { topbarHeaderClass } from "./TopbarButton";
 import { topbarDragStyle, useTopbarPaddingLeft } from "./ShellTopbar";
+import { useAppShortcut } from "../hooks/useAppShortcut";
 import { type GlobalSettingsSection, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
 import { DialogHeader, settingsDialogBodyClass, settingsDialogHeaderClass, settingsDialogSurfaceClass } from "./ui/dialog";
@@ -24,14 +27,6 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
-
-// Internal testers who see the Coder (bring-your-own) settings page in addition
-// to @11x.ai users, so the flow can be exercised on non-11x accounts.
-const CODER_PAGE_TEST_EMAILS = new Set([
-	"prateekkarnal77@gmail.com",
-	"pritommazumdar1995@gmail.com",
-	"c.mohak2004@gmail.com",
-]);
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
@@ -46,10 +41,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const diagnostics = useUiStore((state) => state.developerMode && state.diagnostics);
 	// Reads the daemon settings the dialog tree already queries; no extra fetch.
 	const { cloudEnabled } = useCloudGate();
-	// The bring-your-own-Coder page is for @11x.ai users, plus a small allowlist
-	// of internal testers so the flow can be exercised on non-11x accounts.
-	const email = (useCloudSession().session?.user.email ?? "").toLowerCase();
-	const is11x = email.endsWith("@11x.ai") || CODER_PAGE_TEST_EMAILS.has(email);
+	// The org's offering decides the cloud pages: the bring-your-own-Coder page
+	// only when it includes coder, Upgrade only for self-serve billing.
+	const { hasCoder, selfServeBilling } = useCloudOffering();
 
 	const displaySettings = settingsModal;
 	// The selected page includes several store/query subscribers. Mount it one
@@ -73,7 +67,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	}, [deferSettingsBody, settingsModal]);
 	const isBodyReady = bodySettings === displaySettings;
 
-	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, diagnostics, is11x });
+	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling });
 	const remoteHostId = displaySettings?.scope === "project" ? displaySettings.hostId : undefined;
 	// A cloud project lives only in the control plane; the local daemon has no
 	// record of it. Resolve it here so its settings load from the control plane.
@@ -132,7 +126,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	const activeLabel = !settingsModal ? "" : isProjectSettings
 		? (projectSections.find((s) => s.id === activeProjectSection)?.label ?? t("settings.project.general"))
-		: globalSettingsItem(activeSection, { cloudEnabled, developerMode, diagnostics, is11x }).label(t);
+		: globalSettingsItem(activeSection, { cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling }).label(t);
 
 	const closeSettingsDialog = () => {
 		if (!settingsModal) return;
@@ -176,16 +170,23 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			closeSettings();
 		}
 	}, [closeSettings, projectSaveState]);
+	// Re-resolves the requested page as the gates settle: the org's offering
+	// loads after the dialog opens, so a deep link to Upgrade or Coder lands on
+	// it once the offering allows it.
 	useEffect(() => {
 		if (settingsModal?.scope === "global") {
-			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, is11x }).id);
+			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling }).id);
 		}
+	}, [cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling, settingsModal]);
+	// Project scope resets only when a project is opened, never when a gate
+	// settles, so a reported save state survives the offering loading.
+	useEffect(() => {
 		if (settingsModal?.scope === "project") {
 			setActiveProjectSection(settingsModal.cloudOrgId !== undefined && settingsModal.section === "cues" ? "general" : settingsModal.section ?? "general");
 			setProjectSaveState(initialProjectSaveState());
 			setCueBusy(false);
 		}
-	}, [cloudEnabled, developerMode, diagnostics, is11x, settingsModal]);
+	}, [settingsModal]);
 
 	useEffect(() => {
 		setFocusAgentId(settingsModal?.scope === "global" ? settingsModal.focusAgentId : undefined);
@@ -270,7 +271,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			if (displaySettings?.scope === "project") {
 				return <ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} cloudOrgId={cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />;
 			}
-			return <GlobalSettingsForm cloudEnabled={cloudEnabled} is11x={is11x} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} section={activeSection} />;
+			return <GlobalSettingsForm cloudEnabled={cloudEnabled} hasCoder={hasCoder} selfServeBilling={selfServeBilling} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} section={activeSection} />;
 		},
 	};
 }
@@ -317,6 +318,34 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 		const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 		return () => { if (opener?.isConnected) opener.focus({ preventScroll: true }); };
 	}, [isOpen]);
+	// Settings sections follow the app's navigation chords while the page is
+	// open: previous/next (⌘⇧[ ⌘⇧], ⌃Tab, ⌘⌥←/→) step through the section list and
+	// ⌘1-9 jumps to the Nth section. The shell stands down for these meanwhile.
+	const stepSection = useCallback((direction: -1 | 1) => {
+		const items = activeRef.current?.navItems.filter((item) => !item.disabled) ?? [];
+		if (items.length === 0) return;
+		const current = items.findIndex((item) => item.active);
+		const next = items[(current + direction + items.length) % items.length];
+		next?.onSelect();
+	}, []);
+	useEffect(() => {
+		if (!isOpen) return;
+		const disposers = [
+			aoBridge.app.onPreviousSessionShortcut(() => stepSection(-1)),
+			aoBridge.app.onNextSessionShortcut(() => stepSection(1)),
+			aoBridge.app.onPreviousTabShortcut(() => stepSection(-1)),
+			aoBridge.app.onNextTabShortcut(() => stepSection(1)),
+		];
+		return () => disposers.forEach((dispose) => dispose());
+	}, [isOpen, stepSection]);
+	useAppShortcut(
+		"jump-to-session",
+		({ index }) => {
+			const items = activeRef.current?.navItems.filter((item) => !item.disabled) ?? [];
+			if (index !== undefined) items[index]?.onSelect();
+		},
+		isOpen,
+	);
 	useEffect(() => {
 		if (!isOpen) return;
 		const onKeyDown = (event: KeyboardEvent) => {
@@ -416,7 +445,7 @@ type SettingsLayerState = ReturnType<typeof useSettingsLayer>;
 function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; covered: boolean }) {
 	const { t } = useTranslation();
 	const contentRef = useRef<HTMLDivElement>(null);
-	const closeButtonRef = useRef<HTMLButtonElement>(null);
+	const restoreFocusOnClose = useRestoreFocusOnClose(!covered);
 	// The body renders into a detached host so it stays mounted (and keeps its draft)
 	// while recovery settings cover the dialog, then is re-attached when it returns.
 	const [bodyHost] = useState(() => document.createElement("div"));
@@ -437,7 +466,16 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 						settingsDialogSurfaceClass,
 						"fixed left-1/2 top-1/2 z-overlay h-[min(40rem,calc(100vh-3rem))] w-(--size-settings-dialog-wide) max-h-none -translate-x-1/2 -translate-y-1/2 origin-center overflow-hidden p-0 animate-modal-in motion-reduce:animate-none sm:rounded-lg",
 					)}
-					onOpenAutoFocus={(event) => { event.preventDefault(); closeButtonRef.current?.focus({ preventScroll: true }); }}
+					onOpenAutoFocus={(event) => {
+						// Land on the current section (or the first field), not the close button.
+						const root = contentRef.current;
+						const target = root?.querySelector<HTMLElement>('nav button[aria-current="page"]:not(:disabled)')
+							?? root?.querySelector<HTMLElement>('.settings-dialog-body :is(input, textarea, select, button):not(:disabled)');
+						if (!target) return;
+						event.preventDefault();
+						target.focus({ preventScroll: true });
+					}}
+					onCloseAutoFocus={restoreFocusOnClose}
 					onEscapeKeyDown={(event) => {
 						const target = event.target instanceof Element ? event.target : null;
 						// In-place edits and login flows take Escape themselves.
@@ -481,7 +519,7 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 							<DialogHeader className={cn(settingsDialogHeaderClass, "flex h-auto shrink-0 flex-row items-center justify-between border-b-0 py-3 pl-(--size-modal-padding) pr-3")}>
 								<Dialog.Title className="settings-dialog-title">{layer.title}{layer.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}</Dialog.Title>
 								<Dialog.Description className="sr-only">{t("settings.project.dialogDescription")}</Dialog.Description>
-								<button aria-label={t("settings.close")} className="settings-close-button" disabled={layer.cueBusy} onClick={layer.close} ref={closeButtonRef} type="button">
+								<button aria-label={t("settings.close")} className="settings-close-button" disabled={layer.cueBusy} onClick={layer.close} type="button">
 									<X aria-hidden="true" className="size-4" />
 								</button>
 							</DialogHeader>

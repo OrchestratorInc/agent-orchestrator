@@ -1,8 +1,8 @@
 import { Feather } from "../lib/icons";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useRef, useState } from "react";
-import { Linking, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Linking, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { pingServer } from "../lib/api";
 import { pickNormalLens } from "../lib/cameraLens";
@@ -19,12 +19,12 @@ import { clearOnboardingSkipped } from "../lib/onboardingStore";
 import { completeOnboarding } from "../lib/onboardingNavigation";
 import { pairFromCode } from "../lib/pairFlow";
 import { isLegacyPairingCode, parsePairingCode } from "../lib/pairingCode";
-import { saveHost, setActiveHost } from "../lib/hosts";
+import { findHost, saveHost, setActiveHost, type Host } from "../lib/hosts";
 import { loadAccount } from "../lib/account";
 import { syncAccountHosts, unignoreAccountHost } from "../lib/accountHosts";
 import { probeEndpoint } from "../lib/connectRuntime";
 import { raceEndpoints } from "../lib/race";
-import { connectSheetRoute } from "../lib/sheetResult";
+import { connectSheetRoute, machineNameSheetRoute } from "../lib/sheetResult";
 import { useApp } from "../lib/store";
 import { Button, NumberedStep } from "../lib/ui";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
@@ -40,12 +40,26 @@ export default function PairScreen() {
 	const router = useRouter();
 	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
-	const { from } = useLocalSearchParams<{ from?: string }>();
+	const { from, repairHostId } = useLocalSearchParams<{ from?: string; repairHostId?: string }>();
 	const fromOnboarding = from === "onboarding";
 	const { reloadConfig } = useApp();
 	const [permission, requestPermission] = useCameraPermissions();
 	const [failure, setFailure] = useState<ConnectionErrorCopy | null>(null);
 	const [busy, setBusy] = useState(false);
+	const [repairHost, setRepairHost] = useState<Host | null | undefined>(() => repairHostId ? undefined : null);
+	useEffect(() => {
+		if (!repairHostId) {
+			setRepairHost(null);
+			return;
+		}
+		let current = true;
+		// An unreadable host list must not leave the screen on a spinner; it reads
+		// as "no longer saved", which offers the way back.
+		void findHost(repairHostId).catch(() => null).then((host) => {
+			if (current) setRepairHost(host);
+		});
+		return () => { current = false; };
+	}, [repairHostId]);
 	// The camera keeps running under the manual-connect sheet, so a QR code in
 	// frame would otherwise pair behind it. This replaces the old `manualOpen`
 	// flag now that the sheet is a route pushed on top rather than local state.
@@ -111,26 +125,60 @@ export default function PairScreen() {
 		setBusy(true);
 		setFailure(null);
 
+		// A generic scan of a machine already in the list is also an in-place
+		// refresh. Preserve its human-readable name instead of asking again.
+		const knownHost = repairHost ?? (offer?.hostId ? await findHost(offer.hostId) : null);
 		const result = await pairFromCode(code, {
 			race: (endpoints, expectedHostId) => raceEndpoints(endpoints, expectedHostId, probeEndpoint),
 			verify: async (config) => void (await pingServer(config)),
+			chooseName: (suggested) => new Promise<string | null>((resolve) => {
+				router.push(machineNameSheetRoute({ suggested, onSelect: resolve }));
+			}),
 			saveHost,
 			setActiveHost,
-		});
+		}, { repairHost: knownHost ?? undefined });
 
 		if (!result.ok) {
+			if (result.reason === "cancelled") {
+				pendingCode.current = null;
+				scanned.current = false;
+				setBusy(false);
+				return;
+			}
 			haptics.warning();
 			// Use the first endpoint from the offer for error reporting, if available
 			const firstEndpoint = offer?.endpoints[0];
 			const errorTarget = firstEndpoint
 				? { host: firstEndpoint.host, port: String(firstEndpoint.port), platform: Platform.OS }
 				: { host: "", port: "", platform: Platform.OS };
-			setFailure(
-				describeConnectionFailure(
-					result.reason === "not-ao-qr" ? "not-ao-qr" : result.reason === "incompatible" ? "incompatible-host" : classifyConnectionFailure(undefined),
-					errorTarget,
-				),
-			);
+			if (result.reason === "wrong-machine") {
+				setFailure({
+					title: "Different machine",
+					icon: "alert-circle",
+					message: `That code belongs to a different machine. Scan the code from ${repairHost?.name ?? "the selected machine"}.`,
+					showLocalNetworkHint: false,
+				});
+			} else if (result.reason === "name-required") {
+				setFailure({
+					title: "Machine name required",
+					icon: "alert-circle",
+					message: "Enter a machine name before saving this connection.",
+					showLocalNetworkHint: false,
+				});
+			} else {
+				setFailure(
+					describeConnectionFailure(
+						result.reason === "not-ao-qr"
+							? "not-ao-qr"
+							: result.reason === "outdated-desktop"
+								? "outdated-desktop"
+								: result.reason === "incompatible"
+									? "incompatible-host"
+									: classifyConnectionFailure(undefined),
+						errorTarget,
+					),
+				);
+			}
 			setBusy(false);
 			return;
 		}
@@ -162,16 +210,34 @@ export default function PairScreen() {
 	}
 
 	const back = () => backOr(router);
+	if (repairHost === undefined) {
+		return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+	}
+	if (repairHostId && !repairHost) {
+		return (
+			<View style={[styles.screen, styles.missing, { paddingTop: insets.top + space.xl }]}>
+				<Feather name="monitor-off" size={iconSize.xl} color={t.textTertiary} />
+				<Text style={styles.missingTitle}>Machine no longer saved</Text>
+				<Text style={styles.missingText}>Return to Settings and choose another machine.</Text>
+				<Button title="Back to Settings" variant="ghost" onPress={back} />
+			</View>
+		);
+	}
 
 	return (
 		<View style={[styles.screen, { paddingTop: insets.top }]}>
 			<View style={styles.topBar}><MinimalBackButton onPress={back} /></View>
 
-			<View style={styles.steps}>
-					<NumberedStep n={1} title="Enable AO on a machine" compact />
+			{repairHost ? (
+				<View style={styles.repairIntro}>
+					<Text style={styles.repairTitle}>Reconnect {repairHost.name}</Text>
+					<Text style={styles.repairText}>Scan the new code from Orchestrator → Settings → Connect Mobile on that machine.</Text>
+				</View>
+			) : <View style={styles.steps}>
+					<NumberedStep n={1} title="Enable Orchestrator on a machine" compact />
 					<NumberedStep n={2} title="Open Connect Mobile or run ao remote-host enable" compact />
 					<NumberedStep n={3} title="Scan the code or enter details manually" compact />
-			</View>
+			</View>}
 
 			<View style={styles.viewfinder}>
 				{permission?.granted ? (
@@ -230,7 +296,7 @@ export default function PairScreen() {
 			{/* Always reachable — including when the camera is permanently denied,
 			    which would otherwise leave the user with no way forward at all. */}
 			<Pressable
-				onPress={() => { haptics.tap(); router.push(connectSheetRoute(() => void finish())); }}
+				onPress={() => { haptics.tap(); router.push(connectSheetRoute(() => void finish(), repairHost?.id)); }}
 				style={[styles.manual, { paddingBottom: insets.bottom + 14 }]}
 				accessibilityRole="button"
 			>
@@ -270,8 +336,8 @@ function CameraGate({
 			<Text style={styles.gateTitle}>Camera access needed</Text>
 			<Text style={styles.gateHint}>
 				{canAskAgain
-					? "AO uses the camera only to read a pairing QR code."
-					: "Camera access is turned off for AO. Enable it in system settings, or enter your details manually below."}
+					? "Orchestrator uses the camera only to read a pairing QR code."
+					: "Camera access is turned off for Orchestrator. Enable it in system settings, or enter your details manually below."}
 			</Text>
 			{canAskAgain ? (
 				// App Review 5.1.1(iv): the button ahead of the system permission
@@ -297,9 +363,16 @@ const CORNER_W = 3;
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
+	center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
 	topBar: { paddingHorizontal: space.lg, paddingTop: space.xxs, paddingBottom: space.sm },
 
 	steps: { paddingHorizontal: space.xl, paddingBottom: space.lg },
+	repairIntro: { paddingHorizontal: space.xl, paddingBottom: space.lg },
+	repairTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, fontWeight: "600" },
+	repairText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.xs },
+	missing: { paddingHorizontal: space.xl, gap: space.md },
+	missingTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, fontWeight: "600", textAlign: "center" },
+	missingText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "center" },
 
 	viewfinder: {
 		flex: 1,

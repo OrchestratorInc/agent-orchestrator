@@ -222,6 +222,24 @@ func TestManager_AddListGetRemove(t *testing.T) {
 	wantCode(t, err, "PROJECT_NOT_FOUND")
 }
 
+func TestManager_AddDerivesValidIDFromSpecialCharacterFolderName(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t)
+	repo := filepath.Join(t.TempDir(), "Café (v2)+web")
+	if out, err := exec.Command("git", "init", "-b", "main", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git unavailable: %v (%s)", err, out)
+	}
+	commitEmpty(t, repo)
+
+	proj, err := m.Add(ctx, project.AddInput{Path: repo})
+	if err != nil {
+		t.Fatalf("Add without an explicit id: %v", err)
+	}
+	if proj.ID != "cafe-v2-web" {
+		t.Fatalf("derived id = %q, want cafe-v2-web", proj.ID)
+	}
+}
+
 func TestManager_CloneRegistersRepositoryAndPreservesOrigin(t *testing.T) {
 	ctx := context.Background()
 	m := newManager(t)

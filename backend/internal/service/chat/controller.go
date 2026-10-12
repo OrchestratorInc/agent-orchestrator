@@ -3440,6 +3440,11 @@ func (c *Controller) applyThreadTitle(ctx context.Context, title string, now tim
 		// through the worker-session CAS would rename the reviewed task.
 		return nil
 	}
+	if c.conversation.Scope == domain.ConversationScopeProject {
+		// Only the project orchestrator owns a project conversation, and it is
+		// never renamed. Its own agent must not rename it by naming the thread.
+		return nil
+	}
 	applied, err := c.store.ApplyProviderTitle(
 		ctx, c.conversation.ID, c.sessionID, normalized, now)
 	if err != nil {
