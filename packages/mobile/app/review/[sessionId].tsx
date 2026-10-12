@@ -14,7 +14,7 @@ import { mergeReadiness, type MergeTone } from "../../lib/prMerge";
 import { formatReviewSummaryMessage, reviewRunsForPullRequest, reviewRunUrl } from "../../lib/reviewFeedback";
 import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewVerdictLabel, shortCommit } from "../../lib/reviewView";
 import { HostScope, useApp } from "../../lib/store";
-import type { Theme } from "../../lib/theme";
+import { statusVisual, type Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { AgentLogo } from "../../lib/AgentLogo";
 import { rowDividerWidth } from "../../lib/divider";
@@ -198,7 +198,7 @@ function ReviewDetailContent() {
 
 	const reviewerHarness = data.reviewerSurface?.harness || data.reviewerHarness || "";
 	const activity = data.reviewerActivityState;
-	const activityColor = activity === "active" ? t.orange : activity === "exited" ? t.red : t.textTertiary;
+	const activityColor = activity === "active" ? t.orange : activity === "exited" ? statusVisual(t, "exited").color : t.textTertiary;
 	const stopActions: ItemAction[] = controls.stop && !autoReviewEnabled
 		? [{ id: "stop", label: "Stop reviewer session", systemImage: "power", destructive: true, onPress: confirmKillReviewer }]
 		: [];

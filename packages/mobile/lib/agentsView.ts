@@ -273,18 +273,74 @@ export function groupSessions(
  * that order; rows still update in place. Section membership stays live, so a
  * worker that starts waiting on you still moves to Needs you at once.
  */
-export type OrderSnapshot = { rank: Record<string, number>; eventAt: Record<string, string>; pinned: Record<string, true> };
+export type OrderSnapshot = { rank: Record<string, number>; eventAt: Record<string, string>; pinned: Record<string, true>; hosts: Record<string, true> };
 
-export function snapshotOrder(ordered: DashboardSession[], keyOf: (s: DashboardSession) => string): OrderSnapshot {
+// Do not import hostedRows here: its orchestrator presentation depends on us.
+function orderHostId(session: DashboardSession): string {
+	return "hostId" in session && typeof session.hostId === "string" ? session.hostId : "";
+}
+
+export function snapshotOrder(ordered: DashboardSession[], keyOf: (s: DashboardSession) => string, previous?: OrderSnapshot): OrderSnapshot {
 	const rank: Record<string, number> = {};
 	const eventAt: Record<string, string> = {};
 	const pinned: Record<string, true> = {};
+	const hosts: Record<string, true> = {};
 	ordered.forEach((s, i) => {
 		rank[keyOf(s)] = i;
 		eventAt[keyOf(s)] = eventAtOf(s);
 		if (s.isPinned) pinned[keyOf(s)] = true;
+		hosts[orderHostId(s)] = true;
 	});
-	return { rank, eventAt, pinned };
+	const next = { rank, eventAt, pinned, hosts };
+	// Focus/foreground can accept the same order more than once. Preserve the
+	// snapshot identity so that doing so does not rebuild the whole list.
+	if (previous && (Object.keys(next) as (keyof OrderSnapshot)[]).every(field => {
+		const entries = Object.entries(next[field]);
+		return entries.length === Object.keys(previous[field]).length && entries.every(([key, value]) => previous[field][key] === value);
+	})) return previous;
+	return next;
+}
+
+/** Initial loading from another machine establishes a baseline, not news. */
+export function hasNewHost(snapshot: OrderSnapshot, sessions: DashboardSession[]): boolean {
+	return sessions.some((session) => !snapshot.hosts[orderHostId(session)]);
+}
+
+/**
+ * Adds a newly loaded machine's workers to the held order without re-sorting
+ * anything already shown. Each one is placed after the shown row that precedes
+ * it in the fresh order, so a baseline lands where it belongs while any news
+ * held behind the pill stays held. When nothing is held, the next comparison
+ * finds the order already fresh or re-sorts it as usual.
+ */
+export function absorbNewHosts(
+	snapshot: OrderSnapshot,
+	fresh: DashboardSession[],
+	keyOf: (s: DashboardSession) => string,
+): OrderSnapshot {
+	const incoming = fresh.filter((session) => !snapshot.hosts[orderHostId(session)]);
+	if (incoming.length === 0) return snapshot;
+	const following = new Map<string | null, string[]>();
+	let anchor: string | null = null;
+	for (const session of fresh) {
+		const key = keyOf(session);
+		if (snapshot.hosts[orderHostId(session)]) {
+			if (key in snapshot.rank) anchor = key;
+			continue;
+		}
+		following.set(anchor, [...(following.get(anchor) ?? []), key]);
+	}
+	const shown = Object.keys(snapshot.rank).sort((left, right) => snapshot.rank[left] - snapshot.rank[right]);
+	const merged = [...(following.get(null) ?? []), ...shown.flatMap((key) => [key, ...(following.get(key) ?? [])])];
+	const eventAt = { ...snapshot.eventAt };
+	const pinned = { ...snapshot.pinned };
+	const hosts = { ...snapshot.hosts };
+	for (const session of incoming) {
+		eventAt[keyOf(session)] = eventAtOf(session);
+		if (session.isPinned) pinned[keyOf(session)] = true;
+		hosts[orderHostId(session)] = true;
+	}
+	return { rank: Object.fromEntries(merged.map((key, index) => [key, index])), eventAt, pinned, hosts };
 }
 
 /**
@@ -302,7 +358,8 @@ export function holdOrder(
 
 /**
  * How many sessions have news since the snapshot: an event newer than the one
- * it recorded, or not in it at all. The count on the "N updated" pill.
+ * it recorded, or a new worker on a previously loaded host. Initial loading
+ * from a new host is not an update. This count is cumulative until accepted.
  */
 export function updatedSince(
 	snapshot: OrderSnapshot,
@@ -310,6 +367,7 @@ export function updatedSince(
 	keyOf: (s: DashboardSession) => string,
 ): number {
 	return sessions.filter((s) => {
+		if (!snapshot.hosts[orderHostId(s)]) return false;
 		const before = snapshot.eventAt[keyOf(s)];
 		return before === undefined || time(eventAtOf(s)) > time(before);
 	}).length;
@@ -328,6 +386,7 @@ export function updatedSince(
  *
  * Only a reorder with news behind it is held, behind the "N updated" pill. A
  * snapshot taken from `fresh` never asks for another, so this cannot loop.
+ * Another machine's first workers are absorbed first (see absorbNewHosts).
  */
 export function shouldResnapshot(
 	snapshot: OrderSnapshot | null,

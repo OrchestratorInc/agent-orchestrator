@@ -7,6 +7,7 @@ import {
 	FlatList,
 	Image,
 	Modal,
+	Platform,
 	Pressable,
 	ScrollView,
 	StyleSheet,
@@ -68,6 +69,7 @@ import {
 } from "./timelineModel";
 import { type, space } from "../tokens";
 import { userFacingError } from "../connectionError";
+import { SentResponseQuotes } from "./SentResponseQuotes";
 
 type TimelineRow =
 	| { kind: "single"; key: string; items: [ConversationItem] }
@@ -120,8 +122,14 @@ export const ChatTimeline = memo(function ChatTimeline({
 	// Usage is snapshot state, not conversation. Reasoning stays available in the
 	// durable record but hidden on mobile: prose and work are the primary surface.
 	const items = useMemo(() => readableConversationItems(snapshot), [snapshot]);
-	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items), [items, snapshot.turns]);
+	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items, Platform.OS === "android" ? "android" : "ios"), [items, snapshot.turns]);
 	const groups = plan.groups;
+	const inverted = plan.inverted;
+	const jumpViewPosition = inverted ? 0.82 : 0.18;
+	const scrollToLatest = (animated: boolean) => {
+		if (inverted) listRef.current?.scrollToOffset({ offset: 0, animated });
+		else listRef.current?.scrollToEnd({ animated });
+	};
 
 	useEffect(() => {
 		if (jumpToSequence === undefined) return;
@@ -130,12 +138,12 @@ export const ChatTimeline = memo(function ChatTimeline({
 		// turn never matched and the jump silently did nothing.
 		const index = groups.findIndex((group) => group.anchor === jumpToSequence || group.items.some((item) => item.sequence === jumpToSequence));
 		if (index >= 0) {
-			followsTail.current = index === 0;
+			followsTail.current = index === (inverted ? 0 : groups.length - 1);
 			setShowJump(!followsTail.current);
-			requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.82 }));
+			requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }));
 		}
 		onJumpHandled?.();
-	}, [groups, jumpToSequence, onJumpHandled]);
+	}, [groups, inverted, jumpToSequence, jumpViewPosition, onJumpHandled]);
 
 	if (plan.kind === "empty") {
 		return (
@@ -146,6 +154,17 @@ export const ChatTimeline = memo(function ChatTimeline({
 			</View>
 		);
 	}
+	const olderControl = snapshot.hasMoreBefore ? (
+		<Pressable
+			accessibilityRole="button"
+			disabled={loadingOlder}
+			onPress={() => { haptics.tap(); void onLoadOlder(); }}
+			style={styles.older}
+		>
+			{loadingOlder ? <ActivityIndicator size="small" /> : <Feather name="clock" size={12} />}
+			<Text style={styles.olderText}>{loadingOlder ? "Loading history…" : "Load earlier messages"}</Text>
+		</Pressable>
+	) : null;
 
 	return (
 		<View style={styles.timelineWrap}>
@@ -162,33 +181,24 @@ export const ChatTimeline = memo(function ChatTimeline({
 				maxToRenderPerBatch={4}
 				updateCellsBatchingPeriod={32}
 				windowSize={5}
-				maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+				maintainVisibleContentPosition={inverted ? { minIndexForVisible: 0 } : undefined}
 				onScroll={(event) => {
-					const { contentOffset } = event.nativeEvent;
-					followsTail.current = Math.abs(contentOffset.y) < 120;
+					const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+					followsTail.current = inverted
+						? Math.abs(contentOffset.y) < 120
+						: contentSize.height - layoutMeasurement.height - contentOffset.y < 120;
 					setShowJump(!followsTail.current);
 				}}
 				scrollEventThrottle={100}
 				onContentSizeChange={() => {
-					if (followsTail.current) requestAnimationFrame(() => listRef.current?.scrollToOffset({ offset: 0, animated: false }));
+					if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
 				}}
 				onScrollToIndexFailed={({ index, averageItemLength }) => {
 					listRef.current?.scrollToOffset({ offset: Math.max(0, index * averageItemLength), animated: true });
-					setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.82 }), 120);
+					setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }), 120);
 				}}
-				ListFooterComponent={
-					snapshot.hasMoreBefore ? (
-						<Pressable
-							accessibilityRole="button"
-							disabled={loadingOlder}
-							onPress={() => { haptics.tap(); void onLoadOlder(); }}
-							style={styles.older}
-						>
-							{loadingOlder ? <ActivityIndicator size="small" /> : <Feather name="clock" size={12} />}
-							<Text style={styles.olderText}>{loadingOlder ? "Loading history…" : "Load earlier messages"}</Text>
-						</Pressable>
-					) : null
-				}
+				ListHeaderComponent={inverted ? null : olderControl}
+				ListFooterComponent={inverted ? olderControl : null}
 				renderItem={({ item: group }) => <ConversationTurnGroup
 					group={group}
 					snapshot={snapshot}
@@ -202,7 +212,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 					onToggleWorked={toggleWorked}
 				/>}
 			/>
-			{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); listRef.current?.scrollToOffset({ offset: 0, animated: true }); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}
+			{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); scrollToLatest(true); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}
 		</View>
 	);
 });
@@ -228,7 +238,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		: group.items;
 	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
-		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} answeredBelow={answeredBelow} />);
+		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} answeredBelow={answeredBelow} />);
 	const partition = partitionTurnItems(items, group.turn);
 	const summary = group.turn ? <TurnSummary turn={group.turn} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
@@ -246,6 +256,8 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 const TimelineItem = memo(function TimelineItem({
 	item,
 	sessionId,
+	conversationId,
+	completed,
 	approvalPending,
 	inputPending,
 	onDecide,
@@ -254,6 +266,8 @@ const TimelineItem = memo(function TimelineItem({
 }: {
 	item: ConversationItem;
 	sessionId: string;
+	conversationId: string;
+	completed: boolean;
 	approvalPending: boolean;
 	inputPending: boolean;
 	onDecide(requestId: string, decisionId: string): Promise<void>;
@@ -268,7 +282,8 @@ const TimelineItem = memo(function TimelineItem({
 			const { body, attachments } = stagedAttachmentParts(item.text);
 			return (
 				<View style={styles.userRow}>
-					<View style={styles.userBubble}>
+					<View style={[styles.userBubble, item.content?.some((content) => content.type === "excerpt" && content.text) && styles.quotedBubble]}>
+						<SentResponseQuotes content={item.content} />
 						{body ? <Text selectable style={styles.userText}>{body}</Text> : null}
 						{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}
 						{delivery ? <Text style={styles.delivery}>{delivery}</Text> : null}
@@ -282,8 +297,10 @@ const TimelineItem = memo(function TimelineItem({
 		return (
 			<View style={styles.assistantRow}>
 				{item.senderLabel ? <Text style={styles.sender}>{item.senderLabel}</Text> : null}
-				<ChatMarkdown text={item.streaming ? `${item.text || ""} ▍` : item.text} streaming={item.streaming} />
-				{!item.streaming && item.text ? <Pressable accessibilityRole="button" accessibilityLabel="Copy response" hitSlop={10} onPress={() => { void Clipboard.setStringAsync(item.text); haptics.success(); }} style={styles.copy}><Feather name="copy" size={12} color={t.textFaint} /></Pressable> : null}
+				<ChatMarkdown text={item.streaming ? `${item.text || ""} ▍` : item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
+				{!item.streaming && item.text ? <View style={styles.responseActions}>
+					<Pressable accessibilityRole="button" accessibilityLabel="Copy response" hitSlop={10} onPress={() => { void Clipboard.setStringAsync(item.text); haptics.success(); }} style={styles.copy}><Feather name="copy" size={12} color={t.textFaint} /></Pressable>
+				</View> : null}
 			</View>
 		);
 	}
@@ -1025,6 +1042,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	olderText: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption1.fontSize },
 	userRow: { alignItems: "flex-end", paddingTop: space.lg, paddingBottom: space.sm },
 	userBubble: { maxWidth: "88%", backgroundColor: userMessageSurfaceStyle(t).backgroundColor, borderRadius: 20, borderCurve: "continuous", paddingHorizontal: space.lg, paddingVertical: space.md },
+	quotedBubble: { width: "88%" },
 	userText: { fontFamily: "Geist_400Regular", color: userMessageSurfaceStyle(t).foregroundColor, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
 	delivery: { fontFamily: "Geist_400Regular", marginTop: space.xxs, color: t.amber, fontSize: type.caption2.fontSize },
 	attachments: { flexDirection: "row", flexWrap: "wrap", gap: space.xs },
@@ -1048,6 +1066,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	steerLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, letterSpacing: 1, fontWeight: "600", marginBottom: space.hair },
 	assistantRow: { paddingVertical: space.lg },
 	sender: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600", marginBottom: space.xxs },
+	responseActions: { flexDirection: "row", alignItems: "center", gap: space.md },
 	copy: { alignSelf: "flex-start", alignItems: "center", justifyContent: "center", width: 28, height: 28, marginTop: space.hair, marginLeft: -7 },
 	jump: { position: "absolute", right: 14, bottom: 12, minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.md, borderRadius: 16, backgroundColor: jumpToLatestColors(t).backgroundColor, borderWidth: 1, borderColor: t.borderStrong },
 	jumpText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption2.fontSize, fontWeight: "600" },

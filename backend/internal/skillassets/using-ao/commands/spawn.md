@@ -21,6 +21,7 @@ ao spawn [flags]
 | `--model string` | Agent model override for this session only; overrides project/role config | - |
 | `--name string` | Display name shown in the sidebar (max 100 characters) | Required |
 | `--mode chat\|tui` | Initial session interface; Chat requires harness support | Daemon default, otherwise Terminal UI |
+| `--output artifact` | Ask the worker for a file in its artifact directory instead of a PR | Ordinary task |
 | `--no-takeover` | Refuse if another active session owns the claimed PR (requires `--claim-pr`) | - |
 | `--project string` | Project id to spawn the session in | Optional when `--standalone` is used; defaults to `AO_PROJECT_ID` or the current repo's registered project |
 | `--standalone` | Spawn a projectless worker session in an AO-managed directory | Disabled when `--project` is set |
@@ -52,6 +53,12 @@ ao spawn --project agent-orchestrator --name "review-pr-88" --claim-pr 88 --harn
 # Spawn an orchestrator using the project's orchestrator configuration
 ao spawn --project agent-orchestrator --kind orchestrator --name "coordinate-fix" \
   --prompt "Coordinate the fix and report the worker PR."
+```
+
+```bash
+# Spawn a standalone worker whose deliverable is an artifact file, not a PR
+ao spawn --standalone --agent claude-code --output artifact --name "q3-report" \
+  --prompt "Write a one-page summary of Q3 incidents."
 ```
 
 ```bash

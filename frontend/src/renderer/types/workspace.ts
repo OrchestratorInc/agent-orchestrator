@@ -227,6 +227,8 @@ export type WorkspaceSession = {
 	prs: PullRequestFacts[];
 	/** What kind of durable output this session has produced, when known. */
 	outputType?: SessionOutputType;
+	/** The deliverable requested at spawn; "artifact" for sessions started from Create artifact. */
+	requestedOutput?: "artifact";
 	/**
 	 * Files present in this session's artifact directory, when {@link outputType}
 	 * is `"artifact"`. Empty/absent for sessions whose output is a PR or nothing.

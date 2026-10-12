@@ -7,16 +7,28 @@ import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 import { Linking, Platform } from "react-native";
-import { ApiError, registerPushDevice, unpairFromDaemon, unregisterPushDevice } from "./api";
+import { ApiError, announceDevice, registerPushDevice, unregisterPushDevice } from "./api";
 import { configForEndpoint } from "./connect";
 import { probeEndpoint } from "./connectRuntime";
 import { getInstallId } from "./installId";
 import type { ServerConfig } from "./config";
 import { findHost, type HostMetadata } from "./hosts";
 import { classifyServerFailure, hasServer, type PushRegisterResult, type PushStatus } from "./pushStatus";
-import { raceEndpoints } from "./race";
+import { flushMachineUnpairs, queueMachineUnpair } from "./pendingUnpair";
 
 export type { PushRegisterResult, PushStatus } from "./pushStatus";
+
+// Presence announcements also create daemon roster entries. Serialize them
+// with unpairing so a late announcement cannot resurrect a forgotten phone.
+export function announcePairedDevice(cfg: ServerConfig, device: Parameters<typeof announceDevice>[1]): Promise<void> {
+	return orderedMutation(async () => {
+		if (cfg.hostId) {
+			const paired = await findHost(cfg.hostId);
+			if (!paired || paired.token !== cfg.password) return;
+		}
+		await announceDevice(cfg, device);
+	});
+}
 
 // Existing builds stored one registration here. Keep it for pairings without
 // an identity; identified registrations are moved to a key per daemon.
@@ -211,6 +223,8 @@ async function registerForPushNow(
 	// permission prompt on a request that could only fail (an unpaired app still
 	// holds a config object — it just has an empty host).
 	if (!hasServer(cfg)) return { ok: false, reason: "not-configured" };
+	// A queued refresh can outlive removal. Never resurrect its remote pairing.
+	if (cfg.hostId && !(await findHost(cfg.hostId))) return { ok: false, reason: "not-configured" };
 	await migrateRegistration();
 
 	// Remote push tokens are only issued on physical devices.
@@ -252,7 +266,9 @@ async function registerForPushNow(
 	// wrong host) or it answered and rejected us (bad password, lockout, 5xx).
 	// An ApiError carries a status, which is exactly that distinction.
 	try {
-		const hostName = cfg.hostId ? (await findHost(cfg.hostId).catch(() => null))?.name : undefined;
+		const paired = cfg.hostId ? await findHost(cfg.hostId) : null;
+		if (cfg.hostId && (!paired || paired.token !== cfg.password)) return { ok: false, reason: "not-configured" };
+		const hostName = paired?.name;
 		await registerPushDevice(cfg, {
 			token,
 			platform: Platform.OS,
@@ -265,6 +281,7 @@ async function registerForPushNow(
 		return { ok: false, reason: classifyServerFailure(httpStatus), status: httpStatus };
 	}
 
+	if (cfg.hostId && !(await findHost(cfg.hostId))) return { ok: false, reason: "not-configured" };
 	await saveRegistration({
 		token,
 		hostId: cfg.hostId,
@@ -314,11 +331,15 @@ export async function openNotificationSettings(): Promise<void> {
 	}
 }
 
-// Forget only the selected machine's pairing. Its endpoint must report its host
-// id before its credential is sent; another machine's saved push registration
-// is left alone. Network failure cannot prevent local disconnection.
-async function unpairFromServerNow(target: HostMetadata | null): Promise<void> {
+// Capture durable cleanup before forgetting the credential. This local-only
+// step deliberately does not wait behind push registration's network queue.
+export async function unpairFromServer(target: HostMetadata | null): Promise<void> {
 	if (!target) return;
+	const host = await findHost(target.id);
+	if (!host) return;
+	// Pre-identity legacy pairings can still be forgotten locally, but cannot
+	// safely authorize a remote retry against an address that may be reassigned.
+	if (host.id) await queueMachineUnpair(host, await getInstallId());
 	await migrateRegistration();
 	const saved = target.id ? await readRegistration(registrationKey(target.id)) : null;
 	const identified = saved?.hostId === target.id ? saved : null;
@@ -327,32 +348,28 @@ async function unpairFromServerNow(target: HostMetadata | null): Promise<void> {
 	// address. That comparison clears local state; it never authorizes a DELETE.
 	const reg = identified ?? (legacy && target.endpoints.some((endpoint) => sameDaemon(legacy, configForEndpoint(endpoint, ""))) ? legacy : null);
 	if (reg) await clearRegistration(reg);
-
-	// Use this host's own credential, after checking the endpoint's identity.
-	const host = await findHost(target.id);
-	if (!host) return;
-	const outcome = await raceEndpoints(host.endpoints, host.id, probeEndpoint);
-	if (!outcome.ok) return;
-
-	let id = reg?.token ?? "";
-	try {
-		id = (await getInstallId()) || id;
-	} catch {
-		// Fall back to this host's token if the install id is unreadable.
-	}
-	if (!id) return;
-	try {
-		await unpairFromDaemon(configForEndpoint(outcome.endpoint, host.token, host.id), id);
-	} catch {
-		// The daemon may be unreachable (that is often *why* the user is
-		// disconnecting). Nothing to retry against: the phone is forgetting this
-		// server's address and credentials, so a queued call could never be sent.
-		// The row is left for the desktop to remove.
-	}
 }
 
-export function unpairFromServer(target: HostMetadata | null): Promise<void> {
-	return orderedMutation(() => unpairFromServerNow(target));
+let pendingUnpairRetry: Promise<void> | undefined;
+let retryAgain = false;
+let retryImmediately = false;
+/** `immediate` (launch, foreground) skips the unreachable-machine backoff:
+ * the network has most likely changed since the last attempt. */
+export function retryPendingUnpairs(options: { immediate?: boolean } = {}): Promise<void> {
+	retryImmediately ||= options.immediate === true;
+	if (pendingUnpairRetry) {
+		retryAgain = true;
+		return pendingUnpairRetry;
+	}
+	pendingUnpairRetry = orderedMutation(async () => {
+		do {
+			retryAgain = false;
+			const immediate = retryImmediately;
+			retryImmediately = false;
+			await flushMachineUnpairs({ ignoreBackoff: immediate });
+		} while (retryAgain);
+	}).finally(() => { pendingUnpairRetry = undefined; });
+	return pendingUnpairRetry;
 }
 
 // Resolves once this machine's local status is cleared and the unregister it

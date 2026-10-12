@@ -43,6 +43,7 @@ import { isRuntimeGone, type RouteSession } from "./sessionRoute";
 import { iconSize, press, space, type } from "../tokens";
 import { backOr } from "../backNavigation";
 import { userFacingError } from "../connectionError";
+import { archiveSessionMessage } from "../worker-action-model";
 import { isTerminalGoneError, TERMINAL_STATUS_LABEL, terminalErrorCopy, terminalExitedCopy } from "./terminalCopy";
 
 const FONT_SIZE = 12;
@@ -1243,25 +1244,25 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				leave();
 			} catch (e) {
 				haptics.error();
-				setBanner(`Couldn't stop the session. ${userFacingError(e)}`);
+				setBanner(`${reviewerPane ? "Couldn't stop the reviewer" : shellOnly ? "Couldn't close the shell" : "Couldn't archive the session"}. ${userFacingError(e)}`);
 			}
 		};
 		if (Platform.OS === "web") {
 			doKill();
 			return;
 		}
-		// Cautionary buzz as the destructive confirmation dialog is raised.
-		haptics.warning();
 		if (reviewerPane) {
+			haptics.warning();
 			Alert.alert("Stop reviewer session?", "This closes the persistent reviewer and cancels any review it is currently running. Review history is preserved.", [
 				{ text: "Keep reviewer", style: "cancel" },
 				{ text: "Stop reviewer", style: "destructive", onPress: doKill },
 			]);
 			return;
 		}
-		Alert.alert(shellOnly ? "Close shell?" : "Kill session?", shellOnly ? "This stops the worktree shell." : `This stops ${id}.`, [
+		haptics.warning();
+		Alert.alert(shellOnly ? "Close shell?" : "Archive session?", shellOnly ? "This stops the worktree shell." : archiveSessionMessage(id), [
 			{ text: "Cancel", style: "cancel" },
-			{ text: shellOnly ? "Close" : "Kill", style: "destructive", onPress: doKill },
+			{ text: shellOnly ? "Close" : "Archive session", style: "destructive", onPress: doKill },
 		]);
 	}, [activeConfig, id, leave, params.sessionId, reviewerPane, shellOnly]);
 
@@ -1399,15 +1400,15 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 						<Text style={styles.restoreText}>{restoring ? "Restoring…" : "Restore"}</Text>
 					</Pressable>
 				) : (
-					// Icon-only: the trash glyph reads as "destroy this session" on its
-					// own, so the label would only cost width. Hence accessibilityLabel.
+					// Icon-only: the archive glyph matches the restorable action on the
+					// workers board. The accessible label carries the full operation.
 					<Pressable
 						hitSlop={8}
-						accessibilityLabel={shellOnly ? "Close shell" : "Kill session"}
+						accessibilityLabel={shellOnly ? "Close shell" : "Archive session"}
 						onPress={confirmKill}
 						style={({ pressed }) => [styles.killBtn, pressed && { opacity: press.opacity }]}
 					>
-						<Feather name={shellOnly ? "x" : "trash-2"} size={iconSize.sm} color={t.red} />
+						<Feather name={shellOnly ? "x" : "archive"} size={iconSize.sm} color={shellOnly ? t.red : t.textSecondary} />
 					</Pressable>
 				)}
 			</View>

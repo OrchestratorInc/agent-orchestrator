@@ -15,7 +15,7 @@ import { fontScaleCap, iconSize, space, type } from "../tokens";
 import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { MicKey } from "../voice/MicKey";
 import { useVoiceInput } from "../voice/useVoiceInput";
-import { activeTurn, type ChatConfigOption, type ChatImage, type ChatModel, type ChatResource, type ChatSkill, type ConversationSnapshot, type TurnSettings } from "./types";
+import { activeTurn, type ChatConfigOption, type ChatExcerpt, type ChatImage, type ChatModel, type ChatResource, type ChatSkill, type ConversationSnapshot, type TurnSettings } from "./types";
 import {
 	composerSuggestionKey,
 	findComposerSuggestion,
@@ -35,6 +35,7 @@ import { queuedConversationMessages } from "./timelineModel";
 import { userFacingError } from "../connectionError";
 import type { DashboardPR, SessionPRSummary } from "../api";
 import { PRReviewPrompt } from "./PRReviewPrompt";
+import { decodeResponseDraft, encodeResponseDraft, responseReplyText, responseExcerpts, excerptDraftText, isChatExcerpt, type ResponseQuote, type ResponseQuoteRequest } from "./responseQuotes";
 import { afterDraftWrites } from "./pendingSend";
 
 type Attachment =
@@ -43,7 +44,7 @@ type Attachment =
 
 const MAX_EMBEDDED_FILE_BYTES = 500_000;
 
-/** The pill's resting height; it grows with the field up to COMPOSER_MAX_HEIGHT. */
+/** Resting panel height without quotes; the input row grows up to COMPOSER_MAX_HEIGHT. */
 export const COMPOSER_HEIGHT = 56;
 export const COMPOSER_FIELD_HEIGHT = 44;
 /**
@@ -64,6 +65,8 @@ const MAX_IMAGE_BYTES_TOTAL = 25 * 1024 * 1024;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp"]);
 
 export function ChatComposer({
+	quoteRequest,
+	onQuoteHandled,
 	reviewPR,
 	reviewPRSummary,
 	reviewPRCollapsed,
@@ -103,6 +106,8 @@ export function ChatComposer({
 	onDismissRequest,
 	onRestoreRequest,
 }: {
+	quoteRequest?: ResponseQuoteRequest;
+	onQuoteHandled?(id: string): void;
 	reviewPR?: DashboardPR;
 	reviewPRSummary?: SessionPRSummary;
 	reviewPRCollapsed?: boolean;
@@ -122,7 +127,7 @@ export function ChatComposer({
 	pending?: boolean;
 	interrupting?: boolean;
 	disabled?: boolean;
-	onSend(text: string, attachments?: ChatImage[], resources?: ChatResource[]): Promise<string>;
+	onSend(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]): Promise<string>;
 	onAcknowledgeSend(id: string): Promise<void>;
 	completedRetry?: { id: string; draftText: string };
 	onSteer(text: string): Promise<string>;
@@ -223,6 +228,9 @@ export function ChatComposer({
 		transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * keyboard.progress.value }],
 	}));
 	const [text, setText] = useState("");
+	const [quotes, setQuotes] = useState<ResponseQuote[]>([]);
+	const inputRef = useRef<TextInput>(null);
+	const consumedQuote = useRef<string | undefined>(undefined);
 	const [draftLoaded, setDraftLoaded] = useState(false);
 	const [cursor, setCursor] = useState(0);
 	const [fieldHeight, setFieldHeight] = useState(COMPOSER_FIELD_HEIGHT);
@@ -250,19 +258,31 @@ export function ChatComposer({
 	) : null;
 	const canSteer = snapshot.capabilities?.includes("steer") && !steerUnavailable && active;
 	const canEmbedFiles = snapshot.capabilities?.includes("embedded_context");
-	const hasDraft = Boolean(text.trim());
+	const hasDraft = Boolean(text.trim() || quotes.length);
 	const primaryAction = composerPrimaryAction({ active, hasDraft, hasAttachments: attachments.length > 0 });
-	const steerEligible = Boolean(canSteer && hasDraft && attachments.length === 0);
-	const deliveryPresentation = composerDeliveryPresentation({ active, canSteer: Boolean(canSteer), hasDraft, hasAttachments: attachments.length > 0, hasQueued: visibleQueuedMessages.length > 0 });
+	const steerEligible = Boolean(canSteer && hasDraft && attachments.length === 0 && quotes.length === 0);
+	const deliveryPresentation = composerDeliveryPresentation({ active, canSteer: Boolean(canSteer && quotes.length === 0), hasDraft, hasAttachments: attachments.length > 0, hasQueued: visibleQueuedMessages.length > 0 });
 	const stopped = snapshot.controller.state === "stopped";
 	const draftKey = config ? `ao.chat.draft.${machineIdentity(config)}.${sessionId}` : null;
 	const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const openingSuggestion = useRef<string | undefined>(undefined);
 	const pickerGate = useRef(createRequestGate()).current;
+	const latestQuotes = useRef(quotes);
+	latestQuotes.current = quotes;
 	const latestText = useRef(text);
 	const latestCursor = useRef(cursor);
 	latestText.current = text;
 	latestCursor.current = cursor;
+	useEffect(() => {
+		if (!quoteRequest || consumedQuote.current === quoteRequest.id) return;
+		consumedQuote.current = quoteRequest.id;
+		const next = [...latestQuotes.current, { id: quoteRequest.id, text: quoteRequest.text, source: quoteRequest.source }];
+		latestQuotes.current = next;
+		setQuotes(next);
+		onQuoteHandled?.(quoteRequest.id);
+		haptics.select();
+		requestAnimationFrame(() => inputRef.current?.focus());
+	}, [quoteRequest, onQuoteHandled]);
 	useEffect(() => () => pickerGate.invalidate(), [pickerGate]);
 	useEffect(() => {
 		const queuedIds = new Set(queuedMessages.map((entry) => entry.turnId));
@@ -276,7 +296,12 @@ export function ChatComposer({
 		if (!draftKey) return;
 		let mounted = true;
 		void AsyncStorage.getItem(draftKey)
-			.then((value) => { if (mounted && value) setText((current) => current || value); })
+			.then((value) => {
+				if (!mounted) return;
+				const draft = decodeResponseDraft(value);
+				setText((current) => current || draft.text);
+				setQuotes((current) => [...draft.quotes.filter((quote) => !current.some((item) => item.id === quote.id)), ...current]);
+			})
 			.catch(() => {})
 			.finally(() => { if (mounted) setDraftLoaded(true); });
 		return () => { mounted = false; };
@@ -284,23 +309,27 @@ export function ChatComposer({
 	useEffect(() => {
 		if (!draftKey || !draftLoaded) return;
 		draftTimer.current = setTimeout(() => {
-			void afterDraftWrites(draftKey, () => text ? AsyncStorage.setItem(draftKey, text) : AsyncStorage.removeItem(draftKey)).catch(() => {});
+			const value = encodeResponseDraft(text, quotes);
+			void afterDraftWrites(draftKey, () => value ? AsyncStorage.setItem(draftKey, value) : AsyncStorage.removeItem(draftKey)).catch(() => {});
 		}, 250);
 		return () => { if (draftTimer.current) clearTimeout(draftTimer.current); };
-	}, [draftKey, draftLoaded, text]);
+	}, [draftKey, draftLoaded, text, quotes]);
 	useEffect(() => {
 		if (!completedRetry) return;
 		if (draftTimer.current) clearTimeout(draftTimer.current);
 		const current = latestText.current;
-		const matches = current.trim() === completedRetry.draftText;
+		const currentQuotes = latestQuotes.current;
+		const matches = currentQuotes.length <= 8 && currentQuotes.every((quote) => isChatExcerpt({ ...quote.source, text: quote.text })) && excerptDraftText(responseReplyText(current, currentQuotes), responseExcerpts(currentQuotes)) === completedRetry.draftText;
 		if (matches) {
 			latestText.current = "";
 			setText("");
+			latestQuotes.current = [];
+			setQuotes([]);
 			setAttachments([]);
 		}
 		void (async () => {
 			if (draftKey) {
-				await afterDraftWrites(draftKey, () => matches ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, current));
+				await afterDraftWrites(draftKey, () => matches ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, encodeResponseDraft(current, currentQuotes)));
 			}
 			await onAcknowledgeSend(completedRetry.id);
 		})().catch((cause) => setLocalError(userFacingError(cause)));
@@ -310,7 +339,7 @@ export function ChatComposer({
 
 	const submit = useCallback(async (intent: ComposerDeliveryIntent = "send") => {
 		if (submitting || pending || disabled || (draftKey && !draftLoaded)) return;
-		const trimmed = text.trim();
+		const trimmed = responseReplyText(text, quotes);
 		if (!trimmed && attachments.length === 0) return;
 		// Dismissed on the tap, not after the send lands. Waiting for the request
 		// tied the keyboard's exit to the network, so it dropped whenever the
@@ -320,21 +349,26 @@ export function ChatComposer({
 		setSubmitting(true);
 		if (draftTimer.current) clearTimeout(draftTimer.current);
 		try {
+			const excerpts = responseExcerpts(quotes);
 			const images = attachments.filter((item): item is Extract<Attachment, { kind: "image" }> => item.kind === "image").map((item) => item.image);
 			const resources = attachments.filter((item): item is Extract<Attachment, { kind: "resource" }> => item.kind === "resource").map((item) => item.resource);
 			const route = composerDeliveryRoute(intent, steerEligible);
 			const id = route === "steer"
 				? await onSteer(trimmed)
-				: await onSend(trimmed, images.length ? images : undefined, resources.length ? resources : undefined);
+				: await onSend(trimmed, images.length ? images : undefined, resources.length ? resources : undefined, excerpts.length ? excerpts : undefined);
 			if (draftKey) {
 				const current = latestText.current;
-				await afterDraftWrites(draftKey, () => current === text ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, current));
+				const currentQuotes = latestQuotes.current;
+				const unchanged = current === text && currentQuotes === quotes;
+				await afterDraftWrites(draftKey, () => unchanged ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, encodeResponseDraft(current, currentQuotes)));
 			}
 			await onAcknowledgeSend(id);
-			if (latestText.current === text) {
+			if (latestText.current === text && latestQuotes.current === quotes) {
 				latestText.current = "";
 				setText("");
 				setFieldHeight(COMPOSER_FIELD_HEIGHT);
+				latestQuotes.current = [];
+				setQuotes([]);
 				setAttachments([]);
 			}
 			haptics.success();
@@ -342,7 +376,7 @@ export function ChatComposer({
 			setLocalError(userFacingError(cause));
 			haptics.error();
 		} finally { setSubmitting(false); }
-	}, [text, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled]);
+	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled]);
 
 	const addImage = async () => {
 		setLocalError(undefined);
@@ -518,32 +552,46 @@ export function ChatComposer({
 				style={[styles.composer, activeReviewPR && styles.reviewComposer, activeReviewPR && reviewComposerSurfaceStyle, stopped && { opacity: 0.55 }]}
 			>
 				{activeReviewPR ? <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, reviewComposerGlassStyle]}><ComposerGlass radius={COMPOSER_RADIUS} /></Animated.View> : <ComposerGlass radius={COMPOSER_RADIUS} />}
-				<ChatAttachmentMenu disabled={stopped || submitting} canAttachFile={Boolean(canEmbedFiles)} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />
-				<TextInput
-					accessibilityLabel="Message the agent"
-					editable={!stopped && !submitting}
-					value={text}
-					onChangeText={(value) => { latestText.current = value; setText(value); }}
-					onSelectionChange={(event) => setCursor(event.nativeEvent.selection.start)}
-					onContentSizeChange={(event) => {
-						if (!latestText.current) {
-							setFieldHeight(COMPOSER_FIELD_HEIGHT);
-							return;
-						}
-						// Native contentSize already includes the TextInput's vertical
-						// padding. Treat it as the field's full height; converting it to
-						// lines counted the padding as an extra line on the first render.
-						const contentHeight = Math.ceil(event.nativeEvent.contentSize.height);
-						setFieldHeight(Math.max(COMPOSER_FIELD_HEIGHT, Math.min(COMPOSER_FIELD_MAX_HEIGHT, contentHeight)));
-					}}
-					placeholder={stopped ? "Agent is stopped" : deliveryPresentation.placeholder}
-					placeholderTextColor={t.textFaint}
-					style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}
-					multiline
-					maxLength={40_000}
-				/>
-				<MicKey variant="plain" size={44} glyphSize={iconSize.lg} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} />
-				{primaryAction === "stop" ? <Pressable accessibilityRole="button" accessibilityLabel="Stop turn" accessibilityState={{ busy: interrupting, disabled: disabled || interrupting }} disabled={disabled || interrupting} onPress={() => { haptics.tap(); void onInterrupt(); }} style={[styles.stop, (disabled || interrupting) && { opacity: 0.55 }]}>{interrupting ? <ActivityIndicator size="small" color={t.textPrimary} /> : <Feather name="square" size={12} color={t.textPrimary} />}</Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={active ? "Queue message" : "Send message"} accessibilityState={{ disabled: disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) }} disabled={disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!text.trim() && attachments.length === 0)} onPress={() => { haptics.tap(); void submit("send"); }} style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, (disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!text.trim() && attachments.length === 0)) && { opacity: 0.35 }]}>{pending || submitting ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}</Pressable>}
+				{quotes.length ? <ScrollView style={styles.quotes} keyboardShouldPersistTaps="handled">
+					{quotes.map((quote) => <View key={quote.id} style={styles.quote}>
+						<Text numberOfLines={2} style={styles.quoteText} accessibilityLabel={`Quoted response: ${quote.text}`}>{quote.text}</Text>
+						<Pressable accessibilityRole="button" accessibilityLabel={`Remove quote: ${quote.text}`} onPress={() => {
+							haptics.tap();
+							const next = latestQuotes.current.filter((item) => item.id !== quote.id);
+							latestQuotes.current = next;
+							setQuotes(next);
+						}} style={styles.removeQuote}><Feather name="x" size={iconSize.lg} color={t.textSecondary} /></Pressable>
+					</View>)}
+				</ScrollView> : null}
+				<View style={styles.composerRow}>
+					<ChatAttachmentMenu disabled={stopped || submitting} canAttachFile={Boolean(canEmbedFiles)} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />
+					<TextInput
+						ref={inputRef}
+						accessibilityLabel="Message the agent"
+						editable={!stopped && !submitting}
+						value={text}
+						onChangeText={(value) => { latestText.current = value; setText(value); }}
+						onSelectionChange={(event) => setCursor(event.nativeEvent.selection.start)}
+						onContentSizeChange={(event) => {
+							if (!latestText.current) {
+								setFieldHeight(COMPOSER_FIELD_HEIGHT);
+								return;
+							}
+							// Native contentSize already includes the TextInput's vertical
+							// padding. Treat it as the field's full height; converting it to
+							// lines counted the padding as an extra line on the first render.
+							const contentHeight = Math.ceil(event.nativeEvent.contentSize.height);
+							setFieldHeight(Math.max(COMPOSER_FIELD_HEIGHT, Math.min(COMPOSER_FIELD_MAX_HEIGHT, contentHeight)));
+						}}
+						placeholder={stopped ? "Agent is stopped" : deliveryPresentation.placeholder}
+						placeholderTextColor={t.textFaint}
+						style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}
+						multiline
+						maxLength={40_000}
+					/>
+					<MicKey variant="plain" size={44} glyphSize={iconSize.lg} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} />
+					{primaryAction === "stop" ? <Pressable accessibilityRole="button" accessibilityLabel="Stop turn" accessibilityState={{ busy: interrupting, disabled: disabled || interrupting }} disabled={disabled || interrupting} onPress={() => { haptics.tap(); void onInterrupt(); }} style={[styles.stop, (disabled || interrupting) && { opacity: 0.55 }]}>{interrupting ? <ActivityIndicator size="small" color={t.textPrimary} /> : <Feather name="square" size={12} color={t.textPrimary} />}</Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={active ? "Queue message" : "Send message"} accessibilityState={{ disabled: disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) }} disabled={disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!hasDraft && attachments.length === 0)} onPress={() => { haptics.tap(); void submit("send"); }} style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, (disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!hasDraft && attachments.length === 0)) && { opacity: 0.35 }]}>{pending || submitting ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}</Pressable>}
+				</View>
 			</Animated.View>}
 		</>
 	);
@@ -578,18 +626,23 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// when everything fits, the two never touch.
 	metaRow: { width: "100%", height: 44, flexDirection: "row", alignItems: "center", gap: space.sm },
 	settingsSlot: { flex: 1, minWidth: 0, height: 44, alignItems: "flex-start", justifyContent: "center", overflow: "hidden" },
-	// One pill for the whole row: attach, the field, dictation, and the one filled
+	quotes: { maxHeight: 120, flexGrow: 0, marginTop: space.xxs, marginHorizontal: space.sm },
+	quote: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.sm },
+	quoteText: { ...type.subheadline, flex: 1, minWidth: 0, paddingVertical: space.xs, color: t.textSecondary },
+	removeQuote: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+	// One glass panel for selected quotes, attach, the field, dictation and the filled
 	// control that commits. The pill's radius is half its resting height, so a
-	// single line reads as a capsule and a long message grows a rounded panel —
+	// single line reads as a capsule; quotes and long replies grow a rounded panel —
 	// no second border, no second surface.
 	//
 	// The fill goes transparent where the glass layer is drawing behind it: an
 	// opaque pill under a material is the one arrangement that turns glass grey.
 	//
 	// Bottom-align the controls so attach, mic and send stay anchored while the
-	// text field grows above them. The pill grows around the row; the glass fills
-	// that pill rather than receiving a separately measured height.
-	composer: { minHeight: COMPOSER_HEIGHT, maxHeight: COMPOSER_MAX_HEIGHT, flexDirection: "row", alignItems: "flex-end", gap: space.xxs, paddingHorizontal: space.xs, paddingVertical: space.xs, backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated, borderRadius: COMPOSER_RADIUS, borderCurve: "continuous" },
+	// text field grows above them. The panel grows around both rows; the glass fills
+	// that panel rather than receiving a separately measured height.
+	composer: { minHeight: COMPOSER_HEIGHT, flexDirection: "column", paddingHorizontal: space.xs, paddingVertical: space.xs, backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated, borderRadius: COMPOSER_RADIUS, borderCurve: "continuous" },
+	composerRow: { maxHeight: COMPOSER_MAX_HEIGHT, flexDirection: "row", alignItems: "flex-end", gap: space.xxs },
 	reviewComposer: { backgroundColor: "transparent" },
 	// The native content-size event grows this from its one-line resting height;
 	// at the cap, the multiline field scrolls while the controls remain in place.

@@ -384,6 +384,7 @@ function routeSurface(pathname: string): string {
 	}
 	if (/^\/sessions\/[^/]+$/.test(pathname)) return "session_detail";
 	if (/^\/automations(?:\/|$)/.test(pathname)) return "automations";
+	if (/^\/artifacts(?:\/|$)/.test(pathname)) return "artifacts";
 	return "other";
 }
 
@@ -671,6 +672,12 @@ export async function sanitizeRendererProperties(
 			}
 			break;
 		}
+		case "ao.renderer.artifact_create_requested":
+		case "ao.renderer.artifact_create_succeeded":
+		case "ao.renderer.artifact_create_failed":
+			// Where the session lives, never which project.
+			if (properties?.scope === "standalone" || properties?.scope === "project") safe.scope = properties.scope;
+			break;
 		case "ao.renderer.notification_opened":
 			if (properties?.target === "pr" || properties?.target === "session") safe.target = properties.target;
 			break;
