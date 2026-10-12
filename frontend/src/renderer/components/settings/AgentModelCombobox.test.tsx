@@ -522,4 +522,24 @@ describe("AgentModelCombobox", () => {
 		await userEvent.click(screen.getByRole("menuitem", { name: "Use “private/custom-model” as a custom model" }));
 		expect(onCustom).toHaveBeenCalledWith("private/custom-model");
 	});
+
+	it("disables a model the installed binary cannot run and shows why", async () => {
+		const { onChange } = renderCombobox([
+			{ id: "claude-opus-4-1", label: "Opus 4.1" },
+			{
+				id: "claude-opus-5",
+				label: "Opus 5",
+				unsupported: true,
+				unsupportedReason: "Requires Claude Code 2.1.280 or newer (installed 2.1.228)",
+			},
+		]);
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+
+		const blocked = screen.getByRole("menuitem", { name: /Opus 5/ });
+		expect(blocked).toHaveAttribute("aria-disabled", "true");
+		expect(blocked).toHaveTextContent("Requires Claude Code 2.1.280 or newer (installed 2.1.228)");
+
+		await userEvent.click(blocked);
+		expect(onChange).not.toHaveBeenCalled();
+	});
 });

@@ -129,6 +129,11 @@ type conversation struct {
 	// credential mid-turn. Nil when the binding does not supply one.
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
+	// normalizeRequestError translates a provider-specific JSON-RPC request
+	// error into a user-facing error before the generic ACP wrapping is
+	// applied. It receives the session's active model id so a binding can
+	// attribute a model-specific failure. Nil means the default path applies.
+	normalizeRequestError func(model string, err error) error
 	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	// preamble is standing context attached to the first prompt that actually
 	// reaches the provider. It is the delivery channel for agents that accept no
@@ -218,6 +223,36 @@ func newConversation(
 	go legacyWire.forward(proc.stdout, c.handleNotification)
 	go c.watchConnection()
 	return c
+}
+
+// normalizeError translates a request error into a user-facing error. It first
+// offers the provider binding's NormalizeRequestError hook the chance to
+// classify the error (for example an HTTP 400 that a provider surfaces as an
+// opaque -32603), then falls back to the generic ACP wrapping. Auth rejections
+// stay on the generic path so the reauth prompt still fires. Provider bindings
+// must route every provider request error through here — prompt, session/new,
+// session/load, and config-option setters — so a classified failure reads the
+// same wherever it surfaces.
+func (c *conversation) normalizeError(operation string, err error) error {
+	if c.normalizeRequestError != nil && !isACPAuthRequired(err) {
+		if normalized := c.normalizeRequestError(c.currentModel(), err); normalized != nil {
+			return normalized
+		}
+	}
+	return normalizeACPError(operation, err)
+}
+
+// normalizeLoadError is normalizeError for session/load and session/resume,
+// where a provider-side -32603 that no binding classifies still means the
+// transcript could not be replayed (ErrChatHistoryLoadFailed) rather than a
+// generic transport failure.
+func (c *conversation) normalizeLoadError(operation string, err error) error {
+	if c.normalizeRequestError != nil && !isACPAuthRequired(err) {
+		if normalized := c.normalizeRequestError(c.currentModel(), err); normalized != nil {
+			return normalized
+		}
+	}
+	return normalizeACPLoadError(operation, err)
 }
 
 // providerItemID makes ACP's session-scoped opaque item ids safe to use in
@@ -486,7 +521,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			if isACPMethodNotFound(err) {
 				return fmt.Errorf("%w: session/set_model %q", ErrACPSetterUnsupported, model)
 			}
-			return fmt.Errorf("set ACP session model %q: %w", model, err)
+			return c.normalizeError(fmt.Sprintf("set ACP session model %q", model), err)
 		}
 		c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
 	}
@@ -511,7 +546,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			if isACPMethodNotFound(err) {
 				return fmt.Errorf("%w: session/set_config_option %q", ErrACPSetterUnsupported, option.ID)
 			}
-			return fmt.Errorf("set ACP session option %q: %w", option.ID, err)
+			return c.normalizeError(fmt.Sprintf("set ACP session option %q", option.ID), err)
 		}
 		c.replaceConfigOptions(resp.ConfigOptions)
 		return nil
@@ -547,7 +582,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 				if isACPMethodNotFound(err) {
 					return fmt.Errorf("%w: session/set_mode %q", ErrACPSetterUnsupported, mode)
 				}
-				return fmt.Errorf("set ACP session mode %q: %w", mode, err)
+				return c.normalizeError(fmt.Sprintf("set ACP session mode %q", mode), err)
 			}
 		}
 	}
@@ -670,7 +705,7 @@ func (c *conversation) finishPrompt(
 			state = domain.TurnStateInterrupted
 		} else {
 			state = domain.TurnStateFailed
-			turnErr = normalizeACPError("ACP session/prompt", err)
+			turnErr = c.normalizeError("ACP session/prompt", err)
 		}
 	} else {
 		state = turnState(resp.StopReason)

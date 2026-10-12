@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,49 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/google/uuid"
 )
+
+// claudeVersionIncompatRE matches the HTTP 400 message the claude-agent-acp
+// bridge surfaces as an opaque -32603 when the installed Claude Code binary is
+// too old for the selected model, e.g.:
+//
+//	"Internal error: API Error: 400 Claude Code 2.1.228 does not support this
+//	 model; version 2.1.280 or newer is required."
+//
+// It captures the installed version (group 1) and the minimum required version
+// (group 2).
+var claudeVersionIncompatRE = regexp.MustCompile(
+	`Claude Code (\d+\.\d+\.\d+) does not support this model;\s+version (\d+\.\d+\.\d+) or newer is required`,
+)
+
+// normalizeACPRequestError rewrites the opaque model-version mismatch the bridge
+// emits into a clean, actionable message that carries no raw JSON-RPC envelope,
+// provider stderr, or session ids. Errors that are not that specific mismatch
+// are returned with ok=false so the caller keeps its usual wrapping.
+func normalizeACPRequestError(err error) (error, bool) {
+	var requestErr *acp.RequestError
+	if !errors.As(err, &requestErr) {
+		return nil, false
+	}
+	match := claudeVersionIncompatRE.FindStringSubmatch(requestErr.Message)
+	if match == nil {
+		return nil, false
+	}
+	return fmt.Errorf(
+		"Claude Code %s does not support the selected model. Version %s or newer is required. "+
+			"Update Claude Code by running 'claude update', or update the Claude desktop app, then try again.",
+		match[1], match[2],
+	), true
+}
+
+// acpRequestFailure classifies a provider request error. A recognized
+// model-version mismatch becomes a clean, actionable message; anything else
+// keeps the raw error plus bounded stderr diagnostics for operators.
+func acpRequestFailure(operation string, err error, stderr *lockedBuffer) error {
+	if clean, ok := normalizeACPRequestError(err); ok {
+		return clean
+	}
+	return fmt.Errorf("%s: %w: %s", operation, err, boundedError(stderr.String()))
+}
 
 type approvalControl interface {
 	CreateChatApproval(context.Context, worker.ChatApproval) error
@@ -111,7 +155,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 	defer cancel()
 	initialized, err := conn.Initialize(handshakeCtx, acp.InitializeRequest{ProtocolVersion: acp.ProtocolVersionNumber})
 	if err != nil {
-		return fmt.Errorf("initialize ACP agent: %w: %s", err, boundedError(stderr.String()))
+		return acpRequestFailure("initialize ACP agent", err, &stderr)
 	}
 	var meta map[string]any
 	if turn.Harness == "claude-code" && command.SystemPrompt != "" {
@@ -130,6 +174,9 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 			// ACP must resolve the original durable identity with the provider.
 			// Only an explicit missing Claude session permits a replacement.
 			if turn.Harness != "claude-code" || !errors.As(loadErr, &requestErr) || requestErr.Code != -32002 {
+				if clean, ok := normalizeACPRequestError(loadErr); ok {
+					return clean
+				}
 				return fmt.Errorf("restore ACP session: %w", loadErr)
 			}
 		} else {
@@ -140,7 +187,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 	if sessionID == "" {
 		created, createErr := conn.NewSession(handshakeCtx, acp.NewSessionRequest{Meta: meta, Cwd: command.Dir, McpServers: []acp.McpServer{}})
 		if createErr != nil {
-			return fmt.Errorf("create ACP session: %w: %s", createErr, boundedError(stderr.String()))
+			return acpRequestFailure("create ACP session", createErr, &stderr)
 		}
 		sessionID = created.SessionId
 		configOptions, modes = created.ConfigOptions, created.Modes
@@ -172,7 +219,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 	client.live.Store(true)
 	_, err = conn.Prompt(ctx, acp.PromptRequest{SessionId: sessionID, Prompt: []acp.ContentBlock{{Text: &acp.ContentBlockText{Type: "text", Text: turn.Prompt}}}})
 	if err != nil {
-		return fmt.Errorf("ACP prompt: %w: %s", err, boundedError(stderr.String()))
+		return acpRequestFailure("ACP prompt", err, &stderr)
 	}
 	return nil
 }
@@ -216,6 +263,9 @@ func configureACPSession(ctx context.Context, conn *acp.ClientSideConnection, se
 			SessionId: sessionID, ConfigId: acp.SessionConfigId(id), Value: acp.SessionConfigValueId(value),
 		}})
 		if err != nil {
+			if clean, ok := normalizeACPRequestError(err); ok {
+				return clean
+			}
 			return fmt.Errorf("set ACP %s: %w", id, err)
 		}
 		options = response.ConfigOptions

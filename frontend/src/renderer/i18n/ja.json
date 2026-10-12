@@ -2673,6 +2673,7 @@
 	"coder.templateOptions.selectPlaceholder": "オプションを選択",
 	"coder.templateOptions.settingsHint": "変更は新しいセッションに適用されます。",
 	"settings.models.selectModel": "モデルを選択",
+	"settings.models.unsupported": "インストールされているバージョンでは未対応",
 	"settings.models.useAgentModel": "エージェントのモデルを使用",
 	"settings.models.useAgentMode": "エージェントのモードを使用",
 	"settings.models.clearEffort": "推論レベルをクリア",

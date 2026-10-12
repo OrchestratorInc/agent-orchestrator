@@ -107,6 +107,16 @@ type Config struct {
 	// correction that covers every credential source — including the Bedrock
 	// and Vertex chains AO cannot inspect at all. Optional.
 	OnAuthRejected func()
+	// NormalizeRequestError lets a provider binding translate an opaque
+	// JSON-RPC request error (typically -32603 "Internal error") into a
+	// user-facing error before the generic ACP wrapping is applied. When set,
+	// it is called for every non-auth request error. The model argument is the
+	// session's active model id (empty when the failure happened before any
+	// model was applied), so a binding can attribute the failure to a specific
+	// model. If it returns a non-nil error that value is used directly; if it
+	// returns nil the default path applies. Auth errors (code -32000) are
+	// handled before this hook runs.
+	NormalizeRequestError func(model string, err error) error
 }
 
 // TurnSettingsValidator validates live turn settings against launch-time state.
@@ -187,7 +197,7 @@ func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) (
 		McpServers: []acpsdk.McpServer{},
 	})
 	if err != nil {
-		return nil, normalizeACPError("ACP session/new", err)
+		return nil, conv.normalizeError("ACP session/new", err)
 	}
 	return normalizeConfigOptions(resp.ConfigOptions), nil
 }
@@ -288,7 +298,7 @@ func (d *Driver) openNewSession(
 	})
 	d.logStartStage(launchCfg.SessionID, "session_new", sessionStarted, err)
 	if err != nil {
-		return normalizeACPError("ACP session/new", err)
+		return conv.normalizeError("ACP session/new", err)
 	}
 	if resp.SessionId == "" {
 		return errors.New("ACP session/new returned no session id")
@@ -463,7 +473,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 				return d.resumeFresh(ctx, conv, init, launchCfg, cfg, additional, mcpServers)
 			}
 			conv.discard()
-			return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, normalizeACPLoadError("ACP session/load", err))
+			return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, conv.normalizeLoadError("ACP session/load", err))
 		}
 		configOptions = resp.ConfigOptions
 		modes = resp.Modes
@@ -480,7 +490,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 				return d.resumeFresh(ctx, conv, init, launchCfg, cfg, additional, mcpServers)
 			}
 			conv.discard()
-			return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
+			return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, conv.normalizeError("ACP session/resume", err))
 		}
 		configOptions = resp.ConfigOptions
 		modes = resp.Modes
@@ -562,6 +572,7 @@ func (d *Driver) initialize(
 	)
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
+	conv.normalizeRequestError = d.cfg.NormalizeRequestError
 	conv.hibernationCheck = d.cfg.CanHibernate
 	if proc.reconnected {
 		state := proc.acpState
@@ -786,11 +797,42 @@ func isACPInternalError(err error) bool {
 	return errors.As(err, &requestErr) && requestErr.Code == -32603
 }
 
+// sanitizedRequestError renders a JSON-RPC request error as "code N: message"
+// without its Data field. The SDK's RequestError.Error() marshals the whole
+// struct, so any provider payload or session diagnostic tucked into Data would
+// otherwise be echoed to the user. Unwrap keeps the original error (and thus
+// its code) reachable for errors.Is/errors.As while the visible text stays free
+// of internals.
+type sanitizedRequestError struct {
+	code    int
+	message string
+	cause   error
+}
+
+func (e *sanitizedRequestError) Error() string {
+	if e.message == "" {
+		return fmt.Sprintf("code %d", e.code)
+	}
+	return fmt.Sprintf("code %d: %s", e.code, e.message)
+}
+
+func (e *sanitizedRequestError) Unwrap() error { return e.cause }
+
+// sanitizeRequestError wraps err so its printed form omits the ACP Data field.
+// Non-request errors and nil pass through unchanged.
+func sanitizeRequestError(err error) error {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) {
+		return err
+	}
+	return &sanitizedRequestError{code: requestErr.Code, message: requestErr.Message, cause: err}
+}
+
 func normalizeACPError(operation string, err error) error {
 	if isACPAuthRequired(err) {
-		return fmt.Errorf("%w: %s: %w", ports.ErrChatAuthRequired, operation, err)
+		return fmt.Errorf("%w: %s: %w", ports.ErrChatAuthRequired, operation, sanitizeRequestError(err))
 	}
-	return fmt.Errorf("%s: %w", operation, err)
+	return fmt.Errorf("%s: %w", operation, sanitizeRequestError(err))
 }
 
 // normalizeACPLoadError normalizes a failed ACP session/load whose calling
@@ -800,6 +842,10 @@ func normalizeACPError(operation string, err error) error {
 // reports a dedicated code instead of a generic resume failure. Callers must
 // check their own context first: the SDK also synthesizes -32603 when the
 // caller's context ends mid-request.
+//
+// Unlike the user-facing turn/session paths, the replay diagnostic is preserved
+// here (including the provider's own detail), because it is the only signal
+// that explains why a stored transcript could not be restored.
 func normalizeACPLoadError(operation string, err error) error {
 	if isACPInternalError(err) && !isACPAuthRequired(err) {
 		return fmt.Errorf("%w: %s: %w", ports.ErrChatHistoryLoadFailed, operation, err)

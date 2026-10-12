@@ -67,7 +67,7 @@ func (c *conversation) SetConfigOption(
 			return nil, fmt.Errorf("%w: ACP session config option %q does not offer value %q", ports.ErrChatConfigOptionInvalid, id, value.Select)
 		}
 		if err := c.legacyWire.setModel(ctx, sessionID, value.Select); err != nil {
-			return nil, fmt.Errorf("set ACP legacy session model %q: %w", value.Select, err)
+			return nil, c.normalizeError(fmt.Sprintf("set ACP legacy session model %q", value.Select), err)
 		}
 		c.applyAcceptedConfigOption(id, value)
 		return c.ListConfigOptions(ctx)
@@ -79,7 +79,7 @@ func (c *conversation) SetConfigOption(
 		if _, err := c.conn.SetSessionMode(ctx, acpsdk.SetSessionModeRequest{
 			SessionId: acpsdk.SessionId(sessionID), ModeId: acpsdk.SessionModeId(value.Select),
 		}); err != nil {
-			return nil, fmt.Errorf("set ACP legacy session mode %q: %w", value.Select, err)
+			return nil, c.normalizeError(fmt.Sprintf("set ACP legacy session mode %q", value.Select), err)
 		}
 		c.applyAcceptedConfigOption(id, value)
 		return c.ListConfigOptions(ctx)
@@ -114,7 +114,7 @@ func (c *conversation) SetConfigOption(
 
 	resp, err := c.conn.SetSessionConfigOption(ctx, request)
 	if err != nil {
-		return nil, fmt.Errorf("set ACP session config option %q: %w", id, err)
+		return nil, c.normalizeError(fmt.Sprintf("set ACP session config option %q", id), err)
 	}
 	// ACP marks the response's configOptions required and defines it as the full
 	// rebuilt catalog, but some agents accept the change and answer without it.
@@ -168,6 +168,21 @@ func (c *conversation) applyAcceptedConfigOption(id string, value ports.ChatConf
 		}
 		return
 	}
+}
+
+// currentModel returns the session's active model id from the "model" config
+// option, or "" when the provider has not advertised one (or the failure
+// happened before any model was applied). It is read when a provider request
+// error is classified so a binding can attribute a model-specific failure.
+func (c *conversation) currentModel() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.configOptions {
+		if c.configOptions[i].ID == "model" {
+			return c.configOptions[i].Current.Select
+		}
+	}
+	return ""
 }
 
 // configOptionOffers reports whether the live provider-owned catalog offers a

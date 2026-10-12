@@ -2655,6 +2655,7 @@
 	"coder.templateOptions.selectPlaceholder": "选择一个选项",
 	"coder.templateOptions.settingsHint": "更改将应用于新会话。",
 	"settings.models.selectModel": "选择模型",
+	"settings.models.unsupported": "当前安装的版本不支持",
 	"settings.models.useAgentModel": "使用智能体模型",
 	"settings.models.useAgentMode": "使用智能体模式",
 	"settings.models.clearEffort": "清除推理强度",

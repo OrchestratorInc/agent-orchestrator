@@ -2712,6 +2712,7 @@
 	"coder.templateOptions.selectPlaceholder": "Sélectionnez une option",
 	"coder.templateOptions.settingsHint": "Les modifications s'appliquent aux nouvelles sessions.",
 	"settings.models.selectModel": "Sélectionner un modèle",
+	"settings.models.unsupported": "Non pris en charge par la version installée",
 	"settings.models.useAgentModel": "Utiliser le modèle de l’agent",
 	"settings.models.useAgentMode": "Utiliser le mode de l’agent",
 	"settings.models.clearEffort": "Effacer l’effort",

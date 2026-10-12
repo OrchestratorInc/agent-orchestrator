@@ -389,6 +389,15 @@ func Run() error {
 		}
 		agentSvc.InvalidateAgentAuthentication(string(domain.HarnessClaudeCode))
 		agentSvc.RecheckAgent(string(domain.HarnessClaudeCode))
+	}, func(model, installed, required string) {
+		if agentSvc == nil {
+			return
+		}
+		// The installed Claude Code binary rejected this model as too new for
+		// it. Record the fact so the picker stops offering it until the binary
+		// is upgraded, instead of letting the user pick it and hit the same
+		// deterministic failure again.
+		agentSvc.MarkModelUnsupported(string(domain.HarnessClaudeCode), model, installed, required)
 	})
 
 	// Daemon-owned preferences. The store's type is field-compatible with the

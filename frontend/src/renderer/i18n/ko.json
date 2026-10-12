@@ -2673,6 +2673,7 @@
 	"coder.templateOptions.selectPlaceholder": "옵션 선택",
 	"coder.templateOptions.settingsHint": "변경 사항은 새 세션에 적용됩니다.",
 	"settings.models.selectModel": "모델 선택",
+	"settings.models.unsupported": "설치된 버전에서 지원되지 않음",
 	"settings.models.useAgentModel": "에이전트 모델 사용",
 	"settings.models.useAgentMode": "에이전트 모드 사용",
 	"settings.models.clearEffort": "추론 수준 지우기",

@@ -779,6 +779,7 @@ type fakeAgent struct {
 	capabilities        *acpsdk.AgentCapabilities
 	initErr             error
 	newParams           acpsdk.NewSessionRequest
+	newSessionErr       error
 	loadParams          acpsdk.LoadSessionRequest
 	resumeParams        acpsdk.ResumeSessionRequest
 	loadUpdates         []acpsdk.SessionUpdate
@@ -1033,8 +1034,12 @@ func (a *fakeAgent) ListSessions(context.Context, acpsdk.ListSessionsRequest) (a
 func (a *fakeAgent) NewSession(ctx context.Context, params acpsdk.NewSessionRequest) (acpsdk.NewSessionResponse, error) {
 	a.mu.Lock()
 	a.newParams = params
+	newErr := a.newSessionErr
 	updates := append([]acpsdk.SessionUpdate(nil), a.newSessionUpdates...)
 	a.mu.Unlock()
+	if newErr != nil {
+		return acpsdk.NewSessionResponse{}, newErr
+	}
 	for _, update := range updates {
 		if err := a.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: "claude-session-1", Update: update}); err != nil {
 			return acpsdk.NewSessionResponse{}, err

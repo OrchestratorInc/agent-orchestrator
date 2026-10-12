@@ -75,10 +75,10 @@ func New(drivers ...ports.ChatDriver) *Registry {
 // Every other harness stays TUI-only until the same is true of it. The driver
 // reuses the harness's existing agent plugin for binary resolution and auth, so
 // registration adds no second answer to "is this agent installed and logged in".
-func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
+func Build(log *slog.Logger, onClaudeAuthRejected func(), onClaudeModelUnsupported func(model, installed, required string)) *Registry {
 	return New(
 		codexappserver.New(codex.New(), log),
-		claudeacp.New(claudecode.New(), log, onClaudeAuthRejected),
+		claudeacp.New(claudecode.New(), log, onClaudeAuthRejected, onClaudeModelUnsupported),
 		opencodeacp.New(opencode.New(), log),
 		opencodev2acp.New(opencodev2.New(), log),
 		droidacp.New(droid.New(), log),
