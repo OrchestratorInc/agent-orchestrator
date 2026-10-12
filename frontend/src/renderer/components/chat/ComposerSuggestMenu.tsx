@@ -121,6 +121,7 @@ export function ComposerSuggestMenu({
 						<li key={item.value} data-index={index}>
 							<button
 								type="button"
+								tabIndex={-1}
 								role="option"
 								id={`${id}-option-${index}`}
 								aria-selected={index === highlighted}

@@ -1,5 +1,5 @@
 import { SquareTerminal, X } from "lucide-react";
-import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useTruncatedText } from "../hooks/useTruncatedText";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
@@ -94,6 +94,17 @@ export function ShellTerminalTab({
 				}
 			: { onClick: handleClick, onDoubleClick: beginEdit };
 
+	const renameKeyProps = canEdit
+		? {
+				"aria-keyshortcuts": "F2",
+				onKeyDown: (event: KeyboardEvent) => {
+					if (event.key !== "F2") return;
+					event.preventDefault();
+					beginEdit();
+				},
+			}
+		: {};
+
 	const commit = () => {
 		if (!isEditing) return;
 		setIsEditing(false);
@@ -163,6 +174,7 @@ export function ShellTerminalTab({
 					"aria-current": isActive,
 					"aria-selected": isActive,
 					...tabRenameHandlers,
+					...renameKeyProps,
 					role: "tab",
 					tabIndex: isActive ? 0 : -1,
 					title: isTruncated
@@ -246,6 +258,7 @@ export function ShellTerminalTab({
 						isActive ? "text-foreground" : "text-passive group-hover:text-foreground",
 					)}
 					{...tabRenameHandlers}
+					{...renameKeyProps}
 					role="tab"
 					tabIndex={isActive ? 0 : -1}
 					title={

@@ -177,6 +177,14 @@ daemon validation.
 Standalone spawns require `--agent` because there is no project configuration
 from which to resolve a default harness.
 
+`ao spawn --output artifact` marks a worker whose deliverable is a file rather
+than a pull request. The daemon persists the kind with the session and adds an
+artifact-delivery section to the worker's system prompt, including after
+restore and agent switching. It does not change derived status or the Kanban
+column: the session shows artifact output once a file exists in its artifact
+directory. Any other value exits 2; the API rejects unknown `requestedOutput` values
+with `400 INVALID_REQUESTED_OUTPUT`.
+
 `ao preview` resolves its session from the `AO_SESSION_ID` environment variable
 (it is meant to run inside a session), not a flag. With no argument it
 autodetects an `index.html` in the session workspace. Relative file targets are

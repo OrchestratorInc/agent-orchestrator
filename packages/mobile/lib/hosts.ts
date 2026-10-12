@@ -1,6 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import type { Endpoint } from "./endpoints";
+import type { MachineAppearance } from "./machineAppearance";
+import { clearConfig, loadConfig, saveConfig, type ServerConfig } from "./config";
 
 /**
  * A paired machine.
@@ -15,6 +17,8 @@ export type Host = {
 	id: string;
 	/** Hostname by default; the user can rename it. */
 	name: string;
+	/** Phone-local visual identity used to distinguish machines in fleet views. */
+	appearance?: MachineAppearance;
 	platform: string;
 	endpoints: Endpoint[];
 	/** Connection token. Lives in the device keystore, never in AsyncStorage. */
@@ -28,7 +32,7 @@ export type Host = {
 
 /** Ignore recency-only writes so another host reconnecting does not restart live connections. */
 export function sameHostConnections(left: Host[], right: Host[]): boolean {
-	const connectionFields = (hosts: Host[]) => hosts.map(({ id, name, platform, endpoints, token, accountUserId }) => [id, name, platform, endpoints, token, accountUserId]);
+	const connectionFields = (hosts: Host[]) => hosts.map(({ id, name, appearance, platform, endpoints, token, accountUserId }) => [id, name, appearance, platform, endpoints, token, accountUserId]);
 	return JSON.stringify(connectionFields(left)) === JSON.stringify(connectionFields(right));
 }
 
@@ -72,9 +76,9 @@ async function writeStored(hosts: StoredHost[]): Promise<void> {
 // Several hosts can reconnect together. Serialize read-modify-write so one
 // host's endpoint refresh cannot overwrite another's update.
 let pendingWrite: Promise<void> = Promise.resolve();
-function mutateStored(change: (hosts: StoredHost[]) => StoredHost[]): Promise<void> {
-	const write = pendingWrite.then(async () => writeStored(change(await readStored())));
-	pendingWrite = write.catch(() => {});
+function mutateStored(change: (hosts: StoredHost[]) => StoredHost[] | Promise<StoredHost[]>): Promise<void> {
+	const write = pendingWrite.then(async () => writeStored(await change(await readStored())));
+	pendingWrite = write.then(() => {}, () => {});
 	return write;
 }
 
@@ -111,6 +115,11 @@ export async function renameHost(id: string, name: string): Promise<void> {
 	const trimmed = name.trim();
 	if (!trimmed) throw new Error("Machine name cannot be empty");
 	await mutateStored((stored) => stored.map((host) => host.id === id ? { ...host, name: trimmed } : host));
+}
+
+/** Change only the phone-local visual identity for a paired machine. */
+export async function updateHostAppearance(id: string, appearance: MachineAppearance): Promise<void> {
+	await mutateStored((stored) => stored.map((host) => host.id === id ? { ...host, appearance } : host));
 }
 
 /**
@@ -172,11 +181,31 @@ export async function clearActiveHost(): Promise<void> {
 }
 
 export async function removeHost(id: string): Promise<void> {
-	await mutateStored((stored) => stored.filter((h) => h.id !== id));
+	await mutateStored(async (stored) => {
+		const host = stored.find((item) => item.id === id);
+		const cached = await loadConfig();
+		// Config also feeds legacy migration. Clear it in the same local queue
+		// as connection persistence so a late network result cannot restore it.
+		if (cached.hostId === id || (host && !cached.hostId && host.endpoints.some((address) =>
+			address.host === cached.host && String(address.port) === cached.httpPort && address.secure === !!cached.secure))) await clearConfig();
+		return stored.filter((h) => h.id !== id);
+	});
 	await SecureStore.deleteItemAsync(tokenKey(id));
 	// A pointer at a machine that no longer exists would resolve to nothing;
 	// clearing it falls back to recency instead.
 	if ((await AsyncStorage.getItem(ACTIVE_HOST_KEY)) === id) await clearActiveHost();
+}
+
+/** Commit a connection only while its pairing and credential are still current. */
+export function persistResolvedConfig(config: ServerConfig): Promise<boolean> {
+	const write = pendingWrite.then(async () => {
+		const selected = await activeHost();
+		if (!selected || selected.id !== config.hostId || selected.token !== config.password) return false;
+		await saveConfig(config);
+		return true;
+	});
+	pendingWrite = write.then(() => {}, () => {});
+	return write;
 }
 
 const LEGACY_CONFIG_KEY = "ao.serverConfig";

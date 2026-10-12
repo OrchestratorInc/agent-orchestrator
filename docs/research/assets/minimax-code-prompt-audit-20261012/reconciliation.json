@@ -1,0 +1,19 @@
+{
+  "at": "2026-10-12T18:05:31.911511+00:00",
+  "harness": "minimax-code",
+  "pr": 6520,
+  "previousHead": "32abff8d358f9fe7f82ae034f257bb72b3a3ef5a",
+  "canonicalMain": "fca1b72c0a6e9106dae0cbe76b5621358356aa4e",
+  "resolvedPaths": [
+    "backend/internal/adapters/agent/modelcatalog/catalog.go",
+    "backend/internal/skillassets/using-ao/commands/spawn.md",
+    "backend/internal/storage/sqlite/migrate_burned_versions_test.go",
+    "packages/product-ui/src/agents.ts"
+  ],
+  "preservedEvidence": "All preexisting docs/research bytes unchanged; ancestry retained by merge commit.",
+  "validation": "PR CI only; no local suites run.",
+  "liveFresh": "NOT_RUN_THIS_RECONCILIATION",
+  "liveRestore": "NOT_RUN_THIS_RECONCILIATION",
+  "providerRole": "NOT_RUN_THIS_RECONCILIATION",
+  "historicalProof": "Retained at original tested source/native revision; never promoted by merge."
+}

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, FOCUS_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type KeybindingOverrides } from "./shared/shortcuts";
+import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type AppShortcutEvent, type KeybindingOverrides } from "./shared/shortcuts";
 import {
 	SET_CHAT_DRAFT_RISK_CHANNEL,
 	type ChatDraftBoundaryKind,
@@ -255,8 +255,8 @@ const api = {
 		setChatDraftRisk: (risks: readonly ChatDraftBoundaryKind[], copy?: ChatDraftDialogCopy) => {
 			ipcRenderer.send(SET_CHAT_DRAFT_RISK_CHANNEL, risks, copy);
 		},
-		onOpenSettingsShortcut: (listener: () => void) => {
-			const wrapped = () => listener();
+		onOpenSettingsShortcut: (listener: (section?: string) => void) => {
+			const wrapped = (_event: unknown, section?: unknown) => listener(typeof section === "string" ? section : undefined);
 			ipcRenderer.on(OPEN_SETTINGS_SHORTCUT_CHANNEL, wrapped);
 			return () => {
 				ipcRenderer.off(OPEN_SETTINGS_SHORTCUT_CHANNEL, wrapped);
@@ -290,18 +290,19 @@ const api = {
 				ipcRenderer.off(NEXT_TAB_SHORTCUT_CHANNEL, wrapped);
 			};
 		},
-		onFocusTerminalShortcut: (listener: () => void) => {
-			const wrapped = () => listener();
-			ipcRenderer.on(FOCUS_TERMINAL_SHORTCUT_CHANNEL, wrapped);
+		onShortcut: (listener: (event: AppShortcutEvent) => void) => {
+			const wrapped = (_event: unknown, shortcut: AppShortcutEvent) => listener(shortcut);
+			ipcRenderer.on(APP_SHORTCUT_CHANNEL, wrapped);
 			return () => {
-				ipcRenderer.off(FOCUS_TERMINAL_SHORTCUT_CHANNEL, wrapped);
+				ipcRenderer.off(APP_SHORTCUT_CHANNEL, wrapped);
 			};
 		},
 	},
 	terminal: {
 		saveDroppedFile: (input: { name: string; bytes: Uint8Array }) =>
 			ipcRenderer.invoke("terminal:saveDroppedFile", input) as Promise<string>,
-		setFocused: (focused: boolean) => ipcRenderer.send(SET_TERMINAL_FOCUSED_CHANNEL, focused),
+		setFocused: (focused: boolean, handlesFontSize = false) =>
+			ipcRenderer.send(SET_TERMINAL_FOCUSED_CHANNEL, focused, handlesFontSize),
 		onFontSizeShortcut: (listener: (delta: -1 | 1) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, delta: -1 | 1) => listener(delta);
 			ipcRenderer.on(TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, wrapped);
@@ -366,11 +367,16 @@ const api = {
 			};
 		},
 	},
+	sideChats: {
+		capture: (closedSideId?: string, cancelClose = false) => ipcRenderer.invoke("sideChats:capture", closedSideId, cancelClose) as Promise<void>,
+	},
 	editorHandoff: {
 		getState: (sessionId: string) =>
 			ipcRenderer.invoke("editorHandoff:getState", sessionId) as Promise<EditorHandoffState>,
 		open: (input: OpenSessionTargetInput) =>
 			ipcRenderer.invoke("editorHandoff:open", input) as Promise<OpenSessionTargetResult>,
+		copyWorkspacePath: (sessionId: string) =>
+			ipcRenderer.invoke("editorHandoff:copyWorkspacePath", sessionId) as Promise<void>,
 	},
 	telemetry: {
 		getBootstrap: async () => {

@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -28,5 +30,22 @@ func TestPersistentChatHostKeepSetUsesDurableOwnership(t *testing.T) {
 	}
 	if _, ok := keep["review-recoverable-review"]; !ok {
 		t.Fatalf("keep = %v, missing recoverable reviewer host", keep)
+	}
+}
+
+func TestSideHostsSurviveOnlyTheirDesktopLaunch(t *testing.T) {
+	dir := t.TempDir()
+	for _, id := range []string{"btw-current-one", "btw-current-two", "btw-previous-one", "main"} {
+		if err := os.MkdirAll(filepath.Join(dir, "chat-hosts", id), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep := map[string]struct{}{}
+	keepLaunchSideHosts(dir, "current", keep)
+	if len(keep) != 2 {
+		t.Fatalf("kept side hosts: %v", keep)
+	}
+	if _, ok := keep["btw-previous-one"]; ok {
+		t.Fatal("kept a previous desktop launch")
 	}
 }
