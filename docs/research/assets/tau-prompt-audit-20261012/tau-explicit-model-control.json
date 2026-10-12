@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-12T21:12:28.119122+00:00",
+  "profile": "Owned scratch TAU_HOME only",
+  "oldSHA256": "a54af5f0553ca82f5a6f8ae7b66cd0c52c2d66323aec1eae0aae2fd9f46b5cd7",
+  "newSHA256": "be02b52e70b6d1c88b2a11c5478f1b33e4f23ec0c007807b9747cf2e019b5540",
+  "models": [
+    "glm-5.3-flash",
+    "glm-4.7"
+  ],
+  "nativeDefaultModelUnchanged": true,
+  "realGlobalProfileUntouched": true,
+  "authorization": "Existing authorized Z.ai native OpenAI-compatible provider; GLM-4.7 already used by authorized ZCode proof. No Codex credential import/account/upgrade."
+}

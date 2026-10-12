@@ -1,0 +1,19 @@
+{
+  "at": "2026-10-12T21:26:12.182128+00:00",
+  "http": 200,
+  "reply": {
+    "ok": true,
+    "sessionId": "prompt-tau-5e2d3689-1",
+    "message": "Please create control-alive.json containing alive true, then finish and wait."
+  },
+  "sid": "prompt-tau-5e2d3689-1",
+  "beforeGeneration": "124ace20-9f15-4d29-81eb-2b45618acf64",
+  "observedAt": "2026-10-12T21:27:19.035055+00:00",
+  "controlFileExists": true,
+  "alive": true,
+  "generationUnchanged": true,
+  "activity": {
+    "state": "idle",
+    "lastActivityAt": "2026-10-12T21:26:19.283568299Z"
+  }
+}

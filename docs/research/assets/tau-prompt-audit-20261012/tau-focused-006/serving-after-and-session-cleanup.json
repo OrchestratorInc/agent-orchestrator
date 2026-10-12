@@ -1,0 +1,42 @@
+{
+  "at": "2026-10-12T21:28:53.146370+00:00",
+  "servingPID": 1081040,
+  "executableSHA256": "e17dfc12723abae4343a65a86e9d6f765603dcaa39fe060204cbd5092a2d1083",
+  "backendSource": "e1ef49b12712b6c5fc17e595f931bc28296dd66f",
+  "UIcommit": "3e80348c14cacb833de630563df6b0ab234e86a8",
+  "electronPID": 1080817,
+  "sessions": [
+    {
+      "sid": "prompt-tau-c8de4cb1-1",
+      "http": 200,
+      "reply": {
+        "ok": true,
+        "sessionId": "prompt-tau-c8de4cb1-1"
+      },
+      "terminated": true,
+      "generation": "bbcb4f0b-9b16-4f38-8935-04f0212370ff"
+    },
+    {
+      "sid": "prompt-tau-ae035355-1",
+      "http": 200,
+      "reply": {
+        "ok": true,
+        "sessionId": "prompt-tau-ae035355-1"
+      },
+      "terminated": true,
+      "generation": "643344c9-bc53-4e13-8368-ecac603ab955"
+    },
+    {
+      "sid": "prompt-tau-5e2d3689-1",
+      "http": 200,
+      "reply": {
+        "ok": true,
+        "sessionId": "prompt-tau-5e2d3689-1"
+      },
+      "terminated": true,
+      "generation": "124ace20-9f15-4d29-81eb-2b45618acf64"
+    }
+  ],
+  "profilesHistoryAndWorkspacesPreserved": true,
+  "productionPID625660Untouched": true
+}

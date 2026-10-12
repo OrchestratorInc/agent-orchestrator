@@ -1,0 +1,19 @@
+{
+  "at": "2026-10-12T21:18:59.959382+00:00",
+  "source": "e1ef49b12712b6c5fc17e595f931bc28296dd66f",
+  "nativeHistorySHA256": "ca82c880438a940456b7d34ceb3b458c6c5362f2fb14c74c232bf2c0f01c4c02",
+  "restoreHTTP": 500,
+  "restoreReply": {
+    "error": "internal",
+    "code": "INTERNAL_ERROR",
+    "message": "Internal server error",
+    "requestId": "vps-linux/GPeDWZkSNn-002072",
+    "reporting_owner": "http"
+  },
+  "ownedFailureLog": "time=2026-10-12T21:18:59.760Z level=INFO msg=\"http request\" id=vps-linux/GPeDWZkSNn-002072 method=POST path=/api/v1/sessions/prompt-tau-c8de4cb1-1/restore status=500 bytes=146 duration=5.624314687s remote=127.0.0.1:34938 error=\"restore prompt-tau-c8de4cb1-1: restore command: tau: exact native history is unavailable: open /home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/prompt-audit/tau-profile/sessions/tmp-tau-prompt-data-worktrees-prompt-tau-c8de4cb1-prompt-tau-c8de4cb1-1-3e1228/6aac9d77e39341a1a811ec41e30a6ae5.jsonl: no such file or directory\"",
+  "staysTerminated": true,
+  "sameNativeIdentity": true,
+  "status": "PASS",
+  "nativeIdentitySHA256": "8299c4955a5b8d4b268ae75fff2c7132214c60d713e006755eda78352ccc3bec",
+  "ownedNativeHistoryRestoredByteIdentically": true
+}

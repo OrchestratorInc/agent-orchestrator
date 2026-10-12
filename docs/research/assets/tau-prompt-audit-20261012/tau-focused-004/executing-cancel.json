@@ -1,0 +1,547 @@
+{
+  "at": "2026-10-12T20:44:18.413Z",
+  "source": "3e80348c14cacb833de630563df6b0ab234e86a8",
+  "runnerSHA256": "23dc1a2f39bd6c88fd95b47d041040a039d16c52ab71996a278f49e68f8bdcc5",
+  "witnessSpec": {
+    "startPath": ".cancel-start-6aea84a9964145b988db3f526174a0fc.json",
+    "latePath": ".cancel-late-6aea84a9964145b988db3f526174a0fc.json",
+    "lateSideEffectDelayMs": 12000,
+    "tokenSHA256": "a409b196be0db5d3f910096fa99f35a8d7f6d57c3ecccdb73938c60e35b95ca5"
+  },
+  "result": {
+    "passed": true,
+    "observedActive": true,
+    "reason": "AO terminal mux interrupted the witnessed foreground command; the same terminal settled, its PID stopped, and no delayed side effect appeared",
+    "activeState": {
+      "ok": true,
+      "status": 200,
+      "requestId": "",
+      "method": "GET",
+      "path": "/api/v1/sessions/prompt-tau-5a74f273-1",
+      "response": {
+        "session": {
+          "id": "prompt-tau-5a74f273-1",
+          "projectId": "prompt-tau-5a74f273",
+          "kind": "worker",
+          "harness": "tau",
+          "reviewerConfig": {},
+          "autoReviewEnabled": false,
+          "displayName": "Tau private prompt control",
+          "mode": "tui",
+          "activity": {
+            "state": "active",
+            "lastActivityAt": "2026-10-12T20:43:58.527055627Z"
+          },
+          "isTerminated": false,
+          "terminateOnPrMerge": false,
+          "autoInjectReview": true,
+          "autoInjectCI": true,
+          "outputType": "none",
+          "createdAt": "2026-10-12T20:35:21.832835704Z",
+          "updatedAt": "2026-10-12T20:43:58.931110989Z",
+          "isPinned": false,
+          "provisionState": "ready",
+          "branchState": {
+            "commits": 0,
+            "unpushed": 0
+          },
+          "statusReadiness": "ready",
+          "chatProviderPreserved": false,
+          "status": "working",
+          "kanbanColumn": "building",
+          "displayStatus": "Working",
+          "terminalHandleId": "ptyhost-v1:prompt-tau-5a74f273-1",
+          "branch": "ao/prompt-tau-5a74f273-1/root",
+          "terminalGeneration": "05bd821b-717b-448f-878c-c270d3a04582",
+          "lastUserMessageAt": "2026-10-12T20:43:58.913451709Z",
+          "lastInteractionAt": "2026-10-12T20:43:58.913451709Z",
+          "lastEventAt": "2026-10-12T20:43:58.527055627Z",
+          "prs": []
+        }
+      },
+      "startedAt": "2026-10-12T20:44:05.974Z",
+      "finishedAt": "2026-10-12T20:44:06.013Z",
+      "durationMs": 39
+    },
+    "settledState": {
+      "ok": true,
+      "status": 200,
+      "requestId": "",
+      "method": "GET",
+      "path": "/api/v1/sessions/prompt-tau-5a74f273-1",
+      "response": {
+        "session": {
+          "id": "prompt-tau-5a74f273-1",
+          "projectId": "prompt-tau-5a74f273",
+          "kind": "worker",
+          "harness": "tau",
+          "reviewerConfig": {},
+          "autoReviewEnabled": false,
+          "displayName": "Tau private prompt control",
+          "mode": "tui",
+          "activity": {
+            "state": "idle",
+            "lastActivityAt": "2026-10-12T20:44:06.336131993Z"
+          },
+          "isTerminated": false,
+          "terminateOnPrMerge": false,
+          "autoInjectReview": true,
+          "autoInjectCI": true,
+          "outputType": "none",
+          "createdAt": "2026-10-12T20:35:21.832835704Z",
+          "updatedAt": "2026-10-12T20:44:06.356351803Z",
+          "isPinned": false,
+          "provisionState": "ready",
+          "branchState": {
+            "commits": 0,
+            "unpushed": 0
+          },
+          "statusReadiness": "ready",
+          "chatProviderPreserved": false,
+          "status": "idle",
+          "kanbanColumn": "building",
+          "displayStatus": "Awaiting PR",
+          "terminalHandleId": "ptyhost-v1:prompt-tau-5a74f273-1",
+          "branch": "ao/prompt-tau-5a74f273-1/root",
+          "terminalGeneration": "05bd821b-717b-448f-878c-c270d3a04582",
+          "lastUserMessageAt": "2026-10-12T20:43:58.913451709Z",
+          "lastInteractionAt": "2026-10-12T20:43:58.913451709Z",
+          "lastEventAt": "2026-10-12T20:44:06.336131993Z",
+          "prs": []
+        }
+      },
+      "startedAt": "2026-10-12T20:44:06.442Z",
+      "finishedAt": "2026-10-12T20:44:06.446Z",
+      "durationMs": 4
+    },
+    "confirmationWindowMs": 60000,
+    "websocket": {
+      "transport": "websocket",
+      "sessionId": "prompt-tau-5a74f273-1",
+      "terminalHandleId": "ptyhost-v1:prompt-tau-5a74f273-1",
+      "terminalGeneration": "05bd821b-717b-448f-878c-c270d3a04582",
+      "startedAt": "2026-10-12T20:44:06.017Z",
+      "opened": true,
+      "inputBytes": 1,
+      "pongObserved": true,
+      "frames": [
+        {
+          "direction": "sent",
+          "at": "2026-10-12T20:44:06.029Z",
+          "ch": "terminal",
+          "type": "open",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:06.030Z",
+          "ch": "terminal",
+          "type": "resize",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:06.040Z",
+          "ch": "terminal",
+          "type": "opened",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:06.060Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:06.110Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "sent",
+          "at": "2026-10-12T20:44:06.114Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "sent",
+          "at": "2026-10-12T20:44:06.114Z",
+          "ch": "system",
+          "type": "ping"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:06.114Z",
+          "ch": "system",
+          "type": "pong"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:06.151Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:06.222Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:06.428Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:06.519Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:06.614Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:06.648Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:07.147Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:07.648Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:08.146Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:08.646Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:09.146Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:09.645Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:10.145Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:10.645Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:11.145Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:11.261Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:11.647Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:12.148Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:12.646Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:13.146Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:13.645Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:14.145Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:14.649Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:15.150Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:15.645Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:16.145Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:16.646Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:17.147Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:17.650Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T20:44:18.149Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-tau-5a74f273-1"
+        }
+      ],
+      "timedOut": false,
+      "qualification": "A system pong acknowledges mux processing, not provider cancellation; cancellation also requires a live command-start witness with matching kernel process-start identity, the same session settling, that exact process stopping, and no delayed side effect.",
+      "commandWitness": {
+        "tokenSha256": "a409b196be0db5d3f910096fa99f35a8d7f6d57c3ecccdb73938c60e35b95ca5",
+        "pid": 1076772,
+        "processIdentityKind": "linux-proc-startticks",
+        "processIdentitySha256": "1d0ce3ba8ad92311f42e8fbd02bbda14311157ce23a7dd32242e46811c1be173",
+        "startPath": ".cancel-start-6aea84a9964145b988db3f526174a0fc.json",
+        "latePath": ".cancel-late-6aea84a9964145b988db3f526174a0fc.json",
+        "lateSideEffectDelayMs": 12000
+      },
+      "url": "ws://127.0.0.1:45435/mux",
+      "preInputState": {
+        "method": "GET",
+        "path": "/api/v1/sessions/prompt-tau-5a74f273-1",
+        "status": 200,
+        "requestId": "",
+        "response": {
+          "session": {
+            "id": "prompt-tau-5a74f273-1",
+            "projectId": "prompt-tau-5a74f273",
+            "kind": "worker",
+            "harness": "tau",
+            "reviewerConfig": {},
+            "autoReviewEnabled": false,
+            "displayName": "Tau private prompt control",
+            "mode": "tui",
+            "activity": {
+              "state": "active",
+              "lastActivityAt": "2026-10-12T20:43:58.527055627Z"
+            },
+            "isTerminated": false,
+            "terminateOnPrMerge": false,
+            "autoInjectReview": true,
+            "autoInjectCI": true,
+            "outputType": "none",
+            "createdAt": "2026-10-12T20:35:21.832835704Z",
+            "updatedAt": "2026-10-12T20:43:58.931110989Z",
+            "isPinned": false,
+            "provisionState": "ready",
+            "branchState": {
+              "commits": 0,
+              "unpushed": 0
+            },
+            "statusReadiness": "ready",
+            "chatProviderPreserved": false,
+            "status": "working",
+            "kanbanColumn": "building",
+            "displayStatus": "Working",
+            "terminalHandleId": "ptyhost-v1:prompt-tau-5a74f273-1",
+            "branch": "ao/prompt-tau-5a74f273-1/root",
+            "terminalGeneration": "05bd821b-717b-448f-878c-c270d3a04582",
+            "lastUserMessageAt": "2026-10-12T20:43:58.913451709Z",
+            "lastInteractionAt": "2026-10-12T20:43:58.913451709Z",
+            "lastEventAt": "2026-10-12T20:43:58.527055627Z",
+            "prs": []
+          }
+        },
+        "startedAt": "2026-10-12T20:44:06.040Z",
+        "finishedAt": "2026-10-12T20:44:06.047Z",
+        "durationMs": 6
+      },
+      "preInputWitness": {
+        "start": {
+          "method": "GET",
+          "path": "/api/v1/sessions/prompt-tau-5a74f273-1/workspace/file?path=.cancel-start-6aea84a9964145b988db3f526174a0fc.json",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "sessionId": "prompt-tau-5a74f273-1",
+            "path": ".cancel-start-6aea84a9964145b988db3f526174a0fc.json",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "size": 109,
+            "binary": false,
+            "deleted": false,
+            "editable": true,
+            "content": "{\"token\":\"6aea84a9964145b988db3f526174a0fc\",\"pid\":1076772,\"processIdentity\":\"linux-proc-startticks:88359854\"}",
+            "contentTruncated": false,
+            "diff": "diff --git a/.cancel-start-6aea84a9964145b988db3f526174a0fc.json b/.cancel-start-6aea84a9964145b988db3f526174a0fc.json\nnew file mode 100644\n--- /dev/null\n+++ b/.cancel-start-6aea84a9964145b988db3f526174a0fc.json\n@@ -0,0 +1,1 @@\n+{\"token\":\"6aea84a9964145b988db3f526174a0fc\",\"pid\":1076772,\"processIdentity\":\"linux-proc-startticks:88359854\"}\n",
+            "diffTruncated": false,
+            "compareBaseSha": "a2da51f3e2594dee7217c5e55e9c6cbefcc1b1ed",
+            "compareBaseRef": "refs/heads/main",
+            "compareMode": "base",
+            "workspaceVersion": "bd15d0da992a3cc033bbbf87c72856671f3c445625cb2bd68b3b56d6d83d9657",
+            "fileFingerprint": "6954cad1d45d5971e5fb54210f73f9b282ebc73d60182a4b12fb6d85ebe61cb2"
+          },
+          "startedAt": "2026-10-12T20:44:06.047Z",
+          "finishedAt": "2026-10-12T20:44:06.111Z",
+          "durationMs": 64
+        },
+        "late": {
+          "method": "GET",
+          "path": "/api/v1/sessions/prompt-tau-5a74f273-1/workspace/file?path=.cancel-late-6aea84a9964145b988db3f526174a0fc.json",
+          "status": 404,
+          "requestId": "",
+          "response": {
+            "error": "not_found",
+            "code": "WORKSPACE_FILE_NOT_FOUND",
+            "message": "Workspace file not found",
+            "requestId": "vps-linux/tG2yH7wfot-000926"
+          },
+          "startedAt": "2026-10-12T20:44:06.047Z",
+          "finishedAt": "2026-10-12T20:44:06.111Z",
+          "durationMs": 64
+        },
+        "process": {
+          "running": true,
+          "sameIdentity": true,
+          "identityKind": "linux-proc-startticks",
+          "identitySha256": "1d0ce3ba8ad92311f42e8fbd02bbda14311157ce23a7dd32242e46811c1be173"
+        }
+      },
+      "inputSha256": "77adfc95029e73b173f60e556f915b0cd8850848111358b1c370fb7c154e61fd",
+      "inputSentAt": "2026-10-12T20:44:06.114Z",
+      "settledAt": "2026-10-12T20:44:06.446Z",
+      "settleDurationMs": 332,
+      "settledWithinDefaultWindow": true,
+      "processStoppedAt": "2026-10-12T20:44:06.447Z",
+      "processStopEvidence": {
+        "running": false,
+        "sameIdentity": false
+      },
+      "postInterruptWitness": {
+        "processRunning": false,
+        "pidRunning": false,
+        "sameProcessIdentity": false,
+        "process": {
+          "running": false,
+          "sameIdentity": false
+        },
+        "late": {
+          "method": "GET",
+          "path": "/api/v1/sessions/prompt-tau-5a74f273-1/workspace/file?path=.cancel-late-6aea84a9964145b988db3f526174a0fc.json",
+          "status": 404,
+          "requestId": "",
+          "response": {
+            "error": "not_found",
+            "code": "WORKSPACE_FILE_NOT_FOUND",
+            "message": "Workspace file not found",
+            "requestId": "vps-linux/tG2yH7wfot-001174"
+          },
+          "startedAt": "2026-10-12T20:44:18.410Z",
+          "finishedAt": "2026-10-12T20:44:18.412Z",
+          "durationMs": 2
+        },
+        "checkedAt": "2026-10-12T20:44:18.412Z"
+      },
+      "finishedAt": "2026-10-12T20:44:18.412Z",
+      "durationMs": 12395,
+      "closeCode": 1005
+    }
+  }
+}

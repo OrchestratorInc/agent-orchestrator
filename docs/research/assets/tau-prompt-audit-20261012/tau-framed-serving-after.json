@@ -1,0 +1,29 @@
+{
+  "at": "2026-10-12T20:56:30.716488+00:00",
+  "pid": 1076132,
+  "executableSHA256": "af46afb7510533921dda9d83b64ccc15606d0f0be077707aee3a496a84ef3fa7",
+  "source": "3e80348c14cacb833de630563df6b0ab234e86a8",
+  "UI": "3e80348c14cacb833de630563df6b0ab234e86a8",
+  "electronPID": 1075900,
+  "sessions": [
+    {
+      "sid": "prompt-tau-5a74f273-1",
+      "http": 200,
+      "reply": {
+        "ok": true,
+        "sessionId": "prompt-tau-5a74f273-1"
+      },
+      "terminated": true
+    },
+    {
+      "sid": "prompt-tau-44b843fa-1",
+      "http": 200,
+      "reply": {
+        "ok": true,
+        "sessionId": "prompt-tau-44b843fa-1"
+      },
+      "terminated": true
+    }
+  ],
+  "originalHistoryPreserved": true
+}

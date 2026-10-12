@@ -1,0 +1,15 @@
+{
+  "at": "2026-10-12T20:52:11.378444+00:00",
+  "http": 200,
+  "reply": {
+    "ok": true,
+    "sessionId": "prompt-tau-44b843fa-1",
+    "message": "Please create control-alive.json containing alive true, then finish and wait."
+  },
+  "sid": "prompt-tau-44b843fa-1",
+  "beforeGeneration": "15186b03-d24e-4a5c-b891-d16255a8d0d2",
+  "observedAt": "2026-10-12T20:54:08.613969+00:00",
+  "controlFileExists": true,
+  "alive": true,
+  "generationUnchanged": true
+}

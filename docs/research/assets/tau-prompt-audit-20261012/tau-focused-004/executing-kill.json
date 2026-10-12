@@ -1,0 +1,25 @@
+{
+  "at": "2026-10-12T20:45:21.419936+00:00",
+  "source": "3e80348c14cacb833de630563df6b0ab234e86a8",
+  "status": "PASS",
+  "witness": {
+    "pid": 1076875,
+    "kernelIdentity": "linux-proc-startticks:88364207",
+    "startMs": 1791837889416,
+    "tokenSHA256": "cfebf768870868434cff88dc9c4638fa1070b585454621db5b6fe7b203a8958f"
+  },
+  "generationBeforeKill": "05bd821b-717b-448f-878c-c270d3a04582",
+  "killHTTP": 200,
+  "killReply": {
+    "ok": true,
+    "sessionId": "prompt-tau-5a74f273-1"
+  },
+  "terminatedConfirmed": true,
+  "childReaped": true,
+  "lateDelayMs": 30000,
+  "lateSideEffectAbsentBeyondDeadline": true,
+  "unrelatedControlAliveImmediately": true,
+  "unrelatedControlAliveLater": true,
+  "unrelatedControlGenerationUnchanged": true,
+  "precedingEscapeReceipt": "executing-cancel.json"
+}

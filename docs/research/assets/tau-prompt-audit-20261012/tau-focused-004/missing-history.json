@@ -1,0 +1,56 @@
+{
+  "at": "2026-10-12T20:45:36.512501+00:00",
+  "source": "3e80348c14cacb833de630563df6b0ab234e86a8",
+  "nativeHistorySHA256": "c9f3d546b885bd4bb2126dc858f3bed19a9914d7aa16d35dfef8251756d30042",
+  "restoreHTTP": 200,
+  "restoreReply": {
+    "ok": true,
+    "sessionId": "prompt-tau-5a74f273-1",
+    "restoreMode": "native",
+    "session": {
+      "id": "prompt-tau-5a74f273-1",
+      "projectId": "prompt-tau-5a74f273",
+      "kind": "worker",
+      "harness": "tau",
+      "reviewerConfig": {},
+      "autoReviewEnabled": false,
+      "displayName": "Tau private prompt control",
+      "mode": "tui",
+      "activity": {
+        "state": "idle",
+        "lastActivityAt": "2026-10-12T20:45:36.316750085Z"
+      },
+      "isTerminated": false,
+      "terminateOnPrMerge": false,
+      "autoInjectReview": true,
+      "autoInjectCI": true,
+      "outputType": "none",
+      "createdAt": "2026-10-12T20:35:21.832835704Z",
+      "updatedAt": "2026-10-12T20:45:36.316750085Z",
+      "isPinned": false,
+      "provisionState": "ready",
+      "branchState": {
+        "commits": 0,
+        "unpushed": 0
+      },
+      "statusReadiness": "ready",
+      "chatProviderPreserved": false,
+      "status": "idle",
+      "kanbanColumn": "building",
+      "displayStatus": "Awaiting PR",
+      "terminalHandleId": "ptyhost-v1:prompt-tau-5a74f273-1",
+      "branch": "ao/prompt-tau-5a74f273-1/root",
+      "terminalGeneration": "3acacf6b-0d7f-4ef7-88a8-eed016aeb87b",
+      "lastUserMessageAt": "2026-10-12T20:44:41.753642994Z",
+      "lastInteractionAt": "2026-10-12T20:44:41.753642994Z",
+      "lastEventAt": "2026-10-12T20:45:36.316750085Z",
+      "prs": []
+    }
+  },
+  "ownedFailureLog": "",
+  "staysTerminated": false,
+  "sameNativeIdentity": true,
+  "status": "NOT_PROVEN_OTHER_FAILURE",
+  "nativeIdentitySHA256": "62f50091f6d180288f4a0876804d5a9552362e68011a5ac8ee70d0909862815c",
+  "ownedNativeHistoryRestoredByteIdentically": true
+}

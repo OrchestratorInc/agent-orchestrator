@@ -1,0 +1,88 @@
+{
+  "scope": "REGISTERED_AO_FOCUSED_ORDINARY_TASK",
+  "at": "2026-10-12T21:13:41.715578+00:00",
+  "source": "e1ef49b12712b6c5fc17e595f931bc28296dd66f",
+  "projectId": "prompt-tau-ae035355",
+  "sessionId": "prompt-tau-ae035355-1",
+  "workspace": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/tau-prompt-data/worktrees/prompt-tau-ae035355/prompt-tau-ae035355-1",
+  "nativeIDDigest": "4e2a97a97b1410f8e7beba3d973b60db1c62b3ddc3ae6832dd28c9931dd33d48",
+  "generation": "dfc0b248-f675-4aa0-9763-8b04db7f1a22",
+  "visibleTask": "-Please create visible.json containing count 1 and cwd equal to the actual current working directory. If it already exists, increment its count once. Finish and wait.",
+  "visibleTaskHasPrivatePathOrToken": false,
+  "privateTokenSHA256": "953b0c2853ff84f89bfb6d3ebdc766237c39e97396e16c60ffab943894173bbf",
+  "projectTokenSHA256": "ffd39f6f5e631905a814f9dc02ec315b564b80d6e57da9f6591bb5164c598766",
+  "fresh": {
+    "countOnce": true,
+    "correctCwd": true,
+    "privateAction": true,
+    "projectAction": true,
+    "AGENTSPreserved": true,
+    "activeToSettled": true,
+    "nativeUserExtensionAction": true,
+    "nativeUserAppendAction": true
+  },
+  "observedStates": [
+    "idle",
+    "active"
+  ],
+  "controlSession": null,
+  "controlBefore": null,
+  "controlAfterFresh": null,
+  "actualAuthenticatedWireRole": "NOT_CAPTURED",
+  "nativeSyntheticRole": "system; additive append preserves native default and user extension guidelines in released-native controlled-provider CI",
+  "model": "zai-audit/glm-4.7",
+  "qualification": "Explicit supported native model control; native profile default GLM5.3Flash unchanged. Earlier Flash failures preserved separately.",
+  "killRestore": {
+    "killConfirmedAt": "2026-10-12T21:16:02.613220+00:00",
+    "newTokenIntroducedAt": "2026-10-12T21:16:02.629323+00:00",
+    "newTokenSHA256": "e2ceaf26dd740baf7e37b9fedd1f2c866b452ccadbb3e64851e1ae001d656a48",
+    "nativeSame": true,
+    "generationBefore": "dfc0b248-f675-4aa0-9763-8b04db7f1a22",
+    "generationAfter": "643344c9-bc53-4e13-8368-ecac603ab955",
+    "ownedNativeProcessesBefore": [
+      {
+        "pid": 1081718,
+        "kernelStart": "88535094"
+      }
+    ],
+    "ownedNativeProcessesReaped": true,
+    "killReply": {
+      "ok": true,
+      "sessionId": "prompt-tau-ae035355-1"
+    },
+    "restoreMode": "native",
+    "otherProjectConfigPreserved": true,
+    "oldProofUnchangedBeforeContinuation": true,
+    "unrelatedControlAlive": true,
+    "unrelatedControlGenerationUnchanged": true,
+    "currentComposer": "OBSERVED_REAL_AO_EMPTY_COMPOSER",
+    "ordinaryContinuation": "EXECUTED",
+    "receiptReadbackAt": "2026-10-12T21:16:09.741826+00:00",
+    "composerEvidence": {
+      "at": "2026-10-12T21:18:04.646116+00:00",
+      "screenshot": "restored-ready-native-composer.png",
+      "sha256": "9d162a32951c30f2c11a121f00e7090bb6d20a029a4a610fd6c4f250baed9221",
+      "UI": "3e80348c14cacb833de630563df6b0ab234e86a8",
+      "backend": "e1ef49b12712b6c5fc17e595f931bc28296dd66f",
+      "servingPID": 1081040,
+      "electronPID": 1080817,
+      "modelVisible": "zai-audit:glm-4.7"
+    }
+  },
+  "restoreNewToken": {
+    "at": "2026-10-12T21:21:05.555641+00:00",
+    "checks": {
+      "timeout": true
+    },
+    "visibleTask": "Please update visible.json by adding continued true. Preserve its existing count and cwd, then finish and wait.",
+    "visibleTaskHasPrivatePathOrToken": false,
+    "observedStates": [
+      "idle",
+      "active"
+    ]
+  },
+  "controlLater": {
+    "terminated": false,
+    "generation": "124ace20-9f15-4d29-81eb-2b45618acf64"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "scope": "REGISTERED_AO_FOCUSED_ORDINARY_TASK",
+  "at": "2026-10-12T21:15:34.959043+00:00",
+  "source": "e1ef49b12712b6c5fc17e595f931bc28296dd66f",
+  "projectId": "prompt-tau-5e2d3689",
+  "sessionId": "prompt-tau-5e2d3689-1",
+  "workspace": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/tau-prompt-data/worktrees/prompt-tau-5e2d3689/prompt-tau-5e2d3689-1",
+  "nativeIDDigest": "1bc08a37a7600c16634b958b49f7ba5950fb1958f2c4c760967f0885bc5b0df6",
+  "generation": "124ace20-9f15-4d29-81eb-2b45618acf64",
+  "visibleTask": "-Please create visible.json containing count 1 and cwd equal to the actual current working directory. If it already exists, increment its count once. Finish and wait.",
+  "visibleTaskHasPrivatePathOrToken": false,
+  "privateTokenSHA256": "8187b2907e7a4267485f2a1f78c29646d94257023d19b10ecdbbf6f5f68c4152",
+  "projectTokenSHA256": "683f922317279d59c6dc6f97d80590430b07ab559e25d3789e3e210e1fe8a3be",
+  "fresh": {
+    "countOnce": true,
+    "correctCwd": true,
+    "privateAction": true,
+    "projectAction": true,
+    "AGENTSPreserved": true,
+    "activeToSettled": true
+  },
+  "observedStates": [
+    "idle",
+    "active"
+  ],
+  "controlSession": null,
+  "controlBefore": null,
+  "controlAfterFresh": null,
+  "actualAuthenticatedWireRole": "NOT_CAPTURED",
+  "nativeSyntheticRole": "system; additive append preserves native default and user extension guidelines in released-native controlled-provider CI"
+}
