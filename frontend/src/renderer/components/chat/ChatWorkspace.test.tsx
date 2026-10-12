@@ -1753,12 +1753,12 @@ describe("ChatWorkspace timeline", () => {
 		render(
 			<ChatWorkspace
 				snapshot={snapshot}
-				session={{ ...chatSession, provisionState: "provisioning" }}
+				session={{ ...chatSession, provisionState: "provisioning", provisionSteps: startingSteps("running") }}
 				onResumeAgent={vi.fn()}
 			/>,
 		);
 
-		expect(screen.getByRole("status")).toHaveTextContent("Starting Codex…");
+		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Setting up session$/);
 		expect(screen.queryByText(/^Working for /)).not.toBeInTheDocument();
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
