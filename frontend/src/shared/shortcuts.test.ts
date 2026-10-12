@@ -29,11 +29,13 @@ describe("matchesNewSessionShortcut", () => {
 		expect(matchesNewSessionShortcut(chord({ key: "N", meta: true }), true)).toBe(true);
 	});
 
-	it("does not match plain Ctrl+N on macOS", () => {
+	it("does not match plain Ctrl+N or Alt+N on macOS", () => {
 		expect(matchesNewSessionShortcut(chord({ key: "n", ctrl: true }), true)).toBe(false);
+		expect(matchesNewSessionShortcut(chord({ key: "n", alt: true }), true)).toBe(false);
 	});
 
-	it("matches Ctrl+Shift+N on Windows/Linux", () => {
+	it("matches Alt+N and Ctrl+Shift+N on Windows/Linux", () => {
+		expect(matchesNewSessionShortcut(chord({ key: "n", alt: true }), false)).toBe(true);
 		expect(matchesNewSessionShortcut(chord({ key: "N", ctrl: true, shift: true }), false)).toBe(true);
 	});
 

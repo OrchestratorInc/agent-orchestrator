@@ -1130,7 +1130,7 @@ function ShellLayout() {
 	});
 	useAppShortcut("history-forward", () => router.history.forward());
 
-	// New session (⌘N / Ctrl+Shift+N) is detected in the main process and
+	// New session (⌘N / Ctrl+Shift+N / Alt+N) is detected in the main process and
 	// delivered here, so it fires even when focus is inside xterm or a native
 	// Browser-preview view. The shell owns the routing: open the New Task flow
 	// for the in-scope project, or a standalone agent when no project is in scope.

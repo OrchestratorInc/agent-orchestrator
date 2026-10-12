@@ -8,7 +8,7 @@ import { sessionNavigateTarget } from "../lib/navigate-to-session";
 
 // App-level New Task surface. Lives in the shell (always mounted, on every
 // route and platform, unlike ShellTopbar which unmounts on Linux boards) so a
-// ⌘N / Ctrl+Shift+N shortcut or the sidebar "New session" item can open a
+// ⌘N / Ctrl+Shift+N / Alt+N shortcut or the sidebar "New session" item can open a
 // worker for any project — including one you are not currently viewing.
 // Driven by the ui-store `newTaskRequest` signal; the nonce lets a repeat
 // request for the same project re-open the dialog.

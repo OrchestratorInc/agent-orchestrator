@@ -127,7 +127,9 @@ export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): read
 	const primary = isMac ? { meta: true } : { ctrl: true };
 	switch (id) {
 		case "new-session":
-			return [isMac ? binding("n", { meta: true }) : binding("n", { ctrl: true, shift: true })];
+			return isMac
+				? [binding("n", { meta: true })]
+				: [binding("n", { alt: true }), binding("n", { ctrl: true, shift: true })];
 		// Plain Ctrl+T/W/B are readline/fzf/tmux keys, so on Windows/Linux they
 		// yield to a focused terminal (see app-shortcuts.ts). The Shift variants
 		// are never terminal input and work from anywhere.
@@ -373,11 +375,14 @@ export const NEXT_TAB_SHORTCUT_CHANNEL = "app:next-tab";
 export const APP_SHORTCUT_CHANNEL = "app:shortcut";
 export type AppShortcutEvent = { id: AppShortcutId; index?: number };
 
-// New session: ⌘N on macOS, Ctrl+Shift+N on Windows/Linux. Plain Ctrl+N is a
-// live terminal keystroke (readline/vim "next line"), so the non-mac binding
-// adds Shift to stay clear of the shell. Handled at the application level
-// (main-process before-input-event) so it fires even when focus is inside
-// xterm's helper textarea or a native Browser-preview WebContentsView.
+// New session: ⌘N on macOS; Alt+N or Ctrl+Shift+N on Windows/Linux. Alt+N is
+// the quick chord and is terminal-safe: plain Ctrl+N is a live terminal
+// keystroke (readline/vim "next line") and Ctrl+Alt+N collides with AltGr on
+// international layouts (Windows reports AltGr as Ctrl+Alt, so Ctrl+Alt+N
+// would fire while typing ñ/ń/ň), while terminals treat Alt+N as an unbound
+// meta sequence. Handled at the application level (main-process
+// before-input-event) so it fires even when focus is inside xterm's helper
+// textarea or a native Browser-preview WebContentsView.
 export function matchesNewSessionShortcut(chord: ShortcutChord, isMac: boolean): boolean {
 	return matchesAppShortcut("new-session", chord, isMac);
 }
