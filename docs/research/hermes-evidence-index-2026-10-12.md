@@ -10,8 +10,6 @@ Harness evidence belongs to this integration PR. This documentation-only relocat
 - [hermes-004-token-refusal.json](assets/hermes-openjarvis-20261011/hermes-004-token-refusal.json)
 - [hermes-006-restored.provenance.json](assets/hermes-openjarvis-20261011/hermes-006-restored.provenance.json)
 - [hermes-008-restored.provenance.json](assets/hermes-openjarvis-20261011/hermes-008-restored.provenance.json)
-- [hermes-openjarvis-tui-2026-10-11.manifest.json](hermes-openjarvis-tui-2026-10-11.manifest.json)
-- [hermes-openjarvis-tui-2026-10-11.md](hermes-openjarvis-tui-2026-10-11.md)
 - [hermes-tui-2026-10-11.manifest.json](hermes-tui-2026-10-11.manifest.json)
 - [hermes-tui-2026-10-11.md](hermes-tui-2026-10-11.md)
 
@@ -39,5 +37,4 @@ Original skill evidence snapshot: [eaeed697f2e92fda214b9847443ef941f80ab2ae](htt
 | hermes-006-restored.provenance.json | 34eb452d3a9f4ef8ea9a5220de43cbfa84aebe491680a51eeaa9e2b2cca5a162 |
 | hermes-008-restored.png | 7f93912f6137220510d84bc15eabb9f0ac8b8b2e714d1a7e795fef61a16b71e0 |
 | hermes-008-restored.provenance.json | ad545543b64184a5dbf7bc4dedbd606fb52d8c6e38c6897579736ae87cc9a7f3 |
-| hermes-openjarvis-tui-2026-10-11.manifest.json | 6e561309fd49a6a3be6d9ef01631af6299bcf9971845f5e9fbf23a665a7c5048 |
 | hermes-tui-2026-10-11.manifest.json | 4ccf1de2db1cc5e8f86dffa9680daef6cd4541b4bc01888e12c6a82f1e819e51 |
