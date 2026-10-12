@@ -53,6 +53,9 @@ var (
 	// ErrMissingHarness means neither the spawn request nor the project's role
 	// config selected an agent. Worker/orchestrator spawns must be explicit.
 	ErrMissingHarness = errors.New("session: agent harness required")
+	// ErrArtifactOutputUnavailable rejects an artifact-output spawn when the
+	// daemon has no data dir to hold the session's artifact directory.
+	ErrArtifactOutputUnavailable = errors.New("session: artifact output requires an artifact directory")
 	// ErrHarnessInstallActive prevents launch while the harness executable is replaced.
 	ErrHarnessInstallActive = errors.New("session: harness install active")
 	// ErrUnsupportedModel means the requested model is not supported by the
@@ -914,6 +917,9 @@ func New(d Deps) *Manager {
 // materialization fails the still-seed row is deleted outright; a later failure
 // parks the row as terminated and rolls back what was built.
 func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	if cfg.RequestedOutput == domain.RequestedOutputArtifact && m.artifactDir("") == "" {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrArtifactOutputUnavailable)
+	}
 	if cfg.ClientRequestID != "" {
 		existing, found, err := m.store.GetSessionByClientRequestID(ctx, cfg.ClientRequestID)
 		if err != nil {
@@ -1212,6 +1218,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			branch:            branch,
 			prompt:            appendAttachmentReferences(prompt, spawnAttachmentRefs(cfg.Attachments)),
 			systemPrompt:      systemPrompt,
+			systemPromptFile:  systemPromptFile,
 			promptBytes:       promptBytes,
 			systemPromptBytes: systemPromptBytes,
 			preparation:       prep,
@@ -1292,6 +1299,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			workspaceProject: workspaceProject,
 			prompt:           prompt,
 			systemPrompt:     systemPrompt,
+			systemPromptFile: systemPromptFile,
 		})
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, err
@@ -3241,7 +3249,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	// Recompute standing instructions, then reapply the durable finalized inbound
 	// handoff for this exact native conversation when one exists.
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, false)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, false)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
 	}
@@ -5184,6 +5192,7 @@ func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now t
 		// statement that can change it afterwards.
 		Mode:              domain.NormalizeSessionMode(cfg.RequestedMode),
 		Metadata:          domain.SessionMetadata{Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions},
+		RequestedOutput:   cfg.RequestedOutput,
 		OutputType:        domain.SessionOutputNone,
 		AutoReviewEnabled: projectConfig.AutoReview,
 		AutoInjectReview:  true,
@@ -5390,7 +5399,7 @@ func appendAttachmentReferences(prompt string, refs []string) string {
 // empty input box rather than receiving an auto-generated kickoff turn.
 func (m *Manager) buildSpawnTexts(ctx context.Context, cfg ports.SpawnConfig, sessionID domain.SessionID) (prompt, systemPrompt string, err error) {
 	prompt = buildPrompt(cfg)
-	systemPrompt, err = m.buildSystemPrompt(ctx, cfg.Kind, cfg.ProjectID, sessionID, domain.NormalizeSessionMode(cfg.RequestedMode) == domain.SessionModeChat)
+	systemPrompt, err = m.buildSystemPrompt(ctx, cfg.Kind, cfg.ProjectID, sessionID, cfg.RequestedOutput, domain.NormalizeSessionMode(cfg.RequestedMode) == domain.SessionModeChat)
 	if err != nil {
 		return "", "", err
 	}
@@ -5403,7 +5412,8 @@ func (m *Manager) buildSpawnTexts(ctx context.Context, cfg ports.SpawnConfig, se
 // that is active now, not the one from its original spawn.
 // buildSystemPrompt assembles the standing instructions. chat says whether the
 // agent runs as a chat session, the only mode with the html tools and ao render.
-func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, chat bool) (string, error) {
+// requestedOutput is the deliverable requested at spawn.
+func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, requestedOutput domain.RequestedOutput, chat bool) (string, error) {
 	project, err := m.loadProject(ctx, projectID)
 	if err != nil {
 		return "", err
@@ -5454,6 +5464,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	}
 	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactPrompt)
+	}
+	if kind == domain.KindWorker && requestedOutput == domain.RequestedOutputArtifact {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactOutputPrompt)
 	}
 	return buildSystemPromptText(cfg), nil
 }
@@ -5621,6 +5634,12 @@ func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
 		"Routine test logs, command output, scratch notes, and intermediate diagnostics are working material, not deliverables. Keep them out of report attachments unless requested or needed to explain an actionable failure. Prefer one consolidated deliverable over many diagnostic files. " +
 		"This directory is local storage. Saving a file here or attaching its reference to an AO report does not authorize external publishing; follow the user's publishing scope."
 }
+
+// artifactOutputPrompt is added for a session spawned with the artifact output
+// kind.
+const artifactOutputPrompt = "## Artifact Output\n\n" +
+	"The user's request in this session is for an artifact. Write the finished deliverable as a file in the session artifact directory: HTML for visual work such as pages, dashboards, and diagrams; Markdown for documents. " +
+	"Do not open a pull request, and do not commit the deliverable to the git workspace. If the request is unclear, ask the user what the artifact should contain before writing it."
 
 func (m *Manager) cleanupSystemPromptDir(id domain.SessionID) {
 	dir := m.systemPromptDir(id)

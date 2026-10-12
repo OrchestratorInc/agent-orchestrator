@@ -21,6 +21,7 @@ import { getAccountAccessToken, loadAccount, signInToAccount, signOutOfAccount }
 beforeEach(async () => {
 	await signOutOfAccount();
 	secure.clear();
+	vi.clearAllMocks();
 	vi.unstubAllGlobals();
 	browser.openAuthSessionAsync.mockReset().mockImplementation(async (authorizationUrl: string, redirectUrl: string) => {
 		const state = new URL(authorizationUrl).searchParams.get("state");
@@ -68,4 +69,38 @@ it("refreshes with the rotating token and never sends it to the AO daemon", asyn
 		grant_type: "refresh_token", refresh_token: "old",
 	});
 	expect(JSON.parse(secure.get("ao.account.session") ?? "{}").refreshToken).toBe("new-refresh");
+});
+
+it("does not sign out a newer account when an old refresh expires late", async () => {
+	secure.set("ao.account.session", JSON.stringify({ id: "old", email: "old@example.com", refreshToken: "old-refresh" }));
+	let finish!: (value: unknown) => void;
+	const fetch = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+	vi.stubGlobal("fetch", fetch);
+	const pending = getAccountAccessToken().catch(() => null);
+	await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+	await signOutOfAccount();
+	fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ user: { id: "new", email: "new@example.com" }, access_token: "new-access", refresh_token: "new-refresh" }) });
+	await signInToAccount();
+	finish({ ok: false, json: async () => ({ error: "invalid_grant" }) });
+	await pending;
+	expect(await loadAccount()).toEqual({ id: "new", email: "new@example.com" });
+	expect(await getAccountAccessToken()).toBe("new-access");
+});
+
+it("does not restore an account when sign-out races a refresh credential write", async () => {
+	secure.set("ao.account.session", JSON.stringify({ id: "old", email: "old@example.com", refreshToken: "old-refresh" }));
+	vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ user: { id: "old", email: "old@example.com" }, access_token: "access", refresh_token: "rotated" }) })));
+	const storage = await import("expo-secure-store");
+	let release!: () => void;
+	const write = vi.mocked(storage.setItemAsync).mockImplementationOnce(async (key, value) => {
+		await new Promise<void>((resolve) => { release = resolve; });
+		secure.set(key, value);
+	});
+	const pending = getAccountAccessToken();
+	await vi.waitFor(() => expect(write).toHaveBeenCalled());
+	const signOut = signOutOfAccount();
+	release();
+	await Promise.all([pending, signOut]);
+	expect(await loadAccount()).toBeNull();
+	expect(await getAccountAccessToken()).toBeNull();
 });

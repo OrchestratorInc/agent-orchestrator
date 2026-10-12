@@ -1,4 +1,5 @@
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { isSettingsPageOpen } from "../hooks/useAppShortcut";
 import { useCallback, useEffect } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { defaultShortcutBindings, shortcutBindingLabel } from "../../shared/shortcuts";
@@ -72,8 +73,8 @@ export function ShellTerminalsView() {
 	);
 
 	useEffect(() => {
-		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => selectAdjacentTab(-1));
-		const disposeNext = aoBridge.app.onNextTabShortcut(() => selectAdjacentTab(1));
+		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(-1));
+		const disposeNext = aoBridge.app.onNextTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(1));
 		return () => {
 			disposePrevious();
 			disposeNext();

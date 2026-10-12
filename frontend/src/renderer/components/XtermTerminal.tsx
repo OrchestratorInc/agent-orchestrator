@@ -636,11 +636,15 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		const host = hostRef.current;
 		if (!shell || !host) return undefined;
 		let reportedFocused = false;
+		let reportedFontSize = false;
+		// Every terminal reports focus so Ctrl+K/W/B/T reach the shell; only ones
+		// that resize their own font also claim the zoom chords.
 		const reportFocused = (focused: boolean) => {
-			const next = focused && Boolean(callbacksRef.current.onChangeFontSize);
-			if (next === reportedFocused) return;
-			reportedFocused = next;
-			aoBridge.terminal.setFocused(next);
+			const handlesFontSize = focused && Boolean(callbacksRef.current.onChangeFontSize);
+			if (focused === reportedFocused && handlesFontSize === reportedFontSize) return;
+			reportedFocused = focused;
+			reportedFontSize = handlesFontSize;
+			aoBridge.terminal.setFocused(focused, handlesFontSize);
 		};
 		const handleFocusIn = () => reportFocused(true);
 		const handleFocusOut = (event: FocusEvent) => {

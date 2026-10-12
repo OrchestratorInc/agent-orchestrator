@@ -360,7 +360,7 @@ describe("AgentModelCombobox", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		expect(screen.getByText("Can’t find your model?")).toBeInTheDocument();
 		expect(screen.getByText("Configure the model in OpenCode, then refresh.")).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Refresh models" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Refresh models" }));
 		expect(onRefresh).toHaveBeenCalledOnce();
 	});
 
@@ -372,18 +372,18 @@ describe("AgentModelCombobox", () => {
 		});
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		const search = screen.getByRole("searchbox", { name: "Search worker model" });
-		expect(screen.queryByRole("button", { name: "Refresh models" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Refresh models" })).not.toBeInTheDocument();
 		await userEvent.type(search, "missing-model");
-		const refresh = screen.getByRole("button", { name: "Refresh models" });
+		const refresh = screen.getByRole("menuitem", { name: "Refresh models" });
 		expect(search.parentElement?.parentElement).toContainElement(refresh);
 		expect(screen.queryByText(/Last updated/)).not.toBeInTheDocument();
 		await userEvent.click(refresh);
-		const busy = screen.getByRole("button", { name: /Refreshing/ });
-		expect(busy).toBeDisabled();
+		const busy = screen.getByRole("menuitem", { name: /Refreshing/ });
+		expect(busy).toHaveAttribute("aria-disabled", "true");
 		await userEvent.click(busy);
 		expect(onRefresh).toHaveBeenCalledOnce();
 		finish();
-		await waitFor(() => expect(screen.getByRole("button", { name: "Refresh models" })).toBeEnabled());
+		await waitFor(() => expect(screen.getByRole("menuitem", { name: "Refresh models" })).not.toHaveAttribute("aria-disabled"));
 	});
 
 	it("shows refresh when the catalog is empty", async () => {
@@ -391,7 +391,7 @@ describe("AgentModelCombobox", () => {
 		renderCombobox([], { allowCustom: false, onRefresh });
 
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		await userEvent.click(screen.getByRole("button", { name: "Refresh models" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Refresh models" }));
 		expect(onRefresh).toHaveBeenCalledOnce();
 	});
 
@@ -403,9 +403,18 @@ describe("AgentModelCombobox", () => {
 			retryAt: "2026-09-07T09:30:00Z",
 		});
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		const retry = screen.getByRole("button", { name: /Retry refresh/ });
+		const retry = screen.getByRole("menuitem", { name: /Retry refresh/ });
 		expect(retry).toHaveAttribute("title", "Provider temporarily unavailable");
 		await userEvent.click(retry);
+		expect(onRefresh).toHaveBeenCalledOnce();
+	});
+
+	it("activates the retry action from the keyboard", async () => {
+		const onRefresh = vi.fn();
+		renderCombobox([{ id: "cached", label: "Cached model" }], { onRefresh, refreshError: "Provider temporarily unavailable" });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		screen.getByRole("menuitem", { name: /Retry refresh/ }).focus();
+		await userEvent.keyboard("{Enter}");
 		expect(onRefresh).toHaveBeenCalledOnce();
 	});
 
@@ -415,7 +424,7 @@ describe("AgentModelCombobox", () => {
 			retryAt: null,
 		});
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
-		expect(screen.getByRole("button", { name: /Retry refresh/ })).not.toHaveTextContent("·");
+		expect(screen.getByRole("menuitem", { name: /Retry refresh/ })).not.toHaveTextContent("·");
 	});
 
 	it("preserves a saved selection while a refreshed catalog no longer lists it", async () => {

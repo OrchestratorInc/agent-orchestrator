@@ -2,11 +2,17 @@ import type { WorkspaceSession } from "../types/workspace";
 
 export type CloudLifecycleStage =
 	| "paused_by_coder"
+	| "paused"
 	| "resuming_workspace"
 	| "waiting_for_coder_agent"
 	| "starting_ao_worker"
 	| "restoring_agent"
 	| "connected";
+
+/** A stage where the sandbox is paused on purpose (no startup loader). */
+export function isCloudPausedStage(stage: CloudLifecycleStage | undefined): stage is "paused" | "paused_by_coder" {
+	return stage === "paused" || stage === "paused_by_coder";
+}
 
 /**
  * Derives the desktop's cloud lifecycle stage from the control-plane contract.
@@ -19,8 +25,10 @@ export function cloudLifecycleStage(session?: WorkspaceSession): CloudLifecycleS
 	const desired = lifecycle.desiredState;
 	const observed = lifecycle.observedState;
 
-	if (lifecycle.sandboxProvider === "coder" && desired === "paused" && observed === "stopped") {
-		return "paused_by_coder";
+	// A paused sandbox reads as paused whatever runs it; only a Coder one names
+	// Coder (B2C users never see a Coder session, and do not know the provider).
+	if (desired === "paused" && observed === "stopped") {
+		return lifecycle.sandboxProvider === "coder" ? "paused_by_coder" : "paused";
 	}
 	if (desired === "running" && (observed === "stopped" || observed === "restoring")) {
 		return "resuming_workspace";
@@ -53,7 +61,7 @@ export function cloudLifecycleStage(session?: WorkspaceSession): CloudLifecycleS
  *   the pane explains that instead of rendering blank.
  */
 export type CloudStartupProblem =
-	| { phase: "failed"; message: string }
+	| { phase: "failed"; message: string; code?: string; detail?: string }
 	| { phase: "retrying"; message: string }
 	| { phase: "unavailable"; message?: string };
 
@@ -66,7 +74,11 @@ export function cloudStartupProblem(session?: WorkspaceSession): CloudStartupPro
 	const runtimeState = lifecycle.runtimeState || lifecycle.observedState;
 	const final = runtimeState !== undefined && FINAL_RUNTIME_STATES.has(runtimeState);
 	const message = lifecycle.startupError?.message?.trim();
-	if (message) return final ? { phase: "failed", message } : { phase: "retrying", message };
+	if (message) {
+		if (!final) return { phase: "retrying", message };
+		const detail = lifecycle.startupError?.detail?.trim() || undefined;
+		return { phase: "failed", message, code: lifecycle.startupError?.code, detail };
+	}
 	if (final) return { phase: "unavailable", message: lifecycle.runtimeError?.trim() || undefined };
 	return undefined;
 }

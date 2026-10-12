@@ -23,6 +23,15 @@ type TokenResponse = {
 let accessToken: string | null = null;
 let accessTokenExpiresAt = 0;
 let refreshing: Promise<string | null> | null = null;
+let accountGeneration = 0;
+let credentialWrite: Promise<unknown> = Promise.resolve();
+
+// Serialize only credential storage, never the browser or network request.
+function mutateCredentials<T>(operation: () => Promise<T>): Promise<T> {
+	const next = credentialWrite.then(operation);
+	credentialWrite = next.catch(() => {});
+	return next;
+}
 
 function tokenExpiry(token: string): number {
 	try {
@@ -46,16 +55,18 @@ async function authenticate(body: Record<string, string>): Promise<TokenResponse
 		body: JSON.stringify({ client_id: CLIENT_ID, ...body }),
 	});
 	const result = await response.json() as TokenResponse;
-	if (!response.ok) throw new Error(result.error === "invalid_grant" ? "Session expired. Sign in again." : "AO sign-in failed. Try again.");
+	if (!response.ok) throw new Error(result.error === "invalid_grant" ? "Session expired. Sign in again." : "Orchestrator sign-in failed. Try again.");
 	return result;
 }
 
-async function saveAccount(result: TokenResponse): Promise<Account> {
+async function saveAccount(result: TokenResponse, generation: number): Promise<Account> {
 	const { id, email } = result.user ?? {};
-	if (!id || !email || !result.refresh_token || !result.access_token) throw new Error("AO sign-in returned an incomplete session.");
+	if (!id || !email || !result.refresh_token || !result.access_token) throw new Error("Orchestrator sign-in returned an incomplete session.");
 	await SecureStore.setItemAsync(STORE_KEY, JSON.stringify({ id, email, refreshToken: result.refresh_token } satisfies StoredAccount));
-	accessToken = result.access_token;
-	accessTokenExpiresAt = tokenExpiry(result.access_token);
+	if (generation === accountGeneration) {
+		accessToken = result.access_token;
+		accessTokenExpiresAt = tokenExpiry(result.access_token);
+	}
 	return { id, email };
 }
 
@@ -71,6 +82,8 @@ export async function loadAccount(): Promise<Account | null> {
 }
 
 export async function signInToAccount(): Promise<Account | null> {
+	const generation = ++accountGeneration;
+	refreshing = null;
 	const verifier = randomHex();
 	const state = randomHex();
 	const digest = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, verifier, { encoding: Crypto.CryptoEncoding.BASE64 });
@@ -85,43 +98,51 @@ export async function signInToAccount(): Promise<Account | null> {
 	if (result.type !== "success") return null;
 	const callback = new URL(result.url);
 	if (callback.protocol !== "ao-app:" || callback.hostname !== "callback" || callback.searchParams.get("state") !== state) {
-		throw new Error("AO sign-in response could not be verified.");
+		throw new Error("Orchestrator sign-in response could not be verified.");
 	}
-	if (callback.searchParams.has("error")) throw new Error("AO sign-in was not completed.");
+	if (callback.searchParams.has("error")) throw new Error("Orchestrator sign-in was not completed.");
 	const code = callback.searchParams.get("code");
-	if (!code) throw new Error("AO sign-in did not return a code.");
-	return saveAccount(await authenticate({ grant_type: "authorization_code", code, code_verifier: verifier }));
+	if (!code) throw new Error("Orchestrator sign-in did not return a code.");
+	const session = await authenticate({ grant_type: "authorization_code", code, code_verifier: verifier });
+	return mutateCredentials(async () => generation === accountGeneration ? saveAccount(session, generation) : null);
 }
 
 export async function signOutOfAccount(): Promise<void> {
-	await SecureStore.deleteItemAsync(STORE_KEY);
+	accountGeneration++;
+	refreshing = null;
 	accessToken = null;
 	accessTokenExpiresAt = 0;
+	await mutateCredentials(() => SecureStore.deleteItemAsync(STORE_KEY));
 }
 
 /** Account APIs use this token; it must never be sent to an AO daemon. */
 export async function getAccountAccessToken(): Promise<string | null> {
 	if (accessToken && Date.now() < accessTokenExpiresAt - 60_000) return accessToken;
 	if (refreshing) return refreshing;
-	refreshing = refreshAccountToken();
-	try { return await refreshing; } finally { refreshing = null; }
+	const pending = refreshAccountToken(accountGeneration);
+	refreshing = pending;
+	try { return await pending; } finally { if (refreshing === pending) refreshing = null; }
 }
 
-async function refreshAccountToken(): Promise<string | null> {
+async function refreshAccountToken(generation: number): Promise<string | null> {
 	const raw = await SecureStore.getItemAsync(STORE_KEY);
 	if (!raw) return null;
 	let stored: StoredAccount;
 	try { stored = JSON.parse(raw) as StoredAccount; } catch { return null; }
-	if (!stored.refreshToken) return null;
+	if (!stored.refreshToken || generation !== accountGeneration) return null;
 	try {
 		const result = await authenticate({ grant_type: "refresh_token", refresh_token: stored.refreshToken });
 		// A sign-out or a new sign-in during the request must not resurrect the
 		// previous account's rotating credentials.
-		const current = await SecureStore.getItemAsync(STORE_KEY);
-		if (!current || (JSON.parse(current) as StoredAccount).refreshToken !== stored.refreshToken) return null;
-		await saveAccount(result);
-		return accessToken;
+		return await mutateCredentials(async () => {
+			if (generation !== accountGeneration) return null;
+			const current = await SecureStore.getItemAsync(STORE_KEY);
+			if (generation !== accountGeneration || !current || (JSON.parse(current) as StoredAccount).refreshToken !== stored.refreshToken) return null;
+			await saveAccount(result, generation);
+			return generation === accountGeneration ? accessToken : null;
+		});
 	} catch (error) {
+		if (generation !== accountGeneration) return null;
 		if (error instanceof Error && error.message.startsWith("Session expired")) await signOutOfAccount();
 		throw error;
 	}

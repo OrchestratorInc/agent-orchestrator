@@ -28,12 +28,58 @@ const code = encodePairingCode({
 const deps = (over: Record<string, unknown> = {}) => ({
 	race: vi.fn(async () => ({ ok: true as const, endpoint: lan, hostId: "h_paired" })),
 	verify: vi.fn(async () => {}),
+	chooseName: vi.fn(async (suggested: string) => suggested),
 	saveHost: vi.fn(async () => {}),
 	setActiveHost: vi.fn(async () => {}),
 	...over,
 });
 
 describe("pairFromCode", () => {
+	it("requires a confirmed human-readable name before saving a new machine", async () => {
+		const d = deps({ chooseName: vi.fn(async () => " Studio Mac ") });
+
+		await pairFromCode(`aomobile://pair#${code}`, d);
+
+		expect(d.chooseName).toHaveBeenCalledWith("prasad-mbp");
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ name: "Studio Mac" }));
+	});
+
+	it("stores nothing when machine naming is cancelled", async () => {
+		const d = deps({ chooseName: vi.fn(async () => null) });
+
+		const got = await pairFromCode(`aomobile://pair#${code}`, d);
+
+		expect(got).toEqual({ ok: false, reason: "cancelled" });
+		expect(d.saveHost).not.toHaveBeenCalled();
+		expect(d.setActiveHost).not.toHaveBeenCalled();
+	});
+
+	it("preserves the saved name when repairing the expected machine", async () => {
+		const d = deps();
+
+		await pairFromCode(`aomobile://pair#${code}`, d, { repairHost: { id: "h_paired", name: "Prod" } });
+
+		expect(d.chooseName).not.toHaveBeenCalled();
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ id: "h_paired", name: "Prod", token: "pw" }));
+	});
+
+	it("preserves the local appearance when repairing the expected machine", async () => {
+		const d = deps();
+		const appearance = { symbol: "laptop" as const };
+		await pairFromCode(`aomobile://pair#${code}`, d, { repairHost: { id: "h_paired", name: "Prod", appearance } });
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ appearance }));
+	});
+
+	it("rejects a different machine before probing during repair", async () => {
+		const d = deps();
+
+		const got = await pairFromCode(`aomobile://pair#${code}`, d, { repairHost: { id: "h_other", name: "Dev" } });
+
+		expect(got).toEqual({ ok: false, reason: "wrong-machine" });
+		expect(d.race).not.toHaveBeenCalled();
+		expect(d.saveHost).not.toHaveBeenCalled();
+	});
+
 	it("stores the machine with every endpoint the code carried", async () => {
 		const d = deps();
 		const got = await pairFromCode(`aomobile://pair#${code}`, d);
