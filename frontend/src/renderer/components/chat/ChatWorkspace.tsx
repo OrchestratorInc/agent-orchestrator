@@ -115,6 +115,7 @@ import {
 	AssistantMessage,
 	CompactionMarker,
 	HumanMessage,
+	humanVisibleText,
 	OriginMessage,
 	SteerMessage,
 	TurnChangedFiles,
@@ -1427,6 +1428,12 @@ function ChatWorkspaceContent({
 		() => (queueEdit ? { id: `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}`, text: queueEdit.text, attachments: queueEdit.attachments, stagedAttachments: queueEdit.stagedAttachments } : undefined),
 		[queueEdit],
 	);
+	const sentMessageList = useMemo(
+		() => sentMessageHistory(snapshot, localEchos ?? [], openingTurnId, backgroundWakeQueuedTurnIds),
+		[backgroundWakeQueuedTurnIds, localEchos, openingTurnId, snapshot],
+	);
+	// Stable across streaming deltas, so the memoized composer only renders for a new prompt.
+	const sentMessages = useStableValue(sentMessageList);
 	// Empty chats center the prompt; once a turn or item exists the composer docks
 	// at the bottom and stays there for the rest of the session.
 	const orchestratorStarting = sessionRole === "orchestrator" && startupState !== "failed" && (
@@ -1752,6 +1759,8 @@ function ChatWorkspaceContent({
 										approval={composerApproval}
 										elicitation={composerElicitation}
 										onSend={handleComposerSend}
+										sentMessages={sentMessages}
+										sentMessagesScope={`${snapshot.conversationId}:${snapshot.activeBranchId ?? ""}`}
 										draftSeed={composerDraftSeed}
 										editingQueuedTurnId={queueEdit?.turnId}
 										queuedEditRecovery={Boolean(queueEdit?.clientMessageId)}
@@ -4516,6 +4525,39 @@ function echoMatchesItem(
 	// Rows from a sender that supplied no key fall back to the turn id, then to text and time.
 	if (echo.turnId) return item.turnId === echo.turnId;
 	return item.text === echo.text && item.createdAt >= echo.createdAt;
+}
+
+/**
+ * The messages Up and Down recall into the composer, oldest first: the human prompts
+ * the timeline shows as sent, then local echoes the daemon has not returned yet. The
+ * daemon already leaves other branches out; rolled-back turns and queued prompts,
+ * which the dock edits, are skipped here. A repeat of the message before it is one
+ * stop, not two.
+ */
+function sentMessageHistory(
+	snapshot: ConversationSnapshot,
+	localEchos: readonly ConversationLocalEcho[],
+	openingTurnId: string | undefined,
+	backgroundQueuedTurnIds: ReadonlySet<string>,
+): string[] {
+	const skipped = hiddenTimelineTurnIds(snapshot);
+	if (openingTurnId) skipped.delete(openingTurnId);
+	for (const turn of snapshot.turns) if (turn.rolledBack) skipped.add(turn.id);
+	const human = snapshot.items.filter(
+		(item): item is ConversationMessage => item.kind === "message" && item.role === "user" && item.origin === "human",
+	);
+	const texts = [
+		...human.filter((item) => !item.turnId || !skipped.has(item.turnId)).map((item) => item.text),
+		...localEchos
+			.filter((echo) => !echo.queued && !human.some((item) => echoMatchesItem(echo, item, backgroundQueuedTurnIds)))
+			.map((echo) => echo.text),
+	];
+	return texts.reduce<string[]>((history, text) => {
+		// The body the bubble shows; AO's attachment and report footers are not the user's words.
+		const body = stagedAttachmentParts(humanVisibleText(text)).body;
+		if (body.trim() && body !== history.at(-1)) history.push(body);
+		return history;
+	}, []);
 }
 const groupKey = (group: TimelineGroup): string => group.key;
 

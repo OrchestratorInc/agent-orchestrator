@@ -1,7 +1,7 @@
 import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Activity, Profiler, type ReactElement } from "react";
-import { typeInLexicalEditor } from "../../test/lexical";
+import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
 import { AssistantMessage, HumanMessage, OriginMessage } from "./ChatTimelineItems";
@@ -5068,5 +5068,152 @@ describe("durable queued edits", () => {
 		expect(pending?.clientMessageId).toBeTruthy();
 		fireEvent.keyDown(screen.getByLabelText("Message the agent"), { key: "Escape" });
 		expect(readChatSessionDraft(snapshot.sessionId).queuedEdit).toEqual(pending);
+	});
+});
+
+describe("sent message recall", () => {
+	/** Fires one arrow key; true means the composer claimed it rather than moving the caret. */
+	const press = (key: "ArrowUp" | "ArrowDown") =>
+		!fireEvent.keyDown(screen.getByRole("combobox", { name: "Message the agent" }), { key });
+	const composerText = () => screen.getByRole("combobox", { name: "Message the agent" }).textContent;
+	const human = (id: string, turnId: string, sequence: number, text: string, extra: Partial<ConversationMessage> = {}): ConversationMessage => ({
+		kind: "message", id, turnId, sequence, revision: 0, role: "user", origin: "human", text, streaming: false,
+		createdAt: "2026-09-09T00:00:00Z", ...extra,
+	});
+	function historySnapshot(sessionId: string, items: ConversationMessage[], activeBranchId = "branch-1"): ConversationSnapshot {
+		return {
+			...chatFixtureEmpty,
+			sessionId,
+			activeBranchId,
+			latestSequence: items.length,
+			turns: [...new Set(items.map((item) => item.turnId as string))].map((id) => ({
+				id, state: "completed" as const, requestedAt: "2026-09-09T00:00:00Z",
+			})),
+			items,
+		};
+	}
+
+	it("recalls only the human prompts this conversation shows as sent", async () => {
+		const snapshot = historySnapshot("recall-sources", [
+			human("first", "t1", 1, "First ask", { clientMessageId: "echo-durable" }),
+			{ ...human("reply", "t1", 2, "An answer"), role: "assistant" },
+			{ ...human("relay", "t2", 3, "A worker report"), origin: "automation" },
+			human("attached", "t3", 4, "Look at this\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-notes.txt"),
+			human("undone", "t4", 5, "Undone ask"),
+			human("second", "t5", 6, "Second ask"),
+			human("repeat", "t6", 7, "Second ask"),
+			human("queued", "t7", 8, "Queued ask"),
+		]);
+		snapshot.turns = snapshot.turns.map((turn) =>
+			turn.id === "t4" ? { ...turn, rolledBack: true } : turn.id === "t7" ? { ...turn, state: "queued" as const } : turn);
+		const localEchos = [
+			{ clientMessageId: "echo-durable", text: "First ask", createdAt: "2026-09-09T00:00:00Z" },
+			{ clientMessageId: "echo-queued", text: "Queued echo", createdAt: "2026-09-09T00:00:01Z", queued: true },
+			{ clientMessageId: "echo-new", text: "Just sent", createdAt: "2026-09-09T00:00:02Z" },
+		];
+		render(<ChatWorkspace snapshot={snapshot} localEchos={localEchos} />);
+		await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "");
+
+		const recalled: (string | null)[] = [];
+		while (press("ArrowUp")) recalled.push(composerText());
+		expect(recalled).toEqual(["Just sent", "Second ask", "Look at this", "First ask"]);
+	});
+
+	it("keeps a walk steady while the same branch gains messages", async () => {
+		const sessionId = "recall-same-branch";
+		const before = historySnapshot(sessionId, [human("a", "t1", 1, "First ask"), human("b", "t2", 2, "Second ask")]);
+		const view = render(<ChatWorkspace snapshot={before} />);
+		await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "");
+		press("ArrowUp");
+		expect(composerText()).toBe("Second ask");
+
+		// A prompt from elsewhere and a streaming answer land under the open walk.
+		const after = historySnapshot(sessionId, [
+			human("a", "t1", 1, "First ask"),
+			human("b", "t2", 2, "Second ask"),
+			human("c", "t3", 3, "Third ask"),
+			{ ...human("reply", "t3", 4, "Streaming answer"), role: "assistant", streaming: true },
+		]);
+		view.rerender(<ChatWorkspace snapshot={after} />);
+		press("ArrowUp");
+		expect(composerText()).toBe("First ask");
+		press("ArrowDown");
+		expect(composerText()).toBe("Second ask");
+		press("ArrowDown");
+		expect(composerText()).toBe("");
+
+		press("ArrowUp");
+		expect(composerText()).toBe("Third ask");
+	});
+
+	it.each([
+		{ change: "another branch is activated", conversationId: chatFixtureEmpty.conversationId, activeBranchId: "branch-2" },
+		{ change: "the conversation is replaced", conversationId: "conv-replacement", activeBranchId: "branch-1" },
+	])("drops a walk and restores the draft when $change", async ({ conversationId, activeBranchId }) => {
+		const sessionId = `recall-identity-${activeBranchId}-${conversationId}`;
+		writeChatComposerText(sessionId, "my draft");
+		const view = render(<ChatWorkspace snapshot={historySnapshot(sessionId, [human("a", "t1", 1, "Shared start"), human("b", "t2", 2, "Old branch ask")])} />);
+		const composer = () => screen.getByRole("combobox", { name: "Message the agent" });
+		await waitFor(() => expect(composer()).toHaveTextContent("my draft"));
+		await placeLexicalCaret(composer(), 0);
+		press("ArrowUp");
+		expect(composerText()).toBe("Old branch ask");
+
+		const replaced = historySnapshot(sessionId, [human("a", "t1", 1, "Shared start"), human("c", "t3", 3, "New branch ask")], activeBranchId);
+		view.rerender(<ChatWorkspace snapshot={{ ...replaced, conversationId }} />);
+		expect(composerText()).toBe("my draft");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("my draft");
+
+		const recalled: (string | null)[] = [];
+		while (press("ArrowUp")) recalled.push(composerText());
+		expect(recalled).toEqual(["New branch ask", "Shared start"]);
+	});
+
+	it("restores the user's own draft, after a remount too, and sends a recalled prompt", async () => {
+		const sessionId = "recall-draft";
+		writeChatComposerText(sessionId, "my own draft");
+		const send = vi.fn().mockResolvedValue(undefined);
+		const snapshot = historySnapshot(sessionId, [human("a", "t1", 1, "Earlier ask")]);
+		const first = render(<ChatWorkspace snapshot={snapshot} onSend={send} />);
+		const composer = () => screen.getByRole("combobox", { name: "Message the agent" });
+		await waitFor(() => expect(composer()).toHaveTextContent("my own draft"));
+
+		await placeLexicalCaret(composer(), 0);
+		press("ArrowUp");
+		expect(composerText()).toBe("Earlier ask");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("my own draft");
+		press("ArrowDown");
+		expect(composerText()).toBe("my own draft");
+
+		await placeLexicalCaret(composer(), 0);
+		press("ArrowUp");
+		first.unmount();
+		render(<ChatWorkspace snapshot={snapshot} onSend={send} />);
+		await waitFor(() => expect(composer()).toHaveTextContent("my own draft"));
+
+		await placeLexicalCaret(composer(), 0);
+		press("ArrowUp");
+		expect(send).not.toHaveBeenCalled();
+		fireEvent.keyDown(composer(), { key: "Enter" });
+		await waitFor(() => expect(send).toHaveBeenCalledOnce());
+		expect(send.mock.calls[0]?.[0]).toBe("Earlier ask");
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("");
+	});
+
+	it("walks only the active session's messages", async () => {
+		const view = render(<ChatWorkspace snapshot={historySnapshot("recall-alpha", [human("a", "t1", 1, "Alpha ask")])} />);
+		await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "");
+		press("ArrowUp");
+		expect(composerText()).toBe("Alpha ask");
+
+		view.rerender(<ChatWorkspace snapshot={historySnapshot("recall-beta", [human("b", "t1", 1, "Beta ask")])} />);
+		await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "");
+		expect(composerText()).toBe("");
+		expect(press("ArrowDown")).toBe(false);
+		expect(press("ArrowUp")).toBe(true);
+		expect(composerText()).toBe("Beta ask");
+		expect(press("ArrowUp")).toBe(false);
+		expect(readChatSessionDraft("recall-alpha").composer.text).toBe("");
 	});
 });
