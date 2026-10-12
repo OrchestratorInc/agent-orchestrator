@@ -1,0 +1,404 @@
+{
+  "at": "2026-10-12T23:15:24.707Z",
+  "source": "a3a4ef82e565b4d0c47d67bed68525e7c111b956",
+  "runnerSHA256": "23dc1a2f39bd6c88fd95b47d041040a039d16c52ab71996a278f49e68f8bdcc5",
+  "witnessSpec": {
+    "startPath": ".cancel-start-08841dd3e3cd40bcb5c968dca4a5c2a8.json",
+    "latePath": ".cancel-late-08841dd3e3cd40bcb5c968dca4a5c2a8.json",
+    "lateSideEffectDelayMs": 12000,
+    "tokenSHA256": "567a5d1831b19266c1f89b2694b834bc50a523cfff03562f10084295a7094ddc"
+  },
+  "result": {
+    "passed": true,
+    "observedActive": true,
+    "reason": "AO terminal mux interrupted the witnessed foreground command; the same terminal settled, its PID stopped, and no delayed side effect appeared",
+    "activeState": {
+      "ok": true,
+      "status": 200,
+      "requestId": "",
+      "method": "GET",
+      "path": "/api/v1/sessions/prompt-memcode-c7a83b5e-1",
+      "response": {
+        "session": {
+          "id": "prompt-memcode-c7a83b5e-1",
+          "projectId": "prompt-memcode-c7a83b5e",
+          "kind": "worker",
+          "harness": "memcode",
+          "reviewerConfig": {},
+          "autoReviewEnabled": false,
+          "displayName": "Memcode private prompt control",
+          "mode": "tui",
+          "activity": {
+            "state": "active",
+            "lastActivityAt": "2026-10-12T23:15:12.026282282Z"
+          },
+          "isTerminated": false,
+          "terminateOnPrMerge": false,
+          "autoInjectReview": true,
+          "autoInjectCI": true,
+          "outputType": "none",
+          "createdAt": "2026-10-12T23:06:48.084654213Z",
+          "updatedAt": "2026-10-12T23:15:12.040543626Z",
+          "isPinned": false,
+          "provisionState": "ready",
+          "branchState": {
+            "commits": 0,
+            "unpushed": 0
+          },
+          "statusReadiness": "ready",
+          "chatProviderPreserved": false,
+          "status": "working",
+          "kanbanColumn": "building",
+          "displayStatus": "Working",
+          "terminalHandleId": "ptyhost-v1:prompt-memcode-c7a83b5e-1",
+          "branch": "ao/prompt-memcode-c7a83b5e-1/root",
+          "terminalGeneration": "99558cf1-cca0-469d-bc31-7a998d9b23a4",
+          "lastUserMessageAt": "2026-10-12T23:14:53.969442946Z",
+          "lastInteractionAt": "2026-10-12T23:14:53.969442946Z",
+          "lastEventAt": "2026-10-12T23:15:12.026282282Z",
+          "prs": []
+        }
+      },
+      "startedAt": "2026-10-12T23:15:12.410Z",
+      "finishedAt": "2026-10-12T23:15:12.415Z",
+      "durationMs": 5
+    },
+    "settledState": {
+      "ok": true,
+      "status": 200,
+      "requestId": "",
+      "method": "GET",
+      "path": "/api/v1/sessions/prompt-memcode-c7a83b5e-1",
+      "response": {
+        "session": {
+          "id": "prompt-memcode-c7a83b5e-1",
+          "projectId": "prompt-memcode-c7a83b5e",
+          "kind": "worker",
+          "harness": "memcode",
+          "reviewerConfig": {},
+          "autoReviewEnabled": false,
+          "displayName": "Memcode private prompt control",
+          "mode": "tui",
+          "activity": {
+            "state": "idle",
+            "lastActivityAt": "2026-10-12T23:15:23.002799073Z"
+          },
+          "isTerminated": false,
+          "terminateOnPrMerge": false,
+          "autoInjectReview": true,
+          "autoInjectCI": true,
+          "outputType": "none",
+          "createdAt": "2026-10-12T23:06:48.084654213Z",
+          "updatedAt": "2026-10-12T23:15:23.00798916Z",
+          "isPinned": false,
+          "provisionState": "ready",
+          "branchState": {
+            "commits": 0,
+            "unpushed": 0
+          },
+          "statusReadiness": "ready",
+          "chatProviderPreserved": false,
+          "status": "idle",
+          "kanbanColumn": "building",
+          "displayStatus": "Awaiting PR",
+          "terminalHandleId": "ptyhost-v1:prompt-memcode-c7a83b5e-1",
+          "branch": "ao/prompt-memcode-c7a83b5e-1/root",
+          "terminalGeneration": "99558cf1-cca0-469d-bc31-7a998d9b23a4",
+          "lastUserMessageAt": "2026-10-12T23:14:53.969442946Z",
+          "lastInteractionAt": "2026-10-12T23:14:53.969442946Z",
+          "lastEventAt": "2026-10-12T23:15:23.002799073Z",
+          "prs": []
+        }
+      },
+      "startedAt": "2026-10-12T23:15:23.090Z",
+      "finishedAt": "2026-10-12T23:15:23.093Z",
+      "durationMs": 2
+    },
+    "confirmationWindowMs": 60000,
+    "websocket": {
+      "transport": "websocket",
+      "sessionId": "prompt-memcode-c7a83b5e-1",
+      "terminalHandleId": "ptyhost-v1:prompt-memcode-c7a83b5e-1",
+      "terminalGeneration": "99558cf1-cca0-469d-bc31-7a998d9b23a4",
+      "startedAt": "2026-10-12T23:15:12.421Z",
+      "opened": true,
+      "inputBytes": 1,
+      "pongObserved": true,
+      "frames": [
+        {
+          "direction": "sent",
+          "at": "2026-10-12T23:15:12.433Z",
+          "ch": "terminal",
+          "type": "open",
+          "id": "ptyhost-v1:prompt-memcode-c7a83b5e-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T23:15:12.435Z",
+          "ch": "terminal",
+          "type": "resize",
+          "id": "ptyhost-v1:prompt-memcode-c7a83b5e-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T23:15:12.439Z",
+          "ch": "terminal",
+          "type": "opened",
+          "id": "ptyhost-v1:prompt-memcode-c7a83b5e-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T23:15:12.440Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-memcode-c7a83b5e-1"
+        },
+        {
+          "direction": "sent",
+          "at": "2026-10-12T23:15:12.455Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-memcode-c7a83b5e-1"
+        },
+        {
+          "direction": "sent",
+          "at": "2026-10-12T23:15:12.455Z",
+          "ch": "system",
+          "type": "ping"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T23:15:12.455Z",
+          "ch": "system",
+          "type": "pong"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T23:15:12.521Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-memcode-c7a83b5e-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T23:15:12.538Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-memcode-c7a83b5e-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T23:15:12.621Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-memcode-c7a83b5e-1"
+        }
+      ],
+      "timedOut": false,
+      "qualification": "A system pong acknowledges mux processing, not provider cancellation; cancellation also requires a live command-start witness with matching kernel process-start identity, the same session settling, that exact process stopping, and no delayed side effect.",
+      "commandWitness": {
+        "tokenSha256": "567a5d1831b19266c1f89b2694b834bc50a523cfff03562f10084295a7094ddc",
+        "pid": 1095301,
+        "processIdentityKind": "linux-proc-startticks",
+        "processIdentitySha256": "ae98b16a8beb9d0948b2b4363b952e190e7cccbeaae88fdc200709c0535ebfe7",
+        "startPath": ".cancel-start-08841dd3e3cd40bcb5c968dca4a5c2a8.json",
+        "latePath": ".cancel-late-08841dd3e3cd40bcb5c968dca4a5c2a8.json",
+        "lateSideEffectDelayMs": 12000
+      },
+      "url": "ws://127.0.0.1:45437/mux",
+      "preInputState": {
+        "method": "GET",
+        "path": "/api/v1/sessions/prompt-memcode-c7a83b5e-1",
+        "status": 200,
+        "requestId": "",
+        "response": {
+          "session": {
+            "id": "prompt-memcode-c7a83b5e-1",
+            "projectId": "prompt-memcode-c7a83b5e",
+            "kind": "worker",
+            "harness": "memcode",
+            "reviewerConfig": {},
+            "autoReviewEnabled": false,
+            "displayName": "Memcode private prompt control",
+            "mode": "tui",
+            "activity": {
+              "state": "active",
+              "lastActivityAt": "2026-10-12T23:15:12.026282282Z"
+            },
+            "isTerminated": false,
+            "terminateOnPrMerge": false,
+            "autoInjectReview": true,
+            "autoInjectCI": true,
+            "outputType": "none",
+            "createdAt": "2026-10-12T23:06:48.084654213Z",
+            "updatedAt": "2026-10-12T23:15:12.040543626Z",
+            "isPinned": false,
+            "provisionState": "ready",
+            "branchState": {
+              "commits": 0,
+              "unpushed": 0
+            },
+            "statusReadiness": "ready",
+            "chatProviderPreserved": false,
+            "status": "working",
+            "kanbanColumn": "building",
+            "displayStatus": "Working",
+            "terminalHandleId": "ptyhost-v1:prompt-memcode-c7a83b5e-1",
+            "branch": "ao/prompt-memcode-c7a83b5e-1/root",
+            "terminalGeneration": "99558cf1-cca0-469d-bc31-7a998d9b23a4",
+            "lastUserMessageAt": "2026-10-12T23:14:53.969442946Z",
+            "lastInteractionAt": "2026-10-12T23:14:53.969442946Z",
+            "lastEventAt": "2026-10-12T23:15:12.026282282Z",
+            "prs": []
+          }
+        },
+        "startedAt": "2026-10-12T23:15:12.443Z",
+        "finishedAt": "2026-10-12T23:15:12.450Z",
+        "durationMs": 7
+      },
+      "preInputWitness": {
+        "start": {
+          "method": "GET",
+          "path": "/api/v1/sessions/prompt-memcode-c7a83b5e-1/workspace/file?path=.cancel-start-08841dd3e3cd40bcb5c968dca4a5c2a8.json",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "sessionId": "prompt-memcode-c7a83b5e-1",
+            "path": ".cancel-start-08841dd3e3cd40bcb5c968dca4a5c2a8.json",
+            "status": "unmodified",
+            "additions": 0,
+            "deletions": 0,
+            "size": 109,
+            "binary": false,
+            "deleted": false,
+            "editable": true,
+            "content": "{\"token\":\"08841dd3e3cd40bcb5c968dca4a5c2a8\",\"pid\":1095301,\"processIdentity\":\"linux-proc-startticks:89266492\"}",
+            "contentTruncated": false,
+            "diff": "",
+            "diffTruncated": false,
+            "compareBaseSha": "ffa6dd49fabb1e81b1ff5c728434f0dc667ef860",
+            "compareBaseRef": "refs/heads/main",
+            "compareMode": "base",
+            "workspaceVersion": "f0fb3bbb392edfb8f629c575f7577f1b53cb695cfd5cb8754cd9ddd625b9a6db",
+            "fileFingerprint": "db82d47e4a6c3c98b36d9b42016965e819b780fb60bbc99dee39c6e2543ee5ea"
+          },
+          "startedAt": "2026-10-12T23:15:12.450Z",
+          "finishedAt": "2026-10-12T23:15:12.453Z",
+          "durationMs": 3
+        },
+        "late": {
+          "method": "GET",
+          "path": "/api/v1/sessions/prompt-memcode-c7a83b5e-1/workspace/file?path=.cancel-late-08841dd3e3cd40bcb5c968dca4a5c2a8.json",
+          "status": 404,
+          "requestId": "",
+          "response": {
+            "error": "not_found",
+            "code": "WORKSPACE_FILE_NOT_FOUND",
+            "message": "Workspace file not found",
+            "requestId": "vps-linux/c5JxayRNpu-002609"
+          },
+          "startedAt": "2026-10-12T23:15:12.451Z",
+          "finishedAt": "2026-10-12T23:15:12.454Z",
+          "durationMs": 3
+        },
+        "process": {
+          "running": true,
+          "sameIdentity": true,
+          "identityKind": "linux-proc-startticks",
+          "identitySha256": "ae98b16a8beb9d0948b2b4363b952e190e7cccbeaae88fdc200709c0535ebfe7"
+        }
+      },
+      "inputSha256": "77adfc95029e73b173f60e556f915b0cd8850848111358b1c370fb7c154e61fd",
+      "inputSentAt": "2026-10-12T23:15:12.455Z",
+      "unsettledAfterDefaultWindow": {
+        "observedAfterInputMs": 5098,
+        "state": {
+          "method": "GET",
+          "path": "/api/v1/sessions/prompt-memcode-c7a83b5e-1",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "session": {
+              "id": "prompt-memcode-c7a83b5e-1",
+              "projectId": "prompt-memcode-c7a83b5e",
+              "kind": "worker",
+              "harness": "memcode",
+              "reviewerConfig": {},
+              "autoReviewEnabled": false,
+              "displayName": "Memcode private prompt control",
+              "mode": "tui",
+              "activity": {
+                "state": "active",
+                "lastActivityAt": "2026-10-12T23:15:12.026282282Z"
+              },
+              "isTerminated": false,
+              "terminateOnPrMerge": false,
+              "autoInjectReview": true,
+              "autoInjectCI": true,
+              "outputType": "none",
+              "createdAt": "2026-10-12T23:06:48.084654213Z",
+              "updatedAt": "2026-10-12T23:15:12.040543626Z",
+              "isPinned": false,
+              "provisionState": "ready",
+              "branchState": {
+                "commits": 0,
+                "unpushed": 0
+              },
+              "statusReadiness": "ready",
+              "chatProviderPreserved": false,
+              "status": "working",
+              "kanbanColumn": "building",
+              "displayStatus": "Working",
+              "terminalHandleId": "ptyhost-v1:prompt-memcode-c7a83b5e-1",
+              "branch": "ao/prompt-memcode-c7a83b5e-1/root",
+              "terminalGeneration": "99558cf1-cca0-469d-bc31-7a998d9b23a4",
+              "lastUserMessageAt": "2026-10-12T23:14:53.969442946Z",
+              "lastInteractionAt": "2026-10-12T23:14:53.969442946Z",
+              "lastEventAt": "2026-10-12T23:15:12.026282282Z",
+              "prs": []
+            }
+          },
+          "startedAt": "2026-10-12T23:15:17.550Z",
+          "finishedAt": "2026-10-12T23:15:17.552Z",
+          "durationMs": 2
+        }
+      },
+      "settledAt": "2026-10-12T23:15:23.093Z",
+      "settleDurationMs": 10638,
+      "settledWithinDefaultWindow": false,
+      "processStoppedAt": "2026-10-12T23:15:23.093Z",
+      "processStopEvidence": {
+        "running": false,
+        "sameIdentity": false
+      },
+      "postInterruptWitness": {
+        "processRunning": false,
+        "pidRunning": false,
+        "sameProcessIdentity": false,
+        "process": {
+          "running": false,
+          "sameIdentity": false
+        },
+        "late": {
+          "method": "GET",
+          "path": "/api/v1/sessions/prompt-memcode-c7a83b5e-1/workspace/file?path=.cancel-late-08841dd3e3cd40bcb5c968dca4a5c2a8.json",
+          "status": 404,
+          "requestId": "",
+          "response": {
+            "error": "not_found",
+            "code": "WORKSPACE_FILE_NOT_FOUND",
+            "message": "Workspace file not found",
+            "requestId": "vps-linux/c5JxayRNpu-002779"
+          },
+          "startedAt": "2026-10-12T23:15:24.705Z",
+          "finishedAt": "2026-10-12T23:15:24.706Z",
+          "durationMs": 1
+        },
+        "checkedAt": "2026-10-12T23:15:24.706Z"
+      },
+      "finishedAt": "2026-10-12T23:15:24.706Z",
+      "durationMs": 12285,
+      "closeCode": 1005
+    }
+  }
+}

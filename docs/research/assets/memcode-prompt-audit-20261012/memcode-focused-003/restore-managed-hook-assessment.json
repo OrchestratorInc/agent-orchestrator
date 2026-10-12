@@ -1,0 +1,12 @@
+{
+  "managedChunks": 2,
+  "newTokenPresent": true,
+  "oldTokenPresent": false,
+  "managedInstructionsSHA256": "63d6f27245a848b0d7fbeda7de22564b194df802606702c0e862859b8bef8905",
+  "nativeStartWitness": {
+    "generation": "99558cf1-cca0-469d-bc31-7a998d9b23a4",
+    "sequence": 2,
+    "native_id_SHA256": "0a5395815d651241461e0ef52676fd3cb4d1e3a381a61444cf9af91f7e77174e"
+  },
+  "qualification": "AO emitter writes start witness after emitting private chunk; configuration/native hook execution evidence, not provider wire capture or consumption"
+}

@@ -1,0 +1,19 @@
+{
+  "at": "2026-10-12T23:17:50.702653+00:00",
+  "source": "a3a4ef82e565b4d0c47d67bed68525e7c111b956",
+  "HTTP": 500,
+  "reply": {
+    "error": "internal",
+    "code": "INTERNAL_ERROR",
+    "message": "Internal server error",
+    "requestId": "vps-linux/c5JxayRNpu-003131",
+    "reporting_owner": "http"
+  },
+  "ownedFailureLog": "time=2026-10-12T23:17:49.688Z level=INFO msg=\"http request\" id=vps-linux/c5JxayRNpu-003131 method=POST path=/api/v1/sessions/prompt-memcode-c7a83b5e-1/restore status=500 bytes=146 duration=97.875462ms remote=127.0.0.1:35628 error=\"restore prompt-memcode-c7a83b5e-1: memcode native history missing\"",
+  "nativeIDDigest": "0a5395815d651241461e0ef52676fd3cb4d1e3a381a61444cf9af91f7e77174e",
+  "sameNativeIdentity": true,
+  "staysTerminated": true,
+  "nativeHistorySHA256": "7f7ef98f24b6150048eeaa199484e162cae84a9f2e05f60898402f246b9ff8a5",
+  "status": "PASS",
+  "originalNativeHistoryRestoredByteIdentically": true
+}
