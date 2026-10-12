@@ -13,11 +13,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/zcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/google/uuid"
 )
 
 type frame struct {
@@ -103,21 +105,22 @@ type permissionLedger struct {
 }
 
 type conversation struct {
-	cfg         ports.ChatStartConfig
-	transport   *persistenthost.Transport
-	log         *slog.Logger
-	writeMu     sync.Mutex
-	mu          sync.Mutex
-	nativeID    string
-	pending     map[string]chan frame
-	permissions map[string]pendingPermission
-	turns       map[string]string
-	activeTurn  string
-	sent        map[string]string
-	events      chan ports.ChatEvent
-	done        chan struct{}
-	closeOnce   sync.Once
-	closed      bool
+	cfg          ports.ChatStartConfig
+	transport    *persistenthost.Transport
+	log          *slog.Logger
+	writeMu      sync.Mutex
+	mu           sync.Mutex
+	nativeID     string
+	pending      map[string]chan frame
+	permissions  map[string]pendingPermission
+	turns        map[string]string
+	activeTurn   string
+	sent         map[string]string
+	events       chan ports.ChatEvent
+	done         chan struct{}
+	closeOnce    sync.Once
+	closed       bool
+	eventsClosed bool
 }
 
 var _ ports.ChatConversation = (*conversation)(nil)
@@ -189,17 +192,25 @@ func (c *conversation) call(ctx context.Context, method string, params, out any)
 	}
 }
 func (c *conversation) emit(event ports.ChatEvent) {
+	c.mu.Lock()
+	if c.closed || c.eventsClosed {
+		c.mu.Unlock()
+		return
+	}
+	overflow := false
 	select {
 	case c.events <- event:
 	default:
-		// Disconnect rather than dropping an approval/terminal boundary. The native
-		// host remains owned and its durable history is available for recovery.
+		overflow = true
+	}
+	c.mu.Unlock()
+	if overflow {
 		_ = c.Close()
 	}
 }
 func (c *conversation) pump() {
 	defer close(c.done)
-	defer close(c.events)
+	defer func() { c.mu.Lock(); c.eventsClosed = true; close(c.events); c.mu.Unlock() }()
 	scanner := bufio.NewScanner(c.transport.Stdout)
 	scanner.Buffer(make([]byte, 64<<10), 32<<20)
 	for scanner.Scan() {
@@ -336,6 +347,14 @@ func (c *conversation) ResolveRequest(ctx context.Context, id string, decision p
 	return nil
 }
 func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
+	// Recheck current private input/config before each admission, including a
+	// live host reconnect. Never silently truncate a refreshed instruction file.
+	if _, err := zcode.ReadStandingInstructions(ctx, "", filepath.Join(c.cfg.DataDir, "prompts", string(c.cfg.SessionID), "system.md")); err != nil {
+		return ports.ChatTurnRef{}, err
+	}
+	if err := zcode.ValidateProtocolHookBudget(ctx, ports.WorkspaceHookConfig{WorkspacePath: c.cfg.WorkspacePath, Env: c.cfg.Env}); err != nil {
+		return ports.ChatTurnRef{}, err
+	}
 	if len(msg.Content) > 0 || len(msg.Excerpts) > 0 || msg.Settings.Model != "" || msg.Settings.Effort != "" {
 		return ports.ChatTurnRef{}, ports.ErrChatCapabilityUnavailable
 	}
@@ -471,7 +490,7 @@ func normalizeEvent(n nativeEvent, p eventPayload, turn string, history bool) []
 		event.Detail = n.Payload
 		event.ActivityKind = domain.ActivityKindSystem
 		switch p.Kind {
-		case "start":
+		case "started":
 			event.Kind = ports.ChatEventActivityStarted
 			event.ActivityStatus = domain.ActivityStatusRunning
 		case "result":
@@ -550,7 +569,7 @@ func (c *conversation) savePendingLocked() error {
 	if err != nil {
 		return err
 	}
-	return hookutil.AtomicWriteFile(c.ledgerPath(), data, 0600)
+	return hookutil.AtomicWriteFile(c.ledgerPath(), data, 0o600)
 }
 func (c *conversation) clearPending() {
 	c.mu.Lock()

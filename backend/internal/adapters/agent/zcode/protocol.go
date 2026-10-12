@@ -21,6 +21,9 @@ func (p *Plugin) PrepareProtocol(ctx context.Context, cfg ports.WorkspaceHookCon
 	if !filepath.IsAbs(cfg.DataDir) || !filepath.IsAbs(cfg.WorkspacePath) {
 		return "", fmt.Errorf("zcode: absolute data/workspace paths are required")
 	}
+	if err := ValidateProtocolHookBudget(ctx, cfg); err != nil {
+		return "", err
+	}
 	if err := p.RefreshProtocolInstructions(ctx, cfg); err != nil {
 		return "", err
 	}
@@ -57,8 +60,8 @@ func (p *Plugin) RefreshProtocolInstructions(ctx context.Context, cfg ports.Work
 		return err
 	}
 	path := filepath.Join(cfg.DataDir, "prompts", cfg.SessionID, "system.md")
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return hookutil.AtomicWriteFile(path, []byte(prompt), 0600)
+	return hookutil.AtomicWriteFile(path, []byte(prompt), 0o600)
 }

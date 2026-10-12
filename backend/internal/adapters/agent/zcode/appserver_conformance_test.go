@@ -33,18 +33,18 @@ func TestSourceBuiltZCodeAppServerConformance(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		if r.URL.Path != "/v1/chat/completions" {
-			http.Error(w, "unexpected provider route", 404)
+			http.Error(w, "unexpected provider route", http.StatusNotFound)
 			return
 		}
 		var request conformanceRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			http.Error(w, "invalid synthetic request", 400)
+			http.Error(w, "invalid synthetic request", http.StatusBadRequest)
 			return
 		}
 		select {
 		case requests <- request:
 		default:
-			http.Error(w, "unexpected duplicate request", 429)
+			http.Error(w, "unexpected duplicate request", http.StatusTooManyRequests)
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")

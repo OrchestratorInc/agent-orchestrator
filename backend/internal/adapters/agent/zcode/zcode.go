@@ -1,22 +1,6 @@
-// Package zcode implements the ZCode (Z.AI GLM) agent adapter.
-//
-// ZCode is Z.AI's official coding agent (binary "zcode", official open repo
-// github.com/zai-org/ZCode — source for the Agent CLI and runtime, Apache-2.0;
-// its interactive CLI currently requires a source build, because desktop
-// release bundles omit the TUI). With no arguments it opens an interactive TUI, which is how AO
-// launches it; the initial task is delivered through the terminal after the
-// TUI is ready because both --prompt and -p/--print run a single headless
-// turn and exit, and a bare positional argument is parsed as a subcommand.
-//
-// Permission handling maps AO's permission modes onto `--mode`
-// (build|edit|plan|yolo). The default explicitly selects build so a saved yolo
-// configuration cannot broaden AO permissions. Restore resumes a persisted session
-// with `--resume <sessionId>`.
-//
-// AO installs workspace hooks under .zcode/config.json and grants only their
-// exact native declaration digests. UserPromptSubmit supplies hidden additive
-// standing instructions; lifecycle callbacks capture the native session ID.
-// Model selection stays in ZCode's own model.main configuration.
+// Package zcode provides ZCode install/auth metadata and its additive workspace
+// hook contract. AO launches the stock native app-server through zcodeprotocol;
+// Terminal UI is rejected because it has no workspace-hook trust admission.
 package zcode
 
 import (
@@ -70,7 +54,7 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          "zcode",
 		Name:        "ZCode",
-		Description: "Run Z.AI ZCode (GLM) worker sessions.",
+		Description: "Run Z.AI ZCode worker sessions in Chat.",
 		Version:     "0.0.1",
 		Capabilities: []adapters.Capability{
 			adapters.CapabilityAgent,
@@ -78,19 +62,13 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports ZCode's permission modes. ZCode pins its model in
-// its own config (model.main); zcode has no --model launch flag, so AO
-// exposes the mode instead of a misleading raw-model field.
+// GetConfigSpec leaves model selection in the native ZCode provider profile.
+// Chat permission policy is selected through AO's standard approval controls.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ConfigSpec{}, err
 	}
-	return ports.ConfigSpec{Fields: []ports.ConfigField{{
-		Key:         "mode",
-		Type:        ports.ConfigFieldEnum,
-		Description: "ZCode permission mode passed to `zcode --mode`.",
-		Enum:        []string{"build", "edit", "plan", "yolo"},
-	}}}, nil
+	return ports.ConfigSpec{}, nil
 }
 
 // GetLaunchCommand rejects the stock TUI: it has no supported additive

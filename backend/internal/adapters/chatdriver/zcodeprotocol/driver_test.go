@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -80,16 +81,23 @@ func TestDecisionsMustBeOfferedAndInputCannotConsumePermissions(t *testing.T) {
 	data := t.TempDir()
 	session := "owned"
 	dir := filepath.Join(data, "chat-hosts", session)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	descriptor, _ := json.Marshal(persistenthost.Descriptor{PID: 123, StartedAt: time.Unix(100, 0)})
-	if err := os.WriteFile(filepath.Join(dir, "host.json"), descriptor, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "host.json"), descriptor, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prompt := filepath.Join(data, "prompts", session, "system.md")
+	if err := os.MkdirAll(filepath.Dir(prompt), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(prompt, []byte("bounded synthetic instructions"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	output := &bufferWriteCloser{}
 	c := &conversation{cfg: ports.ChatStartConfig{DataDir: data, SessionID: domain.SessionID(session)}, transport: &persistenthost.Transport{Stdin: output}, permissions: map[string]pendingPermission{"approval": {WireID: json.RawMessage(`"native-rpc"`), Params: permissionParams{RequestID: "approval", Options: []nativeOption{{ID: "reject", Name: "Reject", Response: json.RawMessage(`{"decision":"deny"}`)}}}}}, sent: make(map[string]string), pending: make(map[string]chan frame), events: make(chan ports.ChatEvent, 4), done: make(chan struct{}), log: slog.New(slog.DiscardHandler)}
-	if err := c.ResolveRequest(context.Background(), "approval", ports.ChatDecision{ID: "invented-allow"}); err != ports.ErrChatDecisionNotOffered {
+	if err := c.ResolveRequest(context.Background(), "approval", ports.ChatDecision{ID: "invented-allow"}); !errors.Is(err, ports.ErrChatDecisionNotOffered) {
 		t.Fatalf("fabricated decision accepted: %v", err)
 	}
 	if _, err := c.SendTurn(context.Background(), ports.ChatUserMessage{Text: "yes"}); err == nil {
@@ -98,7 +106,7 @@ func TestDecisionsMustBeOfferedAndInputCannotConsumePermissions(t *testing.T) {
 	if output.Len() != 0 {
 		t.Fatal("rejected admission reached native stdin")
 	}
-	if err := c.ResolveRequest(context.Background(), "approval", ports.ChatDecision{ID: "reject", Raw: []byte(`{"decision":"allow"}`)}); err != ports.ErrChatDecisionNotOffered {
+	if err := c.ResolveRequest(context.Background(), "approval", ports.ChatDecision{ID: "reject", Raw: []byte(`{"decision":"allow"}`)}); !errors.Is(err, ports.ErrChatDecisionNotOffered) {
 		t.Fatal("forged raw response accepted")
 	}
 	if err := c.ResolveRequest(context.Background(), "approval", ports.ChatDecision{ID: "reject"}); err != nil {
@@ -114,7 +122,7 @@ func TestDecisionsMustBeOfferedAndInputCannotConsumePermissions(t *testing.T) {
 	if response.ID != "native-rpc" || response.Result.Decision != "deny" {
 		t.Fatalf("provider-owned denial changed: %#v", response)
 	}
-	if err := c.ResolveRequest(context.Background(), "approval", ports.ChatDecision{ID: "reject"}); err != ports.ErrChatRequestNotPending {
+	if err := c.ResolveRequest(context.Background(), "approval", ports.ChatDecision{ID: "reject"}); !errors.Is(err, ports.ErrChatRequestNotPending) {
 		t.Fatal("duplicate decision admitted before native settled it")
 	}
 	if _, err := io.ReadAll(output); err != nil {

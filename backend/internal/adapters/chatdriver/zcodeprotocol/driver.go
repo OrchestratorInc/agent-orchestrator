@@ -23,11 +23,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// Driver opens ZCode conversations through its native app-server.
 type Driver struct {
 	plugin *zcode.Plugin
 	log    *slog.Logger
 }
 
+// New creates a driver using the existing agent binary resolver.
 func New(plugin *zcode.Plugin, log *slog.Logger) *Driver {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -38,6 +40,7 @@ func New(plugin *zcode.Plugin, log *slog.Logger) *Driver {
 var _ ports.ChatDriver = (*Driver)(nil)
 var _ ports.ChatDriverReconnector = (*Driver)(nil)
 
+// Harness identifies the native provider.
 func (*Driver) Harness() domain.AgentHarness { return domain.HarnessZCode }
 func capabilities() ports.ChatCapabilities {
 	return ports.ChatCapabilities{
@@ -45,6 +48,8 @@ func capabilities() ports.ChatCapabilities {
 		ports.ChatCapabilityResume: true, ports.ChatCapabilityHistory: true,
 	}
 }
+
+// Probe resolves the install; native authentication is checked by real requests.
 func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 	if d.plugin == nil {
 		return nil, ports.ErrChatDriverUnavailable
@@ -106,15 +111,21 @@ func nativeMCP(servers []ports.ChatMCPServerConfig) ([]map[string]any, error) {
 	}
 	return result, nil
 }
+
+// Start creates a fresh native conversation.
 func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
 	return d.open(ctx, cfg, "", false)
 }
+
+// Resume loads exact native history or attaches to its surviving host.
 func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
 	if cfg.ProviderConversationID == "" {
 		return nil, ports.ErrChatResumeFailed
 	}
 	return d.open(ctx, ports.ChatStartConfig{SessionID: cfg.SessionID, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, PrepareEnv: cfg.PrepareEnv, Model: cfg.Model, Effort: cfg.Effort, Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly, SystemPrompt: cfg.SystemPrompt, ProviderScopeID: cfg.ProviderScopeID, AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers}, cfg.ProviderConversationID, cfg.ReconnectOnly)
 }
+
+// Reconnect attaches only to the existing host and never starts a replacement.
 func (d *Driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
 	cfg.ReconnectOnly = true
 	return d.Resume(ctx, cfg)

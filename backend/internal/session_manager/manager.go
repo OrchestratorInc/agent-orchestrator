@@ -973,6 +973,19 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if _, ok := m.agents.Agent(cfg.Harness); !ok {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %q", ErrUnknownHarness, cfg.Harness)
 	}
+	// Stock ZCode has no supported additive TUI instruction route. Reject
+	// explicit Terminal requests before durable state/worktrees are created.
+	if cfg.Harness == domain.HarnessZCode {
+		if cfg.RequestedMode == domain.SessionModeTUI {
+			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: ZCode supports Chat only; Terminal UI is unsupported", ports.ErrChatUnsupported)
+		}
+		if !cfg.RequestedMode.Valid() {
+			cfg.RequestedMode = domain.SessionModeChat
+		}
+		if cfg.AgentConfig.Mode != "" {
+			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: ZCode native mode overrides are unsupported in Chat; select an approval policy")
+		}
+	}
 	// Unreal Agent has no terminal interface or interactive approval channel.
 	// Selecting the harness therefore supplies its only valid launch defaults;
 	// an explicit caller-supplied mode or permission remains authoritative and
@@ -990,6 +1003,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// override) and validate the model before any durable state is created. A
 	// model the harness cannot honor should not leave a seed row behind.
 	agentConfig := applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config), cfg.AgentConfig)
+	if cfg.Harness == domain.HarnessZCode && agentConfig.Mode != "" {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: ZCode native mode overrides are unsupported in Chat; select an approval policy")
+	}
 	if err := validateSpawnModel(cfg.Harness, agentConfig.Model); err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %s", ErrUnsupportedModel, err.Error())
 	}

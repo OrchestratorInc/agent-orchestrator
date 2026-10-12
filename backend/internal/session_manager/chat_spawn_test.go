@@ -1980,3 +1980,28 @@ func TestChatSpawnWritesCommandCodeSessionStartHook(t *testing.T) {
 		}
 	}
 }
+
+func TestZCodeDefaultsToChatWithoutBroadeningApprovalPolicy(t *testing.T) {
+	launcher := &recordingLauncher{}
+	mgr, _, runtime := newChatManager(launcher)
+	mgr.defaults = fixedSessionModeDefaults(domain.SessionModeTUI)
+	rec, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessZCode, AgentConfig: ports.AgentConfig{Permissions: ports.PermissionModeDefault}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Mode != domain.SessionModeChat || runtime.created != 0 || len(launcher.started) != 1 {
+		t.Fatalf("ZCode Chat admission: mode=%s terminal=%d chat=%d", rec.Mode, runtime.created, len(launcher.started))
+	}
+	if launcher.started[0].Permissions != ports.PermissionModeDefault {
+		t.Fatal("Chat-only default broadened native permission policy")
+	}
+}
+func TestZCodeExplicitTerminalRejectsBeforeDurableSession(t *testing.T) {
+	launcher := &recordingLauncher{}
+	mgr, store, runtime := newChatManager(launcher)
+	before := len(store.sessions)
+	_, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessZCode, RequestedMode: domain.SessionModeTUI})
+	if !errors.Is(err, ports.ErrChatUnsupported) || len(store.sessions) != before || runtime.created != 0 || len(launcher.started) != 0 {
+		t.Fatalf("unsupported Terminal left resources: err=%v sessions=%d terminal=%d chat=%d", err, len(store.sessions), runtime.created, len(launcher.started))
+	}
+}

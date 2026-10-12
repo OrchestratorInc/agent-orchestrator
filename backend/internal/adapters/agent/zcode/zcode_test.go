@@ -30,20 +30,10 @@ func TestManifest(t *testing.T) {
 	}
 }
 
-func TestGetConfigSpecReportsMode(t *testing.T) {
-	// zcode 3.14.3 exposes no --model launch flag (the model is pinned in
-	// ZCode's own config), so the adapter exposes the --mode permission
-	// modes instead.
-	spec, err := (&Plugin{}).GetConfigSpec(context.Background())
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if len(spec.Fields) != 1 || spec.Fields[0].Key != "mode" {
-		t.Fatalf("unexpected fields: %#v", spec.Fields)
-	}
-	want := []string{"build", "edit", "plan", "yolo"}
-	if !reflect.DeepEqual(spec.Fields[0].Enum, want) {
-		t.Fatalf("enum = %#v, want %#v", spec.Fields[0].Enum, want)
+func TestGetConfigSpecDefersModelToNativeProfile(t *testing.T) {
+	spec, err := New().GetConfigSpec(context.Background())
+	if err != nil || len(spec.Fields) != 0 {
+		t.Fatalf("unsupported native flags advertised: %#v, %v", spec, err)
 	}
 }
 

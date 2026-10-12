@@ -1387,6 +1387,24 @@ describe("TaskComposer", () => {
 		});
 	});
 
+
+    it("starts ZCode in Chat and does not offer a Terminal fallback", async () => {
+        h.agentCatalog = { agents: [agentReadiness("zcode", "ZCode")] };
+        h.get.mockImplementation(async (path: string) => {
+            if (path === "/api/v1/settings") return { data: { defaultSessionMode: "tui", chatHarnesses: ["zcode"] } };
+            if (path.includes("/models")) return { data: { agent: "zcode", selectionMode: "none", models: [], allowCustom: false } };
+            return { data: { status: "ok", project: { config: {} } } };
+        });
+        h.post.mockResolvedValueOnce({ error: { code: "CHAT_DRIVER_UNAVAILABLE", message: "ZCode is unavailable" } });
+        render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+        await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "zcode"));
+        fireEvent.change(task(), { target: { value: "--help ordinary task" } });
+        fireEvent.click(startTask());
+        await screen.findByText("ZCode is unavailable");
+        expect(h.post.mock.calls[0][1].body).toMatchObject({ harness: "zcode", mode: "chat" });
+        expect(screen.queryByRole("button", { name: /terminal|tui/i })).not.toBeInTheDocument();
+    });
+
 	it("reports dirty then clears it on unmount", () => {
 		const onDirtyChange = vi.fn();
 		const { unmount } = render(
