@@ -100,6 +100,18 @@ func RecordAuthEvidence(ctx context.Context, identity domain.AgentAccountIdentit
 	evidence.mu.Unlock()
 }
 
+// AddAuthEvidence fills fields the recorded evidence leaves empty, such as
+// an email learned after the deciding file or variable was recorded.
+func AddAuthEvidence(ctx context.Context, identity domain.AgentAccountIdentity) {
+	evidence, ok := ctx.Value(authEvidenceKey{}).(*AuthEvidence)
+	if !ok || evidence == nil {
+		return
+	}
+	evidence.mu.Lock()
+	evidence.identity = evidence.identity.Merge(identity)
+	evidence.mu.Unlock()
+}
+
 // Identity returns the recorded evidence.
 func (e *AuthEvidence) Identity() domain.AgentAccountIdentity {
 	if e == nil {

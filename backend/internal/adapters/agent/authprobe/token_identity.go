@@ -85,17 +85,27 @@ func GitHubCLIUser() string {
 		return ""
 	}
 	inGitHub := false
+	childIndent := -1
 	for _, line := range strings.Split(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+		if indent == 0 {
 			inGitHub = strings.TrimSuffix(trimmed, ":") == "github.com"
+			childIndent = -1
 			continue
 		}
-		// The active account is the host's direct "user:" entry (two-space indent).
-		if inGitHub && !strings.HasPrefix(line, "    ") && strings.HasPrefix(trimmed, "user:") {
+		if !inGitHub {
+			continue
+		}
+		// The active account is the host's own "user:" entry, at the indent of
+		// the host's first child; logins listed under "users:" sit deeper.
+		if childIndent < 0 {
+			childIndent = indent
+		}
+		if indent == childIndent && strings.HasPrefix(trimmed, "user:") {
 			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "user:")), `"'`)
 		}
 	}

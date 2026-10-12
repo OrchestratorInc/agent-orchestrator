@@ -23,9 +23,43 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, err
 	}
 	if status, ok, err := ampLocalAuthStatus(ctx); err != nil || ok {
+		if status == ports.AgentAuthStatusAuthorized {
+			// A stored login names no account; Amp's own account list does.
+			ports.AddAuthEvidence(ctx, domain.AgentAccountIdentity{Email: ampActiveAccountEmail(ctx, binary)})
+		}
 		return status, err
 	}
 	return ampUsageAuthStatus(ctx, binary)
+}
+
+// ampActiveAccountEmail reads the account `amp account list` marks active
+// ("* user@example.com (user_…)"), or "" when Amp cannot say.
+func ampActiveAccountEmail(ctx context.Context, binary string) string {
+	if binary == "" {
+		return ""
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := authprobe.CmdRunner(probeCtx, binary, "account", "list")
+	if err != nil || probeCtx.Err() != nil {
+		return ""
+	}
+	return ampActiveEmailFromList(string(out))
+}
+
+func ampActiveEmailFromList(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "*") {
+			continue
+		}
+		for _, field := range strings.Fields(strings.TrimPrefix(trimmed, "*")) {
+			if strings.Contains(field, "@") {
+				return strings.Trim(field, `"'()<>,`)
+			}
+		}
+	}
+	return ""
 }
 
 func ampLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
