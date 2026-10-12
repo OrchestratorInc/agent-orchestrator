@@ -21,6 +21,7 @@ type asyncChatSpawn struct {
 	branch            string
 	prompt            string
 	systemPrompt      string
+	systemPromptFile  string
 	promptBytes       int
 	systemPromptBytes int
 	preparation       *taskPreparation
@@ -237,6 +238,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		workspaceProject: workspaceProject,
 		prompt:           in.prompt,
 		systemPrompt:     in.systemPrompt,
+		systemPromptFile: in.systemPromptFile,
 		// The opening prompt is already a queued turn; the drain below delivers
 		// it together with anything typed while this was starting.
 		promptQueued: true,
@@ -424,6 +426,13 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 	if err != nil {
 		return RestoreResult{}, false, err
 	}
+	// The retry reuses the original session id, so this rewrites the same
+	// prompt file the SessionStart hook reads; without it a retried chat
+	// session would start with hooks but no standing instructions.
+	systemPromptFile, err := m.prepareSystemPromptFile(rec.ID, rec.Harness, systemPrompt)
+	if err != nil {
+		return RestoreResult{}, false, wrapSpawnStage(rec.ID, ErrSpawnSystemPrompt, err)
+	}
 	config := restoredAgentConfig(rec, project.Config)
 	if rec.Metadata.Model != "" {
 		config.Model = rec.Metadata.Model
@@ -443,7 +452,8 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 	}
 	retried, _, _, err := m.beginAsyncChatSpawn(ctx, asyncChatSpawn{
 		cfg: cfg, project: project, projectKind: projectKind,
-		record: rec, branch: branch, systemPrompt: systemPrompt, retry: true, releaseHarness: releaseHarness,
+		record: rec, branch: branch, systemPrompt: systemPrompt, systemPromptFile: systemPromptFile,
+		retry: true, releaseHarness: releaseHarness,
 	})
 	if err != nil {
 		return RestoreResult{}, false, err

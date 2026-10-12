@@ -434,6 +434,7 @@ register_task_definition() {
 				--set-secret "AO_CLOUD_CODER_TOKEN=${coder_secret_arn}:token::"
 				--set-secret "AO_CLOUD_CODER_OWNER=${coder_secret_arn}:owner::"
 				--set-secret "AO_CLOUD_CODER_TEMPLATE_ID=${coder_secret_arn}:template_id::"
+				--set-secret "AO_CLOUD_CODER_TEMPLATE_IDS=${coder_secret_arn}:template_ids::"
 				--set-secret "AO_CLOUD_CODER_AGENT_NAME=${coder_secret_arn}:agent_name::"
 				--set-secret "AO_CLOUD_CODER_PARAMETERS_JSON=${coder_secret_arn}:parameters_json::"
 				--set-secret "AO_CLOUD_CODER_DURABLE_ROOT=${coder_secret_arn}:durable_root::"

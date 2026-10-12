@@ -66,6 +66,7 @@ import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry"
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
 import { useCloudSession } from "../lib/cloud-session";
+import { useCloudAccountSwitchReset } from "../hooks/useCloudAccountSwitchReset";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
@@ -312,10 +313,18 @@ function ShellLayout() {
 	const routeParamsRef = useRef(routeParams);
 	routeParamsRef.current = routeParams;
 	const remoteHostsEnabled = useUiStore((state) => state.developerMode && state.remoteHosts);
-	const { status: accountStatus } = useCloudSession();
+	const { status: accountStatus, session: cloudAccount } = useCloudSession();
 	useEffect(() => {
 		if ((!remoteHostsEnabled || accountStatus === "unauthenticated") && routeParams.hostId) void navigate({ to: "/", replace: true });
 	}, [accountStatus, navigate, remoteHostsEnabled, routeParams.hostId]);
+	useCloudAccountSwitchReset({
+		userId: cloudAccount?.user.id ?? null,
+		ready: accountStatus !== "loading",
+		queryClient,
+		onLocalPage: !routeParams.projectId ||
+			workspaces.some((workspace) => workspace.id === routeParams.projectId && workspace.kind !== CLOUD_PROJECT_KIND),
+		leavePage: () => void navigate({ to: "/", replace: true }),
+	});
 	const linkSession = routeParams.hostId ? undefined : workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === routeParams.sessionId);
 	const openBrowserLink = useSessionBrowserLink(linkSession);
 	const canOpenBrowserLink = linkSession?.kind === "worker" && sessionIsActive(linkSession);

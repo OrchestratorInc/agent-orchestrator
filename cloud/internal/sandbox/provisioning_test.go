@@ -350,3 +350,48 @@ func TestSessionPlanForProviderWithCoderTemplatelessOverride(t *testing.T) {
 		t.Fatalf("size-only templateless session error = %v, want ErrCoderTemplateRequired", err)
 	}
 }
+
+// The deployment's own Coder offers only its allowed templates: a test or
+// bring-your-own template on the shared Coder is refused up front instead of
+// booting a workspace the deployment cannot use. The default template is
+// always allowed, and bring-your-own connections are not limited.
+func TestSessionPlanForProviderWithCoderAllowedTemplates(t *testing.T) {
+	t.Parallel()
+	const (
+		defaultTemplate = "d85825e0-6bd4-4fe4-853d-1b48891b8066"
+		devKit          = "f81b3138-f642-4746-ba51-11ef8ec718b0"
+		testTemplate    = "d7f2324d-51ea-4429-bfdc-c4a544535095"
+	)
+	defaults := ProvisioningDefaults{Provider: ProviderCoder, Release: "test", Coder: CoderConfig{
+		BaseURL: "https://coder.example.com", Owner: "aoadmin", TemplateID: defaultTemplate,
+		AgentName: "main", DurableRoot: "/home/coder", WorkerTokenTTL: DefaultWorkerTokenTTL,
+		AllowedTemplateIDs: []string{devKit},
+	}}
+	for name, options := range map[string]*CoderSessionOptions{
+		"deployment default": nil,
+		"default picked":     {TemplateID: defaultTemplate},
+		"allowed template":   {TemplateID: devKit},
+	} {
+		if _, err := defaults.SessionPlanForProviderWithCoder("codex", ProviderCoder, options, nil); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if _, err := defaults.SessionPlanForProviderWithCoder(
+		"codex", ProviderCoder, &CoderSessionOptions{TemplateID: testTemplate}, nil,
+	); !errors.Is(err, ErrCoderTemplateUnavailable) {
+		t.Fatalf("test template error = %v, want ErrCoderTemplateUnavailable", err)
+	}
+	byo := &CoderDeploymentOverride{BaseURL: "https://org-coder.example.com", Owner: "dev", DurableRoot: "$HOME"}
+	if _, err := defaults.SessionPlanForProviderWithCoder(
+		"codex", ProviderCoder, &CoderSessionOptions{TemplateID: testTemplate}, byo,
+	); err != nil {
+		t.Fatalf("bring-your-own template: %v", err)
+	}
+	unlimited := defaults
+	unlimited.Coder.AllowedTemplateIDs = nil
+	if _, err := unlimited.SessionPlanForProviderWithCoder(
+		"codex", ProviderCoder, &CoderSessionOptions{TemplateID: testTemplate}, nil,
+	); err != nil {
+		t.Fatalf("no allowed list: %v", err)
+	}
+}

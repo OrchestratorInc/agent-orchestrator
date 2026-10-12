@@ -170,7 +170,12 @@ directly from its environment-scoped secret. Provider auto-pause is
 intentionally absent from this deployment configuration.
 
 `coder` is a JSON secret with `url`, `token`, `owner`, `template_id`,
-`agent_name`, `parameters_json`, `durable_root`, and `worker_token_ttl`.
+`template_ids`, `agent_name`, `parameters_json`, `durable_root`, and
+`worker_token_ttl`. `template_ids` is the comma-separated list of templates on
+the shared Coder that sessions on AO's own Coder may pick (the default
+`template_id` is always allowed); the template picker hides the rest and a
+session on any other template is refused. Leave it empty to allow every
+template. Bring-your-own Coder connections are not limited.
 `durable_root` is the approved template's exact persistent-volume mount point,
 not a deployment-wide assumption about the Coder user's home. It must be an
 absolute normalized non-root path. `parameters_json` must be a JSON object whose
