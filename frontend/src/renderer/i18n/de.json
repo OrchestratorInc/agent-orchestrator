@@ -2192,6 +2192,7 @@
 	"settings.harness.updateCheckUnavailable": "Die Verfügbarkeit von Updates konnte nicht verifiziert werden.",
 	"settings.harness.apiVersionNotReported": "API-Version nicht gemeldet",
 	"settings.harness.updateFailed": "Could not start the harness update.",
+	"settings.harness.updateJobFailed": "Aktualisierung fehlgeschlagen.",
 	"settings.harness.updateMethodChanged": "Die Installation von {{agent}} hat sich seit dem Laden dieser Seite geändert. Prüfe sie und versuche es erneut.",
 	"settings.harness.updateTargetChanged": "{{version}} ist jetzt die neueste Version. Wähle erneut „Aktualisieren“, um sie zu installieren.",
 	"settings.harness.working": "Working…",

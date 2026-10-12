@@ -5,7 +5,8 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useAgentAuthPlans } from "../hooks/useAgentAuth";
 import { cacheAgentReadiness, ensureAgentReadiness, useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
-import { fetchInstallers, fetchInstallJobs, hasConfirmedHarnessUpdate, harnessUpdateNoticeKey, installerQueryKey, installJobsQueryKey, maintenanceMethodId, updateAdvisoryQueryKey, useHarnessActionRequest, useHarnessUpdates, versionLabel } from "../hooks/useHarnessUpdates";
+import { fetchInstallers, fetchInstallJobs, fetchUpdateAdvisory, hasConfirmedHarnessUpdate, harnessUpdateNoticeKey, installerQueryKey, installJobsQueryKey, maintenanceMethodId, updateAdvisoryQueryKey, useHarnessActionRequest, useHarnessUpdates, versionLabel } from "../hooks/useHarnessUpdates";
+import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { AGENT_OPTIONS, agentLabel, type AgentId } from "../lib/agent-options";
 import { aoBridge } from "../lib/bridge";
 import { useUiStore } from "../stores/ui-store";
@@ -39,6 +40,11 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	const observedJobs = useRef(new Set<string>());
 	const [dismissed, setDismissed] = useState(readDismissals);
 	const [expanded, setExpanded] = useState(false);
+	// Updates started from a notice run right here; the notice shows progress
+	// and any failure instead of sending the user to Settings.
+	const [starting, setStarting] = useState<ReadonlySet<AgentId>>(new Set());
+	const [errors, setErrors] = useState<Partial<Record<AgentId, string>>>({});
+	const startedJobs = useRef(new Set<AgentId>());
 	const stackId = useId();
 	const openSettings = useUiStore((state) => state.openGlobalSettings);
 	const settingsModal = useUiStore((state) => state.settingsModal);
@@ -63,6 +69,45 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 			void queryClient.invalidateQueries({ queryKey: installerQueryKey });
 		}
 	}, [enabled, jobs.data, queryClient]);
+
+	const startUpdate = async (agentId: AgentId, latestVersion: string, methodId: string) => {
+		if (starting.has(agentId)) return;
+		setStarting((current) => new Set([...current, agentId]));
+		setErrors((current) => ({ ...current, [agentId]: undefined }));
+		try {
+			// The same guard the Harness page applies: install only the release and
+			// through the method the user saw, re-checked at click time.
+			const key = updateAdvisoryQueryKey(agentId);
+			await queryClient.cancelQueries({ queryKey: key });
+			const fresh = await fetchUpdateAdvisory(agentId, undefined, true);
+			queryClient.setQueryData(key, fresh);
+			if (!hasConfirmedHarnessUpdate(fresh)) return;
+			if (fresh.latestVersion !== latestVersion || maintenanceMethodId(fresh) !== methodId) {
+				setErrors((current) => ({ ...current, [agentId]: fresh.latestVersion !== latestVersion
+					? t("settings.harness.updateTargetChanged", { version: versionLabel(fresh.latestVersion!) })
+					: t("settings.harness.updateMethodChanged", { agent: agentLabel(agentId) }) }));
+				return;
+			}
+			const { data, error } = await apiClient.POST("/api/v1/agents/{agent}/install", {
+				params: { path: { agent: agentId } },
+				body: { method: methodId, operation: "update", expectedVersion: fresh.latestVersion },
+			});
+			if (error || !data) {
+				setErrors((current) => ({ ...current, [agentId]: apiErrorMessage(error, t("settings.harness.updateFailed")) }));
+				return;
+			}
+			startedJobs.current.add(agentId);
+			await queryClient.invalidateQueries({ queryKey: installJobsQueryKey });
+		} catch (error) {
+			setErrors((current) => ({ ...current, [agentId]: error instanceof Error ? error.message : t("settings.harness.updateFailed") }));
+		} finally {
+			setStarting((current) => {
+				const next = new Set(current);
+				next.delete(agentId);
+				return next;
+			});
+		}
+	};
 
 	if (!readinessComplete || readiness.isError) return null;
 	// Let the first batch settle so a fast, seldom-used harness cannot jump
@@ -120,10 +165,18 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				const authStatus = readiness.data?.agents.find((agent) => agent.id === agentId)?.authentication.state;
 				const needsLogin = Boolean(authPlan && authPlan.action !== "instructions" && authStatus === "unauthorized");
 				const canUpdate = Boolean(method?.available && method.updateAvailable);
-				const busy = activeJob(job?.status);
+				const busy = activeJob(job?.status) || starting.has(agentId);
+				// A job this notice started that failed stays explained here.
+				const failed = startedJobs.current.has(agentId) && (job?.status === "failed" || job?.status === "unsupported" || job?.status === "interrupted");
+				const error = errors[agentId] ?? (failed ? job?.error || t("settings.harness.updateJobFailed") : undefined);
 				const ready = !authPlans.isPending && !authPlans.isError && !installers.isPending && !installers.isError && !jobs.isPending && !jobs.isError;
 				const requestAction = () => {
-					useHarnessActionRequest.getState().setRequest({ agentId, latestVersion: advisory.latestVersion!, action: needsLogin ? "login" : "update" });
+					if (!needsLogin && method) {
+						void startUpdate(agentId, advisory.latestVersion!, method.id);
+						return;
+					}
+					// A login runs in a terminal on the Harness page.
+					useHarnessActionRequest.getState().setRequest({ agentId, latestVersion: advisory.latestVersion!, action: "login" });
 					openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true });
 				};
 				return <article key={key} aria-label={agentLabel(agentId)} className="relative rounded-xl border border-border bg-card px-2.5 py-2 shadow-md">
@@ -134,11 +187,12 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 					</div>
 					<div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
 						<p className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1 text-[11px]"><span className="break-all font-mono text-settings-label" title={t("settings.harness.installedVersion")}>{versionLabel(advisory.currentVersion!)}</span><ArrowRight className="size-3 shrink-0 text-settings-muted" aria-label={t("settings.harness.availableVersion")} /><span className="break-all font-mono font-medium text-settings-accent">{versionLabel(advisory.latestVersion!)}</span></p>
-					{busy ? <Button size="sm" variant="outline" className="h-7 min-w-16 shrink-0 px-2 text-xs" disabled><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />{t("settings.harness.working")}</Button>
-						: ready && ((needsLogin && authPlan?.available) || (!needsLogin && canUpdate)) ? <Button size="sm" className="h-7 min-w-16 shrink-0 px-2 text-xs" onClick={requestAction}>{t(needsLogin ? authPlan?.action === "setup" ? "settings.harness.setup" : "settings.harness.login" : "settings.harness.update")}</Button>
+					{busy ? <Button size="sm" variant="outline" className="h-7 min-w-16 shrink-0 px-2 text-xs" disabled><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />{t("settings.harness.updating")}</Button>
+						: ready && ((needsLogin && authPlan?.available) || (!needsLogin && canUpdate)) ? <Button size="sm" className="h-7 min-w-16 shrink-0 px-2 text-xs" onClick={requestAction}>{t(needsLogin ? authPlan?.action === "setup" ? "settings.harness.setup" : "settings.harness.login" : error ? "settings.harness.retryUpdate" : "settings.harness.update")}</Button>
 						: ready && !needsLogin && plan?.documentationUrl ? <Button size="sm" variant="outline" className="h-7 shrink-0 px-2 text-xs" title={method?.updateReason ?? t("settings.harness.ownershipUnknown")} onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button>
 						: <Button size="sm" variant="outline" className="h-7 shrink-0 px-2 text-xs" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true })}>{t("settings.harness.viewDetails")}</Button>}
 					</div>
+					{error && !busy ? <p role="alert" className="mt-1 break-words text-[11px] text-error">{error}</p> : null}
 				</article>;
 			})}
 		</div>

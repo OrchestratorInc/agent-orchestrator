@@ -2192,6 +2192,7 @@
 	"settings.harness.updateCheckUnavailable": "更新の有無を確認できませんでした。",
 	"settings.harness.apiVersionNotReported": "APIバージョンは報告されていません",
 	"settings.harness.updateFailed": "Could not start the harness update.",
+	"settings.harness.updateJobFailed": "更新に失敗しました。",
 	"settings.harness.updateMethodChanged": "このページの読み込み後に {{agent}} のインストール方法が変わりました。確認してから、もう一度お試しください。",
 	"settings.harness.updateTargetChanged": "最新リリースは {{version}} になりました。インストールするにはもう一度「更新」を選択してください。",
 	"settings.harness.working": "Working…",

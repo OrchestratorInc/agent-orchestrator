@@ -2258,6 +2258,7 @@
 	"settings.harness.updateCheckUnavailable": "无法验证是否有可用更新。",
 	"settings.harness.apiVersionNotReported": "未提供 API 版本",
 	"settings.harness.updateFailed": "Could not start the harness update.",
+	"settings.harness.updateJobFailed": "更新失败。",
 	"settings.harness.updateMethodChanged": "自此页面加载以来，{{agent}} 的安装方式已更改。请检查后重试。",
 	"settings.harness.updateTargetChanged": "最新版本现在是 {{version}}。请再次选择“更新”进行安装。",
 	"settings.harness.working": "Working…",
