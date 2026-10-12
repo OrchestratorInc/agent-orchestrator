@@ -101,10 +101,13 @@ type Config struct {
 	// NormalizeRequestError lets a provider binding translate an opaque
 	// JSON-RPC request error (typically -32603 "Internal error") into a
 	// user-facing error before the generic ACP wrapping is applied. When set,
-	// it is called for every non-auth request error. If it returns a non-nil
-	// error that value is used directly; if it returns nil the default path
-	// applies. Auth errors (code -32000) are handled before this hook runs.
-	NormalizeRequestError func(error) error
+	// it is called for every non-auth request error. The model argument is the
+	// session's active model id (empty when the failure happened before any
+	// model was applied), so a binding can attribute the failure to a specific
+	// model. If it returns a non-nil error that value is used directly; if it
+	// returns nil the default path applies. Auth errors (code -32000) are
+	// handled before this hook runs.
+	NormalizeRequestError func(model string, err error) error
 }
 
 // TurnSettingsValidator validates live turn settings against launch-time state.

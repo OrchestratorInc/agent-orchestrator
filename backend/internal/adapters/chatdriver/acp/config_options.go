@@ -170,6 +170,21 @@ func (c *conversation) applyAcceptedConfigOption(id string, value ports.ChatConf
 	}
 }
 
+// currentModel returns the session's active model id from the "model" config
+// option, or "" when the provider has not advertised one (or the failure
+// happened before any model was applied). It is read when a provider request
+// error is classified so a binding can attribute a model-specific failure.
+func (c *conversation) currentModel() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.configOptions {
+		if c.configOptions[i].ID == "model" {
+			return c.configOptions[i].Current.Select
+		}
+	}
+	return ""
+}
+
 // configOptionOffers reports whether the live provider-owned catalog offers a
 // select value. known=false means the provider did not advertise that option,
 // so callers must preserve the existing compatibility path instead of guessing.

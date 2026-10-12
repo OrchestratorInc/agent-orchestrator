@@ -21,11 +21,11 @@ func TestClaudeNormalizeRequestErrorVersionIncompatibility(t *testing.T) {
 		" version 2.1.280 or newer is required." +
 		" Run 'claude update', or update the Claude desktop app, then try again."
 
-	err := claudeNormalizeRequestError(&acpsdk.RequestError{
+	err := claudeNormalizeRequestError("claude-sonnet-4-5", &acpsdk.RequestError{
 		Code:    -32603,
 		Message: msg,
 		Data:    map[string]any{"errorKind": "unknown"},
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("expected a non-nil error for a version-incompatibility message, got nil")
 	}
@@ -54,7 +54,7 @@ func TestClaudeNormalizeRequestErrorVersionBelowMinimum(t *testing.T) {
 	msg := "Internal error: API Error: 400 Claude Code 2.1.100 does not support this model;" +
 		" version 2.1.280 or newer is required."
 
-	err := claudeNormalizeRequestError(&acpsdk.RequestError{Code: -32603, Message: msg})
+	err := claudeNormalizeRequestError("claude-opus-4-1", &acpsdk.RequestError{Code: -32603, Message: msg}, nil)
 	if err == nil {
 		t.Fatal("expected non-nil error for version below minimum")
 	}
@@ -103,7 +103,7 @@ func TestClaudeNormalizeRequestErrorPassesThroughUnrelatedErrors(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := claudeNormalizeRequestError(tc.err); got != nil {
+			if got := claudeNormalizeRequestError("some-model", tc.err, nil); got != nil {
 				t.Fatalf("claudeNormalizeRequestError = %v, want nil (pass-through)", got)
 			}
 		})
@@ -119,17 +119,15 @@ func TestClaudeNormalizeRequestErrorRemediation(t *testing.T) {
 		"\n[session/query] sessionId=dd2c330c-8ec3-46f5-b7d9-28686bcf7f22 resume=none" +
 		"\n[CLAUDE_SDK_CAN_USE_TOOL_SHADOWED] Warning: canUseTool will not be invoked"
 
-	err := claudeNormalizeRequestError(&acpsdk.RequestError{
+	err := claudeNormalizeRequestError("some-model", &acpsdk.RequestError{
 		Code:    -32603,
 		Message: msg,
 		Data:    map[string]any{"errorKind": "unknown"},
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("expected non-nil error")
 	}
 	text := err.Error()
-
-	// Remediation must be present.
 	if !strings.Contains(strings.ToLower(text), "update") {
 		t.Fatalf("error missing remediation instruction: %q", text)
 	}
@@ -148,8 +146,48 @@ func TestClaudeNormalizeRequestErrorRemediation(t *testing.T) {
 func TestClaudeNormalizeRequestErrorVersionIncompatibleWithSpacesInMessage(t *testing.T) {
 	msg := "Internal error: API Error: 400 Claude Code 2.1.228 does not support this model;  version 2.1.280 or newer is required."
 
-	err := claudeNormalizeRequestError(&acpsdk.RequestError{Code: -32603, Message: msg})
+	err := claudeNormalizeRequestError("some-model", &acpsdk.RequestError{Code: -32603, Message: msg}, nil)
 	if err == nil {
 		t.Fatal("extra whitespace around semicolon must still be recognized")
+	}
+}
+
+// TestClaudeNormalizeRequestErrorReportsUnsupportedModel verifies that a
+// version-incompatibility failure reports the selected model and both versions
+// to the notify callback, which is how the daemon learns to stop offering a
+// model this binary cannot run.
+func TestClaudeNormalizeRequestErrorReportsUnsupportedModel(t *testing.T) {
+	msg := "Internal error: API Error: 400 Claude Code 2.1.228 does not support this model;" +
+		" version 2.1.280 or newer is required."
+	calls := 0
+	var gotModel, gotInstalled, gotRequired string
+	err := claudeNormalizeRequestError("claude-opus-4-1", &acpsdk.RequestError{Code: -32603, Message: msg},
+		func(model, installed, required string) {
+			calls++
+			gotModel, gotInstalled, gotRequired = model, installed, required
+		})
+	if err == nil {
+		t.Fatal("expected a non-nil error")
+	}
+	if calls != 1 || gotModel != "claude-opus-4-1" || gotInstalled != "2.1.228" || gotRequired != "2.1.280" {
+		t.Fatalf("notify = (%q, %q, %q) calls=%d, want (claude-opus-4-1, 2.1.228, 2.1.280) once",
+			gotModel, gotInstalled, gotRequired, calls)
+	}
+}
+
+// TestClaudeNormalizeRequestErrorSkipsNotifyWithoutModel ensures a failure that
+// cannot be attributed to a model still normalizes but reports nothing, since
+// marking an empty id would be a lie.
+func TestClaudeNormalizeRequestErrorSkipsNotifyWithoutModel(t *testing.T) {
+	msg := "Internal error: API Error: 400 Claude Code 2.1.228 does not support this model;" +
+		" version 2.1.280 or newer is required."
+	calls := 0
+	err := claudeNormalizeRequestError("", &acpsdk.RequestError{Code: -32603, Message: msg},
+		func(string, string, string) { calls++ })
+	if err == nil {
+		t.Fatal("expected a non-nil error")
+	}
+	if calls != 0 {
+		t.Fatalf("notify ran %d times, want 0 without a model id", calls)
 	}
 }

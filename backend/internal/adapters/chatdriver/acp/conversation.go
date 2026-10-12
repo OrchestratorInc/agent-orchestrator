@@ -131,8 +131,9 @@ type conversation struct {
 	promptResponseFailure func(acpsdk.PromptResponse) error
 	// normalizeRequestError translates a provider-specific JSON-RPC request
 	// error into a user-facing error before the generic ACP wrapping is
-	// applied. Nil means the default path applies.
-	normalizeRequestError func(error) error
+	// applied. It receives the session's active model id so a binding can
+	// attribute a model-specific failure. Nil means the default path applies.
+	normalizeRequestError func(model string, err error) error
 	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 
 	contextTokens     int64
@@ -224,7 +225,7 @@ func newConversation(
 // same wherever it surfaces.
 func (c *conversation) normalizeError(operation string, err error) error {
 	if c.normalizeRequestError != nil && !isACPAuthRequired(err) {
-		if normalized := c.normalizeRequestError(err); normalized != nil {
+		if normalized := c.normalizeRequestError(c.currentModel(), err); normalized != nil {
 			return normalized
 		}
 	}
@@ -237,7 +238,7 @@ func (c *conversation) normalizeError(operation string, err error) error {
 // generic transport failure.
 func (c *conversation) normalizeLoadError(operation string, err error) error {
 	if c.normalizeRequestError != nil && !isACPAuthRequired(err) {
-		if normalized := c.normalizeRequestError(err); normalized != nil {
+		if normalized := c.normalizeRequestError(c.currentModel(), err); normalized != nil {
 			return normalized
 		}
 	}

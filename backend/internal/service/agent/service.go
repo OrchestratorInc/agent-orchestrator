@@ -588,6 +588,83 @@ func (s *Service) InvalidateProjectModelCatalogs(projectID string) {
 	}()
 }
 
+// MarkModelUnsupported records that the installed agent binary rejected modelID
+// with a version-incompatibility error, so the picker stops offering it until
+// the discovery inputs change (normally after the binary is upgraded). The fact
+// belongs to the install, not a project, so every cached catalog for the agent
+// is updated. It never blocks the caller: a live turn reports the failure and
+// moves on.
+func (s *Service) MarkModelUnsupported(agentID, modelID, installed, required string) {
+	if s.cache == nil || strings.TrimSpace(modelID) == "" {
+		return
+	}
+	reason := modelUnsupportedReason(installed, required)
+	go func() {
+		records, err := s.cache.ListAgentModelCatalogsByAgent(s.ctx, agentID)
+		if err != nil {
+			s.logger.Debug("model unsupported lookup failed", "agent", agentID, "error", err)
+			return
+		}
+		for _, record := range records {
+			if s.ctx.Err() != nil {
+				return
+			}
+			var catalog ports.AgentModelCatalog
+			if json.Unmarshal([]byte(record.CatalogJSON), &catalog) != nil {
+				continue
+			}
+			changed := false
+			for i := range catalog.Models {
+				if catalog.Models[i].ID != modelID {
+					continue
+				}
+				if catalog.Models[i].Unsupported && catalog.Models[i].UnsupportedReason == reason {
+					continue
+				}
+				catalog.Models[i].Unsupported = true
+				catalog.Models[i].UnsupportedReason = reason
+				changed = true
+			}
+			if !changed {
+				continue
+			}
+			if err := s.saveCatalog(s.ctx, record.ProjectID, catalog, time.Now().UTC().UnixNano(), record.RetryCount); err != nil {
+				s.logger.Debug("model unsupported persist failed", "agent", agentID, "error", err)
+			}
+		}
+	}()
+}
+
+func modelUnsupportedReason(installed, required string) string {
+	return fmt.Sprintf("Requires Claude Code %s or newer (installed %s)", required, installed)
+}
+
+// carryUnsupportedModels copies durable "unsupported" markers from a previous
+// catalog onto freshly discovered models with the same id. It is only called
+// when the discovery inputs are unchanged, so a marker survives an ordinary
+// refresh but is dropped once the binary/config fingerprint changes — which is
+// what happens after the user upgrades and the model starts working again.
+func carryUnsupportedModels(previous, models []ports.AgentModelInfo) {
+	if len(previous) == 0 || len(models) == 0 {
+		return
+	}
+	byID := make(map[string]ports.AgentModelInfo, len(previous))
+	for _, model := range previous {
+		if model.Unsupported {
+			byID[model.ID] = model
+		}
+	}
+	if len(byID) == 0 {
+		return
+	}
+	for i := range models {
+		if prev, ok := byID[models[i].ID]; ok {
+			models[i].Unsupported = true
+			models[i].UnsupportedReason = prev.UnsupportedReason
+		}
+	}
+}
+
 func (s *Service) coalesceModelLoad(
 	ctx context.Context,
 	agentID, projectID string,
@@ -753,6 +830,9 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 			discovered.WarningCode = warningCode
 			discovered.RefreshRecommended = true
 			discovered.Models = s.labelAliasVersions(persistCtx, agentID, discovered.Models, cached, hasCached)
+			if cacheMatchesInputs {
+				carryUnsupportedModels(cached.Catalog.Models, discovered.Models)
+			}
 			previous := cached
 			if !cacheMatchesInputs {
 				previous.Catalog.LastSuccessAt = nil
@@ -783,6 +863,9 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	discovered.LastSuccessAt = &now
 	discovered.InputFingerprint = version
 	discovered.Metadata = catalogMetadata(request)
+	if hasCached && cached.BinaryVersion == version {
+		carryUnsupportedModels(cached.Catalog.Models, discovered.Models)
+	}
 	discovered.RefreshState = "idle"
 	discovered.RefreshError = ""
 	discovered.RetryAt = nil

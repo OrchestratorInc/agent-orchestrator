@@ -34,7 +34,7 @@ func TestNormalizeRequestErrorHookInterceptsMatchingErrors(t *testing.T) {
 		Harness:      domain.HarnessClaudeCode,
 		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
 		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
-		NormalizeRequestError: func(err error) error {
+		NormalizeRequestError: func(_ string, err error) error {
 			var reqErr *acpsdk.RequestError
 			if errors.As(err, &reqErr) && reqErr.Code == -32603 &&
 				strings.Contains(reqErr.Message, "does not support this model") {
@@ -157,7 +157,7 @@ func TestNormalizeRequestErrorHookPassesThroughWhenReturnsNil(t *testing.T) {
 		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
 		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
 		// Hook returns nil → no match, generic path applies.
-		NormalizeRequestError: func(error) error { return nil },
+		NormalizeRequestError: func(string, error) error { return nil },
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	driver.useTestProcess(fakeSpawn(agent))
 
@@ -203,7 +203,7 @@ func TestNormalizeRequestErrorHookDoesNotAffectAuthRejections(t *testing.T) {
 		Harness:      domain.HarnessClaudeCode,
 		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
 		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
-		NormalizeRequestError: func(error) error {
+		NormalizeRequestError: func(string, error) error {
 			// This hook must never be reached for auth rejections.
 			return nil
 		},
@@ -250,13 +250,13 @@ func TestNormalizeRequestErrorHookDoesNotAffectAuthRejections(t *testing.T) {
 // used in TestDriverPropagatesTheAuthRejectionHook.
 func TestDriverPropagatesNormalizeRequestErrorHook(t *testing.T) {
 	called := 0
-	cfg := Config{NormalizeRequestError: func(error) error { called++; return nil }}
+	cfg := Config{NormalizeRequestError: func(string, error) error { called++; return nil }}
 	conv := &conversation{}
 	conv.normalizeRequestError = cfg.NormalizeRequestError
 	if conv.normalizeRequestError == nil {
 		t.Fatal("hook must reach the conversation")
 	}
-	_ = conv.normalizeRequestError(errors.New("test"))
+	_ = conv.normalizeRequestError("", errors.New("test"))
 	if called != 1 {
 		t.Fatalf("hook ran %d times, want 1", called)
 	}
@@ -292,7 +292,7 @@ func TestNormalizeRequestErrorHookInterceptsSessionNewErrors(t *testing.T) {
 		Harness:      domain.HarnessClaudeCode,
 		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
 		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
-		NormalizeRequestError: func(err error) error {
+		NormalizeRequestError: func(_ string, err error) error {
 			var reqErr *acpsdk.RequestError
 			if errors.As(err, &reqErr) && reqErr.Code == -32603 &&
 				strings.Contains(reqErr.Message, "does not support this model") {
@@ -322,7 +322,7 @@ func TestNormalizeRequestErrorHookInterceptsSessionNewErrors(t *testing.T) {
 func TestNormalizeErrorAppliesHookToNonPromptOperations(t *testing.T) {
 	cleanErr := errors.New("classified provider failure")
 	conv := &conversation{
-		normalizeRequestError: func(err error) error {
+		normalizeRequestError: func(_ string, err error) error {
 			var reqErr *acpsdk.RequestError
 			if errors.As(err, &reqErr) && reqErr.Code == -32603 {
 				return cleanErr
@@ -348,7 +348,7 @@ func TestNormalizeErrorAppliesHookToNonPromptOperations(t *testing.T) {
 func TestNormalizeErrorSkipsHookForAuthRejections(t *testing.T) {
 	hookCalled := 0
 	conv := &conversation{
-		normalizeRequestError: func(error) error {
+		normalizeRequestError: func(string, error) error {
 			hookCalled++
 			return errors.New("must not be used")
 		},

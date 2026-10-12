@@ -249,6 +249,17 @@ type AgentModelInfo struct {
 	// is this model. It is derived from session history on every read, never
 	// stored on the cached catalog, and absent for a model no session ran.
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+	// Unsupported is true when the installed agent binary rejected this model
+	// with a version-incompatibility error (for example Claude Code answering an
+	// HTTP 400 "does not support this model; version X or newer is required").
+	// The picker must show it as unavailable rather than letting the user choose
+	// it and hit the same deterministic failure. Unlike LastUsedAt this is a
+	// durable fact: it is recorded when the failure is observed and is cleared
+	// once the discovery inputs change (normally after the binary is upgraded).
+	Unsupported bool `json:"unsupported,omitempty"`
+	// UnsupportedReason explains an Unsupported model in user-facing terms, for
+	// example "Requires Claude Code 2.1.280 or newer (installed 2.1.228)".
+	UnsupportedReason string `json:"unsupportedReason,omitempty"`
 }
 
 // AgentModelCatalog is AO's normalized model-picker response.

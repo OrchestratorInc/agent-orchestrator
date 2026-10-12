@@ -42,8 +42,11 @@ type claudeLaunchAuthenticator interface {
 
 // New constructs the Claude Code ACP driver over the existing Claude agent
 // plugin. The plugin remains the canonical discovery/auth implementation for
-// both Chat and TUI modes.
-func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.ChatDriver {
+// both Chat and TUI modes. onModelUnsupported, when set, is called with the
+// model and the installed/required versions the first time the helper observes
+// a version-incompatibility rejection, so the daemon can stop offering a model
+// this binary cannot run.
+func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func(), onModelUnsupported func(model, installed, required string)) ports.ChatDriver {
 	return &checkpointDriver{plugin: plugin, ChatDriver: acpdriver.New(acpdriver.Config{
 		Harness: domain.HarnessClaudeCode,
 		// A live rejection is the ground truth that outranks any cached
@@ -51,10 +54,12 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 		// only auth correction that works for credential sources AO cannot
 		// read at all — the Bedrock and Vertex chains — because it needs no
 		// credential, no network call, and no provider knowledge.
-		OnAuthRejected:        claudeAuthRejected(onAuthRejected),
+		OnAuthRejected: claudeAuthRejected(onAuthRejected),
 		PromptResponseFailure: claudePromptResponseFailure,
-		NormalizeRequestError: claudeNormalizeRequestError,
-		CanHibernate:          claudeCanHibernate,
+		NormalizeRequestError: func(model string, err error) error {
+			return claudeNormalizeRequestError(model, err, onModelUnsupported)
+		},
+		CanHibernate: claudeCanHibernate,
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityStreaming:    true,
 			ports.ChatCapabilityTools:        true,
@@ -177,35 +182,57 @@ var claudeVersionIncompatRE = regexp.MustCompile(
 	`Claude Code (\d+\.\d+\.\d+) does not support this model;\s+version (\d+\.\d+\.\d+) or newer is required`,
 )
 
-// claudeNormalizeRequestError intercepts the opaque -32603 JSON-RPC error that
-// the claude-agent-acp bridge emits when the installed Claude Code binary
-// rejects the selected model with an HTTP 400 version-incompatibility response.
-// It returns a clean, user-facing error that names the installed version, the
-// required minimum, and the remediation steps. All other errors pass through
-// as nil so the generic ACP wrapping applies.
-func claudeNormalizeRequestError(err error) error {
+// claudeVersionIncompat reports whether err is the version-incompatibility
+// request error the claude-agent-acp bridge emits when the installed Claude
+// Code binary rejects the selected model with an HTTP 400. On a match it
+// returns the installed (rejecting) and required (minimum) versions.
+func claudeVersionIncompat(err error) (installed, required string, ok bool) {
 	var requestErr *acpsdk.RequestError
 	if !errors.As(err, &requestErr) {
-		return nil
+		return "", "", false
 	}
 	// Auth rejections are handled upstream; do not intercept them here.
 	if requestErr.Code == -32000 {
-		return nil
+		return "", "", false
 	}
 	// The version-incompatibility message is buried inside the -32603 message
 	// field as "Internal error: API Error: 400 Claude Code X.Y.Z does not
 	// support this model; version A.B.C or newer is required. ..."
 	m := claudeVersionIncompatRE.FindStringSubmatch(requestErr.Message)
 	if m == nil {
-		return nil
+		return "", "", false
 	}
-	installed, required := m[1], m[2]
+	return m[1], m[2], true
+}
+
+// claudeVersionIncompatFailure is the clean, user-facing error for a
+// version-incompatibility rejection: it names the installed version, the
+// required minimum, and the remediation steps.
+func claudeVersionIncompatFailure(installed, required string) error {
 	title := fmt.Sprintf("Claude Code %s does not support the selected model", installed)
 	detail := fmt.Sprintf(
 		"Version %s or newer is required. Update Claude Code by running 'claude update', or update the Claude desktop app, then try again.",
 		required,
 	)
 	return ports.NewChatProviderFailure(title, detail, nil)
+}
+
+// claudeNormalizeRequestError intercepts the opaque -32603 JSON-RPC error that
+// the claude-agent-acp bridge emits when the installed Claude Code binary
+// rejects the selected model with an HTTP 400 version-incompatibility response.
+// It returns a clean, user-facing error and, when model is known, reports the
+// rejection to onUnsupported so the daemon can stop offering a model this
+// binary cannot run. All other errors return nil so the generic ACP wrapping
+// applies.
+func claudeNormalizeRequestError(model string, err error, onUnsupported func(model, installed, required string)) error {
+	installed, required, ok := claudeVersionIncompat(err)
+	if !ok {
+		return nil
+	}
+	if onUnsupported != nil && model != "" {
+		onUnsupported(model, installed, required)
+	}
+	return claudeVersionIncompatFailure(installed, required)
 }
 
 func claudePromptResponseFailure(response acpsdk.PromptResponse) error {

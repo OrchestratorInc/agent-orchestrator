@@ -10702,6 +10702,10 @@ components:
           - string
         provider:
           type: string
+        unsupported:
+          type: boolean
+        unsupportedReason:
+          type: string
       required:
       - id
       - label

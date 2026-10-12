@@ -405,16 +405,24 @@ export function AgentModelCombobox({
 										<DropdownMenuItem
 											key={item.id}
 											onSelect={(event) => selectCatalogModel(event, item)}
+											disabled={Boolean(item.model.unsupported)}
 											className={modelItemClass(item.id === effectiveModel)}
 											aria-current={tuning && item.id === effectiveModel ? true : undefined}
 										>
 											<span className="truncate text-settings-label">{item.label}</span>
-											{tuning && item.id === effectiveModel && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
+											{item.model.unsupported ? (
+												<span className="ml-auto shrink-0 truncate text-xs text-settings-muted">
+													{item.model.unsupportedReason || t("settings.models.unsupported")}
+												</span>
+											) : (
+												tuning && item.id === effectiveModel && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />
+											)}
 										</DropdownMenuItem>
 									) : (
 										<DropdownMenuItem
 											key={item.id}
 											onSelect={(event) => selectCatalogModel(event, item)}
+											disabled={Boolean(item.model.unsupported)}
 											className={modelItemClass(item.id === effectiveModel)}
 										>
 										<div className="flex min-w-0 flex-1 items-center gap-3">
@@ -422,6 +430,11 @@ export function AgentModelCombobox({
 												<span className="truncate text-settings-label">{item.label}</span>
 													{shouldShowModelID(item, visibleModels, normalizedSearch) && (
 														<p className="truncate text-xs text-settings-muted">{item.id}</p>
+													)}
+													{item.model.unsupported && (
+														<p className="truncate text-xs text-settings-muted">
+															{item.model.unsupportedReason || t("settings.models.unsupported")}
+														</p>
 													)}
 												</div>
 												{group.kind !== "provider" && item.provider !== "Other" && (
@@ -812,6 +825,7 @@ function modelItemClass(selected: boolean): string {
 		"settings-menu-item min-w-0 cursor-default outline-none",
 		"focus:bg-settings-menu-selected focus:text-settings-title",
 		"data-highlighted:bg-settings-menu-selected data-highlighted:text-settings-title",
+		"data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60",
 		selected && "border-settings-menu bg-settings-menu-selected text-settings-title",
 	);
 }
