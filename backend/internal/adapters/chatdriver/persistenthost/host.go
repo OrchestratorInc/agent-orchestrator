@@ -47,6 +47,8 @@ const (
 	// ProtocolUnreal preserves Unreal Agent's AO-private JSONL stream while
 	// fencing ownership with the same stable launch identity used by ACP hosts.
 	ProtocolUnreal Protocol = "unreal"
+	// ProtocolZCode preserves native NDJSON and fences its launch ownership.
+	ProtocolZCode Protocol = "zcode"
 
 	// ACPPromptResultMethod is an AO-private notification emitted when an ACP
 	// prompt finishes after the daemon attachment that issued it has gone away.

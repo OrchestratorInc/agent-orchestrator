@@ -84,7 +84,7 @@ func TestGetLaunchCommand(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			plugin := &Plugin{resolvedBinary: "zcode"}
-			cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+			cmd, err := plugin.legacyGetLaunchCommand(context.Background(), ports.LaunchConfig{
 				Prompt:      "do the thing",
 				Permissions: tt.permissions,
 			})
@@ -101,7 +101,7 @@ func TestGetLaunchCommand(t *testing.T) {
 
 func TestGetLaunchCommandConfigModeWins(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "zcode"}
-	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+	cmd, err := plugin.legacyGetLaunchCommand(context.Background(), ports.LaunchConfig{
 		Prompt:      "fix it",
 		Permissions: ports.PermissionModeBypassPermissions,
 		Config:      ports.AgentConfig{Mode: "plan"},
@@ -120,7 +120,7 @@ func TestGetLaunchCommandRejectsInvalidConfigMode(t *testing.T) {
 	// --mode value"); a bad persisted config must fail here as a clean input
 	// error, not later as a dead terminal session.
 	plugin := &Plugin{resolvedBinary: "zcode"}
-	_, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+	_, err := plugin.legacyGetLaunchCommand(context.Background(), ports.LaunchConfig{
 		Permissions: ports.PermissionModeBypassPermissions,
 		Config:      ports.AgentConfig{Mode: "nope"},
 	})
@@ -136,7 +136,7 @@ func TestGetLaunchCommandRejectsInvalidConfigMode(t *testing.T) {
 
 func TestGetLaunchCommandForwardsDisallowedTools(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "zcode"}
-	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+	cmd, err := plugin.legacyGetLaunchCommand(context.Background(), ports.LaunchConfig{
 		Prompt:          "fix it",
 		DisallowedTools: []string{"Bash(git-push*)", "WebFetch"},
 	})
@@ -152,7 +152,7 @@ func TestGetLaunchCommandForwardsDisallowedTools(t *testing.T) {
 
 func TestGetLaunchCommandRejectsCommaInToolRule(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "zcode"}
-	_, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+	_, err := plugin.legacyGetLaunchCommand(context.Background(), ports.LaunchConfig{
 		Prompt:          "fix it",
 		DisallowedTools: []string{"Bash(git push,rebase)"},
 	})
@@ -166,7 +166,7 @@ func TestGetLaunchCommandRejectsCommaInToolRule(t *testing.T) {
 
 func TestGetLaunchCommandDoesNotPassLeadingDashPromptAsSubcommand(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "zcode"}
-	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+	cmd, err := plugin.legacyGetLaunchCommand(context.Background(), ports.LaunchConfig{
 		Prompt: "-add a health check",
 	})
 	if err != nil {
@@ -190,7 +190,7 @@ func assertNoPromptFlag(t *testing.T, cmd []string) {
 
 func TestGetRestoreCommand(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "zcode", validateRestore: func(context.Context, string, string, map[string]string) error { return nil }}
-	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+	cmd, ok, err := plugin.legacyGetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Session: ports.SessionRef{
 			Metadata: map[string]string{
 				ports.MetadataKeyAgentSessionID: "sess_abc123",
@@ -223,7 +223,7 @@ func TestGetRestoreCommandMapsPermissionModes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			plugin := &Plugin{resolvedBinary: "zcode", validateRestore: func(context.Context, string, string, map[string]string) error { return nil }}
-			cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+			cmd, ok, err := plugin.legacyGetRestoreCommand(context.Background(), ports.RestoreConfig{
 				Session: ports.SessionRef{
 					Metadata: map[string]string{
 						ports.MetadataKeyAgentSessionID: "sess_abc123",
@@ -246,7 +246,7 @@ func TestGetRestoreCommandMapsPermissionModes(t *testing.T) {
 
 func TestGetRestoreCommandForwardsDisallowedTools(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "zcode", validateRestore: func(context.Context, string, string, map[string]string) error { return nil }}
-	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+	cmd, ok, err := plugin.legacyGetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Session: ports.SessionRef{
 			Metadata: map[string]string{
 				ports.MetadataKeyAgentSessionID: "sess_abc123",
@@ -278,7 +278,7 @@ func TestGetRestoreCommandNoID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			plugin := &Plugin{resolvedBinary: "zcode", validateRestore: func(context.Context, string, string, map[string]string) error { return nil }}
-			cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+			cmd, ok, err := plugin.legacyGetRestoreCommand(context.Background(), ports.RestoreConfig{
 				Session: tt.ref,
 			})
 			if err != nil {
@@ -296,7 +296,7 @@ func TestGetRestoreCommandNoID(t *testing.T) {
 
 func TestGetRestoreCommandRejectsCommaInToolRule(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "zcode", validateRestore: func(context.Context, string, string, map[string]string) error { return nil }}
-	_, _, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+	_, _, err := plugin.legacyGetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Session: ports.SessionRef{
 			Metadata: map[string]string{
 				ports.MetadataKeyAgentSessionID: "sess_abc123",
@@ -353,16 +353,26 @@ func TestSessionInfoFalseWhenNoHookMetadata(t *testing.T) {
 
 func TestLaunchRejectsUnsupportedToolAllowlist(t *testing.T) {
 	p := &Plugin{resolvedBinary: "zcode"}
-	if _, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{AllowedTools: []string{"Read"}}); err == nil {
+	if _, err := p.legacyGetLaunchCommand(context.Background(), ports.LaunchConfig{AllowedTools: []string{"Read"}}); err == nil {
 		t.Fatal("tool allowlist silently ignored")
 	}
 }
 func TestRestoreRejectsInvalidNativeID(t *testing.T) {
 	p := &Plugin{resolvedBinary: "zcode"}
 	for _, id := range []string{"--continue", "../other", "sess_a\nother"} {
-		_, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}})
+		_, ok, err := p.legacyGetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}})
 		if err == nil || ok {
 			t.Fatalf("invalid native ID %q accepted", id)
 		}
+	}
+}
+
+func TestProductionZCodeRejectsTerminalFreshAndRestore(t *testing.T) {
+	p := New()
+	if cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{Prompt: "--help ordinary task"}); err == nil || cmd != nil || !strings.Contains(err.Error(), "Terminal UI is unsupported") {
+		t.Fatalf("terminal admission: %v %v", cmd, err)
+	}
+	if cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "sess_prior"}}}); err == nil || ok || cmd != nil {
+		t.Fatalf("terminal restore/fresh fallback: %v %v %v", cmd, ok, err)
 	}
 }

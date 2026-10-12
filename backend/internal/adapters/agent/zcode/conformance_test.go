@@ -47,6 +47,9 @@ type conformanceEvent struct {
 // and TUI built in PR CI. Only the model HTTP boundary and AO hook receiver are
 // fixtures; native trust commands, terminal UI, and SQLite storage are real.
 func TestSourceBuiltZCodeTUIConformance(t *testing.T) {
+	if os.Getenv("AO_ZCODE_REQUIRE_TUI") == "" {
+		t.Skip("historical positive TUI gate retained; ZCode is Chat-only and stock TUI is unsupported")
+	}
 	entry := os.Getenv("AO_ZCODE_ENTRY")
 	node := os.Getenv("AO_ZCODE_NODE")
 	if entry == "" || node == "" {
@@ -157,7 +160,7 @@ exec "$AO_ZCODE_NODE" "$AO_ZCODE_ENTRY" "$@"
 	}
 	initialTask := "--help AO_INITIAL_TASK\nKeep 'quotes' and $(literal) intact."
 	launch := ports.LaunchConfig{WorkspacePath: workspace, SessionID: "ao-zcode-conformance", Prompt: initialTask, SystemPrompt: "AO_HIDDEN_FIRST", Env: envMap}
-	argv, err := plugin.GetLaunchCommand(context.Background(), launch)
+	argv, err := plugin.legacyGetLaunchCommand(context.Background(), launch)
 	if err != nil {
 		probe := exec.Command(binary, "hooks", "trust", "status", "--workspace", workspace, "--json")
 		probe.Dir, probe.Env = workspace, env
@@ -183,7 +186,7 @@ exec "$AO_ZCODE_NODE" "$AO_ZCODE_ENTRY" "$@"
 	first.stop()
 	writeConformanceFile(t, hiddenFile, "AO_HIDDEN_RESTORED")
 	restore := ports.RestoreConfig{Session: ports.SessionRef{ID: "ao-zcode-conformance", WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: started.Payload.SessionID}}, SystemPrompt: "AO_HIDDEN_RESTORED", Env: envMap}
-	argv, ok, err := plugin.GetRestoreCommand(context.Background(), restore)
+	argv, ok, err := plugin.legacyGetRestoreCommand(context.Background(), restore)
 	if err != nil || !ok {
 		t.Fatalf("exact persisted restore = %v, %v", ok, err)
 	}
@@ -250,12 +253,12 @@ exec "$AO_ZCODE_NODE" "$AO_ZCODE_ENTRY" "$@"
 		}
 	}
 	restore.Session.Metadata[ports.MetadataKeyAgentSessionID] = "sess_ao_missing"
-	if _, ok, err := plugin.GetRestoreCommand(context.Background(), restore); err == nil || ok {
+	if _, ok, err := plugin.legacyGetRestoreCommand(context.Background(), restore); err == nil || ok {
 		t.Fatalf("missing native session accepted: %v, %v", ok, err)
 	}
 	restore.Session.Metadata[ports.MetadataKeyAgentSessionID] = started.Payload.SessionID
 	restore.Session.WorkspacePath = t.TempDir()
-	if _, ok, err := plugin.GetRestoreCommand(context.Background(), restore); err == nil || ok {
+	if _, ok, err := plugin.legacyGetRestoreCommand(context.Background(), restore); err == nil || ok {
 		t.Fatalf("foreign native workspace accepted: %v, %v", ok, err)
 	}
 	select {
@@ -520,4 +523,15 @@ if sys.argv[3] == "user-prompt-submit":
 		t.Fatal(err)
 	}
 	return log, path
+}
+
+func TestSourceBuiltZCodeTUIRejectsUnsupportedTrustFlag(t *testing.T) {
+	entry, node := os.Getenv("AO_ZCODE_ENTRY"), os.Getenv("AO_ZCODE_NODE")
+	if entry == "" || node == "" {
+		t.Skip("requires pinned CI native runtime")
+	}
+	output, err := exec.Command(node, entry, "--mode", "build", "--trust-workspace-hooks").CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "Unknown option '--trust-workspace-hooks'") {
+		t.Fatalf("stock parser contract changed: %v; %s", err, output)
+	}
 }

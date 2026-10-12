@@ -23,7 +23,6 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 
@@ -94,36 +93,13 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	}}}, nil
 }
 
-// GetLaunchCommand builds `zcode [--mode <mode>] [--disallowed-tools <list>]`
-// and leaves the prompt for AO's after-start terminal delivery. Zcode's
-// --prompt/-p flags are headless single-turn modes, and a bare positional
-// argument is parsed as a subcommand, so the TUI must start empty.
-func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
+// GetLaunchCommand rejects the stock TUI: it has no supported additive
+// workspace-hook channel. Never pass the nonexistent trust flag to a user TUI.
+func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	if err := validateStandingInstructions(ctx, cfg.SystemPrompt, cfg.SystemPromptFile); err != nil {
 		return nil, err
 	}
-	binary, err := p.zcodeBinary(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(cfg.AllowedTools) != 0 {
-		return nil, fmt.Errorf("zcode: tool allowlists are unsupported")
-	}
-	cmd = make([]string, 0, 8)
-	cmd = append(cmd, binary)
-	if err := appendModeFlags(&cmd, cfg.Permissions, cfg.Config.Mode); err != nil {
-		return nil, err
-	}
-	if err := appendDisallowedTools(&cmd, cfg.DisallowedTools); err != nil {
-		return nil, err
-	}
-	cmd = append(cmd, "--trust-workspace-hooks")
-
-	if err := p.prepareHookTrust(ctx, binary, cfg.WorkspacePath, cfg.Env); err != nil {
-		return nil, err
-	}
-	return cmd, nil
+	return nil, fmt.Errorf("zcode: Terminal UI is unsupported; use Chat (native app-server)")
 }
 
 // GetPromptDeliveryStrategy reports that AO should inject prompted ZCode tasks
@@ -153,56 +129,13 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 	}, nil
 }
 
-// GetRestoreCommand resumes a prior ZCode session by its captured id, building
-// `zcode [--mode <mode>] --resume <agentSessionId>` when we have a captured
-// native session id. ok=false otherwise, so the restore manager falls back to
-// a fresh launch. `-c/--continue` (latest session for the directory) is
-// deliberately not used as that fallback: it could resume an unrelated
-// session that happens to share the worktree.
-func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
-	if err := ctx.Err(); err != nil {
-		return nil, false, err
-	}
+// GetRestoreCommand rejects terminal restores. Native Chat restore uses the
+// dedicated app-server driver and never falls back to a fresh TUI.
+func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	if err := validateStandingInstructions(ctx, cfg.SystemPrompt, cfg.SystemPromptFile); err != nil {
 		return nil, false, err
 	}
-	agentSessionID := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
-	if agentSessionID == "" {
-		return nil, false, nil
-	}
-	if !nativeIDPattern.MatchString(agentSessionID) {
-		return nil, false, fmt.Errorf("zcode: invalid native session ID")
-	}
-	if len(cfg.AllowedTools) != 0 {
-		return nil, false, fmt.Errorf("zcode: tool allowlists are unsupported")
-	}
-
-	binary, err := p.zcodeBinary(ctx)
-	if err != nil {
-		return nil, false, err
-	}
-
-	cmd = make([]string, 0, 5)
-	cmd = append(cmd, binary)
-	if err := appendModeFlags(&cmd, cfg.Permissions, cfg.Config.Mode); err != nil {
-		return nil, false, err
-	}
-	if err := appendDisallowedTools(&cmd, cfg.DisallowedTools); err != nil {
-		return nil, false, err
-	}
-	cmd = append(cmd, "--trust-workspace-hooks")
-	validate := p.validateRestore
-	if validate == nil {
-		validate = validateNativeRestore
-	}
-	if err := validate(ctx, cfg.Session.WorkspacePath, agentSessionID, cfg.Env); err != nil {
-		return nil, false, err
-	}
-	if err := p.prepareHookTrust(ctx, binary, cfg.Session.WorkspacePath, cfg.Env); err != nil {
-		return nil, false, err
-	}
-	cmd = append(cmd, "--resume", agentSessionID)
-	return cmd, true, nil
+	return nil, false, fmt.Errorf("zcode: Terminal UI is unsupported; use Chat (native app-server)")
 }
 
 // SessionInfo reads hook-derived metadata under AO's normalized keys ("title",
@@ -241,50 +174,6 @@ func (p *Plugin) zcodeBinary(ctx context.Context) (string, error) {
 // permission mode is mapped — acceptEdits→edit, auto→build (zcode's internal
 // "auto" mode is reserved but unimplemented), bypassPermissions→yolo. With neither, build is explicit so a saved yolo setting cannot broaden AO permissions.
 var nativeIDPattern = regexp.MustCompile(`^sess_[A-Za-z0-9._-]+$`)
-
-func appendModeFlags(cmd *[]string, permissions ports.PermissionMode, configMode string) error {
-	if mode := strings.TrimSpace(configMode); mode != "" {
-		// ZCode's own vocabulary — a config written by another path must
-		// fail as a clean input error, not reach argv and kill the terminal
-		// session at launch.
-		switch mode {
-		case "build", "edit", "plan", "yolo":
-		default:
-			return fmt.Errorf("invalid zcode mode %q: want one of build, edit, plan, yolo", mode)
-		}
-		*cmd = append(*cmd, "--mode", mode)
-		return nil
-	}
-	switch ports.NormalizePermissionMode(permissions) {
-	case ports.PermissionModeDefault:
-		*cmd = append(*cmd, "--mode", "build") // Do not inherit a saved yolo mode.
-	case ports.PermissionModeAcceptEdits:
-		*cmd = append(*cmd, "--mode", "edit")
-	case ports.PermissionModeAuto:
-		*cmd = append(*cmd, "--mode", "build")
-	case ports.PermissionModeBypassPermissions:
-		*cmd = append(*cmd, "--mode", "yolo")
-	}
-	return nil
-}
-
-// appendDisallowedTools emits the deny list as a single comma-joined
-// --disallowed-tools value. Zcode 0.16.5 has no --allowed-tools flag, so
-// allow lists are not forwarded. A rule containing a comma or whitespace is
-// rejected: the flag's parser splits on BOTH separators ("Comma or
-// space-separated list"), so a literal separator inside a rule would
-// silently split it and weaken the deny list.
-func appendDisallowedTools(cmd *[]string, disallowed []string) error {
-	for _, rule := range disallowed {
-		if strings.ContainsAny(rule, ", 	") {
-			return fmt.Errorf("zcode: disallowed tool rule %q contains a comma or whitespace; tool rules are joined into a single flag value whose parser splits on both, so a literal separator would silently split the rule", rule)
-		}
-	}
-	if len(disallowed) > 0 {
-		*cmd = append(*cmd, "--disallowed-tools", strings.Join(disallowed, ","))
-	}
-	return nil
-}
 
 // InterruptInput cancels a running native turn. Ctrl+C only clears the draft
 // or arms ZCode's exit confirmation; Escape is its turn-cancellation key.

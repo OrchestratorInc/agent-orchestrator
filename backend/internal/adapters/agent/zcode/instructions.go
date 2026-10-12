@@ -14,26 +14,33 @@ import (
 const maxStandingInstructionBytes = 20_000
 
 func validateStandingInstructions(ctx context.Context, text, path string) error {
+	_, err := ReadStandingInstructions(ctx, text, path)
+	return err
+}
+
+// ReadStandingInstructions reads the complete private input or refuses it;
+// it never returns a silently truncated native reminder.
+func ReadStandingInstructions(ctx context.Context, text, path string) (string, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return "", err
 	}
 	if path != "" {
 		file, err := os.Open(path) //nolint:gosec // AO-managed prompt path supplied by session manager.
 		if err != nil {
-			return fmt.Errorf("zcode: read standing instructions: %w", err)
+			return "", fmt.Errorf("zcode: read standing instructions: %w", err)
 		}
 		defer func() { _ = file.Close() }()
 		data, err := io.ReadAll(io.LimitReader(file, maxStandingInstructionBytes+1))
 		if err != nil {
-			return fmt.Errorf("zcode: read standing instructions: %w", err)
+			return "", fmt.Errorf("zcode: read standing instructions: %w", err)
 		}
 		text = string(data)
 	}
 	if !utf8.ValidString(text) {
-		return fmt.Errorf("zcode: standing instructions must be valid UTF-8")
+		return "", fmt.Errorf("zcode: standing instructions must be valid UTF-8")
 	}
 	if len(text) > maxStandingInstructionBytes {
-		return fmt.Errorf("zcode: standing instructions exceed the supported %d-byte native hook context budget", maxStandingInstructionBytes)
+		return "", fmt.Errorf("zcode: standing instructions exceed the supported %d-byte native hook context budget", maxStandingInstructionBytes)
 	}
-	return nil
+	return text, nil
 }

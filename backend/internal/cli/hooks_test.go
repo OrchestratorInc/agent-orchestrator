@@ -2378,3 +2378,34 @@ func TestHooksZCodeDoesNotAcknowledgeBeforeNativeHookVeto(t *testing.T) {
 		t.Fatalf("native acknowledgement = %+v", req)
 	}
 }
+
+func TestZCodeRejectsMissingOrOversizedRefreshedPrivateInput(t *testing.T) {
+	for _, oversized := range []bool{false, true} {
+		t.Run(map[bool]string{false: "missing", true: "oversized"}[oversized], func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-bounded")
+			cfg := setConfigEnv(t)
+			if oversized {
+				path := filepath.Join(cfg.dataDir, "prompts", "ao-bounded", "system.md")
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(strings.Repeat("private-input-", 2000)), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			srv, _ := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			out, _, err := executeCLI(t, Deps{In: strings.NewReader(`{"session_id":"sess_bounded"}`), ProcessAlive: func(int) bool { return true }}, "hooks", "zcode", "user-prompt-submit")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result map[string]any
+			if err := json.Unmarshal([]byte(out), &result); err != nil {
+				t.Fatal(err)
+			}
+			if result["continue"] != false || result["additionalContext"] != nil {
+				t.Fatalf("private input was silently omitted or truncated: %s", out)
+			}
+		})
+	}
+}

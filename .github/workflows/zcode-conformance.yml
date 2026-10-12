@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'backend/internal/adapters/agent/zcode/**'
+      - 'backend/internal/adapters/chatdriver/zcodeprotocol/**'
       - '.github/workflows/zcode-conformance.yml'
   workflow_dispatch:
 
@@ -85,3 +86,14 @@ jobs:
         env:
           AO_ZCODE_ENTRY: ${{ github.workspace }}/upstream-zcode/apps/zcode-cli/packages/cli/dist/zcode.cjs
         run: go test -race -count=1 -timeout=5m -run '^TestSourceBuiltZCode' -v ./internal/adapters/agent/zcode
+
+      - name: Build exact-head AO evidence executable
+        if: always()
+        working-directory: backend
+        run: go build -o ../ao-proof ./cmd/ao
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zcode-ao-proof-linux
+          path: ao-proof
+          retention-days: 7
