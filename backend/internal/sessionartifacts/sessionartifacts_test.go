@@ -112,3 +112,31 @@ func TestList_BoundsTraversalOfEmptyDirectories(t *testing.T) {
 		t.Fatalf("files = %+v, want the traversal cut off before reaching zzz.txt", files)
 	}
 }
+
+func TestList_SkipsTopLevelVersionsDir(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{
+		"page.html",
+		filepath.Join(VersionsDir, "blobs", "ab", "abcd"),
+		filepath.Join("nested", VersionsDir, "kept.md"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := List(dir)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var paths []string
+	for _, f := range files {
+		paths = append(paths, f.Path)
+	}
+	want := []string{"nested/" + VersionsDir + "/kept.md", "page.html"}
+	if fmt.Sprint(paths) != fmt.Sprint(want) {
+		t.Fatalf("paths = %v, want %v", paths, want)
+	}
+}
