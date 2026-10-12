@@ -65,6 +65,8 @@
 	"agentSelector.needsSetup": "Einrichtung erforderlich",
 	"session.statusChecking": "Wird geprüft…",
 	"session.statusUnavailable": "Status nicht überprüfbar",
+	"artifactLink.unavailable": "Artefakt nicht verfügbar",
+	"artifactLink.noPreview": "Keine Vorschau verfügbar",
 	"session.agentTerminated": "Agent beendet",
 	"activity.active": "In Arbeit",
 	"activity.blocked": "Entscheidung ausstehend",
