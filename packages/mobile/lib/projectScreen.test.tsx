@@ -56,7 +56,7 @@ describe("Cloud project page", () => {
 	it.each(["start", "open"] as const)("uses the same orchestrator %s action and qualified project source", async (action) => {
 		state.action = action;
 		await act(async () => { renderer = create(<ProjectScreen />); });
-		const header = renderer!.root.findByType("ProjectPageHeader" as never);
+		const header = renderer!.root.findByType("WorkerBoardList" as never).props.ListHeaderComponent;
 		expect(header.props.row.action).toBe(action);
 		await act(async () => { header.props.onPress(); });
 		expect(state.openOrchestrator).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: "cloud", id: "org-1" } }));
