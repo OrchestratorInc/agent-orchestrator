@@ -17,6 +17,7 @@ export function createMobileCloudClient(input: {
 }): CloudClient {
 	return createCloudClient({
 		baseUrl: input.baseUrl,
+		requestTimeoutMs: 20_000,
 		getAccessToken: async () => {
 			if (input.isCurrent?.() === false) throw new Error("Cloud account changed. Try again.");
 			const token = await input.tokens.getToken();

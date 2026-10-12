@@ -16,6 +16,11 @@ const PR = "https://github.com/Untrivial-ai/agent-orchestrator/pull/5648";
 const PAGE = "https://example.com/docs/getting-started";
 
 describe("openGitHub", () => {
+	it("surfaces a setup launch failure while retaining the error haptic", async () => {
+		openURL.mockRejectedValueOnce(new Error("No browser"));
+		await expect(openGitHub(PR, { fromSheet: true, throwOnFailure: true })).rejects.toThrow("No browser");
+		expect(errorHaptic).toHaveBeenCalledOnce();
+	});
 	beforeEach(() => {
 		canOpenURL.mockReset().mockResolvedValue(false);
 		openURL.mockReset().mockResolvedValue(undefined);

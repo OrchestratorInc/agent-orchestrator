@@ -52,7 +52,11 @@ function inAppBrowser(): Promise<WebBrowserModule | null> {
 // expo-web-browser answers every later call with "locked" until the app
 // restarts. Leaving the app keeps the sheet untouched, exactly as it already is
 // on a device with the GitHub app installed.
-export async function openGitHub(url: string, options: { fromSheet?: boolean } = {}): Promise<void> {
+export async function openGitHub(url: string, options: { fromSheet?: boolean; throwOnFailure?: boolean } = {}): Promise<void> {
+	const failure = (error: unknown) => {
+		haptics.error();
+		if (options.throwOnFailure) throw error;
+	};
 	const appUrl = githubAppUrl(url);
 	if (appUrl) {
 		try {
@@ -65,16 +69,16 @@ export async function openGitHub(url: string, options: { fromSheet?: boolean } =
 		}
 	}
 	if (!/^https?:\/\//i.test(url)) {
-		await Linking.openURL(url).catch(() => haptics.error());
+		await Linking.openURL(url).catch(failure);
 		return;
 	}
 	if (options.fromSheet) {
-		await Linking.openURL(url).catch(() => haptics.error());
+		await Linking.openURL(url).catch(failure);
 		return;
 	}
 	const browser = await inAppBrowser();
 	if (!browser) {
-		await Linking.openURL(url).catch(() => haptics.error());
+		await Linking.openURL(url).catch(failure);
 		return;
 	}
 	try {
@@ -84,6 +88,6 @@ export async function openGitHub(url: string, options: { fromSheet?: boolean } =
 		// the tab is up tears the tab down instead of returning to it.
 		await browser.openBrowserAsync(url, { createTask: false });
 	} catch {
-		await Linking.openURL(url).catch(() => haptics.error());
+		await Linking.openURL(url).catch(failure);
 	}
 }

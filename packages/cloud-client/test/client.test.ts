@@ -14,6 +14,36 @@ import {
 } from "../src/index.js";
 
 describe("CloudClient", () => {
+  it("bounds fetch and preserves caller cancellation and idempotency headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const caller = new AbortController();
+      const fetchMock = vi.fn<typeof fetch>(() => new Promise(() => {}));
+      const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock, requestTimeoutMs: 20 });
+      let error: unknown;
+      void client.createProject("o1", { displayName: "Demo", repositoryUrl: "https://github.com/me/demo", defaultBranch: "main", config: {} }, { idempotencyKey: "create-1", signal: caller.signal }).catch((value) => { error = value; });
+      await vi.advanceTimersByTimeAsync(21);
+      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+      expect(error).toMatchObject({ code: "CLIENT_REQUEST_TIMEOUT" });
+      expect(requestHeaders(fetchMock, 0).get("Idempotency-Key")).toBe("create-1");
+      expect(caller.signal.aborted).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+  it.each(["token", "body"])("includes delayed %s in the whole JSON deadline", async (stage) => {
+    vi.useFakeTimers();
+    try {
+      const response = jsonResponse({});
+      if (stage === "body") vi.spyOn(response, "json").mockImplementation(() => new Promise(() => {}));
+      const fetchMock = vi.fn<typeof fetch>(async () => response);
+      const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => stage === "token" ? new Promise<string>(() => {}) : "token", fetch: fetchMock, requestTimeoutMs: 20 });
+      let error: unknown;
+      void client.getCurrentAccount().catch((value) => { error = value; });
+      await vi.advanceTimersByTimeAsync(21);
+      expect(error).toMatchObject({ code: "CLIENT_REQUEST_TIMEOUT" });
+      if (stage === "token") expect(fetchMock).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
   it("preserves initial and handoff model and effort", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ session: { id: "s1" } }));
     const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });

@@ -129,6 +129,17 @@ describe("buildWorkOSAuthUrl", () => {
 });
 
 describe("exchangeWorkOSCode", () => {
+	it("bounds token exchange body parsing separately from the human auth browser", async () => {
+		vi.useFakeTimers();
+		try {
+			const response = new Response("{}");
+			vi.spyOn(response, "json").mockImplementation(() => new Promise(() => {}));
+			let error: unknown;
+			void exchangeWorkOSCode({ clientId: "client", code: "code", codeVerifier: "verifier" }, { fetchImpl: async () => response, requestTimeoutMs: 20 }).catch((value) => { error = value; });
+			await vi.advanceTimersByTimeAsync(21);
+			expect(error).toMatchObject({ code: "CLIENT_REQUEST_TIMEOUT" });
+		} finally { vi.useRealTimers(); }
+	});
 	it("posts the PKCE token exchange with no client secret", async () => {
 		const fetchImpl = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(
 			JSON.stringify({ access_token: fakeJwt(1_700_000_000), refresh_token: "refresh-1" }),

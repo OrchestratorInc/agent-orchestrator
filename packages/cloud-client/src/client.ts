@@ -85,6 +85,8 @@ export interface CloudClientConfig {
   baseUrl: string;
   getAccessToken: () => MaybePromise<string | null | undefined>;
   fetch?: typeof globalThis.fetch;
+  /** Whole JSON operation deadline, including token acquisition and body parsing. */
+  requestTimeoutMs?: number;
 }
 
 export interface WorkerClientConfig {
@@ -98,6 +100,14 @@ interface JSONRequestOptions extends RequestOptions {
   body?: unknown;
   idempotencyKey?: string;
   cache?: RequestCache;
+}
+
+export class CloudRequestTimeoutError extends Error {
+  readonly code = "CLIENT_REQUEST_TIMEOUT";
+  constructor() {
+    super("Cloud request timed out. Try again.");
+    this.name = "CloudRequestTimeoutError";
+  }
 }
 
 export class CloudApiError extends Error {
@@ -124,6 +134,7 @@ export class CloudClient {
   readonly baseUrl: string;
 
   private readonly getAccessToken: CloudClientConfig["getAccessToken"];
+  private readonly requestTimeoutMs: number | undefined;
   private readonly fetch: typeof globalThis.fetch;
 
   constructor(config: CloudClientConfig) {
@@ -134,6 +145,10 @@ export class CloudClient {
 
     this.baseUrl = baseUrl.toString().replace(/\/+$/, "");
     this.getAccessToken = config.getAccessToken;
+    if (config.requestTimeoutMs !== undefined && (!Number.isFinite(config.requestTimeoutMs) || config.requestTimeoutMs <= 0)) {
+      throw new TypeError("requestTimeoutMs must be a positive finite number.");
+    }
+    this.requestTimeoutMs = config.requestTimeoutMs;
     this.fetch = config.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
@@ -950,6 +965,30 @@ export class CloudClient {
     path: string,
     options: JSONRequestOptions = {},
   ): Promise<T> {
+    if (this.requestTimeoutMs === undefined) return this.performJSONRequest(path, options);
+    const controller = new AbortController();
+    let rejectCancellation!: (error: unknown) => void;
+    const cancelled = new Promise<never>((_resolve, reject) => { rejectCancellation = reject; });
+    const abort = (error: unknown) => {
+      controller.abort();
+      rejectCancellation(error);
+    };
+    const callerAbort = () => abort(options.signal?.reason ?? Object.assign(new Error("Request cancelled."), { name: "AbortError" }));
+    options.signal?.addEventListener("abort", callerAbort, { once: true });
+    if (options.signal?.aborted) callerAbort();
+    const timer = setTimeout(() => abort(new CloudRequestTimeoutError()), this.requestTimeoutMs);
+    try {
+      return await Promise.race([this.performJSONRequest<T>(path, { ...options, signal: controller.signal }), cancelled]);
+    } finally {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", callerAbort);
+    }
+  }
+
+  private async performJSONRequest<T>(
+    path: string,
+    options: JSONRequestOptions = {},
+  ): Promise<T> {
     const headers = new Headers({ Accept: "application/json" });
     if (options.body !== undefined) {
       headers.set("Content-Type", "application/json");
@@ -985,7 +1024,9 @@ export class CloudClient {
     path: string,
     init: RequestInit,
   ): Promise<Response> {
+    if (init.signal?.aborted) throw init.signal.reason ?? Object.assign(new Error("Request cancelled."), { name: "AbortError" });
     const token = (await this.getAccessToken())?.trim();
+    if (init.signal?.aborted) throw init.signal.reason ?? Object.assign(new Error("Request cancelled."), { name: "AbortError" });
     if (!token) {
       throw new CloudApiError(401, {
         error: "Unauthorized",

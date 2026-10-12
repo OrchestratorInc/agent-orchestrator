@@ -1,5 +1,6 @@
 export {
   CloudApiError,
+  CloudRequestTimeoutError,
   CloudClient,
   WorkerClient,
   createCloudClient,

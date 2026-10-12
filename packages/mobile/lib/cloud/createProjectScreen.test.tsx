@@ -31,6 +31,7 @@ vi.mock("react-native", () => ({
 	Text: "Text",
 	TextInput: "TextInput",
 	View: "View",
+	AppState: { addEventListener: () => ({ remove: () => {} }) },
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
 vi.mock("expo-router", () => ({ useRouter: () => ({ back: vi.fn(), replace: state.replace }) }));
@@ -138,7 +139,7 @@ describe("Add Cloud project sheet", () => {
 		expect(root.findByProps({ title: "Connect GitHub" })).toBeDefined();
 		await act(async () => { await root.findByProps({ title: "Connect GitHub" }).props.onPress(); });
 		expect(state.startGitHubInstallation).toHaveBeenCalledWith("org-1", expect.anything());
-		expect(openGitHub).toHaveBeenCalledWith("https://github.com/apps/ao/installations/new");
+		expect(openGitHub).toHaveBeenCalledWith("https://github.com/apps/ao/installations/new", { fromSheet: true, throwOnFailure: true });
 		await act(async () => { root.findByProps({ title: "Set up manually with a token" }).props.onPress(); });
 		expect(root.findByProps({ accessibilityLabel: "GitHub access token" })).toBeDefined();
 	});
@@ -200,7 +201,7 @@ describe("Add Cloud project sheet", () => {
 		const root = await mount();
 		await act(async () => { await root.findByProps({ title: "Manage GitHub access" }).props.onPress(); });
 		expect(state.startGitHubInstallation).toHaveBeenCalledWith("org-1", expect.anything());
-		expect(openGitHub).toHaveBeenCalledWith("https://github.com/apps/ao/installations/new");
+		expect(openGitHub).toHaveBeenCalledWith("https://github.com/apps/ao/installations/new", { fromSheet: true, throwOnFailure: true });
 	});
 
 	it("lets the user stop waiting when GitHub approval is not finished", async () => {
@@ -239,6 +240,7 @@ describe("Add Cloud project sheet", () => {
 	});
 
 	it("shows repository sync after approval creates a pending installation", async () => {
+		vi.useFakeTimers();
 		state.signedIn = true;
 		state.orgId = "org-1";
 		state.orgLoading = false;
@@ -249,9 +251,25 @@ describe("Add Cloud project sheet", () => {
 			.mockResolvedValue(pending as never);
 		const root = await mount();
 		await act(async () => { await root.findByProps({ title: "Connect GitHub" }).props.onPress(); });
+		// The foreground refresh joins an in-flight read; the next single-flight
+		// poll observes the installation created while the browser was opening.
+		await act(async () => { await vi.advanceTimersByTimeAsync(2600); });
 		const text = root.findAll((node) => String(node.type) === "Text").map((node) => node.props.children);
 		expect(text).toContain("Syncing repositories from me");
 		expect(text).not.toContain("Waiting for GitHub approval…");
+	});
+
+	it("syncs a pending installation even when another installation is ready", async () => {
+		state.signedIn = true; state.orgId = "org-1"; state.orgLoading = false;
+		state.listGitHubInstallations.mockResolvedValueOnce([
+			{ id: "ready", accountLogin: "one", status: "active", syncStatus: "ready" },
+			{ id: "pending", accountLogin: "two", status: "active", syncStatus: "pending" },
+		] as never).mockResolvedValue([
+			{ id: "ready", accountLogin: "one", status: "active", syncStatus: "ready" },
+			{ id: "pending", accountLogin: "two", status: "active", syncStatus: "ready" },
+		] as never);
+		await mount();
+		expect(state.syncGitHubInstallation).toHaveBeenCalledWith("org-1", "pending", expect.anything());
 	});
 
 	it("keeps the manual token and URL path available when GitHub App is unavailable", async () => {

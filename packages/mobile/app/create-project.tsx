@@ -3,13 +3,14 @@ import { CloudApiError, type GitHubInstallation, type GitHubRepository } from "@
 import * as Crypto from "expo-crypto";
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, AppState, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AgentLogo } from "../lib/AgentLogo";
 import { backOr } from "../lib/backNavigation";
 import { readyHarnesses } from "../lib/cloud/agentReadiness";
 import { useCloudAuth } from "../lib/cloud/authStore";
 import { loadGrantedRepositories } from "../lib/cloud/githubProjectRepositories";
+import { createGitHubConnectionAttempt } from "../lib/cloud/githubConnection";
 import { cloudProjectInput, initialProjectCreationStep, validGitHubRepositoryURL } from "../lib/cloud/projectCreation";
 import { haptics } from "../lib/haptics";
 import { openGitHub } from "../lib/openGitHub";
@@ -62,6 +63,8 @@ export default function CreateCloudProject() {
 	const connectAttempt = useRef(0);
 	const connectionBaseline = useRef<Map<string, string> | null>(null);
 	const requestAbort = useRef<AbortController | null>(null);
+	const connectRequest = useRef<AbortController | null>(null);
+	const installationStarting = useRef(false);
 	const syncAttempted = useRef<Set<string>>(new Set());
 	const selectedRepository = repositories.find((repository) => repository.githubRepositoryId === selectedRepositoryId);
 	const activeInstallations = installations.filter((installation) => installation.status === "active");
@@ -84,23 +87,23 @@ export default function CreateCloudProject() {
 		setInstallations(nextInstallations);
 		let active = nextInstallations.filter((installation) => installation.status === "active");
 		let ready = active.some((installation) => installation.syncStatus === "ready");
-		if (!ready) {
-			const needsSync = active.find((installation) => installation.syncStatus === "pending" && !syncAttempted.current.has(installation.id));
-			if (needsSync) {
-				syncAttempted.current.add(needsSync.id);
-				await client.syncGitHubInstallation(orgId, needsSync.id, { signal });
+		const needsSync = active.filter((installation) => installation.syncStatus === "pending" && !syncAttempted.current.has(installation.id));
+		if (needsSync.length) {
+			for (const installation of needsSync) {
+				syncAttempted.current.add(installation.id);
+				await client.syncGitHubInstallation(orgId, installation.id, { signal });
 				if (signal.aborted) return false;
+			}
 				const updated = await client.listGitHubInstallations(orgId, { signal });
 				if (signal.aborted) return false;
 				setInstallations(updated);
 				active = updated.filter((installation) => installation.status === "active");
 				ready = active.some((installation) => installation.syncStatus === "ready");
-			}
 		}
-		const connectionReady = ready && (connectionBaseline.current === null || active.some((installation) =>
+		const connectionReady = !installationStarting.current && ready && (connectionBaseline.current === null || active.some((installation) =>
 			installation.syncStatus === "ready" && connectionBaseline.current?.get(installation.id) !== installation.updatedAt,
 		));
-		if (!signal.aborted && active.length > 0) {
+		if (!signal.aborted && !installationStarting.current && active.length > 0) {
 			if (connectionReady) {
 				connectionBaseline.current = null;
 				setConnecting(false);
@@ -129,6 +132,29 @@ export default function CreateCloudProject() {
 		}
 		return connectionReady;
 	}, [client, orgId]);
+
+	const githubAttempt = useMemo(() => {
+		const attempt = createGitHubConnectionAttempt({
+			refresh: async (signal) => { if (await refreshGitHub(signal)) attempt.stop(); },
+			isCurrent: () => Boolean(orgId) && requestAbort.current?.signal.aborted === false,
+			onError: (cause) => {
+				connectAttempt.current += 1;
+				connectRequest.current?.abort();
+				installationStarting.current = false;
+				connectionBaseline.current = null;
+				setOpeningGitHub(false); setConnecting(false);
+				setGithubError(messageFor(cause, "Could not finish connecting GitHub."));
+			},
+		});
+		return attempt;
+	}, [orgId, refreshGitHub]);
+	useEffect(() => () => { githubAttempt.stop(); connectRequest.current?.abort(); }, [githubAttempt]);
+	useEffect(() => {
+		const listener = AppState.addEventListener("change", (state) => {
+			if (state === "active" && orgId && step === "github") void githubAttempt.refresh();
+		});
+		return () => listener.remove();
+	}, [githubAttempt, orgId, step]);
 
 	useEffect(() => {
 		if (signedIn === null || orgLoading) {
@@ -189,22 +215,9 @@ export default function CreateCloudProject() {
 	}, [client, signedIn, orgId, orgLoading, orgError, refreshGitHub, setupAttempt]);
 
 	useEffect(() => {
-		if (!connecting || openingGitHub || !orgId || step !== "github") return;
-		const interval = setInterval(() => {
-			const signal = requestAbort.current?.signal;
-			if (!signal || signal.aborted) return;
-			void refreshGitHub(signal).then((ready) => { if (ready) setConnecting(false); }).catch((cause) => {
-				if (!signal.aborted) setGithubError(messageFor(cause, "Could not finish connecting GitHub."));
-			});
-		}, 2500);
-		const timeout = setTimeout(() => {
-			connectAttempt.current += 1;
-			connectionBaseline.current = null;
-			setConnecting(false);
-			setGithubError("GitHub did not finish connecting. Try again, or set up manually.");
-		}, 5 * 60_000);
-		return () => { clearInterval(interval); clearTimeout(timeout); };
-	}, [connecting, openingGitHub, orgId, step, refreshGitHub]);
+		if (connecting && orgId && step === "github") githubAttempt.start();
+		else githubAttempt.stop();
+	}, [connecting, orgId, step, githubAttempt]);
 
 	const connectGitHub = async () => {
 		if (!orgId || connecting) return;
@@ -212,19 +225,28 @@ export default function CreateCloudProject() {
 		setGithubError(null);
 		setConnecting(true);
 		setOpeningGitHub(true);
+		installationStarting.current = true;
+		syncAttempted.current.clear();
+		connectRequest.current?.abort();
+		const controller = new AbortController();
+		connectRequest.current = controller;
+		githubAttempt.start();
 		try {
-			const signal = requestAbort.current?.signal;
+			const signal = controller.signal;
 			const before = await client.listGitHubInstallations(orgId, { signal });
 			if (signal?.aborted || connectAttempt.current !== attempt) return;
 			connectionBaseline.current = new Map(before.map((installation) => [installation.id, installation.updatedAt]));
 			const { installationUrl } = await client.startGitHubInstallation(orgId, { signal });
 			if (signal?.aborted || connectAttempt.current !== attempt) return;
-			setOpeningGitHub(false);
-			await openGitHub(installationUrl);
+			await openGitHub(installationUrl, { fromSheet: true, throwOnFailure: true });
 			if (signal?.aborted || connectAttempt.current !== attempt) return;
-			if (await refreshGitHub(signal ?? new AbortController().signal)) setConnecting(false);
+			installationStarting.current = false;
+			setOpeningGitHub(false);
+			await githubAttempt.refresh();
 		} catch (cause) {
-			if (requestAbort.current?.signal.aborted || connectAttempt.current !== attempt) return;
+			if (controller.signal.aborted || connectAttempt.current !== attempt) return;
+			githubAttempt.stop();
+			installationStarting.current = false;
 			setGithubError(messageFor(cause, "Could not connect GitHub."));
 			connectionBaseline.current = null;
 			setConnecting(false);
@@ -234,6 +256,9 @@ export default function CreateCloudProject() {
 
 	const stopWaiting = () => {
 		connectAttempt.current += 1;
+		connectRequest.current?.abort();
+		githubAttempt.stop();
+		installationStarting.current = false;
 		connectionBaseline.current = null;
 		setConnecting(false);
 		setOpeningGitHub(false);
@@ -248,7 +273,7 @@ export default function CreateCloudProject() {
 			for (const installation of activeInstallations.filter((item) => item.syncStatus !== "ready")) {
 				await client.syncGitHubInstallation(orgId, installation.id, { signal });
 			}
-			if (!await refreshGitHub(signal)) setConnecting(true);
+			await githubAttempt.refresh();
 		} catch (cause) {
 			setGithubError(messageFor(cause, "Could not refresh GitHub repositories."));
 		} finally { setBusy(false); }
@@ -399,7 +424,7 @@ export default function CreateCloudProject() {
 										<Button title="Manage GitHub access" variant="ghost" icon="external-link" disabled={connecting} onPress={() => void connectGitHub()} />
 									</View>
 								) : null}
-								<Button title="Refresh repositories" variant="ghost" onPress={() => { const signal = requestAbort.current?.signal; if (signal) void refreshGitHub(signal).catch((cause) => setGithubError(messageFor(cause, "Could not refresh repositories."))); }} />
+								<Button title="Refresh repositories" variant="ghost" onPress={() => { void githubAttempt.refresh(); }} />
 							</>
 						)}
 						{githubError ? <Text accessibilityRole="alert" style={styles.error}>{githubError}</Text> : null}
@@ -413,7 +438,7 @@ export default function CreateCloudProject() {
 						<Text style={styles.label}>GitHub access token</Text>
 						<TextInput style={styles.input} value={token} onChangeText={setToken} placeholder="github_pat_…" placeholderTextColor={t.textTertiary} secureTextEntry autoCapitalize="none" autoCorrect={false} textContentType="password" accessibilityLabel="GitHub access token" />
 						<Text style={styles.hint}>Use a fine-grained token with Contents read and write access to the repository.</Text>
-						<Button title="Create a GitHub token" variant="ghost" icon="external-link" onPress={() => void openGitHub("https://github.com/settings/personal-access-tokens/new")} />
+						<Button title="Create a GitHub token" variant="ghost" icon="external-link" onPress={() => void openGitHub("https://github.com/settings/personal-access-tokens/new", { fromSheet: true, throwOnFailure: true }).catch((cause) => setError(messageFor(cause, "Could not open GitHub.")))} />
 						<Button title="Save token and continue" loading={busy} disabled={token.trim().length < 8} onPress={() => void saveToken()} />
 					</View>
 				) : null}

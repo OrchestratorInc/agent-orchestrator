@@ -1,7 +1,20 @@
 import { CLOUD_API_PREFIX } from "./config";
+import { CloudRequestTimeoutError } from "@aoagents/cloud-client";
 import type { CloudTokens } from "./tokens";
 
-type Deps = { fetchImpl?: typeof fetch; now?: () => number };
+type Deps = { fetchImpl?: typeof fetch; now?: () => number; requestTimeoutMs?: number };
+
+async function boundedAuth<T>(deps: Deps, run: (fetchImpl: typeof fetch, signal: AbortSignal) => Promise<T>): Promise<T> {
+	const controller = new AbortController();
+	let rejectTimeout!: (error: Error) => void;
+	const timeout = new Promise<never>((_resolve, reject) => { rejectTimeout = reject; });
+	const timer = setTimeout(() => {
+		controller.abort();
+		rejectTimeout(new CloudRequestTimeoutError());
+	}, deps.requestTimeoutMs ?? 20_000);
+	try { return await Promise.race([run(deps.fetchImpl ?? fetch, controller.signal), timeout]); }
+	finally { clearTimeout(timer); }
+}
 
 /** Only a definitive rejection of the refresh grant requires a new login. */
 export class RefreshRejectedError extends Error {}
@@ -35,18 +48,21 @@ async function localAuth(
 	path: "login" | "register",
 	baseUrl: string,
 	body: Record<string, string>,
-	{ fetchImpl = fetch, now = Date.now }: Deps,
+	deps: Deps,
 ): Promise<CloudTokens> {
-	const response = await fetchImpl(`${baseUrl}${CLOUD_API_PREFIX}/auth/local/${path}`, {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify(body),
+	return boundedAuth(deps, async (fetchImpl, signal) => {
+		const response = await fetchImpl(`${baseUrl}${CLOUD_API_PREFIX}/auth/local/${path}`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+			signal,
 	});
 	if (!response.ok) {
 		throw new Error(await errorMessage(response, `Sign-in failed (${response.status}).`));
 	}
 	const data = (await response.json()) as LocalAuthResponse;
 	return { accessToken: data.token, expiresAt: parseAbsoluteExpiry(data.expiresAt) };
+	});
 }
 
 /** Dev-only email/password sign-in against a loopback control plane. */
@@ -117,17 +133,19 @@ function decodeJwtExpiryMs(token: string): number {
 /** Exchanges a WorkOS authorization code for tokens. PKCE: no client secret. */
 export async function exchangeWorkOSCode(
 	input: { clientId: string; code: string; codeVerifier: string },
-	{ fetchImpl = fetch, now = Date.now }: Deps = {},
+	deps: Deps = {},
 ): Promise<CloudTokens> {
-	const response = await fetchImpl("https://api.workos.com/user_management/authenticate", {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({
-			client_id: input.clientId,
-			grant_type: "authorization_code",
-			code: input.code,
-			code_verifier: input.codeVerifier,
-		}),
+	return boundedAuth(deps, async (fetchImpl, signal) => {
+		const response = await fetchImpl("https://api.workos.com/user_management/authenticate", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				client_id: input.clientId,
+				grant_type: "authorization_code",
+				code: input.code,
+				code_verifier: input.codeVerifier,
+			}),
+			signal,
 	});
 	if (!response.ok) {
 		throw new Error(await errorMessage(response, `Sign-in failed (${response.status}).`));
@@ -138,21 +156,24 @@ export async function exchangeWorkOSCode(
 		refreshToken: body.refresh_token,
 		expiresAt: decodeJwtExpiryMs(body.access_token),
 	};
+	});
 }
 
 /** Rotates a WorkOS access/refresh token pair. Public client: no client secret. */
 export async function refreshWorkOSTokens(
 	input: { clientId: string; refreshToken: string },
-	{ fetchImpl = fetch }: Deps = {},
+	deps: Deps = {},
 ): Promise<CloudTokens> {
-	const response = await fetchImpl("https://api.workos.com/user_management/authenticate", {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({
-			client_id: input.clientId,
-			grant_type: "refresh_token",
-			refresh_token: input.refreshToken,
-		}),
+	return boundedAuth(deps, async (fetchImpl, signal) => {
+		const response = await fetchImpl("https://api.workos.com/user_management/authenticate", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				client_id: input.clientId,
+				grant_type: "refresh_token",
+				refresh_token: input.refreshToken,
+			}),
+			signal,
 	});
 	if (!response.ok) {
 		let body: { error?: string; code?: string; message?: string } = {};
@@ -173,4 +194,5 @@ export async function refreshWorkOSTokens(
 		refreshToken: body.refresh_token,
 		expiresAt: decodeJwtExpiryMs(body.access_token),
 	};
+	});
 }
