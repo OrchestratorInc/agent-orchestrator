@@ -83,17 +83,17 @@ describe("active turn controls", () => {
 	});
 
 	it("shows a paused Coder sandbox before an unavailable conversation fallback", () => {
-		const paused = screenSource.indexOf('if (cloudStage === "paused_by_coder" && !conversation.snapshot)');
-		const unavailable = screenSource.indexOf("if (conversation.unavailable && cloudStage !== \"paused_by_coder\") return <Unavailable");
+		const paused = screenSource.indexOf('if (isResumable(cloudStage) && !conversation.snapshot)');
+		const unavailable = screenSource.indexOf("if (conversation.unavailable && !isResumable(cloudStage)) return <Unavailable");
 		expect(paused).toBeGreaterThan(-1);
 		expect(paused).toBeLessThan(unavailable);
 	});
 
 	it("does not offer the local-agent resume path for a paused cloud sandbox", () => {
-		expect(screenSource).toContain('cloudPaused={cloudStage === "paused_by_coder"}');
+		expect(screenSource).toContain('cloudPaused={isResumable(cloudStage)}');
 		expect(screenSource).toContain('!cloudPaused && snapshot.controller.state === "stopped"');
 		expect(screenSource).toContain('!cloudPaused && !startFailure && (snapshot.controller.state === "recovering"');
-		expect(screenSource).toContain('conversation.error && cloudStage !== "paused_by_coder"');
+		expect(screenSource).toContain('conversation.error && !isResumable(cloudStage)');
 	});
 
 	it("offers a live PR review shortcut while leaving the chat composer in place", () => {

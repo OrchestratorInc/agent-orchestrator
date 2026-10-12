@@ -39,10 +39,19 @@ function fixture() {
 afterEach(() => { FakeSocket.instances = []; vi.useRealTimers(); });
 
 describe("Cloud agent terminal", () => {
+	it("aborts a pending ticket when disconnected and never opens a stale socket", async () => {
+		const { terminal, client } = fixture();
+		let resolve!: (value: unknown) => void;
+		client.createTerminalTicket.mockImplementationOnce(() => new Promise((done) => { resolve = done as never; }));
+		const connecting = terminal.connect();
+		const options = (client.createTerminalTicket.mock.calls[0] as unknown as [string, string, string, { signal: AbortSignal }])[3];
+		terminal.disconnect(); expect(options.signal.aborted).toBe(true);
+		resolve({ ticket: "late" }); await connecting; expect(FakeSocket.instances).toHaveLength(0);
+	});
 	it("mints an agent ticket and becomes ready only after the server's ready frame", async () => {
 		const { terminal, client, statuses } = fixture();
 		await terminal.connect();
-		expect(client.createTerminalTicket).toHaveBeenCalledWith("org-1", "session-1", "agent");
+		expect(client.createTerminalTicket).toHaveBeenCalledWith("org-1", "session-1", "agent", { signal: expect.any(AbortSignal) });
 		expect(statuses).toEqual(["connecting", "attaching"]);
 		const socket = FakeSocket.instances[0];
 		expect(socket.url).toBe("wss://cloud.example/api/cloud/v1/terminal?ticket=ticket-1&after=0&kind=agent&protocol=2");

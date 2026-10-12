@@ -24,6 +24,11 @@ describe("toProjectInfo", () => {
 });
 
 describe("toDashboardSession", () => {
+	it("preserves worker epoch and final runtime reasons independently of archive", () => {
+		const mapped = toDashboardSession({ ...session, runtimeState: "terminated", runtimeError: "Stopped", startupError: { code: "bootstrap_failed", message: "Could not start", at: "2026-10-13T00:00:00Z" }, workerEpoch: 7 });
+		expect(mapped.cloud).toMatchObject({ runtimeState: "terminated", runtimeError: "Stopped", workerEpoch: 7, startupError: { code: "bootstrap_failed" } });
+		expect(mapped.isTerminated).toBe(false);
+	});
 	it("carries the fields the board reads", () => {
 		const mapped = toDashboardSession(session);
 		expect(mapped.id).toBe("s1");

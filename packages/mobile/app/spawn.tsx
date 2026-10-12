@@ -23,6 +23,7 @@ import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { readyHarnesses } from "../lib/cloud/agentReadiness";
 import { useCloudAuth } from "../lib/cloud/authStore";
+import { cloudRequestErrorCopy } from "../lib/cloud/errorCopy";
 import { sourceKey, type SourceRef } from "../lib/environment/scopedBoard";
 import { haptics } from "../lib/haptics";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
@@ -662,7 +663,7 @@ function spawnErrorCopy(e: unknown, environment: "local" | "cloud" | null): stri
 	if (e instanceof ApiError && e.code === "PROMPT_TOO_LONG") {
 		return "Task prompt is too long. Keep it to 16 KiB or fewer (emoji and other non-English characters use more than one byte). Shorten it and try again.";
 	}
-	if (environment === "cloud") return e instanceof Error ? e.message : "Could not start the Cloud worker.";
+	if (environment === "cloud") return cloudRequestErrorCopy(e);
 	return userFacingError(e, "Couldn't start the worker. Try again.");
 }
 

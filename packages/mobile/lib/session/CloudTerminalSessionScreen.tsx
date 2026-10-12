@@ -6,7 +6,8 @@ import { ActivityIndicator, Alert, Keyboard, Platform, Pressable, StyleSheet, Te
 import { useKeyboardState } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCloudAuth } from "../cloud/authStore";
-import { cloudLifecycleStage } from "../cloud/lifecycle";
+import { cloudLifecycleStage, cloudStartupProblem, cloudStartupErrorCopy, isResumable, shouldShowCloudStartup, stageLabel } from "../cloud/lifecycle";
+import { cloudRequestErrorCopy } from "../cloud/errorCopy";
 import { createCloudTerminal, type CloudTerminalStatus } from "../cloud/terminal";
 import { haptics } from "../haptics";
 import { resetHeaderRightForSwap } from "../headerRightSwap";
@@ -174,11 +175,19 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
-	const { client, orgId } = useCloudAuth();
+	const { client, orgId, sessionEpoch } = useCloudAuth();
 	const { refreshSource, sourceFor } = useApp();
 	const sessionSource = sourceFor(source);
 	const refreshBoard = useCallback(() => refreshSource(source), [refreshSource, source.kind, source.id]);
-	const pausedByCoder = cloudLifecycleStage(session) === "paused_by_coder";
+	const stage = cloudLifecycleStage(session);
+	const paused = isResumable(stage);
+	const archived = "projectName" in session ? !!session.isTerminal : !!session.isTerminated;
+	const startupProblem = cloudStartupProblem(session);
+	const startupCopy = startupProblem ? cloudStartupErrorCopy(startupProblem, !session.cloud?.coderWorkspaceUrl) : undefined;
+	const startupStopped = startupProblem?.phase === "failed" || startupProblem?.phase === "unavailable";
+	const transportIdentity = JSON.stringify([sessionSource?.scopeKey, sessionEpoch, session.id, session.cloud?.workerEpoch, scheme]);
+	const liveTransportIdentity = useRef(transportIdentity);
+	liveTransportIdentity.current = transportIdentity;
 	const router = useRouter();
 	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
@@ -190,8 +199,8 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 	const firstReadySession = useRef<string | null>(null);
 	const pendingOutput = useRef<Uint8Array[]>([]);
 	const lastSize = useRef<{ cols: number; rows: number } | null>(null);
-	const [terminalState, setTerminalState] = useState<{ sessionId: string; status: CloudTerminalStatus }>({ sessionId: session.id, status: "connecting" });
-	const status = terminalState.sessionId === session.id ? terminalState.status : "connecting";
+	const [terminalState, setTerminalState] = useState<{ identity: string; status: CloudTerminalStatus }>({ identity: transportIdentity, status: "connecting" });
+	const status = terminalState.identity === transportIdentity ? terminalState.status : "connecting";
 	const [headerRightReady, setHeaderRightReady] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
@@ -241,24 +250,27 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 	}, [headerRightReady, navigation, openChat, sessionTitle, styles, switchingChat, t.accent]);
 
 	useEffect(() => {
+		let active = true;
 		xtermReady.current = false;
 		pendingOutput.current = [];
-		setTerminalState({ sessionId: session.id, status: "connecting" });
+		setTerminalState({ identity: transportIdentity, status: "connecting" });
 		setError(null);
-		if (pausedByCoder) return;
+		if (paused || archived || startupStopped) return;
 		if (!orgId || source.kind !== "cloud" || orgId !== source.id || !sessionSource) {
-			setTerminalState({ sessionId: session.id, status: "error" });
+			setTerminalState({ identity: transportIdentity, status: "error" });
 			setError("Your Cloud workspace is not ready. Sign in again and retry.");
 			return;
 		}
 		const terminal = createCloudTerminal({
 			client, orgId, sessionId: session.id,
 			onStatus: (next) => {
+				if (!active) return;
 				if (next === "ready") firstReadySession.current = session.id;
-				setTerminalState({ sessionId: session.id, status: next });
+				setTerminalState({ identity: transportIdentity, status: next });
 			},
-			onError: setError,
+			onError: (message) => { if (active) setError(message); },
 			onOutput: (bytes) => {
+				if (!active) return;
 				if (!xtermReady.current || !xtermRef.current) {
 					pendingOutput.current.push(bytes);
 					return;
@@ -270,33 +282,43 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 		if (lastSize.current) terminal.resize(lastSize.current.cols, lastSize.current.rows);
 		void terminal.connect();
 		return () => {
+			active = false;
 			terminal.disconnect();
 			terminalRef.current = null;
 			xtermReady.current = false;
 			pendingOutput.current = [];
 		};
-	}, [client, orgId, pausedByCoder, scheme, session.id, source.kind, source.id, sessionSource]);
+	}, [client, orgId, paused, archived, startupStopped, scheme, session.id, session.cloud?.workerEpoch, source.kind, source.id, sessionSource, transportIdentity]);
 
 	const resumeSandbox = useCallback(async () => {
 		if (resuming) return;
 		setResuming(true);
 		try {
 			if (!sessionSource) throw new Error("No cloud session source available");
-			await sessionSource.resumeSession(session.id);
+			if (archived) {
+				if (!sessionSource.restoreSession) throw new Error("Cloud Restore is unavailable. Refresh and try again.");
+				await sessionSource.restoreSession(session.id);
+			} else if (startupProblem?.phase === "failed") {
+				if (!sessionSource.retryStartup) throw new Error("Cloud startup retry is unavailable. Refresh and try again.");
+				await sessionSource.retryStartup(session.id);
+			} else if (paused) await sessionSource.resumeSession(session.id);
+			else throw new Error("This session has no supported recovery action. Refresh its status.");
 			await refreshBoard();
 		} catch (cause) {
-			Alert.alert("Could not resume sandbox", cause instanceof Error ? cause.message : String(cause));
+			Alert.alert("Could not recover session", cloudRequestErrorCopy(cause));
 		} finally {
+			await refreshBoard().catch(() => {});
 			setResuming(false);
 		}
-	}, [refreshBoard, resuming, session.id, sessionSource]);
+	}, [refreshBoard, resuming, session.id, sessionSource, archived, paused, startupProblem?.phase]);
 
 	const onInitialized = useCallback(() => {
+		if (liveTransportIdentity.current !== transportIdentity) return;
 		xtermReady.current = true;
 		for (const bytes of pendingOutput.current) xtermRef.current?.write(bytes);
 		pendingOutput.current = [];
 		if (lastSize.current) xtermRef.current?.resize(lastSize.current);
-	}, []);
+	}, [transportIdentity]);
 
 	const applySize = useCallback((cols: number, rows: number) => {
 		lastSize.current = { cols, rows };
@@ -353,25 +375,28 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 	const bottomPad = dockInset(keyboardHeight, insets.bottom, keyboardVisible);
 	const observedState = session.cloud?.observedState;
 	// A normal revisit reconnects the terminal; it does not recreate the workspace.
-	const showStartup = showSpawnStartup && firstReadySession.current !== session.id
-		&& !pausedByCoder && observedState !== "failed"
-		&& status !== "ready" && status !== "error" && status !== "exited" && !error;
+	const showStartup = shouldShowCloudStartup({ spawnIntent: showSpawnStartup && firstReadySession.current !== session.id,
+		stage, startupProblem, terminalReady: status === "ready" }) && !archived
+		&& status !== "error" && status !== "exited" && !error;
 	const startupStep = status === "attaching" ? 3
 		: (observedState === "bootstrapping" || observedState === "running")
 			? session.runtimeConnected ? 2 : 1
 			: 0;
-	if (pausedByCoder) return <View style={styles.screen}>
+	const recoveryTitle = archived ? "Session archived" : paused ? stageLabel(stage!) : startupProblem?.phase === "failed" ? "Session failed to start" : "Cloud runtime unavailable";
+	const recoveryAction = archived ? "Restore" : paused ? "Resume" : startupProblem?.phase === "failed" ? "Retry startup" : undefined;
+	if (paused || archived || startupStopped) return <View style={styles.screen}>
 		<View style={styles.statusBar}>
 			<View style={[styles.dot, { backgroundColor: t.amber }]} />
-			<Text style={styles.statusText}>Paused by Coder</Text>
+			<Text style={styles.statusText}>{recoveryTitle}</Text>
 		</View>
 		<View style={styles.pausedBody}>
 			<Feather name="cloud" size={22} color={t.amber} />
-			<Text style={styles.pausedTitle}>Paused by Coder</Text>
-			<Text style={styles.pausedCopy}>The sandbox paused after a period of inactivity.</Text>
-			<Pressable accessibilityRole="button" accessibilityLabel="Resume sandbox" disabled={resuming} onPress={() => void resumeSandbox()} style={styles.resumeButton}>
-				<Text style={styles.resumeButtonText}>{resuming ? "Resuming…" : "Resume"}</Text>
-			</Pressable>
+			<Text style={styles.pausedTitle}>{recoveryTitle}</Text>
+			<Text style={styles.pausedCopy}>{archived ? "Its conversation and workspace are preserved." : paused ? "The sandbox paused after a period of inactivity." : startupCopy?.message}</Text>
+			{startupCopy?.detail ? <Text selectable style={styles.pausedCopy}>{startupCopy.detail}</Text> : null}
+			{recoveryAction ? <Pressable accessibilityRole="button" accessibilityLabel={archived ? "Restore session" : paused ? "Resume sandbox" : "Retry startup"} disabled={resuming} onPress={() => void resumeSandbox()} style={styles.resumeButton}>
+				<Text style={styles.resumeButtonText}>{resuming ? "Recovering…" : recoveryAction}</Text>
+			</Pressable> : null}
 		</View>
 	</View>;
 	return <View style={[styles.screen, !showStartup && rootPad > 0 && { paddingBottom: rootPad }]}>
@@ -384,7 +409,7 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 		{!showStartup && (error || voice.error) ? <Text style={styles.error} selectable>{error || voice.error}</Text> : null}
 		<View style={styles.terminal}>
 			<XtermJsWebView
-				key={`cloud-terminal-${scheme}`}
+				key={`cloud-terminal-${transportIdentity}`}
 				ref={xtermRef}
 				autoFit={false}
 				xtermOptions={xtermOptions}
@@ -396,6 +421,7 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 			/>
 			{showStartup ? <View style={styles.startupOverlay} accessible accessibilityLabel={`Starting Cloud terminal: ${startupSteps[startupStep]}`}>
 				<View style={styles.startupSteps}>
+					{startupProblem?.phase === "retrying" ? <Text style={styles.pausedCopy}>{startupCopy?.message} Cloud is still retrying.</Text> : null}
 					{startupSteps.map((step, index) => <View key={step} style={styles.startupRow}>
 						<View style={styles.startupIcon}>
 							{index < startupStep ? <Feather name="check" size={16} color="#60a5fa" />
@@ -437,7 +463,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	pausedBody: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14, paddingHorizontal: 28 },
 	pausedTitle: { color: t.textPrimary, fontSize: 18, fontWeight: "600" },
 	pausedCopy: { color: t.textSecondary, fontSize: 14, textAlign: "center" },
-	resumeButton: { minHeight: 42, justifyContent: "center", backgroundColor: t.accent, borderRadius: 12, paddingHorizontal: 20, marginTop: 8 },
+	resumeButton: { minHeight: 44, justifyContent: "center", backgroundColor: t.accent, borderRadius: 12, paddingHorizontal: 20, marginTop: 8 },
 	resumeButtonText: { color: t.onAccent, fontSize: 14, fontWeight: "600" },
 	terminal: { flex: 1 },
 	xterm: { flex: 1, backgroundColor: t.bgBase },

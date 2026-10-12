@@ -16,7 +16,8 @@ import {
 	View,
 } from "react-native";
 import { mobileReachablePreviewURL, type DashboardSession, type OrchestratorLink } from "../api";
-import { cloudHeaderControllerState, cloudLifecycleStage, isResumable } from "../cloud/lifecycle";
+import { cloudHeaderControllerState, cloudLifecycleStage, cloudStartupProblem, cloudStartupErrorCopy, isResumable, stageLabel } from "../cloud/lifecycle";
+import { cloudRequestErrorCopy } from "../cloud/errorCopy";
 import { machineIdentity } from "../config";
 import { haptics } from "../haptics";
 import { resetHeaderRightForSwap } from "../headerRightSwap";
@@ -151,8 +152,10 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 	// was before cloud environments existed. Cloud workers and orchestrators
 	// both carry the control-plane sandbox lifecycle.
 	const cloudStage = cloudLifecycleStage(session);
-	const cloudComposerLocked = cloudStage !== undefined && cloudStage !== "connected";
-	const failedStart = "projectName" in session || session.provisionState !== "failed"
+	const cloudProblem = cloudStartupProblem(session);
+	const startupCopy = cloudProblem ? cloudStartupErrorCopy(cloudProblem, !session.cloud?.coderWorkspaceUrl) : undefined;
+	const cloudComposerLocked = cloudSession && terminated || cloudStage !== undefined && cloudStage !== "connected";
+	const failedStart = cloudSession && cloudProblem?.phase === "failed" ? startupCopy?.message : "projectName" in session || session.provisionState !== "failed"
 		? undefined
 		: session.provisionError || "The session did not finish starting.";
 	const interfaceTransitionActive = mobileInterfaceTransitionIsActive(interfaceSwitch.transition);
@@ -402,14 +405,17 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 		setResumeError(undefined);
 		try {
 			if (terminated) await restoreOn(source, session.id);
+			else if (cloudSession && cloudProblem?.phase === "failed" && sessionSource?.retryStartup) await sessionSource.retryStartup(session.id);
+			else if (cloudSession && isResumable(cloudStage) && sessionSource) await sessionSource.resumeSession(session.id);
+			else if (cloudSession) throw new Error("This Cloud session has no supported recovery action. Refresh its status.");
 			else await resumeAgentOn(source, session.id);
 			await conversation.refresh();
 		} catch (cause) {
 			// An automatic attempt has no alert; the stopped banner carries the reason.
-			if (quiet) setResumeError(userFacingError(cause));
-			else Alert.alert("Couldn't resume the agent", userFacingError(cause));
-		} finally { setResuming(false); }
-	}, [conversation.refresh, resuming, restoreOn, resumeAgentOn, session.id, source, terminated]);
+			if (quiet) setResumeError(cloudSession ? cloudRequestErrorCopy(cause) : userFacingError(cause));
+			else Alert.alert("Couldn't resume the agent", cloudSession ? cloudRequestErrorCopy(cause) : userFacingError(cause));
+		} finally { if (cloudSession) await refreshBoard().catch(() => {}); setResuming(false); }
+	}, [conversation.refresh, resuming, restoreOn, resumeAgentOn, session.id, source, terminated, cloudSession, cloudProblem?.phase, cloudStage, sessionSource, refreshBoard]);
 
 	const [cloudResuming, setCloudResuming] = useState(false);
 	const resumeCloudSandbox = useCallback(async () => {
@@ -425,7 +431,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 			await refreshBoard();
 			await conversation.refresh();
 		} catch (cause) {
-			Alert.alert("Could not resume sandbox", cause instanceof Error ? cause.message : String(cause));
+			Alert.alert("Could not resume sandbox", cloudRequestErrorCopy(cause));
 		} finally {
 			setCloudResuming(false);
 		}
@@ -587,10 +593,12 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 		onSecondary: recheckingTransition ? undefined : () => void retryInterfaceCheck(),
 	};
 
-	if (cloudStage === "paused_by_coder" && !conversation.snapshot) return <Centered icon="cloud" title="Paused by Coder" message={cloudLifecycleBanner(cloudStage)?.body} action={cloudResuming ? "Resuming…" : "Resume"} onAction={() => void resumeCloudSandbox()} />;
+	if (isResumable(cloudStage) && !conversation.snapshot) return <Centered icon="cloud" title={stageLabel(cloudStage!)} message={cloudLifecycleBanner(cloudStage)?.body} action={cloudResuming ? "Resuming…" : "Resume"} onAction={() => void resumeCloudSandbox()} />;
+	if (cloudSession && terminated && !conversation.snapshot) return <Centered icon="cloud" title="Session archived" message="Its conversation and workspace are preserved." action={resuming ? "Restoring…" : "Restore"} onAction={() => void resume()} />;
+	if (cloudProblem?.phase === "unavailable" && !conversation.snapshot) return <Centered icon="cloud" title="Cloud runtime unavailable" message={startupCopy?.message} />;
 	if (failedStart && !conversation.snapshot) return <Centered icon="alert-triangle" title="Session failed to start" message={failedStart} action={resuming ? "Retrying…" : "Retry"} onAction={() => void resume()} />;
 	if (conversation.loading && !conversation.snapshot) return <Centered icon="message-square" title="Loading conversation…" spinning />;
-	if (conversation.unavailable && cloudStage !== "paused_by_coder") return <Unavailable message={conversation.unavailable.message} onShell={() => void openShell()} openingShell={openingShell} />;
+	if (conversation.unavailable && !isResumable(cloudStage)) return <Unavailable message={conversation.unavailable.message} onShell={() => void openShell()} openingShell={openingShell} />;
 	// The board's poll is the app's view of the link: when it is down, say so in
 	// the board's words instead of echoing whatever this request failed with.
 	if (!conversation.snapshot && unreachable) return <Centered icon="wifi-off" title="This machine is offline" message="This conversation loads once the app reconnects." action="Retry" onAction={() => void conversation.refresh()} />;
@@ -648,7 +656,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 			) : null}
 			<ConversationBanners
 				snapshot={snapshot}
-				cloudPaused={cloudStage === "paused_by_coder"}
+				cloudPaused={isResumable(cloudStage)}
 				startFailure={failedStart}
 				brokenServers={brokenServers}
 				resuming={resuming}
@@ -658,9 +666,9 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 				mcpError={conversation.actionErrors.mcp}
 				mcpReloadSupported={mcpReloadSupported}
 				turnInFlight={active}
-				onResume={() => void resume()}
+				onResume={cloudSession && !terminated && !isResumable(cloudStage) && cloudProblem?.phase !== "failed" ? undefined : () => void resume()}
 				onReload={() => void conversation.reloadMcp().catch(() => {})}
-				onOpenShell={() => void openShell()}
+				onOpenShell={config ? () => void openShell() : undefined}
 				dismissed={dismissedBanners}
 				onDismiss={dismissBanner}
 			/>
@@ -675,7 +683,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 					onPress={isResumable(cloudStage) && !cloudResuming ? () => void resumeCloudSandbox() : undefined}
 				/>
 			) : null}
-			{conversation.error && cloudStage !== "paused_by_coder" ? <DismissibleBanner copy={errorBanner("load", conversation.error)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="wifi-off" action="Retry" onPress={() => void conversation.refresh()} /> : null}
+			{conversation.error && !isResumable(cloudStage) ? <DismissibleBanner copy={errorBanner("load", conversation.error)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="wifi-off" action="Retry" onPress={() => void conversation.refresh()} /> : null}
 			{quota ? <DismissibleBanner copy={quotaBanner(quota)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone={quota.severity === "critical" ? "danger" : "warning"} icon="alert-triangle" action="Details" onPress={() => setMenuOpen(true)} /> : null}
 			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="alert-circle" /> : null}
 			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon="rotate-ccw" /> : null}
@@ -742,12 +750,12 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 	);
 }
 
-function ConversationBanners({ snapshot, cloudPaused, startFailure, brokenServers, resuming, resumeError, terminated, mcpReloading, mcpError, mcpReloadSupported, turnInFlight, onResume, onReload, onOpenShell, dismissed, onDismiss }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; cloudPaused: boolean; startFailure?: string; brokenServers: ReturnType<typeof brokenMcpServers>; resuming: boolean; resumeError?: string; terminated: boolean; mcpReloading: boolean; mcpError?: string; mcpReloadSupported: boolean; turnInFlight: boolean; onResume(): void; onReload(): void; onOpenShell(): void; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {
+function ConversationBanners({ snapshot, cloudPaused, startFailure, brokenServers, resuming, resumeError, terminated, mcpReloading, mcpError, mcpReloadSupported, turnInFlight, onResume, onReload, onOpenShell, dismissed, onDismiss }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; cloudPaused: boolean; startFailure?: string; brokenServers: ReturnType<typeof brokenMcpServers>; resuming: boolean; resumeError?: string; terminated: boolean; mcpReloading: boolean; mcpError?: string; mcpReloadSupported: boolean; turnInFlight: boolean; onResume?(): void; onReload(): void; onOpenShell?(): void; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {
 	const thread = snapshot.threadState;
 	const reauthAt = snapshot.account?.reauthRequiredAt;
 	return <>
 		{reauthAt ? <DismissibleBanner copy={reauthBanner(reauthAt, signInCommand(snapshot.harness))} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="key" action="Open shell" onPress={onOpenShell} /> : null}
-		{startFailure ? <DismissibleBanner copy={{ key: `start:${startFailure}`, title: "Session failed to start", body: startFailure }} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="alert-triangle" action={resuming ? "Retrying…" : "Retry"} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : !cloudPaused && snapshot.controller.state === "stopped" ? <DismissibleBanner copy={controllerStoppedBanner(terminated, resumeError ?? snapshot.controller.error)} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="power" action={terminated ? (resuming ? "Restoring…" : "Restore") : (resuming ? "Resuming…" : "Resume")} secondary="Shell" onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : null}
+		{startFailure ? <DismissibleBanner copy={{ key: `start:${startFailure}`, title: "Session failed to start", body: startFailure }} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="alert-triangle" action={resuming ? "Retrying…" : "Retry"} secondary={onOpenShell ? "Shell" : undefined} onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : !cloudPaused && snapshot.controller.state === "stopped" ? <DismissibleBanner copy={controllerStoppedBanner(terminated, resumeError ?? snapshot.controller.error)} dismissed={dismissed} onDismiss={onDismiss} tone="danger" icon="power" action={onResume ? (terminated ? (resuming ? "Restoring…" : "Restore") : (resuming ? "Resuming…" : "Resume")) : undefined} secondary={onOpenShell ? "Shell" : undefined} onPress={resuming ? undefined : onResume} onSecondary={onOpenShell} /> : null}
 		{/* Passing states clear themselves, so there is nothing to close. */}
 		{!cloudPaused && !startFailure && (snapshot.controller.state === "recovering" || snapshot.controller.state === "connecting") ? <InlineBanner tone="warning" icon="loader" title={snapshot.controller.state === "recovering" ? "Reconnecting to the agent…" : "Starting the agent…"} /> : null}
 		{threadBanner(thread?.status) ? <DismissibleBanner copy={threadBanner(thread?.status)!} dismissed={dismissed} onDismiss={onDismiss} tone={thread?.status === "system_error" ? "danger" : "warning"} icon="alert-triangle" /> : null}

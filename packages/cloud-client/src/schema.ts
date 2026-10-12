@@ -2529,6 +2529,8 @@ export interface components {
             message: string;
             /** Format: date-time */
             at: string;
+            /** @description Optional diagnostic details for bring-your-own compute; managed compute omits internal details. */
+            detail?: string;
         };
         CreateSessionInput: {
             /** Format: uuid */

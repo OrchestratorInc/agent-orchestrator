@@ -1273,9 +1273,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		await refreshSource(ref);
 	}, [assertLocalSource, refreshSource]);
 	const restoreOn = useCallback(async (ref: SourceRef, id: string) => {
-		await restoreSession(assertLocalSource(ref), id);
+		if (ref.kind === "cloud") {
+			const source = sourceFor(ref);
+			if (!source?.restoreSession) throw new Error("Cloud Restore is unavailable. Refresh and try again.");
+			await source.restoreSession(id);
+		} else await restoreSession(assertLocalSource(ref), id);
 		await refreshSource(ref);
-	}, [assertLocalSource, refreshSource]);
+	}, [assertLocalSource, refreshSource, sourceFor]);
 	const resumeAgentOn = useCallback(async (ref: SourceRef, id: string) => {
 		await resumeSessionAgent(assertLocalSource(ref), id);
 		await refreshSource(ref);

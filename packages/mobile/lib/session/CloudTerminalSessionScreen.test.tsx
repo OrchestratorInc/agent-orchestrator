@@ -11,6 +11,7 @@ const fixture = vi.hoisted(() => {
 		setOptions: vi.fn(),
 		replace: vi.fn(),
 		onStatus: null as null | ((status: string) => void),
+		terminals: [] as Array<{ input: { onStatus: (status: string) => void; onError: (message: string) => void }; disconnect: ReturnType<typeof vi.fn> }>,
 	};
 });
 
@@ -35,9 +36,10 @@ vi.mock("react-native", async () => {
 vi.mock("react-native-keyboard-controller", () => ({ useKeyboardState: (select: (state: object) => unknown) => select({ height: 0, isVisible: false }) }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock("../cloud/authStore", () => ({ useCloudAuth: () => ({ client: fixture.client, orgId: "org-1" }) }));
-vi.mock("../cloud/terminal", () => ({ createCloudTerminal: (input: { onStatus: (status: string) => void }) => {
+vi.mock("../cloud/terminal", () => ({ createCloudTerminal: (input: { onStatus: (status: string) => void; onError: (message: string) => void }) => {
 	fixture.onStatus = input.onStatus;
-	return { connect: async () => {}, disconnect: () => {}, resize: () => {}, sendInput: () => false, sendPrompt: async () => false };
+	const disconnect = vi.fn(); fixture.terminals.push({ input, disconnect });
+	return { connect: async () => {}, disconnect, resize: () => {}, sendInput: () => false, sendPrompt: async () => false };
 } }));
 vi.mock("../store", () => ({ useApp: () => ({ refreshSource: fixture.refreshSource, sourceFor: () => fixture.source }) }));
 vi.mock("../haptics", () => ({ haptics: { error: vi.fn(), success: vi.fn() } }));
@@ -74,6 +76,7 @@ const startupLabel = () => renderer!.root.findAll((node) => node.props.accessibi
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixture.onStatus = null;
+	fixture.terminals = [];
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
 		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
@@ -89,6 +92,27 @@ afterEach(async () => {
 });
 
 describe("Cloud terminal startup", () => {
+	it("replaces the transport on worker epoch change and ignores old ready callbacks", async () => {
+		const initial = { ...session("running", true), cloud: { ...session("running", true).cloud, workerEpoch: 1 } };
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={initial} source={cloudSource} />); });
+		const old = fixture.terminals[0];
+		await act(async () => renderer!.update(<CloudTerminalSessionScreen session={{ ...initial, cloud: { ...initial.cloud, workerEpoch: 2 } }} source={cloudSource} />));
+		expect(old.disconnect).toHaveBeenCalledOnce(); expect(fixture.terminals).toHaveLength(2);
+		await act(async () => { old.input.onStatus("ready"); });
+		expect(text("Connected to Cloud terminal")).toHaveLength(0);
+		await act(async () => { fixture.terminals[1].input.onStatus("ready"); });
+		expect(text("Connected to Cloud terminal")).toHaveLength(1);
+	});
+	it("does not acquire a terminal while a generic provider sandbox is paused", async () => {
+		const paused = { ...session("stopped", false), cloud: { sandboxProvider: "ecs", desiredState: "paused", observedState: "stopped" } };
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={paused} source={cloudSource} />); });
+		expect(fixture.terminals).toHaveLength(0); expect(text("Paused").length).toBeGreaterThan(0);
+	});
+	it("presents Restore for archive without connecting it", async () => {
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={{ ...session("terminated", false), isTerminated: true }} source={cloudSource} />); });
+		expect(fixture.terminals).toHaveLength(0);
+		expect(renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Restore session")).toHaveLength(1);
+	});
 	it("opens an existing session without replaying the workspace startup loader", async () => {
 		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} />); });
 		expect(startupLabel()).toBeUndefined();

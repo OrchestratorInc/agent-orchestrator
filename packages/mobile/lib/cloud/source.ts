@@ -1,4 +1,4 @@
-import type { CloudClient, CreateSessionInput, Turn } from "@aoagents/cloud-client";
+import { CloudApiError, type CloudClient, type CreateSessionInput, type Turn } from "@aoagents/cloud-client";
 import type { DashboardSession, ProjectInfo, SpawnOptions } from "../api";
 import type { ConversationEvent } from "../chat/sse";
 import type { ConversationTurn, TurnSettings } from "../chat/types";
@@ -7,6 +7,7 @@ import { fetchConversationReplay, pollCloudEvents, toConversationItems, toConver
 import { toDashboardSession, toProjectInfo } from "./mapping";
 import { cloudRoleDefaults } from "../spawnModel";
 import { acceptCloudOperation, prepareCloudOperation, readCloudOperation, reserveCloudOperation } from "./operation";
+import { cloudHeaderControllerState, cloudLifecycleStage, cloudStartupProblem } from "./lifecycle";
 
 /** How often the cloud transcript is polled for new events. Matches the
  * tunnel-path conversation poll interval mobile already uses elsewhere. */
@@ -139,7 +140,7 @@ export function createCloudSessionSource(input: {
 				// Cloud's `mode` is a trust level; interfaceMode is the actual
 				// controller. A Terminal session must not masquerade as Chat.
 				mode: session.interfaceMode === "tui" ? "tui" as const : "chat" as const,
-				controller: { state: turns.some((turn) => turn.state === "running" || turn.state === "queued") ? "busy" as const : "ready" as const },
+				controller: { state: session.isTerminated ? "stopped" as const : cloudHeaderControllerState(cloudLifecycleStage(toDashboardSession(session)), turns.some((turn) => turn.state === "running" || turn.state === "queued") ? "busy" : "ready") },
 				latestSequence,
 				oldestSequence: events.length > 0 ? events[0].sequence : latestSequence,
 				// No backward pagination yet: a full forward replay is the whole
@@ -178,7 +179,23 @@ export function createCloudSessionSource(input: {
 		// the response body is discarded and the caller relies on the polled
 		// lifecycle stage (cloudLifecycleStage) to see it land.
 		resumeSession: async (id) => {
+			if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
 			await client.resumeSession(orgId, id);
+		},
+		restoreSession: async (id) => {
+			if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
+			await client.restoreSession(orgId, id);
+		},
+		retryStartup: async (id) => {
+			if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
+			const { session } = await client.getSession(orgId, id);
+			if (session.isTerminated || session.desiredState !== "running" || cloudStartupProblem(toDashboardSession(session))?.phase !== "failed") throw new Error("This session is not waiting on a failed startup. Refresh its status.");
+			if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
+			try { await client.retrySessionStartup(orgId, id); }
+			catch (cause) {
+				if (cause instanceof CloudApiError && cause.status === 409 && cause.code === "startup_retry_unavailable") await client.getSession(orgId, id);
+				throw cause;
+			}
 		},
 		switchToChat: async (id) => {
 			const { session } = await client.getSession(orgId, id);

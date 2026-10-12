@@ -34,6 +34,8 @@ export interface SessionSource {
 	 * session, and a throw makes a caller that does so find out immediately.
 	 */
 	resumeSession(id: string): Promise<void>;
+	retryStartup?(id: string): Promise<void>;
+	restoreSession?(id: string): Promise<void>;
 	/** Switch a Cloud Terminal session to its structured Chat controller. */
 	switchToChat?(id: string): Promise<void>;
 	/** Answer a Cloud Chat approval shown in the conversation timeline. */

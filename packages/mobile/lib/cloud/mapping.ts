@@ -43,7 +43,7 @@ export function toDashboardSession(session: Session): DashboardSession {
 	const hasLifecycle =
 		session.sandboxProvider !== undefined ||
 		session.desiredState !== undefined ||
-		session.observedState !== undefined;
+		session.observedState !== undefined || session.runtimeState !== undefined || session.runtimeError !== undefined || session.startupError !== undefined || session.workerEpoch !== undefined;
 
 	return {
 		id: session.id,
@@ -74,6 +74,11 @@ export function toDashboardSession(session: Session): DashboardSession {
 					sandboxProvider: session.sandboxProvider,
 					desiredState: session.desiredState,
 					observedState: session.observedState,
+					runtimeState: session.runtimeState,
+					runtimeError: session.runtimeError,
+					startupError: session.startupError,
+					workerEpoch: session.workerEpoch,
+					coderWorkspaceUrl: session.coderWorkspaceUrl,
 				}
 			: undefined,
 	};

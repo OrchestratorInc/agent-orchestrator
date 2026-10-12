@@ -4535,6 +4535,9 @@ components:
         at:
           type: string
           format: date-time
+        detail:
+          type: string
+          description: Optional diagnostic details for bring-your-own compute; managed compute omits internal details.
     CreateSessionInput:
       type: object
       additionalProperties: false

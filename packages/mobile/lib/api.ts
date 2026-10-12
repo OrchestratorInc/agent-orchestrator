@@ -117,6 +117,11 @@ export type DashboardSession = {
 		sandboxProvider?: string;
 		desiredState?: string;
 		observedState?: string;
+		runtimeState?: string;
+		runtimeError?: string;
+		startupError?: import("@aoagents/cloud-client").Session["startupError"];
+		workerEpoch?: number;
+		coderWorkspaceUrl?: string;
 	};
 	/** Automatically review each new pull-request head. */
 	autoReviewEnabled?: boolean;

@@ -411,4 +411,22 @@ describe("createCloudSessionSource", () => {
 		await source.resumeSession("s1");
 		expect(resumeSession).toHaveBeenCalledWith("o1", "s1");
 	});
+	it("retries a failed startup on the existing session and refreshes eligibility after a conflict", async () => {
+		const { CloudApiError } = await import("@aoagents/cloud-client");
+		const conflict = new CloudApiError(409, { error: "conflict", code: "startup_retry_unavailable", message: "Nothing to retry", requestId: "r1" });
+		const getSession = vi.fn(async () => ({ session: { ...fullSession("s1"), runtimeConnected: false, desiredState: "running", runtimeState: "terminated", startupError: { code: "worker_never_started", message: "Could not start", at: "now" } } }));
+		const retrySessionStartup = vi.fn().mockRejectedValueOnce(conflict);
+		const client = clientStub({ getSession, retrySessionStartup });
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		await expect(source.retryStartup!("s1")).rejects.toBe(conflict);
+		expect(getSession).toHaveBeenCalledTimes(2); expect(retrySessionStartup).toHaveBeenCalledWith("o1", "s1");
+		expect(client.createSession).not.toHaveBeenCalled();
+	});
+	it("restores archive via Restore and rejects startup retry for that archive", async () => {
+		const restoreSession = vi.fn(); const retrySessionStartup = vi.fn();
+		const client = clientStub({ restoreSession, retrySessionStartup, getSession: vi.fn(async () => ({ session: { ...fullSession("s1"), isTerminated: true } })) });
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		await source.restoreSession!("s1"); expect(restoreSession).toHaveBeenCalledWith("o1", "s1");
+		await expect(source.retryStartup!("s1")).rejects.toThrow(/not waiting/i); expect(retrySessionStartup).not.toHaveBeenCalled();
+	});
 });

@@ -1,4 +1,5 @@
 import { CloudApiError, type CloudClient } from "@aoagents/cloud-client";
+import { cloudRequestErrorCopy } from "./errorCopy";
 
 export type CloudTerminalStatus = "connecting" | "waiting" | "attaching" | "ready" | "disconnected" | "exited" | "error";
 
@@ -13,6 +14,8 @@ export function createCloudTerminal(input: {
 }) {
 	const WS = input.WebSocketImpl ?? WebSocket;
 	let socket: WebSocket | null = null;
+	const ticketController = new AbortController();
+	let connecting = false;
 	let retryTimer: ReturnType<typeof setTimeout> | null = null;
 	let disposed = false;
 	let ready = false;
@@ -46,14 +49,15 @@ export function createCloudTerminal(input: {
 	};
 
 	const connect = async () => {
-		if (disposed || socket) return;
+		if (disposed || socket || connecting) return;
+		connecting = true;
 		ready = false;
 		bracketedPasteActive = false;
 		pasteMarkerCarry = "";
 		input.onStatus("connecting");
 		let ticket: string;
 		try {
-			ticket = (await input.client.createTerminalTicket(input.orgId, input.sessionId, "agent")).ticket;
+			ticket = (await input.client.createTerminalTicket(input.orgId, input.sessionId, "agent", { signal: ticketController.signal })).ticket;
 		} catch (cause) {
 			if (disposed) return;
 			if (cause instanceof CloudApiError && cause.code === "TERMINAL_SESSION_EXITED") {
@@ -61,15 +65,19 @@ export function createCloudTerminal(input: {
 				input.onError("The coding-agent terminal has exited.");
 				return;
 			}
-			if (cause instanceof CloudApiError && (cause.status === 401 || cause.status === 403)) {
+			if (cause instanceof CloudApiError && ([401, 402, 403, 404, 410].includes(cause.status) || (cause.status === 409 && cause.code !== "WORKER_UNAVAILABLE" && cause.code !== "worker_unavailable"))) {
 				input.onStatus("error");
-				input.onError(cause.message);
+				input.onError(cloudRequestErrorCopy(cause));
 				return;
 			}
 			input.onStatus("waiting");
+			if (cause instanceof CloudApiError && cause.status === 429) {
+				input.onError(cloudRequestErrorCopy(cause));
+				backoff = Math.max(backoff, (cause.retryAfterSeconds ?? 30) * 1000);
+			}
 			retry();
 			return;
-		}
+		} finally { connecting = false; }
 		if (disposed) return;
 		input.onStatus("attaching");
 		const url = new URL(input.client.terminalUrl(ticket, { after: 0, kind: "agent" }));
@@ -134,6 +142,7 @@ export function createCloudTerminal(input: {
 		connect,
 		disconnect: () => {
 			disposed = true;
+			ticketController.abort();
 			ready = false;
 			if (retryTimer) clearTimeout(retryTimer);
 			retryTimer = null;

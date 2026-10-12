@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ControllerState } from "../chat/types";
 import * as lifecycle from "./lifecycle";
-import { cloudLifecycleStage, isResumable, stageLabel } from "./lifecycle";
+import { cloudLifecycleStage, cloudStartupProblem, cloudStartupErrorCopy, shouldShowCloudStartup, isResumable, stageLabel } from "./lifecycle";
 
 const base = { sandboxProvider: "docker", desiredState: "running", observedState: "running" };
 
@@ -27,11 +27,11 @@ describe("cloudLifecycleStage", () => {
 			.toBe("waiting_for_coder_agent");
 	});
 
-	it("keeps a fresh bootstrap in the starting state after the runtime connects", () => {
+	it("matches desktop's bootstrap-to-agent attachment stage", () => {
 		expect(cloudLifecycleStage({ cloud: { ...base, observedState: "bootstrapping" }, runtimeConnected: false }))
 			.toBe("starting_ao_worker");
 		expect(cloudLifecycleStage({ cloud: { ...base, observedState: "bootstrapping" }, runtimeConnected: true }))
-			.toBe("starting_ao_worker");
+			.toBe("restoring_agent");
 	});
 
 	it("is connected only once the runtime is attached", () => {
@@ -39,11 +39,39 @@ describe("cloudLifecycleStage", () => {
 		expect(cloudLifecycleStage({ cloud: base, runtimeConnected: false })).toBe("restoring_agent");
 	});
 
-	it("surfaces a failed sandbox even when the runtime connection flag is stale", () => {
+	it("keeps transient failed startup in progress", () => {
 		expect(cloudLifecycleStage({
 			cloud: { ...base, observedState: "failed" },
 			runtimeConnected: true,
-		})).toBe("failed");
+		})).toBe("restoring_agent");
+		expect(cloudLifecycleStage({ cloud: { ...base, observedState: "failed" }, runtimeConnected: false })).toBe("starting_ao_worker");
+	});
+	it("reports a provider-neutral pause without naming Coder", () => {
+		const stage = cloudLifecycleStage({ cloud: { ...base, desiredState: "paused", observedState: "stopped" } });
+		expect(stage).toBe("paused"); expect(isResumable(stage)).toBe(true); expect(stageLabel(stage!)).toBe("Paused");
+	});
+});
+
+describe("startup problems", () => {
+	const startupError = { code: "bootstrap_failed", message: "Worker could not start", at: "2026-10-13T00:00:00Z", detail: "Internal https://private.example/log" };
+	it("distinguishes final startup from retries and preserves archive as a separate fact", () => {
+		expect(cloudStartupProblem({ cloud: { runtimeState: "failed", startupError } })).toEqual({ phase: "retrying", message: startupError.message });
+		expect(cloudStartupProblem({ cloud: { runtimeState: "terminated", startupError } })).toMatchObject({ phase: "failed", code: "bootstrap_failed" });
+		expect(cloudStartupProblem({ cloud: { runtimeState: "terminated", runtimeError: "Runtime parked" } })).toEqual({ phase: "unavailable", message: "Runtime parked" });
+		expect(cloudStartupProblem({ isTerminated: true, cloud: { runtimeState: "terminated", startupError } })).toBeUndefined();
+		expect(cloudStartupProblem({ runtimeConnected: true, cloud: { runtimeState: "terminated", startupError } })).toBeUndefined();
+	});
+	it("omits internal detail and URLs for managed compute", () => {
+		const problem = { phase: "failed" as const, message: "Could not reach https://private.example/start", detail: startupError.detail };
+		expect(cloudStartupErrorCopy(problem, true).message).not.toContain("private.example");
+		expect(cloudStartupErrorCopy(problem, true).detail).toBeUndefined();
+		expect(cloudStartupErrorCopy(problem, false).detail).toBe(startupError.detail);
+	});
+	it("never replays creation for a revisit or invents it from unknown facts", () => {
+		expect(shouldShowCloudStartup({ spawnIntent: false, stage: "connected", terminalReady: false })).toBe(false);
+		expect(shouldShowCloudStartup({ spawnIntent: true, terminalReady: false })).toBe(false);
+		expect(shouldShowCloudStartup({ spawnIntent: true, stage: "waiting_for_coder_agent", terminalReady: false })).toBe(true);
+		expect(shouldShowCloudStartup({ spawnIntent: true, stage: "starting_ao_worker", startupProblem: { phase: "failed", message: "Stopped" }, terminalReady: false })).toBe(false);
 	});
 });
 

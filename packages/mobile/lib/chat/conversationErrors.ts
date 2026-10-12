@@ -1,4 +1,6 @@
 import { daemonDetail, userFacingError } from "../connectionError";
+import { CloudApiError } from "@aoagents/cloud-client";
+import { cloudRequestErrorCopy } from "../cloud/errorCopy";
 
 export function conversationErrorCode(error: unknown): string | undefined {
 	if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
@@ -33,6 +35,7 @@ export function conversationErrorIsPermanent(code: string | undefined, reviewer 
 
 /** Stable, user-actionable copy for conversation protocol failures. */
 export function conversationActionError(error: unknown): string {
+	if (error instanceof CloudApiError) return cloudRequestErrorCopy(error);
 	const code = conversationErrorCode(error);
 	switch (code) {
 		case "CHAT_NO_ACTIVE_TURN": return "The turn finished before this guidance landed. Queue it as a new message instead.";

@@ -68,7 +68,7 @@ describe("loadSessionSourceBoard", () => {
 			hasRuntime: true,
 			isTerminal: false,
 		})]);
-		expect(cloudLifecycleStage(result.orchestrators[0])).toBe("failed");
+		expect(cloudLifecycleStage(result.orchestrators[0])).toBe("restoring_agent");
 	});
 
 	it("rejects when listing projects fails", async () => {
