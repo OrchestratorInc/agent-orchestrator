@@ -168,6 +168,29 @@ max_tokens = 1024
 	first.stop() // SIGKILL: prove restore does not rely on a graceful quit hook.
 
 	restore := ports.RestoreConfig{Session: ports.SessionRef{ID: "ao-tau-conformance", WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: started.Payload.SessionID}}, SystemPrompt: "AO_HIDDEN_RESTORED", Permissions: ports.PermissionModeBypassPermissions, Config: ports.AgentConfig{Model: "ao/test"}, Env: envMap}
+	histories, err := filepath.Glob(filepath.Join(tauHome, "sessions", "*", started.Payload.SessionID+".jsonl"))
+	if err != nil || len(histories) != 1 {
+		t.Fatalf("native history lookup: %v, %v", histories, err)
+	}
+	history := histories[0]
+	held := history + ".held"
+	if err := os.Rename(history, held); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := os.Stat(held); err == nil {
+			_ = os.Rename(held, history)
+		}
+	}()
+	if _, ok, err := plugin.GetRestoreCommand(context.Background(), restore); err == nil || ok || !strings.Contains(err.Error(), "history") {
+		t.Fatalf("metadata-only native restore admitted: %v, %v", ok, err)
+	}
+	if _, err := os.Stat(history); !os.IsNotExist(err) {
+		t.Fatalf("validation created missing native history: %v", err)
+	}
+	if err := os.Rename(held, history); err != nil {
+		t.Fatal(err)
+	}
 	argv, ok, err := plugin.GetRestoreCommand(context.Background(), restore)
 	if err != nil || !ok {
 		t.Fatalf("exact persisted restore = %v, %v", ok, err)

@@ -2,6 +2,7 @@ package tau
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -65,7 +66,7 @@ func TestRestoreUsesExactNativeIDAndReappliesPrivateInstructions(t *testing.T) {
 	}
 	id := "8bc1a3fbba2142bcb406fe4a4b6fe21b"
 	cfg := ports.RestoreConfig{Session: ports.SessionRef{WorkspacePath: work, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}, Permissions: ports.PermissionModeBypassPermissions, SystemPromptFile: instructions, Config: ports.AgentConfig{Model: "openrouter/vendor/model"}}
-	p := fixtureRestorePlugin(id, work)
+	p := fixtureRestorePlugin(t, id, work)
 	cmd, ok, err := p.GetRestoreCommand(context.Background(), cfg)
 	if err != nil || !ok {
 		t.Fatalf("restore = %#v, %v, %v", cmd, ok, err)
@@ -236,7 +237,23 @@ func TestToolRestrictionsAreRejectedOnLaunchAndRestore(t *testing.T) {
 	}
 }
 
-func fixtureRestorePlugin(id, workspace string) *Plugin {
+func fixtureRestorePlugin(t *testing.T, id, workspace string) *Plugin {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("TAU_HOME", home)
+	dir := filepath.Join(home, "sessions", "project")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	history := filepath.Join(dir, id+".jsonl")
+	header, _ := json.Marshal(map[string]string{"type": "session_info", "cwd": workspace})
+	if err := os.WriteFile(history, append(header, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	row, _ := json.Marshal(map[string]string{"id": id, "path": history, "cwd": workspace})
+	if err := os.WriteFile(filepath.Join(dir, "index.jsonl"), append(row, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
 	p := fixturePlugin()
 	p.run = func(_ context.Context, _ string, _ map[string]string, args ...string) ([]byte, error) {
 		if len(args) == 1 && args[0] == "sessions" {
@@ -257,7 +274,7 @@ func TestRestoreRejectsMissingOrMismatchedWorkspace(t *testing.T) {
 		{"relative directory", id, "relative"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := fixtureRestorePlugin(tc.nativeID, tc.nativeWorkspace)
+			p := fixtureRestorePlugin(t, tc.nativeID, tc.nativeWorkspace)
 			_, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}, Permissions: ports.PermissionModeBypassPermissions})
 			if err == nil || ok {
 				t.Fatalf("restore accepted unowned workspace: %v, %v", ok, err)
@@ -276,7 +293,7 @@ func TestRestoreAcceptsSymlinkToSameDirectory(t *testing.T) {
 	if err := os.Symlink(workspace, alias); err != nil {
 		t.Fatal(err)
 	}
-	p := fixtureRestorePlugin(id, alias)
+	p := fixtureRestorePlugin(t, id, alias)
 	_, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}, Permissions: ports.PermissionModeBypassPermissions})
 	if err != nil || !ok {
 		t.Fatalf("same workspace alias rejected: %v, %v", ok, err)

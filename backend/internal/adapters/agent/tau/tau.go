@@ -108,6 +108,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err := p.validateRestoreWorkspace(ctx, cmd[0], id, cfg.Session.WorkspacePath, cfg.Env); err != nil {
 		return nil, false, err
 	}
+	if err := validateRestoreHistory(ctx, id, cfg.Session.WorkspacePath, cfg.Env); err != nil {
+		return nil, false, err
+	}
 	return append(cmd, "--session", id), true, nil
 }
 
