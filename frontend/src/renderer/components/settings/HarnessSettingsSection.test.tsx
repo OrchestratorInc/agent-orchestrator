@@ -444,9 +444,9 @@ describe("HarnessSettingsSection", () => {
 	it("shows the account a signed-in harness reports", async () => {
 		const readiness = readyCatalog();
 		const codex = readiness.agents.find((agent) => agent.id === "codex")!;
-		codex.authentication = { ...codex.authentication, account: { email: "dev@example.com", organization: "Acme", plan: "pro", method: "account" } };
+		Object.assign(codex.authentication, { account: { email: "dev@example.com", organization: "Acme", plan: "pro", method: "account" } });
 		const cursor = readiness.agents.find((agent) => agent.id === "cursor")!;
-		cursor.authentication = { ...cursor.authentication, account: { method: "api_key" } };
+		Object.assign(cursor.authentication, { account: { method: "api_key" } });
 		mockInstalledOperations("npm", readiness);
 		renderSection();
 		expect(await within(await findAgentRow("codex")).findByText("Signed in as dev@example.com · Pro · Acme")).toBeInTheDocument();
