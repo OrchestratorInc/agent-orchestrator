@@ -56,8 +56,9 @@ func ValidateProtocolHookBudget(ctx context.Context, cfg ports.WorkspaceHookConf
 		}
 		var config struct {
 			Hooks *struct {
-				Enabled *bool                               `json:"enabled"`
-				Events  map[string][]hooksjson.MatcherGroup `json:"events"`
+				MaxOutputBytes *int                                `json:"maxOutputBytes"`
+				Enabled        *bool                               `json:"enabled"`
+				Events         map[string][]hooksjson.MatcherGroup `json:"events"`
 			} `json:"hooks"`
 		}
 		if err := json.Unmarshal(data, &config); err != nil {
@@ -68,6 +69,9 @@ func ValidateProtocolHookBudget(ctx context.Context, cfg ports.WorkspaceHookConf
 		}
 		if config.Hooks.Enabled != nil && !*config.Hooks.Enabled {
 			return fmt.Errorf("zcode: native hooks are explicitly disabled; AO cannot override this choice")
+		}
+		if config.Hooks.MaxOutputBytes != nil && *config.Hooks.MaxOutputBytes < nativeHookOutputBytes {
+			return fmt.Errorf("zcode: configured native hook output limit is below the supported %d-byte budget", nativeHookOutputBytes)
 		}
 		for _, group := range config.Hooks.Events["UserPromptSubmit"] {
 			for _, hook := range group.Hooks {

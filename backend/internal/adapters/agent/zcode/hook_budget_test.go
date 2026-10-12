@@ -35,3 +35,20 @@ func TestProtocolPreservesCompetingHooksByRejectingUnboundedContext(t *testing.T
 		})
 	}
 }
+
+func TestProtocolRejectsReducedNativeOutputBudgetWithoutChangingConfig(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "zcode.json")
+	input := []byte(`{"hooks":{"enabled":true,"maxOutputBytes":1024}}`)
+	if err := os.WriteFile(path, input, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ports.WorkspaceHookConfig{WorkspacePath: workspace, Env: map[string]string{"HOME": t.TempDir()}}
+	if err := ValidateProtocolHookBudget(context.Background(), cfg); err == nil {
+		t.Fatal("native stdout truncation configuration accepted")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(input) {
+		t.Fatal("native configuration changed")
+	}
+}

@@ -37,6 +37,7 @@ func TestStandingInstructionFileBoundAndUTF8(t *testing.T) {
 		{"ascii exact bound", strings.Repeat("x", maxStandingInstructionBytes), false},
 		{"unicode byte bound", strings.Repeat("界", maxStandingInstructionBytes/3), false},
 		{"unicode exceeds", strings.Repeat("界", maxStandingInstructionBytes/3+1), true},
+		{"JSON escaping exceeds native stdout", strings.Repeat("\x00", maxStandingInstructionBytes), true},
 		{"invalid UTF8", string([]byte{0xff}), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

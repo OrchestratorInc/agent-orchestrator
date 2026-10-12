@@ -2,6 +2,7 @@ package zcode
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 // A byte bound is conservative for valid UTF-8 and reserves space for native
 // event labels/numbering. It does not bound other hooks' combined output.
 const maxStandingInstructionBytes = 20_000
+const nativeHookOutputBytes = 32_768
 
 func validateStandingInstructions(ctx context.Context, text, path string) error {
 	_, err := ReadStandingInstructions(ctx, text, path)
@@ -41,6 +43,17 @@ func ReadStandingInstructions(ctx context.Context, text, path string) (string, e
 	}
 	if len(text) > maxStandingInstructionBytes {
 		return "", fmt.Errorf("zcode: standing instructions exceed the supported %d-byte native hook context budget", maxStandingInstructionBytes)
+	}
+	// The native command runner also bounds serialized stdout. JSON escaping
+	// can expand valid input beyond that bound before hook_context is parsed.
+	encoded, err := json.Marshal(struct {
+		AdditionalContext string `json:"additionalContext"`
+	}{text})
+	if err != nil {
+		return "", err
+	}
+	if len(encoded)+1 > nativeHookOutputBytes {
+		return "", fmt.Errorf("zcode: standing instructions exceed the serialized native hook output budget")
 	}
 	return text, nil
 }
