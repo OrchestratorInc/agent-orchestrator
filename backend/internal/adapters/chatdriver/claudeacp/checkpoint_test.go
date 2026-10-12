@@ -127,10 +127,15 @@ func TestNativeCheckpointTurnCompanionIsNotAUserBoundary(t *testing.T) {
 			parent:    "companion",
 		},
 		{
+			// getSessionMessages drops isMeta records, so replay never shows one.
 			name:      "meta only",
 			companion: `{"type":"user","sessionId":"native","uuid":"meta","parentUuid":"user","promptId":"prompt","isMeta":true,"message":{"content":"B"}}`,
 			parent:    "meta",
-			wantError: true,
+		},
+		{
+			name:      "interrupt marker",
+			companion: `{"type":"user","sessionId":"native","uuid":"marker","parentUuid":"user","promptId":"prompt","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}`,
+			parent:    "marker",
 		},
 		{
 			name:      "turn companion only",
@@ -173,25 +178,38 @@ func TestNativeCheckpointTurnCompanionIsNotAUserBoundary(t *testing.T) {
 }
 
 func TestNativeCheckpointNotificationCycleBelongsToPreviousTurn(t *testing.T) {
-	// Claude answers a finished task's notification on its own. Chat replay
-	// skips the notification, so the boundary is the user turn before it.
-	transcript := strings.Join([]string{
-		`{"type":"user","sessionId":"native","uuid":"user","promptId":"prompt","message":{"content":"A"}}`,
+	// Claude answers a finished task's notification, or a peer message, on its
+	// own. Chat replay skips that note, so the boundary is the user turn before.
+	user := `{"type":"user","sessionId":"native","uuid":"user","promptId":"prompt","message":{"content":"A"}}`
+	answer := strings.Join([]string{
 		`{"type":"attachment","sessionId":"native","uuid":"attachment","parentUuid":"user","attachment":{"type":"hook_additional_context","hookEvent":"UserPromptSubmit","content":["AO transcript correlation ID: submission."]}}`,
 		`{"type":"assistant","sessionId":"native","uuid":"answer","parentUuid":"attachment","message":{"content":"answer","stop_reason":"end_turn"}}`,
-		`{"type":"user","sessionId":"native","uuid":"notification","parentUuid":"answer","promptId":"cycle","message":{"content":"<task-notification>\n<status>running</status>\n</task-notification>\nThis is a check-in, not a completion."}}`,
-		`{"type":"assistant","sessionId":"native","uuid":"reply","parentUuid":"notification","message":{"content":"still running","stop_reason":"end_turn"}}`,
-	}, "\n") + "\n"
-	got, err := verifyCheckpointTranscript(context.Background(), strings.NewReader(transcript), ports.NativeCheckpointRequest{
-		ProviderConversationID: "native",
-		Evidence: checkpointEvidence(
-			domain.NativeCheckpointObservation{Submission: true, SubmissionID: "submission", PromptID: "prompt", Text: "A"},
-			domain.NativeCheckpointObservation{PromptID: "prompt", Text: "answer"},
-			domain.NativeCheckpointObservation{PromptID: "cycle", Text: "still running"},
-		),
-	})
-	if err != nil || got.UserMessageID != "user" || got.UserText != "A" || got.AssistantText != "still running" {
-		t.Fatalf("boundary=%+v error=%v", got, err)
+	}, "\n")
+	reply := `{"type":"assistant","sessionId":"native","uuid":"reply","parentUuid":"note","message":{"content":"still running","stop_reason":"end_turn"}}`
+	evidence := checkpointEvidence(
+		domain.NativeCheckpointObservation{Submission: true, SubmissionID: "submission", PromptID: "prompt", Text: "A"},
+		domain.NativeCheckpointObservation{PromptID: "prompt", Text: "answer"},
+		domain.NativeCheckpointObservation{PromptID: "cycle", Text: "still running"},
+	)
+	verify := func(lines ...string) (ports.NativeCheckpointBoundary, error) {
+		return verifyCheckpointTranscript(context.Background(), strings.NewReader(strings.Join(lines, "\n")+"\n"), ports.NativeCheckpointRequest{
+			ProviderConversationID: "native", Evidence: evidence,
+		})
+	}
+	for _, note := range []string{
+		`{"type":"user","sessionId":"native","uuid":"note","parentUuid":"answer","promptId":"cycle","message":{"content":"<task-notification>\n<status>running</status>\n</task-notification>\nThis is a check-in, not a completion."}}`,
+		`{"type":"user","sessionId":"native","uuid":"note","parentUuid":"answer","promptId":"cycle","isMeta":true,"origin":{"kind":"peer"},"message":{"content":"peer says hi"}}`,
+	} {
+		got, err := verify(user, answer, note, reply)
+		if err != nil || got.UserMessageID != "user" || got.UserText != "A" || got.AssistantText != "still running" {
+			t.Fatalf("note %s: boundary=%+v error=%v", note, got, err)
+		}
+	}
+	// With no user turn before the note, replay has no boundary to match.
+	orphan := `{"type":"user","sessionId":"native","uuid":"note","promptId":"cycle","message":{"content":"<task-notification>done</task-notification>"}}`
+	evidence = checkpointEvidence(domain.NativeCheckpointObservation{PromptID: "cycle", Text: "still running"})
+	if _, err := verify(orphan, reply); !errors.Is(err, ports.ErrChatHistoryUnsettled) {
+		t.Fatalf("orphan note error=%v", err)
 	}
 	for text, want := range map[string]bool{
 		"[Request interrupted by user]":              true,

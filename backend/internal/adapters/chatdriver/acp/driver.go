@@ -94,9 +94,9 @@ type Config struct {
 	// PromptResponseFailure lets a provider binding interpret its own structured
 	// terminal metadata after a nominally successful ACP prompt response.
 	PromptResponseFailure func(acpsdk.PromptResponse) error
-	// HistoryNotice reports a replayed user message that the agent wrote into its
-	// own transcript. Replay starts no turn for it, so the agent's output after it
-	// stays in the turn before, as it did live.
+	// HistoryNotice reports a replayed user message chunk that the agent wrote
+	// into its own transcript. Replay starts no turn for it, so the agent's
+	// output after it stays in the turn before, as it did live.
 	HistoryNotice func(string) bool
 	// CanHibernate checks provider-owned work that outlives an ACP prompt.
 	CanHibernate func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
