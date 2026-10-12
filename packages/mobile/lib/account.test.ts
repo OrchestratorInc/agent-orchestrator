@@ -14,6 +14,7 @@ vi.mock("expo-secure-store", () => ({
 	deleteItemAsync: vi.fn(async (key: string) => void secure.delete(key)),
 }));
 vi.mock("./accountHosts", () => ({ cancelAccountHostSync: vi.fn() }));
+vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getAllKeys: async () => [], removeItem: async () => {} } }));
 import { getAccountAccessToken, loadAccount, signInToAccount, signOutOfAccount } from "./account";
 import { CLOUD_DEPLOYMENT } from "./cloud/config";
 import { getAccountSessionOwner } from "./cloud/sessionOwner";

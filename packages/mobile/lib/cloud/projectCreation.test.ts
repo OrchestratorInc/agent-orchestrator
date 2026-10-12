@@ -1,7 +1,33 @@
 import { describe, expect, it, vi } from "vitest";
-import { cloudProjectInput, initialProjectCreationStep, validGitHubRepositoryURL } from "./projectCreation";
+import { cloudProjectInput, initialProjectCreationStep, validGitHubRepositoryURL, coderSetupProblem, coderParameterProblem, findCloudProjectForRepository } from "./projectCreation";
 
 describe("cloud project creation", () => {
+  it("finds an existing repository project beyond the first page", async () => {
+    const listProjects = vi.fn().mockResolvedValueOnce({ items: [{ id: "other", repositoryUrl: "https://github.com/me/other" }], page: { hasMore: true, nextCursor: "next" } })
+      .mockResolvedValueOnce({ items: [{ id: "existing", repositoryUrl: "https://github.com/me/demo.git" }], page: { hasMore: false } });
+    expect(await findCloudProjectForRepository({ listProjects } as never, "org", "https://github.com/me/demo")).toBe("existing");
+    expect(listProjects.mock.calls[1]?.[1]).toMatchObject({ cursor: "next" });
+  });
+  it("allows managed Coder Default but requires a permitted BYO template", () => {
+    expect(coderSetupProblem({ configured: false }, [], "")).toBeNull();
+    expect(coderSetupProblem({ configured: true }, [{ id: "template" }], "")).toMatch(/template/i);
+    expect(coderSetupProblem({ configured: true }, [{ id: "template" }], "template")).toBeNull();
+    expect(coderSetupProblem({ configured: true }, [], "missing")).toMatch(/template/i);
+  });
+  it.each([
+    ["number", "not-a-number", [], true],
+    ["number", "3", [], false],
+    ["bool", "yes", [], true],
+    ["bool", "true", [], false],
+    ["list(string)", '["one"]', [{ name: "One", value: "one", description: "" }], false],
+    ["list(string)", '["other"]', [{ name: "One", value: "one", description: "" }], true],
+  ])("validates declared Coder %s values", (type, value, options, invalid) => {
+    expect(Boolean(coderParameterProblem({ name: "field", displayName: "Field", description: "", type, formType: "", mutable: false, required: true, defaultValue: "", options, order: 1 }, value))).toBe(invalid);
+  });
+  it("preserves nested role models and Coder project configuration", () => {
+    const config = { worker: { agent: "codex", agentConfig: { model: "model-test", effort: "high" } }, coder: { templateId: "template", parameters: { region: "india" } }, sandboxProvider: "coder" };
+    expect(cloudProjectInput({ displayName: "Demo", repositoryUrl: "https://github.com/me/demo", defaultBranch: "main", config }).config).toEqual(config);
+  });
   it("asks for a GitHub token only when no saved token exists", () => {
     expect(initialProjectCreationStep([])).toBe("github-token");
     expect(initialProjectCreationStep([{ provider: "github", validationState: "valid" }])).toBe("repository");

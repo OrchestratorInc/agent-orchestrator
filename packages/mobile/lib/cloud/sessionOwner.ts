@@ -27,14 +27,16 @@ export interface AccountSessionOwner {
 	signOut(): Promise<void>;
 }
 
-export function createAccountSessionOwner({ tokens, readAccount }: {
-	tokens: TokenProvider; readAccount: () => Promise<Account>;
+export function createAccountSessionOwner({ tokens, readAccount, onSignOut }: {
+	tokens: TokenProvider; readAccount: () => Promise<Account>; onSignOut?: (account: Account | null) => Promise<void>;
 }): AccountSessionOwner {
 	let snapshot: AccountSessionSnapshot = { account: null, signedIn: null, epoch: 0, busy: false, error: null };
 	let initialization: { epoch: number; promise: Promise<void> } | null = null;
 	const listeners = new Set<() => void>();
+	let lastVerifiedAccount: Account | null = null;
 	const publish = (patch: Partial<AccountSessionSnapshot>) => {
 		snapshot = { ...snapshot, ...patch };
+		if (patch.account) lastVerifiedAccount = patch.account;
 		for (const listener of listeners) listener();
 	};
 	const message = (error: unknown) => error instanceof Error ? error.message : "Could not load your account.";
@@ -105,7 +107,9 @@ export function createAccountSessionOwner({ tokens, readAccount }: {
 		},
 		async signOut() {
 			publish({ epoch: snapshot.epoch + 1, account: null, signedIn: false, busy: false, error: null });
-			await tokens.signOut();
+			const account = lastVerifiedAccount;
+			lastVerifiedAccount = null;
+			await Promise.all([tokens.signOut(), onSignOut?.(account)]);
 		},
 	};
 }
@@ -123,6 +127,11 @@ export function getAccountSessionOwner(deployment: CloudDeployment = CLOUD_DEPLO
 	});
 	const owner = createAccountSessionOwner({
 		tokens,
+		onSignOut: async (account) => {
+			if (!account) return;
+			const { clearCloudOperationsForAccount } = await import("./operation");
+			await clearCloudOperationsForAccount(deployment.baseUrl, account.id);
+		},
 		readAccount: async () => {
 			if (CLOUD_CONFIGURATION_ERROR && deployment.key === CLOUD_DEPLOYMENT.key) throw new Error(CLOUD_CONFIGURATION_ERROR);
 			const { user } = await createMobileCloudClient({ baseUrl: deployment.baseUrl, tokens }).getCurrentAccount();

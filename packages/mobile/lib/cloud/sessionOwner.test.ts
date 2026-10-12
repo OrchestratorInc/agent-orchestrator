@@ -21,6 +21,17 @@ function fixture() {
 }
 
 describe("account session owner", () => {
+	it("retires retry records for the last verified account even if sign-out occurs during another login", async () => {
+		const { tokens } = fixture();
+		const retired = vi.fn(async () => {});
+		const owner = createAccountSessionOwner({ tokens, readAccount: async () => account, onSignOut: retired });
+		await owner.initialize();
+		const browser = deferred<CloudTokens>();
+		const login = owner.signIn(() => browser.promise);
+		await owner.signOut();
+		expect(retired).toHaveBeenCalledWith(account);
+		browser.resolve(issued); await login;
+	});
 	it("never returns a bearer after sign-out even if credential removal failed", async () => {
 		const { owner, tokens } = fixture();
 		await owner.initialize();

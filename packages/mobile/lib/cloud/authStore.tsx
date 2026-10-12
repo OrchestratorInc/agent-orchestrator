@@ -18,6 +18,7 @@ export type CloudAuthState = {
 	orgId: string | null; orgLoading: boolean; orgError: string | null;
 	retryOrgResolution(): Promise<void>;
 	sessionEpoch: number; client: CloudClient; baseUrl: string;
+	isCurrentSession(): boolean;
 	error: string | null; busy: boolean;
 	signInWithWorkOS(): Promise<boolean>;
 	signInLocal(email: string, password: string): Promise<void>;
@@ -39,6 +40,7 @@ export function CloudAuthProvider({ children, baseUrl = CLOUD_BASE_URL, owner: i
 	const owner = useMemo(() => injectedOwner ?? getAccountSessionOwner(deployment), [injectedOwner, deployment]);
 	const snapshot = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
 	const epoch = snapshot.epoch;
+	const isCurrentSession = useCallback(() => owner.getSnapshot().epoch === epoch, [owner, epoch]);
 	const [workspace, setWorkspace] = useState<{ epoch: number; orgId: string | null; offering?: ResolvedMobileCloudOffering; loading: boolean; error: string | null }>({ epoch, orgId: null, loading: false, error: null });
 	const resolution = useRef<{ epoch: number; promise: Promise<void> } | null>(null);
 	const signOut = useCallback(async () => {
@@ -102,6 +104,7 @@ export function CloudAuthProvider({ children, baseUrl = CLOUD_BASE_URL, owner: i
 		orgError: workspace.epoch === epoch ? workspace.error : null, retryOrgResolution,
 		client, baseUrl, error: CLOUD_CONFIGURATION_ERROR ?? snapshot.error, busy: snapshot.busy,
 		signInWithWorkOS, signInLocal, registerLocal, signOut,
+		isCurrentSession,
 	};
 	return <CloudAuthContext.Provider value={value}>{children}</CloudAuthContext.Provider>;
 }

@@ -1,7 +1,7 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const state = vi.hoisted(() => ({ push: vi.fn() }));
+const state = vi.hoisted(() => ({ push: vi.fn(), openOrchestrator: vi.fn(), action: "start" as "start" | "open" }));
 
 vi.mock("react-native", () => ({
 	ActivityIndicator: "ActivityIndicator",
@@ -16,7 +16,7 @@ vi.mock("./store", () => ({ useApp: () => ({ environment: "cloud", configured: t
 		sources: { local: { resolved: true, available: false, loading: false, error: null }, cloud: { resolved: true, available: true, loading: false, error: null } } },
 	sourceFor: () => ({ kind: "cloud" }), refreshSource: vi.fn(async () => {}) }) }));
 vi.mock("./orchestratorView", () => ({
-	orchestratorProjectSections: () => [{ data: [{ project: { id: "project-1", name: "Tappy", kind: "single_repo" }, action: "start", link: null }] }],
+	orchestratorProjectSections: () => [{ data: [{ project: { id: "project-1", name: "Tappy", kind: "single_repo" }, action: state.action, link: null }] }],
 	projectDetailSessions: () => [],
 	projectPageStats: () => ({ workers: 0, needsYou: 0, ready: 0, archived: 0 }),
 }));
@@ -24,7 +24,7 @@ vi.mock("./project-card", () => ({ ProjectPageHeader: "ProjectPageHeader", Proje
 vi.mock("./StaleBanner", () => ({ StaleBanner: "StaleBanner" }));
 vi.mock("./UnpairedState", () => ({ CloudUnreadyState: "CloudUnreadyState" }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ bgBase: "#000", blue: "#00f" }), useThemedStyles: (makeStyles: (theme: unknown) => unknown) => makeStyles({ bgBase: "#000", blue: "#00f" }) }));
-vi.mock("./useOrchestratorLauncher", () => ({ useOrchestratorLauncher: () => ({ busyProjects: new Set(), openOrchestrator: vi.fn() }) }));
+vi.mock("./useOrchestratorLauncher", () => ({ useOrchestratorLauncher: () => ({ busyProjects: new Set(), openOrchestrator: state.openOrchestrator }) }));
 vi.mock("./ui", () => ({ Button: "Button", EmptyState: "EmptyState", HeaderIconButton: "HeaderIconButton", ListSectionHeader: "ListSectionHeader", ScreenHeader: "ScreenHeader" }));
 vi.mock("./worker-board-list", () => ({ WorkerBoardList: "WorkerBoardList" }));
 vi.mock("./worker-dock", () => ({ WorkerDock: "WorkerDock" }));
@@ -42,6 +42,7 @@ beforeEach(() => {
 		error(...args);
 	});
 	vi.clearAllMocks();
+	state.action = "start";
 });
 
 afterEach(async () => {
@@ -52,6 +53,14 @@ afterEach(async () => {
 });
 
 describe("Cloud project page", () => {
+	it.each(["start", "open"] as const)("uses the same orchestrator %s action and qualified project source", async (action) => {
+		state.action = action;
+		await act(async () => { renderer = create(<ProjectScreen />); });
+		const header = renderer!.root.findByType("ProjectPageHeader" as never);
+		expect(header.props.row.action).toBe(action);
+		await act(async () => { header.props.onPress(); });
+		expect(state.openOrchestrator).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: "cloud", id: "org-1" } }));
+	});
 	it("places worker spawn at the bottom, not in the header, and keeps the project selected", async () => {
 		await act(async () => { renderer = create(<ProjectScreen />); });
 		const root = renderer!.root;
