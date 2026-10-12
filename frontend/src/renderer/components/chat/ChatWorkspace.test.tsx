@@ -1953,22 +1953,38 @@ describe("ChatWorkspace timeline", () => {
 		await user.click(prompts[1]);
 		await waitFor(() => expect(screen.getByLabelText("Message the agent")).toHaveTextContent("Build an HTML page comparing three options side by side"));
 		expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
-		expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument();
-
+		await waitFor(() => expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument());
 	});
 
-	it("keeps the ordinary welcome without artifact suggestions for other sessions", () => {
+	it("offers ordinary sample requests in an empty non-artifact chat and fills the composer with one", async () => {
+		const user = userEvent.setup();
 		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={chatSession} />);
 
 		expect(screen.getByRole("heading", { name: "What do you want to work on?" })).toBeInTheDocument();
 		expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument();
+		const prompts = within(screen.getByRole("list", { name: "Sample requests" })).getAllByRole("button");
+		expect(prompts.map((prompt) => prompt.textContent)).toEqual([
+			"Review my recent changes for bugs",
+			"Add tests for the code I am working on",
+			"Walk me through how a request flows through this code",
+		]);
+
+		await user.click(prompts[0]);
+		await waitFor(() => expect(screen.getByLabelText("Message the agent")).toHaveTextContent("Review my recent changes for bugs"));
+		await waitFor(() => expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument());
 	});
 
-	it("keeps the sample artifact requests to Scratchpad sessions", () => {
+	it("offers sample artifact requests to artifact sessions outside Scratchpad too", () => {
 		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, requestedOutput: "artifact" }} />);
 
 		expect(screen.getByRole("heading", { name: "What do you want to create?" })).toBeInTheDocument();
-		expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument();
+		expect(screen.getByRole("list", { name: "Sample artifact requests" })).toBeInTheDocument();
+	});
+
+	it("drops the sample requests once the conversation has messages", () => {
+		render(<ChatWorkspace snapshot={chatFixture} session={chatSession} />);
+
+		expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument();
 	});
 
 	it("waits for provider settings before showing composer dropdowns", () => {
