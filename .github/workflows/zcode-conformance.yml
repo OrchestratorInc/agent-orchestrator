@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zai-org/ZCode
-          ref: 29628c9acdb81b703bbd4080c207a0e7ce5e276e
+          ref: aac4755666d09fdcd70272fcf063c077a639015f
           path: upstream-zcode
       - uses: actions/setup-node@v4
         with:
@@ -50,6 +50,20 @@ jobs:
           pnpm --filter '@zcode/cli...' install --frozen-lockfile
           pnpm --filter '@zcode/cli...' build
           echo "AO_ZCODE_NODE=$(command -v node)" >> "$GITHUB_ENV"
+      - name: Archive pinned unmodified native runtime
+        working-directory: upstream-zcode
+        run: |
+          git rev-parse HEAD > SOURCE_COMMIT
+          node --version > NODE_VERSION
+          tar -czf ../zcode-native-runtime.tar.gz SOURCE_COMMIT NODE_VERSION package.json node_modules apps/zcode-cli/package.json apps/zcode-cli/node_modules apps/zcode-cli/packages
+          sha256sum ../zcode-native-runtime.tar.gz > ../zcode-native-runtime.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zcode-v3.15.1-linux-runtime
+          path: |
+            zcode-native-runtime.tar.gz
+            zcode-native-runtime.sha256
+          retention-days: 7
       - name: Verify source-built CLI lifecycle against localhost provider
         working-directory: backend
         env:
