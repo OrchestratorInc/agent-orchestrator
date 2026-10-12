@@ -85,3 +85,15 @@ nativeacp/API/Chat/Kill/reconnect gates are **NOT_RUN**. No AO session was launc
 and no actual AO Electron screenshot exists. Screenshot status is unavailable
 because native provider qualification failed before safe production admission;
 there is no substitute PNG and no integration claim.
+
+## Published scope
+
+Guarded source draft: [PR #6551](https://github.com/OrchestratorInc/agent-orchestrator/pull/6551).
+[Curated native qualification record](assets/pool-20261011/qualification.json) contains
+artifact hashes, redacted native identity digests, native responses and exact owned
+cleanup state. Original bounded observations remain on the audit VPS; credentials,
+profiles, databases, complete raw logs and native executable are excluded.
+
+This evidence append does not change the audit runner; its SHA-256 remains
+`8887aa2e7101b9e6d3950bfca08ffddf2e1e6c1c3f1d030c8dec2676443aecea`.
+Earlier fixture CI is historical until CI validates this evidence head.
