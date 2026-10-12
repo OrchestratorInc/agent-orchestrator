@@ -10920,6 +10920,10 @@ components:
           type: boolean
         binaryVersion:
           type: string
+        configuredProviders:
+          items:
+            type: string
+          type: array
         customModelEntry:
           enum:
           - none

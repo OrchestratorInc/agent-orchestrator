@@ -374,7 +374,7 @@ func TestParseMiMoModelsAcceptsInlineDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].ID != "mimo/mimo-auto" || got[1].ID != "xiaomi/mimo-v2.5" {
+	if len(got) != 2 || got[0].ID != "mimo/mimo-auto" || got[1].ID != "xiaomi/mimo-v2.5" || got[0].Provider != "mimo" || got[1].Provider != "xiaomi" {
 		t.Fatalf("models = %#v", got)
 	}
 }
@@ -866,9 +866,9 @@ Docs:  https://commandcode.ai/docs/models
 		t.Fatal(err)
 	}
 	want := []ports.AgentModelInfo{
-		{ID: "claude-opus-5-5", Label: "claude-opus-5-5"},
-		{ID: "claude-sonnet-5-5", Label: "claude-sonnet-5-5"},
-		{ID: "gpt-6.1-sol", Label: "gpt-6.1-sol"},
+		{ID: "claude-opus-5-5", Label: "claude-opus-5-5", Provider: "anthropic"},
+		{ID: "claude-sonnet-5-5", Label: "claude-sonnet-5-5", Provider: "anthropic"},
+		{ID: "gpt-6.1-sol", Label: "gpt-6.1-sol", Provider: "openai"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("models = %#v, want %#v", got, want)

@@ -353,6 +353,43 @@ describe("HarnessSettingsSection", () => {
 		expect(within(page).getByRole("button", { name: "Next models" })).toBeDisabled();
 	});
 
+	it("filters catalog and default choices by provider and resets pagination on provider change", async () => {
+		mockInstalledOperations("npm");
+		const models = {
+			agentId: "codex", configuredProviders: ["alpha"], models: [
+				...Array.from({ length: 12 }, (_, i) => ({ id: `alpha/model-${i}`, label: `Alpha ${i}`, provider: "alpha" })),
+				{ id: "beta/org/model", label: "Beta model", provider: "beta" },
+				{ id: "legacy/model", label: "Legacy model" },
+			],
+		};
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models"
+			? { data: models } as never : (get as (path: string, options: unknown) => Promise<never>)(path, options));
+		renderSection();
+		const page = await findAgentRow("codex");
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		const list = await within(page).findByRole("list", { name: "Available models" });
+		expect(within(page).getByRole("button", { name: "Provider" })).toHaveTextContent("alpha · 12 · Configured");
+		expect(within(list).queryByText("Beta model")).toBeNull();
+		await userEvent.click(within(page).getByRole("button", { name: "Next models" }));
+		expect(within(list).getByText("Alpha 10")).toBeInTheDocument();
+		await userEvent.click(within(page).getByRole("button", { name: "Provider" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "beta · 1" }));
+		expect(within(list).getByText("Beta model")).toBeInTheDocument();
+		expect(within(page).queryByRole("button", { name: "Next models" })).toBeNull();
+		await userEvent.click(within(page).getByRole("button", { name: "Default model" }));
+		expect(screen.getByRole("menuitem", { name: /Beta model/ })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /Alpha 0/ })).toBeNull();
+		await userEvent.keyboard("{Escape}");
+		await userEvent.click(within(page).getByRole("button", { name: "Provider" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Other models · 1" }));
+		expect(within(list).getByText("Legacy model")).toBeInTheDocument();
+		await userEvent.click(within(page).getByRole("button", { name: "Provider" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "alpha · 12 · Configured" }));
+		expect(within(list).getByText("Alpha 0")).toBeInTheDocument();
+		expect(within(page).getByText("1–10 of 12")).toBeInTheDocument();
+	});
+
 	it("asks for login before loading models", async () => {
 		const readiness = readyCatalog();
 		readiness.agents[1].authentication.state = "unauthorized";

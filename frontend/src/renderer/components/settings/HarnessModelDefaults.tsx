@@ -7,8 +7,8 @@ import { AgentModelCombobox } from "./AgentModelCombobox";
 import { formatEffortLabel } from "./EffortPicker";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
 
-export function HarnessModelDefaults({ agentId, agentLabel, hostId, catalog }: {
-	agentId: string; agentLabel: string; hostId?: string; catalog?: AgentModelCatalog;
+export function HarnessModelDefaults({ agentId, agentLabel, hostId, catalog, selectableModels }: {
+	agentId: string; agentLabel: string; hostId?: string; catalog?: AgentModelCatalog; selectableModels?: AgentModelCatalog["models"];
 }) {
 	const { t } = useTranslation();
 	const { settings, isLoading, error } = useSettings(hostId);
@@ -18,6 +18,8 @@ export function HarnessModelDefaults({ agentId, agentLabel, hostId, catalog }: {
 	const value = draft ?? saved;
 	const model = value?.model ?? "";
 	const effort = value?.effort ?? "";
+	const models = selectableModels ?? catalog?.models ?? [];
+	const modelInProvider = models.some((item) => item.id === model);
 	const selected = catalog?.models.find((item) => item.id === model);
 	const efforts = agentId === "codex" || agentId === "claude-code" ? selected?.efforts ?? [] : [];
 	const disabled = isLoading || Boolean(error) || mutation.saving;
@@ -32,14 +34,15 @@ export function HarnessModelDefaults({ agentId, agentLabel, hostId, catalog }: {
 	return <div className="space-y-3 rounded-lg border border-(--color-border-settings-input) p-3">
 		<h3 className="text-sm font-medium text-settings-label">{t("settings.harness.models.defaultTitle")}</h3>
 		<p className="text-xs text-settings-muted">{t("settings.harness.models.defaultHint")}</p>
+		{model && !modelInProvider ? <p className="break-all text-xs text-settings-muted">{t("settings.harness.models.currentDefault", { model: selected?.label ?? model })}</p> : null}
 		<div className="flex flex-wrap items-center gap-2">
 			<div className="min-w-0 flex-1">
 				<AgentModelCombobox
 					aria-label={t("settings.harness.models.defaultModel")} agentId={agentId} agentLabel={agentLabel}
-					value={model} models={catalog?.models ?? []} allowCustom={catalog?.allowCustom} customModelEntry={catalog?.customModelEntry}
+					value={modelInProvider ? model : ""} models={models} allowCustom={catalog?.allowCustom} customModelEntry={catalog?.customModelEntry}
 					disabled={disabled || !catalog} onChange={chooseModel} onCustom={chooseModel}
-					triggerLabel={!model ? t("settings.harness.models.useHarnessDefault") : undefined}
-					triggerClassName="w-full justify-between" menuAlign="start" showEffortInTrigger={false}
+					triggerLabel={!model ? t("settings.harness.models.useHarnessDefault") : !modelInProvider ? t("settings.models.selectModel") : undefined}
+					triggerClassName="w-full justify-between" menuAlign="start" showEffortInTrigger={false} preserveDefaultModelID
 				/>
 			</div>
 			{efforts.length > 0 || effort ? <SettingsOptionMenu

@@ -3672,6 +3672,7 @@ export interface components {
             agentId: string;
             allowCustom: boolean;
             binaryVersion?: string;
+            configuredProviders?: string[];
             /** @enum {string} */
             customModelEntry: "none" | "direct" | "configured";
             /** Format: date-time */

@@ -270,10 +270,14 @@ type AgentModelInfo struct {
 
 // AgentModelCatalog is AO's normalized model-picker response.
 type AgentModelCatalog struct {
-	AgentID          string               `json:"agentId"`
-	SelectionMode    ModelSelectionMode   `json:"selectionMode" enum:"catalog,text,mode"`
-	Models           []AgentModelInfo     `json:"models"`
-	CustomModelEntry CustomModelEntryMode `json:"customModelEntry" enum:"none,direct,configured"`
+	// ConfiguredProviders names providers with credential configuration observed
+	// during discovery. Presence is not proof of authorization; absence is unknown.
+	// Only provider IDs are exposed, never credential values or source paths.
+	ConfiguredProviders []string             `json:"configuredProviders,omitempty"`
+	AgentID             string               `json:"agentId"`
+	SelectionMode       ModelSelectionMode   `json:"selectionMode" enum:"catalog,text,mode"`
+	Models              []AgentModelInfo     `json:"models"`
+	CustomModelEntry    CustomModelEntryMode `json:"customModelEntry" enum:"none,direct,configured"`
 	// AllowCustom is retained for compatibility and is true only for direct entry.
 	AllowCustom bool   `json:"allowCustom"`
 	Source      string `json:"source"`

@@ -121,6 +121,13 @@ describe("AgentModelCombobox", () => {
 		expect(screen.getByRole("menuitem", { name: "GPT-5.6 Sol" })).toBeInTheDocument();
 	});
 
+	it("can preserve an explicit default model ID for persisted settings", async () => {
+		const { onChange } = renderCombobox([{ id: "provider/model", label: "Model", isDefault: true }], { preserveDefaultModelID: true });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: /Model/ }));
+		expect(onChange).toHaveBeenCalledWith("provider/model");
+	});
+
 	it("applies menuClassName to the menu", async () => {
 		renderCombobox([{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], { menuClassName: "w-56!" });
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));

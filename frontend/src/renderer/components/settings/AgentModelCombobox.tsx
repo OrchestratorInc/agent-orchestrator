@@ -75,6 +75,7 @@ export function AgentModelCombobox({
 	recentScope,
 	compact = false,
 	showEffortInTrigger = true,
+	preserveDefaultModelID = false,
 	agentId,
 	tuning,
 	disabled = false,
@@ -110,6 +111,8 @@ export function AgentModelCombobox({
 	compact?: boolean;
 	/** Keep the effort level inside the menu only, off the trigger label. */
 	showEffortInTrigger?: boolean;
+	/** Settings persist an explicit choice even when it is the harness's current default. */
+	preserveDefaultModelID?: boolean;
 	/** Callers opt into a combined model and reasoning-effort menu. */
 	tuning?: ModelEffortSelection;
 	disabled?: boolean;
@@ -236,7 +239,7 @@ export function AgentModelCombobox({
 			const next = rememberRecentModel(recentScope, modelID);
 			setSessionRecentModels((current) => ({ ...current, [recentScope]: next }));
 		}
-		onChange(modelID === defaultModel ? "" : modelID);
+		onChange(!preserveDefaultModelID && modelID === defaultModel ? "" : modelID);
 	};
 	const selectCatalogModel = (event: Event, item: IndexedModel) => {
 		const openEffort = Boolean(tuning && item.model.efforts?.some((effort) => effort && effort.toLowerCase() !== "default"));

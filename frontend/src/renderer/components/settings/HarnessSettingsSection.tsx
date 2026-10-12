@@ -21,6 +21,8 @@ import { useCloudCp } from "../../hooks/useCloudCp";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
 import { providerConnectionsQueryKey, useProviderConnections } from "../../hooks/useProviderConnections";
 import { GitHubTokenField } from "../onboarding/GitHubTokenField";
+import { groupModelProviders } from "../../lib/model-providers";
+import { useSettings } from "../../hooks/useSettings";
 import { HarnessModelDefaults } from "./HarnessModelDefaults";
 import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPanel";
 import { SettingsRow } from "./SettingsRow";
@@ -1334,7 +1336,18 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	const [refreshing, setRefreshing] = useState(false);
 	const [refreshError, setRefreshError] = useState<string | null>(null);
 	const [page, setPage] = useState(0);
-	useEffect(() => setPage(0), [agentId, hostId]);
+	const scope = `${hostId ?? LOCAL_HOST}:${agentId}`;
+	const [providerChoice, setProviderChoice] = useState<{ scope: string; id: string }>();
+	const { settings } = useSettings(hostId);
+	const allModels = catalog.data?.models;
+	const providers = useMemo(() => groupModelProviders(allModels ?? [], catalog.data?.configuredProviders), [allModels, catalog.data?.configuredProviders]);
+	const showProviders = providers.some((provider) => provider.id !== "");
+	const savedModel = settings?.harnessDefaults?.[agentId]?.model;
+	const initialModel = allModels?.find((model) => model.id === savedModel) ?? allModels?.find((model) => model.isDefault);
+	const initialProviderID = initialModel ? initialModel.provider?.trim() ?? "" : undefined;
+	const initialProvider = providers.find((provider) => provider.id === initialProviderID) ?? providers[0];
+	const selectedProvider = (providerChoice?.scope === scope ? providers.find((provider) => provider.id === providerChoice.id) : undefined) ?? initialProvider;
+	useEffect(() => setPage(0), [scope, selectedProvider?.id]);
 	const agent = agentLabel(agentId);
 	if (!installed || needsLogin) {
 		return <div className="space-y-3">
@@ -1359,14 +1372,24 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	const updated = data?.lastSuccessAt ?? data?.fetchedAt;
 	const busy = refreshing || data?.refreshState === "refreshing" || data?.refreshState === "queued";
 	// Long catalogs page through MODELS_PAGE_SIZE at a time; short ones show no paging controls.
-	const models = data?.models ?? [];
+	const models = (showProviders ? selectedProvider?.models : allModels) ?? [];
 	const pageCount = Math.max(1, Math.ceil(models.length / MODELS_PAGE_SIZE));
 	const currentPage = Math.min(page, pageCount - 1);
 	const pageStart = currentPage * MODELS_PAGE_SIZE;
 	const visibleModels = models.slice(pageStart, pageStart + MODELS_PAGE_SIZE);
 	const error = refreshError ?? (catalog.error instanceof Error ? catalog.error.message : undefined) ?? data?.refreshError;
 	return <div className="flex flex-col gap-3">
-		<HarnessModelDefaults key={`${hostId ?? LOCAL_HOST}:${agentId}`} agentId={agentId} agentLabel={agent} hostId={hostId} catalog={data} />
+		{showProviders ? <div className="space-y-2">
+			<h3 className="text-sm font-medium text-settings-label">{t("settings.harness.models.provider")}</h3>
+			<SettingsOptionMenu
+				aria-label={t("settings.harness.models.provider")} value={selectedProvider?.id ?? ""}
+				options={providers.map((provider) => ({ value: provider.id, label: `${provider.id || t("settings.harness.models.unknownProvider")} · ${provider.models.length}${provider.configured && !data?.stale ? ` · ${t("settings.harness.models.configuredProvider")}` : ""}` }))}
+				onChange={(id) => { setProviderChoice({ scope, id }); setPage(0); }}
+				searchable={providers.length > 5} menuAlign="start" triggerClassName="w-full justify-between"
+			/>
+			{providers.some((provider) => provider.configured) && !data?.stale ? <p className="text-xs text-settings-muted">{t("settings.harness.models.configuredProviderHint")}</p> : null}
+		</div> : null}
+		<HarnessModelDefaults key={scope} agentId={agentId} agentLabel={agent} hostId={hostId} catalog={data} selectableModels={models} />
 		<div className="flex items-center justify-between gap-3">
 			<h3 className="text-xs font-medium leading-4 text-settings-muted">{t("settings.harness.models.title")}</h3>
 			<span className="flex items-center gap-2 text-xs text-settings-muted">
