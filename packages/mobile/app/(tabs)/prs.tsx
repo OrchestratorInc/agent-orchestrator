@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, RefreshControl, SectionList, StyleSheet, View } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Theme } from "../../lib/theme";
 import { haptics } from "../../lib/haptics";
@@ -11,7 +11,7 @@ import { collectPRs, prLifecycle, prListSections, type PRListFilter } from "../.
 import { StaleBanner } from "../../lib/StaleBanner";
 import { useApp } from "../../lib/store";
 import { UnpairedState } from "../../lib/UnpairedState";
-import { usePRSummaries } from "../../lib/usePRSummaries";
+import { PR_SUMMARY_REUSE_MS, usePRSummaries } from "../../lib/usePRSummaries";
 import { useBoardFailure } from "../../lib/useBoardFailure";
 import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
 import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
@@ -38,13 +38,21 @@ export default function PRsScreen() {
 	const insets = useSafeAreaInsets();
 	const router = useRouter();
 	const { hostId: routeHostId, projectId: routeProjectId } = useLocalSearchParams<{ hostId?: string; projectId?: string }>();
-	const { hostStates, configForHost, refreshAll, activeProjectId } = useApp();
+	const { hostStates, allSessions, configForHost, refreshAll, activeProjectId } = useApp();
 	const visibleHosts = useMemo(() => routeHostId ? hostStates.filter((host) => host.hostId === routeHostId) : hostStates, [hostStates, routeHostId]);
 	const projectFilter = routeHostId ? (routeProjectId ?? "all") : hostStates.length === 1 ? activeProjectId : "all";
-	const prs = useMemo(() => visibleHosts.flatMap((host) => collectPRs(host.sessions).filter(({ session }) => projectFilter === "all" || session.projectId === projectFilter).map(({ pr, session }) => ({
-		pr,
-		session: { ...session, hostId: host.hostId, hostName: host.name } as HostedSession,
-	}))), [visibleHosts, projectFilter]);
+	const prs = useMemo(() => {
+		// Hosted rows are structurally shared across sync/notification updates.
+		// Keep those identities, and deduplicate PRs within each machine only.
+		const byHost = new Map<string, HostedSession[]>();
+		for (const session of allSessions) {
+			if (routeHostId && session.hostId !== routeHostId) continue;
+			const rows = byHost.get(session.hostId);
+			if (rows) rows.push(session);
+			else byHost.set(session.hostId, [session]);
+		}
+		return [...byHost.values()].flatMap(sessions => collectPRs(sessions).filter(({ session }) => projectFilter === "all" || session.projectId === projectFilter));
+	}, [allSessions, routeHostId, projectFilter]);
 	const configured = hostStates.length > 0;
 	const loading = visibleHosts.some((host) => host.loading);
 	const error = visibleHosts.every((host) => host.connection !== "open") ? visibleHosts.find((host) => host.error)?.error : null;
@@ -67,11 +75,20 @@ export default function PRsScreen() {
 		return config ? [{ config, sessionId: session.id }] : [];
 	}), [filtered, configForHost]);
 	const summaries = usePRSummaries(summaryTargets);
+	const lastSummaryRefresh = useRef(Date.now());
+	useFocusEffect(useCallback(() => {
+		// Retained tabs should not keep old detail indefinitely, nor restart N
+		// requests on every quick sidebar switch.
+		if (Date.now() - lastSummaryRefresh.current < PR_SUMMARY_REUSE_MS) return;
+		lastSummaryRefresh.current = Date.now();
+		summaries.reload();
+	}, [summaries.reload]));
 	const failure = useBoardFailure();
 
 	const onRefresh = async () => {
 		haptics.tap();
 		setRefreshing(true);
+		lastSummaryRefresh.current = Date.now();
 		summaries.reload();
 		await refreshAll();
 		setRefreshing(false);

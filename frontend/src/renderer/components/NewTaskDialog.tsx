@@ -145,11 +145,11 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 							renderTrigger={() => (
 								<span className="inline-flex min-w-0 items-center gap-1.5">
 									{selectedProjectId === STANDALONE_WORKSPACE_ID ? (
-										<StickyNote aria-hidden="true" className="size-[1em] shrink-0 text-muted-foreground" />
+										<StickyNote aria-hidden="true" className="size-[0.85em] shrink-0 -translate-y-px text-muted-foreground" />
 									) : selectedProjectAvatar ? (
 										<ProjectOwnerAvatar avatar={selectedProjectAvatar} className="size-[1em]" />
-									) : <StickyNote aria-hidden="true" className="size-[1em] shrink-0 text-muted-foreground" />}
-									<span className="min-w-0 truncate">{selectedProjectName}</span>
+									) : <StickyNote aria-hidden="true" className="size-[0.85em] shrink-0 -translate-y-px text-muted-foreground" />}
+									<span className="min-w-0 -translate-y-px truncate">{selectedProjectName}</span>
 								</span>
 							)}
 							renderMenuItem={(option) => {
@@ -158,7 +158,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 									<>
 										<span className="relative flex w-5 shrink-0 items-center justify-center">
 											{option.value === STANDALONE_WORKSPACE_ID ? (
-												<StickyNote aria-hidden="true" className="size-[18px]! text-muted-foreground" />
+												<StickyNote aria-hidden="true" className="size-4! -translate-y-px text-muted-foreground" />
 											) : (
 												<span className="flex items-center -space-x-2">
 													{avatars.slice(0, 2).map((avatar) => (

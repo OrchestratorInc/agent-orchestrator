@@ -479,6 +479,50 @@ func TestAClearedProviderTitleLeavesTheSessionNameAlone(t *testing.T) {
 	}
 }
 
+// The project orchestrator keeps AO's fixed label: neither its own agent naming the
+// thread nor a title request renames it.
+func TestAProjectOrchestratorKeepsItsNameWhenItsThreadIsNamed(t *testing.T) {
+	recorder := newHistoryRecorder()
+	h := &harness{st: openStore(t), conv: recorder.fakeConversation, clock: time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC)}
+	ctx := context.Background()
+	var ids atomic.Int64
+	h.svc = chatsvc.New(chatsvc.Options{
+		Store: h.st, Sessions: h.st,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: recorder}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   func() string { return fmt.Sprintf("id-%03d", ids.Add(1)) },
+		Now:     h.now,
+	})
+	ctrl, err := h.svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: testSession, ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = h.svc.Stop(context.Background(), testSession) })
+	h.ctrl = ctrl
+
+	if _, err := h.svc.SetTitle(ctx, testSession, "A Name"); !errors.Is(err, chatsvc.ErrOrchestratorRename) {
+		t.Fatalf("SetTitle err = %v, want ErrOrchestratorRename", err)
+	}
+	if titles := recorder.setTitles(); len(titles) != 0 {
+		t.Fatalf("provider was asked to set %v", titles)
+	}
+
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: "Self Chosen Name"})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return s.Conversation.ProviderTitle == "Self Chosen Name"
+	})
+	rec, ok, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !ok {
+		t.Fatalf("get session: ok=%v err=%v", ok, err)
+	}
+	if rec.DisplayName != "" {
+		t.Errorf("display name = %q, want the orchestrator left unnamed", rec.DisplayName)
+	}
+}
+
 func TestSetTitleRefusesABlankTitle(t *testing.T) {
 	recorder := newHistoryRecorder()
 	h := newHarnessWithConversation(t, recorder)

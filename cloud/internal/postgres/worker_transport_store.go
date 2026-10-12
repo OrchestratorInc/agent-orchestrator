@@ -462,6 +462,16 @@ func agentTerminalExitVerdict(ctx context.Context, tx pgx.Tx, orgID, sessionID s
 				  AND review_terminal_run.review_terminal_id = latest.id
 			)
 			  )
+			  -- Only the newest worker's own agent terminal can prove the agent
+			  -- exited. A replacement worker (a wake, a repair) registers a newer
+			  -- epoch and closes the old epoch's terminals before it has opened
+			  -- its own; that gap means "starting", not "exited", and answering
+			  -- exited there strands the browser behind TERMINAL_SESSION_EXITED.
+			  AND terminal.worker_epoch >= COALESCE((
+				SELECT MAX(connection.epoch) FROM ao_worker_connections connection
+				WHERE connection.org_id = session.org_id
+				  AND connection.session_id = session.id
+			  ), 0)
 		), EXISTS (
 			SELECT 1 FROM ao_interface_transitions transition
 			WHERE transition.org_id = session.org_id
@@ -541,7 +551,12 @@ func (s *Store) IssueTerminalTicket(
 			"threshold", unconsumedTicketThreshold,
 		)
 	}
-	if err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, _ sessionAccess) error {
+	if err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
+		// Waking a paused billed session is within the plan only. An unbilled
+		// (Coder, Docker) or running session returns before any lock.
+		if err := s.billing.forAccess(principal, access, orgID).wakeAdmissionTx(ctx, tx, orgID, sessionID, wakeFromPaused); err != nil {
+			return err
+		}
 		_, err := tx.Exec(ctx,
 			`UPDATE ao_sandboxes
 			SET desired_state = CASE WHEN desired_state = 'paused' THEN 'running' ELSE desired_state END,
@@ -556,6 +571,7 @@ func (s *Store) IssueTerminalTicket(
 						THEN now() + $4::interval
 					ELSE interactive_until
 				END,
+				last_interaction_at = CASE WHEN $3 THEN last_interaction_at ELSE now() END,
 				updated_at = now()
 			WHERE org_id = $1 AND session_id = $2`,
 			orgID, sessionID, leaseThrottled, intervalString(interactiveSessionLease),
@@ -688,6 +704,50 @@ func (s *Store) IssueTerminalTicket(
 	return token, scopes, nil
 }
 
+// AgentTerminalLive reports whether the session's coding-agent terminal is
+// open at the connected worker's epoch: the condition IssueTerminalTicket
+// waits for before minting an agent ticket. It is read-only, so the ticket
+// handler can poll it cheaply while the agent starts.
+func (s *Store) AgentTerminalLive(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID string,
+) (bool, error) {
+	var live bool
+	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, _ sessionAccess) error {
+		return tx.QueryRow(ctx,
+			`SELECT EXISTS (
+				SELECT 1
+				FROM ao_sessions session
+				JOIN ao_sandboxes sandbox
+				  ON sandbox.org_id = session.org_id
+				 AND sandbox.session_id = session.id
+				JOIN ao_worker_connections worker
+				  ON worker.org_id = session.org_id
+				 AND worker.session_id = session.id
+				 AND worker.disconnected_at IS NULL
+				JOIN ao_terminal_sessions terminal
+				  ON terminal.org_id = session.org_id
+				 AND terminal.session_id = session.id
+				 AND terminal.worker_epoch = worker.epoch
+				WHERE session.org_id = $1 AND session.id = $2
+				  AND NOT session.is_terminated
+				  AND sandbox.desired_state = 'running'
+				  AND terminal.kind = 'agent'
+				  AND terminal.state IN ('opening', 'open')
+				  AND terminal.expires_at > now()
+				  AND NOT EXISTS (
+					SELECT 1 FROM ao_review_runs review_terminal_run
+					WHERE review_terminal_run.org_id = terminal.org_id
+					  AND review_terminal_run.review_terminal_id = terminal.id
+				  )
+			)`,
+			orgID, sessionID,
+		).Scan(&live)
+	})
+	return live, err
+}
+
 // RefreshTerminalInteraction extends the short wake lease after actual user
 // input. Merely opening or retaining either terminal stream is not activity.
 func (s *Store) RefreshTerminalInteraction(
@@ -699,6 +759,7 @@ func (s *Store) RefreshTerminalInteraction(
 		tag, err := tx.Exec(ctx,
 			`UPDATE ao_sandboxes
 			SET interactive_until = now() + $1::interval,
+				last_interaction_at = now(),
 				reconcile_after = now(), updated_at = now()
 			WHERE org_id = $2 AND session_id = $3
 			  AND desired_state = 'running'
@@ -1082,6 +1143,14 @@ func (s *Store) queueTerminalRequest(
 		// mirrors the wake in IssueTerminalTicket for the in-session case where the
 		// box paused underneath an already-open terminal.
 		if kind == "terminal.input" || kind == "terminal.resize" {
+			// A billed session beyond its plan is not woken by a keystroke; it
+			// stays paused (the plan refusal is shown when the terminal is
+			// opened). This runs before anything is inserted, so the plan
+			// check may take the organization lock.
+			wake, err := s.billing.messageWakeTx(ctx, tx, terminal.OrgID, terminal.SessionID, false)
+			if err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx,
 				`UPDATE ao_sandboxes
 				SET desired_state = CASE WHEN desired_state = 'paused' THEN 'running' ELSE desired_state END,
@@ -1090,7 +1159,7 @@ func (s *Store) queueTerminalRequest(
 					interactive_until = now() + $3::interval,
 					updated_at = now()
 				WHERE org_id = $1 AND session_id = $2
-				  AND desired_state IN ('running', 'paused')
+				  AND (desired_state = 'running' OR ($5 AND desired_state = 'paused'))
 				  AND (
 					desired_state = 'paused'
 					OR interactive_until IS NULL
@@ -1099,6 +1168,7 @@ func (s *Store) queueTerminalRequest(
 				terminal.OrgID, terminal.SessionID,
 				intervalString(interactiveSessionLease),
 				intervalString(interactiveSessionLease-interactionRefreshThrottle),
+				wake,
 			); err != nil {
 				return err
 			}

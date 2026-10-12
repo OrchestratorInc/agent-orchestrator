@@ -18,7 +18,7 @@ import { appI18n } from "../../i18n";
 import type { ConversationMessage, ConversationSnapshot } from "../../types/conversation";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
-import type { WorkspaceSession } from "../../types/workspace";
+import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
 import {
 	getChatComposerMutation,
 	getChatInlineEditMutation,
@@ -866,6 +866,28 @@ describe("ChatWorkspace timeline", () => {
 
 		await waitFor(() => expect(renameSessionMock).toHaveBeenCalledWith(chatSession.id, "Focused review"));
 		expect(onSessionRenamed).toHaveBeenCalledOnce();
+	});
+
+	it("does not offer rename on the project orchestrator's chat tab", async () => {
+		const user = userEvent.setup();
+		const onSessionRenamed = vi.fn().mockResolvedValue(undefined);
+		render(
+			<ChatWorkspace
+				snapshot={chatFixture}
+				session={{ ...chatSession, id: "ao-demo-orchestrator", kind: "orchestrator" }}
+				sessionRole="orchestrator"
+				onSessionRenamed={onSessionRenamed}
+			/>,
+		);
+
+		const tab = screen.getByRole("tab", { name: "Orchestrator · Codex · Working" });
+		await user.dblClick(tab);
+		fireEvent.contextMenu(tab);
+
+		expect(screen.queryByRole("textbox", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(renameSessionMock).not.toHaveBeenCalled();
+		expect(onSessionRenamed).not.toHaveBeenCalled();
 	});
 
 	it("keeps titlebar clearance attached throughout sidebar expansion and collapse", () => {
@@ -1926,6 +1948,40 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText(message)).toBeInTheDocument();
 	});
 
+	it("offers sample artifact requests in an empty artifact session, fills the composer with one, and hides them", async () => {
+		const user = userEvent.setup();
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, workspaceId: STANDALONE_WORKSPACE_ID, requestedOutput: "artifact" }} />);
+
+		expect(screen.getByRole("heading", { name: "What do you want to create?" })).toBeInTheDocument();
+		expect(screen.getByText("Describe the page or document you want")).toBeInTheDocument();
+		const prompts = within(screen.getByRole("list", { name: "Sample artifact requests" })).getAllByRole("button");
+		expect(prompts.map((prompt) => prompt.textContent)).toEqual([
+			"Write a one-page plan for a new feature",
+			"Build an HTML page comparing three options side by side",
+			"Turn my rough notes into a polished Markdown document",
+		]);
+
+		await user.click(prompts[1]);
+		await waitFor(() => expect(screen.getByLabelText("Message the agent")).toHaveTextContent("Build an HTML page comparing three options side by side"));
+		expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+		expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument();
+
+	});
+
+	it("keeps the ordinary welcome without artifact suggestions for other sessions", () => {
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={chatSession} />);
+
+		expect(screen.getByRole("heading", { name: "What do you want to work on?" })).toBeInTheDocument();
+		expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument();
+	});
+
+	it("keeps the sample artifact requests to Scratchpad sessions", () => {
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, requestedOutput: "artifact" }} />);
+
+		expect(screen.getByRole("heading", { name: "What do you want to create?" })).toBeInTheDocument();
+		expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument();
+	});
+
 	it("waits for provider settings before showing composer dropdowns", () => {
 		const props = {
 			snapshot: chatFixtureEmpty,
@@ -1985,7 +2041,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(resume).toHaveBeenCalledOnce();
 	});
 
-	it("shows connecting during the controller gap, then restores the composer when ready", () => {
+	it("shows connecting during the controller gap, then restores the composer when ready", async () => {
 		const { rerender } = render(
 			<ChatWorkspace
 				snapshot={{
@@ -2001,15 +2057,71 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
 		expect(screen.getByTestId("chat-conversation-panel")).toHaveAttribute("inert");
-		// Progress is the topbar spinner; the composer stays empty rather than
-		// painting a second "Connecting…" / "Switching…" label over the editor.
 		expect(screen.queryByText("Connecting to the agent…")).not.toBeInTheDocument();
 		expect(screen.queryByText("The controller is not connected")).not.toBeInTheDocument();
+		expect(screen.getByText("Starting the chat agent")).toBeInTheDocument();
+		expect(document.querySelector(".cursor-chat-composer[data-starting]")).not.toBeNull();
 		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
 
+		rerender(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "connecting" } }}
+				controllerTransitioning
+			/>,
+		);
+		expect(await screen.findByText("Restoring your conversation")).toBeInTheDocument();
+
 		rerender(<ChatWorkspace snapshot={chatFixtureEmpty} />);
-		expect(screen.queryByText("Connecting to the agent…")).not.toBeInTheDocument();
+		expect(screen.queryByText("Restoring your conversation")).not.toBeInTheDocument();
+		expect(document.querySelector(".cursor-chat-composer[data-starting]")).toBeNull();
 		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true");
+	});
+
+	it("docks the composer at the bottom while arriving in a chat that already has messages", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }}
+				session={{ ...chatSession, lastUserMessageAt: "2026-10-09T00:00:00Z" }}
+				controllerTransitioning
+			/>,
+		);
+		const placement = document.querySelector("[data-composer-placement]");
+		expect(placement).toHaveAttribute("data-composer-placement", "dock");
+		expect(placement).toHaveClass("justify-end");
+	});
+
+	it("fades the transcript in only when messages load during an interface switch", () => {
+		const loaded = { ...chatFixtureEmpty, items: [humanMessage("hello")] };
+		const navigation = render(<ChatWorkspace snapshot={chatFixtureEmpty} />);
+		navigation.rerender(<ChatWorkspace snapshot={loaded} />);
+		expect(document.querySelector(".chat-transcript-reveal")).toBeNull();
+		navigation.unmount();
+		const arrival = render(<ChatWorkspace snapshot={chatFixtureEmpty} session={chatSession} controllerTransitioning />);
+		arrival.rerender(<ChatWorkspace snapshot={loaded} session={chatSession} controllerTransitioning />);
+		expect(document.querySelector(".chat-transcript-reveal")).not.toBeNull();
+	});
+
+	it("centers the composer while arriving in a chat with no messages yet", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }}
+				session={{ ...chatSession, lastUserMessageAt: undefined }}
+				controllerTransitioning
+			/>,
+		);
+		expect(document.querySelector("[data-composer-placement]")).toHaveAttribute("data-composer-placement", "center");
+	});
+
+	it("keeps the composer quiet while leaving chat for the terminal", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				controllerTransitioning
+				newWorkDisabled
+			/>,
+		);
+		expect(screen.queryByText("Starting the chat agent")).not.toBeInTheDocument();
+		expect(document.querySelector(".cursor-chat-composer[data-starting]")).toBeNull();
 	});
 
 	it("keeps history readable while a stopped agent resumes after opening", () => {

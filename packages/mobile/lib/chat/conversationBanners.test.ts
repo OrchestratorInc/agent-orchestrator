@@ -25,7 +25,7 @@ describe("conversation banners", () => {
 	});
 
 	it("uses the desktop's short headlines", () => {
-		expect(reauthBanner("t", "codex login")).toMatchObject({ title: "Sign in again to keep going", body: "Run “codex login” on the AO host, then send again." });
+		expect(reauthBanner("t", "codex login")).toMatchObject({ title: "Sign in again to keep going", body: "Run “codex login” on the Orchestrator host, then send again." });
 		expect(threadBanner("system_error")?.title).toBe("The agent's thread hit an internal error");
 		expect(threadBanner("closed")?.title).toBe("The agent closed this thread");
 		expect(threadBanner("active")).toBeUndefined();

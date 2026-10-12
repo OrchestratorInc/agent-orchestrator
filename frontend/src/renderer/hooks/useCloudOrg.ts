@@ -1,12 +1,21 @@
 /**
  * Resolves the organization all renderer control-plane calls are scoped to:
- * the first org from GET /me, or — for a user with none — a freshly created
- * one (POST /orgs) named from the account. First-org is a deliberate v0
- * simplification: the UI has no org switcher yet.
+ * the active org from GET /me (selectActiveOrganization), or, for a user with
+ * none, a freshly created one (POST /orgs) named from the account. The UI has
+ * no org switcher yet.
+ *
+ * /me exposes no active-org id and the renderer never sees the WorkOS token.
+ * The control plane scopes /me `organizations` to the token's WorkOS org plus
+ * orgs with no WorkOS link (a personal org), oldest first, and gives each its
+ * own offering. selectActiveOrganization prefers the org whose offering
+ * includes coder (the WorkOS team org) over a personal org, else the first.
+ * lib/cloud-orchestrator.ts applies the same rule. If /me gains an active-org
+ * id, prefer it here.
  */
 
 import { useQuery } from "@tanstack/react-query";
 import type { CloudCpOrganization, CloudCpUser } from "../lib/cloud-cp";
+import { selectActiveOrganization } from "../lib/cloud-offering";
 import { useCloudCp } from "./useCloudCp";
 
 export const cloudOrgQueryKey = ["cloud-org"] as const;
@@ -45,8 +54,8 @@ export function useCloudOrg(): UseCloudOrgResult {
 		retry: 1,
 		queryFn: async (): Promise<CloudCpOrganization> => {
 			const me = await client.me();
-			const first = me.organizations[0];
-			if (first !== undefined) return first;
+			const active = selectActiveOrganization(me.organizations, me.activeOrganizationId);
+			if (active !== undefined) return active;
 			const created = await client.createOrganization({
 				displayName: orgDisplayNameForAccount(me.user),
 			});

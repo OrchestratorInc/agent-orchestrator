@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardPR, DashboardSession } from "./api";
 import {
+	absorbNewHosts,
 	boardZoneOf,
 	eventAtOf,
 	groupSessions,
@@ -275,6 +276,14 @@ describe("held order", () => {
 	const a = session({ id: "a", lastEventAt: "2026-08-09T10:00:00Z" });
 	const b = session({ id: "b", lastEventAt: "2026-08-09T09:00:00Z" });
 	const c = session({ id: "c", lastEventAt: "2026-08-09T08:00:00Z" });
+	it("reuses an unchanged snapshot but accepts rank, event, pin, host and removal changes", () => {
+		const snapshot = snapshotOrder([a, b], key);
+		expect(snapshotOrder([{ ...a, displayName: "New title" }, b], key, snapshot)).toBe(snapshot);
+		for (const ordered of [[b, a], [{ ...a, lastEventAt: "later" }, b], [{ ...a, isPinned: true }, b], [{ ...a, hostId: "mac" }, b], [a], []]) {
+			expect(snapshotOrder(ordered, key, snapshot)).not.toBe(snapshot);
+			expect(snapshotOrder(ordered, key, snapshot)).toEqual(snapshotOrder(ordered, key));
+		}
+	});
 
 	// The point of the snapshot: news does not move rows under a thumb.
 	it("keeps the shown order when a session has news, and counts it", () => {
@@ -296,6 +305,31 @@ describe("held order", () => {
 
 	it("counts nothing when nothing changed", () => {
 		expect(updatedSince(snapshotOrder([a, b, c], key), [a, b, c], key)).toBe(0);
+	});
+
+	it("baselines a newly loaded host instead of holding its existing workers as news", () => {
+		const local = { ...a, hostId: "mac" };
+		const remote = { ...b, hostId: "dev" };
+		const snapshot = snapshotOrder([local], key);
+		expect(updatedSince(snapshot, [local, remote], key)).toBe(0);
+		const hydrated = absorbNewHosts(snapshot, [local, remote], key);
+		expect(holdOrder(hydrated, [remote, local], key).map((s) => s.id)).toEqual(["a", "b"]);
+		expect(shouldResnapshot(hydrated, [local, remote], false, key)).toBe(false);
+		expect(updatedSince(hydrated, [local, { ...remote, lastEventAt: "2026-08-09T11:00:00Z" }], key)).toBe(1);
+	});
+
+	it("keeps news held when another host's first workers arrive", () => {
+		const local = [{ ...a, hostId: "mac" }, { ...b, hostId: "mac" }, { ...c, hostId: "mac" }];
+		const snapshot = snapshotOrder(local, key);
+		const cNews = { ...local[2], lastEventAt: "2026-08-09T11:00:00Z" };
+		const remote = { ...session({ id: "r", lastEventAt: "2026-08-09T09:30:00Z" }), hostId: "dev" };
+		// Fresh order: c's news on top, the remote worker between a and b.
+		const fresh = [cNews, local[0], remote, local[1]];
+		const absorbed = absorbNewHosts(snapshot, fresh, key);
+		expect(holdOrder(absorbed, fresh, key).map((s) => s.id)).toEqual(["a", "r", "b", "c"]);
+		expect(updatedSince(absorbed, fresh, key)).toBe(1);
+		expect(shouldResnapshot(absorbed, fresh, true, key)).toBe(false);
+		expect(absorbNewHosts(absorbed, fresh, key)).toBe(absorbed);
 	});
 
 	it("absorbs news that did not move a row, so a later pin ranks most recent first", () => {

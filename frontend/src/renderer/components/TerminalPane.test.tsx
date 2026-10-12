@@ -494,6 +494,30 @@ describe("TerminalPane empty states", () => {
 		}
 	});
 
+	it("shows the boot spinner instead of the ended strip while an interface switch starts the terminal", () => {
+		const previousAO = window.ao;
+		window.ao = {} as typeof window.ao;
+		terminalState.value = "exited";
+		try {
+			render(
+				<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+					<TerminalPane
+						booting
+						daemonReady
+						fontSize={12}
+						session={worker}
+						terminalTarget={{ kind: "worker" }}
+						theme="dark"
+					/>
+				</QueryClientProvider>,
+			);
+			expect(screen.getByRole("status")).toHaveTextContent("Preparing the agent");
+			expect(screen.queryByText("Terminal ended")).not.toBeInTheDocument();
+		} finally {
+			window.ao = previousAO;
+		}
+	});
+
 	it("refreshes cloud review state without showing a false terminal-ended banner", async () => {
 		const previousAO = window.ao;
 		window.ao = {} as typeof window.ao;
@@ -590,12 +614,7 @@ describe("TerminalPane empty states", () => {
 	it("shows a startup message when a selected session has no terminal handle yet", () => {
 		const view = renderPane(worker);
 		try {
-			expect(screen.getByText("Starting session")).toBeInTheDocument();
-			expect(
-				screen.getByText(
-					"Preparing the worker terminal. This can take a moment while AO creates the workspace and starts the agent.",
-				),
-			).toBeInTheDocument();
+			expect(screen.getByRole("status")).toHaveTextContent("Preparing the agent");
 			expect(screen.queryByText("No session selected. Pick a worker to attach its terminal.")).not.toBeInTheDocument();
 		} finally {
 			view.restore();
@@ -605,12 +624,8 @@ describe("TerminalPane empty states", () => {
 	it("shows orchestrator-specific startup copy for a pending orchestrator terminal", () => {
 		const view = renderPane(orchestrator);
 		try {
-			expect(screen.getByText("Starting session")).toBeInTheDocument();
-			expect(
-				screen.getByText(
-					"Preparing the orchestrator terminal. This can take a moment while AO creates the workspace and starts the agent.",
-				),
-			).toBeInTheDocument();
+			expect(screen.getByRole("status")).toHaveTextContent("Preparing the orchestrator");
+			console.log("HTMLDUMP", screen.getByRole("status").outerHTML);
 			expect(screen.queryByText(/worker terminal/i)).not.toBeInTheDocument();
 		} finally {
 			view.restore();
@@ -798,7 +813,7 @@ describe("TerminalPane replay cover", () => {
 		replaySettled.value = false;
 		const view = renderPane(worker);
 		try {
-			expect(screen.getByText("Starting session")).toBeInTheDocument();
+			expect(screen.getByRole("status")).toBeInTheDocument();
 			expect(screen.queryByTestId("terminal-replay-cover")).not.toBeInTheDocument();
 		} finally {
 			view.restore();

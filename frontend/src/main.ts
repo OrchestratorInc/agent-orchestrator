@@ -15,6 +15,7 @@ import {
 	net,
 	nativeImage,
 	Notification as ElectronNotification,
+	powerMonitor,
 	protocol,
 	shell,
 	session,
@@ -84,12 +85,14 @@ import { toggleAppDevTools } from "./main/app-devtools";
 import { attachAppShortcuts } from "./main/app-shortcuts";
 import {
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
+	OPEN_SETTINGS_SHORTCUT_CHANNEL,
 	SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL,
 	SET_TERMINAL_FOCUSED_CHANNEL,
 	type KeybindingOverrides,
 } from "./shared/shortcuts";
 import { createTrayController, type TrayController } from "./main/tray";
 import { createTrayLifecycle, isTrayEnabled } from "./main/tray-lifecycle";
+import { createDesktopQuitController } from "./main/desktop-quit";
 import {
 	TRAY_RENDERER_READY_CHANNEL,
 	TRAY_SET_ATTENTION_STATE_CHANNEL,
@@ -179,6 +182,7 @@ import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenu
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
 import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
+import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
 import { AGENT_SWITCH_VISIBILITY_IPC_CHANNEL } from "./shared/agent-switch-observability";
@@ -313,6 +317,7 @@ let daemonRestartAfterExitProcess: ChildProcess | null = null;
 let daemonStartPromise: Promise<DaemonStatus> | null = null;
 let daemonStartEpoch = 0;
 let daemonStatus: DaemonStatus = { state: "stopped" };
+let daemonAttachmentGeneration = 0;
 let daemonOutput = "";
 let browserViewHost: BrowserViewHost | null = null;
 let browserProfileIpc: BrowserProfileIpc | null = null;
@@ -323,12 +328,33 @@ let browserQuitCleanupPromise: Promise<void> | null = null;
 let browserCleanupComplete = false;
 let browserQuitRequested = false;
 let createWindowPromise: Promise<void> | null = null;
+const desktopQuit = createDesktopQuitController({
+	platform: process.platform,
+	hasTray: () => trayController !== null && !browserQuitRequested,
+	isUpdateRestartRequested,
+	hasWindow: () => mainWindow !== null || createWindowPromise !== null,
+	closeWindow: () => {
+		if (mainWindow) mainWindow.close();
+		else if (createWindowPromise) {
+			void createWindowPromise
+				.catch((error) => console.error("failed to close pending main window:", error))
+				.then(() => {
+					// No window came of it: nothing will emit "closed", so settle now.
+					if (mainWindow) mainWindow.close();
+					else desktopQuit.windowClosed();
+				});
+		}
+	},
+	hideDock: () => app.dock?.hide(),
+	quit: () => app.quit(),
+});
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
 let browserRuntimeLinkIdentity: BrowserRuntimeIdentity | null = null;
 let keybindingOverrides: KeybindingOverrides = {};
 let keybindingRecordingActive = false;
 let closeShellTerminalShortcutEnabled = false;
 let terminalFocused = false;
+let terminalFontSizeFocused = false;
 let chatDraftRisks: ChatDraftBoundaryKind[] = [];
 let chatDraftDialog: ChatDraftDialogCopy | undefined;
 let chatDraftQuitConfirmed = false;
@@ -514,12 +540,69 @@ function focusMainWindow(): void {
 	mainWindow.focus();
 }
 
+let sideClaimedDaemonPID: number | undefined;
+let sideLaunchState: { appRunId: string; sides: unknown[]; numbers?: Record<string, number> } | undefined;
+let sideStateTimer: ReturnType<typeof setInterval> | undefined;
+let sideStatePolling = false;
+let sideStateRequest = 0;
+let sideStateApplied = 0;
+const closedSideChats = new Set<string>();
+function rememberSideLaunchState(state: { appRunId: string; sides: unknown[]; numbers?: Record<string, number> }): void {
+	sideLaunchState = {
+		...state,
+		sides: state.sides.filter((record) => {
+			const id = (record as { side?: { id?: string } })?.side?.id;
+			return typeof id === "string" && ((record as { cleanupOnly?: boolean }).cleanupOnly || !closedSideChats.has(id));
+		}),
+	};
+}
+
 function setDaemonStatus(nextStatus: DaemonStatus): void {
+	if (nextStatus.state !== "ready" || daemonStatus.state !== "ready" || nextStatus.port !== daemonStatus.port || nextStatus.pid !== daemonStatus.pid) daemonAttachmentGeneration++;
 	if (nextStatus.state !== "ready") disposeBrowserRuntimeLink();
+	if (nextStatus.state !== "ready") {
+		sideClaimedDaemonPID = undefined;
+		if (sideStateTimer) clearInterval(sideStateTimer);
+		sideStateTimer = undefined;
+	}
 	daemonStatus = nextStatus;
 	getShellWebContents()?.send("daemon:status", daemonStatus);
 	if (nextStatus.state === "ready" && browserViewHost) {
 		establishBrowserRuntimeLink();
+	}
+	const daemonIdentity = nextStatus.pid ?? daemonProcess?.pid;
+	if (nextStatus.state === "ready" && nextStatus.port && daemonIdentity && sideClaimedDaemonPID !== daemonIdentity) {
+		sideClaimedDaemonPID = daemonIdentity;
+		const sideBase = `http://127.0.0.1:${nextStatus.port}/api/v1/side-chats/launch`;
+		void fetch(`${sideBase}/claim`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ appRunId }),
+		}).then(async (response) => {
+			if (!response.ok) throw new Error(`side launch claim failed: ${response.status}`);
+			if (sideLaunchState?.appRunId === appRunId && (sideLaunchState.sides.length > 0 || Object.keys(sideLaunchState.numbers ?? {}).length > 0)) {
+				const restored = await fetch(`${sideBase}/state`, {
+					method: "POST", headers: { "content-type": "application/json" },
+					body: JSON.stringify(sideLaunchState),
+				});
+				if (!restored.ok) throw new Error(`side chat recovery failed: ${restored.status}`);
+			}
+			const readState = async () => {
+				if (sideStatePolling || sideClaimedDaemonPID !== daemonIdentity) return;
+				sideStatePolling = true;
+				const request = ++sideStateRequest;
+				try {
+					const result = await fetch(`${sideBase}/state?appRunId=${encodeURIComponent(appRunId)}`);
+					if (result.ok) {
+						const state = await result.json() as { appRunId: string; sides: unknown[]; numbers?: Record<string, number> };
+						if (sideClaimedDaemonPID === daemonIdentity && state.appRunId === appRunId && request > sideStateApplied) { sideStateApplied = request; rememberSideLaunchState(state); }
+					}
+				} catch (error) { console.warn("AO: side chat memory snapshot failed", error); }
+				finally { sideStatePolling = false; }
+			};
+			await readState();
+			if (sideClaimedDaemonPID === daemonIdentity) sideStateTimer = setInterval(() => void readState(), 500);
+		}).catch((error) => { if (sideClaimedDaemonPID === daemonIdentity) sideClaimedDaemonPID = undefined; console.warn("AO: side chat launch claim failed", error); });
 	}
 }
 
@@ -765,16 +848,20 @@ async function createWindowInternal(): Promise<void> {
 	});
 
 	shellWebContents.on("will-prevent-unload", (event) => {
-		if (chatDraftRisks.length === 0) return;
 		if (
-			chatDraftQuitConfirmed ||
-			chatDraftWindowCloseConfirmed ||
-			confirmUnsafeChatDraftLeave(chatDraftRisks, (options) => dialog.showMessageBoxSync(options), chatDraftDialog)
+			chatDraftRisks.length > 0 &&
+			(chatDraftQuitConfirmed ||
+				chatDraftWindowCloseConfirmed ||
+				confirmUnsafeChatDraftLeave(chatDraftRisks, (options) => dialog.showMessageBoxSync(options), chatDraftDialog))
 		) {
 			// Electron uses preventDefault here to ignore beforeunload and continue
-			// leaving. Doing nothing honors the renderer's request to stay.
+			// leaving.
 			event.preventDefault();
+			return;
 		}
+		// Doing nothing honors the renderer's request to stay, so a quit's close
+		// did not happen and AO keeps its Dock icon.
+		desktopQuit.windowCloseCanceled();
 	});
 
 	mainWindow.on("close", (event) => {
@@ -785,6 +872,7 @@ async function createWindowInternal(): Promise<void> {
 			chatDraftDialog,
 		);
 		if (preventClose) {
+			desktopQuit.windowCloseCanceled();
 			event.preventDefault();
 			return;
 		}
@@ -810,6 +898,7 @@ async function createWindowInternal(): Promise<void> {
 			void toggleAppDevTools(browserViewHost, getShellWebContents);
 		},
 		() => terminalFocused,
+		() => terminalFontSizeFocused,
 	);
 
 	browserViewHost = createBrowserViewHost({
@@ -912,9 +1001,11 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.on("render-process-gone", () => {
 		keybindingRecordingActive = false;
 		terminalFocused = false;
+		terminalFontSizeFocused = false;
 	});
 	shellWebContents.on("did-start-loading", () => {
 		terminalFocused = false;
+		terminalFontSizeFocused = false;
 		trayLifecycle.clear();
 	});
 	shellWebContents.on("render-process-gone", () => trayLifecycle.clear());
@@ -940,11 +1031,14 @@ async function createWindowInternal(): Promise<void> {
 		// the next bounce skip attaching one to the replacement window.
 		cancelDockBounce();
 		trayLifecycle.clearPendingTarget();
+		desktopQuit.windowClosed();
 	});
 }
 
 function createWindow(): Promise<void> {
 	if (createWindowPromise) return createWindowPromise;
+	// A background quit hid the Dock icon; bring it back with the window.
+	void app.dock?.show();
 	const pending = createWindowInternal();
 	createWindowPromise = pending;
 	void pending.then(
@@ -1046,6 +1140,7 @@ const editorHandoff = createEditorHandoff({
 		const error = await shell.openPath(workspacePath);
 		if (error) throw new Error(error);
 	},
+	copyText: (text) => clipboard.writeText(text),
 	logError: (message, error) => console.error(message, error),
 });
 
@@ -1325,7 +1420,7 @@ function daemonIdentityError(launch: DaemonLaunchSpec, probe: DaemonProbe): stri
 /**
  * Establish (or re-establish) the OS-native liveness link to the daemon's
  * supervisor socket. Holding this connection keeps the daemon alive: when
- * Electron exits for any reason (Cmd+Q, crash, SIGKILL), the OS closes the fd
+ * Electron exits completely (tray quit, crash, SIGKILL), the OS closes the fd
  * and the daemon detects EOF, then self-stops after its ~5s grace period.
  *
  * Called unconditionally on the spawn path (we always own that daemon).
@@ -1849,7 +1944,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 		if (portConfirmed || daemonProcess !== child || daemonStoppingProcess === child) return;
 		portConfirmed = true;
 		stopDiscovery();
-		setDaemonStatus({ state: "ready", port });
+		setDaemonStatus({ state: "ready", port, pid: child.pid });
 
 		// Establish the OS-native liveness link on the spawn path (we own this
 		// daemon). Holding the connection keeps the daemon alive; when Electron
@@ -2030,6 +2125,7 @@ async function startDaemonForRestart(): Promise<DaemonStatus> {
 async function restartDaemon(): Promise<DaemonStatus> {
 	const child = daemonProcess;
 	if (!child) return startDaemonForRestart();
+	await captureSideChatState().catch((error) => console.warn("AO: pre-restart side snapshot failed", error));
 
 	const exited = new Promise<boolean>((resolve) => {
 		let settled = false;
@@ -2075,6 +2171,35 @@ ipcMain.handle("daemon:restart", async () => {
 		return reportDaemonRestartFailure(error);
 	}
 });
+async function captureSideChatState(closedSideId?: string, cancelClose = false): Promise<void> {
+	if (closedSideId) {
+		if (cancelClose) closedSideChats.delete(closedSideId); else closedSideChats.add(closedSideId);
+		if (sideLaunchState) rememberSideLaunchState(sideLaunchState);
+	}
+	if (daemonStatus.state !== "ready" || !daemonStatus.port) return;
+	const daemonIdentity = sideClaimedDaemonPID;
+	const request = ++sideStateRequest;
+	const result = await fetch(
+		`http://127.0.0.1:${daemonStatus.port}/api/v1/side-chats/launch/state?appRunId=${encodeURIComponent(appRunId)}`,
+		{ signal: AbortSignal.timeout(5000) },
+	);
+	if (!result.ok) throw new Error(`side chat capture failed: ${result.status}`);
+	const state = await result.json() as { appRunId: string; sides: unknown[]; numbers?: Record<string, number> };
+	if (daemonIdentity === sideClaimedDaemonPID && state.appRunId === appRunId && request > sideStateApplied) {
+		sideStateApplied = request;
+		rememberSideLaunchState(state);
+	}
+}
+
+ipcMain.handle("sideChats:capture", async (event, closedSideId?: string, cancelClose = false) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted side chat capture request.");
+	if (closedSideId !== undefined && (typeof closedSideId !== "string" || closedSideId.length > 255)) {
+		throw new Error("Invalid side chat identity.");
+	}
+	if (typeof cancelClose !== "boolean") throw new Error("Invalid close cancellation.");
+	return captureSideChatState(closedSideId, cancelClose);
+});
+
 ipcMain.handle("editorHandoff:getState", (event, sessionId: string) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.getState(typeof sessionId === "string" ? sessionId : "");
@@ -2082,6 +2207,10 @@ ipcMain.handle("editorHandoff:getState", (event, sessionId: string) => {
 ipcMain.handle("editorHandoff:open", (event, input) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.open(input && typeof input === "object" ? input : { sessionId: "" });
+});
+ipcMain.handle("editorHandoff:copyWorkspacePath", (event, sessionId: string) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	return editorHandoff.copyWorkspacePath(typeof sessionId === "string" ? sessionId : "");
 });
 ipcMain.handle("app:getVersion", () => app.getVersion());
 ipcMain.handle("app:openExternal", async (_event, url: string) => {
@@ -2150,9 +2279,10 @@ ipcMain.on(SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, (_event, enabled: 
 	closeShellTerminalShortcutEnabled = enabled === true;
 });
 
-ipcMain.on(SET_TERMINAL_FOCUSED_CHANNEL, (event, focused: unknown) => {
+ipcMain.on(SET_TERMINAL_FOCUSED_CHANNEL, (event, focused: unknown, handlesFontSize: unknown) => {
 	if (event.sender !== getShellWebContents() || typeof focused !== "boolean") return;
 	terminalFocused = focused;
+	terminalFontSizeFocused = focused && handlesFontSize === true;
 });
 
 ipcMain.on(SET_CHAT_DRAFT_RISK_CHANNEL, (event, risks: unknown, dialogCopy: unknown) => {
@@ -2306,6 +2436,9 @@ registerRemotesIpc(ipcMain, {
 		if (!await getCloudSession(cloudDataDir())) throw new Error("Sign in to AO Cloud to use remote hosts.");
 	},
 	getAccountId: async () => (await getCloudSession(cloudDataDir()))?.user.id ?? "",
+	localIdentity: createLocalHostIdentity(() => daemonStatus.state === "ready" && daemonStatus.port
+		? { port: daemonStatus.port, pid: daemonStatus.pid, generation: daemonAttachmentGeneration }
+		: null),
 });
 
 ipcMain.handle("app:chooseDirectory", async (_event, input?: string | { title?: string; defaultPath?: string }) => {
@@ -2526,7 +2659,7 @@ ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAnd
 // already off on the failed path, so quitting can't apply a half-prepared build.
 ipcMain.handle("updates:relaunch", () => {
 	app.relaunch();
-	app.quit();
+	desktopQuit.quitCompletely();
 });
 
 // Whether THIS boot is a post-update relaunch, so the startup loader can show
@@ -2750,6 +2883,13 @@ function focusCloudWindow(): void {
 
 async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	focusCloudWindow();
+	// Stripe Checkout and the Customer Portal return here (via the control
+	// plane's /billing/return page): open Settings on Billing, which re-reads
+	// the plan when it mounts.
+	if (isBillingDeepLink(url)) {
+		getShellWebContents()?.send(OPEN_SETTINGS_SHORTCUT_CHANNEL, "billing");
+		return;
+	}
 	try {
 		const session = await handleCloudDeepLink(url, cloudDataDir());
 		if (!session) return;
@@ -2757,6 +2897,15 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	} catch (error) {
 		console.error("WorkOS callback failed:", error);
 		await showCloudSignInFailure(error);
+	}
+}
+
+function isBillingDeepLink(raw: string): boolean {
+	try {
+		const url = new URL(raw);
+		return url.protocol === "ao-app:" && url.hostname === "billing";
+	} catch {
+		return false;
 	}
 }
 
@@ -3002,14 +3151,20 @@ app.whenReady().then(async () => {
 		: { ...DEFAULT_UI_SETTINGS };
 	soundNotificationsEnabled = initialUiSettings.soundNotificationsEnabled;
 	terminalShellPreference = initialUiSettings.terminalShell;
-	if (isTrayEnabled(process.platform, app.isPackaged, app.getVersion())) {
+	if (browserQuitRequested) return;
+	if (isTrayEnabled(process.platform)) {
 		trayController = createTrayController({
 			focusWindow: focusMainWindow,
 			openSession: trayLifecycle.openSession,
+			quitCompletely: desktopQuit.quitCompletely,
 			locale: initialUiSettings.locale,
 		});
 	}
+	if (process.platform === "darwin") {
+		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());
+	}
 	await createWindow();
+	if (browserQuitRequested) return;
 	void startDaemon();
 	initAutoUpdates();
 
@@ -3037,14 +3192,16 @@ app.whenReady().then(async () => {
 
 // Daemon teardown is now handled via the OS-native supervisor socket: the daemon
 // self-stops ~5s after the last client (this process) drops its connection.
-// The supervisorLink fd is NOT explicitly closed on quit; the OS closes it when
-// the process exits for any reason (Cmd+Q, crash, SIGKILL). Sessions survive.
+// Ordinary macOS Quit closes the window and leaves the Dock; the tray stays.
+// Full exit drops the supervisor socket, stopping the app-owned daemon after
+// its grace period. Sessions survive.
 setUpdateRestartFailureHandler(() => {
 	if (!browserQuitRequested) focusMainWindow();
 });
 
 let updateQuitDeadlineArmed = false;
 app.on("before-quit", (event) => {
+	if (desktopQuit.handleBeforeQuit(event)) return;
 	if (chatDraftRisks.length > 0 && !chatDraftQuitConfirmed) {
 		event.preventDefault();
 		if (confirmUnsafeChatDraftLeave(
@@ -3054,6 +3211,8 @@ app.on("before-quit", (event) => {
 		)) {
 			chatDraftQuitConfirmed = true;
 			app.quit();
+		} else {
+			desktopQuit.cancelQuit();
 		}
 		return;
 	}
@@ -3064,10 +3223,22 @@ app.on("before-quit", (event) => {
 	if (!browserCleanupComplete) {
 		event.preventDefault();
 		if (!browserQuitCleanupPromise) {
+			const retireSides = async () => {
+				if (daemonStatus.state !== "ready" || !daemonStatus.port) return;
+				try {
+					const response = await fetch(`http://127.0.0.1:${daemonStatus.port}/api/v1/side-chats/launch/retire`, {
+						method: "POST", headers: { "content-type": "application/json" },
+						body: JSON.stringify({ appRunId }), signal: AbortSignal.timeout(3000),
+					});
+					if (!response.ok) console.warn("AO: side chat cleanup on quit failed", response.status);
+				} catch (error) { console.warn("AO: side chat cleanup on quit failed", error); }
+				sideLaunchState = undefined;
+			};
 			const cleanup = Promise.all([
 				disposeAllBrowserViewHosts(),
 				remoteRegistry.closeAll(),
 				telemetryPolicyController?.close() ?? Promise.resolve(),
+				retireSides(),
 			]);
 			const finishQuit = () => {
 				browserCleanupComplete = true;

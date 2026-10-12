@@ -642,7 +642,8 @@ export function HumanMessage({
 						<ChatAnnotationSummary
 							annotations={excerptReferences.map((excerpt) => ({
 								text: excerpt.text ?? "",
-								messageId: excerpt.sourceMessageId,
+								conversationId: excerpt.sourceConversationId,
+ messageId: excerpt.sourceMessageId,
 								revision: excerpt.sourceRevision,
 							}))}
 							onSelect={onSelectAnnotation}

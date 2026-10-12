@@ -169,8 +169,7 @@ export function WorkerRowInteraction({
 					<View accessibilityViewIsModal style={styles.menu}>
 						<Text style={styles.menuTitle}>Worker options</Text>
 						{/* A real action list now, rather than a Rename/Cancel pair. Rows are
-						    48dp so they clear Material's touch minimum, and the destructive
-						    one is tinted rather than separated, matching the native menu. */}
+						    48dp so they clear Material's touch minimum, matching the native menu. */}
 						<View style={styles.menuList}>
 							{actions.map((action) => (
 								<Pressable

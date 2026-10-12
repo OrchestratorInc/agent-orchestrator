@@ -19,7 +19,6 @@ const h = vi.hoisted(() => ({
 	agentCatalog: undefined as { agents: ReturnType<typeof import("../test/agent-readiness-fixtures").agentReadiness>[] } | undefined,
 	cloudProjects: [] as Array<{ id: string; displayName: string; repositoryUrl: string; defaultBranch: string; config: Record<string, unknown> }>,
 	cloudCreateSession: vi.fn(),
-	cloudProviders: ["docker"] as string[],
 }));
 
 vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
@@ -95,15 +94,10 @@ vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ client: { createSession: h.cloudCreateSession } }),
 }));
 
-vi.mock("../hooks/useCloudSandboxProviders", () => ({
-	useCloudSandboxProviders: () => ({ available: h.cloudProviders }),
-}));
-
-
 import { TaskComposer } from "./TaskComposer";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
-import { useSandboxProviderStore } from "../stores/sandbox-provider-store";
+import { providerConnectionsQueryKey } from "../hooks/useProviderConnections";
 import { useUiStore } from "../stores/ui-store";
 
 function Wrap({ children, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }) }: {
@@ -153,9 +147,6 @@ afterEach(() => {
 	h.agentCatalog = undefined;
 	h.cloudProjects.length = 0;
 	h.cloudCreateSession.mockReset();
-	h.cloudProviders = ["docker"];
-	window.localStorage.removeItem("ao.cloud.sandboxProvider");
-	useSandboxProviderStore.setState({ selectedProvider: null });
 	vi.unstubAllGlobals();
 	h.agentValues.length = 0;
 	window.localStorage.removeItem("ao.taskComposer.preferences.v1");
@@ -802,7 +793,7 @@ describe("TaskComposer", () => {
 		);
 
 		expect(task().getAttribute("placeholder")).toBeTruthy();
-		expect(task()).toHaveClass("min-h-[calc(3lh+1.75rem)]");
+		expect(task()).toHaveClass("min-h-[calc(3lh+1.125rem)]");
 		await waitForTaskReady();
 		fireEvent.click(screen.getByText("Start task"));
 
@@ -988,27 +979,6 @@ describe("TaskComposer", () => {
 			},
 			controls: async () => [await screen.findByRole("button", { name: "Model" })],
 		},
-		{
-			name: "search and direct model ID",
-			catalog: {
-				agent: "codex",
-				selectionMode: "catalog",
-				models: [{ id: "gpt-5", label: "GPT-5", isDefault: true }],
-				customModelEntry: "direct",
-				allowCustom: true,
-			},
-			controls: async () => {
-				const model = await screen.findByRole("button", { name: "Model" });
-				await userEvent.click(model);
-				await userEvent.type(screen.getByRole("searchbox", { name: "Search model" }), "private/model-id");
-				await userEvent.click(
-					screen.getByRole("menuitem", { name: "Use “private/model-id” as a custom model" }),
-				);
-				expect(model).toHaveTextContent("private/model-id");
-				expect(screen.queryByRole("textbox", { name: "Model" })).not.toBeInTheDocument();
-				return [model];
-			},
-		},
 	])("locks the $name selector while creating and restores it after failure", async ({ catalog, controls }) => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) return { data: catalog };
@@ -1115,9 +1085,8 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ reasoningEffort: "high" })));
 	});
 
-	it("uses the control plane default when a saved sandbox provider is unavailable", async () => {
-		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
-		useSandboxProviderStore.getState().setSelectedProvider("coder");
+	it("leaves the sandbox provider to the project and org default on the control plane", async () => {
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { sandboxProvider: "coder" } });
 		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
 		const onCreated = vi.fn();
 		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={onCreated} /></Wrap>);
@@ -1127,7 +1096,7 @@ describe("TaskComposer", () => {
 		fireEvent.click(startTask());
 
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("session-1"));
-		expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.not.objectContaining({ provider: "coder" }));
+		expect(h.cloudCreateSession.mock.calls[0]?.[1]).not.toHaveProperty("provider");
 	});
 
 	it("waits for a selected file read before submitting", async () => {
@@ -1804,8 +1773,11 @@ describe("TaskComposer", () => {
 				return {
 					data: {
 						agent: "codex",
-						selectionMode: "text",
-						models: [],
+						selectionMode: "catalog",
+						models: [
+							{ id: "gpt-5", label: "GPT-5" },
+							{ id: "gpt-5.1", label: "GPT-5.1" },
+						],
 						allowCustom: true,
 						refreshRecommended: false,
 					},
@@ -1831,8 +1803,8 @@ describe("TaskComposer", () => {
 		const model = await screen.findByRole("button", { name: "Model" });
 		await userEvent.click(model);
 		expect(screen.queryByRole("menuitem", { name: "Use agent model" })).not.toBeInTheDocument();
-		await userEvent.type(screen.getByRole("searchbox", { name: "Search model" }), "gpt-5.1");
-		await userEvent.click(screen.getByRole("menuitem", { name: "Use “gpt-5.1” as a custom model" }));
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: "GPT-5.1" }));
 		fireEvent.change(task(), { target: { value: "Use the selected model" } });
 		fireEvent.click(screen.getByText("Start task"));
 
@@ -2115,6 +2087,20 @@ describe("TaskComposer", () => {
 			await waitForTaskReady();
 			fireEvent.click(startTask());
 			await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
+		});
+
+		it("shows no local-login notice on a cloud project whose agent is connected for cloud", async () => {
+			h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "claude-code" } } });
+			h.agentCatalog = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })] };
+			h.get.mockImplementation(async () => ({ data: claudeCatalog({ warning: expiredDetail, warningCode: "auth_required" }) }));
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			queryClient.setQueryData(providerConnectionsQueryKey, [
+				{ id: "c-1", provider: "claude-code", label: "default", validationState: "valid", config: { credentialType: "oauth" } },
+			]);
+			render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+			await screen.findByRole("textbox", { name: "Task" });
+			await waitFor(() => expect(h.get).toHaveBeenCalled());
+			expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument();
 		});
 
 		it("re-reads the catalog by itself once the agent reads as logged in", async () => {

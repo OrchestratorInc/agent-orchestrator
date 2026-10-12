@@ -153,7 +153,8 @@ export interface ConversationContentSummary {
 	uri?: string;
 	name?: string;
 	text?: string;
-	sourceMessageId?: string;
+	sourceConversationId?: string;
+ sourceMessageId?: string;
 	sourceRevision?: number;
 }
 

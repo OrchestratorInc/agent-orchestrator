@@ -733,6 +733,20 @@ type (
 	ChatForker interface {
 		Fork(ctx context.Context, lastProviderTurnID *string) (providerConversationID string, err error)
 	}
+	// ChatIsolatedForker creates the fork in the destination provider host. The
+	// source host and its active writer remain untouched.
+	ChatIsolatedForker interface {
+		ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ChatStartConfig) (ChatConversation, error)
+	}
+	// ChatNativeTurnID resolves a completed provider turn to its native turn ID.
+	ChatNativeTurnID interface {
+		NativeTurnID(providerTurnID string) string
+	}
+	// ChatForkDeleter removes only a provider fork ID positively registered to
+	// an AO side conversation. The caller must never pass a main thread ID.
+	ChatForkDeleter interface {
+		DeleteFork(ctx context.Context, providerConversationID string) error
+	}
 	// ChatInheritedHistory proves native ancestry and expresses the supplied
 	// replay in an ancestor's ID namespace. Nil means ancestry is unverified.
 	// Event order and content must be preserved; callers still verify each copy.

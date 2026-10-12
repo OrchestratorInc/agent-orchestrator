@@ -57,10 +57,10 @@ export function conversationActionError(error: unknown): string {
 		case "CHAT_RENAME_UNSUPPORTED": return "This agent does not support conversation titles.";
 		case "CHAT_TITLE_REQUIRED": return "Enter a conversation title.";
 		case "CHAT_CONTROLLER_NOT_READY": return "The agent controller is not running. Resume it before trying again.";
-		case "CHAT_AUTH_REQUIRED": return "Sign in with the agent CLI on the AO host, then resume this session.";
-		case "CHAT_DRIVER_UNAVAILABLE": return "The agent CLI is unavailable on the AO host. Install it or open the worktree shell.";
-		case "CHAT_DRIVER_INCOMPATIBLE": return "The installed agent CLI is not compatible with AO Chat. Update it, then resume this session.";
-		case "CHAT_RESUME_FAILED": return "AO could not resume this agent. The conversation and worktree are preserved.";
+		case "CHAT_AUTH_REQUIRED": return "Sign in with the agent CLI on the Orchestrator host, then resume this session.";
+		case "CHAT_DRIVER_UNAVAILABLE": return "The agent CLI is unavailable on the Orchestrator host. Install it or open the worktree shell.";
+		case "CHAT_DRIVER_INCOMPATIBLE": return "The installed agent CLI is not compatible with Orchestrator Chat. Update it, then resume this session.";
+		case "CHAT_RESUME_FAILED": return "Orchestrator could not resume this agent. The conversation and worktree are preserved.";
 		case "CHAT_PROVIDER_REFUSED": return daemonDetail(error) ?? "The provider refused this action.";
 		default: return userFacingError(error);
 	}
