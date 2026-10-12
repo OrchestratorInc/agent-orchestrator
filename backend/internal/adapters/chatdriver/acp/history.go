@@ -266,7 +266,8 @@ func (c *conversation) historyReplayActive() bool {
 }
 
 func (c *conversation) captureHistoryUserChunk(chunk *acpsdk.SessionUpdateUserMessageChunk) {
-	if c.historyNotice != nil && c.historyNotice(historicalUserContent(chunk.Content)) {
+	text := historicalUserContent(chunk.Content)
+	if c.historyNotice != nil && c.historyNotice(text) {
 		return
 	}
 	messageID := ""
@@ -305,7 +306,6 @@ func (c *conversation) captureHistoryUserChunk(chunk *acpsdk.SessionUpdateUserMe
 		c.startHistoryTurn(messageID)
 	}
 
-	text := historicalUserContent(chunk.Content)
 	c.historyMu.Lock()
 	if c.history != nil {
 		c.history.pendingUserID = messageID
