@@ -1,0 +1,77 @@
+{
+  "source": "738b7d36385e41e5305bb723657734a9ad0ca26e",
+  "qualificationSource": "aa7705614e6f91041ff5f1e71de6315104505a66",
+  "session": "docker-acp-proof-004-1",
+  "gates": {
+    "rejectPermission": "PASS",
+    "cancelPendingPermission": "PASS",
+    "executingInterrupt": "PASS",
+    "afterCancelTurn": "PASS",
+    "independentAOKill": "PASS",
+    "exactRestoreFreshInstructions": "PASS",
+    "replayNoDuplicate": "PASS"
+  },
+  "recordNote": "Reconstructed from retained lifecycle/restore launch receipts and contemporaneous tool observations after reconnect helper overwrote local lifecycle JSON. Assertions passed before overwrite. Raw logs, DB and workspace preserved privately.",
+  "initialUserPromptCount": 1,
+  "restoredUserPromptCount": 1,
+  "nativeIDDigest": "54b9c458548fc6597d6225f87bfe3c25417e52ef8584d44e32a549386d10ec90",
+  "initialGeneration": "dbe78dc3-48f4-44b2-8e74-2e736cbb499b",
+  "restoredGeneration": "1ab196bf-7f4c-4d5c-9ab5-35972e633f15",
+  "initialOwnership": {
+    "hostPID": 892239,
+    "kernelStart": "75723000",
+    "nativePID": 892244,
+    "nativeKernelStart": "75723003"
+  },
+  "restoredOwnership": {
+    "hostPID": 893190,
+    "kernelStart": "75766301",
+    "nativePID": 893195,
+    "nativeKernelStart": "75766301"
+  },
+  "controlSession": "docker-acp-proof-004-3",
+  "controlBeforeAfterKill": {
+    "nativeIDDigest": "151a5c3c8ebe93487b177295ae2585fd72355a2a88062ece8375d1805f6428a9",
+    "generation": "24f3a55b-b7c9-40f8-9bf3-54ea0eb37576",
+    "hostPID": 892787,
+    "hostKernelStart": "75744492",
+    "nativePID": 892792,
+    "nativeKernelStart": "75744493"
+  },
+  "interruptChild": {
+    "PID": 892873,
+    "kernelStart": "75750331",
+    "reaped": true,
+    "noLate": true,
+    "observationSeconds": 22
+  },
+  "killChild": {
+    "PID": 892924,
+    "kernelStart": "75754343",
+    "reaped": true,
+    "noLate": true,
+    "observationSeconds": 22
+  },
+  "killHTTP": 200,
+  "killResponse": {
+    "ok": true,
+    "sessionId": "docker-acp-proof-004-1"
+  },
+  "freed": false,
+  "dirtyWorkspacePreserved": true,
+  "admission": {
+    "TUI": [
+      409,
+      "SESSION_MODE_UNSUPPORTED"
+    ],
+    "acceptEdits": [
+      409,
+      "CHAT_CONTROLLER_FAILED"
+    ],
+    "effort": [
+      400,
+      "UNSUPPORTED_EFFORT"
+    ]
+  },
+  "proofFile": "INITIAL_DOCKER_AO_6509\nCONFIG_DOCKER_6509\nUSERHOOK_DOCKER_6509\nSTANDING_DOCKER_AO_6509\nPROJECT_DOCKER_6509\nSECOND_DOCKER_AO_6509\nAFTER_CANCEL_DOCKER_6509\nRESTORED_DOCKER_AO_6509\nFRESH_RESTORE_DOCKER_6509\nRECONNECTED_DOCKER_AO_6509\n"
+}
