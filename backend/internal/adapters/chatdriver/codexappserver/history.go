@@ -422,3 +422,12 @@ func (c *conversation) SetTitle(ctx context.Context, title string) error {
 	}
 	return nil
 }
+
+func (c *conversation) DeleteFork(ctx context.Context, providerConversationID string) error {
+	id := strings.TrimSpace(providerConversationID)
+	if id == "" || id == c.threadID {
+		return errors.New("refusing to delete the active provider conversation")
+	}
+	return c.conn.request(ctx, codexproto.MethodThreadDelete,
+		codexproto.ThreadDeleteParams{ThreadID: id}, nil)
+}

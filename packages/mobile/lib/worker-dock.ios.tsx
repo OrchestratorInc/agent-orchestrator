@@ -1,5 +1,5 @@
 import { Host } from "@expo/ui";
-import { Button, GlassEffectContainer, Group, HStack, Image, Menu, Section, Spacer, TextField, useNativeState } from "@expo/ui/swift-ui";
+import { Button, GlassEffectContainer, Group, HStack, Image, Menu, Section, Spacer, TextField, Toggle, useNativeState } from "@expo/ui/swift-ui";
 import {
 	accessibilityIdentifier,
 	accessibilityLabel,
@@ -17,13 +17,15 @@ import {
 	textFieldStyle,
 	tint,
 } from "@expo/ui/swift-ui/modifiers";
-import { memo, useEffect } from "react";
+import { memo, startTransition, useEffect } from "react";
 import { glassCircle, glassField } from "./glass";
 import { GLASS_CIRCLE_SIZE } from "./native-header-button.ios";
 import { haptics } from "./haptics";
+import { machineAppearance } from "./machineAppearance";
+import { machineMenuImage } from "./machine-menu-image";
 import { duration } from "./tokens";
 import { useTheme, useThemeState } from "./ThemeProvider";
-import { workerProjectLabel, workerProjectOptions } from "./worker-controls";
+import { ALL_WORKER_ENVIRONMENTS, workerEnvironmentOptions, workerProjectLabel, workerProjectOptions } from "./worker-controls";
 import type { WorkerDockProps } from "./worker-dock";
 import { workerDockVisibility } from "./worker-dock-layout";
 import { workerSearchClearState } from "./worker-search";
@@ -36,6 +38,9 @@ export const WorkerDock = memo(function WorkerDock({
 	onSearchOpen,
 	onSearchClose,
 	projectFiltered,
+	environments,
+	selectedEnvironmentId,
+	onSelectEnvironment,
 	projects,
 	selectedProjectId,
 	onSelectProject,
@@ -44,8 +49,9 @@ export const WorkerDock = memo(function WorkerDock({
 	const { scheme } = useThemeState();
 	const text = useNativeState(query);
 	const clear = workerSearchClearState(query);
-	const projectOptions = workerProjectOptions(projects);
-	const selectedProjectLabel = workerProjectLabel(projects, selectedProjectId);
+	const environmentOptions = workerEnvironmentOptions(environments);
+	const projectOptions = workerProjectOptions(projects, selectedEnvironmentId);
+	const selectedProjectLabel = workerProjectLabel(projects, selectedProjectId, selectedEnvironmentId);
 	const visibility = workerDockVisibility(searchOpen);
 
 	useEffect(() => {
@@ -97,6 +103,26 @@ export const WorkerDock = memo(function WorkerDock({
 								onSearchOpen();
 							}}
 						/>
+						<Menu
+							label="Environment"
+							systemImage="tray.2"
+							modifiers={[menuOrder("fixed")]}
+						>
+							{environmentOptions.map((environment) => (
+								<Toggle
+									key={environment.id}
+									label={environment.label}
+									systemImage={machineMenuImage(environment.id === ALL_WORKER_ENVIRONMENTS ? "server" : machineAppearance({ id: environment.id, name: environment.label, appearance: environment.appearance }).symbol)}
+									isOn={environment.id === selectedEnvironmentId}
+									modifiers={[tint(t.textSecondary)]}
+									onIsOnChange={() => {
+										haptics.select();
+										// Preparing a replacement board must not block native menu dismissal.
+										startTransition(() => onSelectEnvironment(environment.id));
+									}}
+								/>
+							))}
+						</Menu>
 						{/* The label is the selection on its own: naming the menu in front
 						    of it pushed the row past the width the menu reserves, and it
 						    wrapped. */}
@@ -108,7 +134,7 @@ export const WorkerDock = memo(function WorkerDock({
 									systemImage={project.id === selectedProjectId ? "checkmark" : "folder"}
 									onPress={() => {
 										haptics.select();
-										onSelectProject(project.id);
+										startTransition(() => onSelectProject(project.id));
 									}}
 								/>
 							))}

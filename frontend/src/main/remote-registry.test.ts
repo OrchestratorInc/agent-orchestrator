@@ -4,6 +4,11 @@ import { RemoteRegistry } from "./remote-registry";
 const workbox = { label: "workbox", url: "http://192.0.2.1:3011", password: "secret", hostId: "h_workbox" };
 
 describe("connected remote hosts", () => {
+	it("returns no live connection for an unpaired legacy host", () => {
+		const registry = new RemoteRegistry(async () => { throw new Error("must not start a proxy"); });
+		expect(registry.connected({ label: workbox.label, url: workbox.url, password: workbox.password })).toBeUndefined();
+	});
+
 	it("closes proxies on account sign-out but permits a later sign-in", async () => {
 		let closed = 0;
 		const registry = new RemoteRegistry(async () => ({

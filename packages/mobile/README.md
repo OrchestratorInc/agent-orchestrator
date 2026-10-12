@@ -46,6 +46,21 @@ report no secure-pairing availability while the mode is off, and current v2 endp
 do not establish a verified working path. Use a managed HTTPS endpoint whose pairing
 record is marked `secure: true` for remote access. Background: [`docs/adr/0001-lan-listener-for-mobile.md`](../../docs/adr/0001-lan-listener-for-mobile.md).
 
+## Forgetting a machine
+
+Forgetting a machine removes its local pairing without waiting for network requests.
+For identified machines, the phone first persists a remote-unpair cleanup job in
+SecureStore. The daemon removes the phone's push registration when that job succeeds;
+failed jobs are retried on launch, foregrounding, and every 30 seconds while the app is
+active, even after the last machine is removed. Each retry checks the daemon's identity
+before sending the saved credential. Credentials retained solely for cleanup are erased
+after success, or when an old job is superseded by a deliberate re-pair.
+
+An unreachable daemon can still send OS notifications until the phone reaches it and
+remote cleanup succeeds. Already-sent notifications cannot be recalled. An old pairing
+without a recorded host identity can only be forgotten locally: its remote registration
+must be removed from the desktop, rather than sending credentials to an unverified address.
+
 ## Prerequisites
 
 | For             | You need                                                                              |

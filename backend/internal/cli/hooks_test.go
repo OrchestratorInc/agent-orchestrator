@@ -441,6 +441,24 @@ func TestHooks_IdlePromptReportsIdle(t *testing.T) {
 	}
 }
 
+func TestHooks_DottedProjectSessionIDReportsActivity(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "acme.dev-2")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "stop")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if capture.path != "/api/v1/sessions/acme.dev-2/activity" {
+		t.Fatalf("activity path = %q, want the dotted session's activity endpoint", capture.path)
+	}
+}
+
 func TestHooks_SessionEndReportsExited(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)
@@ -1396,6 +1414,7 @@ func TestHooks_CommandCodeSessionStartInjectsSystemPromptContext(t *testing.T) {
 	}
 	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
 	writeRunFileFor(t, cfg, srv)
+
 	out, _, err := executeCLI(t, Deps{
 		In:           strings.NewReader(`{"session_id":"command-code-native-1","source":"startup"}`),
 		ProcessAlive: func(int) bool { return true },

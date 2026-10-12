@@ -254,6 +254,22 @@ describe("CenterPane toolbar session label", () => {
 		expect(screen.getByRole("tab", { name: /^do the thing/ })).toBeInTheDocument();
 	});
 
+	it("does not offer rename on the project orchestrator's tab", async () => {
+		const user = userEvent.setup();
+		renderCenterPane({ session: { ...worker, id: "sess-orch", kind: "orchestrator" } });
+
+		const tab = screen.getByRole("tab", { name: /^Orchestrator/ });
+		expect(tab).not.toHaveAttribute("aria-keyshortcuts");
+		await user.dblClick(tab);
+		tab.focus();
+		await user.keyboard("{F2}");
+		fireEvent.contextMenu(tab);
+
+		expect(screen.queryByRole("textbox", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(renameSessionMock).not.toHaveBeenCalled();
+	});
+
 	it.each(["", "do the thing"])("does not persist the no-op terminal-tab rename %j", async (nextName) => {
 		const user = userEvent.setup();
 		renderCenterPane({ session: worker });
