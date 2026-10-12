@@ -37,9 +37,15 @@ var kimiAPIKeyEnvVars = []string{
 	"MOONSHOT_API_KEY",
 }
 
+// kimiLocalAuthStatus checks Kimi's own config and stored logins first; a key
+// in the environment is the fallback when they hold no usable credential.
 func kimiLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
+	}
+	status, found, err := kimiStoredAuthStatus(ctx)
+	if err == nil && found && usableAuthStatus(status) {
+		return status, true, nil
 	}
 	for _, name := range kimiAPIKeyEnvVars {
 		if strings.TrimSpace(os.Getenv(name)) != "" {
@@ -47,6 +53,14 @@ func kimiLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 	}
+	return status, found, err
+}
+
+func usableAuthStatus(status ports.AgentAuthStatus) bool {
+	return status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured
+}
+
+func kimiStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	homes, ok := kimiAuthHomes()
 	if !ok {
 		return ports.AgentAuthStatusUnknown, false, nil

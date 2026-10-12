@@ -29,10 +29,16 @@ func (p *Plugin) AuthStatusWithAccount(ctx context.Context) (ports.AgentAuthStat
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, err
 	}
+	// Kiro's own login, as `kiro-cli whoami` reports it, decides first;
+	// KIRO_API_KEY in the environment is the fallback.
+	status, account, err := kiroWhoamiAuth(ctx, binary)
+	if err == nil && status == ports.AgentAuthStatusAuthorized {
+		return status, account, nil
+	}
 	if strings.TrimSpace(os.Getenv("KIRO_API_KEY")) != "" {
 		return ports.AgentAuthStatusAuthorized, domain.EnvironmentSource("KIRO_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey), nil
 	}
-	return kiroWhoamiAuth(ctx, binary)
+	return status, account, err
 }
 
 func kiroWhoamiAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStatus, error) {

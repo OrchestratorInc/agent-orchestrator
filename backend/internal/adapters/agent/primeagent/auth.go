@@ -63,9 +63,16 @@ var primeAPIKeyEnvVars = []string{
 	"AWS_BEARER_TOKEN_BEDROCK",
 }
 
+// primeLocalAuthStatus checks Prime Agent's own auth.json and models.json
+// first; keys and cloud credentials in the environment are the fallback when
+// those hold no usable credential.
 func primeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
+	}
+	status, found, err := primeStoredAuthStatus(ctx)
+	if err == nil && found && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+		return status, true, nil
 	}
 	for _, name := range primeAPIKeyEnvVars {
 		if strings.TrimSpace(os.Getenv(name)) != "" {
@@ -85,7 +92,10 @@ func primeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(primeFirstSetEnv("GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT_ID", "GCLOUD_PROJECT")).WithMethod(domain.AgentAccountMethodAccount))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
+	return status, found, err
+}
 
+func primeStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	dir, ok := primeConfigDir()
 	if !ok {
 		return ports.AgentAuthStatusUnknown, false, nil

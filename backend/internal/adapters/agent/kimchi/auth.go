@@ -29,14 +29,18 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, err
 	}
 
-	// Tier 1: KIMCHI_API_KEY env var (highest precedence in kimchi's config loading).
+	// AO reads Kimchi's own global config first and falls back to
+	// KIMCHI_API_KEY. Kimchi itself gives the variable precedence at launch, so
+	// with both set the launch uses the variable while this names the config.
+	status, configErr := kimchiConfigAuthStatus(ctx, kimchiGlobalConfigPath())
+	if configErr == nil && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+		return status, nil
+	}
 	if key := strings.TrimSpace(os.Getenv("KIMCHI_API_KEY")); key != "" {
 		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("KIMCHI_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, nil
 	}
-
-	// Tier 2: global ~/.config/kimchi/config.json apiKey field.
-	return kimchiConfigAuthStatus(ctx, kimchiGlobalConfigPath())
+	return status, configErr
 }
 
 // kimchiGlobalConfigPath returns the path to kimchi's global config file.

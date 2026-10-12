@@ -29,15 +29,24 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
+// grokLocalAuthStatus checks Grok's own config.toml and auth.json first;
+// XAI_API_KEY is the fallback when they hold no usable credential.
 func grokLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
+	}
+	status, ok, err := grokStoredAuthStatus(ctx)
+	if err == nil && ok && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+		return status, true, nil
 	}
 	if strings.TrimSpace(os.Getenv("XAI_API_KEY")) != "" {
 		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("XAI_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
+	return status, ok, err
+}
 
+func grokStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	grokHome, err := grokConfigDir()
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err

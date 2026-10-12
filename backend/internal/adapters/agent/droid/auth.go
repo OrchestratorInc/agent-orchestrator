@@ -26,14 +26,24 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
+// droidLocalAuthStatus checks Droid's own Factory settings first;
+// FACTORY_API_KEY is the fallback when they hold no usable credential.
 func droidLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
+	}
+	status, ok, err := droidStoredAuthStatus(ctx)
+	if err == nil && ok && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+		return status, true, nil
 	}
 	if strings.TrimSpace(os.Getenv("FACTORY_API_KEY")) != "" {
 		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("FACTORY_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
+	return status, ok, err
+}
+
+func droidStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err

@@ -21,14 +21,18 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
+	// Cline's own provider settings decide first; CLINE_API_KEY is the
+	// fallback. A settings read error only surfaces when no key is set either.
+	status, ok, providerErr := clineProviderAuthStatus(ctx)
+	if providerErr == nil && ok {
+		return status, nil
+	}
 	if strings.TrimSpace(os.Getenv("CLINE_API_KEY")) != "" {
 		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("CLINE_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, nil
 	}
-	if status, ok, err := clineProviderAuthStatus(ctx); err != nil {
-		return ports.AgentAuthStatusUnknown, err
-	} else if ok {
-		return status, nil
+	if providerErr != nil {
+		return ports.AgentAuthStatusUnknown, providerErr
 	}
 	return ports.AgentAuthStatusUnknown, nil
 }

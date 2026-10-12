@@ -62,14 +62,16 @@ func (p *Plugin) authStatus(ctx context.Context, getenv func(string) string) (po
 	case "fireworks":
 		return keyStatus("FIREWORKS_API_KEY"), nil
 	case "openai-codex":
-		if envSet(getenv, "OPENAI_CODEX_ACCESS_TOKEN") {
-			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("OPENAI_CODEX_ACCESS_TOKEN").WithMethod(domain.AgentAccountMethodToken))
-			return credentialStatus(true), nil
-		}
+		// The stored Codex login decides first; a token in the environment is
+		// the fallback.
 		if path, ok := codexAuthFile(getenv); ok {
 			evidence := domain.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
 			evidence.Email, evidence.Name = codexAuthFileIdentity(path)
 			ports.RecordAuthEvidence(ctx, evidence)
+			return credentialStatus(true), nil
+		}
+		if envSet(getenv, "OPENAI_CODEX_ACCESS_TOKEN") {
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("OPENAI_CODEX_ACCESS_TOKEN").WithMethod(domain.AgentAccountMethodToken))
 			return credentialStatus(true), nil
 		}
 		return credentialStatus(false), nil

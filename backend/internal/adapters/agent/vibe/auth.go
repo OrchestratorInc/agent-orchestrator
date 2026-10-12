@@ -55,18 +55,34 @@ func vibeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
+	// Vibe's own ~/.vibe/.env decides first; the same variables in the
+	// process environment are the fallback.
 	envFile := filepath.Join(vibeHome, ".env")
+	fileStatus, fileOK := ports.AgentAuthStatusUnknown, false
+	var fileErr error
+	for _, envVar := range envVars {
+		status, ok, err := vibeEnvFileAuthStatus(envFile, envVar)
+		if err != nil {
+			fileErr = err
+			break
+		}
+		if ok {
+			if status == ports.AgentAuthStatusAuthorized {
+				ports.RecordAuthEvidence(ctx, domain.FileSource(envFile).WithMethod(domain.AgentAccountMethodAPIKey))
+				return status, true, nil
+			}
+			fileStatus, fileOK = status, true
+			break
+		}
+	}
 	for _, envVar := range envVars {
 		if strings.TrimSpace(os.Getenv(envVar)) != "" {
 			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(envVar).WithMethod(domain.AgentAccountMethodAPIKey))
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
-		if status, ok, err := vibeEnvFileAuthStatus(envFile, envVar); err != nil || ok {
-			if status == ports.AgentAuthStatusAuthorized {
-				ports.RecordAuthEvidence(ctx, domain.FileSource(envFile).WithMethod(domain.AgentAccountMethodAPIKey))
-			}
-			return status, ok, err
-		}
+	}
+	if fileErr != nil || fileOK {
+		return fileStatus, fileOK, fileErr
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
 }

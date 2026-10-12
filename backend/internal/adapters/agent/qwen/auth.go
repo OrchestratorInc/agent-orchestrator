@@ -42,9 +42,15 @@ var qwenAPIKeyEnvVars = []string{
 	"ZAI_API_KEY",
 }
 
+// qwenLocalAuthStatus checks Qwen's own settings and global .env files first;
+// a key in the environment is the fallback when they hold no usable key.
 func qwenLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
+	}
+	status, ok, err := qwenStoredAuthStatus(ctx)
+	if err == nil && ok && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+		return status, true, nil
 	}
 	for _, name := range qwenAPIKeyEnvVars {
 		if strings.TrimSpace(os.Getenv(name)) != "" {
@@ -52,6 +58,10 @@ func qwenLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 	}
+	return status, ok, err
+}
+
+func qwenStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err

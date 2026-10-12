@@ -28,15 +28,24 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 
 const museAPIKeyEnvVar = "META_API_KEY" //nolint:gosec // environment variable name, not a credential
 
+// museLocalAuthStatus checks Muse's own auth.json first; META_API_KEY in the
+// environment is the fallback when it holds no usable credential.
 func museLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
+	}
+	status, ok, err := museStoredAuthStatus(ctx)
+	if err == nil && ok && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+		return status, true, nil
 	}
 	if strings.TrimSpace(os.Getenv(museAPIKeyEnvVar)) != "" {
 		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(museAPIKeyEnvVar).WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
+	return status, ok, err
+}
 
+func museStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	path, ok := museAuthPath()
 	if !ok {
 		return ports.AgentAuthStatusUnknown, false, nil

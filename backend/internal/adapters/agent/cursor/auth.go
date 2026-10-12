@@ -30,17 +30,20 @@ func (p *Plugin) AuthStatusWithAccount(ctx context.Context) (ports.AgentAuthStat
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, err
 	}
+	// Cursor's own login, as `cursor-agent status` reports it, decides first;
+	// CURSOR_API_KEY in the environment is the fallback.
+	status, err := cursorCLIAuthStatus(ctx, binary)
+	if err != nil && ctx.Err() != nil {
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, err
+	}
+	if err == nil && status == ports.AgentAuthStatusAuthorized {
+		return status, cursorLoginAccount(cursorConfigPath()), nil
+	}
 	if strings.TrimSpace(os.Getenv("CURSOR_API_KEY")) != "" {
 		return ports.AgentAuthStatusAuthorized, domain.EnvironmentSource("CURSOR_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey), nil
 	}
-	if status, err := cursorCLIAuthStatus(ctx, binary); err == nil && status != ports.AgentAuthStatusUnknown {
-		var account domain.AgentAccountIdentity
-		if status == ports.AgentAuthStatusAuthorized {
-			account = cursorLoginAccount(cursorConfigPath())
-		}
-		return status, account, nil
-	} else if err != nil && ctx.Err() != nil {
-		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, err
+	if err == nil && status != ports.AgentAuthStatusUnknown {
+		return status, domain.AgentAccountIdentity{}, nil
 	}
 	return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil
 }

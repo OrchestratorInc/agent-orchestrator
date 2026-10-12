@@ -28,32 +28,49 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	if status, ok, err := kilocodeLocalAuthStatus(ctx); err != nil {
-		return ports.AgentAuthStatusUnknown, err
-	} else if ok {
+	// Kilo's own stored credentials decide first, then its `auth list`, and
+	// only then a key in the environment.
+	status, ok, storedErr := kilocodeStoredAuthStatus(ctx)
+	if storedErr == nil && ok {
 		return status, nil
 	}
-
-	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	out, err := aoprocess.CommandContext(probeCtx, binary, "auth", "list").CombinedOutput()
-	if probeCtx.Err() != nil {
-		if probeCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
-			return ports.AgentAuthStatusUnknown, nil
+	if storedErr == nil {
+		listStatus, listOK, err := kilocodeAuthListAuthStatus(ctx, binary)
+		if err != nil {
+			return ports.AgentAuthStatusUnknown, err
 		}
-		return ports.AgentAuthStatusUnknown, probeCtx.Err()
-	}
-	status, ok := kilocodeAuthListStatus(string(out))
-	if ok {
-		if status == ports.AgentAuthStatusAuthorized {
-			ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "auth", "list"))
+		if listOK && listStatus == ports.AgentAuthStatusAuthorized {
+			return listStatus, nil
 		}
-		return status, nil
-	}
-	if err != nil {
+		if envStatus, envOK := kilocodeEnvAuthStatus(ctx); envOK {
+			return envStatus, nil
+		}
+		if listOK {
+			return listStatus, nil
+		}
 		return ports.AgentAuthStatusUnknown, nil
 	}
-	return ports.AgentAuthStatusUnknown, nil
+	if envStatus, envOK := kilocodeEnvAuthStatus(ctx); envOK {
+		return envStatus, nil
+	}
+	return ports.AgentAuthStatusUnknown, storedErr
+}
+
+func kilocodeAuthListAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStatus, bool, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	out, _ := aoprocess.CommandContext(probeCtx, binary, "auth", "list").CombinedOutput()
+	if probeCtx.Err() != nil {
+		if probeCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+			return ports.AgentAuthStatusUnknown, false, nil
+		}
+		return ports.AgentAuthStatusUnknown, false, probeCtx.Err()
+	}
+	status, ok := kilocodeAuthListStatus(string(out))
+	if ok && status == ports.AgentAuthStatusAuthorized {
+		ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "auth", "list"))
+	}
+	return status, ok, nil
 }
 
 var kilocodeAPIKeyEnvVars = []string{
@@ -71,15 +88,33 @@ var kilocodeAPIKeyEnvVars = []string{
 	"COHERE_API_KEY",
 }
 
+// kilocodeLocalAuthStatus checks Kilo's stored credentials, then a key in the
+// environment.
 func kilocodeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
-	if err := ctx.Err(); err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
+	status, ok, err := kilocodeStoredAuthStatus(ctx)
+	if err == nil && ok {
+		return status, true, nil
 	}
+	if envStatus, envOK := kilocodeEnvAuthStatus(ctx); envOK {
+		return envStatus, true, nil
+	}
+	return ports.AgentAuthStatusUnknown, false, err
+}
+
+func kilocodeEnvAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool) {
 	for _, name := range kilocodeAPIKeyEnvVars {
 		if strings.TrimSpace(os.Getenv(name)) != "" {
 			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey))
-			return ports.AgentAuthStatusAuthorized, true, nil
+			return ports.AgentAuthStatusAuthorized, true
 		}
+	}
+	return ports.AgentAuthStatusUnknown, false
+}
+
+// kilocodeStoredAuthStatus reads Kilo's auth.json, then its database.
+func kilocodeStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.AgentAuthStatusUnknown, false, err
 	}
 	dataDir, ok := kilocodeDataDir()
 	if !ok {

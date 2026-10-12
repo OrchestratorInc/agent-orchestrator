@@ -27,14 +27,24 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
+// auggieLocalAuthStatus checks Auggie's own login session first;
+// AUGMENT_SESSION_AUTH in the environment is the fallback.
 func auggieLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
+	}
+	status, ok, err := auggieStoredAuthStatus(ctx)
+	if err == nil && ok && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+		return status, true, nil
 	}
 	if strings.TrimSpace(os.Getenv("AUGMENT_SESSION_AUTH")) != "" {
 		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("AUGMENT_SESSION_AUTH").WithMethod(domain.AgentAccountMethodToken))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
+	return status, ok, err
+}
+
+func auggieStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ports.AgentAuthStatusUnknown, false, err

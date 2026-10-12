@@ -21,6 +21,16 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if _, err := p.ResolveBinary(ctx); err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
+	// Autohand's own config decides first; a key in the environment is the
+	// fallback. A config read error only surfaces when no key is set either.
+	configPath := autohandConfigPath()
+	status, configErr := autohandConfigAuthStatus(configPath)
+	if configErr == nil && status != ports.AgentAuthStatusUnknown {
+		if status == ports.AgentAuthStatusAuthorized {
+			ports.RecordAuthEvidence(ctx, domain.FileSource(configPath).WithMethod(domain.AgentAccountMethodAccount))
+		}
+		return status, nil
+	}
 	for _, name := range []string{
 		"AUTOHAND_API_KEY", "AUTOHAND_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
 		"GOOGLE_API_KEY", "OPENROUTER_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY",
@@ -34,13 +44,8 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 			return ports.AgentAuthStatusAuthorized, nil
 		}
 	}
-	configPath := autohandConfigPath()
-	status, err := autohandConfigAuthStatus(configPath)
-	if err != nil || status != ports.AgentAuthStatusUnknown {
-		if status == ports.AgentAuthStatusAuthorized {
-			ports.RecordAuthEvidence(ctx, domain.FileSource(configPath).WithMethod(domain.AgentAccountMethodAccount))
-		}
-		return status, err
+	if configErr != nil {
+		return ports.AgentAuthStatusUnknown, configErr
 	}
 	// The documented CLI flow prompts for browser sign-in on first use; it does
 	// not expose a stable non-interactive `auth status` command.

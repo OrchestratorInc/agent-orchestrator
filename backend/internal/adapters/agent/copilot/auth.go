@@ -35,9 +35,15 @@ var copilotTokenEnvVars = []string{
 	"GITHUB_TOKEN",
 }
 
+// copilotLocalAuthStatus checks Copilot's own stored login and the GitHub CLI
+// login first; tokens and a BYOK provider in the environment are the fallback.
 func copilotLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
+	}
+	status, ok, err := copilotStoredAuthStatus(ctx)
+	if err == nil && ok && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+		return status, true, nil
 	}
 	for _, name := range copilotTokenEnvVars {
 		if copilotUsableToken(os.Getenv(name)) {
@@ -50,7 +56,10 @@ func copilotLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, e
 		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("COPILOT_PROVIDER_BASE_URL"))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
+	return status, ok, err
+}
 
+func copilotStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err

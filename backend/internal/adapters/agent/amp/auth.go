@@ -22,14 +22,32 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	if status, ok, err := ampLocalAuthStatus(ctx); err != nil || ok {
-		if status == ports.AgentAuthStatusAuthorized {
+	// Amp's own stored login and settings decide first, then `amp usage`,
+	// and only then AMP_API_KEY in the environment.
+	status, ok, login, storedErr := ampStoredAuthStatus(ctx)
+	if storedErr == nil && ok && status == ports.AgentAuthStatusAuthorized {
+		if login {
 			// A stored login names no account; Amp's own account list does.
 			ports.AddAuthEvidence(ctx, domain.AgentAccountIdentity{Email: ampActiveAccountEmail(ctx, binary)})
 		}
-		return status, err
+		return status, nil
 	}
-	return ampUsageAuthStatus(ctx, binary)
+	if storedErr == nil && !ok {
+		usage, err := ampUsageAuthStatus(ctx, binary)
+		if err != nil {
+			return ports.AgentAuthStatusUnknown, err
+		}
+		if usage == ports.AgentAuthStatusAuthorized {
+			return usage, nil
+		}
+	}
+	if envStatus, envOK := ampEnvAuthStatus(ctx); envOK {
+		return envStatus, nil
+	}
+	if storedErr != nil {
+		return ports.AgentAuthStatusUnknown, storedErr
+	}
+	return status, nil
 }
 
 // ampActiveAccountEmail reads the account `amp account list` marks active
@@ -62,30 +80,49 @@ func ampActiveEmailFromList(output string) string {
 	return ""
 }
 
+// ampLocalAuthStatus checks Amp's stored login and settings, then
+// AMP_API_KEY in the environment.
 func ampLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
-	if err := ctx.Err(); err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
+	status, ok, _, err := ampStoredAuthStatus(ctx)
+	if err == nil && ok && status == ports.AgentAuthStatusAuthorized {
+		return status, true, nil
 	}
+	if envStatus, envOK := ampEnvAuthStatus(ctx); envOK {
+		return envStatus, true, nil
+	}
+	return status, ok, err
+}
+
+func ampEnvAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool) {
 	if strings.TrimSpace(os.Getenv("AMP_API_KEY")) != "" {
 		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("AMP_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))
-		return ports.AgentAuthStatusAuthorized, true, nil
+		return ports.AgentAuthStatusAuthorized, true
+	}
+	return ports.AgentAuthStatusUnknown, false
+}
+
+// ampStoredAuthStatus reads Amp's secrets file, then its settings. login
+// reports that the stored login, not a settings key, decided.
+func ampStoredAuthStatus(ctx context.Context) (status ports.AgentAuthStatus, ok, login bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return ports.AgentAuthStatusUnknown, false, false, err
 	}
 	secretsPath := ampSecretsPath()
 	if status, ok, err := ampSecretsAuthStatus(secretsPath); err != nil || ok {
 		if status == ports.AgentAuthStatusAuthorized {
 			ports.RecordAuthEvidence(ctx, domain.FileSource(secretsPath).WithMethod(domain.AgentAccountMethodAccount))
 		}
-		return status, ok, err
+		return status, ok, true, err
 	}
 	settingsPath := ampSettingsPath()
-	status, ok, err := ampSettingsAuthStatus(settingsPath)
+	status, ok, err = ampSettingsAuthStatus(settingsPath)
 	if err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
+		return ports.AgentAuthStatusUnknown, false, false, err
 	}
 	if status == ports.AgentAuthStatusAuthorized {
 		ports.RecordAuthEvidence(ctx, domain.FileSource(settingsPath).WithMethod(domain.AgentAccountMethodAPIKey))
 	}
-	return status, ok, nil
+	return status, ok, false, nil
 }
 
 // Amp documents its persisted CLI credentials in ~/.local/share/amp/secrets.json.

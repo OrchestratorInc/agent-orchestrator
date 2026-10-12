@@ -24,9 +24,15 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
+// piLocalAuthStatus checks Pi's own auth.json first; a key in the environment
+// is the fallback when it holds no usable credential.
 func piLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
+	}
+	status, ok, err := piStoredAuthStatus(ctx)
+	if err == nil && ok && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+		return status, true, nil
 	}
 	for _, name := range []string{
 		"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
@@ -38,6 +44,10 @@ func piLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error)
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 	}
+	return status, ok, err
+}
+
+func piStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	configDir, ok := piConfigDir()
 	if !ok {
 		return ports.AgentAuthStatusUnknown, false, nil

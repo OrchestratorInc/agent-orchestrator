@@ -31,11 +31,16 @@ func devinLocalAuthStatus(ctx context.Context, binary string) (ports.AgentAuthSt
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
+	// Devin's own stored login, as `devin auth status` reports it, decides
+	// first; DEVIN_API_KEY in the environment is the fallback.
+	status, err := authprobe.CLIStatusWithTimeout(ctx, binary, [][]string{{"auth", "status"}}, 8*time.Second)
+	if err == nil && status == ports.AgentAuthStatusAuthorized {
+		return status, true, nil
+	}
 	if key := strings.TrimSpace(os.Getenv("DEVIN_API_KEY")); strings.HasPrefix(key, "cog_") && len(key) > len("cog_") {
 		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("DEVIN_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
-	status, err := authprobe.CLIStatusWithTimeout(ctx, binary, [][]string{{"auth", "status"}}, 8*time.Second)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
