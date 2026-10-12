@@ -241,6 +241,19 @@ func fixtureRestorePlugin(t *testing.T, id, workspace string) *Plugin {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("TAU_HOME", home)
+	writeNativeHistoryFixture(t, home, id, workspace)
+	p := fixturePlugin()
+	p.run = func(_ context.Context, _ string, _ map[string]string, args ...string) ([]byte, error) {
+		if len(args) == 1 && args[0] == "sessions" {
+			return []byte(id + "\tUntitled\tmodel\t" + workspace + "\n"), nil
+		}
+		return []byte("tau 0.4.7\n"), nil
+	}
+	return p
+}
+
+func writeNativeHistoryFixture(t *testing.T, home, id, workspace string) {
+	t.Helper()
 	dir := filepath.Join(home, "sessions", "project")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
@@ -254,14 +267,6 @@ func fixtureRestorePlugin(t *testing.T, id, workspace string) *Plugin {
 	if err := os.WriteFile(filepath.Join(dir, "index.jsonl"), append(row, '\n'), 0600); err != nil {
 		t.Fatal(err)
 	}
-	p := fixturePlugin()
-	p.run = func(_ context.Context, _ string, _ map[string]string, args ...string) ([]byte, error) {
-		if len(args) == 1 && args[0] == "sessions" {
-			return []byte(id + "\tUntitled\tmodel\t" + workspace + "\n"), nil
-		}
-		return []byte("tau 0.4.7\n"), nil
-	}
-	return p
 }
 
 func TestRestoreRejectsMissingOrMismatchedWorkspace(t *testing.T) {
@@ -304,6 +309,8 @@ func TestNativeProbesUseSessionEnvironment(t *testing.T) {
 	const id = "8bc1a3fbba2142bcb406fe4a4b6fe21b"
 	workspace := t.TempDir()
 	nativeHome := t.TempDir()
+	t.Setenv("TAU_HOME", t.TempDir()) // A different global profile must not satisfy restore.
+	writeNativeHistoryFixture(t, nativeHome, id, workspace)
 	env := map[string]string{"TAU_HOME": nativeHome}
 	p := fixturePlugin()
 	p.run = func(_ context.Context, _ string, got map[string]string, args ...string) ([]byte, error) {

@@ -3,11 +3,12 @@ package tau
 import (
 	"context"
 	"encoding/json"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestRestoreRejectsUnusableNativeHistory(t *testing.T) {

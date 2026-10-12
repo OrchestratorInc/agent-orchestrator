@@ -27,10 +27,10 @@ func validateRestoreHistory(ctx context.Context, id, workspace string, env map[s
 		if err != nil {
 			return fmt.Errorf("tau: native history home unavailable: %w", err)
 		}
-		switch {
-		case home == "":
+		switch home {
+		case "":
 			home = filepath.Join(userHome, ".tau")
-		case home == "~":
+		case "~":
 			home = userHome
 		default:
 			home = filepath.Join(userHome, strings.TrimPrefix(home, "~/"))
