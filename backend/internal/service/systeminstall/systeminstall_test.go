@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os/exec"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -1590,5 +1591,80 @@ func TestOpenCodeVendorUpdateNeverPinsUnvettedApprovedRelease(t *testing.T) {
 	s.workers.Wait()
 	if want := []string{"/Users/test/.opencode/bin/opencode", "upgrade", "1.18.36", "--method", "curl"}; !slices.Equal(ran, want) {
 		t.Fatalf("ran %v, want the advisory release %v", ran, want)
+	}
+}
+
+type reviewerListerStub struct {
+	handles []domain.ReviewerHandle
+	chats   []domain.Review
+}
+
+func (s reviewerListerStub) ListLiveReviewerHandles(context.Context) ([]domain.ReviewerHandle, error) {
+	return s.handles, nil
+}
+
+func (s reviewerListerStub) ListRecoverableChatReviews(context.Context) ([]domain.Review, error) {
+	return s.chats, nil
+}
+
+func TestHarnessUpdateIsBlockedWhileItsReviewerRuns(t *testing.T) {
+	for name, reviewers := range map[string]reviewerListerStub{
+		"terminal reviewer": {handles: []domain.ReviewerHandle{{SessionID: "claude-worker", Harness: domain.ReviewerCodex, HandleID: "pane-1"}}},
+		"chat reviewer":     {chats: []domain.Review{{SessionID: "claude-worker", Harness: domain.ReviewerCodex, InterfaceMode: domain.ReviewerInterfaceChat, ControllerGeneration: "gen-1"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newTestService("darwin", "npm")
+			// The worker runs Claude Code; only its reviewer uses Codex.
+			s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "claude-worker", Harness: domain.HarnessClaudeCode}}}
+			s.reviewers = reviewers
+			if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate); !errors.Is(err, ErrHarnessActive) {
+				t.Fatalf("update error = %v, want ErrHarnessActive", err)
+			}
+		})
+	}
+	// A reviewer on another harness, or a reviewer chat with no live
+	// controller, leaves the update to its other checks.
+	s := newTestService("darwin", "npm")
+	s.reviewers = reviewerListerStub{
+		handles: []domain.ReviewerHandle{{Harness: domain.ReviewerClaudeCode, HandleID: "pane-1"}},
+		chats:   []domain.Review{{Harness: domain.ReviewerCodex, InterfaceMode: domain.ReviewerInterfaceChat}},
+	}
+	if err := s.requireNoLiveReviewer(context.Background(), TargetCodex); err != nil {
+		t.Fatalf("requireNoLiveReviewer = %v, want nil", err)
+	}
+}
+
+func TestHomebrewUpdateRefreshesMetadataBeforeUpgrading(t *testing.T) {
+	s := newTestService("darwin", "bash", "brew")
+	s.updateAdvisories = map[Target]UpdateAdvisory{TargetKimi: {AgentID: string(TargetKimi), Status: UpdateStatusBehindLatest, CurrentVersion: "1.2.0", LatestVersion: "1.3.0", CheckedAt: time.Now()}}
+	version := "1.2.0"
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/opt/homebrew/Cellar/kimi-code/1.2.0/bin/kimi", Output: version}, nil
+	})
+	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
+	var ran [][]string
+	s.commands = commandRunnerFunc(func(_ context.Context, argv []string, _, _ io.Writer) error {
+		ran = append(ran, argv)
+		if argv[1] == "update" {
+			return errors.New("a tap failed to update")
+		}
+		version = "1.3.0"
+		return nil
+	})
+	job, err := s.StartAgentOperation(context.Background(), TargetKimi, "homebrew", AgentOperationUpdate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Command != "brew update && brew upgrade kimi-code" {
+		t.Fatalf("command = %q", job.Command)
+	}
+	s.workers.Wait()
+	waitForStatus(t, s, TargetKimi, StatusSucceeded)
+	if want := [][]string{{"brew", "update"}, {"brew", "upgrade", "kimi-code"}}; !reflect.DeepEqual(ran, want) {
+		t.Fatalf("ran %v, want %v", ran, want)
+	}
+	final, _ := s.Status(context.Background(), TargetKimi)
+	if !strings.Contains(final.Output, "brew update failed") {
+		t.Fatalf("output %q does not note the failed refresh", final.Output)
 	}
 }

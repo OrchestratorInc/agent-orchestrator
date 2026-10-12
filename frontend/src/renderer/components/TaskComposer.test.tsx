@@ -1818,6 +1818,39 @@ describe("TaskComposer", () => {
 		);
 	});
 
+	it("keeps the saved effort when the saved model lacks the project effort", async () => {
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") {
+				return { data: { defaultSessionMode: "tui", chatHarnesses: [], harnessDefaults: { codex: { model: "gpt-saved", effort: "low" } } } };
+			}
+			if (path.includes("/models")) {
+				return {
+					data: {
+						agent: "codex",
+						selectionMode: "catalog",
+						models: [
+							{ id: "gpt-default", label: "GPT Default", isDefault: true, efforts: ["low", "medium", "high", "xhigh"] },
+							{ id: "gpt-saved", label: "GPT Saved", efforts: ["low", "medium", "high"] },
+						],
+						allowCustom: true,
+						refreshRecommended: false,
+					},
+				};
+			}
+			// The project sets an effort but no model.
+			return { data: { status: "ok", project: { config: { worker: { agent: "codex", agentConfig: { effort: "xhigh" } } } } } };
+		});
+		h.post.mockResolvedValue({ data: { workerId: "sess-saved" } });
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GPT Saved");
+		await waitFor(() => expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("Low"));
+		fireEvent.click(screen.getByText("Start task"));
+		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
+		// Untouched, the daemon resolves the same saved low; nothing overrides it.
+		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("effort");
+	});
+
 	it("inherits worker effort visually but sends only explicit task overrides", async () => {
 		h.get.mockImplementation(async (path: string) => {
 			if (path.includes("/models")) {

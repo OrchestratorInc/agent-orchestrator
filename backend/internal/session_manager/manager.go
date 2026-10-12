@@ -578,6 +578,14 @@ func (m *Manager) SetHarnessUseGate(gate HarnessUseGate) {
 	m.harnessUseGate = gate
 }
 
+// TryBeginHarnessUse exposes the late-bound installer interlock to launchers
+// built alongside the manager, such as reviewers. Without an installer it
+// always succeeds.
+func (m *Manager) TryBeginHarnessUse(harness domain.AgentHarness) (func(), bool) {
+	release, err := m.beginHarnessUse(harness)
+	return release, err == nil
+}
+
 func (m *Manager) beginHarnessUse(harness domain.AgentHarness) (func(), error) {
 	if m.harnessUseGate == nil {
 		return func() {}, nil
@@ -1565,7 +1573,13 @@ func (m *Manager) resolveAgentConfigWith(ctx context.Context, cfg ports.SpawnCon
 	}
 	modelID := strings.TrimSpace(resolved.Model)
 	validateClaudeModel := cfg.Harness == domain.HarnessClaudeCode && modelID != ""
-	if resolved.Effort == "" && !validateClaudeModel {
+	// A Codex model that only the saved default supplied is checked against a
+	// fresh catalog even without an effort, so a model the provider retired
+	// falls back to the harness default. Task and project models, and an
+	// unavailable or stale catalog, keep the existing pass-through.
+	inheritedCodexModel := cfg.Harness == domain.HarnessCodex && preference.Model != "" &&
+		merged.Model == "" && merged.Mode == "" && modelID == preference.Model
+	if resolved.Effort == "" && !validateClaudeModel && !inheritedCodexModel {
 		return resolved, nil
 	}
 	if m.modelCatalog == nil {
@@ -1607,6 +1621,9 @@ func (m *Manager) resolveAgentConfigWith(ctx context.Context, cfg ports.SpawnCon
 	}
 	if validateClaudeModel && selected == nil {
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
+	}
+	if inheritedCodexModel && selected == nil && !catalog.Stale && len(catalog.Models) > 0 {
+		return ports.AgentConfig{}, fmt.Errorf("%w: saved model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
 	}
 	if selected != nil && len(selected.Efforts) == 0 && cfg.Harness == domain.HarnessClaudeCode {
 		// A family alias ("opus") carries no capabilities of its own; the CLI

@@ -1240,3 +1240,54 @@ func TestReadinessCoordinatorTreatsConfiguredAsUnverified(t *testing.T) {
 		t.Fatal("a configured verdict is a definite observation and must be marked checked")
 	}
 }
+
+func TestEnsureInstallationReadinessSeesExternalInstallWithoutAuthChecks(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	now := time.Unix(1_000, 0)
+	installed := false
+	agent := &readinessTestAgent{
+		resolve: func(context.Context) (string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			if !installed {
+				return "", ports.ErrAgentBinaryNotFound
+			}
+			return "/usr/local/bin/codex", nil
+		},
+		auth: func(context.Context) (ports.AgentAuthStatus, error) { return ports.AgentAuthStatusAuthorized, nil },
+	}
+	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents: []agentregistry.HarnessAgent{readinessHarness("codex", "Codex", agent)},
+		Factory: func() []agentregistry.HarnessAgent {
+			return []agentregistry.HarnessAgent{readinessHarness("codex", "Codex", agent)}
+		},
+		Now: func() time.Time {
+			mu.Lock()
+			defer mu.Unlock()
+			return now
+		},
+	})
+	svc := &Service{readiness: coordinator}
+	state := func() domain.AgentInstallationState {
+		got, err := svc.EnsureInstallationReadiness(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.Agents[0].Installation.State
+	}
+	if got := state(); got != domain.AgentInstallationNotInstalled {
+		t.Fatalf("first pass = %q, want not_installed", got)
+	}
+	// The user installs Codex outside AO; the next periodic pass is hours later.
+	mu.Lock()
+	installed = true
+	now = now.Add(6 * time.Hour)
+	mu.Unlock()
+	if got := state(); got != domain.AgentInstallationInstalled {
+		t.Fatalf("later pass = %q, want installed", got)
+	}
+	if calls := agent.authCalls.Load(); calls != 0 {
+		t.Fatalf("auth checks = %d, want none from an installation refresh", calls)
+	}
+}

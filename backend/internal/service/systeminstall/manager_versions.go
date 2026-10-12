@@ -210,6 +210,7 @@ func parseHomebrewVersion(raw, pkg string, cask, outdated bool) string {
 	var info struct {
 		Formulae []struct {
 			Name           string `json:"name"`
+			FullName       string `json:"full_name"`
 			CurrentVersion string `json:"current_version"`
 			Versions       struct {
 				Stable string `json:"stable"`
@@ -218,6 +219,7 @@ func parseHomebrewVersion(raw, pkg string, cask, outdated bool) string {
 		Casks []struct {
 			Name           json.RawMessage `json:"name"`
 			Token          string          `json:"token"`
+			FullToken      string          `json:"full_token"`
 			CurrentVersion string          `json:"current_version"`
 			Version        string          `json:"version"`
 		} `json:"casks"`
@@ -233,7 +235,8 @@ func parseHomebrewVersion(raw, pkg string, cask, outdated bool) string {
 			if token == "" && outdated {
 				_ = json.Unmarshal(entry.Name, &token)
 			}
-			if token != pkg {
+			// A tapped cask (owner/tap/token) is named in full only by full_token.
+			if token != pkg && (entry.FullToken == "" || entry.FullToken != pkg) {
 				continue
 			}
 			if outdated {
@@ -244,7 +247,9 @@ func parseHomebrewVersion(raw, pkg string, cask, outdated bool) string {
 		return ""
 	}
 	for _, entry := range info.Formulae {
-		if entry.Name != pkg {
+		// brew info names a tapped formula (owner/tap/name) in full only in
+		// full_name; name is the short form an unqualified package matches.
+		if entry.Name != pkg && (entry.FullName == "" || entry.FullName != pkg) {
 			continue
 		}
 		if outdated {

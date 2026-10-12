@@ -541,6 +541,36 @@ func TestResolveFallsBackWhenSavedDefaultModelLeftCatalog(t *testing.T) {
 	}
 }
 
+func TestResolveDropsRetiredModelOnlyCodexDefault(t *testing.T) {
+	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessCodex}
+	current := tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "current-model", IsDefault: true}}}}
+	m := &Manager{modelCatalog: current, defaults: harnessDefaultOnly{Model: "retired-model"}, logger: slog.New(slog.DiscardHandler)}
+	got, err := m.resolveAgentConfig(context.Background(), cfg, domain.ProjectConfig{})
+	if err != nil || got.Model != "" {
+		t.Fatalf("got %+v, %v; want the harness's own default", got, err)
+	}
+	m.defaults = harnessDefaultOnly{Model: "current-model"}
+	if got, err := m.resolveAgentConfig(context.Background(), cfg, domain.ProjectConfig{}); err != nil || got.Model != "current-model" {
+		t.Fatalf("listed saved model = %+v, %v", got, err)
+	}
+	// A project model is the project's choice, not the saved default's.
+	m.defaults = harnessDefaultOnly{Model: "retired-model"}
+	project := domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "project-model"}}}
+	if got, err := m.resolveAgentConfig(context.Background(), cfg, project); err != nil || got.Model != "project-model" {
+		t.Fatalf("project model = %+v, %v", got, err)
+	}
+	// Without a usable catalog the saved model is passed through as before.
+	for name, catalog := range map[string]tuningCatalog{
+		"lookup failed": {err: errors.New("offline")},
+		"stale":         {catalog: ports.AgentModelCatalog{Stale: true, Models: []ports.AgentModelInfo{{ID: "current-model"}}}},
+	} {
+		m.modelCatalog = catalog
+		if got, err := m.resolveAgentConfig(context.Background(), cfg, domain.ProjectConfig{}); err != nil || got.Model != "retired-model" {
+			t.Fatalf("%s: got %+v, %v; want the saved model unchanged", name, got, err)
+		}
+	}
+}
+
 func TestResolveFallsBackWhenSavedDefaultModelCannotBeValidated(t *testing.T) {
 	cfg := ports.SpawnConfig{ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}
 	for name, catalog := range map[string]tuningCatalog{

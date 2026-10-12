@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -342,6 +343,12 @@ func (s requestPlanner) planKiroInstall() Plan {
 }
 
 func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Plan {
+	if operation == AgentOperationUpdate && plan.Method == "npm" && plan.daemonPrefixUnwritable {
+		// The installed copy may live under another, writable prefix (nvm, fnm,
+		// ~/.local). The update validates that prefix once the owner is known.
+		plan.Unsupported, plan.Reason, plan.daemonPrefixUnwritable = false, "", false
+		plan.owningPrefixUnchecked = true
+	}
 	if operation == AgentOperationInstall || plan.Unsupported {
 		return plan
 	}
@@ -374,6 +381,9 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	if operation == AgentOperationUpdate {
 		switch plan.Method {
 		case "homebrew":
+			// The runner sets HOMEBREW_NO_AUTO_UPDATE, and the advisory reads the
+			// live Homebrew API, so refresh local metadata before upgrading.
+			plan.Prepare = [][]string{{"brew", "update"}}
 			plan.Command = []string{"brew", "upgrade"}
 			if plan.PackageCask {
 				plan.Command = append(plan.Command, "--cask")
@@ -554,11 +564,14 @@ func targetInstalledCopy(plan Plan, target Target, binaryPath string) Plan {
 	return plan
 }
 
-// requireWritableOwningPrefix re-checks writability when an npm update was
-// pointed at the prefix that owns the binary instead of the daemon's own
-// prefix, which is the one planNPM validated.
+// requireWritableOwningPrefix validates the prefix an npm update acts on when
+// it is not the daemon prefix planNPM already validated: the prefix that owns
+// the installed binary, or the daemon prefix that planNPM found unwritable.
+// When that prefix runs its own Node, that Node must meet the harness minimum.
 func (s *Service) requireWritableOwningPrefix(ctx context.Context, plan Plan, plannedPrefix string) Plan {
-	if plan.Method != "npm" || plan.Unsupported || plan.PackagePrefix == "" || samePath(plan.PackagePrefix, plannedPrefix) {
+	unchecked := plan.owningPrefixUnchecked
+	plan.owningPrefixUnchecked = false
+	if plan.Method != "npm" || plan.Unsupported || plan.PackagePrefix == "" || (!unchecked && samePath(plan.PackagePrefix, plannedPrefix)) {
 		return plan
 	}
 	writable := false
@@ -568,6 +581,41 @@ func (s *Service) requireWritableOwningPrefix(ctx context.Context, plan Plan, pl
 	if !writable {
 		plan.Unsupported = true
 		plan.Reason = fmt.Sprintf("The npm prefix %s that holds the %s sessions run is not writable by the current user. Update it manually; AO will not use sudo.", plan.PackagePrefix, plan.Target)
+		return plan
+	}
+	if len(plan.Command) > 1 && plan.Command[0] != "npm" {
+		// npmCommandForPrefix chose this prefix's own Node.
+		minimum := minimumNodeVersionForTarget(plan.Target)
+		version, ok := s.nodeVersion(ctx, plan.Command[0])
+		if !ok || !versionAtLeast(version, minimum) {
+			plan.Unsupported = true
+			plan.Reason = fmt.Sprintf("Node.js %s+ is required to update %s with the Node in %s.", formatToolVersion(minimum), plan.Target, plan.PackagePrefix)
+		}
 	}
 	return plan
+}
+
+// unvalidatedOwnerPlan rejects an npm update whose owning prefix could not be
+// found, since the daemon's own prefix already failed validation.
+func unvalidatedOwnerPlan(plan Plan) Plan {
+	if !plan.owningPrefixUnchecked {
+		return plan
+	}
+	plan.owningPrefixUnchecked = false
+	plan.Unsupported = true
+	plan.Reason = fmt.Sprintf("npm's global prefix %s is not writable by the current user, and AO could not find another npm prefix that holds %s. Update it manually; AO will not use sudo.", plan.PackagePrefix, plan.Target)
+	return plan
+}
+
+func (s *Service) nodeVersion(ctx context.Context, node string) ([3]int, bool) {
+	if s.commands == nil {
+		return [3]int{}, false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out := &capturedOutput{max: 4096}
+	if err := s.commands.Run(probeCtx, []string{node, "--version"}, out, out); err != nil {
+		return [3]int{}, false
+	}
+	return parseToolVersion(strings.TrimSpace(out.String()))
 }

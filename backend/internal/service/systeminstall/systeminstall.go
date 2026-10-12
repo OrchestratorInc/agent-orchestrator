@@ -175,8 +175,13 @@ func (f executableFinderFunc) LookPath(file string) (string, error) { return f(f
 // branch on Unsupported; callers that only need to know whether a route exists
 // should test len(Command).
 type Plan struct {
-	Target              Target
-	Command             []string // argv, e.g. ["brew", "install", "tmux"]
+	Target  Target
+	Command []string // argv, e.g. ["brew", "install", "tmux"]
+	// Prepare runs before Command with the same environment, e.g. refreshing
+	// Homebrew's metadata so `brew upgrade` sees the release AO announced. A
+	// failed step is noted in the output; Command still runs and post-update
+	// verification decides the outcome.
+	Prepare             [][]string
 	Script              *ports.InstallScriptCommand
 	Package             string
 	PackagePrefix       string
@@ -189,6 +194,14 @@ type Plan struct {
 	Method              string
 	DocsURL             string
 	ExpectedDestination string
+
+	// daemonPrefixUnwritable marks an npm plan rejected only because the
+	// daemon's own global prefix is not writable. An update acts on the prefix
+	// that owns the installed binary instead, so it validates that one.
+	daemonPrefixUnwritable bool
+	// owningPrefixUnchecked marks an npm update whose target prefix still has
+	// to be validated once the installed binary's owner is known.
+	owningPrefixUnchecked bool
 }
 
 // AgentPlan is the display-safe plan returned to the settings page. Command is
@@ -307,11 +320,20 @@ type SessionLister interface {
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
 }
 
+// ReviewerLister exposes reviewer processes, which have no session row of
+// their own: live TUI reviewer panes and reviewer chats with a live controller.
+type ReviewerLister interface {
+	ListLiveReviewerHandles(ctx context.Context) ([]domain.ReviewerHandle, error)
+	ListRecoverableChatReviews(ctx context.Context) ([]domain.Review, error)
+}
+
 // Deps are the durable and adapter-backed dependencies used for harness jobs.
 type Deps struct {
 	JobStore ports.AgentInstallJobStore
 	Verifier HarnessVerifier
 	Sessions SessionLister
+	// Reviewers, when set, keeps maintenance away from live reviewers too.
+	Reviewers ReviewerLister
 	// DisableUpdateChecks stops update advisories from reaching the network
 	// (AO_HARNESS_UPDATE_CHECKS=off).
 	DisableUpdateChecks bool
@@ -339,6 +361,7 @@ type Service struct {
 	jobStore            ports.AgentInstallJobStore
 	verifier            HarnessVerifier
 	sessions            SessionLister
+	reviewers           ReviewerLister
 	// goos selects the platform branch in planFor. Real use is always
 	// runtime.GOOS; tests override it to exercise every OS branch from one
 	// machine, the same seam lookPath provides for PATH probing.
@@ -418,6 +441,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		jobStore:             deps.JobStore,
 		verifier:             deps.Verifier,
 		sessions:             deps.Sessions,
+		reviewers:            deps.Reviewers,
 		updateChecksDisabled: deps.DisableUpdateChecks,
 		goos:                 runtime.GOOS,
 		installTimeout:       defaultInstallTimeout,
@@ -655,6 +679,9 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 				}
 			}
 		}
+		if err := s.requireNoLiveReviewer(ctx, target); err != nil {
+			return Job{}, err
+		}
 	}
 
 	var plan Plan
@@ -683,6 +710,7 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 			plan = targetInstalledCopy(plan, target, baseline.path)
 			plan = s.requireWritableOwningPrefix(ctx, plan, plannedPrefix)
 		}
+		plan = unvalidatedOwnerPlan(plan)
 	}
 	if operation == AgentOperationUpdate && expected != "" {
 		if baseline == nil {
@@ -759,6 +787,34 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		s.runAgentOperation(s.backgroundContext, plan, operation, job, baseline)
 	}()
 	return initial, nil
+}
+
+// requireNoLiveReviewer refuses a harness operation while a reviewer runs on
+// that harness. Reviewer launches hold the harness gate until their handle is
+// recorded, so a reviewer that is still starting is refused at the gate.
+func (s *Service) requireNoLiveReviewer(ctx context.Context, target Target) error {
+	if s.reviewers == nil {
+		return nil
+	}
+	handles, err := s.reviewers.ListLiveReviewerHandles(ctx)
+	if err != nil {
+		return fmt.Errorf("systeminstall: list reviewers before harness operation: %w", err)
+	}
+	for _, handle := range handles {
+		if string(handle.Harness) == string(target) {
+			return fmt.Errorf("%w: close the %s reviewer for session %s before changing its installation", ErrHarnessActive, target, handle.SessionID)
+		}
+	}
+	chats, err := s.reviewers.ListRecoverableChatReviews(ctx)
+	if err != nil {
+		return fmt.Errorf("systeminstall: list reviewer chats before harness operation: %w", err)
+	}
+	for _, review := range chats {
+		if string(review.Harness) == string(target) && review.ControllerGeneration != "" {
+			return fmt.Errorf("%w: close the %s reviewer for session %s before changing its installation", ErrHarnessActive, target, review.SessionID)
+		}
+	}
+	return nil
 }
 
 func (s *Service) harnessGate(harness domain.AgentHarness) *sync.RWMutex {
@@ -1068,13 +1124,21 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 				_, _ = fmt.Fprintf(out, "\nsource: %s\nsha256: %s\n", command.URL, result.SHA256)
 			}
 		}
-	} else if s.installCommands != nil {
-		runErr = s.installCommands.RunInstall(ctx, ports.InstallCommand{
-			Argv: plan.Command,
-			Env:  env,
-		}, out, out)
 	} else {
-		runErr = s.commands.Run(ctx, plan.Command, out, out)
+		runCommand := func(argv []string) error {
+			if s.installCommands != nil {
+				return s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: env}, out, out)
+			}
+			return s.commands.Run(ctx, argv, out, out)
+		}
+		for _, argv := range plan.Prepare {
+			if err := runCommand(argv); err != nil && ctx.Err() == nil {
+				_, _ = fmt.Fprintf(out, "\n%s failed (%v); continuing.\n", strings.Join(argv, " "), err)
+			}
+		}
+		if ctx.Err() == nil {
+			runErr = runCommand(plan.Command)
+		}
 	}
 	if ctx.Err() == context.DeadlineExceeded {
 		s.finishAgentJob(job, StatusFailed, out.String(), fmt.Sprintf("%s timed out after %s", operation, s.installTimeout), "")
@@ -1241,7 +1305,11 @@ func displayCommand(plan Plan) string {
 	if plan.NeedsRoot && len(argv) > 0 {
 		argv = append([]string{"sudo"}, argv...)
 	}
-	return strings.Join(argv, " ")
+	steps := make([]string, 0, len(plan.Prepare)+1)
+	for _, prepare := range plan.Prepare {
+		steps = append(steps, strings.Join(prepare, " "))
+	}
+	return strings.Join(append(steps, strings.Join(argv, " ")), " && ")
 }
 
 // capturedOutput is an io.Writer that keeps only the last max bytes written,
@@ -1477,6 +1545,7 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 		}
 		if !prefixWritable {
 			plan.Unsupported = true
+			plan.daemonPrefixUnwritable = privatePrefix == ""
 			if privatePrefix != "" {
 				plan.Reason = fmt.Sprintf("OpenCode 2's private npm prefix %s is not writable by the current user.", prefix)
 			} else {

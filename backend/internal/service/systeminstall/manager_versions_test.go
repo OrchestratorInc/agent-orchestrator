@@ -327,6 +327,37 @@ func TestHomebrewTapVersionUsesLocalMetadataOnly(t *testing.T) {
 	}
 }
 
+func TestHomebrewCurrentTapFormulaMatchesInfoFullName(t *testing.T) {
+	client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		t.Fatalf("tap package queried the Homebrew API: %s", request.URL)
+		return nil, nil
+	})}
+	// An already-current tap formula is absent from brew outdated; brew info
+	// names it "opencode" with the qualified name only in full_name.
+	commands := managerCommandRunner(t,
+		managerCommandResponse{
+			argv:   []string{"brew", "outdated", "--json=v2", "--formula", "anomalyco/tap/opencode"},
+			output: `{"formulae":[],"casks":[]}`,
+		},
+		managerCommandResponse{
+			argv:   []string{"brew", "info", "--json=v2", "--formula", "anomalyco/tap/opencode"},
+			output: `{"formulae":[{"name":"opencode","full_name":"anomalyco/tap/opencode","versions":{"stable":"1.18.35"}}],"casks":[]}`,
+		},
+	)
+	got, err := newManagedVersionChecker(commands, client)(context.Background(), Plan{Method: "homebrew", Package: "anomalyco/tap/opencode"})
+	if err != nil || got.Latest != "1.18.35" {
+		t.Fatalf("result=%+v err=%v", got, err)
+	}
+	// An unqualified package still matches the short name, and a qualified
+	// package never matches another tap's formula of the same short name.
+	if got := parseHomebrewVersion(`{"formulae":[{"name":"opencode","full_name":"opencode","versions":{"stable":"2.0.0"}}]}`, "opencode", false, false); got != "2.0.0" {
+		t.Fatalf("short name = %q", got)
+	}
+	if got := parseHomebrewVersion(`{"formulae":[{"name":"opencode","full_name":"other/tap/opencode","versions":{"stable":"9.0.0"}}]}`, "anomalyco/tap/opencode", false, false); got != "" {
+		t.Fatalf("other tap matched: %q", got)
+	}
+}
+
 func TestNodeManagersReadRegistryWithoutStartingManager(t *testing.T) {
 	for _, method := range []string{"npm", "pnpm", "yarn", "bun"} {
 		t.Run(method, func(t *testing.T) {

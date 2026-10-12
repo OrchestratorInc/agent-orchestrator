@@ -381,3 +381,76 @@ func TestNPMUpdateRequiresWritableOwningPrefix(t *testing.T) {
 		t.Fatalf("unwritable owning prefix = %+v, want unsupported naming /usr/local", got)
 	}
 }
+
+// The daemon's npm prefix being unwritable says nothing about the prefix that
+// owns the installed binary; an update validates that one instead.
+func TestNPMUpdateValidatesOwningPrefixNotDaemonPrefix(t *testing.T) {
+	const pkg = "@openai/codex"
+	setup := func(t *testing.T, ownerWritable bool, nodeVersion string) (*Service, *[][]string) {
+		prefix := filepath.Join(t.TempDir(), ".nvm", "versions", "node", "v22.19.0")
+		entry := writeNPMPackage(t, filepath.Join(prefix, "lib", "node_modules"), pkg)
+		bin := filepath.Join(prefix, "bin", "codex")
+		linkBinary(t, bin, entry)
+		for _, file := range []string{filepath.Join(prefix, "bin", "node"), filepath.Join(prefix, "lib", "node_modules", "npm", "bin", "npm-cli.js")} {
+			if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(file, nil, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		resolvedPrefix, _ := filepath.EvalSymlinks(prefix)
+		s := newTestService("darwin", "npm")
+		s.installCapabilities = installCapabilitiesStub{prefix: "/usr/local", writable: false}
+		s.pathWritable = pathWritableProbeFunc(func(_ context.Context, path string) (bool, error) {
+			return path == resolvedPrefix && ownerWritable, nil
+		})
+		s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+			return VerifyResult{ResolvedPath: bin, Output: "codex-cli 1.2.0"}, nil
+		})
+		s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
+		ran := &[][]string{}
+		s.commands = commandRunnerFunc(func(_ context.Context, argv []string, stdout, _ io.Writer) error {
+			*ran = append(*ran, argv)
+			if len(argv) == 2 && argv[1] == "--version" {
+				_, err := io.WriteString(stdout, nodeVersion+"\n")
+				return err
+			}
+			return nil
+		})
+		return s, ran
+	}
+
+	s, ran := setup(t, true, "v22.19.0")
+	job, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate)
+	if err != nil {
+		t.Fatalf("update rejected for the daemon's prefix: %v", err)
+	}
+	if job.Status == StatusUnsupported {
+		t.Fatalf("job = %+v", job)
+	}
+	s.workers.Wait()
+	if len(*ran) < 2 || !slices.Contains((*ran)[len(*ran)-1], "install") || !slices.Contains((*ran)[len(*ran)-1], "--prefix") {
+		t.Fatalf("ran %v, want an install into the owning prefix", *ran)
+	}
+
+	for name, tc := range map[string]struct {
+		writable bool
+		node     string
+		reason   string
+	}{
+		"owning prefix unwritable": {false, "v22.19.0", "not writable"},
+		"owning Node too old":      {true, "v14.0.0", "Node.js"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, _ := setup(t, tc.writable, tc.node)
+			job, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if job.Status != StatusUnsupported || !strings.Contains(job.Error, tc.reason) {
+				t.Fatalf("job = %+v, want unsupported mentioning %q", job, tc.reason)
+			}
+		})
+	}
+}

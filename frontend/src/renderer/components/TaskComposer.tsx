@@ -514,7 +514,14 @@ export function TaskComposer({
 			Object.prototype.hasOwnProperty.call(rememberedConfigForSelectedAgent, "effort"),
 	);
 	const inheritedHarnessEffort = selectedModel === harnessModel ? harnessDefault?.effort ?? "" : "";
-	const inheritedEffort = (selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "") || inheritedHarnessEffort;
+	const projectEffortForSelectedAgent = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
+	// As the daemon resolves it: a project effort set without a project model was
+	// chosen for the harness's own default model. When the saved default model
+	// fills in and does not list that effort, the saved default's effort applies.
+	const savedModelFillsIn = harnessModel !== "" && selectedModel === harnessModel && !projectModelOrMode;
+	const projectEffortUnsupported = savedModelFillsIn && projectEffortForSelectedAgent !== "" && modelCatalogQuery.data !== undefined &&
+		!(catalogModels.find((item) => item.id === selectedModel)?.efforts ?? []).includes(projectEffortForSelectedAgent);
+	const inheritedEffort = (projectEffortUnsupported ? "" : projectEffortForSelectedAgent) || inheritedHarnessEffort;
 	const defaultEffortForSelectedAgent = rememberedEffortIsExplicit
 		? (rememberedConfigForSelectedAgent?.effort ?? "")
 		: inheritedEffort;

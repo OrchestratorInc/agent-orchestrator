@@ -70,6 +70,18 @@ func (s *Service) EnsureReadiness(ctx context.Context, agentIDs []string, purpos
 	return s.withReadinessUsage(ctx, items)
 }
 
+// EnsureInstallationReadiness refreshes installation observations older than
+// the display policy, without authentication checks, and returns every
+// snapshot. Periodic work uses it so a harness installed outside AO since the
+// last observation is seen without anyone opening a page.
+func (s *Service) EnsureInstallationReadiness(ctx context.Context) (Readiness, error) {
+	items, err := s.readiness.EnsureInstallation(ctx, nil, domain.AgentReadinessPurposeDisplay)
+	if err != nil {
+		return Readiness{}, err
+	}
+	return s.withReadinessUsage(ctx, items)
+}
+
 // EnsureAgentReadiness is the narrow service boundary used by launch paths.
 func (s *Service) EnsureAgentReadiness(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error) {
 	result, err := s.EnsureReadiness(ctx, []string{agentID}, purpose)

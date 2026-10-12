@@ -14,9 +14,10 @@ import (
 // watchInstalledHarnessUpdates checks installed harnesses for updates once
 // the startup readiness passes, then again every interval for as long as the
 // daemon runs, so a long-lived daemon notices new releases without a restart.
-// Each pass reads the cached installation observations rather than probing
-// every adapter again, so it also covers harnesses installed since the last
-// pass. The first pass shares in-flight work and cached results with the HTTP
+// Each pass first refreshes installation observations older than the display
+// policy (binary lookups only, no authentication checks), so it covers
+// harnesses installed outside AO since the last pass. The first pass runs just
+// after warm-up and reuses those observations. The first pass shares in-flight work and cached results with the HTTP
 // endpoint. Later passes force a fresh lookup: a result cached just under one
 // interval ago would otherwise be served again for another interval. A pass
 // submits every installed harness at once; the installer service runs at most

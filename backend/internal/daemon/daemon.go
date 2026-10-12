@@ -669,6 +669,7 @@ func Run() error {
 		JobStore:            store,
 		Verifier:            systeminstall.NewVerifier(agents, hostCommands),
 		Sessions:            store,
+		Reviewers:           store,
 		DisableUpdateChecks: !cfg.HarnessUpdateChecks,
 		PrivateNPMPrefixes:  privateNPMPrefixes,
 	})
@@ -1041,7 +1042,7 @@ func Run() error {
 		// migration and fencing reconcile that gate the port bind.
 		readinessDone := agentSvc.WarmReadiness()
 		if cfg.HarnessUpdateChecks {
-			go watchInstalledHarnessUpdates(ctx, readinessDone, cfg.HarnessUpdateInterval, agentSvc.CachedReadiness, func(ctx context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error) {
+			go watchInstalledHarnessUpdates(ctx, readinessDone, cfg.HarnessUpdateInterval, agentSvc.EnsureInstallationReadiness, func(ctx context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error) {
 				return systemInstall.UpdateAdvisory(ctx, target, refresh)
 			}, log)
 		}
