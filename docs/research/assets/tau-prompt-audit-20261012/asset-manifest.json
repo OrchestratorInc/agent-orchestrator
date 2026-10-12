@@ -239,7 +239,13 @@
       "SHA256": "cb96edd5971272be9821aabd376b3db9d734044392e56f7c6dbf9bc86edca72c",
       "utc": "2026-10-12T21:15:34.959231+00:00",
       "scope": "Curated receipt; source scope retained"
+    },
+    {
+      "path": "tau-focused-005/receipt-original.json",
+      "bytes": 2318,
+      "SHA256": "db2d69c34b23b1f35c217401e01ce4a110063ce342ec82cdc91815e5b8e3ead1",
+      "scope": "Original structured receipt, byte-identical to retained local raw receipt"
     }
   ],
-  "qualification": "Copied byte-identically. Earlier failures and blank captures are not qualifying proof. No native profiles, DBs, private state or complete raw logs published."
+  "qualification": "Original PNG bytes unchanged. Original structured receipt bytes retained; receipt005 adds a separately fingerprinted assessment and receipt-original.json preserves the original. No profiles, DBs, private state or complete raw logs published."
 }
