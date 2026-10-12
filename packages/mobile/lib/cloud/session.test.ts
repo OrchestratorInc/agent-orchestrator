@@ -31,6 +31,23 @@ function harness(initial: CloudTokens | null, refresh: () => Promise<CloudTokens
 }
 
 describe("createTokenProvider", () => {
+	it("coalesces credential reads so a late stale snapshot cannot consume a rotated grant twice", async () => {
+		let firstRead!: (value: CloudTokens) => void;
+		let secondRead!: (value: CloudTokens) => void;
+		let stored: CloudTokens | null = stale;
+		const read = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { firstRead = resolve; }))
+			.mockImplementationOnce(() => new Promise((resolve) => { secondRead = resolve; }));
+		const refresh = vi.fn(async () => fresh);
+		const provider = createTokenProvider({ read, refresh, write: async (value) => { stored = value; }, clear: async () => { stored = null; }, now: () => 0 });
+		const a = provider.getToken();
+		const b = provider.getToken();
+		firstRead(stale);
+		expect(await a).toBe("fresh");
+		secondRead?.(stale);
+		expect(await b).toBe("fresh");
+		expect(refresh).toHaveBeenCalledOnce();
+		expect(stored).toEqual(fresh);
+	});
 	it("returns a live token without refreshing", async () => {
 		const { provider, refreshSpy } = harness(fresh, async () => fresh);
 		expect(await provider.getToken()).toBe("fresh");

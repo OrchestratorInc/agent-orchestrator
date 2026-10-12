@@ -1,5 +1,5 @@
 import { Feather } from "@expo/vector-icons";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useCloudAuth } from "./cloud/authStore";
 import { CLOUD_BASE_URL } from "./cloud/config";
@@ -16,6 +16,11 @@ export function CloudSignInSheet({ onDone, onClose }: { onDone: () => void; onCl
 	const t = useTheme();
 	const s = useThemedStyles(makeStyles);
 	const cloudAuth = useCloudAuth();
+	const mounted = useRef(true);
+	useEffect(() => {
+		mounted.current = true;
+		return () => { mounted.current = false; };
+	}, []);
 	const [mode, setMode] = useState<Mode>("sign-in");
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
@@ -36,11 +41,11 @@ export function CloudSignInSheet({ onDone, onClose }: { onDone: () => void; onCl
 		setSubmitting(true);
 		setError(null);
 		try {
-			if (await cloudAuth.signInWithWorkOS()) onDone();
+			if (await cloudAuth.signInWithWorkOS() && mounted.current) onDone();
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : "That didn't work.");
+			if (mounted.current) setError(cause instanceof Error ? cause.message : "That didn't work.");
 		} finally {
-			setSubmitting(false);
+			if (mounted.current) setSubmitting(false);
 		}
 	}
 
@@ -65,11 +70,11 @@ export function CloudSignInSheet({ onDone, onClose }: { onDone: () => void; onCl
 					orgName: name,
 				});
 			}
-			onDone();
+			if (mounted.current) onDone();
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : "That didn't work.");
+			if (mounted.current) setError(cause instanceof Error ? cause.message : "That didn't work.");
 		} finally {
-			setSubmitting(false);
+			if (mounted.current) setSubmitting(false);
 		}
 	}
 

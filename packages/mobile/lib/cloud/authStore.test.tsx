@@ -14,6 +14,7 @@ vi.mock("expo-crypto", () => ({
 	digestStringAsync: async () => "digest",
 	CryptoDigestAlgorithm: { SHA256: "SHA256" }, CryptoEncoding: { BASE64: "base64" },
 }));
+vi.mock("../accountHosts", () => ({ cancelAccountHostSync: vi.fn() }));
 vi.mock("react-native", () => ({
 	AppState: {
 		addEventListener: (_event: string, listener: (state: string) => void) => {
@@ -24,6 +25,11 @@ vi.mock("react-native", () => ({
 }));
 
 import { CloudAuthProvider, useCloudAuth, type CloudAuthState } from "./authStore";
+import { createAccountSessionOwner } from "./sessionOwner";
+import { createTokenProvider } from "./session";
+import { readTokens, writeTokens, clearTokens } from "./tokens";
+import { createMobileCloudClient } from "./client";
+import { resolveCloudDeployment } from "./deployment";
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -46,7 +52,13 @@ function Probe() {
 	return null;
 }
 async function mount() {
-	await act(async () => { renderer = create(<CloudAuthProvider baseUrl="http://127.0.0.1:8081"><Probe /></CloudAuthProvider>); });
+	const deployment = resolveCloudDeployment({ cloudUrl: "http://127.0.0.1:8081", development: true });
+	const tokens = createTokenProvider({ read: () => readTokens(deployment.key), write: (value) => writeTokens(value, deployment.key), clear: () => clearTokens(deployment.key), refresh: async () => ({ accessToken: newToken, refreshToken: "new-refresh", expiresAt: 4_000_000_000_000 }), now: Date.now });
+	const owner = createAccountSessionOwner({ tokens, readAccount: async () => {
+		const { user } = await createMobileCloudClient({ baseUrl: deployment.baseUrl, tokens }).getCurrentAccount();
+		return { id: user.id, email: user.email };
+	} });
+	await act(async () => { renderer = create(<CloudAuthProvider owner={owner} baseUrl="http://127.0.0.1:8081"><Probe /></CloudAuthProvider>); });
 }
 async function replaceSession(method: "local" | "register" | "hosted") {
 	await act(async () => {
@@ -65,10 +77,10 @@ beforeEach(() => {
 		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
 		error(...args);
 	});
-	raw = JSON.stringify({ accessToken: "old", expiresAt: 4_000_000_000_000 });
+	raw = JSON.stringify({ version: 2, deploymentKey: resolveCloudDeployment({ cloudUrl: "http://127.0.0.1:8081", development: true }).key, tokens: { accessToken: "old", expiresAt: 4_000_000_000_000 } });
 	native.getItemAsync.mockReset().mockImplementation(async () => raw);
 	native.setItemAsync.mockReset().mockImplementation(async (_key, value) => { raw = value; });
-	native.deleteItemAsync.mockReset().mockImplementation(async () => { raw = null; });
+	native.deleteItemAsync.mockReset().mockImplementation(async (key: string) => { if (key.startsWith("ao.cloud.tokens.v2.")) raw = null; });
 	native.openAuthSessionAsync.mockReset().mockImplementation(async (url: string) => ({
 		type: "success", url: `aoagents.ao://callback?code=code&state=${new URL(url).searchParams.get("state")}`,
 	}));
@@ -88,6 +100,18 @@ afterEach(async () => {
 });
 
 describe("CloudAuthProvider session boundaries", () => {
+	it("restores the existing workspace when a new sign-in browser is dismissed", async () => {
+		await mount();
+		expect(auth.orgId).toBe("same-org");
+		const browser = deferred<{ type: string }>();
+		native.openAuthSessionAsync.mockImplementationOnce(() => browser.promise);
+		let pending!: Promise<boolean>;
+		await act(async () => { pending = auth.signInWithWorkOS(); });
+		expect(auth.orgId).toBeNull();
+		await act(async () => { browser.resolve({ type: "cancel" }); await pending; });
+		expect(auth.orgId).toBe("same-org");
+		expect(auth.signedIn).toBe(true);
+	});
 	it("reuses the browser identity when signing in after sign-out", async () => {
 		await mount();
 		await act(async () => { await auth.signOut(); });
@@ -109,7 +133,7 @@ describe("CloudAuthProvider session boundaries", () => {
 	});
 
 	it("keeps replacement credentials when an earlier refresh storage write finishes late", async () => {
-		raw = JSON.stringify({ accessToken: "expired", refreshToken: "old-refresh", expiresAt: 0 });
+		raw = JSON.stringify({ version: 2, deploymentKey: resolveCloudDeployment({ cloudUrl: "http://127.0.0.1:8081", development: true }).key, tokens: { accessToken: "expired", refreshToken: "old-refresh", expiresAt: 0 } });
 		const write = deferred<void>();
 		native.setItemAsync.mockImplementationOnce(async (_key, value) => { await write.promise; raw = value; });
 		await mount();
@@ -117,8 +141,8 @@ describe("CloudAuthProvider session boundaries", () => {
 		let replacement!: Promise<void>;
 		await act(async () => { replacement = auth.signInLocal("ada@example.com", "password"); });
 		await act(async () => { write.resolve(); await replacement; });
-		expect(JSON.parse(raw!).accessToken).toBe(newToken);
-		expect(JSON.parse(raw!).refreshToken).toBeUndefined();
+		expect(JSON.parse(raw!).tokens.accessToken).toBe(newToken);
+		expect(JSON.parse(raw!).tokens.refreshToken).toBeUndefined();
 		expect(auth.signedIn).toBe(true);
 	});
 
@@ -132,7 +156,7 @@ describe("CloudAuthProvider session boundaries", () => {
 		await act(async () => { response.resolve(unauthorized()); await pending; });
 		expect(auth.signedIn).toBe(true);
 		expect(auth.orgId).toBe("same-org");
-		expect(JSON.parse(raw!).accessToken).toBe(newToken);
+		expect(JSON.parse(raw!).tokens.accessToken).toBe(newToken);
 	});
 
 	it("invalidates the current session after its own request returns 401", async () => {
@@ -156,7 +180,7 @@ describe("CloudAuthProvider session boundaries", () => {
 		expect(await pending).toBe("discarded");
 		expect(fetchImpl).not.toHaveBeenCalled();
 		expect(auth.signedIn).toBe(true);
-		expect(JSON.parse(raw!).accessToken).toBe(newToken);
+		expect(JSON.parse(raw!).tokens.accessToken).toBe(newToken);
 	});
 });
 
@@ -181,7 +205,7 @@ describe("CloudAuthProvider organization recovery", () => {
 		await act(async () => { for (const listener of native.listeners) listener("active"); });
 		expect(auth.orgId).toBe("same-org");
 		expect(auth.orgError).toBeNull();
-		expect(JSON.parse(raw!).accessToken).toBe("old");
+		expect(JSON.parse(raw!).tokens.accessToken).toBe("old");
 	});
 
 	it("exposes initial resolution failure and recovers on retry without signing in", async () => {
@@ -194,7 +218,7 @@ describe("CloudAuthProvider organization recovery", () => {
 		await act(async () => { await auth.retryOrgResolution(); });
 		expect(auth.orgId).toBe("same-org");
 		expect(auth.orgError).toBeNull();
-		expect(JSON.parse(raw!).accessToken).toBe("old");
+		expect(JSON.parse(raw!).tokens.accessToken).toBe("old");
 	});
 
 	it("coalesces overlapping retries so an account gets only one new organization", async () => {

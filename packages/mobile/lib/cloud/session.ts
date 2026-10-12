@@ -26,6 +26,7 @@ export interface TokenProvider {
 export function createTokenProvider(deps: TokenProviderDeps): TokenProvider {
 	let inFlight: Promise<CloudTokens | null> | null = null;
 	let generation = 0;
+	let acquisition: Promise<string | null> | null = null;
 	let storageWrite: Promise<void> | null = null;
 
 	// SecureStore operations are asynchronous. Serialize mutations so a late
@@ -60,8 +61,7 @@ export function createTokenProvider(deps: TokenProviderDeps): TokenProvider {
 		}
 	}
 
-	return {
-		async getToken() {
+	async function acquire(): Promise<string | null> {
 			// Snapshot the generation before any await: sign-out may run its
 			// synchronous body (bumping `generation`) while this call is
 			// suspended on `deps.read()`, and any refresh kicked off below must
@@ -82,14 +82,24 @@ export function createTokenProvider(deps: TokenProviderDeps): TokenProvider {
 			}
 			const refreshed = await inFlight;
 			return startedAt === generation ? refreshed?.accessToken ?? null : null;
+	}
+
+	return {
+		getToken() {
+			if (acquisition) return acquisition;
+			const next = acquire().finally(() => { if (acquisition === next) acquisition = null; });
+			acquisition = next;
+			return next;
 		},
 		async replace(tokens) {
 			generation += 1;
+			acquisition = null;
 			inFlight = null;
 			await mutateStorage(() => deps.write(tokens));
 		},
 		async signOut() {
 			generation += 1;
+			acquisition = null;
 			inFlight = null;
 			await mutateStorage(() => deps.clear());
 		},

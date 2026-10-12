@@ -12,10 +12,16 @@ import type { TokenProvider } from "./session";
  */
 export function createMobileCloudClient(input: {
 	baseUrl: string;
-	tokens: TokenProvider;
+	tokens: Pick<TokenProvider, "getToken">;
+	isCurrent?: () => boolean;
 }): CloudClient {
 	return createCloudClient({
 		baseUrl: input.baseUrl,
-		getAccessToken: () => input.tokens.getToken(),
+		getAccessToken: async () => {
+			if (input.isCurrent?.() === false) throw new Error("Cloud account changed. Try again.");
+			const token = await input.tokens.getToken();
+			if (input.isCurrent?.() === false) throw new Error("Cloud account changed. Try again.");
+			return token;
+		},
 	});
 }

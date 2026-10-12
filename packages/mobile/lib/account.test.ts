@@ -1,13 +1,11 @@
 import { beforeEach, expect, it, vi } from "vitest";
-
 const secure = new Map<string, string>();
 const browser = vi.hoisted(() => ({ openAuthSessionAsync: vi.fn() }));
-
 vi.mock("expo-crypto", () => ({
 	getRandomBytes: () => new Uint8Array(32).fill(7),
+	getRandomBytesAsync: async () => new Uint8Array(32).fill(7),
 	digestStringAsync: async () => "YWJjZA==",
-	CryptoDigestAlgorithm: { SHA256: "SHA-256" },
-	CryptoEncoding: { BASE64: "base64" },
+	CryptoDigestAlgorithm: { SHA256: "SHA-256" }, CryptoEncoding: { BASE64: "base64" },
 }));
 vi.mock("expo-web-browser", () => browser);
 vi.mock("expo-secure-store", () => ({
@@ -15,92 +13,53 @@ vi.mock("expo-secure-store", () => ({
 	setItemAsync: vi.fn(async (key: string, value: string) => void secure.set(key, value)),
 	deleteItemAsync: vi.fn(async (key: string) => void secure.delete(key)),
 }));
-
+vi.mock("./accountHosts", () => ({ cancelAccountHostSync: vi.fn() }));
 import { getAccountAccessToken, loadAccount, signInToAccount, signOutOfAccount } from "./account";
+import { CLOUD_DEPLOYMENT } from "./cloud/config";
+import { getAccountSessionOwner } from "./cloud/sessionOwner";
+import { writeTokens } from "./cloud/tokens";
 
+const token = `header.${btoa(JSON.stringify({ exp: 4_000_000_000 }))}.sig`;
+const account = { id: "user_1", email: "person@example.com" };
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 beforeEach(async () => {
 	await signOutOfAccount();
-	secure.clear();
-	vi.clearAllMocks();
-	vi.unstubAllGlobals();
-	browser.openAuthSessionAsync.mockReset().mockImplementation(async (authorizationUrl: string, redirectUrl: string) => {
-		const state = new URL(authorizationUrl).searchParams.get("state");
-		return { type: "success", url: `${redirectUrl}?code=once&state=${state}` };
-	});
+	secure.clear(); vi.clearAllMocks(); vi.unstubAllGlobals();
+	browser.openAuthSessionAsync.mockReset().mockImplementation(async (authorizationUrl: string, redirectUrl: string) =>
+		({ type: "success", url: `${redirectUrl}?code=once&state=${new URL(authorizationUrl).searchParams.get("state")}` }));
+	vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (url) => String(url).endsWith("/me") ?
+		json({ user: account, organizations: [] }) : json({ access_token: token, refresh_token: "refresh" })));
 });
-
-it("uses the existing AO AuthKit callback and keeps refresh credentials in SecureStore", async () => {
-	const fetch = vi.fn(async (_url: string, _init: RequestInit) => ({ ok: true, json: async () => ({
-		user: { id: "user_1", email: "person@example.com" }, access_token: "access", refresh_token: "refresh",
-	}) }));
-	vi.stubGlobal("fetch", fetch);
-	await expect(signInToAccount()).resolves.toEqual({ id: "user_1", email: "person@example.com" });
-	const [authorizationUrl, redirectUrl] = browser.openAuthSessionAsync.mock.calls[0] as [string, string];
-	const authorization = new URL(authorizationUrl);
-	expect(redirectUrl).toBe("ao-app://callback");
-	expect(authorization.searchParams.get("redirect_uri")).toBe("https://api.aoagents.dev/app/auth/return");
-	expect(authorization.searchParams.get("code_challenge_method")).toBe("S256");
-	expect(authorization.searchParams.get("code_challenge")).toBe("YWJjZA");
-	expect(JSON.parse((fetch.mock.calls[0]?.[1] as RequestInit).body as string)).toMatchObject({
-		grant_type: "authorization_code", code: "once", code_verifier: expect.any(String),
-	});
-	expect(await loadAccount()).toEqual({ id: "user_1", email: "person@example.com" });
-	expect([...secure.values()].join(" ")).not.toContain("access");
-	await signOutOfAccount();
-	expect(await loadAccount()).toBeNull();
+it("shares Cloud's AuthKit callback, verified account, and SecureStore credential owner", async () => {
+	await expect(signInToAccount()).resolves.toEqual(account);
+	const [authorizationUrl, redirect] = browser.openAuthSessionAsync.mock.calls[0] as [string, string];
+	expect(redirect).toBe("aoagents.ao://callback");
+	expect(new URL(authorizationUrl).searchParams.get("redirect_uri")).toBe(CLOUD_DEPLOYMENT.redirectUri);
+	expect(getAccountSessionOwner(CLOUD_DEPLOYMENT).getSnapshot().account).toEqual(await loadAccount());
+	expect(await getAccountAccessToken()).toBe(token);
+	expect([...secure.keys()].every((key) => key.startsWith("ao.cloud.tokens.v2."))).toBe(true);
 });
-
-it("rejects a callback with the wrong state before exchanging a code", async () => {
-	browser.openAuthSessionAsync.mockResolvedValueOnce({ type: "success", url: "ao-app://callback?code=once&state=wrong" });
-	const fetch = vi.fn();
-	vi.stubGlobal("fetch", fetch);
-	await expect(signInToAccount()).rejects.toThrow(/verified/);
+it("rejects wrong state before exchanging a code", async () => {
+	browser.openAuthSessionAsync.mockResolvedValueOnce({ type: "success", url: "aoagents.ao://callback?code=once&state=wrong" });
+	await expect(signInToAccount()).rejects.toThrow(/state/i);
 	expect(fetch).not.toHaveBeenCalled();
 });
-
-it("refreshes with the rotating token and never sends it to the AO daemon", async () => {
-	secure.set("ao.account.session", JSON.stringify({ id: "user_1", email: "person@example.com", refreshToken: "old" }));
-	const fetch = vi.fn(async (_url: string, _init: RequestInit) => ({ ok: true, json: async () => ({
-		user: { id: "user_1", email: "person@example.com" }, access_token: "new-access", refresh_token: "new-refresh",
-	}) }));
-	vi.stubGlobal("fetch", fetch);
-	expect(await getAccountAccessToken()).toBe("new-access");
-	expect(JSON.parse((fetch.mock.calls[0]?.[1] as RequestInit).body as string)).toMatchObject({
-		grant_type: "refresh_token", refresh_token: "old",
-	});
-	expect(JSON.parse(secure.get("ao.account.session") ?? "{}").refreshToken).toBe("new-refresh");
-});
-
-it("does not sign out a newer account when an old refresh expires late", async () => {
-	secure.set("ao.account.session", JSON.stringify({ id: "old", email: "old@example.com", refreshToken: "old-refresh" }));
-	let finish!: (value: unknown) => void;
-	const fetch = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
-	vi.stubGlobal("fetch", fetch);
-	const pending = getAccountAccessToken().catch(() => null);
-	await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
-	await signOutOfAccount();
-	fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ user: { id: "new", email: "new@example.com" }, access_token: "new-access", refresh_token: "new-refresh" }) });
+it("shares rotating refresh with Cloud callers and uses only account APIs", async () => {
 	await signInToAccount();
-	finish({ ok: false, json: async () => ({ error: "invalid_grant" }) });
-	await pending;
-	expect(await loadAccount()).toEqual({ id: "new", email: "new@example.com" });
-	expect(await getAccountAccessToken()).toBe("new-access");
+	await writeTokens({ accessToken: "expired", refreshToken: "old", expiresAt: 0 });
+	const request = vi.fn<typeof fetch>(async () => json({ access_token: token, refresh_token: "rotated" }));
+	vi.stubGlobal("fetch", request);
+	expect(await Promise.all([getAccountAccessToken(), getAccountSessionOwner(CLOUD_DEPLOYMENT).getToken()])).toEqual([token, token]);
+	expect(request).toHaveBeenCalledOnce();
+	expect(request.mock.calls[0]?.[0]).toBe("https://api.workos.com/user_management/authenticate");
 });
-
-it("does not restore an account when sign-out races a refresh credential write", async () => {
-	secure.set("ao.account.session", JSON.stringify({ id: "old", email: "old@example.com", refreshToken: "old-refresh" }));
-	vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ user: { id: "old", email: "old@example.com" }, access_token: "access", refresh_token: "rotated" }) })));
-	const storage = await import("expo-secure-store");
-	let release!: () => void;
-	const write = vi.mocked(storage.setItemAsync).mockImplementationOnce(async (key, value) => {
-		await new Promise<void>((resolve) => { release = resolve; });
-		secure.set(key, value);
-	});
-	const pending = getAccountAccessToken();
-	await vi.waitFor(() => expect(write).toHaveBeenCalled());
-	const signOut = signOutOfAccount();
-	release();
-	await Promise.all([pending, signOut]);
+it("preserves ambiguous old account and daemon pairing records through fresh sign-in and sign-out", async () => {
+	secure.set("ao.account.session", "old-account-record");
+	secure.set("ao.connection.password", "paired");
+	await signInToAccount();
+	await signOutOfAccount();
 	expect(await loadAccount()).toBeNull();
 	expect(await getAccountAccessToken()).toBeNull();
+	expect(secure.get("ao.account.session")).toBe("old-account-record");
+	expect(secure.get("ao.connection.password")).toBe("paired");
 });

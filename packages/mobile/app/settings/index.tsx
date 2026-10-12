@@ -9,8 +9,6 @@ import * as Updates from "expo-updates";
 import { Children, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { ApiError, pingServer } from "../../lib/api";
-import { loadAccount, signInToAccount, signOutOfAccount, type Account } from "../../lib/account";
-import { clearAccountHosts, syncAccountHosts } from "../../lib/accountHosts";
 import { formatVersionLine, type BuildInfo } from "../../lib/appInfo";
 import { bugReportClipboard, bugReportOpenUrl, bugReportUrl } from "../../lib/bugReport";
 import { isConfigured, type ServerConfig } from "../../lib/config";
@@ -70,17 +68,6 @@ export default function SettingsScreen() {
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
 	const [switchingHostId, setSwitchingHostId] = useState<string | null>(null);
 	const [loaded, setLoaded] = useState(false);
-	const [account, setAccount] = useState<Account | null>(null);
-	const [accountBusy, setAccountBusy] = useState(false);
-	const [accountLoading, setAccountLoading] = useState(true);
-
-	useFocusEffect(useCallback(() => {
-		let current = true;
-		void loadAccount().then((value) => { if (current) setAccount(value); }).catch(() => {
-			if (current) setAccount(null);
-		}).finally(() => { if (current) setAccountLoading(false); });
-		return () => { current = false; };
-	}, []));
 
 	useFocusEffect(useCallback(() => {
 		let current = true;
@@ -134,7 +121,7 @@ export default function SettingsScreen() {
 				contentContainerStyle={styles.content}
 				keyboardShouldPersistTaps="handled"
 			>
-				<SettingsSection title="Cloud account" footer="Sign out to remove this device's AO Cloud credential.">
+				<SettingsSection title="Cloud account" footer="One account for Cloud projects and synced machines. Paired machines stay connected when you sign out.">
 					<SettingsCard>
 						<CloudAccountRow />
 					</SettingsCard>
@@ -177,31 +164,6 @@ export default function SettingsScreen() {
 					</SettingsCard>
 				</SettingsSection>
 
-				<SettingsSection title="Account" footer="Paired machines sync across signed-in devices.">
-					<SettingsCard>
-						<CardRow icon="user" label={account ? "Orchestrator Cloud" : "Sign in to Orchestrator Cloud"} value={account?.email} loading={accountLoading || accountBusy} onPress={account ? undefined : () => {
-							setAccountBusy(true);
-							void signInToAccount().then(async (value) => {
-								if (!value) return;
-								setAccount(value);
-								await syncAccountHosts(value);
-								setPairedHosts(await loadHosts());
-								await reloadConfig();
-							}).catch((error: unknown) => {
-								Alert.alert("Could not sign in", error instanceof Error ? error.message : "Try again.");
-							}).finally(() => setAccountBusy(false));
-						}} />
-						{account ? <CardRow icon="log-out" label="Sign out" onPress={() => {
-							setAccountBusy(true);
-							void signOutOfAccount().then(async () => {
-								await clearAccountHosts();
-								setAccount(null);
-								setPairedHosts(await loadHosts());
-								await reloadConfig();
-							}).catch(() => Alert.alert("Could not sign out", "Try again.")).finally(() => setAccountBusy(false));
-						}} disabled={accountBusy} /> : null}
-					</SettingsCard>
-				</SettingsSection>
 
 				{__DEV__ ? (
 					<SettingsSection title="Developer" footer="Layout grid draws the app's 4pt steps, with the 44pt control lines emphasised.">
@@ -274,21 +236,8 @@ function SettingsCard({ children }: { children: ReactNode }) {
 function CloudAccountRow() {
 	const cloudAuth = useCloudAuth();
 	const router = useRouter();
-	const [email, setEmail] = useState<string | null>(null);
+	const email = cloudAuth.account?.email;
 	const [signingOut, setSigningOut] = useState(false);
-
-	useEffect(() => {
-		if (cloudAuth.signedIn !== true) {
-			setEmail(null);
-			return;
-		}
-		let cancelled = false;
-		cloudAuth.client
-			.getCurrentAccount()
-			.then((account) => { if (!cancelled) setEmail(account.user.email); })
-			.catch(() => {}); // Best-effort label; the row still works without it.
-		return () => { cancelled = true; };
-	}, [cloudAuth.signedIn, cloudAuth.client]);
 
 	function confirmSignOut() {
 		Alert.alert(

@@ -54,6 +54,12 @@ vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 import SettingsScreen from "../app/settings/index";
 
 let renderer: ReactTestRenderer | undefined;
+it("offers one shared AO account rather than independent Cloud and machine-sync sign-ins", async () => {
+	await act(async () => { renderer = create(<SettingsScreen />); });
+	const labels = renderer!.root.findAllByType("Text" as never).map((node) => node.props.children);
+	expect(labels).toContain("AO Cloud account");
+	expect(labels).not.toContain("Sign in to Orchestrator Cloud");
+});
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.stubGlobal("__DEV__", false);

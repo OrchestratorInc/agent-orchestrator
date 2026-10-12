@@ -14,7 +14,7 @@ describe("settings desktop section", () => {
 		expect(source).not.toContain("<EnvironmentRow />");
 		expect(source).toContain("<CloudAccountRow />");
 		expect(source).toContain("<MachineSelector");
-		expect(source).toContain("signInToAccount()");
+		expect(source).not.toContain("signInToAccount()");
 	});
 	it("reports live connection state rather than a saved-address flag", () => {
 		expect(source).not.toMatch(/"Paired"/);
