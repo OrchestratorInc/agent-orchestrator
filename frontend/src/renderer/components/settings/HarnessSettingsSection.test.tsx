@@ -1604,8 +1604,10 @@ describe("HarnessSettingsSection", () => {
 		const user = userEvent.setup();
 		renderSection();
 		const codexRow = await findAgentRow("codex");
-		await user.click(await within(codexRow as HTMLElement).findByRole("button", { name: "Install" }));
+		const install = await within(codexRow as HTMLElement).findByRole("button", { name: "Install" });
+		// The first install is one click; a method picker appears only after a failure.
 		expect(within(codexRow as HTMLElement).queryByRole("button", { name: "Installation method" })).toBeNull();
+		await user.click(install);
 
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
 			params: { path: { agent: "codex" } },
