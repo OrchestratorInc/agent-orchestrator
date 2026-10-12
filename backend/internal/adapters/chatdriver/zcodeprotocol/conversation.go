@@ -64,6 +64,7 @@ type nativeEvent struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 type eventPayload struct {
+	Delta           string `json:"delta"`
 	InputID         string `json:"inputId"`
 	QueryID         string `json:"queryId"`
 	Input           string `json:"input"`
@@ -484,6 +485,13 @@ func normalizeEvent(n nativeEvent, p eventPayload, turn string, history bool) []
 		event.Kind = ports.ChatEventTurnCompleted
 		event.TurnState = domain.TurnStateFailed
 		event.Err = ports.NewChatProviderFailure("ZCode turn failed", p.Error.Message, nil)
+	case "model.streaming":
+		if history || p.Kind != "text_delta" || p.Delta == "" {
+			return nil
+		}
+		event.Kind = ports.ChatEventMessageDelta
+		event.ProviderItemID = turn + ":response"
+		event.Delta = p.Delta
 	case "tool.updated":
 		event.ProviderItemID = p.ToolCallID
 		event.Summary = p.ToolName

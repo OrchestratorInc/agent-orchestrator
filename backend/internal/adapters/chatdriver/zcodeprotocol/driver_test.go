@@ -146,3 +146,21 @@ func TestSnapshotRefusesDifferentNativeHistoryOrWorkspace(t *testing.T) {
 		t.Fatal("foreign native cwd accepted")
 	}
 }
+
+func TestNativeStreamingHasOneSourceAndSettlesTheSameItem(t *testing.T) {
+	n := nativeEvent{EventID: "text-native", SessionID: "sess_exact", TurnID: "turn-native", Type: "model.streaming"}
+	p := eventPayload{Kind: "text_delta", Delta: "ordinary live text"}
+	delta := normalizeEvent(n, p, "input", false)
+	if len(delta) != 1 || delta[0].Kind != ports.ChatEventMessageDelta || delta[0].Delta != p.Delta {
+		t.Fatalf("native text lost: %#v", delta)
+	}
+	n.Type = "part.delta"
+	if got := normalizeEvent(n, p, "input", false); len(got) != 0 {
+		t.Fatal("duplicate native stream layer emitted twice")
+	}
+	n.Type = "turn.completed"
+	completed := normalizeEvent(n, eventPayload{Response: "ordinary live text", ResultType: "success"}, "input", false)
+	if completed[0].ProviderItemID != delta[0].ProviderItemID {
+		t.Fatal("final reply created another item instead of settling streamed text")
+	}
+}

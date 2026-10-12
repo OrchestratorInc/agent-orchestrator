@@ -110,6 +110,12 @@ func TestSourceBuiltZCodeAppServerConformance(t *testing.T) {
 	request := protocolProviderRequest(t, requests)
 	assertProtocolPrivateRole(t, request, task, "AO_HIDDEN_FIRST")
 	first.waitCompleted(t)
+	first.mu.Lock()
+	streamed := strings.Join(first.textDeltas, "")
+	first.mu.Unlock()
+	if streamed != "Native fixture complete" {
+		t.Fatalf("native text streaming missing or duplicated: %q", streamed)
+	}
 	deadline := time.Now().Add(15 * time.Second)
 	for validateNativeRestore(context.Background(), workspace, id, envMap) != nil {
 		if time.Now().After(deadline) {
@@ -185,15 +191,16 @@ type protocolFixtureFrame struct {
 	Error  json.RawMessage `json:"error,omitempty"`
 }
 type protocolFixture struct {
-	command   *exec.Cmd
-	input     io.WriteCloser
-	frames    chan protocolFixtureFrame
-	completed chan struct{}
-	done      chan struct{}
-	mu        sync.Mutex
-	stderr    strings.Builder
-	next      int
-	stopOnce  sync.Once
+	command    *exec.Cmd
+	input      io.WriteCloser
+	frames     chan protocolFixtureFrame
+	completed  chan struct{}
+	done       chan struct{}
+	mu         sync.Mutex
+	stderr     strings.Builder
+	next       int
+	stopOnce   sync.Once
+	textDeltas []string
 }
 
 func startProtocolFixture(t *testing.T, binary, workspace string, env []string) *protocolFixture {
@@ -235,8 +242,19 @@ func startProtocolFixture(t *testing.T, binary, workspace string, env []string) 
 				continue
 			}
 			if frame.Method == "session/event" {
-				var event struct{ Type string }
+				var event struct {
+					Type    string
+					Payload struct {
+						Kind  string
+						Delta string
+					}
+				}
 				_ = json.Unmarshal(frame.Params, &event)
+				if event.Type == "model.streaming" && event.Payload.Kind == "text_delta" {
+					p.mu.Lock()
+					p.textDeltas = append(p.textDeltas, event.Payload.Delta)
+					p.mu.Unlock()
+				}
 				if event.Type == "turn.completed" || event.Type == "turn.failed" {
 					select {
 					case p.completed <- struct{}{}:

@@ -18,7 +18,7 @@ AO default/auto permissions select native `build`, accept-edits selects `edit`, 
 
 A detached AO host owns the native stdio process and fences its workspace, approval policy, provider scope and MCP configuration. Reconnect attaches only to that host; unknown/incompatible ownership never causes replacement. Cold restore validates the exact native ID, durable user history and workspace using read-only native SQLite inspection, then calls native `session/resume`. Missing/archived/foreign history fails; no latest-session or fresh-history fallback exists.
 
-Native events provide active/settled turn boundaries, final assistant replies and tool activity. This initial driver does not advertise streamed prose, live model controls, images, additional roots, read-only sandbox, compaction or fork. Models remain in the native provider profile; AO accepts native stdio MCP servers. Native `session/stop` interrupts a turn; explicit AO Kill terminates the owned host separately. Background work and detached-child cleanup require independent runtime evidence, not assumptions from a settled turn.
+Native events provide active/settled turn boundaries, streamed text, final assistant replies and tool activity. Native model text deltas map once; duplicate part-delta observations are ignored. This initial driver does not advertise live model controls, images, additional roots, read-only sandbox, compaction or fork. Models remain in the native provider profile; AO accepts native stdio MCP servers. Native `session/stop` interrupts a turn; explicit AO Kill terminates the owned host separately. Background work and detached-child cleanup require independent runtime evidence, not assumptions from a settled turn.
 
 ## Install and authentication
 
@@ -34,3 +34,5 @@ Expose a `zcode` wrapper on PATH that runs the stock bundle with Node. Native OA
 - The first authenticated protocol attempt selected disabled thinking; the provider refused that setting. A separate `low` reasoning control passed. The failed receipt remains distinct.
 
 Routine suites run only in PR CI for this audit. No local routine tests, lint, typechecks, vet, race or workflows were executed on the VPS.
+
+The first registered AO admission attempt at implementation head `7c210eb1` failed before session creation because AO requires Chat streaming and the driver initially reported settled prose only. The retained 409 receipt prompted native `model.streaming/text_delta` mapping plus a pinned upstream streaming assertion, rather than weakening AO admission.

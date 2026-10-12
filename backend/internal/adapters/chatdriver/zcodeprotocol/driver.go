@@ -44,7 +44,8 @@ var _ ports.ChatDriverReconnector = (*Driver)(nil)
 func (*Driver) Harness() domain.AgentHarness { return domain.HarnessZCode }
 func capabilities() ports.ChatCapabilities {
 	return ports.ChatCapabilities{
-		ports.ChatCapabilityTools: true, ports.ChatCapabilityApprovals: true, ports.ChatCapabilityInterrupt: true,
+		ports.ChatCapabilityStreaming: true,
+		ports.ChatCapabilityTools:     true, ports.ChatCapabilityApprovals: true, ports.ChatCapabilityInterrupt: true,
 		ports.ChatCapabilityResume: true, ports.ChatCapabilityHistory: true,
 	}
 }
