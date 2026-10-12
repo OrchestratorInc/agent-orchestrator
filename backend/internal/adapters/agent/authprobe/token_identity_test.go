@@ -42,3 +42,23 @@ func TestGitHubCLIUserReadsTheActiveHostLogin(t *testing.T) {
 		})
 	}
 }
+
+func TestJSONProviderMethod(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	if got := JSONProviderMethod(write("api.json", `{"zai":{"type":"api","key":"k"}}`)); got != "api_key" {
+		t.Fatalf("api entries = %q", got)
+	}
+	if got := JSONProviderMethod(write("mixed.json", `{"zai":{"type":"api"},"anthropic":{"type":"oauth"}}`)); got != "account" {
+		t.Fatalf("oauth entry = %q", got)
+	}
+	if got := JSONProviderNames(write("names.json", `{"zai-glm":{},"zai-coding-cn":{}}`)); got != "zai-coding-cn, zai-glm" {
+		t.Fatalf("names = %q", got)
+	}
+}

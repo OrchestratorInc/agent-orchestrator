@@ -126,7 +126,7 @@ func kilocodeStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool,
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if known && authorized {
-		evidence := domain.FileSource(authPath).WithMethod(domain.AgentAccountMethodAccount)
+		evidence := domain.FileSource(authPath).WithMethod(authprobe.JSONProviderMethod(authPath))
 		evidence.Provider = authprobe.JSONProviderNames(authPath)
 		ports.RecordAuthEvidence(ctx, evidence)
 		return ports.AgentAuthStatusAuthorized, true, nil

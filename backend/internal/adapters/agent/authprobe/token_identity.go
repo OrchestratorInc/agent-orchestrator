@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 // TokenIdentity reads the display identity a JWT carries in its payload (an
@@ -63,6 +65,33 @@ func JSONProviderNames(path string) string {
 	}
 	sort.Strings(names)
 	return strings.Join(names, ", ")
+}
+
+// JSONProviderMethod reads how a provider-keyed credential file signs in from
+// each entry's "type": "api" entries are API keys, "oauth" or "wellknown"
+// entries are account logins. An account login anywhere wins; "" when no
+// entry says.
+func JSONProviderMethod(path string) domain.AgentAccountMethod {
+	data, err := os.ReadFile(path) //nolint:gosec // harness credential file chosen by the adapter
+	if err != nil {
+		return ""
+	}
+	var entries map[string]struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(data, &entries) != nil {
+		return ""
+	}
+	method := domain.AgentAccountMethod("")
+	for _, entry := range entries {
+		switch strings.ToLower(strings.TrimSpace(entry.Type)) {
+		case "oauth", "wellknown":
+			return domain.AgentAccountMethodAccount
+		case "api", "api_key", "apikey":
+			method = domain.AgentAccountMethodAPIKey
+		}
+	}
+	return method
 }
 
 // GitHubCLIUser returns the github.com login the GitHub CLI is signed in as,

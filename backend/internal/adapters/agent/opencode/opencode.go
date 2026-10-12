@@ -299,7 +299,7 @@ func opencodeStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool,
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if jsonOK && jsonStatus == ports.AgentAuthStatusAuthorized {
-		evidence := domain.FileSource(authPath)
+		evidence := domain.FileSource(authPath).WithMethod(authprobe.JSONProviderMethod(authPath))
 		evidence.Provider = authprobe.JSONProviderNames(authPath)
 		ports.RecordAuthEvidence(ctx, evidence)
 		return jsonStatus, true, nil

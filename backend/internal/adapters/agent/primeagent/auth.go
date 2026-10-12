@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -108,7 +109,9 @@ func primeStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, er
 		status, found, err := primeCredentialJSONStatus(path, file.allowPlainKey)
 		if err != nil || found {
 			if status == ports.AgentAuthStatusAuthorized {
-				ports.RecordAuthEvidence(ctx, domain.FileSource(path))
+				evidence := domain.FileSource(path).WithMethod(authprobe.JSONProviderMethod(path))
+				evidence.Provider = authprobe.JSONProviderNames(path)
+				ports.RecordAuthEvidence(ctx, evidence)
 			}
 			return status, found, err
 		}
