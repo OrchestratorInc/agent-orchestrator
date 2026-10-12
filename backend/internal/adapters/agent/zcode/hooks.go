@@ -164,12 +164,12 @@ var digestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 // canonicalPath resolves symlinks so paths agree with ZCode's realpath-based
 // workspace identity on both sides of the trust exchange. Unresolvable paths
 // (unit-test fixtures, vanished directories) fall back to the lexical form.
-func canonicalPath(path string) (string, error) {
+func canonicalPath(path string) string {
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return filepath.Clean(path), nil
+		return filepath.Clean(path)
 	}
-	return filepath.Clean(resolved), nil
+	return filepath.Clean(resolved)
 }
 
 // Only exact AO declarations in our file may be granted. Never grant a whole
@@ -177,14 +177,8 @@ func canonicalPath(path string) (string, error) {
 func aoHookDigests(status trustStatus, workspace string) ([]string, error) {
 	// ZCode canonicalizes --workspace via realpath before reporting; compare the
 	// same way so a symlinked workspace (macOS /var -> /private/var) matches.
-	canonicalWorkspace, err := canonicalPath(workspace)
-	if err != nil {
-		return nil, fmt.Errorf("zcode: resolve workspace: %w", err)
-	}
-	canonicalStatus, err := canonicalPath(status.WorkspacePath)
-	if err != nil {
-		return nil, fmt.Errorf("zcode: resolve native trust workspace: %w", err)
-	}
+	canonicalWorkspace := canonicalPath(workspace)
+	canonicalStatus := canonicalPath(status.WorkspacePath)
 	if canonicalStatus != canonicalWorkspace {
 		return nil, fmt.Errorf("zcode: hook trust response belongs to another workspace")
 	}

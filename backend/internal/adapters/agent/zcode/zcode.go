@@ -107,7 +107,8 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if len(cfg.AllowedTools) != 0 {
 		return nil, fmt.Errorf("zcode: tool allowlists are unsupported")
 	}
-	cmd = []string{binary}
+	cmd = make([]string, 0, 8)
+	cmd = append(cmd, binary)
 	if err := appendModeFlags(&cmd, cfg.Permissions, cfg.Config.Mode); err != nil {
 		return nil, err
 	}
