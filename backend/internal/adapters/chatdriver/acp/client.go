@@ -293,6 +293,13 @@ func (c *conversation) requestInput(
 func (c *conversation) providerDetaching() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !c.closed && c.proc != nil && c.proc.terminate != nil && c.conn != nil {
+		select {
+		case <-c.conn.Done():
+			return true
+		default:
+		}
+	}
 	return c.detaching
 }
 
@@ -548,6 +555,31 @@ func (c *conversation) SessionUpdate(_ context.Context, params acpsdk.SessionNot
 		return nil
 	}
 	return c.processUpdate(params)
+}
+
+// handleNotification runs updates and host receipts in wire order, before the
+// next frame is read. Permission requests retain the SDK's asynchronous
+// dispatch, and responses cannot overtake the updates they follow.
+func (c *conversation) handleNotification(method string, params json.RawMessage) bool {
+	var err error
+	switch method {
+	case acpsdk.ClientMethodSessionUpdate:
+		var update acpsdk.SessionNotification
+		if err = json.Unmarshal(params, &update); err == nil {
+			err = update.Validate()
+		}
+		if err == nil {
+			err = c.SessionUpdate(context.Background(), update)
+		}
+	case persistenthost.ACPPromptResultMethod, persistenthost.ACPInteractionCommandMethod:
+		_, err = c.HandleExtensionMethod(context.Background(), method, params)
+	default:
+		return false
+	}
+	if err != nil {
+		c.log.Error("failed to handle ACP notification", "method", method, "err", err)
+	}
+	return true
 }
 
 // processUpdate runs the full ACP -> AO normalization for one update: live

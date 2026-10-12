@@ -3,83 +3,108 @@ import {
 	type AgentAvatarProps,
 	type AgentLogoSources,
 } from "@aoagents/product-ui";
-import agyLogo from "../assets/agents/agy.png";
-import aiderLogo from "../assets/agents/aider.png";
-import ampLogo from "../assets/agents/amp.svg";
-import auggieLogo from "../assets/agents/auggie.svg";
-import autohandLogo from "../assets/agents/autohand.svg";
-import clineLogo from "../assets/agents/cline.svg";
+import agyLogo from "../assets/agents/agy.svg";
+import aiderLogo from "../assets/agents/aider.svg";
+import ampDarkLogo from "../assets/agents/amp-dark.svg";
+import ampLightLogo from "../assets/agents/amp-light.svg";
+import auggieDarkLogo from "../assets/agents/auggie-dark.svg";
+import auggieLightLogo from "../assets/agents/auggie-light.svg";
+import autohandDarkLogo from "../assets/agents/autohand-dark.svg";
+import autohandLightLogo from "../assets/agents/autohand-light.svg";
+import clineDarkLogo from "../assets/agents/cline-dark.svg";
+import clineLightLogo from "../assets/agents/cline-light.svg";
 import claudeLogo from "../assets/agents/claude.svg";
 import claudeCodeLogo from "../assets/agents/claude-code.svg";
 import codexLogo from "../assets/agents/codex.svg";
-import codewhaleLogo from "../assets/agents/codewhale.svg";
-import commandCodeLogo from "../assets/agents/command-code.png";
-import continueLogo from "../assets/agents/continue.png";
-import copilotLogo from "../assets/agents/copilot.svg";
-import crushLogo from "../assets/agents/crush.png";
-import cursorLogo from "../assets/agents/cursor.svg";
-import devinLogo from "../assets/agents/devin.png";
-import deepseekHarnessLogo from "../assets/agents/deepseek-harness.svg";
-import droidLogo from "../assets/agents/droid.png";
-import fxLogo from "../assets/agents/fx.svg";
+import codewhaleDarkLogo from "../assets/agents/codewhale-dark.svg";
+import codewhaleLightLogo from "../assets/agents/codewhale-light.svg";
+import commandCodeDarkLogo from "../assets/agents/command-code-dark.svg";
+import commandCodeLightLogo from "../assets/agents/command-code-light.svg";
+import continueDarkLogo from "../assets/agents/continue-dark.svg";
+import continueLightLogo from "../assets/agents/continue-light.svg";
+import copilotDarkLogo from "../assets/agents/copilot-dark.svg";
+import copilotLightLogo from "../assets/agents/copilot-light.svg";
+import crushLogo from "../assets/agents/crush.svg";
+import cursorDarkLogo from "../assets/agents/cursor-dark.svg";
+import cursorLightLogo from "../assets/agents/cursor-light.svg";
+import devinDarkLogo from "../assets/agents/devin-dark.svg";
+import devinLightLogo from "../assets/agents/devin-light.svg";
+import deepseekHarnessDarkLogo from "../assets/agents/deepseek-harness-dark.svg";
+import deepseekHarnessLightLogo from "../assets/agents/deepseek-harness-light.svg";
+import droidDarkLogo from "../assets/agents/droid-dark.svg";
+import droidLightLogo from "../assets/agents/droid-light.svg";
+import fxDarkLogo from "../assets/agents/fx-dark.svg";
+import fxLightLogo from "../assets/agents/fx-light.svg";
 import geminiLogo from "../assets/agents/gemini.svg";
-import gooseLogo from "../assets/agents/goose.svg";
-import grokLogo from "../assets/agents/grok.png";
-import kilocodeLogo from "../assets/agents/kilocode.svg";
-import kimiLogo from "../assets/agents/kimi.png";
+import gooseDarkLogo from "../assets/agents/goose-dark.svg";
+import gooseLightLogo from "../assets/agents/goose-light.svg";
+import grokDarkLogo from "../assets/agents/grok-dark.svg";
+import grokLightLogo from "../assets/agents/grok-light.svg";
+import kilocodeDarkLogo from "../assets/agents/kilocode-dark.svg";
+import kilocodeLightLogo from "../assets/agents/kilocode-light.svg";
+import kimiDarkLogo from "../assets/agents/kimi-dark.svg";
+import kimiLightLogo from "../assets/agents/kimi-light.svg";
 import kimchiLogo from "../assets/agents/kimchi.svg";
-import kiroLogo from "../assets/agents/kiro.png";
-import museLogo from "../assets/agents/muse.png";
+import kiroLogo from "../assets/agents/kiro.svg";
+import museLogo from "../assets/agents/muse.svg";
 import mimoCodeLogo from "../assets/agents/mimo-code.svg";
-import ompLogo from "../assets/agents/omp.png";
-import openhandsLogo from "../assets/agents/openhands.svg";
-import opencodeLogo from "../assets/agents/opencode.svg";
-import piLogo from "../assets/agents/pi.png";
-import primeAgentLogo from "../assets/agents/prime-agent.png";
-import qwenLogo from "../assets/agents/qwen.svg";
-import unrealAgentLogo from "../assets/agents/unreal-agent.png";
-import vibeLogo from "../assets/agents/vibe.png";
+import ompLogo from "../assets/agents/omp.svg";
+import openhandsDarkLogo from "../assets/agents/openhands-dark.svg";
+import openhandsLightLogo from "../assets/agents/openhands-light.svg";
+import opencodeDarkLogo from "../assets/agents/opencode-dark.svg";
+import opencodeLightLogo from "../assets/agents/opencode-light.svg";
+import piDarkLogo from "../assets/agents/pi-dark.svg";
+import piLightLogo from "../assets/agents/pi-light.svg";
+import primeAgentDarkLogo from "../assets/agents/prime-agent-dark.svg";
+import primeAgentLightLogo from "../assets/agents/prime-agent-light.svg";
+import qwenDarkLogo from "../assets/agents/qwen-dark.svg";
+import qwenLightLogo from "../assets/agents/qwen-light.svg";
+import unrealAgentDarkLogo from "../assets/agents/unreal-agent-dark.png";
+import unrealAgentLightLogo from "../assets/agents/unreal-agent-light.png";
+import vibeLogo from "../assets/agents/vibe.svg";
 
-// Real brand logos keyed by the harness name AO stores on session.provider.
-// Agents without an asset fall back to a lettered tile (fake).
+// Official brand marks keyed by the harness name AO stores on session.provider.
+// A { light, dark } pair is used where the brand ships separate marks for each
+// background; a single mark reads on both. Agents without an asset fall back to
+// a lettered tile.
 const LOGOS: AgentLogoSources = {
 	codex: codexLogo,
-	codewhale: codewhaleLogo,
-	"command-code": commandCodeLogo,
+	codewhale: { light: codewhaleLightLogo, dark: codewhaleDarkLogo },
+	"command-code": { light: commandCodeLightLogo, dark: commandCodeDarkLogo },
 	"claude-code": claudeCodeLogo,
 	claude: claudeLogo,
-	cursor: cursorLogo,
-	opencode: opencodeLogo,
-	"opencode-v2": opencodeLogo,
-	copilot: copilotLogo,
+	cursor: { light: cursorLightLogo, dark: cursorDarkLogo },
+	opencode: { light: opencodeLightLogo, dark: opencodeDarkLogo },
+	"opencode-v2": { light: opencodeLightLogo, dark: opencodeDarkLogo },
+	copilot: { light: copilotLightLogo, dark: copilotDarkLogo },
 	aider: aiderLogo,
-	grok: grokLogo,
+	grok: { light: grokLightLogo, dark: grokDarkLogo },
 	gemini: geminiLogo,
-	droid: droidLogo,
-	fx: fxLogo,
+	droid: { light: droidLightLogo, dark: droidDarkLogo },
+	fx: { light: fxLightLogo, dark: fxDarkLogo },
 	crush: crushLogo,
-	qwen: qwenLogo,
-	goose: gooseLogo,
-	continue: continueLogo,
-	devin: devinLogo,
-	kimi: kimiLogo,
+	qwen: { light: qwenLightLogo, dark: qwenDarkLogo },
+	goose: { light: gooseLightLogo, dark: gooseDarkLogo },
+	continue: { light: continueLightLogo, dark: continueDarkLogo },
+	devin: { light: devinLightLogo, dark: devinDarkLogo },
+	kimi: { light: kimiLightLogo, dark: kimiDarkLogo },
 	muse: museLogo,
 	omp: ompLogo,
-	openhands: openhandsLogo,
+	openhands: { light: openhandsLightLogo, dark: openhandsDarkLogo },
 	kiro: kiroLogo,
-	kilocode: kilocodeLogo,
+	kilocode: { light: kilocodeLightLogo, dark: kilocodeDarkLogo },
 	vibe: vibeLogo,
-	pi: piLogo,
+	pi: { light: piLightLogo, dark: piDarkLogo },
 	kimchi: kimchiLogo,
-	"prime-agent": primeAgentLogo,
-	amp: ampLogo,
-	cline: clineLogo,
+	"prime-agent": { light: primeAgentLightLogo, dark: primeAgentDarkLogo },
+	amp: { light: ampLightLogo, dark: ampDarkLogo },
+	cline: { light: clineLightLogo, dark: clineDarkLogo },
 	agy: agyLogo,
-	auggie: auggieLogo,
-	autohand: autohandLogo,
-	"unreal-agent": unrealAgentLogo,
+	auggie: { light: auggieLightLogo, dark: auggieDarkLogo },
+	autohand: { light: autohandLightLogo, dark: autohandDarkLogo },
+	"unreal-agent": { light: unrealAgentLightLogo, dark: unrealAgentDarkLogo },
 	"mimo-code": mimoCodeLogo,
-	"deepseek-harness": deepseekHarnessLogo,
+	"deepseek-harness": { light: deepseekHarnessLightLogo, dark: deepseekHarnessDarkLogo },
 };
 
 /**

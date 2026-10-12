@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +14,11 @@ vi.mock("../../lib/api-client", () => ({
 	apiClient: { POST: postMock, GET: getMock },
 	apiErrorMessage: (error: unknown, fallback = "Request failed") => error instanceof Error ? error.message : fallback,
 	getApiBaseUrl: () => "",
+}));
+
+vi.mock("../../lib/host-clients", async (importOriginal) => ({
+	...await importOriginal<typeof import("../../lib/host-clients")>(),
+	clientForSessionHost: () => ({ GET: getMock, POST: postMock }),
 }));
 
 // Minimal patch-only "change" metadata. A patch containing "ends-at-eof" gets a
@@ -252,6 +257,92 @@ describe("WorkspaceReviewPane", () => {
 				params: expect.objectContaining({ query: expect.objectContaining({ path: "README.md", side }) }),
 			}));
 		}
+	});
+
+	it("limits automatic full-context reads to one pair and cancels obsolete hydration", async () => {
+		postMock.mockResolvedValue({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [
+			{ repository: "", patch: "README.md ends-at-eof", includedPaths: ["README.md"], deferred: [] },
+			{ repository: "", patch: "src/App.tsx ends-at-eof", includedPaths: ["src/App.tsx"], deferred: [] },
+		] } });
+		let release = () => {};
+		const ready = new Promise<void>((resolve) => { release = resolve; });
+		getMock.mockImplementation(async (_url: string, init: { signal: AbortSignal; params: { query: { path: string; side: string } } }) => {
+			await ready;
+			return { data: { binary: false, content: "contents", revision: `rev-${init.params.query.side}`, truncated: false } };
+		});
+		const data = workspace(["README.md", "src/App.tsx"].map((path) => ({ path, status: "modified", additions: 1, deletions: 0, size: 20, binary: false })));
+		const view = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		expect(getMock.mock.calls.every((call) => call[1].params.query.path === "README.md")).toBe(true);
+		release();
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(4));
+		expect(getMock.mock.calls.slice(2).every((call) => call[1].params.query.path === "src/App.tsx")).toBe(true);
+		view.unmount();
+	});
+
+	it("does not let a stalled host block the same session on another host", async () => {
+		postMock.mockResolvedValue({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [
+			{ repository: "", patch: "README.md ends-at-eof", includedPaths: ["README.md"], deferred: [] },
+		] } });
+		const signals: AbortSignal[] = [];
+		getMock.mockImplementation((_url: string, init: { signal: AbortSignal }) => {
+			signals.push(init.signal);
+			return new Promise(() => {});
+		});
+		const data = workspace([{ path: "README.md", status: "modified", additions: 1, deletions: 0, size: 20, binary: false }]);
+		const first = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" hostId="host-a" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		const second = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" hostId="host-b" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(4));
+		first.unmount();
+		second.unmount();
+		await waitFor(() => expect(signals.every((signal) => signal.aborted)).toBe(true));
+	});
+
+	it("aborts a stalled context pair at its deadline and starts the next file", async () => {
+		vi.useFakeTimers();
+		let view: ReturnType<typeof renderWithQuery> | undefined;
+		try {
+			postMock.mockResolvedValue({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [
+				{ repository: "", patch: "README.md ends-at-eof", includedPaths: ["README.md"], deferred: [] },
+				{ repository: "", patch: "src/App.tsx ends-at-eof", includedPaths: ["src/App.tsx"], deferred: [] },
+			] } });
+			const stalledSignals: AbortSignal[] = [];
+			getMock.mockImplementation((_url: string, init: { signal: AbortSignal; params: { query: { path: string; side: string } } }) => {
+				if (init.params.query.path === "README.md") {
+					stalledSignals.push(init.signal);
+					// Even a transport that never settles after abort must release the slot.
+					return new Promise(() => {});
+				}
+				return Promise.resolve({ data: { binary: false, content: "contents", revision: `rev-${init.params.query.side}`, truncated: false } });
+			});
+			const data = workspace(["README.md", "src/App.tsx"].map((path) => ({ path, status: "modified", additions: 1, deletions: 0, size: 20, binary: false })));
+			view = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+			await act(async () => { await vi.waitFor(() => expect(getMock).toHaveBeenCalledTimes(2)); });
+			await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+			expect(stalledSignals).toHaveLength(2);
+			expect(stalledSignals.every((signal) => signal.aborted && signal.reason.name === "TimeoutError")).toBe(true);
+			expect(getMock).toHaveBeenCalledTimes(4);
+			expect(getMock.mock.calls.slice(2).every((call) => call[1].params.query.path === "src/App.tsx")).toBe(true);
+		} finally {
+			view?.unmount();
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not start queued context reads after the review is closed", async () => {
+		postMock.mockResolvedValue({ data: { sessionId: "sess-1", workspaceVersion: "workspace-1", groups: [
+			{ repository: "", patch: "README.md ends-at-eof", includedPaths: ["README.md"], deferred: [] },
+			{ repository: "", patch: "src/App.tsx ends-at-eof", includedPaths: ["src/App.tsx"], deferred: [] },
+		] } });
+		const signals: AbortSignal[] = [];
+		getMock.mockImplementation((_url: string, init: { signal: AbortSignal }) => { signals.push(init.signal); return new Promise(() => {}); });
+		const data = workspace(["README.md", "src/App.tsx"].map((path) => ({ path, status: "modified", additions: 1, deletions: 0, size: 20, binary: false })));
+		const view = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		view.unmount();
+		await waitFor(() => expect(signals.every((signal) => signal.aborted)).toBe(true));
+		expect(getMock).toHaveBeenCalledTimes(2);
 	});
 
 	it("shows the patch while a file that ends at its last change loads its contents", async () => {

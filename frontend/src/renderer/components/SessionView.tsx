@@ -35,6 +35,7 @@ import { isArtifactPreviewUrl } from "../lib/artifact-preview";
 import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
 import { SessionActionsMenu } from "./SessionActionsMenu";
 import { SessionInspector } from "./SessionInspector";
+import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { ShellTopbar } from "./ShellTopbar";
 import { SwitchAgentDialog } from "./SwitchAgentDialog";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
@@ -77,8 +78,8 @@ import { clientForSessionHost } from "../lib/host-clients";
 import { useHostConnection } from "../hooks/useHostConnection";
 import { sessionReviewsQueryKey } from "../lib/session-reviews";
 import { sessionUiKey } from "../lib/hosts";
-import { sessionWorkspaceFilesQueryOptions } from "../hooks/useSessionWorkspaceFiles";
-import { matchWorkspaceFilePath } from "../lib/workspace-file-path";
+import { resolveSessionWorkspacePath, sessionWorkspaceFilesQueryOptions } from "../hooks/useSessionWorkspaceFiles";
+import { isAbsoluteFileReference, matchWorkspaceFilePath, normalizeWorkspaceFileReference } from "../lib/workspace-file-path";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 import { aoBridge } from "../lib/bridge";
 import {
@@ -95,7 +96,7 @@ import { isMacPlatform } from "../lib/platform";
 import { useShell } from "../lib/shell-context";
 import { cn } from "../lib/utils";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
-import { isOrchestratorSession, sessionAgentExited, sessionIsActive } from "../types/workspace";
+import { isOrchestratorSession, sessionAgentExited, sessionIsActive, type SessionArtifact, type WorkspaceSummary } from "../types/workspace";
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
@@ -146,6 +147,8 @@ function previewRevealKey(previewUrl?: string, previewRevision?: number): string
 	if (typeof previewRevision === "number") return `revision:${previewRevision}`;
 	return `url:${target}`;
 }
+
+const BROWSER_REVEAL_ACTIONS = new Set(["open", "tab-new"]);
 
 function browserIsVisible(sessionId: string, browserPoppedOut: boolean): boolean {
 	if (browserPoppedOut) return true;
@@ -505,6 +508,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		resumeOnOpen(session.id);
 	}, [canResume, daemonStatus.state, hostId, resumeOnOpen, session, uiSessionId]);
 	const previewBaselineRef = useRef<{ sessionId: string; key: string } | null>(null);
+	const revealedBrowserCommandsRef = useRef<{ sessionId: string; commands: Set<string> }>({ sessionId: uiSessionId, commands: new Set() });
 	const sessionSplitRef = useRef<HTMLDivElement | null>(null);
 	const terminalLiveResizeTimerRef = useRef<number | null>(null);
 	const workspaceResizeTimerRef = useRef<number | null>(null);
@@ -518,9 +522,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	});
 	const [filesPoppedOut, setFilesPoppedOut] = useState(false);
 	const [filesSplit, setFilesSplit] = useState(() => window.localStorage.getItem("ao.files.diffStyle") === "split");
-	const [filePreviewRequestsBySession, setFilePreviewRequestsBySession] = useState<
-		Record<string, { feedback?: boolean; path: string; key: number; source?: "artifact" }>
-	>({});
+	const [artifactRequestsBySession, setArtifactRequestsBySession] = useState<Record<string, ArtifactOpenRequest>>({});
 	const [fileTabsBySession, setFileTabsBySession] = useState<Record<string, SessionFileTabState>>({});
 	const fileTabs = fileTabsBySession[uiSessionId] ?? EMPTY_SESSION_FILE_TABS;
 	const [dirtyFilesBySession, setDirtyFilesBySession] = useState<Record<string, Record<string, true>>>({});
@@ -592,6 +594,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const [handoffDialogOpen, setHandoffDialogOpen] = useState(false);
 	const handoffDialogContainerRef = useRef<HTMLDivElement | null>(null);
 	const [handoffDialogContainer, setHandoffDialogContainer] = useState<HTMLDivElement | null>(null);
+	// One SessionView serves every local session, so session-scoped UI state must
+	// reset on a switch. Reset during render, not in an effect: children must never
+	// mount (or fetch) against the previous session's reviewer, popout, or dialog.
+	const [stateSessionId, setStateSessionId] = useState(sessionId);
+	if (stateSessionId !== sessionId) {
+		setStateSessionId(sessionId);
+		setTerminalTarget({ kind: "worker" });
+		setReviewerChatId(null);
+		setBrowserPopOutState({ sessionId, phase: "docked" });
+		setFilesPoppedOut(false);
+		setHandoffDialogOpen(false);
+	}
 	const bindHandoffDialogContainer = useCallback((node: HTMLDivElement | null) => {
 		handoffDialogContainerRef.current = node;
 		setHandoffDialogContainer(node);
@@ -1347,16 +1361,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		initializeInspectorSession(uiSessionId, hasBrowserContent, hasInspector);
 	}, [browserOnly, hasBrowserContent, hasInspector, session, uiSessionId, initializeInspectorSession, setInspectorOpenForSession, setInspectorViewForSession]);
 
-	useLayoutEffect(() => {
-		setTerminalTarget({ kind: "worker" });
-		setReviewerChatId(null);
-		setBrowserPopOutState({ sessionId, phase: "docked" });
-		setFilesPoppedOut(false);
-	}, [sessionId]);
-
-	// Route props change one render before the passive reset above. Reject the
-	// previous session's shell/reviewer synchronously so its handle can never be
-	// cached under the destination session.
+	// Keep rejecting another session's shell/reviewer handle here as well, so it
+	// can never be cached under the destination session.
 	const routedTerminalTarget = terminalTargetBelongsToSession(terminalTarget, sessionId)
 		? terminalTarget
 		: ({ kind: "worker" } satisfies TerminalTarget);
@@ -1498,35 +1504,68 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		);
 	}, [hostId, queryClient, sessionId, t]);
 
-	const revealResolvedWorkspaceFile = useCallback(
-		async (rawPath: string, options?: FileOpenOptions) => {
-			const data = await fetchWorkspaceFiles();
-			const path = matchWorkspaceFilePath(rawPath, data.files ?? []);
-			openCenterFile(path, options);
+	const handleOpenArtifact = useCallback(
+		(target: { feedback?: boolean; path: string }) => {
+			if (browserOnly) return;
+			setBrowserPopOutState({ sessionId, phase: "docked" });
+			setFilesPoppedOut(false);
+			transitionInspectorView("artifacts");
+			setInspectorOpenForSession(uiSessionId, true);
+			setArtifactRequestsBySession((current) => ({
+				...current,
+				[uiSessionId]: { feedback: target.feedback, path: target.path, key: (current[uiSessionId]?.key ?? 0) + 1 },
+			}));
 		},
-		[openCenterFile, fetchWorkspaceFiles],
+		[browserOnly, sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId],
 	);
 
-	// A reveal is one-shot. Left in place, it would reopen the file (and take
-	// focus from the agent tab) every time the explorer re-ran it, which happens
-	// on each return to this session.
-	const handleRevealHandled = useCallback((key: number) => {
-		setFilePreviewRequestsBySession((current) => {
-			if (current[uiSessionId]?.key !== key) return current;
-			const { [uiSessionId]: _handled, ...rest } = current;
-			return rest;
-		});
-	}, [uiSessionId]);
+	// A file written moments ago, or one past the artifact list cap, is not in
+	// the cached session, and the Files inspector can only show listed
+	// artifacts. Refresh once before deciding it cannot be opened.
+	const revealResolvedArtifact = useCallback(
+		async (path: string) => {
+			if (browserOnly) return false;
+			const listed = (artifacts: SessionArtifact[] | undefined) => artifacts?.some((artifact) => artifact.path === path) ?? false;
+			if (!listed(session?.artifactFiles)) {
+				await refreshWorkspaces();
+				const refreshed = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId))
+					?.flatMap((workspace) => workspace.sessions)
+					.find((candidate) => candidate.id === sessionId);
+				if (!listed(refreshed?.artifactFiles)) return false;
+			}
+			handleOpenArtifact({ path });
+			return true;
+		},
+		[browserOnly, handleOpenArtifact, hostId, queryClient, refreshWorkspaces, session?.artifactFiles, sessionId],
+	);
+
+	const revealResolvedWorkspaceFile = useCallback(
+		async (rawPath: string, options?: FileOpenOptions) => {
+			const reference = normalizeWorkspaceFileReference(rawPath);
+			if (!isAbsoluteFileReference(reference)) {
+				const data = await fetchWorkspaceFiles();
+				openCenterFile(matchWorkspaceFilePath(rawPath, data.files ?? []), options);
+				return;
+			}
+			// The renderer is never told where a session's worktree lives, so the
+			// daemon decides which root an absolute path belongs to.
+			const resolved = await resolveSessionWorkspacePath(sessionId, reference, hostId);
+			if (resolved?.kind === "workspace") {
+				openCenterFile(resolved.path, options);
+				return;
+			}
+			if (resolved?.kind === "artifact" && await revealResolvedArtifact(resolved.path)) return;
+			// Outside the session, or the daemon could not say. Nothing shows the
+			// path belongs here, so open it as written and let the file pane say
+			// so, rather than a workspace file that happens to share its name.
+			openCenterFile(reference, options);
+		},
+		[fetchWorkspaceFiles, hostId, openCenterFile, revealResolvedArtifact, sessionId],
+	);
 
 	const handleOpenFiles = useCallback(() => {
 		markFileViewerPerformance("files-click");
-		// Opens the workspace changes, replacing an artifact opened earlier.
 		setFilesSource(uiSessionId, { kind: "workspace" });
-		setFilePreviewRequestsBySession((current) => {
-			if (current[uiSessionId]?.source !== "artifact") return current;
-			const { [uiSessionId]: _artifact, ...rest } = current;
-			return rest;
-		});
 		prepareFilesInspector();
 		void fetchWorkspaceFiles();
 	}, [fetchWorkspaceFiles, prepareFilesInspector, setFilesSource, uiSessionId]);
@@ -1545,19 +1584,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		[revealResolvedWorkspaceFile],
 	);
 
-	const handleOpenArtifact = useCallback(
-		(target: { feedback?: boolean; path: string }) => {
-			if (browserOnly) return;
-			prepareFilesInspector();
-			setFilePreviewRequestsBySession((current) => ({
-				...current,
-				[uiSessionId]: { feedback: target.feedback, path: target.path, key: (current[uiSessionId]?.key ?? 0) + 1, source: "artifact" },
-			}));
-		},
-		[browserOnly, prepareFilesInspector, uiSessionId],
-	);
-	const handleFilePreviewRequestConsumed = useCallback((key: number) => {
-		setFilePreviewRequestsBySession((current) => {
+	const handleArtifactRequestConsumed = useCallback((key: number) => {
+		setArtifactRequestsBySession((current) => {
 			const request = current[uiSessionId];
 			if (!request || request.key !== key || !request.feedback) return current;
 			return {
@@ -1573,7 +1601,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const { nonce, path, source } = workspaceFileOpenRequest;
 		if (source === "artifact") {
 			// Same routing as the Summary panel's artifact rows: HTML opens in
-			// the Browser panel, everything else in the Files artifact viewer.
+			// the Browser panel, everything else in the Artifacts view.
 			const artifact = session.artifactFiles?.find((file) => file.path === path);
 			if (artifact?.kind === "html" && artifact.previewUrl) openArtifactPreview(artifact.previewUrl);
 			else handleOpenArtifact({ path });
@@ -1646,54 +1674,58 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		terminated,
 	]);
 
+	const revealBrowserPanel = useCallback(() => {
+		setBrowserContentRevealed(uiSessionId, true);
+		setBrowserUnseen(uiSessionId, false);
+		if (browserIsVisible(uiSessionId, browserPoppedOut)) return;
+		setFilesPoppedOut(false);
+		transitionInspectorView("browser");
+		setInspectorOpenForSession(uiSessionId, true);
+	}, [browserPoppedOut, uiSessionId, setBrowserContentRevealed, setBrowserUnseen, transitionInspectorView, setInspectorOpenForSession]);
+
 	useEffect(() => {
 		if (!hasInspector) return;
 		const previewKey = previewRevealKey(previewUrl, previewRevision);
 		const baseline = previewBaselineRef.current;
-		if (!baseline || baseline.sessionId !== sessionId) {
-			previewBaselineRef.current = { sessionId, key: previewKey };
+		if (!baseline || baseline.sessionId !== uiSessionId) {
+			previewBaselineRef.current = { sessionId: uiSessionId, key: previewKey };
 			return;
 		}
 		if (baseline.key === previewKey) return;
-		previewBaselineRef.current = { sessionId, key: previewKey };
-		if (!previewKey) return;
-		if (browserOnly && !terminated && !useUiStore.getState().inspectorSessions[uiSessionId]?.browserContentRevealed) {
-			setInspectorOpenForSession(uiSessionId, true);
-		}
-		setBrowserContentRevealed(uiSessionId, true);
-		if (browserIsVisible(uiSessionId, browserPoppedOut)) {
-			setBrowserUnseen(uiSessionId, false);
-			return;
-		}
-		// Workers and already-revealed orchestrators badge new browser work.
-		// A new preview target used to force-switch the inspector to the Browser
-		// tab and pop it open, even if the user was looking at something else
-		// entirely (Reviews, a different session's Files tab, mid-typing in
-		// chat). Match the agent-activity effect below: badge it as unseen and
-		// let the user open Browser themselves when they're ready, instead of
-		// grabbing focus out from under them.
-		setBrowserUnseen(uiSessionId, true);
+		previewBaselineRef.current = { sessionId: uiSessionId, key: previewKey };
+		if (!previewKey || terminated) return;
+		// Only the routed session mounts SessionView. A new explicit preview
+		// reveals its panel; entering a session with an existing target does not.
+		revealBrowserPanel();
 	}, [
-		browserPoppedOut,
 		hasInspector,
 		previewRevision,
 		previewUrl,
-		sessionId,
 		uiSessionId,
-		setBrowserContentRevealed,
-		setBrowserUnseen,
-		browserOnly,
 		terminated,
-		setInspectorOpenForSession,
+		revealBrowserPanel,
 	]);
 
-	// Agent browser commands are genuine browser activity even when they do not
-	// navigate (fill, click, snapshot, etc.) or land on an empty target — e.g. a
-	// command that runs before any page has loaded. When Browser is hidden,
-	// surface that activity as unseen rather than reopening the tab; gating this
-	// on hasBrowserContent/browserContentRevealed missed exactly that case.
+	// Explicit open commands reveal once per command. A fast command's start
+	// and finish can share a React render, so either event can consume its ID.
+	// Later completion and UI changes must not override a user's close.
 	useEffect(() => {
-		if (!hasInspector || terminated || !browserView.agentBrowserActive) return;
+		if (revealedBrowserCommandsRef.current.sessionId !== uiSessionId) {
+			revealedBrowserCommandsRef.current = { sessionId: uiSessionId, commands: new Set() };
+		}
+		if (!hasInspector || terminated) return;
+		const activity = browserView.agentBrowserActivity;
+		if (activity && BROWSER_REVEAL_ACTIONS.has(activity.action)) {
+			if (!activity.commandId || activity.viewId !== browserView.viewId) return;
+			const commands = revealedBrowserCommandsRef.current.commands;
+			if (commands.has(activity.commandId)) return;
+			commands.add(activity.commandId);
+			// Bound deduplication memory while retaining recent overlapping commands.
+			if (commands.size > 64) commands.delete(commands.values().next().value!);
+			revealBrowserPanel();
+			return;
+		}
+		if (!browserView.agentBrowserActive) return;
 		if (browserOnly && !useUiStore.getState().inspectorSessions[uiSessionId]?.browserContentRevealed) {
 			setBrowserContentRevealed(uiSessionId, true);
 			setInspectorOpenForSession(uiSessionId, true);
@@ -1703,6 +1735,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [
 		browserPoppedOut,
 		browserView.agentBrowserActive,
+		browserView.agentBrowserActivity,
+		browserView.viewId,
 		hasInspector,
 		inspectorView,
 		isInspectorOpen,
@@ -1712,6 +1746,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		browserOnly,
 		setBrowserContentRevealed,
 		setInspectorOpenForSession,
+		revealBrowserPanel,
 	]);
 
 	// Opening Browser consumes the pending activity indicator, including the
@@ -2086,14 +2121,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										<CloudWorkspaceDiff annotation={fileAnnotation} onOpenFile={openCenterFile} onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} session={session} split={filesSplit} />
 									) : (
 										<SessionFileExplorer
-											artifacts={session.artifactFiles ?? []}
 											hostId={hostId}
 											onOpenFile={openCenterFile}
-											onRevealHandled={handleRevealHandled}
-											onRevealRequestConsumed={handleFilePreviewRequestConsumed}
 											onSplitChange={setFilesSplit}
 											onToggleMaximized={handleToggleFilesPopOut}
-											revealRequest={filePreviewRequestsBySession[uiSessionId] ?? null}
 											sessionId={session.id}
 											split={filesSplit}
 										/>
@@ -2101,6 +2132,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								) : null
 							}
 							isInspectorVisible={inspectorPanelVisible}
+							artifactRequest={artifactRequestsBySession[uiSessionId] ?? null}
+							onArtifactRequestConsumed={handleArtifactRequestConsumed}
 							onOpenArtifact={browserOnly ? undefined : handleOpenArtifact}
 							onOpenFiles={browserOnly ? undefined : handleOpenFiles}
 							onOpenReviewFile={handleOpenReviewFile}
@@ -2186,14 +2219,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									<CloudWorkspaceDiff annotation={fileAnnotation} isMaximized onOpenFile={openCenterFile} onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} session={session} split={filesSplit} />
 								) : (
 									<SessionFileExplorer
-										artifacts={session.artifactFiles ?? []}
 										hostId={hostId}
 										isMaximized
-										onRevealHandled={handleRevealHandled}
-										onRevealRequestConsumed={handleFilePreviewRequestConsumed}
 										onSplitChange={setFilesSplit}
 										onToggleMaximized={handleToggleFilesPopOut}
-										revealRequest={filePreviewRequestsBySession[uiSessionId] ?? null}
 										sessionId={session.id}
 										split={filesSplit}
 									/>

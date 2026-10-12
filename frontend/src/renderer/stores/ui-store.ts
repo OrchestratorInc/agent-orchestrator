@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
+import { developerModeStorageKey, windowTranslucencyStorageKey } from "../lib/window-translucency";
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
@@ -64,7 +65,7 @@ export type SettingsModal =
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
 export type WorkbenchTab = "changes" | "files" | "terminal";
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files";
+export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts";
 
 export type InspectorSessionState = {
 	isOpen: boolean;
@@ -133,6 +134,8 @@ export type UiState = {
 	diagnostics: boolean;
 	/** Experimental side chats in the inspector. Only takes effect in Developer mode. Default off. */
 	sideChats: boolean;
+	/** Developer Mode, macOS only: blur the desktop behind a translucent window. */
+	windowTranslucency: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
 	terminalCopyOnSelect: boolean;
 	restartingProjectIds: ReadonlySet<string>;
@@ -185,6 +188,7 @@ export type UiState = {
 	setRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
 	setSideChats: (enabled: boolean) => void;
+	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
@@ -241,7 +245,6 @@ export type OrchestratorReplacementFailure = {
 };
 
 const sidebarStorageKey = "ao.sidebar.open";
-const developerModeStorageKey = "ao.developerMode";
 const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
@@ -271,6 +274,10 @@ function initialDiagnostics() {
 
 function initialSideChats() {
 	return getLocalStorage()?.getItem(sideChatsStorageKey) === "true";
+}
+
+function initialWindowTranslucency() {
+	return getLocalStorage()?.getItem(windowTranslucencyStorageKey) === "true";
 }
 
 function initialTerminalCopyOnSelect() {
@@ -333,6 +340,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
 	sideChats: initialSideChats(),
+	windowTranslucency: initialWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
@@ -391,6 +399,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setSideChats: (sideChats) => {
 		getLocalStorage()?.setItem(sideChatsStorageKey, String(sideChats));
 		set({ sideChats });
+	},
+	setWindowTranslucency: (windowTranslucency) => {
+		getLocalStorage()?.setItem(windowTranslucencyStorageKey, String(windowTranslucency));
+		set({ windowTranslucency });
 	},
 	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));

@@ -93,6 +93,23 @@ const textFile = (name = "notes.txt") => new File(["hello"], name, { type: "text
 /* ---- the keyboard contract the composer already had ---------------------- */
 
 describe("send keys", () => {
+	it("lays attachments beside annotations and clears only annotation references", async () => {
+		const sessionId = "composer-shared-attachment-row";
+		writeChatExcerptReferences(sessionId, EXCERPTS);
+		writeChatComposerText(sessionId, "keep this draft");
+		const { field } = renderComposer({ draftSessionId: sessionId, onStageAttachments: vi.fn().mockResolvedValue([".ao/attachments/shot.png"]) });
+		fireEvent.paste(field, { clipboardData: clipboardData([png()]) });
+		const removeImage = await screen.findByRole("button", { name: "Remove shot.png" });
+		const row = screen.getByTestId("composer-attachments-and-annotations");
+		expect(row).toHaveClass("flex", "flex-wrap", "items-center");
+		expect(row).toContainElement(removeImage);
+		expect(row).toContainElement(screen.getByRole("button", { name: "1 annotation" }));
+		await userEvent.click(screen.getByRole("button", { name: "Remove all annotations" }));
+		expect(screen.queryByRole("button", { name: "1 annotation" })).not.toBeInTheDocument();
+		expect(readChatSessionDraft(sessionId).composer.excerpts).toEqual([]);
+		expect(removeImage).toBeInTheDocument();
+		expect(field).toHaveTextContent("keep this draft");
+	});
 	it("navigates to the selected annotation from the composer popover", async () => {
 		const excerpt = { id: "navigation", conversationId: "conversation-1", messageId: "source-1", revision: 2, text: "navigate here", role: "assistant" as const };
 		writeChatExcerptReferences("composer-navigation", [excerpt]);
