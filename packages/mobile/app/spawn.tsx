@@ -164,16 +164,8 @@ function SpawnModalContent() {
 				setLoading(false);
 				return;
 			}
-			void Promise.allSettled([
-				cloudClient.listProviderConnections(cloudOrgId),
-				cloudClient.listUserProviderConnections(),
-			]).then((results) => {
+			void cloudClient.listUserProviderConnections().then((available) => {
 				if (cancelled || !spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current)) return;
-				const available = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
-				if (results.every((result) => result.status === "rejected")) {
-					const failure = results[0].status === "rejected" ? results[0].reason : undefined;
-					throw failure instanceof Error ? failure : new Error("Could not load Cloud agents.");
-				}
 				const harnesses = readyHarnesses(available);
 				const agents = harnesses.map(cloudAgentInfo);
 				setCatalog({ supported: agents, installed: agents, authorized: agents });
@@ -593,6 +585,7 @@ const CLOUD_AGENT_LABELS: Record<string, string> = {
 	"claude-code": "Claude Code",
 	codex: "Codex",
 	cursor: "Cursor",
+	opencode: "OpenCode",
 };
 
 function cloudAgentInfo(id: string): AgentInfo {

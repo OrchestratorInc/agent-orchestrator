@@ -26,6 +26,7 @@ const AGENT_LABELS: Record<string, string> = {
 	"claude-code": "Claude Code",
 	codex: "Codex",
 	cursor: "Cursor",
+	opencode: "OpenCode",
 };
 
 export default function CreateCloudProject() {
@@ -36,6 +37,7 @@ export default function CreateCloudProject() {
 	const { refreshSource } = useApp();
 	const { client, signedIn, orgId, orgLoading, orgError, retryOrgResolution } = useCloudAuth();
 	const [step, setStep] = useState<Step>("loading");
+	const [setupAttempt, setSetupAttempt] = useState(0);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [token, setToken] = useState("");
@@ -161,21 +163,22 @@ export default function CreateCloudProject() {
 		connectionBaseline.current = null;
 		creationKey.current = null;
 		setStep("loading");
-		Promise.allSettled([client.listUserProviderConnections({ signal: abort.signal }), client.listProviderConnections(orgId, { signal: abort.signal }), refreshGitHub(abort.signal)]).then((results) => {
+		Promise.allSettled([client.listUserProviderConnections({ signal: abort.signal }), refreshGitHub(abort.signal)]).then((results) => {
 			if (!active) return;
-			const userConnections = results[0].status === "fulfilled" ? results[0].value : [];
-			const available = [results[0], results[1]].flatMap((result) => result.status === "fulfilled" ? result.value : []);
-			const harnesses = readyHarnesses(available);
+			if (results[0].status === "rejected") {
+				setError(messageFor(results[0].reason, "Could not load Cloud agent credentials."));
+				setStep("unavailable");
+				return;
+			}
+			const userConnections = results[0].value;
+			const harnesses = readyHarnesses(userConnections);
 			setAgents(harnesses);
 			setWorkerAgent(harnesses[0] ?? "");
 			setOrchestratorAgent(harnesses[0] ?? "");
 			setHasSavedToken(initialProjectCreationStep(userConnections) === "repository");
 			setStep("github");
-			if (results[0].status === "rejected") {
-				setGithubError(messageFor(results[0].reason, "Could not check saved GitHub access."));
-			}
-			if (results[2].status === "rejected") {
-				setGithubError(messageFor(results[2].reason, "Could not load GitHub repositories."));
+			if (results[1].status === "rejected") {
+				setGithubError(messageFor(results[1].reason, "Could not load GitHub repositories."));
 			}
 		}).catch((cause) => {
 			if (!active) return;
@@ -183,7 +186,7 @@ export default function CreateCloudProject() {
 			setStep("github");
 		});
 		return () => { active = false; abort.abort(); };
-	}, [client, signedIn, orgId, orgLoading, orgError, refreshGitHub]);
+	}, [client, signedIn, orgId, orgLoading, orgError, refreshGitHub, setupAttempt]);
 
 	useEffect(() => {
 		if (!connecting || openingGitHub || !orgId || step !== "github") return;
@@ -352,7 +355,7 @@ export default function CreateCloudProject() {
 					<View style={styles.group}>
 						<Text style={styles.title}>Can't add a project yet</Text>
 						<Text style={styles.description}>{error}</Text>
-						{signedIn && orgError ? <Button title="Retry" onPress={() => void retryOrgResolution()} /> : null}
+						{signedIn ? <Button title="Retry" onPress={() => orgError || !orgId ? void retryOrgResolution() : setSetupAttempt((value) => value + 1)} /> : null}
 						<Button title="Close" variant="ghost" onPress={() => backOr(router)} />
 					</View>
 				) : null}
@@ -435,7 +438,7 @@ export default function CreateCloudProject() {
 						{selectedRepository ? <View style={styles.selectedSummary}><Feather name="book" size={18} color={t.textSecondary} /><View><Text style={styles.repositoryName}>{selectedRepository.fullName}</Text><Text style={styles.repositoryMeta}>Default branch · {selectedRepository.defaultBranch}</Text></View></View> : null}
 						{selectedRepository ? <><Text style={styles.label}>Project name</Text><TextInput style={styles.input} value={displayName} onChangeText={(value) => { setDisplayName(value); creationKey.current = null; }} placeholder="Project name" placeholderTextColor={t.textTertiary} accessibilityLabel="Project name" /></> : null}
 						<Text style={styles.description}>Choose the agents that build and coordinate this project.</Text>
-						{agents.length === 0 ? <Text style={styles.warning}>No Cloud agent credential is ready. Add a Claude Code, Codex, or Cursor credential in desktop Settings, then reopen this form.</Text> : (
+						{agents.length === 0 ? <Text style={styles.warning}>No personal default Cloud agent credential is ready. Connect a coding agent in desktop Settings, then reopen this form.</Text> : (
 							<>
 								<Text style={styles.label}>Worker agent</Text>
 								{agents.map((agent) => <AgentOption key={`worker-${agent}`} agent={agent} selected={workerAgent === agent} onPress={() => { setWorkerAgent(agent); creationKey.current = null; }} styles={styles} color={t.accent} />)}

@@ -2,7 +2,7 @@ import type { RedactedProviderConnection } from "@aoagents/cloud-client";
 
 /**
  * `ProviderName` (packages/cloud-client/src/schema.ts) is
- * `"daytona" | "claude-code" | "codex" | "cursor"`. `daytona` is a sandbox
+ * includes coding agents and sandbox providers. `daytona` is a sandbox
  * provider connection — it provisions the VM a session runs in, it does not
  * run code — so it is deliberately excluded here. This is an explicit
  * allow-list rather than a comment on the provider list: `readyHarnesses`
@@ -10,7 +10,7 @@ import type { RedactedProviderConnection } from "@aoagents/cloud-client";
  * holds even if a future non-agent provider is added to `ProviderName` and
  * nobody updates this file.
  */
-const CODING_AGENT_PROVIDERS = ["claude-code", "codex", "cursor"] as const;
+const CODING_AGENT_PROVIDERS = ["claude-code", "codex", "cursor", "opencode"] as const;
 
 function isCodingAgentProvider(provider: string): boolean {
 	return (CODING_AGENT_PROVIDERS as readonly string[]).includes(provider);
@@ -36,18 +36,18 @@ function isCodingAgentProvider(provider: string): boolean {
  * guarantee holds regardless of what a caller passes in.
  */
 export function hasConnectionForHarness(
-	connections: RedactedProviderConnection[],
+	connections: readonly RedactedProviderConnection[],
 	harness: string,
 ): boolean {
 	if (!isCodingAgentProvider(harness)) return false;
 	return connections.some(
-		(connection) => connection.provider === harness && connection.validationState === "valid",
+		(connection) => connection.provider === harness && connection.label === "default" && connection.validationState === "valid",
 	);
 }
 
-/** Every coding-agent harness with its own valid provider connection, in list order. */
-export function readyHarnesses(connections: RedactedProviderConnection[]): string[] {
+/** Personal default credentials only; callers must not merge organization connections. */
+export function readyHarnesses(connections: readonly RedactedProviderConnection[]): string[] {
 	return [...new Set(connections
-		.filter((connection) => connection.validationState === "valid" && isCodingAgentProvider(connection.provider))
+		.filter((connection) => connection.label === "default" && connection.validationState === "valid" && isCodingAgentProvider(connection.provider))
 		.map((connection) => connection.provider))];
 }

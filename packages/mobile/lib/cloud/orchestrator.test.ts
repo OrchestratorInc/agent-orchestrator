@@ -10,7 +10,8 @@ function fakeClient(config: Record<string, unknown> = { orchestrator: { agent: "
 	const createSession = vi.fn(async () => ({ session: { id: "session-1" } }));
 	const client = {
 		listProviderConnections: vi.fn(async () => [connection("codex")]),
-		listUserProviderConnections: vi.fn(async () => [connection("claude-code")]),
+		listUserProviderConnections: vi.fn(async () => [connection("claude-code"), connection("codex")]),
+		getProject: vi.fn(async () => ({ project: { id: "project-1", config } })),
 		listProjects: vi.fn(async () => ({ items: [{ id: "project-1", config }], page: { hasMore: false } })),
 		createSession,
 	} as unknown as CloudClient;
@@ -18,6 +19,18 @@ function fakeClient(config: Record<string, unknown> = { orchestrator: { agent: "
 }
 
 describe("Cloud project orchestrator", () => {
+	it("does not treat organization-only agent credentials as personal readiness", async () => {
+		const { client, createSession } = fakeClient();
+		vi.mocked(client.listUserProviderConnections).mockResolvedValue([]);
+		await expect(spawnCloudOrchestrator(client, "org-1", "project-1", "request-4")).rejects.toThrow("Connect a Cloud coding agent");
+		expect(createSession).not.toHaveBeenCalled();
+	});
+	it("loads the exact project and surfaces its configuration failure", async () => {
+		const { client, createSession } = fakeClient();
+		vi.mocked(client.getProject).mockRejectedValueOnce(new Error("Project could not be loaded"));
+		await expect(spawnCloudOrchestrator(client, "org-1", "project-1", "request-5")).rejects.toThrow("Project could not be loaded");
+		expect(createSession).not.toHaveBeenCalled();
+	});
 	it("creates one orchestrator with the project's chosen ready agent and an idempotency key", async () => {
 		const { client, createSession } = fakeClient();
 		const id = await spawnCloudOrchestrator(client, "org-1", "project-1", "request-1");

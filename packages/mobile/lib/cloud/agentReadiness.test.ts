@@ -4,13 +4,16 @@ import { hasConnectionForHarness, readyHarnesses } from "./agentReadiness";
 // RedactedProviderConnection (packages/cloud-client/src/schema.ts) keys the
 // connection by `provider`, not `agent`, and its validation field is
 // `validationState`. Verified against the schema before writing this test.
-const claude = { provider: "claude-code", validationState: "valid" };
+const claude = { provider: "claude-code", label: "default", validationState: "valid" };
 const codexInvalid = { provider: "codex", validationState: "invalid" };
 // daytona is a sandbox provider connection, never a coding agent — even
 // valid, it must never make a spawn picker look ready to run code.
 const daytonaValid = { provider: "daytona", validationState: "valid" };
 
 describe("hasConnectionForHarness", () => {
+	it("rejects a valid nondefault credential", () => {
+		expect(hasConnectionForHarness([{ provider: "codex", label: "other", validationState: "valid" }] as never, "codex")).toBe(false);
+	});
 	it("is true for a harness with its own valid connection", () => {
 		expect(hasConnectionForHarness([claude] as never, "claude-code")).toBe(true);
 	});
@@ -37,6 +40,9 @@ describe("hasConnectionForHarness", () => {
 });
 
 describe("readyHarnesses", () => {
+	it("includes a personal default OpenCode credential", () => {
+		expect(readyHarnesses([{ provider: "opencode", label: "default", validationState: "valid" }] as never)).toEqual(["opencode"]);
+	});
 	it("names only the harnesses that can actually run", () => {
 		expect(readyHarnesses([claude, codexInvalid] as never)).toEqual(["claude-code"]);
 	});

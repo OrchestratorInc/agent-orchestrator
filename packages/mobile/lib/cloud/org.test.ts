@@ -21,6 +21,10 @@ describe("orgDisplayNameForAccount", () => {
 });
 
 describe("resolveOrg", () => {
+	it("uses the reported active organization instead of the first one", async () => {
+		const client = { getCurrentAccount: async () => ({ activeOrganizationId: "o2", organizations: [{ id: "o1" }, { id: "o2" }] }) };
+		expect((await resolveOrg(client as never)).id).toBe("o2");
+	});
 	it("uses the first organization when one exists", async () => {
 		const client = {
 			getCurrentAccount: vi.fn(async () => ({

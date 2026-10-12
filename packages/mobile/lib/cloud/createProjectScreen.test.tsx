@@ -84,6 +84,13 @@ afterEach(async () => {
 });
 
 describe("Add Cloud project sheet", () => {
+	it("offers Retry instead of reporting missing credentials after a readiness request fails", async () => {
+		state.signedIn = true; state.orgId = "org-1"; state.orgLoading = false;
+		state.listUserProviderConnections.mockRejectedValueOnce(new Error("Credential service unavailable"));
+		const root = await mount();
+		expect(root.findByProps({ title: "Retry" })).toBeDefined();
+		expect(root.findAllByType("Text" as never).map((node) => node.props.children)).toContain("Credential service unavailable");
+	});
 	it("keeps account resolution loading instead of showing a false sign-in error", async () => {
 		const root = await mount();
 		expect(root.findAll((node) => String(node.type) === "ActivityIndicator")).toHaveLength(1);
@@ -109,7 +116,7 @@ describe("Add Cloud project sheet", () => {
 		state.orgLoading = false;
 		state.listUserProviderConnections.mockResolvedValueOnce([
 			{ provider: "github", validationState: "valid" },
-			{ provider: "claude-code", validationState: "valid" },
+			{ provider: "claude-code", label: "default", validationState: "valid" },
 		] as never);
 		state.listProviderConnections.mockResolvedValueOnce([{ provider: "codex", validationState: "valid" }] as never);
 		const root = await mount();
@@ -120,7 +127,7 @@ describe("Add Cloud project sheet", () => {
 		});
 		await act(async () => { root.findByProps({ title: "Check repository access" }).props.onPress(); });
 		const marks = root.findAll((node) => String(node.type) === "Image").map((node) => node.props.source);
-		expect(marks).toEqual(["asset-claude-code", "asset-codex", "asset-claude-code", "asset-codex"]);
+		expect(marks).toEqual(["asset-claude-code", "asset-claude-code"]);
 	});
 
 	it("connects GitHub using the selected Cloud environment and offers manual setup", async () => {
@@ -146,7 +153,7 @@ describe("Add Cloud project sheet", () => {
 			{ githubRepositoryId: "1", name: "alpha", fullName: "me/alpha", htmlUrl: "https://github.com/me/alpha", defaultBranch: "main", access: "active", isArchived: false },
 			{ githubRepositoryId: "2", name: "beta", fullName: "me/beta", htmlUrl: "https://github.com/me/beta", defaultBranch: "develop", access: "active", isArchived: false },
 		], page: { hasMore: false } } as never);
-		state.listUserProviderConnections.mockResolvedValue([{ provider: "claude-code", validationState: "valid" }] as never);
+		state.listUserProviderConnections.mockResolvedValue([{ provider: "claude-code", label: "default", validationState: "valid" }] as never);
 		const root = await mount();
 		await act(async () => { root.findByProps({ accessibilityLabel: "Search repositories" }).props.onChangeText("beta"); });
 		expect(root.findAllByProps({ accessibilityLabel: "Select me/alpha" })).toHaveLength(0);
@@ -265,7 +272,7 @@ describe("Add Cloud project sheet", () => {
 		state.orgLoading = false;
 		state.listUserProviderConnections.mockResolvedValueOnce([
 			{ provider: "github", validationState: "valid" },
-			{ provider: "codex", validationState: "valid" },
+			{ provider: "codex", label: "default", validationState: "valid" },
 		] as never);
 		const root = await mount();
 		await act(async () => { root.findByProps({ title: "Set up manually with a token" }).props.onPress(); });

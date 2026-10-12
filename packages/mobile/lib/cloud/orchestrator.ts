@@ -1,12 +1,7 @@
-import type { CloudClient, Project, RedactedProviderConnection } from "@aoagents/cloud-client";
+import type { CloudClient, Project } from "@aoagents/cloud-client";
+import { readyHarnesses } from "./agentReadiness";
 
-const HARNESS_PRIORITY = ["codex", "claude-code", "cursor"] as const;
-
-function readyHarnesses(connections: readonly RedactedProviderConnection[]): Set<string> {
-	return new Set(connections
-		.filter((connection) => connection.label === "default" && connection.validationState === "valid")
-		.map((connection) => connection.provider));
-}
+const HARNESS_PRIORITY = ["codex", "claude-code", "cursor", "opencode"] as const;
 
 function projectHarness(project: Project | undefined): string | undefined {
 	const orchestrator = project?.config.orchestrator;
@@ -22,14 +17,12 @@ export async function spawnCloudOrchestrator(
 	projectId: string,
 	idempotencyKey: string,
 ): Promise<string> {
-	const [orgConnections, userConnections] = await Promise.all([
-		client.listProviderConnections(orgId),
+	const [{ project }, userConnections] = await Promise.all([
+		client.getProject(orgId, projectId),
 		client.listUserProviderConnections(),
 	]);
-	const ready = readyHarnesses([...orgConnections, ...userConnections]);
-	// Project config is a preference, not a blocker if this fetch fails.
-	const projects = await client.listProjects(orgId, { limit: 100 }).catch(() => null);
-	const chosen = projectHarness(projects?.items.find((project) => project.id === projectId));
+	const ready = new Set(readyHarnesses(userConnections));
+	const chosen = projectHarness(project);
 	const harness = chosen && ready.has(chosen) ? chosen : HARNESS_PRIORITY.find((candidate) => ready.has(candidate));
 	if (!harness) throw new Error("Connect a Cloud coding agent before spawning an orchestrator.");
 	const { session } = await client.createSession(orgId, {

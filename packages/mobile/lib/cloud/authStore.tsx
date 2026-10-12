@@ -6,13 +6,15 @@ import { cancelAccountHostSync } from "../accountHosts";
 import { createMobileCloudClient } from "./client";
 import { CLOUD_BASE_URL, CLOUD_CONFIGURATION_ERROR, CLOUD_DEPLOYMENT } from "./config";
 import { resolveCloudDeployment } from "./deployment";
-import { resolveOrg } from "./org";
+import { resolveCloudWorkspace } from "./org";
+import type { ResolvedMobileCloudOffering } from "./offering";
 import { getAccountSessionOwner, signInToDeployment, type AccountSessionOwner } from "./sessionOwner";
 import { registerWithLocalAuth, signInWithLocalAuth, type RegisterLocalAuthInput } from "./signIn";
 import { wrapUnauthorized } from "./unauthorized";
 
 export type CloudAuthState = {
 	signedIn: boolean | null; account: Account | null;
+	accountId: string | null; offering: ResolvedMobileCloudOffering | null;
 	orgId: string | null; orgLoading: boolean; orgError: string | null;
 	retryOrgResolution(): Promise<void>;
 	sessionEpoch: number; client: CloudClient; baseUrl: string;
@@ -37,7 +39,7 @@ export function CloudAuthProvider({ children, baseUrl = CLOUD_BASE_URL, owner: i
 	const owner = useMemo(() => injectedOwner ?? getAccountSessionOwner(deployment), [injectedOwner, deployment]);
 	const snapshot = useSyncExternalStore(owner.subscribe, owner.getSnapshot, owner.getSnapshot);
 	const epoch = snapshot.epoch;
-	const [workspace, setWorkspace] = useState<{ epoch: number; orgId: string | null; loading: boolean; error: string | null }>({ epoch, orgId: null, loading: false, error: null });
+	const [workspace, setWorkspace] = useState<{ epoch: number; orgId: string | null; offering?: ResolvedMobileCloudOffering; loading: boolean; error: string | null }>({ epoch, orgId: null, loading: false, error: null });
 	const resolution = useRef<{ epoch: number; promise: Promise<void> } | null>(null);
 	const signOut = useCallback(async () => {
 		cancelAccountHostSync();
@@ -61,8 +63,8 @@ export function CloudAuthProvider({ children, baseUrl = CLOUD_BASE_URL, owner: i
 				if (capturedEpoch !== owner.getSnapshot().epoch) return;
 				if (owner.getSnapshot().signedIn !== true) return;
 				if (!owner.getSnapshot().account) throw new Error(owner.getSnapshot().error ?? "Could not verify your Cloud account.");
-				const org = await resolveOrg(boundClient(capturedEpoch), () => capturedEpoch === owner.getSnapshot().epoch);
-				if (capturedEpoch === owner.getSnapshot().epoch) setWorkspace({ epoch: capturedEpoch, orgId: org.id, loading: false, error: null });
+				const result = await resolveCloudWorkspace(boundClient(capturedEpoch), () => capturedEpoch === owner.getSnapshot().epoch);
+				if (capturedEpoch === owner.getSnapshot().epoch) setWorkspace({ epoch: capturedEpoch, orgId: result.organization.id, offering: result.offering, loading: false, error: null });
 			} catch (error) {
 				if (capturedEpoch === owner.getSnapshot().epoch) setWorkspace({ epoch: capturedEpoch, orgId: null, loading: false, error: error instanceof Error ? error.message : "Could not load your cloud workspace." });
 			} finally {
@@ -95,6 +97,7 @@ export function CloudAuthProvider({ children, baseUrl = CLOUD_BASE_URL, owner: i
 	}, [owner, baseUrl, resolveSession]);
 	const value: CloudAuthState = {
 		signedIn: snapshot.signedIn, account: snapshot.account, sessionEpoch: epoch,
+		accountId: snapshot.account?.id ?? null, offering: orgId ? workspace.offering ?? null : null,
 		orgId, orgLoading: workspace.epoch === epoch && workspace.loading,
 		orgError: workspace.epoch === epoch ? workspace.error : null, retryOrgResolution,
 		client, baseUrl, error: CLOUD_CONFIGURATION_ERROR ?? snapshot.error, busy: snapshot.busy,
