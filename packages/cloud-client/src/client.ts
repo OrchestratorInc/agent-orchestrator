@@ -13,6 +13,9 @@ import type {
   CreateProjectInput,
   CreateSessionInput,
   CurrentAccount,
+  OrgCoderConfigResponse,
+  CoderTemplate,
+  CoderTemplateParameter,
   UserCloudPreferences,
   PutUserCloudPreferencesInput,
   DeleteProjectResponse,
@@ -103,8 +106,9 @@ export class CloudApiError extends Error {
   readonly requestId: string;
   readonly details?: Record<string, unknown>;
   readonly envelope: ErrorEnvelope;
+  readonly retryAfterSeconds?: number;
 
-  constructor(status: number, envelope: ErrorEnvelope) {
+  constructor(status: number, envelope: ErrorEnvelope, retryAfterSeconds?: number) {
     super(envelope.message);
     this.name = "CloudApiError";
     this.status = status;
@@ -112,6 +116,7 @@ export class CloudApiError extends Error {
     this.requestId = envelope.requestId;
     this.details = envelope.details;
     this.envelope = envelope;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -134,6 +139,22 @@ export class CloudClient {
 
   getCurrentAccount(options: RequestOptions = {}): Promise<CurrentAccount> {
     return this.request("/api/cloud/v1/me", options);
+  }
+
+  getOrgCoderConfig(orgId: string, options: RequestOptions = {}): Promise<OrgCoderConfigResponse> {
+    return this.request(this.orgPath(orgId, "/coder-config"), options);
+  }
+
+  listCoderTemplates(orgId: string, options: RequestOptions = {}): Promise<{ templates: CoderTemplate[] }> {
+    return this.request(this.orgPath(orgId, "/sandbox/coder/templates"), options);
+  }
+
+  getCoderTemplateParameters(orgId: string, templateId: string, options: RequestOptions = {}): Promise<{ parameters: CoderTemplateParameter[] }> {
+    return this.request(this.orgPath(orgId, `/coder-templates/${encodeURIComponent(templateId)}/parameters`), options);
+  }
+
+  touchSessionPresence(orgId: string, sessionId: string, options: RequestOptions = {}): Promise<void> {
+    return this.request(this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/presence`), { method: "POST", signal: options.signal });
   }
 
   getUserPreferences(options: RequestOptions = {}): Promise<UserCloudPreferences> {
@@ -989,7 +1010,7 @@ export class CloudClient {
       value = undefined;
     }
     const envelope = toErrorEnvelope(response, value);
-    throw new CloudApiError(response.status, envelope);
+    throw new CloudApiError(response.status, envelope, retryAfterSeconds(response));
   }
 
   private invalidResponse(status: number, message: string): CloudApiError {
@@ -1371,6 +1392,10 @@ function toErrorEnvelope(response: Response, value: unknown): ErrorEnvelope {
         ? object.requestId
         : response.headers.get("x-request-id") ?? "",
     ...(isRecord(object.details) ? { details: object.details } : {}),
+    ...(typeof object.plan === "string" ? { plan: object.plan } : {}),
+    ...(typeof object.limit === "number" && Number.isFinite(object.limit) ? { limit: object.limit } : {}),
+    ...(typeof object.used === "number" && Number.isFinite(object.used) ? { used: object.used } : {}),
+    ...(typeof object.resetsAt === "string" ? { resetsAt: object.resetsAt } : {}),
   };
 }
 
@@ -1382,7 +1407,14 @@ async function throwIfErrorResponse(response: Response): Promise<void> {
   } catch {
     value = undefined;
   }
-  throw new CloudApiError(response.status, toErrorEnvelope(response, value));
+  throw new CloudApiError(response.status, toErrorEnvelope(response, value), retryAfterSeconds(response));
+}
+
+function retryAfterSeconds(response: Response): number | undefined {
+  const value = response.headers.get("Retry-After")?.trim();
+  if (!value || !/^\d+$/.test(value)) return undefined;
+  const seconds = Number(value);
+  return Number.isSafeInteger(seconds) ? seconds : undefined;
 }
 
 async function readJSONResponse<T>(response: Response): Promise<T> {

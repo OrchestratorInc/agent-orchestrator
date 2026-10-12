@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
   CloudApiError,
@@ -6,11 +6,64 @@ import {
   createWorkerClient,
   type AgentProfile,
   type ClientEvent,
+  type CurrentAccount,
+  type CreateSessionInput,
+  type StartSessionInterfaceTransitionInput,
   type PullRequestSummary,
   type SessionReviewState,
 } from "../src/index.js";
 
 describe("CloudClient", () => {
+  it("preserves initial and handoff model and effort", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ session: { id: "s1" } }));
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+    const input: CreateSessionInput = { projectId: "p1", kind: "worker", harness: "codex", displayName: "Check", prompt: "Check", mode: "trusted", deniedCommands: [], model: "model-test", reasoningEffort: "high" };
+    await client.createSession("o1", input, { idempotencyKey: "request-1" });
+    const handoff: StartSessionInterfaceTransitionInput = { targetMode: "tui", policy: "drain", model: "model-test", reasoningEffort: "high" };
+    await client.startSessionInterfaceTransition("o1", "s1", handoff);
+    for (const call of fetchMock.mock.calls) expect(JSON.parse(String(call[1]?.body))).toMatchObject({ model: "model-test", reasoningEffort: "high" });
+    expectTypeOf<CurrentAccount>().toHaveProperty("activeOrganizationId");
+  });
+
+  it("reads Coder configuration and templates and renews passive presence", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn<typeof fetch>(async (url) => String(url).endsWith("/presence") ? new Response(null, { status: 204 }) : jsonResponse({ configured: false, templates: [], parameters: [] }));
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+    await client.getOrgCoderConfig("org/1", { signal: controller.signal });
+    await client.listCoderTemplates("org/1", { signal: controller.signal });
+    await client.getCoderTemplateParameters("org/1", "template/1", { signal: controller.signal });
+    await expect(client.touchSessionPresence("org/1", "session/1", { signal: controller.signal })).resolves.toBeUndefined();
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "https://cloud.test/api/cloud/v1/orgs/org%2F1/coder-config",
+      "https://cloud.test/api/cloud/v1/orgs/org%2F1/sandbox/coder/templates",
+      "https://cloud.test/api/cloud/v1/orgs/org%2F1/coder-templates/template%2F1/parameters",
+      "https://cloud.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/presence",
+    ]);
+    for (const call of fetchMock.mock.calls) expect(call[1]?.signal).toBe(controller.signal);
+    expect(fetchMock.mock.calls[3]?.[1]?.method).toBe("POST");
+  });
+
+  it("retains rich server events without losing item identity", async () => {
+    const base = { sessionId: "s1", createdAt: "2026-10-13T00:00:00Z" };
+    const events: ClientEvent[] = [
+      { ...base, sequence: 1, type: "chat.assistant_delta", payload: { turnId: "t1", attempt: 2, stream: "stdout", text: "hi", itemId: "i1" } },
+      { ...base, sequence: 2, type: "chat.activity", payload: { turnId: "t1", attempt: 2, activity: { id: "a1", kind: "command", status: "completed", summary: "Checked", detail: { command: "test" } } } },
+      { ...base, sequence: 3, type: "chat.turn_capabilities", payload: { turnId: "t1", attempt: 2, steering: true } },
+      { ...base, sequence: 4, type: "chat.approval_requested", payload: { turnId: "t1", attempt: 2, requestId: "r1", summary: "Run", toolKind: "command", decisions: ["allow", "deny"] } },
+      { ...base, sequence: 5, type: "chat.approval_decided", payload: { turnId: "t1", requestId: "r1", decision: "allow" } },
+    ];
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: vi.fn<typeof fetch>(async () => jsonResponse({ events, hasMore: false, nextAfter: 5 })) });
+    await expect(client.replayEvents("o1", "s1")).resolves.toMatchObject({ events });
+  });
+
+  it.each(["60", "-1", "tomorrow"])("retains quota metadata and validates Retry-After %s", async (retryAfter) => {
+    const envelope = { error: "Too Many Requests", code: "LIMIT_WINDOW", message: "Usage limit", requestId: "req1", plan: "starter", limit: 10, used: 10, resetsAt: "2026-10-14T00:00:00Z" };
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: vi.fn<typeof fetch>(async () => new Response(JSON.stringify(envelope), { status: 429, headers: { "Retry-After": retryAfter } })) });
+    const error = await client.getCurrentAccount().catch((err: CloudApiError) => err);
+    expect(error).toBeInstanceOf(CloudApiError);
+    expect(error).toMatchObject({ envelope, retryAfterSeconds: retryAfter === "60" ? 60 : undefined });
+  });
+
   it("retries a session whose startup failed", async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>

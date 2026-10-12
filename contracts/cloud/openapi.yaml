@@ -1296,6 +1296,42 @@ paths:
           description: The coding-agent credential was disconnected.
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sandbox/coder/templates:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    get:
+      operationId: listCoderTemplates
+      tags: [Providers]
+      description: Lists templates from the organization's Coder connection or the deployment's managed Coder. Requires Coder entitlement.
+      responses:
+        "200":
+          description: Available templates. Sending no templateId selects the default.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [templates]
+                properties:
+                  templates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CoderTemplate"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/presence:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: touchSessionPresence
+      tags: [Sessions]
+      description: Renews passive viewing presence; does not wake a paused session.
+      responses:
+        "204":
+          description: Presence recorded.
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/coder-config:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -2579,6 +2615,9 @@ components:
       additionalProperties: false
       required: [user, organizations]
       properties:
+        activeOrganizationId:
+          type: string
+          description: Organization selected by the authenticated desktop account; empty when there is none.
         user:
           $ref: "#/components/schemas/CurrentUser"
         organizations:
@@ -2683,6 +2722,15 @@ components:
         details:
           type: object
           additionalProperties: true
+        plan:
+          type: string
+        limit:
+          type: integer
+        used:
+          type: integer
+        resetsAt:
+          type: string
+          format: date-time
     PageInfo:
       type: object
       additionalProperties: false
@@ -2889,6 +2937,25 @@ components:
         Who runs AO's worker and agent in the workspace: a dedicated ao-worker
         user (default; added to the docker group when one exists), or the
         workspace's own login user with its real HOME, groups and environment.
+    CoderTemplate:
+      type: object
+      additionalProperties: false
+      required: [id, name, displayName, description, icon, parameters]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        displayName:
+          type: string
+        description:
+          type: string
+        icon:
+          type: string
+        parameters:
+          type: array
+          items:
+            type: string
     OrgCoderConfigResponse:
       type: object
       additionalProperties: false
@@ -3565,6 +3632,9 @@ components:
           type: string
           minLength: 1
           description: Assistant output frame, limited by the server to 16 KiB.
+        itemId:
+          type: string
+          description: Harness-native output item identity within the fenced turn attempt.
     WorkerReadyEventInput:
       type: object
       additionalProperties: false
@@ -4324,6 +4394,12 @@ components:
           $ref: "#/components/schemas/SessionInterfaceMode"
         policy:
           $ref: "#/components/schemas/SessionInterfaceTransitionPolicy"
+        model:
+          type: string
+          description: Optional model override; supported only when targetMode is tui.
+        reasoningEffort:
+          type: string
+          description: Optional effort override; supported only when targetMode is tui.
     Session:
       type: object
       additionalProperties: false
@@ -4494,6 +4570,9 @@ components:
           items:
             type: string
           default: []
+        reasoningEffort:
+          type: string
+          description: Initial reasoning effort; empty uses the harness default.
         provider:
           type: string
           description: Explicit sandbox provider override. If omitted, the control plane resolves the user's preference or deployment default.
@@ -5147,6 +5226,143 @@ components:
         createdAt:
           type: string
           format: date-time
+    ChatActivityEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.activity
+        payload:
+          type: object
+          additionalProperties: false
+          required: [turnId, attempt, activity]
+          properties:
+            turnId:
+              type: string
+              format: uuid
+            attempt:
+              type: integer
+              minimum: 1
+            activity:
+              type: object
+              additionalProperties: false
+              required: [id, kind, status, summary]
+              properties:
+                id:
+                  type: string
+                kind:
+                  type: string
+                status:
+                  type: string
+                summary:
+                  type: string
+                detail:
+                  type: object
+                  additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    TurnCapabilitiesEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.turn_capabilities
+        payload:
+          type: object
+          additionalProperties: false
+          required: [turnId, attempt, steering]
+          properties:
+            turnId:
+              type: string
+              format: uuid
+            attempt:
+              type: integer
+              minimum: 1
+            steering:
+              type: boolean
+        createdAt:
+          type: string
+          format: date-time
+    ApprovalRequestedEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.approval_requested
+        payload:
+          type: object
+          additionalProperties: false
+          required: [turnId, attempt, requestId, summary, toolKind, decisions]
+          properties:
+            turnId:
+              type: string
+              format: uuid
+            attempt:
+              type: integer
+              minimum: 1
+            requestId:
+              type: string
+            summary:
+              type: string
+            toolKind:
+              type: string
+            decisions:
+              type: array
+              items:
+                type: string
+        createdAt:
+          type: string
+          format: date-time
+    ApprovalDecidedEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.approval_decided
+        payload:
+          type: object
+          additionalProperties: false
+          required: [turnId, requestId, decision]
+          properties:
+            turnId:
+              type: string
+              format: uuid
+            requestId:
+              type: string
+            decision:
+              type: string
+        createdAt:
+          type: string
+          format: date-time
     ClientEvent:
       oneOf:
         - $ref: "#/components/schemas/UserMessageEvent"
@@ -5157,6 +5373,10 @@ components:
         - $ref: "#/components/schemas/TurnAbortedEvent"
         - $ref: "#/components/schemas/InterruptRequestedEvent"
         - $ref: "#/components/schemas/TurnSteeredEvent"
+        - $ref: "#/components/schemas/ChatActivityEvent"
+        - $ref: "#/components/schemas/TurnCapabilitiesEvent"
+        - $ref: "#/components/schemas/ApprovalRequestedEvent"
+        - $ref: "#/components/schemas/ApprovalDecidedEvent"
     ClientEventPage:
       type: object
       additionalProperties: false

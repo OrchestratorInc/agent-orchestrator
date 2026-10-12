@@ -960,6 +960,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sandbox/coder/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description Lists templates from the organization's Coder connection or the deployment's managed Coder. Requires Coder entitlement. */
+        get: operations["listCoderTemplates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/presence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Renews passive viewing presence; does not wake a paused session. */
+        post: operations["touchSessionPresence"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/coder-config": {
         parameters: {
             query?: never;
@@ -1585,6 +1624,8 @@ export interface components {
             default: string;
         };
         CurrentAccount: {
+            /** @description Organization selected by the authenticated desktop account; empty when there is none. */
+            activeOrganizationId?: string;
             user: components["schemas"]["CurrentUser"];
             organizations: components["schemas"]["OrganizationMembership"][];
             offering?: components["schemas"]["Offering"];
@@ -1631,6 +1672,11 @@ export interface components {
             details?: {
                 [key: string]: unknown;
             };
+            plan?: string;
+            limit?: number;
+            used?: number;
+            /** Format: date-time */
+            resetsAt?: string;
         };
         PageInfo: {
             hasMore: boolean;
@@ -1745,6 +1791,14 @@ export interface components {
          * @enum {string}
          */
         CoderWorkerUser: "ao-worker" | "workspace";
+        CoderTemplate: {
+            id: string;
+            name: string;
+            displayName: string;
+            description: string;
+            icon: string;
+            parameters: string[];
+        };
         OrgCoderConfigResponse: {
             configured: boolean;
             coderConfig?: components["schemas"]["OrgCoderConfig"];
@@ -2050,6 +2104,8 @@ export interface components {
             stream: "stdout" | "stderr";
             /** @description Assistant output frame, limited by the server to 16 KiB. */
             text: string;
+            /** @description Harness-native output item identity within the fenced turn attempt. */
+            itemId?: string;
         };
         WorkerReadyEventInput: {
             /**
@@ -2415,6 +2471,10 @@ export interface components {
         StartSessionInterfaceTransitionInput: {
             targetMode: components["schemas"]["SessionInterfaceMode"];
             policy: components["schemas"]["SessionInterfaceTransitionPolicy"];
+            /** @description Optional model override; supported only when targetMode is tui. */
+            model?: string;
+            /** @description Optional effort override; supported only when targetMode is tui. */
+            reasoningEffort?: string;
         };
         Session: {
             /** Format: uuid */
@@ -2483,6 +2543,8 @@ export interface components {
             model?: string;
             /** @default [] */
             deniedCommands: string[];
+            /** @description Initial reasoning effort; empty uses the harness default. */
+            reasoningEffort?: string;
             /** @description Explicit sandbox provider override. If omitted, the control plane resolves the user's preference or deployment default. */
             provider?: string;
             /** Format: uuid */
@@ -2782,7 +2844,78 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"];
+        ChatActivityEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.activity";
+            payload: {
+                /** Format: uuid */
+                turnId: string;
+                attempt: number;
+                activity: {
+                    id: string;
+                    kind: string;
+                    status: string;
+                    summary: string;
+                    detail?: {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        TurnCapabilitiesEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.turn_capabilities";
+            payload: {
+                /** Format: uuid */
+                turnId: string;
+                attempt: number;
+                steering: boolean;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ApprovalRequestedEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.approval_requested";
+            payload: {
+                /** Format: uuid */
+                turnId: string;
+                attempt: number;
+                requestId: string;
+                summary: string;
+                toolKind: string;
+                decisions: string[];
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ApprovalDecidedEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.approval_decided";
+            payload: {
+                /** Format: uuid */
+                turnId: string;
+                requestId: string;
+                decision: string;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["ChatActivityEvent"] | components["schemas"]["TurnCapabilitiesEvent"] | components["schemas"]["ApprovalRequestedEvent"] | components["schemas"]["ApprovalDecidedEvent"];
         ClientEventPage: {
             events: components["schemas"]["ClientEvent"][];
             hasMore: boolean;
@@ -4671,6 +4804,53 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description The coding-agent credential was disconnected. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listCoderTemplates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Available templates. Sending no templateId selects the default. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        templates: components["schemas"]["CoderTemplate"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    touchSessionPresence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Presence recorded. */
             204: {
                 headers: {
                     [name: string]: unknown;
