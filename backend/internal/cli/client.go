@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
@@ -38,6 +39,10 @@ type apiResponseError struct {
 }
 
 var errDaemonUnavailable = errors.New("AO daemon unavailable")
+
+// errDaemonNotRunning distinguishes a missing/stale run file from transport
+// failures so hooks can keep expected restart noise out of the agent's stderr.
+var errDaemonNotRunning = errors.New("AO daemon is not running")
 
 // daemonUnavailableError keeps the established user-facing diagnostics while
 // giving the few idempotent CLI operations that can safely retry a typed signal.
@@ -158,10 +163,10 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 		return err
 	}
 	if info == nil {
-		return daemonUnavailableError{message: "AO daemon is not running — start it with `ao start`"}
+		return daemonUnavailableError{message: "AO daemon is not running — start it with `ao start`", cause: errDaemonNotRunning}
 	}
 	if !c.deps.ProcessAlive(info.PID) {
-		return daemonUnavailableError{message: fmt.Sprintf("AO daemon is not running (stale run-file at %s) — start it with `ao start`", cfg.RunFilePath)}
+		return daemonUnavailableError{message: fmt.Sprintf("AO daemon is not running (stale run-file at %s) — start it with `ao start`", cfg.RunFilePath), cause: errDaemonNotRunning}
 	}
 
 	var reader io.Reader = http.NoBody
@@ -182,6 +187,9 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	}
 	for name, value := range headers {
 		req.Header.Set(name, value)
+	}
+	if sideID := os.Getenv("AO_SIDE_CONVERSATION_ID"); sideID != "" {
+		req.Header.Set("X-AO-Side-Conversation", sideID)
 	}
 
 	// Reuse the injected client's transport (keeps it stubbable in tests) but

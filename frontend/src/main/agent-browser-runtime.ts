@@ -9,6 +9,7 @@ const MAX_ARGUMENT_CHARS = 16_384;
 const MAX_OUTPUT_BYTES = 1 << 20;
 const MAX_SCREENSHOT_BYTES = 5 << 20;
 const COMMAND_TIMEOUT_MS = 60_000;
+const SCREENSHOT_TIMEOUT_MS = 30_000;
 const CLOSE_TIMEOUT_MS = 10_000;
 const BRIDGE_CLOSE_TIMEOUT_MS = 5_000;
 export const BROWSER_RUNTIME_RECLAIM_GRACE_MS = 15 * 60_000;
@@ -179,6 +180,7 @@ export class AgentBrowserRuntime {
 		args: string[],
 		provider: AgentBrowserTargetProvider,
 		signal?: AbortSignal,
+		timeoutMs = COMMAND_TIMEOUT_MS,
 	): Promise<AgentBrowserRunResult> {
 		if (this.disposed) throw runtimeError("AGENT_BROWSER_RUNTIME_CLOSED", "Browser automation runtime is closed");
 		await this.assertBinary();
@@ -203,7 +205,7 @@ export class AgentBrowserRuntime {
 				disabled.stderr.trim() || "Unable to disable agent-browser streaming",
 			);
 		}
-		const result = await this.processRunner(this.options.binaryPath, args, environment, signal);
+		const result = await this.processRunner(this.options.binaryPath, args, environment, signal, timeoutMs);
 		if (result.exitCode !== 0) {
 			throw runtimeError(
 				"AGENT_BROWSER_COMMAND_FAILED",
@@ -225,23 +227,61 @@ export class AgentBrowserRuntime {
 		return parseAgentBrowserJSON(result.stdout);
 	}
 
+	private nativeAnnotations(stdout: string): { annotations?: unknown[]; boundary?: unknown } | undefined {
+		try {
+			const parsed = parseAgentBrowserJSON(stdout);
+			if (!Array.isArray(parsed.annotations)) {
+				this.log("agent-browser screenshot returned no annotations for an annotated capture");
+				return undefined;
+			}
+			return { annotations: parsed.annotations, boundary: parsed._boundary };
+		} catch (error) {
+			// agent-browser reporting its own failure is the caller's error, not a
+			// missing extra; only unreadable output degrades to "no annotations".
+			if ((error as { code?: string }).code !== "AGENT_BROWSER_INVALID_OUTPUT") throw error;
+			this.log(`agent-browser screenshot annotations were unreadable: ${(error as Error).message}`);
+			return undefined;
+		}
+	}
+
 	async screenshot(
 		sessionId: string,
 		provider: AgentBrowserTargetProvider,
 		signal?: AbortSignal,
-	): Promise<{ data: string; width: number; height: number; untrustedExternalContent: true }> {
+		options: { annotate?: boolean } = {},
+	): Promise<{
+		data: string;
+		width: number;
+		height: number;
+		annotations?: unknown[];
+		annotationsUnavailable?: true;
+		untrustedExternalContent: true;
+	}> {
 		const runtime = await this.ensureSession(sessionId, provider);
 		await this.touchRuntimeRoot();
 		const directory = await mkdtemp(path.join(runtime.runtimeDir, "screenshot-"));
 		const target = path.join(directory, "screenshot.png");
 		try {
-			await this.run(sessionId, ["screenshot", target, "--json"], provider, signal);
+			const command = ["screenshot", target, "--json", ...(options.annotate === true ? ["--annotate"] : [])];
+			const result = await this.run(sessionId, command, provider, signal, SCREENSHOT_TIMEOUT_MS);
+			// Read the envelope before the file: a native capture that failed with a
+			// reason reports it here, and its message beats the ENOENT that reading a
+			// PNG it never wrote would raise.
+			const annotated = options.annotate === true ? this.nativeAnnotations(result.stdout) : undefined;
 			const image = await readFile(target);
 			if (image.length > MAX_SCREENSHOT_BYTES) {
 				throw runtimeError("AGENT_BROWSER_OUTPUT_TOO_LARGE", "Browser screenshot exceeded AO's size limit");
 			}
 			const { width, height } = pngDimensions(image);
-			return { data: image.toString("base64"), width, height, untrustedExternalContent: true };
+			return {
+				data: image.toString("base64"),
+				width,
+				height,
+				...(annotated?.annotations ? { annotations: annotated.annotations } : {}),
+				...(annotated?.boundary ? { _boundary: annotated.boundary } : {}),
+				...(options.annotate === true && !annotated?.annotations ? { annotationsUnavailable: true as const } : {}),
+				untrustedExternalContent: true,
+			};
 		} finally {
 			await removePath(directory, this.log, "screenshot directory");
 		}
@@ -626,8 +666,14 @@ export function nativeArgumentsForAction(action: string, args: Record<string, un
 		case "open":
 			return ["open", httpURL(stringValue(args.url, "url is required"))];
 		case "snapshot":
-			return ["snapshot", ...(args.interactive === true ? ["--interactive"] : []), "--compact"];
+			return [
+				"snapshot",
+				...(args.interactive === true ? ["--interactive"] : []),
+				"--compact",
+				...(args.delta === true ? ["--delta", ...(args.full === true ? ["--full"] : [])] : []),
+			];
 		case "click":
+			return ["click", ref(), ...(args.human === true ? ["--human"] : [])];
 		case "dblclick":
 		case "focus":
 		case "hover":
@@ -642,7 +688,12 @@ export function nativeArgumentsForAction(action: string, args: Record<string, un
 		case "press":
 			return ["press", stringValue(args.key, "key is required")];
 		case "drag":
-			return ["drag", ref(), nativeRef(stringValue(args.targetRef, "target ref is required"))];
+			return [
+				"drag",
+				ref(),
+				nativeRef(stringValue(args.targetRef, "target ref is required")),
+				...(args.human === true ? ["--human"] : []),
+			];
 		case "select":
 			return ["select", ref(), stringValue(args.value, "value is required", true)];
 		case "tabs":
@@ -733,13 +784,16 @@ export function parseAgentBrowserJSON(stdout: string): AgentBrowserJSONResult {
 	}
 	if (!isRecord(envelope)) throw runtimeError("AGENT_BROWSER_INVALID_OUTPUT", "Browser automation returned invalid output");
 	if (envelope.success === false) {
-		throw runtimeError(staleReferenceCode(envelope.error) ?? "AGENT_BROWSER_COMMAND_FAILED", stringError(envelope.error) || "Browser automation failed");
+		throw runtimeError(
+			staleReferenceCode(envelope.error) ?? waitTimeoutCode(envelope.error) ?? "AGENT_BROWSER_COMMAND_FAILED",
+			stringError(envelope.error) || "Browser automation failed",
+		);
 	}
 	const boundary = validContentBoundary(envelope._boundary);
 	const result: Record<string, unknown> = isRecord(envelope.data) ? { ...envelope.data } : { value: envelope.data };
 	// `_boundary` is native-output metadata. Never forward a page-shaped field
 	// with the same name as trusted metadata, but preserve the root field emitted
-	// by agent-browser 0.33.1 so downstream adapters retain its nonce and origin.
+	// by agent-browser 0.38.1 so downstream adapters retain its nonce and origin.
 	delete result._boundary;
 	if (boundary) result._boundary = boundary;
 	return { ...result, untrustedExternalContent: true };
@@ -785,6 +839,7 @@ function stringError(value: unknown): string {
 }
 
 const STALE_REFERENCE_MESSAGE = /^(?:Unknown ref:|Could not locate element with)/;
+const WAIT_TIMEOUT_MESSAGE = /^Wait timed out after \d+ms$/;
 
 // Preserve only the stale-reference signal needed by `act`. Other native
 // command failures stay generic so tab drift and close recovery paths continue
@@ -792,6 +847,10 @@ const STALE_REFERENCE_MESSAGE = /^(?:Unknown ref:|Could not locate element with)
 function staleReferenceCode(value: unknown): "STALE_REFERENCE" | undefined {
 	if (isRecord(value) && value.code === "STALE_REFERENCE") return "STALE_REFERENCE";
 	return typeof value === "string" && STALE_REFERENCE_MESSAGE.test(value) ? "STALE_REFERENCE" : undefined;
+}
+
+function waitTimeoutCode(value: unknown): "AGENT_BROWSER_WAIT_TIMEOUT" | undefined {
+	return WAIT_TIMEOUT_MESSAGE.test(stringError(value)) ? "AGENT_BROWSER_WAIT_TIMEOUT" : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

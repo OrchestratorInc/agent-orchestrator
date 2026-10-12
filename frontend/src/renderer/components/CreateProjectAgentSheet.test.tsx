@@ -1,16 +1,36 @@
+import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
+import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
-import { CreateProjectAgentSheet, defaultAuthorizedAgent, RequiredAgentField } from "./CreateProjectAgentSheet";
+import { CreateProjectAgentSheet, RequiredAgentField } from "./CreateProjectAgentSheet";
 import { TooltipProvider } from "./ui/tooltip";
+import { useUiStore } from "../stores/ui-store";
+
+const remote = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
+vi.mock("../lib/host-clients", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/host-clients")>()),
+	clientForHost: () => ({ GET: remote.get, POST: remote.post }),
+}));
+
+const { trackerIntakeGate } = vi.hoisted(() => ({ trackerIntakeGate: { enabled: true } }));
+
+vi.mock("../hooks/useSettings", () => ({
+	useSettings: () => ({ settings: { trackerIntakeEnabled: trackerIntakeGate.enabled }, isLoading: false, error: undefined }),
+}));
+
+beforeEach(() => {
+	trackerIntakeGate.enabled = true;
+	useUiStore.setState({ settingsModal: null });
+});
 
 function renderSheet(
 	onSubmit = vi.fn().mockResolvedValue(undefined),
 	queryClient?: QueryClient,
-	options: { shake?: boolean } = {},
+	options: { shake?: boolean; hostId?: string } = {},
 ) {
 	queryClient ??= new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	if (queryClient.getQueryData(agentReadinessQueryKey) === undefined) {
@@ -18,10 +38,14 @@ function renderSheet(
 			agents: [agentReadiness("claude-code"), agentReadiness("codex")],
 		});
 	}
+	if (queryClient.getQueryData(workspaceQueryKey) === undefined) {
+		queryClient.setQueryData(workspaceQueryKey, []);
+	}
 	render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
 				<CreateProjectAgentSheet
+					hostId={options.hostId}
 					isCreating={false}
 					kind="single_repo"
 					onOpenChange={() => undefined}
@@ -36,44 +60,95 @@ function renderSheet(
 	return onSubmit;
 }
 
+it("unmounts the modal on submit and does not bring it back when creation succeeds", async () => {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	queryClient.setQueryData(agentReadinessQueryKey, { agents: [agentReadiness("codex")] });
+	queryClient.setQueryData(workspaceQueryKey, []);
+	let finish!: () => void;
+	const pending = new Promise<void>((resolve) => { finish = resolve; });
+	function Harness() {
+		const [busy, setBusy] = useState(false);
+		const [open, setOpen] = useState(true);
+		return <QueryClientProvider client={queryClient}><TooltipProvider>
+			<CreateProjectAgentSheet open={open} isCreating={busy} kind="single_repo" path="/repo/new-project" onOpenChange={setOpen} onSubmit={async () => {
+				setBusy(true);
+				await pending;
+				setOpen(false);
+				setBusy(false);
+			}} />
+		</TooltipProvider></QueryClientProvider>;
+	}
+	render(<Harness />);
+	await userEvent.click(await screen.findByRole("button", { name: "Create and start" }));
+	expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
+	await act(async () => finish());
+	expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
+});
+
 async function chooseOption(trigger: HTMLElement, optionName: string) {
 	await userEvent.click(trigger);
 	const escaped = optionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	await userEvent.click(await screen.findByRole("option", { name: new RegExp(escaped, "i") }));
 }
 
+function hoursAgo(hours: number): string {
+	return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+}
+
 describe("CreateProjectAgentSheet", () => {
+	it("checks only the selected agent for launch readiness on a remote host", async () => {
+		remote.get.mockResolvedValue({ data: { agents: [agentReadiness("codex")] } });
+		remote.post.mockResolvedValue({ data: { agents: [agentReadiness("codex")] } });
+		renderSheet(undefined, undefined, { hostId: "box-a" });
+
+		await waitFor(() => expect(remote.post).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", {
+			body: { agentIds: [], purpose: "display" },
+		}));
+	});
+
+	it("can create a remote project with an installed agent whose auth is unknown", async () => {
+		const agents = [agentReadiness("opencode", "OpenCode", { authentication: "unknown" })];
+		remote.get.mockResolvedValue({ data: { agents } });
+		remote.post.mockResolvedValue({ data: { agents } });
+		const onSubmit = renderSheet(vi.fn().mockResolvedValue(undefined), undefined, { hostId: "box-a" });
+
+		await chooseOption(await screen.findByLabelText("Worker agent"), "OpenCode");
+		await chooseOption(screen.getByLabelText("Orchestrator agent"), "OpenCode");
+		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+			workerAgent: "opencode",
+			orchestratorAgent: "opencode",
+		})));
+	});
+
 	it("shakes the active sheet when creation fails", () => {
 		renderSheet(undefined, undefined, { shake: true });
 
 		expect(screen.getByRole("dialog")).toHaveClass("modal-shake");
 	});
 
-	it("chooses the highest-priority authorized default agent", () => {
-		expect(
-			defaultAuthorizedAgent([
-				agentReadiness("opencode", "OpenCode"),
-				agentReadiness("codex", "Codex"),
-			]),
-		).toBe("codex");
+	// Under the auth ladder an agent whose credentials AO cannot validate
+	// reports "configured", never "authorized". If that dropped out of the
+	// preselection pool, a working Claude Code install would silently stop
+	// being the default agent on this sheet.
+	it("still preselects an agent whose credentials are configured but unverified", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(agentReadinessQueryKey, {
+			agents: [agentReadiness("claude-code", "Claude Code", { authentication: "configured" })],
+		});
+		renderSheet(undefined, queryClient);
+		await waitFor(() => expect(screen.getAllByText("Claude Code").length).toBeGreaterThan(0));
 	});
 
-	it("chooses the most frequently used authorized agent by default", () => {
-		expect(
-			defaultAuthorizedAgent([
-				agentReadiness("claude-code", "Claude Code", { usageCount: 1 }),
-				agentReadiness("codex", "Codex", { usageCount: 3 }),
-			]),
-		).toBe("codex");
-	});
-
-	it("falls back to the alphabetically first authorized agent when no priority agent is authorized", () => {
-		expect(
-			defaultAuthorizedAgent([
-				agentReadiness("goose", "Goose"),
-				agentReadiness("devin", "Devin"),
-			]),
-		).toBe("devin");
+	// I2: only a definite rejection removes an agent from the pool.
+	it("does not preselect an agent the provider definitely rejected", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(agentReadinessQueryKey, {
+			agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })],
+		});
+		renderSheet(undefined, queryClient);
+		await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+		expect(screen.queryAllByText("Claude Code")).toHaveLength(0);
 	});
 
 	it("uses the compact trigger size for agent fields", () => {
@@ -100,6 +175,137 @@ describe("CreateProjectAgentSheet", () => {
 		expect(await screen.findByRole("listbox")).toHaveClass("max-h-select-menu-max!");
 	});
 
+	it.each(["chip", "settings-row"] as const)("uses the fixed compact width for the %s agent menu", async (variant) => {
+		render(
+			<RequiredAgentField
+				id="agent"
+				label="Agent"
+				onChange={() => undefined}
+				placeholder="Choose agent"
+				value="claude-code"
+				variant={variant}
+			/>,
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: "Agent" }));
+
+		expect(screen.getByRole("menu")).toHaveClass(
+			"w-56!",
+			"min-w-56!",
+			"max-w-56!",
+		);
+	});
+
+	it.each(["stacked", "chip", "settings-row"] as const)("%s offers agents with unknown readiness and opens Harness for definite failures", async (variant) => {
+		const onChange = vi.fn();
+		useUiStore.setState({ settingsModal: null });
+		render(<RequiredAgentField
+			id="agent" label="Agent" placeholder="Choose agent" value="codex" variant={variant} onChange={onChange}
+			agents={[
+				agentReadiness("claude-code", "Claude Code", { freshness: "stale" }),
+				agentReadiness("codex", "Codex", { authentication: "unauthorized" }),
+				agentReadiness("aider", "Aider", { authentication: "not_applicable" }),
+				agentReadiness("fx", "fx", { authentication: "configured" }),
+				agentReadiness("cursor", "Cursor", { installation: "not_installed" }),
+				agentReadiness("opencode", "OpenCode", { authentication: "unknown" }),
+			]}
+		/>);
+		const trigger = screen.getByLabelText("Agent");
+		expect(trigger).toHaveTextContent("Codex");
+		expect(trigger).toHaveTextContent("Needs setup");
+		expect(screen.queryByRole("button", { name: "Log in" })).not.toBeInTheDocument();
+		await userEvent.click(trigger);
+		const role = variant === "stacked" ? "option" : "menuitem";
+		expect(screen.getByRole(role, { name: /Claude Code/ })).toBeInTheDocument();
+		expect(screen.getByRole(role, { name: /Aider/ })).toBeInTheDocument();
+		expect(screen.getByRole(role, { name: /fx.*Unverified/ })).toBeInTheDocument();
+		expect(screen.getByRole(role, { name: /OpenCode.*Auth unknown/ })).not.toHaveAttribute("aria-disabled", "true");
+		for (const name of [/Codex/, /Cursor/]) expect(screen.queryByRole(role, { name })).not.toBeInTheDocument();
+		await userEvent.keyboard("{End}{Enter}");
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "harness", focusAgentId: "codex" }));
+		expect(onChange).not.toHaveBeenCalled();
+		expect(trigger).toHaveTextContent("Codex");
+	});
+
+	it("preserves cloud agent choices without offering local Harness management", async () => {
+		render(<RequiredAgentField id="agent" label="Agent" placeholder="Choose agent" value="" manageAgents={false} variant="chip" onChange={() => undefined}
+			agents={[agentReadiness("codex", "Codex", { authentication: "unknown" })]} />);
+		await userEvent.click(screen.getByLabelText("Agent"));
+		expect(screen.getByRole("menuitem", { name: /Codex/ })).not.toHaveAttribute("aria-disabled", "true");
+		expect(screen.queryByRole("menuitem", { name: "Manage agents…" })).not.toBeInTheDocument();
+	});
+
+	it("does not send an installed configured agent back to setup", () => {
+		render(<RequiredAgentField id="agent" label="Agent" placeholder="Choose agent" value="fx" variant="chip" onChange={() => undefined}
+			agents={[agentReadiness("fx", "fx", { authentication: "configured" })]} />);
+
+		expect(screen.getByLabelText("Agent")).toHaveTextContent("fx");
+		expect(screen.getByLabelText("Agent")).not.toHaveTextContent("Needs setup");
+	});
+
+	it("keeps agent management available with an empty ready list", async () => {
+		const onChange = vi.fn();
+		useUiStore.setState({ settingsModal: null });
+		render(<RequiredAgentField id="agent" label="Agent" placeholder="Choose agent" value="" onChange={onChange} agents={[]} />);
+		await userEvent.click(screen.getByLabelText("Agent"));
+		expect(screen.getByText("No agents ready")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("option", { name: "Manage agents…" }));
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "harness" }));
+		expect(onChange).not.toHaveBeenCalled();
+	});
+
+	it("opens management on the remote host for an unavailable selected agent", async () => {
+		useUiStore.setState({ settingsModal: null });
+		render(<RequiredAgentField id="agent" label="Agent" placeholder="Choose agent" value="codex" hostId="box-a" onChange={() => undefined}
+			agents={[agentReadiness("codex", "Codex", { authentication: "unauthorized" })]} />);
+		await userEvent.click(screen.getByLabelText("Agent"));
+		await userEvent.click(screen.getByRole("option", { name: "Manage agents…" }));
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "harness", focusAgentId: "codex", hostId: "box-a" }));
+	});
+
+	it("keeps fallback agents usable until a readiness snapshot arrives", async () => {
+		render(<RequiredAgentField id="agent" label="Agent" placeholder="Choose agent" value="codex" variant="settings-row" onChange={() => undefined} />);
+
+		const trigger = screen.getByRole("button", { name: "Agent" });
+		expect(trigger).toHaveTextContent("Codex");
+		expect(trigger).not.toHaveTextContent("Needs setup");
+		await userEvent.click(trigger);
+		expect(screen.getByRole("menuitem", { name: /Claude Code/ })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: /Codex/ })).toBeInTheDocument();
+		expect(screen.queryByText("No agents ready")).not.toBeInTheDocument();
+	});
+
+	it("opens management for a selected create-project agent without losing the selection", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(agentReadinessQueryKey, {
+			agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")],
+		});
+		renderSheet(vi.fn().mockResolvedValue(undefined), queryClient);
+		const worker = screen.getByRole("combobox", { name: "Worker agent" });
+		expect(worker).toHaveTextContent("Claude Code");
+		await chooseOption(worker, "Codex");
+
+		act(() => {
+			queryClient.setQueryData(agentReadinessQueryKey, {
+				agents: [
+					agentReadiness("claude-code", "Claude Code"),
+					agentReadiness("codex", "Codex", { authentication: "unauthorized" }),
+				],
+			});
+		});
+		await userEvent.click(worker);
+		await userEvent.click(screen.getByRole("option", { name: "Manage agents…" }));
+		await waitFor(() => expect(useUiStore.getState().settingsModal).not.toBeNull());
+		expect(useUiStore.getState().settingsModal).toEqual({
+			scope: "global",
+			section: "harness",
+			focusAgentId: "codex",
+		});
+
+		act(() => useUiStore.getState().closeSettings());
+		expect(worker).toHaveTextContent("Codex");
+	});
+
 	it("creates without intake when the toggle is left off", async () => {
 		const onSubmit = renderSheet();
 
@@ -114,6 +320,53 @@ describe("CreateProjectAgentSheet", () => {
 			orchestratorAgent: "claude-code",
 			trackerIntake: undefined,
 		});
+	});
+
+	it("defaults each role from its own session history", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(workspaceQueryKey, [
+			{
+				sessions: [
+					{ id: "w1", kind: "worker", provider: "codex", createdAt: hoursAgo(5) },
+					{ id: "w2", kind: "worker", provider: "codex", createdAt: hoursAgo(4) },
+					{ id: "o1", kind: "orchestrator", provider: "claude-code", createdAt: hoursAgo(3) },
+				],
+			},
+		]);
+		const onSubmit = renderSheet(vi.fn().mockResolvedValue(undefined), queryClient);
+
+		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
+
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+		expect(onSubmit).toHaveBeenCalledWith({
+			workerAgent: "codex",
+			orchestratorAgent: "claude-code",
+			trackerIntake: undefined,
+		});
+	});
+
+	it("does not replace a manually selected role when history refreshes", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(workspaceQueryKey, [
+			{
+				sessions: [{ id: "w1", kind: "worker", provider: "claude-code", createdAt: hoursAgo(3) }],
+			},
+		]);
+		const onSubmit = renderSheet(vi.fn().mockResolvedValue(undefined), queryClient);
+		await chooseOption(screen.getByLabelText("Worker agent"), "codex");
+
+		queryClient.setQueryData(workspaceQueryKey, [
+			{
+				sessions: [
+					{ id: "w2", kind: "worker", provider: "claude-code", createdAt: hoursAgo(2) },
+					{ id: "w3", kind: "worker", provider: "claude-code", createdAt: hoursAgo(1) },
+				],
+			},
+		]);
+		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
+
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+		expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ workerAgent: "codex" }));
 	});
 
 	it("does not show a manual agent catalog refresh action", () => {
@@ -141,6 +394,18 @@ describe("CreateProjectAgentSheet", () => {
 			orchestratorAgent: "codex",
 			trackerIntake: { enabled: true, assignee: "octocat" },
 		});
+	});
+
+	it("omits the intake control, and submits no intake, when the daemon gate is off", async () => {
+		trackerIntakeGate.enabled = false;
+		const onSubmit = vi.fn().mockResolvedValue(undefined);
+		renderSheet(onSubmit);
+
+		expect(screen.queryByLabelText("Automatically work on assigned issues")).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+		expect(onSubmit.mock.calls[0]?.[0]?.trackerIntake).toBeUndefined();
 	});
 
 	it("keeps the create sheet minimal: no repo row or credential hint", async () => {

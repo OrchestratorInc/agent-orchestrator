@@ -142,7 +142,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 	return (
 		<div className="chat-code group/code my-2.5 overflow-hidden rounded-lg border border-border bg-surface">
 			<div className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
-				<span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+				<span className="text-caption text-muted-foreground">
 					mermaid
 				</span>
 				<div className="ml-auto flex items-center gap-1.5">
@@ -157,7 +157,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 								onClick={() => setShowSource(false)}
 								aria-pressed={!showSource}
 								className={cn(
-									"rounded px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide transition-colors",
+									"rounded px-2 py-0.5 text-xs transition-colors",
 									showSource
 										? "text-muted-foreground hover:text-foreground"
 										: "bg-raised text-foreground",
@@ -170,7 +170,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 								onClick={() => setShowSource(true)}
 								aria-pressed={showSource}
 								className={cn(
-									"rounded px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide transition-colors",
+									"rounded px-2 py-0.5 text-xs transition-colors",
 									showSource
 										? "bg-raised text-foreground"
 										: "text-muted-foreground hover:text-foreground",
@@ -208,11 +208,11 @@ export const MermaidBlock = memo(function MermaidBlock({
 				</div>
 			) : (
 				<pre className="scrollbar-none overflow-x-auto px-3 py-2.5">
-					<code className="font-mono text-[12px] leading-[1.6] text-foreground">{code}</code>
+					<code className="font-mono text-xs leading-[1.6] text-foreground">{code}</code>
 				</pre>
 			)}
 			{failed && !showSource ? (
-				<div className="border-t border-border px-3 py-1.5 text-[11px] text-muted-foreground">
+				<div className="border-t border-border px-3 py-1.5 text-caption text-muted-foreground">
 					Couldn&apos;t render this diagram — showing its source.
 				</div>
 			) : null}

@@ -352,6 +352,7 @@ func TestConversationHistoryRefusalsAreTypedNeverInternalErrors(t *testing.T) {
 		{"unsupported", chatsvc.ErrRollbackUnsupported, http.StatusConflict, "CHAT_ROLLBACK_UNSUPPORTED"},
 		{"provider refused", fmt.Errorf("%w: no", chatsvc.ErrProviderRefused), http.StatusConflict, "CHAT_PROVIDER_REFUSED"},
 		{"no controller", chatsvc.ErrNoController, http.StatusConflict, "CHAT_CONTROLLER_NOT_READY"},
+		{"stopped before queue append", chatsvc.ErrNotProvisioning, http.StatusConflict, "CHAT_CONTROLLER_NOT_READY"},
 		{"tui session", chatsvc.ErrNotChatMode, http.StatusConflict, "SESSION_MODE_MISMATCH"},
 		{"missing session", ports.ErrSessionNotFound, http.StatusNotFound, "SESSION_NOT_FOUND"},
 	}
@@ -406,6 +407,14 @@ func TestSetTitleRouteReportsAnUnsupportedProvider(t *testing.T) {
 		"/api/v1/sessions/ao-1/conversation/title", `{"title":"A Name"}`)
 	assertJSON(t, headers)
 	assertErrorCode(t, body, status, http.StatusConflict, "CHAT_RENAME_UNSUPPORTED")
+}
+
+func TestSetTitleRouteRefusesTheProjectOrchestrator(t *testing.T) {
+	srv := newChatTestServer(t, &fakeChatService{setTitle: chatsvc.ErrOrchestratorRename})
+	body, status, headers := doRequest(t, srv, "PUT",
+		"/api/v1/sessions/ao-1/conversation/title", `{"title":"A Name"}`)
+	assertJSON(t, headers)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "ORCHESTRATOR_RENAME_UNSUPPORTED")
 }
 
 // Without a chat driver wired the routes must say "not implemented" rather than

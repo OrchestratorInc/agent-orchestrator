@@ -20,6 +20,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listUserProviderConnections"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/providers/{agent}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["putUserAgentConnection"];
+        post?: never;
+        delete: operations["deleteUserAgentConnection"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/github/user": {
         parameters: {
             query?: never;
@@ -114,13 +148,33 @@ export interface paths {
             };
             cookie?: never;
         };
-        get?: never;
+        get: operations["getProject"];
         put?: never;
         post?: never;
         delete: operations["deleteProject"];
         options?: never;
         head?: never;
         patch: operations["updateProject"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Merge supplied settings only. Omitted fields are preserved, nested role objects merge, and reviewers replace the array. Null is rejected. */
+        patch: operations["updateProjectSettings"];
         trace?: never;
     };
     "/api/cloud/v1/orgs/{orgId}/github/installations": {
@@ -269,6 +323,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/wake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Ask the reconciler to resume the user's idle-paused sandboxes. */
+        post: operations["wakePausedSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}": {
         parameters: {
             query?: never;
@@ -283,6 +356,65 @@ export interface paths {
         put?: never;
         post?: never;
         delete: operations["deleteSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get: operations["getSessionInterfaceTransition"];
+        put?: never;
+        post: operations["startSessionInterfaceTransition"];
+        delete: operations["cancelSessionInterfaceTransition"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition/{transitionId}/notice-acknowledgement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                transitionId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["acknowledgeSessionInterfaceTransitionNotice"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/startup-retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Retries a session whose worker never started (its startupError explains why). The startup window, repair count and startup error are reset and the worker bootstrap runs again against the existing sandbox; a bring-your-own workspace is never recreated. Returns 409 startup_retry_unavailable when the worker has already checked in or the session is not meant to be running. */
+        post: operations["retrySessionStartup"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -346,6 +478,122 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/trigger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["triggerSessionReviews"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["cancelSessionReviews"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/send": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["sendSessionReviewToWorker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateSessionPreferences"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviewer-harnesses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get: operations["inspectSessionReviewerHarnesses"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviewer-harnesses/{harness}/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                harness: components["schemas"]["CloudReviewerHarness"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["installSessionReviewerHarness"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/messages": {
         parameters: {
             query?: never;
@@ -359,6 +607,26 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["sendMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Model and reasoning-effort choices available to this session's agent. */
+        get: operations["listChatModels"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -379,6 +647,46 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["cancelTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["steerTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/approvals/{requestId}/decide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["decideChatApproval"];
         delete?: never;
         options?: never;
         head?: never;
@@ -497,6 +805,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/file/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Read one cloud workspace file with its bounded unified diff. */
+        get: operations["readWorkspaceDiffFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/diff": {
         parameters: {
             query?: never;
@@ -507,6 +835,7 @@ export interface paths {
             };
             cookie?: never;
         };
+        /** @description Changed-file summary and line counts relative to the session compare base. */
         get: operations["getWorkspaceDiff"];
         put?: never;
         post?: never;
@@ -540,7 +869,7 @@ export interface paths {
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
-                provider: "claude-code" | "codex" | "cursor";
+                provider: "claude-code" | "codex" | "cursor" | "opencode";
             };
             cookie?: never;
         };
@@ -548,6 +877,46 @@ export interface paths {
         put: operations["putAgentProviderConnection"];
         post?: never;
         delete: operations["deleteAgentProviderConnection"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/coder-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description The organization's bring-your-own Coder connection, without its token. 403 provider_forbidden when the organization is not entitled to Coder. */
+        get: operations["getOrgCoderConfig"];
+        /** @description Create or replace the organization's bring-your-own Coder connection (org admins). The token is required on first save and when baseUrl changes; otherwise an omitted token keeps the stored one. An omitted owner is derived from the token. */
+        put: operations["putOrgCoderConfig"];
+        post?: never;
+        delete: operations["deleteOrgCoderConfig"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/coder-templates/{templateId}/parameters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        /** @description The coder_parameter inputs the template's active version declares, read from the organization's own Coder connection (or the deployment's Coder when it has none). 403 provider_forbidden for organizations without Coder; 404 coder_template_not_found for an unknown template; 502 coder_unavailable when Coder cannot be read. */
+        get: operations["getCoderTemplateParameters"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -712,7 +1081,8 @@ export interface paths {
             cookie?: never;
         };
         /** @description Returns the valid default coding-agent credential selected by the
-         *     session harness. The secret must never be logged or persisted.
+         *     session harness, or the durable reviewer harness when reviewRunId is supplied.
+         *     The secret must never be logged or persisted.
          *      */
         get: operations["getWorkerCredential"];
         put?: never;
@@ -936,11 +1306,162 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/worker/notification-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Durably accepts one agent notification event for the authenticated worker epoch. */
+        post: operations["publishWorkerNotificationEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listCloudNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/notification-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Returns durable events as JSON, or an SSE replay/live stream when requested with Accept text/event-stream. */
+        get: operations["listCloudNotificationEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/notifications/{notificationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["markCloudNotificationRead"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/notifications/read-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["markAllCloudNotificationsRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         EmptyObject: Record<string, never>;
+        AgentNotificationEvent: {
+            eventId: string;
+            /** @enum {string} */
+            type: "needs_input" | "agent_failed" | "agent_completed";
+            /** Format: date-time */
+            occurredAt: string;
+            payload: Record<string, never>;
+        };
+        NotificationAcceptance: {
+            /** @constant */
+            accepted: true;
+            eventId: string;
+            duplicate: boolean;
+        };
+        CloudNotification: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            recipientUserId: string;
+            /** Format: uuid */
+            projectId?: string;
+            /** Format: uuid */
+            sessionId?: string;
+            /** @constant */
+            source: "cloud";
+            type: string;
+            title: string;
+            body: string;
+            /** @enum {string} */
+            status: "unread" | "read";
+            eventId?: string;
+            metadata: Record<string, never>;
+            /** Format: date-time */
+            resolvedAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        CloudNotificationEvent: {
+            /** Format: int64 */
+            sequence: number;
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            recipientUserId: string;
+            /** @enum {string} */
+            kind: "notification_created" | "notification_updated" | "notification_resolved";
+            eventId: string;
+            notification: components["schemas"]["CloudNotification"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        NotificationPage: {
+            items: components["schemas"]["CloudNotification"][];
+            page: {
+                hasMore: boolean;
+                nextCursor?: string;
+            };
+            unreadCount: number;
+            /** Format: int64 */
+            latestSequence: number;
+        };
+        NotificationEventPage: {
+            items: components["schemas"]["CloudNotificationEvent"][];
+            hasMore: boolean;
+        };
         /** @enum {string} */
         AuthProvider: "workos" | "local";
         /** @enum {string} */
@@ -959,10 +1480,37 @@ export interface components {
             slug: string;
             displayName: string;
             role: components["schemas"]["OrganizationRole"];
+            offering?: components["schemas"]["Offering"];
+        };
+        /** @description What an organization may use and how it is billed. The control plane is the source of truth; clients shape their UI from it and the server enforces the same rules on create. */
+        Offering: {
+            /** @description Sandbox providers the organization may use: the deployment's providers filtered by the capability gate against the organization's effective capabilities. */
+            providers: string[];
+            /** @description Provider a session gets when none is chosen: the deployment default when allowed, otherwise the first allowed provider, otherwise empty (no cloud sessions). */
+            defaultProvider: string;
+            /**
+             * @description off when the deployment has no Stripe configured; contract when the organization is billed under an agreement, runs on the internal plan, or is grandfathered; self_serve otherwise. Only self_serve organizations are subject to plan limits.
+             * @enum {string}
+             */
+            billingMode: "self_serve" | "contract" | "off";
+            /**
+             * @description b2b when coder is the only allowed provider, b2c when only other providers are allowed, both for a mix, none when no provider is allowed.
+             * @enum {string}
+             */
+            kind: "b2b" | "b2c" | "both" | "none";
+            /** @description Plan feature flags; empty when none apply. */
+            features: string[];
+        };
+        /** @description Legacy provider selector data; the same values as offering.providers and offering.defaultProvider. */
+        SandboxProviders: {
+            available: string[];
+            default: string;
         };
         CurrentAccount: {
             user: components["schemas"]["CurrentUser"];
             organizations: components["schemas"]["OrganizationMembership"][];
+            offering?: components["schemas"]["Offering"];
+            sandboxProviders?: components["schemas"]["SandboxProviders"];
         };
         /** @enum {string} */
         AgentCapability: "interface.chat" | "interface.tui" | "model.catalog" | "model.custom" | "attachments" | "browser.preview" | "review.execute" | "session.resume";
@@ -1000,6 +1548,178 @@ export interface components {
             hasMore: boolean;
             nextCursor?: string;
         };
+        /** @enum {string} */
+        CloudAgentHarness: "claude-code" | "codex" | "cursor" | "opencode";
+        ProjectAgentConfig: {
+            model?: string;
+            /**
+             * @description Cursor CLI mode. Omit or use an empty string for the agent default.
+             * @enum {string}
+             */
+            mode?: "" | "plan" | "ask";
+            /**
+             * @description Reasoning effort for Codex or Claude Code. Claude Code does not accept xhigh.
+             * @enum {string}
+             */
+            effort?: "" | "low" | "medium" | "high" | "xhigh" | "max";
+            /**
+             * @description Native approval policy. OpenCode does not accept accept-edits. Empty uses the session execution policy.
+             * @enum {string}
+             */
+            permissions?: "" | "default" | "auto" | "accept-edits" | "bypass-permissions";
+        };
+        ProjectRoleConfig: {
+            agent: components["schemas"]["CloudAgentHarness"];
+            agentConfig?: components["schemas"]["ProjectAgentConfig"];
+        };
+        ProjectRoleConfigPatch: {
+            agent?: components["schemas"]["CloudAgentHarness"];
+            agentConfig?: components["schemas"]["ProjectAgentConfig"];
+        };
+        ProjectReviewer: {
+            harness: components["schemas"]["CloudAgentHarness"];
+            agentConfig?: components["schemas"]["ProjectAgentConfig"];
+        };
+        /** @description Canonical nested role settings. Legacy workerAgent and orchestratorAgent are normalized on reads and removed on the next settings write. Nested agents take precedence. */
+        ProjectConfig: {
+            /** @description Prefix for new session branches. Empty uses ao; existing sessions are unchanged. */
+            sessionPrefix?: string;
+            worker?: components["schemas"]["ProjectRoleConfig"];
+            orchestrator?: components["schemas"]["ProjectRoleConfig"];
+            /** @description Empty or absent uses the session agent for reviews. */
+            reviewers?: components["schemas"]["ProjectReviewer"][];
+            /** @description Defaults to enabled when absent. Independent of session autoInjectReview feedback delivery. */
+            autoReview?: boolean;
+            coder?: components["schemas"]["ProjectCoderConfig"];
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description Coder dev-kit settings inherited by every Coder session of the project. */
+        ProjectCoderConfig: {
+            /**
+             * Format: uuid
+             * @description Coder template; absent uses the organization or deployment default.
+             */
+            templateId?: string;
+            /** @enum {string} */
+            size?: "small" | "medium" | "large";
+            startupScript?: string;
+            extraRepos?: components["schemas"]["ProjectCoderRepository"][];
+            workspaceNamePrefix?: components["schemas"]["CoderWorkspaceNamePrefix"];
+            parameters?: components["schemas"]["CoderTemplateParameterValues"];
+        };
+        /** @description Values for the chosen template's coder_parameter inputs, by parameter name. A list(string) value is a JSON array string and a bool is "true" or "false". Requires a chosen template; names must be parameters the template declares. At workspace create they override the organization connection's parameters and are overridden by size and startupScript. */
+        CoderTemplateParameterValues: {
+            [key: string]: string;
+        };
+        CoderTemplateParameter: {
+            name: string;
+            displayName: string;
+            description: string;
+            /** @description Coder parameter type: "string", "number", "bool" or "list(string)". */
+            type: string;
+            /** @description Coder's form hint (for example dropdown, multi-select, switch); may be empty. */
+            formType: string;
+            /** @description False when the value can only be set when a workspace is created. */
+            mutable: boolean;
+            required: boolean;
+            defaultValue: string;
+            options: {
+                name: string;
+                value: string;
+                description: string;
+            }[];
+            order: number;
+        };
+        OrgCoderConfig: {
+            baseUrl: string;
+            owner: string;
+            templateId: string;
+            agentName?: string;
+            parameters?: {
+                [key: string]: string;
+            };
+            durableRoot?: string;
+            endpointServiceName?: string;
+            region?: string;
+            requireMountedDurableRoot?: boolean;
+            startupTimeoutSeconds?: number;
+            workerUser: components["schemas"]["CoderWorkerUser"];
+            /** @description Shell command run as the workspace user after the Coder agent is ready and before AO starts its worker; polled every 5 seconds until it exits 0. */
+            readyProbe?: string;
+            /** @description Ready check budget, measured from the agent becoming ready. 900 when a ready check is set without one. On timeout the session fails with startup error workspace_setup_not_ready. */
+            readyProbeTimeoutSeconds?: number;
+            /** @description Work in the checkout of the project repository the template already cloned (under $HOME/work/* or $HOME/*) instead of cloning into ~/repository. Always false for the ao-worker user; defaults to true for the workspace user. */
+            reuseExistingCheckout: boolean;
+        };
+        /**
+         * @description Who runs AO's worker and agent in the workspace: a dedicated ao-worker user (default; added to the docker group when one exists), or the workspace's own login user with its real HOME, groups and environment.
+         * @enum {string}
+         */
+        CoderWorkerUser: "ao-worker" | "workspace";
+        OrgCoderConfigResponse: {
+            configured: boolean;
+            coderConfig?: components["schemas"]["OrgCoderConfig"];
+            validationState?: string;
+            /** Format: date-time */
+            validatedAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        PutOrgCoderConfigInput: {
+            /** @description Coder API token. Required on first save and when baseUrl changes; omit to keep the stored token. */
+            token?: string;
+            baseUrl: string;
+            /** @description Omit to derive from the token. */
+            owner?: string;
+            templateId?: string;
+            agentName?: string;
+            parameters?: {
+                [key: string]: string;
+            };
+            durableRoot?: string;
+            endpointServiceName?: string;
+            region?: string;
+            requireMountedDurableRoot?: boolean;
+            /** @description 0 (default 20 minutes) or 60..7200. */
+            startupTimeoutSeconds?: number;
+            workerUser?: components["schemas"]["CoderWorkerUser"];
+            readyProbe?: string;
+            /** @description 0 (default 900 when readyProbe is set) or 30..3600. */
+            readyProbeTimeoutSeconds?: number;
+            /** @description Omit for the default (true with the workspace user). */
+            reuseExistingCheckout?: boolean;
+        };
+        ProjectCoderRepository: {
+            /** Format: uri */
+            url: string;
+            branch?: string;
+        };
+        /** @description Names new Coder workspaces <prefix>-<short session id> (at most 32 characters). Lowercase letters, digits and single hyphens, starting with a letter and not ending with a hyphen. Empty keeps the default ao-<id>; existing sessions keep their workspace. */
+        CoderWorkspaceNamePrefix: string;
+        ProjectSettingsConfigPatch: {
+            /** @description Prefix for new session branches. Empty uses ao; existing sessions are unchanged. */
+            sessionPrefix?: string;
+            /** @description Null removes the worker override and uses the session agent selection. */
+            worker?: components["schemas"]["ProjectRoleConfigPatch"] | null;
+            /** @description Null removes the orchestrator override and uses the session agent selection. */
+            orchestrator?: components["schemas"]["ProjectRoleConfigPatch"] | null;
+            reviewers?: components["schemas"]["ProjectReviewer"][];
+            autoReview?: boolean;
+            /** @description Only the workspace name prefix and the template parameters are editable after the project is created. parameters replaces the stored values as a whole and needs a project with a chosen template. */
+            coder?: {
+                workspaceNamePrefix?: components["schemas"]["CoderWorkspaceNamePrefix"];
+                parameters?: components["schemas"]["CoderTemplateParameterValues"];
+            };
+        };
+        ProjectSettingsInput: {
+            displayName?: string;
+            defaultBranch?: string;
+            config?: components["schemas"]["ProjectSettingsConfigPatch"];
+        };
+        ProjectResponse: {
+            project: components["schemas"]["Project"];
+        };
         Project: {
             /** Format: uuid */
             id: string;
@@ -1011,9 +1731,7 @@ export interface components {
             defaultBranch: string;
             /** @description GitHub's integer repository ID encoded as a decimal string to preserve precision. */
             githubRepositoryId?: string;
-            config: {
-                [key: string]: unknown;
-            };
+            config: components["schemas"]["ProjectConfig"];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -1027,6 +1745,7 @@ export interface components {
             config?: {
                 [key: string]: unknown;
             };
+            coder?: components["schemas"]["ProjectCoderConfig"];
         };
         UpdateProjectInput: {
             displayName: string;
@@ -1189,6 +1908,10 @@ export interface components {
             prompt: string;
             agentSessionId?: string;
             mode: components["schemas"]["SessionMode"];
+            interfaceMode: components["schemas"]["SessionInterfaceMode"];
+            /** @description Coding-agent model to launch with; empty uses the harness default. */
+            model?: string;
+            agentConfig?: components["schemas"]["ProjectAgentConfig"];
             deniedCommands: string[];
             /** Format: uri */
             repositoryUrl: string;
@@ -1321,6 +2044,29 @@ export interface components {
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
         };
+        ChatMessageInput: {
+            text: string;
+            model?: string;
+            /** @enum {string} */
+            reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            mode?: components["schemas"]["SessionMode"];
+            /** @enum {string} */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+        };
+        ChatApprovalDecisionInput: {
+            decisionId: string;
+        };
+        ChatModel: {
+            id: string;
+            displayName: string;
+            description?: string;
+            default: boolean;
+            efforts?: string[];
+            defaultEffort?: string;
+        };
+        ChatModelsResponse: {
+            models: components["schemas"]["ChatModel"][];
+        };
         SendMessageInput: {
             text: string;
         };
@@ -1330,6 +2076,9 @@ export interface components {
             limit: number;
         };
         WorkerWorkspaceReadPayload: {
+            path: string;
+        };
+        WorkerWorkspaceDiffFilePayload: {
             path: string;
         };
         WorkerWorkspaceWritePayload: components["schemas"]["WorkspaceFileWriteInput"];
@@ -1418,6 +2167,17 @@ export interface components {
             kind: "WorkerWorkspaceDiffTransport";
             payload: components["schemas"]["EmptyObject"];
         };
+        WorkerWorkspaceDiffFileTransport: {
+            /** Format: uuid */
+            id: string;
+            attempt: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "WorkerWorkspaceDiffFileTransport";
+            payload: components["schemas"]["WorkerWorkspaceDiffFilePayload"];
+        };
         WorkerTerminalOpenTransport: {
             /** Format: uuid */
             id: string;
@@ -1462,12 +2222,12 @@ export interface components {
             kind: "WorkerTerminalCloseTransport";
             payload: components["schemas"]["WorkerTerminalClosePayload"];
         };
-        WorkerTransportRequest: components["schemas"]["WorkerWorkspaceListTransport"] | components["schemas"]["WorkerWorkspaceReadTransport"] | components["schemas"]["WorkerWorkspaceWriteTransport"] | components["schemas"]["WorkerWorkspaceDiffTransport"] | components["schemas"]["WorkerTerminalOpenTransport"] | components["schemas"]["WorkerTerminalInputTransport"] | components["schemas"]["WorkerTerminalResizeTransport"] | components["schemas"]["WorkerTerminalCloseTransport"];
+        WorkerTransportRequest: components["schemas"]["WorkerWorkspaceListTransport"] | components["schemas"]["WorkerWorkspaceReadTransport"] | components["schemas"]["WorkerWorkspaceWriteTransport"] | components["schemas"]["WorkerWorkspaceDiffTransport"] | components["schemas"]["WorkerWorkspaceDiffFileTransport"] | components["schemas"]["WorkerTerminalOpenTransport"] | components["schemas"]["WorkerTerminalInputTransport"] | components["schemas"]["WorkerTerminalResizeTransport"] | components["schemas"]["WorkerTerminalCloseTransport"];
         WorkerClaimTransportResponse: {
             request: components["schemas"]["WorkerTransportRequest"] | null;
         };
         /** @description The server accepts any non-null JSON object. Built-in workers return a
-         *     WorkerWorkspaceEntryPage, WorkspaceFile, WorkspaceDiff,
+         *     WorkerWorkspaceEntryPage, WorkspaceFile, WorkspaceDiffFileDetail, WorkspaceDiff,
          *     WorkerTerminalOpenResult, WorkerTerminalInputResult, or
          *     WorkerTerminalCloseResult appropriate to the claimed command.
          *      */
@@ -1507,6 +2267,47 @@ export interface components {
                 desiredState: "deleted";
             };
         };
+        SessionResponse: {
+            session: components["schemas"]["Session"];
+        };
+        /** @enum {string} */
+        SessionInterfaceMode: "tui" | "chat";
+        /** @enum {string} */
+        SessionInterfaceTransitionPolicy: "drain" | "interrupt";
+        /** @enum {string} */
+        SessionInterfaceTransitionPhase: "requested" | "preflighting" | "draining" | "source_stopping" | "source_stopped" | "target_starting" | "activating" | "completed" | "failed" | "cancelled" | "recovery_required";
+        SessionInterfaceTransition: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            sessionId: string;
+            sourceMode: components["schemas"]["SessionInterfaceMode"];
+            targetMode: components["schemas"]["SessionInterfaceMode"];
+            policy: components["schemas"]["SessionInterfaceTransitionPolicy"];
+            phase: components["schemas"]["SessionInterfaceTransitionPhase"];
+            nativeConversationId?: string;
+            errorCode?: string;
+            errorDetail?: string;
+            /** Format: date-time */
+            noticeAcknowledgedAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: date-time */
+            completedAt?: string;
+        };
+        SessionInterfaceTransitionStatus: {
+            supported: boolean;
+            targetMode: components["schemas"]["SessionInterfaceMode"];
+            reasonCode?: string;
+            reason?: string;
+            transition?: components["schemas"]["SessionInterfaceTransition"];
+        };
+        StartSessionInterfaceTransitionInput: {
+            targetMode: components["schemas"]["SessionInterfaceMode"];
+            policy: components["schemas"]["SessionInterfaceTransitionPolicy"];
+        };
         Session: {
             /** Format: uuid */
             id: string;
@@ -1516,22 +2317,45 @@ export interface components {
             projectId: string;
             kind: components["schemas"]["SessionKind"];
             harness: string;
+            reviewerHarness?: string;
+            autoReviewEnabled: boolean;
+            autoInjectCI: boolean;
+            autoInjectReview: boolean;
+            terminateOnPrMerge: boolean;
             displayName: string;
             branch: string;
             mode: components["schemas"]["SessionMode"];
+            /** @description Coding-agent model the session launched with; empty means the harness default. */
+            model?: string;
             deniedCommands: string[];
+            interfaceMode: components["schemas"]["SessionInterfaceMode"];
             activityState: components["schemas"]["SessionActivityState"];
             status: components["schemas"]["SessionStatus"];
             capabilities?: components["schemas"]["AgentCapability"][];
             runtimeConnected: boolean;
             runtimeState?: string;
             runtimeError?: string;
+            startupError?: components["schemas"]["SessionStartupError"];
+            /**
+             * Format: uri
+             * @description The session's workspace page on the organization's own (bring-your-own) Coder deployment, as <baseUrl>/@<owner>/<workspace name>. Present only for sessions on a bring-your-own Coder connection, from the session's creation (the workspace may not exist yet); never set for AO's managed Coder or other providers.
+             */
+            coderWorkspaceUrl?: string;
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. */
+        SessionStartupError: {
+            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, or workspace_setup_not_ready (a Coder connection's workspace ready check never passed). Clients must tolerate codes added later. */
+            code: string;
+            /** @description Human-readable explanation suitable for display as-is. */
+            message: string;
+            /** Format: date-time */
+            at: string;
         };
         CreateSessionInput: {
             /** Format: uuid */
@@ -1542,10 +2366,31 @@ export interface components {
             prompt: string;
             /** @default trusted */
             mode: components["schemas"]["SessionMode"];
+            /** @description Coding-agent model the session launches with (harness-native id, e.g. "anthropic/claude-opus-4-8"). Optional; empty uses the harness default. */
+            model?: string;
             /** @default [] */
             deniedCommands: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
+        };
+        UpdateSessionPreferencesInput: {
+            reviewerHarness?: components["schemas"]["CloudReviewerHarness"] | string;
+            autoReviewEnabled?: boolean;
+            autoInjectCI?: boolean;
+            autoInjectReview?: boolean;
+            terminateOnPrMerge?: boolean;
+        };
+        /** @enum {string} */
+        CloudReviewerHarness: "claude-code" | "codex" | "cursor";
+        HarnessStatus: {
+            harness: components["schemas"]["CloudReviewerHarness"];
+            /** @enum {string} */
+            status: "missing" | "ready" | "failed";
+            version?: string;
+            error?: string;
+        };
+        HarnessInspectResponse: {
+            harnesses: components["schemas"]["HarnessStatus"][];
         };
         SessionPage: {
             items: components["schemas"]["Session"][];
@@ -1678,6 +2523,8 @@ export interface components {
             sessionId: string;
             batchId: string;
             harness: string;
+            /** @enum {string} */
+            triggerSource: "manual" | "auto";
             pullRequestUrl: string;
             targetSha: string;
             status: components["schemas"]["AOReviewRunStatus"];
@@ -1705,6 +2552,7 @@ export interface components {
             sessionId: string;
             reviewerHandleId?: string;
             reviewerHarness?: string;
+            availableReviewerHarnesses: components["schemas"]["CloudReviewerHarness"][];
             reviews: components["schemas"]["AOPullRequestReviewState"][];
             runs: components["schemas"]["AOReviewRun"][];
         };
@@ -1716,6 +2564,8 @@ export interface components {
             type: "chat.user_message";
             payload: {
                 text: string;
+                /** Format: uuid */
+                turnId?: string;
             };
             /** Format: date-time */
             createdAt: string;
@@ -1802,7 +2652,22 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"];
+        TurnSteeredEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.turn_steered";
+            payload: {
+                /** Format: uuid */
+                turnId: string;
+                text: string;
+                clientMessageId: string;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"];
         ClientEventPage: {
             events: components["schemas"]["ClientEvent"][];
             hasMore: boolean;
@@ -1859,6 +2724,20 @@ export interface components {
             deletions: number;
             binary: boolean;
         };
+        WorkspaceDiffFileDetail: {
+            path: string;
+            status: components["schemas"]["WorkspaceFileStatus"];
+            additions: number;
+            deletions: number;
+            /** Format: int64 */
+            size: number;
+            binary: boolean;
+            deleted: boolean;
+            content: string;
+            contentTruncated: boolean;
+            diff: string;
+            diffTruncated: boolean;
+        };
         WorkspaceDiff: {
             status: string;
             unstaged: string;
@@ -1874,25 +2753,37 @@ export interface components {
             };
         };
         /** @enum {string} */
-        ProviderName: "daytona" | "claude-code" | "codex" | "cursor";
+        ProviderName: "daytona" | "claude-code" | "codex" | "cursor" | "opencode" | "github" | "coder" | "nodeops";
         ProviderPublicConfig: {
             /** Format: uri */
             apiUrl?: string;
             /** @enum {string} */
             target?: "us" | "eu";
             /** @enum {string} */
-            credentialType?: "oauth_token" | "api_key" | "access_token";
+            credentialType?: "oauth_token" | "api_key" | "access_token" | "auth_json" | "personal_access_token" | "opencode_api_key" | "anthropic_api_key" | "openai_api_key" | "openrouter_api_key";
+            /** Format: uri */
+            baseUrl?: string;
+            owner?: string;
+            /** Format: uuid */
+            templateId?: string;
+            agentName?: string;
+            parameters?: {
+                [key: string]: string;
+            };
+            durableRoot?: string;
+            endpointServiceName?: string;
+            region?: string;
         };
         PutAgentProviderConnectionInput: {
             /** @enum {string} */
-            credentialType: "oauth_token" | "api_key" | "access_token";
+            credentialType: "oauth_token" | "api_key" | "access_token" | "auth_json" | "opencode_api_key" | "anthropic_api_key" | "openai_api_key" | "openrouter_api_key";
             secret: string;
         };
         WorkerCredentialResponse: {
             /** @enum {string} */
             provider: "claude-code" | "codex" | "cursor";
             /** @enum {string} */
-            credentialType: "oauth_token" | "api_key" | "access_token";
+            credentialType: "oauth_token" | "api_key" | "access_token" | "auth_json";
             /**
              * Format: password
              * @description Decrypted coding-agent secret. Never log or persist this value.
@@ -2029,6 +2920,79 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CurrentAccount"];
                 };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listUserProviderConnections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redacted provider connections owned by the authenticated user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        providerConnections: components["schemas"]["RedactedProviderConnection"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putUserAgentConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutAgentProviderConnectionInput"];
+            };
+        };
+        responses: {
+            /** @description The validated personal coding-agent credential was encrypted and stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        providerConnection: components["schemas"]["RedactedProviderConnection"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteUserAgentConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The personal coding-agent credential was disconnected. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Error"];
         };
@@ -2203,6 +3167,30 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Project and normalized settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     deleteProject: {
         parameters: {
             query?: never;
@@ -2252,6 +3240,34 @@ export interface operations {
                     "application/json": {
                         project: components["schemas"]["Project"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateProjectSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectSettingsInput"];
+            };
+        };
+        responses: {
+            /** @description Validated settings persisted atomically. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"];
                 };
             };
             default: components["responses"]["Error"];
@@ -2510,6 +3526,32 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    wakePausedSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The resume requests were accepted for asynchronous processing. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: int64 */
+                        woken: number;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getSession: {
         parameters: {
             query?: never;
@@ -2555,6 +3597,135 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteSessionResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSessionInterfaceTransition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Interface-switch readiness and the active transition, if any. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionInterfaceTransitionStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    startSessionInterfaceTransition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartSessionInterfaceTransitionInput"];
+            };
+        };
+        responses: {
+            /** @description Interface switch accepted for asynchronous processing. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        transition: components["schemas"]["SessionInterfaceTransition"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    cancelSessionInterfaceTransition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Interface switch cancelled. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    acknowledgeSessionInterfaceTransitionNotice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                transitionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Interface-switch failure or recovery notice acknowledged. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    retrySessionStartup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The retry was accepted for asynchronous processing. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        session: components["schemas"]["Session"];
+                    };
                 };
             };
             default: components["responses"]["Error"];
@@ -2635,6 +3806,172 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    triggerSessionReviews: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The current commit was already reviewed or is ineligible. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReviewState"];
+                };
+            };
+            /** @description A reviewer terminal was started. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReviewState"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    cancelSessionReviews: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Review state after cancellation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReviewState"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    sendSessionReviewToWorker: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stored review was accepted and durably queued for the worker agent. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["UserMessageEvent"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateSessionPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSessionPreferencesInput"];
+            };
+        };
+        responses: {
+            /** @description The updated cloud session. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    inspectSessionReviewerHarnesses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Supported reviewer CLI availability inside the live sandbox. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HarnessInspectResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    installSessionReviewerHarness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                harness: components["schemas"]["CloudReviewerHarness"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The installed and verified reviewer CLI. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HarnessStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     sendMessage: {
         parameters: {
             query?: never;
@@ -2652,9 +3989,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    text: string;
-                };
+                "application/json": components["schemas"]["ChatMessageInput"];
             };
         };
         responses: {
@@ -2667,6 +4002,30 @@ export interface operations {
                     "application/json": {
                         event: components["schemas"]["UserMessageEvent"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listChatModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Available Chat models. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatModelsResponse"];
                 };
             };
             default: components["responses"]["Error"];
@@ -2691,6 +4050,71 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Cancellation was durably requested for the turn. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    steerTurn: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendMessageInput"];
+            };
+        };
+        responses: {
+            /** @description Guidance for the active turn accepted. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["TurnSteeredEvent"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    decideChatApproval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatApprovalDecisionInput"];
+            };
+        };
+        responses: {
+            /** @description Approval decision accepted. */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -2894,6 +4318,33 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    readWorkspaceDiffFile: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Docker workspace file review details. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceDiffFileDetail"];
+                };
+            };
+            501: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
     getWorkspaceDiff: {
         parameters: {
             query?: never;
@@ -2915,6 +4366,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkspaceDiff"];
                 };
             };
+            501: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -2949,7 +4401,7 @@ export interface operations {
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
-                provider: "claude-code" | "codex" | "cursor";
+                provider: "claude-code" | "codex" | "cursor" | "opencode";
             };
             cookie?: never;
         };
@@ -2979,7 +4431,7 @@ export interface operations {
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
-                provider: "claude-code" | "codex" | "cursor";
+                provider: "claude-code" | "codex" | "cursor" | "opencode";
             };
             cookie?: never;
         };
@@ -2991,6 +4443,103 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getOrgCoderConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection, or configured=false when there is none. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgCoderConfigResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putOrgCoderConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutOrgCoderConfigInput"];
+            };
+        };
+        responses: {
+            /** @description The validated connection was stored; the token is never returned. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgCoderConfigResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteOrgCoderConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection was removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getCoderTemplateParameters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                templateId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The template's parameters in Coder's order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        parameters: components["schemas"]["CoderTemplateParameter"][];
+                    };
+                };
             };
             default: components["responses"]["Error"];
         };
@@ -3214,7 +4763,10 @@ export interface operations {
     };
     getWorkerCredential: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Select the snapshotted reviewer credential for a running review owned by this session. */
+                reviewRunId?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3601,6 +5153,146 @@ export interface operations {
             401: components["responses"]["WorkerUnauthorized"];
             403: components["responses"]["WorkerScopeRequired"];
             409: components["responses"]["Error"];
+        };
+    };
+    publishWorkerNotificationEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentNotificationEvent"];
+            };
+        };
+        responses: {
+            /** @description The exact event was already durably accepted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationAcceptance"];
+                };
+            };
+            /** @description The event was durably accepted. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationAcceptance"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            409: components["responses"]["Error"];
+        };
+    };
+    listCloudNotifications: {
+        parameters: {
+            query?: {
+                status?: "all" | "unread" | "read";
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recipient-scoped cloud notification inbox. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listCloudNotificationEvents: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ordered durable cloud notification events. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationEventPage"];
+                    "text/event-stream": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    markCloudNotificationRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                notificationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @constant */
+                    status: "read";
+                };
+            };
+        };
+        responses: {
+            /** @description The notification was marked read. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    markAllCloudNotificationsRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every unread notification for the current recipient was marked read. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
         };
     };
 }

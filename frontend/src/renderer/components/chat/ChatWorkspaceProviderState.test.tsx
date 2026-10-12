@@ -1,5 +1,5 @@
 import userEvent from "@testing-library/user-event";
-import { render as rtlRender, screen } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -140,9 +140,82 @@ describe("plan", () => {
 });
 
 describe("provider state chrome", () => {
-	it("puts the credential demand above everything else that is wrong", () => {
+	it.each(["completion", "notification", "both"])("keeps the %s failure in chat while preserving sign-in guidance", (source) => {
+		const reason = "Provider access denied.\n\nContact your administrator.";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureReauth,
+			account: { ...chatFixtureReauth.account, reauthReason: reason },
+			turns: chatFixtureReauth.turns.map((turn) =>
+				turn.id === "turn-2" ? { ...turn, state: "failed", errorMessage: source === "notification" ? undefined : reason } : turn,
+			),
+			items: [
+				...chatFixtureReauth.items.filter(
+					(item) => !(item.kind === "activity" && item.detail?.event === "auth.reauth_required"),
+				),
+				{
+					kind: "activity",
+					id: "transient-provider-failure",
+					turnId: "turn-2",
+					sequence: chatFixtureReauth.latestSequence + 1,
+					revision: 1,
+					activityKind: "system",
+					status: "failed",
+					summary: "Provider access denied.",
+					detail: { event: "provider.failure", text: "Contact your administrator." },
+					createdAt: "2026-08-03T00:00:00Z",
+				},
+				{
+					kind: "activity",
+					id: "earlier-recovered-warning",
+					turnId: "turn-2",
+					sequence: chatFixtureReauth.latestSequence + 2,
+					revision: 1,
+					activityKind: "system",
+					status: "completed",
+					summary: "Earlier recovered warning",
+					detail: { event: "provider.failure" },
+					createdAt: "2026-08-03T00:00:00Z",
+				},
+			],
+			latestSequence: chatFixtureReauth.latestSequence + 2,
+		};
+		if (source !== "completion") {
+			snapshot.items.push({
+				kind: "activity", id: "terminal-error", turnId: "turn-2",
+				sequence: ++snapshot.latestSequence, revision: 1,
+				activityKind: "error", status: "failed", summary: reason,
+				createdAt: "2026-08-03T00:00:00Z",
+			});
+		}
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot} />);
+		for (const trigger of screen.getAllByRole("button", { name: /Worked for/ })) {
+			fireEvent.click(trigger);
+		}
+		expect(screen.getByRole("alert")).toHaveTextContent("Provider authentication needs attention");
+		expect(screen.getByRole("alert")).toHaveTextContent("login");
+		expect(screen.getByRole("alert")).not.toHaveTextContent("Provider access denied");
+		expect(screen.getAllByText(/Provider access denied/)).toHaveLength(1);
+		expect(screen.getByText(/Contact your administrator/)).toBeInTheDocument();
+		expect(screen.getByText("Earlier recovered warning")).toBeInTheDocument();
+
+		rerender(<ChatWorkspace snapshot={structuredClone(snapshot)} />);
+		expect(screen.getByRole("alert")).toHaveTextContent("Provider authentication needs attention");
+		expect(screen.getByRole("alert")).toHaveTextContent("login");
+		expect(screen.getByRole("alert")).not.toHaveTextContent("Provider access denied");
+		expect(screen.getAllByText(/Provider access denied/)).toHaveLength(1);
+
+		rerender(
+			<ChatWorkspace
+				snapshot={{ ...snapshot, account: { ...snapshot.account, reauthReason: "Session expired." } }}
+			/>,
+		);
+		expect(screen.getAllByText(/Provider access denied/)).toHaveLength(1);
+		expect(screen.getByRole("alert")).toHaveTextContent("Session expired.");
+	});
+
+	it("keeps credential recovery available when the failure is not in loaded history", () => {
 		render(<ChatWorkspace snapshot={chatFixtureReauth} />);
-		expect(screen.getByRole("alert")).toHaveTextContent(/Sign in again to keep going/);
+		expect(screen.getByRole("alert")).toHaveTextContent(/Provider authentication needs attention/);
 	});
 
 	it("reports a provider-side thread fault while the controller is healthy", () => {
@@ -152,19 +225,23 @@ describe("provider state chrome", () => {
 		expect(screen.queryByText(/agent controller stopped/i)).not.toBeInTheDocument();
 	});
 
-	it("surfaces a tool server that will never answer", () => {
+	it("notes tool servers that did not start, without a reload control", () => {
 		render(<ChatWorkspace snapshot={chatFixtureMcpFailed} />);
-		expect(screen.getByText("2 tool servers did not start")).toBeInTheDocument();
+		expect(screen.getByText("Playwright, Postgres didn’t start. Continuing without them.").closest("[role=status]")).not.toBeNull();
+		expect(screen.queryByRole("button", { name: /Reload/ })).not.toBeInTheDocument();
 	});
 
 	it("says nothing about tool servers when they all started", () => {
 		render(<ChatWorkspace snapshot={chatFixture} />);
-		expect(screen.queryByText(/did not start/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/didn’t start/)).not.toBeInTheDocument();
 	});
 
-	it("disables the tool-server reload while a turn is running", () => {
-		render(<ChatWorkspace snapshot={chatFixtureMcpFailed} onReloadMcpServers={vi.fn()} />);
-		expect(screen.getByRole("button", { name: /Reload/ })).toBeDisabled();
+	it("does not use up the note while the chat panel is behind another tab", () => {
+		const snapshot = { ...chatFixtureMcpFailed, sessionId: "ao-mcp-hidden" };
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot} workspaceActiveTabKey="file:README.md" />);
+		expect(screen.queryByText(/didn’t start/)).not.toBeInTheDocument();
+		rerender(<ChatWorkspace snapshot={snapshot} />);
+		expect(screen.getByText("Playwright, Postgres didn’t start. Continuing without them.")).toBeInTheDocument();
 	});
 });
 
@@ -196,6 +273,9 @@ describe("model reroute", () => {
 				onChooseSettings={vi.fn()}
 			/>,
 		);
+		for (const trigger of screen.getAllByRole("button", { name: /Worked for/ })) {
+			fireEvent.click(trigger);
+		}
 		expect(
 			screen.getByText(/The requested model is at capacity for this account tier/),
 		).toBeInTheDocument();

@@ -178,7 +178,7 @@ func approvalToolDetail(tool acpsdk.ToolCallUpdate, activityKind domain.Activity
 		"subjectKind": string(activityKind),
 	}
 	if tool.RawInput != nil {
-		detail["input"] = tool.RawInput
+		detail["input"] = cappedInput(tool.RawInput)
 	}
 	if claude := nestedMap(tool.Meta, "claudeCode"); claude != nil {
 		copyDetail(detail, claude, "toolName", "providerToolName")
@@ -543,6 +543,16 @@ func (c *conversation) discardPermission(requestID string) {
 }
 
 func (c *conversation) SessionUpdate(_ context.Context, params acpsdk.SessionNotification) error {
+	// Keep replay normalization off the SDK's bounded notification queue.
+	if c.captureReplayUpdate(params) {
+		return nil
+	}
+	return c.processUpdate(params)
+}
+
+// processUpdate runs the full ACP -> AO normalization for one update: live
+// notifications and replayed updates during the post-load drain.
+func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	if c.prepareHistoryUpdate(params.Update) {
 		return nil
 	}
@@ -656,7 +666,7 @@ func (c *conversation) SessionUpdate(_ context.Context, params acpsdk.SessionNot
 			emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: *update.SessionInfoUpdate.Title})
 		}
 		if turnID != "" {
-			if event, ok := c.sessionFailureEvent(turnID, update.SessionInfoUpdate.Meta); ok {
+			if event, ok := c.sessionFailureEvent(turnID, sourceID, update.SessionInfoUpdate.Meta); ok {
 				emit(event)
 			}
 		}
@@ -746,14 +756,17 @@ func (c *conversation) mergeToolUpdate(update *acpsdk.SessionToolCallUpdate) *to
 }
 
 func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool) ports.ChatEvent {
-	output := toolOutputText(tool.rawOutput)
+	output := toolOutputText(withoutImageData(tool.rawOutput))
 	if tool.terminalOutput != "" {
 		output = tool.terminalOutput
 	}
 	activityKind := activityKindFromTool(tool.kind)
+	// The detail is rewritten on every tool update and carried by every snapshot,
+	// so a page an agent hands html_render and the screenshot html_preview hands
+	// back are not stored whole.
 	detailMap := map[string]any{
 		"protocol": "acp", "toolKind": tool.kind, "locations": tool.locations,
-		"input": tool.rawInput, "output": output, "content": tool.content,
+		"input": cappedInput(tool.rawInput), "output": output, "content": contentWithoutImageData(tool.content),
 	}
 	if activityKind == domain.ActivityKindFileChange {
 		files := make([]map[string]any, 0)
@@ -840,6 +853,72 @@ func acpFilePatch(path string, oldText *string, newText string) string {
 	return strings.Join(lines, "\n")
 }
 
+// cappedInput keeps a tool's input only while it fits the tool payload cap,
+// as the Codex driver does for MCP arguments.
+func cappedInput(raw any) any {
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	return commanddetail.TruncatedJSON(encoded)
+}
+
+// imageStub stands in for an image block. Its base64 data would be stored as
+// text and printed as text when the row is expanded; bytes is its length.
+func imageStub(mimeType any, data string) map[string]any {
+	return map[string]any{"type": "image", "mimeType": mimeType, "bytes": len(data)}
+}
+
+// contentWithoutImageData keeps a tool's content blocks, text included, and
+// replaces each image block with imageStub.
+func contentWithoutImageData(content []acpsdk.ToolCallContent) []any {
+	if content == nil {
+		return nil
+	}
+	out := make([]any, len(content))
+	for i, item := range content {
+		if item.Content != nil && item.Content.Content.Image != nil {
+			image := item.Content.Content.Image
+			out[i] = map[string]any{"type": "content", "content": imageStub(image.MimeType, image.Data)}
+			continue
+		}
+		out[i] = item
+	}
+	return out
+}
+
+// withoutImageData replaces every image block in a decoded JSON value with
+// imageStub: MCP's {type:"image", data, mimeType} and the Anthropic
+// {type:"image", source:{type:"base64", media_type, data}} that
+// claude-agent-acp passes through as rawOutput.
+func withoutImageData(value any) any {
+	switch v := value.(type) {
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = withoutImageData(item)
+		}
+		return out
+	case map[string]any:
+		if v["type"] == "image" {
+			if data, ok := v["data"].(string); ok {
+				return imageStub(v["mimeType"], data)
+			}
+			if source, ok := v["source"].(map[string]any); ok {
+				if data, ok := source["data"].(string); ok {
+					return imageStub(source["media_type"], data)
+				}
+			}
+		}
+		out := make(map[string]any, len(v))
+		for key, item := range v {
+			out[key] = withoutImageData(item)
+		}
+		return out
+	}
+	return value
+}
+
 // toolOutputText translates ACP's provider-defined rawOutput into AO's neutral
 // command-detail contract, where output is always text. ACP deliberately permits
 // any JSON value here; OpenCode, for example, wraps the text as
@@ -921,24 +1000,15 @@ func nestedMap(meta map[string]any, key string) map[string]any {
 // namespace. A stable provider item id makes successive retry attempts update one
 // row; settling the enclosing turn then settles this running status with it.
 func (c *conversation) sessionFailureEvent(
-	turnID string,
+	turnID, sourceID string,
 	meta map[string]any,
 ) (ports.ChatEvent, bool) {
-	jetbrains := nestedMap(meta, "jetbrains")
-	air := nestedMap(jetbrains, "air")
-	version, versionOK := number(air["version"])
-	failure := nestedMap(air, "sessionFailure")
-	if !versionOK || version < 1 || failure == nil {
+	failure := sessionFailure(meta)
+	if failure == nil {
 		return ports.ChatEvent{}, false
 	}
-
-	id, _ := failure["id"].(string)
 	title, _ := failure["title"].(string)
-	id = strings.TrimSpace(id)
 	title = strings.TrimSpace(title)
-	if id == "" || title == "" {
-		return ports.ChatEvent{}, false
-	}
 
 	detailMap := map[string]any{"event": "provider.failure"}
 	for _, key := range []string{"category", "severity"} {
@@ -956,25 +1026,40 @@ func (c *conversation) sessionFailureEvent(
 	event := ports.ChatEvent{
 		Kind:           ports.ChatEventActivityStarted,
 		ProviderTurnID: turnID,
-		// Some adapters mint a fresh extension incident id for every retry when
-		// their provider turn id is not known yet. AO already has the durable turn
-		// boundary, so key the live failure to that boundary and update one row.
-		ProviderItemID: c.providerItemID("session-failure:" + turnID),
 		ActivityKind:   domain.ActivityKindSystem,
 		ActivityStatus: domain.ActivityStatusRunning,
 		Summary:        title,
 		Detail:         detail,
 	}
 	c.mu.Lock()
+	if c.providerFailure != nil && c.providerFailure.ProviderTurnID == turnID {
+		event.ProviderItemID = c.providerFailure.ProviderItemID
+	} else {
+		// One row per uninterrupted retry episode. Host identity survives replay;
+		// direct connections have no replay ID and need a fresh local identity.
+		if sourceID == "" {
+			sourceID = uuid.NewString()
+		}
+		event.ProviderItemID = c.providerItemID("session-failure:" + sourceID)
+	}
 	c.providerFailure = &event
 	c.mu.Unlock()
 	return event, true
 }
 
-// completeProviderFailure removes a stale retry warning as soon as the provider
-// produces substantive output again. The AIR extension advances failures but
-// deliberately sends no recovery update, so AO closes its normalized activity
-// on the first message, thought, tool call, or plan after the failure.
+func sessionFailure(meta map[string]any) map[string]any {
+	air := nestedMap(nestedMap(meta, "jetbrains"), "air")
+	version, versionOK := number(air["version"])
+	failure := nestedMap(air, "sessionFailure")
+	id, _ := failure["id"].(string)
+	title, _ := failure["title"].(string)
+	if !versionOK || version < 1 || strings.TrimSpace(id) == "" || strings.TrimSpace(title) == "" {
+		return nil
+	}
+	return failure
+}
+
+// AIR sends no recovery update, so output completes the active retry episode.
 func (c *conversation) completeProviderFailure(turnID string, emit func(ports.ChatEvent)) {
 	c.mu.Lock()
 	if c.providerFailure == nil || c.providerFailure.ProviderTurnID != turnID {

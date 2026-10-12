@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 import type { DashboardSession } from "./api";
 import {
 	ALL_PROJECTS,
+	STANDALONE_PROJECT,
 	NO_PROJECTS_KNOWN,
 	activeProjectLabel,
 	filteredEmptyCopy,
 	projectsForMachine,
 	resolveActiveProject,
+	resolveSpawnProject,
 	retainProjects,
+	sessionRowsForMachine,
 	type KnownProjects,
 } from "./projectFilter";
 
@@ -19,6 +22,16 @@ const listed = [
 const session = (projectId: string, over: Partial<DashboardSession> = {}): DashboardSession =>
 	({ id: `${projectId}-1`, projectId, status: null, ...over }) as DashboardSession;
 const archived = (projectId: string) => session(projectId, { isTerminated: true });
+
+describe("sessionRowsForMachine", () => {
+	it("does not show A's session when B has the same session ID", () => {
+		const a = [session("a", { id: "session-1", displayName: "A's worker" })];
+		const b = [session("b", { id: "session-1", displayName: "B's worker" })];
+
+		expect(sessionRowsForMachine(a, "host.h_a", "host.h_b")).toEqual([]);
+		expect(sessionRowsForMachine(b, "host.h_b", "host.h_b")).toEqual(b);
+	});
+});
 
 describe("resolveActiveProject", () => {
 	// The bug this exists for: the filter named a project removed on the desktop
@@ -49,6 +62,28 @@ describe("resolveActiveProject", () => {
 	// filter hides.
 	it("rejects the filter when the daemon answers with no projects at all", () => {
 		expect(resolveActiveProject("ao", [], true)).toBe("all");
+	});
+});
+
+describe("resolveSpawnProject", () => {
+	it("keeps an explicit standalone choice when the project list changes", () => {
+		expect(resolveSpawnProject(STANDALONE_PROJECT, "scratch", "ao", listed, true)).toBe(STANDALONE_PROJECT);
+		expect(resolveSpawnProject(STANDALONE_PROJECT, undefined, ALL_PROJECTS, [], true)).toBe(STANDALONE_PROJECT);
+	});
+	it("drops a selected project after the daemon confirms it was deleted", () => {
+		expect(resolveSpawnProject("removed", undefined, ALL_PROJECTS, listed, true)).toBeNull();
+	});
+
+	it("keeps a selected project until the daemon project list is known", () => {
+		expect(resolveSpawnProject("ao", undefined, "ao", [], false)).toBe("ao");
+	});
+
+	it("re-seeds from the only remaining project after the selected project disappears", () => {
+		expect(resolveSpawnProject("removed", undefined, ALL_PROJECTS, [listed[1]], true)).toBe("ao");
+	});
+
+	it("prefers a valid route project when the sheet has no selection", () => {
+		expect(resolveSpawnProject(null, "scratch", ALL_PROJECTS, listed, true)).toBe("scratch");
 	});
 });
 
@@ -162,11 +197,8 @@ describe("retainProjects", () => {
 		]);
 	});
 
-	// Round 2 of the review. fetchAll has no staleness guard, so a request from
-	// the machine the user just left still lands. Recording it as A's was not
-	// enough: it displaced the list B had just given us, and B's next failure
-	// then found nothing retained for B, went unknown, and the saved filter came
-	// back to hide B's workers. Received "removed" before the guard.
+	// Defense in depth for any caller folding a response after the active machine
+	// changed: A's late project list must not displace B's retained list.
 	it("survives a late answer from the machine the user just left", () => {
 		const workers = [session("remaining")];
 		let known = retainProjects(NO_PROJECTS_KNOWN, { machine: B, projects: remaining }, B);

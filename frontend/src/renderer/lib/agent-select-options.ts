@@ -1,6 +1,8 @@
+import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
+
 export type AgentInfo = {
 	authentication: {
-		state: "authorized" | "unauthorized" | "unknown" | "not_applicable";
+		state: "authorized" | "unauthorized" | "unknown" | "not_applicable" | "configured";
 		freshness: "fresh" | "stale" | "checking";
 	};
 	effectiveReadiness: "ready" | "not_ready" | "unknown";
@@ -14,7 +16,13 @@ export type AgentInfo = {
 	usageCount: number;
 };
 
-export const DEFAULT_AGENT_PRIORITY = ["claude-code", "codex", "cursor", "opencode", "aider"] as const;
+export type RoleSession = Pick<WorkspaceSession, "id" | "provider" | "kind" | "createdAt">;
+
+// Only recent habits drive onboarding defaults: a harness used heavily
+// months ago must not outvote what the user reaches for now.
+export const ROLE_HISTORY_WINDOW_MS = 48 * 60 * 60 * 1000;
+
+export const DEFAULT_AGENT_PRIORITY = ["claude-code", "codex", "cursor", "opencode", "opencode-v2", "aider"] as const;
 export const DEFAULT_AGENT_PRIORITY_RANK = new Map<string, number>(
 	DEFAULT_AGENT_PRIORITY.map((agent, index) => [agent, index]),
 );
@@ -59,6 +67,42 @@ export function agentUsageCompare(a: AgentInfo, b: AgentInfo): number {
 	return 0;
 }
 
+export function defaultAuthorizedAgentForRole(
+	authorizedAgents: AgentInfo[],
+	sessions: RoleSession[],
+	role: "worker" | "orchestrator",
+): string {
+	const eligible = new Set(authorizedAgents.map((agent) => agent.id));
+	const usage = new Map<string, { count: number; latest: number }>();
+	const cutoff = Date.now() - ROLE_HISTORY_WINDOW_MS;
+	for (const session of sessions) {
+		if (!isRoleSession(session, role) || !eligible.has(session.provider)) continue;
+		const at = session.createdAt ? Date.parse(session.createdAt) : Number.NaN;
+		if (Number.isNaN(at) || at < cutoff) continue;
+		const prev = usage.get(session.provider) ?? { count: 0, latest: Number.NEGATIVE_INFINITY };
+		usage.set(session.provider, { count: prev.count + 1, latest: Math.max(prev.latest, at) });
+	}
+	const empty = { count: 0, latest: Number.NEGATIVE_INFINITY };
+	return [...authorizedAgents]
+		.sort((a, b) => {
+			const aUsage = usage.get(a.id) ?? empty;
+			const bUsage = usage.get(b.id) ?? empty;
+			return (
+				bUsage.count - aUsage.count ||
+				bUsage.latest - aUsage.latest ||
+				(DEFAULT_AGENT_PRIORITY_RANK.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+					(DEFAULT_AGENT_PRIORITY_RANK.get(b.id) ?? Number.MAX_SAFE_INTEGER) ||
+				agentLabelCompare(a, b)
+			);
+		})[0]?.id ?? "";
+}
+
+// Role matching reuses the board's definition: orchestrators are explicit,
+// everything else counts as worker history.
+function isRoleSession(session: RoleSession, role: "worker" | "orchestrator"): boolean {
+	return role === "orchestrator" ? isOrchestratorSession(session) : !isOrchestratorSession(session);
+}
+
 function agentStatus(agent: AgentInfo): Pick<RankedAgentOption, "status" | "statusTone"> {
 	if (agent.installation.state === "not_installed") {
 		return { status: "Needs install", statusTone: "muted" };
@@ -72,9 +116,26 @@ function agentStatus(agent: AgentInfo): Pick<RankedAgentOption, "status" | "stat
 	if (agent.authentication.state === "unknown") {
 		return { status: "Auth unknown", statusTone: "warning" };
 	}
+	// A credential exists but nothing proved it works. It must not fall through
+	// to the known-good branch below: rendering an unverified credential green
+	// is precisely how a revoked key came to look like a working agent.
+	if (agent.authentication.state === "configured") {
+		return { status: "Unverified", statusTone: "muted" };
+	}
 	// Known-good agents stay selectable even while stale or checking; freshness
 	// is informative coordinator state, not a reason for the renderer to block.
 	return { status: "", statusTone: "success" };
+}
+
+/** Cached known-good agents remain usable while the daemon refreshes them. */
+export function isReadyAgent(agent: AgentInfo): boolean {
+	return agent.installation.state === "installed" &&
+		(agent.authentication.state === "authorized" || agent.authentication.state === "not_applicable");
+}
+
+/** Unknown readiness is not a rejection; only definite failures block launch. */
+export function isLaunchableAgent(agent: AgentInfo): boolean {
+	return agent.installation.state !== "not_installed" && agent.authentication.state !== "unauthorized";
 }
 
 export function buildRankedAgentOptions({
@@ -92,7 +153,11 @@ export function buildRankedAgentOptions({
 		.filter((agent) => (filter ? filter(agent) : true))
 		.map((agent) => {
 			const isInstallationUnknown = agent.installation.state === "unknown";
-			const isAuthUnknown = agent.authentication.state === "unknown";
+			// Configured ranks with unknown, not below it: a credential AO could
+			// not validate is still more evidence than no observation at all,
+			// and neither is a reason to make the agent unselectable.
+			const isAuthUnknown =
+				agent.authentication.state === "unknown" || agent.authentication.state === "configured";
 			const isAuthorized =
 				agent.authentication.state === "authorized" || agent.authentication.state === "not_applicable";
 			const isDefinitelyUnavailable =

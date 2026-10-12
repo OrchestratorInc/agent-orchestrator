@@ -54,8 +54,8 @@ describe("useFileAttachments", () => {
 				}),
 		);
 		const { result } = renderHook(() => useFileAttachments({ prepareAttachments }));
-		let first!: Promise<void>;
-		let second!: Promise<void>;
+		let first!: Promise<unknown>;
+		let second!: Promise<unknown>;
 		act(() => {
 			first = result.current.addFiles([file("first.txt")]);
 			second = result.current.addFiles([file("second.txt")]);
@@ -89,8 +89,8 @@ describe("useFileAttachments", () => {
 				}),
 		);
 		const { result } = renderHook(() => useFileAttachments({ prepareAttachments }));
-		let first!: Promise<void>;
-		let second!: Promise<void>;
+		let first!: Promise<unknown>;
+		let second!: Promise<unknown>;
 		let settled: Awaited<ReturnType<typeof result.current.toSettledPayload>> | undefined;
 		act(() => {
 			first = result.current.addFiles([file("first.txt")]);
@@ -125,7 +125,7 @@ describe("useFileAttachments", () => {
 		const first = renderHook(() =>
 			useFileAttachments({ initialKey: sessionId, prepareAttachments }),
 		);
-		let pending!: Promise<void>;
+		let pending!: Promise<unknown>;
 		act(() => {
 			pending = first.result.current.addFiles([file("discard-me.txt")]);
 		});
@@ -174,7 +174,7 @@ describe("useFileAttachments", () => {
 					}),
 			}),
 		);
-		let oldPending!: Promise<void>;
+		let oldPending!: Promise<unknown>;
 		act(() => {
 			oldPending = first.result.current.addFiles([file("old.txt")]);
 		});
@@ -240,9 +240,9 @@ describe("useFileAttachments", () => {
 			chatDraftScopeKey({ sessionId: "other-session", incarnation: "2026-08-26T09:00:00.000Z" }),
 			"other",
 		);
-		let firstPending!: Promise<void>;
-		let replacementPending!: Promise<void>;
-		let otherPending!: Promise<void>;
+		let firstPending!: Promise<unknown>;
+		let replacementPending!: Promise<unknown>;
+		let otherPending!: Promise<unknown>;
 		act(() => {
 			firstPending = first.result.current.addFiles([file("first.txt")]);
 			replacementPending = replacement.result.current.addFiles([file("replacement.txt")]);
@@ -281,14 +281,14 @@ describe("useFileAttachments", () => {
 		const staging = renderHook(() =>
 			useFileAttachments({ initialKey: key, prepareAttachments }),
 		);
-		let beforeConfirmation!: Promise<void>;
+		let beforeConfirmation!: Promise<unknown>;
 		act(() => {
 			beforeConfirmation = staging.result.current.addFiles([file("before-confirmation.txt")]);
 		});
 		await waitFor(() => expect(prepareAttachments).toHaveBeenCalledTimes(1));
 
 		const confirmedWork = capturePendingFileAttachmentsForSession(sessionId);
-		let afterConfirmation!: Promise<void>;
+		let afterConfirmation!: Promise<unknown>;
 		act(() => {
 			afterConfirmation = staging.result.current.addFiles([file("after-confirmation.txt")]);
 			discardCapturedPendingFileAttachments(confirmedWork);
@@ -364,35 +364,84 @@ describe("useFileAttachments", () => {
 		expect(result.current.error).toMatch(/under/i);
 	});
 
-	it("enforces the count cap", async () => {
+	it("accepts a video above the previous 10 MiB limit", async () => {
 		const { result } = renderHook(() => useFileAttachments());
 		await act(async () => {
-			await result.current.addFiles(Array.from({ length: MAX_ATTACHMENTS + 2 }, (_, i) => file(`f-${i}.txt`)));
+			await result.current.addFiles([file("video.mov", 11 * mb, "video/quicktime")]);
 		});
-		expect(result.current.attachments).toHaveLength(MAX_ATTACHMENTS);
-		expect(result.current.error).toMatch(/up to/i);
+		expect(result.current.attachments[0]).toMatchObject({ name: "video.mov", bytes: 11 * mb });
+		expect(result.current.error).toBeNull();
+	});
+
+	it("enforces the count cap", async () => {
+		const read = vi.spyOn(FileReader.prototype, "readAsDataURL");
+		const { result } = renderHook(() => useFileAttachments());
+		try {
+			await act(async () => {
+				await result.current.addFiles(Array.from({ length: MAX_ATTACHMENTS + 2 }, (_, i) => file(`f-${i}.txt`)));
+			});
+			expect(result.current.attachments).toHaveLength(MAX_ATTACHMENTS);
+			expect(result.current.error).toMatch(/up to/i);
+			expect(read).toHaveBeenCalledTimes(MAX_ATTACHMENTS);
+		} finally {
+			read.mockRestore();
+		}
 	});
 
 	it("skips a file that exceeds the total cap without dropping later smaller files", async () => {
 		// Regression probe for the break-vs-continue cap bug: one file that does not
 		// fit into the remaining budget aborted the whole staging loop, silently
 		// dropping every smaller file staged after it in the same batch.
+		const read = vi.spyOn(FileReader.prototype, "readAsDataURL");
 		const { result } = renderHook(() => useFileAttachments());
-		await act(async () => {
-			await result.current.addFiles([
-				file("a.txt", 9 * mb),
-				file("b.txt", 9 * mb),
-				file("c.txt", 9 * mb),
-				file("d.txt", 5 * mb),
-			]);
+		try {
+			await act(async () => {
+				await result.current.addFiles([
+					file("a.txt", 40 * mb),
+					file("b.txt", 40 * mb),
+					file("c.txt", 40 * mb),
+					file("d.txt", 15 * mb),
+				]);
+			});
+			// a + b (80 MB) fit; c would push past MAX_ATTACHMENTS_BYTES (100 MB) and only it is
+			// refused; d (95 MB total) still fits and must survive the batch.
+			expect(result.current.attachments.map((a) => a.name)).toEqual(["a.txt", "b.txt", "d.txt"]);
+			expect(result.current.attachments.reduce((sum, a) => sum + a.bytes, 0)).toBeLessThanOrEqual(
+				MAX_ATTACHMENTS_BYTES,
+			);
+			expect(result.current.error).toMatch(/total under/i);
+			expect(read).toHaveBeenCalledTimes(3);
+		} finally {
+			read.mockRestore();
+		}
+	});
+
+	it("does not reserve budget for a file that fails to read", async () => {
+		const unreadable = file("unreadable.bin");
+		const second = file("second.bin");
+		const small = file("small.bin");
+		Object.defineProperty(unreadable, "size", { value: 50 * mb });
+		Object.defineProperty(second, "size", { value: 50 * mb });
+		Object.defineProperty(small, "size", { value: mb });
+		const originalRead = FileReader.prototype.readAsDataURL;
+		const read = vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (this: FileReader, blob: Blob) {
+			if (blob === unreadable) {
+				queueMicrotask(() => this.dispatchEvent(new ProgressEvent("error")));
+				return;
+			}
+			originalRead.call(this, blob);
 		});
-		// a + b (18 MB) fit; c would push past MAX_ATTACHMENTS_BYTES and only it is
-		// refused; d (23 MB total) still fits and must survive the batch.
-		expect(result.current.attachments.map((a) => a.name)).toEqual(["a.txt", "b.txt", "d.txt"]);
-		expect(result.current.attachments.reduce((sum, a) => sum + a.bytes, 0)).toBeLessThanOrEqual(
-			MAX_ATTACHMENTS_BYTES,
-		);
-		expect(result.current.error).toMatch(/total under/i);
+		try {
+			const { result } = renderHook(() => useFileAttachments());
+			await act(async () => {
+				await result.current.addFiles([unreadable, second, small]);
+			});
+			expect(result.current.attachments.map((attachment) => attachment.name)).toEqual(["second.bin", "small.bin"]);
+			expect(result.current.error).toMatch(/couldn't be read/i);
+			expect(read).toHaveBeenCalledTimes(3);
+		} finally {
+			read.mockRestore();
+		}
 	});
 
 	it("discards a pending file read when its draft is cleared", async () => {
@@ -402,7 +451,7 @@ describe("useFileAttachments", () => {
 		});
 		try {
 			const { result } = renderHook(() => useFileAttachments());
-			let pending!: Promise<void>;
+			let pending!: Promise<unknown>;
 			act(() => {
 				pending = result.current.addFiles([file("discarded.png", 8, "image/png")]);
 			});

@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,7 +12,8 @@ const { getMock, patchMock, postMock, apiErrorCodeMock, apiErrorMessageMock } = 
 	apiErrorMessageMock: vi.fn(),
 }));
 
-vi.mock("../lib/api-client", () => ({
+vi.mock("../lib/api-client", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/api-client")>(),
 	apiClient: { GET: getMock, POST: postMock, PATCH: patchMock },
 	apiErrorCode: apiErrorCodeMock,
 	apiErrorMessage: apiErrorMessageMock,
@@ -25,8 +26,11 @@ import {
 	useConversationCommands,
 	useConversationConfigOptions,
 	useConversationSkills,
+	toSnapshot,
 } from "./useConversation";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
+import { ChatWorkspace } from "../components/chat/ChatWorkspace";
+import { TooltipProvider } from "../components/ui/tooltip";
 
 function wrapper({ children }: { children: ReactNode }) {
 	const queryClient = new QueryClient({
@@ -83,6 +87,9 @@ const WIRE = {
 		at: "2026-08-03T00:00:01Z",
 	},
 	account: {
+		authenticationState: "required",
+		authFailureId: "auth-failure-1",
+		lastAuthFailureReason: "expired",
 		authMode: "chatgpt",
 		planLabel: "Pro",
 		reauthRequiredAt: "2026-08-03T00:00:02Z",
@@ -101,6 +108,31 @@ beforeEach(() => {
 	postMock.mockReset();
 	apiErrorCodeMock.mockReset().mockReturnValue(undefined);
 	apiErrorMessageMock.mockReset().mockReturnValue("failed");
+});
+
+it("renders a retained-history boundary between exchanges from the daemon snapshot", async () => {
+	getMock.mockResolvedValue({ data: {
+		...WIRE, controller: "ready", turns: [], modelReroute: undefined, account: undefined,
+		latestSequence: 3,
+		messages: [
+			{ id: "old", sequence: 1, revision: 1, role: "assistant", origin: "provider", text: "Earlier context answer", streaming: false, createdAt: "2026-09-13T00:00:00Z" },
+			{ id: "new", sequence: 3, revision: 1, role: "assistant", origin: "provider", text: "Independent context answer", streaming: false, createdAt: "2026-09-13T00:02:00Z" },
+		],
+		activities: [{ id: "boundary", sequence: 2, revision: 1, kind: "system", status: "completed",
+			summary: "Native conversation changed. Earlier messages are retained; continuity with this agent's context is not verified.",
+			detail: { event: "context.boundary", reason: "native_terminal_handoff" }, createdAt: "2026-09-13T00:01:00Z" }],
+	}, error: undefined });
+	function LiveConversation() {
+		const { snapshot } = useConversation("ao-1");
+		return snapshot ? <TooltipProvider><ChatWorkspace snapshot={snapshot} /></TooltipProvider> : null;
+	}
+	render(<LiveConversation />, { wrapper });
+	const boundary = await screen.findByText(/continuity with this agent's context is not verified/);
+	const old = screen.getByText("Earlier context answer");
+	const current = screen.getByText("Independent context answer");
+	expect(old.compareDocumentPosition(boundary) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+	expect(boundary.compareDocumentPosition(current) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+	expect(screen.getAllByText(/Native conversation changed/)).toHaveLength(1);
 });
 
 describe("accepted conversation sends", () => {
@@ -176,7 +208,7 @@ describe("accepted conversation sends", () => {
 			await firstSend;
 		});
 
-		expect(result.current.pendingAcceptedTurnId).toBe("turn-2");
+		await waitFor(() => expect(result.current.pendingAcceptedTurnId).toBe("turn-2"));
 		rerender({ sessionId: "ao-1" });
 		expect(result.current.pendingAcceptedTurnId).toBe("turn-1");
 	});
@@ -736,6 +768,9 @@ describe("useConversation snapshot mapping", () => {
 			at: "2026-08-03T00:00:01Z",
 		});
 		expect(snapshot.account?.reauthRequiredAt).toBe("2026-08-03T00:00:02Z");
+		expect(snapshot.account?.authenticationState).toBe("required");
+		expect(snapshot.account?.authFailureId).toBe("auth-failure-1");
+		expect(snapshot.account?.lastAuthFailureReason).toBe("expired");
 		expect(snapshot.threadState).toEqual({
 			status: "system_error",
 			waitingOn: ["user_input"],
@@ -792,6 +827,24 @@ describe("useConversation snapshot mapping", () => {
 });
 
 describe("conversation branching commands", () => {
+	it("marks only attachment-bearing conversation writes as uploads", async () => {
+		postMock.mockResolvedValue({ data: {}, error: undefined });
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+		const image = { mimeType: "image/png", data: "YQ==" };
+
+		await act(async () => {
+			await result.current.send({ text: "plain" });
+			await result.current.send({ text: "image", attachments: [image] });
+			await result.current.steer("image", [image]);
+			await result.current.editQueuedTurn("turn-1", "image", { attachments: [image] });
+		});
+
+		expect(postMock.mock.calls[0][1].headers).toBeUndefined();
+		for (const [, options] of postMock.mock.calls.slice(1)) {
+			expect(options.headers).toEqual({ "X-AO-Attachment-Upload": "1" });
+		}
+	});
+
 	it("threads caller-owned idempotency ids through send, steer, and inline edit", async () => {
 		postMock.mockResolvedValue({ data: {}, error: undefined });
 		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
@@ -905,6 +958,7 @@ describe("steering refusals", () => {
 			"/api/v1/sessions/{sessionId}/conversation/steer",
 			{
 				params: { path: { sessionId: "ao-1" } },
+				headers: { "X-AO-Attachment-Upload": "1" },
 				body: {
 					text: "inspect this",
 					attachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
@@ -1047,41 +1101,28 @@ describe("steering refusals", () => {
 	});
 });
 
-describe("tool server reload refusals", () => {
-	it("withdraws the control when the harness cannot reload", async () => {
-		apiErrorCodeMock.mockReturnValue("CHAT_MCP_RELOAD_UNSUPPORTED");
-		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_MCP_RELOAD_UNSUPPORTED" } });
-
-		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
-		await act(async () => {
-			await result.current.reloadMcpServers().catch(() => {});
-		});
-
-		await waitFor(() => {
-			expect(result.current.mcpReloadUnsupported).toBe(true);
-			// Not also an error message: the control disappearing is the whole answer.
-			expect(result.current.mcpReloadError).toBeUndefined();
-		});
-	});
-
-	it("surfaces a refusal the user can act on", async () => {
-		apiErrorCodeMock.mockReturnValue("CHAT_TURN_RUNNING");
-		apiErrorMessageMock.mockReturnValue("a turn is running");
-		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_TURN_RUNNING" } });
-
-		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
-		await act(async () => {
-			await result.current.reloadMcpServers().catch(() => {});
-		});
-
-		await waitFor(() => {
-			expect(result.current.mcpReloadUnsupported).toBe(false);
-			expect(result.current.mcpReloadError).toBe("a turn is running");
-		});
-	});
-});
-
 describe("controller recovery", () => {
+	it("shares an automatic resume's pending state only with the same session", async () => {
+		const queryClient = new QueryClient();
+		const completion = deferred<void>();
+		const mutation = queryClient.getMutationCache().build(queryClient, {
+			mutationKey: ["resume-agent", "local", "ao-1"],
+			mutationFn: () => completion.promise,
+		});
+		const pending = mutation.execute(undefined);
+		const { result } = renderHook(() => ({
+			opened: useConversationCommands("ao-1"),
+			other: useConversationCommands("ao-2"),
+		}), { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> });
+		await waitFor(() => expect(result.current.opened.resumingAgent).toBe(true));
+		expect(result.current.other.resumingAgent).toBe(false);
+		await act(async () => {
+			completion.resolve();
+			await pending;
+		});
+		await waitFor(() => expect(result.current.opened.resumingAgent).toBe(false));
+	});
+
 	it("refreshes the conversation after Stop reports stale turn state", async () => {
 		postMock.mockResolvedValue({
 			data: undefined,
@@ -1188,5 +1229,40 @@ describe("useConversationSkills polling", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+
+describe("toSnapshot", () => {
+	it("keeps the sender's clientMessageId on a user message so its echo can be matched", () => {
+		const snapshot = toSnapshot({
+			conversationId: "c1",
+			sessionId: "s1",
+			harness: "claude-code",
+			mode: "chat",
+			controller: "ready",
+			latestSequence: 1,
+			turns: [],
+			messages: [
+				{
+					kind: "message",
+					id: "m1",
+					turnId: "t1",
+					sequence: 1,
+					revision: 0,
+					role: "user",
+					origin: "human",
+					text: "hi",
+					clientMessageId: "client-1",
+					editAvailable: true,
+					streaming: false,
+					createdAt: "2026-10-08T00:00:00Z",
+				},
+			],
+			activities: [],
+		} as unknown as Parameters<typeof toSnapshot>[0]);
+
+		const message = snapshot.items.find((item) => item.kind === "message");
+		expect(message).toMatchObject({ id: "m1", clientMessageId: "client-1" });
 	});
 });

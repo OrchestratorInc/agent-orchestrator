@@ -27,6 +27,7 @@ function transition(phase: SessionInterfaceTransition["phase"]): SessionInterfac
 		sourceMode: "tui",
 		targetMode: "chat",
 		policy: "drain",
+		historyPolicy: "strict",
 		phase,
 		createdAt: "2026-08-05T10:00:00Z",
 		updatedAt: "2026-08-05T10:00:01Z",
@@ -34,6 +35,25 @@ function transition(phase: SessionInterfaceTransition["phase"]): SessionInterfac
 }
 
 describe("SessionInterfaceSwitchButton", () => {
+	it("disables the action when Cloud reports a terminated session", () => {
+		const onClick = vi.fn();
+		render(
+			<TooltipProvider>
+				<SessionInterfaceSwitchButton
+					target="chat"
+					supported={false}
+					disabledReason="Terminated sessions must be restored before switching interfaces."
+					onClick={onClick}
+				/>
+			</TooltipProvider>,
+		);
+
+		const button = screen.getByRole("button", { name: "Switch to chat UI" });
+		expect(button).toBeDisabled();
+		fireEvent.click(button);
+		expect(onClick).not.toHaveBeenCalled();
+	});
+
 	it("uses the shared topbar spacing between adjacent session actions", () => {
 		render(
 			<SessionInterfaceActionGroup>
@@ -76,13 +96,16 @@ describe("SessionInterfaceSwitchButton", () => {
 		expect(onCancel).toHaveBeenCalledOnce();
 	});
 
-	it("stays non-interactive after the source controller begins stopping", () => {
+	it.each([
+		["source_stopping", "Stopping controller… Switching to Chat UI."],
+		["target_starting", "Resuming agent… Switching to Chat UI."],
+	] as const)("stays non-interactive while %s is progressing", (phase, expectedLabel) => {
 		render(
 			<TooltipProvider>
 				<SessionInterfaceSwitchButton
 					target="chat"
 					supported
-					transition={transition("source_stopping")}
+					transition={transition(phase)}
 					onClick={vi.fn()}
 					onCancel={vi.fn()}
 				/>
@@ -90,12 +113,34 @@ describe("SessionInterfaceSwitchButton", () => {
 		);
 
 		const status = screen.getByRole("status");
-		expect(status).toHaveAttribute(
-			"aria-label",
-			"Stopping controller… Switching to Chat UI.",
-		);
+		expect(status).toHaveAttribute("aria-label", expectedLabel);
 		expect(status.querySelector(".animate-spin")).not.toBeNull();
 		expect(screen.queryByRole("button", { name: "Cancel switch to Chat UI" })).not.toBeInTheDocument();
+	});
+
+	it("replaces progress with a non-interactive warning when target shutdown is unconfirmed", () => {
+		const detail =
+			"AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface.";
+		render(
+			<TooltipProvider>
+				<SessionInterfaceSwitchButton
+					target="chat"
+					supported
+					transition={{
+						...transition("target_starting"),
+						errorCode: "TARGET_STOP_UNCONFIRMED",
+						errorDetail: detail,
+					}}
+					onClick={vi.fn()}
+					onCancel={vi.fn()}
+				/>
+			</TooltipProvider>,
+		);
+
+		const status = screen.getByRole("status");
+		expect(status).toHaveAttribute("aria-label", `Interface switch needs attention. ${detail}`);
+		expect(status.querySelector(".animate-spin")).toBeNull();
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
 	});
 
 	it.each([
@@ -119,6 +164,7 @@ describe("SessionInterfaceSwitchButton", () => {
 		);
 
 		expect(screen.getByText("Interface switch recovered")).toBeInTheDocument();
+		expect(screen.getByRole("status").querySelector(".text-success")).toBeNull();
 		expect(screen.queryByText("Interface switch needs recovery")).not.toBeInTheDocument();
 
 		rerender(
@@ -147,6 +193,27 @@ describe("SessionInterfaceSwitchButton", () => {
 });
 
 describe("SessionInterfaceSwitchDialog", () => {
+	it("requires an explicit Terminal stop for Cloud without claiming the agent is busy", () => {
+		const onChoose = vi.fn();
+		render(
+			<SessionInterfaceSwitchDialog
+				open
+				target="chat"
+				requireExplicitTerminalStop
+				onOpenChange={vi.fn()}
+				onChoose={onChoose}
+			/>,
+		);
+
+		const dialog = screen.getByRole("dialog", { name: "Switch to Chat UI?" });
+		expect(dialog).toHaveTextContent("AO cannot verify whether this Terminal is idle.");
+		expect(within(dialog).queryByRole("button", { name: /^Finish work, then switch/ })).not.toBeInTheDocument();
+		const action = within(dialog).getByRole("button", { name: /^Terminate and then switch/ });
+		expect(onChoose).not.toHaveBeenCalled();
+		fireEvent.click(action);
+		expect(onChoose).toHaveBeenCalledWith("interrupt");
+	});
+
 	it("focuses Finish work as the safe default", async () => {
 		render(<SessionInterfaceSwitchDialog open target="tui" onOpenChange={vi.fn()} onChoose={vi.fn()} />);
 
@@ -178,25 +245,165 @@ describe("SessionInterfaceSwitchDialog", () => {
 });
 
 describe("SessionInterfaceTransitionNotice", () => {
-	it("offers an explicit discard action when drain preserves a draft", () => {
-		const onSwitchWithInterrupt = vi.fn();
+	it.each([undefined, "2026-08-13T08:00:00Z"])(
+		"keeps unconfirmed target shutdown visible without unsafe recovery or dismissal actions (%s)",
+		(noticeAcknowledgedAt) => {
+			const detail =
+				"AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface. target still running";
+			render(
+				<SessionInterfaceTransitionNotice
+					transition={{
+						...transition("target_starting"),
+						errorCode: "TARGET_STOP_UNCONFIRMED",
+						errorDetail: detail,
+						noticeAcknowledgedAt,
+					}}
+					onDismiss={vi.fn()}
+					dismissing
+					onRetry={vi.fn()}
+					retrying
+					onUseProviderHistory={vi.fn()}
+					onSwitchWithInterrupt={vi.fn()}
+				/>,
+			);
+
+			const alert = screen.getByRole("alert");
+			expect(alert).toHaveTextContent("Interface switch needs attention");
+			expect(alert).toHaveTextContent(detail);
+			expect(alert.querySelector(".animate-spin")).toBeNull();
+			expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		},
+	);
+
+	it("provides the restart instruction if unconfirmed target shutdown has no detail", () => {
+		render(
+			<SessionInterfaceTransitionNotice
+				transition={{ ...transition("target_starting"), errorCode: "TARGET_STOP_UNCONFIRMED" }}
+				onDismiss={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByRole("alert")).toHaveTextContent(
+			"AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface.",
+		);
+		expect(screen.queryByText(/original interface remains available/)).not.toBeInTheDocument();
+	});
+
+	it("announces unsettled history and offers retry or stay actions", () => {
+		const onRetry = vi.fn();
+		const onDismiss = vi.fn();
 		render(
 			<SessionInterfaceTransitionNotice
 				transition={{
 					...transition("failed"),
-					errorCode: "DRAIN_DRAFT_PRESENT",
-					errorDetail: "AO found unsent text and left the source untouched.",
+					errorCode: "TARGET_HISTORY_UNSETTLED",
+					errorDetail: "Interface switch failed (AO-2L): target history is not settled.",
 				}}
-				onDismiss={vi.fn()}
-				onSwitchWithInterrupt={onSwitchWithInterrupt}
+				onDismiss={onDismiss}
+				onRetry={onRetry}
 			/>,
 		);
 
-		const action = screen.getByRole("button", {
-			name: "Discard draft and switch",
-		});
-		fireEvent.click(action);
-		expect(onSwitchWithInterrupt).toHaveBeenCalledOnce();
+		expect(screen.getByRole("alert")).toHaveTextContent("AO-2L");
+		fireEvent.click(screen.getByRole("button", { name: "Retry switch to Chat UI" }));
+		expect(onRetry).toHaveBeenCalledOnce();
+		expect(screen.queryByRole("button", { name: "Use provider history and switch" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Stay in Terminal" }));
+		expect(onDismiss).toHaveBeenCalledOnce();
+	});
+
+	it("offers provider-history recovery only for a legacy text mismatch", () => {
+		const onRetry = vi.fn();
+		const onUseProviderHistory = vi.fn();
+		const onDismiss = vi.fn();
+		render(
+			<SessionInterfaceTransitionNotice
+				transition={{
+					...transition("failed"),
+					errorCode: "TARGET_HISTORY_UNTRUSTED_TEXT_MISMATCH",
+					errorDetail: "Interface switch failed (AO-2L): legacy checkpoint text did not match.",
+				}}
+				onDismiss={onDismiss}
+				onRetry={onRetry}
+				onUseProviderHistory={onUseProviderHistory}
+			/>,
+		);
+
+		expect(screen.getByRole("alert")).toHaveTextContent("AO-2L");
+		fireEvent.click(screen.getByRole("button", { name: "Retry switch to Chat UI" }));
+		fireEvent.click(screen.getByRole("button", { name: "Use provider history and switch" }));
+		fireEvent.click(screen.getByRole("button", { name: "Stay in Terminal" }));
+		expect(onRetry).toHaveBeenCalledOnce();
+		expect(onUseProviderHistory).toHaveBeenCalledOnce();
+		expect(onDismiss).toHaveBeenCalledOnce();
+	});
+
+	it("retains explicit provider-history recovery after daemon restart", () => {
+		const onRetry = vi.fn();
+		const onUseProviderHistory = vi.fn();
+		const onDismiss = vi.fn();
+		render(
+			<SessionInterfaceTransitionNotice
+				transition={{
+					...transition("recovery_required"),
+					historyPolicy: "provider_history",
+					errorCode: "DAEMON_RESTARTED",
+					errorDetail: "AO restored Terminal after the daemon restarted.",
+				}}
+				onDismiss={onDismiss}
+				onRetry={onRetry}
+				onUseProviderHistory={onUseProviderHistory}
+			/>,
+		);
+
+		expect(screen.getByRole("status")).toHaveTextContent("AO restored Terminal");
+		fireEvent.click(screen.getByRole("button", { name: "Retry switch to Chat UI" }));
+		fireEvent.click(screen.getByRole("button", { name: "Use provider history and switch" }));
+		fireEvent.click(screen.getByRole("button", { name: "Stay in Terminal" }));
+		expect(onRetry).toHaveBeenCalledOnce();
+		expect(onUseProviderHistory).toHaveBeenCalledOnce();
+		expect(onDismiss).toHaveBeenCalledOnce();
+	});
+
+	it("announces a rejected recovery attempt once inside AO-2L", () => {
+		render(
+			<SessionInterfaceTransitionNotice
+				transition={{
+					...transition("failed"),
+					errorCode: "TARGET_HISTORY_UNTRUSTED_TEXT_MISMATCH",
+					errorDetail: "Interface switch failed (AO-2L).",
+				}}
+				onDismiss={vi.fn()}
+				onRetry={vi.fn()}
+				recoveryError="Terminal history changed; retry with a fresh choice."
+			/>,
+		);
+
+		const [announcement] = screen.getAllByRole("alert");
+		expect(screen.getAllByRole("alert")).toHaveLength(1);
+		expect(announcement).toHaveTextContent("Interface switch failed (AO-2L).");
+		expect(announcement).toHaveTextContent(
+			"Recovery attempt failed: Terminal history changed; retry with a fresh choice.",
+		);
+	});
+
+	it("announces a notice dismissal failure once inside AO-2L", () => {
+		render(
+			<SessionInterfaceTransitionNotice
+				transition={{
+					...transition("failed"),
+					errorCode: "TARGET_HISTORY_UNSETTLED",
+					errorDetail: "Interface switch failed (AO-2L).",
+				}}
+				onDismiss={vi.fn()}
+				dismissError="Dismiss request was rejected."
+			/>,
+		);
+
+		const [announcement] = screen.getAllByRole("alert");
+		expect(screen.getAllByRole("alert")).toHaveLength(1);
+		expect(announcement).toHaveTextContent("Interface switch failed (AO-2L).");
+		expect(announcement).toHaveTextContent("Could not dismiss this message. Try again.");
 	});
 
 	it("offers an explicit cancellation action when a provider decision blocks drain", () => {
@@ -220,6 +427,28 @@ describe("SessionInterfaceTransitionNotice", () => {
 		expect(onSwitchWithInterrupt).toHaveBeenCalledOnce();
 	});
 
+	it("offers termination only after Docker cannot verify an interactive source is idle", () => {
+		const onSwitchWithInterrupt = vi.fn();
+		render(
+			<SessionInterfaceTransitionNotice
+				transition={{
+					...transition("failed"),
+					errorCode: "SOURCE_DRAIN_FAILED",
+					errorDetail: "source controller activity cannot be verified; use stop now to interrupt it",
+				}}
+				onDismiss={vi.fn()}
+				onSwitchWithInterrupt={onSwitchWithInterrupt}
+			/>,
+		);
+
+		const alert = screen.getByRole("alert");
+		expect(alert).toHaveTextContent("AO cannot verify whether this Terminal is idle.");
+		const action = within(alert).getByRole("button", { name: "Terminate and then switch" });
+		expect(onSwitchWithInterrupt).not.toHaveBeenCalled();
+		fireEvent.click(action);
+		expect(onSwitchWithInterrupt).toHaveBeenCalledOnce();
+	});
+
 	it("does not offer a destructive retry for unrelated failures", () => {
 		render(
 			<SessionInterfaceTransitionNotice
@@ -233,7 +462,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 		);
 
 		expect(screen.queryByRole("button", { name: "Stop now and switch" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Discard draft and switch" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Cancel request and switch" })).not.toBeInTheDocument();
 	});
 
 	it("does not offer a destructive retry when terminal quiescence is unverified", () => {

@@ -131,14 +131,24 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 	if err != nil {
 		return ClaimPRResult{}, err
 	}
+	// Reconcile immediately rather than waiting for the artifact-output
+	// poller's next tick: a session that already produced artifacts must move
+	// to pr OutputType (and out of the artifact Kanban placement) with the
+	// same latency claiming a PR always had. A reconcile failure must not
+	// fail an otherwise-successful claim.
+	if s.outputTypeReconciler != nil {
+		if err := s.outputTypeReconciler.ReconcileSessionOutputType(ctx, id); err != nil && s.logger != nil {
+			s.logger.Warn("claim: reconcile output type failed", "session", id, "err", err)
+		}
+	}
 	prs, err := s.listPRFacts(ctx, id)
 	if err != nil {
 		return ClaimPRResult{}, err
 	}
 	prs = claimedFirst(prs, prURL)
 	// TODO: implement workspace branch checkout. Until then, leave BranchChanged
-	// false and let CLI output omit the checkout line rather than claiming the
-	// session was already on the PR branch.
+	// false and have CLI output report that the workspace was unchanged, without
+	// assuming the session was already on the PR branch.
 	res := ClaimPRResult{PRs: prs, BranchChanged: false, DonorWasTerminated: outcome.OwnerTerminated}
 	if outcome.PreviousOwner != "" && outcome.PreviousOwner != id {
 		res.TakenOverFrom = []domain.SessionID{outcome.PreviousOwner}
@@ -318,7 +328,7 @@ func claimRowsFromSCM(sessionID domain.SessionID, obs ports.SCMObservation, revi
 	for _, th := range obs.Review.Threads {
 		threads = append(threads, domain.PullRequestReviewThread{ThreadID: th.ID, Path: th.Path, Line: th.Line, Resolved: th.Resolved, IsBot: th.IsBot, UpdatedAt: now})
 		for _, c := range th.Comments {
-			comments = append(comments, domain.PullRequestComment{ThreadID: th.ID, ReviewID: c.ReviewID, ID: c.ID, Author: c.Author, File: th.Path, Line: th.Line, Body: c.Body, URL: c.URL, Resolved: th.Resolved, IsBot: c.IsBot || th.IsBot, CreatedAt: now, AutoInjectReview: sessionRecord.AutoInjectReview})
+			comments = append(comments, domain.PullRequestComment{ThreadID: th.ID, ReviewID: c.ReviewID, ID: c.ID, Author: c.Author, File: th.Path, Line: th.Line, Body: c.Body, URL: c.URL, Resolved: th.Resolved, IsBot: c.IsBot, CreatedAt: now, AutoInjectReview: sessionRecord.AutoInjectReview})
 		}
 	}
 	return pr, checks, reviews, threads, comments

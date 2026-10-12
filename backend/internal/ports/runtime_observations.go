@@ -39,20 +39,41 @@ type RuntimeFacts struct {
 // (old CLIs, adapters with no tool identity) keeps plain last-writer-wins
 // state semantics.
 type ActivitySignal struct {
-	Valid             bool
-	State             domain.ActivityState
-	Timestamp         time.Time
-	ExpectedUpdatedAt time.Time
-	Event             string
-	ToolName          string
-	ToolUseID         string
-	AgentSessionID    string
+	Valid     bool
+	State     domain.ActivityState
+	Timestamp time.Time
+	// ExpectedRevision fences a daemon observer's pre-probe snapshot. nil is an
+	// unversioned hook, while a pointer to zero is a valid initial revision.
+	ExpectedRevision *int64
+	// ExpectedHarness fences native reports to their provider. Empty preserves
+	// the existing generic hook contract; socket reporters always set it.
+	ExpectedHarness domain.AgentHarness
+	Event           string
+	ToolName        string
+	ToolUseID       string
+	SubagentID      string
+	// RunningSubagentIDs is Claude's authoritative parent task snapshot.
+	// Codex provides child start/stop events instead and leaves this nil.
+	RunningSubagentIDs *[]string
+	AgentSessionID     string
 	// LatestUserPrompt and LatestAssistantUpdate are provider hook facts used
-	// to build a deterministic handoff. They are never promoted to system
-	// instructions and internal <ao-...> coordination turns are filtered by
-	// the hook client before submission.
+	// to build a deterministic handoff. Lifecycle accepts them only from their
+	// main-turn event boundaries (UserPromptSubmit and Stop) under the current
+	// runtime/controller generation. They are never promoted to system instructions,
+	// and internal <ao-...> coordination turns are filtered by the hook client.
 	LatestUserPrompt      string
 	LatestAssistantUpdate string
+	// ConversationCheckpointOrigin distinguishes real human turns from AO's
+	// own coordination. Lifecycle persists coordination provenance across the
+	// prompt-submit/Stop boundary; an empty value is an older hook client.
+	ConversationCheckpointOrigin domain.ConversationCheckpointOrigin
+	// CoordinationID identifies an AO-authored semantic prompt. Native hooks
+	// derive it from AO's prompt envelope; raw terminal writes cannot set it.
+	CoordinationID string
+	// ProviderTurnID identifies the main turn reported by a native hook.
+	ProviderTurnID string
+	// SubmissionID identifies AO's per-invocation prompt-hook context attachment.
+	SubmissionID string
 	// TranscriptPath is a read-only provider-native transcript reference when
 	// the hook exposes one. AO stores the path, never rewrites the transcript.
 	TranscriptPath string

@@ -3,13 +3,17 @@ package acp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
 func restartFixture(t *testing.T, env map[string]string) (Config, ports.ChatStartConfig) {
@@ -28,6 +32,93 @@ func restartFixture(t *testing.T, env map[string]string) (Config, ports.ChatStar
 	return cfg, start
 }
 
+func TestPersistentClaudeACPHibernateAndNativeResume(t *testing.T) {
+	callsPath := filepath.Join(t.TempDir(), "calls.log")
+	cfg, start := restartFixture(t, map[string]string{"AO_TEST_PERSISTENT_ACP_CALLS": callsPath})
+	cfg.Harness = domain.HarnessClaudeCode
+	cfg.Capabilities = ports.ChatCapabilities{ports.ChatCapabilityResume: true}
+	t.Cleanup(func() { _ = persistenthost.Shutdown(context.Background(), start.DataDir, string(start.SessionID)) })
+
+	first, err := New(cfg, nil).Start(context.Background(), start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Capabilities()[ports.ChatCapabilityResume] {
+		t.Fatal("Claude ACP did not advertise native resume")
+	}
+	_ = nextEvent(t, first.Events()) // ready
+	providerID := first.ProviderConversationID()
+	firstPID := completedProviderPID(t, first)
+	if err := first.(ports.ChatProviderHibernator).Hibernate(); err != nil {
+		t.Fatalf("Hibernate: %v", err)
+	}
+	if processalive.Alive(firstPID) {
+		t.Fatalf("Claude ACP bridge process %d survived hibernation", firstPID)
+	}
+	descriptor := filepath.Join(start.DataDir, "chat-hosts", string(start.SessionID), "host.json")
+	if _, err := os.Stat(descriptor); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Claude ACP host survived hibernation: %v", err)
+	}
+	calls, err := os.ReadFile(callsPath)
+	if err != nil || strings.Contains(string(calls), "session/close\n") {
+		t.Fatalf("hibernate closed native session: calls=%q err=%v", calls, err)
+	}
+
+	second, err := New(cfg, nil).Resume(context.Background(), ports.ChatResumeConfig{
+		SessionID: start.SessionID, DataDir: start.DataDir, WorkspacePath: start.WorkspacePath,
+		ProviderConversationID: providerID, ProviderScopeID: start.ProviderScopeID,
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	defer func() { _ = second.(ports.ChatProviderTerminator).Terminate() }()
+	if second.ProviderConversationID() != providerID || second.(ports.ChatLiveReconnector).ReconnectedLive() {
+		t.Fatal("Claude ACP did not native-resume the same session in a replacement process")
+	}
+	_ = nextEvent(t, second.Events()) // ready
+	if secondPID := completedProviderPID(t, second); secondPID == firstPID {
+		t.Fatalf("Claude ACP bridge process did not change: %d", secondPID)
+	}
+	calls, err = os.ReadFile(callsPath)
+	if err != nil || strings.Count(string(calls), "session/resume\n") != 1 {
+		t.Fatalf("native resume calls=%q err=%v", calls, err)
+	}
+}
+
+func completedProviderPID(t *testing.T, conv ports.ChatConversation) int {
+	t.Helper()
+	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatal(err)
+	}
+	var pid int
+	completed := false
+	for {
+		event := nextEvent(t, conv.Events())
+		if event.Kind == ports.ChatEventMessageDelta {
+			_, _ = fmt.Sscanf(event.Delta, "provider-pid=%d", &pid)
+		}
+		if event.Kind == ports.ChatEventTurnCompleted {
+			if event.TurnState != domain.TurnStateCompleted {
+				t.Fatalf("turn state = %q", event.TurnState)
+			}
+			completed = true
+			if err := conv.(ports.ChatProviderEventAcknowledger).AcknowledgeProviderEvent(context.Background(), event.ProviderEventID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if completed && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerReady {
+			if pid == 0 {
+				t.Fatal("provider did not report its process id")
+			}
+			return pid
+		}
+	}
+}
+
 func TestPersistentACPFailedPromptAcknowledgementAllowsNextTurn(t *testing.T) {
 	cfg, start := restartFixture(t, map[string]string{"AO_TEST_PERSISTENT_ACP_ERROR": "1"})
 	conv, err := New(cfg, nil).Start(context.Background(), start)
@@ -44,18 +135,23 @@ func TestPersistentACPFailedPromptAcknowledgementAllowsNextTurn(t *testing.T) {
 		if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
 			t.Fatal(err)
 		}
-		for {
+		completed, ready := false, false
+		for !ready {
 			event := nextEvent(t, conv.Events())
-			if event.Kind != ports.ChatEventTurnCompleted {
-				continue
+			switch event.Kind {
+			case ports.ChatEventTurnCompleted:
+				if event.TurnState != want || event.ProviderEventID == "" {
+					t.Fatalf("completion = %#v, want %s with a durable receipt", event, want)
+				}
+				if err := conv.(ports.ChatProviderEventAcknowledger).AcknowledgeProviderEvent(context.Background(), event.ProviderEventID); err != nil {
+					t.Fatal(err)
+				}
+				completed = true
+			case ports.ChatEventControllerState:
+				// TurnCompleted is emitted before the driver releases activeTurn.
+				// ControllerReady is the barrier after which the next turn is valid.
+				ready = completed && event.ControllerState == ports.ChatControllerReady
 			}
-			if event.TurnState != want || event.ProviderEventID == "" {
-				t.Fatalf("completion = %#v, want %s with a durable receipt", event, want)
-			}
-			if err := conv.(ports.ChatProviderEventAcknowledger).AcknowledgeProviderEvent(context.Background(), event.ProviderEventID); err != nil {
-				t.Fatal(err)
-			}
-			break
 		}
 	}
 }

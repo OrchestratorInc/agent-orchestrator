@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // These ID types are distinct string types so they can't be swapped at a call
 // site by accident.
@@ -22,6 +25,109 @@ const (
 	KindOrchestrator SessionKind = "orchestrator"
 )
 
+// ConversationCheckpointState records which main-turn boundaries AO has
+// durably observed for the hook-derived replay checkpoint. The legacy value is
+// intentionally distinct: rows written before owner/event scoping may still be
+// enforced by an ordinary switch, but only those text dimensions may be waived
+// by explicit provider-history consent.
+type ConversationCheckpointState string
+
+// Conversation checkpoint states, from unscoped legacy data through a fully
+// observed main-turn boundary.
+const (
+	ConversationCheckpointLegacy ConversationCheckpointState = "legacy"
+	ConversationCheckpointEmpty  ConversationCheckpointState = "empty"
+	// ConversationCheckpointCoordination records an AO-authored turn boundary.
+	// It carries across a prompt-submit/Stop pair so provider coordination can
+	// never be promoted into replay evidence, even when Stop omits the prompt.
+	ConversationCheckpointCoordination ConversationCheckpointState = "coordination"
+	ConversationCheckpointPrompt       ConversationCheckpointState = "prompt"
+	ConversationCheckpointComplete     ConversationCheckpointState = "complete"
+)
+
+// Trusted reports whether the checkpoint was collected by the scoped
+// main-turn state machine rather than inherited from pre-provenance storage.
+func (s ConversationCheckpointState) Trusted() bool {
+	return s == ConversationCheckpointPrompt || s == ConversationCheckpointComplete
+}
+
+// ConversationCheckpointOrigin classifies the main-turn boundary reported by
+// a provider hook. Empty preserves compatibility with older hook clients.
+type ConversationCheckpointOrigin string
+
+// Conversation checkpoint origins distinguish compatibility traffic, real
+// human turns, and AO-authored coordination turns.
+const (
+	ConversationCheckpointOriginUnknown      ConversationCheckpointOrigin = ""
+	ConversationCheckpointOriginHuman        ConversationCheckpointOrigin = "human"
+	ConversationCheckpointOriginCoordination ConversationCheckpointOrigin = "coordination"
+)
+
+// Valid reports whether an activity request carries a supported origin.
+func (o ConversationCheckpointOrigin) Valid() bool {
+	return o == ConversationCheckpointOriginUnknown ||
+		o == ConversationCheckpointOriginHuman ||
+		o == ConversationCheckpointOriginCoordination
+}
+
+// SessionOutputType is the durable summary of what kind of output a session
+// currently owns.
+type SessionOutputType string
+
+// Session output types. PRAndArtifact is a distinct value rather than two
+// independent flags: the output-kind set is small and expected to stay that
+// way, so an explicit enumerated combination is simpler to persist, validate,
+// and read than a bitmask or a join table.
+const (
+	SessionOutputNone          SessionOutputType = "none"
+	SessionOutputPR            SessionOutputType = "pr"
+	SessionOutputArtifact      SessionOutputType = "artifact"
+	SessionOutputPRAndArtifact SessionOutputType = "pr_artifact"
+)
+
+// RequestedOutput is the deliverable a spawn asks for. Empty is the ordinary
+// task flow; it does not change derived status or the Kanban column.
+type RequestedOutput string
+
+// RequestedOutputArtifact asks the agent to deliver a file in the session's
+// artifact directory instead of a pull request.
+const RequestedOutputArtifact RequestedOutput = "artifact"
+
+// Valid reports whether k is empty or a known output kind.
+func (k RequestedOutput) Valid() bool {
+	return k == "" || k == RequestedOutputArtifact
+}
+
+// HasPR reports whether a session's output includes a claimed/observed PR.
+func (t SessionOutputType) HasPR() bool {
+	return t == SessionOutputPR || t == SessionOutputPRAndArtifact
+}
+
+// HasArtifact reports whether a session's output includes at least one
+// artifact file.
+func (t SessionOutputType) HasArtifact() bool {
+	return t == SessionOutputArtifact || t == SessionOutputPRAndArtifact
+}
+
+// SessionArtifactKind is the UI-facing kind of one file artifact.
+type SessionArtifactKind string
+
+// Session artifact kinds.
+const (
+	SessionArtifactHTML     SessionArtifactKind = "html"
+	SessionArtifactMarkdown SessionArtifactKind = "markdown"
+	SessionArtifactGeneric  SessionArtifactKind = "file"
+)
+
+// SessionArtifactFile is one session-owned file discovered inside artifact_dir.
+type SessionArtifactFile struct {
+	Path      string              `json:"path"`
+	Name      string              `json:"name"`
+	Kind      SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
+	Size      int64               `json:"size"`
+	UpdatedAt time.Time           `json:"updatedAt"`
+}
+
 // SessionMetadata is the typed, off-status metadata for a session: operational
 // handles and seed inputs used by Session Manager and reaper.
 type SessionMetadata struct {
@@ -40,8 +146,9 @@ type SessionMetadata struct {
 	// own AgentSessionID. Usually that proof comes from a provider hook. A
 	// coordinated Chat-to-TUI handoff may also establish it by launching the
 	// target with the exact structured provider id transferred from Chat.
-	AgentSessionIDLaunchID string `json:"-"`
-	Prompt                 string `json:"prompt,omitempty"`
+	AgentSessionIDLaunchID   string    `json:"-"`
+	NativeIdentityObservedAt time.Time `json:"-"`
+	Prompt                   string    `json:"prompt,omitempty"`
 	// LatestUserPrompt is the latest real user-authored task direction observed
 	// for this AO session. Internal AO coordination messages (for example an
 	// agent-switch handoff request) must not replace it.
@@ -50,13 +157,35 @@ type SessionMetadata struct {
 	// separate durable fact because SessionRecord.UpdatedAt also changes for
 	// lifecycle, SCM, preview, and preference updates.
 	LatestUserPromptAt time.Time `json:"-"`
+	// LatestInteractionAt records deliberate direction independently of human authorship.
+	LatestInteractionAt time.Time `json:"-"`
 	// LatestAssistantUpdate is the latest user-facing assistant update observed
 	// before any internal agent-switch coordination turn.
-	LatestAssistantUpdate string `json:"latestAssistantUpdate,omitempty"`
+	LatestAssistantUpdate   string    `json:"latestAssistantUpdate,omitempty"`
+	LatestAssistantUpdateAt time.Time `json:"-"`
+	// ConversationCheckpointState and its owner provenance are internal replay
+	// safety facts. They survive daemon restart but are not part of the session
+	// presentation model.
+	ConversationCheckpointState      ConversationCheckpointState `json:"-"`
+	ConversationCheckpointGeneration string                      `json:"-"`
+	ConversationCheckpointNativeID   string                      `json:"-"`
+	ConversationCheckpointTurnID     string                      `json:"-"`
+	NativeCheckpointEvidence         string                      `json:"-"`
+	// ConversationCheckpointUnsettled records a scoped Stop that could not be
+	// correlated with a prompt boundary. Without a provider turn identity there
+	// is no collision-safe way to prove native replay crossed that boundary, so a
+	// Chat handoff must fail closed until a newer canonical prompt supersedes it.
+	ConversationCheckpointUnsettled bool `json:"-"`
 	// NativeTranscriptPath is the read-only transcript path for the currently
 	// active native agent session when its provider exposes one. Retained
 	// provider-specific paths also live on AgentNativeSession records.
 	NativeTranscriptPath string `json:"nativeTranscriptPath,omitempty"`
+	// ClaudeActivityFacts records parent-turn and subagent hook facts for the
+	// current runtime launch. It is internal native evidence, not display status.
+	ClaudeActivityFacts string `json:"-"`
+	// CodexActivityFacts records parent-turn and native child hook facts for the
+	// current runtime launch. It is internal evidence, not display status.
+	CodexActivityFacts string `json:"-"`
 	// ProviderConversationID is the opaque handle a Chat driver needs to resume
 	// this session's provider conversation after a restart (a Codex thread id
 	// today). Normally empty for TUI sessions. It remains a distinct field from
@@ -80,6 +209,13 @@ type SessionMetadata struct {
 	// Model is the agent model this session resolved to at spawn time, including
 	// any per-spawn --model override. Empty means the agent's default model.
 	Model string `json:"model,omitempty"`
+	// Effort is the reasoning level resolved with Model at spawn time. Empty
+	// means the provider default, including an explicit task-level reset. The
+	// resolved value is pinned so project-default changes cannot alter resume.
+	Effort string `json:"effort,omitempty"`
+	// ArtifactDir is the session-owned artifact directory under AO's data dir.
+	// It is outside the git workspace and is never exposed directly on the API.
+	ArtifactDir string `json:"-"`
 	// BrowserCapabilityVerifier is a one-way verifier for the random browser
 	// capability held by this session's worker process. The bearer token itself
 	// is never persisted, so reading the database cannot grant access to another
@@ -92,14 +228,26 @@ type SessionMetadata struct {
 // facts: identity, agent harness, activity_state, is_terminated, and operational
 // metadata. The user-facing Status is derived from these facts plus PR facts.
 type SessionRecord struct {
-	ID        SessionID    `json:"id"`
-	ProjectID ProjectID    `json:"projectId,omitempty"`
-	IssueID   IssueID      `json:"issueId,omitempty"`
-	Kind      SessionKind  `json:"kind"`
-	Harness   AgentHarness `json:"harness,omitempty"`
+	ID        SessionID `json:"id"`
+	ProjectID ProjectID `json:"projectId,omitempty"`
+	// AutomationRunID is the optional durable origin for an unattended spawn.
+	// It is internal lifecycle data, not part of the session API read model.
+	AutomationRunID *AutomationRunID `json:"-"`
+	// AutomationLaunchCompleted is set atomically with the final lifecycle
+	// commit. A seed carrying AutomationRunID alone is not proof that its
+	// workspace/controller launch completed.
+	AutomationLaunchCompleted bool `json:"-"`
+	// ClientRequestID binds one manual task creation attempt to its durable row.
+	// A retry may return this row only after ClientRequestCommitted is set.
+	ClientRequestID        string       `json:"-"`
+	ClientRequestHash      string       `json:"-"`
+	ClientRequestCommitted bool         `json:"-"`
+	IssueID                IssueID      `json:"issueId,omitempty"`
+	Kind                   SessionKind  `json:"kind"`
+	Harness                AgentHarness `json:"harness,omitempty"`
 	// ReviewerHarness is this session's preferred reviewer. Empty delegates to
 	// the project configuration.
-	ReviewerHarness   ReviewerHarness `json:"reviewerHarness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,kiro,pi,agy,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`
+	ReviewerHarness   ReviewerHarness `json:"reviewerHarness,omitempty" enum:"claude-code,codex,copilot,cursor,kilocode,opencode,opencode-v2,kiro,pi,agy,devin,droid,kimi,kimchi,muse,amp,aider,grok,crush,auggie,cline,autohand"`
 	ReviewerConfig    AgentConfig     `json:"reviewerConfig,omitempty"`
 	AutoReviewEnabled bool            `json:"autoReviewEnabled"`
 	DisplayName       string          `json:"displayName,omitempty"`
@@ -117,22 +265,143 @@ type SessionRecord struct {
 	// of the API read model.
 	FirstSignalAt time.Time `json:"-"`
 	IsTerminated  bool      `json:"isTerminated"`
+	// HibernatedAt records that the idle Chat controller was stopped while the
+	// session and conversation remain resumable. Nil means no recorded hibernation.
+	HibernatedAt *time.Time `json:"hibernatedAt,omitempty"`
 	// TerminateOnPRMerge is a user-controlled lifecycle policy. When enabled,
 	// completing the session's PR set through a merge tears down the session.
-	TerminateOnPRMerge bool            `json:"terminateOnPrMerge"`
-	AutoInjectReview   bool            `json:"autoInjectReview"`
-	AutoInjectCI       bool            `json:"autoInjectCI"`
-	Metadata           SessionMetadata `json:"-"`
+	TerminateOnPRMerge bool              `json:"terminateOnPrMerge"`
+	AutoInjectReview   bool              `json:"autoInjectReview"`
+	AutoInjectCI       bool              `json:"autoInjectCI"`
+	OutputType         SessionOutputType `json:"outputType" enum:"none,pr,artifact,pr_artifact"`
+	// RequestedOutput is the deliverable requested at spawn. It is fixed after
+	// insertion so restore and agent switching rebuild the same worker prompt.
+	RequestedOutput RequestedOutput `json:"requestedOutput,omitempty" enum:"artifact"`
+	Metadata        SessionMetadata `json:"-"`
 	// CleanupGeneration is a monotonic counter bumped each time the session is
 	// un-terminated (spawn/restore). The terminal-resource reconciler stamps its
 	// durable cleanup facts with the generation they were written for so a
 	// finalize started under an earlier terminal episode cannot satisfy a later
 	// one. Internal fact, not part of the API read model.
 	CleanupGeneration int64      `json:"-"`
+	Revision          int64      `json:"-"` // Database-owned row revision, independent of event timestamps.
 	CreatedAt         time.Time  `json:"createdAt"`
 	UpdatedAt         time.Time  `json:"updatedAt"`
 	IsPinned          bool       `json:"isPinned"`
 	PinnedAt          *time.Time `json:"pinnedAt,omitempty"`
+	// IsTaskPreparation marks a hidden row that only reserves identity and a
+	// speculative worktree for the New Task dialog. Claiming it clears the flag
+	// before the session becomes visible; cancellation and startup reconciliation
+	// delete it after reclaiming the worktree.
+	IsTaskPreparation bool `json:"-"`
+	// ProvisionState is how far a Chat spawn has got. A Chat spawn answers the
+	// API as soon as the row and its conversation exist, so a session can be
+	// visible — and receive queued messages — before its worktree and controller
+	// do. Sessions written before asynchronous spawn existed read back as
+	// SessionProvisionReady.
+	ProvisionState SessionProvisionState `json:"provisionState,omitempty" enum:"provisioning,ready,failed"`
+	// ProvisionError explains a failed start in the user's terms. It is kept on
+	// the row rather than discarded with it, because the user is already looking
+	// at the session by the time the start can fail.
+	ProvisionError string `json:"provisionError,omitempty"`
+	// ProvisionSteps is the checklist an asynchronous Chat start works through,
+	// in order. It is written only by that background start, at each stage
+	// boundary, and kept after the start settles. A step still running when the
+	// session reads ProvisionState failed is the step that failed.
+	ProvisionSteps []SessionProvisionStep `json:"provisionSteps,omitempty"`
+	// BranchState is what the daemon last observed about the session branch:
+	// its commits on top of the base and whether they reached the remote. The
+	// branch-state reconcile writes it only when a fact changes; nil until the first
+	// observation, and a failed git read keeps the last known value.
+	BranchState *SessionBranchState `json:"branchState,omitempty"`
+}
+
+// SessionBranchState is the session branch's commit and push facts.
+type SessionBranchState struct {
+	// Commits is how many commits the branch has on top of its base.
+	Commits int `json:"commits"`
+	// RemoteBranch is the remote-tracking branch, such as "origin/feat/x".
+	// Empty means the branch has never been pushed.
+	RemoteBranch string `json:"remoteBranch,omitempty"`
+	// Unpushed is how many branch commits are not on RemoteBranch. It equals
+	// Commits while RemoteBranch is empty.
+	Unpushed int `json:"unpushed"`
+}
+
+// SessionProvisionStepID names one stage of an asynchronous Chat start.
+type SessionProvisionStepID string
+
+// Start-up stages, in the order a start runs them. A start includes only the
+// stages it will actually run: a prepared worktree skips the fetch, and setup
+// appears only when the project has post-create commands.
+const (
+	SessionProvisionStepFetch    SessionProvisionStepID = "fetch"
+	SessionProvisionStepWorktree SessionProvisionStepID = "worktree"
+	SessionProvisionStepSetup    SessionProvisionStepID = "setup"
+	SessionProvisionStepAgent    SessionProvisionStepID = "agent"
+)
+
+// SessionProvisionStepStatus is how far one start-up stage has got.
+type SessionProvisionStepStatus string
+
+// Start-up stage statuses.
+const (
+	SessionProvisionStepPending SessionProvisionStepStatus = "pending"
+	SessionProvisionStepRunning SessionProvisionStepStatus = "running"
+	SessionProvisionStepDone    SessionProvisionStepStatus = "done"
+)
+
+// SessionProvisionStep is one row of a start's checklist.
+type SessionProvisionStep struct {
+	ID        SessionProvisionStepID     `json:"id" enum:"fetch,worktree,setup,agent"`
+	Status    SessionProvisionStepStatus `json:"status" enum:"pending,running,done"`
+	StartedAt *time.Time                 `json:"startedAt,omitempty"`
+	EndedAt   *time.Time                 `json:"endedAt,omitempty"`
+}
+
+// EligibleForChatHibernation is the cheap durable-fact filter. The chat service
+// still checks live provider work and view leases under its controller gate.
+func (s SessionRecord) EligibleForChatHibernation() bool {
+	return NormalizeSessionMode(s.Mode) == SessionModeChat &&
+		s.Kind != KindOrchestrator &&
+		!s.IsTerminated && !s.IsTaskPreparation && s.ProvisionState.WithDefault() == SessionProvisionReady &&
+		s.HibernatedAt == nil && s.Activity.State == ActivityIdle &&
+		!s.Activity.LastActivityAt.IsZero() &&
+		strings.TrimSpace(s.Metadata.ProviderConversationID) != ""
+}
+
+// SessionProvisionState is a session's start-up progress.
+type SessionProvisionState string
+
+// TaskPreparationToken identifies one speculative task workspace. It is opaque
+// outside the session manager even though the current implementation reserves a
+// session id as its value.
+type TaskPreparationToken string
+
+const (
+	// SessionProvisionProvisioning means the row and its conversation exist; the
+	// worktree, the agent controller, or both do not yet. Messages sent now are
+	// queued and dispatched by the controller when it arrives.
+	SessionProvisionProvisioning SessionProvisionState = "provisioning"
+	// SessionProvisionReady means the session owns everything a spawn creates. This is
+	// the zero value's meaning, so rows predating asynchronous spawn are ready.
+	SessionProvisionReady SessionProvisionState = "ready"
+	// SessionProvisionFailed means the start did not complete. The row, its
+	// conversation, and anything queued into it survive so the user can retry.
+	SessionProvisionFailed SessionProvisionState = "failed"
+)
+
+// WithDefault resolves the zero value to ready.
+func (s SessionProvisionState) WithDefault() SessionProvisionState {
+	if s == "" {
+		return SessionProvisionReady
+	}
+	return s
+}
+
+// IsProvisioning reports whether the session is still being built.
+func (s SessionProvisionState) IsProvisioning() bool {
+	return s == SessionProvisionProvisioning
 }
 
 // IsStandalone reports whether the session has no registered project owner.
@@ -171,11 +440,16 @@ func (r SessionRecord) ControllerOwner() SessionControllerOwner {
 // persisted.
 type Session struct {
 	SessionRecord
+	// WorkspaceCleanup is a durable teardown fact for the current generation.
+	WorkspaceCleanup WorkspaceDisposition `json:"workspaceCleanup,omitempty" enum:"pending,removed,preserved_dirty,failed,not_applicable"`
+	// StatusReadiness describes startup verification, never a persisted status.
+	// Clients must withhold activity labels until ready; unavailable permits retry.
+	StatusReadiness string `json:"statusReadiness" enum:"checking,ready,unavailable"`
 	// ChatProviderPreserved is a live-controller observation, never stored.
 	// False also covers recovery/unknown ownership; callers must not infer safety.
 	ChatProviderPreserved bool          `json:"chatProviderPreserved"`
-	Status                SessionStatus `json:"status" enum:"working,pr_open,draft,ci_failed,review_pending,changes_requested,approved,mergeable,merged,needs_input,exited,idle,terminated,no_signal"`
-	SCMStatus             SessionStatus `json:"scmStatus,omitempty" enum:"pr_open,draft,ci_failed,review_pending,changes_requested,approved,mergeable,merged"`
+	Status                SessionStatus `json:"status" enum:"working,pr_open,draft,ci_failed,review_pending,changes_requested,commented,approved,mergeable,merged,needs_input,exited,idle,terminated,no_signal"`
+	SCMStatus             SessionStatus `json:"scmStatus,omitempty" enum:"pr_open,draft,ci_failed,review_pending,changes_requested,commented,approved,mergeable,merged"`
 	// KanbanColumn is where the session sits in its delivery lifecycle and
 	// which loop is turning it: an AO-driven one (validating) or the
 	// review-feedback loop whose next turn is a person's (needs_review). It is
@@ -185,11 +459,36 @@ type Session struct {
 	// important current fact about the session at the stage it sits in. It is
 	// derived after the column, from the facts that column reads, and ships in
 	// renderable form so clients print it without a mapping table of their own.
-	DisplayStatus     DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
-	TerminalHandleID  string        `json:"terminalHandleId,omitempty"`
-	ActiveAgentSwitch *AgentSwitch  `json:"-"`
+	DisplayStatus     DisplayStatus         `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
+	TerminalHandleID  string                `json:"terminalHandleId,omitempty"`
+	ArtifactFiles     []SessionArtifactFile `json:"-"`
+	ActiveAgentSwitch *AgentSwitch          `json:"-"`
 	// PRs are the session's attributed pull requests (one session can own many).
 	// They feed status derivation and are surfaced on the API read model. Not
 	// serialized here: the HTTP boundary maps them to the curated wire shape.
 	PRs []PRFacts `json:"-"`
+}
+
+// LastEventAt is when something a person would notice last happened to the
+// session: an activity-state transition (started, finished, waiting, exited),
+// a PR lifecycle change, a CI result change, or a review submission. Mobile
+// orders its workers list by it.
+//
+// It is derived at read time from durable fact timestamps and never stored.
+// Deliberately not UpdatedAt: that advances on metadata writes and PR polls,
+// so a busy session would keep floating to the top without anything changing.
+func (s Session) LastEventAt() time.Time {
+	latest := s.CreatedAt
+	consider := func(t time.Time) {
+		if t.After(latest) {
+			latest = t
+		}
+	}
+	consider(s.Activity.LastActivityAt)
+	for _, pr := range s.PRs {
+		consider(pr.StateChangedAt)
+		consider(pr.CIChangedAt)
+		consider(pr.LastReviewAt)
+	}
+	return latest
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
@@ -21,9 +22,17 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
-// maxConversationBody bounds a chat message. Large context belongs in files the
-// agent reads from the worktree, not in a request body.
-const maxConversationBody = maxSpawnBodyBytes
+// Native chat images are sent to the provider and retained in conversation
+// history. Workspace file attachments use separate, larger spawn limits. The
+// body limit also fits a 25 MiB render page as a JSON string, but only because
+// the page's HTML source is capped at 1 MiB: json.Marshal writes each <, > and
+// & as a 6-byte escape, so the source can grow sixfold. Inlined images are
+// base64 and do not grow.
+const (
+	maxConversationImageBytes  = 10 << 20
+	maxConversationImagesBytes = 25 << 20
+	maxConversationBody        = maxConversationImagesBytes*4/3 + (2 << 20)
+)
 
 // ConversationService is the controller-facing Chat contract.
 type ConversationService interface {
@@ -56,6 +65,20 @@ type pagedConversationService interface {
 	SnapshotPage(ctx context.Context, session domain.SessionID, beforeSequence, limit int64) (chatsvc.Snapshot, error)
 }
 
+type reviewerConversationService interface {
+	ModelsForOwner(context.Context, domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, error)
+	SetTurnSettingsForOwner(context.Context, domain.ConversationOwner, domain.ConversationSettings) (domain.ConversationSettings, error)
+	SnapshotPageForReview(ctx context.Context, reviewID string, beforeSequence, limit int64) (chatsvc.Snapshot, error)
+	SendForOwner(ctx context.Context, owner domain.ConversationOwner, msg ports.ChatUserMessage) (domain.ConversationTurn, error)
+	ResolveForOwner(ctx context.Context, owner domain.ConversationOwner, requestID string, decision ports.ChatDecision) error
+	ResolveInputForOwner(ctx context.Context, owner domain.ConversationOwner, requestID string, response ports.ChatInputResponse) error
+	InterruptForOwner(ctx context.Context, owner domain.ConversationOwner) error
+}
+
+type chatViewService interface {
+	SetChatView(context.Context, domain.SessionID, string, bool) error
+}
+
 // ConversationsController owns the Chat routes for a session.
 //
 // Every route dispatches from the session's persisted mode inside the service, so
@@ -63,16 +86,42 @@ type pagedConversationService interface {
 // even by calling these URLs directly. UI visibility is not the boundary.
 type ConversationsController struct {
 	Svc ConversationService
+	// Renders serves agent HTML renders. Nil answers the render route 501.
+	Renders *attachmentstore.Store
 }
 
 // Register mounts the conversation routes under a session.
 func (c *ConversationsController) Register(r chi.Router) {
+	r.Patch("/sessions/{sessionId}/conversation/side-chats/{sideId}/label", c.renameSideChat)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/cancel", c.cancelSideQuestion)
+	r.Post("/sessions/{sessionId}/conversation/side-chats", c.createSideChat)
+	r.Get("/sessions/{sessionId}/conversation/side-chats", c.listSideChats)
+	r.Get("/sessions/{sessionId}/conversation/side-chats/{sideId}", c.sideSnapshot)
+	r.Get("/sessions/{sessionId}/conversation/side-chats/{sideId}/events", c.streamSideChat)
+	r.Delete("/sessions/{sessionId}/conversation/side-chats/{sideId}", c.closeSideChat)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/messages", c.sendSideQuestion)
+	r.Patch("/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}", c.editSideQuestion)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/retry", c.retrySideQuestion)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/interrupt", c.interruptSideQuestion)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/recover", c.recoverSideChat)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/compact", c.compactSideChat)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/approvals/{requestId}/resolve", c.resolveSideApproval)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/inputs/{requestId}/resolve", c.resolveSideInput)
+	r.Patch("/sessions/{sessionId}/conversation/side-chats/{sideId}/settings", c.sideSettings)
+	r.Get("/sessions/{sessionId}/conversation/side-chats/{sideId}/draft", c.getSideDraft)
+	r.Put("/sessions/{sessionId}/conversation/side-chats/{sideId}/draft", c.putSideDraft)
+	r.Post("/side-chats/launch/claim", c.claimSideLaunch)
+	r.Get("/side-chats/launch/state", c.exportSideLaunch)
+	r.Post("/side-chats/launch/state", c.recoverSideLaunch)
+	r.Post("/side-chats/launch/retire", c.retireSideLaunch)
+	r.Post("/sessions/{sessionId}/chat-view", c.setChatView)
 	r.Get("/sessions/{sessionId}/conversation", c.snapshot)
 	r.Post("/sessions/{sessionId}/conversation/messages", c.send)
 	r.Post("/sessions/{sessionId}/conversation/approvals/{requestId}/resolve", c.resolve)
 	r.Post("/sessions/{sessionId}/conversation/inputs/{requestId}/resolve", c.resolveInput)
 	r.Post("/sessions/{sessionId}/conversation/interrupt", c.interrupt)
 	r.Post("/sessions/{sessionId}/conversation/steer", c.steer)
+	r.Post("/sessions/{sessionId}/conversation/steer-or-send", c.steerOrSend)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/steer", c.promoteQueuedTurn)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/cancel", c.cancelQueuedTurn)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/queue/edit", c.editQueuedTurn)
@@ -89,6 +138,210 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/branches/{branchId}/activate", c.activateBranch)
 	r.Put("/sessions/{sessionId}/conversation/title", c.setTitle)
 	r.Post("/sessions/{sessionId}/conversation/mcp/reload", c.reloadMCPServers)
+	r.Post("/sessions/{sessionId}/renders", c.publishRender)
+	r.Post("/sessions/{sessionId}/renders/check", c.checkRender)
+	r.Get("/sessions/{sessionId}/renders/{renderId}", c.renderFile)
+	r.Post("/sessions/{sessionId}/renders/{renderId}/artifact", c.saveRenderArtifact)
+	r.Get("/reviews/{reviewId}/conversation/models", c.reviewModels)
+	r.Patch("/reviews/{reviewId}/conversation/settings", c.reviewSetSettings)
+	r.Get("/reviews/{reviewId}/conversation", c.reviewSnapshot)
+	r.Post("/reviews/{reviewId}/conversation/messages", c.reviewSend)
+	r.Post("/reviews/{reviewId}/conversation/approvals/{requestId}/resolve", c.reviewResolve)
+	r.Post("/reviews/{reviewId}/conversation/inputs/{requestId}/resolve", c.reviewResolveInput)
+	r.Post("/reviews/{reviewId}/conversation/interrupt", c.reviewInterrupt)
+}
+
+func (c *ConversationsController) setChatView(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(chatViewService)
+	if !ok {
+		apispec.NotImplemented(w, r, http.MethodPost, "/api/v1/sessions/{sessionId}/chat-view")
+		return
+	}
+	var req SetChatViewRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if req.ViewID == "" || len(req.ViewID) > 128 || strings.TrimSpace(req.ViewID) != req.ViewID {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_VIEW_ID_INVALID", "viewId must be a nonempty identifier of at most 128 bytes", nil)
+		return
+	}
+	if !req.activePresent {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_VIEW_ACTIVE_INVALID", "active must be true or false", nil)
+		return
+	}
+	if err := svc.SetChatView(r.Context(), sessionID(r), req.ViewID, req.Active); err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (c *ConversationsController) reviewService(w http.ResponseWriter, r *http.Request) (reviewerConversationService, bool) {
+	svc, ok := c.Svc.(reviewerConversationService)
+	if !ok {
+		apispec.NotImplemented(w, r, r.Method, r.URL.Path)
+	}
+	return svc, ok
+}
+
+func (c *ConversationsController) reviewModels(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.reviewService(w, r)
+	if !ok {
+		return
+	}
+	models, selected, err := svc.ModelsForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")))
+	if err != nil && !errors.Is(err, chatsvc.ErrModelsUnsupported) {
+		writeConversationError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, conversationModelsResponse(models, selected))
+}
+
+func (c *ConversationsController) reviewSetSettings(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.reviewService(w, r)
+	if !ok {
+		return
+	}
+	var req ConversationTurnSettingsPayload
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	approval := domain.PermissionMode(req.ApprovalMode)
+	if req.ApprovalMode != "" && !approval.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_APPROVAL_MODE_INVALID", "unknown approval mode", nil)
+		return
+	}
+	settings, err := svc.SetTurnSettingsForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")), domain.ConversationSettings{Model: req.Model, ReasoningEffort: req.ReasoningEffort, ApprovalMode: approval})
+	if errors.Is(err, chatsvc.ErrReviewerPermissionsFixed) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_REVIEW_PERMISSIONS_FIXED", err.Error(), nil)
+		return
+	}
+	if err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, turnSettingsPayload(settings))
+}
+
+func (c *ConversationsController) reviewSnapshot(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.reviewService(w, r)
+	if !ok {
+		return
+	}
+	before, err := optionalPositiveInt64(r.URL.Query().Get("beforeSequence"))
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CONVERSATION_CURSOR_INVALID", err.Error(), nil)
+		return
+	}
+	limit := int64(200)
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || limit < 1 || limit > 500 {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CONVERSATION_LIMIT_INVALID", "limit must be between 1 and 500", nil)
+			return
+		}
+	}
+	snapshot, err := svc.SnapshotPageForReview(r.Context(), chi.URLParam(r, "reviewId"), before, limit)
+	if err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, conversationSnapshotResponse(snapshot))
+}
+
+func (c *ConversationsController) reviewSend(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.reviewService(w, r)
+	if !ok {
+		return
+	}
+	var req SendConversationMessageRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if req.Text == "" && len(req.Attachments) == 0 && len(req.Resources) == 0 {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_MESSAGE_EMPTY", "message text is required", nil)
+		return
+	}
+	content, attachmentErr := conversationContent(req)
+	if attachmentErr != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", attachmentErr.code, attachmentErr.message, nil)
+		return
+	}
+	text := req.Text
+	if text == "" {
+		text = fmt.Sprintf("Attached %d item(s) for context", len(content))
+	}
+	turn, err := svc.SendForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")), ports.ChatUserMessage{Text: text, Content: content, ClientMessageID: req.ClientMessageID, Origin: domain.MessageOriginHuman})
+	if err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusAccepted, SendConversationMessageResponse{TurnID: turn.ID, ProviderTurnID: turn.ProviderTurnID, State: turn.State, Duplicate: turn.ID == ""})
+}
+
+func (c *ConversationsController) reviewResolve(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.reviewService(w, r)
+	if !ok {
+		return
+	}
+	var req ResolveConversationApprovalRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if req.DecisionID == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_DECISION_REQUIRED", "decisionId is required", nil)
+		return
+	}
+	requestID, ok := conversationRequestID(w, r)
+	if !ok {
+		return
+	}
+	if err := svc.ResolveForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")), requestID, ports.ChatDecision{ID: req.DecisionID}); err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (c *ConversationsController) reviewResolveInput(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.reviewService(w, r)
+	if !ok {
+		return
+	}
+	var req ResolveConversationInputRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	action := ports.ChatInputAction(req.Action)
+	if !action.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_INPUT_ACTION_INVALID", "action must be accept, decline, or cancel", nil)
+		return
+	}
+	if action != ports.ChatInputActionAccept && len(req.Content) > 0 {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_INPUT_CONTENT_INVALID", "content is only allowed with accept", nil)
+		return
+	}
+	requestID, ok := conversationRequestID(w, r)
+	if !ok {
+		return
+	}
+	if err := svc.ResolveInputForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId")), requestID, ports.ChatInputResponse{Action: action, Content: req.Content}); err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (c *ConversationsController) reviewInterrupt(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.reviewService(w, r)
+	if !ok {
+		return
+	}
+	if err := svc.InterruptForOwner(r.Context(), domain.ReviewConversationOwner(chi.URLParam(r, "reviewId"))); err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (c *ConversationsController) editMessage(w http.ResponseWriter, r *http.Request) {
@@ -560,7 +813,7 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	if req.Text == "" && len(req.Attachments) == 0 && len(req.Resources) == 0 {
+	if req.Text == "" && len(req.Attachments) == 0 && len(req.Resources) == 0 && len(req.Excerpts) == 0 {
 		// There is no keystroke concept in Chat mode: an empty body is a client
 		// bug, not a way to nudge the agent.
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
@@ -576,11 +829,23 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 	}
 	text := req.Text
 	if text == "" {
-		text = fmt.Sprintf("Attached %d item(s) for context", len(content))
+		if len(req.Excerpts) > 0 {
+			text = fmt.Sprintf("Use the attached %d chat excerpt(s) as context", len(req.Excerpts))
+		} else {
+			text = fmt.Sprintf("Attached %d item(s) for context", len(content))
+		}
+	}
+	excerpts := make([]ports.ChatExcerptReference, 0, len(req.Excerpts))
+	for _, excerpt := range req.Excerpts {
+		excerpts = append(excerpts, ports.ChatExcerptReference{
+			ConversationID: excerpt.ConversationID, MessageID: excerpt.MessageID,
+			Revision: excerpt.Revision, Text: excerpt.Text,
+		})
 	}
 	turn, err := c.Svc.Send(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), ports.ChatUserMessage{
 		Text:            text,
 		Content:         content,
+		Excerpts:        excerpts,
 		ClientMessageID: req.ClientMessageID,
 		Origin:          domain.MessageOriginHuman,
 	})
@@ -608,7 +873,7 @@ func conversationContent(req SendConversationMessageRequest) ([]ports.ChatConten
 			Data:     attachment.Data,
 		})
 	}
-	if _, err := decodeSpawnAttachments(spawnInputs); err != nil {
+	if _, err := decodeAttachments(spawnInputs, maxConversationImageBytes, maxConversationImagesBytes); err != nil {
 		return nil, err
 	}
 	content := make([]ports.ChatContent, 0, len(req.Attachments)+len(req.Resources))
@@ -731,7 +996,11 @@ func conversationRequestID(w http.ResponseWriter, r *http.Request) (string, bool
 }
 
 func decodeConversationBody(w http.ResponseWriter, r *http.Request, into any) bool {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxConversationBody))
+	return decodeConversationBodyLimit(w, r, into, maxConversationBody)
+}
+
+func decodeConversationBodyLimit(w http.ResponseWriter, r *http.Request, into any, limit int64) bool {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
 			"INVALID_BODY", "could not read request body", nil)
@@ -759,10 +1028,18 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 			"SESSION_MODE_MISMATCH",
 			"this session was created in Terminal UI mode and has no chat conversation", nil)
 
-	case errors.Is(err, chatsvc.ErrNoController):
+	case errors.Is(err, chatsvc.ErrNoController), errors.Is(err, chatsvc.ErrNotProvisioning):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_CONTROLLER_NOT_READY",
 			"the agent controller for this session is not running", nil)
+
+	case errors.Is(err, chatsvc.ErrExcerptInvalid):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"CHAT_EXCERPT_INVALID", err.Error(), nil)
+
+	case errors.Is(err, chatsvc.ErrExcerptStale):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_EXCERPT_STALE", err.Error(), nil)
 
 	case errors.Is(err, chatsvc.ErrControllerHandoff):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
@@ -791,6 +1068,10 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, domain.ErrNoConversationTurn):
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found",
 			"CHAT_TURN_NOT_FOUND", "that turn is not in this session's conversation", nil)
+
+	case errors.Is(err, domain.ErrClientMessageConflict):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_MESSAGE_IDEMPOTENCY_CONFLICT", "clientMessageId belongs to a different message", nil)
 
 	case errors.Is(err, chatsvc.ErrTurnRunning):
 		// Retryable, unlike every other refusal here: the same request works once
@@ -822,6 +1103,10 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, chatsvc.ErrRenameUnsupported):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_RENAME_UNSUPPORTED", "this agent's conversation carries no title", nil)
+
+	case errors.Is(err, chatsvc.ErrOrchestratorRename):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"ORCHESTRATOR_RENAME_UNSUPPORTED", "the project orchestrator cannot be renamed", nil)
 
 	case errors.Is(err, chatsvc.ErrMCPReloadUnsupported):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
@@ -935,16 +1220,20 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 
 	for _, msg := range s.Messages {
 		message := ConversationMessageResponse{
-			Kind:      "message",
-			ID:        msg.ID,
-			TurnID:    msg.TurnID,
-			Sequence:  msg.Sequence,
-			Revision:  msg.Revision,
-			Role:      string(msg.Role),
-			Origin:    string(msg.Origin),
-			Text:      msg.Text,
-			Streaming: msg.Streaming,
-			CreatedAt: msg.CreatedAt.UTC().Format(time.RFC3339),
+			Kind:              "message",
+			ID:                msg.ID,
+			TurnID:            msg.TurnID,
+			Sequence:          msg.Sequence,
+			Revision:          msg.Revision,
+			Role:              string(msg.Role),
+			Origin:            string(msg.Origin),
+			Text:              msg.Text,
+			SenderSessionID:   msg.SenderSessionID,
+			SenderProjectID:   msg.SenderProjectID,
+			SenderDisplayName: msg.SenderDisplayName,
+			ClientMessageID:   msg.ClientMessageID,
+			Streaming:         msg.Streaming,
+			CreatedAt:         msg.CreatedAt.UTC().Format(time.RFC3339),
 		}
 		message.Content, message.EditAvailable = conversationContentSummary(msg)
 		message.EditAvailable = message.EditAvailable && msg.Sequence > s.EditFloorSequence
@@ -1009,9 +1298,28 @@ func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationC
 		if name == "" && block.Type != "image" && block.Type != "resource" && block.Type != "resource_link" {
 			name = block.Type
 		}
-		summaries = append(summaries, ConversationContentSummaryResponse{
-			Type: block.Type, MIMEType: block.MIMEType, URI: block.URI, Name: name,
-		})
+		summary := ConversationContentSummaryResponse{Type: block.Type, MIMEType: block.MIMEType, Name: name}
+		if block.Type == "excerpt" {
+			// Excerpts written by current versions carry verified structured
+			// context. Older durable messages only have the excerpt resource URI
+			// and selected text; keep those navigable without exposing the
+			// internal URI in the public content summary.
+			summary.Name = "Chat excerpt"
+			if block.Excerpt != nil {
+				summary.Text = block.Excerpt.SelectedText
+				summary.SourceConversationID = block.Excerpt.Reference.ConversationID
+				summary.SourceMessageID = block.Excerpt.Reference.MessageID
+				summary.SourceRevision = block.Excerpt.Reference.Revision
+			} else {
+				summary.Text = block.Text
+				if strings.HasPrefix(block.URI, ports.ChatExcerptResourceURIPrefix) {
+					summary.SourceMessageID = strings.TrimPrefix(block.URI, ports.ChatExcerptResourceURIPrefix)
+				}
+			}
+		} else {
+			summary.URI = block.URI
+		}
+		summaries = append(summaries, summary)
 	}
 	return summaries, true
 }
@@ -1114,11 +1422,23 @@ func accountPayload(account *domain.ConversationAccount) *ConversationAccountPay
 	if account == nil {
 		return nil
 	}
+	state := account.AuthenticationState
+	if state == "" {
+		state = "unknown"
+		if account.ReauthRequiredAt != nil {
+			state = "required"
+		}
+	}
 	return &ConversationAccountPayload{
-		AuthMode:         account.AuthMode,
-		PlanLabel:        account.PlanLabel,
-		ReauthRequiredAt: optionalTimestamp(account.ReauthRequiredAt),
-		ReauthReason:     account.ReauthReason,
+		AuthenticationState:   state,
+		AuthVerifiedAt:        optionalTimestamp(account.AuthVerifiedAt),
+		LastAuthFailureAt:     optionalTimestamp(account.LastAuthFailureAt),
+		LastAuthFailureReason: account.LastAuthFailureReason,
+		AuthFailureID:         account.AuthFailureID,
+		AuthMode:              account.AuthMode,
+		PlanLabel:             account.PlanLabel,
+		ReauthRequiredAt:      optionalTimestamp(account.ReauthRequiredAt),
+		ReauthReason:          account.ReauthReason,
 	}
 }
 
@@ -1235,4 +1555,58 @@ func optionalTimestamp(t *time.Time) *string {
 	}
 	formatted := t.UTC().Format(time.RFC3339)
 	return &formatted
+}
+
+type sideChatConversationService interface {
+	SideChatNumbers(string, map[domain.SessionID]int) map[domain.SessionID]int
+	RenameSideChat(context.Context, domain.SessionID, string, string) error
+	CancelQueuedSideQuestion(context.Context, domain.SessionID, string, string) error
+	ListIndependentSideChats(context.Context, domain.SessionID) ([]domain.SideConversation, error)
+	CreateIndependentSideChat(context.Context, domain.SessionID, chatsvc.SideCreateRequest) (domain.SideConversation, error)
+	SideSnapshot(context.Context, domain.SessionID, string, time.Time, int) (domain.SideSnapshot, error)
+	SendSideQuestion(context.Context, domain.SessionID, string, ports.ChatUserMessage) (domain.SideTurn, error)
+	EditQueuedSideQuestion(context.Context, domain.SessionID, string, string, string) error
+	RetrySideQuestion(context.Context, domain.SessionID, string, string) error
+	RetrySideConnection(context.Context, domain.SessionID, string) error
+	UpdateSideSettings(context.Context, domain.SessionID, string, string, string) error
+	SaveSideDraft(context.Context, domain.SessionID, string, string) error
+	SideDraft(context.Context, domain.SessionID, string) (string, error)
+	InterruptSideQuestion(context.Context, domain.SessionID, string) error
+	CompactSideChat(context.Context, domain.SessionID, string) (ports.ChatCompactionResult, error)
+	ResolveSideApproval(context.Context, domain.SessionID, string, string, string) error
+	ResolveSideInput(context.Context, domain.SessionID, string, string, ports.ChatInputResponse) error
+	CloseIndependentSideChat(context.Context, domain.SessionID, string) error
+	ClaimSideChatLaunch(context.Context, string) error
+	ExportSideChatLaunch(context.Context, string) ([]chatsvc.SideRecoveryRecord, error)
+	RecoverSideChatLaunch(context.Context, string, []chatsvc.SideRecoveryRecord) error
+	RetireSideChatLaunch(context.Context, string) error
+	WatchSideChat(context.Context, domain.SessionID, string) (string, <-chan struct{}, func(), error)
+}
+
+func (c *ConversationsController) createSideChat(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/conversation/side-chats")
+		return
+	}
+	var req CreateConversationSideChatRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	svc, ok := c.sideService(w, r)
+	if !ok {
+		return
+	}
+
+	var ref *ports.ChatExcerptReference
+	if req.Reference != nil {
+		ref = &ports.ChatExcerptReference{ConversationID: req.Reference.ConversationID,
+			MessageID: req.Reference.MessageID, Revision: req.Reference.Revision, Text: req.Reference.Text}
+	}
+	side, err := svc.CreateIndependentSideChat(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")),
+		chatsvc.SideCreateRequest{IdempotencyKey: req.IdempotencyKey, ForceNew: req.ForceNew, Label: req.Label, Reference: ref})
+	if err != nil {
+		writeSideChatError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusCreated, CreateConversationSideChatResponse{Side: side})
 }

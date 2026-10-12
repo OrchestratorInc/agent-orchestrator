@@ -90,6 +90,7 @@ type conversation struct {
 
 	mu                 sync.Mutex
 	sessionID          string
+	reportedSessionID  string
 	capabilities       ports.ChatCapabilities
 	prepared           *preparedTurn
 	activeTurn         string
@@ -124,6 +125,18 @@ type conversation struct {
 	detaching          bool
 	terminalEventID    string
 	ignorePromptResult bool
+	// onAuthRejected corrects cached auth state when the provider rejects the
+	// credential mid-turn. Nil when the binding does not supply one.
+	onAuthRejected        func()
+	promptResponseFailure func(acpsdk.PromptResponse) error
+	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
+	// preamble is standing context attached to the first prompt that actually
+	// reaches the provider. It is the delivery channel for agents that accept no
+	// system-prompt launch flag and ignore session/new _meta but do execute
+	// prompt content blocks. It is consumed in StartDeferredTurn, not SendTurn,
+	// so a rejected or discarded turn leaves it armed for the next one.
+	preamble      []acpsdk.ContentBlock
+	preambleSpent bool
 
 	contextTokens     int64
 	contextWindow     int64
@@ -142,6 +155,11 @@ type conversation struct {
 	historyEvents []ports.ChatEvent
 	historyErr    error
 	historyLoaded bool
+	// replayMu protects only the replay inbox and its transition to live
+	// delivery; normalization of replay batches does not hold it.
+	replayMu      sync.Mutex
+	replaying     bool
+	replayUpdates []acpsdk.SessionNotification
 }
 
 var _ ports.ChatConversation = (*conversation)(nil)
@@ -153,6 +171,7 @@ var _ ports.ChatSteerer = (*conversation)(nil)
 var _ ports.ChatInputResponder = (*conversation)(nil)
 var _ ports.ChatProviderPreserver = (*conversation)(nil)
 var _ ports.ChatProviderTerminator = (*conversation)(nil)
+var _ ports.ChatProviderHibernator = (*conversation)(nil)
 var _ ports.ChatLiveReconnector = (*conversation)(nil)
 var _ ports.ChatLiveReconnectActivator = (*conversation)(nil)
 var _ ports.ChatProviderEventAcknowledger = (*conversation)(nil)
@@ -269,6 +288,7 @@ func (c *conversation) start(
 ) {
 	c.mu.Lock()
 	c.sessionID = sessionID
+	c.reportedSessionID = sessionID
 	c.capabilities = capabilities
 	// Preserve config options received via session/update during session/new.
 	// An agent may send config_option_update before start() runs; only overwrite
@@ -299,7 +319,25 @@ func (c *conversation) start(
 func (c *conversation) ProviderConversationID() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.sessionID
+	return c.reportedSessionID
+}
+
+func (c *conversation) setReportedProviderConversationID(sessionID string) {
+	c.mu.Lock()
+	c.reportedSessionID = sessionID
+	c.mu.Unlock()
+}
+
+// setSessionPreamble arms standing context for the next prompt that actually
+// reaches the provider. Any earlier preamble is dropped: the newest launch
+// context is the one that should be delivered, which is how a recomputed system
+// prompt replaces the original. It is consumed in StartDeferredTurn so a turn
+// that never starts leaves it armed.
+func (c *conversation) setSessionPreamble(blocks []acpsdk.ContentBlock) {
+	c.mu.Lock()
+	c.preamble = blocks
+	c.preambleSpent = len(blocks) == 0
+	c.mu.Unlock()
 }
 
 func (c *conversation) Capabilities() ports.ChatCapabilities {
@@ -449,8 +487,57 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		}
 		c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
 	}
+	var options []SessionOption
+	if optionsFor != nil {
+		options = optionsFor(settings)
+	}
+	applyOption := func(option SessionOption) error {
+		if option.ID == "" || option.Value == "" {
+			return nil
+		}
+		if (option.ID == "model" && legacyModel) || (option.ID == "mode" && legacyMode) {
+			return nil
+		}
+		resp, err := c.conn.SetSessionConfigOption(ctx, acpsdk.SetSessionConfigOptionRequest{
+			ValueId: &acpsdk.SetSessionConfigOptionValueId{
+				SessionId: acpsdk.SessionId(sessionID), ConfigId: acpsdk.SessionConfigId(option.ID),
+				Value: acpsdk.SessionConfigValueId(option.Value),
+			},
+		})
+		if err != nil {
+			if isACPMethodNotFound(err) {
+				return fmt.Errorf("%w: session/set_config_option %q", ErrACPSetterUnsupported, option.ID)
+			}
+			return fmt.Errorf("set ACP session option %q: %w", option.ID, err)
+		}
+		c.replaceConfigOptions(resp.ConfigOptions)
+		return nil
+	}
+	// A model switch may change the modes an ACP agent offers. Apply a modern
+	// model config option before session/set_mode so the requested mode is
+	// validated against the selected model rather than the session's default.
+	for _, option := range options {
+		if option.ID == "model" {
+			if err := applyOption(option); err != nil {
+				return err
+			}
+		}
+	}
+	effectiveApproval := settings.Approval
 	if modeFor != nil {
 		if mode := modeFor(settings.Approval); mode != "" {
+			// Some ACP agents rebuild their permission modes after a model switch.
+			// Claude, for example, removes Auto for Haiku and clamps itself back to
+			// Default. Respect that authoritative catalog instead of immediately
+			// reapplying AO's default Auto choice and aborting session creation.
+			if ports.NormalizePermissionMode(settings.Approval) == ports.PermissionModeAuto {
+				if offered, known := c.configOptionOffers("mode", mode); known && !offered {
+					if fallbackOffered, _ := c.configOptionOffers("mode", "default"); fallbackOffered {
+						mode = "default"
+						effectiveApproval = ports.PermissionModeDefault
+					}
+				}
+			}
 			if _, err := c.conn.SetSessionMode(ctx, acpsdk.SetSessionModeRequest{
 				SessionId: acpsdk.SessionId(sessionID), ModeId: acpsdk.SessionModeId(mode),
 			}); err != nil {
@@ -461,32 +548,16 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			}
 		}
 	}
-	if optionsFor != nil {
-		for _, option := range optionsFor(settings) {
-			if option.ID == "" || option.Value == "" {
-				continue
+	for _, option := range options {
+		if option.ID != "model" {
+			if err := applyOption(option); err != nil {
+				return err
 			}
-			if (option.ID == "model" && legacyModel) || (option.ID == "mode" && legacyMode) {
-				continue
-			}
-			resp, err := c.conn.SetSessionConfigOption(ctx, acpsdk.SetSessionConfigOptionRequest{
-				ValueId: &acpsdk.SetSessionConfigOptionValueId{
-					SessionId: acpsdk.SessionId(sessionID), ConfigId: acpsdk.SessionConfigId(option.ID),
-					Value: acpsdk.SessionConfigValueId(option.Value),
-				},
-			})
-			if err != nil {
-				if isACPMethodNotFound(err) {
-					return fmt.Errorf("%w: session/set_config_option %q", ErrACPSetterUnsupported, option.ID)
-				}
-				return fmt.Errorf("set ACP session option %q: %w", option.ID, err)
-			}
-			c.replaceConfigOptions(resp.ConfigOptions)
 		}
 	}
 	if settings.Approval != "" {
 		c.mu.Lock()
-		c.permissionMode = ports.NormalizePermissionMode(settings.Approval)
+		c.permissionMode = ports.NormalizePermissionMode(effectiveApproval)
 		c.mu.Unlock()
 	}
 	return nil
@@ -504,6 +575,17 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	}
 	turn := *c.prepared
 	c.prepared = nil
+	// Standing context leads the first prompt so the provider reads it as
+	// context rather than as part of what the user asked. It is consumed here,
+	// not in SendTurn, because this is the first point at which a prompt is
+	// guaranteed to reach the provider: settings validation, a busy conversation
+	// and a discarded prepared turn all fail in SendTurn, and spending the
+	// preamble on any of them would silently drop AO's instructions from the
+	// session's first real turn.
+	if !c.preambleSpent && len(c.preamble) > 0 {
+		turn.prompt = append(append([]acpsdk.ContentBlock(nil), c.preamble...), turn.prompt...)
+		c.preambleSpent = true
+	}
 	c.activeTurn = turn.id
 	c.settlingTurn = ""
 	turnCtx, cancel := context.WithCancel(context.Background())
@@ -574,21 +656,22 @@ func (c *conversation) finishPrompt(
 		}
 	}
 	var state domain.TurnState
+	var turnErr error
 	if err != nil {
 		if interruptedLocally || errors.Is(err, context.Canceled) {
 			state = domain.TurnStateInterrupted
 		} else {
 			state = domain.TurnStateFailed
-			if isACPAuthRequired(err) {
-				c.emit(ports.ChatEvent{Kind: ports.ChatEventAccountChanged, Account: &ports.ChatAccount{
-					ReauthRequired: true, ReauthReason: "Provider authentication expired",
-				}})
-				err = normalizeACPError("ACP session/prompt", err)
-			}
-			c.emit(ports.ChatEvent{Kind: ports.ChatEventError, ProviderTurnID: turnID, Err: err})
+			turnErr = normalizeACPError("ACP session/prompt", err)
 		}
 	} else {
 		state = turnState(resp.StopReason)
+		if c.promptResponseFailure != nil && state != domain.TurnStateInterrupted && !interruptedLocally {
+			if failure := c.promptResponseFailure(resp); failure != nil {
+				state = domain.TurnStateFailed
+				turnErr = failure
+			}
+		}
 		if resp.Usage != nil {
 			cached := 0
 			if resp.Usage.CachedReadTokens != nil {
@@ -604,6 +687,19 @@ func (c *conversation) finishPrompt(
 			}})
 		}
 	}
+	if errors.Is(turnErr, ports.ErrChatAuthRequired) {
+		// The provider has just contradicted whatever the readiness cache holds.
+		// Correct it for both request errors and structured prompt failures.
+		if c.onAuthRejected != nil {
+			c.onAuthRejected()
+		}
+	} else if turnErr == nil && state == domain.TurnStateCompleted {
+		// A successful provider turn is affirmative recovery evidence, including
+		// after a daemon restart where this conversation has no in-memory memory
+		// of the earlier rejection. The projector ignores this when no durable
+		// reauthentication demand exists.
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventAccountChanged, Account: &ports.ChatAccount{ReauthRecovered: true}})
+	}
 	if isCompaction {
 		if state == domain.TurnStateCompleted {
 			c.settleCompaction(turnID)
@@ -615,15 +711,24 @@ func (c *conversation) finishPrompt(
 			c.mu.Unlock()
 		}
 	}
-	c.mu.Lock()
-	c.terminalEventID = eventID
-	c.mu.Unlock()
+	// Only a durable host receipt replaces the outstanding one. A host-local
+	// rejection carries no event ID; erasing the receipt here would make the
+	// controller's later ACK of that receipt a no-op and leave the host refusing
+	// every prompt until restart.
+	if eventID != "" {
+		c.mu.Lock()
+		c.terminalEventID = eventID
+		c.mu.Unlock()
+	}
 	c.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderEventID: eventID,
-		ProviderTurnID: turnID, TurnState: state,
+		ProviderTurnID: turnID, TurnState: state, Err: turnErr,
 	})
-	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady})
-
+	// Release the turn before announcing readiness, not after. A consumer that
+	// reacts to ChatControllerReady by sending the next turn — AO's own queue
+	// drain does exactly that — would otherwise race this unlock and be refused
+	// with "already has a turn in flight", depending purely on which goroutine
+	// the scheduler picks. Ready has to mean ready.
 	c.mu.Lock()
 	if c.activeTurn == turnID {
 		c.activeTurn = ""
@@ -635,6 +740,7 @@ func (c *conversation) finishPrompt(
 		}
 	}
 	c.mu.Unlock()
+	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady})
 }
 
 func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult, error) {
@@ -869,16 +975,32 @@ func (c *conversation) discard() {
 }
 
 func (c *conversation) Close() error {
-	return c.closeProvider(false)
+	return c.closeProvider(false, false)
 }
 
 // Terminate destroys the provider host. Close deliberately only detaches during
 // daemon shutdown or updater replacement.
 func (c *conversation) Terminate() error {
-	return c.closeProvider(true)
+	return c.closeProvider(true, true)
 }
 
-func (c *conversation) closeProvider(terminate bool) error {
+func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
+	if c.hibernationCheck == nil {
+		return true, nil
+	}
+	c.mu.Lock()
+	id := c.sessionID
+	c.mu.Unlock()
+	return c.hibernationCheck(ctx, c.conn, acpsdk.SessionId(id))
+}
+
+// Hibernate releases the bridge and its provider without closing the native
+// ACP session. session/close can delete the resume state on some agents.
+func (c *conversation) Hibernate() error {
+	return c.closeProvider(true, false)
+}
+
+func (c *conversation) closeProvider(terminate, closeSession bool) error {
 	var closeErr error
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
@@ -897,7 +1019,7 @@ func (c *conversation) closeProvider(terminate bool) error {
 		}
 		c.failPendingPermissions()
 		c.failPendingInputs()
-		if sessionID != "" {
+		if closeSession && sessionID != "" {
 			closeCtx, cancelClose := context.WithTimeout(context.Background(), 2*time.Second)
 			_, _ = c.conn.CloseSession(closeCtx, acpsdk.CloseSessionRequest{SessionId: acpsdk.SessionId(sessionID)})
 			cancelClose()

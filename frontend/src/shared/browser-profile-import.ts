@@ -26,6 +26,11 @@ export type BrowserImportSource = {
 	cookieSupport: BrowserImportCookieSupport;
 	cookieSupportReason: BrowserImportCookieSupportReason;
 	historySupport: true;
+	profilesDeferred?: true;
+};
+
+export type BrowserImportDiscoveryRequest = {
+	sourceId?: string;
 };
 
 export type BrowserImportDiscovery = {
@@ -79,7 +84,7 @@ export type BrowserImportResult = {
 
 export type BrowserImportProgress = {
 	requestId: string;
-	phase: "preparing" | "reading" | "importing";
+	phase: "preparing" | "permission" | "reading" | "importing";
 	completed: number;
 	total: number;
 };

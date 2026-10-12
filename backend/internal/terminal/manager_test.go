@@ -750,3 +750,23 @@ func TestEnqueueDataUnblocksOnConnClose(t *testing.T) {
 		t.Fatal("cancelling the connection must release a waiting data frame")
 	}
 }
+
+// A shell that starts on its first sized attach must still start when only a
+// secondary viewer (the phone) has reported a grid, including next to a primary
+// that attached without one (a desktop tab parked before it measured).
+func TestLargestGridFallsBackToSecondaryWhenNoPrimaryHasASize(t *testing.T) {
+	phone := &connState{}
+	parkedDesktop := &connState{}
+	members := map[*connState]*termMember{
+		phone:         {cols: 45, rows: 30, primary: false},
+		parkedDesktop: {cols: 0, rows: 0, primary: true},
+	}
+	if cols, rows := largestGrid(members); cols != 45 || rows != 30 {
+		t.Fatalf("largestGrid = %dx%d, want the phone's 45x30", cols, rows)
+	}
+
+	members[parkedDesktop].cols, members[parkedDesktop].rows = 151, 38
+	if cols, rows := largestGrid(members); cols != 151 || rows != 38 {
+		t.Fatalf("largestGrid once the desktop measures = %dx%d, want 151x38", cols, rows)
+	}
+}

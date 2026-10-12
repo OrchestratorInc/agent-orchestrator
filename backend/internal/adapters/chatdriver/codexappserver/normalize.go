@@ -153,8 +153,8 @@ func normalizeNotification(n notification, now time.Time) []ports.ChatEvent {
 			ProviderConversationID: p.ThreadID,
 			TurnState:              turnStateFrom(string(p.Turn.Status)),
 		}
-		if p.Turn.Error != nil && p.Turn.Error.Message != "" {
-			ev.Err = fmt.Errorf("%s", p.Turn.Error.Message)
+		if p.Turn.Error != nil {
+			ev.Err = codexProviderFailure(*p.Turn.Error)
 		}
 		return []ports.ChatEvent{ev}
 
@@ -646,6 +646,28 @@ func normalizeNotification(n notification, now time.Time) []ports.ChatEvent {
 		}}
 
 	case codexproto.MethodError:
+		var p codexproto.ErrorNotification
+		if err := json.Unmarshal(n.Params, &p); err == nil &&
+			(strings.TrimSpace(p.Error.Message) != "" || p.Error.AdditionalDetails != nil) {
+			failure := codexProviderFailure(p.Error)
+			if failure == nil {
+				return nil
+			}
+			if p.WillRetry && p.TurnID != "" {
+				return []ports.ChatEvent{{
+					Kind: ports.ChatEventActivityStarted, ProviderConversationID: p.ThreadID,
+					ProviderTurnID: p.TurnID, ProviderItemID: "codex-retry:" + p.ThreadID + ":" + p.TurnID,
+					ActivityKind: domain.ActivityKindSystem, ActivityStatus: domain.ActivityStatusRunning,
+					Summary: failure.Error(), Detail: json.RawMessage(`{"event":"provider.failure"}`),
+				}}
+			}
+			return []ports.ChatEvent{{
+				Kind:                   ports.ChatEventError,
+				ProviderTurnID:         p.TurnID,
+				ProviderConversationID: p.ThreadID,
+				Err:                    failure,
+			}}
+		}
 		return []ports.ChatEvent{{
 			Kind: ports.ChatEventError,
 			Err:  fmt.Errorf("provider error: %s", truncateForLog(n.Params)),
@@ -670,6 +692,23 @@ func normalizeNotification(n notification, now time.Time) []ports.ChatEvent {
 		//     from a transcript delta would be a feature nobody asked for.
 		return nil
 	}
+}
+
+// codexErrorInfo is metadata, not display copy. Only an explicit unauthorized
+// reason invokes the existing authentication path; other errors remain readable.
+func codexProviderFailure(turnErr codexproto.TurnError) error {
+	detail := ""
+	if turnErr.AdditionalDetails != nil {
+		detail = *turnErr.AdditionalDetails
+	}
+	var cause error
+	if turnErr.CodexErrorInfo != nil && string(*turnErr.CodexErrorInfo) == `"unauthorized"` {
+		cause = ports.ErrChatAuthRequired
+	}
+	if strings.TrimSpace(turnErr.Message) == "" && strings.TrimSpace(detail) == "" && cause == nil {
+		return nil
+	}
+	return ports.NewChatProviderFailure(turnErr.Message, detail, cause)
 }
 
 // turnIDFallback reads a top-level turnId, which some builds send instead of
@@ -1166,10 +1205,10 @@ func activityDetail(it threadItem) []byte {
 		// What the tool was called WITH. A tool call with no arguments shown is a
 		// claim the user cannot check: "called search" says nothing about what was
 		// searched for. Capped, because a tool can be handed a whole file.
-		detail["arguments"] = truncatedJSON(it.Arguments)
+		detail["arguments"] = commanddetail.TruncatedJSON(it.Arguments)
 	}
 	if len(it.Result) > 0 && !isJSONNull(it.Result) {
-		detail["result"] = truncatedJSON(it.Result)
+		detail["result"] = commanddetail.TruncatedJSON(it.Result)
 	}
 	if it.Error != nil && it.Error.Message != "" {
 		detail["error"] = it.Error.Message
@@ -1187,27 +1226,6 @@ func activityDetail(it threadItem) []byte {
 		return nil
 	}
 	return encodeDetail(detail)
-}
-
-// maxToolPayloadChars caps one tool call's arguments or result.
-//
-// A tool can be handed a whole file and can hand one back, and this payload is
-// re-read by every conversation snapshot poll. 8K is well past what a card shows
-// and far short of what an unbounded result would cost; over the cap the JSON is
-// replaced by a marker rather than cut, because half a JSON document is not JSON
-// and a client that tried to parse it would fail on valid provider data.
-const maxToolPayloadChars = 8 * 1024
-
-// truncatedJSON keeps a payload only while it is small enough to be worth keeping.
-func truncatedJSON(raw json.RawMessage) any {
-	if len(raw) <= maxToolPayloadChars {
-		return raw
-	}
-	return map[string]any{
-		"truncated": true,
-		"bytes":     len(raw),
-		"note":      "payload exceeded the daemon's tool payload cap and was not stored",
-	}
 }
 
 func isJSONNull(raw json.RawMessage) bool {

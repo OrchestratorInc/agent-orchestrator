@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/aoagents/agent-orchestrator/cloud/internal/notificationoutbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
@@ -20,6 +21,46 @@ import (
 type wsDialer struct {
 	url   string
 	dials atomic.Int64
+}
+
+func TestDeliverNotificationWaitsForControlPlaneAcknowledgement(t *testing.T) {
+	received := make(chan worker.TerminalStreamFrame, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		frame := readFrame(t, conn)
+		received <- frame
+		streamFrame(t, conn, worker.TerminalStreamFrame{Type: "notification_ack", EventID: frame.EventID})
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, server.URL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	stream := &terminalStream{conn: conn, ctx: ctx}
+	terminal := &terminalProcess{stream: atomic.Pointer[terminalStream]{}}
+	terminal.stream.Store(stream)
+	supervisor := &Supervisor{notificationStreams: map[*terminalStream]struct{}{stream: {}}}
+	// The production reader owns socket reads. Model just its ACK branch here.
+	go func() {
+		frame := readFrame(t, conn)
+		stream.acknowledgeNotification(frame.EventID, true)
+	}()
+	err = supervisor.DeliverNotification(ctx, notificationoutbox.Event{
+		EventID: "evt-1", EventType: "needs_input", OccurredAt: time.Now().UTC(), Payload: []byte(`{"message":"choose"}`),
+	})
+	if err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	frame := <-received
+	if frame.Type != "notification" || frame.EventID != "evt-1" || frame.EventType != "needs_input" {
+		t.Fatalf("unexpected frame: %+v", frame)
+	}
 }
 
 func (d *wsDialer) DialTerminalStream(
@@ -125,21 +166,21 @@ func TestSendOutputPrefersStreamAndFallsBackWhenBroken(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	stream := &terminalStream{conn: conn, ctx: ctx}
-	if !stream.sendOutput([]byte("hello")) {
+	if !stream.sendOutput(1, []byte("hello")) {
 		t.Fatal("healthy stream refused output")
 	}
 	frame := <-received
-	if frame.Type != "output" || string(frame.Data) != "hello" {
+	if frame.Type != "output" || frame.ID != 1 || string(frame.Data) != "hello" {
 		t.Fatalf("server got %+v", frame)
 	}
 	// Once the socket is gone (in production the read loop notices first and
 	// unsets the terminal's stream pointer), sends must fail so the copy loop
 	// falls back to the HTTP publish path — and stay failed thereafter.
 	_ = conn.CloseNow()
-	if stream.sendOutput([]byte("again")) {
+	if stream.sendOutput(2, []byte("again")) {
 		t.Fatal("closed stream accepted output")
 	}
-	if stream.sendOutput([]byte("still")) {
+	if stream.sendOutput(3, []byte("still")) {
 		t.Fatal("retired stream accepted output")
 	}
 }

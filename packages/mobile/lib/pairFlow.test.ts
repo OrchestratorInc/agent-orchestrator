@@ -11,7 +11,7 @@ vi.mock("expo-secure-store", () => ({
 
 import type { Endpoint } from "./endpoints";
 import { pairFromCode } from "./pairFlow";
-import { encodePairingCode } from "./pairingCode";
+import { encodePairingCode, parsePairingCode } from "./pairingCode";
 
 const lan: Endpoint = { kind: "lan", host: "192.168.1.42", port: 3011, secure: false };
 const tunnel: Endpoint = { kind: "tunnel", host: "abc.trycloudflare.com", port: 443, secure: true };
@@ -28,12 +28,58 @@ const code = encodePairingCode({
 const deps = (over: Record<string, unknown> = {}) => ({
 	race: vi.fn(async () => ({ ok: true as const, endpoint: lan, hostId: "h_paired" })),
 	verify: vi.fn(async () => {}),
+	chooseName: vi.fn(async (suggested: string) => suggested),
 	saveHost: vi.fn(async () => {}),
 	setActiveHost: vi.fn(async () => {}),
 	...over,
 });
 
 describe("pairFromCode", () => {
+	it("requires a confirmed human-readable name before saving a new machine", async () => {
+		const d = deps({ chooseName: vi.fn(async () => " Studio Mac ") });
+
+		await pairFromCode(`aomobile://pair#${code}`, d);
+
+		expect(d.chooseName).toHaveBeenCalledWith("prasad-mbp");
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ name: "Studio Mac" }));
+	});
+
+	it("stores nothing when machine naming is cancelled", async () => {
+		const d = deps({ chooseName: vi.fn(async () => null) });
+
+		const got = await pairFromCode(`aomobile://pair#${code}`, d);
+
+		expect(got).toEqual({ ok: false, reason: "cancelled" });
+		expect(d.saveHost).not.toHaveBeenCalled();
+		expect(d.setActiveHost).not.toHaveBeenCalled();
+	});
+
+	it("preserves the saved name when repairing the expected machine", async () => {
+		const d = deps();
+
+		await pairFromCode(`aomobile://pair#${code}`, d, { repairHost: { id: "h_paired", name: "Prod" } });
+
+		expect(d.chooseName).not.toHaveBeenCalled();
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ id: "h_paired", name: "Prod", token: "pw" }));
+	});
+
+	it("preserves the local appearance when repairing the expected machine", async () => {
+		const d = deps();
+		const appearance = { symbol: "laptop" as const };
+		await pairFromCode(`aomobile://pair#${code}`, d, { repairHost: { id: "h_paired", name: "Prod", appearance } });
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ appearance }));
+	});
+
+	it("rejects a different machine before probing during repair", async () => {
+		const d = deps();
+
+		const got = await pairFromCode(`aomobile://pair#${code}`, d, { repairHost: { id: "h_other", name: "Dev" } });
+
+		expect(got).toEqual({ ok: false, reason: "wrong-machine" });
+		expect(d.race).not.toHaveBeenCalled();
+		expect(d.saveHost).not.toHaveBeenCalled();
+	});
+
 	it("stores the machine with every endpoint the code carried", async () => {
 		const d = deps();
 		const got = await pairFromCode(`aomobile://pair#${code}`, d);
@@ -136,5 +182,29 @@ describe("pairFromCode reasons", () => {
 		const got = await pairFromCode("hello world", deps());
 		expect(got.ok).toBe(false);
 		if (!got.ok) expect(got.reason).toBe("not-ao-qr");
+	});
+
+	it("preserves endpoint information when race fails for error reporting", async () => {
+		const d = deps({ race: vi.fn(async () => ({ ok: false as const, reason: "none-reachable" as const })) });
+		const got = await pairFromCode(`aomobile://pair#${code}`, d);
+
+		expect(got.ok).toBe(false);
+		if (!got.ok) {
+			expect(got.reason).toBe("none-reachable");
+		}
+	});
+
+	it("makes parsed endpoints available for error reporting in the UI layer", () => {
+		// Verify that parsePairingCode correctly extracts endpoints that can be
+		// used in error messages when the race fails. This is the contract that
+		// pair.tsx relies on when constructing error targets.
+		const parsed = parsePairingCode(`aomobile://pair#${code}`);
+		expect(parsed).not.toBeNull();
+		expect(parsed?.endpoints).toHaveLength(2);
+		expect(parsed?.endpoints[0]).toEqual(lan);
+		expect(parsed?.endpoints[1]).toEqual(tunnel);
+		// The UI extracts the first endpoint for error reporting: host:port
+		expect(parsed?.endpoints[0].host).toBe("192.168.1.42");
+		expect(parsed?.endpoints[0].port).toBe(3011);
 	});
 });

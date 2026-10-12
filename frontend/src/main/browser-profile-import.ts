@@ -8,6 +8,8 @@ import {
 	readFile,
 	readdir,
 	realpath,
+	rename,
+	rmdir,
 	rm,
 	stat,
 } from "node:fs/promises";
@@ -23,6 +25,7 @@ import {
 	BROWSER_IMPORT_MAX_SOURCE_PROFILES,
 	type BrowserImportCookieSupportReason,
 	type BrowserImportDiscovery,
+	type BrowserImportDiscoveryRequest,
 	type BrowserImportProgress,
 	type BrowserImportRequest,
 	type BrowserImportResult,
@@ -45,6 +48,7 @@ const SOURCE_FILE_MAX_BYTES = 256 * 1024 * 1024;
 const SOURCE_SIDECAR_MAX_BYTES = 64 * 1024 * 1024;
 const IMPORT_TOTAL_MAX_BYTES = 512 * 1024 * 1024;
 const LOCAL_STATE_MAX_BYTES = 4 * 1024 * 1024;
+const STAGING_STALE_AGE_MS = 24 * 60 * 60 * 1_000;
 const SOURCE_ID_PATTERN = /^[0-9a-f]{32}$/;
 
 type BrowserFamily = "chromium" | "firefox" | "safari";
@@ -77,6 +81,11 @@ type InternalSource = {
 	descriptor: BrowserDescriptor;
 	root: string;
 	profiles: InternalSourceProfile[];
+};
+
+type InternalDiscoveryOptions = {
+	sourceId?: string;
+	includeProtectedSource?: boolean;
 };
 
 type ImportedCookie = CookiesSetDetails & {
@@ -261,6 +270,32 @@ async function existingRealDirectory(candidate: string, throwAccessDenied = fals
 	}
 }
 
+async function removeStaleStagingDirectories(root: string): Promise<void> {
+	const entries = await readdir(root, { withFileTypes: true }).catch((error) => {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+		throw error;
+	});
+	const cutoff = Date.now() - STAGING_STALE_AGE_MS;
+	for (const entry of entries) {
+		if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+		const directory = path.join(root, entry.name);
+		try {
+			if ((await lstat(directory)).mtimeMs < cutoff) await rm(directory, { recursive: true, force: true });
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
+}
+
+async function removeEmptyDirectory(directory: string): Promise<void> {
+	try {
+		await rmdir(directory);
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST") throw error;
+	}
+}
+
 function isAccessDenied(error: unknown): boolean {
 	const code = (error as NodeJS.ErrnoException | undefined)?.code;
 	return code === "EACCES" || code === "EPERM";
@@ -427,6 +462,7 @@ async function readSafariProfileNames(root: string, relativeDatabase: string, st
 		// TCC may block SafariTabs.db. UUID directory discovery still works.
 	} finally {
 		await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+		await removeEmptyDirectory(stagingRoot);
 	}
 	return names;
 }
@@ -469,6 +505,7 @@ function cookieCapability(
 export class BrowserProfileImportService {
 	private readonly context: DiscoveryContext;
 	private readonly now: () => Date;
+	private readonly stagingInstanceId = randomUUID();
 	private activeImport: Promise<BrowserImportResult> | null = null;
 	private activeController: AbortController | null = null;
 	private disposePromise: Promise<void> | null = null;
@@ -486,7 +523,8 @@ export class BrowserProfileImportService {
 	async initialize(): Promise<void> {
 		if (this.disposed) throw new Error("Browser profile import is unavailable.");
 		if (this.activeImport) throw new Error("Another browser import is already running.");
-		await rm(this.stagingRoot(), { recursive: true, force: true });
+		await removeStaleStagingDirectories(this.stagingBase());
+		await removeEmptyDirectory(this.stagingBase());
 	}
 
 	dispose(): Promise<void> {
@@ -497,26 +535,60 @@ export class BrowserProfileImportService {
 		this.disposePromise = (async () => {
 			if (activeImport) await activeImport.catch(() => undefined);
 			await rm(this.stagingRoot(), { recursive: true, force: true }).catch(() => undefined);
+			await removeEmptyDirectory(this.stagingBase());
 		})();
 		return this.disposePromise;
 	}
 
-	private stagingRoot(): string {
+	private stagingBase(): string {
 		return path.join(this.options.stateDir, "browser-import-staging");
 	}
 
-	async discover(): Promise<BrowserImportDiscovery> {
+	private stagingRoot(): string {
+		return path.join(this.stagingBase(), this.stagingInstanceId);
+	}
+
+	async discover(request: BrowserImportDiscoveryRequest = {}): Promise<BrowserImportDiscovery> {
 		const warnings: NonNullable<BrowserImportDiscovery["warnings"]> = [];
-		const sources = await this.discoverInternal(warnings);
+		const sourceId = typeof request.sourceId === "string" && SOURCE_ID_PATTERN.test(request.sourceId)
+			? request.sourceId
+			: undefined;
+		const sources = await this.discoverInternal(warnings, {
+			...(sourceId ? { sourceId, includeProtectedSource: true } : {}),
+		});
 		return { sources: sources.map((source) => source.public), ...(warnings.length ? { warnings } : {}) };
 	}
 
-	private async discoverInternal(warnings: NonNullable<BrowserImportDiscovery["warnings"]> = []): Promise<InternalSource[]> {
+	private async discoverInternal(
+		warnings: NonNullable<BrowserImportDiscovery["warnings"]> = [],
+		options: InternalDiscoveryOptions = {},
+	): Promise<InternalSource[]> {
 		const sources: InternalSource[] = [];
 		for (const descriptor of DESCRIPTORS) {
 			for (const candidate of descriptor.roots(this.context)) {
 				const root = await existingRealDirectory(candidate);
 				if (!root) continue;
+				const publicSourceId = opaqueSourceId(`${descriptor.id}:source`, root);
+				if (options.sourceId && publicSourceId !== options.sourceId) continue;
+				const capability = cookieCapability(descriptor.family, this.context.platform);
+				if (descriptor.family === "safari" && !options.includeProtectedSource) {
+					sources.push({
+						descriptor,
+						root,
+						profiles: [],
+						public: {
+							id: publicSourceId,
+							name: descriptor.name,
+							family: descriptor.family,
+							profiles: [],
+							profilesDeferred: true,
+							cookieSupport: capability.support,
+							cookieSupportReason: capability.reason,
+							historySupport: true,
+						},
+					});
+					break;
+				}
 				let profiles: InternalSourceProfile[];
 				try {
 					profiles = descriptor.family === "chromium"
@@ -530,13 +602,12 @@ export class BrowserProfileImportService {
 					continue;
 				}
 				if (profiles.length === 0) continue;
-				const capability = cookieCapability(descriptor.family, this.context.platform);
 				sources.push({
 					descriptor,
 					root,
 					profiles,
 					public: {
-						id: opaqueSourceId(`${descriptor.id}:source`, root),
+						id: publicSourceId,
 						name: descriptor.name,
 						family: descriptor.family,
 						profiles: profiles.map(({ id, name, default: isDefault }) => ({ id, name, default: isDefault })),
@@ -580,7 +651,12 @@ export class BrowserProfileImportService {
 		let sourceRoots: string[] = [];
 		try {
 			throwIfImportAborted(signal);
-			const sources = await this.discoverInternal();
+			const sourceId = isRecord(rawRequest) && typeof rawRequest.sourceId === "string" && SOURCE_ID_PATTERN.test(rawRequest.sourceId)
+				? rawRequest.sourceId
+				: undefined;
+			const sources = await this.discoverInternal(undefined, {
+				...(sourceId ? { sourceId, includeProtectedSource: true } : {}),
+			});
 			throwIfImportAborted(signal);
 			sourceRoots = sources.map((source) => source.root);
 			const request = validateRequest(rawRequest, sources, this.options.profileStore.profiles);
@@ -589,19 +665,26 @@ export class BrowserProfileImportService {
 			onProgress({ requestId: request.requestId, phase: "preparing", completed: 0, total: selected.length });
 			await mkdir(staging, { recursive: true, mode: 0o700 });
 			const budget = new SourceBudget();
-			const decryptor = await ChromiumCookieDecryptor.create(source, this.context.platform);
+			if (request.includeCookies && source.descriptor.family === "chromium" && this.context.platform === "darwin") {
+				onProgress({ requestId: request.requestId, phase: "permission", completed: 0, total: selected.length });
+			}
+			const decryptor = request.includeCookies
+				? await ChromiumCookieDecryptor.create(source, this.context.platform, signal)
+				: null;
 			const readData: ReadProfileData[] = [];
 			for (const [index, profile] of selected.entries()) {
 				throwIfImportAborted(signal);
+				onProgress({ requestId: request.requestId, phase: "reading", completed: index, total: selected.length });
 				readData.push(await readProfileData(source, profile, request, staging, budget, decryptor, this.now()));
 				throwIfImportAborted(signal);
 				onProgress({ requestId: request.requestId, phase: "reading", completed: index + 1, total: selected.length });
 			}
 			return await this.commitImport(source, request, readData, onProgress, signal);
 		} catch (error) {
-			throw redactSourcePaths(error, sourceRoots);
+			throw redactImportPaths(error, sourceRoots, this.stagingBase());
 		} finally {
 			await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+			await removeEmptyDirectory(this.stagingRoot());
 		}
 	}
 
@@ -622,6 +705,7 @@ export class BrowserProfileImportService {
 		try {
 			for (const [index, group] of groups.entries()) {
 				throwIfImportAborted(signal);
+				onProgress({ requestId: request.requestId, phase: "importing", completed: index, total: groups.length });
 				const profile = await this.options.profileStore.createProfile(group.name);
 				created.push(profile);
 				throwIfImportAborted(signal);
@@ -696,12 +780,15 @@ export class BrowserProfileImportService {
 	}
 }
 
-function redactSourcePaths(error: unknown, sourceRoots: string[]): Error {
+function redactImportPaths(error: unknown, sourceRoots: string[], stagingRoot: string): Error {
 	let message = error instanceof Error ? error.message : "Browser data could not be imported.";
 	for (const root of sourceRoots.sort((a, b) => b.length - a.length)) {
 		for (const variant of new Set([root, root.replaceAll("\\", "/")])) {
 			message = message.replaceAll(variant, "<browser source>");
 		}
+	}
+	for (const variant of new Set([stagingRoot, stagingRoot.replaceAll("\\", "/")])) {
+		message = message.replaceAll(variant, "<browser import staging>");
 	}
 	return new Error(message || "Browser data could not be imported.");
 }
@@ -759,7 +846,7 @@ async function readProfileData(
 	request: BrowserImportRequest,
 	staging: string,
 	budget: SourceBudget,
-	decryptor: ChromiumCookieDecryptor,
+	decryptor: ChromiumCookieDecryptor | null,
 	now: Date,
 ): Promise<ReadProfileData> {
 	const warnings: BrowserImportWarning[] = [];
@@ -778,7 +865,7 @@ async function readProfileData(
 			const outcome = source.descriptor.family === "safari"
 				? readSafariCookies(await readFile(await snapshotFile(cookieDatabase, profile.root, staging, budget)), now)
 				: source.descriptor.family === "chromium"
-					? readChromiumCookies(await snapshotSQLite(cookieDatabase, profile.root, staging, budget), decryptor, now)
+					? readChromiumCookies(await snapshotSQLite(cookieDatabase, profile.root, staging, budget, source.public.name), decryptor, now)
 					: readFirefoxCookies(await snapshotSQLite(cookieDatabase, profile.root, staging, budget), now);
 			if (!outcome) {
 				warnings.push({ code: "cookie-database-missing" });
@@ -796,7 +883,13 @@ async function readProfileData(
 		if (!historyDatabase) {
 			warnings.push({ code: "history-database-missing" });
 		} else {
-			const snapshot = await snapshotSQLite(historyDatabase, profile.root, staging, budget);
+			const snapshot = await snapshotSQLite(
+				historyDatabase,
+				profile.root,
+				staging,
+				budget,
+				source.descriptor.family === "chromium" ? source.public.name : undefined,
+			);
 			const outcome = source.descriptor.family === "chromium"
 				? readChromiumHistory(snapshot)
 				: source.descriptor.family === "firefox"
@@ -862,6 +955,7 @@ async function snapshotSQLite(
 	profileRoot: string,
 	staging: string,
 	budget: SourceBudget,
+	browserName?: string,
 ): Promise<string> {
 	const destination = path.join(staging, `${randomUUID()}-${path.basename(database)}`);
 	const canonical = await preflightContainedFile(database, profileRoot, SOURCE_FILE_MAX_BYTES, budget);
@@ -873,21 +967,55 @@ async function snapshotSQLite(
 		}
 	}
 	const source = new Database(canonical, { readonly: true, fileMustExist: true, timeout: 5_000 });
+	const temporarySnapshots: string[] = [];
 	try {
 		source.pragma("query_only = ON");
-		await source.backup(destination);
-		const output = await stat(destination);
-		if (!output.isFile() || output.size > SOURCE_FILE_MAX_BYTES + SOURCE_SIDECAR_MAX_BYTES) {
-			throw new Error("Browser source database exceeds the snapshot size limit.");
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			await mkdir(staging, { recursive: true, mode: 0o700 });
+			const temporary = path.join(staging, `${randomUUID()}-${path.basename(database)}.tmp`);
+			temporarySnapshots.push(temporary);
+			try {
+				await source.backup(temporary);
+			} catch (error) {
+				await rm(temporary, { force: true }).catch(() => undefined);
+				if (attempt === 0) continue;
+				if (browserName) throw temporarySnapshotError(browserName);
+				throw error;
+			}
+			const output = await stat(temporary).catch((error) => {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+				throw error;
+			});
+			if (!output) {
+				await rm(temporary, { force: true }).catch(() => undefined);
+				continue;
+			}
+			if (!output.isFile() || output.size > SOURCE_FILE_MAX_BYTES + SOURCE_SIDECAR_MAX_BYTES) {
+				throw new Error("Browser source database exceeds the snapshot size limit.");
+			}
+			await chmod(temporary, 0o600);
+			await rename(temporary, destination);
+			return destination;
 		}
-		await chmod(destination, 0o600);
-		return destination;
+		if (browserName) throw temporarySnapshotError(browserName);
+		throw new Error("AO's temporary browser data snapshot disappeared before it could be read. Restart AO and retry the import.");
 	} catch (error) {
 		await rm(destination, { force: true }).catch(() => undefined);
 		throw error;
 	} finally {
+		for (const temporary of temporarySnapshots) {
+			await rm(temporary, { force: true }).catch(() => undefined);
+		}
 		source.close();
 	}
+}
+
+function temporarySnapshotError(browserName: string): Error {
+	return new Error(
+		`AO couldn't create a temporary copy of ${browserName}'s profile database. `
+		+ `Fully close ${browserName}, including background processes, then retry the import. `
+		+ "If this keeps happening, restart AO and try again.",
+	);
 }
 
 async function preflightContainedFile(
@@ -959,7 +1087,7 @@ function readFirefoxCookies(file: string, now: Date): { cookies: ImportedCookie[
 
 function readChromiumCookies(
 	file: string,
-	decryptor: ChromiumCookieDecryptor,
+	decryptor: ChromiumCookieDecryptor | null,
 	now: Date,
 ): { cookies: ImportedCookie[]; skipped: number; warnings: BrowserImportWarning[] } {
 	return withReadOnlyDatabase(file, (database) => {
@@ -986,7 +1114,7 @@ function readChromiumCookies(
 			let value = stringValue(row.value);
 			if (!value) {
 				const encrypted = Buffer.isBuffer(row.encrypted_value) ? row.encrypted_value : Buffer.alloc(0);
-				value = decryptor.decrypt(encrypted, domain) ?? "";
+				value = decryptor?.decrypt(encrypted, domain) ?? "";
 				if (!value && encrypted.length > 0) {
 					encryptedSkipped += 1;
 					continue;
@@ -1134,7 +1262,9 @@ function normalizeCookieRows(
 				url,
 				name,
 				value,
-				domain,
+				// Passing domain turns a host-only cookie into a domain cookie.
+				// Electron also rejects __Host- cookies when domain is set.
+				...(domain.startsWith(".") ? { domain } : {}),
 				path: cookiePath,
 				secure,
 				httpOnly: row.httpOnly === true,
@@ -1380,7 +1510,7 @@ class ChromiumCookieDecryptor {
 		private readonly key: Buffer | null,
 	) {}
 
-	static async create(source: InternalSource, platform: NodeJS.Platform): Promise<ChromiumCookieDecryptor> {
+	static async create(source: InternalSource, platform: NodeJS.Platform, signal: AbortSignal): Promise<ChromiumCookieDecryptor> {
 		if (source.descriptor.family !== "chromium") return new ChromiumCookieDecryptor(platform, null);
 		if (platform === "win32") {
 			try {
@@ -1396,19 +1526,7 @@ class ChromiumCookieDecryptor {
 			}
 		}
 		if (platform === "darwin") {
-			for (const name of source.descriptor.chromiumKeychainNames ?? []) {
-				try {
-					const { stdout } = await execFileAsync(
-						"security",
-						["find-generic-password", "-w", "-s", `${name} Safe Storage`],
-						{ timeout: 10_000, maxBuffer: 16 * 1024 },
-					);
-					const password = stdout.trim();
-					if (password) return new ChromiumCookieDecryptor(platform, Buffer.from(password));
-				} catch {
-					// Try the next legitimate Keychain service name.
-				}
-			}
+			return new ChromiumCookieDecryptor(platform, await readMacChromiumPassword(source.descriptor.chromiumKeychainNames ?? [], signal));
 		}
 		return new ChromiumCookieDecryptor(platform, null);
 	}
@@ -1419,6 +1537,33 @@ class ChromiumCookieDecryptor {
 		if (this.platform === "darwin") return decryptMacChromiumCookie(encrypted, this.key, host);
 		return null;
 	}
+}
+
+export async function readMacChromiumPassword(
+	names: string[],
+	signal: AbortSignal,
+	run: typeof execFileAsync = execFileAsync,
+): Promise<Buffer> {
+	for (const name of names) {
+		try {
+			const { stdout } = await run("security", ["find-generic-password", "-w", "-s", `${name} Safe Storage`], {
+				timeout: 120_000, maxBuffer: 16 * 1024, signal,
+			});
+			const password = stdout.trim();
+			if (password) return Buffer.from(password);
+			throw new Error("Empty Safe Storage key");
+		} catch (error) {
+			throwIfImportAborted(signal);
+			// security maps errSecItemNotFound (-25300) to exit status 44.
+			// Denial, cancellation and timeout must not trigger another prompt.
+			if ((error as { code?: unknown }).code === 44) continue;
+			if ((error as { killed?: boolean }).killed) {
+				throw new Error("Timed out waiting for macOS Safe Storage access. Retry and respond to the macOS prompt, or turn off cookies to import history only.");
+			}
+			throw new Error("macOS did not grant access to the browser's Safe Storage key. Retry and allow access, or turn off cookies to import history only.");
+		}
+	}
+	throw new Error("The browser's Safe Storage key was not found. Turn off cookies to import history only.");
 }
 
 export function decryptWindowsChromiumCookie(encrypted: Buffer, key: Buffer, host: string): string | null {

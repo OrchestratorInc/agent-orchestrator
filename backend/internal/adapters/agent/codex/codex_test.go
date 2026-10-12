@@ -39,6 +39,16 @@ func TestResolveCodexBinaryFindsLocalAppDataNPMShimOnWindows(t *testing.T) {
 	}
 }
 
+func TestInvalidateBinaryResolutionClearsCachedPath(t *testing.T) {
+	p := &Plugin{resolvedBinary: "old-codex"}
+
+	p.InvalidateBinaryResolution()
+
+	if p.resolvedBinary != "" {
+		t.Fatalf("resolvedBinary = %q, want empty after invalidation", p.resolvedBinary)
+	}
+}
+
 func TestNativeConversationIDRequiresCapturedCodexThreadForTUI(t *testing.T) {
 	p := &Plugin{}
 	if id, ok, err := p.NativeConversationID(context.Background(), ports.SessionRef{
@@ -184,6 +194,9 @@ func sessionHookFlags(t *testing.T) []string {
 		"-c", `hooks.SessionStart=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"session-start") + `,timeout=5}]}]`,
 		"-c", `hooks.UserPromptSubmit=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"user-prompt-submit") + `,timeout=5}]}]`,
 		"-c", `hooks.PermissionRequest=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"permission-request") + `,timeout=5}]}]`,
+		"-c", `hooks.PostToolUse=[{matcher="^(spawn_agent|collaborationspawn_agent)$",hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"post-tool-use") + `,timeout=5}]}]`,
+		"-c", `hooks.SubagentStart=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"subagent-start") + `,timeout=5}]}]`,
+		"-c", `hooks.SubagentStop=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"subagent-stop") + `,timeout=5}]}]`,
 		"-c", `hooks.Stop=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"stop") + `,timeout=5}]}]`,
 	}
 }
@@ -417,6 +430,24 @@ func TestGetLaunchCommandAppendsConfiguredModel(t *testing.T) {
 	}
 	if containsSubsequence(cmd, []string{"--model", "  gpt-5.4-mini  "}) {
 		t.Fatalf("command %#v used untrimmed model", cmd)
+	}
+}
+
+func TestGetLaunchCommandAppendsConfiguredEffort(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "codex"}
+
+	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Config: ports.AgentConfig{Effort: "  high  "},
+		Prompt: "review this change",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsSubsequence(cmd, []string{"-c", "model_reasoning_effort='high'"}) {
+		t.Fatalf("command %#v missing trimmed model_reasoning_effort config", cmd)
+	}
+	if containsSubsequence(cmd, []string{"-c", "model_reasoning_effort='  high  '"}) {
+		t.Fatalf("command %#v used untrimmed effort", cmd)
 	}
 }
 
@@ -915,6 +946,23 @@ func TestGetRestoreCommandAppendsConfiguredModel(t *testing.T) {
 	}
 }
 
+func TestGetRestoreCommandAppendsConfiguredEffort(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "codex"}
+
+	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Config: ports.AgentConfig{Effort: "high"},
+		Session: ports.SessionRef{
+			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "thread-123"},
+		},
+	})
+	if err != nil || !ok {
+		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
+	}
+	if !containsSubsequence(cmd, []string{"-c", "model_reasoning_effort='high'"}) {
+		t.Fatalf("restore command %#v missing configured effort", cmd)
+	}
+}
+
 func TestGetRestoreCommandFalseWithoutAgentSessionID(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "codex"}
 
@@ -1055,7 +1103,7 @@ func TestDoctorLaunchProbesMirrorLaunchFlags(t *testing.T) {
 	}
 	joined := strings.Join(override, " ")
 	for _, want := range []string{
-		"hooks.SessionStart=", "hooks.UserPromptSubmit=", "hooks.PermissionRequest=", "hooks.Stop=",
+		"hooks.SessionStart=", "hooks.UserPromptSubmit=", "hooks.PermissionRequest=", "hooks.PostToolUse=", "hooks.SubagentStart=", "hooks.SubagentStop=", "hooks.Stop=",
 		"notice.hide_rate_limit_model_nudge=true",
 		`projects={`,
 	} {

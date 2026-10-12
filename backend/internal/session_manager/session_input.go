@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
@@ -13,14 +14,15 @@ import (
 type agentOperationKind string
 
 const (
-	agentOperationSwitch             agentOperationKind = "switch"
-	agentOperationExit               agentOperationKind = "exit"
-	agentOperationResume             agentOperationKind = "resume"
-	agentOperationKill               agentOperationKind = "kill"
-	agentOperationRestore            agentOperationKind = "restore"
-	agentOperationRetire             agentOperationKind = "retire"
-	agentOperationReconcile          agentOperationKind = "reconcile"
-	agentOperationCodexAccountSwitch agentOperationKind = "codex_account_switch"
+	agentOperationSwitch            agentOperationKind = "switch"
+	agentOperationExit              agentOperationKind = "exit"
+	agentOperationResume            agentOperationKind = "resume"
+	agentOperationHibernate         agentOperationKind = "hibernate"
+	agentOperationKill              agentOperationKind = "kill"
+	agentOperationRestore           agentOperationKind = "restore"
+	agentOperationRetire            agentOperationKind = "retire"
+	agentOperationReconcile         agentOperationKind = "reconcile"
+	agentOperationInterfaceRecovery agentOperationKind = "interface_recovery"
 )
 
 var errAgentOperationInProgress = errors.New("session: another exclusive operation is in progress")
@@ -77,16 +79,18 @@ func (m *Manager) SessionMutationInProgress(id domain.SessionID) bool {
 
 func (m *Manager) agentOperationActiveLocked(id domain.SessionID) bool {
 	_, ok := m.agentOperations[id]
-	return ok
+	_, deferred := m.deferredInterfaceRecovery[id]
+	return ok || deferred
 }
 
 func (m *Manager) agentSwitchDecisionInputAllowedLocked(id domain.SessionID) bool {
+	if _, deferred := m.deferredInterfaceRecovery[id]; deferred {
+		return false
+	}
 	switch m.agentOperations[id] {
 	case agentOperationSwitch:
 		_, allowed := m.switchDecisionInput[id]
 		return allowed
-	case agentOperationCodexAccountSwitch:
-		return false
 	default:
 		return false
 	}
@@ -101,15 +105,29 @@ func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	m.agentOpMu.Lock()
-	if m.agentOperationActiveLocked(id) {
+	var drained <-chan struct{}
+	for {
+		m.agentOpMu.Lock()
+		if m.agentOperationActiveLocked(id) {
+			current := m.agentOperations[id]
+			m.agentOpMu.Unlock()
+			if current != agentOperationHibernate || kind == agentOperationHibernate {
+				return errAgentOperationInProgress
+			}
+			// Background cleanup yields to every explicit operation once its
+			// bounded shutdown completes; it must not make Kill/Switch fail.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(20 * time.Millisecond):
+				continue
+			}
+		}
+		m.agentOperations[id] = kind
+		drained = m.inputDrained[id]
 		m.agentOpMu.Unlock()
-		return errAgentOperationInProgress
+		break
 	}
-	m.agentOperations[id] = kind
-	drained := m.inputDrained[id]
-	m.agentOpMu.Unlock()
-
 	if drained == nil {
 		return nil
 	}
@@ -175,7 +193,34 @@ func (m *Manager) endAgentOperation(id domain.SessionID, kind agentOperationKind
 	}
 	if current, ok := m.agentOperations[id]; ok && current == kind {
 		delete(m.agentOperations, id)
+		m.resumeDeferredInterfaceRecoveryLocked(id)
 	}
+}
+
+// The deferred fence survives the foreign operation's release. Recovery, not
+// that operation, is responsible for reopening input after its durable commit.
+func (m *Manager) resumeDeferredInterfaceRecoveryLocked(id domain.SessionID) {
+	transitionID, deferred := m.deferredInterfaceRecovery[id]
+	if !deferred {
+		return
+	}
+	if err := m.beginAgentSwitchAttempt(); err != nil {
+		return // Preserve the fence for the next boot after shutdown admission closes.
+	}
+	go func() {
+		defer m.agentSwitchWorkers.Done()
+		recovered, err := m.recoverInterfaceTransitions(m.backgroundContext, transitionID)
+		if err != nil {
+			m.logger.Error("interface transition: deferred recovery failed", "sessionID", id, "error", err)
+		} else if len(recovered) == 0 {
+			// The exact obligation was cancelled/settled before the worker read it.
+			m.agentOpMu.Lock()
+			if m.deferredInterfaceRecovery[id] == transitionID {
+				delete(m.deferredInterfaceRecovery, id)
+			}
+			m.agentOpMu.Unlock()
+		}
+	}()
 }
 
 func (m *Manager) allowAgentSwitchDecisionInput(id domain.SessionID, switchID domain.AgentSwitchID) {
@@ -300,22 +345,23 @@ func (m *Manager) releaseRetainedAgentSwitch(id domain.SessionID) {
 	}
 	delete(m.retainedSwitches, id)
 	delete(m.agentOperations, id)
+	m.resumeDeferredInterfaceRecoveryLocked(id)
 }
 
 func (m *Manager) beginAgentResume(ctx context.Context, id domain.SessionID) error {
-	if err := m.beginAgentOperation(ctx, id, agentOperationResume); err != nil {
-		if errors.Is(err, errAgentOperationInProgress) {
-			m.agentOpMu.Lock()
-			activeOperation := m.agentOperations[id]
-			m.agentOpMu.Unlock()
-			if activeOperation == agentOperationSwitch {
-				return ErrSwitchInProgress
-			}
-			return ErrResumeInProgress
+	waitCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	err := m.beginAgentOperation(waitCtx, id, agentOperationResume)
+	if errors.Is(err, errAgentOperationInProgress) {
+		m.agentOpMu.Lock()
+		activeOperation := m.agentOperations[id]
+		m.agentOpMu.Unlock()
+		if activeOperation == agentOperationSwitch {
+			return ErrSwitchInProgress
 		}
-		return err
+		return ErrResumeInProgress
 	}
-	return nil
+	return err
 }
 
 func (m *Manager) endAgentResume(id domain.SessionID) {

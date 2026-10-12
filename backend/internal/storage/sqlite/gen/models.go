@@ -26,12 +26,20 @@ type AgentInstallJob struct {
 }
 
 type AgentModelCatalog struct {
-	AgentID       string
-	ProjectID     string
-	BinaryVersion string
-	CatalogJson   string
-	Source        string
-	FetchedAt     time.Time
+	AgentID          string
+	ProjectID        string
+	BinaryVersion    string
+	CatalogJson      string
+	Source           string
+	FetchedAt        time.Time
+	MetadataJson     string
+	InputFingerprint string
+	LastSuccessAt    sql.NullTime
+	RefreshState     string
+	RefreshError     string
+	RetryCount       int64
+	RetryAt          sql.NullTime
+	Generation       int64
 }
 
 type AgentNativeSession struct {
@@ -149,6 +157,38 @@ type AppSetting struct {
 	CloudOffering      bool
 }
 
+type Automation struct {
+	ID          domain.AutomationID
+	ProjectID   domain.ProjectID
+	DisplayName string
+	Prompt      string
+	Kind        domain.SessionKind
+	Harness     domain.AgentHarness
+	RruleText   string
+	Timezone    string
+	Enabled     bool
+	NextRunAt   time.Time
+	LastRunAt   sql.NullTime
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+type AutomationRun struct {
+	ID             domain.AutomationRunID
+	AutomationID   domain.AutomationID
+	ScheduledFor   time.Time
+	SessionID      *domain.SessionID
+	Status         domain.AutomationRunStatus
+	AttemptCount   int64
+	ClaimedAt      sql.NullTime
+	LeaseExpiresAt sql.NullTime
+	StartedAt      sql.NullTime
+	FinishedAt     sql.NullTime
+	ErrorMessage   sql.NullString
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 type ChangeLog struct {
 	Seq       int64
 	ProjectID *domain.ProjectID
@@ -159,46 +199,17 @@ type ChangeLog struct {
 }
 
 type CodexAccountSwitch struct {
-	ID                      string
-	SourceAccountID         string
-	TargetAccountID         string
-	IdempotencyKey          string
-	RequestFingerprint      string
-	ExpectedAccountRevision int64
-	Phase                   string
-	FailureCode             string
-	CredentialsCommittedAt  sql.NullTime
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
-	CompletedAt             sql.NullTime
-}
-
-type CodexAccountSwitchSession struct {
-	SwitchID                string
-	SessionID               string
-	NativeSessionID         string
-	InterfaceMode           string
-	SourceHandleID          string
-	SourceGeneration        string
-	WasRunning              bool
-	StopState               string
-	RestartState            string
-	ReviewerWasRunning      bool
-	ReviewerSourceHandleID  string
-	ReviewerNativeSessionID string
-	ReviewerStopState       string
-	ReviewerRestartState    string
-	ErrorCode               string
-	StoppedAt               sql.NullTime
-	RestartedAt             sql.NullTime
-}
-
-type CodexActiveAccount struct {
-	SingletonID int64
-	AccountID   string
-	Revision    int64
-	ActivatedAt time.Time
-	UpdatedAt   time.Time
+	ID                     string
+	SourceAccountID        string
+	TargetAccountID        string
+	IdempotencyKey         string
+	Phase                  string
+	FailureCode            string
+	CredentialsCommittedAt sql.NullTime
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	CompletedAt            sql.NullTime
+	SourceKind             string
 }
 
 type Conversation struct {
@@ -206,7 +217,9 @@ type Conversation struct {
 	Scope                      domain.ConversationScope
 	ProjectID                  *domain.ProjectID
 	SessionID                  *domain.SessionID
+	ReviewID                   sql.NullString
 	CurrentSessionID           *domain.SessionID
+	CurrentReviewID            sql.NullString
 	LatestSequence             int64
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
@@ -273,6 +286,8 @@ type ConversationBranch struct {
 	ReplayCutoffSequence   int64
 	ReplayTruncated        int64
 	ProviderScopeID        string
+	ProviderIdsScoped      int64
+	ReviewID               sql.NullString
 }
 
 type ConversationEditDelivery struct {
@@ -310,6 +325,10 @@ type ConversationMessage struct {
 	UpdatedAt           time.Time
 	DeliveryContentJson string
 	BranchID            string
+	ClientPayloadHash   sql.NullString
+	SenderSessionID     string
+	SenderProjectID     string
+	SenderDisplayName   string
 }
 
 type ConversationProviderEvent struct {
@@ -321,6 +340,7 @@ type ConversationProviderEvent struct {
 	PayloadJson     string
 	ReceivedAt      time.Time
 	BranchID        string
+	ReviewID        sql.NullString
 }
 
 type ConversationQueuedEditDelivery struct {
@@ -361,6 +381,18 @@ type ConversationTurn struct {
 	PromotionStartedAt   sql.NullTime
 	PromotedToTurnID     sql.NullString
 	RetryOfTurnID        sql.NullString
+	HandledByReviewID    sql.NullString
+}
+
+type Cue struct {
+	ID        domain.CueID
+	ProjectID domain.ProjectID
+	Name      string
+	Type      domain.CueType
+	Command   string
+	Prompt    string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type ModelUsageEvent struct {
@@ -387,16 +419,18 @@ type ModelUsageEvent struct {
 }
 
 type Notification struct {
-	ID         string
-	SessionID  domain.SessionID
-	ProjectID  *domain.ProjectID
-	PRURL      string
-	Type       domain.NotificationType
-	Title      string
-	Body       string
-	Status     domain.NotificationStatus
-	CreatedAt  time.Time
-	ResolvedAt sql.NullTime
+	ID          string
+	SessionID   domain.SessionID
+	ProjectID   *domain.ProjectID
+	PRURL       string
+	Type        domain.NotificationType
+	Title       string
+	Body        string
+	Status      domain.NotificationStatus
+	CreatedAt   time.Time
+	ResolvedAt  sql.NullTime
+	DismissedAt sql.NullTime
+	SourceKey   string
 }
 
 type PR struct {
@@ -514,18 +548,56 @@ type Project struct {
 	Kind          string
 }
 
+type Report struct {
+	ID                 string
+	SessionID          string
+	ProjectID          string
+	State              string
+	Note               string
+	Message            string
+	CreatedAt          time.Time
+	DeliveryState      string
+	AvailableAt        time.Time
+	SettlementDeadline sql.NullTime
+	RepeatCount        int64
+	ClaimToken         string
+	ClaimedAt          sql.NullTime
+	DeliveryAttempts   int64
+	AcknowledgedAt     sql.NullTime
+	LastError          string
+	DeliveryBatchID    string
+}
+
+type ReportOutput struct {
+	ReportID  string
+	Position  int64
+	Kind      string
+	Reference string
+	Label     string
+}
+
+type ReportWorkerInterrupt struct {
+	SessionID         string
+	LastInterruptedAt time.Time
+}
+
 type Review struct {
-	ID                    string
-	SessionID             domain.SessionID
-	ProjectID             domain.ProjectID
-	Harness               domain.ReviewerHarness
-	PRURL                 string
-	ReviewerHandleID      string
-	AgentSessionID        string
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	ReviewerActivityState string
-	ReviewerLaunchID      string
+	ID                     string
+	SessionID              domain.SessionID
+	ProjectID              domain.ProjectID
+	Harness                domain.ReviewerHarness
+	PRURL                  string
+	ReviewerHandleID       string
+	AgentSessionID         string
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	ReviewerActivityState  string
+	ReviewerLaunchID       string
+	InterfaceMode          string
+	ProviderConversationID string
+	ControllerGeneration   string
+	ControllerError        string
+	IsArchived             bool
 }
 
 type ReviewRun struct {
@@ -547,50 +619,77 @@ type ReviewRun struct {
 }
 
 type Session struct {
-	ID                        domain.SessionID
-	ProjectID                 *domain.ProjectID
-	Num                       int64
-	IssueID                   domain.IssueID
-	Kind                      domain.SessionKind
-	Harness                   domain.AgentHarness
-	ActivityState             domain.ActivityState
-	ActivityLastAt            time.Time
-	IsTerminated              bool
-	Branch                    string
-	WorkspacePath             string
-	RuntimeHandleID           string
-	AgentSessionID            string
-	Prompt                    string
-	CreatedAt                 time.Time
-	UpdatedAt                 time.Time
-	DisplayName               string
-	FirstSignalAt             sql.NullTime
-	PreviewURL                string
-	PreviewRevision           int64
-	CleanupGeneration         int64
-	RuntimeLaunchID           string
-	WorkspaceRepoPath         string
-	TerminateOnPRMerge        bool
-	DiffBaseSha               string
-	DiffBaseRef               string
-	ReviewerHarness           domain.ReviewerHarness
-	IsPinned                  bool
-	PinnedAt                  sql.NullTime
-	SessionMode               domain.SessionMode
-	ProviderConversationID    string
-	ControllerGeneration      string
-	BrowserCapabilityVerifier string
-	AutoInjectReview          bool
-	LatestUserPrompt          string
-	LatestAssistantUpdate     string
-	NativeTranscriptPath      string
-	AutoInjectCI              bool
-	AutoReviewEnabled         bool
-	AgentSessionIDLaunchID    string
-	Model                     string
-	LatestUserPromptAt        sql.NullTime
-	ReviewerAgentConfig       string
-	SessionPermissions        string
+	ID                               domain.SessionID
+	ProjectID                        *domain.ProjectID
+	Num                              int64
+	IssueID                          domain.IssueID
+	Kind                             domain.SessionKind
+	Harness                          domain.AgentHarness
+	ActivityState                    domain.ActivityState
+	ActivityLastAt                   time.Time
+	IsTerminated                     bool
+	Branch                           string
+	WorkspacePath                    string
+	RuntimeHandleID                  string
+	AgentSessionID                   string
+	Prompt                           string
+	CreatedAt                        time.Time
+	UpdatedAt                        time.Time
+	DisplayName                      string
+	FirstSignalAt                    sql.NullTime
+	PreviewURL                       string
+	PreviewRevision                  int64
+	CleanupGeneration                int64
+	RuntimeLaunchID                  string
+	WorkspaceRepoPath                string
+	TerminateOnPRMerge               bool
+	DiffBaseSha                      string
+	DiffBaseRef                      string
+	ReviewerHarness                  domain.ReviewerHarness
+	IsPinned                         bool
+	PinnedAt                         sql.NullTime
+	SessionMode                      domain.SessionMode
+	ProviderConversationID           string
+	ControllerGeneration             string
+	BrowserCapabilityVerifier        string
+	AutoInjectReview                 bool
+	LatestUserPrompt                 string
+	LatestAssistantUpdate            string
+	NativeTranscriptPath             string
+	AutoInjectCI                     bool
+	AutoReviewEnabled                bool
+	AgentSessionIDLaunchID           string
+	Model                            string
+	LatestUserPromptAt               sql.NullTime
+	ReviewerAgentConfig              string
+	SessionPermissions               string
+	ConversationCheckpointState      domain.ConversationCheckpointState
+	ConversationCheckpointGeneration string
+	ConversationCheckpointNativeID   string
+	ConversationCheckpointUnsettled  bool
+	ConversationCheckpointTurnID     string
+	Revision                         int64
+	NativeCheckpointEvidence         string
+	LatestAssistantUpdateAt          sql.NullTime
+	NativeIdentityObservedAt         sql.NullTime
+	Effort                           string
+	ProvisionState                   domain.SessionProvisionState
+	ProvisionError                   string
+	IsTaskPreparation                bool
+	AutomationRunID                  *domain.AutomationRunID
+	AutomationLaunchCompleted        bool
+	ClientRequestID                  string
+	ClientRequestHash                string
+	ClientRequestCommitted           bool
+	CodexActivityFacts               string
+	ClaudeActivityFacts              string
+	ProvisionSteps                   string
+	ArtifactDir                      string
+	SessionOutputType                string
+	LatestInteractionAt              sql.NullTime
+	HibernatedAt                     sql.NullTime
+	BranchState                      string
+	RequestedOutput                  string
 }
 
 type SessionCleanupFact struct {
@@ -618,6 +717,7 @@ type SessionInterfaceTransition struct {
 	UpdatedAt            time.Time
 	CompletedAt          sql.NullTime
 	NoticeAcknowledgedAt sql.NullTime
+	HistoryPolicy        domain.SessionInterfaceTransitionHistoryPolicy
 }
 
 type SessionInterfaceTransitionMessage struct {
@@ -627,6 +727,8 @@ type SessionInterfaceTransitionMessage struct {
 	CreatedAt       time.Time
 	DeliveredAt     sql.NullTime
 	ClientMessageID string
+	SenderSessionID string
+	AuthoredByUser  bool
 }
 
 type SessionWorktree struct {
@@ -638,17 +740,19 @@ type SessionWorktree struct {
 	PreservedRef string
 	State        string
 	BaseRef      string
+	CreationSha  string
 }
 
 type ShellTerminal struct {
-	HandleID   string
-	ProjectID  *domain.ProjectID
-	WorkingDir string
-	Title      string
-	AppRunID   string
-	CreatedAt  time.Time
-	SessionID  sql.NullString
-	Transient  bool
+	HandleID                  string
+	ProjectID                 *domain.ProjectID
+	WorkingDir                string
+	Title                     string
+	AppRunID                  string
+	CreatedAt                 time.Time
+	SessionID                 sql.NullString
+	Transient                 bool
+	PreviewCapabilityVerifier string
 }
 
 type TelemetryEvent struct {

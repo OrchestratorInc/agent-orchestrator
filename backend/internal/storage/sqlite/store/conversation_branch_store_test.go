@@ -335,6 +335,49 @@ func TestActivateConversationBranchMovesProviderAndGenerationTogether(t *testing
 	}
 }
 
+func TestBranchActivationScopesNativeHistoryFacts(t *testing.T) {
+	for _, nativeID := range []string{"thread-root", "thread-child"} {
+		t.Run(nativeID, func(t *testing.T) {
+			ctx := context.Background()
+			s, session, conversation := seededChatConversation(t)
+			session.Metadata.AgentSessionID = "thread-root"
+			session.Metadata.LatestUserPrompt = "continue"
+			session.Metadata.LatestUserPromptAt = testNow
+			session.Metadata.LatestAssistantUpdate = "old answer"
+			session.Metadata.LatestAssistantUpdateAt = testNow
+			session.Metadata.NativeTranscriptPath = "/old/transcript.jsonl"
+			if err := s.UpdateSession(ctx, session); err != nil {
+				t.Fatal(err)
+			}
+			branch := domain.ConversationBranch{
+				ID: "child", ConversationID: conversation.ID, ParentBranchID: conversation.ActiveBranchID,
+				ProviderConversationID: nativeID,
+			}
+			if err := s.CreateAndActivateConversationBranch(ctx, session.ID, branch, "child-generation", testNow.Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			got, found, err := s.GetSession(ctx, session.ID)
+			if err != nil || !found {
+				t.Fatalf("GetSession: found=%v err=%v", found, err)
+			}
+			meta := got.Metadata
+			if meta.AgentSessionID != nativeID || meta.ProviderConversationID != nativeID || meta.ControllerGeneration != "child-generation" {
+				t.Fatalf("native owner not moved with branch: %+v", meta)
+			}
+			if nativeID == "thread-root" {
+				if meta.LatestUserPrompt != "continue" || !meta.LatestUserPromptAt.Equal(testNow) ||
+					meta.LatestAssistantUpdate != "old answer" || !meta.LatestAssistantUpdateAt.Equal(testNow) ||
+					meta.NativeTranscriptPath != "/old/transcript.jsonl" {
+					t.Fatalf("same native owner lost checkpoint: %+v", meta)
+				}
+			} else if meta.LatestUserPrompt != "" || !meta.LatestUserPromptAt.Equal(testNow) ||
+				meta.LatestAssistantUpdate != "" || !meta.LatestAssistantUpdateAt.IsZero() || meta.NativeTranscriptPath != "" {
+				t.Fatalf("new native owner inherited checkpoint or lost last human activity time: %+v", meta)
+			}
+		})
+	}
+}
+
 func TestActivateConversationBranchRollsBackWhenSessionCannotMove(t *testing.T) {
 	ctx := context.Background()
 	s, session, conversation := seededChatConversation(t)
@@ -672,6 +715,12 @@ func TestConversationBranchSnapshotFollowsOnlyActiveLineage(t *testing.T) {
 	activateTestBranch(t, s, session, conversation, child.ID, child.ProviderConversationID, "generation-child")
 	appendBranchPrompt(t, s, session, conversation, "generation-child", "b-edited", "B edited")
 	appendBranchPrompt(t, s, session, conversation, "generation-child", "c-edited", "C edited")
+	if err := s.SettleTurnByID(ctx, "turn-c-edited", domain.TurnStateCompleted, "", testNow); err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.LatestVisibleUserTurnSettled(ctx, conversation.ID, session.ID); err != nil || !settled {
+		t.Fatalf("latest turn on child branch settled = %v, %v", settled, err)
+	}
 
 	childSnapshot, err := s.LoadConversationSnapshot(ctx, conversation.ID)
 	if err != nil {
@@ -680,6 +729,9 @@ func TestConversationBranchSnapshotFollowsOnlyActiveLineage(t *testing.T) {
 	assertMessageTexts(t, childSnapshot.Messages, []string{"A", "B edited", "C edited"})
 
 	activateTestBranch(t, s, session, conversation, rootID, "thread-root", "generation-root-2")
+	if settled, err := s.LatestVisibleUserTurnSettled(ctx, conversation.ID, session.ID); err != nil || settled {
+		t.Fatalf("latest turn on root branch settled = %v, %v", settled, err)
+	}
 	rootSnapshot, err := s.LoadConversationSnapshot(ctx, conversation.ID)
 	if err != nil {
 		t.Fatalf("LoadConversationSnapshot root: %v", err)
@@ -889,6 +941,7 @@ func TestConversationBranchPointDescribesSiblingNavigation(t *testing.T) {
 	}
 	if point == nil {
 		t.Fatalf("branch points = %+v", snapshot.BranchPoints)
+		return
 	}
 	if point.Position != 3 || point.Total != 3 || point.PreviousBranchID != "branch-child-1" || point.NextBranchID != "" {
 		t.Fatalf("active child branch point = %+v", *point)

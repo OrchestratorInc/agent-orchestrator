@@ -70,6 +70,31 @@ type SteerResult struct {
 	ActivityID string
 }
 
+// SteerOrSendResult identifies whether one atomic request joined an active turn
+// or opened a normal turn while the conversation was idle.
+type SteerOrSendResult struct {
+	Steered   bool
+	Duplicate bool
+	Steer     SteerResult
+	Turn      domain.ConversationTurn
+}
+
+// resolveSteerSender enriches CLI-originated steering with the source session's
+// current durable identity. A missing source is tolerated so older workers and
+// cross-daemon callers keep the raw text prefix as their fallback.
+func (s *Service) resolveSteerSender(ctx context.Context, msg ports.ChatUserMessage) ports.ChatUserMessage {
+	if msg.SenderSessionID == "" || s.sessions == nil {
+		return msg
+	}
+	record, found, err := s.sessions.GetSession(ctx, domain.SessionID(msg.SenderSessionID))
+	if err != nil || !found {
+		return msg
+	}
+	msg.SenderProjectID = string(record.ProjectID)
+	msg.SenderDisplayName = strings.TrimSpace(record.DisplayName)
+	return msg
+}
+
 // PromoteQueuedTurnResult attributes a durable queue item to the running turn
 // that absorbed it.
 type PromoteQueuedTurnResult struct {
@@ -95,13 +120,15 @@ func (s *Service) Steer(
 	if strings.TrimSpace(msg.Text) == "" {
 		return SteerResult{}, ErrSteerTextRequired
 	}
-	if _, err := s.requireChatSession(ctx, id); err != nil {
-		return SteerResult{}, err
+	msg = s.resolveSteerSender(ctx, msg)
+	if msg.SenderSessionID != "" {
+		msg.Origin = domain.MessageOriginAutomation
 	}
-	controller, err := s.Controller(id)
+	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return SteerResult{}, err
 	}
+	defer release()
 	return controller.Steer(ctx, msg)
 }
 
@@ -125,6 +152,35 @@ func (s *Service) RecoverSteer(ctx context.Context, id domain.SessionID, clientM
 	return replaySteerDelivery(delivery, delivery.RequestJSON)
 }
 
+// SteerOrSend routes one idempotent request through the session's live Chat
+// controller without exposing a state-check race to the caller.
+func (s *Service) SteerOrSend(
+	ctx context.Context,
+	id domain.SessionID,
+	msg ports.ChatUserMessage,
+	recoverOnly bool,
+) (SteerOrSendResult, error) {
+	if strings.TrimSpace(msg.Text) == "" && !recoverOnly {
+		return SteerOrSendResult{}, ErrSteerTextRequired
+	}
+	if msg.ClientMessageID == "" {
+		return SteerOrSendResult{}, ErrSteerDeliveryUncertain
+	}
+	msg = s.resolveSteerSender(ctx, msg)
+	// A cross-session steer that finds no active turn falls through to the normal
+	// send path. Keep that message attributed as automation so idle and busy
+	// targets render the same way.
+	if msg.SenderSessionID != "" {
+		msg.Origin = domain.MessageOriginAutomation
+	}
+	controller, release, err := s.workingController(ctx, id)
+	if err != nil {
+		return SteerOrSendResult{}, err
+	}
+	defer release()
+	return controller.SteerOrSend(ctx, msg, recoverOnly)
+}
+
 // PromoteQueuedTurn delivers one already queued turn into the active turn. The
 // daemon reads the queued content; callers identify it but cannot replace it.
 func (s *Service) PromoteQueuedTurn(
@@ -139,10 +195,18 @@ func (s *Service) PromoteQueuedTurn(
 	if err != nil {
 		return PromoteQueuedTurnResult{}, err
 	}
-	if _, ok := controller.conv.(ports.ChatSteerer); !ok {
+	if _, ok := controller.steerer(); !ok {
 		return PromoteQueuedTurnResult{}, ErrSteerUnsupported
 	}
 	return controller.PromoteQueuedTurn(ctx, turnID)
+}
+
+// steerer returns the provider's steering port only when the conversation
+// negotiated it. The ACP driver implements Steer for every agent, so the type
+// alone does not say the agent can take guidance mid-turn.
+func (c *Controller) steerer() (ports.ChatSteerer, bool) {
+	steerer, ok := c.conv.(ports.ChatSteerer)
+	return steerer, ok && c.Capabilities().Has(ports.ChatCapabilitySteer)
 }
 
 // PromoteQueuedTurn reserves a durable queue item, asks the provider to absorb
@@ -151,7 +215,7 @@ func (c *Controller) PromoteQueuedTurn(
 	ctx context.Context,
 	turnID string,
 ) (PromoteQueuedTurnResult, error) {
-	steerer, ok := c.conv.(ports.ChatSteerer)
+	steerer, ok := c.steerer()
 	if !ok {
 		return PromoteQueuedTurnResult{}, ErrSteerUnsupported
 	}
@@ -304,6 +368,10 @@ func (c *Controller) rejectSteerBeforeDispatch(
 func (c *Controller) Steer(ctx context.Context, msg ports.ChatUserMessage) (SteerResult, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
+	return c.steerLocked(ctx, msg)
+}
+
+func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage) (SteerResult, error) {
 
 	requestJSON, err := encodeSteerDeliveryRequest(msg)
 	if err != nil {
@@ -329,7 +397,7 @@ func (c *Controller) Steer(ctx context.Context, msg ports.ChatUserMessage) (Stee
 				persistContext: "persist interface-transition refusal",
 			})
 	}
-	steerer, ok := c.conv.(ports.ChatSteerer)
+	steerer, ok := c.steerer()
 	if !ok {
 		return c.rejectSteerBeforeDispatch(ctx, msg.ClientMessageID, requestJSON,
 			durableSteerRefusal{
@@ -413,16 +481,95 @@ func (c *Controller) Steer(ctx context.Context, msg ports.ChatUserMessage) (Stee
 	return SteerResult{ProviderTurnID: landed, ActivityID: activityID}, nil
 }
 
+// SteerOrSend selects and persists one delivery outcome while holding the same
+// lock used by ordinary sends and steering.
+func (c *Controller) SteerOrSend(
+	ctx context.Context,
+	msg ports.ChatUserMessage,
+	recoverOnly bool,
+) (SteerOrSendResult, error) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+
+	if existing, found, err := c.store.ConversationMessageByClientID(
+		ctx, c.conversation.ID, msg.ClientMessageID,
+	); err != nil {
+		return SteerOrSendResult{}, fmt.Errorf("recover sent message: %w", err)
+	} else if found {
+		if !recoverOnly {
+			hash, err := clientPayloadHash(msg)
+			if err != nil {
+				return SteerOrSendResult{}, err
+			}
+			if existing.ClientPayloadHash != "" {
+				if existing.ClientPayloadHash != hash {
+					return SteerOrSendResult{}, domain.ErrClientMessageConflict
+				}
+			} else if !legacyMessageMatches(existing, msg) {
+				return SteerOrSendResult{}, domain.ErrClientMessageConflict
+			}
+		}
+		turn, err := c.store.TurnByID(ctx, existing.TurnID)
+		if err != nil {
+			return SteerOrSendResult{}, fmt.Errorf("recover sent turn: %w", err)
+		}
+		return SteerOrSendResult{Duplicate: true, Turn: turn}, nil
+	}
+
+	requestJSON, err := encodeSteerDeliveryRequest(msg)
+	if err != nil {
+		return SteerOrSendResult{}, err
+	}
+	if delivery, found, err := c.store.SteerDelivery(
+		ctx, c.conversation.ID, msg.ClientMessageID,
+	); err != nil {
+		return SteerOrSendResult{}, fmt.Errorf("%w: load prior result: %w", ErrSteerDeliveryUncertain, err)
+	} else if found {
+		replayRequest := requestJSON
+		if recoverOnly {
+			replayRequest = delivery.RequestJSON
+		}
+		steered, replayErr := replaySteerDelivery(delivery, replayRequest)
+		if replayErr == nil {
+			return SteerOrSendResult{Steered: true, Duplicate: true, Steer: steered}, nil
+		}
+		if !errors.Is(replayErr, ErrNoActiveTurn) || recoverOnly {
+			return SteerOrSendResult{}, replayErr
+		}
+	}
+	if recoverOnly {
+		return SteerOrSendResult{}, ErrSteerDeliveryUncertain
+	}
+
+	if _, active := c.awaitAcknowledgedTurn(ctx); active {
+		steered, err := c.steerLocked(ctx, msg)
+		if err == nil {
+			return SteerOrSendResult{Steered: true, Steer: steered}, nil
+		}
+		if !errors.Is(err, ErrNoActiveTurn) {
+			return SteerOrSendResult{}, err
+		}
+	}
+
+	turn, err := c.sendLocked(ctx, msg, false)
+	if err != nil {
+		return SteerOrSendResult{}, err
+	}
+	return SteerOrSendResult{Turn: turn}, nil
+}
+
 type steerDeliveryRequest struct {
-	Text     string                  `json:"text"`
-	Content  []ports.ChatContent     `json:"content,omitempty"`
-	Origin   domain.MessageOrigin    `json:"origin"`
-	Settings deliveryRequestSettings `json:"settings"`
+	Text            string                  `json:"text"`
+	Content         []ports.ChatContent     `json:"content,omitempty"`
+	Origin          domain.MessageOrigin    `json:"origin"`
+	SenderSessionID string                  `json:"senderSessionId,omitempty"`
+	Settings        deliveryRequestSettings `json:"settings"`
 }
 
 func encodeSteerDeliveryRequest(msg ports.ChatUserMessage) (string, error) {
 	encoded, err := json.Marshal(steerDeliveryRequest{
 		Text: msg.Text, Content: msg.Content, Origin: normalizeOrigin(msg.Origin),
+		SenderSessionID: msg.SenderSessionID,
 		Settings: deliveryRequestSettings{
 			Model: msg.Settings.Model, Effort: msg.Settings.Effort, Approval: msg.Settings.Approval,
 		},
@@ -516,8 +663,9 @@ func classifySteerRejection(
 // opens a NEW turn — using it here would mint a second turn row that the drain loop
 // would later dispatch as its own turn, sending the user's correction twice. The row
 // is tagged `event: "steer"` in its detail so a client can render it as the user's
-// own words rather than as a system notice, the same way compaction entries are
-// identified by their discriminator instead of by the general `system` kind.
+// own words rather than as a system notice. Cross-session CLI steers additionally
+// carry sender metadata so the client can attribute them as automation without
+// changing the activity storage model.
 //
 // The provider's own echo is not the record. It replays the guidance as a
 // `userMessage` item on the turn, but the driver drops those: AO records what the
@@ -549,6 +697,15 @@ func makeSteerActivity(
 		"event":  "steer",
 		"text":   msg.Text,
 		"origin": string(normalizeOrigin(msg.Origin)),
+	}
+	if msg.SenderSessionID != "" {
+		detail["senderSessionId"] = msg.SenderSessionID
+		if msg.SenderProjectID != "" {
+			detail["senderProjectId"] = msg.SenderProjectID
+		}
+		if msg.SenderDisplayName != "" {
+			detail["senderDisplayName"] = msg.SenderDisplayName
+		}
 	}
 	if msg.ClientMessageID != "" {
 		detail["clientMessageId"] = msg.ClientMessageID

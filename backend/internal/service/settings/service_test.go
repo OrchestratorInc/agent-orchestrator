@@ -1,6 +1,64 @@
 package settings
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+)
+
+type hibernationSettingsStore struct{ err error }
+
+func (s *hibernationSettingsStore) GetAppSettings(context.Context) (Snapshot, error) {
+	return Snapshot{DefaultSessionMode: domain.SessionModeChat}, s.err
+}
+func (*hibernationSettingsStore) SetDefaultSessionMode(context.Context, domain.SessionMode, time.Time) error {
+	return nil
+}
+func (*hibernationSettingsStore) SetCloudOffering(context.Context, bool, time.Time) error { return nil }
+
+func TestChatHibernationGateResetsOnDaemonBoot(t *testing.T) {
+	ctx := context.Background()
+	store := &hibernationSettingsStore{}
+	first := New(store, nil, Offering{}, nil)
+	if first.ChatHibernationEnabled() {
+		t.Fatal("new daemon enabled chat hibernation")
+	}
+	snapshot, err := first.SetChatHibernationEnabled(ctx, true)
+	if err != nil || !snapshot.ChatHibernationEnabled || !first.ChatHibernationEnabled() {
+		t.Fatalf("enable chat hibernation: snapshot=%+v err=%v", snapshot, err)
+	}
+	second := New(store, nil, Offering{}, nil)
+	snapshot, err = second.Get(ctx)
+	if err != nil || snapshot.ChatHibernationEnabled || second.ChatHibernationEnabled() {
+		t.Fatalf("restarted daemon retained chat hibernation: snapshot=%+v err=%v", snapshot, err)
+	}
+}
+
+func TestDisablingChatHibernationSurvivesSettingsReadFailure(t *testing.T) {
+	ctx := context.Background()
+	store := &hibernationSettingsStore{}
+	svc := New(store, nil, Offering{}, nil)
+	if _, err := svc.SetChatHibernationEnabled(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	store.err = errors.New("database unavailable")
+	if _, err := svc.SetChatHibernationEnabled(ctx, false); err == nil || svc.ChatHibernationEnabled() {
+		t.Fatalf("disable after read error = %v, enabled=%v", err, svc.ChatHibernationEnabled())
+	}
+}
+
+func TestOfferingFromConfigCarriesTrackerIntake(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		got := OfferingFromConfig(config.Config{TrackerIntake: on})
+		if got.TrackerIntakeEnabled != on {
+			t.Errorf("OfferingFromConfig(TrackerIntake=%v).TrackerIntakeEnabled = %v, want %v", on, got.TrackerIntakeEnabled, on)
+		}
+	}
+}
 
 // The cloud gate is the single most safety-critical expression in the offering:
 // a false positive would surface cloud UI (and let a local-only build reach a

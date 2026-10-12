@@ -18,12 +18,22 @@ var (
 	ErrIdempotencyMismatch  = errors.New("idempotency key belongs to a different operation")
 	ErrSandboxQuotaExceeded = errors.New("sandbox quota exceeded")
 	ErrWorkerUnavailable    = errors.New("worker unavailable")
-	ErrTransportExpired     = errors.New("worker request expired")
-	ErrWorkspaceReadOnly    = errors.New("workspace is read-only")
+	// ErrTerminalSessionExited means an agent terminal finished and there is no
+	// live worker terminal to attach to. It is deliberately distinct from
+	// ErrWorkerUnavailable: the latter is expected while a sandbox is booting
+	// and callers should retry it, while this one is terminal for this agent
+	// session.
+	ErrTerminalSessionExited = errors.New("terminal session exited")
+	ErrTransportExpired      = errors.New("worker request expired")
+	ErrWorkspaceReadOnly     = errors.New("workspace is read-only")
 )
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	billing billingPolicy
+	// activityLog is told about activity rows the store writes itself, inside
+	// the transaction they describe (see commitWithActivity).
+	activityLog func(context.Context, domain.ActivityEvent)
 }
 
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
@@ -66,10 +76,9 @@ func (s *Store) ValidateRuntimeRole(ctx context.Context) error {
 type tenantFn func(pgx.Tx) error
 
 // withService runs fn in a transaction that carries the control-plane service
-// context. Only ao_sandboxes grants this context, and only so the reconciler
-// can scan due sandboxes across organizations. Every write that follows a claim
-// must run through withOrg instead, so row-level security still confines it to
-// a single tenant.
+// context. It is used to scan due sandboxes and to locate registrations for a
+// host-authenticated address update. Writes after either lookup run under the
+// specific organization or user RLS identity.
 func (s *Store) withService(ctx context.Context, fn tenantFn) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {

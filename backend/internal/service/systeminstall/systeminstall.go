@@ -12,7 +12,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -37,36 +39,45 @@ type Target string
 
 // The exhaustive set of installable targets. No other value is ever accepted.
 const (
-	TargetTmux       Target = "tmux"
-	TargetGH         Target = "gh"
-	TargetClaude     Target = "claude"
-	TargetClaudeCode Target = "claude-code"
-	TargetCodex      Target = "codex"
-	TargetCursor     Target = "cursor"
-	TargetOpencode   Target = "opencode"
-	TargetAider      Target = "aider"
-	TargetCopilot    Target = "copilot"
-	TargetGrok       Target = "grok"
-	TargetKimi       Target = "kimi"
-	TargetPi         Target = "pi"
-	TargetAmp        Target = "amp"
-	TargetAuggie     Target = "auggie"
-	TargetDroid      Target = "droid"
-	TargetCrush      Target = "crush"
-	TargetCline      Target = "cline"
-	TargetGoose      Target = "goose"
-	TargetQwen       Target = "qwen"
-	TargetContinue   Target = "continue"
-	TargetDevin      Target = "devin"
-	TargetKiro       Target = "kiro"
-	TargetKilocode   Target = "kilocode"
-	TargetVibe       Target = "vibe"
-	TargetMuse       Target = "muse"
-	TargetAgy        Target = "agy"
-	TargetAutohand   Target = "autohand"
-	TargetKimchi     Target = "kimchi"
-	TargetPrimeAgent Target = "prime-agent"
-	TargetOMP        Target = "omp"
+	TargetTmux        Target = "tmux"
+	TargetGH          Target = "gh"
+	TargetClaude      Target = "claude"
+	TargetClaudeCode  Target = "claude-code"
+	TargetCodex       Target = "codex"
+	TargetCursor      Target = "cursor"
+	TargetOpencode    Target = "opencode"
+	TargetOpencodeV2  Target = "opencode-v2"
+	TargetAider       Target = "aider"
+	TargetCopilot     Target = "copilot"
+	TargetGrok        Target = "grok"
+	TargetKimi        Target = "kimi"
+	TargetPi          Target = "pi"
+	TargetAmp         Target = "amp"
+	TargetAuggie      Target = "auggie"
+	TargetDroid       Target = "droid"
+	TargetCrush       Target = "crush"
+	TargetCline       Target = "cline"
+	TargetGoose       Target = "goose"
+	TargetQwen        Target = "qwen"
+	TargetGemini      Target = "gemini"
+	TargetContinue    Target = "continue"
+	TargetDevin       Target = "devin"
+	TargetKiro        Target = "kiro"
+	TargetKilocode    Target = "kilocode"
+	TargetVibe        Target = "vibe"
+	TargetMuse        Target = "muse"
+	TargetAgy         Target = "agy"
+	TargetAutohand    Target = "autohand"
+	TargetKimchi      Target = "kimchi"
+	TargetPrimeAgent  Target = "prime-agent"
+	TargetOMP         Target = "omp"
+	TargetFX          Target = "fx"
+	TargetUnreal      Target = "unreal-agent"
+	TargetCodewhale   Target = "codewhale"
+	TargetMiMoCode    Target = "mimo-code"
+	TargetDeepSeek    Target = "deepseek-harness"
+	TargetOpenHands   Target = "openhands"
+	TargetCommandCode Target = "command-code"
 	// TargetCloudflared is the optional connector that makes a paired phone
 	// reachable from outside the local network.
 	TargetCloudflared Target = "cloudflared"
@@ -74,12 +85,13 @@ const (
 
 // agentTargets is the stable settings-page order.
 var agentTargets = []Target{
-	TargetClaudeCode, TargetCodex, TargetCursor, TargetOpencode, TargetAider,
+	TargetClaudeCode, TargetCodex, TargetCursor, TargetOpencode, TargetOpencodeV2, TargetAider,
 	TargetCopilot, TargetGrok, TargetKimi, TargetPi, TargetAmp, TargetAuggie,
-	TargetDroid, TargetCrush, TargetCline, TargetGoose, TargetQwen,
+	TargetDroid, TargetCrush, TargetCline, TargetGoose, TargetQwen, TargetGemini,
 	TargetContinue, TargetDevin, TargetKiro, TargetKilocode, TargetVibe,
 	TargetMuse, TargetAgy, TargetAutohand, TargetKimchi, TargetPrimeAgent,
-	TargetOMP,
+	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetDeepSeek, TargetOpenHands,
+	TargetCommandCode,
 }
 
 var agentTargetSet = func() map[Target]bool {
@@ -90,11 +102,20 @@ var agentTargetSet = func() map[Target]bool {
 	return out
 }()
 
+const openCodeV2ReplacementNotice = "Installing OpenCode 2 at the default location replaces the default OpenCode 1 `opencode` executable; the two majors are not installed side by side by default."
+
+func installNotice(target Target) string {
+	if target == TargetOpencodeV2 {
+		return openCodeV2ReplacementNotice
+	}
+	return ""
+}
+
 // systemTargetSet is the stable contract of the legacy /system/install route.
 // Agent-only targets use /agents/{agent}/install instead.
 var systemTargetSet = map[Target]bool{
 	TargetTmux: true, TargetGH: true, TargetClaude: true, TargetCloudflared: true,
-	TargetCodex: true, TargetOpencode: true, TargetCopilot: true,
+	TargetCodex: true, TargetOpencode: true, TargetOpencodeV2: true, TargetCopilot: true,
 }
 
 // knownTargets is the exhaustive allowlist backing Valid.
@@ -157,6 +178,7 @@ type Plan struct {
 	NeedsRoot           bool   // Command must run as root; the caller supplies the privilege
 	Unsupported         bool
 	Reason              string // set when Unsupported, or as extra context otherwise
+	Notice              string // fixed user-visible consequence that applies even when available
 	Method              string
 	DocsURL             string
 	ExpectedDestination string
@@ -171,6 +193,7 @@ type AgentPlan struct {
 	Method              string               `json:"method"`
 	Command             string               `json:"command,omitempty"`
 	Reason              string               `json:"reason,omitempty"`
+	Notice              string               `json:"notice,omitempty"`
 	DocumentationURL    string               `json:"documentationUrl"`
 	ExpectedDestination string               `json:"expectedDestination,omitempty"`
 	Methods             []AgentInstallMethod `json:"methods"`
@@ -185,6 +208,7 @@ type AgentInstallMethod struct {
 	Recommended         bool   `json:"recommended"`
 	Command             string `json:"command,omitempty"`
 	Reason              string `json:"reason,omitempty"`
+	Notice              string `json:"notice,omitempty"`
 	ExpectedDestination string `json:"expectedDestination,omitempty"`
 	ReinstallAvailable  bool   `json:"reinstallAvailable"`
 	ReinstallCommand    string `json:"reinstallCommand,omitempty"`
@@ -238,15 +262,18 @@ const defaultInstallTimeout = 15 * time.Minute
 // consuming the daemon's entire shutdown drain budget behind a blocked DB.
 const defaultPersistenceTimeout = 2 * time.Second
 
+var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/devin\.`)
+
 // Job is the tracked state of one install run for a Target.
 type Job struct {
-	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,cloudflared" description:"Fixed install target this job ran (or is running) for."`
+	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,cloudflared" description:"Fixed install target this job ran (or is running) for."`
 	Status              Status `json:"status" enum:"idle,running,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job."`
 	Method              string `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
 	Command             string `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
 	ExpectedDestination string `json:"expectedDestination,omitempty" description:"Expected or adapter-resolved executable destination."`
 	Output              string `json:"output,omitempty" description:"Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes."`
 	Error               string `json:"error,omitempty" description:"Set on failure or when the target is unsupported on this machine: the exec error, the Unsupported reason, or a timeout message."`
+	Notice              string `json:"notice,omitempty" description:"Fixed user-visible consequence to acknowledge before running this install."`
 	// Pointers, not time.Time: omitempty has no effect on a struct, so a bare
 	// time.Time always serializes (as the zero value's "0001-01-01..."
 	// timestamp) even when nothing has happened yet. A nil pointer actually
@@ -271,9 +298,10 @@ type SessionLister interface {
 
 // Deps are the durable and adapter-backed dependencies used for harness jobs.
 type Deps struct {
-	JobStore ports.AgentInstallJobStore
-	Verifier HarnessVerifier
-	Sessions SessionLister
+	JobStore           ports.AgentInstallJobStore
+	Verifier           HarnessVerifier
+	Sessions           SessionLister
+	PrivateNPMPrefixes map[Target]string
 }
 
 // Service runs real install commands for the fixed Target allowlist.
@@ -285,12 +313,15 @@ type Service struct {
 	stopping          bool
 	workers           sync.WaitGroup
 	droidGate         sync.RWMutex
+	fxGate            sync.RWMutex
 
 	executables         ports.ExecutableFinder
 	commands            ports.CommandRunner
 	installCommands     ports.InstallCommandRunner
 	installScripts      ports.InstallScriptRunner
 	installCapabilities ports.InstallCapabilityProbe
+	pathWritable        ports.PathWritableProbe
+	privateNPMPrefixes  map[Target]string
 	jobStore            ports.AgentInstallJobStore
 	verifier            HarnessVerifier
 	sessions            SessionLister
@@ -348,6 +379,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 	installCommands, _ := commands.(ports.InstallCommandRunner)
 	installScripts, _ := commands.(ports.InstallScriptRunner)
 	installCapabilities, _ := executables.(ports.InstallCapabilityProbe)
+	pathWritable, _ := executables.(ports.PathWritableProbe)
 	backgroundContext, stop := context.WithCancel(context.Background())
 	return &Service{
 		jobs:                make(map[Target]*Job),
@@ -356,6 +388,8 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		installCommands:     installCommands,
 		installScripts:      installScripts,
 		installCapabilities: installCapabilities,
+		pathWritable:        pathWritable,
+		privateNPMPrefixes:  deps.PrivateNPMPrefixes,
 		jobStore:            deps.JobStore,
 		verifier:            deps.Verifier,
 		sessions:            deps.Sessions,
@@ -393,7 +427,7 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 			methods = append(methods, AgentInstallMethod{
 				ID: methodPlan.Method, Label: installMethodLabel(methodPlan.Method),
 				Available: !methodPlan.Unsupported, Recommended: index == recommended,
-				Command: displayCommand(methodPlan), Reason: methodPlan.Reason,
+				Command: displayCommand(methodPlan), Reason: methodPlan.Reason, Notice: methodPlan.Notice,
 				ExpectedDestination: methodPlan.ExpectedDestination,
 				ReinstallAvailable:  !reinstallPlan.Unsupported,
 				ReinstallCommand:    displayCommand(reinstallPlan), ReinstallReason: reinstallPlan.Reason,
@@ -402,7 +436,7 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 		out = append(out, AgentPlan{
 			AgentID: string(target), Available: !plan.Unsupported,
 			Automatic: !plan.Unsupported, Method: plan.Method,
-			Command: displayCommand(plan), Reason: plan.Reason,
+			Command: displayCommand(plan), Reason: plan.Reason, Notice: plan.Notice,
 			DocumentationURL:    plan.DocsURL,
 			ExpectedDestination: plan.ExpectedDestination,
 			Methods:             methods,
@@ -477,6 +511,7 @@ func (s *Service) Start(ctx context.Context, target Target) (Job, error) {
 			Status:     StatusUnsupported,
 			Command:    command,
 			Error:      plan.Reason,
+			Notice:     plan.Notice,
 			StartedAt:  &now,
 			FinishedAt: &now,
 		}
@@ -488,6 +523,7 @@ func (s *Service) Start(ctx context.Context, target Target) (Job, error) {
 		Target:    target,
 		Status:    StatusRunning,
 		Command:   command,
+		Notice:    plan.Notice,
 		StartedAt: &now,
 	}
 	s.jobs[target] = job
@@ -526,31 +562,35 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 	if !IsAgentTarget(target) {
 		return Job{}, fmt.Errorf("systeminstall: unknown harness target %q", target)
 	}
-	var releaseDroid func()
-	if target == TargetDroid {
+	var releaseHarness func()
+	if target == TargetDroid || target == TargetFX {
+		gate := &s.droidGate
+		if target == TargetFX {
+			gate = &s.fxGate
+		}
 		s.mu.Lock()
 		if current, ok := s.jobs[target]; ok && activeStatus(current.Status) {
 			s.mu.Unlock()
 			return Job{}, ErrInstallActive
 		}
 		s.mu.Unlock()
-		if !s.droidGate.TryLock() {
-			return Job{}, fmt.Errorf("%w: a Droid session is starting", ErrHarnessActive)
+		if !gate.TryLock() {
+			return Job{}, fmt.Errorf("%w: a %s session is starting", ErrHarnessActive, target)
 		}
-		releaseDroid = s.droidGate.Unlock
+		releaseHarness = gate.Unlock
 		defer func() {
-			if releaseDroid != nil {
-				releaseDroid()
+			if releaseHarness != nil {
+				releaseHarness()
 			}
 		}()
 		if s.sessions != nil {
 			sessions, err := s.sessions.ListAllSessions(ctx)
 			if err != nil {
-				return Job{}, fmt.Errorf("systeminstall: list sessions before droid install: %w", err)
+				return Job{}, fmt.Errorf("systeminstall: list sessions before %s install: %w", target, err)
 			}
 			for _, session := range sessions {
-				if session.Harness == domain.HarnessDroid && !session.IsTerminated {
-					return Job{}, fmt.Errorf("%w: end Droid session %s before installing or reinstalling Droid", ErrHarnessActive, session.ID)
+				if session.Harness == domain.AgentHarness(target) && !session.IsTerminated {
+					return Job{}, fmt.Errorf("%w: end %s session %s before installing or reinstalling %s", ErrHarnessActive, target, session.ID, target)
 				}
 			}
 		}
@@ -588,7 +628,7 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 	job := &Job{
 		Target: target, Status: status, Method: plan.Method,
 		Command: displayCommand(plan), ExpectedDestination: plan.ExpectedDestination,
-		Error: plan.Reason, StartedAt: &now, FinishedAt: finishedAt, UpdatedAt: &now,
+		Error: plan.Reason, Notice: plan.Notice, StartedAt: &now, FinishedAt: finishedAt, UpdatedAt: &now,
 	}
 	s.jobs[target] = job
 	s.mu.Unlock()
@@ -614,8 +654,8 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		s.finishAgentJob(job, StatusInterrupted, "", "daemon shutdown interrupted the install", "")
 		return initial, nil
 	}
-	workerRelease := releaseDroid
-	releaseDroid = nil
+	workerRelease := releaseHarness
+	releaseHarness = nil
 	go func() { //nolint:gosec // bounded daemon-owned worker intentionally outlives the request.
 		defer s.workers.Done()
 		if workerRelease != nil {
@@ -626,16 +666,22 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 	return initial, nil
 }
 
-// TryBeginHarnessUse prevents a Droid session launch from racing replacement
-// of the Droid executable. The returned release must be called after launch.
+// TryBeginHarnessUse prevents Droid and fx session launches from racing
+// replacement of their executables. The returned release must be called after launch.
 func (s *Service) TryBeginHarnessUse(harness domain.AgentHarness) (func(), bool) {
-	if harness != domain.HarnessDroid {
+	var gate *sync.RWMutex
+	switch harness {
+	case domain.HarnessDroid:
+		gate = &s.droidGate
+	case domain.HarnessFX:
+		gate = &s.fxGate
+	default:
 		return func() {}, true
 	}
-	if !s.droidGate.TryRLock() {
+	if !gate.TryRLock() {
 		return nil, false
 	}
-	return s.droidGate.RUnlock, true
+	return gate.RUnlock, true
 }
 
 // Status returns the current or last known Job for target. A target that has
@@ -687,6 +733,7 @@ func (s *Service) Status(ctx context.Context, target Target) (Job, error) {
 		Status:  status,
 		Command: displayCommand(plan),
 		Error:   plan.Reason,
+		Notice:  plan.Notice,
 	}, nil
 }
 
@@ -763,7 +810,7 @@ func (s *Service) Verify(ctx context.Context, target Target) (Job, error) {
 	}
 	previous, hadPrevious := s.jobs[target]
 	now := time.Now().UTC()
-	job := &Job{Target: target, Status: StatusVerifying, StartedAt: &now, UpdatedAt: &now}
+	job := &Job{Target: target, Status: StatusVerifying, Notice: installNotice(target), StartedAt: &now, UpdatedAt: &now}
 	if current, ok := s.jobs[target]; ok {
 		job.Method = current.Method
 		job.Command = current.Command
@@ -897,6 +944,12 @@ func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
 	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 	defer cancel()
 	out := &capturedOutput{max: maxOutputBytes}
+	outputWriter := io.Writer(out)
+	var devinOutput *devinInstallOutput
+	if plan.Target == TargetDevin && plan.Method == "official-installer" && plan.Script != nil {
+		devinOutput = &devinInstallOutput{dst: out, maxPending: maxOutputBytes}
+		outputWriter = devinOutput
+	}
 	env := []string{
 		"CI=1", "NONINTERACTIVE=1", "HOMEBREW_NO_AUTO_UPDATE=1",
 		"NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false",
@@ -907,9 +960,9 @@ func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
 			runErr = errors.New("remote installer runner is not configured")
 		} else {
 			command := *plan.Script
-			command.Env = append([]string(nil), env...)
+			command.Env = append(append([]string(nil), env...), command.Env...)
 			var result ports.InstallScriptResult
-			result, runErr = s.installScripts.RunInstallScript(ctx, command, out, out)
+			result, runErr = s.installScripts.RunInstallScript(ctx, command, outputWriter, outputWriter)
 			if result.SHA256 != "" {
 				_, _ = fmt.Fprintf(out, "\nsource: %s\nsha256: %s\n", command.URL, result.SHA256)
 			}
@@ -930,7 +983,8 @@ func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
 		s.finishAgentJob(job, StatusInterrupted, out.String(), "daemon shutdown interrupted the install", "")
 		return
 	}
-	if runErr != nil {
+	installConfirmed := runErr != nil && devinOutput != nil && devinOutput.Confirmed()
+	if runErr != nil && !installConfirmed {
 		s.finishAgentJob(job, StatusFailed, out.String(), runErr.Error(), "")
 		return
 	}
@@ -1036,7 +1090,7 @@ func jobFromRecord(record ports.AgentInstallJobRecord) Job {
 	return Job{
 		Target: Target(record.Target), Status: Status(record.Status), Method: record.Method,
 		Command: record.Command, ExpectedDestination: record.ExpectedDestination,
-		Output: record.Output, Error: record.Error, StartedAt: &startedAt,
+		Output: record.Output, Error: record.Error, Notice: installNotice(Target(record.Target)), StartedAt: &startedAt,
 		FinishedAt: record.FinishedAt, UpdatedAt: &updatedAt,
 	}
 }
@@ -1099,6 +1153,45 @@ func (c *capturedOutput) String() string {
 	return c.buf.String()
 }
 
+// devinInstallOutput remembers whether Devin reported a completed binary
+// install, even after the bounded destination evicts that line from diagnostics.
+type devinInstallOutput struct {
+	mu         sync.Mutex
+	dst        io.Writer
+	pending    []byte
+	maxPending int
+	confirmed  bool
+}
+
+func (w *devinInstallOutput) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	n, err := w.dst.Write(p)
+	if w.confirmed {
+		return n, err
+	}
+	w.pending = append(w.pending, p...)
+	if devinInstalledLine.Match(w.pending) {
+		w.confirmed = true
+		w.pending = nil
+		return n, err
+	}
+	if delimiter := bytes.LastIndexAny(w.pending, "\r\n"); delimiter >= 0 {
+		w.pending = append(w.pending[:0], w.pending[delimiter+1:]...)
+	}
+	if len(w.pending) > w.maxPending {
+		w.pending = append(w.pending[:0], w.pending[len(w.pending)-w.maxPending:]...)
+	}
+	return n, err
+}
+
+func (w *devinInstallOutput) Confirmed() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.confirmed
+}
+
 // planFor resolves the install Plan for target on the current platform,
 // probing PATH via s.executables so tests can inject deterministic results.
 func (s *Service) planFor(target Target) Plan {
@@ -1115,6 +1208,8 @@ func (s *Service) planFor(target Target) Plan {
 		return s.planNPM(TargetCopilot, "@github/copilot")
 	case TargetOpencode:
 		return s.planOpencode()
+	case TargetOpencodeV2:
+		return s.planAgent(TargetOpencodeV2)
 	case TargetCloudflared:
 		return s.planCloudflared()
 	default:
@@ -1201,13 +1296,32 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 		}
 	}
 	plan := Plan{Target: target, Command: []string{"npm", "install", "-g", pkg}, Method: "npm"}
+	privatePrefix := ""
+	if target == TargetOpencodeV2 {
+		privatePrefix = strings.TrimSpace(s.privateNPMPrefixes[target])
+		if privatePrefix == "" {
+			plan.Unsupported = true
+			plan.Reason = "OpenCode 2's private npm prefix could not be resolved."
+			return plan
+		}
+		plan.Command = []string{"npm", "install", "-g", "--prefix", privatePrefix, pkg}
+	}
 	if IsAgentTarget(target) {
-		if p.capabilities == nil || p.capabilities.NPM.Err != nil {
+		if p.capabilities == nil {
 			plan.Unsupported = true
 			plan.Reason = "npm and Node.js capabilities could not be inspected."
 			return plan
 		}
 		npm := p.capabilities.NPM
+		capabilityErr := npm.Err
+		if privatePrefix != "" {
+			capabilityErr = npm.RuntimeErr
+		}
+		if capabilityErr != nil {
+			plan.Unsupported = true
+			plan.Reason = "npm and Node.js capabilities could not be inspected."
+			return plan
+		}
 		nodeVersion, nodeOK := parseToolVersion(npm.NodeVersion)
 		_, npmOK := parseToolVersion(npm.NPMVersion)
 		if !nodeOK || !npmOK {
@@ -1222,14 +1336,34 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 			return plan
 		}
 		prefix := npm.GlobalPrefix
+		prefixWritable := npm.PrefixWritable
+		if privatePrefix != "" {
+			prefix = privatePrefix
+			if s.pathWritable == nil {
+				plan.Unsupported = true
+				plan.Reason = "OpenCode 2's private npm prefix could not be validated."
+				return plan
+			}
+			var err error
+			prefixWritable, err = s.pathWritable.PathWritable(p.ctx, prefix)
+			if err != nil {
+				plan.Unsupported = true
+				plan.Reason = "OpenCode 2's private npm prefix could not be validated."
+				return plan
+			}
+		}
 		if prefix == "" {
 			plan.Unsupported = true
 			plan.Reason = "npm's global install prefix could not be resolved."
 			return plan
 		}
-		if !npm.PrefixWritable {
+		if !prefixWritable {
 			plan.Unsupported = true
-			plan.Reason = fmt.Sprintf("npm's global prefix %s is not writable by the current user. Configure a user-owned prefix; AO will not use sudo.", prefix)
+			if privatePrefix != "" {
+				plan.Reason = fmt.Sprintf("OpenCode 2's private npm prefix %s is not writable by the current user.", prefix)
+			} else {
+				plan.Reason = fmt.Sprintf("npm's global prefix %s is not writable by the current user. Configure a user-owned prefix; AO will not use sudo.", prefix)
+			}
 			return plan
 		}
 		if s.goos == "windows" {
@@ -1243,7 +1377,7 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 
 func minimumNodeVersionForTarget(target Target) [3]int {
 	switch target {
-	case TargetAuggie, TargetDroid:
+	case TargetAuggie, TargetDroid, TargetGemini:
 		return [3]int{20, 0, 0}
 	case TargetClaudeCode, TargetQwen, TargetAutohand:
 		return [3]int{22, 0, 0}

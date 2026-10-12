@@ -32,6 +32,7 @@ export type TrayController = {
 export type TrayControllerOptions = {
 	focusWindow: () => void;
 	openSession: (target: TrayOpenSessionTarget) => void;
+	quitCompletely: () => void;
 	locale: AppLocale;
 };
 
@@ -95,7 +96,7 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 		}
 		items.push({ type: "separator" });
 		items.push({ label: t("tray.show"), click: () => options.focusWindow() });
-		items.push({ label: t("tray.quit"), role: "quit" });
+		items.push({ label: t("tray.quit"), click: () => options.quitCompletely() });
 		tray.setContextMenu(Menu.buildFromTemplate(items));
 	};
 

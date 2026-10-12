@@ -5,6 +5,7 @@ import {
 	TriangleAlert,
 	X,
 } from "lucide-react";
+import { isSettingsPageOpen } from "../hooks/useAppShortcut";
 import { Reorder, useDragControls } from "motion/react";
 import {
 	useCallback,
@@ -25,13 +26,17 @@ import {
 } from "../hooks/useAgentSwitches";
 import { useObservedAgentSwitchLifecycle } from "../hooks/useObservedAgentSwitchLifecycle";
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility";
+import { useTabListTabStop } from "../hooks/useTabListTabStop";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
-import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { useHostConnection } from "../hooks/useHostConnection";
+import { useSidebarChromeClearanceRef } from "../hooks/useSidebarChromeGeometry";
 import { MAX_SESSION_DISPLAY_NAME_LEN, useSessionRename } from "../hooks/useSessionRename";
 import { useSwitchAgentState } from "../hooks/useSwitchAgent";
 import { useTruncatedText } from "../hooks/useTruncatedText";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
-import { TERMINAL_FONT_SIZE_DEFAULT, TERMINAL_FONT_SIZE_MAX, TERMINAL_FONT_SIZE_MIN } from "../lib/design-tokens";
+import { clampTerminalFontSize, initialTerminalFontSize, terminalFontSizeStorageKey } from "../lib/terminal-font-size";
+import { createTerminalMux, muxUrlFromApiBase } from "../lib/terminal-mux";
 import { getAgentActivityView } from "../lib/session-presentation";
 import {
 	deriveAgentSwitchPresentation,
@@ -55,16 +60,23 @@ import { AgentSwitchProgressTrack } from "./AgentSwitchProgressTrack";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { TerminalTabFrame } from "./TerminalTabFrame";
 import { TerminalPane } from "./TerminalPane";
+import { sessionUiKey } from "../lib/hosts";
 import { SessionTopbarPortal } from "./SessionTopbarPortal";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "./ui/context-menu";
 
 type CenterPaneProps = {
 	session?: WorkspaceSession;
+	hostId?: string;
+	terminalGeneration?: string;
 	theme: Theme;
 	daemonReady: boolean;
 	terminalTarget?: TerminalTarget;
 	reviewerTerminal?: { handleId: string; harness: string };
 	onSelectReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
+	reviewerChat?: { reviewId: string; harness: string };
+	reviewerChatSelected?: boolean;
+	reviewerChatContent?: ReactNode;
+	onSelectReviewerChat?: (target: { reviewId: string; harness: string }) => void;
 	/** Standalone shells to render as tabs beside the session's own pane. */
 	shellTerminals?: ShellTerminal[];
 	onSelectSessionTerminal?: () => void;
@@ -90,6 +102,10 @@ type CenterPaneProps = {
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	/** Stop forwarding the agent pane's keystrokes while its controller drains. */
 	agentInputDisabled?: boolean;
+	/** The agent terminal is coming up after an interface switch. */
+	terminalBooting?: boolean;
+	/** Reports attachment of the session's own agent terminal. */
+	onSessionTerminalAttached?: (attached: boolean) => void;
 };
 
 export type CenterPaneWorkspaceTab = {
@@ -101,10 +117,10 @@ export type CenterPaneWorkspaceTab = {
 
 type AuxiliaryTab =
 	| { key: string; kind: "reviewer"; terminal: NonNullable<CenterPaneProps["reviewerTerminal"]> }
+	| { key: string; kind: "reviewer-chat"; terminal: NonNullable<CenterPaneProps["reviewerChat"]> }
 	| { key: string; kind: "shell"; terminal: ShellTerminal }
 	| { key: string; kind: "workspace"; tab: CenterPaneWorkspaceTab };
 
-const terminalFontSizeStorageKey = "ao.terminal.fontSize";
 const WHEEL_ZOOM_THRESHOLD = 80;
 const WHEEL_ZOOM_RESET_MS = 250;
 const isMac = isMacPlatform();
@@ -133,25 +149,19 @@ function DraggableWorkspaceTab({ children, value }: { children: ReactNode; value
 	);
 }
 
-function clampTerminalFontSize(size: number): number {
-	return Math.min(TERMINAL_FONT_SIZE_MAX, Math.max(TERMINAL_FONT_SIZE_MIN, size));
-}
-
-function initialTerminalFontSize(): number {
-	if (typeof window === "undefined") return TERMINAL_FONT_SIZE_DEFAULT;
-	const raw = window.localStorage?.getItem(terminalFontSizeStorageKey);
-	const parsed = raw === null ? Number.NaN : Number(raw);
-	if (!Number.isFinite(parsed)) return TERMINAL_FONT_SIZE_DEFAULT;
-	return clampTerminalFontSize(parsed);
-}
-
 export function CenterPane({
 	session,
+	hostId,
+	terminalGeneration,
 	theme,
 	daemonReady,
 	terminalTarget,
 	reviewerTerminal,
+	reviewerChat,
+	reviewerChatSelected = false,
+	reviewerChatContent,
 	onSelectReviewerTerminal,
+	onSelectReviewerChat,
 	shellTerminals = [],
 	onSelectSessionTerminal,
 	onSelectShellTerminal,
@@ -169,9 +179,12 @@ export function CenterPane({
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	agentInputDisabled = false,
+	terminalBooting = false,
+	onSessionTerminalAttached,
 }: CenterPaneProps) {
 	const { t } = useTranslation();
 	const paneRef = useRef<HTMLDivElement | null>(null);
+	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const wheelZoomRemainderRef = useRef(0);
 	const lastWheelZoomAtRef = useRef(0);
 	const [fontSize, setFontSize] = useState(initialTerminalFontSize);
@@ -180,8 +193,13 @@ export function CenterPane({
 	const [tabOrderBySession, setTabOrderBySession] = useState<Record<string, string[]>>({});
 	const queryClient = useQueryClient();
 	const refreshWorkspaces = useCallback(
-		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKey }),
-		[queryClient],
+		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) }),
+		[hostId, queryClient],
+	);
+	const { baseUrl: remoteBase } = useHostConnection(hostId);
+	const remoteCreateMux = useMemo(
+		() => remoteBase ? () => createTerminalMux(muxUrlFromApiBase(remoteBase)) : undefined,
+		[remoteBase],
 	);
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const sessionId = session?.id;
@@ -196,10 +214,13 @@ export function CenterPane({
 						},
 					]
 				: []),
+			...(!reviewerTerminal && reviewerChat
+				? [{ key: `reviewer-chat:${reviewerChat.reviewId}`, kind: "reviewer-chat" as const, terminal: reviewerChat }]
+				: []),
 			...shellTerminals.map((terminal) => ({ key: terminal.handleId, kind: "shell" as const, terminal })),
 			...(workspaceTabs ?? []).map((tab) => ({ key: tab.key, kind: "workspace" as const, tab })),
 		],
-		[reviewerTerminal, shellTerminals, workspaceTabs],
+		[reviewerChat, reviewerTerminal, shellTerminals, workspaceTabs],
 	);
 	const availableAuxiliaryKeys = useMemo(() => auxiliaryTabs.map((tab) => tab.key), [auxiliaryTabs]);
 	const orderedAuxiliaryTabs = useMemo(() => {
@@ -221,9 +242,9 @@ export function CenterPane({
 		showRightFade,
 	} = useTabScrollEdges([tabOverflowWatch]);
 	const previousTabCountRef = useRef(availableAuxiliaryKeys.length);
-	const agentSwitchesQuery = useAgentSwitches(session?.id ?? "");
+	const agentSwitchesQuery = useAgentSwitches(session?.id ?? "", hostId ?? !session?.cloud);
 	const agentSwitches = agentSwitchesQuery.data ?? [];
-	const switchMutation = useSwitchAgentState(session?.id ?? "");
+	const switchMutation = useSwitchAgentState(session?.id ?? "", hostId);
 	const mountedSessionIdRef = useRef(session?.id);
 	const sourceFocusSwitchIdRef = useRef<string | undefined>(undefined);
 	const announcedAlertKeysRef = useRef(new Set<string>());
@@ -281,7 +302,7 @@ export function CenterPane({
 		admissionAgentSwitch ??
 		latestCompletedSwitch ??
 		observedTerminalSwitch;
-	useAgentSwitchRouteVisibility(`session/${session?.id ?? "unavailable"}`, agentSwitch && agentSwitch.state !== "completed" && agentSwitch.state !== "failed" ? "active" : "history", undefined, false);
+	useAgentSwitchRouteVisibility(`session/${sessionUiKey(session?.id ?? "unavailable", hostId)}`, agentSwitch && agentSwitch.state !== "completed" && agentSwitch.state !== "failed" ? "active" : "history", undefined, false);
 	const presentation =
 		agentSwitch && session
 			? deriveAgentSwitchPresentation({
@@ -325,7 +346,7 @@ export function CenterPane({
 	const shownAgentSwitch = agentSwitch ?? displayedSuccessNotice?.agentSwitch;
 	const visibilityPresentationKind = agentSwitchVisibilityPresentationKind(shownPresentation);
 	useAgentSwitchPresentationVisibility({
-		localRouteKey: `session/${session?.id ?? "unavailable"}`,
+		localRouteKey: `session/${sessionUiKey(session?.id ?? "unavailable", hostId)}`,
 		agentSwitch: shownAgentSwitch,
 		presentationKind: visibilityPresentationKind,
 		visible: Boolean(shownPresentation && shownAgentSwitch && !workspaceFileActive && !handoffDialogOpen),
@@ -336,7 +357,9 @@ export function CenterPane({
 			: session.title
 		: t("terminal.noSession");
 	const activeTerminalLabel =
-		target.kind === "shell"
+		reviewerChatSelected && reviewerChat
+			? `${t("terminal.reviewer")} · ${reviewerChat.harness}`
+			: target.kind === "shell"
 			? (shellTerminals.find((shell) => shell.handleId === target.handleId)?.title ?? target.title)
 			: target.kind === "reviewer"
 				? `${t("terminal.reviewer")} · ${target.harness}`
@@ -357,11 +380,13 @@ export function CenterPane({
 	const selectAdjacentTab = useCallback(
 		(direction: -1 | 1) => {
 			const activeKey =
-				workspaceActiveTabKey ?? (target.kind === "shell"
-					? target.handleId
-					: target.kind === "reviewer"
-						? `reviewer:${target.handleId}`
-						: "worker");
+				reviewerChatSelected && reviewerChat
+					? `reviewer-chat:${reviewerChat.reviewId}`
+					: workspaceActiveTabKey ?? (target.kind === "shell"
+						? target.handleId
+						: target.kind === "reviewer"
+							? `reviewer:${target.handleId}`
+							: "worker");
 			const tabKeys = ["worker", ...orderedAuxiliaryTabs.map((tab) => tab.key)];
 			const activeIndex = Math.max(0, tabKeys.indexOf(activeKey));
 			const nextIndex = (activeIndex + direction + tabKeys.length) % tabKeys.length;
@@ -371,14 +396,18 @@ export function CenterPane({
 			}
 			const nextTab = orderedAuxiliaryTabs[nextIndex - 1];
 			if (nextTab?.kind === "reviewer") onSelectReviewerTerminal?.(nextTab.terminal);
+			if (nextTab?.kind === "reviewer-chat") onSelectReviewerChat?.(nextTab.terminal);
 			if (nextTab?.kind === "shell") onSelectShellTerminal?.(nextTab.terminal.handleId);
 			if (nextTab?.kind === "workspace") nextTab.tab.onSelect();
 		},
 		[
+			onSelectReviewerChat,
 			onSelectReviewerTerminal,
 			onSelectSessionTerminal,
 			onSelectShellTerminal,
 			orderedAuxiliaryTabs,
+			reviewerChat,
+			reviewerChatSelected,
 			target,
 			workspaceActiveTabKey,
 		],
@@ -474,8 +503,8 @@ export function CenterPane({
 	);
 
 	useEffect(() => {
-		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => selectAdjacentTab(-1));
-		const disposeNext = aoBridge.app.onNextTabShortcut(() => selectAdjacentTab(1));
+		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(-1));
+		const disposeNext = aoBridge.app.onNextTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(1));
 		return () => {
 			disposePrevious();
 			disposeNext();
@@ -509,11 +538,13 @@ export function CenterPane({
 
 	useEffect(() => {
 		const activeKey =
-			workspaceActiveTabKey ?? (target.kind === "shell"
-				? target.handleId
-				: target.kind === "reviewer"
-					? `reviewer:${target.handleId}`
-					: undefined);
+			reviewerChatSelected && reviewerChat
+				? `reviewer-chat:${reviewerChat.reviewId}`
+				: workspaceActiveTabKey ?? (target.kind === "shell"
+					? target.handleId
+					: target.kind === "reviewer"
+						? `reviewer:${target.handleId}`
+						: undefined);
 		if (!activeKey) return;
 		const scrollRegion = tabsOverflowRef.current;
 		if (!scrollRegion) return;
@@ -528,7 +559,7 @@ export function CenterPane({
 		if (tabRect.right > scrollRect.right) nextScrollLeft += tabRect.right - scrollRect.right;
 		if (nextScrollLeft === scrollRegion.scrollLeft) return;
 		scrollRegion.scrollTo({ behavior: "smooth", left: Math.max(0, nextScrollLeft) });
-	}, [orderedAuxiliaryTabs, target, workspaceActiveTabKey]);
+	}, [orderedAuxiliaryTabs, reviewerChat, reviewerChatSelected, target, workspaceActiveTabKey]);
 
 	useEffect(() => {
 		const pane = paneRef.current;
@@ -601,6 +632,7 @@ export function CenterPane({
 		[updateFontSize],
 	);
 
+	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(!isFullscreen && isMac);
 	const terminalTopbar = (
 		<div className="flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar">
 
@@ -608,10 +640,11 @@ export function CenterPane({
 				<div
 					className={cn(
 						"flex min-w-0 shrink items-stretch",
-						!isFullscreen && !isSidebarOpen && isMac && "session-topbar-titlebar-clearance-mac",
+						!isFullscreen && isMac && "session-topbar-titlebar-clearance-mac",
 						!isFullscreen && !isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
 					)}
 					data-testid="session-terminal-region"
+					ref={clearanceRef}
 					style={{
 						width: terminalBounds.width > 0 ? terminalBounds.width : "100%",
 					}}
@@ -620,6 +653,7 @@ export function CenterPane({
 							aria-label={t("terminal.tabsAria")}
 							className="flex h-full min-w-0 flex-1 items-stretch"
 							onKeyDown={handleTerminalTabListKeyDown}
+							ref={tabListRef}
 							role="tablist"
 						>
 							<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
@@ -631,7 +665,7 @@ export function CenterPane({
 									{/* The owning session scrolls with its auxiliary terminals, but remains fixed in order. */}
 									{session ? (
 										<SessionPaneTab
-											isActive={target.kind === "worker" && !workspaceActiveTabKey}
+											isActive={target.kind === "worker" && !workspaceActiveTabKey && !reviewerChatSelected}
 											label={sessionTabLabel}
 											onSelect={onSelectSessionTerminal}
 											onRenamed={refreshWorkspaces}
@@ -651,7 +685,7 @@ export function CenterPane({
 									>
 										{orderedAuxiliaryTabs.map((tab) => (
 											<DraggableWorkspaceTab key={tab.key} value={tab.key}>
-												{tab.kind === "reviewer" ? (
+												{tab.kind === "reviewer" || tab.kind === "reviewer-chat" ? (
 													<SessionPaneTab
 														appearance="connected"
 														icon={
@@ -661,15 +695,19 @@ export function CenterPane({
 																decorative
 															/>
 														}
-														isActive={target.kind === "reviewer"}
+																		isActive={tab.kind === "reviewer" ? target.kind === "reviewer" && !workspaceActiveTabKey : reviewerChatSelected && !workspaceActiveTabKey}
 														label={t("terminal.reviewer")}
-														onSelect={() => onSelectReviewerTerminal?.(tab.terminal)}
+														onSelect={() =>
+															tab.kind === "reviewer"
+																? onSelectReviewerTerminal?.(tab.terminal)
+																: onSelectReviewerChat?.(tab.terminal)
+														}
 														title={tab.terminal.harness}
 													/>
 												) : tab.kind === "shell" ? (
 													<ShellTerminalTab
 														appearance="connected"
-														isActive={target.kind === "shell" && target.handleId === tab.terminal.handleId}
+														isActive={target.kind === "shell" && target.handleId === tab.terminal.handleId && !workspaceActiveTabKey}
 														onClose={() => onCloseShellTerminal?.(tab.terminal.handleId)}
 														onRename={
 															onRenameShellTerminal
@@ -718,30 +756,37 @@ export function CenterPane({
 				className="relative min-h-0 flex-1"
 				role="tabpanel"
 			>
-				<div
-					className="h-full min-h-0"
-					data-testid="terminal-interaction-surface"
-					inert={workerInputDisabled ? true : undefined}
-				>
-					<TerminalPane
-						daemonReady={daemonReady}
-						fontSize={fontSize}
+				{reviewerChatSelected && reviewerChatContent ? reviewerChatContent : (
+					<div
+						className="h-full min-h-0"
+						data-testid="terminal-interaction-surface"
+						inert={workerInputDisabled ? true : undefined}
+					>
+						{hostId && !remoteBase ? null : <TerminalPane
+							key={hostId ? `${hostId}:${remoteBase}` : undefined}
+							createMux={hostId ? remoteCreateMux : undefined}
+							daemonReady={hostId ? Boolean(remoteBase) : daemonReady}
+							fontSize={fontSize}
 						// A terminal you can type into should already hold the caret when you
 						// open or switch to the session, the same way the chat composer does.
 						// Worker input is off during an interface transition or a locked agent
 						// switch; every other target is interactive as soon as it is on screen.
 						// Without this a worker terminal was only focused mid agent-switch, so
 						// switching sessions left keystrokes going nowhere until you clicked it.
-						focusRequested={target.kind !== "worker" || !workerInputDisabled}
-						isFullscreen={isFullscreen}
-						inputDisabled={workerInputDisabled}
-						onChangeFontSize={updateFontSize}
-						onToggleFullscreen={toggleFullscreen}
-						session={session}
-						terminalTarget={target}
-						theme={theme}
-					/>
-				</div>
+							focusRequested={target.kind !== "worker" || !workerInputDisabled}
+							isFullscreen={isFullscreen}
+							inputDisabled={workerInputDisabled}
+							booting={terminalBooting && target.kind === "worker"}
+							onChangeFontSize={updateFontSize}
+							onTerminalContentReadyChange={target.kind === "worker" && session?.cloud ? onSessionTerminalAttached : undefined}
+							onToggleFullscreen={toggleFullscreen}
+							session={session}
+							terminalGeneration={terminalGeneration}
+							terminalTarget={target}
+							theme={theme}
+						/>}
+					</div>
+				)}
 				{handoffDialogOpen ? null : shownPresentation && shownAgentSwitch && target.kind === "worker" ? (
 					<AgentSwitchTerminalOverlay
 						agentSwitch={shownAgentSwitch}
@@ -963,8 +1008,9 @@ export function SessionPaneTab({
 	const connected = appearance === "connected";
 	// A session object supplies the tab presentation; refresh wiring explicitly
 	// opts the owning surface into rename so shared preview/cloud tabs cannot
-	// persist a title without updating their query cache.
-	const renameSession = onRenamed ? session : undefined;
+	// persist a title without updating their query cache. The project
+	// orchestrator's tab shows its role, not a name, so it is never renamable.
+	const renameSession = onRenamed && session && !isOrchestratorSession(session) ? session : undefined;
 	const rename = useSessionRename(renameSession, onRenamed);
 	const editingContent = renameSession && rename.isEditing ? (
 		<div className="flex h-full min-w-0 flex-1 items-center gap-2 px-2">

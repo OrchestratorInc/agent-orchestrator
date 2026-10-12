@@ -40,7 +40,7 @@ export function TopbarButton({
 	variant,
 	type = "button",
 	...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & VariantProps<typeof topbarButtonVariants>) {
+}: React.ComponentProps<"button"> & VariantProps<typeof topbarButtonVariants>) {
 	return <button className={cn(topbarButtonVariants({ variant }), className)} type={type} {...props} />;
 }
 
@@ -49,7 +49,7 @@ export function TopbarActionError({ className, ...props }: React.HTMLAttributes<
 }
 
 export const topbarHeaderClass =
-	"center-panel-titlebar flex h-toolbar shrink-0 items-center gap-3 border-b border-border pr-4 z-chrome";
+	"center-panel-titlebar flex h-toolbar shrink-0 items-center gap-3 border-b border-border-strong pr-4 z-chrome";
 
 export const topbarProjectLabelClass =
 	"text-brand font-semibold tracking-tight leading-none text-foreground whitespace-nowrap";
