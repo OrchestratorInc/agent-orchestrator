@@ -368,6 +368,23 @@ describe("SessionFileExplorer", () => {
 		expect(useUiStore.getState().inspectorSessions["sess-artifact-reveal"]?.filesSource).toEqual({ kind: "artifact" });
 	});
 
+	it("returns from an opened artifact to the workspace changes through the Workspace button", async () => {
+		const sessionId = "sess-artifact-back";
+		const onRevealHandled = vi.fn();
+		const reveal = { path: "reports/plan.md", key: 4, source: "artifact" as const };
+		renderWithQuery(
+			<SessionFileExplorer artifacts={artifacts} onRevealHandled={onRevealHandled} revealRequest={reveal} sessionId={sessionId} />,
+		);
+
+		expect(await screen.findByTestId("artifact-view")).toHaveTextContent("plan.md:reports/plan.md");
+		await userEvent.click(screen.getByRole("button", { name: "Workspace" }));
+
+		expect(useUiStore.getState().inspectorSessions[sessionId]?.filesSource).toEqual({ kind: "workspace" });
+		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
+		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
+		expect(onRevealHandled).toHaveBeenCalledWith(4);
+	});
+
 	it("switches back to Workspace when a workspace file is revealed after viewing artifacts", async () => {
 		const sessionId = "sess-workspace-reveal";
 		useUiStore.getState().setFilesSource(sessionId, { kind: "artifact" });

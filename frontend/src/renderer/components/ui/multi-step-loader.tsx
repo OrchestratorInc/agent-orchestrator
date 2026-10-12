@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Check } from "lucide-react";
 import { cn } from "../../lib/utils";
 
@@ -9,6 +9,7 @@ export function MultiStepLoader({
 	complete = false,
 	duration = 380,
 	steps,
+	stepAccessories,
 }: {
 	ariaLabel: string;
 	className?: string;
@@ -16,6 +17,8 @@ export function MultiStepLoader({
 	complete?: boolean;
 	duration?: number;
 	steps: readonly string[];
+	/** Optional controls rendered beside a step's label, by step index. */
+	stepAccessories?: readonly ReactNode[];
 }) {
 	if (steps.length === 0) return null;
 
@@ -42,6 +45,7 @@ export function MultiStepLoader({
 								</span>
 							</span>
 						) : <span className={index < activeIndex ? "text-foreground/80" : "text-muted-foreground/55"}>{step}</span>}
+						{stepAccessories?.[index] ? <span className="-ml-2 flex">{stepAccessories[index]}</span> : null}
 					</li>
 				))}
 			</ol>

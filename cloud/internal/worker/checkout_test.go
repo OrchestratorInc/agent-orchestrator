@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,11 +17,13 @@ import (
 type stagingRecorderRunner struct {
 	cloneURL   string
 	stagingDir string
+	cloneArgs  []string
 }
 
 func (r *stagingRecorderRunner) Run(_ context.Context, dir string, _ map[string]string, args ...string) (string, error) {
 	if len(args) > 0 && args[0] == "clone" {
 		r.stagingDir = dir
+		r.cloneArgs = append([]string(nil), args...)
 		dest := args[len(args)-1]
 		if err := os.MkdirAll(filepath.Join(dest, ".git"), 0o755); err != nil {
 			return "", err
@@ -348,5 +351,171 @@ func TestCloneExtraRepoDoesNotPersistToken(t *testing.T) {
 	origin := gitOutput(t, dest, "remote", "get-url", "origin")
 	if strings.Contains(origin, token) || strings.Contains(origin, "x-access-token") {
 		t.Fatalf("origin url is credentialed: %s", origin)
+	}
+}
+
+// Only a checkout that opts in (Freestyle) is a partial clone. Coder, BYO
+// Coder, and Docker checkouts, and every extra-repo clone, stay full clones.
+func TestCheckoutPartialCloneOnlyWhenOptedIn(t *testing.T) {
+	hasFilter := func(args []string) bool {
+		for _, arg := range args {
+			if arg == partialCloneFilter {
+				return true
+			}
+		}
+		return false
+	}
+	grant := CheckoutGrantResponse{CloneURL: "https://github.com/acme/repo.git"}
+	empty := func(t *testing.T) string { return filepath.Join(t.TempDir(), "repository") }
+	nonEmpty := func(t *testing.T) string {
+		workspace := filepath.Join(t.TempDir(), "repository")
+		if err := os.MkdirAll(workspace, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(workspace, ".claude"), []byte("agent"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return workspace
+	}
+
+	for _, layout := range []struct {
+		name      string
+		workspace func(*testing.T) string
+	}{{"empty workspace", empty}, {"non-empty workspace", nonEmpty}} {
+		t.Run(layout.name+" default is full", func(t *testing.T) {
+			runner := &stagingRecorderRunner{cloneURL: grant.CloneURL}
+			if err := PrepareCheckout(context.Background(), runner, layout.workspace(t), grant); err != nil {
+				t.Fatalf("PrepareCheckout: %v", err)
+			}
+			if len(runner.cloneArgs) == 0 || hasFilter(runner.cloneArgs) {
+				t.Fatalf("default clone args %q must be a full clone", runner.cloneArgs)
+			}
+		})
+		t.Run(layout.name+" opted in is partial", func(t *testing.T) {
+			runner := &stagingRecorderRunner{cloneURL: grant.CloneURL}
+			if err := PrepareCheckoutWithOptions(context.Background(), runner, layout.workspace(t), grant,
+				CheckoutOptions{PartialClone: true}); err != nil {
+				t.Fatalf("PrepareCheckoutWithOptions: %v", err)
+			}
+			if !hasFilter(runner.cloneArgs) {
+				t.Fatalf("clone args %q lack %s", runner.cloneArgs, partialCloneFilter)
+			}
+		})
+	}
+
+	t.Run("extra repo is full", func(t *testing.T) {
+		runner := &stagingRecorderRunner{cloneURL: grant.CloneURL}
+		parent := t.TempDir()
+		if err := CloneExtraRepo(context.Background(), runner, parent, filepath.Join(parent, "extra"),
+			grant.CloneURL, "main", "", t.TempDir()); err != nil {
+			t.Fatalf("CloneExtraRepo: %v", err)
+		}
+		if len(runner.cloneArgs) == 0 || hasFilter(runner.cloneArgs) {
+			t.Fatalf("extra repo clone args %q must be a full clone", runner.cloneArgs)
+		}
+	})
+}
+
+// commandRecorderRunner records every git invocation and answers the origin
+// lookup, for workspaces that already hold a checkout.
+type commandRecorderRunner struct {
+	cloneURL string
+	commands [][]string
+	// emptyRemote makes origin/HEAD unresolvable, as in an empty repository.
+	emptyRemote bool
+}
+
+func (r *commandRecorderRunner) Run(_ context.Context, _ string, _ map[string]string, args ...string) (string, error) {
+	r.commands = append(r.commands, append([]string(nil), args...))
+	if len(args) >= 2 && args[0] == "remote" && args[1] == "get-url" {
+		return r.cloneURL, nil
+	}
+	if r.emptyRemote && len(args) > 0 && args[0] == "rev-parse" {
+		return "", errors.New("exit status 1")
+	}
+	return "", nil
+}
+
+func existingCheckout(t *testing.T, withMarker bool) string {
+	t.Helper()
+	workspace := filepath.Join(t.TempDir(), "repository")
+	if err := os.MkdirAll(filepath.Join(workspace, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("# repo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if withMarker {
+		if err := os.WriteFile(filepath.Join(workspace, ".git", ProjectSnapshotMarker), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return workspace
+}
+
+func hasCommand(commands [][]string, want ...string) bool {
+	for _, command := range commands {
+		if strings.Join(command, " ") == strings.Join(want, " ") {
+			return true
+		}
+	}
+	return false
+}
+
+// A checkout baked into a project snapshot is as old as the snapshot: the first
+// checkout moves it to the latest origin/HEAD and clears the marker.
+func TestCheckoutAdoptsProjectSnapshotOnce(t *testing.T) {
+	grant := CheckoutGrantResponse{CloneURL: "https://github.com/acme/repo.git"}
+	workspace := existingCheckout(t, true)
+	runner := &commandRecorderRunner{cloneURL: grant.CloneURL}
+
+	if err := PrepareCheckout(context.Background(), runner, workspace, grant); err != nil {
+		t.Fatalf("PrepareCheckout: %v", err)
+	}
+	if !hasCommand(runner.commands, "fetch", "--prune", "--", "origin") {
+		t.Fatalf("no fetch in %q", runner.commands)
+	}
+	if !hasCommand(runner.commands, "reset", "--hard", "--quiet", "origin/HEAD") {
+		t.Fatalf("snapshot checkout not moved to origin/HEAD: %q", runner.commands)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".git", ProjectSnapshotMarker)); !os.IsNotExist(err) {
+		t.Fatalf("marker still present (err=%v)", err)
+	}
+}
+
+// A workspace without the marker is a session's own checkout (a worker
+// restart): it is fetched but never reset, so uncommitted work survives.
+func TestCheckoutNeverResetsASessionsOwnWorkspace(t *testing.T) {
+	grant := CheckoutGrantResponse{CloneURL: "https://github.com/acme/repo.git"}
+	workspace := existingCheckout(t, false)
+	runner := &commandRecorderRunner{cloneURL: grant.CloneURL}
+
+	if err := PrepareCheckout(context.Background(), runner, workspace, grant); err != nil {
+		t.Fatalf("PrepareCheckout: %v", err)
+	}
+	for _, command := range runner.commands {
+		if len(command) > 0 && command[0] == "reset" {
+			t.Fatalf("reset ran on a session's own workspace: %q", command)
+		}
+	}
+}
+
+// A snapshot of an empty repository has no origin/HEAD to move to; checkout
+// keeps it as baked instead of failing the session.
+func TestCheckoutKeepsAnEmptyRepositorySnapshot(t *testing.T) {
+	grant := CheckoutGrantResponse{CloneURL: "https://github.com/acme/repo.git"}
+	workspace := existingCheckout(t, true)
+	runner := &commandRecorderRunner{cloneURL: grant.CloneURL, emptyRemote: true}
+
+	if err := PrepareCheckout(context.Background(), runner, workspace, grant); err != nil {
+		t.Fatalf("PrepareCheckout failed on an empty repository snapshot: %v", err)
+	}
+	for _, command := range runner.commands {
+		if len(command) > 0 && command[0] == "reset" {
+			t.Fatalf("reset ran with no origin/HEAD: %q", command)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".git", ProjectSnapshotMarker)); !os.IsNotExist(err) {
+		t.Fatalf("marker still present (err=%v)", err)
 	}
 }

@@ -68,7 +68,16 @@ type Config struct {
 	// session/resume. Standing context such as a system prompt is process input,
 	// not transcript history, so a resumed native conversation must receive it
 	// again even though the provider recovers the messages itself.
+	//
+	// Only use this for extensions the provider's session handlers actually read.
+	// An agent that ignores _meta on session/new needs SessionPreamble instead.
 	SessionMeta func(LaunchConfig) map[string]any
+	// SessionPreamble returns standing context to attach to the first prompt of a
+	// session as an embedded ACP resource. It is for agents that accept no
+	// system-prompt launch flag and ignore session/new _meta, but do execute
+	// prompt content blocks. Delivered on session/new and again on session/load,
+	// because standing context is process input rather than transcript history.
+	SessionPreamble func(LaunchConfig) []acpsdk.ContentBlock
 	// SessionMode maps AO's approval vocabulary onto this ACP agent's mode ids.
 	// Empty means "leave the provider/user default unchanged".
 	SessionMode func(ports.PermissionMode) string
@@ -298,6 +307,7 @@ func (d *Driver) openNewSession(
 	if d.cfg.EncodeProviderConversationID != nil {
 		conv.setReportedProviderConversationID(d.cfg.EncodeProviderConversationID(string(resp.SessionId)))
 	}
+	conv.setSessionPreamble(d.sessionPreamble(launchCfg))
 	settingsStarted := time.Now()
 	err = conv.applyTurnSettings(ctx, settings)
 	d.logStartStage(launchCfg.SessionID, "initial_settings", settingsStarted, err)
@@ -311,6 +321,13 @@ func (d *Driver) openNewSession(
 		}
 	}
 	return nil
+}
+
+func (d *Driver) sessionPreamble(cfg LaunchConfig) []acpsdk.ContentBlock {
+	if d.cfg.SessionPreamble == nil {
+		return nil
+	}
+	return d.cfg.SessionPreamble(cfg)
 }
 
 func (d *Driver) logStartStage(sessionID domain.SessionID, stage string, started time.Time, err error) {
@@ -406,6 +423,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		)
 		conv.setReportedProviderConversationID(reportedProviderConversationID)
 		conv.initialPermission = ports.PermissionMode(live.InitialPermissions)
+		conv.setSessionPreamble(d.sessionPreamble(launchCfg))
 		return conv, nil
 	}
 	if !supportsSessionRestore(init) {
@@ -480,6 +498,10 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	)
 	d.bindSessionValidation(conv, launchCfg, cfg.ProviderConversationID)
 	conv.setReportedProviderConversationID(reportedProviderConversationID)
+	// Standing context is process input, not transcript history, so a resumed
+	// conversation must receive it again even though the provider recovers the
+	// messages itself.
+	conv.setSessionPreamble(d.sessionPreamble(launchCfg))
 	if err := conv.applyTurnSettings(ctx, ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions}); err != nil {
 		if !errors.Is(err, ErrACPSetterUnsupported) {
 			conv.discard()

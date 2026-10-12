@@ -2288,9 +2288,9 @@ describe("SessionInspector Activity section", () => {
 describe("SessionInspector tabs", () => {
   it("exposes Reviews after Summary and keeps review content out of Summary", async () => {
     mockCommonGets([], "", [reviewState(1, "needs_review")]);
-    renderWithQuery(<SessionInspector session={session([pr(1, "open")])} />);
+    renderWithQuery(<SessionInspector session={session([pr(1, "open")])} sideChatView={<div />} />);
     const tabs = screen.getAllByRole("tab").map((el) => el.textContent?.trim());
-    expect(tabs).toEqual(["Summary", "Reviews", "Browser", "Files"]);
+    expect(tabs).toEqual(["Summary", "Reviews", "Browser", "Side chat", "Files"]);
     expect(screen.queryByText("Review controls")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
@@ -4498,6 +4498,7 @@ describe("SessionInspector summary reviews", () => {
 
     await screen.findByRole("tab", { name: /Summary/ });
     expect(screen.queryByRole("tab", { name: /Reviews/ })).not.toBeInTheDocument();
+    // No side chat view from the host (side chats off or unsupported): no tab.
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual([
       "Summary",
       "Browser",
