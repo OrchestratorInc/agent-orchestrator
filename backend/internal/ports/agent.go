@@ -3,6 +3,7 @@ package ports
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -70,6 +71,44 @@ const (
 	// configured instead, and must never render as a ready state.
 	AgentAuthStatusConfigured AgentAuthStatus = "configured"
 )
+
+// AuthEvidence collects what an authentication check relied on, so readiness
+// can say why a harness reads as signed in. Adapters record through
+// RecordAuthEvidence; without a collector in the context it does nothing.
+type AuthEvidence struct {
+	mu       sync.Mutex
+	identity domain.AgentAccountIdentity
+}
+
+type authEvidenceKey struct{}
+
+// WithAuthEvidence returns a context that collects authentication evidence.
+func WithAuthEvidence(ctx context.Context) (context.Context, *AuthEvidence) {
+	evidence := &AuthEvidence{}
+	return context.WithValue(ctx, authEvidenceKey{}, evidence), evidence
+}
+
+// RecordAuthEvidence records what made a check succeed. A later record
+// replaces an earlier one, so adapters record at the point they decide.
+func RecordAuthEvidence(ctx context.Context, identity domain.AgentAccountIdentity) {
+	evidence, ok := ctx.Value(authEvidenceKey{}).(*AuthEvidence)
+	if !ok || evidence == nil {
+		return
+	}
+	evidence.mu.Lock()
+	evidence.identity = identity
+	evidence.mu.Unlock()
+}
+
+// Identity returns the recorded evidence.
+func (e *AuthEvidence) Identity() domain.AgentAccountIdentity {
+	if e == nil {
+		return domain.AgentAccountIdentity{}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.identity
+}
 
 // AgentAuthAccountChecker is an AgentAuthChecker whose check also observes
 // the signed-in account. The readiness coordinator prefers it, so the account

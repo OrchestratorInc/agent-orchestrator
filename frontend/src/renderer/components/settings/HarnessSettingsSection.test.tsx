@@ -466,12 +466,12 @@ describe("HarnessSettingsSection", () => {
 		const codex = readiness.agents.find((agent) => agent.id === "codex")!;
 		Object.assign(codex.authentication, { account: { email: "dev@example.com", organization: "Acme", plan: "pro", method: "account" } });
 		const cursor = readiness.agents.find((agent) => agent.id === "cursor")!;
-		Object.assign(cursor.authentication, { account: { method: "api_key" } });
+		Object.assign(cursor.authentication, { account: { method: "api_key", provider: "zai", sourceKind: "environment", source: "CURSOR_API_KEY" } });
 		mockInstalledOperations("npm", readiness);
 		renderSection();
 		expect(await within(await findAgentRow("codex")).findByText("Signed in as dev@example.com · Pro · Acme")).toBeInTheDocument();
 		backToList();
-		expect(await within(await findAgentRow("cursor")).findByText("Using an API key")).toBeInTheDocument();
+		expect(await within(await findAgentRow("cursor")).findByText("Using an API key · zai · from CURSOR_API_KEY")).toBeInTheDocument();
 	});
 
 	it("keeps the list beside the open harness when there is room", async () => {

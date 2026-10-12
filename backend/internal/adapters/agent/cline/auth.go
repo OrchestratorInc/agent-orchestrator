@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -20,6 +22,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, err
 	}
 	if strings.TrimSpace(os.Getenv("CLINE_API_KEY")) != "" {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("CLINE_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, nil
 	}
 	if status, ok, err := clineProviderAuthStatus(ctx); err != nil {
@@ -85,6 +88,15 @@ func clineProviderAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 
 	if provider, ok := configuredClineProvider(file); ok {
 		if providerAuthorized(provider.Settings) {
+			evidence := domain.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
+			evidence.Provider = provider.Settings.Provider
+			if strings.TrimSpace(provider.Settings.APIKey) != "" || strings.TrimSpace(provider.Settings.APIKeyAlt) != "" {
+				evidence.Method = domain.AgentAccountMethodAPIKey
+			} else if provider.Settings.Auth != nil {
+				// A Cline account login carries who signed in in its access token.
+				evidence.Email, evidence.Name = authprobe.TokenIdentity(provider.Settings.Auth.AccessToken)
+			}
+			ports.RecordAuthEvidence(ctx, evidence)
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 		return ports.AgentAuthStatusUnknown, false, nil

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -30,6 +31,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 
 	// Tier 1: KIMCHI_API_KEY env var (highest precedence in kimchi's config loading).
 	if key := strings.TrimSpace(os.Getenv("KIMCHI_API_KEY")); key != "" {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("KIMCHI_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, nil
 	}
 
@@ -79,6 +81,7 @@ func kimchiConfigAuthStatus(ctx context.Context, configPath string) (ports.Agent
 	}
 
 	if key := kimchiExtractAPIKey(config); key != "" {
+		ports.RecordAuthEvidence(ctx, domain.FileSource(configPath).WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, nil
 	}
 	return ports.AgentAuthStatusUnknown, nil

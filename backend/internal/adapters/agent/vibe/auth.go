@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -54,11 +55,16 @@ func vibeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
+	envFile := filepath.Join(vibeHome, ".env")
 	for _, envVar := range envVars {
 		if strings.TrimSpace(os.Getenv(envVar)) != "" {
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(envVar).WithMethod(domain.AgentAccountMethodAPIKey))
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
-		if status, ok, err := vibeEnvFileAuthStatus(filepath.Join(vibeHome, ".env"), envVar); err != nil || ok {
+		if status, ok, err := vibeEnvFileAuthStatus(envFile, envVar); err != nil || ok {
+			if status == ports.AgentAuthStatusAuthorized {
+				ports.RecordAuthEvidence(ctx, domain.FileSource(envFile).WithMethod(domain.AgentAccountMethodAPIKey))
+			}
 			return status, ok, err
 		}
 	}

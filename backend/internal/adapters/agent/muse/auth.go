@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -32,6 +33,7 @@ func museLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if strings.TrimSpace(os.Getenv(museAPIKeyEnvVar)) != "" {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(museAPIKeyEnvVar).WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 
@@ -39,7 +41,11 @@ func museLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 	if !ok {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
-	return museAuthJSONStatus(path)
+	status, identity, ok, err := museAuthJSON(path)
+	if status == ports.AgentAuthStatusAuthorized {
+		ports.RecordAuthEvidence(ctx, identity.Merge(domain.FileSource(path)))
+	}
+	return status, ok, err
 }
 
 // museAuthPath mirrors the official launcher: MUSE_AUTH_PATH wins, then the
@@ -59,41 +65,50 @@ func museAuthPath() (string, bool) {
 }
 
 func museAuthJSONStatus(path string) (ports.AgentAuthStatus, bool, error) {
+	status, _, ok, err := museAuthJSON(path)
+	return status, ok, err
+}
+
+// museAuthJSON also reports how the stored credential signs in and, for a
+// login, who signed in.
+func museAuthJSON(path string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, bool, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // user-selected Muse config path
 	if os.IsNotExist(err) {
-		return ports.AgentAuthStatusUnknown, false, nil
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, false, nil
 	}
 	if err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, false, err
 	}
 
 	if strings.TrimSpace(string(data)) == "" {
-		return ports.AgentAuthStatusUnknown, false, nil
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, false, nil
 	}
 	var auth struct {
 		Providers struct {
 			Meta struct {
-				Mechanism   string `json:"mechanism"`
-				AccessToken string `json:"access_token"`
-				APIKey      string `json:"api_key"`
+				Mechanism    string `json:"mechanism"`
+				AccessToken  string `json:"access_token"`
+				APIKey       string `json:"api_key"`
+				UserEmail    string `json:"user_email"`
+				UserFullName string `json:"user_full_name"`
 			} `json:"meta"`
 		} `json:"providers"`
 	}
 	if err := json.Unmarshal(data, &auth); err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, false, err
 	}
 	meta := auth.Providers.Meta
 	switch strings.ToLower(strings.TrimSpace(meta.Mechanism)) {
 	case "oauth":
 		if strings.TrimSpace(meta.AccessToken) != "" {
-			return ports.AgentAuthStatusAuthorized, true, nil
+			return ports.AgentAuthStatusAuthorized, domain.AgentAccountIdentity{Email: meta.UserEmail, Name: meta.UserFullName, Method: domain.AgentAccountMethodAccount}, true, nil
 		}
-		return ports.AgentAuthStatusUnknown, false, nil
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, false, nil
 	case "api_key", "api-key", "apikey":
 		if strings.TrimSpace(meta.APIKey) != "" {
-			return ports.AgentAuthStatusAuthorized, true, nil
+			return ports.AgentAuthStatusAuthorized, domain.AgentAccountIdentity{Method: domain.AgentAccountMethodAPIKey}, true, nil
 		}
-		return ports.AgentAuthStatusUnknown, false, nil
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, false, nil
 	}
-	return ports.AgentAuthStatusUnknown, false, nil
+	return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, false, nil
 }

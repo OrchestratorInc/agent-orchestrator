@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -31,13 +32,19 @@ func auggieLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, er
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if strings.TrimSpace(os.Getenv("AUGMENT_SESSION_AUTH")) != "" {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("AUGMENT_SESSION_AUTH").WithMethod(domain.AgentAccountMethodToken))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	return auggieSessionAuthStatus(filepath.Join(home, ".augment", "session.json"))
+	path := filepath.Join(home, ".augment", "session.json")
+	status, ok, err := auggieSessionAuthStatus(path)
+	if status == ports.AgentAuthStatusAuthorized {
+		ports.RecordAuthEvidence(ctx, domain.FileSource(path).WithMethod(domain.AgentAccountMethodAccount))
+	}
+	return status, ok, err
 }
 
 // auggieSessionAuthStatus checks Auggie's documented login session file

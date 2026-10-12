@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -46,6 +47,7 @@ func aiderLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	}
 	for _, name := range aiderAPIKeyEnvVars {
 		if strings.TrimSpace(os.Getenv(name)) != "" {
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey))
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 	}
@@ -56,6 +58,7 @@ func aiderLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 			return ports.AgentAuthStatusUnknown, false, err
 		}
 		if ok {
+			ports.RecordAuthEvidence(ctx, domain.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey))
 			return status, true, nil
 		}
 	}

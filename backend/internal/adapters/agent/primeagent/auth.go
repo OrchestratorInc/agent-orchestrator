@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -68,10 +69,20 @@ func primeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	}
 	for _, name := range primeAPIKeyEnvVars {
 		if strings.TrimSpace(os.Getenv(name)) != "" {
+			method := domain.AgentAccountMethodAPIKey
+			if strings.Contains(name, "TOKEN") && !strings.HasSuffix(name, "_API_KEY") {
+				method = domain.AgentAccountMethodToken
+			}
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(method))
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 	}
-	if primeAWSCredentialEnvConfigured() || primeGoogleCredentialConfigured() {
+	if primeAWSCredentialEnvConfigured() {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(primeFirstSetEnv("AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_ROLE_ARN", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI")).WithMethod(domain.AgentAccountMethodAccount))
+		return ports.AgentAuthStatusAuthorized, true, nil
+	}
+	if primeGoogleCredentialConfigured() {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(primeFirstSetEnv("GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT_ID", "GCLOUD_PROJECT")).WithMethod(domain.AgentAccountMethodAccount))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 
@@ -79,15 +90,30 @@ func primeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	if !ok {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
-	status, found, err := primeCredentialJSONStatus(filepath.Join(dir, "auth.json"), true)
-	if err != nil || found {
-		return status, found, err
-	}
-	status, found, err = primeCredentialJSONStatus(filepath.Join(dir, "models.json"), false)
-	if err != nil || found {
-		return status, found, err
+	for _, file := range []struct {
+		name          string
+		allowPlainKey bool
+	}{{"auth.json", true}, {"models.json", false}} {
+		path := filepath.Join(dir, file.name)
+		status, found, err := primeCredentialJSONStatus(path, file.allowPlainKey)
+		if err != nil || found {
+			if status == ports.AgentAuthStatusAuthorized {
+				ports.RecordAuthEvidence(ctx, domain.FileSource(path))
+			}
+			return status, found, err
+		}
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
+}
+
+// primeFirstSetEnv names the first of names that is set, for display.
+func primeFirstSetEnv(names ...string) string {
+	for _, name := range names {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			return name
+		}
+	}
+	return names[0]
 }
 
 func primeConfigDir() (string, bool) {

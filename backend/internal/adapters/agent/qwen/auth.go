@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -47,6 +48,7 @@ func qwenLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 	}
 	for _, name := range qwenAPIKeyEnvVars {
 		if strings.TrimSpace(os.Getenv(name)) != "" {
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey))
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 	}
@@ -60,13 +62,25 @@ func qwenLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 	qwenHome := qwenHomeDir(home)
 	settingsPath := filepath.Join(qwenHome, "settings.json")
 	if status, ok, err := qwenAuthStatusFromSettings(settingsPath); err != nil || ok {
+		if status == ports.AgentAuthStatusAuthorized {
+			ports.RecordAuthEvidence(ctx, domain.FileSource(settingsPath).WithMethod(domain.AgentAccountMethodAPIKey))
+		}
 		return status, ok, err
 	}
 	names, err := qwenConfiguredEnvNamesFromSettings(settingsPath)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	return qwenGlobalEnvAuthStatus(qwenHome, home, names...)
+	for _, path := range qwenGlobalEnvFiles(qwenHome, home) {
+		status, ok, err := qwenEnvFileAuthStatus(path, names...)
+		if err != nil || ok {
+			if status == ports.AgentAuthStatusAuthorized {
+				ports.RecordAuthEvidence(ctx, domain.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey))
+			}
+			return status, ok, err
+		}
+	}
+	return ports.AgentAuthStatusUnknown, false, nil
 }
 
 // qwenHomeDir mirrors Qwen Code's QWEN_HOME override for global state. Project
@@ -192,13 +206,18 @@ func qwenGlobalEnvAuthStatus(qwenHome, home string, extraNames ...string) (ports
 	// Qwen falls back to these user-scoped .env files only after its
 	// workspace search. The workspace search cannot be performed safely by a
 	// global catalog probe, which has no workspace input.
-	for _, path := range []string{filepath.Join(qwenHome, ".env"), filepath.Join(home, ".env")} {
+	for _, path := range qwenGlobalEnvFiles(qwenHome, home) {
 		status, ok, err := qwenEnvFileAuthStatus(path, extraNames...)
 		if err != nil || ok {
 			return status, ok, err
 		}
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
+}
+
+// qwenGlobalEnvFiles are the user-scoped .env files Qwen falls back to.
+func qwenGlobalEnvFiles(qwenHome, home string) []string {
+	return []string{filepath.Join(qwenHome, ".env"), filepath.Join(home, ".env")}
 }
 
 func qwenEnvFileAuthStatus(path string, extraNames ...string) (ports.AgentAuthStatus, bool, error) {

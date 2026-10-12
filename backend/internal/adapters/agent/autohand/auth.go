@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -25,11 +26,20 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		"GOOGLE_API_KEY", "OPENROUTER_API_KEY", "MISTRAL_API_KEY", "GROQ_API_KEY",
 	} {
 		if strings.TrimSpace(os.Getenv(name)) != "" {
+			method := domain.AgentAccountMethodAPIKey
+			if strings.HasSuffix(name, "_TOKEN") {
+				method = domain.AgentAccountMethodToken
+			}
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(method))
 			return ports.AgentAuthStatusAuthorized, nil
 		}
 	}
-	status, err := autohandConfigAuthStatus(autohandConfigPath())
+	configPath := autohandConfigPath()
+	status, err := autohandConfigAuthStatus(configPath)
 	if err != nil || status != ports.AgentAuthStatusUnknown {
+		if status == ports.AgentAuthStatusAuthorized {
+			ports.RecordAuthEvidence(ctx, domain.FileSource(configPath).WithMethod(domain.AgentAccountMethodAccount))
+		}
 		return status, err
 	}
 	// The documented CLI flow prompts for browser sign-in on first use; it does

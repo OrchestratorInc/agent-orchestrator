@@ -31,7 +31,7 @@ func (p *Plugin) AuthStatusWithAccount(ctx context.Context) (ports.AgentAuthStat
 		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, err
 	}
 	if strings.TrimSpace(os.Getenv("CURSOR_API_KEY")) != "" {
-		return ports.AgentAuthStatusAuthorized, domain.AgentAccountIdentity{Method: domain.AgentAccountMethodAPIKey}, nil
+		return ports.AgentAuthStatusAuthorized, domain.EnvironmentSource("CURSOR_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey), nil
 	}
 	if status, err := cursorCLIAuthStatus(ctx, binary); err == nil && status != ports.AgentAuthStatusUnknown {
 		var account domain.AgentAccountIdentity

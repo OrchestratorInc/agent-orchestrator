@@ -8,6 +8,7 @@ package codex
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -318,6 +320,13 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, probeCtx.Err()
 	}
 	if status, ok := codexAuthStatusFromOutput(out); ok {
+		if status == ports.AgentAuthStatusAuthorized {
+			evidence := domain.CommandSource(binary, "login", "status").WithMethod(codexLoginMethod(out))
+			if evidence.Method == domain.AgentAccountMethodAccount {
+				evidence.Email, evidence.Name = codexLoginIdentity()
+			}
+			ports.RecordAuthEvidence(ctx, evidence)
+		}
 		return status, nil
 	}
 	// The probe is advisory. Version skew, transient startup failures, and
@@ -325,6 +334,46 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	// launch remains the authoritative check.
 	_ = err
 	return ports.AgentAuthStatusUnknown, nil
+}
+
+// codexLoginIdentity reads who a ChatGPT login belongs to from the id_token
+// Codex stores in CODEX_HOME/auth.json. Only display claims are read.
+func codexLoginIdentity() (email, name string) {
+	home := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	if home == "" {
+		userHome, err := os.UserHomeDir()
+		if err != nil || userHome == "" {
+			return "", ""
+		}
+		home = filepath.Join(userHome, ".codex")
+	}
+	data, err := os.ReadFile(filepath.Join(home, "auth.json")) //nolint:gosec // Codex's own auth file
+	if err != nil {
+		return "", ""
+	}
+	var auth struct {
+		Tokens struct {
+			IDToken string `json:"id_token"`
+		} `json:"tokens"`
+	}
+	if json.Unmarshal(data, &auth) != nil {
+		return "", ""
+	}
+	return authprobe.TokenIdentity(auth.Tokens.IDToken)
+}
+
+// codexLoginMethod reads how `codex login status` says it is signed in. Only
+// the method is kept; the output can include a key fragment.
+func codexLoginMethod(out []byte) domain.AgentAccountMethod {
+	text := strings.ToLower(string(out))
+	switch {
+	case strings.Contains(text, "api key"):
+		return domain.AgentAccountMethodAPIKey
+	case strings.Contains(text, "chatgpt"):
+		return domain.AgentAccountMethodAccount
+	default:
+		return ""
+	}
 }
 
 func codexAuthStatusFromOutput(out []byte) (ports.AgentAuthStatus, bool) {

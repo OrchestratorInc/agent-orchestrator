@@ -268,6 +268,34 @@ func TestReadinessCoordinatorReportsSignedInAccount(t *testing.T) {
 	}
 }
 
+type evidenceReadinessAgent struct {
+	readinessTestAgent
+}
+
+func (a *evidenceReadinessAgent) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
+	ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("GROK_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))
+	return ports.AgentAuthStatusConfigured, nil
+}
+
+func TestReadinessCoordinatorShowsRecordedAuthEvidence(t *testing.T) {
+	t.Parallel()
+	agent := &evidenceReadinessAgent{readinessTestAgent{resolve: func(context.Context) (string, error) { return "/bin/grok", nil }}}
+	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents: []agentregistry.HarnessAgent{readinessHarness("grok", "Grok", agent)},
+		Factory: func() []agentregistry.HarnessAgent {
+			return []agentregistry.HarnessAgent{readinessHarness("grok", "Grok", agent)}
+		},
+	})
+	got, err := coordinator.Ensure(context.Background(), []string{"grok"}, domain.AgentReadinessPurposeLaunch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := domain.AgentAccountIdentity{Method: domain.AgentAccountMethodAPIKey, SourceKind: domain.AgentCredentialSourceEnvironment, Source: "GROK_API_KEY"}
+	if account := got[0].Authentication.Account; account == nil || *account != want {
+		t.Fatalf("account = %+v, want %+v", account, want)
+	}
+}
+
 func TestReadinessCoordinatorSingleFlightAndCallerCancellation(t *testing.T) {
 	t.Parallel()
 	started := make(chan struct{})

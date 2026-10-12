@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -56,6 +57,8 @@ func cliStatus(ctx context.Context, binary string, commands [][]string, timeout 
 			return ports.AgentAuthStatusUnknown, err
 		}
 		if status != ports.AgentAuthStatusUnknown {
+			// The command that decided is the evidence readiness shows.
+			ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, args...))
 			return status, nil
 		}
 	}

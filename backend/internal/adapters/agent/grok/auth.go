@@ -9,6 +9,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -33,6 +34,7 @@ func grokLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if strings.TrimSpace(os.Getenv("XAI_API_KEY")) != "" {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("XAI_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 
@@ -43,8 +45,12 @@ func grokLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 	if grokHome == "" {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
-	configStatus, configOK, err := grokConfigAuthStatus(filepath.Join(grokHome, "config.toml"))
+	configPath := filepath.Join(grokHome, "config.toml")
+	configStatus, configOK, err := grokConfigAuthStatus(configPath)
 	if err != nil || configOK {
+		if configStatus == ports.AgentAuthStatusAuthorized {
+			ports.RecordAuthEvidence(ctx, domain.FileSource(configPath).WithMethod(domain.AgentAccountMethodAPIKey))
+		}
 		return configStatus, configOK, err
 	}
 	path := filepath.Join(grokHome, "auth.json")
@@ -73,9 +79,17 @@ func grokLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 		var session struct {
 			AccessToken  string `json:"access_token"`
 			RefreshToken string `json:"refresh_token"`
+			Email        string `json:"email"`
+			FirstName    string `json:"first_name"`
+			LastName     string `json:"last_name"`
 		}
 		if json.Unmarshal(value, &session) == nil &&
 			(strings.TrimSpace(session.AccessToken) != "" || strings.TrimSpace(session.RefreshToken) != "") {
+			// The xAI login records who signed in next to its tokens.
+			evidence := domain.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
+			evidence.Email = session.Email
+			evidence.Name = strings.TrimSpace(session.FirstName + " " + session.LastName)
+			ports.RecordAuthEvidence(ctx, evidence)
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 	}

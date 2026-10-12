@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 
@@ -43,6 +45,9 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	}
 	status, ok := kilocodeAuthListStatus(string(out))
 	if ok {
+		if status == ports.AgentAuthStatusAuthorized {
+			ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "auth", "list"))
+		}
 		return status, nil
 	}
 	if err != nil {
@@ -72,6 +77,7 @@ func kilocodeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 	}
 	for _, name := range kilocodeAPIKeyEnvVars {
 		if strings.TrimSpace(os.Getenv(name)) != "" {
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey))
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 	}
@@ -79,18 +85,24 @@ func kilocodeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 	if !ok {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
-	authorized, known, err := kilocodeAuthJSONStatus(filepath.Join(dataDir, "auth.json"))
+	authPath := filepath.Join(dataDir, "auth.json")
+	authorized, known, err := kilocodeAuthJSONStatus(authPath)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if known && authorized {
+		evidence := domain.FileSource(authPath).WithMethod(domain.AgentAccountMethodAccount)
+		evidence.Provider = authprobe.JSONProviderNames(authPath)
+		ports.RecordAuthEvidence(ctx, evidence)
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
-	authorized, known, err = kilocodeDBAuthStatus(ctx, filepath.Join(dataDir, "kilo.db"))
+	dbPath := filepath.Join(dataDir, "kilo.db")
+	authorized, known, err = kilocodeDBAuthStatus(ctx, dbPath)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if known && authorized {
+		ports.RecordAuthEvidence(ctx, domain.FileSource(dbPath).WithMethod(domain.AgentAccountMethodAccount))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	return ports.AgentAuthStatusUnknown, false, nil

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -32,14 +33,23 @@ func ampLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if strings.TrimSpace(os.Getenv("AMP_API_KEY")) != "" {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("AMP_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
-	if status, ok, err := ampSecretsAuthStatus(ampSecretsPath()); err != nil || ok {
+	secretsPath := ampSecretsPath()
+	if status, ok, err := ampSecretsAuthStatus(secretsPath); err != nil || ok {
+		if status == ports.AgentAuthStatusAuthorized {
+			ports.RecordAuthEvidence(ctx, domain.FileSource(secretsPath).WithMethod(domain.AgentAccountMethodAccount))
+		}
 		return status, ok, err
 	}
-	status, ok, err := ampSettingsAuthStatus(ampSettingsPath())
+	settingsPath := ampSettingsPath()
+	status, ok, err := ampSettingsAuthStatus(settingsPath)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
+	}
+	if status == ports.AgentAuthStatusAuthorized {
+		ports.RecordAuthEvidence(ctx, domain.FileSource(settingsPath).WithMethod(domain.AgentAccountMethodAPIKey))
 	}
 	return status, ok, nil
 }
@@ -135,6 +145,9 @@ func ampUsageAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStat
 		return ports.AgentAuthStatusUnknown, probeCtx.Err()
 	}
 	if err == nil && strings.Contains(strings.ToLower(string(out)), "signed in as") {
+		evidence := domain.CommandSource(binary, "usage").WithMethod(domain.AgentAccountMethodAccount)
+		evidence.Email = authprobe.SignedInEmail(string(out))
+		ports.RecordAuthEvidence(ctx, evidence)
 		return ports.AgentAuthStatusAuthorized, nil
 	}
 	return ports.AgentAuthStatusUnknown, nil

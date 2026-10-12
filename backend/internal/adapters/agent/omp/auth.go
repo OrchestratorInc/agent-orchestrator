@@ -10,6 +10,7 @@ import (
 
 	_ "modernc.org/sqlite" // register sqlite driver for OMP auth database probes
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -39,12 +40,21 @@ func ompLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error
 	if !ok {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
-	if status, ok, err := ompAgentDBAuthStatus(filepath.Join(configDir, "agent.db")); err != nil {
+	dbPath := filepath.Join(configDir, "agent.db")
+	if status, ok, err := ompAgentDBAuthStatus(dbPath); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	} else if ok {
+		if status == ports.AgentAuthStatusAuthorized {
+			ports.RecordAuthEvidence(ctx, domain.FileSource(dbPath))
+		}
 		return status, true, nil
 	}
-	return ompAuthJSONStatus(filepath.Join(configDir, "auth.json"))
+	authPath := filepath.Join(configDir, "auth.json")
+	status, ok, err := ompAuthJSONStatus(authPath)
+	if status == ports.AgentAuthStatusAuthorized {
+		ports.RecordAuthEvidence(ctx, domain.FileSource(authPath))
+	}
+	return status, ok, err
 }
 
 func ompConfigDir() (string, bool) {

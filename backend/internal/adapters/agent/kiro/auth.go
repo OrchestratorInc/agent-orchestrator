@@ -30,7 +30,7 @@ func (p *Plugin) AuthStatusWithAccount(ctx context.Context) (ports.AgentAuthStat
 		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, err
 	}
 	if strings.TrimSpace(os.Getenv("KIRO_API_KEY")) != "" {
-		return ports.AgentAuthStatusAuthorized, domain.AgentAccountIdentity{Method: domain.AgentAccountMethodAPIKey}, nil
+		return ports.AgentAuthStatusAuthorized, domain.EnvironmentSource("KIRO_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey), nil
 	}
 	return kiroWhoamiAuth(ctx, binary)
 }

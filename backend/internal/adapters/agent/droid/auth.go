@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -30,6 +31,7 @@ func droidLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if strings.TrimSpace(os.Getenv("FACTORY_API_KEY")) != "" {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("FACTORY_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	home, err := os.UserHomeDir()
@@ -39,7 +41,12 @@ func droidLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	if home == "" {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
-	return droidFactoryAuthStatus(filepath.Join(home, ".factory"))
+	factoryDir := filepath.Join(home, ".factory")
+	status, ok, err := droidFactoryAuthStatus(factoryDir)
+	if status == ports.AgentAuthStatusAuthorized {
+		ports.RecordAuthEvidence(ctx, domain.FileSource(filepath.Join(factoryDir, "settings.json")).WithMethod(domain.AgentAccountMethodAPIKey))
+	}
+	return status, ok, err
 }
 
 func droidFactoryAuthStatus(factoryDir string) (ports.AgentAuthStatus, bool, error) {

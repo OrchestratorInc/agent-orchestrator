@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -40,10 +41,13 @@ func copilotLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, e
 	}
 	for _, name := range copilotTokenEnvVars {
 		if copilotUsableToken(os.Getenv(name)) {
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodToken))
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 	}
 	if copilotBYOKConfigured() {
+		// A bring-your-own provider; its API key, if any, is optional.
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("COPILOT_PROVIDER_BASE_URL"))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 
@@ -56,8 +60,10 @@ func copilotLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, e
 	}
 	// Copilot credentials can come from several independent sources. A corrupt
 	// config file must not prevent the documented GitHub CLI token fallback.
-	configStatus, configOK, _ := copilotConfigAuthStatus(filepath.Join(copilotHomeDir(home), "config.json"))
+	configPath := filepath.Join(copilotHomeDir(home), "config.json")
+	configStatus, configOK, _ := copilotConfigAuthStatus(configPath)
 	if configOK {
+		ports.RecordAuthEvidence(ctx, domain.FileSource(configPath).WithMethod(domain.AgentAccountMethodAccount))
 		return configStatus, true, nil
 	}
 	if status, ok, err := copilotGHAuthStatus(ctx); err != nil || ok {
@@ -120,6 +126,9 @@ func copilotGHAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 		return ports.AgentAuthStatusUnknown, false, probeCtx.Err()
 	}
 	if err == nil && copilotUsableToken(string(out)) {
+		evidence := domain.CommandSource("gh", "auth", "token").WithMethod(domain.AgentAccountMethodAccount)
+		evidence.Name = authprobe.GitHubCLIUser()
+		ports.RecordAuthEvidence(ctx, evidence)
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	// GitHub CLI state is only one Copilot credential source. A negative result

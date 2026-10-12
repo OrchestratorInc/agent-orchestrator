@@ -33,8 +33,10 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 
@@ -212,6 +214,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, nil
 	}
 	if strings.Contains(text, "credential") && err == nil {
+		ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "auth", "list"))
 		return ports.AgentAuthStatusAuthorized, nil
 	}
 	if err != nil {
@@ -240,6 +243,7 @@ func opencodeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 	}
 	for _, name := range opencodeAPIKeyEnvVars {
 		if strings.TrimSpace(os.Getenv(name)) != "" {
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey))
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 	}
@@ -248,14 +252,22 @@ func opencodeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 	if !ok {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
-	jsonStatus, jsonOK, err := opencodeAuthJSONStatus(filepath.Join(dataDir, "auth.json"))
+	authPath := filepath.Join(dataDir, "auth.json")
+	jsonStatus, jsonOK, err := opencodeAuthJSONStatus(authPath)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if jsonOK && jsonStatus == ports.AgentAuthStatusAuthorized {
+		evidence := domain.FileSource(authPath)
+		evidence.Provider = authprobe.JSONProviderNames(authPath)
+		ports.RecordAuthEvidence(ctx, evidence)
 		return jsonStatus, true, nil
 	}
-	if status, ok, err := opencodeDBAuthStatus(ctx, filepath.Join(dataDir, "opencode.db")); err != nil || ok {
+	dbPath := filepath.Join(dataDir, "opencode.db")
+	if status, ok, err := opencodeDBAuthStatus(ctx, dbPath); err != nil || ok {
+		if status == ports.AgentAuthStatusAuthorized {
+			ports.RecordAuthEvidence(ctx, domain.FileSource(dbPath).WithMethod(domain.AgentAccountMethodAccount))
+		}
 		return status, ok, err
 	}
 	if jsonOK {

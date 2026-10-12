@@ -9,6 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -50,13 +51,18 @@ func deepseekLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if strings.TrimSpace(os.Getenv(deepseekCredentialKey)) != "" {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(deepseekCredentialKey).WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	path, err := deepseekCredentialsPath()
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	return deepseekCredentialsStatus(path)
+	status, ok, err := deepseekCredentialsStatus(path)
+	if status == ports.AgentAuthStatusAuthorized {
+		ports.RecordAuthEvidence(ctx, domain.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey))
+	}
+	return status, ok, err
 }
 
 // deepseekCredentialsPath resolves the Harness credential store. DSH_HOME moves
