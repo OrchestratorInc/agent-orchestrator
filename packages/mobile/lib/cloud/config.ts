@@ -1,19 +1,24 @@
-/**
- * The AuthKit client id is public configuration — it appears in every sign-in
- * URL — so a baked default keeps sign-in working with no build-time setup,
- * exactly as the desktop app does (frontend/src/main/cloud-auth.ts).
- */
-export const WORKOS_CLIENT_ID =
-	process.env.EXPO_PUBLIC_WORKOS_CLIENT_ID?.trim() || "client_01KZ3VRKC374HS91XGRDPT3671";
+import { resolveCloudDeployment } from "./deployment";
 
-/** Control plane the app signs into. Overridable for local Docker development. */
-export const CLOUD_BASE_URL =
-	process.env.EXPO_PUBLIC_AO_CLOUD_URL?.trim() || "https://staging-api.aoagents.dev";
+function configuredDeployment() {
+	try {
+		return { deployment: resolveCloudDeployment({
+			cloudUrl: process.env.EXPO_PUBLIC_AO_CLOUD_URL,
+			accountUrl: process.env.EXPO_PUBLIC_AO_CLOUD_API_BASE_URL,
+			clientId: process.env.EXPO_PUBLIC_WORKOS_CLIENT_ID,
+			development: typeof __DEV__ !== "undefined" && __DEV__,
+		}), error: null };
+	} catch (cause) {
+		// Keep pairing usable while refusing requests to either conflicting API.
+		return { deployment: resolveCloudDeployment({ cloudUrl: "https://configuration.invalid", development: false }),
+			error: cause instanceof Error ? cause.message : "Invalid Cloud deployment settings." };
+	}
+}
 
-// Confirmed against cloud/internal/httpapi/server.go:323 — router.Route("/api/cloud/v1", ...).
+const configured = configuredDeployment();
+export const CLOUD_DEPLOYMENT = configured.deployment;
+export const CLOUD_CONFIGURATION_ERROR = configured.error;
+export const CLOUD_BASE_URL = CLOUD_DEPLOYMENT.baseUrl;
+export const WORKOS_CLIENT_ID = CLOUD_DEPLOYMENT.clientId;
+export const WORKOS_REDIRECT_URI = CLOUD_DEPLOYMENT.redirectUri;
 export const CLOUD_API_PREFIX = "/api/cloud/v1";
-// The bundle identifier, not the app's generic `aomobile` scheme: WorkOS warns
-// that a generic scheme can be claimed by another app on the device, and this
-// project's dev build already captures `aomobile://`. Pairing keeps the old
-// scheme (see lib/pairingCode.ts); both are registered in app.json.
-export const WORKOS_REDIRECT_URI = "aoagents.ao://callback";

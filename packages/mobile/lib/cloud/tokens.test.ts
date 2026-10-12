@@ -12,6 +12,24 @@ import { clearTokens, isExpired, readTokens, writeTokens } from "./tokens";
 beforeEach(() => store.clear());
 
 describe("cloud tokens", () => {
+  it("never adopts ambiguous legacy tokens or touches pairing credentials", async () => {
+    store.set("ao.cloud.tokens", JSON.stringify({ accessToken: "legacy", expiresAt: 1000 }));
+    store.set("ao.account.session", JSON.stringify({ refreshToken: "legacy" }));
+    store.set("ao.connection.password", "paired");
+    expect(await readTokens("staging")).toBeNull();
+    expect(store.has("ao.cloud.tokens")).toBe(true);
+    await writeTokens({ accessToken: "fresh", expiresAt: 2000 }, "staging");
+    expect(await readTokens("production")).toBeNull();
+    expect(await readTokens("staging")).toMatchObject({ accessToken: "fresh" });
+    expect(store.has("ao.cloud.tokens")).toBe(false);
+    expect(store.get("ao.connection.password")).toBe("paired");
+  });
+  it("rejects an envelope for a different deployment", async () => {
+    await writeTokens({ accessToken: "a", expiresAt: 1000 }, "staging");
+    const [key, value] = [...store.entries()][0]!;
+    store.set(key, JSON.stringify({ ...JSON.parse(value), deploymentKey: "production" }));
+    expect(await readTokens("staging")).toBeNull();
+  });
 	it("round-trips through the device keystore", async () => {
 		await writeTokens({ accessToken: "a", refreshToken: "r", expiresAt: 1000 });
 		expect(await readTokens()).toEqual({ accessToken: "a", refreshToken: "r", expiresAt: 1000 });

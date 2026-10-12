@@ -3,10 +3,11 @@ import { ignoredAccountHosts, mutateAccountHosts } from "./accountHostPreference
 import { forgetPairedHost } from "./disconnect";
 import { endpointBaseUrl, type Endpoint } from "./endpoints";
 import { loadHosts, saveHost, type Host } from "./hosts";
+import { CLOUD_BASE_URL } from "./cloud/config";
 
 export { ignoreAccountHost, unignoreAccountHost } from "./accountHostPreferences";
 
-const CONTROL_PLANE = (process.env.EXPO_PUBLIC_AO_CLOUD_API_BASE_URL || "https://api.aoagents.dev").replace(/\/$/, "");
+const CONTROL_PLANE = CLOUD_BASE_URL;
 type AccountHost = { hostId: string; label: string; url: string; token: string };
 
 function endpoint(raw: string): Endpoint | null {

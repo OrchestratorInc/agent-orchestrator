@@ -5,6 +5,7 @@
 	},
 	"build": {
 		"development": {
+			"env": { "EXPO_PUBLIC_AO_CLOUD_URL": "https://staging-api.aoagents.dev" },
 			"developmentClient": true,
 			"distribution": "internal",
 			"android": {
@@ -12,6 +13,7 @@
 			}
 		},
 		"preview": {
+			"env": { "EXPO_PUBLIC_AO_CLOUD_URL": "https://staging-api.aoagents.dev" },
 			"distribution": "internal",
 			"android": {
 				"buildType": "apk",
@@ -22,6 +24,7 @@
 			"channel": "preview"
 		},
 		"production": {
+			"env": { "EXPO_PUBLIC_AO_CLOUD_URL": "https://api.aoagents.dev" },
 			"autoIncrement": true,
 			"channel": "production"
 		}
