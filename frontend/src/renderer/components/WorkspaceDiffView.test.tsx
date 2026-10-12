@@ -234,6 +234,20 @@ describe("ReviewDiffBody", () => {
 		await waitFor(() => expect(textarea).toHaveFocus());
 	});
 
+	// A whole-file box mounts above the content: opened from the toolbar while
+	// scrolled down, it would sit out of sight above the viewport unless the
+	// box scrolls its own container into view as it takes focus.
+	it("scrolls its own container into view when the box opens", async () => {
+		const model = noopAnnotation();
+		model.targets = [{ path: "src/App.tsx", side: "file", surface: "review" }];
+		const { container } = render(<FileAnnotationComposer annotation={model} target={model.targets[0]} />);
+
+		const box = container.firstElementChild as HTMLElement;
+		const scrollIntoView = vi.fn();
+		box.scrollIntoView = scrollIntoView;
+		await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" }));
+	});
+
 	it("keeps typing local to the box; ⌘/Ctrl+Enter sends, as its hint says, and plain Enter doesn't", () => {
 		const model = noopAnnotation();
 		model.targets = [{ path: "src/App.tsx", side: "file", surface: "review" }];

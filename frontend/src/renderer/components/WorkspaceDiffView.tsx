@@ -704,12 +704,19 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 	const saveDraftRef = useRef(() => annotation.setDraft(target, textRef.current));
 	saveDraftRef.current = () => annotation.setDraft(target, textRef.current);
 	useEffect(() => () => saveDraftRef.current(), []);
+	const containerRef = useRef<HTMLDivElement>(null);
 	// Only the newest box takes focus, so an older one scrolling back into view
-	// doesn't pull the caret away from the comment being written.
+	// doesn't pull the caret away from the comment being written. A whole-file
+	// box mounts above the content, so bring it on screen first (nearest leaves
+	// an already-visible box alone; the container's scroll-margin clears the
+	// sticky toolbar) before the preventScroll focus can skip the scroll.
 	const newest = annotation.targets[annotation.targets.length - 1] === target;
 	useEffect(() => {
 		if (!newest) return;
-		const frame = window.requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
+		const frame = window.requestAnimationFrame(() => {
+			containerRef.current?.scrollIntoView({ block: "nearest" });
+			textareaRef.current?.focus({ preventScroll: true });
+		});
 		return () => window.cancelAnimationFrame(frame);
 	}, [newest, target]);
 	const fitHeight = useCallback(() => {
@@ -757,7 +764,7 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 	};
 
 	return (
-		<div className="p-2 font-sans">
+		<div ref={containerRef} className="scroll-mt-9 p-2 font-sans">
 			<form
 				className="rounded-2xl border border-border bg-background px-2.5 py-2"
 				onSubmit={(event) => {
