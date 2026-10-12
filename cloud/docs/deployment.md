@@ -258,6 +258,38 @@ It does not reverse database migrations.
 Schema migrations must remain backward-compatible with the previous API
 revision so that rolling deploys and application rollback are safe.
 
+### Rolling back past user-scoped GitHub connections
+
+Migration 00081 lets a GitHub organization member who is not an owner connect
+an installation user-scoped: only the repositories they can access. Releases
+from before it sync every connection with the installation's whole repository
+list, so after a code-only rollback their next sync would grant those members
+every repository in the installation. Before rolling back to such a release,
+revoke the user-scoped connections with the migration role (the role that owns
+the tables; it is subject to forced RLS, hence `NO FORCE`), in one transaction:
+
+```sql
+BEGIN;
+ALTER TABLE ao_github_installations NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE ao_github_repository_grants NO FORCE ROW LEVEL SECURITY;
+UPDATE ao_github_repository_grants grant_row
+SET revoked_at = now(), revoke_reason = 'github_user_scope_rolled_back'
+FROM ao_github_installations installation
+WHERE installation.org_id = grant_row.org_id
+  AND installation.id = grant_row.installation_id
+  AND installation.access_scope = 'user'
+  AND grant_row.revoked_at IS NULL;
+UPDATE ao_github_installations
+SET status = 'disconnected', disconnected_at = now(), updated_at = now()
+WHERE access_scope = 'user' AND status <> 'disconnected';
+ALTER TABLE ao_github_repository_grants FORCE ROW LEVEL SECURITY;
+ALTER TABLE ao_github_installations FORCE ROW LEVEL SECURITY;
+COMMIT;
+```
+
+The 00081 Down migration runs the same statements. Members reconnect once the
+newer release is back.
+
 ## Production promotion
 
 Production is deliberately a separate environment. It has its own PostgreSQL

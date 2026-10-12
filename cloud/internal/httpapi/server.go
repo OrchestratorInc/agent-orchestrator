@@ -436,6 +436,7 @@ func New(options Options) *Server {
 	if server.github != nil {
 		router.Get("/api/cloud/v1/github/install/setup", server.githubSetupCallback)
 		router.Get("/api/cloud/v1/github/oauth/callback", server.githubOAuthCallback)
+		router.Post("/api/cloud/v1/github/oauth/connect-others", server.githubConnectOthers)
 		router.Get("/api/cloud/v1/github/user/callback", server.githubUserCallback)
 		router.Post("/api/cloud/v1/github/webhooks", server.githubWebhook)
 		if server.brokerAuthToken != "" {

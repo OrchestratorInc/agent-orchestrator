@@ -32,9 +32,46 @@ type userScopeStore struct {
 	bound         []domain.GitHubInstallation
 	bindErr       error
 	failureMarked int
+	// othersJoined: the organization has gained another active member, so the
+	// user is no longer its only one.
+	othersJoined bool
+	syncs        int
+	deleted      int
+}
+
+func (s *userScopeStore) GitHubUserScopeIntact(_ context.Context, orgID, userID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return orgID != "" && userID == scopeTestUserID && !s.othersJoined, nil
+}
+
+func (s *userScopeStore) DeleteGitHubUserConnection(context.Context, string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleted++
+	s.connection = nil
+	return nil
+}
+
+func (s *userScopeStore) UpdateGitHubUserConnection(
+	_ context.Context, userID string, input postgres.GitHubUserConnectionInput,
+) (domain.GitHubUserConnection, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	updated := domain.GitHubUserConnection{
+		UserID: userID, GitHubUserID: input.GitHubUserID,
+		AccessTokenCiphertext: input.AccessTokenCiphertext, AccessTokenNonce: input.AccessTokenNonce,
+		AccessTokenExpiresAt: input.AccessTokenExpiresAt, RefreshTokenCiphertext: input.RefreshTokenCiphertext,
+		RefreshTokenNonce: input.RefreshTokenNonce, RefreshTokenExpiresAt: input.RefreshTokenExpiresAt,
+		UpdatedAt: time.Now(),
+	}
+	s.connection = &updated
+	return updated, nil
 }
 
 func (s *userScopeStore) GitHubUserConnection(context.Context, string) (domain.GitHubUserConnection, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.connection == nil {
 		return domain.GitHubUserConnection{}, postgres.ErrNotFound
 	}
@@ -42,6 +79,9 @@ func (s *userScopeStore) GitHubUserConnection(context.Context, string) (domain.G
 }
 
 func (s *userScopeStore) BeginGitHubRepositorySync(context.Context, domain.GitHubInstallation) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.syncs++
 	return 1, nil
 }
 
@@ -97,6 +137,8 @@ type fakeGitHub struct {
 	t                 *testing.T
 	userRepositories  []int64 // /user/installations/1234/repositories
 	userReposStatus   int     // non-zero: answer the user listing with this status
+	rateLimited       bool    // mark error answers as GitHub's rate limit
+	repositoryCalls   int     // GET /repositories/{id} calls
 	permissions       map[int64]map[string]bool
 	membershipRole    string
 	installationOrgID int64
@@ -135,6 +177,9 @@ func (f *fakeGitHub) server() *httptest.Server {
 			return
 		}
 		if f.userReposStatus != 0 {
+			if f.rateLimited {
+				w.Header().Set("X-RateLimit-Remaining", "0")
+			}
 			encode(w, f.userReposStatus, map[string]any{"message": "nope"})
 			return
 		}
@@ -146,6 +191,12 @@ func (f *fakeGitHub) server() *httptest.Server {
 	})
 	mux.HandleFunc("/repositories/", func(w http.ResponseWriter, r *http.Request) {
 		if !requireUserToken(w, r) {
+			return
+		}
+		f.repositoryCalls++
+		if f.rateLimited {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			encode(w, http.StatusForbidden, map[string]any{"message": "API rate limit exceeded"})
 			return
 		}
 		var id int64
@@ -248,10 +299,15 @@ func TestUserScopedSyncFailsClosed(t *testing.T) {
 		{"authorization gone", false, 0, false, true},
 		{"github says not found", true, http.StatusNotFound, false, true},
 		{"github says unauthorized", true, http.StatusUnauthorized, false, true},
+		{"github says forbidden", true, http.StatusForbidden, false, true},
 		{"transient github failure", true, http.StatusBadGateway, true, false},
+		{"rate limited", true, -http.StatusForbidden, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			github := &fakeGitHub{t: t, userReposStatus: tc.status}
+			if tc.status < 0 {
+				github.userReposStatus, github.rateLimited = -tc.status, true
+			}
 			server := github.server()
 			defer server.Close()
 			store := &userScopeStore{}
@@ -361,5 +417,207 @@ func TestConnectUserInstallationsReportsTheReason(t *testing.T) {
 	_, err := service.ConnectUserInstallations(context.Background(), domain.Principal{UserID: scopeTestUserID}, "org-1")
 	if !errors.Is(err, postgres.ErrGitHubUserScopeNeedsPersonalOrg) {
 		t.Fatalf("err = %v, want ErrGitHubUserScopeNeedsPersonalOrg", err)
+	}
+}
+
+// A user-scoped connection stands on one user's GitHub access, so it ends
+// once anyone else joins the organization: tokens are refused, the next sync
+// revokes every grant, and nothing more is connected there.
+func TestUserScopeEndsWhenTheOrganizationGainsAMember(t *testing.T) {
+	github := &fakeGitHub{t: t, userRepositories: []int64{42}, membershipRole: "admin", installationOrgID: 900,
+		permissions: map[int64]map[string]bool{42: {"pull": true, "push": true}}}
+	server := github.server()
+	defer server.Close()
+	store := &userScopeStore{connection: connectedUser(t), othersJoined: true}
+	service := newCompleteOAuthTestService(t, store, newExchangeTestClient(t, server.URL))
+	ctx := context.Background()
+	scoped := domain.GitHubCheckoutContext{OrgID: "org-1", AccessScope: domain.GitHubAccessScopeUser, ScopeUserID: scopeTestUserID}
+
+	if err := service.requireUserScopedAccess(ctx, scoped, 42, false); !errors.Is(err, postgres.ErrForbidden) {
+		t.Fatalf("checkout after another member joined: err = %v, want ErrForbidden", err)
+	}
+	if github.repositoryCalls != 0 {
+		t.Fatalf("asked GitHub %d times for an organization the user no longer has alone", github.repositoryCalls)
+	}
+	if err := service.sync(ctx, userScopedInstallation()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.reconciled) != 1 || len(store.reconciled[0]) != 0 {
+		t.Fatalf("reconciled = %v, want every grant revoked", store.reconciled)
+	}
+	if _, err := service.ConnectUserInstallations(ctx, domain.Principal{UserID: scopeTestUserID}, "org-1"); !errors.Is(err, postgres.ErrGitHubUserScopeNeedsPersonalOrg) {
+		t.Fatalf("connecting into a shared organization: err = %v, want ErrGitHubUserScopeNeedsPersonalOrg", err)
+	}
+	if len(store.bound) != 0 {
+		t.Fatalf("bound %+v into a shared organization", store.bound)
+	}
+}
+
+// A rate-limited access check is an error, not a denial; a positive check is
+// reused briefly, a denial never is.
+func TestUserRepositoryAccessCacheAndRateLimits(t *testing.T) {
+	github := &fakeGitHub{t: t, permissions: map[int64]map[string]bool{42: {"pull": true, "push": true}}}
+	server := github.server()
+	defer server.Close()
+	store := &userScopeStore{connection: connectedUser(t)}
+	service := newCompleteOAuthTestService(t, store, newExchangeTestClient(t, server.URL))
+	ctx := context.Background()
+	scoped := domain.GitHubCheckoutContext{OrgID: "org-1", AccessScope: domain.GitHubAccessScopeUser, ScopeUserID: scopeTestUserID}
+
+	for range 3 {
+		if err := service.requireUserScopedAccess(ctx, scoped, 42, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if github.repositoryCalls != 1 {
+		t.Fatalf("GitHub asked %d times, want 1 (positive answer reused)", github.repositoryCalls)
+	}
+	if err := service.requireUserScopedAccess(ctx, scoped, 43, false); !errors.Is(err, postgres.ErrForbidden) {
+		t.Fatalf("repository without access: err = %v, want ErrForbidden", err)
+	}
+	github.permissions[43] = map[string]bool{"pull": true}
+	if err := service.requireUserScopedAccess(ctx, scoped, 43, false); err != nil {
+		t.Fatalf("access granted on GitHub after a denial: err = %v, want allowed at once", err)
+	}
+	github.rateLimited = true
+	err := service.requireUserScopedAccess(ctx, scoped, 44, false)
+	if err == nil || errors.Is(err, postgres.ErrForbidden) {
+		t.Fatalf("rate-limited check: err = %v, want a transient error", err)
+	}
+}
+
+// Listing installations refreshes a stale user-scoped connection in the
+// background, once per interval even when polled repeatedly.
+func TestUserScopedRefreshRunsOnceInTheBackground(t *testing.T) {
+	github := &fakeGitHub{t: t, userRepositories: []int64{42}}
+	server := github.server()
+	defer server.Close()
+	store := &userScopeStore{connection: connectedUser(t)}
+	service := newCompleteOAuthTestService(t, store, newExchangeTestClient(t, server.URL))
+	installation := userScopedInstallation()
+	stale := time.Now().Add(-2 * userScopedResyncAfter)
+	installation.LastSyncedAt = &stale
+
+	for range 5 {
+		service.refreshUserScopedInBackground(context.Background(), installation)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		store.mu.Lock()
+		syncs, reconciled := store.syncs, len(store.reconciled)
+		store.mu.Unlock()
+		if reconciled == 1 {
+			if syncs != 1 {
+				t.Fatalf("syncs = %d, want 1", syncs)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background refresh never ran")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	fresh := time.Now()
+	installation.ID, installation.LastSyncedAt = "inst-2", &fresh
+	service.refreshUserScopedInBackground(context.Background(), installation)
+	time.Sleep(50 * time.Millisecond)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.syncs != 1 {
+		t.Fatalf("a fresh connection was refreshed: syncs = %d", store.syncs)
+	}
+}
+
+// A write through an unknown scope is refused rather than allowed.
+func TestRequireUserScopedPushWithoutScopeResolverRefuses(t *testing.T) {
+	service := newCompleteOAuthTestService(t, &installOAuthStore{}, newExchangeTestClient(t, "https://github.invalid"))
+	if err := service.requireUserScopedPush(context.Background(), "org-1", "acme/app", 42); !errors.Is(err, postgres.ErrForbidden) {
+		t.Fatalf("err = %v, want ErrForbidden", err)
+	}
+}
+
+// expiringConnection is a stored connection whose access token needs a
+// refresh and whose refresh token decrypts under the test credential key.
+func expiringConnection(t *testing.T, updatedAt time.Time) *domain.GitHubUserConnection {
+	t.Helper()
+	connection := connectedUser(t)
+	key := make([]byte, 32)
+	refresh, refreshNonce, err := Encrypt(key, []byte("ghr_refresh"),
+		githubUserTokenAssociatedData(scopeTestUserID, scopeTestGitHubUserID, "refresh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := time.Now().Add(-time.Minute)
+	refreshExpires := time.Now().Add(time.Hour)
+	connection.AccessTokenExpiresAt = &expired
+	connection.RefreshTokenCiphertext, connection.RefreshTokenNonce = refresh, refreshNonce
+	connection.RefreshTokenExpiresAt = &refreshExpires
+	connection.UpdatedAt = updatedAt
+	return connection
+}
+
+// rotatingStore returns the connection as first read, then (from the second
+// read on) as another replica left it after refreshing first.
+type rotatingStore struct {
+	*userScopeStore
+	reads   int
+	rotated *domain.GitHubUserConnection
+}
+
+func (s *rotatingStore) GitHubUserConnection(ctx context.Context, userID string) (domain.GitHubUserConnection, error) {
+	s.reads++
+	if s.reads > 1 && s.rotated != nil {
+		return *s.rotated, nil
+	}
+	return s.userScopeStore.GitHubUserConnection(ctx, userID)
+}
+
+// A refresh that GitHub fails to answer keeps the connection; one it rejects
+// because another replica already used the refresh token adopts that
+// replica's tokens; only a refresh rejected outright discards it.
+func TestGitHubUserTokenRefreshFailures(t *testing.T) {
+	read := time.Now().Add(-time.Hour)
+	for _, tc := range []struct {
+		name        string
+		answer      int
+		body        string
+		rotated     bool
+		wantErr     error
+		wantDeleted int
+	}{
+		{"github unavailable", http.StatusBadGateway, `{"message":"bad gateway"}`, false, nil, 0},
+		{"rotated by another replica", http.StatusOK, `{"error":"bad_refresh_token"}`, true, nil, 0},
+		{"rejected", http.StatusOK, `{"error":"bad_refresh_token"}`, false, postgres.ErrNotFound, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/login/oauth/access_token", func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.answer)
+				_, _ = w.Write([]byte(tc.body))
+			})
+			server := httptest.NewServer(mux)
+			defer server.Close()
+			base := &userScopeStore{connection: expiringConnection(t, read)}
+			store := &rotatingStore{userScopeStore: base}
+			if tc.rotated {
+				rotated := *connectedUser(t)
+				rotated.UpdatedAt = time.Now()
+				store.rotated = &rotated
+			}
+			service := newCompleteOAuthTestService(t, store, newExchangeTestClient(t, server.URL))
+			_, token, err := service.githubUserAccessToken(context.Background(), scopeTestUserID)
+			switch {
+			case tc.wantErr != nil && !errors.Is(err, tc.wantErr):
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			case tc.wantErr == nil && tc.rotated && (err != nil || token != scopeTestUserToken):
+				t.Fatalf("token, err = %q, %v; want the other replica's token", token, err)
+			case tc.wantErr == nil && !tc.rotated && (err == nil || errors.Is(err, postgres.ErrNotFound)):
+				t.Fatalf("err = %v, want a transient error", err)
+			}
+			if base.deleted != tc.wantDeleted {
+				t.Fatalf("connection deleted %d times, want %d", base.deleted, tc.wantDeleted)
+			}
+		})
 	}
 }

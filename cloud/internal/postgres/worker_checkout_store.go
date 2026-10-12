@@ -51,6 +51,7 @@ func (s *Store) WorkerGitHubCheckoutContext(
 			  AND repository.is_archived = false
 			  AND repository.is_disabled = false
 			  AND btrim(repository.clone_url) <> ''
+			  AND `+githubUserScopeIntactSQL+`
 			ORDER BY grant_row.granted_at DESC
 			LIMIT 1`,
 			orgID, sessionID,

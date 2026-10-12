@@ -180,18 +180,12 @@ func (s *Service) ClaimUserInstallation(
 	if err != nil {
 		return domain.GitHubInstallation{}, err
 	}
-	authorized, err := s.userAdministersInstallation(ctx, token, providerInstallation)
-	if err != nil {
-		return domain.GitHubInstallation{}, err
-	}
 	// Someone who does not administer the installation (a GitHub organization
 	// member who is not an owner) connects it user-scoped: only the
-	// repositories they can access, in their personal organization.
-	candidate := toDomainInstallation(providerInstallation)
-	candidate.AccessScope = domain.GitHubAccessScopeInstallation
-	if !authorized {
-		candidate.AccessScope = domain.GitHubAccessScopeUser
-		candidate.ScopeUserID = principal.UserID
+	// repositories they can access, in an organization that is theirs alone.
+	candidate, err := s.scopedInstallation(ctx, principal, token, providerInstallation)
+	if err != nil {
+		return domain.GitHubInstallation{}, err
 	}
 	installation, err := s.store.BindGitHubInstallation(
 		ctx,
@@ -262,11 +256,17 @@ func (s *Service) PrepareScratchRepository(
 	if eligible, _ := scratchInstallationEligibility(providerInstallation); !eligible {
 		return domain.GitHubRepository{}, nil, postgres.ErrForbidden
 	}
+	// Seeing the installation is not administering it: a member who is not
+	// an owner connects it user-scoped, as everywhere else.
+	scoped, err := s.scopedInstallation(ctx, principal, token, providerInstallation)
+	if err != nil {
+		return domain.GitHubRepository{}, nil, err
+	}
 	bound, err := s.store.BindGitHubInstallation(
 		ctx,
 		principal,
 		orgID,
-		toDomainInstallation(providerInstallation),
+		scoped,
 	)
 	if err != nil {
 		return domain.GitHubRepository{}, nil, err
@@ -389,12 +389,27 @@ func (s *Service) githubUserAccessToken(
 		return domain.GitHubUserConnection{}, "", err
 	}
 	rotated, err := s.client.RefreshUserAccessToken(ctx, string(refreshToken))
-	if err != nil {
+	if errors.Is(err, ErrUserAuthorizationRejected) {
+		// Refresh tokens are single use, so another control-plane replica
+		// that refreshed first makes this one fail. Use what it stored rather
+		// than discarding a working connection.
+		if current, token, ok := s.rotatedElsewhere(ctx, userID, connection); ok {
+			return current, token, nil
+		}
 		_ = s.store.DeleteGitHubUserConnection(ctx, userID)
 		return domain.GitHubUserConnection{}, "", postgres.ErrNotFound
 	}
+	if err != nil {
+		// GitHub did not answer (network, 5xx, a cancelled request): the
+		// connection may still be fine, so keep it and fail this call only.
+		return domain.GitHubUserConnection{}, "", err
+	}
 	user, err := s.client.GetUser(ctx, rotated.Token())
-	if err != nil || user.ID != connection.GitHubUserID {
+	if err != nil {
+		// The old refresh token is spent, so keep the rotated tokens under the
+		// identity already on file rather than losing the connection.
+		user = User{ID: connection.GitHubUserID, Login: connection.GitHubLogin, AvatarURL: connection.GitHubAvatarURL}
+	} else if user.ID != connection.GitHubUserID {
 		_ = s.store.DeleteGitHubUserConnection(ctx, userID)
 		return domain.GitHubUserConnection{}, "", postgres.ErrNotFound
 	}
@@ -408,6 +423,34 @@ func (s *Service) githubUserAccessToken(
 		return domain.GitHubUserConnection{}, "", err
 	}
 	return updated, rotated.Token(), nil
+}
+
+// rotatedElsewhere returns the user's connection when it was refreshed after
+// connection was read (by another replica) and its access token is still
+// usable.
+func (s *Service) rotatedElsewhere(
+	ctx context.Context,
+	userID string,
+	connection domain.GitHubUserConnection,
+) (domain.GitHubUserConnection, string, bool) {
+	current, err := s.store.GitHubUserConnection(ctx, userID)
+	if err != nil || current.GitHubUserID != connection.GitHubUserID ||
+		!current.UpdatedAt.After(connection.UpdatedAt) {
+		return domain.GitHubUserConnection{}, "", false
+	}
+	if current.AccessTokenExpiresAt != nil && !current.AccessTokenExpiresAt.After(time.Now().UTC()) {
+		return domain.GitHubUserConnection{}, "", false
+	}
+	token, err := Decrypt(
+		s.credentialKey,
+		current.AccessTokenCiphertext,
+		current.AccessTokenNonce,
+		githubUserTokenAssociatedData(userID, current.GitHubUserID, "access"),
+	)
+	if err != nil {
+		return domain.GitHubUserConnection{}, "", false
+	}
+	return current, string(token), true
 }
 
 func (s *Service) encryptGitHubUserConnection(

@@ -21,15 +21,50 @@ import (
 //   - every checkout or push token is preceded by a live check that the user
 //     can still read (or push to) each repository it covers;
 //   - when the user's GitHub authorization is gone or no longer reaches the
-//     installation, a sync revokes every grant and token issuance is refused.
+//     installation, a sync revokes every grant and token issuance is refused;
+//   - it holds only while that user is the organization's only active member.
+//     Anyone who joins later would reach repositories through someone else's
+//     GitHub access, so then the grants are hidden, tokens are refused and the
+//     next sync revokes everything.
+
+const (
+	// userScopedResyncAfter is how stale a user-scoped connection's repository
+	// list may get before listing installations refreshes it.
+	userScopedResyncAfter = 5 * time.Minute
+	// userScopedRefreshTimeout bounds one background refresh.
+	userScopedRefreshTimeout = time.Minute
+	// userAccessCacheTTL is how long a positive live access check is reused.
+	// The worker's git credential helper asks for a token on every git
+	// operation; this keeps those from each calling GitHub, at the cost of a
+	// revocation taking up to this long to apply to new tokens.
+	userAccessCacheTTL = 30 * time.Second
+	// userAccessCacheMax bounds the cache; expired entries are dropped when it
+	// fills.
+	userAccessCacheMax = 4096
+)
 
 // errUserScopeUnavailable is a user-scoped connection whose user's GitHub
 // authorization is gone (disconnected, expired, or revoked on GitHub).
-// userScopedResyncAfter is how stale a user-scoped connection's repository list
-// may get before listing installations refreshes it.
-const userScopedResyncAfter = 5 * time.Minute
-
 var errUserScopeUnavailable = errors.New("the GitHub authorization behind this connection is no longer available")
+
+type userAccessKey struct {
+	userID       string
+	repositoryID int64
+}
+
+type userAccessEntry struct {
+	pull, push bool
+	checkedAt  time.Time
+}
+
+// userScopeIntact reports whether a user-scoped connection's user is still the
+// organization's only active member.
+func (s *Service) userScopeIntact(ctx context.Context, orgID, userID string) (bool, error) {
+	if orgID == "" || userID == "" {
+		return false, nil
+	}
+	return s.store.GitHubUserScopeIntact(ctx, orgID, userID)
+}
 
 // userScopeToken returns the GitHub user token a user-scoped connection acts
 // with.
@@ -46,12 +81,22 @@ func (s *Service) userScopeToken(ctx context.Context, userID string) (string, er
 
 // userScopedRepositories lists what a user-scoped connection may hold. A user
 // whose authorization is gone, or who can no longer reach the installation,
-// holds nothing: the sync then revokes every grant (fail closed). Other errors
-// are returned so a transient GitHub failure does not revoke anything.
+// holds nothing: the sync then revokes every grant (fail closed). So does an
+// organization the user no longer has to themselves. Other errors, rate limits
+// included, are returned so a transient failure does not revoke anything.
 func (s *Service) userScopedRepositories(
 	ctx context.Context,
 	installation domain.GitHubInstallation,
 ) ([]Repository, error) {
+	intact, err := s.userScopeIntact(ctx, installation.OrgID, installation.ScopeUserID)
+	if err != nil {
+		return nil, err
+	}
+	if !intact {
+		s.logger.Info("organization no longer has the connecting user as its only member; revoking user-scoped repositories",
+			"org_id", installation.OrgID, "installation_id", installation.GitHubInstallationID)
+		return []Repository{}, nil
+	}
 	token, err := s.userScopeToken(ctx, installation.ScopeUserID)
 	if errors.Is(err, errUserScopeUnavailable) {
 		s.logger.Info("GitHub user authorization gone; revoking user-scoped repositories",
@@ -63,7 +108,7 @@ func (s *Service) userScopedRepositories(
 	}
 	repositories, err := s.client.ListUserInstallationRepositories(ctx, token, installation.GitHubInstallationID)
 	var httpError *HTTPError
-	if errors.As(err, &httpError) {
+	if errors.As(err, &httpError) && !httpError.RateLimited {
 		switch httpError.StatusCode {
 		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
 			s.logger.Info("GitHub user no longer reaches the installation; revoking user-scoped repositories",
@@ -87,14 +132,14 @@ func (s *Service) requireUserScopedAccess(
 	if authorization.AccessScope != domain.GitHubAccessScopeUser {
 		return nil
 	}
-	token, err := s.userScopeToken(ctx, authorization.ScopeUserID)
-	if errors.Is(err, errUserScopeUnavailable) {
-		return postgres.ErrForbidden
-	}
+	intact, err := s.userScopeIntact(ctx, authorization.OrgID, authorization.ScopeUserID)
 	if err != nil {
 		return err
 	}
-	pull, push, err := s.client.UserRepositoryAccess(ctx, token, repositoryID)
+	if !intact {
+		return postgres.ErrForbidden
+	}
+	pull, push, err := s.userRepositoryAccess(ctx, authorization.ScopeUserID, repositoryID)
 	if err != nil {
 		return err
 	}
@@ -102,6 +147,88 @@ func (s *Service) requireUserScopedAccess(
 		return postgres.ErrForbidden
 	}
 	return nil
+}
+
+// userRepositoryAccess is the user's live access to a repository, reusing a
+// positive GitHub answer for userAccessCacheTTL. The user's stored
+// authorization is always read first, so disconnecting GitHub applies at once;
+// a denial is never cached, so access granted on GitHub applies at once too.
+func (s *Service) userRepositoryAccess(ctx context.Context, userID string, repositoryID int64) (pull, push bool, err error) {
+	token, err := s.userScopeToken(ctx, userID)
+	if errors.Is(err, errUserScopeUnavailable) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	key := userAccessKey{userID: userID, repositoryID: repositoryID}
+	now := time.Now()
+	s.userAccessMu.Lock()
+	entry, ok := s.userAccess[key]
+	s.userAccessMu.Unlock()
+	if ok && now.Sub(entry.checkedAt) < userAccessCacheTTL {
+		return entry.pull, entry.push, nil
+	}
+	pull, push, err = s.client.UserRepositoryAccess(ctx, token, repositoryID)
+	if err != nil {
+		return false, false, err
+	}
+	s.userAccessMu.Lock()
+	defer s.userAccessMu.Unlock()
+	if !pull {
+		delete(s.userAccess, key)
+		return false, false, nil
+	}
+	if s.userAccess == nil {
+		s.userAccess = make(map[userAccessKey]userAccessEntry)
+	}
+	if len(s.userAccess) >= userAccessCacheMax {
+		for cached, value := range s.userAccess {
+			if now.Sub(value.checkedAt) >= userAccessCacheTTL {
+				delete(s.userAccess, cached)
+			}
+		}
+		if len(s.userAccess) >= userAccessCacheMax {
+			clear(s.userAccess)
+		}
+	}
+	s.userAccess[key] = userAccessEntry{pull: pull, push: push, checkedAt: now}
+	return pull, push, nil
+}
+
+// refreshUserScopedInBackground re-syncs a stale user-scoped connection off
+// the request path. At most one refresh per connection runs per
+// userScopedResyncAfter in this process, whether or not the last one worked,
+// so a failing one is not retried on every poll.
+func (s *Service) refreshUserScopedInBackground(ctx context.Context, installation domain.GitHubInstallation) {
+	if !installation.UserScoped() || (installation.LastSyncedAt != nil &&
+		time.Since(*installation.LastSyncedAt) <= userScopedResyncAfter) {
+		return
+	}
+	now := time.Now()
+	s.userScopeRefreshMu.Lock()
+	if last, ok := s.userScopeRefreshAt[installation.ID]; ok && now.Sub(last) < userScopedResyncAfter {
+		s.userScopeRefreshMu.Unlock()
+		return
+	}
+	if s.userScopeRefreshAt == nil {
+		s.userScopeRefreshAt = make(map[string]time.Time)
+	}
+	for id, last := range s.userScopeRefreshAt {
+		if now.Sub(last) >= userScopedResyncAfter {
+			delete(s.userScopeRefreshAt, id)
+		}
+	}
+	s.userScopeRefreshAt[installation.ID] = now
+	s.userScopeRefreshMu.Unlock()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), userScopedRefreshTimeout)
+		defer cancel()
+		if err := s.sync(ctx, installation); err != nil {
+			s.logger.Warn("refresh user-scoped GitHub installation", "error", err,
+				"org_id", installation.OrgID, "installation_id", installation.GitHubInstallationID)
+		}
+	}()
 }
 
 // filterUserScopedRepositoryIDs keeps, for a user-scoped connection, only the
@@ -135,7 +262,8 @@ func (s *Service) filterUserScopedRepositoryIDs(
 // connection when the user administers it (their own account, or an owner of
 // the GitHub organization), otherwise user-scoped. Each connection is synced
 // before returning. Installations that cannot be connected are skipped; the
-// call fails only when none could be, with the first reason.
+// call fails only when none could be, with the first reason. The organization
+// must be the user's alone.
 func (s *Service) ConnectUserInstallations(
 	ctx context.Context,
 	principal domain.Principal,
@@ -152,13 +280,23 @@ func (s *Service) ConnectUserInstallations(
 }
 
 // connectVisibleInstallations connects every installation the token's user can
-// see except skip (0: none).
+// see except skip (0: none), into an organization where the user is the only
+// member.
 func (s *Service) connectVisibleInstallations(
 	ctx context.Context,
 	principal domain.Principal,
 	orgID, token string,
 	skip int64,
 ) ([]domain.GitHubInstallation, error) {
+	// Connecting installations nobody picked shares them with everyone in the
+	// organization, so it is only done where the user is the only member.
+	intact, err := s.userScopeIntact(ctx, orgID, principal.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if !intact {
+		return nil, postgres.ErrGitHubUserScopeNeedsPersonalOrg
+	}
 	visible, err := s.client.ListUserInstallations(ctx, token)
 	if err != nil {
 		return nil, err
@@ -198,6 +336,31 @@ func (s *Service) connectUserInstallation(
 	if err != nil {
 		return domain.GitHubInstallation{}, err
 	}
+	installation, err := s.scopedInstallation(ctx, principal, token, providerInstallation)
+	if err != nil {
+		return domain.GitHubInstallation{}, err
+	}
+	installation, err = s.store.BindGitHubInstallation(ctx, principal, orgID, installation)
+	if err != nil {
+		return domain.GitHubInstallation{}, err
+	}
+	if err := s.sync(ctx, installation); err != nil {
+		return domain.GitHubInstallation{}, err
+	}
+	installation.SyncStatus = "ready"
+	return installation, nil
+}
+
+// scopedInstallation is providerInstallation as a connection for principal,
+// scoped by whether they administer it: whole when they do, otherwise only
+// what they can access. Every path that connects an installation decides this
+// explicitly, so none widens a member's connection to the whole installation.
+func (s *Service) scopedInstallation(
+	ctx context.Context,
+	principal domain.Principal,
+	token string,
+	providerInstallation Installation,
+) (domain.GitHubInstallation, error) {
 	administers, err := s.userAdministersInstallation(ctx, token, providerInstallation)
 	if err != nil {
 		return domain.GitHubInstallation{}, err
@@ -209,14 +372,6 @@ func (s *Service) connectUserInstallation(
 		installation.AccessScope = domain.GitHubAccessScopeUser
 		installation.ScopeUserID = principal.UserID
 	}
-	installation, err = s.store.BindGitHubInstallation(ctx, principal, orgID, installation)
-	if err != nil {
-		return domain.GitHubInstallation{}, err
-	}
-	if err := s.sync(ctx, installation); err != nil {
-		return domain.GitHubInstallation{}, err
-	}
-	installation.SyncStatus = "ready"
 	return installation, nil
 }
 
@@ -232,7 +387,9 @@ type repositoryScopeStore interface {
 func (s *Service) requireUserScopedPush(ctx context.Context, orgID, repository string, repositoryID int64) error {
 	scoper, ok := s.store.(repositoryScopeStore)
 	if !ok {
-		return nil
+		// Without a way to tell the connection's scope, refuse rather than
+		// write through what might be someone else's access.
+		return postgres.ErrForbidden
 	}
 	scope, scopeUserID, err := scoper.GitHubRepositoryAccessScope(ctx, orgID, repository)
 	if err != nil {
@@ -263,52 +420,4 @@ func (s *Service) userAdministersInstallation(
 		return false, nil
 	}
 	return s.client.UserCanAdministerInstallation(ctx, token, installation)
-}
-
-// connectOtherInstallationsTimeout bounds the follow-up connects the
-// installation callback runs after its own installation is stored.
-const connectOtherInstallationsTimeout = 2 * time.Minute
-
-// connectOtherUserInstallations runs after the App installation callback has
-// connected the installation the user chose. It keeps the user's GitHub
-// authorization (so user-scoped connections can sync and re-check access
-// later) and connects every other installation that authorization can see:
-// whole where the user administers it, otherwise only the repositories they
-// can access. It is best effort and never fails the callback; it outlives a
-// closed browser tab, bounded by connectOtherInstallationsTimeout.
-func (s *Service) connectOtherUserInstallations(
-	ctx context.Context,
-	orgID, userID string,
-	connectedInstallationID int64,
-	token UserAccessToken,
-) {
-	if orgID == "" || userID == "" {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), connectOtherInstallationsTimeout)
-	defer cancel()
-	log := s.logger.With("org_id", orgID, "user_id", userID)
-	user, err := s.client.GetUser(ctx, token.Token())
-	if err != nil {
-		log.Warn("read GitHub user after installation", "error", err)
-		return
-	}
-	input, err := s.encryptGitHubUserConnection(userID, user, token)
-	if err != nil {
-		log.Warn("encrypt GitHub user authorization", "error", err)
-		return
-	}
-	if _, err := s.store.SaveGitHubUserConnection(ctx, userID, input); err != nil {
-		log.Warn("keep GitHub user authorization", "error", err)
-		return
-	}
-	connected, err := s.connectVisibleInstallations(ctx, domain.Principal{UserID: userID}, orgID,
-		token.Token(), connectedInstallationID)
-	if err != nil {
-		log.Info("other GitHub installations not connected", "error", err)
-		return
-	}
-	if len(connected) > 0 {
-		log.Info("connected other GitHub installations the user can access", "count", len(connected))
-	}
 }

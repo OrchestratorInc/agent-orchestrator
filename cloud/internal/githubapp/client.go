@@ -56,6 +56,29 @@ type Client struct {
 type HTTPError struct {
 	StatusCode int
 	Message    string
+	// RateLimited is a 403 or 429 GitHub sent because a rate limit ran out,
+	// not because the caller lacks access; it says nothing about access.
+	RateLimited bool
+}
+
+// ErrUserAuthorizationRejected is GitHub refusing a user token exchange or
+// refresh outright (for example an expired, revoked or already used refresh
+// token), as opposed to failing to answer.
+var ErrUserAuthorizationRejected = errors.New("GitHub user authorization was rejected")
+
+// githubRateLimited reports whether a failed GitHub response is a rate limit
+// (primary: X-RateLimit-Remaining 0; secondary: Retry-After or the message).
+func githubRateLimited(response *http.Response, message string) bool {
+	switch response.StatusCode {
+	case http.StatusTooManyRequests:
+		return true
+	case http.StatusForbidden:
+	default:
+		return false
+	}
+	return response.Header.Get("X-RateLimit-Remaining") == "0" ||
+		response.Header.Get("Retry-After") != "" ||
+		strings.Contains(strings.ToLower(message), "rate limit")
 }
 
 func (e *HTTPError) Error() string {
@@ -363,7 +386,7 @@ func (c *Client) exchangeUserToken(
 	}
 	response.AccessToken = strings.TrimSpace(response.AccessToken)
 	if response.Error != "" || response.AccessToken == "" {
-		return UserAccessToken{}, errors.New("GitHub user authorization was rejected")
+		return UserAccessToken{}, ErrUserAuthorizationRejected
 	}
 	token := UserAccessToken{
 		value:        response.AccessToken,
@@ -770,6 +793,7 @@ func (c *Client) ListUserInstallationRepositories(
 // UserRepositoryAccess reports whether the user behind token can read and push
 // to a repository, addressed by its stable ID. A repository the user cannot see
 // is (false, false, nil): GitHub answers 404 (or 403) rather than revealing it.
+// A rate-limited answer is an error, not a denial.
 func (c *Client) UserRepositoryAccess(
 	ctx context.Context,
 	token string,
@@ -789,7 +813,7 @@ func (c *Client) UserRepositoryAccess(
 	path := fmt.Sprintf("/repositories/%d", repositoryID)
 	if err := c.userJSON(ctx, token, http.MethodGet, path, nil, &repository); err != nil {
 		var httpError *HTTPError
-		if errors.As(err, &httpError) &&
+		if errors.As(err, &httpError) && !httpError.RateLimited &&
 			(httpError.StatusCode == http.StatusNotFound || httpError.StatusCode == http.StatusForbidden) {
 			return false, false, nil
 		}
@@ -1367,7 +1391,11 @@ func (c *Client) jsonRequest(
 			Message string `json:"message"`
 		}
 		_ = json.Unmarshal(raw, &failure)
-		return &HTTPError{StatusCode: response.StatusCode, Message: failure.Message}
+		return &HTTPError{
+			StatusCode:  response.StatusCode,
+			Message:     failure.Message,
+			RateLimited: githubRateLimited(response, failure.Message),
+		}
 	}
 	if destination == nil {
 		return nil
