@@ -1,7 +1,7 @@
 // Package cortexcode contains the admission gate for Snowflake Cortex Code.
 //
 // Cortex Code is intentionally not registered as an AO agent until an official
-// release satisfies every required launch and lifecycle capability. Keeping
+// transport satisfies every required launch and lifecycle capability. Keeping
 // this check executable prevents a partial integration from silently claiming
 // worker, orchestrator, restore, or Chat support.
 package cortexcode
@@ -21,7 +21,9 @@ type cliContract struct {
 // cortexCLIContract records only flags verified in the pinned official
 // release. The empty append-system field is deliberate: stable artifact
 // 1.1.87+175514.04f5c9114e11 has no such option and therefore cannot be
-// admitted. Do not fill this field from SDK behavior or an inferred flag.
+// admitted by this historical stream-json flag gate. This is not an ACP
+// requirement: ACP uses session/request_permission, and the official SDK has
+// a separate additive control-initialize route. Do not infer either from flags.
 var cortexCLIContract = cliContract{
 	requiredFlags: []string{
 		"--input-format",
@@ -48,6 +50,26 @@ func validateCLIContract(version, help string) error {
 	}
 	if len(failures) != 0 {
 		return fmt.Errorf("cortex code contract rejected: %s", strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+// validateACPHelp checks only the launch surface of the pinned ACP release.
+// Success is not admission: authentication, additive instruction consumption,
+// provider role, permissions and lifecycle still require native and AO proof.
+// In particular, SDK --permission-prompt-tool is not an ACP requirement.
+func validateACPHelp(version, help string) error {
+	var failures []string
+	if strings.TrimSpace(version) != "Cortex Code v0.26.1012" {
+		failures = append(failures, "unsupported ACP release")
+	}
+	for _, required := range []string{"cortex acp serve", "--connection", "--model", "--workdir", "--plugin-dir"} {
+		if !strings.Contains(help, required) {
+			failures = append(failures, "missing "+required)
+		}
+	}
+	if len(failures) != 0 {
+		return fmt.Errorf("cortex code ACP launch surface rejected: %s", strings.Join(failures, "; "))
 	}
 	return nil
 }

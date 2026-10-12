@@ -1,0 +1,40 @@
+{
+  "status": "blocked",
+  "candidate": "cortex",
+  "utc": "2026-10-12T17:56:43.721130+00:00",
+  "pr": 5507,
+  "artifact": "1.1.104+041358.66de1c44636f",
+  "archiveSHA256": "149d0c225a174e0efcf384031c4d2849a97f09b43c10bb3427ce271e5fafd372",
+  "executableSHA256": "f82b8f5125099ebc3259803a8e26c305ebc6be05437f9355be41a6adea327596",
+  "nativeVersion": "Cortex Code v0.26.1012",
+  "archiveVerified": true,
+  "extraction": "stock executable and bundled node_modules; optional runtimes not extracted; no monkeypatch",
+  "startup": {
+    "exit": 1,
+    "handshake": false,
+    "stdoutBytes": 0,
+    "error": "Error: cortex is not configured, and onboarding requires an interactive terminal (stdin is not a TTY).\nRun cortex once in an interactive shell to complete onboarding.",
+    "config": "documented --config and --config-file with isolated empty files; explicit missing connection"
+  },
+  "proofs": {
+    "nativeHelp": "observed",
+    "authenticatedTurn": "BLOCKED",
+    "freshInstructions": "NOT_RUN",
+    "restoreInstructions": "NOT_RUN",
+    "providerRole": "UNKNOWN",
+    "defaultsPreservation": "NOT_RUN",
+    "AORegisteredSession": "NOT_RUN",
+    "AOUI": "unavailable: no proven registration/authenticated native session"
+  },
+  "cleanup": {
+    "ownedNativeProcessesRemaining": 0,
+    "daemonStarted": false,
+    "globalNativeState": "Help created ~/.snowflake/cortex/cortex.json and logs/coco.log; preserved; no credential files or user/project rules edited"
+  },
+  "limitations": [
+    "No configured authorized Snowflake connection",
+    "No model consumption or ACP handshake established",
+    "SDK appendSystemPrompt does not establish ACP hook semantics",
+    "Routine checks only GitHub CI"
+  ]
+}

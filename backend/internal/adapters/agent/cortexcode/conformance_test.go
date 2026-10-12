@@ -73,3 +73,29 @@ func runCortex(t *testing.T, binary string, args ...string) string {
 	}
 	return string(output)
 }
+
+func TestACPLaunchSurfaceIsIndependentOfSDKFlags(t *testing.T) {
+	help, err := os.ReadFile("testdata/acp-help.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateACPHelp("Cortex Code v0.26.1012", string(help)); err != nil {
+		t.Fatal(err)
+	}
+	// This native ACP fixture deliberately has neither an SDK permission flag
+	// nor an append CLI flag. Passing launch preflight cannot prove delivery.
+	if strings.Contains(string(help), "--permission-prompt-tool") {
+		t.Fatal("ACP fixture unexpectedly contains SDK permission mediation")
+	}
+	for _, required := range []string{"--connection", "--model", "--workdir", "--plugin-dir"} {
+		t.Run(required, func(t *testing.T) {
+			incomplete := strings.ReplaceAll(string(help), required, "missing-option")
+			if err := validateACPHelp("Cortex Code v0.26.1012", incomplete); err == nil {
+				t.Fatal("incomplete ACP launch surface accepted")
+			}
+		})
+	}
+	if err := validateACPHelp("Cortex Code development", string(help)); err == nil {
+		t.Fatal("unknown ACP version accepted")
+	}
+}
