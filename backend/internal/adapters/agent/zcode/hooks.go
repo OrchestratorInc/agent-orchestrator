@@ -27,6 +27,9 @@ var managedHooks = []struct{ event, eventArg string }{
 
 // GetAgentHooks merges native hooks.events while preserving user settings.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
+	if err := validateStandingInstructions(ctx, cfg.SystemPrompt, cfg.SystemPromptFile); err != nil {
+		return err
+	}
 	return updateHooks(ctx, cfg.WorkspacePath, true)
 }
 

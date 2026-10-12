@@ -99,6 +99,9 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 // --prompt/-p flags are headless single-turn modes, and a bare positional
 // argument is parsed as a subcommand, so the TUI must start empty.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
+	if err := validateStandingInstructions(ctx, cfg.SystemPrompt, cfg.SystemPromptFile); err != nil {
+		return nil, err
+	}
 	binary, err := p.zcodeBinary(ctx)
 	if err != nil {
 		return nil, err
@@ -158,6 +161,9 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 // session that happens to share the worktree.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	if err := validateStandingInstructions(ctx, cfg.SystemPrompt, cfg.SystemPromptFile); err != nil {
 		return nil, false, err
 	}
 	agentSessionID := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])

@@ -55,7 +55,8 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import { cp, mkdir, realpath } from 'node:fs/promises';
-          import { resolve } from 'node:path';
+          import { dirname, resolve } from 'node:path';
+          import { createRequire } from 'node:module';
           const runtime = resolve('../zcode-native-runtime');
           await mkdir(resolve(runtime, 'node_modules'), { recursive: true });
           for (const name of ['zcode.cjs', 'provider', 'THIRD-PARTY-NOTICES.md']) {
@@ -64,7 +65,7 @@ jobs:
           // The protocol bundle keeps its external browser assets. The TUI is
           // intentionally excluded: upstream's SEA collector requires a dist
           // directory for the source-only root @zcode/shared package.
-          await cp(await realpath('apps/zcode-cli/packages/cli/node_modules/playwright-core'), resolve(runtime, 'node_modules/playwright-core'), { recursive: true });
+          await cp(await realpath(dirname(createRequire(resolve('apps/zcode-cli/packages/cli/package.json')).resolve('playwright-core/package.json'))), resolve(runtime, 'node_modules/playwright-core'), { recursive: true });
           NODE
           echo 'Stock app-server/headless runtime; TUI dependency closure excluded' > ../zcode-native-runtime/SCOPE
           git rev-parse HEAD > ../zcode-native-runtime/SOURCE_COMMIT
