@@ -288,3 +288,10 @@ same Escape probe without a changed source-grounded hypothesis.
 
 See the [source patch and regression proposal](../../../../docs/research/stakpak-recovery-proposal-2026-10-12.md).
 It is a proposal, not an installed patch or a passing stock-native proof.
+
+
+### Stakpak native foreground source fix qualification
+
+Native source PR767 now contains a small owned-child Unix group fix, real executor regressions and ECHILD signal disarming; this is source implementation, not a proposal or repaired stock release. Keep source/artifact hashes and original stock failures separate. The exact rmcp cancellation handler retains the request future on ordinary token cancellation; a synchronous child-owning Drop guard is sufficient for aborted execution futures without a generic job framework. Do not retain armed numeric PGIDs after wait/try_wait or a loss-of-ownership error, and avoid deferred direct kills after ECHILD. Cancellation-safe line reads and draining both pipes matter for reliable subsequent output.
+
+Source62bd883's pinned CI artifact passed native foreground Escape and same-session continuation in an actual AO Electron standalone shell; this does not register or qualify an AO harness. Full hosted workspace CI remained unavailable/cancelled, so the fix remains draft. The standalone-shell runtime-close control is not agent-session Kill; unmanaged shells have no agent launch generation. A forced renderer reload earlier caused OSC11 reply text in the composer; retain that failed control and never blindly clear permission/draft input. A fresh terminal is a separate control. Default secret scanning can classify harmless assignment-shaped audit text; prefer plain token wording rather than disabling native security. See [curated source-fix evidence](../../../../docs/research/stakpak-native-fix-2026-10-12.md).
