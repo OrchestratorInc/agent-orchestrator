@@ -498,6 +498,15 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		if (option.ID == "model" && legacyModel) || (option.ID == "mode" && legacyMode) {
 			return nil
 		}
+		// A model value the session does not offer is rejected by the agent as an
+		// opaque JSON-RPC error at the first turn. Enforce the advertised choices
+		// here, like the legacy path does, so the picker's mistake surfaces as a
+		// typed config error before anything is sent.
+		if option.ID == "model" {
+			if choices, advertised := advertisedModelChoices(configOptions); advertised && !choiceOffered(choices, option.Value) {
+				return fmt.Errorf("%w: ACP session model does not offer %q", ports.ErrChatConfigOptionInvalid, option.Value)
+			}
+		}
 		resp, err := c.conn.SetSessionConfigOption(ctx, acpsdk.SetSessionConfigOptionRequest{
 			ValueId: &acpsdk.SetSessionConfigOptionValueId{
 				SessionId: acpsdk.SessionId(sessionID), ConfigId: acpsdk.SessionConfigId(option.ID),

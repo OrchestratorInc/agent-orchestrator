@@ -3589,6 +3589,142 @@ func TestACPDriverRejectsAmbiguousLegacyModelAlias(t *testing.T) {
 	}
 }
 
+func TestACPDriverRejectsUnadvertisedModernModel(t *testing.T) {
+	agent := &fakeAgent{newConfig: []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "model", "sonnet", "sonnet", "opus"),
+	}}
+	driver := New(Config{
+		Harness: domain.HarnessClaudeCode,
+		Probe:   func(context.Context) error { return nil },
+		Launch:  func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+	_ = nextEvent(t, opened.Events())
+
+	conv := opened.(*conversation)
+	err = conv.applyTurnSettings(context.Background(), ports.ChatTurnSettings{Model: "claude-haiku-5-5"})
+	if !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+		t.Fatalf("applyTurnSettings with unadvertised model: err = %v, want ErrChatConfigOptionInvalid", err)
+	}
+	if !strings.Contains(err.Error(), `does not offer "claude-haiku-5-5"`) {
+		t.Fatalf("applyTurnSettings error = %v, want it to name the rejected model", err)
+	}
+	agent.mu.Lock()
+	calls := agent.setCalls
+	agent.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("session/set_config_option called %d times, want 0", calls)
+	}
+}
+
+func TestACPDriverAppliesAdvertisedModernModel(t *testing.T) {
+	agent := &fakeAgent{newConfig: []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "model", "sonnet", "sonnet", "opus"),
+	}}
+	driver := New(Config{
+		Harness: domain.HarnessClaudeCode,
+		Probe:   func(context.Context) error { return nil },
+		Launch:  func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+	_ = nextEvent(t, opened.Events())
+
+	conv := opened.(*conversation)
+	if err := conv.applyTurnSettings(context.Background(), ports.ChatTurnSettings{Model: "sonnet"}); err != nil {
+		t.Fatalf("applyTurnSettings with advertised model: %v", err)
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.options["model"] != "sonnet" {
+		t.Fatalf("agent model = %q, want sonnet", agent.options["model"])
+	}
+	if agent.setCalls != 1 {
+		t.Fatalf("session/set_config_option called %d times, want 1", agent.setCalls)
+	}
+}
+
+func TestACPDriverSendsModernModelWithoutAdvertisedModelOption(t *testing.T) {
+	agent := &fakeAgent{newConfig: []acpsdk.SessionConfigOption{
+		selectConfigOption("effort", "Effort", "reasoning", "low", "low", "high"),
+	}}
+	driver := New(Config{
+		Harness: domain.HarnessClaudeCode,
+		Probe:   func(context.Context) error { return nil },
+		Launch:  func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+	_ = nextEvent(t, opened.Events())
+
+	conv := opened.(*conversation)
+	if err := conv.applyTurnSettings(context.Background(), ports.ChatTurnSettings{Model: "claude-haiku-5-5"}); err != nil {
+		t.Fatalf("applyTurnSettings without an advertised model option: %v", err)
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.options["model"] != "claude-haiku-5-5" {
+		t.Fatalf("agent model = %q, want claude-haiku-5-5", agent.options["model"])
+	}
+}
+
+func TestACPDriverSendsModernModelWhenModelOptionHasNoChoices(t *testing.T) {
+	agent := &fakeAgent{newConfig: []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "model", "sonnet"),
+	}}
+	driver := New(Config{
+		Harness: domain.HarnessClaudeCode,
+		Probe:   func(context.Context) error { return nil },
+		Launch:  func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+	_ = nextEvent(t, opened.Events())
+
+	conv := opened.(*conversation)
+	if err := conv.applyTurnSettings(context.Background(), ports.ChatTurnSettings{Model: "claude-haiku-5-5"}); err != nil {
+		t.Fatalf("applyTurnSettings against a choiceless model option: %v", err)
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.options["model"] != "claude-haiku-5-5" {
+		t.Fatalf("agent model = %q, want claude-haiku-5-5", agent.options["model"])
+	}
+}
+
 func TestACPDriverExposesDynamicAvailableCommandsAsSkills(t *testing.T) {
 	agent := &fakeAgent{}
 	driver := New(Config{

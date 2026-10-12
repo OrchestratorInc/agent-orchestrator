@@ -186,6 +186,23 @@ func (c *conversation) configOptionOffers(id, value string) (offered, known bool
 	return false, false
 }
 
+// advertisedModelChoices reports the choices a session's model config option
+// advertises. advertised is false when the session lists no model option, or an
+// older adapter advertises one without choices, in which case callers must send
+// the value unchanged rather than enforce against an empty catalog.
+func advertisedModelChoices(options []ports.ChatConfigOption) (choices []ports.ChatConfigOptionChoice, advertised bool) {
+	for i := range options {
+		if options[i].ID != "model" {
+			continue
+		}
+		if len(options[i].Choices) == 0 {
+			return nil, false
+		}
+		return options[i].Choices, true
+	}
+	return nil, false
+}
+
 func normalizeConfigOptions(options []acpsdk.SessionConfigOption) []ports.ChatConfigOption {
 	out := make([]ports.ChatConfigOption, 0, len(options))
 	for _, option := range options {
