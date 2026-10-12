@@ -282,7 +282,7 @@ const TimelineItem = memo(function TimelineItem({
 			const { body, attachments } = stagedAttachmentParts(item.text);
 			return (
 				<View style={styles.userRow}>
-					<View style={styles.userBubble}>
+					<View style={[styles.userBubble, item.content?.some((content) => content.type === "excerpt" && content.text) && styles.quotedBubble]}>
 						<SentResponseQuotes content={item.content} />
 						{body ? <Text selectable style={styles.userText}>{body}</Text> : null}
 						{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}
@@ -1042,6 +1042,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	olderText: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption1.fontSize },
 	userRow: { alignItems: "flex-end", paddingTop: space.lg, paddingBottom: space.sm },
 	userBubble: { maxWidth: "88%", backgroundColor: userMessageSurfaceStyle(t).backgroundColor, borderRadius: 20, borderCurve: "continuous", paddingHorizontal: space.lg, paddingVertical: space.md },
+	quotedBubble: { width: "88%" },
 	userText: { fontFamily: "Geist_400Regular", color: userMessageSurfaceStyle(t).foregroundColor, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
 	delivery: { fontFamily: "Geist_400Regular", marginTop: space.xxs, color: t.amber, fontSize: type.caption2.fontSize },
 	attachments: { flexDirection: "row", flexWrap: "wrap", gap: space.xs },
