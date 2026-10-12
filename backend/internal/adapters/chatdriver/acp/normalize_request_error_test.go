@@ -270,3 +270,118 @@ func TestNilNormalizeRequestErrorHookIsSafe(t *testing.T) {
 		t.Fatal("unset hook must be nil")
 	}
 }
+
+var errorKindVersionRequest = &acpsdk.RequestError{
+	Code:    -32603,
+	Message: "Internal error: API Error: 400 Claude Code 2.1.228 does not support this model; version 2.1.280 or newer is required.",
+	Data:    map[string]any{"errorKind": "unknown", "sessionId": "dd2c330c-8ec3-46f5-b7d9-28686bcf7f22"},
+}
+
+// TestNormalizeRequestErrorHookInterceptsSessionNewErrors verifies the hook is
+// applied when the provider rejects the model while opening a session, not just
+// during a prompt turn. This is the path that previously leaked the raw -32603
+// blob because session/new bypassed the hook.
+func TestNormalizeRequestErrorHookInterceptsSessionNewErrors(t *testing.T) {
+	cleanErr := ports.NewChatProviderFailure(
+		"Claude Code 2.1.228 does not support the selected model",
+		"Version 2.1.280 or newer is required. Run 'claude update' and try again.",
+		nil,
+	)
+	agent := &fakeAgent{newSessionErr: errorKindVersionRequest}
+	driver := New(Config{
+		Harness:      domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		NormalizeRequestError: func(err error) error {
+			var reqErr *acpsdk.RequestError
+			if errors.As(err, &reqErr) && reqErr.Code == -32603 &&
+				strings.Contains(reqErr.Message, "does not support this model") {
+				return cleanErr
+			}
+			return nil
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	_, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err == nil {
+		t.Fatal("Start succeeded, want the classified session/new failure")
+	}
+	text := err.Error()
+	if !strings.Contains(text, "2.1.228") || !strings.Contains(text, "2.1.280") {
+		t.Fatalf("error missing versions: %q", text)
+	}
+	if strings.Contains(text, `"code"`) || strings.Contains(text, "errorKind") || strings.Contains(text, "dd2c330c") {
+		t.Fatalf("raw ACP payload leaked from session/new: %q", text)
+	}
+}
+
+// TestNormalizeErrorAppliesHookToNonPromptOperations covers the conversation
+// helper directly: config-option setters and session/new must route through the
+// provider hook exactly like the prompt path does.
+func TestNormalizeErrorAppliesHookToNonPromptOperations(t *testing.T) {
+	cleanErr := errors.New("classified provider failure")
+	conv := &conversation{
+		normalizeRequestError: func(err error) error {
+			var reqErr *acpsdk.RequestError
+			if errors.As(err, &reqErr) && reqErr.Code == -32603 {
+				return cleanErr
+			}
+			return nil
+		},
+	}
+	for _, operation := range []string{"ACP session/new", `set ACP session option "model"`, "ACP session/resume"} {
+		t.Run(operation, func(t *testing.T) {
+			if got := conv.normalizeError(operation, errorKindVersionRequest); !errors.Is(got, cleanErr) {
+				t.Fatalf("normalizeError = %v, want the hook's error", got)
+			}
+			if got := conv.normalizeLoadError(operation, errorKindVersionRequest); !errors.Is(got, cleanErr) {
+				t.Fatalf("normalizeLoadError = %v, want the hook's error", got)
+			}
+		})
+	}
+}
+
+// TestNormalizeErrorSkipsHookForAuthRejections ensures a -32000 rejection keeps
+// taking the reauth path even when a provider hook is installed, matching the
+// documented "auth runs before the hook" contract.
+func TestNormalizeErrorSkipsHookForAuthRejections(t *testing.T) {
+	hookCalled := 0
+	conv := &conversation{
+		normalizeRequestError: func(error) error {
+			hookCalled++
+			return errors.New("must not be used")
+		},
+	}
+	authErr := &acpsdk.RequestError{Code: -32000, Message: "authentication required"}
+	err := conv.normalizeError("ACP session/new", authErr)
+	if hookCalled != 0 {
+		t.Fatalf("hook called %d times for an auth rejection, want 0", hookCalled)
+	}
+	if !errors.Is(err, ports.ErrChatAuthRequired) {
+		t.Fatalf("auth rejection = %v, want ErrChatAuthRequired", err)
+	}
+}
+
+// TestNormalizeACPErrorStripsRawRequestData verifies the generic path no longer
+// echoes the JSON-RPC envelope (including Data, which can carry provider
+// payloads or session ids) while still exposing the code to callers.
+func TestNormalizeACPErrorStripsRawRequestData(t *testing.T) {
+	raw := &acpsdk.RequestError{
+		Code:    -32603,
+		Message: "Internal error: context deadline exceeded",
+		Data:    map[string]any{"sessionId": "dd2c330c-8ec3-46f5-b7d9-28686bcf7f22", "payload": "secret"},
+	}
+	err := normalizeACPError("ACP session/prompt", raw)
+	text := err.Error()
+	if strings.Contains(text, "secret") || strings.Contains(text, "dd2c330c") || strings.Contains(text, `"code"`) {
+		t.Fatalf("raw payload leaked: %q", text)
+	}
+	if !strings.Contains(text, "code -32603") || !strings.Contains(text, "context deadline exceeded") {
+		t.Fatalf("sanitized error lost its code/message: %q", text)
+	}
+	var reqErr *acpsdk.RequestError
+	if !errors.As(err, &reqErr) || reqErr.Code != -32603 {
+		t.Fatalf("errors.As could not recover the request error from %v", err)
+	}
+}

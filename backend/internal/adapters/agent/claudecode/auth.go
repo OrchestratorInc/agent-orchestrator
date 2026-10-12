@@ -461,6 +461,12 @@ func providerModelsFor(probeCtx context.Context, resolved claudeProviderContext)
 		if result.State == agentcreds.StateInvalid {
 			return nil, modelDiscoveryAuthError{kind: ports.ErrAgentModelDiscoveryCredentialRejected, message: message}
 		}
+		if !resolved.found {
+			// Discovery has no credential to ask with, which the user resolves by
+			// signing in. Classify it so the picker shows the sign-in notice (with
+			// the resolver's wording behind "Details") instead of a raw warning.
+			return nil, modelDiscoveryAuthError{kind: ports.ErrAgentModelDiscoverySignInRequired, message: message}
+		}
 		return nil, errors.New(message)
 	}
 	if len(result.Models) == 0 {

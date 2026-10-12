@@ -798,3 +798,25 @@ func TestProviderModelsDoesNotClaimConfiguredFoundryDeployments(t *testing.T) {
 		t.Fatalf("models/error = %+v/%v, want unsupported Foundry discovery", models, err)
 	}
 }
+
+// A picker with no credential AO can read is a sign-in the user can act on, not
+// the resolver's internal "no credential could be resolved" wording shown raw.
+func TestProviderModelsReportsUnresolvedCredentialAsSignInRequired(t *testing.T) {
+	clearClaudeCredentialEnv(t)
+	InvalidateAuthCache()
+	t.Cleanup(InvalidateAuthCache)
+
+	previous := claudeModelAuthReport
+	claudeModelAuthReport = func(context.Context, string, string, map[string]string) (claudeAuthReport, bool) {
+		return claudeAuthReport{}, false
+	}
+	t.Cleanup(func() { claudeModelAuthReport = previous })
+
+	models, err := ProviderModels(context.Background(), "/opt/claude", "/workspace", nil)
+	if err == nil || len(models) != 0 {
+		t.Fatalf("models/error = %+v/%v, want a sign-in-required discovery failure", models, err)
+	}
+	if !errors.Is(err, ports.ErrAgentModelDiscoverySignInRequired) {
+		t.Fatalf("err = %v, want ErrAgentModelDiscoverySignInRequired", err)
+	}
+}
