@@ -301,3 +301,43 @@ hashes, failure labels and standalone-versus-registered scope. Split combined
 reports by harness. Verify destination assets and published comment links before
 removing the old paths from the skill PR's net diff. Keep immutable historical
 references where needed; relocation does not establish a new runtime PASS.
+
+
+## Independent standing-instruction controls
+
+Use an ordinary visible file task that never names the private token, private
+instruction path, private witness, or reading standing/project instructions.
+Give the private instructions their own distinct prescribed file action and
+an independent project rule control. On exact restore, introduce a new hidden
+token only after confirmed Kill, inspect the current empty native composer,
+and send another ordinary task. Preserve the first failed continuation even
+if a later separate control passes.
+
+The TUI runner's prompts that explicitly request hidden/project token fields
+are assisted consumption controls. Their token gates do not establish the
+independent ordinary-task proof above. Keep that scope visible in reports;
+use a focused registered daemon session for the independent control. A
+proprietary Chat harness still requires its actual Chat API and lifecycle.
+
+For ordinary daemon `/sessions/{id}/send` follow-ups, set `userAuthored: true`.
+Omitting it is coordination delivery: the native agent can legitimately treat
+its tagged content as an unsolicited instruction. Keep coordination rejection
+separate from user-input loss. Exercise long multiline tasks through the
+actual guarded AO input path; a native fixture that already uses bracketed
+paste can hide raw chunk submission and stranded-draft defects.
+
+A supported read-only native SDK view can confirm that the new managed append,
+native defaults and user rules are configured together. It cannot establish
+model consumption or the authenticated provider wire role. Retain a configured
+NEW token with an unchanged OLD private witness as a failed consumption control.
+
+After every Electron relaunch, re-read the serving PID and preserve the native
+profile/PATH environment needed by the replacement daemon. Binary lookup or
+version-probe failure does not prove missing history rejection. A missing-history
+control must reach that check, reject restore without a fresh conversation,
+and restore the exact owned withheld history bytes afterward.
+
+If software WebGL produces blank frames, retain them as failed captures. A
+normal Electron graphics fallback may be used for the real app; record its
+flags, exact UI source and serving binary separately. Never replace native
+viewport evidence with DOM text, raw terminal-ring text or generated pixels.
