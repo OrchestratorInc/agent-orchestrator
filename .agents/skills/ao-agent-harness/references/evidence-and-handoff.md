@@ -286,3 +286,18 @@ Record instruction delivery separately from provider message role. Additive nati
 Use actual registered daemon Chat sessions for proprietary native protocols; this TUI runner does not qualify their streaming, approval or reconnect contract. A standalone native receipt is a separate prerequisite. Prove new hidden instructions after confirmed Kill with the same native history, and retain failed controls separately. Limit aggregate native hook context or reject competing unbounded hooks; hook fail-open and truncation behavior require explicit boundaries.
 
 Executing-child interrupt and explicit AO Kill are independent gates. A host disappearance is insufficient when a native Bash tool starts a new process group. On Linux record PID plus kernel birth ticks, bounded reaping and the absence of a scheduled late artifact, while an unrelated control session stays usable. Do not infer other operating-system cleanup from a Linux-only proof. Record CI merge-build VCS and any difference from the implementation head separately from the Electron UI head.
+
+## Evidence ownership by integration PR
+
+For an integration batch, publish each harness's report, JSON receipts, original
+screenshots and adjacent provenance on that harness's integration PR branch or
+as attachments to that PR. Embed the images and link the detailed receipts in
+its PR comments. Record the tested source/native revisions independently of the
+evidence commit. A skill/tooling PR holds reusable instructions, runner/tests
+and a concise session index linking to those integration PRs.
+
+When relocating existing evidence, preserve screenshot bytes, original test
+hashes, failure labels and standalone-versus-registered scope. Split combined
+reports by harness. Verify destination assets and published comment links before
+removing the old paths from the skill PR's net diff. Keep immutable historical
+references where needed; relocation does not establish a new runtime PASS.

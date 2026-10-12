@@ -98,6 +98,11 @@ non-pass gates, tested source and binary, evidence links, and cleanup state.
 Publish detailed PR reports only when requested or already authorized; otherwise
 summarize and attach the same evidence in the authorized handoff.
 
+Keep each harness's detailed reports, JSON receipts, screenshots and provenance
+with its own integration PR, and embed/link them in that PR's comments. A skill
+PR contains reusable guidance, runner/tests and a concise linked session summary.
+See the evidence reference for relocation and publication requirements.
+
 ## Validate changes
 
 On the authorized execution host, from this skill directory:

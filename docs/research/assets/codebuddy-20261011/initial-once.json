@@ -1,5 +1,0 @@
-{
-  "nativeDurableInitialTaskOccurrences": 1,
-  "historySource": "exact session ID corroborated with durable cwd; raw native ID withheld",
-  "workspaceAgentsBytesUnchanged": true
-}
