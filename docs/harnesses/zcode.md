@@ -2,7 +2,7 @@
 
 AO uses the official [ZCode v3.15.1 source](https://github.com/zai-org/ZCode/tree/aac4755666d09fdcd70272fcf063c077a639015f), commit `aac4755666d09fdcd70272fcf063c077a639015f`, through `zcode app-server`. Its CLI reports `0.16.9`; the upstream product and internal CLI versions differ. The protocol is native ZCode NDJSON, not ACP. Terminal UI, reviewers and TUI/Chat handoff are unsupported. Explicit Terminal requests fail before creating durable resources.
 
-**Draft qualification:** pinned stock-source CI proves additive private context and exact native history with a synthetic provider. Authenticated standalone Z.ai proof additionally demonstrates correct-workspace edits, separate project rules, leading-dash task delivery, a second message, refreshed private instructions after native process kill, unknown-history rejection, offered permission decisions and executing-child cancellation. Actual registered AO manager/Electron proof and final current-head CI remain pending; standalone proof does not establish integration completion.
+**Qualification evidence:** pinned stock-source CI proves additive private context and exact native history with a synthetic provider. Authenticated standalone Z.ai proof additionally demonstrates correct-workspace edits, separate project rules, leading-dash task delivery, a second message, refreshed private instructions after native process kill, unknown-history rejection, offered permission decisions and executing-child cancellation. [PR6003](https://github.com/OrchestratorInc/agent-orchestrator/pull/6003) records registered AO manager/Electron receipts, failed controls, source provenance and current-head CI separately; standalone proof does not establish integration completion.
 
 ## Instructions and native controls
 
@@ -44,3 +44,5 @@ The first actual AO-manager run proved fresh/second/restore instruction consumpt
 Serialized hook JSON must also fit the pinned native 32,768-byte stdout limit. AO rejects escape-expanded output and smaller configured native limits before launching or submitting a turn, preserving the native configuration.
 
 The Linux host periodically reaps direct adopted zombies after native interrupt while keeping the provider alive; it excludes the provider PID owned by exec.Cmd.Wait. The ownership epoch refuses attachment to older hosts without this guarantee.
+
+The first subreaper revision stopped native interrupt side effects but retained an adopted zombie while the provider stayed live. That failed control remains separate from the subsequent periodic-reaper qualification. Live evidence records the CI-built runtime head and later documentation/comment-only differences explicitly.
