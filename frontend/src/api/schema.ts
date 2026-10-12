@@ -3584,7 +3584,6 @@ export interface components {
             /** Format: date-time */
             lastUsedAt?: null | string;
             provider?: string;
-
             unsupported?: boolean;
             unsupportedReason?: string;
         };

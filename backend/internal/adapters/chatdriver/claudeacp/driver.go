@@ -54,7 +54,7 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func(), onModelUn
 		// only auth correction that works for credential sources AO cannot
 		// read at all — the Bedrock and Vertex chains — because it needs no
 		// credential, no network call, and no provider knowledge.
-		OnAuthRejected: claudeAuthRejected(onAuthRejected),
+		OnAuthRejected:        claudeAuthRejected(onAuthRejected),
 		PromptResponseFailure: claudePromptResponseFailure,
 		NormalizeRequestError: func(model string, err error) error {
 			return claudeNormalizeRequestError(model, err, onModelUnsupported)
