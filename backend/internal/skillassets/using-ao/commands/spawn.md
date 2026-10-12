@@ -21,6 +21,7 @@ ao spawn [flags]
 | `--model string` | Agent model override for this session only; overrides project/role config | - |
 | `--name string` | Display name shown in the sidebar (max 100 characters) | Required |
 | `--mode chat\|tui` | Initial session interface; Chat requires harness support | Daemon default, otherwise Terminal UI |
+| `--output artifact` | Ask the worker for a file in its artifact directory instead of a PR | Ordinary task |
 | `--no-takeover` | Refuse if another active session owns the claimed PR (requires `--claim-pr`) | - |
 | `--project string` | Project id to spawn the session in | Optional when `--standalone` is used; defaults to `AO_PROJECT_ID` or the current repo's registered project |
 | `--standalone` | Spawn a projectless worker session in an AO-managed directory | Disabled when `--project` is set |
@@ -30,9 +31,11 @@ ao spawn [flags]
 
 `--agent` is an alias for `--harness`.
 
-Available harnesses: `claude-code`, `codex`, `aider`, `opencode`, `opencode-v2`, `grok`, `droid`, `amp`, `agy`, `crush`, `cursor`, `qwen`, `gemini`, `copilot`, `goose`, `auggie`, `continue`, `devin`, `cline`, `kimi`, `muse`, `kiro`, `kilocode`, `vibe`, `pi`, `kimchi`, `prime-agent`, `autohand`, `omp`, `fx`, `unreal-agent`, `mimo-code`, `deepseek-harness`, `openhands`. Check `ao agent ls --refresh` for readiness on the installed build. `unreal-agent` is Chat-only; Gemini, MiMo Code, and OpenHands are Terminal UI-only.
+Available harnesses: `claude-code`, `codex`, `aider`, `opencode`, `opencode-v2`, `grok`, `droid`, `amp`, `agy`, `crush`, `cursor`, `qwen`, `gemini`, `copilot`, `goose`, `auggie`, `continue`, `devin`, `cline`, `kimi`, `muse`, `kiro`, `kilocode`, `vibe`, `pi`, `kimchi`, `prime-agent`, `autohand`, `omp`, `fx`, `unreal-agent`, `mimo-code`, `deepseek-harness`, `openhands`, `command-code`. Check `ao agent ls --refresh` for readiness on the installed build. `unreal-agent` is Chat-only; Gemini, MiMo Code, and OpenHands are Terminal UI-only.
 
 `fx` is experimental and Terminal UI only: spawn it with `--agent fx --mode tui`.
+
+`command-code` is Terminal UI only: spawn it with `--agent command-code --mode tui`.
 
 ## Examples
 
@@ -50,6 +53,12 @@ ao spawn --project agent-orchestrator --name "review-pr-88" --claim-pr 88 --harn
 # Spawn an orchestrator using the project's orchestrator configuration
 ao spawn --project agent-orchestrator --kind orchestrator --name "coordinate-fix" \
   --prompt "Coordinate the fix and report the worker PR."
+```
+
+```bash
+# Spawn a standalone worker whose deliverable is an artifact file, not a PR
+ao spawn --standalone --agent claude-code --output artifact --name "q3-report" \
+  --prompt "Write a one-page summary of Q3 incidents."
 ```
 
 ```bash

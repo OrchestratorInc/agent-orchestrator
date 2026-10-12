@@ -2,6 +2,7 @@ import { ChevronDown, Code2, FolderOpen, SquareTerminal } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { OpenTarget, OpenTargetId } from "../../shared/editor-handoff";
+import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { useEditorHandoffState, useOpenSessionTarget, workspaceCheckFailed } from "../hooks/useEditorHandoff";
 import { TopbarActionError, TopbarButton } from "./TopbarButton";
 import {
@@ -97,6 +98,13 @@ export function TopbarOpenEditorButton({
 		open.reset();
 		open.mutate({ sessionId, projectId, ...(targetId ? { targetId } : {}) });
 	};
+	// ⌘O opens the workspace in the preferred editor, or in the first available
+	// target (file manager, terminal) when no editor is installed.
+	useSessionShortcut("open-in-editor", () => {
+		if (busy || !workspaceAvailable) return;
+		if (preferred) launch();
+		else if (targets[0]) launch(targets[0].id);
+	});
 	const launchError = open.error instanceof Error ? open.error.message : null;
 	const waitingLabel = stateQuery.isPending
 		? t("editor.preparingWorkspace")

@@ -477,6 +477,21 @@ describe("ACP session config options", () => {
 		expect(screen.queryByText("Showing 2 of 2 matching models", { exact: true })).not.toBeInTheDocument();
 	});
 
+	it("fires exactly one change per mouse click on a toggle switch", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		render(
+			<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange}
+				configOptions={[OPTIONS[0], { ...OPTIONS[2], currentValue: "build", choices: [
+					{ value: "build", name: "Build" },
+					{ value: "plan", name: "Plan" },
+				] }]} />,
+		);
+		await user.click(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" }));
+		await user.click(screen.getByRole("switch", { name: "Plan Mode" }));
+		expect(onChange).toHaveBeenCalledTimes(1);
+	});
+
 	it.each(["ao-plan-project-1", "agents/plan-reviewer", "my_plan_agent"])(
 		"does not treat custom agent %s as native Plan Mode",
 		async (custom) => {
@@ -501,6 +516,18 @@ describe("ACP session config options", () => {
 			expect(onChange).toHaveBeenLastCalledWith("mode", { value: "build" });
 		},
 	);
+
+	it("toggles a menu row from the keyboard with Enter and keeps the menu open", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={OPTIONS} />);
+		await user.click(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" }));
+		const row = screen.getByRole("switch", { name: "Fast mode" }).closest("[role='menuitem']") as HTMLElement;
+		row.focus();
+		await user.keyboard("{Enter}");
+		expect(onChange).toHaveBeenCalledWith("fast", { enabled: true });
+		expect(screen.getByRole("switch", { name: "Fast mode" })).toBeInTheDocument();
+	});
 
 	it("keeps OpenCode Plan Mode reversible through its Build mode", async () => {
 		const user = userEvent.setup();

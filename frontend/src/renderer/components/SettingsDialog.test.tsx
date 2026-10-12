@@ -1,8 +1,9 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
+import { appShortcutBus } from "../test/app-shortcut-bus";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { SettingsDialog } from "./SettingsPageTestHarness";
 import { globalSettingsItemsFor, visibleGlobalSettings } from "./settings/settingsCatalog";
@@ -88,7 +89,9 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 }));
 
 vi.mock("./CuesDialog", () => ({
-	CuesSettings: ({ projectId }: { projectId: string }) => <div data-testid="project-cues-settings">{projectId}</div>,
+	CuesSettings: ({ projectId, onBusyChange }: { projectId: string; onBusyChange?: (busy: boolean) => void }) => (
+		<div data-testid="project-cues-settings">{projectId}<button onClick={() => onBusyChange?.(true)} type="button">Make cues busy</button></div>
+	),
 }));
 
 vi.mock("./ProjectScriptsSettings", () => ({
@@ -101,8 +104,11 @@ vi.mock("../hooks/useCloudGate", () => ({
 	useCloudGate: () => ({ cloudEnabled: false, localEnabled: true }),
 }));
 
-// The dialog reads the cloud session email to gate the 11x-only Coder page.
-// Signed out here, so that page is never visible.
+// The dialog reads the org's offering to gate the Coder and Upgrade pages.
+// Nothing resolved here (signed out), so neither page is visible.
+vi.mock("../hooks/useCloudOffering", () => ({
+	useCloudOffering: () => ({ hasCoder: false, selfServeBilling: false }),
+}));
 vi.mock("../lib/cloud-session", () => ({
 	useCloudSession: () => ({ status: "unauthenticated", session: null }),
 }));
@@ -330,8 +336,8 @@ describe("SettingsDialog", () => {
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("diagnostics");
 		expect(screen.getByRole("button", { name: "Diagnostics" })).toBeInTheDocument();
 		// The live monitor is a page of its own: the aggregate view never mounts it.
-		expect(globalSettingsItemsFor("all", { cloudEnabled: true, developerMode: true, diagnostics: true, is11x: false }).map((item) => item.id)).not.toContain("diagnostics");
-		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: true, is11x: false }).map((item) => item.id)).toContain("diagnostics");
+		expect(globalSettingsItemsFor("all", { cloudEnabled: true, developerMode: true, diagnostics: true, hasCoder: false, selfServeBilling: false }).map((item) => item.id)).not.toContain("diagnostics");
+		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: true, hasCoder: false, selfServeBilling: false }).map((item) => item.id)).toContain("diagnostics");
 	});
 
 	it("hides Diagnostics until its toggle is on in Developer mode, falling back to General if asked for", async () => {
@@ -341,7 +347,7 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
 		expect(screen.queryByRole("button", { name: "Diagnostics" })).not.toBeInTheDocument();
-		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: false, is11x: false }).map((item) => item.id)).not.toContain("diagnostics");
+		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: false, hasCoder: false, selfServeBilling: false }).map((item) => item.id)).not.toContain("diagnostics");
 	});
 
 	it("hides Diagnostics outside Developer mode even with its toggle left on", async () => {
@@ -353,8 +359,34 @@ describe("SettingsDialog", () => {
 		expect(screen.queryByRole("button", { name: "Diagnostics" })).not.toBeInTheDocument();
 	});
 
+	describe("offering gates", () => {
+		const pages = (context: { hasCoder: boolean; selfServeBilling: boolean; cloudEnabled?: boolean }) =>
+			visibleGlobalSettings({ cloudEnabled: true, developerMode: false, diagnostics: false, ...context }).map((item) => item.id);
+
+		it("a B2C self-serve org sees Upgrade and no Coder page", () => {
+			expect(pages({ hasCoder: false, selfServeBilling: true })).toContain("billing");
+			expect(pages({ hasCoder: false, selfServeBilling: true })).not.toContain("coder");
+		});
+
+		it("a B2B contract org sees the Coder page and no Upgrade", () => {
+			expect(pages({ hasCoder: true, selfServeBilling: false })).toContain("coder");
+			expect(pages({ hasCoder: true, selfServeBilling: false })).not.toContain("billing");
+		});
+
+		it("an org on both sees both, and Upgrade only while self-serve", () => {
+			expect(pages({ hasCoder: true, selfServeBilling: true })).toEqual(expect.arrayContaining(["coder", "billing"]));
+			expect(pages({ hasCoder: true, selfServeBilling: false })).not.toContain("billing");
+		});
+
+		it("shows neither cloud page with cloud off", () => {
+			const ids = pages({ hasCoder: true, selfServeBilling: true, cloudEnabled: false });
+			expect(ids).not.toContain("coder");
+			expect(ids).not.toContain("billing");
+		});
+	});
+
 	it("falls back to General when the Coder page is unavailable", async () => {
-		useUiStore.getState().openGlobalSettings("coder11x");
+		useUiStore.getState().openGlobalSettings("coder");
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
@@ -431,5 +463,75 @@ describe("SettingsDialog", () => {
 		document.body.focus();
 		fireEvent.keyDown(document.body, { key: "Escape" });
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+	});
+
+	describe("section navigation chords", () => {
+		type Listener = () => void;
+		const listeners: Record<string, Set<Listener>> = {};
+		const channels = ["onPreviousSessionShortcut", "onNextSessionShortcut", "onPreviousTabShortcut", "onNextTabShortcut"] as const;
+		const fire = (channel: (typeof channels)[number]) => act(() => [...(listeners[channel] ?? [])].forEach((listener) => listener()));
+		const navButtons = () => within(screen.getByRole("navigation", { name: "Settings sections" })).getAllByRole("button");
+		const activeIndex = () => navButtons().findIndex((button) => button.getAttribute("aria-current") === "page");
+		const jump = (index?: number) => act(() => appShortcutBus.emit({ id: "jump-to-session", index }));
+
+		beforeEach(() => {
+			for (const channel of channels) {
+				listeners[channel] = new Set();
+				(window.ao!.app as unknown as Record<string, unknown>)[channel] = (listener: Listener) => {
+					listeners[channel].add(listener);
+					return () => listeners[channel].delete(listener);
+				};
+			}
+		});
+
+		it.each([
+			["onNextSessionShortcut", 1],
+			["onNextTabShortcut", 1],
+			["onPreviousSessionShortcut", -1],
+			["onPreviousTabShortcut", -1],
+		] as const)("%s steps the global section list and wraps", async (channel, direction) => {
+			useUiStore.getState().openGlobalSettings();
+			renderSettingsDialog();
+			await screen.findByRole("navigation", { name: "Settings sections" });
+			const count = navButtons().length;
+			expect(count).toBeGreaterThan(2);
+			const start = activeIndex();
+			expect(start).toBe(0);
+			fire(channel);
+			expect(activeIndex()).toBe((start + direction + count) % count);
+			// A full lap lands back on the starting section.
+			for (let i = 1; i < count; i += 1) fire(channel);
+			expect(activeIndex()).toBe(start);
+		});
+
+		it("jumps to the Nth section and ignores an out-of-range or missing index", async () => {
+			useUiStore.getState().openGlobalSettings();
+			renderSettingsDialog();
+			await screen.findByRole("navigation", { name: "Settings sections" });
+			jump(2);
+			expect(activeIndex()).toBe(2);
+			jump(999);
+			expect(activeIndex()).toBe(2);
+			jump();
+			expect(activeIndex()).toBe(2);
+			jump(0);
+			expect(activeIndex()).toBe(0);
+		});
+
+		it("stands down for project settings, which are a dialog without these chords", async () => {
+			useUiStore.getState().openProjectSettings("proj-1");
+			renderSettingsDialog();
+			await screen.findByRole("navigation", { name: "Settings sections" });
+			for (const channel of channels) expect(listeners[channel].size).toBe(0);
+		});
+
+		it("does not listen while settings are closed, and unsubscribes when they close", async () => {
+			renderSettingsDialog();
+			for (const channel of channels) expect(listeners[channel].size).toBe(0);
+			act(() => useUiStore.getState().openGlobalSettings());
+			for (const channel of channels) expect(listeners[channel].size).toBe(1);
+			act(() => useUiStore.getState().closeSettings());
+			for (const channel of channels) expect(listeners[channel].size).toBe(0);
+		});
 	});
 });

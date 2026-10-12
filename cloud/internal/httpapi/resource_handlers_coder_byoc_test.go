@@ -204,3 +204,28 @@ func TestCreateSessionRejectsOrgOnlyAgentCredential(t *testing.T) {
 		t.Fatalf("org-only launch: status=%d created=%v body=%s", rec.Code, store.created, rec.Body.String())
 	}
 }
+
+// Re-spawning a scratch project's orchestrator in a bring-your-own org whose
+// connection has no default template runs on the deployment's Coder, as its
+// first orchestrator did; a regular project without a template still has to
+// choose one.
+func TestCreateSessionScratchProjectFallsBackWithoutTemplate(t *testing.T) {
+	t.Parallel()
+	store := &stubCoderBYOCStore{personalCredentialAvailable: true, omitOrgTemplate: true, projectConfig: []byte(`{"source":"scratch"}`)}
+	srv := newBYOCServer(store)
+	rec := httptest.NewRecorder()
+	srv.createSession(rec, byocCreateSessionRequest(t))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("scratch: status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	if store.captured.SandboxConnectionID != "" {
+		t.Fatalf("scratch: SandboxConnectionID = %q, want the deployment's Coder", store.captured.SandboxConnectionID)
+	}
+
+	regular := &stubCoderBYOCStore{personalCredentialAvailable: true, omitOrgTemplate: true}
+	rec = httptest.NewRecorder()
+	newBYOCServer(regular).createSession(rec, byocCreateSessionRequest(t))
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "coder_template_required") {
+		t.Fatalf("regular: status = %d, want 422 coder_template_required; body = %s", rec.Code, rec.Body.String())
+	}
+}
