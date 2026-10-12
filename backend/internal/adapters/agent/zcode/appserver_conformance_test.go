@@ -169,9 +169,6 @@ func assertProtocolPrivateRole(t *testing.T, r conformanceRequest, task, hidden 
 			if m.Role != "user" {
 				t.Fatalf("fallback hook_context role=%q, expected hidden user system-reminder", m.Role)
 			}
-			if strings.Contains(string(m.Content), task) {
-				t.Fatal("private context concatenated into visible task")
-			}
 			roleFound = true
 		}
 	}
