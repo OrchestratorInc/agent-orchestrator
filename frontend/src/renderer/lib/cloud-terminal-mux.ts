@@ -25,6 +25,7 @@
 //             {type:"output",data:<base64>,sequence}
 
 import { base64ToBytes, type MuxConnectionState, type TerminalMux } from "./terminal-mux";
+import { PLAN_REFUSAL_CODES } from "./cloud-cp/client";
 import { publishCloudNotificationHint } from "./cloud-notification-hints";
 
 export interface CloudTerminalMuxOptions {
@@ -98,6 +99,17 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 		errorListeners.forEach((listener) =>
 			listener("The coding-agent terminal has exited. Start a new session to continue."),
 		);
+	};
+
+	// The org's plan does not allow waking this session (a usage limit, no
+	// plan). That holds for hours or days, so it is reported once as a pane
+	// error rather than polled like a worker that is still starting; the client
+	// already raised the plan prompt for this refusal.
+	const planRefusal = (error: unknown): string | undefined => {
+		if (typeof error !== "object" || error === null) return undefined;
+		const { code, message } = error as { code?: unknown; message?: unknown };
+		if (typeof code !== "string" || !PLAN_REFUSAL_CODES.has(code)) return undefined;
+		return typeof message === "string" && message !== "" ? message : "Your plan does not allow this session to run right now.";
 	};
 
 	const sendJSON = (message: unknown): boolean => {
@@ -199,6 +211,11 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 			// (the "Connected, but stuck Connecting…" symptom).
 			if (terminalExited(error)) {
 				reportTerminalExited();
+				return;
+			}
+			const refusal = planRefusal(error);
+			if (refusal) {
+				errorListeners.forEach((listener) => listener(refusal));
 				return;
 			}
 			// A freshly created session's worker may not be connected yet while its

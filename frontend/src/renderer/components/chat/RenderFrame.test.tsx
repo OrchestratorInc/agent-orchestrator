@@ -529,6 +529,31 @@ describe("artifact activity", () => {
 		}
 	});
 
+	it("labels the inline card as an artifact with its name", () => {
+		renderArtifact();
+		const header = screen.getByTestId("artifact-card-header");
+		expect(header).toHaveTextContent("Artifact");
+		expect(header).toHaveTextContent("Q3 (final).html");
+		// The session lists no preview for this artifact, so there is nothing to open.
+		expect(within(header).queryByRole("button", { name: "Open in Browser panel" })).toBeNull();
+	});
+
+	it("opens the artifact in the Browser panel straight from the card", async () => {
+		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+		try {
+			const user = userEvent.setup();
+			renderArtifact([sessionArtifact("q3/Q3 (final).html")]);
+			await user.click(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Open in Browser panel" }));
+			expect(useUiStore.getState().inspectorSessions["proj-1"]).toMatchObject({ isOpen: true, view: "browser" });
+			await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+			const request = new Request(...(fetch.mock.calls[0]! as [RequestInfo | URL, RequestInit?]));
+			expect(request.url).toBe("http://127.0.0.1:3001/api/v1/sessions/proj-1/preview");
+			expect(await request.json()).toEqual({ url: previewUrl });
+		} finally {
+			fetch.mockRestore();
+		}
+	});
+
 	it("reads the source and saves the served page under the artifact's name", async () => {
 		const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("<p>report</p>"));
 		const original = { createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL };

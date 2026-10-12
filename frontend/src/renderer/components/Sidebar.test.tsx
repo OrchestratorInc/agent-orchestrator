@@ -54,6 +54,7 @@ const {
 	downloadUpdateMock,
 	getMock,
 	navigateMock,
+	mockLocation,
 	mockParams,
 	postMock,
 	renameSessionMock,
@@ -77,6 +78,7 @@ const {
 		getMock: vi.fn(),
 		postMock: vi.fn(),
 		navigateMock: vi.fn(),
+		mockLocation: { pathname: "/" },
 		mockParams: { hostId: undefined as string | undefined, projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
 		renameSessionMock: vi.fn().mockResolvedValue(undefined),
 		spawnMock: vi.fn(),
@@ -146,7 +148,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 		useNavigate: () => navigateMock,
 		useParams: () => ({ ...mockParams }),
 		useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => unknown }) =>
-			select({ location: { pathname: "/" } }),
+			select({ location: { pathname: mockLocation.pathname } }),
 	};
 });
 
@@ -543,6 +545,7 @@ beforeEach(() => {
 	mockParams.projectId = undefined;
 	mockParams.sessionId = undefined;
 	mockParams.hostId = undefined;
+	mockLocation.pathname = "/";
 });
 
 afterEach(() => {
@@ -644,6 +647,49 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		expect(screen.getAllByLabelText("Sign in to AO Cloud")).toHaveLength(2);
+	});
+
+	it("shows the Artifacts row under Automations with a count of live artifacts", async () => {
+		const user = userEvent.setup();
+		const withArtifacts: WorkspaceSummary = {
+			...workspace,
+			sessions: [
+				{
+					...session,
+					outputType: "artifact",
+					artifactFiles: [
+						{ kind: "html", name: "flow.html", path: "flow.html", size: 1, updatedAt: "2026-10-11T10:00:00Z" },
+						{ kind: "markdown", name: "plan.md", path: "plan.md", size: 1, updatedAt: "2026-10-10T10:00:00Z" },
+					],
+				},
+				{
+					...session,
+					id: "proj-1-2",
+					isTerminated: true,
+					outputType: "artifact",
+					artifactFiles: [{ kind: "markdown", name: "old.md", path: "old.md", size: 1, updatedAt: "2026-10-01T10:00:00Z" }],
+				},
+			],
+		};
+		renderSidebar({ workspaces: [withArtifacts] });
+
+		const automations = screen.getByRole("button", { name: "Automations" });
+		const artifacts = screen.getByRole("button", { name: "Artifacts" });
+		expect(automations.compareDocumentPosition(artifacts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(artifacts).toHaveTextContent("2");
+		expect(artifacts).not.toHaveAttribute("aria-current");
+
+		await user.click(artifacts);
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/artifacts" });
+	});
+
+	it("omits the Artifacts count when there are none and marks the row active on its route", () => {
+		mockLocation.pathname = "/artifacts";
+		renderSidebar();
+
+		const artifacts = screen.getByRole("button", { name: "Artifacts" });
+		expect(artifacts).toHaveAttribute("aria-current", "page");
+		expect(artifacts.textContent).toBe("Artifacts");
 	});
 
 	it("navigates home from the brand row", async () => {
