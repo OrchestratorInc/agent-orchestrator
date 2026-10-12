@@ -209,7 +209,14 @@ func reportAt(id string, worker domain.SessionID, created, available time.Time, 
 func (s *coordinatorStore) add(records ...domain.ReportRecord) {
 	s.reports = append(s.reports, records...)
 }
+func (s *coordinatorStore) setSessions(sessions ...domain.SessionRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions = sessions
+}
 func (s *coordinatorStore) ListSessions(_ context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var recs []domain.SessionRecord
 	for _, rec := range s.sessions {
 		if rec.ProjectID == project {
@@ -219,6 +226,8 @@ func (s *coordinatorStore) ListSessions(_ context.Context, project domain.Projec
 	return recs, nil
 }
 func (s *coordinatorStore) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, rec := range s.sessions {
 		if rec.ID == id {
 			return rec, true, nil
@@ -238,6 +247,17 @@ func (s *coordinatorStore) ListPendingReportSchedule(context.Context, int64) ([]
 	sortReports(pending)
 	if len(pending) > 1 {
 		pending = pending[:1]
+	}
+	return pending, nil
+}
+func (s *coordinatorStore) ListPendingDoneReports(context.Context) ([]domain.ReportRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var pending []domain.ReportRecord
+	for _, rec := range s.reports {
+		if rec.DeliveryState == domain.ReportPending && rec.State == domain.ReportDone {
+			pending = append(pending, rec)
+		}
 	}
 	return pending, nil
 }
@@ -331,13 +351,18 @@ type coordinatorSubmission struct {
 	message, key string
 }
 type coordinatorDelivery struct {
+	mu           sync.Mutex
 	submissions  []coordinatorSubmission
 	interrupts   []domain.SessionID
 	submitErr    error
 	submitErrFor map[domain.SessionID]error
+	attempts     int
 }
 
 func (d *coordinatorDelivery) Submit(_ context.Context, target domain.SessionID, message, key string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.attempts++
 	if d.submitErr != nil {
 		return d.submitErr
 	}
@@ -346,6 +371,11 @@ func (d *coordinatorDelivery) Submit(_ context.Context, target domain.SessionID,
 	}
 	d.submissions = append(d.submissions, coordinatorSubmission{target, message, key})
 	return nil
+}
+func (d *coordinatorDelivery) submitted() []coordinatorSubmission {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]coordinatorSubmission(nil), d.submissions...)
 }
 func (d *coordinatorDelivery) Interrupt(_ context.Context, target domain.SessionID) error {
 	d.interrupts = append(d.interrupts, target)
