@@ -8,7 +8,9 @@ const actionsSheetSource = readFileSync(new URL("./ConversationActionsSheet.tsx"
 
 describe("active turn controls", () => {
 	it("remounts the composer when a same-ID session changes host", () => {
-		expect(screenSource).toContain('key={config ? JSON.stringify([machineIdentity(config), session.id]) : session.id}');
+		expect(screenSource).toContain('const composerKey = config ? JSON.stringify([machineIdentity(config), session.id]) : session.id;');
+		expect(screenSource).toContain('key={composerKey}');
+		expect(screenSource).toContain('quoteRequest?.composerKey === composerKey ? quoteRequest : undefined');
 		expect(composerSource).toContain('`ao.chat.draft.${machineIdentity(config)}.${sessionId}`');
 		expect(composerSource).toContain('if (!draftKey || !draftLoaded) return;');
 	});

@@ -100,8 +100,15 @@ type Supervisor struct {
 	// TUI and Chat controllers. It is the resume hint used on both sides.
 	AgentSessionID string
 
+	// PersistAgent keeps the interactive agent alive across worker restarts
+	// (see persistentAgent). It takes effect only when dtach is installed.
+	PersistAgent bool
+
+	persistOnce              sync.Once
+	persist                  *persistentAgent
 	mu                       sync.Mutex
 	terminals                map[string]*terminalProcess
+	activity                 activity
 	iface                    InterfaceTransition
 	notificationStreams      map[*terminalStream]struct{}
 	holdAgentInput           bool
@@ -165,8 +172,14 @@ type terminalProcess struct {
 	pty                   *os.File
 	cleanup               func()
 	interfaceHandoffClose bool
-	stream                atomic.Pointer[terminalStream]
-	done                  chan struct{}
+	// persistent marks the interactive agent running under dtach: the process
+	// here is only a client, and the agent outlives it.
+	persistent bool
+	// shellPID is the workspace shell's process id (0 for agent and reviewer
+	// terminals); a process under it keeps the session from idling.
+	shellPID int
+	stream   atomic.Pointer[terminalStream]
+	done     chan struct{}
 	// outputID belongs to the terminal rather than a WebSocket connection. A
 	// stream redial must continue its sequence so direct relay frames and the
 	// durable replay log use the same cursor.
@@ -710,10 +723,14 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 		return err
 	}
 	terminal := &terminalProcess{
-		cancel:  cancel,
-		pty:     terminalPTY,
-		cleanup: cleanup,
-		done:    make(chan struct{}),
+		cancel:     cancel,
+		pty:        terminalPTY,
+		cleanup:    cleanup,
+		done:       make(chan struct{}),
+		persistent: s.persistsAgent(input),
+	}
+	if input.Kind == "workspace" && command.Process != nil {
+		terminal.shellPID = command.Process.Pid
 	}
 	if input.NextOutputSequence > 1 {
 		terminal.outputID.Store(input.NextOutputSequence - 1)
@@ -764,12 +781,23 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 			current.cancel()
 			current.cleanup()
 		}
+		exitCode := command.ProcessState.ExitCode()
+		if terminal.persistent {
+			if _, alive := s.persistentAgent().running(); alive {
+				// Only this worker's client ended (the worker is shutting down);
+				// the agent keeps running for the next worker to attach to.
+				return
+			}
+			if code, ok := s.persistentAgent().exitCode(); ok {
+				exitCode = code
+			}
+		}
 		exitCtx, exitCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer exitCancel()
 		if err := s.Control.PublishTerminalExit(
 			exitCtx,
 			input.TerminalID,
-			command.ProcessState.ExitCode(),
+			exitCode,
 			handoff,
 		); err != nil && exitCtx.Err() == nil {
 			s.Logger.Warn("publish terminal exit", "error", err, "terminal_id", input.TerminalID)
@@ -816,8 +844,20 @@ func (s *Supervisor) terminalCommand(
 			args = append(args, string(input.Data))
 		}
 		command := exec.CommandContext(ctx, commandConfig.Path, args...)
+		environment := commandConfig.Env
+		if s.persistsAgent(input) {
+			persist := s.persistentAgent()
+			command = persist.command(ctx, commandConfig.Path, args)
+			environment = make(map[string]string, len(commandConfig.Env)+2)
+			for key, value := range commandConfig.Env {
+				environment[key] = value
+			}
+			for key, value := range persist.environment() {
+				environment[key] = value
+			}
+		}
 		command.Dir = commandConfig.Dir
-		command.Env = terminalEnvironment(commandConfig.Env)
+		command.Env = terminalEnvironment(environment)
 		cleanup := commandConfig.Cleanup
 		if cleanup == nil {
 			cleanup = func() {}
@@ -849,6 +889,7 @@ func (s *Supervisor) copyTerminalOutput(
 	for {
 		count, err := terminal.pty.Read(buffer)
 		if count > 0 {
+			s.activity.noteOutput(time.Now())
 			data := append([]byte(nil), buffer[:count]...)
 			if clearPreviousDisplay {
 				// A handoff resumes the conversation in a new PTY but reuses its
@@ -993,6 +1034,10 @@ func (s *Supervisor) closeTerminalForInterfaceHandoff(ctx context.Context, id st
 	if terminal == nil {
 		return nil
 	}
+	// Ending the dtach client would leave the agent running and still owning
+	// the provider's thread. End the agent itself first; the wait below then
+	// covers its exit as before.
+	s.stopPersistentTerminal(terminal)
 	_ = terminal.pty.Close()
 	terminal.cancel()
 	terminal.cleanup()
@@ -1010,6 +1055,9 @@ func (s *Supervisor) closeTerminalForInterfaceHandoff(ctx context.Context, id st
 func (s *Supervisor) closeTerminalWithReason(id string, interfaceHandoff bool) {
 	terminal := s.detachTerminal(id, interfaceHandoff)
 	if terminal != nil {
+		// Closing the agent terminal means ending the agent, not just this
+		// client of it.
+		s.stopPersistentTerminal(terminal)
 		_ = terminal.pty.Close()
 		terminal.cancel()
 		terminal.cleanup()
@@ -1035,7 +1083,61 @@ func (s *Supervisor) closeAllTerminals() {
 	for _, terminal := range terminals {
 		_ = terminal.pty.Close()
 		terminal.cancel()
-		terminal.cleanup()
+		// The worker is shutting down, not ending the agent: a persisted agent
+		// keeps running and still needs its launch files (the next worker
+		// rewrites them before attaching).
+		if !terminal.persistent {
+			terminal.cleanup()
+		}
+	}
+}
+
+// persistentAgent returns the dtach wrapper when agent persistence is on and
+// available, or nil.
+func (s *Supervisor) persistentAgent() *persistentAgent {
+	s.persistOnce.Do(func() {
+		if s.PersistAgent {
+			s.persist = newPersistentAgent(s.DataDir)
+		}
+	})
+	return s.persist
+}
+
+// PersistsAgent reports whether this worker keeps the interactive agent
+// running under dtach, so the agent can outlive the worker (and a later worker
+// adopts it, along with the notifications it queued meanwhile).
+func (s *Supervisor) PersistsAgent() bool {
+	return s.persistentAgent() != nil
+}
+
+// persistsAgent reports whether a terminal launch runs the interactive agent
+// under dtach. Review and reviewer terminals are always plain processes.
+func (s *Supervisor) persistsAgent(input worker.TerminalCommand) bool {
+	return input.Kind == "agent" && !input.Review && s.persistentAgent() != nil
+}
+
+// persistentAgentStopGrace bounds how long a deliberate stop waits for the
+// agent to exit on SIGTERM before killing its process group.
+const persistentAgentStopGrace = 10 * time.Second
+
+func (s *Supervisor) stopPersistentTerminal(terminal *terminalProcess) {
+	if !terminal.persistent {
+		return
+	}
+	if err := s.persistentAgent().stop(persistentAgentStopGrace); err != nil && s.Logger != nil {
+		s.Logger.Warn("stop persistent agent", "error", err)
+	}
+}
+
+// StopPersistentAgent ends an agent left running by a previous worker. A
+// worker that starts in the Chat interface calls it before anything else, so a
+// TUI agent that survived an interrupted handoff cannot keep owning the
+// conversation the Chat runner is about to resume.
+func (s *Supervisor) StopPersistentAgent() {
+	if persist := s.persistentAgent(); persist != nil {
+		if err := persist.stop(persistentAgentStopGrace); err != nil && s.Logger != nil {
+			s.Logger.Warn("stop persistent agent", "error", err)
+		}
 	}
 }
 
@@ -1073,7 +1175,28 @@ func transportError(err error) (string, string) {
 		return "WORKSPACE_NOT_FOUND", "The requested workspace path does not exist."
 	case errors.Is(err, os.ErrPermission):
 		return "WORKSPACE_PERMISSION_DENIED", "The worker denied access to the workspace path."
+	case errors.Is(err, workerexec.ErrChatAdapterInstalling):
+		return "CHAT_ADAPTER_INSTALLING", "Setting up Chat UI on this workspace. Try again in a minute."
+	case errors.Is(err, workerexec.ErrChatAdapterUnavailable):
+		return "CHAT_ADAPTER_UNAVAILABLE", "Chat UI for Claude needs the Claude ACP adapter (@agentclientprotocol/claude-agent-acp) on this workspace, and AO could not install it. Install it in the workspace template, or use the terminal."
 	default:
 		return "WORKER_OPERATION_FAILED", "The worker could not complete the operation."
 	}
+}
+
+// Busy reports whether anything happened in the sandbox since the previous
+// call: terminal output, a process running under a workspace shell, or CPU
+// use beyond the worker's own. The worker sends it with each heartbeat; the
+// control plane only idle-pauses a session that stayed un-busy for the whole
+// idle threshold.
+func (s *Supervisor) Busy() bool {
+	s.mu.Lock()
+	shells := make([]int, 0, len(s.terminals))
+	for _, terminal := range s.terminals {
+		if terminal.shellPID > 0 {
+			shells = append(shells, terminal.shellPID)
+		}
+	}
+	s.mu.Unlock()
+	return s.activity.busySince(time.Now(), shells)
 }

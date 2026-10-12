@@ -51,7 +51,7 @@ export function AgentPickerSheet({
 			nestedScrollEnabled
 			contentContainerStyle={SHEET_SCROLL_CONTENT}
 			ListEmptyComponent={
-				<Text style={s.empty}>No agents reported. Check that AO is running on your computer, then refresh.</Text>
+				<Text style={s.empty}>No agents reported. Check that Orchestrator is running on your computer, then refresh.</Text>
 			}
 			ListHeaderComponent={
 				<>

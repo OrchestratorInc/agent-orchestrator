@@ -35,22 +35,28 @@ func (s *Store) UpsertWorkOSUser(
 	if err != nil {
 		return domain.Principal{}, err
 	}
-	if err := s.ensureWorkOSOrganization(ctx, principal); err != nil {
+	teamOrgID, err := s.ensureWorkOSOrganization(ctx, principal)
+	if err != nil {
 		return domain.Principal{}, err
 	}
+	principal.TeamOrgID = teamOrgID
 	return principal, nil
 }
 
+// ensureWorkOSOrganization makes sure the principal's organization and
+// membership exist. It returns the AO organization ID of the token's WorkOS
+// organization, or "" when the token carries none (the personal organization
+// is ensured instead).
 func (s *Store) ensureWorkOSOrganization(
 	ctx context.Context,
 	principal domain.Principal,
-) error {
+) (string, error) {
 	if principal.ExternalOrgID == "" {
-		return s.ensurePersonalOrganization(ctx, principal)
+		return "", s.ensurePersonalOrganization(ctx, principal)
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(
@@ -60,14 +66,14 @@ func (s *Store) ensureWorkOSOrganization(
 		principal.UserID,
 		principal.ExternalOrgID,
 	); err != nil {
-		return err
+		return "", err
 	}
 	if _, err := tx.Exec(
 		ctx,
 		`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
 		principal.ExternalOrgID,
 	); err != nil {
-		return err
+		return "", err
 	}
 	orgName := strings.TrimSpace(principal.OrgName)
 	if orgName == "" {
@@ -84,6 +90,7 @@ func (s *Store) ensureWorkOSOrganization(
 	digest := sha256.Sum256([]byte(principal.ExternalOrgID))
 	slug := "workos-" + hex.EncodeToString(digest[:8])
 	var orgID string
+	var orgCreated bool
 	if err := tx.QueryRow(
 		ctx,
 		`INSERT INTO ao_organizations (
@@ -95,35 +102,46 @@ func (s *Store) ensureWorkOSOrganization(
 			display_name = EXCLUDED.display_name,
 			owner_user_id = COALESCE(ao_organizations.owner_user_id, EXCLUDED.owner_user_id),
 			updated_at = now()
-		RETURNING id`,
+		RETURNING id, (xmax = 0)`,
 		principal.ExternalOrgID,
 		slug,
 		orgName,
 		ownerUserID,
 		principal.UserID,
-	).Scan(&orgID); err != nil {
-		return err
+	).Scan(&orgID, &orgCreated); err != nil {
+		return "", err
 	}
 	if _, err := tx.Exec(
 		ctx,
 		`SELECT set_config('ao.org_id', $1, true)`,
 		orgID,
 	); err != nil {
-		return err
+		return "", err
 	}
-	if _, err := tx.Exec(
+	var joined bool
+	if err := tx.QueryRow(
 		ctx,
 		`INSERT INTO ao_org_memberships (org_id, user_id, role)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (org_id, user_id)
-		DO UPDATE SET role = EXCLUDED.role, updated_at = now()`,
+		DO UPDATE SET role = EXCLUDED.role, updated_at = now()
+		RETURNING (xmax = 0)`,
 		orgID,
 		principal.UserID,
 		role,
-	); err != nil {
-		return err
+	).Scan(&joined); err != nil {
+		return "", err
 	}
-	return tx.Commit(ctx)
+	var events []domain.ActivityEvent
+	if orgCreated {
+		events = append(events, domain.ActivityEvent{OrgID: orgID, UserID: principal.UserID,
+			Kind: domain.ActivityOrgCreated, Attrs: map[string]any{"org_kind": "team", "auth_provider": "workos"}})
+	}
+	if joined {
+		events = append(events, domain.ActivityEvent{OrgID: orgID, UserID: principal.UserID,
+			Kind: domain.ActivityMemberJoined, Attrs: map[string]any{"role": role, "first_member": orgCreated}})
+	}
+	return orgID, s.commitWithActivity(ctx, tx, events)
 }
 
 func (s *Store) ensurePersonalOrganization(
@@ -198,7 +216,8 @@ func (s *Store) ensurePersonalOrganization(
 	); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return s.commitWithActivity(ctx, tx, []domain.ActivityEvent{{OrgID: orgID, UserID: principal.UserID,
+		Kind: domain.ActivityOrgCreated, Attrs: map[string]any{"org_kind": "personal", "auth_provider": "workos"}}})
 }
 
 func (s *Store) RegisterLocal(
@@ -283,7 +302,8 @@ func (s *Store) RegisterLocal(
 	); err != nil {
 		return domain.Principal{}, "", err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := s.commitWithActivity(ctx, tx, []domain.ActivityEvent{{OrgID: orgID, UserID: principal.UserID,
+		Kind: domain.ActivityOrgCreated, Attrs: map[string]any{"org_kind": "personal", "auth_provider": "local"}}}); err != nil {
 		return domain.Principal{}, "", err
 	}
 	return principal, orgID, nil

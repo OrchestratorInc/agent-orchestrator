@@ -7,10 +7,11 @@ import type { FeatherIconName } from "./icons";
  *
  * Every action here maps to an endpoint that actually exists. That constraint
  * is the whole design: the obvious missing item is "Stop", and there is no stop
- * or pause endpoint. `killSession` is what Delete already calls, and its own
- * copy says it terminates the session — so a "Stop" entry would be a second,
- * gentler-sounding name for the same destructive call. Resume/Restore are the
- * honest inverses instead.
+ * or pause endpoint. The archive action calls `killSession`: it stops the agent
+ * and deletes the session's worktree folder unless that folder has uncommitted
+ * changes (the daemon refuses to remove a dirty worktree). The conversation and
+ * the branch's commits stay, which is what Restore rebuilds from. A "Stop" entry
+ * would therefore be a second name for the same call.
  */
 import type { SFSymbol } from "sf-symbols-typescript";
 
@@ -19,7 +20,7 @@ export type WorkerActionId = "open" | "pin" | "unpin" | "rename" | "resume" | "r
 export type WorkerAction = {
 	id: WorkerActionId;
 	title: string;
-	/** Marks the row destructive in the native menu. */
+	/** Marks an irreversible row action as destructive in the native menu. */
 	destructive?: boolean;
 };
 
@@ -49,11 +50,18 @@ export function workerContextActions(state: WorkerActionState): WorkerAction[] {
 
 	if (state.hasPr) actions.push({ id: "openPr", title: "Review pull request" });
 
-	// Last and marked destructive: the native menus render it apart from the rest,
-	// and the screen still raises its own confirmation before calling kill.
-	actions.push({ id: "delete", title: "Delete session", destructive: true });
+	// The internal id predates Archive and stays for action routing. Still
+	// destructive: archiving deletes a clean worktree folder.
+	actions.push({ id: "delete", title: "Archive session", destructive: true });
 	return actions;
 }
+
+/** Confirmation copy for every Archive entry point; see the module comment. */
+export function archiveSessionMessage(name: string): string {
+	return `This stops ${name} and moves it to Archive. Its worktree folder is deleted unless it has uncommitted changes. The conversation and committed work on its branch are kept, so you can restore it later.`;
+}
+
+export const ARCHIVE_SESSION_HINT = "Stops the agent and moves it to Archive. Deletes the worktree folder unless it has uncommitted changes.";
 
 /**
  * SF Symbol per action, for iOS's native menu.
@@ -80,7 +88,7 @@ export function workerActionSymbol(id: WorkerActionId): SFSymbol {
 		case "openPr":
 			return "arrow.up.forward.square";
 		default:
-			return "trash";
+			return "archivebox";
 	}
 }
 
@@ -121,7 +129,7 @@ export function workerActionGlyph(id: WorkerActionId): WorkerActionGlyph {
 		case "resume": return { family: "feather", name: "play" };
 		case "restore": return { family: "feather", name: "rotate-ccw" };
 		case "openPr": return { family: "feather", name: "git-pull-request" };
-		case "delete": return { family: "feather", name: "trash-2" };
+		case "delete": return { family: "feather", name: "archive" };
 	}
 }
 

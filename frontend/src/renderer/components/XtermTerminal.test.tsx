@@ -997,17 +997,23 @@ describe("XtermTerminal", () => {
 		const textarea = container.querySelector("textarea")!;
 
 		textarea.focus();
-		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(true);
+		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(true, true);
 		fontSizeShortcut?.(1);
 		expect(onChangeFontSize).toHaveBeenCalledWith(1);
 
 		const outside = document.createElement("button");
 		document.body.appendChild(outside);
 		outside.focus();
-		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(false);
+		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(false, false);
 		fontSizeShortcut?.(-1);
 		expect(onChangeFontSize).toHaveBeenCalledTimes(1);
 		outside.remove();
+	});
+
+	it("reports focus for a terminal that does not resize its font, without claiming the zoom chords", () => {
+		const { container } = render(<XtermTerminal theme="dark" />);
+		container.querySelector("textarea")!.focus();
+		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(true, false);
 	});
 
 	it("handles native copy events from inside the terminal", () => {
