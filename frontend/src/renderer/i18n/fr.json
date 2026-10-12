@@ -2314,7 +2314,6 @@
 	"settings.harness.models.updated": "Mis à jour {{time}}",
 	"settings.harness.models.refresh": "Actualiser",
 	"settings.harness.models.refreshing": "Actualisation…",
-	"settings.harness.models.loading": "Chargement des modèles…",
 	"settings.harness.models.empty": "Ce harness n’a signalé aucun modèle.",
 	"settings.harness.models.notInstalled": "Installez {{agent}} pour voir ses modèles.",
 	"settings.harness.models.needsLogin": "Connectez-vous à {{agent}} pour charger ses modèles.",

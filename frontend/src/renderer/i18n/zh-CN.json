@@ -2346,7 +2346,6 @@
 	"settings.harness.models.updated": "更新于 {{time}}",
 	"settings.harness.models.refresh": "刷新",
 	"settings.harness.models.refreshing": "正在刷新…",
-	"settings.harness.models.loading": "正在加载模型…",
 	"settings.harness.models.empty": "此 Harness 未报告任何模型。",
 	"settings.harness.models.notInstalled": "安装 {{agent}} 后即可查看其模型。",
 	"settings.harness.models.needsLogin": "登录 {{agent}} 后即可加载其模型。",

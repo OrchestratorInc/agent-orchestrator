@@ -10,7 +10,7 @@ import {
 	useAgentReadinessQuery,
 } from "../../hooks/useAgentReadinessQuery";
 import { agentAuthPlansQueryKeyForHost, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "../../hooks/useAgentAuth";
-import { agentModelsQueryOptions, refreshAgentModels, invalidateAgentModelCatalogs } from "../../hooks/useAgentModelsQuery";
+import { agentModelsQueryOptions, invalidateAgentModelCatalogs, isRefreshingCatalog, refreshAgentModels } from "../../hooks/useAgentModelsQuery";
 import { fetchSessionMemory, formatCPU, formatMemory, sessionMemoryQueryOptions } from "../../hooks/useSessionMemory";
 import { closeShellTerminal, shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../hooks/useShellTerminals";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
@@ -1321,7 +1321,8 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	};
 	const data = catalog.data;
 	const updated = data?.lastSuccessAt ?? data?.fetchedAt;
-	const busy = refreshing || data?.refreshState === "refreshing" || data?.refreshState === "queued";
+	// Cached models show at once; only the refresh control reports background work.
+	const busy = refreshing || catalog.isPending || isRefreshingCatalog(data);
 	// Long catalogs page through MODELS_PAGE_SIZE at a time; short ones show no paging controls.
 	const models = data?.models ?? [];
 	const pageCount = Math.max(1, Math.ceil(models.length / MODELS_PAGE_SIZE));
@@ -1335,14 +1336,14 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 			<h3 className="text-xs font-medium leading-4 text-settings-muted">{t("settings.harness.models.title")}</h3>
 			<span className="flex items-center gap-2 text-xs text-settings-muted">
 				{updated && Number.isFinite(Date.parse(updated)) ? <span>{t("settings.harness.models.updated", { time: new Date(updated).toLocaleString(i18n.resolvedLanguage, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) })}</span> : null}
-				<Button type="button" size="sm" variant="ghost" className="h-7 px-2" disabled={busy || catalog.isPending} onClick={() => void refresh()}>
+				<Button type="button" size="sm" variant="ghost" className="h-7 px-2" disabled={busy} onClick={() => void refresh()}>
 					{busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
 					{t(busy ? "settings.harness.models.refreshing" : "settings.harness.models.refresh")}
 				</Button>
 			</span>
 		</div>
 		{error ? <p role="alert" className="text-xs text-error">{error}</p> : null}
-		{catalog.isPending ? <p className="flex items-center gap-2 px-3 py-6 text-sm text-settings-muted"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("settings.harness.models.loading")}</p>
+		{catalog.isPending ? null
 			: !data?.models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.models.empty")}</p>
 			: <ul className={HARNESS_CARD_CLASS} aria-label={t("settings.harness.models.title")}>
 				{visibleModels.map((model) => <li key={model.id} className={cn(HARNESS_CARD_ROW_CLASS, "gap-4")}>

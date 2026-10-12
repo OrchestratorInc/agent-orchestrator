@@ -80,11 +80,15 @@ type Service struct {
 	modelCalls        map[string]*modelCatalogCall
 	modelGeneration   map[string]int64
 	discoverySlots    chan struct{}
-	ctx               context.Context
-	now               func() time.Time
-	codexAccounts     *codexAccountManager
-	codexSwitches     *codexAccountSwitchCoordinator
-	logger            *slog.Logger
+	// inputChecks tracks background credential-input checks for cached
+	// catalogs, so a cache read never waits on them.
+	inputCheckMu  sync.Mutex
+	inputChecks   map[string]catalogInputCheck
+	ctx           context.Context
+	now           func() time.Time
+	codexAccounts *codexAccountManager
+	codexSwitches *codexAccountSwitchCoordinator
+	logger        *slog.Logger
 }
 
 // Deps contains optional durable dependencies for the agent catalog service.
@@ -354,14 +358,23 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, r
 		if err != nil {
 			return ports.AgentModelCatalog{}, err
 		}
-		if ok {
-			// Claude provider model IDs are credential-scoped. Check its local
-			// discovery inputs before serving a cache hit so switching provider or
-			// credentials cannot briefly expose IDs from the previous provider.
-			// The check is local; provider discovery remains cache-first.
-			if agentID == "claude-code" && s.modelCatalogInputsChanged(ctx, agentID, projectID, cached.BinaryVersion) {
-				return s.coalesceModelLoad(ctx, agentID, projectID, modelLoadCached)
+		if !ok && projectID == "" {
+			// The device-global scope (Settings) has never been discovered, but
+			// a project has: show that catalog now and discover this scope in
+			// the background rather than making the page wait.
+			if fallback, found := s.newestCachedCatalog(ctx, agentID); found {
+				go func() { _, _ = s.coalesceModelLoad(s.ctx, agentID, projectID, modelLoadCached) }()
+				fallback = applyCustomModelEntryPolicy(fallback, s.discoverer.Manual(agentID))
+				fallback.RefreshState = "refreshing"
+				return fallback, nil
 			}
+		}
+		if ok {
+			// Claude provider model IDs are credential-scoped. The cache is served
+			// at once and its local discovery inputs are checked in the background;
+			// while that runs the catalog reports itself refreshing, so open views
+			// re-read it and pick up the rediscovered catalog when inputs changed.
+			inputsChecking := agentID == "claude-code" && s.checkCatalogInputsInBackground(agentID, projectID, cached.BinaryVersion)
 			cached.Catalog = applyCustomModelEntryPolicy(cached.Catalog, s.discoverer.Manual(agentID))
 			due := catalogNeedsRevalidation(catalogLastSuccess(cached.Catalog), s.now())
 			needsRecovery := cached.RefreshState == "refreshing"
@@ -371,10 +384,13 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, r
 				go func() { _, _ = s.revalidateModels(s.ctx, agentID, projectID) }()
 			} else if retriesExhausted {
 				go s.revalidateChangedInputs(agentID, projectID, cached.BinaryVersion)
-			} else if !due {
+			} else if !due && agentID != "claude-code" {
 				time.AfterFunc(10*time.Millisecond, func() {
 					s.revalidateChangedInputs(agentID, projectID, cached.BinaryVersion)
 				})
+			}
+			if inputsChecking && cached.Catalog.RefreshState == "" {
+				cached.Catalog.RefreshState = "refreshing"
 			}
 			return cached.Catalog, nil
 		}
@@ -384,6 +400,78 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, r
 		mode = modelLoadRefresh
 	}
 	return s.coalesceModelLoad(ctx, agentID, projectID, mode)
+}
+
+// catalogInputCheckTTL is how long a matching input check stands for a cached
+// catalog. Logins and logouts invalidate catalogs directly, so this only bounds
+// how long an out-of-band credential change goes unnoticed.
+const catalogInputCheckTTL = 2 * time.Minute
+
+type catalogInputCheck struct {
+	running     bool
+	checkedAt   time.Time
+	fingerprint string
+}
+
+// checkCatalogInputsInBackground starts, at most once at a time and once per
+// catalogInputCheckTTL, a check of whether a cached catalog's discovery inputs
+// changed, rediscovering the catalog when they did. It reports whether a check
+// is in flight.
+func (s *Service) checkCatalogInputsInBackground(agentID, projectID, fingerprint string) bool {
+	key := agentID + "\x00" + projectID
+	s.inputCheckMu.Lock()
+	if s.inputChecks == nil {
+		s.inputChecks = make(map[string]catalogInputCheck)
+	}
+	check := s.inputChecks[key]
+	if check.running {
+		s.inputCheckMu.Unlock()
+		return true
+	}
+	if check.fingerprint == fingerprint && !check.checkedAt.IsZero() && s.now().Sub(check.checkedAt) < catalogInputCheckTTL {
+		s.inputCheckMu.Unlock()
+		return false
+	}
+	s.inputChecks[key] = catalogInputCheck{running: true}
+	s.inputCheckMu.Unlock()
+	go func() {
+		current := fingerprint
+		if s.ctx.Err() == nil && s.modelCatalogInputsChanged(s.ctx, agentID, projectID, fingerprint) {
+			_, _ = s.revalidateModels(s.ctx, agentID, projectID)
+			if cached, ok, err := s.cachedCatalog(s.ctx, agentID, projectID); err == nil && ok {
+				current = cached.BinaryVersion
+			}
+		}
+		s.inputCheckMu.Lock()
+		s.inputChecks[key] = catalogInputCheck{checkedAt: s.now(), fingerprint: current}
+		s.inputCheckMu.Unlock()
+	}()
+	return true
+}
+
+// newestCachedCatalog returns the most recently successful cached catalog for
+// agentID across every scope.
+func (s *Service) newestCachedCatalog(ctx context.Context, agentID string) (ports.AgentModelCatalog, bool) {
+	if s.cache == nil {
+		return ports.AgentModelCatalog{}, false
+	}
+	records, err := s.cache.ListAgentModelCatalogsByAgent(ctx, agentID)
+	if err != nil {
+		return ports.AgentModelCatalog{}, false
+	}
+	var newest ports.AgentModelCatalog
+	var newestAt time.Time
+	found := false
+	for _, record := range records {
+		cached, ok, err := s.cachedCatalog(ctx, agentID, record.ProjectID)
+		if err != nil || !ok || len(cached.Catalog.Models) == 0 {
+			continue
+		}
+		if !found || cached.LastSuccessAt.After(newestAt) {
+			newest, newestAt, found = cached.Catalog, cached.LastSuccessAt, true
+		}
+	}
+	return newest, found
 }
 
 func (s *Service) revalidateChangedInputs(agentID, projectID, cachedFingerprint string) {

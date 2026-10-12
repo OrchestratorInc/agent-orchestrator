@@ -1405,7 +1405,6 @@
 	"settings.harness.models.updated": "Updated {{time}}",
 	"settings.harness.models.refresh": "Refresh",
 	"settings.harness.models.refreshing": "Refreshing…",
-	"settings.harness.models.loading": "Loading models…",
 	"settings.harness.models.empty": "This harness reported no models.",
 	"settings.harness.models.notInstalled": "Install {{agent}} to see its models.",
 	"settings.harness.models.needsLogin": "Log in to {{agent}} to load its models.",

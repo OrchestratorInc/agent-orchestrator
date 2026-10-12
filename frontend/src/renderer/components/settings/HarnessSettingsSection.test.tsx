@@ -328,6 +328,26 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(within(page).queryByText("gpt-5.3-mini")).toBeNull());
 	});
 
+	it("shows cached models at once and picks up the background refresh", async () => {
+		mockInstalledOperations("npm");
+		let reads = 0;
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path !== "/api/v1/agents/{agent}/models") return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+			reads += 1;
+			// The daemon serves its cache while it refreshes, then the new catalog.
+			return { data: reads === 1
+				? { agentId: "codex", refreshState: "refreshing", models: [{ id: "gpt-cached", label: "GPT Cached", isDefault: true }] }
+				: { agentId: "codex", models: [{ id: "gpt-fresh", label: "GPT Fresh", isDefault: true }] } } as never;
+		});
+		renderSection();
+		const page = await findAgentRow("codex");
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		expect(await within(page).findByText("GPT Cached")).toBeInTheDocument();
+		expect(within(page).queryByText("Loading models…")).toBeNull();
+		expect(await within(page).findByText("GPT Fresh", undefined, { timeout: 6_000 })).toBeInTheDocument();
+	}, 15_000);
+
 	it("pages through more than ten models", async () => {
 		mockInstalledOperations("npm");
 		const models = { agentId: "codex", models: Array.from({ length: 12 }, (_, index) => ({ id: `model-${index + 1}`, label: `Model ${index + 1}`, efforts: [] })) };

@@ -1914,12 +1914,52 @@ func TestClaudeModelsRejectProviderCacheWhenCredentialFingerprintChanges(t *test
 	}
 	svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, nil, discoverer)
 
+	// The cache is served at once while the credential inputs are checked in
+	// the background; it reports itself refreshing so open views re-read it.
 	got, err := svc.Models(context.Background(), "claude-code", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Models) != 2 || got.Models[0].ID != "sonnet" || got.Models[1].ID != "opus" || got.Source != "catalog" || !got.Stale {
-		t.Fatalf("catalog = %#v, want current-credential fallback", got)
+	if len(got.Models) != 1 || got.Models[0].ID != "us.anthropic.claude-opus-v1" || got.RefreshState != "refreshing" {
+		t.Fatalf("first read = %#v, want the cached catalog marked refreshing", got)
+	}
+	// A later read returns the catalog rediscovered for the current credential.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, err = svc.Models(context.Background(), "claude-code", "", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Models) == 2 && got.Models[0].ID == "sonnet" && got.Models[1].ID == "opus" && got.Source == "catalog" && got.Stale {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("catalog = %#v, want current-credential fallback after the background check", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestModelsServeAnotherScopeWhileGlobalScopeIsDiscovered(t *testing.T) {
+	project := cachedModelRecord(t, "cursor", "project-a", time.Now().Add(-time.Hour), false)
+	project.ProjectID = "project-a"
+	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{"cursor\x00project-a": project}}
+	// Discovery is slow; the read must not wait for it.
+	discoverer := &fakeModelDiscoverer{
+		catalog: ports.AgentModelCatalog{AgentID: "cursor", SelectionMode: ports.ModelSelectionCatalog, Models: []ports.AgentModelInfo{{ID: "cursor/global"}}, Source: "catalog"},
+		delay:   time.Second,
+	}
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("cursor", "Cursor", nil)}, cache, nil, discoverer)
+	started := time.Now()
+	got, err := svc.Models(context.Background(), "cursor", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("global read waited %s for discovery", elapsed)
+	}
+	if len(got.Models) == 0 || got.RefreshState != "refreshing" {
+		t.Fatalf("global read = %#v, want the project's cached catalog while discovering", got)
 	}
 }
 

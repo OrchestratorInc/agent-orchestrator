@@ -2280,7 +2280,6 @@
 	"settings.harness.models.updated": "{{time}} に更新",
 	"settings.harness.models.refresh": "更新",
 	"settings.harness.models.refreshing": "更新中…",
-	"settings.harness.models.loading": "モデルを読み込み中…",
 	"settings.harness.models.empty": "このハーネスはモデルを報告していません。",
 	"settings.harness.models.notInstalled": "モデルを表示するには {{agent}} をインストールしてください。",
 	"settings.harness.models.needsLogin": "モデルを読み込むには {{agent}} にログインしてください。",
