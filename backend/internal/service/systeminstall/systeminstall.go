@@ -195,13 +195,19 @@ type Plan struct {
 	DocsURL             string
 	ExpectedDestination string
 
-	// daemonPrefixUnwritable marks an npm plan rejected only because the
-	// daemon's own global prefix is not writable. An update acts on the prefix
-	// that owns the installed binary instead, so it validates that one.
-	daemonPrefixUnwritable bool
-	// owningPrefixUnchecked marks an npm update whose target prefix still has
-	// to be validated once the installed binary's owner is known.
-	owningPrefixUnchecked bool
+	// daemonRuntimeRejected and daemonPrefixRejected mark an npm plan rejected
+	// only for the daemon's own Node/npm or global prefix. An install runs
+	// there, so it stays rejected; an update acts on the installation that owns
+	// the binary, so it re-checks against that one instead.
+	daemonRuntimeRejected bool
+	daemonPrefixRejected  bool
+	// deferredReason is the daemon rejection an update deferred; it applies
+	// again when the owning installation turns out to use the daemon's runtime
+	// or prefix, or cannot be found.
+	deferredReason string
+	// ownerPrefixFound records that targetInstalledCopy located the npm prefix
+	// that owns the installed binary.
+	ownerPrefixFound bool
 }
 
 // AgentPlan is the display-safe plan returned to the settings page. Command is
@@ -705,12 +711,11 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		if baseline, err = s.confirmInstalledOwner(ctx, target, plan); err != nil {
 			return Job{}, err
 		}
+		plannedPrefix := plan.PackagePrefix
 		if baseline != nil && baseline.path != "" {
-			plannedPrefix := plan.PackagePrefix
 			plan = targetInstalledCopy(plan, target, baseline.path)
-			plan = s.requireWritableOwningPrefix(ctx, plan, plannedPrefix)
 		}
-		plan = unvalidatedOwnerPlan(plan)
+		plan = s.validateNPMUpdateTarget(ctx, plan, plannedPrefix)
 	}
 	if operation == AgentOperationUpdate && expected != "" {
 		if baseline == nil {
@@ -1509,15 +1514,15 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 		}
 		nodeVersion, nodeOK := parseToolVersion(npm.NodeVersion)
 		_, npmOK := parseToolVersion(npm.NPMVersion)
+		runtimeReason := ""
 		if !nodeOK || !npmOK {
-			plan.Unsupported = true
-			plan.Reason = "npm and Node.js versions could not be validated."
-			return plan
+			runtimeReason = "npm and Node.js versions could not be validated."
+		} else if minimumNode := minimumNodeVersionForTarget(target); !versionAtLeast(nodeVersion, minimumNode) {
+			runtimeReason = fmt.Sprintf("Node.js %s+ is required for %s's npm recipe; found %s.", formatToolVersion(minimumNode), target, npm.NodeVersion)
 		}
-		minimumNode := minimumNodeVersionForTarget(target)
-		if !versionAtLeast(nodeVersion, minimumNode) {
+		if runtimeReason != "" && privatePrefix != "" {
 			plan.Unsupported = true
-			plan.Reason = fmt.Sprintf("Node.js %s+ is required for %s's npm recipe; found %s.", formatToolVersion(minimumNode), target, npm.NodeVersion)
+			plan.Reason = runtimeReason
 			return plan
 		}
 		prefix := npm.GlobalPrefix
@@ -1543,9 +1548,18 @@ func (p requestPlanner) planNPM(target Target, pkg string) Plan {
 			plan.Reason = "npm's global install prefix could not be resolved."
 			return plan
 		}
+		if runtimeReason != "" {
+			// The daemon's Node/npm cannot run this recipe. Reported before any
+			// prefix problem, as it always was; an update may still use another.
+			plan.Unsupported = true
+			plan.Reason = runtimeReason
+			plan.daemonRuntimeRejected = true
+			plan.daemonPrefixRejected = !prefixWritable
+			return plan
+		}
 		if !prefixWritable {
 			plan.Unsupported = true
-			plan.daemonPrefixUnwritable = privatePrefix == ""
+			plan.daemonPrefixRejected = privatePrefix == ""
 			if privatePrefix != "" {
 				plan.Reason = fmt.Sprintf("OpenCode 2's private npm prefix %s is not writable by the current user.", prefix)
 			} else {

@@ -368,15 +368,15 @@ func TestNPMUpdateRequiresWritableOwningPrefix(t *testing.T) {
 		return writable[path], nil
 	})
 	plan := Plan{Target: TargetCodex, Method: "npm", PackagePrefix: "/daemon/npm"}
-	if got := s.requireWritableOwningPrefix(context.Background(), plan, "/daemon/npm"); got.Unsupported || len(checked) != 0 {
+	if got := s.validateNPMUpdateTarget(context.Background(), plan, "/daemon/npm"); got.Unsupported || len(checked) != 0 {
 		t.Fatalf("daemon prefix re-checked: plan=%+v checked=%v", got, checked)
 	}
 	plan.PackagePrefix = "/Users/u/.nvm/versions/node/v22.0.0"
-	if got := s.requireWritableOwningPrefix(context.Background(), plan, "/daemon/npm"); got.Unsupported {
+	if got := s.validateNPMUpdateTarget(context.Background(), plan, "/daemon/npm"); got.Unsupported {
 		t.Fatalf("writable owning prefix rejected: %+v", got)
 	}
 	plan.PackagePrefix = "/usr/local"
-	got := s.requireWritableOwningPrefix(context.Background(), plan, "/daemon/npm")
+	got := s.validateNPMUpdateTarget(context.Background(), plan, "/daemon/npm")
 	if !got.Unsupported || !strings.Contains(got.Reason, "/usr/local") {
 		t.Fatalf("unwritable owning prefix = %+v, want unsupported naming /usr/local", got)
 	}
@@ -414,6 +414,10 @@ func TestNPMUpdateValidatesOwningPrefixNotDaemonPrefix(t *testing.T) {
 			*ran = append(*ran, argv)
 			if len(argv) == 2 && argv[1] == "--version" {
 				_, err := io.WriteString(stdout, nodeVersion+"\n")
+				return err
+			}
+			if len(argv) == 3 && argv[2] == "--version" {
+				_, err := io.WriteString(stdout, "10.0.0\n")
 				return err
 			}
 			return nil

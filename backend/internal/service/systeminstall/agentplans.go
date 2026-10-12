@@ -343,11 +343,12 @@ func (s requestPlanner) planKiroInstall() Plan {
 }
 
 func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Plan {
-	if operation == AgentOperationUpdate && plan.Method == "npm" && plan.daemonPrefixUnwritable {
-		// The installed copy may live under another, writable prefix (nvm, fnm,
-		// ~/.local). The update validates that prefix once the owner is known.
-		plan.Unsupported, plan.Reason, plan.daemonPrefixUnwritable = false, "", false
-		plan.owningPrefixUnchecked = true
+	if operation == AgentOperationUpdate && plan.Method == "npm" && (plan.daemonRuntimeRejected || plan.daemonPrefixRejected) {
+		// The installed copy may live under another prefix (nvm, fnm, ~/.local)
+		// with its own Node. The update validates that installation once the
+		// owner is known, and applies this reason again if it uses the daemon's.
+		plan.deferredReason = plan.Reason
+		plan.Unsupported, plan.Reason = false, ""
 	}
 	if operation == AgentOperationInstall || plan.Unsupported {
 		return plan
@@ -559,63 +560,69 @@ func targetInstalledCopy(plan Plan, target Target, binaryPath string) Plan {
 			}
 		}
 		plan.PackagePrefix = prefix
+		plan.ownerPrefixFound = true
 		plan.Command = append(npmCommandForPrefix(prefix), args...)
 	}
 	return plan
 }
 
-// requireWritableOwningPrefix validates the prefix an npm update acts on when
-// it is not the daemon prefix planNPM already validated: the prefix that owns
-// the installed binary, or the daemon prefix that planNPM found unwritable.
-// When that prefix runs its own Node, that Node must meet the harness minimum.
-func (s *Service) requireWritableOwningPrefix(ctx context.Context, plan Plan, plannedPrefix string) Plan {
-	unchecked := plan.owningPrefixUnchecked
-	plan.owningPrefixUnchecked = false
-	if plan.Method != "npm" || plan.Unsupported || plan.PackagePrefix == "" || (!unchecked && samePath(plan.PackagePrefix, plannedPrefix)) {
+// validateNPMUpdateTarget checks the installation an npm update acts on.
+// planNPM validated the daemon's Node/npm and global prefix; an update that
+// targets another prefix, or that deferred a daemon rejection, is validated
+// against the owning prefix and the runtime that will run the update: that
+// prefix's own Node and npm when it has them, else the daemon's.
+func (s *Service) validateNPMUpdateTarget(ctx context.Context, plan Plan, plannedPrefix string) Plan {
+	deferred, runtimeRejected, prefixRejected, ownerFound := plan.deferredReason, plan.daemonRuntimeRejected, plan.daemonPrefixRejected, plan.ownerPrefixFound
+	plan.deferredReason, plan.daemonRuntimeRejected, plan.daemonPrefixRejected, plan.ownerPrefixFound = "", false, false, false
+	if plan.Method != "npm" || plan.Unsupported {
 		return plan
 	}
-	writable := false
-	if s.pathWritable != nil {
-		writable, _ = s.pathWritable.PathWritable(ctx, plan.PackagePrefix)
-	}
-	if !writable {
+	reject := func(reason string) Plan {
 		plan.Unsupported = true
-		plan.Reason = fmt.Sprintf("The npm prefix %s that holds the %s sessions run is not writable by the current user. Update it manually; AO will not use sudo.", plan.PackagePrefix, plan.Target)
+		plan.Reason = reason
 		return plan
 	}
-	if len(plan.Command) > 1 && plan.Command[0] != "npm" {
-		// npmCommandForPrefix chose this prefix's own Node.
-		minimum := minimumNodeVersionForTarget(plan.Target)
-		version, ok := s.nodeVersion(ctx, plan.Command[0])
-		if !ok || !versionAtLeast(version, minimum) {
-			plan.Unsupported = true
-			plan.Reason = fmt.Sprintf("Node.js %s+ is required to update %s with the Node in %s.", formatToolVersion(minimum), plan.Target, plan.PackagePrefix)
+	if !samePath(plan.PackagePrefix, plannedPrefix) || prefixRejected {
+		if !ownerFound && deferred != "" {
+			return reject(deferred)
+		}
+		writable := false
+		if s.pathWritable != nil && plan.PackagePrefix != "" {
+			writable, _ = s.pathWritable.PathWritable(ctx, plan.PackagePrefix)
+		}
+		if !writable {
+			return reject(fmt.Sprintf("The npm prefix %s that holds the %s sessions run is not writable by the current user. Update it manually; AO will not use sudo.", plan.PackagePrefix, plan.Target))
 		}
 	}
-	return plan
-}
-
-// unvalidatedOwnerPlan rejects an npm update whose owning prefix could not be
-// found, since the daemon's own prefix already failed validation.
-func unvalidatedOwnerPlan(plan Plan) Plan {
-	if !plan.owningPrefixUnchecked {
-		return plan
+	if len(plan.Command) > 1 && plan.Command[0] != "npm" {
+		// npmCommandForPrefix chose this prefix's own Node and npm.
+		minimum := minimumNodeVersionForTarget(plan.Target)
+		node, nodeOK := s.toolVersion(ctx, plan.Command[0], "--version")
+		_, npmOK := s.toolVersion(ctx, plan.Command[0], plan.Command[1], "--version")
+		if !nodeOK || !npmOK {
+			return reject(fmt.Sprintf("AO could not validate the Node.js and npm in %s that update %s.", plan.PackagePrefix, plan.Target))
+		}
+		if !versionAtLeast(node, minimum) {
+			return reject(fmt.Sprintf("Node.js %s+ is required to update %s with the Node in %s; found %s.", formatToolVersion(minimum), plan.Target, plan.PackagePrefix, formatToolVersion(node)))
+		}
+	} else if runtimeRejected {
+		// npm from PATH runs the update on the daemon's own Node.
+		return reject(deferred)
 	}
-	plan.owningPrefixUnchecked = false
-	plan.Unsupported = true
-	plan.Reason = fmt.Sprintf("npm's global prefix %s is not writable by the current user, and AO could not find another npm prefix that holds %s. Update it manually; AO will not use sudo.", plan.PackagePrefix, plan.Target)
 	return plan
 }
 
-func (s *Service) nodeVersion(ctx context.Context, node string) ([3]int, bool) {
+// toolVersion runs a version probe and parses its first line.
+func (s *Service) toolVersion(ctx context.Context, argv ...string) ([3]int, bool) {
 	if s.commands == nil {
 		return [3]int{}, false
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	out := &capturedOutput{max: 4096}
-	if err := s.commands.Run(probeCtx, []string{node, "--version"}, out, out); err != nil {
+	if err := s.commands.Run(probeCtx, argv, out, out); err != nil {
 		return [3]int{}, false
 	}
-	return parseToolVersion(strings.TrimSpace(out.String()))
+	line, _, _ := strings.Cut(strings.TrimSpace(out.String()), "\n")
+	return parseToolVersion(strings.TrimSpace(line))
 }
