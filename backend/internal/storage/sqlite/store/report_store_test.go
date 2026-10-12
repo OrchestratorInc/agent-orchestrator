@@ -236,3 +236,38 @@ func TestReportStoreInterruptLimitSurvivesRestart(t *testing.T) {
 		t.Fatalf("boundary acquired = %v, err = %v", acquired, err)
 	}
 }
+
+func TestReportStoreListsPendingDoneReportsBeforeTheirDeadline(t *testing.T) {
+	ctx := context.Background()
+	s, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	seedProject(t, s, "ao")
+	sess, err := s.CreateSession(ctx, sampleRecord("ao"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	reports := []domain.ReportRecord{
+		{ID: "rpt_checkpoint", State: domain.ReportCheckpoint, Note: "progress", AvailableAt: now.Add(domain.ReportBatchFallback)},
+		{ID: "rpt_done", State: domain.ReportDone, Note: "finished", AvailableAt: now.Add(domain.ReportSettlementWindow), SettlementDeadline: now.Add(domain.ReportSettlementWindow)},
+	}
+	for _, rec := range reports {
+		rec.SessionID, rec.ProjectID, rec.CreatedAt, rec.DeliveryState, rec.RepeatCount = sess.ID, sess.ProjectID, now, domain.ReportPending, 1
+		if _, err := s.CreateReport(ctx, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done, err := s.ListPendingDoneReports(ctx)
+	if err != nil || len(done) != 1 || done[0].ID != "rpt_done" || done[0].SessionID != sess.ID {
+		t.Fatalf("pending done=%+v err=%v", done, err)
+	}
+	if _, err := s.ClaimPendingReportBatch(ctx, sess.ProjectID, "token", now); err != nil {
+		t.Fatal(err)
+	}
+	if done, err = s.ListPendingDoneReports(ctx); err != nil || len(done) != 0 {
+		t.Fatalf("claimed done still pending=%+v err=%v", done, err)
+	}
+}
