@@ -1,0 +1,10 @@
+{
+  "at": "2026-10-12T22:31:33.458670+00:00",
+  "HTTP": 200,
+  "reply": {
+    "ok": true,
+    "sessionId": "prompt-neovate-c0476fe5-1"
+  },
+  "terminated": true,
+  "reason": "Restored history retained abandoned overlapping command requests; later model selected prior nonce instead of current witness. Preserve invalid/no-witness failures and use a separate clean conversation for independent controls."
+}

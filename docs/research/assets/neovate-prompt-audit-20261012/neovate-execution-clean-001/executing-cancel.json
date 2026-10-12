@@ -1,0 +1,362 @@
+{
+  "at": "2026-10-12T22:37:22.984Z",
+  "source": "6be36883b73840e7a9950fc933643f1698d74c68",
+  "runnerSHA256": "23dc1a2f39bd6c88fd95b47d041040a039d16c52ab71996a278f49e68f8bdcc5",
+  "witnessSpec": {
+    "startPath": ".cancel-start-364f390b010e43818bf4db31bf664784.json",
+    "latePath": ".cancel-late-364f390b010e43818bf4db31bf664784.json",
+    "lateSideEffectDelayMs": 12000,
+    "tokenSHA256": "51f5c513b4415a6149f22dfb2146f405bdf5a56433b71d191b1c8832eb299e96"
+  },
+  "result": {
+    "passed": false,
+    "observedActive": true,
+    "reason": "the same active TUI session did not settle after mux input",
+    "activeState": {
+      "ok": true,
+      "status": 200,
+      "requestId": "",
+      "method": "GET",
+      "path": "/api/v1/sessions/prompt-neovate-8ca2d039-1",
+      "response": {
+        "session": {
+          "id": "prompt-neovate-8ca2d039-1",
+          "projectId": "prompt-neovate-8ca2d039",
+          "kind": "worker",
+          "harness": "neovate",
+          "reviewerConfig": {},
+          "autoReviewEnabled": false,
+          "displayName": "Neovate private prompt control",
+          "mode": "tui",
+          "activity": {
+            "state": "active",
+            "lastActivityAt": "2026-10-12T22:36:14.154413952Z"
+          },
+          "isTerminated": false,
+          "terminateOnPrMerge": false,
+          "autoInjectReview": true,
+          "autoInjectCI": true,
+          "outputType": "none",
+          "createdAt": "2026-10-12T22:32:38.812941175Z",
+          "updatedAt": "2026-10-12T22:36:22.345183029Z",
+          "isPinned": false,
+          "provisionState": "ready",
+          "branchState": {
+            "commits": 0,
+            "unpushed": 0
+          },
+          "statusReadiness": "ready",
+          "chatProviderPreserved": false,
+          "status": "working",
+          "kanbanColumn": "building",
+          "displayStatus": "Working",
+          "terminalHandleId": "ptyhost-v1:prompt-neovate-8ca2d039-1",
+          "branch": "ao/prompt-neovate-8ca2d039-1/root",
+          "terminalGeneration": "83d2cfdf-0690-4a6d-ba08-cc79b9eca4b4",
+          "model": "zai-audit/glm-4.7",
+          "lastUserMessageAt": "2026-10-12T22:36:14.154413952Z",
+          "lastInteractionAt": "2026-10-12T22:36:14.154413952Z",
+          "lastEventAt": "2026-10-12T22:36:14.154413952Z",
+          "prs": []
+        }
+      },
+      "startedAt": "2026-10-12T22:36:22.973Z",
+      "finishedAt": "2026-10-12T22:36:22.976Z",
+      "durationMs": 4
+    },
+    "settledState": {
+      "ok": true,
+      "status": 200,
+      "requestId": "",
+      "method": "GET",
+      "path": "/api/v1/sessions/prompt-neovate-8ca2d039-1",
+      "response": {
+        "session": {
+          "id": "prompt-neovate-8ca2d039-1",
+          "projectId": "prompt-neovate-8ca2d039",
+          "kind": "worker",
+          "harness": "neovate",
+          "reviewerConfig": {},
+          "autoReviewEnabled": false,
+          "displayName": "Neovate private prompt control",
+          "mode": "tui",
+          "activity": {
+            "state": "active",
+            "lastActivityAt": "2026-10-12T22:36:14.154413952Z"
+          },
+          "isTerminated": false,
+          "terminateOnPrMerge": false,
+          "autoInjectReview": true,
+          "autoInjectCI": true,
+          "outputType": "none",
+          "createdAt": "2026-10-12T22:32:38.812941175Z",
+          "updatedAt": "2026-10-12T22:36:22.345183029Z",
+          "isPinned": false,
+          "provisionState": "ready",
+          "branchState": {
+            "commits": 0,
+            "unpushed": 0
+          },
+          "statusReadiness": "ready",
+          "chatProviderPreserved": false,
+          "status": "working",
+          "kanbanColumn": "building",
+          "displayStatus": "Working",
+          "terminalHandleId": "ptyhost-v1:prompt-neovate-8ca2d039-1",
+          "branch": "ao/prompt-neovate-8ca2d039-1/root",
+          "terminalGeneration": "83d2cfdf-0690-4a6d-ba08-cc79b9eca4b4",
+          "model": "zai-audit/glm-4.7",
+          "lastUserMessageAt": "2026-10-12T22:36:14.154413952Z",
+          "lastInteractionAt": "2026-10-12T22:36:14.154413952Z",
+          "lastEventAt": "2026-10-12T22:36:14.154413952Z",
+          "prs": []
+        }
+      },
+      "startedAt": "2026-10-12T22:37:22.881Z",
+      "finishedAt": "2026-10-12T22:37:22.882Z",
+      "durationMs": 2
+    },
+    "confirmationWindowMs": 60000,
+    "websocket": {
+      "transport": "websocket",
+      "sessionId": "prompt-neovate-8ca2d039-1",
+      "terminalHandleId": "ptyhost-v1:prompt-neovate-8ca2d039-1",
+      "terminalGeneration": "83d2cfdf-0690-4a6d-ba08-cc79b9eca4b4",
+      "startedAt": "2026-10-12T22:36:22.980Z",
+      "opened": true,
+      "inputBytes": 1,
+      "pongObserved": true,
+      "frames": [
+        {
+          "direction": "sent",
+          "at": "2026-10-12T22:36:22.992Z",
+          "ch": "terminal",
+          "type": "open",
+          "id": "ptyhost-v1:prompt-neovate-8ca2d039-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:36:22.994Z",
+          "ch": "terminal",
+          "type": "opened",
+          "id": "ptyhost-v1:prompt-neovate-8ca2d039-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:36:23.001Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-8ca2d039-1"
+        },
+        {
+          "direction": "sent",
+          "at": "2026-10-12T22:36:23.010Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-8ca2d039-1"
+        },
+        {
+          "direction": "sent",
+          "at": "2026-10-12T22:36:23.010Z",
+          "ch": "system",
+          "type": "ping"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:36:23.010Z",
+          "ch": "system",
+          "type": "pong"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:36:23.023Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-8ca2d039-1"
+        },
+        {
+          "direction": "received",
+          "at": "2026-10-12T22:36:24.394Z",
+          "ch": "terminal",
+          "type": "data",
+          "id": "ptyhost-v1:prompt-neovate-8ca2d039-1"
+        }
+      ],
+      "timedOut": true,
+      "qualification": "A system pong acknowledges mux processing, not provider cancellation; cancellation also requires a live command-start witness with matching kernel process-start identity, the same session settling, that exact process stopping, and no delayed side effect.",
+      "commandWitness": {
+        "tokenSha256": "51f5c513b4415a6149f22dfb2146f405bdf5a56433b71d191b1c8832eb299e96",
+        "pid": 1089058,
+        "processIdentityKind": "linux-proc-startticks",
+        "processIdentitySha256": "87dc4897e085546860c457c32a3fcff4e47071969308c95618db52af17bbbc9d",
+        "startPath": ".cancel-start-364f390b010e43818bf4db31bf664784.json",
+        "latePath": ".cancel-late-364f390b010e43818bf4db31bf664784.json",
+        "lateSideEffectDelayMs": 12000
+      },
+      "url": "ws://127.0.0.1:45436/mux",
+      "preInputState": {
+        "method": "GET",
+        "path": "/api/v1/sessions/prompt-neovate-8ca2d039-1",
+        "status": 200,
+        "requestId": "",
+        "response": {
+          "session": {
+            "id": "prompt-neovate-8ca2d039-1",
+            "projectId": "prompt-neovate-8ca2d039",
+            "kind": "worker",
+            "harness": "neovate",
+            "reviewerConfig": {},
+            "autoReviewEnabled": false,
+            "displayName": "Neovate private prompt control",
+            "mode": "tui",
+            "activity": {
+              "state": "active",
+              "lastActivityAt": "2026-10-12T22:36:14.154413952Z"
+            },
+            "isTerminated": false,
+            "terminateOnPrMerge": false,
+            "autoInjectReview": true,
+            "autoInjectCI": true,
+            "outputType": "none",
+            "createdAt": "2026-10-12T22:32:38.812941175Z",
+            "updatedAt": "2026-10-12T22:36:22.345183029Z",
+            "isPinned": false,
+            "provisionState": "ready",
+            "branchState": {
+              "commits": 0,
+              "unpushed": 0
+            },
+            "statusReadiness": "ready",
+            "chatProviderPreserved": false,
+            "status": "working",
+            "kanbanColumn": "building",
+            "displayStatus": "Working",
+            "terminalHandleId": "ptyhost-v1:prompt-neovate-8ca2d039-1",
+            "branch": "ao/prompt-neovate-8ca2d039-1/root",
+            "terminalGeneration": "83d2cfdf-0690-4a6d-ba08-cc79b9eca4b4",
+            "model": "zai-audit/glm-4.7",
+            "lastUserMessageAt": "2026-10-12T22:36:14.154413952Z",
+            "lastInteractionAt": "2026-10-12T22:36:14.154413952Z",
+            "lastEventAt": "2026-10-12T22:36:14.154413952Z",
+            "prs": []
+          }
+        },
+        "startedAt": "2026-10-12T22:36:23.002Z",
+        "finishedAt": "2026-10-12T22:36:23.007Z",
+        "durationMs": 5
+      },
+      "preInputWitness": {
+        "start": {
+          "method": "GET",
+          "path": "/api/v1/sessions/prompt-neovate-8ca2d039-1/workspace/file?path=.cancel-start-364f390b010e43818bf4db31bf664784.json",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "sessionId": "prompt-neovate-8ca2d039-1",
+            "path": ".cancel-start-364f390b010e43818bf4db31bf664784.json",
+            "status": "unmodified",
+            "additions": 0,
+            "deletions": 0,
+            "size": 109,
+            "binary": false,
+            "deleted": false,
+            "editable": true,
+            "content": "{\"token\":\"364f390b010e43818bf4db31bf664784\",\"pid\":1089058,\"processIdentity\":\"linux-proc-startticks:89033567\"}",
+            "contentTruncated": false,
+            "diff": "",
+            "diffTruncated": false,
+            "compareBaseSha": "d51fbb01c38319dbdb13b5158cdf496c5d037e5d",
+            "compareBaseRef": "refs/heads/main",
+            "compareMode": "base",
+            "workspaceVersion": "f7435ff962837b8b29bdfeed7580d873c741a1f43720eeebdd7c8b48cce34287",
+            "fileFingerprint": "2667cd1e6e4966841da0aa7c885eb59132287be240a97bedad7716cdd9800678"
+          },
+          "startedAt": "2026-10-12T22:36:23.007Z",
+          "finishedAt": "2026-10-12T22:36:23.009Z",
+          "durationMs": 2
+        },
+        "late": {
+          "method": "GET",
+          "path": "/api/v1/sessions/prompt-neovate-8ca2d039-1/workspace/file?path=.cancel-late-364f390b010e43818bf4db31bf664784.json",
+          "status": 404,
+          "requestId": "",
+          "response": {
+            "error": "not_found",
+            "code": "WORKSPACE_FILE_NOT_FOUND",
+            "message": "Workspace file not found",
+            "requestId": "vps-linux/ao33ckoSwx-006110"
+          },
+          "startedAt": "2026-10-12T22:36:23.007Z",
+          "finishedAt": "2026-10-12T22:36:23.009Z",
+          "durationMs": 2
+        },
+        "process": {
+          "running": true,
+          "sameIdentity": true,
+          "identityKind": "linux-proc-startticks",
+          "identitySha256": "87dc4897e085546860c457c32a3fcff4e47071969308c95618db52af17bbbc9d"
+        }
+      },
+      "inputSha256": "77adfc95029e73b173f60e556f915b0cd8850848111358b1c370fb7c154e61fd",
+      "inputSentAt": "2026-10-12T22:36:23.010Z",
+      "unsettledAfterDefaultWindow": {
+        "observedAfterInputMs": 5066,
+        "state": {
+          "method": "GET",
+          "path": "/api/v1/sessions/prompt-neovate-8ca2d039-1",
+          "status": 200,
+          "requestId": "",
+          "response": {
+            "session": {
+              "id": "prompt-neovate-8ca2d039-1",
+              "projectId": "prompt-neovate-8ca2d039",
+              "kind": "worker",
+              "harness": "neovate",
+              "reviewerConfig": {},
+              "autoReviewEnabled": false,
+              "displayName": "Neovate private prompt control",
+              "mode": "tui",
+              "activity": {
+                "state": "active",
+                "lastActivityAt": "2026-10-12T22:36:14.154413952Z"
+              },
+              "isTerminated": false,
+              "terminateOnPrMerge": false,
+              "autoInjectReview": true,
+              "autoInjectCI": true,
+              "outputType": "none",
+              "createdAt": "2026-10-12T22:32:38.812941175Z",
+              "updatedAt": "2026-10-12T22:36:22.345183029Z",
+              "isPinned": false,
+              "provisionState": "ready",
+              "branchState": {
+                "commits": 0,
+                "unpushed": 0
+              },
+              "statusReadiness": "ready",
+              "chatProviderPreserved": false,
+              "status": "working",
+              "kanbanColumn": "building",
+              "displayStatus": "Working",
+              "terminalHandleId": "ptyhost-v1:prompt-neovate-8ca2d039-1",
+              "branch": "ao/prompt-neovate-8ca2d039-1/root",
+              "terminalGeneration": "83d2cfdf-0690-4a6d-ba08-cc79b9eca4b4",
+              "model": "zai-audit/glm-4.7",
+              "lastUserMessageAt": "2026-10-12T22:36:14.154413952Z",
+              "lastInteractionAt": "2026-10-12T22:36:14.154413952Z",
+              "lastEventAt": "2026-10-12T22:36:14.154413952Z",
+              "prs": []
+            }
+          },
+          "startedAt": "2026-10-12T22:36:28.075Z",
+          "finishedAt": "2026-10-12T22:36:28.076Z",
+          "durationMs": 2
+        }
+      },
+      "error": "the same active TUI session did not settle after mux input",
+      "finishedAt": "2026-10-12T22:37:22.984Z",
+      "durationMs": 60004,
+      "closeCode": 1005
+    }
+  }
+}

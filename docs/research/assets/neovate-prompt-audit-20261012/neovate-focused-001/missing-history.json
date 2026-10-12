@@ -1,0 +1,21 @@
+{
+  "at": "2026-10-12T22:33:34.755305+00:00",
+  "source": "6be36883b73840e7a9950fc933643f1698d74c68",
+  "HTTP": 500,
+  "reply": {
+    "error": "internal",
+    "code": "INTERNAL_ERROR",
+    "message": "Internal server error",
+    "requestId": "vps-linux/ao33ckoSwx-005489",
+    "reporting_owner": "http"
+  },
+  "ownedFailureLog": "time=2026-10-12T22:33:34.654Z level=INFO msg=\"http request\" id=vps-linux/ao33ckoSwx-005489 method=POST path=/api/v1/sessions/prompt-neovate-c0476fe5-1/restore status=500 bytes=146 duration=39.361473ms remote=127.0.0.1:34268 error=\"restore prompt-neovate-c0476fe5-1: restore command: neovate: cannot restore native session: open native transcript: open /home/azureuser/.neovate/projects/home-azureuser-ao-audits-zcode-cortex-20261012-tmp-neovate-prompt-data-worktrees-prompt-neovate-c0476fe5-prompt-neovate-c0476fe5-1/15cc5193.jsonl: no such file or directory\"",
+  "nativeIDDigest": "37685d852495875d1700b02d591fcf616f1ba25609f621511907619dd98e83a0",
+  "sameNativeIdentity": true,
+  "staysTerminated": true,
+  "nativeHistorySHA256": "58a43a89d91f27e79fcfeceb557bc7edbcb34fc6d969341ca9910b2040f7df2a",
+  "status": "PASS",
+  "originalNativeHistoryRestoredByteIdentically": true,
+  "originalPredicateAssessment": "NOT_PROVEN_OTHER_FAILURE",
+  "assessmentCorrection": "The owned failure names native transcript (not the word history); exact unavailable-transcript cause and unchanged terminated identity satisfy the intended gate."
+}

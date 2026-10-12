@@ -1,0 +1,85 @@
+{
+  "at": "2026-10-12T21:57:49.171763+00:00",
+  "version": "0.28.5",
+  "releaseSource": "d4f89bff889e6488f907fc19cfe045f23ca8d02e",
+  "officialNPMIntegrity": "sha512-oimeQUCP+lbYuV0wkCkLchqhNMTl4Orh/f1CF0l8sczxXAzL6YlZU4kCaxZOFSy+hAXm8Az8KoBnABvNYYzczw==",
+  "archiveSHA256": "47df168fe7f6e9031c1d8e0b18dc38440a618c027e4edb94570727836625c7ba",
+  "sourceURL": "https://registry.npmjs.org/@neovate/code/-/code-0.28.5.tgz",
+  "archiveBytes": 14806219,
+  "files": [
+    {
+      "path": "vendor/ripgrep/COPYING",
+      "archiveSHA256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+      "installedSHA256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+      "matches": true
+    },
+    {
+      "path": "LICENSE",
+      "archiveSHA256": "d78d4170f7e5766a06aa36992179914f9487592834869329e854c227e56382a6",
+      "installedSHA256": "d78d4170f7e5766a06aa36992179914f9487592834869329e854c227e56382a6",
+      "matches": true
+    },
+    {
+      "path": "vendor/ripgrep/arm64-darwin/rg",
+      "archiveSHA256": "4fdf1d8365af224bc70e3c1490d8461d859c37cc70e739a11e987af0215f3e94",
+      "installedSHA256": "4fdf1d8365af224bc70e3c1490d8461d859c37cc70e739a11e987af0215f3e94",
+      "matches": true
+    },
+    {
+      "path": "vendor/ripgrep/arm64-linux/rg",
+      "archiveSHA256": "968cabe8efed72fd8fd482cb76b6084fcb695fc5293af7fb62296b02f487fb69",
+      "installedSHA256": "968cabe8efed72fd8fd482cb76b6084fcb695fc5293af7fb62296b02f487fb69",
+      "matches": true
+    },
+    {
+      "path": "vendor/ripgrep/x64-darwin/rg",
+      "archiveSHA256": "3bafa7e6ee51ba3ac4ed065883484a309be09b26ea6dad561ae4049bfe049c50",
+      "installedSHA256": "3bafa7e6ee51ba3ac4ed065883484a309be09b26ea6dad561ae4049bfe049c50",
+      "matches": true
+    },
+    {
+      "path": "vendor/ripgrep/x64-linux/rg",
+      "archiveSHA256": "ebeaf56f8a25e102e9419933423738b3a2a613a444fd749d695e15eba53f71f2",
+      "installedSHA256": "ebeaf56f8a25e102e9419933423738b3a2a613a444fd749d695e15eba53f71f2",
+      "matches": true
+    },
+    {
+      "path": "vendor/ripgrep/x64-win32/rg.exe",
+      "archiveSHA256": "decdd4992f3f1b9a5ef9898f1b40ab16886d579d6516b4efd3d5eaa19364e408",
+      "installedSHA256": "decdd4992f3f1b9a5ef9898f1b40ab16886d579d6516b4efd3d5eaa19364e408",
+      "matches": true
+    },
+    {
+      "path": "package.json",
+      "archiveSHA256": "fce5797e2ce5b7dbf902973e17a088f51e9cbfbdb69168092a9da535a8215551",
+      "installedSHA256": "fce5797e2ce5b7dbf902973e17a088f51e9cbfbdb69168092a9da535a8215551",
+      "matches": true
+    },
+    {
+      "path": "README.md",
+      "archiveSHA256": "168c278babc4ec13ec194d10cf7e0b355346d0b91a9e0d06f512786dde5e0ffb",
+      "installedSHA256": "168c278babc4ec13ec194d10cf7e0b355346d0b91a9e0d06f512786dde5e0ffb",
+      "matches": true
+    },
+    {
+      "path": "dist/cli.mjs",
+      "archiveSHA256": "676775b5762ea6464da5560693daca3a2dad807ab6ca661bbeb795ec186b9323",
+      "installedSHA256": "676775b5762ea6464da5560693daca3a2dad807ab6ca661bbeb795ec186b9323",
+      "matches": true
+    },
+    {
+      "path": "dist/index.mjs",
+      "archiveSHA256": "882416c63ffd9134ef6064972be126451125a174789024b0d9837e6eadc22077",
+      "installedSHA256": "882416c63ffd9134ef6064972be126451125a174789024b0d9837e6eadc22077",
+      "matches": true
+    },
+    {
+      "path": "dist/index.d.ts",
+      "archiveSHA256": "52bc2facd2b6ebb980f2ca8d8e5ca4ce5d16c5d7b9d01dd612621ce2a8e55ccd",
+      "installedSHA256": "52bc2facd2b6ebb980f2ca8d8e5ca4ce5d16c5d7b9d01dd612621ce2a8e55ccd",
+      "matches": true
+    }
+  ],
+  "allMatch": true,
+  "scope": "Read-only official release fingerprint; streamed archive discarded, no install/local routine suite/native package edits."
+}

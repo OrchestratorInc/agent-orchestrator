@@ -1,0 +1,60 @@
+{
+  "at": "2026-10-12T22:53:51.079992+00:00",
+  "sessions": [
+    {
+      "id": "prompt-neovate-c0476fe5-1",
+      "killHTTP": 200,
+      "killReply": {
+        "ok": true,
+        "sessionId": "prompt-neovate-c0476fe5-1"
+      },
+      "terminated": true
+    },
+    {
+      "id": "prompt-neovate-8ca2d039-1",
+      "killHTTP": 200,
+      "killReply": {
+        "ok": true,
+        "sessionId": "prompt-neovate-8ca2d039-1"
+      },
+      "terminated": true
+    },
+    {
+      "id": "prompt-neovate-62a5cf42-1",
+      "killHTTP": 200,
+      "killReply": {
+        "ok": true,
+        "sessionId": "prompt-neovate-62a5cf42-1"
+      },
+      "terminated": true
+    },
+    {
+      "id": "prompt-neovate-dc236913-1",
+      "killHTTP": 200,
+      "killReply": {
+        "ok": true,
+        "sessionId": "prompt-neovate-dc236913-1"
+      },
+      "terminated": true
+    }
+  ],
+  "servingAfter": {
+    "pid": 1084822,
+    "executable": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/prompt-audit/neovate/bin/ao",
+    "sha256": "1c798cd970ac6cc49cec498d637a36ebc4e36f1d096274c736e1a72198fdac82"
+  },
+  "finalScreenshot": {
+    "path": "unrelated-control-live-output.png",
+    "sha256": "b06c218056acff0ab5cd4aaf46deb500cd3e981d44ebf885a070916dc3483b46",
+    "inspected": true,
+    "nativeViewportVisible": true
+  },
+  "electronStoppedPID": 1084733,
+  "shutdownHTTP": 202,
+  "shutdownReply": {
+    "pid": 1084822,
+    "service": "agent-orchestrator-daemon",
+    "status": "shutting_down"
+  },
+  "unrelatedOlderDaemon625660Preserved": true
+}

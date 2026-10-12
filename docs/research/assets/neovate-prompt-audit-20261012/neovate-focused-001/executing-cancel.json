@@ -1,0 +1,102 @@
+{
+  "at": "2026-10-12T22:27:06.162Z",
+  "source": "6be36883b73840e7a9950fc933643f1698d74c68",
+  "runnerSHA256": "23dc1a2f39bd6c88fd95b47d041040a039d16c52ab71996a278f49e68f8bdcc5",
+  "witnessSpec": {
+    "startPath": ".cancel-start-0ecb163928f145e7a4987e5d4ca54be2.json",
+    "latePath": ".cancel-late-0ecb163928f145e7a4987e5d4ca54be2.json",
+    "lateSideEffectDelayMs": 12000,
+    "tokenSHA256": "1f0a21a8748a69ca7a9fe7ecea14ca18b255b453373d43eca68650266cadf3ec"
+  },
+  "result": {
+    "passed": false,
+    "observedActive": true,
+    "reason": "the cancellation turn settled or timed out without a valid command-start witness",
+    "activeState": {
+      "ok": true,
+      "status": 200,
+      "requestId": "",
+      "method": "GET",
+      "path": "/api/v1/sessions/prompt-neovate-c0476fe5-1",
+      "response": {
+        "session": {
+          "id": "prompt-neovate-c0476fe5-1",
+          "projectId": "prompt-neovate-c0476fe5",
+          "kind": "worker",
+          "harness": "neovate",
+          "reviewerConfig": {},
+          "autoReviewEnabled": false,
+          "displayName": "Neovate private prompt control",
+          "mode": "tui",
+          "activity": {
+            "state": "active",
+            "lastActivityAt": "2026-10-12T22:26:36.724786608Z"
+          },
+          "isTerminated": false,
+          "terminateOnPrMerge": false,
+          "autoInjectReview": true,
+          "autoInjectCI": true,
+          "outputType": "none",
+          "createdAt": "2026-10-12T22:04:59.825367436Z",
+          "updatedAt": "2026-10-12T22:26:36.745215672Z",
+          "isPinned": false,
+          "provisionState": "ready",
+          "branchState": {
+            "commits": 0,
+            "unpushed": 0
+          },
+          "statusReadiness": "ready",
+          "chatProviderPreserved": false,
+          "status": "working",
+          "kanbanColumn": "building",
+          "displayStatus": "Working",
+          "terminalHandleId": "ptyhost-v1:prompt-neovate-c0476fe5-1",
+          "branch": "ao/prompt-neovate-c0476fe5-1/root",
+          "terminalGeneration": "2ad9bd56-6a6d-4e1f-8a94-6c3d53647256",
+          "model": "zai-audit/glm-4.7",
+          "lastUserMessageAt": "2026-10-12T22:26:36.724786608Z",
+          "lastInteractionAt": "2026-10-12T22:26:36.724786608Z",
+          "lastEventAt": "2026-10-12T22:26:36.724786608Z",
+          "prs": []
+        }
+      },
+      "startedAt": "2026-10-12T22:27:05.868Z",
+      "finishedAt": "2026-10-12T22:27:05.911Z",
+      "durationMs": 44
+    },
+    "witness": {
+      "start": {
+        "method": "GET",
+        "path": "/api/v1/sessions/prompt-neovate-c0476fe5-1/workspace/file?path=.cancel-start-0ecb163928f145e7a4987e5d4ca54be2.json",
+        "status": 404,
+        "requestId": "",
+        "response": {
+          "error": "not_found",
+          "code": "WORKSPACE_FILE_NOT_FOUND",
+          "message": "Workspace file not found",
+          "requestId": "vps-linux/ao33ckoSwx-004517"
+        },
+        "startedAt": "2026-10-12T22:27:05.868Z",
+        "finishedAt": "2026-10-12T22:27:05.911Z",
+        "durationMs": 43
+      },
+      "late": {
+        "method": "GET",
+        "path": "/api/v1/sessions/prompt-neovate-c0476fe5-1/workspace/file?path=.cancel-late-0ecb163928f145e7a4987e5d4ca54be2.json",
+        "status": 404,
+        "requestId": "",
+        "response": {
+          "error": "not_found",
+          "code": "WORKSPACE_FILE_NOT_FOUND",
+          "message": "Workspace file not found",
+          "requestId": "vps-linux/ao33ckoSwx-004516"
+        },
+        "startedAt": "2026-10-12T22:27:05.868Z",
+        "finishedAt": "2026-10-12T22:27:05.871Z",
+        "durationMs": 3
+      },
+      "command": null,
+      "process": null
+    }
+  }
+}

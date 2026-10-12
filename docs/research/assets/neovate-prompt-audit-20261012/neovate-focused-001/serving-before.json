@@ -1,0 +1,21 @@
+{
+  "at": "2026-10-12T22:07:17.774891+00:00",
+  "servingPID": 1084822,
+  "executable": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/prompt-audit/neovate/bin/ao",
+  "executableSHA256": "1c798cd970ac6cc49cec498d637a36ebc4e36f1d096274c736e1a72198fdac82",
+  "backendSource": "6be36883b73840e7a9950fc933643f1698d74c68",
+  "UIcommit": "6be36883b73840e7a9950fc933643f1698d74c68",
+  "electronPID": 1084733,
+  "runFilePath": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/neovate-prompt-running.json",
+  "sessionId": "prompt-neovate-c0476fe5-1",
+  "nativeIDDigest": "37685d852495875d1700b02d591fcf616f1ba25609f621511907619dd98e83a0",
+  "generation": "d5d51a77-f0c3-4882-8d9c-47be6b161ab0",
+  "model": "zai-audit/glm-4.7",
+  "nativeVersion": "0.28.5",
+  "screenshot": {
+    "path": "fresh-private-project-user.png",
+    "utc": "2026-10-12T22:06:35.287705+00:00",
+    "SHA256": "0ef9d4849bd9cb590abcafa292164b16706b516cf364e63a380d70f16a719ceb"
+  },
+  "graphics": "Stock no-WebGL Electron fallback and real X11 window resize"
+}

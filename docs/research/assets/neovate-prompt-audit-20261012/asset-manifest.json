@@ -1,0 +1,170 @@
+{
+  "at": "2026-10-12T22:54:49.498027+00:00",
+  "assets": [
+    {
+      "path": "README.md",
+      "SHA256": "6c87e817f4da0e92686780d9a6fb5065c10ec3d6de17bb8d18cdf8e7302a8951",
+      "bytes": 3406
+    },
+    {
+      "path": "main-reconciliation-002.json",
+      "SHA256": "9e7b892f3806093e874116bb29b0d6ced867ac6694cfb51b160322d32312ac28",
+      "bytes": 771
+    },
+    {
+      "path": "neovate-artifact.json",
+      "SHA256": "ebc56a11b7325072b0306cb1c19771763c611b8137b426e4fc13bd219184a72b",
+      "bytes": 5328
+    },
+    {
+      "path": "neovate-cleanup.json",
+      "SHA256": "85dbccb9bf006b1cf45a706a4e15f9cc01571f9dcca32ac0d0af5abbd98b0d02",
+      "bytes": 1538
+    },
+    {
+      "path": "neovate-control-001/executing-kill.json",
+      "SHA256": "e152eae1484e5295baae8ac3a1004c635cdfbb4926662867822a336e0d861c14",
+      "bytes": 869
+    },
+    {
+      "path": "neovate-control-001/receipt.json",
+      "SHA256": "b1b4fbbf46086be202116a0ec4dacd7e3c7672722d98c2e90e0296b4f334b431",
+      "bytes": 1456
+    },
+    {
+      "path": "neovate-control-001/unrelated-control-after-kill.png",
+      "SHA256": "10b6a63b06bb461d2d7660df3874889945968bbdeb3a2741fa67d95a97c1c073",
+      "bytes": 36653
+    },
+    {
+      "path": "neovate-control-001/unrelated-control-followup.json",
+      "SHA256": "169e9388a5af1dcef8d6e7ce56d3cb731ddfdd768180a96c3f87d1c81ca9e4e8",
+      "bytes": 510
+    },
+    {
+      "path": "neovate-control-001/unrelated-control-live-output.png",
+      "SHA256": "b06c218056acff0ab5cd4aaf46deb500cd3e981d44ebf885a070916dc3483b46",
+      "bytes": 93719
+    },
+    {
+      "path": "neovate-execution-clean-001/cleanup-after-escape-failure.json",
+      "SHA256": "943859b6885e856c2df1c45a0ebf2d4baf58e8b73a462fd42c229de726c07aa6",
+      "bytes": 378
+    },
+    {
+      "path": "neovate-execution-clean-001/executing-cancel.json",
+      "SHA256": "b41c79555470b40e963af28ea065b9c13a442cf559349e4630c0f932e2fd6819",
+      "bytes": 13779
+    },
+    {
+      "path": "neovate-execution-clean-001/receipt.json",
+      "SHA256": "feb6541345185554c58feef1a11e1a781defe338c7817a34f4321660f31b3853",
+      "bytes": 1279
+    },
+    {
+      "path": "neovate-focused-001/cancel-no-start-witness.png",
+      "SHA256": "04de149eadf49c2574a73917c5f22b9a265e8c5a9590a72a9be64099e300296d",
+      "bytes": 138072
+    },
+    {
+      "path": "neovate-focused-001/executing-cancel-overlap-invalid.json",
+      "SHA256": "bb5f6cc7afd1e828a3fe65d2f8980ebb0557d2f60025bd029108c75420de3b9b",
+      "bytes": 39195
+    },
+    {
+      "path": "neovate-focused-001/executing-cancel.json",
+      "SHA256": "16cba72ed0a2a91659d58db21f32dffea9471bf975247dd4ca13b6d5643e0558",
+      "bytes": 3710
+    },
+    {
+      "path": "neovate-focused-001/fresh-private-project-user.png",
+      "SHA256": "0ef9d4849bd9cb590abcafa292164b16706b516cf364e63a380d70f16a719ceb",
+      "bytes": 82028
+    },
+    {
+      "path": "neovate-focused-001/missing-history.json",
+      "SHA256": "a5147526637e2acdae2df25c7ec0165a986fd17532a3847f5d212ff7d0973bba",
+      "bytes": 1463
+    },
+    {
+      "path": "neovate-focused-001/overlapping-control-attempt.json",
+      "SHA256": "9f4db077298a5160b845594582762ba926897cf013654c5a4c2e5e9d55b24333",
+      "bytes": 311
+    },
+    {
+      "path": "neovate-focused-001/queued-command-cleanup.json",
+      "SHA256": "4c007b76e22742d8673a5ddf1a0b4c12e839f2ede61f143fc3b661052926a4c3",
+      "bytes": 406
+    },
+    {
+      "path": "neovate-focused-001/receipt.json",
+      "SHA256": "b838b1de4506470c07ed6997433e94b2590b93402105d8a03a10d8653fb8ef68",
+      "bytes": 3348
+    },
+    {
+      "path": "neovate-focused-001/restore-attempt-lab-ci-env.json",
+      "SHA256": "112e8ec72779259c189f2efb11f30e023589626dc19b8b3b6e3c02da974e1535",
+      "bytes": 2911
+    },
+    {
+      "path": "neovate-focused-001/restore-attempt-new-token-failed.json",
+      "SHA256": "d1ba214eb861e622d5a7c67cc753dd96a1fd7284bdfe77f2ae84804d4f208e77",
+      "bytes": 3686
+    },
+    {
+      "path": "neovate-focused-001/restore-continuation-live.png",
+      "SHA256": "2ed590a3237acd5db8b17c2680f3c24cd6feb0a293b2b5e25fe9398fca010ffc",
+      "bytes": 94215
+    },
+    {
+      "path": "neovate-focused-001/restore-for-serial-controls.json",
+      "SHA256": "2b36c411d8042307dc5e50b76d2ec26b72c172d63e4d3a45f330ae22237cf711",
+      "bytes": 1680
+    },
+    {
+      "path": "neovate-focused-001/restore-readonly-hook-control.json",
+      "SHA256": "85be166590c04f48bd1f66e588ceb678e442a83d8caea40c440eb0cccafbe030",
+      "bytes": 1419
+    },
+    {
+      "path": "neovate-focused-001/restored-before-continuation.png",
+      "SHA256": "0bb564a9cd6c77d13818695fbec9a23cdc42233c3a256b00fe85742856c2720c",
+      "bytes": 84708
+    },
+    {
+      "path": "neovate-focused-001/restored-diagnostic-empty-composer.png",
+      "SHA256": "d10b1601745af78d807cf474d210443d0de9eb27e55b7cf0dd6e0abb78a170f0",
+      "bytes": 94104
+    },
+    {
+      "path": "neovate-focused-001/restored-with-native-ci-unset.png",
+      "SHA256": "fbc3942dcd9b0148486abce00da338ec77f546a4d95adcf4aa09547f02438fc5",
+      "bytes": 89571
+    },
+    {
+      "path": "neovate-focused-001/serving-before.json",
+      "SHA256": "58a9a081836712f19a987f72b127e71c3d6df79bbda44fb911981589788d9459",
+      "bytes": 1033
+    },
+    {
+      "path": "neovate-kill-control-001/receipt.json",
+      "SHA256": "0fbd935b3f62ddddae16fdefcdeb80e92e20a381722e6def8ad2a9eae34c8df8",
+      "bytes": 1456
+    },
+    {
+      "path": "neovate-native-provenance.json",
+      "SHA256": "125bedd47103743e3af1ed81790b32ca3eb18e3878ce55ad83f565ea0d6bb740",
+      "bytes": 3702
+    },
+    {
+      "path": "neovate-system-observations.jsonl",
+      "SHA256": "0164ef09ec879161307c93c1da5d99d1e24a80af59cb26bc419437bde4dca74a",
+      "bytes": 3196
+    },
+    {
+      "path": "reconciliation.json",
+      "SHA256": "b985dba0498979c7b56f6133f89fa957b05ea68f69884d9748b233d576d0c549",
+      "bytes": 685
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "at": "2026-10-12T22:42:39.516006+00:00",
+  "source": "6be36883b73840e7a9950fc933643f1698d74c68",
+  "status": "PASS",
+  "witness": {
+    "pid": 1089881,
+    "kernelIdentity": "linux-proc-startticks:89068023",
+    "startMs": 1791844927436,
+    "tokenSHA256": "48b085e5ed0037b486055c5a9596c004e3e997810ff3cf0d834fbcc7266a5795"
+  },
+  "generationBeforeKill": "dcd9a5a2-81dd-495f-a6db-e724aa7a33e1",
+  "killHTTP": 200,
+  "killReply": {
+    "ok": true,
+    "sessionId": "prompt-neovate-62a5cf42-1"
+  },
+  "terminatedConfirmed": true,
+  "childReaped": true,
+  "lateDelayMs": 30000,
+  "lateSideEffectAbsentBeyondDeadline": true,
+  "unrelatedControlAliveImmediately": true,
+  "unrelatedControlAliveLater": true,
+  "unrelatedControlGenerationUnchanged": true,
+  "independence": "Different clean native conversation from failed Escape; unrelated new control remains alive"
+}

@@ -1,0 +1,18 @@
+{
+  "at": "2026-10-12T22:44:56.554267+00:00",
+  "sid": "prompt-neovate-dc236913-1",
+  "generationBefore": "dc8aae01-8b11-430a-894a-b90416d59a1b",
+  "HTTP": 200,
+  "reply": {
+    "ok": true,
+    "sessionId": "prompt-neovate-dc236913-1",
+    "message": "Please create control-alive.json containing alive true, then finish and wait."
+  },
+  "status": "PASS",
+  "checks": {
+    "alive": true,
+    "generationUnchanged": true,
+    "controlFileExists": true
+  },
+  "observedAt": "2026-10-12T22:46:44.322466+00:00"
+}

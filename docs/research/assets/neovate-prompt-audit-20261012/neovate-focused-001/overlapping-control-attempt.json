@@ -1,0 +1,8 @@
+{
+  "at": "2026-10-12T22:24:13.156850+00:00",
+  "status": "INVALID_INDEPENDENCE",
+  "reason": "Kill control was started before executing cancellation helper completed. Stop only the exact owned Kill helper; retain receipts and clean target before serial retry.",
+  "ownedHelperPIDsStopped": [
+    1087524
+  ]
+}

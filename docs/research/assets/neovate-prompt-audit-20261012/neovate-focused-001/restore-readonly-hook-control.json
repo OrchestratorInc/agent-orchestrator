@@ -1,0 +1,33 @@
+{
+  "at": "2026-10-12T22:19:50.497322+00:00",
+  "visibleTask": "Please create probe.json containing ready true and cwd equal to the actual current working directory, then finish and wait.",
+  "privatePathOrTokenInTask": false,
+  "source": "6be36883b73840e7a9950fc933643f1698d74c68",
+  "nativeGeneration": "b5644106-b77d-49c4-b579-d9225d9be9f4",
+  "newTokenSHA256": "9b987d43af295bf03ea211e7d2640ed1617a6504f057ec4281136ccfbc17a69a",
+  "priorFailureRetained": "restore-attempt-new-token-failed.json",
+  "HTTP": 200,
+  "reply": {
+    "ok": true,
+    "sessionId": "prompt-neovate-c0476fe5-1",
+    "message": "Please create probe.json containing ready true and cwd equal to the actual current working directory, then finish and wait."
+  },
+  "status": "FAIL_PRIVATE_ACTION",
+  "checks": {
+    "visibleProbeCreated": true,
+    "privateNew": false,
+    "privateOld": true
+  },
+  "systemObservations": [
+    {
+      "at": "2026-10-12T22:19:50.559Z",
+      "nativeIDDigest": "37685d852495875d1700b02d591fcf616f1ba25609f621511907619dd98e83a0",
+      "systemPromptOldAuditTokenPresent": false,
+      "systemPromptNewAuditTokenPresent": true,
+      "nativeUserControlPresent": true,
+      "systemBytes": 25190,
+      "qualification": "Supported read-only native systemPrompt hook; returns defaults unchanged. Configuration only, no full prompt or headers retained."
+    }
+  ],
+  "observedAt": "2026-10-12T22:20:47.276971+00:00"
+}

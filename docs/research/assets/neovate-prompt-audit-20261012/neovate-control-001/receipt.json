@@ -1,0 +1,31 @@
+{
+  "scope": "REGISTERED_AO_FOCUSED_ORDINARY_TASK",
+  "at": "2026-10-12T22:07:50.942485+00:00",
+  "source": "6be36883b73840e7a9950fc933643f1698d74c68",
+  "projectId": "prompt-neovate-62a5cf42",
+  "sessionId": "prompt-neovate-62a5cf42-1",
+  "workspace": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/neovate-prompt-data/worktrees/prompt-neovate-62a5cf42/prompt-neovate-62a5cf42-1",
+  "nativeIDDigest": "512cb74e86ffdcd1bf1ed0a778e6edfa26ec065c876f633be82de5e7cada963f",
+  "generation": "dcd9a5a2-81dd-495f-a6db-e724aa7a33e1",
+  "visibleTask": "-Please create visible.json containing count 1 and cwd equal to the actual current working directory. If it already exists, increment its count once. Finish and wait.",
+  "visibleTaskHasPrivatePathOrToken": false,
+  "privateTokenSHA256": "f1a80006aea6c8f0d4d690ae6cdab847587cb4dcb7f2dbf413eeda92464f299b",
+  "projectTokenSHA256": "33f94b0fe55c4901958b3554e2f44f8d15fc970c2d78601b1c823d735b35d249",
+  "fresh": {
+    "countOnce": true,
+    "correctCwd": true,
+    "privateAction": true,
+    "projectAction": true,
+    "AGENTSPreserved": true,
+    "activeToSettled": true
+  },
+  "observedStates": [
+    "idle",
+    "active"
+  ],
+  "controlSession": null,
+  "controlBefore": null,
+  "controlAfterFresh": null,
+  "actualAuthenticatedWireRole": "NOT_CAPTURED",
+  "nativeSyntheticRole": "system; additive append preserves native default and user extension guidelines in released-native controlled-provider CI"
+}
