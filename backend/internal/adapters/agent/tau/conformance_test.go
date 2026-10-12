@@ -119,7 +119,8 @@ context_window = 128000
 max_tokens = 1024
 `, server.URL+"/v1"))
 	writeConformanceFile(t, filepath.Join(workspace, "AGENTS.md"), "AO_PROJECT_RULE_PRESERVED")
-	// Native extension instructions must remain additive beside the AO observer.
+	// Native user extension instructions stay additive beside the AO observer.
+	// Project extension execution retains the native opt-in boundary.
 	userExtension := "import os\nfrom pathlib import Path\ndef setup(tau):\n    Path(os.environ['AO_TEST_USER_EXTENSION_MARKER']).write_text('loaded')\n    tau.add_prompt_guideline('AO_USER_EXTENSION_RULE_PRESERVED')\n"
 	projectExtension := "import os\nfrom pathlib import Path\ndef setup(tau):\n    Path(os.environ['AO_TEST_PROJECT_EXTENSION_MARKER']).write_text('loaded')\n    tau.add_prompt_guideline('AO_PROJECT_EXTENSION_RULE_PRESERVED')\n"
 	writeConformanceFile(t, filepath.Join(tauHome, "extensions", "user_default.py"), userExtension)
@@ -196,10 +197,13 @@ max_tokens = 1024
 	waitConformanceEvent(t, hookLog, "agent-start", 4, restored)
 	waitConformanceEvent(t, hookLog, "stop", 4, restored)
 	restored.stop()
-	for _, key := range []string{"AO_TEST_USER_EXTENSION_MARKER", "AO_TEST_PROJECT_EXTENSION_MARKER"} {
+	for _, key := range []string{"AO_TEST_USER_EXTENSION_MARKER"} {
 		if data, err := os.ReadFile(envMap[key]); err != nil || string(data) != "loaded" {
 			t.Fatalf("native extension did not initialize: %s, %v", key, err)
 		}
+	}
+	if _, err := os.Stat(envMap["AO_TEST_PROJECT_EXTENSION_MARKER"]); !os.IsNotExist(err) {
+		t.Fatalf("project extension executed without native opt-in: %v", err)
 	}
 	for _, event := range readConformanceEvents(t, hookLog) {
 		if event.Payload.SessionID != started.Payload.SessionID {
@@ -252,7 +256,7 @@ func countRequestText(request conformanceRequest, needle string) int {
 
 func assertConformancePrompt(t *testing.T, request conformanceRequest, task, hidden string) {
 	t.Helper()
-	if request.Model != "test" || countRequestText(request, task) != 1 || countRequestText(request, hidden) != 1 || countRequestText(request, "AO_PROJECT_RULE_PRESERVED") == 0 || countRequestText(request, "AO_USER_EXTENSION_RULE_PRESERVED") == 0 || countRequestText(request, "AO_PROJECT_EXTENSION_RULE_PRESERVED") == 0 {
+	if request.Model != "test" || countRequestText(request, task) != 1 || countRequestText(request, hidden) != 1 || countRequestText(request, "AO_PROJECT_RULE_PRESERVED") == 0 || countRequestText(request, "AO_USER_EXTENSION_RULE_PRESERVED") == 0 {
 		t.Fatalf("model, task, private instructions or project rules changed: %#v", request)
 	}
 	found := false
