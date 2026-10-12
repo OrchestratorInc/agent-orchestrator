@@ -21,7 +21,9 @@ import (
 
 	"github.com/creack/pty"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
 
 type conformanceRequest struct {
@@ -142,7 +144,7 @@ max_tokens = 1024
 	if err := plugin.GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace, SessionID: "ao-tau-conformance"}); err != nil {
 		t.Fatal(err)
 	}
-	initialTask := "--help AO_INITIAL_TASK\nKeep 'quotes' and $(literal) intact."
+	initialTask := "--help AO_INITIAL_TASK\nKeep 'quotes' and $(literal) intact.\n" + strings.Repeat("Literal long task data. ", 40) + "\nFinal task line."
 	launch := ports.LaunchConfig{WorkspacePath: workspace, SessionID: "ao-tau-conformance", Prompt: initialTask, SystemPrompt: "AO_HIDDEN_FIRST", Permissions: ports.PermissionModeBypassPermissions, Config: ports.AgentConfig{Model: "ao/test"}, Env: envMap}
 	argv, err := plugin.GetLaunchCommand(context.Background(), launch)
 	if err != nil {
@@ -395,15 +397,38 @@ func waitConformanceComposer(t *testing.T, process *conformanceTUI) {
 	t.Fatalf("native composer readiness marker missing\n%s", process.output())
 }
 
+type conformanceSessionReader struct{}
+
+func (conformanceSessionReader) GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error) {
+	return domain.SessionRecord{ID: "ao-tau-conformance", Harness: domain.HarnessTau, Activity: domain.Activity{State: domain.ActivityIdle}, FirstSignalAt: time.Now()}, true, nil
+}
+
+type conformanceMessenger struct{ process *conformanceTUI }
+
+func (m conformanceMessenger) Send(_ context.Context, _ domain.SessionID, prompt string) error {
+	runes := []rune(prompt)
+	for i := 0; i < len(runes); i += 512 {
+		end := i + 512
+		if end > len(runes) {
+			end = len(runes)
+		}
+		if _, err := m.process.terminal.WriteString(string(runes[i:end])); err != nil {
+			return err
+		}
+		if end < len(runes) {
+			time.Sleep(15 * time.Millisecond)
+		}
+	}
+	time.Sleep(300 * time.Millisecond)
+	_, err := m.process.terminal.WriteString("\r")
+	return err
+}
 func sendConformanceInput(t *testing.T, process *conformanceTUI, prompt string) {
 	t.Helper()
-	time.Sleep(200 * time.Millisecond)
-	if _, err := process.terminal.WriteString("\x1b[200~" + prompt + "\x1b[201~"); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(200 * time.Millisecond)
-	if _, err := process.terminal.WriteString("\r"); err != nil {
-		t.Fatal(err)
+	guard := sessionguard.New(conformanceSessionReader{}, conformanceMessenger{process}, nil)
+	outcome, err := guard.Deliver(context.Background(), "ao-tau-conformance", prompt)
+	if err != nil || outcome != sessionguard.Sent {
+		t.Fatalf("guarded native delivery: %v, %v", outcome, err)
 	}
 }
 
