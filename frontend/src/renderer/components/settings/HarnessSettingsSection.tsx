@@ -877,8 +877,8 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		// Who the harness is signed in as, when its own login check names it.
 		const account: AgentAccountIdentity | undefined = authStatus === "authorized" || authStatus === "configured" ? readinessAgent?.authentication.account : undefined;
 		const accountWho = account?.email || account?.name;
-		// Everything the login check relied on: who, the plan and organization,
-		// and where the credential came from (never its value).
+		// Who and how the harness is signed in. Where the credential was found
+		// stays in the readiness data for diagnostics; the row does not show it.
 		const accountDescription = account ? [
 			accountWho ? t("settings.harness.signedInAs", { account: accountWho })
 				: account.method === "api_key" ? t("settings.harness.usingApiKey")
@@ -887,10 +887,6 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 			account.plan ? account.plan.charAt(0).toUpperCase() + account.plan.slice(1) : undefined,
 			account.organization,
 			account.provider,
-			account.sourceKind === "environment" && account.source ? t("settings.harness.sourceEnvironment", { name: account.source })
-				: account.sourceKind === "file" && account.source ? t("settings.harness.sourceFile", { path: account.source })
-				: account.sourceKind === "command" && account.source ? t("settings.harness.sourceCommand", { command: account.source })
-				: account.sourceKind === "keychain" ? t("settings.harness.sourceKeychain") : undefined,
 		].filter(Boolean).join(" · ") || undefined : undefined;
 		const rowAuthWorkflow = authWorkflow?.agentId === agentId ? authWorkflow : null;
 		const authBusy = Boolean(rowAuthWorkflow || authState?.pending);

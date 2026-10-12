@@ -471,7 +471,8 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		expect(await within(await findAgentRow("codex")).findByText("Signed in as dev@example.com · Pro · Acme")).toBeInTheDocument();
 		backToList();
-		expect(await within(await findAgentRow("cursor")).findByText("Using an API key · zai · from CURSOR_API_KEY")).toBeInTheDocument();
+		// The credential's source is never shown, only who and how.
+		expect(await within(await findAgentRow("cursor")).findByText("Using an API key · zai")).toBeInTheDocument();
 	});
 
 	it("keeps the list beside the open harness when there is room", async () => {
