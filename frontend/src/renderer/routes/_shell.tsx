@@ -1,3 +1,4 @@
+import { SessionChatCacheProvider } from "../components/chat/SessionChatCache";
 import { OrchestratorStartingChat } from "../components/chat/OrchestratorStartingChat";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { AppBrowserLinkContext } from "../components/AppLink";
@@ -1257,6 +1258,7 @@ function ShellLayout() {
 					open={isKeyboardShortcutsSettingsOpen}
 					onOpenChange={setIsKeyboardShortcutsSettingsOpen}
 				/>
+				<SessionChatCacheProvider>
 				<TerminalCacheProvider
 					daemonReady={daemonStatus.state === "ready"}
 					theme={resolvedTheme}
@@ -1403,6 +1405,7 @@ function ShellLayout() {
 					<CommandPalette />
 				</div>
 				</TerminalCacheProvider>
+				</SessionChatCacheProvider>
 			</SessionTopbarProvider>
 			</AppBrowserLinkContext.Provider>
 		</ShellProvider>

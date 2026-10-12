@@ -1,4 +1,5 @@
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { useSessionViewport } from "../../lib/session-viewport";
 /**
  * The Chat composer.
  *
@@ -321,6 +322,10 @@ export const ChatComposer = memo(function ChatComposer({
 	acceptedClientMessageIds?: ReadonlySet<string>;
 }) {
 	const translateDraft = useChatDraftTranslation();
+	const viewport = useSessionViewport();
+	const composerForm = useRef<HTMLFormElement>(null);
+	const ownsEditorFocus = () => composerForm.current?.contains(document.activeElement) &&
+		document.activeElement?.getAttribute("aria-label") === "Message the agent";
 	const draftScope = useMemo<ChatDraftScope | undefined>(
 		() =>
 			draftSessionId
@@ -692,7 +697,10 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!autoFocus || disabled) return;
 		editor.current?.focus();
 	}, [autoFocus, disabled]);
-	useImperativeHandle(focusRef, () => ({ focus: focusEditor, isEmpty: () => !hasDraft }), [focusEditor, hasDraft]);
+	const focusExplicitly = useCallback(() => {
+		if (viewport.visible && (autoFocus || viewport.embedded) && !disabled) editor.current?.focus();
+	}, [autoFocus, disabled, viewport]);
+	useImperativeHandle(focusRef, () => ({ focus: focusExplicitly, isEmpty: () => !hasDraft }), [focusExplicitly, hasDraft]);
 
 	useEffect(() => {
 		focusEditor();
@@ -703,7 +711,7 @@ export const ChatComposer = memo(function ChatComposer({
 		hasQueuedDock &&
 		!hadQueuedDockRef.current &&
 		typeof document !== "undefined" &&
-		document.activeElement?.getAttribute("aria-label") === "Message the agent";
+		ownsEditorFocus();
 	useLayoutEffect(() => {
 		hadQueuedDockRef.current = hasQueuedDock;
 		if (restoreFocusAfterQueueAppears) editor.current?.focus();
@@ -1072,12 +1080,12 @@ export const ChatComposer = memo(function ChatComposer({
 	useLayoutEffect(() => {
 		if (submitting || !restoreFocusAfterSubmission.current) return;
 		restoreFocusAfterSubmission.current = false;
-		if (typeof document === "undefined") return;
+		if (typeof document === "undefined" || !viewport.visible) return;
 		const active = document.activeElement;
 		// Restore focus only when disabling the editor caused the blur. Do not steal
 		// focus if the user deliberately moved to another control while awaiting.
 		if (active === document.body || active === null) editor.current?.focus();
-	}, [submitting]);
+	}, [submitting, viewport.visible]);
 
 	const completeFromEditor = useCallback(
 		(snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab"): string | undefined => {
@@ -1107,7 +1115,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (submitInFlight.current) return submitInFlight.current;
 		restoreFocusAfterSubmission.current =
 			typeof document !== "undefined" &&
-			document.activeElement?.getAttribute("aria-label") === "Message the agent";
+			Boolean(ownsEditorFocus());
 		setSubmitting(true);
 		const pending = performSubmit(forceSteer);
 		submitInFlight.current = pending;
@@ -1612,6 +1620,7 @@ export const ChatComposer = memo(function ChatComposer({
 	if (approval) {
 		return withQueueStack(
 			<form
+				ref={composerForm}
 				onSubmit={(event) => event.preventDefault()}
 				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
 				className="cursor-chat-composer relative flex flex-col gap-1.5 px-3 py-3"
@@ -1628,6 +1637,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 	return withQueueStack(
 		<form
+			ref={composerForm}
 			// Cmd/Ctrl steering remains available as a quiet power-user action.
 			onSubmit={(event) => void submit(event, steersDraft)}
 				onDragOver={(event) => {

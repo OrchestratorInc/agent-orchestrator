@@ -2844,5 +2844,21 @@
 	"settings.billing.usageNote": "Every running session counts, so two sessions running for an hour use 2 session hours. Paused sessions don't count.",
 	"settings.billing.cancelNotice": "Your {{plan}} plan ends on {{date}}. You'll move to Free then.",
 	"settings.billing.keepPlan": "Keep {{plan}}",
-	"settings.billing.freeStarts": "Starts {{date}}"
+	"settings.billing.freeStarts": "Starts {{date}}",
+	"grid.open": "Open Grid",
+	"grid.title": "Live Grid",
+	"grid.completed": "Show completed",
+	"grid.reset": "Reset panel sizes",
+	"grid.connectionError": "Connection interrupted. Sessions remain attached while AO reconnects.",
+	"grid.retry": "Retry connection",
+	"grid.orchestratorUnavailable": "The project orchestrator is unavailable. Refresh to reconnect to its existing session.",
+	"grid.resizeColumns": "Resize columns",
+	"grid.resizeRows": "Resize rows",
+	"grid.move": "Drag worker panel",
+	"grid.movePrevious": "Move worker earlier",
+	"grid.moveNext": "Move worker later",
+	"grid.maximize": "Maximize panel",
+	"grid.restoreSize": "Restore grid",
+	"grid.restore": "Restore session",
+	"grid.done": "Completed"
 }

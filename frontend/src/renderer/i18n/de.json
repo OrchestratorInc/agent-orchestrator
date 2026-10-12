@@ -2864,5 +2864,21 @@
 	"settings.billing.usageNote": "Jede laufende Sitzung zählt: Zwei Sitzungen für eine Stunde verbrauchen 2 Sitzungsstunden. Pausierte Sitzungen zählen nicht.",
 	"settings.billing.cancelNotice": "Dein {{plan}}-Tarif endet am {{date}}. Danach wechselst du zu Kostenlos.",
 	"settings.billing.keepPlan": "{{plan}} behalten",
-	"settings.billing.freeStarts": "Ab {{date}}"
+	"settings.billing.freeStarts": "Ab {{date}}",
+	"grid.open": "Grid öffnen",
+	"grid.title": "Live Grid",
+	"grid.completed": "Abgeschlossene anzeigen",
+	"grid.reset": "Panelgrößen zurücksetzen",
+	"grid.connectionError": "Verbindung unterbrochen. Die Sitzungen bleiben beim Wiederverbinden erhalten.",
+	"grid.retry": "Verbindung erneut versuchen",
+	"grid.orchestratorUnavailable": "Der Projekt-Orchestrator ist nicht verfügbar. Aktualisieren, um seine bestehende Sitzung wieder zu verbinden.",
+	"grid.resizeColumns": "Spaltenbreite ändern",
+	"grid.resizeRows": "Zeilenhöhe ändern",
+	"grid.move": "Worker-Panel ziehen",
+	"grid.movePrevious": "Worker nach vorne verschieben",
+	"grid.moveNext": "Worker nach hinten verschieben",
+	"grid.maximize": "Panel maximieren",
+	"grid.restoreSize": "Grid wiederherstellen",
+	"grid.restore": "Sitzung wiederherstellen",
+	"grid.done": "Abgeschlossen"
 }

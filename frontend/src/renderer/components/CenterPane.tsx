@@ -764,7 +764,7 @@ export function CenterPane({
 					>
 						{hostId && !remoteBase ? null : <TerminalPane
 							key={hostId ? `${hostId}:${remoteBase}` : undefined}
-							createMux={hostId ? remoteCreateMux : undefined}
+							createMux={hostId && target.kind !== "worker" ? remoteCreateMux : undefined}
 							daemonReady={hostId ? Boolean(remoteBase) : daemonReady}
 							fontSize={fontSize}
 						// A terminal you can type into should already hold the caret when you

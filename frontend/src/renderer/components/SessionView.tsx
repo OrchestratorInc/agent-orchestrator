@@ -18,7 +18,7 @@ import { defaultShortcutBindings, shortcutBindingLabel } from "../../shared/shor
 import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane } from "./CenterPane";
 import type { FileOpenOptions, FileViewMode } from "./FileContentPane";
-import { SessionChatSurface } from "./chat/SessionChatSurface";
+import { RetainedSessionChatSurface as SessionChatSurface } from "./chat/SessionChatCache";
 import { CloudSessionChatSurface } from "./chat/CloudSessionChatSurface";
 import { ReviewerChatSurface } from "./chat/ReviewerChatSurface";
 import { NotificationCenter } from "./NotificationCenter";

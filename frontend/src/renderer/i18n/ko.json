@@ -2864,5 +2864,21 @@
 	"settings.billing.usageNote": "실행 중인 세션마다 계산됩니다. 세션 두 개를 한 시간 실행하면 2 세션 시간입니다. 일시 중지된 세션은 계산되지 않습니다.",
 	"settings.billing.cancelNotice": "{{plan}} 플랜이 {{date}}에 종료되며, 이후 무료 플랜으로 전환됩니다.",
 	"settings.billing.keepPlan": "{{plan}} 유지",
-	"settings.billing.freeStarts": "{{date}}부터 시작"
+	"settings.billing.freeStarts": "{{date}}부터 시작",
+	"grid.open": "Grid 열기",
+	"grid.title": "Live Grid",
+	"grid.completed": "완료된 세션 표시",
+	"grid.reset": "패널 크기 초기화",
+	"grid.connectionError": "연결이 끊겼습니다. AO가 다시 연결하는 동안 세션은 유지됩니다.",
+	"grid.retry": "연결 다시 시도",
+	"grid.orchestratorUnavailable": "프로젝트 오케스트레이터를 사용할 수 없습니다. 새로 고쳐 기존 세션에 다시 연결하세요.",
+	"grid.resizeColumns": "열 크기 조절",
+	"grid.resizeRows": "행 크기 조절",
+	"grid.move": "워커 패널 드래그",
+	"grid.movePrevious": "워커를 앞으로 이동",
+	"grid.moveNext": "워커를 뒤로 이동",
+	"grid.maximize": "패널 최대화",
+	"grid.restoreSize": "그리드 복원",
+	"grid.restore": "세션 복원",
+	"grid.done": "완료"
 }

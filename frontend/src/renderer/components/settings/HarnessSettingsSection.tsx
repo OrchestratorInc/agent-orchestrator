@@ -303,6 +303,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 	const rowsRef = useRef<HTMLDivElement>(null);
 	const focusHandledRef = useRef(false);
 	const highlightTimerRef = useRef<number | null>(null);
+	const copyResetTimerRef = useRef<number | null>(null);
 	const [highlightedAgentId, setHighlightedAgentId] = useState<AgentId | null>(null);
 
 	const plans = useMemo(() => new Map(installers.data?.map((plan) => [plan.agentId, plan]) ?? []), [installers.data]);
@@ -404,6 +405,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 
 	useEffect(() => () => {
 		if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
+		if (copyResetTimerRef.current !== null) window.clearTimeout(copyResetTimerRef.current);
 	}, []);
 
 	// A "Log in" shortcut elsewhere (the task composer's model error) lands here
@@ -514,8 +516,13 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 
 	const copyText = async (agentId: AgentId, text: string) => {
 		await aoBridge.clipboard.writeText(text);
+		if (!mountedRef.current) return;
 		setCopiedAgent(agentId);
-		window.setTimeout(() => setCopiedAgent((current) => (current === agentId ? null : current)), 1_500);
+		if (copyResetTimerRef.current !== null) window.clearTimeout(copyResetTimerRef.current);
+		copyResetTimerRef.current = window.setTimeout(() => {
+			copyResetTimerRef.current = null;
+			setCopiedAgent((current) => (current === agentId ? null : current));
+		}, 1_500);
 	};
 
 	const startAuth = async (agentId: AgentId) => {

@@ -85,6 +85,12 @@ describe("terminal WebGL pool", () => {
 		expect(addons[1].disposed).toBe(true);
 	});
 
+	it("caps WebGL contexts with twelve simultaneously visible live terminals", () => {
+		for (let index = 0; index < 12; index++) lease({ value: true }).lease.activate();
+		expect(liveAddons()).toBe(MAX_WEBGL_TERMINALS);
+		expect(addons.slice(0, 4).every((addon) => addon.disposed)).toBe(true);
+	});
+
 	it("re-creates a lost context on the next activation", () => {
 		vi.spyOn(console, "warn").mockImplementation(() => undefined);
 		const shown = { value: true };

@@ -426,6 +426,7 @@ export type FakeAgentOptions = {
  */
 export type FakeAgentController = {
 	snapshot: () => unknown[];
+	conversationChanged: (id: string) => void;
 	createWorker: (worker: FakeWorker) => void;
 	removeWorker: (id: string) => void;
 	setStatus: (id: string, status: string, activity?: string) => void;
@@ -625,6 +626,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 
 			const controller: FakeAgentController = {
 				snapshot: () => JSON.parse(JSON.stringify(state.workspaces)),
+				conversationChanged: (id) => emit("/api/v1/events", "session_updated", JSON.stringify({ type: "session_updated", sessionId: id, payload: { conversationId: `conversation-${id}` } })),
 				createWorker: (w) => {
 					if (!findSession(w.id)) (project.sessions as Session[]).push(makeWorker(w));
 					pushWorkspaces("session_created");

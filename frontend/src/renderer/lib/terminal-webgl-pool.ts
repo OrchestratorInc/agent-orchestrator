@@ -74,6 +74,14 @@ function evictOverCap(): void {
 		detach(entry);
 		attached--;
 	}
+	// A grid can have more visible panes than the budget. Keep the newest
+	// leases accelerated and hand older visible panes to xterm's live DOM renderer.
+	for (const entry of entries.values()) {
+		if (attached <= MAX_WEBGL_TERMINALS) return;
+		if (!entry.addon) continue;
+		detach(entry);
+		attached--;
+	}
 }
 
 export function leaseWebglRenderer(term: Terminal, isVisible: () => boolean): WebglLease {

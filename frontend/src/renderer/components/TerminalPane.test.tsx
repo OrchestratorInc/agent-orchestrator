@@ -825,6 +825,30 @@ describe("TerminalCacheProvider", () => {
 	const sessionA = { ...worker, id: "sess-a", title: "session A", terminalHandleId: "handle-a" };
 	const sessionB = { ...worker, id: "sess-b", title: "session B", terminalHandleId: "handle-b" };
 
+	it("shows multiple live terminals concurrently and reuses them across grid and single view", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions([sessionA, sessionB]));
+		queryClient.setQueryData(shellTerminalsQueryKey, []);
+		const previousAO = window.ao;
+		window.ao = {} as typeof window.ao;
+		const tree = (sessions: WorkspaceSession[]) => <QueryClientProvider client={queryClient}><TooltipProvider><TerminalCacheProvider daemonReady theme="dark">{sessions.map((session) => <TerminalPane key={session.id} session={session} daemonReady theme="dark" fontSize={12} focusRequested={false} />)}</TerminalCacheProvider></TooltipProvider></QueryClientProvider>;
+		const view = render(tree([sessionA, sessionB]));
+		try {
+			await waitFor(() => expect(screen.getAllByTestId("xterm")).toHaveLength(2));
+			const nodes = screen.getAllByTestId("xterm");
+			expect(document.querySelectorAll("[data-terminal-activation-phase='visible']")).toHaveLength(2);
+			view.rerender(tree([]));
+			expect(document.querySelectorAll("[data-terminal-activation-phase='visible']")).toHaveLength(0);
+			view.rerender(tree([sessionA]));
+			expect(document.querySelectorAll("[data-terminal-activation-phase='visible']")).toHaveLength(1);
+			view.rerender(tree([sessionB, sessionA]));
+			expect(document.querySelectorAll("[data-terminal-activation-phase='visible']")).toHaveLength(2);
+			expect(new Set(screen.getAllByTestId("xterm"))).toEqual(new Set(nodes));
+			expect(xtermMounts.value).toBe(2);
+			expect(xtermUnmounts.value).toBe(0);
+		} finally { view.unmount(); window.ao = previousAO; }
+	});
+
 	it("uses a caller-provided mux without retaining a remote shell in the local cache", async () => {
 		const shell = { handleId: "auth-a", title: "Log in", workingDir: "/host-a", createdAt: "2026-09-29T00:00:00Z" } satisfies ShellTerminal;
 		const createMux = vi.fn(() => ({} as TerminalMux));

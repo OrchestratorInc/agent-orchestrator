@@ -3,9 +3,10 @@ import { purgeFileAttachmentsForSession } from "../../hooks/useFileAttachments";
 import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
-import { Activity, Profiler } from "react";
+import { Activity, Profiler, createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { ChatComposer } from "./ChatComposer";
+import { ChatComposer, type ChatComposerHandle } from "./ChatComposer";
+import { SessionViewportContext } from "../../lib/session-viewport";
 import { sendReferenceToChat } from "../../lib/chat-context-bus";
 import { attachmentURL } from "./messageAttachments";
 import { getApiBaseUrl } from "../../lib/api-client";
@@ -167,6 +168,36 @@ describe("send keys", () => {
 
 	it("does not focus the hidden or inactive chat composer", () => {
 		const { field } = renderComposer({ autoFocus: false, autoFocusKey: "session-1" });
+		expect(document.activeElement).not.toBe(field);
+	});
+
+	it("keeps focus in the owning composer when another Grid panel receives a queued message", () => {
+		const Dock = () => <div>Queued</div>;
+		const tree = (queued: boolean) => <>
+			<ChatComposer autoFocus={false} onSend={vi.fn()} queuedDock={queued ? <Dock /> : undefined} />
+			<ChatComposer autoFocus={false} onSend={vi.fn()} />
+		</>;
+		const view = render(tree(false));
+		const fields = screen.getAllByLabelText("Message the agent");
+		fields[1].focus();
+		view.rerender(tree(true));
+		expect(document.activeElement).toBe(fields[1]);
+	});
+
+	it("allows explicit focus in a visible embedded composer without automatic Grid focus", () => {
+		const ref = createRef<ChatComposerHandle>();
+		const view = render(<SessionViewportContext.Provider value={{ embedded: true, visible: true }}>
+			<ChatComposer autoFocus={false} focusRef={ref} onSend={vi.fn()} />
+		</SessionViewportContext.Provider>);
+		const field = screen.getByLabelText("Message the agent");
+		expect(document.activeElement).not.toBe(field);
+		act(() => ref.current?.focus());
+		expect(document.activeElement).toBe(field);
+		field.blur();
+		view.rerender(<SessionViewportContext.Provider value={{ embedded: true, visible: false }}>
+			<ChatComposer autoFocus={false} focusRef={ref} onSend={vi.fn()} />
+		</SessionViewportContext.Provider>);
+		act(() => ref.current?.focus());
 		expect(document.activeElement).not.toBe(field);
 	});
 

@@ -2906,5 +2906,21 @@
 	"settings.billing.usageNote": "Chaque session en cours compte : deux sessions pendant une heure utilisent 2 heures de session. Les sessions en pause ne comptent pas.",
 	"settings.billing.cancelNotice": "Votre forfait {{plan}} se termine le {{date}}. Vous passerez alors au forfait Gratuit.",
 	"settings.billing.keepPlan": "Garder {{plan}}",
-	"settings.billing.freeStarts": "Commence le {{date}}"
+	"settings.billing.freeStarts": "Commence le {{date}}",
+	"grid.open": "Ouvrir Grid",
+	"grid.title": "Live Grid",
+	"grid.completed": "Afficher les sessions terminées",
+	"grid.reset": "Réinitialiser la taille des panneaux",
+	"grid.connectionError": "Connexion interrompue. Les sessions sont conservées pendant la reconnexion.",
+	"grid.retry": "Réessayer la connexion",
+	"grid.orchestratorUnavailable": "L’orchestrateur du projet est indisponible. Actualisez pour reconnecter sa session existante.",
+	"grid.resizeColumns": "Redimensionner les colonnes",
+	"grid.resizeRows": "Redimensionner les lignes",
+	"grid.move": "Glisser le panneau du worker",
+	"grid.movePrevious": "Déplacer le worker avant",
+	"grid.moveNext": "Déplacer le worker après",
+	"grid.maximize": "Agrandir le panneau",
+	"grid.restoreSize": "Restaurer la grille",
+	"grid.restore": "Restaurer la session",
+	"grid.done": "Terminée"
 }

@@ -569,6 +569,19 @@ export function useRemoteProjectQuery(hostId: string, projectId: string) {
 	});
 }
 
+/** Shared authoritative snapshots for retained session UI, without new transports. */
+export function useRemoteWorkspaceSnapshots() {
+	const hosts = useConnectedHosts();
+	const queries = useQueries({
+		queries: hosts.map((hostId) => ({
+			queryKey: remoteWorkspaceQueryKey(hostId),
+			queryFn: () => fetchRemoteWorkspaces(hostId),
+			retry: 1,
+		})),
+	});
+	return queries.map((query, index) => ({ hostId: hosts[index], ...query }));
+}
+
 // Route-level recovery for a Cloud session that has just been created or whose
 // list cache is stale. The session screen must resolve it through the control
 // plane, never try the local daemon just because the list query has not caught

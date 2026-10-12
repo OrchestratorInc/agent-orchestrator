@@ -1,5 +1,6 @@
 import { createContext, useContext, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useSessionViewport } from "../lib/session-viewport";
 import { cn } from "../lib/utils";
 
 type SessionTopbarContextValue = {
@@ -35,6 +36,9 @@ export function SessionTopbarHost({ className, ref, ...props }: ComponentProps<"
 
 export function SessionTopbarPortal({ children }: { children: ReactNode }) {
 	const context = useContext(SessionTopbarContext);
+	const viewport = useSessionViewport();
+	if (!viewport.visible) return null;
+	if (viewport.embedded) return children;
 	if (!context) return children;
 	if (!context.host) return null;
 	return createPortal(children, context.host);

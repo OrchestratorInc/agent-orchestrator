@@ -123,10 +123,10 @@ const config: ForgeConfig = {
 		// runtime dependency tree explicitly; AutoUnpackNativesPlugin then places
 		// the .node binary outside app.asar.
 		ignore: ignoreFromVitePackage,
-		appBundleId: "dev.agent-orchestrator.desktop",
-		name: "Agent Orchestrator",
+		appBundleId: process.env.AO_BUILD_VARIANT === "live-grid-lab" ? "dev.agent-orchestrator.live-grid-lab" : "dev.agent-orchestrator.desktop",
+		name: process.env.AO_BUILD_VARIANT === "live-grid-lab" ? "Agent Orchestrator Live Grid" : "Agent Orchestrator",
 		executableName: EXECUTABLE_NAME,
-		protocols: [AUTH_PROTOCOL],
+		protocols: process.env.AO_BUILD_VARIANT === "live-grid-lab" ? [] : [AUTH_PROTOCOL],
 		appCategoryType: "public.app-category.developer-tools",
 		// App icon. electron-packager appends the per-platform extension
 		// (.icns on macOS, .ico on Windows); Linux menu icons come from the

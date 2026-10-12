@@ -26,6 +26,7 @@ import {
 	useConversationCommands,
 	useConversationConfigOptions,
 	useConversationSkills,
+	useWorkspaceFilePaths,
 	toSnapshot,
 } from "./useConversation";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
@@ -46,6 +47,20 @@ function deferred<T>() {
 	});
 	return { promise, resolve };
 }
+
+it("uses polling for embedded file completion without opening a per-panel SSE connection", async () => {
+	const source = vi.fn();
+	vi.stubGlobal("EventSource", source);
+	getMock.mockResolvedValue({ data: { files: [{ path: "src/app.ts", status: "modified" }] } });
+	try {
+		const { result, unmount } = renderHook(() => useWorkspaceFilePaths("grid-chat", true, undefined, false), { wrapper });
+		await waitFor(() => expect(result.current.paths).toEqual(["src/app.ts"]));
+		expect(source).not.toHaveBeenCalled();
+		unmount();
+	} finally {
+		vi.unstubAllGlobals();
+	}
+});
 
 it("preserves queued-edit API error codes for delivery recovery", async () => {
 	const refusal = { code: "CHAT_QUEUED_EDIT_CONFLICT", message: "Queued message changed" };

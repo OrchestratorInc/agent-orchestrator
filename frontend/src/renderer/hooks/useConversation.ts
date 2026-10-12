@@ -366,6 +366,37 @@ function selectConversationPages(data: InfiniteData<ConversationSnapshot>) {
 	return mergeConversationPages(data.pages);
 }
 
+// Multiple surfaces (Grid header, retained Chat, ordinary session) observe the
+// same conversation. Keep one fallback timer and one in-flight poll per owner.
+const remoteConversationPolls = new WeakMap<QueryClient, Map<string, { refs: number; timer: number }>>();
+function subscribeRemoteConversationPoll(queryClient: QueryClient, sessionId: string, hostId: string) {
+	let polls = remoteConversationPolls.get(queryClient);
+	if (!polls) {
+		polls = new Map();
+		remoteConversationPolls.set(queryClient, polls);
+	}
+	const key = JSON.stringify([hostId, sessionId]);
+	let poll = polls.get(key);
+	if (!poll) {
+		let running = false;
+		const timer = window.setInterval(() => {
+			if (running) return;
+			running = true;
+			void refreshRemoteConversation(queryClient, sessionId, hostId)
+				.catch(() => {})
+				.finally(() => { running = false; });
+		}, 2_000);
+		poll = { refs: 0, timer };
+		polls.set(key, poll);
+	}
+	poll.refs++;
+	return () => {
+		if (--poll.refs !== 0) return;
+		window.clearInterval(poll.timer);
+		polls.delete(key);
+	};
+}
+
 export function useConversation(sessionId: string | undefined, hostId?: string): ConversationQueryResult {
 	const queryClient = useQueryClient();
 	const refreshError = useQuery({
@@ -381,10 +412,7 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 	});
 	useEffect(() => {
 		if (!hostId || !sessionId) return;
-		const timer = window.setInterval(() => {
-			void refreshRemoteConversation(queryClient, sessionId, hostId).catch(() => {});
-		}, 2_000);
-		return () => window.clearInterval(timer);
+		return subscribeRemoteConversationPoll(queryClient, sessionId, hostId);
 	}, [hostId, queryClient, sessionId]);
 
 	if (query.error && (!hostId || !query.data)) {
@@ -1403,7 +1431,7 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
  * The endpoint caps itself, and `truncated` is respected rather than presented as a
  * complete list.
  */
-export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: boolean, hostId?: string) {
+export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: boolean, hostId?: string, watchChanges = true) {
 	const queryClient = useQueryClient();
 	const query = useQuery({
 		queryKey: hostId ? ["remote-workspace-file-paths", hostId, sessionId ?? ""] : ["workspace-file-paths", sessionId ?? ""],
@@ -1414,7 +1442,9 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
 		staleTime: 30 * 1000,
 		// Local file changes arrive through the workspace event subscription below.
 		// Remote sessions use their owning daemon instead of the local event stream.
-		refetchInterval: hostId ? 30 * 1000 : false,
+		// Embedded sessions share the daemon's HTTP/1 connection budget. File
+		// completion inventories can poll; conversation streaming stays on CDC.
+		refetchInterval: hostId || !watchChanges ? 30 * 1000 : false,
 		retry: false,
 		queryFn: async () => {
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/files", {
@@ -1432,9 +1462,9 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
 		},
 	});
 	useEffect(() => {
-		if (!sessionId || !enabled || hostId) return;
+		if (!sessionId || !enabled || hostId || !watchChanges) return;
 		return subscribeWorkspaceFileChanges(sessionId, queryClient);
-	}, [enabled, hostId, queryClient, sessionId]);
+	}, [enabled, hostId, queryClient, sessionId, watchChanges]);
 	return {
 		paths: query.data?.paths ?? [],
 		truncated: query.data?.truncated ?? false,

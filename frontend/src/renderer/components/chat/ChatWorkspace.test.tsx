@@ -2195,7 +2195,9 @@ describe("ChatWorkspace timeline", () => {
 
 		expect(scrollbar).toHaveAttribute("aria-hidden", "true");
 		expect(scrollbar).toHaveClass("pointer-events-none");
-		expect(scrollbar.querySelectorAll("[data-chat-scroll-marker]")).toHaveLength(0);
+		// The hidden track retains its ticks so closing the inspector can reveal
+		// a quiet conversation without rerendering the entire timeline.
+		expect(scrollbar.querySelectorAll("[data-chat-scroll-marker]")).toHaveLength(8);
 
 		fireEvent.wheel(scrollbar, { deltaY: 200 });
 		expect(log.scrollTop).toBe(1000);
@@ -2502,7 +2504,8 @@ describe("ChatWorkspace timeline", () => {
 		useUiStore.setState({
 			inspectorSessions: { "ao-long": { isOpen: false, view: "summary" } },
 		});
-		render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
+		const snapshot = chatFixtureLongHistory(8);
+		const view = render(<ChatWorkspace snapshot={snapshot} />);
 		const log = screen.getByRole("log");
 		const scrollbar = screen.getByTestId("chat-conversation-minimap");
 		stubGeometry(log, {
@@ -2529,6 +2532,9 @@ describe("ChatWorkspace timeline", () => {
 		await waitFor(() => {
 			expect(scrollbar).toHaveAttribute("aria-hidden", "true");
 		});
+		// A streamed update while the rail is open must not discard the ticks.
+		view.rerender(<ChatWorkspace snapshot={{ ...snapshot }} />);
+		expect(scrollbar.querySelectorAll("[data-chat-scroll-marker]")).toHaveLength(8);
 		fireEvent.wheel(scrollbar, { deltaY: 200 });
 		expect(log.scrollTop).toBe(1200);
 

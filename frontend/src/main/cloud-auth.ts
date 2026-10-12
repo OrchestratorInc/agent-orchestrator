@@ -1,10 +1,11 @@
 import { createWorkOS, type User } from "@workos-inc/node";
 import { app, dialog, ipcMain, safeStorage, shell } from "electron";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmod,
   mkdir,
   readFile,
+  rename,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -201,8 +202,16 @@ export async function writeAuthStore(
   memoryStores.delete(dataDir);
   await mkdir(dataDir, { recursive: true });
   const target = storePath(dataDir);
-  await writeFile(target, encodeStore(store), { mode: 0o600 });
-  await chmod(target, 0o600);
+  // Many session surfaces read this store concurrently. Never expose a
+  // truncated encrypted file while a rotating credential is being saved:
+  // a reader would mistake it for invalid auth and delete the new session.
+  const temporary = path.join(dataDir, `.cloud-auth-${randomUUID()}.tmp`);
+  try {
+    await writeFile(temporary, encodeStore(store), { mode: 0o600, flag: "wx" });
+    await rename(temporary, target);
+  } finally {
+    await rm(temporary, { force: true });
+  }
 }
 
 export async function removeAuthStore(dataDir: string): Promise<void> {

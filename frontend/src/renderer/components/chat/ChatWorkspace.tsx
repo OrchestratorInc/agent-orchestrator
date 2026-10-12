@@ -1,3 +1,4 @@
+import { useSessionViewport } from "../../lib/session-viewport";
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
@@ -1110,6 +1111,7 @@ function ChatWorkspaceContent({
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
 	const surfaceRef = useRef<HTMLElement | null>(null);
 	const composerFocusRef = useRef<ChatComposerHandle>(null);
+	const viewport = useSessionViewport();
 	const annotationNavigationRef = useRef<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>(null);
 	const navigateToAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
 		annotationNavigationRef.current?.(annotation);
@@ -1792,7 +1794,7 @@ function ChatWorkspaceContent({
 										filePathsTruncated={filePathsTruncated}
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
-										autoFocus={!reviewerActive}
+										autoFocus={!reviewerActive && viewport.visible && !viewport.embedded}
 										autoFocusKey={draftScope.sessionId}
 										// Steering is only meaningful into a turn that is running. A queued turn
 										// has not reached the provider, so there is nothing to steer.
@@ -2058,7 +2060,8 @@ function ChatHeader({
 	// cluster sits over the session tab strip. Terminal already reserves that
 	// space; chat must too or the back/forward buttons land on the tab label.
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
-	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
+	const headerViewport = useSessionViewport();
+	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac && !headerViewport.embedded);
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const header = (
 		<header className="flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar">
@@ -2069,8 +2072,8 @@ function ChatHeader({
 				<div
 					className={cn(
 						"flex min-w-0 shrink items-stretch",
-						isMac && "session-topbar-titlebar-clearance-mac",
-						!isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
+						isMac && !headerViewport.embedded && "session-topbar-titlebar-clearance-mac",
+						!isSidebarOpen && isLinux && !headerViewport.embedded && "session-topbar-titlebar-clearance-linux",
 					)}
 					data-testid="session-terminal-region"
 					ref={clearanceRef}
@@ -3941,7 +3944,9 @@ export function Timeline({
 					)}
 				>
 					<div className="absolute inset-0 cursor-grab group-active/scroll:cursor-grabbing">
-						{minimapEnabled && !inspectorOpenRef.current
+						{/* Visibility is imperative above. Keep ticks mounted so a
+						    quiet transcript can reveal them without a timeline render. */}
+						{minimapEnabled
 						? scrollbar.markers.map((marker, index) => {
 								const distance =
 									hoveredMarker === null

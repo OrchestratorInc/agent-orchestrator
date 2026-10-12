@@ -2864,5 +2864,21 @@
 	"settings.billing.usageNote": "実行中のセッションごとに計上されます。2 つのセッションを 1 時間実行すると 2 セッション時間です。一時停止中は計上されません。",
 	"settings.billing.cancelNotice": "{{plan}} プランは {{date}} に終了し、その後は無料プランになります。",
 	"settings.billing.keepPlan": "{{plan}} を継続",
-	"settings.billing.freeStarts": "{{date}} から開始"
+	"settings.billing.freeStarts": "{{date}} から開始",
+	"grid.open": "Grid を開く",
+	"grid.title": "Live Grid",
+	"grid.completed": "完了したセッションを表示",
+	"grid.reset": "パネルサイズをリセット",
+	"grid.connectionError": "接続が中断されました。AO が再接続する間もセッションは保持されます。",
+	"grid.retry": "再接続",
+	"grid.orchestratorUnavailable": "プロジェクトのオーケストレーターは利用できません。更新して既存のセッションに再接続してください。",
+	"grid.resizeColumns": "列の幅を変更",
+	"grid.resizeRows": "行の高さを変更",
+	"grid.move": "ワーカーパネルをドラッグ",
+	"grid.movePrevious": "ワーカーを前に移動",
+	"grid.moveNext": "ワーカーを後に移動",
+	"grid.maximize": "パネルを最大化",
+	"grid.restoreSize": "グリッドに戻る",
+	"grid.restore": "セッションを復元",
+	"grid.done": "完了"
 }

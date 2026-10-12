@@ -2846,5 +2846,21 @@
 	"settings.billing.usageNote": "每个运行中的会话都会计时：两个会话运行一小时计 2 会话小时。已暂停的会话不计时。",
 	"settings.billing.cancelNotice": "你的 {{plan}} 套餐将于 {{date}} 结束，之后将转为免费套餐。",
 	"settings.billing.keepPlan": "保留 {{plan}}",
-	"settings.billing.freeStarts": "{{date}} 开始"
+	"settings.billing.freeStarts": "{{date}} 开始",
+	"grid.open": "打开 Grid",
+	"grid.title": "Live Grid",
+	"grid.completed": "显示已完成的会话",
+	"grid.reset": "重置面板大小",
+	"grid.connectionError": "连接已中断。AO 重新连接时会保留会话。",
+	"grid.retry": "重试连接",
+	"grid.orchestratorUnavailable": "项目编排器暂不可用。请刷新以重新连接现有会话。",
+	"grid.resizeColumns": "调整列宽",
+	"grid.resizeRows": "调整行高",
+	"grid.move": "拖动工作代理面板",
+	"grid.movePrevious": "将工作代理向前移动",
+	"grid.moveNext": "将工作代理向后移动",
+	"grid.maximize": "最大化面板",
+	"grid.restoreSize": "恢复网格",
+	"grid.restore": "恢复会话",
+	"grid.done": "已完成"
 }

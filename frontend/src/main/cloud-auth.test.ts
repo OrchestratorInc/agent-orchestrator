@@ -158,6 +158,25 @@ describe("native WorkOS authentication", () => {
     expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps encrypted auth readable while simultaneous session surfaces observe credential updates", async () => {
+    await beginCloudSignIn(dataDir);
+    await handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir);
+    const original = await readAuthStore(dataDir);
+    const reads = async () => {
+      for (let index = 0; index < 100; index++) {
+        const store = await readAuthStore(dataDir);
+        expect(store.session?.user.id).toBe("user_123");
+      }
+    };
+    const writes = async () => {
+      for (let index = 0; index < 30; index++) {
+        await writeAuthStore(dataDir, { ...original, session: { ...original.session!, user: { ...original.session!.user, displayName: `updated-${index}-${"x".repeat(100_000)}` } } });
+      }
+    };
+    await Promise.all([reads(), reads(), writes()]);
+    expect((await readAuthStore(dataDir)).session?.user.id).toBe("user_123");
+  });
+
   it("ignores callbacks with no login pending without changing the signed-in account", async () => {
     await beginCloudSignIn(dataDir);
     const account = await handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir);

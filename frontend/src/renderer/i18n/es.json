@@ -2906,5 +2906,21 @@
 	"settings.billing.usageNote": "Cuenta cada sesión en ejecución: dos sesiones durante una hora usan 2 horas de sesión. Las sesiones en pausa no cuentan.",
 	"settings.billing.cancelNotice": "Tu plan {{plan}} termina el {{date}}. Entonces pasarás a Gratis.",
 	"settings.billing.keepPlan": "Mantener {{plan}}",
-	"settings.billing.freeStarts": "Empieza el {{date}}"
+	"settings.billing.freeStarts": "Empieza el {{date}}",
+	"grid.open": "Abrir Grid",
+	"grid.title": "Live Grid",
+	"grid.completed": "Mostrar completadas",
+	"grid.reset": "Restablecer tamaños de panel",
+	"grid.connectionError": "Conexión interrumpida. Las sesiones se conservan mientras AO se vuelve a conectar.",
+	"grid.retry": "Reintentar conexión",
+	"grid.orchestratorUnavailable": "El orquestador del proyecto no está disponible. Actualiza para reconectar su sesión existente.",
+	"grid.resizeColumns": "Cambiar ancho de columnas",
+	"grid.resizeRows": "Cambiar altura de filas",
+	"grid.move": "Arrastrar panel del agente",
+	"grid.movePrevious": "Mover agente antes",
+	"grid.moveNext": "Mover agente después",
+	"grid.maximize": "Maximizar panel",
+	"grid.restoreSize": "Restaurar Grid",
+	"grid.restore": "Restaurar sesión",
+	"grid.done": "Completada"
 }

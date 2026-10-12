@@ -1293,13 +1293,16 @@ describe("HarnessSettingsSection", () => {
 			return { data: undefined } as never;
 		});
 		const user = userEvent.setup();
-		renderSection();
+		const view = renderSection();
 		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
 		await user.click(await within(row).findByRole("button", { name: "Show diagnostics" }));
 		expect(row).toHaveTextContent("permission denied");
 		expect(row).toHaveTextContent("/Users/test/.npm/bin/codex");
 		await user.click(within(row).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
+		const clearTimer = vi.spyOn(window, "clearTimeout");
+		view.unmount();
+		expect(clearTimer).toHaveBeenCalled();
 		const copied = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0] as string;
 		// The machine the install died on is part of the report.
 		expect(copied).toContain("permission denied");
