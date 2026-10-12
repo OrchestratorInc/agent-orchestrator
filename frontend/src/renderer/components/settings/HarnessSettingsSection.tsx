@@ -80,6 +80,11 @@ type AuthTerminalWorkflow = {
 	startedAt: number;
 };
 
+function authWorkflowSucceeded(workflow: AuthTerminalWorkflow, status: string | undefined): boolean {
+	// Setup flows and MiMo can confirm local configuration without proving provider authorization.
+	return status === "authorized" || (status === "configured" && (workflow.action === "setup" || workflow.agentId === "mimo-code"));
+}
+
 async function closeAuthTerminal(handleId: string, hostId?: string): Promise<void> {
 	try {
 		await closeShellTerminal(handleId, hostId);
@@ -589,9 +594,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 	const finishAuth = useCallback(async (workflow: AuthTerminalWorkflow) => {
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
 		setAuthWorkflow((current) => current?.terminal.handleId === workflow.terminal.handleId ? { ...current, phase: "verifying", reason: undefined } : current);
-		// MiMo can confirm a stored provider key locally without validating it upstream.
-		const loggedIn = (candidate: AgentAuthProbeResult | undefined) =>
-			candidate?.agent.authStatus === "authorized" || (workflow.agentId === "mimo-code" && candidate?.agent.authStatus === "configured");
+		const loggedIn = (candidate: AgentAuthProbeResult | undefined) => authWorkflowSucceeded(workflow, candidate?.agent.authStatus);
 		let result = await checkAuth(workflow.agentId, { fresh: true });
 		for (let attempt = 1; attempt < AUTH_VERIFY_ATTEMPTS && !loggedIn(result); attempt++) {
 			await new Promise((resolve) => window.setTimeout(resolve, AUTH_VERIFY_RETRY_MS));
@@ -639,7 +642,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 	// instead of leaving a stale "signed out" terminal on screen.
 	useEffect(() => {
 		if (!authWorkflow || (authWorkflow.phase !== "unauthorized" && authWorkflow.phase !== "unverified")) return;
-		if (readinessAgents.get(authWorkflow.agentId)?.authentication.state === "authorized") void closeAuth(authWorkflow);
+		if (authWorkflowSucceeded(authWorkflow, readinessAgents.get(authWorkflow.agentId)?.authentication.state)) void closeAuth(authWorkflow);
 	}, [authWorkflow, readinessAgents, closeAuth]);
 
 	useEffect(() => {
@@ -705,7 +708,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 						const authState = authStates[agentId];
 						const authStatus = readinessAgent?.authentication.state;
 						const connectedCredential = authStatus === "authorized" || authStatus === "configured";
-						const showAuthAction = authStatus !== "authorized" && (authStatus !== "configured" || isSetupAction);
+						const showAuthAction = !connectedCredential || isDocumentationAction;
 						const installationStatusLabel = t("settings.harness.installed");
 						const showInstallationStatus = connectedCredential
 							|| authStatus === "not_applicable"
@@ -718,12 +721,11 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 							(job.error || job.output || job.method || job.expectedDestination),
 						);
 
+						const connectedStatusLabel = isSetupAction && agentId !== "gemini" ? t("settings.harness.configured") : t("settings.harness.loggedIn");
 						const authSummary = authState?.error
 							? authState.error
-							: authStatus === "configured"
-								? (isSetupAction ? t("settings.harness.configured") : t("settings.harness.loggedIn"))
-								: authStatus === "authorized"
-								? (isSetupAction ? t("settings.harness.configured") : t("settings.harness.loggedIn"))
+							: authStatus === "configured" || authStatus === "authorized"
+								? connectedStatusLabel
 								: authPlan && !authPlan.available
 									? (authPlan.reason ?? t("settings.harness.authFailed"))
 									: authStatus === "unauthorized"
@@ -753,12 +755,12 @@ function LocalHarnessContent({ focusAgentId, hostId, search, startLogin = false 
 								) : null}
 							</>
 						) : null;
-						// A logged-in harness's only action is to re-run its login.
-						const refreshLocal = authPlan?.action === "login" && connectedCredential ? (
+						// A connected/configured harness's only action is to re-run its auth flow.
+						const refreshLocal = authPlan && authPlan.action !== "instructions" && !isDocumentationAction && connectedCredential ? (
 							<Button type="button" size="sm" variant="outline" disabled={!authPlan.available || authState?.pending || Boolean(authWorkflow)} onClick={() => void startAuth(agentId)}>
 								{t("settings.harness.refreshLogin")}
 							</Button>
-						) : null;
+					) : null;
 					const localControls = active ? (
 				<span className="inline-flex items-center gap-1.5 text-xs text-settings-muted" role="status"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{job?.status === "installing" ? t("settings.harness.installing") : t("settings.harness.verifying")}</span>
 							) : isInstalled ? (

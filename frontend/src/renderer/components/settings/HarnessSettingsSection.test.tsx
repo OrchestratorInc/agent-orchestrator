@@ -750,6 +750,49 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
 
+	for (const tc of [
+		{ name: "post-setup probe", probeStatus: "configured", readinessAfterProbes: 1 },
+		{ name: "readiness recovery", probeStatus: "unauthorized", readinessAfterProbes: 4 },
+	]) {
+		it(`completes Gemini setup from ${tc.name} when credentials are configured`, async () => {
+			const initial = { agents: [agentReadiness("gemini", "Gemini CLI", { authentication: "unknown" })] };
+			const configured = { agents: [agentReadiness("gemini", "Gemini CLI", { authentication: "configured" })] };
+			let probeCalls = 0;
+			vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+				if (path === "/api/v1/agents/readiness") return { data: initial } as never;
+				if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "gemini", action: "setup", launchMode: "terminal", available: true }] } } as never;
+				if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+				if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+				return { data: undefined } as never;
+			});
+			vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+				if (path === "/api/v1/agents/{agent}/auth") return { data: {
+					agentId: "gemini", action: "setup", terminal: { handleId: "auth-gemini", projectId: null, sessionId: null, workingDir: "/tmp", title: "Gemini setup", createdAt: "2026-10-11T00:00:00Z" },
+				} } as never;
+				if (path === "/api/v1/agents/{agent}/probe") {
+					probeCalls += 1;
+					return { data: { agent: { id: "gemini", authStatus: tc.probeStatus }, installed: true } } as never;
+				}
+				if (path === "/api/v1/agents/readiness/ensure") return { data: probeCalls >= tc.readinessAfterProbes ? configured : initial } as never;
+				return { data: undefined } as never;
+			});
+			const close = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
+			renderSection();
+			const row = (await screen.findByText("Gemini CLI")).closest('[data-agent="gemini"]') as HTMLElement;
+			await userEvent.click(await within(row).findByRole("button", { name: "Set up" }));
+			await userEvent.click(await within(row).findByRole("button", { name: "Complete login terminal" }));
+
+			await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
+				params: { path: { handleId: "auth-gemini" } },
+			}), { timeout: 8_000 });
+			if (tc.readinessAfterProbes > 1) expect(probeCalls).toBeGreaterThanOrEqual(4);
+			expect(await within(row).findByText("Connected")).toBeInTheDocument();
+			expect(within(row).queryByText("Configured")).not.toBeInTheDocument();
+			expect(within(row).getByRole("button", { name: "Refresh login" })).toBeEnabled();
+			await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
+		}, 15_000);
+	}
+
 	it("refreshes authentication when the user closes the login terminal", async () => {
 		const authorized = catalogWithInstalled("claude-code");
 		authorized.agents[0].authentication.state = "authorized";
@@ -798,11 +841,11 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Authorized" })).toBeNull();
 	});
 
-	it("uses Configured for a completed setup action", async () => {
-		const authorized = catalogWithInstalled("codex");
-		authorized.agents[1].authentication.state = "authorized";
+	it("offers Refresh login instead of Set up for configured setup actions", async () => {
+		const configured = catalogWithInstalled("codex");
+		configured.agents[1].authentication.state = "configured";
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
-			if (path === "/api/v1/agents/readiness") return { data: authorized } as never;
+			if (path === "/api/v1/agents/readiness") return { data: configured } as never;
 			if (path === "/api/v1/agents/installers") return { data: plans } as never;
 			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
 			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [
@@ -811,8 +854,8 @@ describe("HarnessSettingsSection", () => {
 			return { data: undefined } as never;
 		});
 		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
-			if (path === "/api/v1/agents/readiness/ensure") return { data: authorized } as never;
-			if (path === "/api/v1/agents/{agent}/probe") return { data: { agent: { id: "codex", label: "Codex", authStatus: "authorized" }, supported: true, installed: true } } as never;
+			if (path === "/api/v1/agents/readiness/ensure") return { data: configured } as never;
+			if (path === "/api/v1/agents/{agent}/probe") return { data: { agent: { id: "codex", label: "Codex", authStatus: "configured" }, supported: true, installed: true } } as never;
 			return { data: undefined } as never;
 		});
 
@@ -820,6 +863,8 @@ describe("HarnessSettingsSection", () => {
 		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
 
 		await within(row).findByText("Configured");
+		expect(within(row).queryByRole("button", { name: "Set up" })).not.toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "Refresh login" })).toBeInTheDocument();
 	});
 
 	it("does not expose manual readiness controls", async () => {
