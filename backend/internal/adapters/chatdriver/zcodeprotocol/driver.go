@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -52,6 +53,9 @@ func capabilities() ports.ChatCapabilities {
 
 // Probe resolves the install; native authentication is checked by real requests.
 func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
+	if runtime.GOOS != "linux" {
+		return nil, fmt.Errorf("%w: ZCode Chat currently requires Linux owned-child cleanup", ports.ErrChatDriverUnavailable)
+	}
 	if d.plugin == nil {
 		return nil, ports.ErrChatDriverUnavailable
 	}
@@ -132,6 +136,9 @@ func (d *Driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (por
 	return d.Resume(ctx, cfg)
 }
 func (d *Driver) open(ctx context.Context, cfg ports.ChatStartConfig, nativeID string, reconnectOnly bool) (ports.ChatConversation, error) {
+	if runtime.GOOS != "linux" {
+		return nil, fmt.Errorf("%w: ZCode Chat currently supports Linux only", ports.ErrChatDriverUnavailable)
+	}
 	mode, err := validateConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -140,7 +147,7 @@ func (d *Driver) open(ctx context.Context, cfg ports.ChatStartConfig, nativeID s
 	if err != nil {
 		return nil, err
 	}
-	owner, _ := json.Marshal([]any{filepath.Clean(cfg.WorkspacePath), domain.HarnessZCode, cfg.ProviderScopeID, mode, mcp})
+	owner, _ := json.Marshal([]any{"zcode-owned-tree-v1", filepath.Clean(cfg.WorkspacePath), domain.HarnessZCode, cfg.ProviderScopeID, mode, mcp})
 	fingerprint := sha256.Sum256(owner)
 	hostCfg := persistenthost.Config{SessionID: string(cfg.SessionID), DataDir: cfg.DataDir, Workdir: cfg.WorkspacePath, Protocol: persistenthost.ProtocolZCode, OwnershipFingerprint: hex.EncodeToString(fingerprint[:]), ReconnectOnly: reconnectOnly,
 		Prepare: func(prepareCtx context.Context) (persistenthost.PreparedProvider, error) {

@@ -110,3 +110,5 @@ func killProviderProcess(ctx context.Context, cmd *exec.Cmd) error {
 	}
 	return nil
 }
+
+func configureProviderOwnership(_ Protocol) error { return nil }

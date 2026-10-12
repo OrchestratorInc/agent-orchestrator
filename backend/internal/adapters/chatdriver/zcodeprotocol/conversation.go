@@ -152,6 +152,22 @@ func (c *conversation) Close() error {
 func (c *conversation) Terminate() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	c.mu.Lock()
+	active := c.activeTurn != ""
+	c.mu.Unlock()
+	if active {
+		// Give native cancellation an opportunity to publish an interrupted
+		// boundary and stop foreground tools before the owned host is reaped.
+		_ = c.call(ctx, "session/stop", map[string]any{"sessionId": c.ProviderConversationID()}, nil)
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			var snapshot nativeSnapshot
+			if c.call(ctx, "session/read", map[string]any{"sessionId": c.ProviderConversationID()}, &snapshot) != nil || snapshot.Runtime.ActiveTurnID == "" {
+				break
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
 	err := persistenthost.Shutdown(ctx, c.cfg.DataDir, string(c.cfg.SessionID))
 	_ = c.Close()
 	return err

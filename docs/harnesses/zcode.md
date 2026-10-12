@@ -36,3 +36,7 @@ Expose a `zcode` wrapper on PATH that runs the stock bundle with Node. Native OA
 Routine suites run only in PR CI for this audit. No local routine tests, lint, typechecks, vet, race or workflows were executed on the VPS.
 
 The first registered AO admission attempt at implementation head `7c210eb1` failed before session creation because AO requires Chat streaming and the driver initially reported settled prose only. The retained 409 receipt prompted native `model.streaming/text_delta` mapping plus a pinned upstream streaming assertion, rather than weakening AO admission.
+
+## Linux ownership qualification
+
+The first actual AO-manager run proved fresh/second/restore instruction consumption and native foreground interruption, but **failed independent AO Kill**: process-group cleanup left ZCode's detached Bash child alive and it wrote its delayed artifact. That failure and its real Electron screenshot are retained separately. Linux host cleanup now adopts orphan descendants through a process-scoped subreaper and signals exact kernel identities with pidfds, reaping adopted children before host exit. The driver also requests native foreground stop before explicit termination. Its ownership fingerprint fences older hosts lacking this cleanup contract. The initial shipped driver refuses other operating systems; their native cleanup remains unqualified rather than borrowing the Linux result.

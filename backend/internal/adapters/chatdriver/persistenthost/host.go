@@ -589,6 +589,9 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer func() { _ = listener.Close() }()
 
+	if err := configureProviderOwnership(cfg.Protocol); err != nil {
+		return err
+	}
 	child := aoprocess.Command(cfg.Argv[0], cfg.Argv[1:]...) //nolint:gosec // provider argv is constructed by AO's driver.
 	child.Dir = cfg.Workdir
 	child.Env = cfg.Env

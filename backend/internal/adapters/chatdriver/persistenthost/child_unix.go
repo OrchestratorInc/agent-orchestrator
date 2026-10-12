@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !linux
 
 package persistenthost
 
@@ -30,3 +30,5 @@ func killProviderProcess(_ context.Context, cmd *exec.Cmd) error {
 	}
 	return err
 }
+
+func configureProviderOwnership(_ Protocol) error { return nil }
