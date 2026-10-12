@@ -72,7 +72,7 @@ func reapAdoptedProviderZombies(providerPID int) {
 		return
 	}
 	for _, task := range tasks {
-		data, err := os.ReadFile(filepath.Join("/", "proc", "self", "task", task.Name(), "children"))
+		data, err := os.ReadFile(filepath.Join("/", "proc", "self", "task", task.Name(), "children")) //nolint:gocritic // Linux procfs discovery requires an absolute root.
 		if err != nil {
 			continue
 		}
