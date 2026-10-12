@@ -818,7 +818,7 @@ func (m *Manager) preflightInterfaceTarget(
 	if err != nil {
 		return err
 	}
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, false)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, false)
 	if err != nil {
 		return err
 	}
