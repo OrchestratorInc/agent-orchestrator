@@ -42,10 +42,13 @@ func TestLinuxZCodeHostReapsDetachedChildAfterProviderEOF(t *testing.T) {
 	})
 	marker := filepath.Join(dir, "child.json")
 	deadline := time.Now().Add(8 * time.Second)
-	var child ownedProcess
+	var markerData struct {
+		PID   int    `json:"pid"`
+		Birth string `json:"birth"`
+	}
 	for {
 		if data, err := os.ReadFile(marker); err == nil {
-			if err = json.Unmarshal(data, &child); err != nil {
+			if err = json.Unmarshal(data, &markerData); err != nil {
 				t.Fatal(err)
 			}
 			break
@@ -56,20 +59,7 @@ func TestLinuxZCodeHostReapsDetachedChildAfterProviderEOF(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	// The fixture contains only test-owned child identity, never provider data.
-	if child.pid == 0 {
-		var markerData struct {
-			PID   int    `json:"pid"`
-			Birth string `json:"birth"`
-		}
-		data, err := os.ReadFile(marker)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err = json.Unmarshal(data, &markerData); err != nil {
-			t.Fatal(err)
-		}
-		child = ownedProcess{pid: markerData.PID, birth: markerData.Birth}
-	}
+	child := ownedProcess{pid: markerData.PID, birth: markerData.Birth}
 	t.Cleanup(func() {
 		current, err := readProcessIdentity(child.pid)
 		if err == nil && current.birth == child.birth {
