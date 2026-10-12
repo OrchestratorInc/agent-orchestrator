@@ -1,0 +1,14 @@
+{
+  "interface": "registered AO Chat",
+  "sourceHead": "9a850b4d0607330a88f3718d4b763d23d1aa4b2f",
+  "binaryVCS": "b3045a16a6b72e21d858884847abe4ff8719581f",
+  "uiHead": "9a850b4d0607330a88f3718d4b763d23d1aa4b2f",
+  "nativeSource": "aac4755666d09fdcd70272fcf063c077a639015f",
+  "nativeModel": "glm-4.7 (low)",
+  "utc": "2026-10-12T15:40:41Z",
+  "proofs": {},
+  "sessions": [],
+  "approvalDecisions": [],
+  "status": "failed",
+  "error": "POST /api/v1/sessions HTTP 409: {\"error\":\"conflict\",\"code\":\"CHAT_CONTROLLER_FAILED\",\"message\":\"spawn zcode-primary-1: chat controller: zcode: native hook trust command failed: signal: killed\",\"requestId\":\"vps-linux/i2nN0wutop-000009\"}\n"
+}

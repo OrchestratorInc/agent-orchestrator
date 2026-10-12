@@ -278,3 +278,11 @@ When routine validation is restricted to PR CI, run only essential authorized
 native/AO proof and minimal artifact builds on the VPS. Record complete current-head
 remote checks; interrupted or omitted local suites remain NOT_RUN. An untouched
 runner's earlier fixture PASS is historical and must not be described as retested.
+
+## Private instruction and proprietary Chat evidence
+
+Record instruction delivery separately from provider message role. Additive native system/developer configuration, hidden user-role hook context and visible task concatenation are different routes. Token consumption proves behavior; it cannot alone establish the provider wire role. Preserve the default native prompt and independent project/user rules. A replace-only custom system prompt is not an additive integration. Capture synthetic contents/roles only through a legitimate controlled provider endpoint, and label authenticated wire role unknown when it was not observed.
+
+Use actual registered daemon Chat sessions for proprietary native protocols; this TUI runner does not qualify their streaming, approval or reconnect contract. A standalone native receipt is a separate prerequisite. Prove new hidden instructions after confirmed Kill with the same native history, and retain failed controls separately. Limit aggregate native hook context or reject competing unbounded hooks; hook fail-open and truncation behavior require explicit boundaries.
+
+Executing-child interrupt and explicit AO Kill are independent gates. A host disappearance is insufficient when a native Bash tool starts a new process group. On Linux record PID plus kernel birth ticks, bounded reaping and the absence of a scheduled late artifact, while an unrelated control session stays usable. Do not infer other operating-system cleanup from a Linux-only proof. Record CI merge-build VCS and any difference from the implementation head separately from the Electron UI head.

@@ -1,0 +1,33 @@
+{
+  "utc": "2026-10-12T13:45:35Z",
+  "source": "aac4755666d09fdcd70272fcf063c077a639015f",
+  "entrySHA256": "f78a9144825414853caf3aac2f6913f72def33a808aae7885d50230c289c60ee",
+  "standalone": true,
+  "provider": "authorized Z.ai coding API",
+  "model": "glm-4.7",
+  "proofs": {
+    "fresh": {
+      "private": false,
+      "project": false,
+      "task": false,
+      "rulesPreserved": true,
+      "status": "error",
+      "messages": 3
+    },
+    "second": false,
+    "restoredHistory": {
+      "sameID": true,
+      "messages": 5
+    },
+    "restoreFreshInstructions": false,
+    "unknownHistoryRejected": true
+  },
+  "role": "NOT_CAPTURED; source predicts model-dependent hook_context reminder role",
+  "nativeIdDigest": "a8c373b08cd1609e0d76e3790ff8ecd046394b6240d4f404345d507a82a6bbe9",
+  "pid": 1018704,
+  "activeSettled": [
+    true,
+    true,
+    true
+  ]
+}
