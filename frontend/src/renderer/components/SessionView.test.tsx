@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useState, type ReactNode } from "react";
+import { StrictMode, useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, within } from "@testing-library/react";
@@ -562,42 +562,17 @@ vi.mock("./SessionFileExplorer", () => ({
 	SessionFileExplorer: ({
 		isMaximized,
 		onOpenFile,
-		onRevealRequestConsumed,
 		onSplitChange,
-		onRevealHandled,
 		onToggleMaximized,
-		revealRequest,
 		split,
 	}: {
 		isMaximized?: boolean;
 		onOpenFile?: (path: string, options?: { editing?: boolean; mode?: "diff" | "file" | "rendered" }) => void;
-		onRevealRequestConsumed?: (key: number) => void;
-		onRevealHandled?: (key: number) => void;
 		onSplitChange?: (split: boolean) => void;
 		onToggleMaximized?: (next: boolean) => void;
-		revealRequest?: { feedback?: boolean; path: string; key: number; source?: "artifact" } | null;
 		split?: boolean;
 	}) => {
 		const topbarHost = useFilesTopbarHost();
-		// Like the real explorer, the revealed path is kept as local selection,
-		// so it outlives the one-shot request once the owner drops it.
-		const [selectedPath, setSelectedPath] = useState<string | null>(null);
-		useEffect(() => {
-			if (!revealRequest) return;
-			if (revealRequest.source === "artifact") {
-				setSelectedPath(revealRequest.path);
-				return;
-			}
-			setSelectedPath(revealRequest.path);
-			if (isMaximized) return;
-			onOpenFile?.(revealRequest.path, { mode: "file" });
-			onRevealHandled?.(revealRequest.key);
-		}, [isMaximized, onOpenFile, onRevealHandled, revealRequest]);
-		useEffect(() => {
-			if (!revealRequest?.feedback) return;
-			artifactFeedbackConsumes.push(revealRequest.key);
-			onRevealRequestConsumed?.(revealRequest.key);
-		}, [onRevealRequestConsumed, revealRequest]);
 		return <div>
 			{topbarHost ? createPortal(<input aria-label="files filter" />, topbarHost) : null}
 			<button type="button" onClick={() => onToggleMaximized?.(!isMaximized)}>
@@ -609,8 +584,6 @@ vi.mock("./SessionFileExplorer", () => ({
 			{!isMaximized && onOpenFile ? (
 				<>
 					<span>file tree</span>
-					{selectedPath ? <span>{`selected ${selectedPath}`}</span> : null}
-					{revealRequest?.feedback ? <span>{`feedback request ${revealRequest.key}`}</span> : null}
 					<button type="button" onClick={() => onOpenFile("src/App.tsx", { mode: "file" })}>
 						select src/App.tsx
 					</button>
@@ -694,10 +667,30 @@ vi.mock("../hooks/useBrowserView", () => ({
 		};
 	},
 }));
+function ArtifactsViewMock({
+	onRequestConsumed,
+	request,
+}: {
+	onRequestConsumed?: (key: number) => void;
+	request?: { feedback?: boolean; path: string; key: number } | null;
+}) {
+	useEffect(() => {
+		if (!request?.feedback) return;
+		artifactFeedbackConsumes.push(request.key);
+		onRequestConsumed?.(request.key);
+	}, [onRequestConsumed, request]);
+	return <div>
+		<span>artifacts view</span>
+		{request ? <span>{`selected ${request.path}`}</span> : null}
+		{request?.feedback ? <span>{`feedback request ${request.key}`}</span> : null}
+	</div>;
+}
 vi.mock("./SessionInspector", () => ({
 	SessionInspector: ({
+		artifactRequest,
 		filesView,
 		isInspectorVisible = true,
+		onArtifactRequestConsumed,
 		onOpenArtifact,
 		onOpenFiles,
 		onOpenReviewFile,
@@ -707,8 +700,10 @@ vi.mock("./SessionInspector", () => ({
 		onWorkerMessageSent,
 		view,
 	}: {
+		artifactRequest?: { feedback?: boolean; path: string; key: number } | null;
 		filesView?: ReactNode;
 		isInspectorVisible?: boolean;
+		onArtifactRequestConsumed?: (key: number) => void;
 		onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 		onOpenFiles?: () => void;
 		onOpenReviewFile?: (target: { line?: number; path: string }) => void;
@@ -758,6 +753,9 @@ vi.mock("./SessionInspector", () => ({
 					send review feedback
 				</button>
 				{view === "files" ? filesView : null}
+				{view === "artifacts" ? (
+					<ArtifactsViewMock onRequestConsumed={onArtifactRequestConsumed} request={artifactRequest} />
+				) : null}
 			</div>
 		);
 	},
@@ -1028,36 +1026,34 @@ describe("SessionView", () => {
 		});
 	});
 
-	it("does not replay consumed artifact feedback when Files remounts", async () => {
+	it("opens the Artifacts view for an artifact and consumes its feedback request once", async () => {
 		render(<SessionView sessionId="sess-1" />);
 
 		fireEvent.click(screen.getByRole("button", { name: "open artifact feedback" }));
 
 		await waitFor(() => expect(artifactFeedbackConsumes).toEqual([1]));
 		await waitFor(() => expect(screen.queryByText("feedback request 1")).not.toBeInTheDocument());
+		expect(screen.getByText("artifacts view")).toBeInTheDocument();
 		expect(screen.getByText("selected report.html")).toBeInTheDocument();
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+		expect(inspectorOpen("sess-1")).toBe(true);
 
 		fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
-		expect(screen.queryByText("selected report.html")).not.toBeInTheDocument();
-
-		fireEvent.click(screen.getByRole("button", { name: "open files" }));
-		expect(screen.queryByText("selected report.html")).not.toBeInTheDocument();
-		expect(screen.queryByText("feedback request 1")).not.toBeInTheDocument();
+		expect(screen.queryByText("artifacts view")).not.toBeInTheDocument();
 		expect(artifactFeedbackConsumes).toEqual([1]);
 	});
 
-	it("opens the workspace changes from Summary after an artifact was opened", async () => {
+	it("opens the workspace changes from Files after an artifact was opened", async () => {
 		render(<SessionView sessionId="sess-1" />);
 
 		fireEvent.click(screen.getByRole("button", { name: "open artifact feedback" }));
-		await waitFor(() => expect(screen.getByText("selected report.html")).toBeInTheDocument());
-		useUiStore.getState().setFilesSource("sess-1", { kind: "artifact" });
+		await waitFor(() => expect(screen.getByText("artifacts view")).toBeInTheDocument());
 
-		fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
 		fireEvent.click(screen.getByRole("button", { name: "open files" }));
 
 		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesSource).toEqual({ kind: "workspace" });
-		expect(screen.queryByText("selected report.html")).not.toBeInTheDocument();
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("files");
+		expect(screen.queryByText("artifacts view")).not.toBeInTheDocument();
 	});
 
 	it("resumes only the opened stopped session once, including in StrictMode", async () => {
@@ -5218,7 +5214,7 @@ describe("SessionView", () => {
 		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("summary");
 	});
 
-	it("opens a requested markdown artifact in the Files artifact viewer", () => {
+	it("opens a requested markdown artifact in the Artifacts view", () => {
 		const worker = workspaces[0].sessions[0];
 		worker.artifactFiles = [{ kind: "markdown", name: "report.md", path: "out/report.md", size: 10, updatedAt: "2026-06-10T00:00:00Z" }];
 		try {
@@ -5227,7 +5223,7 @@ describe("SessionView", () => {
 			render(<SessionView sessionId="sess-1" />);
 
 			expect(screen.getByText("selected out/report.md")).toBeInTheDocument();
-			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("files");
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
 			expect(inspectorOpen("sess-1")).toBe(true);
 			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
 		} finally {

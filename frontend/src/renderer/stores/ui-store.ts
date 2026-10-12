@@ -64,7 +64,7 @@ export type SettingsModal =
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
 export type WorkbenchTab = "changes" | "files" | "terminal";
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files";
+export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts";
 
 export type InspectorSessionState = {
 	isOpen: boolean;
