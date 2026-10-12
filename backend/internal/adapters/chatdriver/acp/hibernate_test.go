@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
@@ -41,18 +40,6 @@ func TestACPDriverUsesProviderHibernationCheck(t *testing.T) {
 			ready = true
 			if canSleep, err = h.CanHibernate(context.Background()); err != nil || !canSleep {
 				t.Fatalf("ended task CanHibernate=%v, %v", canSleep, err)
-			}
-			// Output outside an AO prompt is work AO has no turn for.
-			text := acpsdk.UpdateAgentMessageText("tests passed, building")
-			if err := conv.(*conversation).processUpdate(acpsdk.SessionNotification{SessionId: gotID, Update: text}); err != nil {
-				t.Fatal(err)
-			}
-			if canSleep, err = h.CanHibernate(context.Background()); err != nil || canSleep {
-				t.Fatalf("unprompted output CanHibernate=%v, %v", canSleep, err)
-			}
-			conv.(*conversation).unpromptedOutputAt = time.Now().Add(-unpromptedOutputQuiet)
-			if canSleep, err = h.CanHibernate(context.Background()); err != nil || !canSleep {
-				t.Fatalf("quiet agent CanHibernate=%v, %v", canSleep, err)
 			}
 			checkErr = errors.New("native registry unavailable")
 			if _, err = h.CanHibernate(context.Background()); !errors.Is(err, checkErr) {

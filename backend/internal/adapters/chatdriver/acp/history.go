@@ -266,7 +266,7 @@ func (c *conversation) historyReplayActive() bool {
 }
 
 func (c *conversation) captureHistoryUserChunk(chunk *acpsdk.SessionUpdateUserMessageChunk) {
-	if isClaudeTranscriptNotice(historicalUserContent(chunk.Content)) {
+	if c.historyNotice != nil && c.historyNotice(historicalUserContent(chunk.Content)) {
 		return
 	}
 	messageID := ""
@@ -505,15 +505,6 @@ func optionalMessageID(id *string) string {
 		return ""
 	}
 	return strings.TrimSpace(*id)
-}
-
-// isClaudeTranscriptNotice reports Claude Code's own notes that its transcript
-// stores as user messages: a finished background task's <task-notification>
-// and the marker written when a turn is stopped. Live Chat never shows them.
-func isClaudeTranscriptNotice(text string) bool {
-	text = strings.TrimSpace(text)
-	return strings.HasPrefix(text, "<task-notification>") && strings.HasSuffix(text, "</task-notification>") ||
-		strings.HasPrefix(text, "[Request interrupted by user") && strings.HasSuffix(text, "]")
 }
 
 func historicalUserContent(content acpsdk.ContentBlock) string {

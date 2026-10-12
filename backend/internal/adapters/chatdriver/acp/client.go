@@ -581,11 +581,6 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	if providerOutputResumed {
 		c.completeProviderFailure(turnID, emit)
 	}
-	if turnID == "" && (providerOutputResumed || update.ToolCallUpdate != nil) {
-		c.mu.Lock()
-		c.unpromptedOutputAt = time.Now()
-		c.mu.Unlock()
-	}
 	switch {
 	case update.AgentMessageChunk != nil:
 		c.mu.Lock()

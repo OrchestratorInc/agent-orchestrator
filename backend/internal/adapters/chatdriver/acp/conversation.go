@@ -130,8 +130,7 @@ type conversation struct {
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
 	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
-	// unpromptedOutputAt is the last agent output outside an AO prompt.
-	unpromptedOutputAt time.Time
+	historyNotice         func(string) bool
 	// preamble is standing context attached to the first prompt that actually
 	// reaches the provider. It is the delivery channel for agents that accept no
 	// system-prompt launch flag and ignore session/new _meta but do execute
@@ -986,21 +985,13 @@ func (c *conversation) Terminate() error {
 	return c.closeProvider(true, true)
 }
 
-// Agents can work after an AO turn without a prompt, for example when Claude
-// answers a finished background task. AO has no turn for that work and ACP has
-// no end signal for it, so the agent must be quiet before it can sleep.
-// ponytail: a quiet window, so unprompted work that is silent for longer needs
-// a provider check such as Claude's.
-const unpromptedOutputQuiet = 30 * time.Second
-
 func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
+	if c.hibernationCheck == nil {
+		return true, nil
+	}
 	c.mu.Lock()
 	id := c.sessionID
-	working := time.Since(c.unpromptedOutputAt) < unpromptedOutputQuiet
 	c.mu.Unlock()
-	if working || c.hibernationCheck == nil {
-		return !working, nil
-	}
 	return c.hibernationCheck(ctx, c.conn, acpsdk.SessionId(id))
 }
 

@@ -172,6 +172,39 @@ func TestNativeCheckpointTurnCompanionIsNotAUserBoundary(t *testing.T) {
 	}
 }
 
+func TestNativeCheckpointNotificationCycleBelongsToPreviousTurn(t *testing.T) {
+	// Claude answers a finished task's notification on its own. Chat replay
+	// skips the notification, so the boundary is the user turn before it.
+	transcript := strings.Join([]string{
+		`{"type":"user","sessionId":"native","uuid":"user","promptId":"prompt","message":{"content":"A"}}`,
+		`{"type":"attachment","sessionId":"native","uuid":"attachment","parentUuid":"user","attachment":{"type":"hook_additional_context","hookEvent":"UserPromptSubmit","content":["AO transcript correlation ID: submission."]}}`,
+		`{"type":"assistant","sessionId":"native","uuid":"answer","parentUuid":"attachment","message":{"content":"answer","stop_reason":"end_turn"}}`,
+		`{"type":"user","sessionId":"native","uuid":"notification","parentUuid":"answer","promptId":"cycle","message":{"content":"<task-notification>\n<status>running</status>\n</task-notification>\nThis is a check-in, not a completion."}}`,
+		`{"type":"assistant","sessionId":"native","uuid":"reply","parentUuid":"notification","message":{"content":"still running","stop_reason":"end_turn"}}`,
+	}, "\n") + "\n"
+	got, err := verifyCheckpointTranscript(context.Background(), strings.NewReader(transcript), ports.NativeCheckpointRequest{
+		ProviderConversationID: "native",
+		Evidence: checkpointEvidence(
+			domain.NativeCheckpointObservation{Submission: true, SubmissionID: "submission", PromptID: "prompt", Text: "A"},
+			domain.NativeCheckpointObservation{PromptID: "prompt", Text: "answer"},
+			domain.NativeCheckpointObservation{PromptID: "cycle", Text: "still running"},
+		),
+	})
+	if err != nil || got.UserMessageID != "user" || got.UserText != "A" || got.AssistantText != "still running" {
+		t.Fatalf("boundary=%+v error=%v", got, err)
+	}
+	for text, want := range map[string]bool{
+		"[Request interrupted by user]":              true,
+		"[Request interrupted by user for tool use]": true,
+		"[Request interrupted by user] keep going":   false,
+		"what does <task-notification> mean?":        false,
+	} {
+		if claudeTranscriptNotice(text) != want {
+			t.Errorf("claudeTranscriptNotice(%q) = %v", text, !want)
+		}
+	}
+}
+
 func TestNativeCheckpointRejectsUnprovenAncestry(t *testing.T) {
 	source := checkpointFixture(t, []string{"A", "B"}, []string{"answer A", "answer B"})
 	evidence := checkpointEvidence(domain.NativeCheckpointObservation{PromptID: "prompt-1", Text: "answer B"})
