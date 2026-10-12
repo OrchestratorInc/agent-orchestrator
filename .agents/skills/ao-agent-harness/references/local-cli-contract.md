@@ -295,3 +295,27 @@ It is a proposal, not an installed patch or a passing stock-native proof.
 Native source PR767 now contains a small owned-child Unix group fix, real executor regressions and ECHILD signal disarming; this is source implementation, not a proposal or repaired stock release. Keep source/artifact hashes and original stock failures separate. The exact rmcp cancellation handler retains the request future on ordinary token cancellation; a synchronous child-owning Drop guard is sufficient for aborted execution futures without a generic job framework. Do not retain armed numeric PGIDs after wait/try_wait or a loss-of-ownership error, and avoid deferred direct kills after ECHILD. Cancellation-safe line reads and draining both pipes matter for reliable subsequent output.
 
 Source62bd883's pinned CI artifact passed native foreground Escape and same-session continuation in an actual AO Electron standalone shell; this does not register or qualify an AO harness. Full hosted workspace CI remained unavailable/cancelled, so the fix remains draft. The standalone-shell runtime-close control is not agent-session Kill; unmanaged shells have no agent launch generation. A forced renderer reload earlier caused OSC11 reply text in the composer; retain that failed control and never blindly clear permission/draft input. A fresh terminal is a separate control. Default secret scanning can classify harmless assignment-shaped audit text; prefer plain token wording rather than disabling native security. See [curated source-fix evidence](../../../../docs/research/stakpak-native-fix-2026-10-12.md).
+
+
+## Freebuff creation snapshots and native source qualification
+
+[Native PR1505](https://github.com/CodebuffAI/freebuff/pull/1505) adds an explicit
+private file input on public source; it does not repair stock0.2.26. A creation
+snapshot persisted in native history avoids false claims that deleting or
+replacing one knowledge-map entry refreshes cached system prompts/compaction.
+Omission preserves the snapshot; changed/retrofitted input must fail before
+inference. Constructor/run options already spread through CodebuffClient.
+Test actual provider-request composition, not only the file loader. Preserve
+project/home/native rules, fail closed on bounded Unicode/file validation and
+sanitize filesystem errors without mislabelling them as authentication.
+Normal saved history/traces retain instructions; do not promise secrecy.
+
+Attach the actual AO UI primary before starting the native TUI so native terminal
+color detection sees the correct surface. A secondary-before-primary empty
+startup is a separate control; never force renderer reload or clear arbitrary
+composer text to make evidence pass. Send task text and Enter separately after
+verified readiness; grouped paste can remain a draft. Arm an execution watcher
+before submission, record PID/kernel start, and keep the original missed-window
+late artifact even when a later identically timed control passes. Standalone
+terminal close is not registered agent-session Kill or restore. See the
+[curated prerelease report](../../../../docs/research/freebuff-native-fix-2026-10-12.md).
