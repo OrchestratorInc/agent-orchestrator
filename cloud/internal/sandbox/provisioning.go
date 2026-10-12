@@ -13,11 +13,12 @@ import (
 )
 
 const (
-	ProviderDocker  = "docker"
-	ProviderDaytona = "daytona"
-	ProviderECS     = "ecs"
-	ProviderNodeOps = "nodeops"
-	ProviderCoder   = "coder"
+	ProviderDocker    = "docker"
+	ProviderDaytona   = "daytona"
+	ProviderECS       = "ecs"
+	ProviderNodeOps   = "nodeops"
+	ProviderCoder     = "coder"
+	ProviderFreestyle = "freestyle"
 
 	DefaultProvider       = ProviderDocker
 	DefaultWorkerTokenTTL = 15 * time.Minute
@@ -53,6 +54,47 @@ func (c NodeOpsConfig) rootFSForHarness(harness string) string {
 		return rootFS
 	}
 	return strings.TrimSpace(c.DefaultRootFS)
+}
+
+// FreestyleConfig configures Freestyle VMs. Sessions boot from a prepared
+// snapshot (the NodeOps workspace layout plus one harness and the worker), so
+// SnapshotByHarness plays the role NodeOps' per-harness rootfs plays.
+type FreestyleConfig struct {
+	BaseURL           string
+	APIKey            string
+	DefaultSnapshot   string
+	SnapshotByHarness map[string]string
+	WorkerTokenTTL    time.Duration
+	AutoPauseSeconds  int
+}
+
+// snapshotForHarness resolves the snapshot one session boots from.
+func (c FreestyleConfig) snapshotForHarness(harness string) string {
+	if snapshot := strings.TrimSpace(c.SnapshotByHarness[strings.TrimSpace(harness)]); snapshot != "" {
+		return snapshot
+	}
+	return strings.TrimSpace(c.DefaultSnapshot)
+}
+
+func (c FreestyleConfig) Validate() error {
+	if strings.TrimSpace(c.APIKey) == "" {
+		return errors.New("AO_CLOUD_FREESTYLE_API_KEY is required")
+	}
+	if strings.TrimSpace(c.DefaultSnapshot) == "" {
+		return errors.New("AO_CLOUD_FREESTYLE_DEFAULT_SNAPSHOT is required")
+	}
+	if c.BaseURL != "" {
+		if _, err := url.ParseRequestURI(c.BaseURL); err != nil {
+			return fmt.Errorf("AO_CLOUD_FREESTYLE_BASE_URL must be a valid URL: %w", err)
+		}
+	}
+	if c.WorkerTokenTTL <= 0 {
+		return errors.New("AO_CLOUD_FREESTYLE_WORKER_TOKEN_TTL must be positive")
+	}
+	if c.AutoPauseSeconds < 0 {
+		return errors.New("AO_CLOUD_FREESTYLE_AUTO_PAUSE_SECONDS must not be negative")
+	}
+	return nil
 }
 
 type DockerConfig struct {
@@ -91,6 +133,29 @@ type CoderSessionProfile struct {
 	// StartupTimeoutSeconds overrides the deployment startup budget for this
 	// session's ready wait and startup ceiling. Zero keeps the deployment value.
 	StartupTimeoutSeconds int `json:"startupTimeoutSeconds,omitempty"`
+	// WorkerUser is CoderWorkerUserWorkspace when the worker and agent run as
+	// the workspace's own login user. Empty (rows written before the field
+	// existed, and the default) keeps the dedicated ao-worker user.
+	WorkerUser string `json:"workerUser,omitempty"`
+	// ReadyProbe, when set, is a shell command the workspace user must see
+	// exit 0 before AO launches the worker, polled for at most
+	// ReadyProbeTimeoutSeconds.
+	ReadyProbe               string `json:"readyProbe,omitempty"`
+	ReadyProbeTimeoutSeconds int    `json:"readyProbeTimeoutSeconds,omitempty"`
+	// ReuseExistingCheckout tells the worker to adopt a checkout of the
+	// session repository the template already cloned. Only meaningful with
+	// the workspace worker user.
+	ReuseExistingCheckout bool `json:"reuseExistingCheckout,omitempty"`
+}
+
+// CoderWorkerUserWorkspace is the CoderSessionProfile.WorkerUser value that
+// runs the worker as the workspace's own login user.
+const CoderWorkerUserWorkspace = domain.CoderWorkerUserWorkspace
+
+// RunsAsWorkspaceUser reports whether the session's worker runs as the
+// workspace's own login user.
+func (p CoderSessionProfile) RunsAsWorkspaceUser() bool {
+	return p.WorkerUser == CoderWorkerUserWorkspace
 }
 
 // RequiresMountedDurableRoot reports whether bootstrap must find a mounted
@@ -118,6 +183,11 @@ type CoderSessionOptions struct {
 	// WorkspaceNamePrefix names the session's workspace <prefix>-<id> instead
 	// of the default ao-<id>. It applies with or without a picked template.
 	WorkspaceNamePrefix string
+	// Parameters are the project's values for the picked template's rich
+	// parameters. Like Size and StartupScript they apply only with a picked
+	// template; they override the connection's parameters and are overridden
+	// by Size and StartupScript.
+	Parameters map[string]string
 }
 
 // CoderDeploymentOverride redirects a session's Coder provisioning to a specific
@@ -139,7 +209,18 @@ type CoderDeploymentOverride struct {
 	// StartupTimeoutSeconds is the connection's startup budget. Zero selects
 	// DefaultBYOCoderStartupTimeout.
 	StartupTimeoutSeconds int
+	// WorkerUser, ReadyProbe, ReadyProbeTimeoutSeconds and
+	// ReuseExistingCheckout are the connection's dev-environment options,
+	// stamped onto each session profile (see CoderSessionProfile).
+	WorkerUser               string
+	ReadyProbe               string
+	ReadyProbeTimeoutSeconds int
+	ReuseExistingCheckout    bool
 }
+
+// readyProbeStartupMargin is the startup budget a session keeps after its
+// ready check passes: worker install, repository checkout and first check-in.
+const readyProbeStartupMargin = 10 * time.Minute
 
 // DefaultBYOCoderStartupTimeout is the startup budget for a bring-your-own
 // Coder connection that does not set one. Customer templates routinely clone
@@ -263,6 +344,20 @@ func DecodeCoderSessionProfile(raw json.RawMessage) (CoderSessionProfile, error)
 	if profile.StartupTimeoutSeconds < 0 {
 		return CoderSessionProfile{}, errors.New("Coder session startup timeout must not be negative")
 	}
+	profile.WorkerUser = strings.TrimSpace(profile.WorkerUser)
+	if profile.WorkerUser == domain.CoderWorkerUserAOWorker {
+		profile.WorkerUser = ""
+	}
+	if profile.WorkerUser != "" && profile.WorkerUser != CoderWorkerUserWorkspace {
+		return CoderSessionProfile{}, fmt.Errorf("Coder session worker user %q is not supported", profile.WorkerUser)
+	}
+	profile.ReadyProbe = strings.TrimSpace(profile.ReadyProbe)
+	if profile.ReadyProbeTimeoutSeconds < 0 {
+		return CoderSessionProfile{}, errors.New("Coder session ready check timeout must not be negative")
+	}
+	if !profile.RunsAsWorkspaceUser() {
+		profile.ReuseExistingCheckout = false
+	}
 	return profile, nil
 }
 
@@ -358,11 +453,12 @@ func (c NodeOpsConfig) Validate() error {
 }
 
 type ProvisioningDefaults struct {
-	Provider string
-	Release  string
-	NodeOps  NodeOpsConfig
-	Docker   DockerConfig
-	Coder    CoderConfig
+	Provider  string
+	Release   string
+	NodeOps   NodeOpsConfig
+	Docker    DockerConfig
+	Coder     CoderConfig
+	Freestyle FreestyleConfig
 }
 
 type Plan struct {
@@ -437,6 +533,19 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 			"workerTokenTtlSeconds": int64(d.NodeOps.WorkerTokenTTL / time.Second),
 			"autoPauseSeconds":      d.NodeOps.AutoPauseSeconds,
 		}
+	} else if provider == ProviderFreestyle {
+		if err := d.Freestyle.Validate(); err != nil {
+			return Plan{}, err
+		}
+		// The snapshot is stamped on the session so a later recreate boots the
+		// same build even after the deployment moves to newer snapshots.
+		freestyle := map[string]any{
+			"snapshot":              d.Freestyle.snapshotForHarness(harness),
+			"workerTokenTtlSeconds": int64(d.Freestyle.WorkerTokenTTL / time.Second),
+			"autoPauseSeconds":      d.Freestyle.AutoPauseSeconds,
+		}
+		resourceProfile["freestyle"] = freestyle
+		bootstrapContext["freestyle"] = freestyle
 	} else if provider == ProviderDocker {
 		if err := d.Docker.Validate(); err != nil {
 			return Plan{}, err
@@ -480,6 +589,15 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 			if startupTimeoutSeconds <= 0 {
 				startupTimeoutSeconds = int(DefaultBYOCoderStartupTimeout / time.Second)
 			}
+			// A ready check can hold the worker back for its whole timeout, so the
+			// session's startup budget must outlast it with room to spare.
+			if strings.TrimSpace(override.ReadyProbe) != "" {
+				readyBudget := override.ReadyProbeTimeoutSeconds
+				if readyBudget <= 0 {
+					readyBudget = domain.DefaultCoderReadyProbeTimeoutSeconds
+				}
+				startupTimeoutSeconds = max(startupTimeoutSeconds, readyBudget+int(readyProbeStartupMargin/time.Second))
+			}
 		}
 		workspaceNamePrefix := ""
 		if coder != nil {
@@ -510,11 +628,18 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 		if err != nil {
 			return Plan{}, err
 		}
-		// Layer on the picked template's size/startup form values only when the
-		// client explicitly picked a non-default template — the default template
-		// does not declare those rich parameters, so sending them would make Coder
-		// reject the build.
+		// Layer on the project's values for the picked template's parameters,
+		// then its size/startup form values, only when the client explicitly
+		// picked a non-default template: the default template does not declare
+		// those rich parameters, so sending them would make Coder reject the
+		// build. Merge order: connection parameters, then the project's
+		// parameters, then AO's own size/startup mapping.
 		if pickedTemplate {
+			for name, value := range coder.Parameters {
+				if name = strings.TrimSpace(name); name != "" {
+					parameters[name] = value
+				}
+			}
 			if size := strings.TrimSpace(coder.Size); size != "" {
 				parameters["size"] = size
 			}
@@ -539,6 +664,9 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 		if startupTimeoutSeconds > 0 {
 			coderProfile["startupTimeoutSeconds"] = startupTimeoutSeconds
 		}
+		if override != nil {
+			addCoderDevEnvironment(coderProfile, override)
+		}
 		resourceProfile["coder"] = coderProfile
 		bootstrapContext["coder"] = map[string]any{
 			"owner":       strings.TrimSpace(coderCfg.Owner),
@@ -562,6 +690,75 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 	}, nil
 }
 
+// addCoderDevEnvironment stamps a bring-your-own connection's dev-environment
+// options onto a session's Coder profile. The default (ao-worker user, no
+// ready check, no checkout reuse) adds nothing, so those profiles keep their
+// historical shape.
+func addCoderDevEnvironment(coderProfile map[string]any, override *CoderDeploymentOverride) {
+	if strings.ToLower(strings.TrimSpace(override.WorkerUser)) == CoderWorkerUserWorkspace {
+		coderProfile["workerUser"] = CoderWorkerUserWorkspace
+		if override.ReuseExistingCheckout {
+			coderProfile["reuseExistingCheckout"] = true
+		}
+	}
+	if probe := strings.TrimSpace(override.ReadyProbe); probe != "" {
+		timeout := override.ReadyProbeTimeoutSeconds
+		if timeout <= 0 {
+			timeout = domain.DefaultCoderReadyProbeTimeoutSeconds
+		}
+		coderProfile["readyProbe"] = probe
+		coderProfile["readyProbeTimeoutSeconds"] = timeout
+	}
+}
+
 func normalizeProvider(provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+// FreestyleSnapshot returns the snapshot a Freestyle plan boots from, or "" for
+// any other provider's plan.
+func FreestyleSnapshot(plan Plan) string {
+	var profile struct {
+		Freestyle struct {
+			Snapshot string `json:"snapshot"`
+		} `json:"freestyle"`
+	}
+	if err := json.Unmarshal(plan.ResourceProfile, &profile); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(profile.Freestyle.Snapshot)
+}
+
+// WithFreestyleSnapshot returns plan booting from snapshot instead, used when
+// the session's project has a prepared snapshot for its harness. The harness
+// snapshot it replaces is kept as baseSnapshot, which a later create or
+// recreate boots if the project snapshot has been collected by then.
+func WithFreestyleSnapshot(plan Plan, snapshot string) (Plan, error) {
+	rewrite := func(raw json.RawMessage) (json.RawMessage, error) {
+		var document map[string]any
+		if err := json.Unmarshal(raw, &document); err != nil {
+			return nil, err
+		}
+		freestyle, ok := document["freestyle"].(map[string]any)
+		if !ok {
+			return nil, errors.New("plan has no freestyle section")
+		}
+		if _, stamped := freestyle["baseSnapshot"]; !stamped {
+			if base, ok := freestyle["snapshot"].(string); ok && strings.TrimSpace(base) != "" {
+				freestyle["baseSnapshot"] = base
+			}
+		}
+		freestyle["snapshot"] = snapshot
+		return json.Marshal(document)
+	}
+	resourceProfile, err := rewrite(plan.ResourceProfile)
+	if err != nil {
+		return Plan{}, err
+	}
+	bootstrapContext, err := rewrite(plan.BootstrapContext)
+	if err != nil {
+		return Plan{}, err
+	}
+	plan.ResourceProfile, plan.BootstrapContext = resourceProfile, bootstrapContext
+	return plan, nil
 }

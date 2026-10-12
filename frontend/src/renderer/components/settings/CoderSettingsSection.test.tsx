@@ -1,9 +1,10 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../../i18n";
 import type { UseCoderTemplatesResult } from "../../hooks/useCoderTemplates";
-import { Coder11xSection } from "./Coder11xSection";
+import { CoderSettingsSection } from "./CoderSettingsSection";
 
 // Mutable mock state so each test drives the loaded config and the template list
 // independently. The section under test is gated on a saved connection
@@ -11,12 +12,13 @@ import { Coder11xSection } from "./Coder11xSection";
 const mocks = vi.hoisted(() => ({
 	config: { data: undefined as unknown },
 	templates: { value: { templates: [], isLoading: false, isError: false } as UseCoderTemplatesResult },
+	putOrgCoderConfig: vi.fn(),
 }));
 
 vi.mock("../../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true }) }));
 vi.mock("../../lib/cloud-session", () => ({ useCloudSession: () => ({ status: "authenticated" }) }));
 vi.mock("../../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ client: {}, ready: true, baseUrl: "https://cp.test" }),
+	useCloudCp: () => ({ client: { putOrgCoderConfig: mocks.putOrgCoderConfig }, ready: true, baseUrl: "https://cp.test" }),
 }));
 vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org-1" } }) }));
 vi.mock("../../hooks/useOrgCoderConfig", () => ({
@@ -30,12 +32,12 @@ const savedConfig = { baseUrl: "https://coder.test", owner: "me", defaultTemplat
 function renderSection() {
 	render(
 		<QueryClientProvider client={new QueryClient()}>
-			<Coder11xSection />
+			<CoderSettingsSection />
 		</QueryClientProvider>,
 	);
 }
 
-describe("Coder11xSection templates list", () => {
+describe("CoderSettingsSection templates list", () => {
 	beforeEach(async () => {
 		await appI18n.changeLanguage("en");
 		mocks.config.data = undefined;
@@ -89,5 +91,63 @@ describe("Coder11xSection templates list", () => {
 		expect(list.getByText("4 vCPU / 16 GB")).toBeInTheDocument();
 		// Falls back to the slug name when no displayName is set.
 		expect(list.getByText("ao-devkit-large")).toBeInTheDocument();
+	});
+});
+
+describe("CoderSettingsSection dev environment", () => {
+	beforeEach(async () => {
+		await appI18n.changeLanguage("en");
+		mocks.templates.value = { templates: [], isLoading: false, isError: false };
+		mocks.putOrgCoderConfig.mockReset().mockResolvedValue({ coderConfig: null });
+	});
+
+	it("does not show the dev-environment controls (set during onboarding)", () => {
+		mocks.config.data = {
+			...savedConfig, workerUser: "workspace", reuseExistingCheckout: true,
+			readyProbe: "grep -q '^Ready' ~/.bootstrap-status", readyProbeTimeoutSeconds: 600,
+		};
+		renderSection();
+		expect(screen.queryByRole("switch", { name: "Run the agent as the workspace user" })).toBeNull();
+		expect(screen.queryByRole("switch", { name: "Use the template's existing checkout" })).toBeNull();
+		expect(screen.queryByRole("textbox", { name: "Workspace ready check" })).toBeNull();
+		expect(screen.queryByText("Dev environment")).toBeNull();
+		// Nothing to change and no new token: nothing to save.
+		expect(screen.getByRole("button", { name: "Save and fetch templates" })).toBeDisabled();
+	});
+
+	it("keeps the stored dev-environment settings when a new token is saved", async () => {
+		mocks.config.data = {
+			...savedConfig, templateId: "t-1", parameters: { region: "eu" }, startupTimeoutSeconds: 1800,
+			workerUser: "workspace", reuseExistingCheckout: false,
+			readyProbe: "grep -q '^Ready' ~/.bootstrap-status", readyProbeTimeoutSeconds: 600,
+		};
+		const user = userEvent.setup();
+		renderSection();
+		await user.type(screen.getByLabelText("API token *"), "rotated");
+		await user.click(screen.getByRole("button", { name: "Save and fetch templates" }));
+		await waitFor(() => expect(mocks.putOrgCoderConfig).toHaveBeenCalledTimes(1));
+		expect(mocks.putOrgCoderConfig).toHaveBeenCalledWith("org-1", {
+			baseUrl: "https://coder.test",
+			token: "rotated",
+			templateId: "t-1",
+			parameters: { region: "eu" },
+			startupTimeoutSeconds: 1800,
+			// Carried through unchanged: onboarding owns these, a token rotation must not reset them.
+			workerUser: "workspace",
+			reuseExistingCheckout: false,
+			readyProbe: "grep -q '^Ready' ~/.bootstrap-status",
+			readyProbeTimeoutSeconds: 600,
+		});
+	});
+
+	it("sends no dev-environment fields while they are at their defaults", async () => {
+		mocks.config.data = undefined;
+		const user = userEvent.setup();
+		renderSection();
+		await user.type(screen.getByLabelText("Coder URL or IP *"), "https://coder.test");
+		await user.type(screen.getByLabelText("API token *"), "secret");
+		await user.click(screen.getByRole("button", { name: "Save and fetch templates" }));
+		await waitFor(() => expect(mocks.putOrgCoderConfig).toHaveBeenCalledTimes(1));
+		expect(mocks.putOrgCoderConfig).toHaveBeenCalledWith("org-1", { baseUrl: "https://coder.test", token: "secret" });
 	});
 });

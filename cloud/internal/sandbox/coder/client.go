@@ -111,6 +111,20 @@ type Client struct {
 	workspaceNamePrefix   string
 	expectedWorkspaceName string
 	http                  *http.Client
+	// Dev-environment options a bring-your-own connection stamps on the
+	// session profile (see sandbox.CoderSessionProfile). The zero values are
+	// the historical behavior: a dedicated ao-worker user, no ready check and
+	// a fresh clone into ~/repository.
+	runAsWorkspaceUser bool
+	readyProbe         string
+	readyProbeTimeout  time.Duration
+	reuseCheckout      bool
+	// readyProbeInterval paces ready-check attempts and readyProbeInlineWindow
+	// bounds how long one bootstrap call keeps polling before handing the
+	// session back to the reconciler as not ready yet.
+	readyProbeInterval     time.Duration
+	readyProbeInlineWindow time.Duration
+	now                    func() time.Time
 }
 
 var (
@@ -165,6 +179,10 @@ func New(config Config) (*Client, error) {
 		agentName:  strings.TrimSpace(config.AgentName),
 		parameters: parameters,
 		http:       httpClient,
+
+		readyProbeInterval:     defaultReadyProbeInterval,
+		readyProbeInlineWindow: defaultReadyProbeInlineWindow,
+		now:                    time.Now,
 	}, nil
 }
 
@@ -230,6 +248,17 @@ func (c *Client) ForSandbox(record domain.Sandbox) (sandbox.Provider, error) {
 	sessionClient.parameters = parameters
 	sessionClient.workspaceNamePrefix = profile.WorkspaceNamePrefix
 	sessionClient.expectedWorkspaceName = WorkspaceNameWithPrefix(profile.WorkspaceNamePrefix, record.SessionID)
+	sessionClient.runAsWorkspaceUser = profile.RunsAsWorkspaceUser()
+	sessionClient.reuseCheckout = profile.RunsAsWorkspaceUser() && profile.ReuseExistingCheckout
+	sessionClient.readyProbe = profile.ReadyProbe
+	sessionClient.readyProbeTimeout = 0
+	if profile.ReadyProbe != "" {
+		timeout := profile.ReadyProbeTimeoutSeconds
+		if timeout <= 0 {
+			timeout = domain.DefaultCoderReadyProbeTimeoutSeconds
+		}
+		sessionClient.readyProbeTimeout = time.Duration(timeout) * time.Second
+	}
 	return &sessionClient, nil
 }
 
@@ -328,6 +357,92 @@ func (c *Client) templateVersionParameterNames(ctx context.Context, versionID st
 	return names, nil
 }
 
+// TemplateParameter is one coder_parameter a template's active version
+// declares, in the shape the project form renders: the input type, whether it
+// can change after the workspace is created, and its default and options.
+type TemplateParameter struct {
+	Name         string                    `json:"name"`
+	DisplayName  string                    `json:"displayName"`
+	Description  string                    `json:"description"`
+	Type         string                    `json:"type"`
+	FormType     string                    `json:"formType"`
+	Mutable      bool                      `json:"mutable"`
+	Required     bool                      `json:"required"`
+	DefaultValue string                    `json:"defaultValue"`
+	Options      []TemplateParameterOption `json:"options"`
+	Order        int                       `json:"order"`
+}
+
+// TemplateParameterOption is one choice of an option-backed parameter.
+type TemplateParameterOption struct {
+	Name        string `json:"name"`
+	Value       string `json:"value"`
+	Description string `json:"description"`
+}
+
+// ErrTemplateNotFound reports a template ID the Coder deployment does not
+// know (or the configured user cannot see).
+var ErrTemplateNotFound = errors.New("coder: template not found")
+
+// TemplateParameters returns the rich parameters the template's active
+// version declares, in Coder's order. It reads GET /api/v2/templates/{id} for
+// the active version, then that version's rich-parameters.
+func (c *Client) TemplateParameters(ctx context.Context, templateID string) ([]TemplateParameter, error) {
+	parsed, err := uuid.Parse(strings.TrimSpace(templateID))
+	if err != nil {
+		return nil, errors.New("coder: template ID must be a UUID")
+	}
+	var template struct {
+		ActiveVersionID string `json:"active_version_id"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v2/templates/"+url.PathEscape(parsed.String()), nil, &template); err != nil {
+		if errors.Is(err, sandbox.ErrNotFound) {
+			return nil, ErrTemplateNotFound
+		}
+		return nil, fmt.Errorf("coder: read template: %w", err)
+	}
+	if strings.TrimSpace(template.ActiveVersionID) == "" {
+		return []TemplateParameter{}, nil
+	}
+	var raw []struct {
+		Name         string `json:"name"`
+		DisplayName  string `json:"display_name"`
+		Description  string `json:"description"`
+		Type         string `json:"type"`
+		FormType     string `json:"form_type"`
+		Mutable      bool   `json:"mutable"`
+		Required     bool   `json:"required"`
+		DefaultValue string `json:"default_value"`
+		Options      []struct {
+			Name        string `json:"name"`
+			Value       string `json:"value"`
+			Description string `json:"description"`
+		} `json:"options"`
+	}
+	if err := c.do(ctx, http.MethodGet,
+		"/api/v2/templateversions/"+url.PathEscape(template.ActiveVersionID)+"/rich-parameters", nil, &raw); err != nil {
+		return nil, fmt.Errorf("coder: template version parameters: %w", err)
+	}
+	parameters := make([]TemplateParameter, 0, len(raw))
+	for _, p := range raw {
+		if p.Name == "" {
+			continue
+		}
+		options := make([]TemplateParameterOption, 0, len(p.Options))
+		for _, option := range p.Options {
+			options = append(options, TemplateParameterOption{
+				Name: option.Name, Value: option.Value, Description: option.Description,
+			})
+		}
+		parameters = append(parameters, TemplateParameter{
+			Name: p.Name, DisplayName: p.DisplayName, Description: p.Description,
+			Type: p.Type, FormType: p.FormType, Mutable: p.Mutable, Required: p.Required,
+			DefaultValue: p.DefaultValue, Options: options, Order: len(parameters),
+		})
+	}
+	return parameters, nil
+}
+
 type workspace struct {
 	ID          string          `json:"id"`
 	Name        string          `json:"name"`
@@ -342,10 +457,20 @@ type workspaceHealth struct {
 }
 
 type workspaceBuild struct {
+	ID        string              `json:"id"`
 	Status    string              `json:"status"`
+	Job       workspaceBuildJob   `json:"job"`
 	Reason    string              `json:"reason"`
 	Deadline  *time.Time          `json:"deadline"`
 	Resources []workspaceResource `json:"resources"`
+}
+
+// workspaceBuildJob is the provisioner job behind a build; its error explains
+// a failed build (a template error, a cloud quota) in the provider's words.
+type workspaceBuildJob struct {
+	Status    string `json:"status"`
+	Error     string `json:"error"`
+	ErrorCode string `json:"error_code"`
 }
 
 type workspaceResource struct {
@@ -359,6 +484,10 @@ type workspaceAgent struct {
 	LifecycleState string          `json:"lifecycle_state"`
 	Architecture   string          `json:"architecture"`
 	Health         workspaceHealth `json:"health"`
+	// ReadyAt is when the agent's startup finished for this build. It anchors
+	// the ready-check timeout, so the budget holds across bootstrap attempts
+	// without AO storing anything.
+	ReadyAt *time.Time `json:"ready_at,omitempty"`
 }
 
 // agentReady reports whether a Coder agent can take a worker bootstrap. The
@@ -426,12 +555,38 @@ func WorkspaceNameWithPrefix(prefix, sessionID string) string {
 	return prefix + "-" + id[:idLength]
 }
 
+// WorkspaceURL is the Coder dashboard page of one AO session's workspace,
+// <baseURL>/@<owner>/<workspace name>, naming the workspace exactly as
+// WorkspaceNameWithPrefix does when AO creates it. It returns "" unless
+// baseURL is an absolute http(s) origin and owner is set, so a malformed
+// record never yields a link.
+func WorkspaceURL(baseURL, owner, prefix, sessionID string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	owner = strings.TrimSpace(owner)
+	endpoint, err := url.Parse(baseURL)
+	if err != nil || endpoint.Host == "" || endpoint.User != nil ||
+		(endpoint.Scheme != "http" && endpoint.Scheme != "https") ||
+		endpoint.RawQuery != "" || endpoint.Fragment != "" ||
+		owner == "" || strings.TrimSpace(sessionID) == "" {
+		return ""
+	}
+	return baseURL + "/@" + url.PathEscape(owner) + "/" +
+		url.PathEscape(WorkspaceNameWithPrefix(prefix, sessionID))
+}
+
 func (c *Client) workspaceName(sessionID string) string {
 	return WorkspaceNameWithPrefix(c.workspaceNamePrefix, sessionID)
 }
 
 // Create provisions a Coder workspace from the configured template.
 func (c *Client) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Environment, error) {
+	finish := sandbox.BeginStage(ctx, sandbox.StageWorkspaceCreate)
+	environment, err := c.create(ctx, spec)
+	finish(err, c.stageAttrs(string(environment.ID), ""))
+	return environment, err
+}
+
+func (c *Client) create(ctx context.Context, spec sandbox.Spec) (sandbox.Environment, error) {
 	name := strings.TrimSpace(spec.Name)
 	if spec.SessionID != "" {
 		name = c.workspaceName(spec.SessionID)
@@ -540,7 +695,10 @@ func (c *Client) validateWorkspaceIdentity(view workspace, expectedName string) 
 }
 
 func (c *Client) Start(ctx context.Context, id sandbox.ID) error {
-	return c.transition(ctx, id, "start")
+	finish := sandbox.BeginStage(ctx, sandbox.StageWorkspaceStart)
+	err := c.transition(ctx, id, "start")
+	finish(err, c.stageAttrs(string(id), ""))
+	return err
 }
 
 func (c *Client) Stop(ctx context.Context, id sandbox.ID) error {
@@ -656,12 +814,21 @@ func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap s
 		return err
 	}
 	agent, ok := c.selectAgent(view)
+	agentAttrs := c.stageAttrs(string(id), agent.ID)
+	agentAttrs["agent_status"] = agent.Status
+	agentAttrs["agent_lifecycle"] = agent.LifecycleState
+	agentAttrs["agent_architecture"] = agent.Architecture
+	agentAttrs["build_status"] = view.LatestBuild.Status
+	finishAgentWait := sandbox.BeginStage(ctx, sandbox.StageAgentWait)
 	if !ok || !agentReady(agent) {
 		// Never bootstrap while the agent is still starting: the template's
 		// startup script has not finished preparing the workspace yet.
-		return fmt.Errorf("coder: workspace agent is not ready (status %q, lifecycle %q): %w",
+		err := fmt.Errorf("coder: workspace agent is not ready (status %q, lifecycle %q): %w",
 			agent.Status, agent.LifecycleState, sandbox.ErrWorkspaceNotReady)
+		finishAgentWait(err, agentAttrs)
+		return err
 	}
+	finishAgentWait(nil, agentAttrs)
 	ptyURL, err := url.Parse(c.baseURL + "/api/v2/workspaceagents/" + url.PathEscape(agent.ID) + "/pty")
 	if err != nil {
 		return fmt.Errorf("coder: build PTY URL: %w", err)
@@ -679,21 +846,47 @@ func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap s
 		arch = sandbox.ArchAMD64
 	}
 	home := ""
-	if sandbox.NormalizeCoderDurableRoot(bootstrap.DurableRoot) == sandbox.CoderHomeDurableRoot {
+	workspaceUser := ""
+	// The workspace user mode always probes: it needs the login user and the
+	// real HOME the worker will run with, whatever the durable root is.
+	if sandbox.NormalizeCoderDurableRoot(bootstrap.DurableRoot) == sandbox.CoderHomeDurableRoot || c.runAsWorkspaceUser {
+		finishProbe := sandbox.BeginStage(ctx, sandbox.StageDurableRootProbe)
 		probe, err := c.probeWorkspace(ctx, id, ptyURL)
 		if err != nil {
-			return classifyBootstrapError(err, bootstrap.DurableRoot)
+			err = classifyBootstrapError(err, bootstrap.DurableRoot)
+			finishProbe(err, agentAttrs)
+			return err
 		}
+		probeAttrs := c.stageAttrs(string(id), agent.ID)
+		probeAttrs["machine"] = probe.machine
+		if c.runAsWorkspaceUser {
+			probeAttrs["workspace_user"] = probe.user
+		}
+		finishProbe(nil, probeAttrs)
 		arch = normalizeArchitecture(probe.machine)
 		if arch == "" {
 			return unsupportedArchitectureError(probe.machine)
 		}
 		home = probe.home
+		workspaceUser = probe.user
 	}
-	resolved, err := resolveWorkerBootstrap(bootstrap, arch, home)
+	// The template's own setup can outlive the agent's startup script; a
+	// configured ready check holds the worker back until it passes.
+	if c.readyProbe != "" {
+		if err := c.waitForReadyProbe(ctx, id, ptyURL, agent); err != nil {
+			return err
+		}
+	}
+	resolved, err := c.specializeBootstrap(bootstrap, arch, home)
 	if err != nil {
 		return err
 	}
+	finishInstall := sandbox.BeginStage(ctx, sandbox.StageWorkerInstall)
+	installAttrs := c.stageAttrs(string(id), agent.ID)
+	installAttrs["arch"] = arch
+	installAttrs["durable_root"] = resolved.DurableRoot
+	installAttrs["worker_user"] = c.workerUserLabel(workspaceUser)
+	installAttrs["checkout_reuse"] = c.checkoutReuseLabel()
 	err = c.bootstrapResolvedWorker(ctx, id, ptyURL, resolved, arch)
 	var mismatch *architectureMismatchError
 	if errors.As(err, &mismatch) {
@@ -701,17 +894,23 @@ func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap s
 		if detected == "" || detected == arch {
 			return unsupportedArchitectureError(mismatch.machine)
 		}
-		if resolved, err = resolveWorkerBootstrap(bootstrap, detected, home); err != nil {
+		if resolved, err = c.specializeBootstrap(bootstrap, detected, home); err != nil {
 			return err
 		}
+		installAttrs["arch"] = detected
 		err = c.bootstrapResolvedWorker(ctx, id, ptyURL, resolved, detected)
 		if errors.As(err, &mismatch) {
-			return unsupportedArchitectureError(mismatch.machine)
+			err = unsupportedArchitectureError(mismatch.machine)
+			finishInstall(err, installAttrs)
+			return err
 		}
 	}
 	if err != nil {
-		return classifyBootstrapError(err, resolved.DurableRoot)
+		err = classifyBootstrapError(err, resolved.DurableRoot)
+		finishInstall(err, installAttrs)
+		return err
 	}
+	finishInstall(nil, installAttrs)
 	return nil
 }
 
@@ -770,6 +969,61 @@ func unsupportedArchitectureError(machine string) error {
 		Message: fmt.Sprintf("This workspace's CPU architecture (%s) isn't supported. AO workers run on x86_64 (amd64) and arm64 workspaces.", machine),
 		Err:     fmt.Errorf("coder: no worker build for architecture %q", machine),
 	}
+}
+
+// specializeBootstrap resolves a bootstrap for one workspace and applies the
+// session's dev-environment options. In the workspace user mode the worker
+// keeps the login user's real HOME (the agent's own config directories stay
+// under the durable root's .ao tree), and a checkout-reuse hint tells the
+// worker to look for the template's existing clone of the repository.
+func (c *Client) specializeBootstrap(bootstrap sandbox.WorkerBootstrap, arch, home string) (sandbox.WorkerBootstrap, error) {
+	resolved, err := resolveWorkerBootstrap(bootstrap, arch, home)
+	if err != nil {
+		return sandbox.WorkerBootstrap{}, err
+	}
+	if !c.runAsWorkspaceUser {
+		return resolved, nil
+	}
+	home = strings.TrimSpace(home)
+	if !sandbox.SafeCoderDurableRoot(home) {
+		return sandbox.WorkerBootstrap{}, &sandbox.StartupError{
+			Code:    sandbox.StartupErrorDurableRootUnavailable,
+			Message: fmt.Sprintf("AO couldn't use the workspace user's home directory (%q) to run its worker.", home),
+			Err:     errors.New("coder: workspace home directory is not a safe absolute path"),
+		}
+	}
+	resolved.RunAsWorkspaceUser = true
+	resolved.Environment["HOME"] = home
+	resolved.Environment["GIT_TERMINAL_PROMPT"] = "0"
+	if c.reuseCheckout {
+		resolved.Environment[ReuseExistingCheckoutEnv] = "1"
+	}
+	return resolved, nil
+}
+
+// ReuseExistingCheckoutEnv is the worker environment variable that asks the
+// worker to adopt a checkout of the session repository the template already
+// cloned (mirrored by worker.ReuseExistingCheckoutEnv).
+const ReuseExistingCheckoutEnv = "AO_WORKER_REUSE_EXISTING_CHECKOUT"
+
+// workerUserLabel names who the worker runs as, for stage reports.
+func (c *Client) workerUserLabel(workspaceUser string) string {
+	if !c.runAsWorkspaceUser {
+		return domain.CoderWorkerUserAOWorker
+	}
+	if workspaceUser == "" {
+		return domain.CoderWorkerUserWorkspace
+	}
+	return domain.CoderWorkerUserWorkspace + ":" + workspaceUser
+}
+
+// checkoutReuseLabel reports whether the worker was asked to adopt the
+// template's existing checkout, for stage reports and diagnostics.
+func (c *Client) checkoutReuseLabel() string {
+	if c.reuseCheckout {
+		return "enabled"
+	}
+	return "disabled"
 }
 
 // resolveWorkerBootstrap specializes a bootstrap for one workspace: it selects
@@ -878,6 +1132,9 @@ func classifyBootstrapError(err error, durableRoot string) error {
 type workspaceProbeResult struct {
 	machine string
 	home    string
+	// user is the workspace login user (id -un); only the workspace user mode
+	// asks for it.
+	user string
 }
 
 // probeWorkspace runs a one-line command in the workspace to learn its CPU
@@ -888,7 +1145,12 @@ func (c *Client) probeWorkspace(ctx context.Context, id sandbox.ID, ptyURL *url.
 	query := attemptURL.Query()
 	query.Set("width", "120")
 	query.Set("height", "40")
-	query.Set("command", "sh -c "+shellQuote(`printf '%s:%s:%s\n' `+workspaceProbe+` "$(uname -m)" "$HOME"`))
+	probeCommand := `printf '%s:%s:%s\n' ` + workspaceProbe + ` "$(uname -m)" "$HOME"`
+	if c.runAsWorkspaceUser {
+		// The login user goes first so a HOME containing ':' still parses.
+		probeCommand = `printf '%s:%s:%s:%s\n' ` + workspaceProbe + ` "$(id -un)" "$(uname -m)" "$HOME"`
+	}
+	query.Set("command", "sh -c "+shellQuote(probeCommand))
 	query.Set("backend_type", "buffered")
 	attemptURL.RawQuery = query.Encode()
 	const probeAttempts = 3
@@ -1011,8 +1273,15 @@ func (c *Client) probeWorkspaceOnce(ctx context.Context, ptyURL *url.URL) (works
 				return workspaceProbeResult{}, fmt.Errorf("%w: workspace PTY closed before the probe reported", errTerminalNotReady)
 			}
 			if _, rest, found := strings.Cut(line.data, workspaceProbe+":"); found {
-				machine, home, _ := strings.Cut(strings.TrimRight(rest, "\r\n"), ":")
-				return workspaceProbeResult{machine: strings.TrimSpace(machine), home: strings.TrimSpace(home)}, nil
+				rest = strings.TrimRight(rest, "\r\n")
+				user := ""
+				if c.runAsWorkspaceUser {
+					user, rest, _ = strings.Cut(rest, ":")
+				}
+				machine, home, _ := strings.Cut(rest, ":")
+				return workspaceProbeResult{
+					machine: strings.TrimSpace(machine), home: strings.TrimSpace(home), user: strings.TrimSpace(user),
+				}, nil
 			}
 			if line.err != nil {
 				return workspaceProbeResult{}, fmt.Errorf("%w: read workspace probe: %v", errTerminalNotReady, line.err)
@@ -1382,8 +1651,12 @@ func bootstrapCommandForArchive(
 		"  if [ \"$kind\" = data ] && [ \"$sequence\" -eq \"$expected\" ] && [ \"${#chunk}\" -eq \"$declared\" ] && [ $((received + declared)) -le \"$target\" ]; then\n" +
 		"    printf %s \"$chunk\" >>\"$encoded\"\n    received=$((received + declared))\n    expected=$((expected + 1))\n    echo " + bootstrapUploadACK + ":$expected\n" +
 		"  elif [ \"$kind\" = done ] && [ \"$received\" -eq \"$target\" ]; then\n    echo " + bootstrapUploadDone + "\n    break\n  fi\ndone\nstty echo icanon 2>/dev/null || true\n" +
-		"base64 -d \"$encoded\" | gzip -d | tar -xf - -C \"$stage\"\n" +
-		"sudo -n id -u " + shellQuote(workerUser) + " >/dev/null 2>&1 || sudo -n useradd -m " + shellQuote(workerUser) + "\n" +
+		"base64 -d \"$encoded\" | gzip -d | tar -xf - -C \"$stage\"\n"
+	if bootstrap.RunAsWorkspaceUser {
+		return "sh -lc " + shellQuote(script+workspaceUserLaunchScript(bootstrap, layout, binaryPreparation))
+	}
+	script += "sudo -n id -u " + shellQuote(workerUser) + " >/dev/null 2>&1 || sudo -n useradd -m " + shellQuote(workerUser) + "\n" +
+		dockerGroupScript(workerUser) +
 		durableRootScript(layout.DurableRoot, bootstrap.RequireMountedDurableRoot) +
 		"sudo -n chmod o+x \"$durable_root\"\n" +
 		"sudo -n mkdir -p " + shellQuote(layout.Repository) + " " + shellQuote(layout.WorkerData) + " " +
@@ -1459,6 +1732,86 @@ func durableRootScript(durableRoot string, requireMount bool) string {
 		"elif [ ! -d \"$durable_root\" ]; then\n" +
 		"  sudo -n mkdir -p \"$durable_root\"\n" +
 		"  sudo -n chown \"$(id -u):$(id -g)\" \"$durable_root\"\nfi\n"
+}
+
+// dockerGroupScript adds the dedicated worker user to the workspace's docker
+// group when one exists, so the agent can drive the template's containers. It
+// is idempotent (usermod -aG keeps existing memberships; busybox images fall
+// back to adduser) and never fails the bootstrap. The membership applies to the
+// worker sudo launches afterwards, since sudo initializes groups at launch.
+func dockerGroupScript(workerUser string) string {
+	quotedUser := shellQuote(workerUser)
+	return "if getent group docker >/dev/null 2>&1 || grep -q '^docker:' /etc/group 2>/dev/null; then\n" +
+		"  sudo -n usermod -aG docker " + quotedUser + " 2>/dev/null || sudo -n adduser " + quotedUser + " docker >/dev/null 2>&1 || true\nfi\n"
+}
+
+// workspaceUserLaunchScript is the post-upload half of the bootstrap when the
+// worker runs as the workspace's own login user. No account is created and the
+// worker is not launched through sudo: it starts directly from the agent's
+// login shell, detached with setsid and nohup, so it inherits that user's HOME
+// (from worker.env), supplementary groups (for example docker) and login
+// environment. Only installing a missing worker binary into a system path still
+// uses sudo, exactly as in the dedicated-user path.
+func workspaceUserLaunchScript(
+	bootstrap sandbox.WorkerBootstrap,
+	layout sandbox.CoderWorkspaceLayout,
+	binaryPreparation string,
+) string {
+	workerDestination := strings.TrimSpace(bootstrap.Destination)
+	requireIdentity := "0"
+	if bootstrap.RequireDurableIdentity {
+		requireIdentity = "1"
+	}
+	identity := shellQuote(strings.TrimSpace(bootstrap.DurableIdentity))
+	workerEnvironment := shellQuote(path.Join(layout.WorkerData, "worker.env"))
+	workerLauncher := path.Join(layout.WorkerData, "launch.sh")
+	workerLog := shellQuote(path.Join(layout.WorkerData, "worker.log"))
+	workerPID := shellQuote(path.Join(layout.WorkerData, "worker.pid"))
+	processName := path.Base(workerDestination)
+	if len(processName) > 15 {
+		processName = processName[:15] // the kernel's comm length
+	}
+	launch := "exec nohup " + shellQuote(workerLauncher) + " " + workerEnvironment + " " +
+		shellQuote(workerDestination) + " " + workerPID + " >" + workerLog + " 2>&1 </dev/null"
+	return durableRootScript(layout.DurableRoot, bootstrap.RequireMountedDurableRoot) +
+		"mkdir -p " + shellQuote(layout.Repository) + " " + shellQuote(layout.WorkerData) + " " +
+		shellQuote(layout.Home) + " " + shellQuote(layout.ClaudeConfig) + " " + shellQuote(layout.CodexHome) + "\n" +
+		"identity_file=" + shellQuote(layout.DurableIdentity) + "\n" +
+		"if [ -f \"$identity_file\" ]; then\n" +
+		"  existing_identity=$(cat \"$identity_file\")\n" +
+		"  if [ \"$existing_identity\" != " + identity + " ]; then\n" +
+		"    echo 'Coder durable root belongs to a different AO session' >&2\n    exit 1\n  fi\n" +
+		"elif [ " + requireIdentity + " -eq 1 ]; then\n" +
+		"  echo 'Coder durable state did not survive workspace stop/start' >&2\n  exit 1\n" +
+		"else\n" +
+		"  printf '%s\\n' " + identity + " >\"$identity_file\"\nfi\n" +
+		binaryPreparation +
+		"install -m 0600 \"$stage/worker.env\" " + workerEnvironment + "\n" +
+		"install -m 0700 \"$stage/launch.sh\" " + shellQuote(workerLauncher) + "\n" +
+		// Stop this session's previous worker. pkill -f would also match this
+		// bootstrap shell (same user, and its command line names the worker
+		// path), so match the exact process name, plus the recorded pid when it
+		// still runs the worker.
+		"if [ -s " + workerPID + " ]; then\n" +
+		"  old_pid=$(cat " + workerPID + ")\n" +
+		"  case \"$old_pid\" in ''|*[!0-9]*) ;; *)\n" +
+		"    case \"$(tr '\\000' ' ' </proc/$old_pid/cmdline 2>/dev/null)\" in *" + shellQuote(workerDestination) + "*) kill \"$old_pid\" 2>/dev/null || true ;; esac ;;\n" +
+		"  esac\nfi\n" +
+		"pkill -u \"$(id -u)\" -x " + shellQuote(processName) + " 2>/dev/null || true\n" +
+		"install -m 0600 /dev/null " + workerLog + "\n" +
+		"install -m 0600 /dev/null " + workerPID + "\n" +
+		// Detach exactly as the dedicated-user path does: a new session with no
+		// controlling terminal, so nothing the worker runs can stop it by
+		// touching /dev/tty, and closing this PTY does not hang it up.
+		"ao_setsid=\nif command -v setsid >/dev/null 2>&1; then ao_setsid=setsid; fi\n" +
+		"GIT_TERMINAL_PROMPT=0 $ao_setsid sh -c " + shellQuote(launch) + " >/dev/null 2>&1 </dev/null &\n" +
+		"attempt=0\nworker_pid=\nwhile [ \"$attempt\" -lt 5 ]; do\n" +
+		"  if [ -s " + workerPID + " ]; then worker_pid=$(cat " + workerPID + "); fi\n" +
+		"  case \"$worker_pid\" in ''|*[!0-9]*) ;; *) if kill -0 \"$worker_pid\" 2>/dev/null; then break; fi ;; esac\n" +
+		"  worker_pid=\nattempt=$((attempt + 1))\nsleep 1\ndone\n" +
+		"case \"$worker_pid\" in ''|*[!0-9]*) echo 'AO worker did not start' >&2; exit 1 ;; esac\n" +
+		"sleep 1\nkill -0 \"$worker_pid\" 2>/dev/null || { echo 'AO worker exited during startup' >&2; exit 1; }\n" +
+		"rm -rf \"$stage\"\ntrap - EXIT\necho " + bootstrapOK + "\n"
 }
 
 // preinstalledHealScript emits the shell that runs before a launch-only bootstrap

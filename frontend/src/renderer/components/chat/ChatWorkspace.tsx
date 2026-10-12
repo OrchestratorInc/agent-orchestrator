@@ -1,3 +1,4 @@
+import { TurnWorkSummary } from "./TurnWorkSummary";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
@@ -34,7 +35,7 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
-import { ArrowDown, ChevronRight, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "lucide-react";
+import { ArrowDown, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "lucide-react";
 import { Reorder, useDragControls } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
@@ -103,7 +104,6 @@ import {
 import { AgentAvatar } from "../AgentAvatar";
 import { SessionPaneTab } from "../CenterPane";
 import { Button } from "../ui/button";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "../ui/accordion";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
 import { ShellTerminalTab } from "../ShellTerminalTab";
@@ -117,7 +117,6 @@ import {
 	OriginMessage,
 	SteerMessage,
 	TurnChangedFiles,
-	TurnDuration,
 	TurnOutcome,
 	LiveResponseStatus,
 	type TurnOutcomeRetryControl,
@@ -315,6 +314,8 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 }
 
 export interface ChatWorkspaceProps {
+	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
+	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
 	snapshot: ConversationSnapshot;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
 	uiSessionId?: string;
@@ -593,6 +594,8 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 }
 
 function ChatWorkspaceContent({
+	onAddToSideChat,
+	annotationNavigationRequest,
 	snapshot,
 	sessionTitle,
 	sessionRole = "worker",
@@ -1111,6 +1114,7 @@ function ChatWorkspaceContent({
 	const navigateToAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
 		annotationNavigationRef.current?.(annotation);
 	}, []);
+	useEffect(() => { if (annotationNavigationRequest) navigateToAnnotation(annotationNavigationRequest); }, [annotationNavigationRequest, navigateToAnnotation]);
 	// Storage failures can be transient, so try again when the user comes back. Only while
 	// the composer is empty: recovering remounts it, which would drop unsaved text.
 	useEffect(() => {
@@ -1672,6 +1676,7 @@ function ChatWorkspaceContent({
 							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles}>
 
 								<Timeline
+							onAddToSideChat={onAddToSideChat}
 									annotationNavigationRef={annotationNavigationRef}
 									key={draftScopeKey}
 									snapshot={snapshot}
@@ -2328,7 +2333,15 @@ const CHAT_ESTIMATED_TURN_HEIGHT = 600;
 const CHAT_TURN_GAP = 18;
 const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
 
-function Timeline({
+/**
+ * The conversation transcript: turn grouping, live status, "Worked for", and
+ * scroll follow. Exported so a side chat renders its transcript with exactly
+ * this behavior while keeping its own composer.
+ */
+export function Timeline({
+	onAddToSideChat,
+	onAddToChat,
+	onForeignAnnotation,
 	annotationNavigationRef,
 	snapshot,
 	assetBaseUrl,
@@ -2358,6 +2371,11 @@ function Timeline({
 	startup,
 	arriving = false,
 }: {
+	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
+	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
+	onAddToChat?: (excerpt: ChatDraftExcerptReference) => void;
+	/** Handles annotations whose source is another conversation. */
+	onForeignAnnotation?: (annotation: { text: string; messageId?: string; revision?: number; conversationId?: string }) => void;
 	annotationNavigationRef: MutableRefObject<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>;
 	snapshot: ConversationSnapshot;
 	assetBaseUrl?: string;
@@ -2464,7 +2482,13 @@ function Timeline({
 	// that adds nothing (a failed page or a source outside this branch) must end
 	// the search instead of requesting the same page again.
 	const annotationOlderRequestGroups = useRef<number | undefined>(undefined);
-	const selectAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
+	const selectAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number; conversationId?: string }) => {
+		if (onForeignAnnotation && annotation.conversationId && annotation.conversationId !== snapshot.conversationId) {
+			// The source lives in another conversation (a side chat quoting the main
+			// chat); its host navigates there instead of searching this transcript.
+			onForeignAnnotation(annotation);
+			return;
+		}
 		releaseFollow();
 		setAnnotationNavigationError(undefined);
 		annotationRetryCount.current = 0;
@@ -2480,7 +2504,7 @@ function Timeline({
 			return;
 		}
 		setAnnotationTarget({ ...annotation });
-	}, [releaseFollow]);
+	}, [onForeignAnnotation, releaseFollow, snapshot.conversationId]);
 	useEffect(() => {
 		annotationNavigationRef.current = selectAnnotation;
 		return () => { annotationNavigationRef.current = null; };
@@ -2579,6 +2603,13 @@ function Timeline({
 
 	const addSelectionToChat = useCallback(async () => {
 		if (!selectionAction) return;
+		if (onAddToChat) {
+			// A host with its own composer (a side chat) owns where references go.
+			onAddToChat(selectionAction.excerpt);
+			setSelectionAction(null);
+			window.getSelection()?.removeAllRanges();
+			return;
+		}
 		const composer = readChatSessionDraft(draftScope).composer;
 		// A pending delivery is cleared by revision on acceptance. Changing the
 		// draft now would keep the sent text and excerpts for a second send.
@@ -2598,7 +2629,7 @@ function Timeline({
 		setDraftPersistenceError(result.ok ? undefined : "chat.draft.saveFailed");
 		setSelectionAction(null);
 		window.getSelection()?.removeAllRanges();
-	}, [draftScope, selectionAction]);
+	}, [draftScope, onAddToChat, selectionAction]);
 	const inlineEditRecoveryLabel = durableInlineEditDelivery
 		? durableInlineEditDelivery.state === "accepted"
 			? "chat.draft.clearEdit"
@@ -3108,6 +3139,7 @@ function Timeline({
 				content: echo.excerpts?.map((excerpt) => ({
 					type: "excerpt",
 					text: excerpt.text,
+					sourceConversationId: excerpt.conversationId,
 					sourceMessageId: excerpt.messageId,
 					sourceRevision: excerpt.revision,
 				})),
@@ -3702,11 +3734,12 @@ function Timeline({
 					ref={selectionButton}
 					style={{ left: selectionPosition?.left ?? 0, top: selectionPosition?.top ?? 0, visibility: selectionPosition?.visible ? "visible" : "hidden" }}
 					onMouseDown={(event) => event.preventDefault()}
-					className={cn(actionMenuContentClass, "absolute min-w-0 w-max max-w-full shadow-lg")}
+					className={cn(actionMenuContentClass, "absolute flex-row min-w-0 w-max max-w-full shadow-lg")}
 				>
 					<button type="button" onClick={() => void addSelectionToChat()} className={cn(actionMenuItemClass, "shrink-0 whitespace-nowrap hover:bg-interactive-hover hover:text-foreground")}>
 						<MessageSquarePlus aria-hidden="true" className="size-3.5" /> Add to chat
 					</button>
+					{onAddToSideChat ? <button type="button" className={cn(actionMenuItemClass, "shrink-0 whitespace-nowrap hover:bg-interactive-hover")} onClick={() => { void onAddToSideChat(selectionAction.excerpt); clearSelectionAction(); window.getSelection()?.removeAllRanges(); }}><MessageSquarePlus aria-hidden="true" className="size-3.5" /> {t("sideChat.addToSideChat")}</button> : null}
 				</div>
 			) : null}
 			<div
@@ -4192,46 +4225,17 @@ const TurnGroup = memo(function TurnGroup({
 	const outcome = showSettledStatus ? group.outcome : undefined;
 	if (!outcome) {
 		body.push(...workedRuns.map(renderRun));
-	} else if (foldedRuns.length > 0) {
+	} else {
 		const disclosureKey = `${group.key}:worked`;
 		body.push(
-			<Accordion
+			<TurnWorkSummary
 				key="turn-worked"
-				type="single"
-				collapsible
-				className="-mx-1 border-b border-border"
-				// Held above the virtualizer, so the accordion stays open when its row scrolls away and back.
-				value={activityDisclosureOverrides[disclosureKey] ? "worked" : ""}
-				onValueChange={(value) => onActivityDisclosureChange(disclosureKey, value === "worked")}
+				durationMs={outcome.durationMs}
+				open={Boolean(activityDisclosureOverrides[disclosureKey])}
+				onOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
 			>
-				<AccordionItem value="worked" className="border-0">
-					<AccordionTrigger
-						className="chat-worked-trigger h-7 select-none gap-1 px-1 py-0 text-sm font-normal text-muted-foreground transition-colors hover:text-foreground active:transform-none"
-						headerClassName="hover:bg-transparent data-[state=open]:bg-transparent"
-						trailing={null}
-					>
-						<span className="inline-flex w-fit items-center gap-1">
-							Worked for
-							{outcome.durationMs !== undefined ? <TurnDuration durationMs={outcome.durationMs} inline /> : null}
-							<ChevronRight aria-hidden="true" className="size-3.5 shrink-0 transition-transform duration-200 group-data-[state=open]/row:rotate-90" />
-						</span>
-					</AccordionTrigger>
-					{/* Padding lives on the inner div: the content element's height is what animates,
-					    so any padding on it itself would stay put while it opens and closes. */}
-					<AccordionContent className="chat-worked-accordion-content">
-						<div className="space-y-2 px-1 pb-2 pt-1">{foldedRuns.map(renderRun)}</div>
-					</AccordionContent>
-				</AccordionItem>
-			</Accordion>,
-		);
-	} else {
-		body.push(
-			<div key="turn-worked-plain" className="-mx-1 flex h-7 select-none items-center border-b border-border px-1 py-0 text-sm font-normal text-muted-foreground">
-				<span className="inline-flex w-fit items-center gap-1">
-					Worked for
-					{outcome.durationMs !== undefined ? <TurnDuration durationMs={outcome.durationMs} inline /> : null}
-				</span>
-			</div>,
+				{foldedRuns.length > 0 ? foldedRuns.map(renderRun) : undefined}
+			</TurnWorkSummary>,
 		);
 	}
 	if (outcome) body.push(...noticeRuns.map(renderRun));

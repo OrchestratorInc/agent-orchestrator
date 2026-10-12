@@ -10,16 +10,56 @@ API_FAMILY="${AO_CLOUD_API_TASK_FAMILY:-ao-cloud-staging-api}"
 MIGRATION_FAMILY="${AO_CLOUD_MIGRATION_TASK_FAMILY:-ao-cloud-staging-migrate}"
 ROLLBACK_ALARM="${AO_CLOUD_ROLLBACK_ALARM:-ao-cloud-staging-target-5xx}"
 RUNTIME_DATABASE_USER="${AO_CLOUD_RUNTIME_DATABASE_USER:-ao_cloud_app}"
-SANDBOX_PROVIDER="${AO_CLOUD_SANDBOX_PROVIDER:-nodeops}"
-# Every sandbox provider this control plane serves. Defaults to the single
-# primary; a multi-provider CP (for example nodeops,coder) plumbs and preserves
-# all their secrets so a deploy never drops an inactive provider's credentials.
-PROVIDERS="${AO_CLOUD_SANDBOX_PROVIDERS:-$SANDBOX_PROVIDER}"
+
+# shellcheck source=lib/deploy-common.sh
+source ./scripts/lib/deploy-common.sh
+
+ROLLING=false
+RELEASE_ARG=""
+for arg in "$@"; do
+	case "$arg" in
+	--rolling-200-100) ROLLING=true ;;
+	-*)
+		echo "Unknown option $arg (usage: deploy-staging.sh [--rolling-200-100] [release])." >&2
+		exit 1
+		;;
+	*)
+		if [[ -n "$RELEASE_ARG" ]]; then
+			echo "Pass at most one release." >&2
+			exit 1
+		fi
+		RELEASE_ARG="$arg"
+		;;
+	esac
+done
+
+# The offering (providers, capability gate, default org capabilities and
+# billing, paywalled features, idle pause) comes from scripts/offering/staging.env
+# unless the deploying shell sets a value. Every served provider's secrets are
+# plumbed and preserved, so a deploy never drops an inactive provider's
+# credentials.
+load_offering ./scripts/offering/staging.env
+SANDBOX_PROVIDER="$AO_CLOUD_SANDBOX_PROVIDER"
+PROVIDERS="$AO_CLOUD_SANDBOX_PROVIDERS"
+# SKIP_FREESTYLE_BAKE=1 reuses the snapshots already recorded in the Freestyle
+# secret, so a Freestyle outage cannot block a release. New sessions then fetch
+# the current worker from the control plane before starting.
+SKIP_FREESTYLE_BAKE="${SKIP_FREESTYLE_BAKE:-}"
+# SKIP_CODER_WORKSPACE_PUBLISH=1 keeps the published Coder workspace image (for
+# a host that cannot build it, or a Coder registry outage). Workers self-update
+# at boot, so a stale baked worker only costs the first start a download.
+SKIP_CODER_WORKSPACE_PUBLISH="${SKIP_CODER_WORKSPACE_PUBLISH:-}"
+ARTIFACTS_BUCKET="${AO_CLOUD_ARTIFACTS_BUCKET:-ao-cloud-staging-artifacts}"
 NODEOPS_SECRET_ID="${AO_CLOUD_NODEOPS_SECRET_ID:-ao-cloud/staging/nodeops}"
 CODER_SECRET_ID="${AO_CLOUD_CODER_SECRET_ID:-ao-cloud/staging/coder}"
+FREESTYLE_SECRET_ID="${AO_CLOUD_FREESTYLE_SECRET_ID:-ao-cloud/staging/freestyle}"
 WORKER_SECRET_ID="${AO_CLOUD_WORKER_SECRET_ID:-ao-cloud/staging/worker}"
+# Stripe billing is optional: without this secret the control plane runs with
+# billing off, as before.
+STRIPE_SECRET_ID="${AO_CLOUD_STRIPE_SECRET_ID:-ao-cloud/staging/stripe}"
+SUPPORT_SECRET_ID="${AO_CLOUD_SUPPORT_SECRET_ID:-ao-cloud/staging/support}"
 HEAD_SHA="$(git rev-parse HEAD)"
-RELEASE="${1:-$HEAD_SHA}"
+RELEASE="${RELEASE_ARG:-$HEAD_SHA}"
 IMAGE_TAG="${RELEASE//+/-}-linux-amd64"
 
 # CVE allowlist shared with promote-production.sh. These CRITICAL/HIGH findings
@@ -39,7 +79,16 @@ IMAGE_TAG="${RELEASE//+/-}-linux-amd64"
 # (CVE-2026-93990 UTF-16 surrogate validation) and libstdc++ (CVE-2026-95619
 # aligned operator new overflow) findings have no Debian 13 fix yet; the worker
 # parses no UTF-16 XML and makes no attacker-sized aligned allocations.
-SCAN_CVE_ALLOWLIST="${AO_CLOUD_SCAN_CVE_ALLOWLIST:-CVE-2026-57432 CVE-2026-45186 CVE-2026-12087 CVE-2025-15661 CVE-2026-58051 CVE-2026-7017 CVE-2026-48962 CVE-2026-57433 CVE-2026-66032 CVE-2026-48961 CVE-2026-48959 CVE-2026-66034 CVE-2026-58050 CVE-2026-13221 CVE-2026-14456 CVE-2026-66046 CVE-2026-63076 CVE-2026-53615 CVE-2026-54874 CVE-2026-63072 CVE-2026-8927 CVE-2026-8924 CVE-2026-8286 CVE-2026-85091 CVE-2026-93990 CVE-2026-95619}"
+# The gnutls28 findings (CVE-2026-95210, CVE-2026-88647, CVE-2026-67693:
+# certificate and hostname checks that accept a crafted certificate;
+# CVE-2026-95184, CVE-2026-95209: rejecting valid ones) and cyrus-sasl2
+# (CVE-2026-107161, DIGEST-MD5 client overflow) have no Debian 13 fix yet. Only
+# git's HTTPS transport and curl link gnutls (ao-worker, node and the agents use
+# their own TLS); abusing it needs an on-path attacker holding a CA-signed
+# certificate for the target. The DIGEST-MD5 plugin (libsasl2-modules) is not
+# installed, so the SASL overflow is unreachable. This image runs only for the
+# docker provider; Coder and Freestyle sessions boot Ubuntu images instead.
+SCAN_CVE_ALLOWLIST="${AO_CLOUD_SCAN_CVE_ALLOWLIST:-CVE-2026-57432 CVE-2026-45186 CVE-2026-12087 CVE-2025-15661 CVE-2026-58051 CVE-2026-7017 CVE-2026-48962 CVE-2026-57433 CVE-2026-66032 CVE-2026-48961 CVE-2026-48959 CVE-2026-66034 CVE-2026-58050 CVE-2026-13221 CVE-2026-14456 CVE-2026-66046 CVE-2026-63076 CVE-2026-53615 CVE-2026-54874 CVE-2026-63072 CVE-2026-8927 CVE-2026-8924 CVE-2026-8286 CVE-2026-85091 CVE-2026-93990 CVE-2026-95619 CVE-2026-95210 CVE-2026-88647 CVE-2026-67693 CVE-2026-95184 CVE-2026-95209 CVE-2026-107161}"
 
 AWS_OPTIONS=(--region "$REGION")
 if [[ -n "${AWS_PROFILE:-}" ]]; then
@@ -63,14 +112,14 @@ if [[ ! "$RELEASE" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,199}$ ]]; then
 	echo "Release must be a Git SHA or release tag." >&2
 	exit 1
 fi
-if [[ "$SANDBOX_PROVIDER" != "nodeops" && "$SANDBOX_PROVIDER" != "coder" ]]; then
-	echo "AO_CLOUD_SANDBOX_PROVIDER must be nodeops or coder." >&2
+if [[ "$SANDBOX_PROVIDER" != "nodeops" && "$SANDBOX_PROVIDER" != "coder" && "$SANDBOX_PROVIDER" != "freestyle" ]]; then
+	echo "AO_CLOUD_SANDBOX_PROVIDER must be nodeops, coder, or freestyle." >&2
 	exit 1
 fi
 IFS=',' read -ra _providers_list <<<"$PROVIDERS"
 for _provider in "${_providers_list[@]}"; do
-	if [[ "$_provider" != "nodeops" && "$_provider" != "coder" ]]; then
-		echo "AO_CLOUD_SANDBOX_PROVIDERS entries must each be nodeops or coder, got: $_provider" >&2
+	if [[ "$_provider" != "nodeops" && "$_provider" != "coder" && "$_provider" != "freestyle" ]]; then
+		echo "AO_CLOUD_SANDBOX_PROVIDERS entries must each be nodeops, coder, or freestyle, got: $_provider" >&2
 		exit 1
 	fi
 done
@@ -83,12 +132,33 @@ if ! resolved_release="$(git rev-parse "${RELEASE}^{commit}" 2>/dev/null)" ||
 	echo "Release must resolve to the current commit ${HEAD_SHA}." >&2
 	exit 1
 fi
+./scripts/validate-hosted-settings.py \
+	--offering \
+	--environment staging \
+	--providers "$PROVIDERS" \
+	--provider "$SANDBOX_PROVIDER" \
+	--capability-gated-providers "$AO_CLOUD_CAPABILITY_GATED_PROVIDERS" \
+	--default-org-capabilities "$AO_CLOUD_DEFAULT_ORG_CAPABILITIES" \
+	--default-org-billing "$AO_CLOUD_DEFAULT_ORG_BILLING" \
+	--paywalled-features "$AO_CLOUD_PAYWALLED_FEATURES" \
+	--idle-pause-threshold "$AO_CLOUD_IDLE_PAUSE_THRESHOLD" \
+	--freestyle-idle-pause-threshold "$AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD"
+echo "Offering: providers=${PROVIDERS} default=${SANDBOX_PROVIDER} gated=${AO_CLOUD_CAPABILITY_GATED_PROVIDERS:-none} default_org_capabilities=${AO_CLOUD_DEFAULT_ORG_CAPABILITIES:-none} default_org_billing=${AO_CLOUD_DEFAULT_ORG_BILLING} paywalled=${AO_CLOUD_PAYWALLED_FEATURES:-none}" >&2
 
 ./scripts/verify-ecs-service.py \
 	--region "$REGION" \
 	--cluster "$CLUSTER" \
 	--service "$SERVICE" \
 	--alarm "$ROLLBACK_ALARM" >/dev/null
+# The task definition running before this deploy. Its Freestyle snapshots stay
+# protected from the post-deploy prune.
+previous_task="$(
+	aws_cli ecs describe-services \
+		--cluster "$CLUSTER" \
+		--services "$SERVICE" \
+		--query 'services[0].taskDefinition' \
+		--output text
+)"
 
 secret_arn() {
 	aws_cli secretsmanager describe-secret \
@@ -138,7 +208,47 @@ if providers_has coder; then
 		--worker <(printf '%s' "$worker_settings")
 	unset coder_settings
 fi
+if providers_has freestyle; then
+	freestyle_secret_arn="$(secret_arn "$FREESTYLE_SECRET_ID")"
+	freestyle_settings="$(
+		aws_cli secretsmanager get-secret-value \
+			--secret-id "$FREESTYLE_SECRET_ID" \
+			--query SecretString \
+			--output text
+	)"
+	./scripts/validate-hosted-settings.py \
+		--freestyle <(printf '%s' "$freestyle_settings") \
+		--worker <(printf '%s' "$worker_settings")
+	# Snapshot ids are not credentials; plaintext keeps a malformed optional key
+	# from blocking container start, as for NodeOps rootfs_by_harness.
+	snapshot_by_harness="$(jq -r '.snapshot_by_harness' <<<"$freestyle_settings")"
+	unset freestyle_settings
+fi
 unset worker_settings
+# The operator support lookup token is optional: without it the endpoint is off.
+support_secret_arn="$(optional_secret_arn "$SUPPORT_SECRET_ID")"
+# Only a missing secret turns billing off; any other lookup error fails here.
+stripe_secret_arn="$(optional_secret_arn "$STRIPE_SECRET_ID")"
+if [[ -n "$stripe_secret_arn" ]]; then
+	stripe_settings="$(
+		aws_cli secretsmanager get-secret-value \
+			--secret-id "$STRIPE_SECRET_ID" \
+			--query SecretString \
+			--output text
+	)"
+	./scripts/validate-hosted-settings.py \
+		--stripe <(printf '%s' "$stripe_settings") \
+		--environment staging
+	# Price ids are not credentials; the key and webhook secret stay secrets.
+	stripe_price_ids="$(jq -c '.price_ids | if type == "string" then fromjson else . end' <<<"$stripe_settings")"
+	stripe_portal_configuration="$(jq -r '.portal_configuration // ""' <<<"$stripe_settings")"
+	# Organizations created before billing went live stay exempt.
+	stripe_exempt_before="$(jq -r '.exempt_orgs_created_before // ""' <<<"$stripe_settings")"
+	unset stripe_settings
+	echo "Stripe billing: enabled from $STRIPE_SECRET_ID" >&2
+else
+	echo "Stripe billing: off ($STRIPE_SECRET_ID not found)" >&2
+fi
 
 publish_image() {
 	local repository="$1"
@@ -244,12 +354,39 @@ scan_image "$WORKER_REPOSITORY" "$worker_image_digest"
 # baked binaries are byte-identical to what the reconciler advertises
 # (AO_WORKER_EXPECTED_SHA256). The nodeops path is unaffected: its template is
 # published out of band by scripts/publish-nodeops-template.sh.
-if providers_has coder; then
+if providers_has coder && [[ "$SKIP_CODER_WORKSPACE_PUBLISH" == 1 ]]; then
+	echo "Coder workspace image: skipped (SKIP_CODER_WORKSPACE_PUBLISH=1); workers self-update at boot." >&2
+elif providers_has coder; then
 	AWS_REGION="$REGION" \
 		AO_CLOUD_CP_IMAGE="$control_image" \
 		AO_CLOUD_CODER_SECRET_ID="$CODER_SECRET_ID" \
 		AO_CLOUD_CODER_WORKSPACE_IMAGE_TAG="${IMAGE_TAG}" \
 		./scripts/publish-coder-workspace.sh
+fi
+
+# Freestyle boots sessions from snapshots with ao-worker baked in, so a release
+# that changes the worker must rebake them; otherwise every new session first
+# downloads the current worker from the control plane. Bake from the exact
+# control-plane digest, record the new snapshot ids in the Freestyle secret, and
+# give this release's task those ids directly. Old snapshots are pruned only
+# after the new task is healthy (see the end of this script).
+freestyle_baked=false
+if providers_has freestyle && [[ "$SKIP_FREESTYLE_BAKE" == 1 ]]; then
+	echo "Freestyle bake: skipped (SKIP_FREESTYLE_BAKE=1); reusing the snapshots in $FREESTYLE_SECRET_ID." >&2
+elif providers_has freestyle; then
+	snapshot_by_harness="$(
+		AWS_PROFILE="${AWS_PROFILE:-}" \
+			AWS_REGION="$REGION" \
+			AO_CLOUD_CP_IMAGE="$control_image" \
+			AO_CLOUD_FREESTYLE_SECRET_ID="$FREESTYLE_SECRET_ID" \
+			AO_CLOUD_ARTIFACTS_BUCKET="$ARTIFACTS_BUCKET" \
+			AO_CLOUD_FREESTYLE_UPDATE_SECRET=1 \
+			AO_CLOUD_FREESTYLE_PRUNE=0 \
+			./scripts/publish-freestyle-snapshot.sh | tail -n 1
+	)"
+	jq -e 'type == "object"' <<<"$snapshot_by_harness" >/dev/null ||
+		{ echo "Freestyle snapshot bake did not return a snapshot map." >&2; exit 1; }
+	freestyle_baked=true
 fi
 
 register_task_definition() {
@@ -284,6 +421,12 @@ register_task_definition() {
 			--set-secret "AO_CLOUD_SANDBOX_RECONCILE_INTERVAL=${worker_secret_arn}:sandbox_reconcile_interval::"
 			--set-secret "AO_CLOUD_SANDBOX_STARTUP_TIMEOUT=${worker_secret_arn}:sandbox_startup_timeout::"
 			--set-secret "AO_CLOUD_WORKER_HEARTBEAT_TIMEOUT=${worker_secret_arn}:worker_heartbeat_timeout::"
+			--set-environment "AO_CLOUD_CAPABILITY_GATED_PROVIDERS=${AO_CLOUD_CAPABILITY_GATED_PROVIDERS}"
+			--set-environment "AO_CLOUD_DEFAULT_ORG_CAPABILITIES=${AO_CLOUD_DEFAULT_ORG_CAPABILITIES}"
+			--set-environment "AO_CLOUD_DEFAULT_ORG_BILLING=${AO_CLOUD_DEFAULT_ORG_BILLING}"
+			--set-environment "AO_CLOUD_PAYWALLED_FEATURES=${AO_CLOUD_PAYWALLED_FEATURES}"
+			--set-environment "AO_CLOUD_IDLE_PAUSE_THRESHOLD=${AO_CLOUD_IDLE_PAUSE_THRESHOLD}"
+			--set-environment "AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD=${AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD}"
 		)
 		if providers_has coder; then
 			render_args+=(
@@ -308,6 +451,26 @@ register_task_definition() {
 				--set-secret "AO_CLOUD_NODEOPS_SSH_KEY_PATH=${nodeops_secret_arn}:ssh_key_path::"
 				--set-secret "AO_CLOUD_NODEOPS_REGION=${nodeops_secret_arn}:region::"
 				--set-secret "AO_CLOUD_NODEOPS_WORKER_TOKEN_TTL=${nodeops_secret_arn}:worker_token_ttl::"
+			)
+		fi
+		if [[ -n "$support_secret_arn" ]]; then
+			render_args+=(--set-secret "AO_CLOUD_SUPPORT_TOKEN=${support_secret_arn}:token::")
+		fi
+		if [[ -n "$stripe_secret_arn" ]]; then
+			render_args+=(
+				--set-environment "AO_CLOUD_STRIPE_PRICE_IDS=${stripe_price_ids}"
+				--set-environment "AO_CLOUD_STRIPE_PORTAL_CONFIGURATION=${stripe_portal_configuration}"
+				--set-environment "AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE=${stripe_exempt_before}"
+				--set-secret "AO_CLOUD_STRIPE_SECRET_KEY=${stripe_secret_arn}:secret_key::"
+				--set-secret "AO_CLOUD_STRIPE_WEBHOOK_SECRET=${stripe_secret_arn}:webhook_secret::"
+			)
+		fi
+		if providers_has freestyle; then
+			render_args+=(
+				--set-environment "AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS=${snapshot_by_harness}"
+				--set-secret "AO_CLOUD_FREESTYLE_API_KEY=${freestyle_secret_arn}:api_key::"
+				--set-secret "AO_CLOUD_FREESTYLE_DEFAULT_SNAPSHOT=${freestyle_secret_arn}:default_snapshot::"
+				--set-secret "AO_CLOUD_FREESTYLE_WORKER_TOKEN_TTL=${freestyle_secret_arn}:worker_token_ttl::"
 			)
 		fi
 	else
@@ -389,8 +552,7 @@ aws_cli ecs update-service \
 	--desired-count 1 \
 	--health-check-grace-period-seconds 60 \
 	--availability-zone-rebalancing DISABLED \
-	--deployment-configuration \
-	"{\"maximumPercent\":100,\"minimumHealthyPercent\":0,\"deploymentCircuitBreaker\":{\"enable\":true,\"rollback\":true},\"alarms\":{\"alarmNames\":[\"${ROLLBACK_ALARM}\"],\"enable\":true,\"rollback\":true}}" \
+	--deployment-configuration "$(deployment_configuration "$ROLLBACK_ALARM" "$ROLLING")" \
 	>/dev/null
 aws_cli ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
 
@@ -406,7 +568,14 @@ if [[ "$deployed_task" != "$api_task" ]]; then
 	exit 1
 fi
 verification_error=""
-for _ in $(seq 1 18); do
+verify_args=()
+verify_attempts=18
+if [[ "$ROLLING" == true ]]; then
+	# The replaced task's target drains for the deregistration delay.
+	verify_args+=(--allow-draining-targets)
+	verify_attempts=36
+fi
+for _ in $(seq 1 "$verify_attempts"); do
 	if verification_error="$(
 		./scripts/verify-ecs-service.py \
 			--region "$REGION" \
@@ -415,7 +584,8 @@ for _ in $(seq 1 18); do
 			--alarm "$ROLLBACK_ALARM" \
 			--expected-task-definition "$api_task" \
 			--expected-control-image "$control_image" \
-			--expected-worker-image "$worker_image" 2>&1
+			--expected-worker-image "$worker_image" \
+			${verify_args[@]+"${verify_args[@]}"} 2>&1
 	)"; then
 		verification_error=""
 		break
@@ -427,6 +597,19 @@ if [[ -n "$verification_error" ]]; then
 	exit 1
 fi
 trap - EXIT
+
+# Only now, with the new task healthy, delete old harness snapshots. The task
+# that ran before this deploy and the one now running stay protected, as does
+# whatever production runs. A failed prune never fails the deploy.
+if [[ "$freestyle_baked" == true ]]; then
+	AWS_PROFILE="${AWS_PROFILE:-}" \
+		AWS_REGION="$REGION" \
+		AO_CLOUD_FREESTYLE_SECRET_ID="$FREESTYLE_SECRET_ID" \
+		AO_CLOUD_FREESTYLE_PRUNE_ONLY=1 \
+		AO_CLOUD_FREESTYLE_PROTECT_TASK_DEFINITIONS="$previous_task $api_task" \
+		./scripts/publish-freestyle-snapshot.sh ||
+		echo "warning: Freestyle snapshot prune failed; old snapshots remain." >&2
+fi
 
 printf 'Deployed release %s\nControl-plane digest: %s\nWorker digest: %s\nTask definition: %s\n' \
 	"$RELEASE" \

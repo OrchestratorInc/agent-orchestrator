@@ -104,8 +104,11 @@ vi.mock("../hooks/useCloudGate", () => ({
 	useCloudGate: () => ({ cloudEnabled: false, localEnabled: true }),
 }));
 
-// The dialog reads the cloud session email to gate the 11x-only Coder page.
-// Signed out here, so that page is never visible.
+// The dialog reads the org's offering to gate the Coder and Upgrade pages.
+// Nothing resolved here (signed out), so neither page is visible.
+vi.mock("../hooks/useCloudOffering", () => ({
+	useCloudOffering: () => ({ hasCoder: false, selfServeBilling: false }),
+}));
 vi.mock("../lib/cloud-session", () => ({
 	useCloudSession: () => ({ status: "unauthenticated", session: null }),
 }));
@@ -333,8 +336,8 @@ describe("SettingsDialog", () => {
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("diagnostics");
 		expect(screen.getByRole("button", { name: "Diagnostics" })).toBeInTheDocument();
 		// The live monitor is a page of its own: the aggregate view never mounts it.
-		expect(globalSettingsItemsFor("all", { cloudEnabled: true, developerMode: true, diagnostics: true, is11x: false }).map((item) => item.id)).not.toContain("diagnostics");
-		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: true, is11x: false }).map((item) => item.id)).toContain("diagnostics");
+		expect(globalSettingsItemsFor("all", { cloudEnabled: true, developerMode: true, diagnostics: true, hasCoder: false, selfServeBilling: false }).map((item) => item.id)).not.toContain("diagnostics");
+		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: true, hasCoder: false, selfServeBilling: false }).map((item) => item.id)).toContain("diagnostics");
 	});
 
 	it("hides Diagnostics until its toggle is on in Developer mode, falling back to General if asked for", async () => {
@@ -344,7 +347,7 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
 		expect(screen.queryByRole("button", { name: "Diagnostics" })).not.toBeInTheDocument();
-		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: false, is11x: false }).map((item) => item.id)).not.toContain("diagnostics");
+		expect(visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: false, hasCoder: false, selfServeBilling: false }).map((item) => item.id)).not.toContain("diagnostics");
 	});
 
 	it("hides Diagnostics outside Developer mode even with its toggle left on", async () => {
@@ -356,8 +359,34 @@ describe("SettingsDialog", () => {
 		expect(screen.queryByRole("button", { name: "Diagnostics" })).not.toBeInTheDocument();
 	});
 
+	describe("offering gates", () => {
+		const pages = (context: { hasCoder: boolean; selfServeBilling: boolean; cloudEnabled?: boolean }) =>
+			visibleGlobalSettings({ cloudEnabled: true, developerMode: false, diagnostics: false, ...context }).map((item) => item.id);
+
+		it("a B2C self-serve org sees Upgrade and no Coder page", () => {
+			expect(pages({ hasCoder: false, selfServeBilling: true })).toContain("billing");
+			expect(pages({ hasCoder: false, selfServeBilling: true })).not.toContain("coder");
+		});
+
+		it("a B2B contract org sees the Coder page and no Upgrade", () => {
+			expect(pages({ hasCoder: true, selfServeBilling: false })).toContain("coder");
+			expect(pages({ hasCoder: true, selfServeBilling: false })).not.toContain("billing");
+		});
+
+		it("an org on both sees both, and Upgrade only while self-serve", () => {
+			expect(pages({ hasCoder: true, selfServeBilling: true })).toEqual(expect.arrayContaining(["coder", "billing"]));
+			expect(pages({ hasCoder: true, selfServeBilling: false })).not.toContain("billing");
+		});
+
+		it("shows neither cloud page with cloud off", () => {
+			const ids = pages({ hasCoder: true, selfServeBilling: true, cloudEnabled: false });
+			expect(ids).not.toContain("coder");
+			expect(ids).not.toContain("billing");
+		});
+	});
+
 	it("falls back to General when the Coder page is unavailable", async () => {
-		useUiStore.getState().openGlobalSettings("coder11x");
+		useUiStore.getState().openGlobalSettings("coder");
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");

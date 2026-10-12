@@ -566,6 +566,9 @@ describe("send keys", () => {
 		["CHAT_CONTROLLER_NOT_READY", "Request was rejected"],
 		["validation_error", "Request was rejected"],
 		["CHAT_RESUME_FAILED", "The provider could not reopen the saved conversation"],
+		// A refused /btw or /side launch must not lock the main draft.
+		["CHAT_SIDE_UNSUPPORTED", "side chats support Codex, Claude Code, and OpenCode"],
+		["CHAT_SIDE_UNAVAILABLE", "side chats are unavailable"],
 	])("unlocks a definitively rejected first send (%s) and gives the edited send a new identity", async (code, message) => {
 		const sessionId = `composer-first-send-refused-${code}`;
 		const onSend = vi.fn()
