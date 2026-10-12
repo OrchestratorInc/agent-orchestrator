@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+	ALL_WORKER_ENVIRONMENTS,
 	ALL_WORKER_PROJECTS,
+	filterWorkersByEnvironmentAndProject,
 	filterWorkersByProject,
 	spawnProjectParam,
+	workerEnvironmentOptions,
+	workerProjectForEnvironment,
 	workerProjectLabel,
 	workerProjectOptions,
 	workerSearchPresentation,
@@ -29,6 +33,49 @@ describe("filterWorkersByProject", () => {
 		expect(filterWorkersByProject(workers, hostedProjectKey(projects[1]), projects)).toEqual([workers[1]]);
 		expect(spawnProjectParam(hostedProjectKey(projects[1]), projects)).toEqual({ projectId: "same", hostId: "b" });
 		expect(workerProjectOptions(projects).map((item) => item.label)).toEqual(["All projects", "App · Laptop", "App · Desktop"]);
+	});
+});
+
+describe("environment worker filtering", () => {
+	const projects = [
+		{ id: "same", name: "App", hostId: "mac", hostName: "Studio Mac" },
+		{ id: "same", name: "App", hostId: "dev", hostName: "Dev" },
+	];
+	const workers = [
+		{ id: "mac-worker", projectId: "same", hostId: "mac" },
+		{ id: "dev-worker", projectId: "same", hostId: "dev" },
+		{ id: "dev-other", projectId: "other", hostId: "dev" },
+	];
+
+	it("keeps only workers from the selected machine before applying the project filter", () => {
+		expect(filterWorkersByEnvironmentAndProject(workers, "dev", ALL_WORKER_PROJECTS, projects)).toEqual([
+			workers[1],
+			workers[2],
+		]);
+		expect(filterWorkersByEnvironmentAndProject(workers, "dev", hostedProjectKey(projects[1]), projects)).toEqual([
+			workers[1],
+		]);
+	});
+
+	it("builds human-readable environment choices and scopes project choices to the selected machine", () => {
+		expect(workerEnvironmentOptions([
+			{ id: "mac", name: "Studio Mac" },
+			{ id: "dev", name: "Dev" },
+		])).toEqual([
+			{ id: ALL_WORKER_ENVIRONMENTS, label: "All environments" },
+			{ id: "mac", label: "Studio Mac" },
+			{ id: "dev", label: "Dev" },
+		]);
+		expect(workerProjectOptions(projects, "dev")).toEqual([
+			{ id: ALL_WORKER_PROJECTS, label: "All projects" },
+			{ id: hostedProjectKey(projects[1]), label: "App" },
+		]);
+	});
+
+	it("resolves an incompatible project in the same environment selection", () => {
+		expect(workerProjectForEnvironment(projects, "dev", hostedProjectKey(projects[0]))).toBe(ALL_WORKER_PROJECTS);
+		expect(workerProjectForEnvironment(projects, "dev", hostedProjectKey(projects[1]))).toBe(hostedProjectKey(projects[1]));
+		expect(workerProjectForEnvironment(projects, "dev", ALL_WORKER_PROJECTS)).toBe(ALL_WORKER_PROJECTS);
 	});
 });
 

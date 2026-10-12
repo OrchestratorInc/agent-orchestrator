@@ -289,6 +289,7 @@ describe("telemetry sanitizers", () => {
 		expect(routeSurface("/projects/demo/sessions/demo-1")).toBe("session_detail");
 		expect(routeSurface("/automations")).toBe("automations");
 		expect(routeSurface("/automations/demo-automation")).toBe("automations");
+		expect(routeSurface("/artifacts")).toBe("artifacts");
 	});
 
 	it("keeps automation funnel events free of prompt text and raw ids", async () => {
@@ -468,6 +469,18 @@ describe("telemetry sanitizers", () => {
 				error: "raw error with /Users/alice/path",
 			});
 			expect(Object.keys(props)).toEqual(["project_id_hash"]);
+		}
+	});
+
+	it("keeps only the scope enum on artifact_create events", async () => {
+		for (const event of [
+			"ao.renderer.artifact_create_requested",
+			"ao.renderer.artifact_create_succeeded",
+			"ao.renderer.artifact_create_failed",
+		]) {
+			expect(await sanitizeRendererProperties(event, { scope: "project", project_id: "demo-project", name: "plan.md" })).toEqual({ scope: "project" });
+			expect(await sanitizeRendererProperties(event, { scope: "standalone" })).toEqual({ scope: "standalone" });
+			expect(await sanitizeRendererProperties(event, { scope: "/Users/alice/secret" })).toEqual({});
 		}
 	});
 

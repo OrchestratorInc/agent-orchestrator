@@ -37,7 +37,7 @@ export default function OnboardingScreen() {
 			<View style={styles.topBar}>
 				<View style={styles.brand}>
 					<Image source={MASCOT} style={styles.mascot} resizeMode="contain" />
-					<Text style={styles.brandName}>AO</Text>
+					<Text style={styles.brandName}>Orchestrator.inc</Text>
 				</View>
 				<Pressable onPress={() => { haptics.tap(); void skip(); }} hitSlop={12} accessibilityRole="button">
 					<Text style={styles.skip}>Skip</Text>
@@ -50,9 +50,9 @@ export default function OnboardingScreen() {
 				showsVerticalScrollIndicator={false}
 			>
 				<View style={styles.hero}>
-					<Text style={styles.title}>Connect to AO</Text>
+					<Text style={styles.title}>Connect to Orchestrator</Text>
 					<Text style={styles.lede}>
-						Pair with AO on a computer or self-hosted machine to check on your agents, jump into any terminal, and drive work from your
+						Pair with Orchestrator on a computer or self-hosted machine to check on your agents, jump into any terminal, and drive work from your
 						phone.
 					</Text>
 					<Button

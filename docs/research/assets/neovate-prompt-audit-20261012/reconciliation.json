@@ -1,0 +1,17 @@
+{
+  "at": "2026-10-12T18:13:25.974109+00:00",
+  "harness": "neovate",
+  "pr": 6494,
+  "previousHead": "e49194666453940305165dd6ba632daa268d4c0d",
+  "canonicalMain": "fca1b72c0a6e9106dae0cbe76b5621358356aa4e",
+  "migration": {
+    "old": 195,
+    "new": 209,
+    "main195Preserved": true,
+    "openPRsScanned": 380,
+    "burnedRecovery": "requested_output schema repair preserves old Neovate195 ledger and existing output values; independent idempotent harness reconcile retained"
+  },
+  "validation": "Focused regressions written; PR CI only, no local suites.",
+  "runtimeProof": "NOT_RUN_THIS_RECONCILIATION",
+  "historicalEvidence": "Preserved unchanged, original scope retained."
+}

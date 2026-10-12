@@ -7,6 +7,7 @@ import type { FilesSource } from "../hooks/useSessionWorkspaceFiles";
 import {
 	applyDocumentTheme,
 	applyDocumentThemeStyle,
+	isDocumentThemeStyle,
 	readStoredThemePreference,
 	readStoredThemeStyle,
 	resolveTheme,
@@ -26,8 +27,9 @@ export type GlobalSettingsSection =
 	| "general"
 	| "harness"
 	| "agents"
+	| "billing"
 	| "remoteHosts"
-	| "coder11x"
+	| "coder"
 	| "mobile"
 	| "shortcuts"
 	| "browserProfiles"
@@ -62,7 +64,7 @@ export type SettingsModal =
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
 export type WorkbenchTab = "changes" | "files" | "terminal";
-export type InspectorView = "summary" | "reviews" | "browser" | "files";
+export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files";
 
 export type InspectorSessionState = {
 	isOpen: boolean;
@@ -102,6 +104,8 @@ export type WorkspaceFileOpenRequest = {
 	sessionId: string;
 	hostId?: string;
 	path: string;
+	/** "artifact" resolves `path` against the session's artifact files instead of its workspace. */
+	source?: "artifact";
 	nonce: number;
 };
 
@@ -127,6 +131,8 @@ export type UiState = {
 	remoteHosts: boolean;
 	/** Memory and CPU monitoring (card chips, memory light, Diagnostics page). Only takes effect in Developer mode. Default off. */
 	diagnostics: boolean;
+	/** Experimental side chats in the inspector. Only takes effect in Developer mode. Default off. */
+	sideChats: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
 	terminalCopyOnSelect: boolean;
 	restartingProjectIds: ReadonlySet<string>;
@@ -178,6 +184,7 @@ export type UiState = {
 	setDeveloperMode: (enabled: boolean) => void;
 	setRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
+	setSideChats: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
@@ -216,7 +223,7 @@ export type UiState = {
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
 	requestNewTask: (projectId: string, hostId?: string) => void;
-	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string) => void;
+	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact") => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
 	requestCreateProject: () => void;
 	requestCreateProjectFromPath: (path: string) => void;
@@ -237,6 +244,7 @@ const sidebarStorageKey = "ao.sidebar.open";
 const developerModeStorageKey = "ao.developerMode";
 const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
+const sideChatsStorageKey = "ao.sideChats";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
@@ -259,6 +267,10 @@ function initialRemoteHosts() {
 
 function initialDiagnostics() {
 	return getLocalStorage()?.getItem(diagnosticsStorageKey) === "true";
+}
+
+function initialSideChats() {
+	return getLocalStorage()?.getItem(sideChatsStorageKey) === "true";
 }
 
 function initialTerminalCopyOnSelect() {
@@ -320,6 +332,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	developerMode: initialDeveloperModeValue,
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
+	sideChats: initialSideChats(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
@@ -348,6 +361,14 @@ export const useUiStore = create<UiState>((set, get) => ({
 	},
 	setThemeStyle: (themeStyle) => {
 		if (get().themeStyle === themeStyle) return;
+		// Choosing the theme being previewed keeps the preview as-is. A View
+		// Transition here would apply it a frame late, after the menu's close
+		// has restored the old theme, and flash between the two.
+		if (isDocumentThemeStyle(themeStyle)) {
+			getLocalStorage()?.setItem(themeStyleStorageKey, themeStyle);
+			set({ themeStyle });
+			return;
+		}
 		runThemeTransition(() => {
 			getLocalStorage()?.setItem(themeStyleStorageKey, themeStyle);
 			applyDocumentThemeStyle(themeStyle);
@@ -366,6 +387,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setDiagnostics: (diagnostics) => {
 		getLocalStorage()?.setItem(diagnosticsStorageKey, String(diagnostics));
 		set({ diagnostics });
+	},
+	setSideChats: (sideChats) => {
+		getLocalStorage()?.setItem(sideChatsStorageKey, String(sideChats));
+		set({ sideChats });
 	},
 	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
@@ -604,12 +629,13 @@ export const useUiStore = create<UiState>((set, get) => ({
 		}
 		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
-	requestWorkspaceFileOpen: (sessionId, path, hostId) =>
+	requestWorkspaceFileOpen: (sessionId, path, hostId, source) =>
 		set((state) => ({
 			workspaceFileOpenRequest: {
 				sessionId,
 				path,
 				...(hostId ? { hostId } : {}),
+				...(source ? { source } : {}),
 				nonce: (state.workspaceFileOpenRequest?.nonce ?? 0) + 1,
 			},
 		})),

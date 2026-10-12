@@ -2015,6 +2015,11 @@ BEGIN
 	// this column, so repair field databases that recorded 0132 without adding it.
 	{version: 132, table: "conversations", column: "opencode_mode",
 		addDDL: `ALTER TABLE conversations ADD COLUMN opencode_mode TEXT NOT NULL DEFAULT ''`},
+	// Pre-merge Neovate builds used 0195 for their harness constraint. Main
+	// owns 0195 for requested_output; recover its column when that number was
+	// recorded by those builds without changing existing output values.
+	{version: 195, table: "sessions", column: "requested_output",
+		addDDL: `ALTER TABLE sessions ADD COLUMN requested_output TEXT NOT NULL DEFAULT ''`},
 }
 
 // reconcileSchema verifies that the columns in schemaRepairs physically exist
