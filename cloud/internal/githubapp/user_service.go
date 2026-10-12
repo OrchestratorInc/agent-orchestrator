@@ -180,25 +180,24 @@ func (s *Service) ClaimUserInstallation(
 	if err != nil {
 		return domain.GitHubInstallation{}, err
 	}
-	if !InstallationSupportsAuthorityProof(providerInstallation) {
-		return domain.GitHubInstallation{}, postgres.ErrForbidden
-	}
-	authorized, err := s.client.UserCanAdministerInstallation(
-		ctx,
-		token,
-		providerInstallation,
-	)
+	authorized, err := s.userAdministersInstallation(ctx, token, providerInstallation)
 	if err != nil {
 		return domain.GitHubInstallation{}, err
 	}
+	// Someone who does not administer the installation (a GitHub organization
+	// member who is not an owner) connects it user-scoped: only the
+	// repositories they can access, in their personal organization.
+	candidate := toDomainInstallation(providerInstallation)
+	candidate.AccessScope = domain.GitHubAccessScopeInstallation
 	if !authorized {
-		return domain.GitHubInstallation{}, postgres.ErrForbidden
+		candidate.AccessScope = domain.GitHubAccessScopeUser
+		candidate.ScopeUserID = principal.UserID
 	}
 	installation, err := s.store.BindGitHubInstallation(
 		ctx,
 		principal,
 		orgID,
-		toDomainInstallation(providerInstallation),
+		candidate,
 	)
 	if err != nil {
 		return domain.GitHubInstallation{}, err

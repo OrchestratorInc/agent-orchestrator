@@ -3045,6 +3045,12 @@ components:
         repositorySelection:
           type: string
           enum: [all, selected]
+        accessScope:
+          type: string
+          enum: [installation, user]
+          description: >-
+            installation: the installation's whole repository selection.
+            user: only the repositories the connecting user can access on GitHub.
         syncStatus:
           $ref: "#/components/schemas/GitHubSyncStatus"
         lastSyncedAt:

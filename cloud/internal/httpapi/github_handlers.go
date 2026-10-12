@@ -16,17 +16,21 @@ import (
 )
 
 type githubInstallationResponse struct {
-	ID                   string     `json:"id"`
-	GitHubInstallationID string     `json:"githubInstallationId"`
-	AccountLogin         string     `json:"accountLogin"`
-	AccountType          string     `json:"accountType"`
-	Status               string     `json:"status"`
-	RepositorySelection  string     `json:"repositorySelection"`
-	SyncStatus           string     `json:"syncStatus"`
-	LastSyncedAt         *time.Time `json:"lastSyncedAt,omitempty"`
-	LastError            string     `json:"lastError,omitempty"`
-	CreatedAt            time.Time  `json:"createdAt"`
-	UpdatedAt            time.Time  `json:"updatedAt"`
+	ID                   string `json:"id"`
+	GitHubInstallationID string `json:"githubInstallationId"`
+	AccountLogin         string `json:"accountLogin"`
+	AccountType          string `json:"accountType"`
+	Status               string `json:"status"`
+	RepositorySelection  string `json:"repositorySelection"`
+	// AccessScope is "installation" (the installation's whole repository
+	// selection) or "user" (only the repositories the connecting user can
+	// access on GitHub).
+	AccessScope  string     `json:"accessScope"`
+	SyncStatus   string     `json:"syncStatus"`
+	LastSyncedAt *time.Time `json:"lastSyncedAt,omitempty"`
+	LastError    string     `json:"lastError,omitempty"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
 }
 
 type githubRepositoryResponse struct {
@@ -367,6 +371,13 @@ func (s *Server) listGitHubInstallations(w http.ResponseWriter, r *http.Request)
 		items = append(items, toGitHubInstallationResponse(installation))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"installations": items})
+}
+
+func githubAccessScope(scope string) string {
+	if scope == domain.GitHubAccessScopeUser {
+		return scope
+	}
+	return domain.GitHubAccessScopeInstallation
 }
 
 func (s *Server) syncGitHubInstallation(w http.ResponseWriter, r *http.Request) {
@@ -803,6 +814,7 @@ func toGitHubInstallationResponse(
 		AccountType:          installation.AccountType,
 		Status:               status,
 		RepositorySelection:  installation.RepositorySelection,
+		AccessScope:          githubAccessScope(installation.AccessScope),
 		SyncStatus:           installation.SyncStatus,
 		LastSyncedAt:         installation.LastSyncedAt,
 		LastError:            installation.LastError,

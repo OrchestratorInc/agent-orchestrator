@@ -1777,6 +1777,11 @@ export interface components {
             status: components["schemas"]["GitHubInstallationStatus"];
             /** @enum {string} */
             repositorySelection: "all" | "selected";
+            /**
+             * @description installation: the installation's whole repository selection. user: only the repositories the connecting user can access on GitHub.
+             * @enum {string}
+             */
+            accessScope?: "installation" | "user";
             syncStatus: components["schemas"]["GitHubSyncStatus"];
             /** Format: date-time */
             lastSyncedAt?: string;
