@@ -600,6 +600,10 @@ type LaunchConfig struct {
 	SystemPrompt     string
 	SystemPromptFile string
 	WorkspacePath    string
+	// Sandboxed marks a launch that runs inside a sandbox container (#6663).
+	// The harness comes from the image, so an adapter must not resolve or
+	// require a host binary and uses its bare in-image name instead.
+	Sandboxed bool
 }
 
 // WorkspaceHookConfig carries inputs needed to install workspace-local agent hooks.
@@ -633,6 +637,9 @@ type RestoreConfig struct {
 	// system-prompt flag should re-apply this in their resume command.
 	SystemPrompt     string
 	SystemPromptFile string
+	// Sandboxed marks a restore that runs inside a sandbox container; see
+	// LaunchConfig.Sandboxed.
+	Sandboxed bool
 }
 
 // SessionRef identifies an AO session whose agent-owned metadata may be read.
