@@ -295,11 +295,11 @@ describe("SwitchAgentDialog", () => {
 		expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
 		expect(within(dialog).getByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.4");
 		// Global settings feed the model filter; no project is looked up.
-		expect(getSpy.mock.calls.map(([path]) => path).filter((path) => path !== "/api/v1/settings")).toEqual([]);
+		expect((getSpy.mock.calls as unknown[][]).map((call) => call[0]).filter((path) => path !== "/api/v1/settings")).toEqual([]);
 
 		await userEvent.click(within(dialog).getByRole("button", { name: "Switch" }));
 
-		expect(getSpy.mock.calls.map(([path]) => path).filter((path) => path !== "/api/v1/settings")).toEqual([]);
+		expect((getSpy.mock.calls as unknown[][]).map((call) => call[0]).filter((path) => path !== "/api/v1/settings")).toEqual([]);
 		expect(switchMocks.mutate).toHaveBeenCalledWith(
 			{
 				idempotencyKey: "idempotency-1",
