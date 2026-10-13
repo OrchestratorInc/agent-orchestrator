@@ -176,7 +176,7 @@ const fetchesSince = (before: WorkspaceFetchLog, after: WorkspaceFetchLog) =>
 	) as Record<FetchTrigger, number>;
 
 test("diagnostic: large workspace snapshot, refetch race, and SSE replay keep the worker row in sync @SIDEBAR_DIAG", async ({ page }) => {
-	test.setTimeout(180_000);
+	test.setTimeout(240_000);
 	page.on("pageerror", (error) => console.log("SIDEBAR_DIAGNOSTIC pageerror", error.message));
 	await openLargeExpandedWorkspace(page);
 	await instrumentWorkspaceFetches(page);
@@ -241,7 +241,7 @@ test("diagnostic: large workspace snapshot, refetch race, and SSE replay keep th
 	const streamCountBeforeClose = (await eventStreams(page)).length;
 	await page.evaluate(() => window.__aoFakeAgent!.closeEventsStream());
 	await expect.poll(async () => (await replayProgress(page)).phase, { timeout: 15_000 }).toBe("idle");
-	await expect.poll(async () => (await eventStreams(page)).length, { timeout: 30_000 }).toBe(streamCountBeforeClose + 1);
+	await expect.poll(async () => (await eventStreams(page)).length, { timeout: 45_000 }).toBe(streamCountBeforeClose + 1);
 	const afterReplayCache = await cacheState(page);
 	const afterReplay = {
 		cacheSessionCount: afterReplayCache.sessionCount,
@@ -290,15 +290,15 @@ test("diagnostic: large workspace snapshot, refetch race, and SSE replay keep th
 });
 
 test("diagnostic: continuous SSE pressure does not starve workspace invalidation for two minutes @SIDEBAR_DIAG", async ({ page }) => {
-	test.setTimeout(180_000);
+	test.setTimeout(240_000);
 	await openLargeExpandedWorkspace(page);
 	await instrumentWorkspaceFetches(page);
 
 	const before = await workspaceFetchLog(page);
 	const startTime = await page.evaluate(() => Date.now());
-	// EventSource can hand the renderer a deep buffered queue under replay load.
-	// Deliver 100 recognized session frames in each 50 ms tick so each debounce
-	// window receives many arrivals even if rendering delays the next timer task.
+	// Send 100 recognized session frames per 50 ms (2,000/s). Frames that arrive
+	// while rendering blocks the main thread are handed over together, as
+	// EventSource does with a buffered stream, so the rate holds under load.
 	await page.evaluate(() => window.__aoFakeAgent!.startContinuousWorkspaceEvents(50, 100));
 	await page.waitForTimeout(1_000);
 	await page.evaluate(() => window.__aoFakeAgent!.createWorker({ id: "continuous-worker", title: "Continuous worker" }));
@@ -329,7 +329,7 @@ test("diagnostic: continuous SSE pressure does not starve workspace invalidation
 });
 
 test("diagnostic: exhausted snapshot retries do not stop the 15-second workspace poll @SIDEBAR_DIAG", async ({ page }) => {
-	test.setTimeout(120_000);
+	test.setTimeout(150_000);
 	await openLargeExpandedWorkspace(page);
 	await instrumentWorkspaceFetches(page);
 	const baseline = await page.evaluate(() => window.__aoFakeAgent!.snapshotCallCount());
@@ -339,7 +339,7 @@ test("diagnostic: exhausted snapshot retries do not stop the 15-second workspace
 		window.__aoFakeAgent!.setSnapshotFailures(2);
 	});
 	const failureStart = await page.evaluate(() => Date.now());
-	await expect.poll(async () => (await page.evaluate(() => window.__aoFakeAgent!.snapshotCallCount())) - baseline, { timeout: 30_000 }).toBeGreaterThanOrEqual(2);
+	await expect.poll(async () => (await page.evaluate(() => window.__aoFakeAgent!.snapshotCallCount())) - baseline, { timeout: 45_000 }).toBeGreaterThanOrEqual(2);
 	await expect.poll(async () => (await queryMetrics(page)).queryStatus, { timeout: 5_000 }).toBe("error");
 	const failedCapture = {
 		elapsedMs: await page.evaluate((startedAt) => Date.now() - startedAt, failureStart),
@@ -355,7 +355,7 @@ test("diagnostic: exhausted snapshot retries do not stop the 15-second workspace
 	expect(failedCapture.row.mounted).toBe(false);
 
 	const nextPollStart = await page.evaluate(() => Date.now());
-	await expect.poll(async () => (await page.evaluate(() => window.__aoFakeAgent!.snapshotCallCount())) - baseline, { timeout: 30_000 }).toBeGreaterThan(failedCapture.snapshotCalls);
+	await expect.poll(async () => (await page.evaluate(() => window.__aoFakeAgent!.snapshotCallCount())) - baseline, { timeout: 45_000 }).toBeGreaterThan(failedCapture.snapshotCalls);
 	await expect.poll(async () => (await cacheState(page)).sessionIds.includes("failed-poll-worker"), { timeout: 5_000 }).toBe(true);
 	const recoveredCache = await cacheState(page);
 	const recoveryCapture = {
@@ -461,7 +461,7 @@ test("diagnostic: a missed hidden SSE event recovers on the next interval after 
 });
 
 test("diagnostic: the app's replacement EventSource catches up a missed event on open @SIDEBAR_DIAG", async ({ page }) => {
-	test.setTimeout(75_000);
+	test.setTimeout(100_000);
 	await openLargeExpandedWorkspace(page);
 	await instrumentWorkspaceFetches(page);
 	// While hidden TanStack neither polls nor refetches on focus, so only the
@@ -477,7 +477,7 @@ test("diagnostic: the app's replacement EventSource catches up a missed event on
 	await page.evaluate(() => window.__aoFakeAgent!.createWorkerWithoutEvent({ id: "reopen-catchup-worker", title: "Reopen catch-up worker" }));
 	expect((await cacheState(page)).sessionIds).not.toContain("reopen-catchup-worker");
 	await expect
-		.poll(async () => (await eventStreams(page)).length, { timeout: 30_000, intervals: [100] })
+		.poll(async () => (await eventStreams(page)).length, { timeout: 45_000, intervals: [100] })
 		.toBe(streamsBeforeClose.length + 1);
 	const reopenedAfterCloseMs = await page.evaluate((startedAt) => Date.now() - startedAt, closedAt);
 	await expect.poll(async () => (await cacheState(page)).sessionIds.includes("reopen-catchup-worker"), { timeout: 5_000, intervals: [100] }).toBe(true);

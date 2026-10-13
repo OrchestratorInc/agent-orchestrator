@@ -835,13 +835,19 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				startContinuousWorkspaceEvents: (intervalMs, eventsPerTick = 1) => {
 					if (state.continuousEventTimer !== undefined) window.clearInterval(state.continuousEventTimer);
 					state.continuousWorkspaceEvents = 0;
+					const period = Math.max(1, Math.floor(intervalMs));
+					const perTick = Math.max(1, Math.floor(eventsPerTick));
+					const startedAt = performance.now();
+					// The daemon keeps sending while rendering blocks the main thread, and
+					// EventSource then hands over the buffered frames together: deliver by
+					// elapsed time, not by how often this timer gets to run.
 					state.continuousEventTimer = window.setInterval(() => {
-						const count = Math.max(1, Math.floor(eventsPerTick));
-						for (let i = 0; i < count; i += 1) {
+						const due = Math.floor((performance.now() - startedAt) / period) * perTick;
+						while (state.continuousWorkspaceEvents < due) {
 							state.continuousWorkspaceEvents += 1;
 							pushWorkspaces("session_updated");
 						}
-					}, Math.max(1, Math.floor(intervalMs)));
+					}, period);
 				},
 				stopContinuousWorkspaceEvents: () => {
 					if (state.continuousEventTimer !== undefined) window.clearInterval(state.continuousEventTimer);
