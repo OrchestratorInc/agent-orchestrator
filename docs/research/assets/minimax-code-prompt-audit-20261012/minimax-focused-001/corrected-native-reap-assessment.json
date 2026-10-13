@@ -1,0 +1,19 @@
+{
+  "scope": "Supplemental exact observed native reap metadata retained from helper stdout",
+  "source": "103855409714c65310ff1ff109d46cb13a4cb367",
+  "killConfirmedAt": "2026-10-13T00:03:57.460381+00:00",
+  "sessionId": "prompt-minimax-74fd231b-1",
+  "nativeSame": true,
+  "generationBefore": "4c16ae10-0458-417a-85ff-43d908007aa4",
+  "generationAfter": "0cc2e660-791c-43b7-9321-cf5e46fc54c6",
+  "nativeProcessBefore": {
+    "pid": 1100989,
+    "kernelStart": "89538543",
+    "ownership": "Owned session PTY ancestry and exact private native-profile binding"
+  },
+  "nativeProcessReaped": true,
+  "killHTTP": 200,
+  "unrelatedControlAlive": true,
+  "unrelatedControlGenerationUnchanged": true,
+  "qualification": "Not a new execution; preserves metadata from the already observed corrected control before later killRestore fields were replaced by another distinct control."
+}
