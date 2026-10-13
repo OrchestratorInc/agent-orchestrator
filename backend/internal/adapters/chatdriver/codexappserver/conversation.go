@@ -52,7 +52,10 @@ type conversation struct {
 	historyParentID string
 	providerScopeID string
 	readOnly        bool
-	events          chan ports.ChatEvent
+	// launchMode is the permission mode the thread started or resumed with;
+	// a turn without its own approval setting runs under it.
+	launchMode ports.PermissionMode
+	events     chan ports.ChatEvent
 	// Effective defaults returned when Codex opened or resumed this thread.
 	threadModel, threadEffort string
 

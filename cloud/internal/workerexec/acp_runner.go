@@ -83,7 +83,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 	if !ok {
 		return errors.New("Cloud approval control is unavailable")
 	}
-	path, args, env, err := acpLaunch(turn, command)
+	path, args, env, err := acpLaunch(ctx, turn, command)
 	if err != nil {
 		return err
 	}
@@ -177,7 +177,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 	return nil
 }
 
-func acpLaunch(turn worker.Turn, command Command) (string, []string, map[string]string, error) {
+func acpLaunch(ctx context.Context, turn worker.Turn, command Command) (string, []string, map[string]string, error) {
 	env := make(map[string]string, len(command.Env)+1)
 	for key, value := range command.Env {
 		env[key] = value
@@ -185,7 +185,11 @@ func acpLaunch(turn worker.Turn, command Command) (string, []string, map[string]
 	switch turn.Harness {
 	case "claude-code":
 		env = claudeModelEnvironment(command, turn.Model, nil)
-		return "claude-agent-acp", nil, env, nil
+		adapter, err := EnsureClaudeACPAdapter(ctx)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		return adapter, nil, env, nil
 	case "cursor":
 		args := []string{"--trust"}
 		switch turn.ApprovalMode {

@@ -39,7 +39,7 @@ vi.mock("./useCloudOrg", () => ({
 	useCloudOrg: () => ({ org: cloudState.org, isLoading: false, error: undefined, ready: cloudState.ready }),
 }));
 
-import { useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
 it("preserves the existing local and remote workspace cache keys", () => {
 	expect(workspaceQueryKeyForHost()).toBe(workspaceQueryKey);
@@ -76,6 +76,17 @@ beforeEach(() => {
 });
 
 describe("useWorkspaceQuery", () => {
+	it.each(["pending", "failed", "removed"])("keeps local workspace cleanup state %s", async (workspaceCleanup) => {
+		respondWith({
+			projects: { data: { projects: [{ id: "p1", name: "Project", path: "/tmp/project" }] } },
+			sessions: { data: { sessions: [{ id: "s1", projectId: "p1", harness: "codex", status: "working", statusReadiness: "ready",
+				activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" }, isTerminated: true, workspaceCleanup, prs: [] }] } },
+		});
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		expect(result.current.data?.[0].sessions[0].workspaceCleanup).toBe(workspaceCleanup);
+	});
+
 	it.each(["checking", "unavailable"] as const)("does not expose unverified activity while %s", async (statusReadiness) => {
 		respondWith({
 			projects: { data: { projects: [{ id: "p1", name: "Project", path: "/tmp/project" }] } },
@@ -87,6 +98,19 @@ describe("useWorkspaceQuery", () => {
 		expect(result.current.data?.[0].sessions[0]).toMatchObject({ status: "unknown", statusReadiness });
 		expect(result.current.data?.[0].sessions[0].activity).toBeUndefined();
 		expect(captureRendererEventMock).not.toHaveBeenCalled();
+	});
+
+	it("keeps each artifact's inline URL, which the chat frames an HTML artifact from", async () => {
+		const inlineUrl = "http://ao-inline-artifact.x.localhost:3001/q3/report.html";
+		respondWith({
+			projects: { data: { projects: [{ id: "p1", name: "Project", path: "/tmp/project" }] } },
+			sessions: { data: { sessions: [{ id: "s1", projectId: "p1", harness: "codex", status: "working", statusReadiness: "ready",
+				activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" }, updatedAt: "2026-01-01T00:00:00Z", prs: [],
+				artifactFiles: [{ path: "q3/report.html", name: "report.html", kind: "html", size: 12, updatedAt: "2026-01-01T00:00:00Z", inlineUrl }] }] } },
+		});
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		expect(result.current.data?.[0].sessions[0].artifactFiles?.[0]).toMatchObject({ path: "q3/report.html", inlineUrl });
 	});
 
 	it("rejects workspace reads while the daemon base URL is untrusted", async () => {
@@ -745,5 +769,36 @@ describe("useWorkspaceScope board presentation", () => {
 		const { result } = renderHook(() => useWorkspaceScope("cloud-1"), { wrapper });
 		await waitFor(() => expect(result.current.data?.hasWorkerSessions).toBe(true));
 		expect(result.current.data?.project).toMatchObject({ id: "cloud-1", kind: "cloud", name: "Cloud project" });
+	});
+});
+
+describe("useWorkspacePolling", () => {
+	it("polls once per interval however many components subscribe", async () => {
+		vi.useFakeTimers();
+		try {
+			respondWith({});
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
+			const shared = ({ children }: { children: ReactNode }) => (
+				<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+			);
+			renderHook(
+				() => {
+					useWorkspacePolling();
+					useWorkspaceQuery();
+					useWorkspaceQuery();
+					useWorkspaceTraySessions();
+				},
+				{ wrapper: shared },
+			);
+			await vi.advanceTimersByTimeAsync(0);
+			const sessionFetches = () => getMock.mock.calls.filter(([url]) => url === "/api/v1/sessions").length;
+			const afterMount = sessionFetches();
+			await vi.advanceTimersByTimeAsync(15_000);
+			expect(sessionFetches()).toBe(afterMount + 1);
+			await vi.advanceTimersByTimeAsync(15_000);
+			expect(sessionFetches()).toBe(afterMount + 2);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

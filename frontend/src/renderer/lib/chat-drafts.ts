@@ -95,6 +95,8 @@ export interface ChatComposerDelivery {
 	clientMessageId: string;
 	/** Exact API text, including durable attachment path references. */
 	requestText: string;
+	/** Sent draft, separate from the editable next draft during optimistic delivery. */
+	draft?: { text: string; attachments: ChatDraftAttachment[] };
 	/** Exact verified transcript excerpts attached to this delivery. */
 	excerpts?: ChatDraftExcerptReference[];
 }
@@ -153,6 +155,7 @@ export type DraftDeliveryResult<Mutation> =
 
 export interface PrepareChatComposerDeliveryInput {
 	nativeImages?: boolean;
+	optimistic?: boolean;
 	kind: ChatComposerDelivery["kind"];
 	composerText: string;
 	attachments: ChatDraftAttachment[];
@@ -758,7 +761,12 @@ function isComposerDelivery(value: unknown): value is ChatComposerDelivery {
 		typeof delivery.requestText === "string" &&
 		(delivery.excerpts === undefined ||
 			(Array.isArray(delivery.excerpts) && delivery.excerpts.every(isExcerptReference))) &&
-		(!("nativeImages" in delivery) || typeof delivery.nativeImages === "boolean")
+		(!("nativeImages" in delivery) || typeof delivery.nativeImages === "boolean") &&
+		(delivery.draft === undefined || (delivery.draft !== null &&
+			typeof delivery.draft === "object" &&
+			typeof delivery.draft.text === "string" &&
+			Array.isArray(delivery.draft.attachments) &&
+			delivery.draft.attachments.every(isAttachment)))
 	);
 }
 
@@ -1002,6 +1010,8 @@ export function prepareChatComposerDelivery(
 	const revision = exact
 		? loaded.draft.composer.revision
 		: loaded.draft.composer.revision + 1;
+	// shortcut: excerpt sends stay locked, enable optimism when refused references can be edited separately.
+	const optimistic = input.optimistic && input.kind === "send" && excerpts.length === 0;
 	const mutation: ChatComposerDelivery = {
 		...(input.nativeImages === undefined ? {} : { nativeImages: input.nativeImages }),
 		kind: input.kind,
@@ -1009,14 +1019,15 @@ export function prepareChatComposerDelivery(
 		revision,
 		clientMessageId: input.clientMessageId,
 		requestText: input.requestText,
+		...(optimistic ? { draft: { text: input.composerText, attachments: input.attachments } } : {}),
 		excerpts,
 	};
 	const next: ChatSessionDraft = {
 		...loaded.draft,
 		composer: {
-			revision,
-			text: input.composerText,
-			attachments: input.attachments,
+			revision: optimistic ? revision + 1 : revision,
+			text: optimistic ? "" : input.composerText,
+			attachments: optimistic ? [] : input.attachments,
 			excerpts,
 			delivery: mutation,
 		},
@@ -1059,9 +1070,8 @@ export function markChatComposerDeliveryAccepted(
 }
 
 /**
- * Remove a definitively refused delivery journal without consuming its text. The
- * daemon proved that this first attempt was not accepted, so the same composer
- * revision becomes an ordinary editable draft again.
+ * Restore a definitively refused draft, or keep its delivery beside newer input
+ * for retry. Legacy sends and steers only lose their delivery journal.
  */
 export function clearRejectedChatComposerDelivery(
 	scope: ChatDraftScopeInput,
@@ -1080,12 +1090,15 @@ export function clearRejectedChatComposerDelivery(
 	) {
 		return { ok: false, draft: loaded.draft };
 	}
+	if (delivery.draft && (loaded.draft.composer.text !== "" || loaded.draft.composer.attachments.length > 0)) {
+		return { ok: true, draft: loaded.draft };
+	}
 	const next: ChatSessionDraft = {
 		...loaded.draft,
 		composer: {
-			revision: loaded.draft.composer.revision,
-			text: loaded.draft.composer.text,
-			attachments: loaded.draft.composer.attachments,
+			revision: loaded.draft.composer.revision + (delivery.draft ? 1 : 0),
+			text: delivery.draft?.text ?? loaded.draft.composer.text,
+			attachments: delivery.draft?.attachments ?? loaded.draft.composer.attachments,
 			excerpts: loaded.draft.composer.excerpts,
 		},
 	};
@@ -1267,8 +1280,13 @@ export function writeChatComposerText(
 	scope: ChatDraftScopeInput,
 	text: string,
 	storage: DraftStorage | undefined = rendererStorage(),
+	expectedRevision?: number,
 ): DraftWriteResult {
 	const loaded = loadChatSessionDraft(scope, storage);
+	// A delayed retry of a failed save must not overwrite a newer surface's draft.
+	if (loaded.ok && expectedRevision !== undefined && loaded.draft.composer.revision !== expectedRevision) {
+		return { ok: true, draft: loaded.draft };
+	}
 	if (loaded.ok && loaded.draft.composer.text === text) {
 		return { ok: true, draft: loaded.draft };
 	}
@@ -1427,16 +1445,18 @@ export function clearAcceptedChatInlineEdit(
  * Clear the composer accepted by the daemon only if it is still the same
  * revision. A keystroke or attachment change that happened while send awaited
  * acceptance must remain both on screen and in durable storage.
+ * Sent attachments belong to the accepted message, even if the next text is newer.
  */
 export function clearAcceptedChatComposer(
 	scope: ChatDraftScopeInput,
 	acceptedRevision: number,
 	storage: DraftStorage | undefined = rendererStorage(),
+	acceptedAttachmentIds: readonly string[] = [],
 ): DraftClearResult {
 	const loaded = loadChatSessionDraft(scope, storage);
 	const current = loaded.draft;
 	if (!loaded.ok) return { ok: false, cleared: false, draft: current };
-	if (current.composer.revision !== acceptedRevision) {
+	if (current.composer.delivery?.draft || current.composer.revision !== acceptedRevision) {
 		if (current.composer.delivery?.revision !== acceptedRevision) {
 			return { ok: true, cleared: false, draft: current };
 		}
@@ -1445,13 +1465,19 @@ export function clearAcceptedChatComposer(
 			composer: {
 				revision: current.composer.revision,
 				text: current.composer.text,
-				attachments: current.composer.attachments,
+				attachments: current.composer.delivery.draft
+					? current.composer.attachments
+					: current.composer.attachments.filter((attachment) => !acceptedAttachmentIds.includes(attachment.id)),
 				excerpts: current.composer.excerpts,
 			},
 		};
 		const result = persistDraftProven(next, storage);
 		return result.ok
-			? { ok: true, cleared: false, draft: result.draft }
+			? {
+				ok: true,
+				cleared: Boolean(current.composer.delivery.draft) && next.composer.text === "" && next.composer.attachments.length === 0,
+				draft: result.draft,
+			}
 			: { ok: false, cleared: false, draft: current };
 	}
 	const next: ChatSessionDraft = {

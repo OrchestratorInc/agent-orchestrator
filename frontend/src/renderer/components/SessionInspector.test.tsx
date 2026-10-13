@@ -889,12 +889,23 @@ describe("SessionInspector PR section", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("omits the pull request section and PR policies until a PR is known, even for PR output", () => {
+  it("omits PR cards and PR policies until a PR is known, even for PR output", () => {
     renderWithQuery(<SessionInspector session={session([], { outputType: "pr" })} />);
-    expect(screen.queryByText("Pull request")).not.toBeInTheDocument();
+    expect(screen.queryByText(/PR #\d+/)).not.toBeInTheDocument();
     expect(screen.queryByText("No pull request opened yet.")).not.toBeInTheDocument();
     expect(screen.queryByText("Session controls")).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "Automatically fix CI failures" })).not.toBeInTheDocument();
+  });
+
+  it("titles the branch block Branch without a PR and Pull request with one", () => {
+    const { unmount } = renderWithQuery(<SessionInspector session={session([], { outputType: "none" })} />);
+    expect(screen.getByRole("button", { name: "Branch" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByText("Pull request")).not.toBeInTheDocument();
+    unmount();
+
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")], { outputType: "none" })} />);
+    expect(screen.getByRole("button", { name: "Pull request" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Branch" })).not.toBeInTheDocument();
   });
 
   it("hides the section entirely when the session has no known output type", () => {
@@ -1203,6 +1214,33 @@ describe("SessionInspector Artifacts section", () => {
       "/api/v1/sessions/{sessionId}/preview",
       expect.anything(),
     );
+  });
+
+  it("opens the Artifacts view from the More menu beside the tab list", async () => {
+    const onViewChange = vi.fn();
+    renderWithQuery(
+      <SessionInspector
+        onViewChange={onViewChange}
+        session={session([], {
+          artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })],
+        })}
+      />,
+    );
+
+    const more = screen.getByRole("button", { name: "More" });
+    expect(screen.getByRole("tablist")).not.toContainElement(more);
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    expect(more).not.toHaveAttribute("data-active");
+
+    await userEvent.click(more);
+    const menu = await screen.findByRole("menu");
+    expect(menu).toHaveAttribute("data-browser-native-overlay", "true");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Artifacts" }));
+
+    expect(onViewChange).toHaveBeenCalledWith("artifacts");
+    expect(await screen.findByRole("button", { name: /notes\.md/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("button", { name: "More" })).toHaveAttribute("data-active");
   });
 
   it("does not render a feedback button on artifact rows", () => {
@@ -2075,11 +2113,9 @@ describe("SessionInspector Activity section", () => {
     );
 
     for (const title of ["Pull request", "Session controls", "Activity"]) {
-      const heading = screen.getByText(title).parentElement;
-      expect(heading?.parentElement).toHaveAttribute(
-        "data-testid",
-        "inspector-section",
-      );
+      expect(
+        screen.getByText(title).closest('[data-testid="inspector-section"]'),
+      ).toBeInTheDocument();
     }
   });
 
@@ -2279,9 +2315,9 @@ describe("SessionInspector Activity section", () => {
 describe("SessionInspector tabs", () => {
   it("exposes Reviews after Summary and keeps review content out of Summary", async () => {
     mockCommonGets([], "", [reviewState(1, "needs_review")]);
-    renderWithQuery(<SessionInspector session={session([pr(1, "open")])} />);
+    renderWithQuery(<SessionInspector session={session([pr(1, "open")])} sideChatView={<div />} />);
     const tabs = screen.getAllByRole("tab").map((el) => el.textContent?.trim());
-    expect(tabs).toEqual(["Summary", "Reviews", "Browser", "Files"]);
+    expect(tabs).toEqual(["Summary", "Reviews", "Browser", "Side chat", "Files"]);
     expect(screen.queryByText("Review controls")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
@@ -2318,10 +2354,19 @@ describe("SessionInspector tabs", () => {
     expect(screen.queryByText("View review details")).not.toBeInTheDocument();
   });
 
+  it("collapses and expands a section from its heading", async () => {
+    renderWithQuery(<SessionInspector session={session([])} />);
+    const heading = screen.getByRole("button", { name: "Activity" });
+    await userEvent.click(heading);
+    expect(heading).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(heading);
+    expect(heading).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("does not render the overview card in the summary", () => {
     renderWithQuery(
       <SessionInspector
-        session={{ ...session([]), issueId: "github:acme/project-one#42" }}
+        session={{ ...session([], { outputType: "pr" }), issueId: "github:acme/project-one#42" }}
       />,
     );
 
@@ -4480,6 +4525,7 @@ describe("SessionInspector summary reviews", () => {
 
     await screen.findByRole("tab", { name: /Summary/ });
     expect(screen.queryByRole("tab", { name: /Reviews/ })).not.toBeInTheDocument();
+    // No side chat view from the host (side chats off or unsupported): no tab.
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual([
       "Summary",
       "Browser",

@@ -130,6 +130,13 @@ type conversation struct {
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
 	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
+	// preamble is standing context attached to the first prompt that actually
+	// reaches the provider. It is the delivery channel for agents that accept no
+	// system-prompt launch flag and ignore session/new _meta but do execute
+	// prompt content blocks. It is consumed in StartDeferredTurn, not SendTurn,
+	// so a rejected or discarded turn leaves it armed for the next one.
+	preamble      []acpsdk.ContentBlock
+	preambleSpent bool
 
 	contextTokens     int64
 	contextWindow     int64
@@ -142,6 +149,7 @@ type conversation struct {
 	events       chan ports.ChatEvent
 	eventsClosed bool
 	closeOnce    sync.Once
+	closing      chan struct{}
 
 	historyMu     sync.Mutex
 	history       *historyCapture
@@ -197,15 +205,17 @@ func newConversation(
 		nestedMessages:   make(map[string]nestedMessageState),
 		tools:            make(map[string]*toolState),
 		events:           make(chan ports.ChatEvent, eventBuffer),
+		closing:          make(chan struct{}),
 		extensionFor:     extensionFor,
 		extensionMethods: reverseAliases,
 	}
-	legacyWire, sdkWriter, sdkReader := newLegacyACPTransport(proc.stdin, proc.stdout)
+	legacyWire, sdkWriter, sdkReader := newLegacyACPTransport(proc.stdin)
 	c.legacyWire = legacyWire
 	c.conn = acpsdk.NewClientSideConnection(
 		c, sdkWriter, newExtensionMethodReader(sdkReader, extensionAliases),
 	)
 	c.conn.SetLogger(log)
+	go legacyWire.forward(proc.stdout, c.handleNotification)
 	go c.watchConnection()
 	return c
 }
@@ -318,6 +328,18 @@ func (c *conversation) ProviderConversationID() string {
 func (c *conversation) setReportedProviderConversationID(sessionID string) {
 	c.mu.Lock()
 	c.reportedSessionID = sessionID
+	c.mu.Unlock()
+}
+
+// setSessionPreamble arms standing context for the next prompt that actually
+// reaches the provider. Any earlier preamble is dropped: the newest launch
+// context is the one that should be delivered, which is how a recomputed system
+// prompt replaces the original. It is consumed in StartDeferredTurn so a turn
+// that never starts leaves it armed.
+func (c *conversation) setSessionPreamble(blocks []acpsdk.ContentBlock) {
+	c.mu.Lock()
+	c.preamble = blocks
+	c.preambleSpent = len(blocks) == 0
 	c.mu.Unlock()
 }
 
@@ -556,6 +578,17 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	}
 	turn := *c.prepared
 	c.prepared = nil
+	// Standing context leads the first prompt so the provider reads it as
+	// context rather than as part of what the user asked. It is consumed here,
+	// not in SendTurn, because this is the first point at which a prompt is
+	// guaranteed to reach the provider: settings validation, a busy conversation
+	// and a discarded prepared turn all fail in SendTurn, and spending the
+	// preamble on any of them would silently drop AO's instructions from the
+	// session's first real turn.
+	if !c.preambleSpent && len(c.preamble) > 0 {
+		turn.prompt = append(append([]acpsdk.ContentBlock(nil), c.preamble...), turn.prompt...)
+		c.preambleSpent = true
+	}
 	c.activeTurn = turn.id
 	c.settlingTurn = ""
 	turnCtx, cancel := context.WithCancel(context.Background())
@@ -600,6 +633,18 @@ func (c *conversation) finishPrompt(
 	resp acpsdk.PromptResponse,
 	err error,
 ) {
+	eventID, _ := resp.Meta[persistenthost.ACPEventIDMetaKey].(string)
+	var requestErr *acpsdk.RequestError
+	if eventID == "" && errors.As(err, &requestErr) {
+		if data, ok := requestErr.Data.(map[string]any); ok {
+			eventID, _ = data[persistenthost.ACPEventIDMetaKey].(string)
+		}
+	}
+	// A transport error may win the race with watchConnection. The host still
+	// owns this prompt; its journal, not an SDK disconnect, supplies the outcome.
+	if err != nil && eventID == "" && c.providerDetaching() {
+		return
+	}
 	c.mu.Lock()
 	if c.detaching {
 		c.mu.Unlock()
@@ -617,13 +662,6 @@ func (c *conversation) finishPrompt(
 		// cannot look interrupted and an accepted one cannot look failed.
 		<-interrupt.done
 		interruptedLocally = interrupt.err == nil
-	}
-	eventID, _ := resp.Meta[persistenthost.ACPEventIDMetaKey].(string)
-	var requestErr *acpsdk.RequestError
-	if eventID == "" && errors.As(err, &requestErr) {
-		if data, ok := requestErr.Data.(map[string]any); ok {
-			eventID, _ = data[persistenthost.ACPEventIDMetaKey].(string)
-		}
 	}
 	var state domain.TurnState
 	var turnErr error
@@ -975,6 +1013,7 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
 		c.closed = true
+		close(c.closing)
 		persistent := c.proc.terminate != nil
 		c.detaching = persistent && !terminate
 		cancel := c.turnCancel
@@ -1021,14 +1060,29 @@ func (c *conversation) watchConnection() {
 	<-c.conn.Done()
 	c.mu.Lock()
 	detaching := c.detaching
+	preserve := !c.closed && c.proc.terminate != nil
 	c.mu.Unlock()
-	if !detaching {
+	// SDK Done cancels only its logical connection. Release both the forwarding
+	// pipe and the actual socket, including a host blocked writing replay under
+	// its ownership lock. Stopping this transport must not terminate the host.
+	_ = c.legacyWire.reader.Close()
+	_ = c.proc.stop()
+	if !detaching && !preserve {
 		c.failPendingPermissions()
 		c.failPendingInputs()
 	}
-	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped})
+	event := ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped}
+	if preserve {
+		event.Err = ports.ErrChatRecoveryInconclusive
+	}
 	c.eventMu.Lock()
 	if !c.eventsClosed {
+		// Deliver the recovery boundary even though conn.Done is already closed;
+		// emit's disconnect select could otherwise drop this ownership signal.
+		select {
+		case c.events <- event:
+		case <-c.closing:
+		}
 		c.eventsClosed = true
 		close(c.events)
 	}
@@ -1050,6 +1104,7 @@ func (c *conversation) emit(event ports.ChatEvent) {
 		select {
 		case c.events <- event:
 		case <-c.conn.Done():
+		case <-c.closing:
 		}
 		return
 	}

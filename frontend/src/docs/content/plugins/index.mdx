@@ -3,7 +3,7 @@ title: Built-in capabilities
 description: Agent, runtime, workspace, tracker, SCM, notification, and terminal support compiled into AO.
 ---
 
-To use a built-in capability, choose an agent or project type in AO. Capabilities ship with the desktop app; they are not npm plugins and cannot be installed through a marketplace. For an external agent, install its CLI, sign in, then run `ao agent ls --refresh` to check readiness. Unreal Agent is built into AO for Chat on supported macOS and Linux.
+To use a built-in capability, choose an agent or project type in Orchestrator. Capabilities ship with the desktop app; they are not npm plugins and cannot be installed through a marketplace. For an external agent, install its CLI, sign in, then run `ao agent ls --refresh` to check readiness. Unreal Agent is built into Orchestrator for Chat on supported macOS and Linux.
 
 ## Capability map
 
@@ -15,13 +15,13 @@ To use a built-in capability, choose an agent or project type in AO. Capabilitie
 | [Tracker](/plugins/trackers) | GitHub and GitLab issue intake | Per-project opt-in, plus `AO_TRACKER_INTAKE` on the daemon |
 | [SCM](/plugins/scm) | GitHub/GitLab PR or MR, checks, reviews, and mergeability | Derived from the Git repository |
 | [Notifications](/plugins/notifiers) | Durable history, desktop toasts, and paired-device mobile push | Built in |
-| [Terminal](/plugins/terminals) | Desktop xterm surface over AO's terminal mux | Built in |
+| [Terminal](/plugins/terminals) | Desktop xterm surface over Orchestrator's terminal mux | Built in |
 
 ## Agents are the configurable adapter set
 
 Use `ao agent ls --refresh` to see the exact daemon-advertised catalog and whether each local CLI is installed and authenticated. `ao spawn --agent <name>` selects a harness for one session; project worker and orchestrator defaults are stored in typed project configuration.
 
-The other areas are daemon-owned boundaries, not interchangeable marketplace slots. In particular, the runtime is selected for the operating system, Git repositories use worktrees, and Scratch projects use AO-managed directories.
+The other areas are daemon-owned boundaries, not interchangeable marketplace slots. In particular, the runtime is selected for the operating system, Git repositories use worktrees, and Scratch projects use Orchestrator-managed directories.
 
 <Callout type="info">
 	Legacy `agent-orchestrator.yaml` plugin, notifier, runtime, workspace, tracker, and SCM blocks are not active configuration in the rewrite. `ao import` reports unsupported legacy fields as dropped.

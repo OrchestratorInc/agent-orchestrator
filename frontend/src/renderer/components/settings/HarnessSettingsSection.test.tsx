@@ -76,6 +76,7 @@ function catalogWithInstalled(...installed: string[]) {
 			{ id: "codex", label: "Codex" },
 			{ id: "cursor", label: "Cursor" },
 			{ id: "goose", label: "Goose" },
+			{ id: "codewhale", label: "Codewhale" },
 		].map((agent) => ({
 			...agent,
 			installation: { state: installed.includes(agent.id) ? "installed" : "not_installed", freshness: "fresh", reason: "", reasonCode: "", attemptedAt: null, checkedAt: null },
@@ -118,6 +119,11 @@ const plans = {
 			command: "pwsh.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <downloaded from https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1>",
 			documentationUrl: "https://goose-docs.ai/docs/getting-started/installation/",
 			methods: [{ id: "official-installer", label: "Official installer", available: true, recommended: true, command: "pwsh.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <downloaded from https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1>", reinstallAvailable: false, reinstallReason: "No headless reinstall" }],
+		},
+		{
+			agentId: "codewhale", available: false, automatic: false, method: "manual",
+			reason: "AO does not automatically install Codewhale.", documentationUrl: "https://github.com/Hmbown/Codewhale",
+			methods: [{ id: "manual", label: "Manual", available: false, recommended: true, reason: "AO does not automatically install Codewhale.", reinstallAvailable: false }],
 		},
 	],
 };
@@ -297,7 +303,7 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
 	});
 
-	it("shows configured MiMo Code without asking for login again", async () => {
+	it("shows configured MiMo Code as connected and offers refresh login", async () => {
 		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: configured } as never;
@@ -308,9 +314,10 @@ describe("HarnessSettingsSection", () => {
 		});
 		renderSection();
 		const row = (await screen.findByText("MiMo Code")).closest('[data-agent="mimo-code"]') as HTMLElement;
-		expect(await within(row).findByText("Configured")).toBeInTheDocument();
-		expect(within(row).queryByRole("button", { name: "Configured" })).toBeNull();
+		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "Refresh login" })).toBeEnabled();
 	});
 
 	it("offers fx installation while readiness refreshes automatically", async () => {
@@ -425,6 +432,57 @@ describe("HarnessSettingsSection", () => {
 		const login = await within(row).findByRole("button", { name: "Login" });
 		await userEvent.click(login);
 		expect(openExternal).toHaveBeenCalledWith("https://example.test/login");
+	});
+
+	it("opens the installation guide for a manual-only harness", async () => {
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		renderSection();
+		const row = (await screen.findByText("Codewhale")).closest('[data-agent="codewhale"]') as HTMLElement;
+		await userEvent.click(await within(row).findByRole("button", { name: "Open installation guide" }));
+
+		expect(openExternal).toHaveBeenCalledWith("https://github.com/Hmbown/Codewhale");
+	});
+
+	it("classifies an unauthorized Unreal Agent as not configured and offers documentation", async () => {
+		const unrealCatalog = { agents: [agentReadiness("unreal-agent", "Unreal Agent", { authentication: "unauthorized" })] };
+		const documentationUrl = "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/harnesses/unreal-agent.md";
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: unrealCatalog } as never;
+			if (path === "/api/v1/agents/auth-plans") {
+				return { data: { plans: [{ agentId: "unreal-agent", action: "setup", launchMode: "documentation", available: true, documentationUrl }] } } as never;
+			}
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: unrealCatalog } as never);
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+
+		renderSection();
+		const row = (await screen.findByText("Unreal Agent")).closest('[data-agent="unreal-agent"]') as HTMLElement;
+		expect(await within(row).findByText("Not set up")).toBeInTheDocument();
+		const documentation = within(row).getByRole("button", { name: "View documentation" });
+		await userEvent.click(documentation);
+		expect(openExternal).toHaveBeenCalledWith(documentationUrl);
+	});
+
+	it("keeps Unreal documentation available when credentials are configured but unverified", async () => {
+		const unrealCatalog = { agents: [agentReadiness("unreal-agent", "Unreal Agent", { authentication: "configured" })] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: unrealCatalog } as never;
+			if (path === "/api/v1/agents/auth-plans") {
+				return { data: { plans: [{ agentId: "unreal-agent", action: "setup", launchMode: "documentation", available: true, documentationUrl: "https://example.test/unreal" }] } } as never;
+			}
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: unrealCatalog } as never);
+
+		renderSection();
+		const row = (await screen.findByText("Unreal Agent")).closest('[data-agent="unreal-agent"]') as HTMLElement;
+		expect(await within(row).findByText("Configured")).toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "View documentation" })).toBeEnabled();
 	});
 
 	it("shows cached readiness while silently refreshing when the page opens", async () => {
@@ -685,9 +743,10 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "auth-mimo" } },
 		}));
-		expect(await within(row).findByText("Configured")).toBeInTheDocument();
-		expect(within(row).queryByRole("button", { name: "Configured" })).toBeNull();
+		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
+		expect(within(row).getByRole("button", { name: "Refresh login" })).toBeEnabled();
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
 
@@ -931,7 +990,7 @@ describe("HarnessSettingsSection", () => {
 		}));
 	});
 
-	it("shows an incompatible OpenCode version reason and keeps installation available", async () => {
+	it("treats a separate OpenCode major as ordinarily not installed", async () => {
 		const reason = 'OpenCode 2 requires OpenCode 2, but "/usr/local/bin/opencode" reports OpenCode 1 (1.18.33); select the matching harness or put OpenCode 2 on PATH';
 		const mismatch = agentReadiness("opencode-v2", "OpenCode 2", {
 			installation: "not_installed",
@@ -963,9 +1022,10 @@ describe("HarnessSettingsSection", () => {
 
 		renderSection();
 		const row = (await screen.findByText("OpenCode 2")).closest('[data-agent="opencode-v2"]') as HTMLElement;
-		expect(await within(row).findByText(reason)).toBeInTheDocument();
+		const install = await within(row).findByRole("button", { name: "Install" });
+		expect(row).toHaveTextContent("Available via npm");
+		expect(row).not.toHaveTextContent(reason);
 		expect(row).not.toHaveTextContent("Installation status unknown");
-		const install = within(row).getByRole("button", { name: "Install" });
 		expect(install).toBeEnabled();
 
 		await userEvent.click(install);

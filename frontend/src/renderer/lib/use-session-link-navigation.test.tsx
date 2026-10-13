@@ -11,8 +11,15 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => mocks.workspace(),
 	useCloudProjectsQuery: () => mocks.cloudProjects(),
 	useCloudSessionsQuery: () => mocks.cloudSessions(),
+	toCloudWorkspace: (project: { id: string; displayName?: string }, sessions: Array<{ id: string; projectId: string }>) => ({
+		id: project.id,
+		name: project.displayName ?? project.id,
+		path: "",
+		sessions: sessions.filter((session) => session.projectId === project.id),
+	}),
 	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
 }));
+vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ ready: true, org: { id: "org-1" } }) }));
 
 describe("useSessionLinkNavigation", () => {
 	beforeEach(() => {
@@ -79,6 +86,19 @@ describe("useSessionLinkNavigation", () => {
 				dedupeKey: "session-link:project:terminated",
 			}),
 		]);
+	});
+
+	it("navigates to the session and requests the artifact open, even after termination", () => {
+		useUiStore.setState({ workspaceFileOpenRequest: null });
+		const { result } = renderHook(() => useSessionLinkNavigation());
+		act(() => expect(result.current("ao://sessions/project/terminated/artifacts/plans/my%20plan.md")).toBe(true));
+		expect(mocks.navigate).toHaveBeenCalledWith("project", "terminated");
+		expect(useUiStore.getState().workspaceFileOpenRequest).toEqual(expect.objectContaining({
+			sessionId: "terminated",
+			path: "plans/my plan.md",
+			source: "artifact",
+		}));
+		expect(useUiStore.getState().globalToasts).toEqual([]);
 	});
 
 	it.each([

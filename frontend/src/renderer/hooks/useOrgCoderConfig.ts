@@ -9,17 +9,24 @@
 import { useQuery } from "@tanstack/react-query";
 import type { CloudCpOrgCoderConfig } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
+import { useCloudOffering } from "./useCloudOffering";
 import { useCloudOrg } from "./useCloudOrg";
 
 export const orgCoderConfigQueryKey = ["cloud-org-coder-config"] as const;
 
-export function useOrgCoderConfig() {
+/**
+ * Read only for an org whose offering includes coder: the control plane
+ * answers 403 provider_forbidden for any other org. `enabled` lets a caller
+ * narrow it further.
+ */
+export function useOrgCoderConfig(enabled = true) {
 	const { client, ready } = useCloudCp();
 	const { org } = useCloudOrg();
+	const { hasCoder } = useCloudOffering();
 	const orgId = org?.id ?? "";
 	return useQuery({
 		queryKey: [...orgCoderConfigQueryKey, orgId],
-		enabled: ready && orgId !== "",
+		enabled: enabled && hasCoder && ready && orgId !== "",
 		staleTime: 60_000,
 		queryFn: async (): Promise<CloudCpOrgCoderConfig | null> => {
 			const response = await client.getOrgCoderConfig(orgId);

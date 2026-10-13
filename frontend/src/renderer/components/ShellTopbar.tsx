@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
-import { Archive, CalendarClock, Folder, LayoutDashboard, Plus } from "lucide-react";
+import { Archive, CalendarClock, FileText, Folder, LayoutDashboard, Plus } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { animate, LayoutGroup, motion, useMotionValue, useReducedMotion } from "motion/react";
 import { NotificationCenter } from "./NotificationCenter";
@@ -42,6 +42,7 @@ import { StatusPill } from "./StatusPill";
 import { TopbarActionError, TopbarButton, topbarHeaderClass, topbarProjectLabelClass } from "./TopbarButton";
 import { SessionArchiveDialog } from "./SessionArchiveDialog";
 import { TopbarOpenEditorButton } from "./TopbarOpenEditorButton";
+import { useSessionShortcut } from "../hooks/useAppShortcut";
 import {
 	agentSwitchStatusVisual,
 	deriveSessionAgentSwitchPresentation,
@@ -130,6 +131,7 @@ export function ShellTopbar({
 	const session = startingOrchestrator ? undefined : workspaceScope?.session;
 	const isSessionRoute = startingOrchestrator || Boolean(params.sessionId);
 	const isAutomationsRoute = location.pathname === "/automations";
+	const isArtifactsRoute = location.pathname === "/artifacts";
 	const isStandaloneBoardRoute = location.pathname === "/sessions" || location.pathname === "/sessions/";
 	const isOrchestrator = startingOrchestrator || (session ? isOrchestratorSession(session) : false);
 	const isInspectorOpen = useUiStore((state) =>
@@ -142,7 +144,7 @@ export function ShellTopbar({
 	// route slug. "Board" is the root-board crumb only.
 	const projectId = session?.workspaceId ?? params.projectId;
 	const isProjectBoardRoute = !isSessionRoute && Boolean(projectId);
-	const isRootBoardRoute = !isSessionRoute && !isProjectBoardRoute && !isAutomationsRoute && !isStandaloneBoardRoute;
+	const isRootBoardRoute = !isSessionRoute && !isProjectBoardRoute && !isAutomationsRoute && !isArtifactsRoute && !isStandaloneBoardRoute;
 	const project = workspaceScope?.project;
 	const supportsLocalCues = Boolean(!hostId && project && toProjectKind(project.kind));
 	const projectLabel = project?.name ?? session?.workspaceName ?? (projectId ? "" : t("shell.board"));
@@ -199,6 +201,13 @@ export function ShellTopbar({
 							{t("automations.title")}
 						</span>
 					</div>
+				) : isArtifactsRoute ? (
+					<div className="inline-flex min-w-0 items-center gap-1.5" data-testid="artifacts-topbar-label">
+						<span className={cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5")}>
+							<FileText aria-hidden="true" className="size-icon-md" />
+							{t("artifacts.title")}
+						</span>
+					</div>
 				) : (isProjectBoardRoute && boardActionsInPanel) ||
 				  (isMac && isRootBoardRoute && boardActionsInPanel) ||
 				  (isStandaloneBoardRoute && boardActionsInPanel) ? null : (
@@ -229,6 +238,7 @@ export function ShellTopbar({
 				data-compact-actions={compactActions ? "true" : "false"}
 				data-testid="workspace-topbar-actions"
 			>
+				{isProjectBoardRoute || isOrchestrator ? <ProjectTerminationFeedback projectId={projectId} hostId={hostId} /> : null}
 				{!boardActionsInPanel && isProjectBoardRoute ? (
 					<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={project?.kind === CLOUD_PROJECT_KIND} style={noDragStyle} />
 				) : null}
@@ -236,7 +246,6 @@ export function ShellTopbar({
 					<>
 						{isOrchestrator ? (
 							<>
-								{!hostId ? <ProjectTerminationFeedback projectId={projectId} /> : null}
 								{sessionAction ? (
 									<div className="inline-flex shrink-0 items-center" style={noDragStyle}>
 										{sessionAction}
@@ -441,6 +450,12 @@ export function TopbarArchiveButton({
 		kill.mutate(session);
 		onKilled(session.workspaceId, orchestratorId);
 	};
+	// ⌘⇧A opens the same confirmation the button does.
+	useSessionShortcut("archive-session", () => {
+		if (isPending) return;
+		clearTerminateSessionState(queryClient, session.id, session.hostId);
+		setConfirmOpen(true);
+	});
 
 	return (
 		<div className="inline-flex items-center gap-1.5" style={noDragStyle}>
@@ -476,26 +491,26 @@ export function TopbarArchiveButton({
 	);
 }
 
-function ProjectTerminationFeedback({ projectId }: { projectId: string | undefined }) {
+export function ProjectTerminationFeedback({ projectId, hostId }: { projectId: string | undefined; hostId?: string }) {
 	const { t } = useTranslation();
-	const states = useProjectTerminateSessionStates(projectId);
+	const states = useProjectTerminateSessionStates(projectId, hostId);
 	if (states.length === 0) return null;
 
 	return (
 		<div aria-label={t("shell.sessionTerminationStatus")} className="flex max-w-content-max items-center gap-2">
 			{states.map((state) =>
 				state.error ? (
-					<TopbarActionError className="max-w-48 truncate" key={state.session.id} title={state.error}>
-						{state.session.title}: {state.error}
+					<TopbarActionError className="max-w-48 truncate" key={state.session.id} title={`${state.session.title}: ${state.error}`}>
+						{state.error}
 					</TopbarActionError>
 				) : (
 					<span
 						className="max-w-40 truncate text-caption text-muted-foreground"
 						key={state.session.id}
 						role="status"
-						title={t("shell.archivingNamed", { title: state.session.title })}
+						title={t(state.cleanupPending ? "shell.workspaceCleanupPending" : "shell.archivingNamed", { title: state.session.title })}
 					>
-						{t("shell.archivingNamed", { title: state.session.title })}
+						{t(state.cleanupPending ? "shell.workspaceCleanupPending" : "shell.archivingNamed", { title: state.session.title })}
 					</span>
 				),
 			)}

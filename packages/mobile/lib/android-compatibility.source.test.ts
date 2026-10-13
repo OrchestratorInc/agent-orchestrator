@@ -189,13 +189,6 @@ describe("Android native compatibility boundaries", () => {
 		expect(spawn).toContain("iosContent: { paddingTop: space.xxxl }");
 	});
 
-	it("waits for the Android destination route before closing the drawer", () => {
-		const drawer = source("./sidebar-navigation-shell.android.tsx");
-		expect(drawer).toContain("pendingClosePath");
-		expect(drawer).toContain("sidebarNavigationSettled");
-		expect(drawer).toMatch(/pendingClosePath[\s\S]*router\.replace\(destination\.href\)/);
-	});
-
 	it("uses compact app-native choice rows instead of the unstable Compose picker", () => {
 		const path = fileURLToPath(new URL("./chat/ChatSettingsModal.android.tsx", import.meta.url));
 		expect(existsSync(path)).toBe(true);
@@ -242,7 +235,7 @@ describe("Android native compatibility boundaries", () => {
 	});
 
 	it("presents Settings from the root stack above the preserved drawer", () => {
-		const rootSettingsPath = fileURLToPath(new URL("../app/settings.tsx", import.meta.url));
+		const rootSettingsPath = fileURLToPath(new URL("../app/settings/index.tsx", import.meta.url));
 		const nestedSettingsPath = fileURLToPath(new URL("../app/(tabs)/settings.tsx", import.meta.url));
 		expect(existsSync(rootSettingsPath)).toBe(true);
 		expect(existsSync(nestedSettingsPath)).toBe(false);

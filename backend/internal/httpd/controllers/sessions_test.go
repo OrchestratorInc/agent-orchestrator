@@ -35,10 +35,12 @@ import (
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 )
 
 type fakeSessionService struct {
+	cleanupPending             bool
 	sessions                   map[domain.SessionID]domain.Session
 	sent                       string
 	sentAttachment             *ports.SpawnAttachment
@@ -1591,6 +1593,7 @@ func TestSessionsAPI_GetExposesArtifactFilesAndServesHTMLArtifact(t *testing.T) 
 				Path       string `json:"path"`
 				Kind       string `json:"kind"`
 				PreviewURL string `json:"previewUrl"`
+				InlineURL  string `json:"inlineUrl"`
 			} `json:"artifactFiles"`
 		} `json:"session"`
 	}
@@ -1610,6 +1613,13 @@ func TestSessionsAPI_GetExposesArtifactFilesAndServesHTMLArtifact(t *testing.T) 
 	}
 	if resp.Session.ArtifactFiles[1].PreviewURL != "" {
 		t.Fatalf("markdown previewUrl = %q, want empty", resp.Session.ArtifactFiles[1].PreviewURL)
+	}
+	// The chat frames the page from its own inline origin, not the preview one.
+	if inline := resp.Session.ArtifactFiles[0].InlineURL; !strings.Contains(inline, "://ao-inline-artifact.") || !strings.HasSuffix(inline, "/site/index.html") {
+		t.Fatalf("html inlineUrl = %q, want an ao-inline-artifact origin", inline)
+	}
+	if resp.Session.ArtifactFiles[1].InlineURL != "" {
+		t.Fatalf("markdown inlineUrl = %q, want empty", resp.Session.ArtifactFiles[1].InlineURL)
 	}
 
 	directPreviewPath, err := url.Parse(resp.Session.ArtifactFiles[0].PreviewURL)
@@ -2150,6 +2160,53 @@ func TestSessionsAPI_OrchestratorRejectsUnknownApprovalMode(t *testing.T) {
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/orchestrators",
 		`{"projectId":"ao","approvalMode":"sometimes"}`)
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_APPROVAL_MODE")
+}
+
+func TestSessionsAPI_SpawnAcceptsArtifactRequestedOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "project", body: `{"projectId":"ao","kind":"worker","harness":"codex","requestedOutput":"artifact","displayName":"New artifact"}`},
+		{name: "standalone", body: `{"kind":"worker","harness":"codex","requestedOutput":"artifact","displayName":"New artifact"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newFakeSessionService()
+			srv := newSessionTestServer(t, svc)
+
+			body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", tc.body)
+			if status != http.StatusCreated {
+				t.Fatalf("status = %d, want 201; body=%s", status, body)
+			}
+			if svc.lastSpawn.RequestedOutput != domain.RequestedOutputArtifact {
+				t.Fatalf("RequestedOutput = %q, want artifact", svc.lastSpawn.RequestedOutput)
+			}
+		})
+	}
+}
+
+func TestSessionsAPI_SpawnOmittedRequestedOutputStaysEmpty(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", `{"projectId":"ao","kind":"worker","harness":"codex"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", status, body)
+	}
+	if svc.lastSpawn.RequestedOutput != "" {
+		t.Fatalf("RequestedOutput = %q, want empty", svc.lastSpawn.RequestedOutput)
+	}
+}
+
+func TestSessionsAPI_SpawnRejectsUnknownRequestedOutput(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", `{"projectId":"ao","kind":"worker","harness":"codex","requestedOutput":"slides"}`)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_REQUESTED_OUTPUT")
+	if svc.lastSpawn.RequestedOutput != "" || svc.lastSpawn.ProjectID != "" {
+		t.Fatalf("rejected request reached the service: %#v", svc.lastSpawn)
+	}
 }
 
 func TestSessionsAPI_PreviewDiscoversAndServesStaticIndex(t *testing.T) {
@@ -4467,5 +4524,27 @@ func TestSessionsAPI_InteractionRecencyKeepsHumanTimestampSeparate(t *testing.T)
 	}
 	if !response.Session.LastInteractionAt.Equal(rec.Metadata.LatestUserPromptAt) {
 		t.Fatalf("new human recency=%v", response.Session.LastInteractionAt)
+	}
+}
+
+func (f *fakeSessionService) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
+	freed, err := f.Kill(ctx, id)
+	return sessionmanager.KillResult{Freed: freed && !f.cleanupPending, CleanupPending: f.cleanupPending}, err
+}
+
+func TestSessionsAPI_KillReportsAcceptedCleanup(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.cleanupPending = true
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/kill", "")
+	var result struct {
+		CleanupPending bool `json:"cleanupPending"`
+		Freed          bool `json:"freed"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusOK || !result.CleanupPending || result.Freed || !svc.sessions["ao-1"].IsTerminated {
+		t.Fatalf("accepted cleanup response = %d %s", status, body)
 	}
 }

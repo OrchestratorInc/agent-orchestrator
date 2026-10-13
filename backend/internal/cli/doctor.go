@@ -87,8 +87,12 @@ var harnessProbeSpecs = map[string]harnessProbeSpec{
 	"kiro":        {BinaryName: "kiro-cli", VersionArg: "--version"},
 	"kilocode":    {BinaryName: "kilocode", VersionArg: "--version"},
 	"omp":         {BinaryName: "omp", VersionArg: "--version"},
+	"codewhale":   {BinaryName: "codewhale", VersionArg: "--version"},
 	"cursor":      {BinaryName: "cursor-agent"},
 	"continue":    {BinaryName: "cn"},
+	// Command Code's binary is `cmd` on Unix and `cmdc` on Windows, where `cmd`
+	// is the built-in shell; the full name resolves on every platform.
+	"command-code": {BinaryName: "command-code", VersionArg: "--version"},
 }
 
 func newDoctorCommand(ctx *commandContext) *cobra.Command {

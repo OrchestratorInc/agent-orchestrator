@@ -20,6 +20,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	workspacerouter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/router"
 	scratchworkspace "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/artifactversions"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
@@ -82,7 +83,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		// must not prevent the daemon or ordinary agent sessions from starting.
 		logger.Warn("fx Herdr listener unavailable", "error", err)
 	}
-	artifactsPoller := artifactsobserver.New(store, lcm, artifactsobserver.Config{Logger: logger})
+	artifactsPoller := artifactsobserver.New(store, lcm, artifactversions.New(store, dataDir, logger), artifactsobserver.Config{Logger: logger})
 	return &lifecycleStack{
 		LCM:           lcm,
 		runtimeReaper: rp,

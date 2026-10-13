@@ -292,7 +292,7 @@ describe("NewTaskDialog", () => {
 		});
 	});
 
-	it("starts the original task naming the preselected project-default agent and optional model", async () => {
+	it("starts the original task naming the preselected project-default agent", async () => {
 		const { onCreated, onOpenChange } = renderDialog();
 		const user = userEvent.setup();
 		const brief = "  Restore the fallback renderer after WebGL init fails.  ";
@@ -305,9 +305,6 @@ describe("NewTaskDialog", () => {
 		);
 
 		await user.type(screen.getByLabelText("Task"), brief);
-		await user.click(await screen.findByRole("button", { name: "Model" }));
-		await user.type(screen.getByRole("searchbox", { name: "Search model" }), "placeholder-model");
-		await user.click(screen.getByRole("menuitem", { name: "Use “placeholder-model” as a custom model" }));
 		await user.click(screen.getByRole("button", { name: "Create task" }));
 
 		await waitFor(() => expect(requestBody).not.toThrow());
@@ -319,13 +316,13 @@ describe("NewTaskDialog", () => {
 				// The dialog preselects the project's worker agent, so the delegate
 				// call names it instead of relying on a server-side fallback.
 				agent: "claude-code",
-				model: "placeholder-model",
 				taskPreparation: "prep-token",
 			}),
 		}));
 		expect(requestBody()).not.toHaveProperty("issueId");
 		expect(requestBody()).not.toHaveProperty("branch");
 		expect(requestBody()).not.toHaveProperty("harness");
+		expect(requestBody()).not.toHaveProperty("model");
 		expect(onCreated).toHaveBeenCalledWith("worker-1");
 		expect(onOpenChange).toHaveBeenCalledWith(false);
 	}, 20_000);

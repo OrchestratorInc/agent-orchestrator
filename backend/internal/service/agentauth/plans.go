@@ -3,6 +3,7 @@ package agentauth
 import (
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
@@ -22,7 +23,7 @@ var plans = []Plan{
 	plan("opencode-v2", ActionLogin, "Log in to OpenCode 2", []string{"opencode", "auth", "login"}, "Native provider chooser", "https://opencode.ai/v2/docs"),
 	plan("mimo-code", ActionLogin, "Log in to MiMo Code", []string{"mimo", "auth", "login"}, "Native provider chooser", "https://mimo.mi.com/docs/en-US/tokenplan/integration/mimo-code"),
 	documentationPlan("aider", ActionSetup, "Set up Aider", "Configure provider credentials using Aider's documented environment or configuration-file options", "https://aider.chat/docs/config/api-keys.html"),
-	plan("copilot", ActionLogin, "Log in to GitHub Copilot", []string{"copilot", "login"}, "Native GitHub device/browser flow", "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli"),
+	copilotLoginPlan(),
 	plan("grok", ActionLogin, "Log in to Grok", []string{"grok", "login"}, "Native login; device-auth remains available inside the CLI", "https://docs.x.ai/build/overview"),
 	kimiLoginPlan(),
 	piLoginPlan(),
@@ -42,10 +43,11 @@ var plans = []Plan{
 	plan("muse", ActionLogin, "Log in to Muse", []string{"muse", "login"}, "Native login flow", "https://ai.meta.com/llama/"),
 	plan("agy", ActionLogin, "Log in to Agy", []string{"agy"}, "Native first-run browser sign-in", "https://github.com/google-antigravity/antigravity-cli"),
 	plan("autohand", ActionLogin, "Log in to Autohand", []string{"autohand", "login"}, "Native Autohand account sign-in", "https://docs.autohand.ai/working-with-autohand-code/cli-reference"),
-	plan("kimchi", ActionLogin, "Log in to Kimchi", []string{"kimchi", "login"}, "Native browser login flow", "https://docs.kimchi.dev/docs/service-keys"),
+	kimchiLoginPlan(),
 	terminalInputPlan("prime-agent", ActionLogin, "Log in to Prime Agent", []string{"prime-agent"}, "/login\r", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md"),
 	terminalInputPlan("omp", ActionLogin, "Log in to OMP", []string{"omp"}, "/login\r", "Select Open login after OMP finishes starting", "https://github.com/can1357/oh-my-pi"),
 	plan("fx", ActionLogin, "Log in to fx", []string{"fx", "login"}, "Select Vercel, Codex, or Grok in fx's native login flow", "https://fx.sh/docs"),
+	documentationPlan("unreal-agent", ActionSetup, "View Unreal Agent documentation", "Configure an OpenAI, OpenRouter, Fireworks, Codex, or Ollama provider for AO's built-in Unreal Agent", "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/harnesses/unreal-agent.md"),
 	// DeepSeek Harness has no login subcommand — credentials are records in its
 	// own store (~/.dsh/.credentials.yaml) — but the web profile serves the
 	// Models page that writes them, which is the route a failed run names
@@ -53,11 +55,26 @@ var plans = []Plan{
 	// page writes it)"). The profile prints a tokenised URL and opens it, so
 	// setup lands on the page that does the work rather than on a docs link.
 	plan("deepseek-harness", ActionSetup, "Set up DeepSeek", []string{"dsh", "--profile", "web"}, "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness"),
+	plan("openhands", ActionSetup, "Set up OpenHands", []string{"openhands"}, "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start"),
+	plan("command-code", ActionLogin, "Log in to Command Code", []string{"command-code", "login"}, "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart"),
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {
 	p := plan(agentID, action, title, command, guidance, docs)
 	p.terminalInput = terminalInput
+	return p
+}
+
+// kimchiLoginPlan starts Kimchi's TUI, which opens the authentication picker
+// on first launch. If the picker is not already open, /login is sent once the
+// TUI is ready.
+func kimchiLoginPlan() Plan {
+	p := plan("kimchi", ActionLogin, "Log in to Kimchi", []string{"kimchi"}, "Kimchi opens the authentication method picker in the PTY", "https://docs.kimchi.dev/docs/service-keys")
+	p.initialInput = "/login"
+	p.initialInputReadyStates = []shellterm.InitialInputReadyState{
+		{Text: "Select authentication method:", SkipInput: true},
+		{Text: "/ for commands"},
+	}
 	return p
 }
 
@@ -94,6 +111,22 @@ func piLoginPlan() Plan {
 		{Text: "Pi can explain its own features"},
 	}
 	p.sendInitialInputOnReadyTimeout = true
+	return p
+}
+
+// copilotLoginPlan opens Copilot's TUI and injects /login so its native
+// account picker (GitHub.com, GitHub Enterprise Cloud, or Microsoft Entra) is
+// offered; the bare `copilot login` subcommand jumps straight into the
+// GitHub.com browser flow. The input is sent once the composer footer renders,
+// or after the bounded ready wait when slow hooks delay that footer.
+// Copilot's "Confirm folder trust" dialog would swallow that input in AO's
+// private auth workspace, so the folder is recorded as trusted first.
+func copilotLoginPlan() Plan {
+	p := plan("copilot", ActionLogin, "Log in to GitHub Copilot", []string{"copilot"}, "Copilot opens its account picker automatically", "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli")
+	p.initialInput = "/login"
+	p.initialInputReadyStates = []shellterm.InitialInputReadyState{{Text: "/ commands"}}
+	p.sendInitialInputOnReadyTimeout = true
+	p.prepareWorkspace = copilot.EnsureWorkspaceTrusted
 	return p
 }
 

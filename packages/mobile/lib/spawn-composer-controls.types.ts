@@ -15,6 +15,9 @@ export type SpawnComposerVoice = {
 };
 
 export type SpawnComposerControlsProps = {
+	hosts: readonly SpawnComposerOption[];
+	hostId: string | null;
+	onSelectHost: (hostId: string) => void;
 	projects: readonly SpawnComposerOption[];
 	projectId: string | null;
 	onSelectProject: (projectId: string) => void;

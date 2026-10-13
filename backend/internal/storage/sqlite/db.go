@@ -2103,9 +2103,12 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsOMP := !strings.Contains(schema, "'omp'")
 	needsGemini := !strings.Contains(schema, "'gemini'")
 	needsUnreal := !strings.Contains(schema, "'unreal-agent'")
+	needsCodewhale := !strings.Contains(schema, "'codewhale'")
 	needsMiMo := !strings.Contains(schema, "'mimo-code'")
 	needsDeepSeek := !strings.Contains(schema, "'deepseek-harness'")
-	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsMiMo && !needsDeepSeek {
+	needsOpenHands := !strings.Contains(schema, "'openhands'")
+	needsCommandCode := !strings.Contains(schema, "'command-code'")
+	if !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2198,6 +2201,27 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		// instead of enumerating the shapes repaired above.
 		repairs = append(repairs, replacement{"'fake'))", "'deepseek-harness', 'fake'))"})
 	}
+	if needsOpenHands {
+		// Migration 0192 rewrites the current constraint variants by exact
+		// string. A database that skipped an earlier harness migration matches
+		// none of them, so it reaches this repair with the harness list still
+		// missing entries; goose has already run, so nothing else adds this
+		// harness. Every variant ends with the retained 'fake' fixture harness,
+		// so anchor there instead of enumerating the shapes repaired above.
+		// This runs after the DeepSeek repair, so a database missing both gets
+		// 'deepseek-harness', 'openhands', 'fake' in that order.
+		repairs = append(repairs, replacement{"'fake'))", "'openhands', 'fake'))"})
+	}
+	if needsCodewhale {
+		repairs = append(repairs, replacement{"'fake'))", "'codewhale', 'fake'))"})
+	}
+	if needsCommandCode {
+		// Migration 0194 rewrites the constraint by anchoring on the retained
+		// 'fake' fixture harness, for the same reason as DeepSeek above. A
+		// database that skipped an earlier harness migration reaches this repair
+		// without Command Code, so anchor there instead of enumerating shapes.
+		repairs = append(repairs, replacement{"'fake'))", "'command-code', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2240,6 +2264,15 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'deepseek-harness'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing DeepSeek Harness and did not match known pre-DeepSeek schema")
+	}
+	if !strings.Contains(schema, "'codewhale'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Codewhale")
+	}
+	if !strings.Contains(schema, "'openhands'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing OpenHands and did not match known pre-OpenHands schema")
+	}
+	if !strings.Contains(schema, "'command-code'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Command Code and did not match known pre-Command-Code schema")
 	}
 	return nil
 }

@@ -13,7 +13,7 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Archive, Check, Copy, GitBranch, LoaderCircle, RotateCcw } from "lucide-react";
+import { Archive, Check, Copy, GitBranch, Globe, LoaderCircle, RotateCcw, Shapes } from "lucide-react";
 import type { MessageKey } from "../i18n";
 import { aoBridge } from "../lib/bridge";
 import { formatTimeCompact } from "../lib/format-time";
@@ -25,8 +25,8 @@ import {
 	deriveSessionAgentSwitchPresentation,
 } from "../lib/agent-switch-presentation";
 import { agentLabel } from "../lib/agent-options";
-import type { WorkspaceSession } from "../types/workspace";
-import { canonicalTrackerIssueId } from "../types/workspace";
+import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
+import { canonicalTrackerIssueId, sessionArtifacts } from "../types/workspace";
 import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
 import type { ChipTone } from "@aoagents/product-ui";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
@@ -56,6 +56,15 @@ export function toBoardSessionPresentation(
 					tone: "var(--color-status-working)",
 				}
 			: undefined;
+	const failedStartStatus =
+		session.provisionState === "failed"
+			? {
+					className: "text-status-exited",
+					indicatorClassName: "bg-status-exited",
+					label: "Start failed",
+					tone: "var(--color-status-exited)",
+				}
+			: undefined;
 	return {
 		activity: session.activity,
 		branch: session.branch,
@@ -67,7 +76,7 @@ export function toBoardSessionPresentation(
 		status: session.status,
 		statusReadiness: session.statusReadiness,
 		statusPresentation:
-			provisioningStatus ??
+			provisioningStatus ?? failedStartStatus ??
 			(t && switchPresentation && switchVisual
 				? {
 						className: switchVisual.className,
@@ -93,6 +102,7 @@ export function BoardSessionCardAdapter({
 	memory,
 	memoryTone,
 	onOpen,
+	onOpenArtifact,
 	onTerminate,
 	session,
 	usage,
@@ -102,6 +112,8 @@ export function BoardSessionCardAdapter({
 	/** Colour for the chip; neutral unless this card is part of the fix. */
 	memoryTone?: ChipTone;
 	onOpen: () => void;
+	/** Opens the session with this artifact (by path) shown in the inspector. */
+	onOpenArtifact?: (path: string) => void;
 	onTerminate?: () => void;
 	session: WorkspaceSession;
 	usage?: SessionUsageSummary;
@@ -111,6 +123,7 @@ export function BoardSessionCardAdapter({
 			memory={memory}
 			memoryTone={memoryTone}
 			onOpen={onOpen}
+			onOpenArtifact={onOpenArtifact}
 			onTerminate={onTerminate}
 			session={session}
 			usage={usage}
@@ -165,6 +178,7 @@ function DesktopSessionCard({
 	memory,
 	memoryTone,
 	onOpen,
+	onOpenArtifact,
 	onTerminate,
 	session,
 	usage,
@@ -177,6 +191,7 @@ function DesktopSessionCard({
 	memory?: SessionMemoryReading;
 	memoryTone?: ChipTone;
 	onOpen?: () => void;
+	onOpenArtifact?: (path: string) => void;
 	onTerminate?: () => void;
 	session: WorkspaceSession;
 	usage?: SessionUsageSummary;
@@ -248,6 +263,11 @@ function DesktopSessionCard({
 	return (
 		<SessionCardView
 			action={action}
+			artifacts={
+				interactive && onOpenArtifact ? (
+					<BoardArtifactLinks artifacts={sessionArtifacts(session)} onOpen={onOpenArtifact} />
+				) : undefined
+			}
 			branchAction={branchAction}
 			branchIcon={<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />}
 			error={termination.error ?? undefined}
@@ -299,6 +319,59 @@ function DesktopSessionCard({
 			)}
 			usage={usagePresentation}
 		/>
+	);
+}
+
+const BOARD_ARTIFACT_LIMIT = 2;
+
+/** The session's most recently updated artifacts, newest first. */
+export function latestSessionArtifacts(artifacts: SessionArtifact[], limit = BOARD_ARTIFACT_LIMIT): SessionArtifact[] {
+	return [...artifacts]
+		.sort(
+			(a, b) =>
+				(Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0) || a.path.localeCompare(b.path),
+		)
+		.slice(0, limit);
+}
+
+function BoardArtifactLinks({
+	artifacts,
+	onOpen,
+}: {
+	artifacts: SessionArtifact[];
+	onOpen: (path: string) => void;
+}) {
+	const { t } = useTranslation();
+	if (artifacts.length === 0) return null;
+	const latest = latestSessionArtifacts(artifacts);
+	const hidden = artifacts.length - latest.length;
+	return (
+		<div className="flex min-w-0 flex-col gap-0.5" data-testid="board-session-artifacts">
+			{latest.map((artifact) => {
+				const Icon = artifact.kind === "html" ? Globe : Shapes;
+				return (
+					<button
+						aria-label={t("shell.openArtifactNamed", { name: artifact.name })}
+						className="flex min-w-0 max-w-full items-center gap-1.5 self-start rounded-sm py-0.5 text-left text-xs text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						key={artifact.path}
+						onClick={(event) => {
+							event.stopPropagation();
+							onOpen(artifact.path);
+						}}
+						title={artifact.path}
+						type="button"
+					>
+						<Icon aria-hidden="true" className="size-icon-2xs shrink-0 text-muted-foreground" />
+						<span className="truncate">{artifact.name}</span>
+					</button>
+				);
+			})}
+			{hidden > 0 ? (
+				<span className="pl-[18px] text-2xs text-muted-foreground">
+					{t("shell.moreArtifacts", { count: hidden })}
+				</span>
+			) : null}
+		</div>
 	);
 }
 
