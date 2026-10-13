@@ -1,4 +1,5 @@
 {
+	"settings.harness.health.authContext": "检查使用所选主机上 AO 进程的环境。如果在终端中可以登录，请比较下方的可执行文件、凭据来源和检查时间。无法确定结果并不代表你已退出登录。",
 	"settings.harness.health.authDiagnostics": "身份验证检查",
 	"settings.harness.health.authChecked": "上次完成的身份验证检查",
 	"settings.harness.health.authAttempted": "最近的身份验证尝试",

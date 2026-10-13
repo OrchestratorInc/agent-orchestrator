@@ -315,11 +315,21 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
+	started := time.Now()
 	out, err := aoprocess.CommandContext(probeCtx, binary, "login", "status").CombinedOutput()
+	status, recognized := codexAuthStatusFromOutput(out)
+	if !recognized {
+		status = ports.AgentAuthStatusUnknown
+	}
+	step := authprobe.CommandDiagnostic("codex login status", status, err, probeCtx.Err(), started)
+	if source := domain.FileSource(binary).Sanitized(); source != nil {
+		step.Source = source.Source
+	}
+	ports.RecordAuthDiagnostic(ctx, step)
 	if probeCtx.Err() != nil {
 		return ports.AgentAuthStatusUnknown, probeCtx.Err()
 	}
-	if status, ok := codexAuthStatusFromOutput(out); ok {
+	if recognized {
 		if status == ports.AgentAuthStatusAuthorized {
 			evidence := domain.CommandSource(binary, "login", "status").WithMethod(codexLoginMethod(out))
 			if evidence.Method == domain.AgentAccountMethodAccount {
@@ -332,7 +342,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	// The probe is advisory. Version skew, transient startup failures, and
 	// unfamiliar output are not proof that credentials are invalid; the actual
 	// launch remains the authoritative check.
-	_ = err
 	return ports.AgentAuthStatusUnknown, nil
 }
 

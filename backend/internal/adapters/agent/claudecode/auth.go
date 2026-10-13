@@ -412,6 +412,9 @@ func (p *Plugin) claudeCLIAuthReportDiagnostic(ctx context.Context, binary, work
 		report, ok = claudeAuthReport{}, false
 	}
 	step := authprobe.CommandDiagnostic("claude auth status", report.status(), err, probeCtx.Err(), started)
+	if source := domain.FileSource(binary).Sanitized(); source != nil {
+		step.Source = source.Source
+	}
 	return report, ok, step
 }
 

@@ -45,7 +45,10 @@ func CLIStatusWithTimeout(ctx context.Context, binary string, commands [][]strin
 }
 
 func cliStatus(ctx context.Context, binary string, commands [][]string, timeout time.Duration, classify Classifier) (ports.AgentAuthStatus, error) {
-	status, _, err := CLIStatusWithDiagnostics(ctx, binary, commands, timeout, classify)
+	status, steps, err := CLIStatusWithDiagnostics(ctx, binary, commands, timeout, classify)
+	for _, step := range steps {
+		ports.RecordAuthDiagnostic(ctx, step)
+	}
 	return status, err
 }
 
@@ -89,6 +92,9 @@ func commandStatus(ctx context.Context, binary string, args []string, timeout ti
 		}
 	}
 	step := CommandDiagnostic(filepath.Base(binary)+" "+strings.Join(args, " "), status, err, probeCtx.Err(), started)
+	if source := domain.FileSource(binary).Sanitized(); source != nil {
+		step.Source = source.Source
+	}
 	if probeCtx.Err() != nil {
 		if probeCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
 			return status, step, nil

@@ -1,4 +1,5 @@
 {
+	"settings.harness.health.authContext": "As verificações usam o ambiente do processo do AO no host selecionado. Se o login funciona no terminal, compare o executável, a origem das credenciais e o horário da verificação abaixo. Um resultado inconclusivo não significa que você está desconectado.",
 	"settings.harness.health.authDiagnostics": "Verificações de autenticação",
 	"settings.harness.health.authChecked": "Última verificação de autenticação concluída",
 	"settings.harness.health.authAttempted": "Última tentativa de autenticação",

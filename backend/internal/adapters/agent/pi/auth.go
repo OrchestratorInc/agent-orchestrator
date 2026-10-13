@@ -34,15 +34,13 @@ func piLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error)
 	if err == nil && ok && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
 		return status, true, nil
 	}
-	for _, name := range []string{
+	if name := authprobe.FirstCredentialEnvironment(ctx, []string{
 		"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
 		"MISTRAL_API_KEY", "GROQ_API_KEY", "XAI_API_KEY", "OPENROUTER_API_KEY",
 		"DEEPSEEK_API_KEY", "ZAI_API_KEY", "CEREBRAS_API_KEY", "KIMI_API_KEY",
-	} {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey))
-			return ports.AgentAuthStatusAuthorized, true, nil
-		}
+	}); name != "" {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey))
+		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	return status, ok, err
 }
@@ -53,7 +51,7 @@ func piStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
 	path := filepath.Join(configDir, "auth.json")
-	status, method, ok, err := piAuthJSON(path)
+	status, method, ok, err := piAuthJSON(ctx, path)
 	if status == ports.AgentAuthStatusAuthorized {
 		evidence := domain.FileSource(path).WithMethod(method)
 		evidence.Provider = authprobe.JSONProviderNames(path)
@@ -82,13 +80,13 @@ type piAuthEntry struct {
 }
 
 func piAuthJSONStatus(path string) (ports.AgentAuthStatus, bool, error) {
-	status, _, ok, err := piAuthJSON(path)
+	status, _, ok, err := piAuthJSON(context.Background(), path)
 	return status, ok, err
 }
 
 // piAuthJSON also reports how the stored credential signs in.
-func piAuthJSON(path string) (ports.AgentAuthStatus, domain.AgentAccountMethod, bool, error) {
-	data, err := os.ReadFile(path)
+func piAuthJSON(ctx context.Context, path string) (ports.AgentAuthStatus, domain.AgentAccountMethod, bool, error) {
+	data, err := authprobe.ReadCredentialFile(ctx, path)
 	if os.IsNotExist(err) {
 		return ports.AgentAuthStatusUnknown, "", false, nil
 	}
@@ -101,6 +99,7 @@ func piAuthJSON(path string) (ports.AgentAuthStatus, domain.AgentAccountMethod, 
 
 	var entries map[string]piAuthEntry
 	if err := json.Unmarshal(data, &entries); err != nil {
+		authprobe.RecordFileDiagnostic(ctx, path, "credential_file_invalid")
 		return ports.AgentAuthStatusUnknown, "", false, err
 	}
 	if len(entries) == 0 {
@@ -112,6 +111,11 @@ func piAuthJSON(path string) (ports.AgentAuthStatus, domain.AgentAccountMethod, 
 		}
 		if piAuthEntryIsOAuth(entry) {
 			return ports.AgentAuthStatusAuthorized, domain.AgentAccountMethodAccount, true, nil
+		}
+		if key := strings.TrimSpace(entry.Key); strings.HasPrefix(key, "!") {
+			authprobe.RecordFileDiagnostic(ctx, path, "credential_command_deferred")
+		} else if key != "" && !piAuthKeyIsResolved(key) {
+			authprobe.RecordFileDiagnostic(ctx, path, "credential_reference_unresolved")
 		}
 		if piAuthKeyIsResolved(entry.Key) {
 			return ports.AgentAuthStatusAuthorized, domain.AgentAccountMethodAPIKey, true, nil

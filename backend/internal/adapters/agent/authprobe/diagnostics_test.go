@@ -50,3 +50,24 @@ func TestCLIStatusDiagnosticsPreserveFailureWithoutRawOutput(t *testing.T) {
 		})
 	}
 }
+
+func TestLegacyCLIStatusRetainsDiagnosticsInContext(t *testing.T) {
+	old := CmdRunner
+	t.Cleanup(func() { CmdRunner = old })
+	CmdRunner = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("secret-token"), errors.New("secret-token")
+	}
+	ctx, evidence := ports.WithAuthEvidence(context.Background())
+	status, err := CLIStatus(ctx, "/bin/mock", [][]string{{"status"}})
+	if err != nil || status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("status=%s err=%v", status, err)
+	}
+	steps := evidence.Diagnostics()
+	if len(steps) != 1 || steps[0].Code != "command_failed" || steps[0].Source != "/bin/mock" {
+		t.Fatalf("steps=%+v", steps)
+	}
+	payload, _ := json.Marshal(steps)
+	if strings.Contains(string(payload), "secret-token") {
+		t.Fatal("raw command output leaked")
+	}
+}

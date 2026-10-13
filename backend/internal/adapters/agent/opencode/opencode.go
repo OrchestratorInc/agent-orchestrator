@@ -221,11 +221,23 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
-func opencodeAuthListStatus(ctx context.Context, binary string) (ports.AgentAuthStatus, error) {
+func opencodeAuthListStatus(ctx context.Context, binary string) (status ports.AgentAuthStatus, resultErr error) {
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
+	started := time.Now()
 	out, err := aoprocess.CommandContext(probeCtx, binary, "auth", "list").CombinedOutput()
+	noCredentials := false
+	defer func() {
+		step := authprobe.CommandDiagnostic("opencode auth list", status, err, probeCtx.Err(), started)
+		if noCredentials && probeCtx.Err() == nil {
+			step = domain.NewAgentAuthDiagnostic("opencode auth list", "credential_missing")
+		}
+		if source := domain.FileSource(binary).Sanitized(); source != nil {
+			step.Source = source.Source
+		}
+		ports.RecordAuthDiagnostic(ctx, step)
+	}()
 	if probeCtx.Err() != nil {
 		if probeCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
 			return ports.AgentAuthStatusUnknown, nil
@@ -234,6 +246,7 @@ func opencodeAuthListStatus(ctx context.Context, binary string) (ports.AgentAuth
 	}
 	text := strings.ToLower(string(out))
 	if strings.Contains(text, "0 credentials") || strings.Contains(text, "no credentials") || strings.Contains(text, "not authenticated") {
+		noCredentials = true
 		return ports.AgentAuthStatusUnknown, nil
 	}
 	if strings.Contains(text, "credential") && err == nil {
@@ -275,11 +288,9 @@ func usableAuthStatus(status ports.AgentAuthStatus) bool {
 }
 
 func opencodeEnvAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool) {
-	for _, name := range opencodeAPIKeyEnvVars {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey))
-			return ports.AgentAuthStatusAuthorized, true
-		}
+	if name := authprobe.FirstCredentialEnvironment(ctx, opencodeAPIKeyEnvVars); name != "" {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey))
+		return ports.AgentAuthStatusAuthorized, true
 	}
 	return ports.AgentAuthStatusUnknown, false
 }
@@ -294,7 +305,7 @@ func opencodeStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool,
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
 	authPath := filepath.Join(dataDir, "auth.json")
-	jsonStatus, jsonOK, err := opencodeAuthJSONStatus(authPath)
+	jsonStatus, jsonOK, err := opencodeAuthJSONStatus(ctx, authPath)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
@@ -331,8 +342,8 @@ func opencodeDataDir() (string, bool) {
 	return filepath.Join(home, ".local", "share", "opencode"), true
 }
 
-func opencodeAuthJSONStatus(path string) (ports.AgentAuthStatus, bool, error) {
-	data, err := os.ReadFile(path)
+func opencodeAuthJSONStatus(ctx context.Context, path string) (ports.AgentAuthStatus, bool, error) {
+	data, err := authprobe.ReadCredentialFile(ctx, path)
 	if os.IsNotExist(err) {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
@@ -345,6 +356,7 @@ func opencodeAuthJSONStatus(path string) (ports.AgentAuthStatus, bool, error) {
 
 	var entries map[string]json.RawMessage
 	if err := json.Unmarshal(data, &entries); err != nil {
+		authprobe.RecordFileDiagnostic(ctx, path, "credential_file_invalid")
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if len(entries) == 0 {
@@ -362,11 +374,17 @@ func opencodeAuthJSONStatus(path string) (ports.AgentAuthStatus, bool, error) {
 	return ports.AgentAuthStatusUnknown, true, nil
 }
 
-func opencodeDBAuthStatus(ctx context.Context, path string) (ports.AgentAuthStatus, bool, error) {
+func opencodeDBAuthStatus(ctx context.Context, path string) (status ports.AgentAuthStatus, ok bool, err error) {
+	defer func() {
+		if err != nil && ctx.Err() == nil {
+			authprobe.RecordFileDiagnostic(ctx, path, "credential_store_unreadable")
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
+		authprobe.RecordFileDiagnostic(ctx, path, "credential_file_missing")
 		return ports.AgentAuthStatusUnknown, false, nil
 	} else if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err

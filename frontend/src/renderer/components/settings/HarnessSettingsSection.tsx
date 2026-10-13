@@ -1118,6 +1118,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 			`Installation: ${readinessAgent?.installation.state ?? "unknown"}${readinessAgent?.installation.checkedAt ? ` (checked ${readinessAgent.installation.checkedAt})` : ""}`,
 			readinessAgent?.installation.reason ? `Installation reason: ${readinessAgent.installation.reason}` : "",
 			`Authentication: ${readinessAgent?.authentication.state ?? "unknown"}`,
+			t("settings.harness.health.authContext"),
 			readinessAgent?.authentication.reason ? `Authentication reason: ${readinessAgent.authentication.reason}` : "",
 			readinessAgent?.authentication.reasonCode ? `Authentication reason code: ${readinessAgent.authentication.reasonCode}` : "",
 			readinessAgent?.authentication.freshness ? `Authentication freshness: ${readinessAgent.authentication.freshness}` : "",
@@ -1128,7 +1129,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				`Auth check: ${step.method} (${step.code})`,
 				`Observed: ${step.checkedAt} · ${step.cached ? "cached" : "fresh"} · ${step.durationMs} ms`,
 				step.provider ? `Provider: ${step.provider}` : "",
-				step.source ? `Credential source: ${step.source}` : "",
+				step.source ? `Source: ${step.source}` : "",
 				step.httpStatus ? `HTTP status: ${step.httpStatus}` : "",
 				step.exitCode !== undefined ? `Exit code: ${step.exitCode}` : "",
 				step.reason,
@@ -1169,6 +1170,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				</HarnessDetailRow> : null}
 			</HarnessDetailGroup>
 			{isInstalled && (readinessAgent?.authentication.checkedAt || readinessAgent?.authentication.attemptedAt || readinessAgent?.authentication.diagnostics?.length || authCheckErrors[agentId]) ? <HarnessDetailGroup title={t("settings.harness.health.authDiagnostics")}>
+				<p className="p-3 text-xs text-settings-muted">{t("settings.harness.health.authContext")}</p>
 				{readinessAgent?.authentication.checkedAt ? <HarnessDetailRow label={t("settings.harness.health.authChecked")}>
 					<span className="text-xs text-settings-label">{formatTimestamp(readinessAgent.authentication.checkedAt)}{readinessAgent.authentication.freshness === "stale" ? ` · ${t("settings.harness.health.stale")}` : ""}</span>
 				</HarnessDetailRow> : null}

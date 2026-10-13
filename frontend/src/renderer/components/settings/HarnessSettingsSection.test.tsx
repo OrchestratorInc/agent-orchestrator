@@ -347,7 +347,7 @@ describe("HarnessSettingsSection", () => {
 			? await pending as never : (post as (path: string, options: unknown) => Promise<never>)(path, options));
 		renderSection(undefined, undefined, undefined, queryClient);
 		const page = await findAgentRow("codex");
-		const refreshCalls = () => vi.mocked(apiClient.POST).mock.calls.filter(([path]) => path === "/api/v1/agents/{agent}/models/refresh");
+		const refreshCalls = () => vi.mocked(apiClient.POST).mock.calls.filter((call: readonly unknown[]) => call[0] === "/api/v1/agents/{agent}/models/refresh");
 		await waitFor(() => expect(refreshCalls()).toHaveLength(1));
 		// Opening Account already requests refresh; Models never waits for it.
 		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
@@ -564,7 +564,9 @@ describe("HarnessSettingsSection", () => {
 		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
 		const report = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0];
-		expect(report).toContain("Credential source: keychain");
+		expect(report).toContain("Source: keychain");
+		expect(report).toContain("Checks use AO's process environment on the selected host.");
+		expect(within(page).getByText(/An inconclusive check does not mean you are signed out/)).toBeInTheDocument();
 		expect(report).toContain("Auth check: provider_validation (token_renewal_pending)");
 		expect(report).toContain("Next step: Run the harness, then check again.");
 	});
@@ -815,7 +817,7 @@ describe("HarnessSettingsSection", () => {
 		const button = await screen.findByRole("button", { name: "Update all (2)" });
 		fireEvent.click(button);
 		fireEvent.click(button);
-		await waitFor(() => expect(vi.mocked(apiClient.POST).mock.calls.filter(([path]) => path === "/api/v1/agents/{agent}/install")).toHaveLength(2));
+		await waitFor(() => expect(vi.mocked(apiClient.POST).mock.calls.filter((call: readonly unknown[]) => call[0] === "/api/v1/agents/{agent}/install")).toHaveLength(2));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
 			params: { path: { agent: "claude-code" } }, body: { method: "homebrew", operation: "update", expectedVersion: "1.3.0" },
 		});

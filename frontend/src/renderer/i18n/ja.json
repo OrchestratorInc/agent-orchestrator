@@ -1,4 +1,5 @@
 {
+	"settings.harness.health.authContext": "チェックには選択したホスト上の AO プロセスの環境を使用します。ターミナルではログインできる場合、以下の実行ファイル、認証情報の参照元、チェック時刻を比較してください。判定不能はログアウトを意味しません。",
 	"settings.harness.health.authDiagnostics": "認証チェック",
 	"settings.harness.health.authChecked": "最後に完了した認証チェック",
 	"settings.harness.health.authAttempted": "最新の認証試行",

@@ -80,19 +80,6 @@ func ampActiveEmailFromList(output string) string {
 	return ""
 }
 
-// ampLocalAuthStatus checks Amp's stored login and settings, then
-// AMP_API_KEY in the environment.
-func ampLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
-	status, ok, _, err := ampStoredAuthStatus(ctx)
-	if err == nil && ok && status == ports.AgentAuthStatusAuthorized {
-		return status, true, nil
-	}
-	if envStatus, envOK := ampEnvAuthStatus(ctx); envOK {
-		return envStatus, true, nil
-	}
-	return status, ok, err
-}
-
 func ampEnvAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool) {
 	if strings.TrimSpace(os.Getenv("AMP_API_KEY")) != "" {
 		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("AMP_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))

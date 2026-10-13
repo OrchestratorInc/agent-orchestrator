@@ -567,14 +567,20 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 
 func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAgent, purpose domain.AgentReadinessPurpose) (observation domain.AgentAuthenticationObservation, failed bool) {
 	var diagnostics []domain.AgentAuthDiagnostic
+	evidenceCtx, evidence := ports.WithAuthEvidence(c.ctx)
 	defer func() {
-		if len(diagnostics) > 0 {
-			observation.Diagnostics = diagnostics
+		observation.Diagnostics = append(observation.Diagnostics, diagnostics...)
+		observation.Diagnostics = append(observation.Diagnostics, evidence.Diagnostics()...)
+		if source := evidence.Identity().Sanitized(); source != nil && source.Source != "" {
+			step := domain.NewAgentAuthDiagnostic("selected_credential", "credential_present")
+			step.Source, step.Provider = source.Source, source.Provider
+			observation.Diagnostics = append(observation.Diagnostics, step)
 		}
+		completeAuthenticationDiagnostics(&observation)
 	}()
 	attempted := c.now()
 	if c.authenticationCheck != nil {
-		ctx, cancel := context.WithTimeout(c.ctx, c.authTimeout)
+		ctx, cancel := context.WithTimeout(evidenceCtx, c.authTimeout)
 		observation, handled := c.authenticationCheck(ctx, string(item.Harness), purpose)
 		cancel()
 		if handled {
@@ -591,9 +597,8 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 		// First-use migration needs its own budget; the adapter bounds its auth CLI separately.
 		timeout = opencodeV2MigrationTimeout
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, timeout)
+	ctx, cancel := context.WithTimeout(evidenceCtx, timeout)
 	defer cancel()
-	ctx, evidence := ports.WithAuthEvidence(ctx)
 	var status ports.AgentAuthStatus
 	var account domain.AgentAccountIdentity
 	var err error

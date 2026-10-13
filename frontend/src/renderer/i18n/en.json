@@ -1,4 +1,5 @@
 {
+	"settings.harness.health.authContext": "Checks use AO's process environment on the selected host. If login works in your terminal, compare the executable, credential source and check time below. An inconclusive check does not mean you are signed out.",
 	"settings.harness.health.authDiagnostics": "Authentication checks",
 	"settings.harness.health.authChecked": "Last completed auth check",
 	"settings.harness.health.authAttempted": "Latest auth attempt",

@@ -76,8 +76,9 @@ const (
 // can say why a harness reads as signed in. Adapters record through
 // RecordAuthEvidence; without a collector in the context it does nothing.
 type AuthEvidence struct {
-	mu       sync.Mutex
-	identity domain.AgentAccountIdentity
+	mu          sync.Mutex
+	identity    domain.AgentAccountIdentity
+	diagnostics []domain.AgentAuthDiagnostic
 }
 
 type authEvidenceKey struct{}
@@ -120,6 +121,30 @@ func (e *AuthEvidence) Identity() domain.AgentAccountIdentity {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.identity
+}
+
+// RecordAuthDiagnostic retains an adapter-authored check outcome, including
+// unsuccessful attempts. Never pass raw errors, credential values or CLI output.
+func RecordAuthDiagnostic(ctx context.Context, diagnostic domain.AgentAuthDiagnostic) {
+	evidence, ok := ctx.Value(authEvidenceKey{}).(*AuthEvidence)
+	if !ok || evidence == nil {
+		return
+	}
+	evidence.mu.Lock()
+	defer evidence.mu.Unlock()
+	if len(evidence.diagnostics) < 64 {
+		evidence.diagnostics = append(evidence.diagnostics, diagnostic)
+	}
+}
+
+// Diagnostics returns an independent snapshot of the recorded check outcomes.
+func (e *AuthEvidence) Diagnostics() []domain.AgentAuthDiagnostic {
+	if e == nil {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]domain.AgentAuthDiagnostic(nil), e.diagnostics...)
 }
 
 // AgentAuthAccountChecker is an AgentAuthChecker whose check also observes

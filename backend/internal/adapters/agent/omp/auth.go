@@ -10,6 +10,7 @@ import (
 
 	_ "modernc.org/sqlite" // register sqlite driver for OMP auth database probes
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -41,7 +42,7 @@ func ompLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
 	dbPath := filepath.Join(configDir, "agent.db")
-	if status, ok, err := ompAgentDBAuthStatus(dbPath); err != nil {
+	if status, ok, err := ompAgentDBAuthStatus(ctx, dbPath); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	} else if ok {
 		if status == ports.AgentAuthStatusAuthorized {
@@ -50,7 +51,7 @@ func ompLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error
 		return status, true, nil
 	}
 	authPath := filepath.Join(configDir, "auth.json")
-	status, ok, err := ompAuthJSONStatus(authPath)
+	status, ok, err := ompAuthJSONStatus(ctx, authPath)
 	if status == ports.AgentAuthStatusAuthorized {
 		ports.RecordAuthEvidence(ctx, domain.FileSource(authPath))
 	}
@@ -73,8 +74,8 @@ type ompAuthEntry struct {
 	Key  string `json:"key"`
 }
 
-func ompAuthJSONStatus(path string) (ports.AgentAuthStatus, bool, error) {
-	data, err := os.ReadFile(path)
+func ompAuthJSONStatus(ctx context.Context, path string) (ports.AgentAuthStatus, bool, error) {
+	data, err := authprobe.ReadCredentialFile(ctx, path)
 	if os.IsNotExist(err) {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
@@ -87,6 +88,7 @@ func ompAuthJSONStatus(path string) (ports.AgentAuthStatus, bool, error) {
 
 	var entries map[string]ompAuthEntry
 	if err := json.Unmarshal(data, &entries); err != nil {
+		authprobe.RecordFileDiagnostic(ctx, path, "credential_file_invalid")
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if len(entries) == 0 {
@@ -103,11 +105,17 @@ func ompAuthJSONStatus(path string) (ports.AgentAuthStatus, bool, error) {
 	return ports.AgentAuthStatusUnknown, false, nil
 }
 
-func ompAgentDBAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
+func ompAgentDBAuthStatus(ctx context.Context, path string) (status ports.AgentAuthStatus, ok bool, err error) {
+	defer func() {
+		if err != nil && ctx.Err() == nil {
+			authprobe.RecordFileDiagnostic(ctx, path, "credential_store_unreadable")
+		}
+	}()
 	if strings.TrimSpace(path) == "" {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
+		authprobe.RecordFileDiagnostic(ctx, path, "credential_file_missing")
 		return ports.AgentAuthStatusUnknown, false, nil
 	} else if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -123,7 +131,7 @@ func ompAgentDBAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
 
 	var total int
 	var enabled int
-	err = db.QueryRow(`
+	err = db.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*),
 			COUNT(CASE WHEN trim(coalesce(data, '')) <> '' AND disabled_cause IS NULL THEN 1 END)
@@ -136,6 +144,7 @@ func ompAgentDBAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	if total > 0 {
+		authprobe.RecordFileDiagnostic(ctx, path, "credentials_disabled")
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
 	return ports.AgentAuthStatusUnknown, false, nil

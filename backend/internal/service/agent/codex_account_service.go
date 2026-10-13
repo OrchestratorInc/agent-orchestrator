@@ -19,6 +19,7 @@ func (s *Service) codexAuthenticationWithAccount(ctx context.Context, agentID st
 	observation, handled := s.structuredCodexAuthentication(ctx, agentID, purpose)
 	if handled && (observation.State == domain.AgentAuthenticationAuthorized || observation.State == domain.AgentAuthenticationConfigured) {
 		observation.Account = s.activeCodexAccountIdentity()
+		observation.Diagnostics = append(observation.Diagnostics, domain.NewAgentAuthDiagnostic("codex_account", "account_context"))
 	}
 	return observation, handled
 }
@@ -53,6 +54,7 @@ func (s *Service) structuredCodexAuthentication(ctx context.Context, agentID str
 		return domain.AgentAuthenticationObservation{}, false
 	}
 	if err := s.WaitCodexAccountStoreReady(ctx); err != nil {
+		ports.RecordAuthDiagnostic(ctx, domain.NewAgentAuthDiagnostic("codex_account", "account_store_unavailable"))
 		// Account management is optional for ordinary Codex use. When AO's
 		// local account store cannot answer safely, fall back to the native
 		// readiness path instead of treating that as proof Codex is signed out.
@@ -73,7 +75,9 @@ func (s *Service) structuredCodexAuthentication(ctx context.Context, agentID str
 		credentialPresent := s.codexAccounts.deviceCredentialPresent
 		s.codexAccounts.mu.Unlock()
 		if !reconciled || credentialPresent {
-			return uncheckedAuthentication(), true
+			observation := uncheckedAuthentication()
+			observation.Diagnostics = []domain.AgentAuthDiagnostic{domain.NewAgentAuthDiagnostic("codex_account", "account_sync_pending")}
+			return observation, true
 		}
 		return successfulAuthentication(s.codexAccounts.now(), domain.AgentAuthenticationUnauthorized, domain.AgentReadinessReasonUnauthorized, "Sign in to Codex or add an account in Settings."), true
 	}
