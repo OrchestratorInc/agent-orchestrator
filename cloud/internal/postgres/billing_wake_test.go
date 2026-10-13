@@ -250,7 +250,8 @@ func TestWakesOutsideSelfServeBillingAreUntouched(t *testing.T) {
 		t.Fatalf("coder session not woken: %s", desired)
 	}
 
-	// Contract: the principal's organization billing exempts it, and is
+	// Contract: Freestyle is paid by every organization, so a contract one's
+	// Freestyle session needs a plan to resume too. Its billing is still
 	// recorded for the usage enforcer.
 	billedPaused(t, admin, fixture)
 	contract := principal
@@ -258,23 +259,32 @@ func TestWakesOutsideSelfServeBillingAreUntouched(t *testing.T) {
 	// WorkOS billing describes only the organization the token's WorkOS
 	// organization maps to.
 	contract.TeamOrgID = fixture.orgID
-	if _, err := store.ResumeSession(ctx, contract, fixture.orgID, fixture.sessionID); err != nil {
-		t.Fatalf("contract resume: %v", err)
+	// A member's request records the organization's billing; a refused
+	// resume rolls back, so read the billing summary first.
+	if _, err := store.BillingSummary(ctx, contract, fixture.orgID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResumeSession(ctx, contract, fixture.orgID, fixture.sessionID); !errors.Is(err, ErrPlanRequired) {
+		t.Fatalf("contract freestyle resume without a plan: err = %v, want ErrPlanRequired", err)
 	}
 	billing, err := store.OrgBilling(ctx, principal, fixture.orgID)
 	if err != nil || billing.BillingMode != domain.OrgBillingContract {
 		t.Fatalf("contract not recorded: %+v %v", billing.BillingMode, err)
 	}
 	summary, err := store.BillingSummary(ctx, principal, fixture.orgID)
-	if err != nil || summary.BillingMode != domain.BillingModeContract || !summary.Exempt || !summary.Entitled {
-		t.Fatalf("summary = %+v err = %v", summary, err)
+	if err != nil || summary.BillingMode != domain.BillingModeSelfServe || summary.Exempt || summary.Entitled {
+		t.Fatalf("summary = %+v err = %v; want self-serve and not entitled", summary, err)
 	}
-	// Background work without a principal uses the recorded value.
-	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET observed_state = 'running' WHERE session_id = $1`, fixture.sessionID); err != nil {
+	// Background work pauses a contract organization's Freestyle session
+	// without a plan like anyone else's.
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET desired_state = 'running', observed_state = 'running' WHERE session_id = $1`, fixture.sessionID); err != nil {
 		t.Fatal(err)
 	}
-	if paused, err := store.PauseOverLimit(ctx, fixture.orgID); err != nil || paused != 0 {
-		t.Fatalf("enforcer paused a contract organization: %d %v", paused, err)
+	if paused, err := store.PauseOverLimit(ctx, fixture.orgID); err != nil || paused != 1 {
+		t.Fatalf("enforcer on a contract organization without a plan: %d %v", paused, err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET desired_state = 'running', observed_state = 'running' WHERE session_id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
 	}
 	// Back to self-serve: the next request records it.
 	selfServe := principal

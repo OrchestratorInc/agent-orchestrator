@@ -13,13 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 )
 
-// orgBillingStandingStore reads an organization's plan and grandfathered
-// status for domain.BillingMode. The Postgres store implements it; a store
-// without it reports no plan and no grandfathering.
-type orgBillingStandingStore interface {
-	OrgBillingStanding(ctx context.Context, principal domain.Principal, orgID string) (string, bool, error)
-}
-
 // orgCapabilities returns the effective entitlement flags for one organization.
 // The token's WorkOS organization metadata (principal.OrgCapabilities) describes
 // only the organization the token's WorkOS organization maps to
@@ -156,22 +149,16 @@ func (s *Server) orgChosenProvider(ctx context.Context, orgID string) string {
 	return provider
 }
 
-// billingModeForOrg computes domain.BillingMode for one organization.
-func (s *Server) billingModeForOrg(ctx context.Context, principal domain.Principal, orgID string) (string, error) {
+// billingModeForOrg computes domain.BillingMode for one organization: plans
+// apply to every organization offered a billed provider (Freestyle, or Coder
+// without the coder capability), contract and internal ones included.
+func (s *Server) billingModeForOrg(_ context.Context, principal domain.Principal, orgID string) (string, error) {
 	if !s.billingReady() || !s.orgOffersBilledProvider(principal, orgID) {
-		// Plans only sell billed (Freestyle) capacity: an organization offered
-		// none has nothing to buy, matching GET /billing.
+		// An organization offered nothing billed has nothing to buy, matching
+		// GET /billing.
 		return domain.BillingModeOff, nil
 	}
-	plan, grandfathered := "", false
-	if store, ok := s.store.(orgBillingStandingStore); ok && orgID != "" {
-		var err error
-		plan, grandfathered, err = store.OrgBillingStanding(ctx, principal, orgID)
-		if err != nil {
-			return "", err
-		}
-	}
-	return domain.BillingMode(s.orgBillingArrangement(principal, orgID), plan, grandfathered, true), nil
+	return domain.BillingMode(true), nil
 }
 
 // offeringResponse is the /me "offering" object: which sandbox providers the

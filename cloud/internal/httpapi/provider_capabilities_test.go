@@ -301,11 +301,13 @@ func TestMeOfferingBillingMode(t *testing.T) {
 		grandfathered bool
 		want          string
 	}{
+		// Freestyle is paid by everyone: contract, internal and grandfathered
+		// organizations are self-serve too.
 		{"self-serve", "", "free", false, domain.BillingModeSelfServe},
-		{"contract metadata", domain.OrgBillingContract, "free", false, domain.BillingModeContract},
-		{"internal plan", "", domain.PlanInternal, false, domain.BillingModeContract},
-		{"grandfathered", "", "free", true, domain.BillingModeContract},
-		{"coder only has nothing to buy", "", "free", false, domain.BillingModeOff},
+		{"contract metadata", domain.OrgBillingContract, "free", false, domain.BillingModeSelfServe},
+		{"internal plan", "", domain.PlanInternal, false, domain.BillingModeSelfServe},
+		{"grandfathered", "", "free", true, domain.BillingModeSelfServe},
+		{"coder only with the coder capability has nothing to buy", "", "free", false, domain.BillingModeOff},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

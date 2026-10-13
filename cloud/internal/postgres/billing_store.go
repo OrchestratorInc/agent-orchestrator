@@ -149,24 +149,32 @@ func (p billingPolicy) exempt(billing domain.OrgBilling) bool {
 	return billing.StripeSubscriptionID == "" && !p.exemptBefore.IsZero() && billing.CreatedAt.Before(p.exemptBefore)
 }
 
-// mode is the organization's billing mode. Only domain.BillingModeSelfServe
-// organizations are subject to plans; contract, internal and grandfathered
-// organizations never are.
-func (p billingPolicy) mode(billing domain.OrgBilling) string {
+// mode is the organization's billing mode: domain.BillingModeSelfServe for
+// every organization while billing is enforced. Freestyle is paid by everyone,
+// including organizations under a contract (billing=contract), on the internal
+// plan or grandfathered; what an organization does not pay for is decided per
+// sandbox instead (Coder for an organization with the coder capability; see
+// sandboxBilledTx).
+func (p billingPolicy) mode(domain.OrgBilling) string {
 	if !p.enforced {
 		return domain.BillingModeOff
 	}
+	return domain.BillingModeSelfServe
+}
+
+// featureExempt reports whether the organization gets every plan feature
+// without a plan: under a contract (billing=contract), on the internal plan, or
+// grandfathered. It gates paywalled features only; Freestyle is paid by every
+// organization (mode).
+func (p billingPolicy) featureExempt(billing domain.OrgBilling) bool {
 	if p.exempt(billing) {
-		return domain.BillingModeContract
+		return true
 	}
 	recorded := p.principalBilling
 	if recorded == "" {
 		recorded = billing.BillingMode
 	}
-	if recorded == domain.OrgBillingContract {
-		return domain.BillingModeContract
-	}
-	return domain.BillingModeSelfServe
+	return recorded == domain.OrgBillingContract
 }
 
 // entitled reports whether the organization's subscription may use its plan
@@ -1078,7 +1086,7 @@ func (s *Store) OrgHasFeature(ctx context.Context, orgID, feature string) bool {
 		if err != nil {
 			return err
 		}
-		if s.billing.mode(billing) != domain.BillingModeSelfServe {
+		if s.billing.mode(billing) != domain.BillingModeSelfServe || s.billing.featureExempt(billing) {
 			has = true
 			return nil
 		}
