@@ -29,6 +29,10 @@ func DiscoverClaudeModels(ctx context.Context, command Command, nativeConversati
 	if err != nil {
 		return worker.ChatModelsResponse{}, err
 	}
+	if command.Path == claudeCodeBinary {
+		// List models with the Claude Code that will run them.
+		command.Path = EnsureClaudeCode(ctx)
+	}
 	process := exec.CommandContext(ctx, adapter)
 	configureProviderProcess(process)
 	process.Dir = command.Dir

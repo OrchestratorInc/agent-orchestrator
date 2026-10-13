@@ -259,6 +259,7 @@ func run(logger *slog.Logger) error {
 		// Chat UI needs the Claude ACP adapter; a bring-your-own template may
 		// not ship it, so start installing it now rather than on first chat.
 		workerexec.WarmClaudeACPAdapter()
+		workerexec.WarmClaudeCode()
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)

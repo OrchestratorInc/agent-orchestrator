@@ -184,6 +184,11 @@ func acpLaunch(ctx context.Context, turn worker.Turn, command Command) (string, 
 	}
 	switch turn.Harness {
 	case "claude-code":
+		if command.Path == claudeCodeBinary {
+			ensureCtx, cancel := context.WithTimeout(ctx, claudeCodeTurnWait)
+			command.Path = EnsureClaudeCode(ensureCtx)
+			cancel()
+		}
 		env = claudeModelEnvironment(command, turn.Model, nil)
 		adapter, err := EnsureClaudeACPAdapter(ctx)
 		if err != nil {

@@ -60,7 +60,7 @@ RUN dpkg-source -x expat_2.9.0-1.dsc source && \
 
 FROM node:22-trixie-slim AS worker
 ARG TARGETARCH
-ARG CLAUDE_CODE_VERSION=2.1.228
+ARG CLAUDE_CODE_VERSION=2.1.287
 ARG CODEX_VERSION=0.147.0
 ARG CURSOR_AGENT_VERSION=2026.08.11-e8db854
 # OpenCode v2 ships as a NEW package, @opencode/cli (v1 was opencode-ai, whose

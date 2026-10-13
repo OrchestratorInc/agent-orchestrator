@@ -27,7 +27,7 @@ RUN apt-get update && \
         | tar --strip-components=2 -xzf - -C /usr/bin \
             "gh_${gh_version}_linux_${architecture}/bin/gh" && \
     npm install --global \
-        @anthropic-ai/claude-code@2.1.228 \
+        @anthropic-ai/claude-code@2.1.287 \
         @agentclientprotocol/claude-agent-acp@0.70.0 \
         @openai/codex@0.147.0 && \
     ln -sfn "$(npm root --global)/@anthropic-ai/claude-code/cli-wrapper.cjs" \
