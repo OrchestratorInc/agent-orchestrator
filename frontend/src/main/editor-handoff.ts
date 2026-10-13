@@ -80,7 +80,7 @@ export type EditorHandoffDeps = {
 	launch: (command: string, args: readonly string[], cwd: string) => Promise<void>;
 	openDirectory: (workspacePath: string) => Promise<void>;
 	/** Puts text on the system clipboard. The workspace path never reaches the renderer. */
-	copyText?: (text: string) => void;
+	copyText?: (text: string) => void | Promise<void>;
 	isExecutable?: (candidatePath: string) => boolean;
 	isDirectory?: (candidatePath: string) => boolean;
 	logError?: (message: string, error: unknown) => void;
@@ -398,7 +398,7 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 			const id = sessionId.trim();
 			if (!id) throw new Error("Session is required.");
 			if (!deps.copyText) throw new Error("Copying is not available.");
-			deps.copyText(await deps.resolveWorkspace(id));
+			await deps.copyText(await deps.resolveWorkspace(id));
 		},
 	};
 }
