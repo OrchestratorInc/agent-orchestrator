@@ -15,6 +15,7 @@ automatic PR publisher, or Chat conformance suite.
 | --- | --- |
 | Add/complete a harness | [Integration path](references/integration-path.md): check duplicate PRs, pin upstream, prove capabilities, implement/register only supported surfaces |
 | Run the same lifecycle audit across harnesses | [Local CLI contract](references/local-cli-contract.md): native probes, cancellation input, restored composer cue |
+| Operate an audit and identify coverage | [Operating recipe and journey map](references/audit-journeys.md): Doctor, actions, readiness, proof, UI gaps, cleanup |
 | Interpret results, preserve failures, capture screens | [Evidence and handoff](references/evidence-and-handoff.md): gates, diagnostic mode, artifacts, authentication, screenshots |
 
 ## Run
@@ -47,6 +48,25 @@ can leave owned processes behind; inspect the report and clean those exact
 processes before retrying. `--no-live` skips provider turns
 and AO sessions, but still builds/starts AO and runs safe binary, version,
 integration, and model-list commands. It is not an execution-free review mode.
+
+## Operating checklist
+
+1. **Prepare:** resolve the authorized host, selected source/native build, existing
+   credentials, isolated profile, native contract, and fresh report path from the
+   repo and session context. Confirm the runner's bypass-permission scope.
+2. **Launch:** use the command above; the runner owns isolated daemon/data/port
+   setup. Plan UI capture first and use `--keep-daemon` if capture follows the run.
+3. **Doctor:** before manual input/capture, verify the retained daemon's PID/port,
+   build, cached readiness, session/workspace and current native composer.
+4. **Drive:** use the [journey map](references/audit-journeys.md) for each action,
+   prerequisite and expected proof. Qualify actual UI and Chat paths separately.
+5. **Evidence:** retain action/result and functional artifacts; distinguish strict,
+   diagnostic, assisted-instruction and independent user-path results.
+6. **Cleanup:** verify owned session/process teardown and confirm report/artifacts
+   survive it. Kept or interrupted runs require separately recorded cleanup.
+
+See the map for the exact read-only Doctor routes and a fresh-reader/live rehearsal
+check. Fixture success alone does not validate the operational recipe end to end.
 
 ## Judge and hand off the evidence
 

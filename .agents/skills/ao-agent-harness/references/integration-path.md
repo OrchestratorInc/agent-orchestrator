@@ -214,6 +214,10 @@ lint, fixtures, or provider turns on the workstation. Keep source/binary hashes,
 pinned runtime versions, failed attempts, and the exact tested commit in the
 report. Read the current `AGENTS.md` and workflow files for the required suites.
 
+Use the [operating recipe and journey map](audit-journeys.md) to plan API/native
+checks, actual UI controls, independent instruction proof, and evidence-preserving
+teardown.
+
 Run the narrowest affected packages first. The complete local gate for a
 production harness normally includes:
 
