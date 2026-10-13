@@ -158,11 +158,21 @@ func (m *Manager) prepareReboundOrchestratorChatProviderHandoff(ctx context.Cont
 		return nil, nil
 	}
 	// ...and this session must be the project's sole live orchestrator.
-	current, found, err := m.activeOrchestratorSessionID(ctx, rec.ProjectID)
+	sessions, err := m.store.ListSessions(ctx, rec.ProjectID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list orchestrator recovery owners: %w", err)
 	}
-	if !found || current != rec.ID {
+	currentFound := false
+	for _, current := range sessions {
+		if current.Kind != domain.KindOrchestrator || current.IsTerminated {
+			continue
+		}
+		if current.ID != rec.ID {
+			return nil, nil // a competing live orchestrator cannot be ignored
+		}
+		currentFound = true
+	}
+	if !currentFound {
 		return nil, nil
 	}
 	branch, err := store.ConversationBranch(ctx, conversation.ID, conversation.ActiveBranchID)
@@ -170,7 +180,7 @@ func (m *Manager) prepareReboundOrchestratorChatProviderHandoff(ctx context.Cont
 		return nil, err
 	}
 	if branch.SessionID == rec.ID {
-		return nil, nil // the head already carries this session's provider identity
+		return nil, nil // not a replacement; retain ordinary resume admission
 	}
 	if branch.SessionID == "" {
 		return nil, nil // ownerless history cannot be proven; strict resume rejects it
@@ -187,10 +197,9 @@ func (m *Manager) prepareReboundOrchestratorChatProviderHandoff(ctx context.Cont
 		return nil, nil // the head already holds the requested thread; plain resume applies
 	}
 	if branch.ProviderConversationID == "" && conversation.LatestSequence != 0 {
-		// Documented omission: an empty branch handle above recorded history
-		// cannot name the provider namespace that history came from, so it stays
-		// fail-closed on the ordinary path instead of recovering here.
-		return nil, nil
+		// The ordinary handle check accepts an empty id, so explicitly refuse
+		// recorded history whose provider identity cannot be proven.
+		return nil, errors.New("cannot recover recorded Chat history without a provider identity")
 	}
 	if !m.proveNativeConversationPersisted(ctx, rec, rec.Metadata.ProviderConversationID) {
 		// Without positive proof that the session's own thread exists, there is
@@ -216,6 +225,9 @@ func (m *Manager) prepareReboundOrchestratorChatProviderHandoff(ctx context.Cont
 // conservative treat-as-existing fallback used elsewhere, because opening a
 // provider boundary here must be earned, never assumed.
 func (m *Manager) proveNativeConversationPersisted(ctx context.Context, rec domain.SessionRecord, nativeConversationID string) bool {
+	if m.agents == nil {
+		return false
+	}
 	registered, ok := m.agents.Agent(rec.Harness)
 	if !ok {
 		return false
