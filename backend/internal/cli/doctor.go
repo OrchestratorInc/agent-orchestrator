@@ -25,6 +25,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/tau"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
 
@@ -636,7 +637,7 @@ func (c *commandContext) checkHarness(ctx context.Context, harness harnessProbe)
 //
 // The binary must be resolved exactly the way a spawn resolves it. A bare PATH
 // lookup is not equivalent on Windows: `codex` on PATH is the npm shim
-// (codex.cmd / codex.ps1), and Windows runs a .cmd through cmd.exe, which
+// (codex.cmd), and Windows runs a .cmd through cmd.exe, which
 // re-parses the command line and corrupts AO's `-c hooks.*=` value. Codex then
 // exits 255 with `failed to load bootstrap configuration` and the canary
 // reports a config regression that does not exist, while the real launch - which
@@ -644,9 +645,15 @@ func (c *commandContext) checkHarness(ctx context.Context, harness harnessProbe)
 // (#6443).
 func (c *commandContext) checkCodexLaunchFlags(ctx context.Context) doctorCheck {
 	const name = "codex-launch-flags"
-	path, err := c.deps.ResolveCodexBinary(ctx)
-	if err != nil || path == "" {
-		return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: name, Message: "skipped: codex not found in PATH"}
+	path, err := c.deps.DoctorResolveCodexBinary(ctx)
+	if err != nil {
+		if errors.Is(err, ports.ErrAgentBinaryNotFound) {
+			return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: name, Message: "skipped: codex binary not found"}
+		}
+		return doctorCheck{Level: doctorWarn, Section: doctorSectionAgents, Name: name, Message: fmt.Sprintf("skipped codex launch-flag probe: could not resolve codex binary: %v", err)}
+	}
+	if path == "" {
+		return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: name, Message: "skipped: codex binary not found"}
 	}
 	for _, probe := range codex.DoctorLaunchProbes() {
 		reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)

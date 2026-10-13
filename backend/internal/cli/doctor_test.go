@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestDoctorChecksGitVersion(t *testing.T) {
@@ -524,6 +525,9 @@ func TestDoctorJSONOutputIsDecodable(t *testing.T) {
 			}
 			return "", errors.New("missing")
 		},
+		DoctorResolveCodexBinary: func(context.Context) (string, error) {
+			return "", fmt.Errorf("codex: %w", ports.ErrAgentBinaryNotFound)
+		},
 		CommandOutput: func(_ context.Context, name string, _ ...string) ([]byte, error) {
 			if name == "/bin/tmux" {
 				return []byte("tmux 3.3a\n"), nil
@@ -560,6 +564,9 @@ func TestDoctorTextOutputIsGrouped(t *testing.T) {
 				return "/bin/tmux", nil
 			}
 			return "", errors.New("missing")
+		},
+		DoctorResolveCodexBinary: func(context.Context) (string, error) {
+			return "", fmt.Errorf("codex: %w", ports.ErrAgentBinaryNotFound)
 		},
 		CommandOutput: func(_ context.Context, name string, _ ...string) ([]byte, error) {
 			if name == "/bin/tmux" {
@@ -813,12 +820,12 @@ func doctorContext(t *testing.T, paths map[string]string, commandOutput func(con
 			}
 			return path, nil
 		},
-		// The codex launch-flag canary resolves the binary the way a spawn does,
-		// not through LookPath, so it gets its own seam (#6443).
-		ResolveCodexBinary: func(context.Context) (string, error) {
+		// The codex launch-flag canary resolves the binary like a spawn does;
+		// see checkCodexLaunchFlags.
+		DoctorResolveCodexBinary: func(context.Context) (string, error) {
 			path, ok := paths["codex"]
 			if !ok || path == "" {
-				return "", fmt.Errorf("codex missing")
+				return "", fmt.Errorf("codex: %w", ports.ErrAgentBinaryNotFound)
 			}
 			return path, nil
 		},
@@ -972,11 +979,8 @@ func writeHooksLogLines(t *testing.T, dataDir string, lines ...string) {
 }
 
 // TestDoctorCodexLaunchFlagsProbesSpawnResolvedBinary pins the regression in
-// #6443. On Windows `codex` on PATH is the npm shim, and running a .cmd goes
-// through cmd.exe, which re-parses and corrupts AO's `-c hooks.*=` value: codex
-// then exits 255 with `failed to load bootstrap configuration` even though its
-// real executable accepts the same argv. The canary must therefore probe the
-// binary a spawn would use, and must not fall back to a PATH lookup.
+// #6443: the canary must probe via the DoctorResolveCodexBinary seam, not
+// deps.LookPath (see checkCodexLaunchFlags).
 func TestDoctorCodexLaunchFlagsProbesSpawnResolvedBinary(t *testing.T) {
 	setConfigEnv(t)
 	dir := t.TempDir()
@@ -992,7 +996,7 @@ func TestDoctorCodexLaunchFlagsProbesSpawnResolvedBinary(t *testing.T) {
 			}
 			// The separate `codex` harness version check legitimately resolves
 			// through PATH; only the launch-flag canary is under test here.
-			if len(args) == 1 && args[0] == "--version" {
+			if name == shim && len(args) == 1 && args[0] == "--version" {
 				return []byte("codex-cli 0.159.2\n"), nil
 			}
 			if name != resolved {
@@ -1000,12 +1004,42 @@ func TestDoctorCodexLaunchFlagsProbesSpawnResolvedBinary(t *testing.T) {
 			}
 			return []byte("ok\n"), nil
 		})
-	// doctorContext seeds this from paths["codex"] (the shim); point it at the
-	// spawn-resolved binary, which is what the seam must supply.
-	c.deps.ResolveCodexBinary = func(context.Context) (string, error) { return resolved, nil }
+	// doctorContext seeds the seam from paths["codex"] (the shim); point it at
+	// the spawn-resolved binary, which is what the seam must supply in prod.
+	c.deps.DoctorResolveCodexBinary = func(context.Context) (string, error) { return resolved, nil }
 
 	check := findDoctorCheck(t, c.runDoctor(context.Background()), "codex-launch-flags")
 	if check.Level != doctorPass || !strings.Contains(check.Message, "accepts") {
 		t.Fatalf("canary = %+v, want PASS accepts", check)
+	}
+}
+
+func TestDoctorCodexLaunchFlagsSkippedMessage(t *testing.T) {
+	setConfigEnv(t)
+	c := doctorContext(t, map[string]string{"git": "/bin/git"}, func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("git version 2.43.0\n"), nil
+	})
+	c.deps.DoctorResolveCodexBinary = func(context.Context) (string, error) {
+		return "", fmt.Errorf("codex: %w", ports.ErrAgentBinaryNotFound)
+	}
+
+	check := findDoctorCheck(t, c.runDoctor(context.Background()), "codex-launch-flags")
+	if check.Level != doctorPass || !strings.Contains(check.Message, "codex binary not found") {
+		t.Fatalf("canary = %+v, want skipped PASS without PATH wording", check)
+	}
+}
+
+func TestDoctorCodexLaunchFlagsWarnsOnResolverError(t *testing.T) {
+	setConfigEnv(t)
+	c := doctorContext(t, map[string]string{"git": "/bin/git"}, func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("git version 2.43.0\n"), nil
+	})
+	c.deps.DoctorResolveCodexBinary = func(context.Context) (string, error) {
+		return "", errors.New("nvm scan failed: permission denied")
+	}
+
+	check := findDoctorCheck(t, c.runDoctor(context.Background()), "codex-launch-flags")
+	if check.Level != doctorWarn || !strings.Contains(check.Message, "could not resolve codex binary") {
+		t.Fatalf("canary = %+v, want WARN on resolver error", check)
 	}
 }
