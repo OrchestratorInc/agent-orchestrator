@@ -251,6 +251,11 @@ type ClaudeFingerprintFunc func(context.Context, ports.AgentModelDiscoveryReques
 
 // Discover uses the agent-owned model surface configured for this adapter.
 func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
+	if request.AgentID == "fx" && request.BrowseAll {
+		return discoverFXBrowsingCatalog(ctx, request, func(ctx context.Context, binary string, args []string, dir string, env map[string]string) ([]byte, error) {
+			return modelCommand(ctx, binary, args, dir, env).CombinedOutput()
+		})
+	}
 	if request.AgentID == "claude-code" {
 		return discoverClaudeCatalog(ctx, request, d.ClaudeModels)
 	}
@@ -468,6 +473,9 @@ func claudeConfiguredLabel(id string) string {
 // cached catalog, since the binary alone does not change when settings do.
 func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentModelDiscoveryRequest) string {
 	fingerprint := CatalogFingerprint(ctx, request.AgentID, request.Binary, request.WorkingDir, request.Env)
+	if request.AgentID == "fx" && request.BrowseAll {
+		return fingerprint + ":browse-v1:" + fingerprintConfigPaths([]string{fxSettingsPath(request.Env)})
+	}
 	if request.AgentID != "claude-code" || d.ClaudeFingerprint == nil {
 		return fingerprint
 	}

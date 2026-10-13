@@ -361,7 +361,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 			retry: false,
 			queryFn: async () => {
 				await queryClient.prefetchQuery(options);
-				const catalog = await refreshAgentModels(agentId, "", hostId);
+				const catalog = await refreshAgentModels(agentId, "", hostId, true);
 				if (catalog) queryClient.setQueryData(options.queryKey, catalog);
 				return true;
 			},

@@ -272,6 +272,7 @@ func TestGetAndRefreshAgentModels(t *testing.T) {
 		wantRevalidate  bool
 		wantCatalogOnly bool
 	}{
+		{name: "refresh browsing catalog", method: http.MethodPost, path: "/api/v1/agents/codex/models/refresh?projectId=proj-1&catalogOnly=true", wantCatalogOnly: true, wantRefresh: true},
 		{name: "catalog only", method: http.MethodGet, path: "/api/v1/agents/codex/models?projectId=proj-1&catalogOnly=true", wantCatalogOnly: true},
 		{name: "cached", method: http.MethodGet, path: "/api/v1/agents/codex/models?projectId=proj-1"},
 		{name: "refresh", method: http.MethodPost, path: "/api/v1/agents/codex/models/refresh?projectId=proj-1", wantRefresh: true},

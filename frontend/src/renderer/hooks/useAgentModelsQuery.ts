@@ -38,7 +38,7 @@ async function requestAgentModels(
 			: await client.POST("/api/v1/agents/{agent}/models/refresh", {
 					params: {
 						path,
-						query: { projectId: projectId || undefined, revalidate: mode === "revalidate" || undefined },
+						query: { projectId: projectId || undefined, revalidate: mode === "revalidate" || undefined, ...(catalogOnly ? { catalogOnly: true } : {}) },
 					},
 				});
 	if (result.error) throw new Error(apiErrorMessage(result.error));
@@ -96,8 +96,8 @@ export function invalidateAgentModelCatalogs(queryClient: QueryClient, agentId: 
 	]);
 }
 
-export function refreshAgentModels(agentId: string, projectId: string, hostId?: string) {
-	return requestAgentModels(agentId, projectId, "refresh", hostId);
+export function refreshAgentModels(agentId: string, projectId: string, hostId?: string, catalogOnly = false) {
+	return requestAgentModels(agentId, projectId, "refresh", hostId, catalogOnly);
 }
 
 export function revalidateAgentModels(agentId: string, projectId: string, hostId?: string) {

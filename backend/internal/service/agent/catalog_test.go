@@ -2482,3 +2482,62 @@ func TestModelCatalogServesPersistedModelsDuringBlockedRefresh(t *testing.T) {
 		t.Fatalf("catalog = %#v, want persisted models before refresh completes", got)
 	}
 }
+
+func TestFXBrowsingUsesSeparatePersistentScope(t *testing.T) {
+	cache := &fakeModelCache{}
+	discoverer := successfulModelDiscoverer()
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("fx", "FX", nil)}, cache, nil, discoverer)
+	if _, err := svc.Models(context.Background(), "fx", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if discoverer.lastRequest.BrowseAll {
+		t.Fatal("task picker requested all providers")
+	}
+	if _, err := svc.ModelCatalog(context.Background(), "fx", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if !discoverer.lastRequest.BrowseAll {
+		t.Fatal("Settings did not request all providers")
+	}
+	if _, ok, _ := cache.GetAgentModelCatalog(context.Background(), "fx", ""); !ok {
+		t.Fatal("missing task cache")
+	}
+	if _, ok, _ := cache.GetAgentModelCatalog(context.Background(), "fx", browsingCatalogScope); !ok {
+		t.Fatal("missing browsing cache")
+	}
+	// A new picker with no global cache must never borrow the broader catalog.
+	cache.mu.Lock()
+	delete(cache.records, "fx\x00")
+	cache.mu.Unlock()
+	if _, found := svc.newestCachedCatalog(context.Background(), "fx"); found {
+		t.Fatal("browsing catalog leaked into task fallback")
+	}
+}
+
+func TestFXBrowsingRefreshKeepsFailedProviderModelsOnly(t *testing.T) {
+	cache := &fakeModelCache{}
+	discoverer := successfulModelDiscoverer()
+	discoverer.catalog = ports.AgentModelCatalog{AgentID: "fx", Models: []ports.AgentModelInfo{
+		{ID: "old", Provider: "gateway"}, {ID: "cached", Provider: "codex"},
+	}}
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("fx", "FX", nil)}, cache, nil, discoverer)
+	if _, err := svc.ModelCatalog(context.Background(), "fx", "", true); err != nil {
+		t.Fatal(err)
+	}
+	discoverer.mu.Lock()
+	discoverer.catalog = ports.AgentModelCatalog{AgentID: "fx", Models: []ports.AgentModelInfo{{ID: "new", Provider: "gateway"}},
+		Metadata: map[string]string{"unavailableProviders": "codex"}, Warning: "Codex unavailable"}
+	discoverer.mu.Unlock()
+	for range 2 {
+		got, err := svc.ModelCatalog(context.Background(), "fx", "", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Models) != 2 || got.Models[0].ID != "new" || got.Models[1].ID != "cached" {
+			t.Fatalf("models = %#v", got.Models)
+		}
+		if got.Warning == "" {
+			t.Fatal("missing partial refresh explanation")
+		}
+	}
+}

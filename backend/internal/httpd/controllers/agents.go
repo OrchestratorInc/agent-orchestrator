@@ -98,8 +98,8 @@ func (c *AgentsController) writeModels(w http.ResponseWriter, r *http.Request, r
 	projectID := strings.TrimSpace(r.URL.Query().Get("projectId"))
 	var catalog ports.AgentModelCatalog
 	var err error
-	if !refresh && r.URL.Query().Get("catalogOnly") == "true" {
-		catalog, err = c.Catalog.ModelCatalog(r.Context(), agentID, projectID, false)
+	if r.URL.Query().Get("catalogOnly") == "true" {
+		catalog, err = c.Catalog.ModelCatalog(r.Context(), agentID, projectID, refresh)
 	} else if revalidate {
 		catalog, err = c.Catalog.RevalidateModels(r.Context(), agentID, projectID)
 	} else {

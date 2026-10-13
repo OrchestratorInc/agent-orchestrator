@@ -6794,6 +6794,8 @@ export interface operations {
     refreshAgentModels: {
         parameters: {
             query?: {
+                /** @description Refresh the Harness Settings browsing catalog without session-history enrichment; FX includes all connections in a separate cache. */
+                catalogOnly?: boolean;
                 /** @description Optional project identifier used as the model-catalog cache scope. */
                 projectId?: string;
                 /** @description When true, compare executable and config metadata before running discovery. */

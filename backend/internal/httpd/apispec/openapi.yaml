@@ -266,6 +266,14 @@ paths:
         schema:
           description: Agent adapter identifier.
           type: string
+      - description: Refresh the Harness Settings browsing catalog without session-history
+          enrichment; FX includes all connections in a separate cache.
+        in: query
+        name: catalogOnly
+        schema:
+          description: Refresh the Harness Settings browsing catalog without session-history
+            enrichment; FX includes all connections in a separate cache.
+          type: boolean
       - description: Optional project identifier used as the model-catalog cache scope.
         in: query
         name: projectId

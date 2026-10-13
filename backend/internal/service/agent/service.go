@@ -332,7 +332,7 @@ func (s *Service) monitorModelCatalogFreshness(ctx context.Context) {
 // documented CLI discovery attempt. Discovery failures degrade to the last
 // cached catalog or a custom model input.
 func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
-	catalog, err := s.ModelCatalog(ctx, agentID, projectID, refresh)
+	catalog, err := s.modelCatalog(ctx, agentID, projectID, refresh)
 	if err != nil {
 		return catalog, err
 	}
@@ -346,6 +346,16 @@ func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh
 // Cached reads never wait for CLI discovery or input checks, which run in the
 // background. A scope with no persisted catalog still needs its first discovery.
 func (s *Service) ModelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
+	if agentID == "fx" && projectID == "" {
+		projectID = browsingCatalogScope
+	}
+	return s.modelCatalog(ctx, agentID, projectID, refresh)
+}
+
+// This scope cannot collide with a project ID. It must never seed a task picker.
+const browsingCatalogScope = "@browse:all"
+
+func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
 	if s.discoverer == nil {
 		return ports.AgentModelCatalog{}, apierr.Internal("MODEL_DISCOVERY_UNAVAILABLE", "Model discovery is unavailable")
 	}
@@ -467,6 +477,9 @@ func (s *Service) newestCachedCatalog(ctx context.Context, agentID string) (port
 	var newestAt time.Time
 	found := false
 	for _, record := range records {
+		if record.ProjectID == browsingCatalogScope {
+			continue
+		}
 		cached, ok, err := s.cachedCatalog(ctx, agentID, record.ProjectID)
 		if err != nil || !ok || len(cached.Catalog.Models) == 0 {
 			continue
@@ -528,6 +541,9 @@ func credentialTypeFromScope(scope string) (string, bool) {
 }
 
 func (s *Service) modelCatalogScope(ctx context.Context, projectID string) (string, error) {
+	if projectID == browsingCatalogScope {
+		return projectID, nil
+	}
 	// A credential scope has no backing project; keep it verbatim so its catalog
 	// caches under its own key instead of collapsing to the device-global scope.
 	if _, ok := credentialTypeFromScope(projectID); ok {
@@ -548,6 +564,10 @@ func (s *Service) modelCatalogScope(ctx context.Context, projectID string) (stri
 
 func (s *Service) modelDiscoveryRequest(ctx context.Context, agentID, projectID, binary string) (ports.AgentModelDiscoveryRequest, error) {
 	request := ports.AgentModelDiscoveryRequest{AgentID: agentID, Binary: binary}
+	if projectID == browsingCatalogScope {
+		request.BrowseAll = true
+		return s.globalModelDiscoveryRequest(request)
+	}
 	// Credential-scoped discovery reflects a cloud session's pushed credential,
 	// not a local project: leave WorkingDir/Env empty and let the adapter unlock
 	// that provider's models from the credential type alone.
@@ -869,6 +889,19 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 			}
 		}
 		return fallback, nil
+	}
+	// Browsing is informational: keep a failed provider's previous model list,
+	// while still accepting fresh catalogs from the other connections.
+	if request.BrowseAll && hasCached {
+		unavailable := strings.Split(discovered.Metadata["unavailableProviders"], ",")
+		for _, model := range cached.Catalog.Models {
+			for _, provider := range unavailable {
+				if provider != "" && model.Provider == provider {
+					discovered.Models = append(discovered.Models, model)
+					break
+				}
+			}
+		}
 	}
 	now := s.now().UTC()
 	discovered.ValidatedAt = now

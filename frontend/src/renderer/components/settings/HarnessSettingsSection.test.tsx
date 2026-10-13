@@ -330,7 +330,7 @@ describe("HarnessSettingsSection", () => {
 		expect(within(page).queryByRole("button", { name: "Save defaults" })).toBeNull();
 		expect(within(list).getByText("Context (tokens): 200,000")).toBeInTheDocument();
 		expect(within(page).queryByRole("button", { name: /Refresh/ })).toBeNull();
-		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", { params: { path: { agent: "codex" }, query: { projectId: undefined, revalidate: undefined } } });
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", { params: { path: { agent: "codex" }, query: { projectId: undefined, revalidate: undefined, catalogOnly: true } } });
 	});
 
 
@@ -483,17 +483,17 @@ describe("HarnessSettingsSection", () => {
 		expect(within(page).queryByRole("button", { name: "Next models" })).toBeNull();
 	});
 
-	it("allows multi-provider browsing while signed out", async () => {
-		const readiness = catalogWithInstalled("codewhale");
-		readiness.agents.find((agent) => agent.id === "codewhale")!.authentication.state = "unauthorized";
+	it.each(["codewhale", "fx"] as const)("allows %s browsing while signed out", async (agentId) => {
+		const readiness = catalogWithInstalled(agentId);
+		readiness.agents.find((agent) => agent.id === agentId)!.authentication.state = "unauthorized";
 		mockInstalledOperations("npm", readiness);
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models"
-			? { data: { agentId: "codewhale", providers: ["available", "empty"], models: [{ id: "model", label: "Browse me", provider: "available" }] } } as never
-			: path === "/api/v1/agents/auth-plans" ? { data: { plans: [{ agentId: "codewhale", action: "login", launchMode: "terminal", available: true }] } } as never
+			? { data: { agentId, providers: ["available", "empty"], models: [{ id: "model", label: "Browse me", provider: "available" }] } } as never
+			: path === "/api/v1/agents/auth-plans" ? { data: { plans: [{ agentId, action: "login", launchMode: "terminal", available: true }] } } as never
 			: (get as (path: string, options: unknown) => Promise<never>)(path, options));
-		renderSection("codewhale");
-		const page = await findAgentRow("codewhale");
+		renderSection(agentId);
+		const page = await findAgentRow(agentId);
 		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
 		expect(await within(page).findByText("Browse me")).toBeInTheDocument();
 		await userEvent.click(within(page).getByRole("button", { name: "Provider" }));
