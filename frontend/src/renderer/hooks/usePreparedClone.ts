@@ -4,11 +4,17 @@ import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 
 type PreparedClone = components["schemas"]["ClonePreparationResult"];
+export type CloneProgress = components["schemas"]["CloneProgress"];
+
+// git throttles its own progress display to roughly one update per second, so
+// a sub-second poll captures every phase change without busy-looping the daemon.
+const CLONE_PROGRESS_POLL_MS = 500;
 
 export function usePreparedClone(hostId?: string) {
 	const currentRef = useRef<PreparedClone | null>(null);
 	const inputRef = useRef<{ remoteUrl: string; destinationParent: string } | null>(null);
 	const [isCleaning, setIsCleaning] = useState(false);
+	const [progress, setProgress] = useState<CloneProgress | null>(null);
 	const activeRequest = useRef<AbortController | null>(null);
 	const supportsCheckoutRelease = useRef(!hostId);
 
@@ -41,10 +47,24 @@ export function usePreparedClone(hostId?: string) {
 	}, [hostId]);
 
 	const prepare = useCallback(async (remoteUrl: string, destinationParent: string) => {
+		const client = hostId ? clientForSessionHost(hostId) : apiClient;
 		const controller = new AbortController();
 		activeRequest.current = controller;
+		// The prepare call blocks until the clone finishes; poll its progress
+		// side-channel while it runs so the dialog can render live git output.
+		setProgress(null);
+		const timer = window.setInterval(() => {
+			void client.GET("/api/v1/projects/clone/progress", {
+				params: { query: { remoteUrl, destinationParent } },
+			}).then(({ data }) => {
+				if (data && typeof data.phase === "string") setProgress(data);
+			}).catch(() => {
+				// Progress is best-effort: the route 404s before the clone
+				// registers and older daemons do not serve it at all.
+			});
+		}, CLONE_PROGRESS_POLL_MS);
 		try {
-			const { data, error } = await (hostId ? clientForSessionHost(hostId) : apiClient).POST("/api/v1/projects/clone/prepare", {
+			const { data, error } = await client.POST("/api/v1/projects/clone/prepare", {
 				body: { remoteUrl, destinationParent },
 				signal: controller.signal,
 			});
@@ -55,6 +75,8 @@ export function usePreparedClone(hostId?: string) {
 			inputRef.current = { remoteUrl, destinationParent };
 			return data;
 		} finally {
+			window.clearInterval(timer);
+			setProgress(null);
 			if (activeRequest.current === controller) activeRequest.current = null;
 		}
 	}, [hostId]);
@@ -94,5 +116,5 @@ export function usePreparedClone(hostId?: string) {
 
 	const current = useCallback(() => currentRef.current, []);
 
-	return { cancel, checkDestination, cleanup, complete, current, isCleaning, matches, prepare };
+	return { cancel, checkDestination, cleanup, complete, current, isCleaning, matches, prepare, progress };
 }

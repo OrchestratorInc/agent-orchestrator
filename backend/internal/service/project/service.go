@@ -46,6 +46,11 @@ type Manager interface {
 	CheckCloneDestination(ctx context.Context, in CloneInput) (CloneDestination, error)
 	CleanupPreparedClone(ctx context.Context, in ClonePreparationCleanupInput) error
 
+	// CloneProgress reports the latest observed state of the clone identified
+	// by the same inputs as PrepareClone, for clients polling while the
+	// prepare call is still in flight.
+	CloneProgress(ctx context.Context, in CloneProgressQuery) (CloneProgress, error)
+
 	// InitializeRepository prepares a selected folder for project registration.
 	InitializeRepository(ctx context.Context, in InitializeRepositoryInput) (InitializeRepositoryResult, error)
 
@@ -85,6 +90,9 @@ type Service struct {
 	// covered by the store's own writeMu, so path/id conflict checks plus the
 	// subsequent mutation must be atomic from the perspective of concurrent callers.
 	addMu sync.Mutex
+	// cloneProgress tracks in-flight clones so the progress polling route can
+	// report them. Nil-safe: a zero Service answers "no clone running".
+	cloneProgress *cloneProgressRegistry
 }
 
 const maxDisplayNameLen = 100
@@ -127,6 +135,7 @@ func NewWithDeps(d Deps) *Service {
 		milestones:     d.Milestones,
 		defaultHarness: defaultHarness,
 		logger:         d.Logger,
+		cloneProgress:  newCloneProgressRegistry(),
 	}
 	if s.clock == nil {
 		s.clock = time.Now

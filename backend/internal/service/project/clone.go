@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -122,6 +123,36 @@ func (m *Service) PrepareClone(ctx context.Context, in CloneInput) (ClonePrepara
 	return m.prepareClone(ctx, in)
 }
 
+// CloneProgress reports the latest parsed git progress of the clone identified
+// by the query's remote URL and destination parent. The lookup derives the
+// same destination path prepareClone computes, so the client only needs the
+// values it already sent.
+func (m *Service) CloneProgress(_ context.Context, in CloneProgressQuery) (CloneProgress, error) {
+	key, err := cloneProgressKey(in.RemoteURL, in.DestinationParent)
+	if err != nil {
+		return CloneProgress{}, err
+	}
+	progress, ok := m.cloneProgress.get(key)
+	if !ok {
+		return CloneProgress{}, apierr.NotFound("CLONE_PROGRESS_NOT_FOUND", "No clone is currently running for this repository and destination.")
+	}
+	return progress, nil
+}
+
+// cloneProgressKey derives the progress registry key for a clone attempt: the
+// final checkout path, exactly as prepareClone computes it.
+func cloneProgressKey(remoteURL, destinationParent string) (string, error) {
+	name, err := cloneRepositoryName(strings.TrimSpace(remoteURL))
+	if err != nil {
+		return "", err
+	}
+	parent, err := normalizePath(destinationParent)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(parent, name), nil
+}
+
 // CleanupPreparedClone removes an unregistered checkout created by PrepareClone,
 // or releases AO's cleanup ownership when the user chooses to keep it.
 func (m *Service) CleanupPreparedClone(ctx context.Context, in ClonePreparationCleanupInput) error {
@@ -217,16 +248,35 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePrepara
 		}
 	}()
 
+	// tracker follows the current clone attempt so the progress polling route
+	// can report it. The final (successful) tracker stays registered until
+	// prepareClone returns, so late polls still see the finalizing phase.
+	var tracker *cloneProgressTracker
+	defer func() {
+		if tracker != nil {
+			m.cloneProgress.remove(target, tracker)
+		}
+	}()
+
 	for attempt := 0; ; attempt++ {
-		cmd := aoprocess.CommandContext(ctx, "git", "clone", "--origin", "origin", "--", remoteURL, temporaryPath)
+		cmd := aoprocess.CommandContext(ctx, "git", "clone", "--progress", "--origin", "origin", "--", remoteURL, temporaryPath)
 		aoprocess.ConfigureTreeCancellation(cmd)
 		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never", "LC_ALL=C")
+		tracker = newCloneProgressTracker(m.clock)
+		m.cloneProgress.add(target, tracker)
 		var stderr limitedCloneOutput
-		cmd.Stderr = &stderr
+		// git writes its progress stream to stderr: tee it into the bounded
+		// error buffer and the live progress parser.
+		cmd.Stderr = io.MultiWriter(&stderr, tracker)
 		err := cmd.Run()
 		if err == nil {
+			// git finished; the remaining marker write and rename are local
+			// and fast, but report them so the last polls do not show a
+			// stale receiving phase.
+			tracker.finish()
 			break
 		}
+		m.cloneProgress.remove(target, tracker)
 		var executableError *exec.Error
 		if errors.As(err, &executableError) {
 			return ClonePreparationResult{}, apierr.Invalid("GIT_NOT_FOUND", "Git is required to clone a repository.", nil)

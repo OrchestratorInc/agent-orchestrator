@@ -3,6 +3,8 @@ package controllers_test
 import (
 	"context"
 
+	"crypto/rand"
+
 	"encoding/json"
 
 	"io"
@@ -22,7 +24,11 @@ import (
 
 	"strings"
 
+	"sync"
+
 	"testing"
+
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 
@@ -308,6 +314,152 @@ func TestProjectsAPI_Clone(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_GIT_URL")
 	body, status, _ = doRequest(t, srv, "POST", "/api/v1/projects/clone", `{`)
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_JSON")
+}
+
+// TestProjectsAPI_CloneProgress drives the loop the renderer runs: POST
+// /projects/clone/prepare blocks until the clone finishes while GET
+// /projects/clone/progress polls the running clone, and the route answers with
+// a clean not-found envelope once the preparation settles.
+func TestProjectsAPI_CloneProgress(t *testing.T) {
+	srv := newTestServer(t)
+	source := gitRepo(t, "clone-progress-source")
+	// A 40 MiB blob keeps the clone alive long enough for the poller to
+	// observe it in flight; without it git finishes before the first poll.
+	blob := make([]byte, 40<<20)
+	if _, err := rand.Read(blob); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "blob.bin"), blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", source, "add", "blob.bin").CombinedOutput(); err != nil {
+		t.Fatalf("git add fixture blob: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "-C", source, "-c", "user.email=ao@example.com", "-c", "user.name=AO Test", "commit", "-m", "blob").CombinedOutput(); err != nil {
+		t.Fatalf("git commit fixture blob: %v\n%s", err, out)
+	}
+
+	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	destinationParent := t.TempDir()
+	progressPath := "/api/v1/projects/clone/progress?remoteUrl=" + url.QueryEscape(remoteURL) +
+		"&destinationParent=" + url.QueryEscape(destinationParent)
+
+	// doProgress reports failures through its status instead of Fatalf so it
+	// is safe to call from the poller goroutine.
+	doProgress := func() ([]byte, int) {
+		req, err := http.NewRequest(http.MethodGet, srv.URL+progressPath, nil)
+		if err != nil {
+			return nil, 0
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			return nil, 0
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, resp.StatusCode
+		}
+		return body, resp.StatusCode
+	}
+
+	type progressPoll struct {
+		body   []byte
+		status int
+	}
+	var pollsMu sync.Mutex
+	var polls []progressPoll
+	stopPolling := make(chan struct{})
+	var poller sync.WaitGroup
+	poller.Add(1)
+	go func() {
+		defer poller.Done()
+		for {
+			select {
+			case <-stopPolling:
+				return
+			default:
+			}
+			body, status := doProgress()
+			pollsMu.Lock()
+			polls = append(polls, progressPoll{body: body, status: status})
+			pollsMu.Unlock()
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	prepareStatus := 0
+	prepareBody := []byte(nil)
+	prepareDone := make(chan struct{})
+	go func() {
+		defer close(prepareDone)
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/projects/clone/prepare",
+			strings.NewReader(`{"remoteUrl":`+quote(remoteURL)+`,"destinationParent":`+quote(destinationParent)+`}`))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+		prepareStatus = resp.StatusCode
+		prepareBody, _ = io.ReadAll(resp.Body)
+	}()
+	<-prepareDone
+	if prepareStatus != http.StatusOK {
+		t.Fatalf("POST prepare = %d, want 200; body=%s", prepareStatus, prepareBody)
+	}
+	close(stopPolling)
+	poller.Wait()
+
+	pollsMu.Lock()
+	defer pollsMu.Unlock()
+	validPhases := map[string]bool{
+		"connecting": true, "enumerating": true, "counting": true, "compressing": true,
+		"receiving": true, "resolving": true, "updating": true, "finalizing": true,
+	}
+	sawSnapshot, sawTransfer := false, false
+	for _, p := range polls {
+		if p.status != http.StatusOK {
+			continue
+		}
+		var snapshot struct {
+			Phase string `json:"phase"`
+		}
+		mustJSON(t, p.body, &snapshot)
+		if !validPhases[snapshot.Phase] {
+			t.Fatalf("progress poll reported phase %q", snapshot.Phase)
+		}
+		sawSnapshot = true
+		if snapshot.Phase == "receiving" || snapshot.Phase == "resolving" || snapshot.Phase == "updating" || snapshot.Phase == "finalizing" {
+			sawTransfer = true
+		}
+	}
+	if !sawSnapshot {
+		t.Fatal("no poll observed the running clone")
+	}
+	if !sawTransfer {
+		t.Fatal("no poll observed a transfer phase (receiving, resolving, updating, or finalizing)")
+	}
+
+	// After the preparation settles the entry is gone: late polls get the
+	// documented not-found envelope instead of a stale snapshot.
+	body, status, headers := doRequest(t, srv, "GET", progressPath, "")
+	assertJSON(t, headers)
+	assertErrorCode(t, body, status, http.StatusNotFound, "CLONE_PROGRESS_NOT_FOUND")
+
+	// Validation errors mirror the prepare route's error envelopes.
+	badURL := "/api/v1/projects/clone/progress?remoteUrl=" + url.QueryEscape("not a url") +
+		"&destinationParent=" + url.QueryEscape(destinationParent)
+	body, status, headers = doRequest(t, srv, "GET", badURL, "")
+	assertJSON(t, headers)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_GIT_URL")
+	missingParent := "/api/v1/projects/clone/progress?remoteUrl=" + url.QueryEscape(remoteURL)
+	body, status, headers = doRequest(t, srv, "GET", missingParent, "")
+	assertJSON(t, headers)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "PATH_REQUIRED")
 }
 
 func TestProjectsAPI_InitializeRepository(t *testing.T) {

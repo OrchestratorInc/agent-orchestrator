@@ -158,6 +158,10 @@ func (f *fakeProjectManager) CheckCloneDestination(_ context.Context, in project
 	return projectsvc.CloneDestination{RemoteURL: in.RemoteURL}, nil
 }
 
+func (f *fakeProjectManager) CloneProgress(context.Context, projectsvc.CloneProgressQuery) (projectsvc.CloneProgress, error) {
+	return projectsvc.CloneProgress{}, nil
+}
+
 func (f *fakeProjectManager) CleanupPreparedClone(context.Context, projectsvc.ClonePreparationCleanupInput) error {
 	return nil
 }

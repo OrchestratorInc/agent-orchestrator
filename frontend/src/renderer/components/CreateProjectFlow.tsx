@@ -868,6 +868,7 @@ export function CreateProjectFlow({
 							error={error}
 							existingProjectNames={existingProjectNames}
 							existingProjectPaths={existingProjectPaths}
+							progress={preparedClone.progress}
 							onBack={() => {
 								void leaveCloneDialog(true);
 							}}

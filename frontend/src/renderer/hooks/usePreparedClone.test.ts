@@ -1,12 +1,15 @@
 import { act, renderHook } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usePreparedClone } from "./usePreparedClone";
 
-const api = vi.hoisted(() => ({ POST: vi.fn() }));
+const api = vi.hoisted(() => ({ POST: vi.fn(), GET: vi.fn() }));
 vi.mock("../lib/api-client", () => ({ apiClient: api, apiErrorMessage: () => "Request failed" }));
 vi.mock("../lib/host-clients", () => ({ clientForSessionHost: () => api }));
 
-beforeEach(() => { api.POST.mockReset(); });
+beforeEach(() => {
+	api.POST.mockReset();
+	api.GET.mockReset();
+});
 
 it.each([404, 405])("allows cloning on an older daemon without destination preflight (%s)", async (status) => {
 	api.POST.mockResolvedValueOnce({ error: { message: "Route unavailable" }, response: { status } });
@@ -123,4 +126,82 @@ it("aborts a clone when its owning host changes", async () => {
 	rerender({ hostId: "b" });
 	await rejection;
 	expect(requestSignal?.aborted).toBe(true);
+});
+
+describe("clone progress polling", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	function progressSnapshot(overrides: Record<string, unknown> = {}) {
+		return {
+			phase: "receiving",
+			percent: 45,
+			itemsDone: 1234,
+			itemsTotal: 2748,
+			transferredBytes: 2097152,
+			speedBytesPerSecond: 1572864,
+			startedAt: "2026-10-12T00:00:00Z",
+			updatedAt: "2026-10-12T00:00:01Z",
+			...overrides,
+		};
+	}
+
+	it("polls clone progress while prepare is in flight and stops when it settles", async () => {
+		vi.useFakeTimers();
+		let resolvePrepare: (value: { data: { path: string; remoteUrl: string; preparationId: string } }) => void = () => {};
+		const preparePromise = new Promise<{ data: { path: string; remoteUrl: string; preparationId: string } }>((resolve) => {
+			resolvePrepare = resolve;
+		});
+		api.POST.mockReturnValue(preparePromise);
+		api.GET.mockResolvedValue({ data: progressSnapshot() });
+
+		const { result } = renderHook(() => usePreparedClone());
+		let prepared: { preparationId: string } | undefined;
+		act(() => {
+			void result.current.prepare("https://example.com/repo.git", "/repos").then((value) => {
+				prepared = value;
+			});
+		});
+
+		// Before the first poll only the busy state is known.
+		expect(result.current.progress).toBeNull();
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(500);
+		});
+		expect(api.GET).toHaveBeenCalledWith("/api/v1/projects/clone/progress", {
+			params: { query: { remoteUrl: "https://example.com/repo.git", destinationParent: "/repos" } },
+		});
+		expect(result.current.progress?.phase).toBe("receiving");
+
+		await act(async () => {
+			resolvePrepare({ data: { path: "/repos/repo", remoteUrl: "https://example.com/repo.git", preparationId: "prep-1" } });
+			await vi.advanceTimersByTimeAsync(100);
+		});
+		expect(prepared).toMatchObject({ preparationId: "prep-1" });
+		expect(result.current.progress).toBeNull();
+
+		const callsAfterCompletion = api.GET.mock.calls.length;
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(2000);
+		});
+		expect(api.GET.mock.calls.length).toBe(callsAfterCompletion);
+	});
+
+	it("ignores progress misses so older daemons keep the plain busy state", async () => {
+		vi.useFakeTimers();
+		api.POST.mockResolvedValue({
+			data: { path: "/repos/repo", remoteUrl: "https://example.com/repo.git", preparationId: "prep-1" },
+		});
+		api.GET.mockResolvedValue({ data: undefined, error: { code: "CLONE_PROGRESS_NOT_FOUND" } });
+
+		const { result } = renderHook(() => usePreparedClone());
+		await act(async () => {
+			void result.current.prepare("https://example.com/repo.git", "/repos");
+			await vi.advanceTimersByTimeAsync(1500);
+		});
+
+		expect(result.current.progress).toBeNull();
+	});
 });
