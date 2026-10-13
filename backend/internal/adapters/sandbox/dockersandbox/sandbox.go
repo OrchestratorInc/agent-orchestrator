@@ -123,13 +123,23 @@ func (s *Sandbox) mounts(req ports.SandboxRequest, gitDir string) ([]mount, erro
 				ports.ErrSandboxMisconfigured, work, req.WorkspacePath)
 		}
 	}
-	return []mount{
+	projectDir := filepath.Join(s.cfg.DataDir, "sandbox", "projects", string(req.ProjectID))
+	state := []mount{{Path: projectDir}}
+	if req.Config.Mode != domain.SandboxModeShared {
+		// Per-agent containers see only their own session dir, not siblings'.
+		state = []mount{
+			{Path: filepath.Join(projectDir, "home")},
+			{Path: filepath.Join(projectDir, "claude")},
+			{Path: filepath.Join(projectDir, "sessions", string(req.SessionID))},
+		}
+	}
+	m := []mount{
 		{Path: work},
 		{Path: gitDir},
 		{Path: filepath.Join(s.cfg.DataDir, "prompts"), ReadOnly: true},
-		{Path: filepath.Join(s.cfg.DataDir, "sandbox", "projects", string(req.ProjectID))},
-		{Path: filepath.Join(s.cfg.DataDir, "sandbox", "bin"), ReadOnly: true},
-	}, nil
+	}
+	m = append(m, state...)
+	return append(m, mount{Path: filepath.Join(s.cfg.DataDir, "sandbox", "bin"), ReadOnly: true}), nil
 }
 
 func (s *Sandbox) gitCommonDir(ctx context.Context, workspace string) (string, error) {
@@ -167,12 +177,14 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 	}
 	hash := configHash(req.Config, mounts)
 	name := containerName(req, hash)
-	unlock := s.lock(name)
-	defer unlock()
+	if req.Config.Mode == domain.SandboxModeShared {
+		defer s.lock("project:" + string(req.ProjectID))()
+	}
+	defer s.lock(name)()
 
 	target := s.targetFor(name, req.ProjectID, req.SessionID)
 	target.Docker = docker
-	for _, dir := range []string{filepath.Join(target.ProjectDir, "home"), filepath.Join(target.RelayDir, "req"),
+	for _, dir := range []string{filepath.Join(target.ProjectDir, "home"), filepath.Join(target.ProjectDir, "claude"), filepath.Join(target.RelayDir, "req"),
 		filepath.Join(target.RelayDir, "work"), filepath.Join(target.RelayDir, "resp"), filepath.Join(s.cfg.DataDir, "prompts")} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return ports.SandboxTarget{}, fmt.Errorf("sandbox state dir: %w", err)
@@ -187,10 +199,9 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 		return ports.SandboxTarget{}, err
 	}
 	switch {
-	case status != "" && existingHash != hash:
-		// Only per-agent names can collide across config changes; shared
-		// names embed the hash. The worktree lives on the host, so recreating
-		// loses only container-local installs.
+	case status != "" && status != "running" && existingHash != hash:
+		// A stopped container with stale config is recreated; the worktree
+		// lives on the host. A running one may hold a live agent: reuse it.
 		if _, err := s.output(ctx, probeTimeout, docker, "rm", "-f", name); err != nil {
 			return ports.SandboxTarget{}, err
 		}
@@ -201,7 +212,11 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 			labels[dockerreap.SessionLabel] = string(req.SessionID)
 		}
 		if _, err := s.output(ctx, createTimeout, docker, runArgs(name, req.Config, labels, mounts, hostUser())...); err != nil {
-			return ports.SandboxTarget{}, fmt.Errorf("start sandbox from image %s: %w", req.Config.Image, err)
+			if errors.Is(err, ports.ErrSandboxUnavailable) {
+				return ports.SandboxTarget{}, err
+			}
+			return ports.SandboxTarget{}, fmt.Errorf("%w: start sandbox from image %s (the image must exist or be pullable and provide /bin/sh): %v",
+				ports.ErrSandboxMisconfigured, req.Config.Image, err)
 		}
 	case status != "running":
 		if _, err := s.output(ctx, probeTimeout, docker, "start", name); err != nil {
@@ -209,12 +224,12 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 		}
 	}
 	for _, bin := range req.RequireBinaries {
-		if _, err := s.output(ctx, probeTimeout, docker, "exec", name, "/bin/sh", "-c", "command -v '"+bin+"'"); err != nil {
+		if _, err := s.output(ctx, probeTimeout, docker, "exec", name, "/bin/sh", "-c", `command -v "$1"`, "sh", bin); err != nil {
 			if errors.Is(err, ports.ErrSandboxUnavailable) {
 				return ports.SandboxTarget{}, err
 			}
-			return ports.SandboxTarget{}, fmt.Errorf("%w: image %s has no %q on PATH (and needs /bin/sh)",
-				ports.ErrSandboxMisconfigured, req.Config.Image, bin)
+			return ports.SandboxTarget{}, fmt.Errorf("%w: image %s has no %q on PATH (and needs /bin/sh): %v",
+				ports.ErrSandboxMisconfigured, req.Config.Image, bin, err)
 		}
 	}
 	return target, nil
@@ -225,7 +240,7 @@ func (s *Sandbox) inspect(ctx context.Context, docker, name string) (string, str
 	out, err := s.output(ctx, probeTimeout, docker, "inspect", "--type", "container",
 		"--format", `{{.State.Status}}	{{index .Config.Labels "`+labelHash+`"}}`, name)
 	if err != nil {
-		if strings.Contains(err.Error(), "No such object") || strings.Contains(err.Error(), "No such container") {
+		if msg := strings.ToLower(err.Error()); strings.Contains(msg, "no such object") || strings.Contains(msg, "no such container") {
 			return "", "", nil
 		}
 		return "", "", err
@@ -238,7 +253,7 @@ func (s *Sandbox) output(ctx context.Context, timeout time.Duration, docker stri
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	out, err := s.run.Output(ctx, docker, args...)
-	if err != nil && dockerreap.IsDockerUnavailable(err) {
+	if err != nil && (dockerreap.IsDockerUnavailable(err) || dockerSocketDenied(err)) {
 		return out, fmt.Errorf("%w: Docker is not running or not reachable: %v", ports.ErrSandboxUnavailable, err)
 	}
 	return out, err
@@ -273,10 +288,20 @@ func (s *Sandbox) Exec(target ports.SandboxTarget, workspacePath string, env map
 	return execArgv(docker, target, workspacePath, argv), nil
 }
 
+// dockerSocketDenied reports a Docker socket permission error, which means
+// the daemon is unusable for this user.
+func dockerSocketDenied(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "permission denied") && strings.Contains(msg, "docker")
+}
+
 // Release removes the project's shared containers once nothing uses them.
-// An unreachable Docker is not an error: there is nothing to release.
-func (s *Sandbox) Release(ctx context.Context, project domain.ProjectID, inUse bool) error {
-	if inUse {
+// inUse runs under the project lock, so it cannot race a shared Ensure; an
+// error or true keeps the containers. An unreachable Docker is not an error.
+func (s *Sandbox) Release(ctx context.Context, project domain.ProjectID, inUse func(context.Context) (bool, error)) error {
+	defer s.lock("project:" + string(project))()
+	used, err := inUse(ctx)
+	if err != nil || used {
 		return nil
 	}
 	docker, err := s.dockerPath()

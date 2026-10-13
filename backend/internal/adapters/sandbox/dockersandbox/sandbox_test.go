@@ -42,6 +42,11 @@ func testSandbox(t *testing.T, script []fakeCall) (*Sandbox, *fakeRunner, string
 	t.Helper()
 	data := t.TempDir()
 	fr := &fakeRunner{t: t, script: script}
+	t.Cleanup(func() {
+		if len(fr.script) != 0 {
+			t.Errorf("unconsumed fake calls: %v", fr.script)
+		}
+	})
 	return newWithRunner(Config{DataDir: data, ManagedRoot: filepath.Join(data, "worktrees")}, fr, "/usr/bin/docker"), fr, data
 }
 
@@ -55,7 +60,7 @@ func TestEnsureCreatesPerAgentContainer(t *testing.T) {
 		{match: "rev-parse --path-format=absolute --git-common-dir", out: "/repo/.git\n"},
 		{match: "inspect", err: errors.New("Error: No such object: ao-sbx-s1")},
 		{match: "run -d --init --name ao-sbx-s1"},
-		{match: "exec ao-sbx-s1 /bin/sh -c command -v 'claude'"},
+		{match: "exec ao-sbx-s1 /bin/sh -c command -v \"$1\" sh claude"},
 	})
 	ws := filepath.Join(data, "worktrees", "p", "s1")
 	target, err := s.Ensure(context.Background(), perAgentReq(ws))
@@ -64,10 +69,16 @@ func TestEnsureCreatesPerAgentContainer(t *testing.T) {
 	}
 	run := fr.calls[2]
 	for _, want := range []string{"--label ao.session=s1", "-v " + ws + ":" + ws, "-v /repo/.git:/repo/.git",
-		filepath.Join(data, "prompts") + ":ro", filepath.Join(data, "sandbox", "bin") + ":ro"} {
+		filepath.Join(data, "prompts") + ":ro", filepath.Join(data, "sandbox", "bin") + ":ro",
+		"-v " + filepath.Join(data, "sandbox", "projects", "p", "home") + ":",
+		"-v " + filepath.Join(data, "sandbox", "projects", "p", "claude") + ":",
+		"-v " + filepath.Join(data, "sandbox", "projects", "p", "sessions", "s1") + ":"} {
 		if !strings.Contains(run, want) {
 			t.Fatalf("docker run missing %q:\n%s", want, run)
 		}
+	}
+	if strings.Contains(run, "-v "+filepath.Join(data, "sandbox", "projects", "p")+":") {
+		t.Fatalf("whole project dir mounted in per-agent mode:\n%s", run)
 	}
 	if target.Container != "ao-sbx-s1" || target.SessionDir != filepath.Join(data, "sandbox", "projects", "p", "sessions", "s1") {
 		t.Fatalf("target = %#v", target)
@@ -84,7 +95,7 @@ func TestEnsureReusesRunningContainerWithSameHash(t *testing.T) {
 	s.run.(*fakeRunner).script = []fakeCall{
 		{match: "rev-parse", out: "/repo/.git\n"},
 		{match: "inspect", out: "running\t" + hash + "\n"},
-		{match: "command -v 'claude'"},
+		{match: "command -v \"$1\" sh claude"},
 	}
 	if _, err := s.Ensure(context.Background(), perAgentReq(ws)); err != nil {
 		t.Fatal(err)
@@ -99,7 +110,7 @@ func TestEnsureStartsStoppedContainer(t *testing.T) {
 		{match: "rev-parse", out: "/repo/.git\n"},
 		{match: "inspect", out: "exited\t" + hash + "\n"},
 		{match: "start ao-sbx-s1"},
-		{match: "command -v 'claude'"},
+		{match: "command -v \"$1\" sh claude"},
 	}
 	if _, err := s.Ensure(context.Background(), perAgentReq(ws)); err != nil {
 		t.Fatal(err)
@@ -122,7 +133,7 @@ func TestEnsureMissingHarnessBinary(t *testing.T) {
 		{match: "rev-parse", out: "/repo/.git\n"},
 		{match: "inspect", err: errors.New("No such object")},
 		{match: "run -d"},
-		{match: "command -v 'claude'", err: errors.New("exit status 1")},
+		{match: "command -v \"$1\" sh claude", err: errors.New("exit status 1")},
 	})
 	_, err := s.Ensure(context.Background(), perAgentReq(filepath.Join(data, "worktrees", "p", "s1")))
 	if !errors.Is(err, ports.ErrSandboxMisconfigured) || !strings.Contains(err.Error(), `node:22`) || !strings.Contains(err.Error(), `"claude"`) {
@@ -148,7 +159,7 @@ func TestEnsureSharedHasNoSessionLabel(t *testing.T) {
 		{match: "rev-parse", out: "/repo/.git\n"},
 		{match: "inspect", err: errors.New("No such object")},
 		{match: "run -d"},
-		{match: "command -v"},
+		{match: "command -v \"$1\""},
 	}
 	if _, err := s.Ensure(context.Background(), req); err != nil {
 		t.Fatal(err)
@@ -184,9 +195,12 @@ func TestExecDoesNotPutEnvInArgv(t *testing.T) {
 	}
 }
 
+func notUsed(context.Context) (bool, error) { return false, nil }
+
 func TestReleaseRemovesSharedContainersOnlyWhenUnused(t *testing.T) {
 	s, fr, _ := testSandbox(t, nil)
-	if err := s.Release(context.Background(), "p", true); err != nil || len(fr.calls) != 0 {
+	inUse := func(context.Context) (bool, error) { return true, nil }
+	if err := s.Release(context.Background(), "p", inUse); err != nil || len(fr.calls) != 0 {
 		t.Fatalf("in-use release = %v, calls %v", err, fr.calls)
 	}
 	fr.script = []fakeCall{
@@ -194,7 +208,67 @@ func TestReleaseRemovesSharedContainersOnlyWhenUnused(t *testing.T) {
 		{match: "rm -f c1"},
 		{match: "rm -f c2"},
 	}
-	if err := s.Release(context.Background(), "p", false); err != nil {
+	if err := s.Release(context.Background(), "p", notUsed); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReleaseKeepsContainersWhenInUseCheckFails(t *testing.T) {
+	s, fr, _ := testSandbox(t, nil)
+	err := s.Release(context.Background(), "p", func(context.Context) (bool, error) { return false, errors.New("db down") })
+	if err != nil || len(fr.calls) != 0 {
+		t.Fatalf("release = %v, calls %v", err, fr.calls)
+	}
+}
+
+func TestEnsureRunFailureIsMisconfigured(t *testing.T) {
+	s, _, data := testSandbox(t, []fakeCall{
+		{match: "rev-parse", out: "/repo/.git\n"},
+		{match: "inspect", err: errors.New("No such object")},
+		{match: "run -d", err: errors.New("pull access denied for node")},
+	})
+	_, err := s.Ensure(context.Background(), perAgentReq(filepath.Join(data, "worktrees", "p", "s1")))
+	if !errors.Is(err, ports.ErrSandboxMisconfigured) || !strings.Contains(err.Error(), "node:22") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestEnsureDockerSocketPermissionDenied(t *testing.T) {
+	s, _, data := testSandbox(t, []fakeCall{
+		{match: "rev-parse", out: "/repo/.git\n"},
+		{match: "inspect", err: errors.New("permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock")},
+	})
+	_, err := s.Ensure(context.Background(), perAgentReq(filepath.Join(data, "worktrees", "p", "s1")))
+	if !errors.Is(err, ports.ErrSandboxUnavailable) {
+		t.Fatalf("err = %v, want ErrSandboxUnavailable", err)
+	}
+}
+
+func TestEnsureRunningContainerWithStaleHashIsReused(t *testing.T) {
+	s, fr, data := testSandbox(t, []fakeCall{
+		{match: "rev-parse", out: "/repo/.git\n"},
+		{match: "inspect", out: "running\tstale\n"},
+		{match: "command -v"},
+	})
+	if _, err := s.Ensure(context.Background(), perAgentReq(filepath.Join(data, "worktrees", "p", "s1"))); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range fr.calls {
+		if strings.Contains(c, " rm ") || strings.Contains(c, " run ") {
+			t.Fatalf("running container was touched: %s", c)
+		}
+	}
+}
+
+func TestEnsureStoppedContainerWithStaleHashIsRecreated(t *testing.T) {
+	s, _, data := testSandbox(t, []fakeCall{
+		{match: "rev-parse", out: "/repo/.git\n"},
+		{match: "inspect", out: "exited\tstale\n"},
+		{match: "rm -f ao-sbx-s1"},
+		{match: "run -d --init --name ao-sbx-s1"},
+		{match: "command -v"},
+	})
+	if _, err := s.Ensure(context.Background(), perAgentReq(filepath.Join(data, "worktrees", "p", "s1"))); err != nil {
 		t.Fatal(err)
 	}
 }

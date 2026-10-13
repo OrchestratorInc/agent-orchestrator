@@ -42,8 +42,9 @@ type Sandbox interface {
 	// Exec writes the session env file and returns the argv that runs argv
 	// inside the container. Secrets never appear in the returned argv.
 	Exec(target SandboxTarget, workspacePath string, env map[string]string, argv []string) ([]string, error)
-	// Release removes the project's shared containers when inUse is false.
-	Release(ctx context.Context, project domain.ProjectID, inUse bool) error
+	// Release removes the project's shared containers. inUse is evaluated under
+	// the project lock; an error or true keeps the containers.
+	Release(ctx context.Context, project domain.ProjectID, inUse func(context.Context) (bool, error)) error
 }
 
 // AgentSandboxSupport is implemented by harnesses that can run sandboxed.
