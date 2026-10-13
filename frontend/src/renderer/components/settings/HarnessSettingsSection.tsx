@@ -1450,14 +1450,31 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	const pageStart = currentPage * MODELS_PAGE_SIZE;
 	const visibleModels = models.slice(pageStart, pageStart + MODELS_PAGE_SIZE);
 	const error = (catalog.error instanceof Error ? catalog.error.message : undefined) ?? data?.refreshError;
+	const renderProviderOption = (id: string, label: string, inMenu: boolean) => {
+		const provider = providers.find((candidate) => candidate.id === id);
+		const count = provider?.models.length ?? 0;
+		const configured = provider?.configured && !data?.stale;
+		const configuredLabel = t("settings.harness.models.configuredProvider");
+		// Configured providers get only the status slot's dot and full-strength text so
+		// the few with credentials stand out among hundreds of catalog providers.
+		return <span className="flex min-w-0 flex-1 items-center gap-2">
+			<span className="sr-only">{`${label} · ${count}${configured ? ` · ${configuredLabel}` : ""}`}</span>
+			<span aria-hidden="true" className="flex size-1.5 shrink-0">{configured ? <HarnessStatusDot tone="ok" /> : null}</span>
+			<span aria-hidden="true" className={cn("min-w-0 truncate", inMenu && !configured && "text-settings-muted")}>{label}</span>
+			<span aria-hidden="true" className="ml-auto shrink-0 pl-2 text-xs tabular-nums text-settings-muted">{count}</span>
+		</span>;
+	};
 	return <div className="flex min-h-0 flex-1 flex-col gap-3">
 		{showProviders ? <div className="shrink-0 space-y-2">
 			<h3 className="text-sm font-medium text-settings-label">{t("settings.harness.models.provider")}</h3>
 			<SettingsOptionMenu
 				aria-label={t("settings.harness.models.provider")} value={selectedProvider?.id ?? ""}
-				options={providers.map((provider) => ({ value: provider.id, label: `${provider.id || t("settings.harness.models.unknownProvider")} · ${provider.models.length}${provider.configured && !data?.stale ? ` · ${t("settings.harness.models.configuredProvider")}` : ""}` }))}
+				options={providers.map((provider) => ({ value: provider.id, label: provider.id || t("settings.harness.models.unknownProvider") }))}
 				onChange={(id) => { setProviderChoice({ scope, id }); setPage(0); }}
+				renderTrigger={(option) => option ? renderProviderOption(option.value, option.label, false) : null}
+				renderMenuItem={(option) => renderProviderOption(option.value, option.label, true)}
 				searchable={providers.length > 5} menuAlign="start" triggerClassName="w-full justify-between"
+				menuClassName="w-(--radix-dropdown-menu-trigger-width)" menuItemClassName="w-full"
 			/>
 			{providers.some((provider) => provider.configured) && !data?.stale ? <p className="text-xs text-settings-muted">{t("settings.harness.models.configuredProviderHint")}</p> : null}
 		</div> : null}

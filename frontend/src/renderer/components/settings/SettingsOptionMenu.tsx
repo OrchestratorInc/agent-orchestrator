@@ -134,7 +134,7 @@ export function SettingsOptionMenu<T extends string>({
 							value={search}
 							onChange={(event) => setSearch(event.target.value)}
 							placeholder={searchPlaceholder ?? t("settings.options.searchPlaceholder")}
-							className="settings-inline-input w-full"
+							className="menu-search-input"
 						/>
 					</div>
 				)}

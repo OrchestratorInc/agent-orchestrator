@@ -174,8 +174,9 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		// Outside Settings the stack reaches the window's drag region, which would swallow its clicks.
 		style={{ WebkitAppRegion: "no-drag" } as CSSProperties}>
 		{/* The stack toggle sits above the cards so it never reads as part of one notice. */}
-		{updates.length > 1 ? <div className="mb-2 flex items-center justify-between gap-2">
-			<Button type="button" variant="outline" size="sm" className="h-6 bg-card px-2 text-[11px] shadow-sm"
+		{/* Above the stack, whose negative margin reaches up into this row, and clear of the first card's dismiss button. */}
+		{updates.length > 1 ? <div className="relative z-20 mb-4 flex items-center justify-between gap-2">
+			<Button type="button" size="sm" className="h-6 px-2 text-[11px] shadow-sm"
 				disabled={startingAll || updateAllTargets.length === 0} title={t("settings.harness.updateAllHint")} onClick={() => void startAllUpdates()}>
 				{startingAll ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
 				<span className="tabular-nums">{startingAll ? t("settings.harness.startingAllUpdates")
