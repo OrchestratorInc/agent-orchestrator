@@ -568,7 +568,7 @@ function ResultStep({ empty, includeCookies, includeHistory, result }: { empty: 
 	return (
 		<div className="space-y-3">
 			{result.entries.map((entry) => (
-				<div className="rounded-xl border border-border px-3" key={entry.destinationProfile.id}>
+				<div className="rounded-lg border border-border px-3" key={entry.destinationProfile.id}>
 					<p className="pt-3 text-sm font-medium">{entry.destinationProfile.name}</p>
 					<p className="pb-2 text-xs text-muted-foreground" role="status">{t("settings.browserImport.resultCounts", { cookies: entry.importedCookies, history: entry.importedHistoryEntries })}</p>
 					{[
