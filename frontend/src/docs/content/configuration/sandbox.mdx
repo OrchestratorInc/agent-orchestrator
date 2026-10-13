@@ -1,0 +1,95 @@
+---
+title: Sandbox
+description: Run Claude Code agents inside Docker containers while Orchestrator, worktrees, and the UI stay on the host.
+---
+
+The sandbox runs an agent inside a Docker container. Orchestrator, your worktrees, and the desktop app stay on the host. The agent sees its worktree and nothing else from your machine, so a mistaken or hostile command can't reach the rest of your files.
+
+The sandbox is off by default and is configured per project.
+
+## Requirements
+
+- Docker Desktop or Docker Engine on macOS or Linux. Windows is not supported yet.
+- An image that provides `/bin/sh`, `git`, and `claude` on `PATH`.
+- Claude Code as the agent harness. Other harnesses are refused with `SANDBOX_MISCONFIGURED`.
+
+A minimal image:
+
+```dockerfile
+FROM node:22-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+RUN npm install -g @anthropic-ai/claude-code
+```
+
+There is no Docker access inside the sandbox.
+
+## Configuration
+
+| Field | Purpose |
+| --- | --- |
+| `mode` | `off`, `per-agent`, or `shared`. |
+| `image` | Docker image to run. |
+| `cpus` | CPU limit for the container. |
+| `memory` | Memory limit, for example `8g`. |
+| `pidsLimit` | Maximum number of processes in the container. |
+
+A `sandbox` block under `worker` or `orchestrator` replaces the whole project-level block for that role. It does not merge field by field.
+
+| Mode | Behavior |
+| --- | --- |
+| `off` | The agent runs on the host. |
+| `per-agent` | Each session gets its own container. Sessions are isolated from each other. |
+| `shared` | All sessions in the project share one container. |
+
+In `shared` mode, sessions can see each other's sandbox state: the home directory, Claude config, and env files. Use `per-agent` when sessions must be isolated from each other. Shared mode also requires the workspace to be an Orchestrator-managed worktree.
+
+Set the config with `ao project set-config`. It replaces the whole project config, so read the [full-config warning](/configuration/projects#update-from-the-cli) first.
+
+```bash
+ao project set-config <id> --config-json '{"sandbox":{"mode":"shared","image":"ghcr.io/acme/dev:latest","memory":"8g"},"orchestrator":{"sandbox":{"mode":"off"}}}'
+```
+
+Keep the orchestrator role unsandboxed, as the example does. Inside the sandbox the agent can't run the `ao` commands an orchestrator needs.
+
+### Applying changes
+
+A running per-agent container keeps its old settings until it stops. New settings apply on the next fresh start. Shared containers are created per config, and the old one is removed when the project's last session ends.
+
+## Authentication
+
+The macOS keychain login is not visible inside the container. Set one of these in the project `env`:
+
+- `ANTHROPIC_API_KEY`
+- `CLAUDE_CODE_OAUTH_TOKEN`, which you can create with `claude setup-token`
+
+The Claude token that Orchestrator saved from the desktop cloud login also works.
+
+## What the agent can do with `ao`
+
+Inside the sandbox, only these commands work:
+
+- `ao hooks`
+- `ao report`
+- `ao status`
+- `ao version`
+- `ao preview <http(s)-url>`
+
+Everything else (spawn, send, session, render, review, browser, project, and so on) is refused. This keeps the sandbox from being escaped through Orchestrator. `ao mcp` is not available either.
+
+## Limits
+
+- Terminal sessions only. Chat-mode sessions are refused for sandboxed roles, and so is restoring an existing chat session. Switch the session to terminal mode first.
+- Agent switching is not supported for sandboxed sessions.
+- Session-title generation still runs the harness briefly on the host, outside the sandbox.
+
+## Troubleshooting
+
+`SANDBOX_UNAVAILABLE` means Docker is missing, not running, or its socket isn't accessible. On Linux, add your user to the `docker` group.
+
+`SANDBOX_MISCONFIGURED` means one of these:
+
+- The image can't be pulled.
+- The image lacks `/bin/sh` or `claude`.
+- Credentials are missing.
+- The shared-mode workspace isn't an Orchestrator-managed worktree.
+- A chat session or an agent switch was requested for a sandboxed session.

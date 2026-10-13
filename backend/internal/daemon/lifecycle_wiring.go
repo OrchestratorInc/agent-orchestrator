@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/container/dockerreap"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/sandbox/dockersandbox"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
 	workspacerouter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/router"
 	scratchworkspace "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
@@ -268,10 +269,13 @@ func telemetryEmitsSpawned(cfg config.Config) bool {
 // It also returns the manager so the caller can wire Reconcile into the boot
 // sequence.
 func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.Runtime, store *sqlite.Store, lcm *lifecycle.Manager, artifactVersions *artifactversions.Capturer, messenger ports.AgentMessenger, telemetry ports.EventSink, notifications notificationSink, agents ports.AgentResolver, agentReadiness ports.AgentReadinessProvider, previewLifecycle sessionmanager.PreviewLifecycle, browserLifecycle sessionmanager.BrowserLifecycle, browserCapabilities sessionmanager.BrowserCapabilityIssuer, chat sessionmanager.ChatLauncher, reviewerRecoveryDone <-chan struct{}, defaults sessionmanager.SessionModeDefaults, reportingPolicy ports.AgentSwitchReportingPolicy, tracker ports.Tracker, codexOperationGate ports.CodexOperationGate, log *slog.Logger) (*sessionsvc.Service, reviewsvc.Manager, sessionLifecycle, error) {
+	// Per-session worktrees live under the data dir, so a single AO_DATA_DIR
+	// override moves all durable per-user state together. The sandbox adapter
+	// shares this root so the two cannot drift.
+	managedRoot := filepath.Join(cfg.DataDir, "worktrees")
+	sandbox := dockersandbox.New(dockersandbox.Config{DataDir: cfg.DataDir, ManagedRoot: managedRoot})
 	gitWS, err := gitworktree.New(gitworktree.Options{
-		// Per-session worktrees live under the data dir, so a single AO_DATA_DIR
-		// override moves all durable per-user state together.
-		ManagedRoot: filepath.Join(cfg.DataDir, "worktrees"),
+		ManagedRoot: managedRoot,
 		// Resolve each project's source repo from the projects table, so a
 		// session spawned for a registered project materialises its worktree off
 		// that repo. Unregistered projects fail loudly.
@@ -282,7 +286,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		return nil, nil, nil, fmt.Errorf("session workspace: %w", err)
 	}
 	scratchWS, err := scratchworkspace.New(scratchworkspace.Options{
-		ManagedRoot: filepath.Join(cfg.DataDir, "worktrees"),
+		ManagedRoot: managedRoot,
 	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("scratch session workspace: %w", err)
@@ -296,6 +300,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		Runtime:             runtime,
 		Agents:              agents,
 		Workspace:           ws,
+		Sandbox:             sandbox,
 		Store:               store,
 		ReportingPolicy:     reportingPolicy,
 		DaemonRunID:         cfg.AppRunID,
