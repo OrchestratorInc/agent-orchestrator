@@ -240,12 +240,25 @@ export type BrowserShortcutAction =
   | "close-tab"
   | "focus-location"
   | "find"
-  | "reload";
+  | "reload"
+  | "back"
+  | "forward";
 
 export function browserShortcutAction(
   input: BrowserShortcutInput,
   isMac: boolean,
 ): BrowserShortcutAction | null {
+  // Page history, not AO's route history: ⌘[ / ⌘] on macOS, Alt+←/→ elsewhere.
+  if (!input.shift) {
+    if (isMac && input.meta && !input.control && !input.alt) {
+      if (input.key === "[") return "back";
+      if (input.key === "]") return "forward";
+    }
+    if (!isMac && input.alt && !input.control && !input.meta) {
+      if (input.key === "ArrowLeft") return "back";
+      if (input.key === "ArrowRight") return "forward";
+    }
+  }
   const primaryModifier = isMac
     ? input.meta && !input.control
     : input.control && !input.meta;
@@ -1722,6 +1735,17 @@ export function createBrowserViewHost(
       }
       if (action === "reload") {
         activeEntry(session).view.webContents.reload();
+        return;
+      }
+      if (action === "back" || action === "forward") {
+        invokeNav(
+          session.viewId,
+          (contents) => {
+            if (action === "back" && contents.canGoBack()) contents.goBack();
+            if (action === "forward" && contents.canGoForward()) contents.goForward();
+          },
+          true,
+        );
         return;
       }
       if (action === "new-tab") {

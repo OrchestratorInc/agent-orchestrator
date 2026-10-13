@@ -6,6 +6,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 
 export interface ChatAnnotationSummaryItem {
 	text: string;
+	conversationId?: string;
 	id?: string;
 	messageId?: string;
 	revision?: number;
@@ -29,28 +30,18 @@ export function ChatAnnotationSummary({
 }: ChatAnnotationSummaryProps) {
 	const [open, setOpen] = useState(false);
 	const { t } = useTranslation();
-	const pointerFocus = useRef(false);
-	const closing = useRef(false);
 	const triggerRef = useRef<HTMLButtonElement>(null);
 	if (annotations.length === 0) return null;
 	const label = `${annotations.length} annotation${annotations.length === 1 ? "" : "s"}`;
 
 	return (
-		<Popover open={open} onOpenChange={(next) => {
-			closing.current = !next;
-			setOpen(next);
-		}}>
+		<Popover open={open} onOpenChange={setOpen}>
 			<PopoverTrigger asChild>
 				<button
 					ref={triggerRef}
 					type="button"
 					disabled={disabled}
 					aria-label={label}
-					onPointerDown={() => { pointerFocus.current = true; }}
-					onFocus={() => {
-						if (!pointerFocus.current && !closing.current) setOpen(true);
-					}}
-					onBlur={() => { pointerFocus.current = false; closing.current = false; }}
 					className={cn(
 						"inline-flex w-fit max-w-full select-none self-start min-w-0 items-center gap-1.5 rounded-[10px] border border-logo-accent/25 bg-logo-accent/5 px-2.5 py-1.5 text-[11px] leading-tight text-muted-foreground transition-colors hover:bg-logo-accent/10 disabled:cursor-not-allowed disabled:opacity-50",
 						className,
@@ -64,7 +55,6 @@ export function ChatAnnotationSummary({
 				// Returning focus to the trigger must not scroll the composer/message
 				// back into view after a row has just navigated to its source.
 				event.preventDefault();
-				closing.current = true;
 				triggerRef.current?.focus({ preventScroll: true });
 			}}>
 				<div className="space-y-1" aria-label={t("chat.annotationReferences")}>
@@ -75,8 +65,7 @@ export function ChatAnnotationSummary({
 								className="min-w-0 flex-1 rounded-md px-2 py-1.5 text-left text-xs text-popover-foreground hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-logo-accent"
 								onClick={() => {
 									onSelect?.(annotation);
-									closing.current = true;
-									setOpen(false);
+														setOpen(false);
 								}}
 							>
 								<span className="block max-w-[280px] truncate">{annotation.text}</span>

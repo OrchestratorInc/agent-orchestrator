@@ -94,6 +94,10 @@ sql:
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
+          - column: "session_artifact_versions.session_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "SessionID"
           - column: "sessions.project_id"
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"

@@ -49,7 +49,22 @@ func (c *client) putTranscript(ctx context.Context, body transcriptCheckpoint) e
 // case for a session that was never deleted. It handles its own response so a
 // 404 is a clean "nothing captured" signal rather than an error, and so a large
 // transcript is not truncated by the default response cap.
+// transcriptLookup is one getTranscript result, as a single value for prefetch.
+type transcriptLookup struct {
+	checkpoint transcriptCheckpoint
+	found      bool
+}
+
+// getTranscript returns the session's captured checkpoint, using the lookup
+// prefetched at startup when one is ready.
 func (c *client) getTranscript(ctx context.Context) (transcriptCheckpoint, bool, error) {
+	if lookup, ok := c.transcriptPrefetch.take(ctx); ok {
+		return lookup.checkpoint, lookup.found, nil
+	}
+	return c.fetchTranscript(ctx)
+}
+
+func (c *client) fetchTranscript(ctx context.Context) (transcriptCheckpoint, bool, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+transcriptPath, nil)
 	if err != nil {
 		return transcriptCheckpoint{}, false, err

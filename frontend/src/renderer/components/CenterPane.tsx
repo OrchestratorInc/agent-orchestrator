@@ -5,6 +5,7 @@ import {
 	TriangleAlert,
 	X,
 } from "lucide-react";
+import { isSettingsPageOpen } from "../hooks/useAppShortcut";
 import { Reorder, useDragControls } from "motion/react";
 import {
 	useCallback,
@@ -25,6 +26,7 @@ import {
 } from "../hooks/useAgentSwitches";
 import { useObservedAgentSwitchLifecycle } from "../hooks/useObservedAgentSwitchLifecycle";
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility";
+import { useTabListTabStop } from "../hooks/useTabListTabStop";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useHostConnection } from "../hooks/useHostConnection";
@@ -182,6 +184,7 @@ export function CenterPane({
 }: CenterPaneProps) {
 	const { t } = useTranslation();
 	const paneRef = useRef<HTMLDivElement | null>(null);
+	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const wheelZoomRemainderRef = useRef(0);
 	const lastWheelZoomAtRef = useRef(0);
 	const [fontSize, setFontSize] = useState(initialTerminalFontSize);
@@ -500,8 +503,8 @@ export function CenterPane({
 	);
 
 	useEffect(() => {
-		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => selectAdjacentTab(-1));
-		const disposeNext = aoBridge.app.onNextTabShortcut(() => selectAdjacentTab(1));
+		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(-1));
+		const disposeNext = aoBridge.app.onNextTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(1));
 		return () => {
 			disposePrevious();
 			disposeNext();
@@ -650,6 +653,7 @@ export function CenterPane({
 							aria-label={t("terminal.tabsAria")}
 							className="flex h-full min-w-0 flex-1 items-stretch"
 							onKeyDown={handleTerminalTabListKeyDown}
+							ref={tabListRef}
 							role="tablist"
 						>
 							<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">

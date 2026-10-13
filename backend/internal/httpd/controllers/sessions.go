@@ -99,6 +99,7 @@ type SessionService interface {
 	ListAgentSwitches(ctx context.Context, id domain.SessionID) ([]domain.AgentSwitch, error)
 	SubmitAgentHandoff(ctx context.Context, id domain.SessionID, switchID domain.AgentSwitchID, sourceGenerationID domain.AgentGenerationID, handoff json.RawMessage) (domain.AgentSwitch, error)
 	RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error)
+	DeleteArtifacts(ctx context.Context, id domain.SessionID) error
 	RollbackSpawn(ctx context.Context, id domain.SessionID) (sessionsvc.RollbackOutcome, error)
 	Cleanup(ctx context.Context, project domain.ProjectID) (sessionsvc.CleanupOutcome, error)
 	Rename(ctx context.Context, id domain.SessionID, displayName string) error
@@ -135,6 +136,7 @@ type SessionService interface {
 	GetWorkspaceFileRevision(ctx context.Context, id domain.SessionID, path string, scope sessionsvc.WorkspaceDiffScope, side sessionsvc.WorkspaceFileBlobSide, workspaceVersion, expectedRevision string) (sessionsvc.WorkspaceFileRevision, error)
 	GetWorkspaceFileRevisionAtCommit(ctx context.Context, id domain.SessionID, path string, side sessionsvc.WorkspaceFileBlobSide, workspaceVersion, expectedRevision, commitSHA string) (sessionsvc.WorkspaceFileRevision, error)
 	SearchWorkspaceFiles(ctx context.Context, id domain.SessionID, query, cursor string, limit int) (sessionsvc.WorkspaceFileSearch, error)
+	ResolveWorkspacePath(ctx context.Context, id domain.SessionID, rawPath string) (sessionsvc.WorkspacePathResolution, error)
 	ListWorkspaceTree(ctx context.Context, id domain.SessionID, path string) (sessionsvc.WorkspaceTree, error)
 	InvalidateWorkspaceCache(id domain.SessionID)
 	Pin(ctx context.Context, id domain.SessionID) (domain.Session, error)
@@ -224,6 +226,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/workspace/diffs", c.getWorkspaceDiffs)
 	r.Get("/sessions/{sessionId}/workspace/file/revision", c.getWorkspaceFileRevision)
 	r.Get("/sessions/{sessionId}/workspace/search", c.searchWorkspaceFiles)
+	r.Get("/sessions/{sessionId}/workspace/resolve", c.resolveWorkspacePath)
 	r.Get("/sessions/{sessionId}/workspace/tree", c.listWorkspaceTree)
 	r.Get("/sessions/{sessionId}/pr/{prNumber}/files", c.listPRFiles)
 	r.Get("/sessions/{sessionId}/pr/{prNumber}/file", c.getPRFile)
@@ -316,6 +319,10 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_APPROVAL_MODE", "approvalMode is invalid", nil)
 		return
 	}
+	if !in.RequestedOutput.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "INVALID_REQUESTED_OUTPUT", "requestedOutput must be \"artifact\" or omitted", nil)
+		return
+	}
 	if len(in.Prompt) > maxPromptLen {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROMPT_TOO_LONG", "Prompt must be 16 KiB or fewer", nil)
 		return
@@ -344,7 +351,7 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		keyless.Attachments = nil
 		requestHash = clientRequestFingerprint("session", keyless, attachments)
 	}
-	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash})
+	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -1065,6 +1072,26 @@ func (c *SessionsController) searchWorkspaceFiles(w http.ResponseWriter, r *http
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, workspaceFileSearchResponse(result))
+}
+
+// resolveWorkspacePath classifies a path from chat as a workspace file, a
+// session artifact, or neither, so the renderer can open it without knowing
+// where the session's worktree lives.
+func (c *SessionsController) resolveWorkspacePath(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/resolve")
+		return
+	}
+	result, err := c.Svc.ResolveWorkspacePath(r.Context(), sessionID(r), r.URL.Query().Get("path"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, WorkspacePathResolutionResponse{
+		SessionID: result.SessionID,
+		Kind:      result.Kind,
+		Path:      result.Path,
+	})
 }
 
 // listWorkspaceTree returns one directory level of the session workspace's
@@ -1868,12 +1895,28 @@ func (c *SessionsController) kill(w http.ResponseWriter, r *http.Request) {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/kill")
 		return
 	}
+	var in KillSessionRequest
+	if err := decodeJSON(r, &in); err != nil && !errors.Is(err, io.EOF) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
 	result, err := c.Svc.RequestKill(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, KillSessionResponse{OK: true, SessionID: sessionID(r), Freed: result.Freed, CleanupPending: result.CleanupPending})
+	// The session is already archived here, so a failed delete must not fail
+	// the request: the caller would roll back an archive that happened. The
+	// response reports it instead and the files stay on disk.
+	artifactsDeleted := false
+	if in.DeleteArtifacts {
+		if err := c.Svc.DeleteArtifacts(r.Context(), sessionID(r)); err != nil {
+			slog.WarnContext(r.Context(), "delete session artifacts after archive", "session", sessionID(r), "err", err)
+		} else {
+			artifactsDeleted = true
+		}
+	}
+	envelope.WriteJSON(w, http.StatusOK, KillSessionResponse{OK: true, SessionID: sessionID(r), Freed: result.Freed, CleanupPending: result.CleanupPending, ArtifactsDeleted: artifactsDeleted})
 }
 
 // rollback undoes a partially-completed spawn: if the session row is still in

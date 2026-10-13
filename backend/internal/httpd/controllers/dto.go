@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
@@ -308,6 +309,11 @@ type WorkspaceSearchQuery struct {
 	Limit  int    `query:"limit,omitempty" minimum:"1" maximum:"100" description:"Maximum results. Defaults to 50."`
 }
 
+// WorkspaceResolveQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/resolve.
+type WorkspaceResolveQuery struct {
+	Path string `query:"path" required:"true" description:"Absolute or workspace-relative file path to classify."`
+}
+
 // WorkspaceTreeQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/tree.
 type WorkspaceTreeQuery struct {
 	Path string `query:"path,omitempty" description:"Directory path relative to the session workspace root. Empty or omitted lists the root."`
@@ -431,6 +437,11 @@ type SpawnSessionRequest struct {
 	Model string `json:"model,omitempty" maxLength:"256"`
 	// Effort is the optional reasoning level for the selected model.
 	Effort string `json:"effort,omitempty" maxLength:"32"`
+
+	// RequestedOutput asks for a specific deliverable. artifact tells the worker to
+	// write a file in its artifact directory instead of opening a PR. Omitted is
+	// the ordinary task flow.
+	RequestedOutput domain.RequestedOutput `json:"requestedOutput,omitempty" enum:"artifact"`
 
 	// DisplayName is the sidebar label for the session, capped at 100 characters.
 	// `ao spawn --name` always sets it; other clients (e.g. the desktop new-task
@@ -739,6 +750,15 @@ type WorkspaceFileSearchResponse struct {
 	Truncated  bool                                `json:"truncated"`
 }
 
+// WorkspacePathResolutionResponse is the body of GET /api/v1/sessions/{sessionId}/workspace/resolve.
+// Path is relative to the root named by Kind and empty when Kind is outside;
+// the response never carries a local absolute path.
+type WorkspacePathResolutionResponse struct {
+	SessionID domain.SessionID             `json:"sessionId"`
+	Kind      sessionsvc.WorkspacePathKind `json:"kind" enum:"workspace,artifact,outside"`
+	Path      string                       `json:"path"`
+}
+
 // DesktopWorkspaceLocationResponse is returned only by the LAN-blocked desktop
 // handoff route. Electron main consumes the absolute path and never exposes it
 // through the preload bridge.
@@ -990,12 +1010,20 @@ type InterfaceTransitionNoticeAckResponse struct {
 	Transition SessionInterfaceTransitionView `json:"transition"`
 }
 
+// KillSessionRequest is the optional body of POST /api/v1/sessions/{sessionId}/kill.
+// DeleteArtifacts empties the session's artifact directory once it is
+// terminated. Only the archive dialog sets it; the CLI and the reaper never do.
+type KillSessionRequest struct {
+	DeleteArtifacts bool `json:"deleteArtifacts,omitempty"`
+}
+
 // KillSessionResponse is the body of POST /api/v1/sessions/{sessionId}/kill.
 type KillSessionResponse struct {
-	OK             bool             `json:"ok"`
-	SessionID      domain.SessionID `json:"sessionId"`
-	Freed          bool             `json:"freed,omitempty"`
-	CleanupPending bool             `json:"cleanupPending,omitempty"`
+	OK               bool             `json:"ok"`
+	SessionID        domain.SessionID `json:"sessionId"`
+	Freed            bool             `json:"freed,omitempty"`
+	CleanupPending   bool             `json:"cleanupPending,omitempty"`
+	ArtifactsDeleted bool             `json:"artifactsDeleted,omitempty"`
 }
 
 // RollbackSessionResponse is the body of POST /api/v1/sessions/{sessionId}/rollback.
@@ -2570,8 +2598,9 @@ type ConversationContentSummaryResponse struct {
 	Text string `json:"text,omitempty"`
 	// SourceMessageID and SourceRevision let the renderer navigate back to the
 	// verified transcript message without exposing the internal excerpt URI.
-	SourceMessageID string `json:"sourceMessageId,omitempty"`
-	SourceRevision  int64  `json:"sourceRevision,omitempty"`
+	SourceConversationID string `json:"sourceConversationId,omitempty"`
+	SourceMessageID      string `json:"sourceMessageId,omitempty"`
+	SourceRevision       int64  `json:"sourceRevision,omitempty"`
 }
 
 // EditConversationMessageResponse identifies the newly selected branch and its
@@ -2867,6 +2896,9 @@ type ConversationActivityResponse struct {
 
 // ConversationSnapshotResponse is the durable read model a client bootstraps from.
 type ConversationSnapshotResponse struct {
+	// SupportsExcerpts advertises daemon-owned source verification separately from
+	// provider capabilities. Older daemons silently ignore the excerpts input.
+	SupportsExcerpts           bool   `json:"supportsExcerpts,omitempty"`
 	ConversationID             string `json:"conversationId"`
 	ActiveBranchID             string `json:"activeBranchId,omitempty"`
 	BranchedFromEarlierMessage bool   `json:"branchedFromEarlierMessage"`
@@ -3304,4 +3336,85 @@ type MuteDeviceRequest struct {
 // routes.
 type InstallIDParam struct {
 	InstallID string `path:"installId" description:"The device's stable install id."`
+}
+
+// CreateConversationSideChatRequest opens an independent launch-scoped side chat.
+type CreateConversationSideChatRequest struct {
+	ForceNew       bool                                 `json:"forceNew,omitempty"`
+	Label          string                               `json:"label,omitempty" maxLength:"80"`
+	IdempotencyKey string                               `json:"idempotencyKey"`
+	Reference      *ConversationExcerptReferenceRequest `json:"reference,omitempty"`
+}
+
+// CreateConversationSideChatResponse identifies a side without activating it.
+type CreateConversationSideChatResponse struct {
+	Side domain.SideConversation `json:"side"`
+}
+
+// SendSideQuestionRequest carries a side question and its references.
+type SendSideQuestionRequest struct {
+	Text            string                                `json:"text"`
+	ClientMessageID string                                `json:"clientMessageId"`
+	References      []ConversationExcerptReferenceRequest `json:"references,omitempty"`
+	Attachments     []ConversationImageContentRequest     `json:"attachments,omitempty"`
+	Resources       []ConversationResourceContentRequest  `json:"resources,omitempty"`
+}
+
+// SideQuestionResponse returns an accepted side question.
+type SideQuestionResponse struct {
+	Turn domain.SideTurn `json:"turn"`
+}
+
+// SideChatSnapshotResponse returns a side conversation snapshot.
+type SideChatSnapshotResponse struct {
+	Snapshot domain.SideSnapshot `json:"snapshot"`
+}
+
+// SideChatListResponse lists side conversations for a main chat.
+type SideChatListResponse struct {
+	Sides []domain.SideConversation `json:"sides"`
+}
+
+// SideSettingsRequest updates model settings for a side chat.
+type SideSettingsRequest struct {
+	Model  string `json:"model"`
+	Effort string `json:"effort"`
+}
+
+// SideDraftRequest saves a launch-scoped side draft.
+type SideDraftRequest struct {
+	ContentJSON string `json:"contentJson"`
+}
+
+// SideDraftResponse returns a launch-scoped side draft.
+type SideDraftResponse struct {
+	ContentJSON string `json:"contentJson"`
+}
+
+// SideChatIDParam identifies a side chat in a route.
+type SideChatIDParam struct {
+	SideID string `path:"sideId" description:"Independent side chat identifier."`
+}
+
+// SideChatPageQuery controls side transcript pagination.
+type SideChatPageQuery struct {
+	Before string `query:"before,omitempty" description:"Read side turns older than this RFC3339 timestamp."`
+	Limit  *int   `query:"limit,omitempty" minimum:"1" maximum:"500"`
+}
+
+// SideChatLaunchClaimRequest claims a desktop launch for side chat recovery.
+type SideChatLaunchClaimRequest struct {
+	AppRunID string `json:"appRunId"`
+}
+
+// SideChatLaunchState carries the side state retained by Electron for recovery.
+type SideChatLaunchState struct {
+	Numbers  map[domain.SessionID]int     `json:"numbers,omitempty"`
+	AppRunID string                       `json:"appRunId"`
+	Sides    []chatsvc.SideRecoveryRecord `json:"sides"`
+}
+
+// SideLabelRequest renames a side conversation.
+type SideLabelRequest struct {
+	Label string `json:"label"`
 }
