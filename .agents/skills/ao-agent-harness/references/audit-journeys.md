@@ -2,7 +2,8 @@
 
 Use this map with the selected checkout and native CLI contract. It describes
 existing runner behavior and the additional user-path proof required for an AO
-integration. Route paths below are relative to `/api/v1/` except root `/readyz`;
+integration. HTTP route paths below are relative to `/api/v1/` except root `/readyz`;
+the terminal WebSocket uses root `/mux`.
 substitute only IDs from the same owned audit. Keep per-agent results on that
 agent's integration PR, not in this guide.
 
