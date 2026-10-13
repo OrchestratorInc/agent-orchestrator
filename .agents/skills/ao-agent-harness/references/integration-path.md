@@ -179,6 +179,11 @@ capability gate.
 
 ## 6. Add Chat only when proven
 
+Use the [ACP-to-shared-Chat-UI guide](chat-integration.md) for exact source entry
+points, frontend reuse decisions, and the focused Chat verification checklist.
+A new agent normally reuses the existing AO Chat screen; provider protocol and
+lifecycle behavior stay in the daemon.
+
 For ACP, reuse `backend/internal/adapters/chatdriver/nativeacp` and the existing
 persistent-host architecture. A provider-specific wrapper should own only binary
 configuration and truthful capabilities.

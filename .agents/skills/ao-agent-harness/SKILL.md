@@ -15,6 +15,7 @@ automatic PR publisher, or Chat conformance suite.
 | --- | --- |
 | Add/complete a harness | [Integration path](references/integration-path.md): check duplicate PRs, pin upstream, prove capabilities, implement/register only supported surfaces |
 | Run the same lifecycle audit across harnesses | [Local CLI contract](references/local-cli-contract.md): native probes, cancellation input, restored composer cue |
+| Add ACP Chat and reuse the existing UI | [Chat integration and verification](references/chat-integration.md): source entry points, capability gates, real Chat journeys |
 | Operate an audit and identify coverage | [Operating recipe and journey map](references/audit-journeys.md): Doctor, actions, readiness, proof, UI gaps, cleanup |
 | Interpret results, preserve failures, capture screens | [Evidence and handoff](references/evidence-and-handoff.md): gates, diagnostic mode, artifacts, authentication, screenshots |
 
