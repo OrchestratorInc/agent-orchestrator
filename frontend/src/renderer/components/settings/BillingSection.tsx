@@ -22,9 +22,11 @@ export { cloudBillingQueryKey };
 /** After Checkout or the Portal opens, poll briefly so the new plan shows without a manual refresh. */
 const POLL_WINDOW_MS = 3 * 60_000;
 const RECOMMENDED_PLAN = "starter";
+/** Enterprise is sold by the founders, not through Checkout. */
+const ENTERPRISE_BOOKING_URL = "https://cal.com/agentwrapper/ao-design-partner?overlayCalendar=true";
 
 /**
- * Upgrade: the AO Cloud plans (Free, Starter, Pro), the org's usage against its
+ * Upgrade: the AO Cloud plans (Free, Starter, Pro, Enterprise), the org's usage against its
  * plan, and the actions an admin takes on it. Payment happens on Stripe's pages
  * in the system browser, which return to the app afterwards.
  */
@@ -150,11 +152,16 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						</Button>
 					</p>
 				) : null}
-				<div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
 					<PlanCard
 						name={t("settings.billing.planFree")}
 						price={t("settings.billing.freePrice")}
-						features={[t("settings.billing.freeLocal"), t("settings.billing.freeNoCloud")]}
+						features={[
+							t("settings.billing.freeLocal"),
+							t("settings.billing.freeAgents"),
+							t("settings.billing.freeOrchestrator"),
+							t("settings.billing.freeNoCloud"),
+						]}
 						current={currentPlan === "free"}
 						action={endsAt ? (
 							<Button size="sm" variant="secondary" className="w-full" disabled>
@@ -185,7 +192,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 								key={offer.name}
 								name={planName(offer.name)}
 								price={offerPrice(offer, t)}
-								features={offer.limits ? planFeatures(offer.limits, t) : []}
+								features={offer.limits ? planFeatures(offer.name, offer.limits, t) : []}
 								current={isCurrent}
 								recommended={!subscribed && offer.name === RECOMMENDED_PLAN}
 								highlighted={subscribed ? isCurrent : offer.name === RECOMMENDED_PLAN}
@@ -200,6 +207,26 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 							/>
 						);
 					})}
+					<PlanCard
+						name={t("settings.billing.planEnterprise")}
+						price={t("settings.billing.enterprisePrice")}
+						features={[
+							t("settings.billing.enterpriseSessions"),
+							t("settings.billing.enterpriseOrchestrators"),
+							t("settings.billing.enterpriseHours"),
+							t("settings.billing.enterpriseCoder"),
+							t("settings.billing.enterpriseSso"),
+							t("settings.billing.enterpriseSupport"),
+						]}
+						current={false}
+						action={(
+							<Button size="sm" variant="secondary" className="w-full" onClick={() => void aoBridge.app.openExternal(ENTERPRISE_BOOKING_URL)}>
+								<ExternalLink className="size-icon-sm" aria-hidden="true" />
+								{t("settings.billing.talkToFounder")}
+							</Button>
+						)}
+						t={t}
+					/>
 				</div>
 				{manage ? null : <p className="px-1 text-xs text-muted-foreground">{t("settings.billing.adminOnly")}</p>}
 				{actionError ? <p role="alert" className="px-1 text-xs text-destructive">{actionError}</p> : null}
@@ -370,12 +397,22 @@ function planName(plan: string): string {
 	return plan.charAt(0).toUpperCase() + plan.slice(1);
 }
 
-function planFeatures(limits: CloudCpPlanLimits, t: TFunction): string[] {
+/**
+ * What a paid plan includes: what cloud adds over local (Starter lists it, Pro
+ * builds on Starter), then the limits from its Stripe product.
+ */
+function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): string[] {
+	const included = plan === RECOMMENDED_PLAN
+		? [t("settings.billing.cloudAway"), t("settings.billing.cloudSandboxes"), t("settings.billing.cloudGithub")]
+		: [t("settings.billing.everythingInStarter")];
 	return [
+		...included,
 		t("settings.billing.featureRunning", { count: runningSlots(limits) }),
 		t("settings.billing.featureTotal", { count: limits.maxActiveSandboxes }),
+		t("settings.billing.featureOrchestrators", { count: limits.orchestratorSlots }),
 		t("settings.billing.featureWindow", { hours: limits.windowSessionHours, window: limits.windowHours }),
 		t("settings.billing.featureWeekly", { hours: limits.weeklySessionHours }),
+		...(limits.manualResetsPerMonth > 0 ? [t("settings.billing.featureResets", { count: limits.manualResetsPerMonth })] : []),
 	];
 }
 
