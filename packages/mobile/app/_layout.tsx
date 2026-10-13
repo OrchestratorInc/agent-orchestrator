@@ -276,11 +276,11 @@ function Shell() {
 					name="sheets/connect"
 					options={{ ...CONNECT_SHEET_OPTIONS, contentStyle: { backgroundColor: t.bgSurface } }}
 				/>
-				{/* Also has text inputs, so it takes the same keyboard-aware sizing
-				    as sheets/connect rather than a fixed detent from SHEET_ROUTES. */}
+				{/* Hosted sign-in has no fields. The route opts into Android's
+				    keyboard-aware detents only for a local development login. */}
 				<Stack.Screen
 					name="sheets/cloud-signin"
-					options={{ ...CONNECT_SHEET_OPTIONS, contentStyle: { backgroundColor: t.bgSurface } }}
+					options={{ ...CONNECT_SHEET_OPTIONS, sheetAllowedDetents: "fitToContents", contentStyle: { backgroundColor: t.bgSurface } }}
 				/>
 				<Stack.Screen
 					name="sheets/machine-name"

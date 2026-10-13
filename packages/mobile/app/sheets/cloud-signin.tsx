@@ -1,6 +1,9 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { Platform } from "react-native";
 import { CloudSignInSheet } from "../../lib/CloudSignInSheet";
 import { backOr } from "../../lib/backNavigation";
+import { CLOUD_BASE_URL } from "../../lib/cloud/config";
+import { localAuthAvailable } from "../../lib/cloud/localAuthAvailable";
 
 /**
  * Cloud sign-in adds the Cloud workspace alongside the paired desktop.
@@ -14,7 +17,14 @@ export default function CloudSignInSheetRoute() {
 		else backOr(router);
 	}
 
-	return <CloudSignInSheet onDone={done} onClose={() => backOr(router)} />;
+	return (
+		<>
+			<Stack.Screen options={{
+				sheetAllowedDetents: Platform.OS === "android" && localAuthAvailable(CLOUD_BASE_URL) ? [0.6, 0.95] : "fitToContents",
+			}} />
+			<CloudSignInSheet onDone={done} onClose={() => backOr(router)} />
+		</>
+	);
 }
 
 export { SheetErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
