@@ -112,6 +112,28 @@ func TestRegistryIncludesOMP(t *testing.T) {
 	t.Fatal("Harnessed does not contain omp")
 }
 
+func TestRegistryIncludesHermes(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("hermes")
+	if !ok {
+		t.Fatal("registry does not contain hermes")
+	}
+	manifest := adapter.Manifest()
+	if manifest.Name != "Hermes" {
+		t.Fatalf("hermes manifest name = %q, want Hermes", manifest.Name)
+	}
+
+	for _, item := range Harnessed() {
+		if item.Harness == domain.HarnessHermes {
+			return
+		}
+	}
+	t.Fatal("Harnessed does not contain hermes")
+}
+
 func TestHarnessedExcludesFakeHarness(t *testing.T) {
 	for _, ha := range Harnessed() {
 		if ha.Harness == domain.HarnessFake {

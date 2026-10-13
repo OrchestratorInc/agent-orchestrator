@@ -203,6 +203,7 @@ func TestCustomModelEntryPolicy(t *testing.T) {
 		{agent: "kimchi", wantEntryMode: "configured", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "prime-agent", wantEntryMode: "configured", wantSelection: ports.ModelSelectionCatalog},
 		{agent: "autohand", wantEntryMode: "direct", wantSelection: ports.ModelSelectionCatalog},
+		{agent: "hermes", wantEntryMode: "configured", wantSelection: ports.ModelSelectionCatalog},
 	}
 
 	for _, tc := range tests {
@@ -312,6 +313,34 @@ func TestClineDiscoveryUsesACPModelOptions(t *testing.T) {
 	want := []ports.AgentModelInfo{
 		{ID: "anthropic/claude-sonnet-4-6", Label: "Claude Sonnet 4.6", Provider: "anthropic", IsDefault: true},
 		{ID: "openai/gpt-5.4", Label: "GPT-5.4", Provider: "openai"},
+	}
+	if !reflect.DeepEqual(got.Models, want) || got.Source != "acp" {
+		t.Fatalf("catalog = %#v, want models %#v from ACP", got, want)
+	}
+}
+
+func TestHermesDiscoveryUsesACPModelOptions(t *testing.T) {
+	discoverer := Discoverer{HermesOptions: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+		return []ports.ChatConfigOption{
+			{
+				ID: "model", Name: "Model", Category: "model", Type: ports.ChatConfigOptionSelect,
+				Current: ports.ChatConfigOptionValue{Select: "zai:glm-5.3-flash"},
+				Choices: []ports.ChatConfigOptionChoice{
+					{Value: "moa:default", Name: "Mixture of Agents · default"},
+					{Value: "anthropic:claude-sonnet-5", Name: "claude-sonnet-5", Group: "anthropic", GroupName: "Anthropic"},
+					{Value: "zai:glm-5.3-flash", Name: "glm-5.3-flash", Group: "zai", GroupName: "Z.AI / GLM"},
+				},
+			},
+		}, nil
+	}}
+	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "hermes", Binary: "/bin/hermes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ports.AgentModelInfo{
+		{ID: "zai:glm-5.3-flash", Label: "glm-5.3-flash", Provider: "zai", IsDefault: true},
+		{ID: "anthropic:claude-sonnet-5", Label: "claude-sonnet-5", Provider: "anthropic"},
+		{ID: "moa:default", Label: "Mixture of Agents · default"},
 	}
 	if !reflect.DeepEqual(got.Models, want) || got.Source != "acp" {
 		t.Fatalf("catalog = %#v, want models %#v from ACP", got, want)

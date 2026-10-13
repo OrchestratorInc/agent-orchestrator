@@ -124,7 +124,7 @@ func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	case "claude-code", "codex", "opencode", "grok", "cursor", "qwen",
 		"kimi", "muse", "aider", "goose", "autohand":
 		return ports.CustomModelEntryDirect
-	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
+	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent", "hermes":
 		return ports.CustomModelEntryConfigured
 	default:
 		return ports.CustomModelEntryNone
@@ -133,8 +133,11 @@ func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 
 // Discoverer implements the model-discovery port for production daemon wiring.
 type Discoverer struct {
-	CodexModels  CodexModelListFunc
-	ClineOptions ClineConfigOptionListFunc
+	CodexModels CodexModelListFunc
+	// ClineOptions and HermesOptions obtain an agent's provider-owned model
+	// choices from the ACP configuration catalog advertised by session/new.
+	ClineOptions  ClineConfigOptionListFunc
+	HermesOptions ClineConfigOptionListFunc
 }
 
 // CodexModelListFunc obtains Codex's account-scoped app-server catalog without
@@ -157,11 +160,18 @@ func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscov
 		return discoverCodexCatalog(ctx, request, d.CodexModels)
 	}
 	if request.AgentID == "cline" && d.ClineOptions != nil {
-		if catalog, err := discoverClineCatalog(ctx, request, d.ClineOptions); err == nil {
+		if catalog, err := discoverACPCatalog(ctx, request, d.ClineOptions); err == nil {
 			return catalog, nil
 		}
 		// Older Cline releases may not expose ACP config options. Fall back to
 		// the configured provider selections already stored by Cline.
+	}
+	if request.AgentID == "hermes" && d.HermesOptions != nil {
+		if catalog, err := discoverACPCatalog(ctx, request, d.HermesOptions); err == nil {
+			return catalog, nil
+		}
+		// A short-lived ACP probe can fail for transient local reasons; the
+		// manual fallback below stays honest about Hermes being session-owned.
 	}
 	return Discover(ctx, request.AgentID, request.Binary, request.WorkingDir, request.Env)
 }
@@ -301,7 +311,10 @@ func discoverCodexCatalog(ctx context.Context, request ports.AgentModelDiscovery
 	return base, nil
 }
 
-func discoverClineCatalog(
+// discoverACPCatalog converts the model select option an ACP agent advertises
+// at session/new into AO's normalized catalog. Cline and Hermes both expose
+// their models this way; `configured` custom-model semantics apply.
+func discoverACPCatalog(
 	ctx context.Context,
 	request ports.AgentModelDiscoveryRequest,
 	list ClineConfigOptionListFunc,
@@ -309,7 +322,7 @@ func discoverClineCatalog(
 	base := Base(request.AgentID)
 	options, err := list(ctx, request)
 	if err != nil {
-		return base, fmt.Errorf("cline ACP model discovery: %w", err)
+		return base, fmt.Errorf("%s ACP model discovery: %w", request.AgentID, err)
 	}
 	var models []ports.AgentModelInfo
 	for _, option := range options {
@@ -340,7 +353,7 @@ func discoverClineCatalog(
 	}
 	models = normalize(models)
 	if len(models) == 0 {
-		return base, errors.New("cline ACP model discovery returned no models")
+		return base, fmt.Errorf("%s ACP model discovery returned no models", request.AgentID)
 	}
 	base.Models = models
 	base.Source = "acp"

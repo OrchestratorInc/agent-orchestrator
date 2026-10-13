@@ -7,7 +7,7 @@ AO compiles agent adapters into the daemon. It uses your locally installed agent
 
 ## Shipped terminal harnesses
 
-The daemon registry currently advertises 27 worker harnesses:
+The daemon registry currently advertises 28 worker harnesses:
 
 | | | | |
 | --- | --- | --- | --- |
@@ -17,7 +17,7 @@ The daemon registry currently advertises 27 worker harnesses:
 | `crush` | `aider` | `goose` | `auggie` |
 | `continue` | `devin` | `cline` | `kiro` |
 | `kilocode` | `vibe` | `pi` | `kimchi` |
-| `prime-agent` | `autohand` | `omp` | |
+| `prime-agent` | `autohand` | `omp` | `hermes` |
 
 Run the catalog instead of relying on a static page when scripting:
 
@@ -30,7 +30,7 @@ The readiness probe reports whether a harness is supported, installed, and authe
 
 ## Chat versus Terminal UI
 
-All advertised harnesses can run through their native terminal interface. Four also have structured Chat drivers:
+All advertised harnesses can run through their native terminal interface. Several also have structured Chat drivers:
 
 | Harness | Chat transport |
 | --- | --- |
@@ -38,6 +38,12 @@ All advertised harnesses can run through their native terminal interface. Four a
 | `claude-code` | `claude-agent-acp` using the user's Claude executable |
 | `opencode` | Native ACP |
 | `droid` | Native ACP |
+| `kimi` | Native ACP |
+| `kimchi` | Native ACP |
+| `pi` | Native ACP |
+| `cursor` | Native ACP |
+| `omp` | Native ACP |
+| `hermes` | Native ACP (`hermes acp`) |
 
 Every other harness is Terminal UI-only. Choose the initial interface with `ao spawn --mode chat|tui`. Compatible Claude Code and Codex sessions can hand off between Chat and Terminal UI while retaining the AO session and worktree.
 
@@ -54,6 +60,7 @@ ao spawn --project my-app --name auth-fix --agent claude-code --mode chat
 	<Card title="Claude Code" description="Terminal UI and structured Chat." href="/docs/plugins/agents/claude-code" />
 	<Card title="Codex" description="Terminal UI and native app-server Chat." href="/docs/plugins/agents/codex" />
 	<Card title="OpenCode" description="Terminal UI and native ACP Chat." href="/docs/plugins/agents/opencode" />
+	<Card title="Hermes" description="Terminal UI and native ACP Chat." href="/docs/plugins/agents/hermes" />
 	<Card title="Cursor" description="Built-in terminal harness." href="/docs/plugins/agents/cursor" />
 	<Card title="Aider" description="Built-in terminal harness." href="/docs/plugins/agents/aider" />
 </Cards>

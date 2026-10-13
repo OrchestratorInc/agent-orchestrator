@@ -1,0 +1,19 @@
+---
+title: Hermes
+description: Built-in Terminal UI and native ACP Chat support for the user's Hermes Agent installation.
+---
+
+AO resolves your local `hermes` executable and reuses its authentication.
+
+```bash
+ao agent ls --refresh
+ao spawn --project my-app --name hermes-task --agent hermes --mode chat
+```
+
+Hermes can run as its native Terminal UI or through its native ACP interface (`hermes acp`) in structured Chat. Chat sessions advertise Hermes' own model catalog and edit-approval modes, and AO retains the provider conversation identity for continuity.
+
+AO launches Hermes sessions under Hermes' `tool` session source so worker sessions stay out of your personal Hermes session lists, and delivers standing instructions through `HERMES_EPHEMERAL_SYSTEM_PROMPT` so they are applied at inference time without being persisted into the transcript.
+
+Terminal sessions have no activity signals: Hermes has no workspace-local hook surface, so AO installs no lifecycle hooks for it. Approval behavior in a terminal session follows Hermes' own configuration, with `bypass permissions` mapping to `--yolo`. Structured Chat sessions report activity, approvals, and diffs natively over ACP.
+
+Hermes is not a shipped reviewer harness, and TUI-to-Chat or Chat-to-TUI handoff is not supported.

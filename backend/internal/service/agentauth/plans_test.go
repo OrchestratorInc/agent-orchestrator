@@ -46,6 +46,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"kimchi", "Log in to Kimchi", "kimchi", "Native browser login flow", "https://docs.kimchi.dev/docs/service-keys", "", ActionLogin, []string{"kimchi", "login"}},
 		{"prime-agent", "Log in to Prime Agent", "prime-agent", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md", "/login\r", ActionLogin, []string{"prime-agent"}},
 		{"omp", "Log in to OMP", "omp", "Select Open login after OMP finishes starting", "https://github.com/can1357/oh-my-pi", "/login\r", ActionLogin, []string{"omp"}},
+		{"hermes", "Set up Hermes", "hermes", "Interactive provider and model setup wizard; AO forwards terminal input without persisting or logging the raw input, while Hermes controls credential storage", "https://github.com/NousResearch/hermes-agent", "", ActionSetup, []string{"hermes", "setup"}},
 	}
 
 	svc := New(foundExecutables(cases), nil)

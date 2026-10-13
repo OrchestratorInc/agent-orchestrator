@@ -20,6 +20,7 @@ import devinLogo from "../assets/agents/devin.png";
 import droidLogo from "../assets/agents/droid.png";
 import gooseLogo from "../assets/agents/goose.svg";
 import grokLogo from "../assets/agents/grok.png";
+import hermesLogo from "../assets/agents/hermes.png";
 import kilocodeLogo from "../assets/agents/kilocode.svg";
 import kimiLogo from "../assets/agents/kimi.png";
 import kimchiLogo from "../assets/agents/kimchi.svg";
@@ -63,6 +64,7 @@ const LOGOS: AgentLogoSources = {
 	agy: agyLogo,
 	auggie: auggieLogo,
 	autohand: autohandLogo,
+	hermes: hermesLogo,
 };
 
 /**

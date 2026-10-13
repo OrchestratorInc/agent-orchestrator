@@ -9225,6 +9225,7 @@ components:
           - omp
           - prime-agent
           - autohand
+          - hermes
           - fake
           type: string
         approvalMode:
@@ -9795,6 +9796,7 @@ components:
           - kimchi
           - prime-agent
           - omp
+          - hermes
           - cloudflared
           type: string
         updatedAt:
@@ -11768,6 +11770,7 @@ components:
           - omp
           - prime-agent
           - autohand
+          - hermes
           type: string
         issueId:
           type: string

@@ -459,6 +459,13 @@ func Run() error {
 				Env:     request.Env,
 			}, request.WorkingDir, log)
 		},
+		HermesOptions: func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+			return chatdriveracp.DiscoverConfigOptions(listCtx, chatdriveracp.Launch{
+				Command: request.Binary,
+				Args:    []string{"acp"},
+				Env:     request.Env,
+			}, request.WorkingDir, log)
+		},
 	}
 	// Build the multi-tracker dispatching to both GitHub and GitLab once,
 	// shared between the session service and the intake observer below.
