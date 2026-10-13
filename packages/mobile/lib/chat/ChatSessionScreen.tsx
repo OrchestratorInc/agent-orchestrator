@@ -107,7 +107,6 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 	const cloudSession = source.kind === "cloud";
 	const refreshBoard = useCallback(() => refreshSource(source), [refreshSource, source.kind, source.id]);
 	const conversation = useMobileConversation(cloudSession ? null : config, session.id, sessionSource);
-	useChatViewLease(cloudSession ? null : config, session.id);
 	// A load that failed while the desktop was unreachable retries as soon as the
 	// board's poll reconnects, which is what the offline state promises.
 	// Keyed on a failed load, not a missing one, so the first mount doesn't send a
@@ -152,9 +151,10 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 	// was before cloud environments existed. Cloud workers and orchestrators
 	// both carry the control-plane sandbox lifecycle.
 	const cloudStage = cloudLifecycleStage(session);
+	useChatViewLease(cloudSession ? null : config, session.id, cloudSession && !terminated && cloudStage === "connected" ? sessionSource : undefined);
 	const cloudProblem = cloudStartupProblem(session);
 	const startupCopy = cloudProblem ? cloudStartupErrorCopy(cloudProblem, !session.cloud?.coderWorkspaceUrl) : undefined;
-	const cloudComposerLocked = cloudSession && terminated || cloudStage !== undefined && cloudStage !== "connected";
+	const cloudComposerLocked = cloudSession && (terminated || Boolean(conversation.unavailable)) || cloudStage !== undefined && cloudStage !== "connected";
 	const failedStart = cloudSession && cloudProblem?.phase === "failed" ? startupCopy?.message : "projectName" in session || session.provisionState !== "failed"
 		? undefined
 		: session.provisionError || "The session did not finish starting.";
@@ -598,7 +598,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 	if (cloudProblem?.phase === "unavailable" && !conversation.snapshot) return <Centered icon="cloud" title="Cloud runtime unavailable" message={startupCopy?.message} />;
 	if (failedStart && !conversation.snapshot) return <Centered icon="alert-triangle" title="Session failed to start" message={failedStart} action={resuming ? "Retrying…" : "Retry"} onAction={() => void resume()} />;
 	if (conversation.loading && !conversation.snapshot) return <Centered icon="message-square" title="Loading conversation…" spinning />;
-	if (conversation.unavailable && !isResumable(cloudStage)) return <Unavailable message={conversation.unavailable.message} onShell={() => void openShell()} openingShell={openingShell} />;
+	if (conversation.unavailable && !isResumable(cloudStage) && !conversation.snapshot) return cloudSession ? <Centered icon="cloud" title="Conversation unavailable" message={conversation.unavailable.message} /> : <Unavailable message={conversation.unavailable.message} onShell={() => void openShell()} openingShell={openingShell} />;
 	// The board's poll is the app's view of the link: when it is down, say so in
 	// the board's words instead of echoing whatever this request failed with.
 	if (!conversation.snapshot && unreachable) return <Centered icon="wifi-off" title="This machine is offline" message="This conversation loads once the app reconnects." action="Retry" onAction={() => void conversation.refresh()} />;
@@ -684,6 +684,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 				/>
 			) : null}
 			{conversation.error && !isResumable(cloudStage) ? <DismissibleBanner copy={errorBanner("load", conversation.error)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="wifi-off" action="Retry" onPress={() => void conversation.refresh()} /> : null}
+			{conversation.unavailable && conversation.snapshot ? <DismissibleBanner copy={errorBanner("load", conversation.unavailable.message)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="wifi-off" /> : null}
 			{quota ? <DismissibleBanner copy={quotaBanner(quota)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone={quota.severity === "critical" ? "danger" : "warning"} icon="alert-triangle" action="Details" onPress={() => setMenuOpen(true)} /> : null}
 			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="alert-circle" /> : null}
 			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon="rotate-ccw" /> : null}

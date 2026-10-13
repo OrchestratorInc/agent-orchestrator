@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useFocusEffect } from "expo-router";
+import { AppState } from "react-native";
+import { CloudApiError } from "@aoagents/cloud-client";
 import { machineIdentity, type ServerConfig } from "../config";
 import type { SessionSource } from "../environment/types";
 import { createLocalSessionSource } from "../environment/local";
@@ -29,7 +32,7 @@ import {
 	type ConversationPage,
 } from "./api";
 import type { ChatConfigOption, ChatExcerpt, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
-import { cachedConversationState, createMobileConversationPageCache, discardHistoricalPages } from "./snapshot";
+import { cachedConversationState, mobileConversationPageCache as conversationPageCache, discardHistoricalPages } from "./snapshot";
 import { conversationActionError, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
 import { conversationAccess } from "./conversation-access";
 import { subscribeConversationEvents } from "./conversationEvents";
@@ -43,7 +46,6 @@ import { excerptDraftText } from "./responseQuotes";
 import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
 
 const REFRESH_DEBOUNCE_MS = 120;
-const conversationPageCache = createMobileConversationPageCache();
 const turnOptionsCache = createAsyncValueCache<string, { models: ChatModel[]; configOptions: ChatConfigOption[] }>(16, 30_000);
 const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
 
@@ -53,6 +55,7 @@ export type PendingSend = {
 	text: string;
 	kind?: "send" | "steer";
 	targetTurnId?: string;
+	settings?: TurnSettings;
 	state: "sending" | "failed";
 	error?: string;
 	attachments?: ChatImage[];
@@ -131,7 +134,7 @@ export function useMobileConversation(
 		? `${cfg.secure ? "https" : "http"}://${cfg.host}:${cfg.httpPort}/${cfg.password}/review:${options.reviewId}`
 		: access?.cacheKey ?? "";
 	const pendingKey = sessionSource?.kind === "cloud"
-		? pendingSendKey("cloud", sessionId)
+		? sessionSource.scopeKey ? pendingSendKey(sessionSource.scopeKey, sessionId) : ""
 		: cfg ? pendingSendKey(machineIdentity(cfg), options?.reviewId ? `review:${options.reviewId}` : sessionId) : "";
 	const [initialState] = useState(() => cacheKey
 		? cachedConversationState(conversationPageCache, cacheKey)
@@ -152,22 +155,30 @@ export function useMobileConversation(
 	const [actionErrors, setActionErrors] = useState<Partial<Record<ConversationAction, string>>>({});
 	const [actionCodes, setActionCodes] = useState<Partial<Record<ConversationAction, string>>>({});
 	const mounted = useRef(true);
+	const liveOwner = useRef({ cacheKey, source: sessionSource });
+	liveOwner.current = { cacheKey, source: sessionSource };
+	const stateOwner = useRef(cacheKey);
+	const pendingOwner = useRef(pendingKey);
 	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const refreshGate = useRef(createRequestGate()).current;
+	const refreshController = useRef<AbortController | undefined>(undefined);
 
-	const snapshot = useMemo(() => mergeConversationPages(pages), [pages]);
+	const snapshot = useMemo(() => mergeConversationPages(stateOwner.current === cacheKey ? pages : conversationPageCache.get(cacheKey) ?? []), [cacheKey, pages]);
+	const currentOwner = () => mounted.current && liveOwner.current.cacheKey === cacheKey && liveOwner.current.source === sessionSource;
 	const hasConversation = Boolean(snapshot);
 	const hasProviderConfig = Boolean(snapshot?.capabilities?.includes("config_options"));
 
 	const refresh = useCallback(async () => {
 		if (!access && !(options?.reviewId && cfg)) return;
 		const request = refreshGate.begin();
+		refreshController.current?.abort();
+		const controller = new AbortController(); refreshController.current = controller;
 		setRefreshing(true);
 		try {
 			const live = options?.reviewId
 				? await requireConfig(cfg, (c) => getReviewerConversationPage(c, options.reviewId!))
-				: await access!.source.getConversationPage(sessionId);
-			if (!mounted.current || !refreshGate.isCurrent(request)) return;
+				: await access!.source.getConversationPage(sessionId, undefined, { signal: controller.signal });
+			if (!mounted.current || !refreshGate.isCurrent(request) || controller.signal.aborted) return;
 			setPages((old) => {
 				const next = old[0]?.conversationId && old[0].conversationId !== live.conversationId
 					? [live]
@@ -212,21 +223,26 @@ export function useMobileConversation(
 
 	useEffect(() => {
 		mounted.current = true;
+		stateOwner.current = cacheKey;
 		const cached = cacheKey
 			? cachedConversationState(conversationPageCache, cacheKey)
 			: { pages: [] as ConversationPage[], loading: true };
 		setPages(cached.pages);
 		setLoading(cached.loading);
 		setUnavailable(undefined);
-		void refresh();
+		setError(undefined);
+		setModels([]); setConfigOptions([]); setSkills([]);
+		if (sessionSource?.kind !== "cloud") void refresh();
 		return () => {
 			mounted.current = false;
 			refreshGate.invalidate();
+			refreshController.current?.abort();
 			if (refreshTimer.current) clearTimeout(refreshTimer.current);
 		};
-	}, [cacheKey, refresh, refreshGate]);
+	}, [cacheKey, refresh, refreshGate, sessionSource?.kind]);
 
 	useEffect(() => {
+		pendingOwner.current = pendingKey;
 		setPendingSends([]);
 		setCompletedRetry(undefined);
 		if (!pendingKey) return;
@@ -275,6 +291,7 @@ export function useMobileConversation(
 
 	useEffect(() => {
 		if (!options?.reviewId) {
+			if (access?.source.kind === "cloud") return;
 			if (!access?.subscribeToEvents || unavailable) return;
 			return access.source.subscribeEvents(sessionId, (event) => {
 				if (event.payload?.conversationId) scheduleRefresh();
@@ -286,6 +303,31 @@ export function useMobileConversation(
 			if (event.payload?.conversationId) scheduleRefresh();
 		});
 	}, [access, cfg, options?.eventSessionId, options?.reviewId, sessionId, scheduleRefresh, unavailable]);
+
+	useFocusEffect(useCallback(() => {
+		if (access?.source.kind !== "cloud" || unavailable) return;
+		let unsubscribe: (() => void) | undefined;
+		const stop = () => {
+			unsubscribe?.(); unsubscribe = undefined;
+			refreshController.current?.abort(); refreshGate.invalidate();
+			if (refreshTimer.current) clearTimeout(refreshTimer.current);
+		};
+		const update = (state: string) => {
+			stop();
+			if (state !== "active") return;
+			void refresh();
+			unsubscribe = access.source.subscribeEvents(sessionId, (event) => {
+				if (event.sessionId === sessionId) scheduleRefresh();
+			}, { onError: (cause) => {
+				const classified = classifyConversationError(cause);
+				if (classified.permanent) setUnavailable({ code: classified.code, message: classified.message });
+				else setError(classified.message);
+			} });
+		};
+		update(AppState.currentState);
+		const listener = AppState.addEventListener("change", update);
+		return () => { listener.remove(); stop(); };
+	}, [access, refresh, refreshGate, scheduleRefresh, sessionId, unavailable]));
 
 	// Poll the conversation on paths where the event stream cannot deliver.
 	// Over a Cloudflare quick tunnel the subscription above never fires — the
@@ -326,6 +368,7 @@ export function useMobileConversation(
 	const deliver = useCallback(
 		async (pending: PendingSend) => {
 			if (!access && !(options?.reviewId && cfg)) throw new Error("No conversation source available");
+			if (!currentOwner()) throw new Error("Conversation changed. Reopen it before retrying.");
 			setPendingSends((old) => upsertPending(old, { ...pending, state: "sending", error: undefined }));
 			try {
 				const input = {
@@ -334,6 +377,7 @@ export function useMobileConversation(
 					attachments: pending.attachments,
 					resources: pending.resources,
 					excerpts: pending.excerpts,
+					...(pending.settings !== undefined ? { settings: pending.settings } : {}),
 				};
 				if (sessionSource?.kind === "cloud") {
 					if (needsAttachmentRecovery(Boolean(pending.restored), pending.hasAttachments, Boolean(pending.attachments?.length || pending.resources?.length))) {
@@ -362,10 +406,12 @@ export function useMobileConversation(
 						await access!.source.sendMessage(sessionId, input);
 					}
 				}
+				if (!currentOwner()) return;
 				setPendingSends((old) => old.filter((item) => item.id !== pending.id));
 				await refresh();
 			} catch (cause) {
 				const message = conversationActionError(cause);
+				if (!currentOwner()) throw new Error(message);
 				if (pending.kind === "steer") setActionCodes((old) => ({ ...old, steer: conversationErrorCode(cause) }));
 				setPendingSends((old) => upsertPending(old, { ...pending, state: "failed", error: message }));
 				throw new Error(message);
@@ -391,6 +437,7 @@ export function useMobileConversation(
 			}
 			const saved = await reservePendingSend(pendingKey, {
 				id, draftText: excerptDraftText(text, excerpts), text: message, excerpts, hasAttachments: Boolean(attachments?.length || resources?.length), kind: "send",
+				...(sessionSource?.kind === "cloud" ? { settings: { ...snapshot?.settings } } : {}),
 			});
 			await deliver({
 				...saved, text: attachments?.length || resources?.length ? message : saved.text,
@@ -399,7 +446,7 @@ export function useMobileConversation(
 			});
 			return saved.id;
 		},
-		[cfg, options?.reviewId, sessionId, snapshot?.capabilities, deliver, pendingKey],
+		[cfg, options?.reviewId, sessionId, snapshot?.capabilities, snapshot?.settings, sessionSource?.kind, deliver, pendingKey],
 	);
 
 	const retrySend = useCallback(
@@ -512,10 +559,10 @@ export function useMobileConversation(
 		loadingOlder,
 		error,
 		unavailable,
-		models,
-		configOptions,
-		skills,
-		pendingSends,
+		models: stateOwner.current === cacheKey ? models : [],
+		configOptions: stateOwner.current === cacheKey ? configOptions : [],
+		skills: stateOwner.current === cacheKey ? skills : [],
+		pendingSends: pendingOwner.current === pendingKey ? pendingSends : [],
 		completedRetry,
 		pendingActions,
 		actionError,
@@ -562,7 +609,7 @@ function upsertPending(items: PendingSend[], next: PendingSend): PendingSend[] {
 function classifyConversationError(error: unknown, reviewer = false): { permanent: boolean; code?: string; message: string } {
 	const code = typeof error === "object" && error !== null && "code" in error ? String(error.code ?? "") : undefined;
 	return {
-		permanent: conversationErrorIsPermanent(code, reviewer),
+		permanent: conversationErrorIsPermanent(code, reviewer) || error instanceof CloudApiError && [401, 403, 404, 410].includes(error.status),
 		code,
 		message: conversationActionError(error),
 	};

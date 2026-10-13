@@ -11,6 +11,7 @@ import { cloudHeaderControllerState, cloudLifecycleStage, cloudStartupProblem } 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { afterDraftWrites } from "../chat/pendingSend";
 import { cloudConversationCapabilities } from "./events";
+import { awaitCloudReplay, cloudConversationReplayCache, type CloudReplayEntry } from "./conversationReplay";
 
 /** How often the cloud transcript is polled for new events. Matches the
  * tunnel-path conversation poll interval mobile already uses elsewhere. */
@@ -72,6 +73,28 @@ export function createCloudSessionSource(input: {
 	isCurrent: () => boolean;
 }): SessionSource {
 	const { client, orgId, scopeKey, isCurrent } = input;
+	const replays = new Map<string, { controller: AbortController; promise: Promise<CloudReplayEntry>; consumers: number }>();
+	const subscriptions = new Map<string, number>();
+	const requireCurrent = () => { if (!isCurrent()) throw new Error("Cloud account changed. Try again."); };
+	const replay = async (id: string, signal?: AbortSignal): Promise<CloudReplayEntry> => {
+		requireCurrent();
+		let request = replays.get(id);
+		if (request?.controller.signal.aborted) { replays.delete(id); request = undefined; }
+		if (!request) {
+			const controller = new AbortController();
+			const unwatch = cloudConversationReplayCache.watchScope(scopeKey, () => controller.abort());
+			const after = cloudConversationReplayCache.get(scopeKey, id)?.cursor ?? 0;
+			const created = { controller, consumers: 0, promise: undefined as unknown as Promise<CloudReplayEntry> };
+			created.promise = fetchConversationReplay(client, orgId, id, { after, signal: controller.signal }).then(({ events, latestSequence }) => {
+				requireCurrent(); controller.signal.throwIfAborted();
+				return cloudConversationReplayCache.apply(scopeKey, id, events, latestSequence);
+			}).finally(() => { unwatch(); if (replays.get(id) === created) replays.delete(id); });
+			request = created; replays.set(id, created);
+		}
+		request.consumers++;
+		try { return await awaitCloudReplay(request.promise, signal); }
+		finally { if (--request.consumers === 0) request.controller.abort(); }
+	};
 	const settingsBySession = new Map<string, TurnSettings>();
 	const settingsKey = (id: string) => "ao.cloud.turn-settings.v1." + encodeURIComponent(JSON.stringify([scopeKey, id]));
 	const normalizeSettings = (value: TurnSettings): TurnSettings => ({
@@ -140,15 +163,16 @@ export function createCloudSessionSource(input: {
 			return request;
 		},
 		deleteSession: async (id) => { await client.deleteSession(orgId, id); },
-		getConversationPage: async (id) => {
+		getConversationPage: async (id, _before, options) => {
+			requireCurrent();
+			const cached = cloudConversationReplayCache.get(scopeKey, id);
 			const [{ session }, { events, latestSequence }, overrides] = await Promise.all([
-				client.getSession(orgId, id),
-				// A single replayEvents call is capped at the server's page limit
-				// and reports hasMore; paging to the end here is required so this
-				// shows the live tail of a long conversation, not just its start.
-				fetchConversationReplay(client, orgId, id),
+				awaitCloudReplay(options ? client.getSession(orgId, id, options) : client.getSession(orgId, id), options?.signal),
+				(subscriptions.has(id) && cached && !replays.has(id)
+					? Promise.resolve(cached) : replay(id, options?.signal)).then((entry) => ({ events: entry.events, latestSequence: entry.cursor })),
 				readSettings(id),
 			]);
+			requireCurrent(); options?.signal?.throwIfAborted();
 			const turns = toConversationTurns(events);
 			if (session.activeTurn && !turns.some((turn) => turn.id === session.activeTurn?.id)) {
 				turns.push(toConversationTurn(session.activeTurn));
@@ -173,7 +197,8 @@ export function createCloudSessionSource(input: {
 			};
 		},
 		sendMessage: async (id, input) => {
-			const settings = await readSettings(id);
+			const settings = input.settings === undefined ? await readSettings(id) : normalizeSettings(input.settings);
+			requireCurrent();
 			const message = settings && (settings.model || settings.reasoningEffort || settings.approvalMode)
 				? {
 					text: input.text,
@@ -197,7 +222,7 @@ export function createCloudSessionSource(input: {
 		},
 		steerMessage: async (id, input, targetTurnId) => {
 			if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
-			const [{ session }, { events }] = await Promise.all([client.getSession(orgId, id), fetchConversationReplay(client, orgId, id)]);
+			const [{ session }, { events }] = await Promise.all([client.getSession(orgId, id), replay(id)]);
 			if (session.activeTurn?.id !== targetTurnId || !cloudConversationCapabilities(session, events).includes("steer")) throw new Error("The turn finished or cannot take guidance now. Queue a new message instead.");
 			if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
 			await client.steerTurn(orgId, id, targetTurnId, input.text, { idempotencyKey: input.clientMessageId });
@@ -258,24 +283,28 @@ export function createCloudSessionSource(input: {
 			// distinct request.
 			await client.cancelTurn(orgId, id, turnId, { idempotencyKey: `cancel-${turnId}` });
 		},
-		subscribeEvents: (id, listener) => {
+		touchPresence: async (id, options) => {
+			requireCurrent();
+			await client.touchSessionPresence(orgId, id, options);
+		},
+		subscribeEvents: (id, listener, options) => {
 			const controller = new AbortController();
-			// KNOWN GAP — do not wire this into useConversation until it's fixed.
-			// `after: 0` is hardcoded with no cursor persisted across calls, so a
-			// fresh subscribeEvents() (e.g. on remount or a reconnect) replays the
-			// *entire* transcript as "new" events. Unlike the local path, which
-			// persists a poll cursor (see lib/chat/conversationPoll.ts), there is
-			// no equivalent here. The real fix needs a SessionSource redesign to
-			// carry a resumable cursor and is out of scope for this pass — see
-			// item 7 of .superpowers/sdd/2026-09-19-mobile-cloud-environments/
-			// final-fix-report.md.
+			const unwatch = cloudConversationReplayCache.watchScope(scopeKey, () => controller.abort());
+			const unpin = cloudConversationReplayCache.pin(scopeKey, id);
+			subscriptions.set(id, (subscriptions.get(id) ?? 0) + 1);
 			void pollCloudEvents({
 				client,
 				orgId,
 				sessionId: id,
-				after: 0,
+				after: cloudConversationReplayCache.get(scopeKey, id)?.cursor ?? 0,
 				signal: controller.signal,
 				intervalMs: CLOUD_EVENT_POLL_MS,
+				readPage: async (after, signal) => {
+					if (!isCurrent()) { controller.abort(); requireCurrent(); }
+					const entry = await replay(id, signal);
+					return { events: entry.events.filter((event) => event.sequence > after), nextAfter: entry.cursor, hasMore: false };
+				},
+				onError: options?.onError,
 				onEvents: (events) => {
 					for (const event of events) {
 						const conversationEvent: ConversationEvent = {
@@ -292,7 +321,12 @@ export function createCloudSessionSource(input: {
 					}
 				},
 			});
-			return () => controller.abort();
+			let closed = false;
+			return () => {
+				if (closed) return; closed = true; controller.abort(); unpin(); unwatch();
+				const count = (subscriptions.get(id) ?? 1) - 1;
+				if (count) subscriptions.set(id, count); else subscriptions.delete(id);
+			};
 		},
 	};
 }

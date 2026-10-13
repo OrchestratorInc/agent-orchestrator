@@ -13,7 +13,7 @@ vi.mock("react-native", () => ({
 }));
 vi.mock("react-native-reanimated", () => ({ default: { View: "AnimatedView" }, Easing: { out: () => {}, cubic: () => {} }, interpolateColor: () => "gray", runOnJS: (cb: unknown) => cb, useAnimatedStyle: () => ({}), useSharedValue: (value: unknown) => ({ value }), withSpring: () => {}, withTiming: () => {} }));
 vi.mock("react-native-keyboard-controller", () => ({ useReanimatedKeyboardAnimation: () => ({ progress: { value: 0 } }) }));
-vi.mock("expo-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("expo-router", async () => { const { useEffect } = await import("react"); return { useRouter: () => ({ push: vi.fn() }), useFocusEffect: (effect: () => void) => useEffect(effect, [effect]) }; });
 vi.mock("expo-secure-store", () => ({}));
 vi.mock("expo-document-picker", () => ({}));
 vi.mock("expo-image-picker", () => ({ launchImageLibraryAsync: vi.fn() }));

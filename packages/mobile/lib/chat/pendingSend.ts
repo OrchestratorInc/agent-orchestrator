@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-import type { ChatExcerpt } from "./types";
+import type { ChatExcerpt, TurnSettings } from "./types";
 import { isChatExcerpt } from "./responseQuotes";
 
 export type PendingSendRecord = {
@@ -13,6 +13,7 @@ export type PendingSendRecord = {
 	kind?: "send" | "steer";
 	/** A restored Cloud steer must never target a different active turn. */
 	targetTurnId?: string;
+	settings?: TurnSettings;
 };
 
 export function pendingSendKey(host: string, conversation: string): string {
@@ -39,6 +40,7 @@ export async function readPendingSend(key: string): Promise<PendingSendRecord | 
 	if (!saved.id || typeof saved.draftText !== "string" || typeof saved.text !== "string" || typeof saved.hasAttachments !== "boolean" ||
 		(saved.kind !== undefined && saved.kind !== "send" && saved.kind !== "steer") ||
 		(saved.targetTurnId !== undefined && typeof saved.targetTurnId !== "string") ||
+		(saved.settings !== undefined && (!saved.settings || typeof saved.settings !== "object" || Object.entries(saved.settings).some(([key, value]) => !["model", "reasoningEffort", "approvalMode"].includes(key) || typeof value !== "string"))) ||
 		(saved.excerpts !== undefined && (!Array.isArray(saved.excerpts) || saved.excerpts.length > 8 || !saved.excerpts.every(isChatExcerpt)))) {
 		throw new Error("The previous message's retry record is damaged. Discard it before sending another message.");
 	}

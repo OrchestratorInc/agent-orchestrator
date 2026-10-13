@@ -5,6 +5,7 @@ import { conversationAccess } from "./conversation-access";
 
 const source = (kind: "local" | "cloud"): SessionSource => ({
 	kind,
+	...(kind === "cloud" ? { scopeKey: "account-one" } : {}),
 	listProjects: vi.fn(),
 	listSessions: vi.fn(),
 	createSession: vi.fn(),
@@ -24,14 +25,19 @@ const config = {
 } as ServerConfig;
 
 describe("conversationAccess", () => {
-	it("opens Cloud conversations without a Local daemon and polls for updates", () => {
+	it("opens scoped Cloud conversations without a Local daemon and uses one event owner", () => {
 		const cloud = source("cloud");
 		expect(conversationAccess({ config: null, source: cloud, sessionId: "orch-1" })).toEqual({
 			source: cloud,
-			cacheKey: "cloud/orch-1",
-			pollInterval: 2_000,
-			subscribeToEvents: false,
+			cacheKey: JSON.stringify(["cloud", "account-one", "orch-1"]),
+			pollInterval: null,
+			subscribeToEvents: true,
 		});
+	});
+	it("never reuses another account's same-session cache or an unscoped Cloud adapter", () => {
+		const a = source("cloud"); const b = { ...a, scopeKey: "account-two" };
+		expect(conversationAccess({ config: null, source: a, sessionId: "s1" })?.cacheKey).not.toBe(conversationAccess({ config: null, source: b, sessionId: "s1" })?.cacheKey);
+		expect(conversationAccess({ config: null, source: { ...a, scopeKey: undefined }, sessionId: "s1" })).toBeUndefined();
 	});
 
 	it("keeps Local conversations scoped to their paired daemon and event stream", () => {

@@ -2,6 +2,8 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ServerConfig } from "../config";
 import type { ChatExcerpt, ChatImage } from "./types";
+vi.mock("expo-router", async () => { const { useEffect } = await import("react"); return { useFocusEffect: (effect: () => void) => useEffect(effect, [effect]) }; });
+vi.mock("react-native", () => ({ AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) } }));
 
 const { request, storage, stored } = vi.hoisted(() => {
  const stored = new Map<string, string>();

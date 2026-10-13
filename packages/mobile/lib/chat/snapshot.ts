@@ -5,6 +5,7 @@ export type ConversationPage = ConversationSnapshot;
 export type ConversationPageCache = {
 	get(key: string): ConversationPage[] | undefined;
 	set(key: string, pages: ConversationPage[]): void;
+	clearWhere(predicate: (key: string) => boolean): void;
 };
 
 /**
@@ -22,6 +23,9 @@ export function createConversationPageCache(
 	const weightLimit = Math.max(0, maxWeight);
 	let retainedWeight = 0;
 	return {
+		clearWhere(predicate) {
+			for (const [key, entry] of entries) if (predicate(key)) { retainedWeight -= entry.weight; entries.delete(key); }
+		},
 		get(key) {
 			const entry = entries.get(key);
 			if (!entry) return undefined;
@@ -55,6 +59,16 @@ export function createMobileConversationPageCache(
 	weigh?: (page: ConversationPage) => number,
 ): ConversationPageCache {
 	return createConversationPageCache(16, 2 * 1024 * 1024, weigh);
+}
+export const mobileConversationPageCache = createMobileConversationPageCache();
+export function clearCloudConversationPages(baseUrl: string, userId: string): void {
+	mobileConversationPageCache.clearWhere((key) => {
+		try {
+			const [kind, scopeKey] = JSON.parse(key);
+			const scope = JSON.parse(scopeKey);
+			return kind === "cloud" && scope[0] === baseUrl.replace(/\/+$/, "") && scope[1] === userId;
+		} catch { return false; }
+	});
 }
 
 function estimateRetainedBytes(value: unknown): number {

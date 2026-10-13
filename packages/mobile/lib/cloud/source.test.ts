@@ -6,6 +6,8 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
 } }));
 beforeEach(() => { storage.data.clear(); storage.setItem.mockReset().mockImplementation(async (key: string, value: string) => { storage.data.set(key, value); }); });
 import { createCloudSessionSource as createSource } from "./source";
+import { cloudConversationReplayCache } from "./conversationReplay";
+beforeEach(() => cloudConversationReplayCache.clear());
 function createCloudSessionSource(input: { client: never; orgId: string; scopeKey?: string; isCurrent?: () => boolean }) {
 	return createSource({ scopeKey: "test-scope", isCurrent: () => true, ...input });
 }
@@ -42,6 +44,27 @@ function clientStub<T extends Record<string, unknown> = Record<string, never>>(o
 }
 
 describe("createCloudSessionSource", () => {
+	it("refreshes after the adopted tail and keeps history across source remount", async () => {
+		const event = { sessionId: "s1", sequence: 1, type: "chat.user_message", createdAt: "now", payload: { text: "one" } };
+		const client = clientStub({ getSession: vi.fn(async () => ({ session: fullSession("s1") })), replayEvents: vi.fn().mockResolvedValueOnce({ events: [event], nextAfter: 1, hasMore: false }).mockResolvedValue({ events: [{ ...event, sequence: 2, payload: { text: "two" } }], nextAfter: 2, hasMore: false }) });
+		await createCloudSessionSource({ client: client as never, orgId: "o1" }).getConversationPage("s1");
+		const page = await createCloudSessionSource({ client: client as never, orgId: "o1" }).getConversationPage("s1");
+		expect(client.replayEvents.mock.calls[1]?.[2]).toMatchObject({ after: 1 });
+		expect(page.items).toHaveLength(2);
+	});
+	it("shares initial replay with a subscription and never adopts after account change", async () => {
+		let resolve!: (value: unknown) => void; let current = true;
+		const client = clientStub({ getSession: vi.fn(async () => ({ session: fullSession("s1") })), replayEvents: vi.fn(() => new Promise((done) => { resolve = done; })) });
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1", isCurrent: () => current });
+		const page = source.getConversationPage("s1");
+		const outcome = expect(page).rejects.toThrow(/account changed/i);
+		const unsubscribe = source.subscribeEvents("s1", vi.fn());
+		await Promise.resolve(); await Promise.resolve();
+		expect(client.replayEvents).toHaveBeenCalledOnce(); current = false;
+		resolve({ events: [{ sessionId: "s1", sequence: 1, type: "chat.user_message", createdAt: "now", payload: { text: "private" } }], nextAfter: 1, hasMore: false });
+		await outcome; unsubscribe();
+		expect(cloudConversationReplayCache.get("test-scope", "s1")).toBeUndefined();
+	});
 	it("adopts the durable session model and keeps supported overrides across remount", async () => {
 		const client = clientStub({ getSession: vi.fn(async () => ({ session: { ...fullSession("s1"), interfaceMode: "chat", model: "durable" } })), replayEvents: vi.fn(async () => ({ events: [], nextAfter: 0, hasMore: false })) });
 		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
@@ -282,7 +305,7 @@ describe("createCloudSessionSource", () => {
 		const page = await source.getConversationPage("s1");
 
 		expect(client.getSession).toHaveBeenCalledWith("o1", "s1");
-		expect(client.replayEvents).toHaveBeenCalledWith("o1", "s1", { after: 0 });
+		expect(client.replayEvents).toHaveBeenCalledWith("o1", "s1", expect.objectContaining({ after: 0 }));
 		expect(page).toMatchObject({
 			conversationId: "s1",
 			sessionId: "s1",
@@ -384,23 +407,23 @@ describe("createCloudSessionSource", () => {
 		const page = await source.getConversationPage("s1");
 
 		expect(client.replayEvents).toHaveBeenCalledTimes(3);
-		expect(client.replayEvents).toHaveBeenNthCalledWith(1, "o1", "s1", { after: 0 });
-		expect(client.replayEvents).toHaveBeenNthCalledWith(2, "o1", "s1", { after: 1 });
-		expect(client.replayEvents).toHaveBeenNthCalledWith(3, "o1", "s1", { after: 2 });
+		expect(client.replayEvents).toHaveBeenNthCalledWith(1, "o1", "s1", expect.objectContaining({ after: 0 }));
+		expect(client.replayEvents).toHaveBeenNthCalledWith(2, "o1", "s1", expect.objectContaining({ after: 1 }));
+		expect(client.replayEvents).toHaveBeenNthCalledWith(3, "o1", "s1", expect.objectContaining({ after: 2 }));
 		expect(page.items.map((item) => (item.kind === "message" ? item.text : undefined))).toEqual(["one", "two", "three"]);
 		expect(page.latestSequence).toBe(3);
 		expect(page.oldestSequence).toBe(1);
 	});
 
-	it("falls back to the cursor for latest/oldest sequence on an empty replay", async () => {
+	it("does not skip unseen history based on an empty replay's advertised cursor", async () => {
 		const client = clientStub({
 			getSession: vi.fn(async () => ({ session: fullSession("s1") })),
 			replayEvents: vi.fn(async () => ({ events: [], hasMore: false, nextAfter: 5 })),
 		});
 		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
 		const page = await source.getConversationPage("s1");
-		expect(page.latestSequence).toBe(5);
-		expect(page.oldestSequence).toBe(5);
+		expect(page.latestSequence).toBe(0);
+		expect(page.oldestSequence).toBe(0);
 		expect(page.items).toEqual([]);
 	});
 

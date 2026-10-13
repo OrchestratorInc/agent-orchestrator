@@ -1,4 +1,5 @@
-import type { ClientEvent, CloudClient, Session } from "@aoagents/cloud-client";
+import { CloudApiError, type ClientEvent, type ClientEventPage, type CloudClient, type Session } from "@aoagents/cloud-client";
+import { awaitCloudReplay } from "./conversationReplay";
 import type { ActivityDetail, ActivityKind, ActivityStatus, ConversationActivity, ConversationItem, ConversationMessage, ConversationTurn, FileChange } from "../chat/types";
 
 function payloadField(event: ClientEvent, field: string): unknown {
@@ -251,13 +252,16 @@ export async function fetchConversationReplay(
 	client: CloudClient,
 	orgId: string,
 	sessionId: string,
+	options: { after?: number; signal?: AbortSignal } = {},
 ): Promise<{ events: ClientEvent[]; latestSequence: number }> {
 	const events: ClientEvent[] = [];
-	let cursor = 0;
+	let cursor = options.after ?? 0;
 	for (;;) {
-		const page = await client.replayEvents(orgId, sessionId, { after: cursor });
+		const page = await awaitCloudReplay(client.replayEvents(orgId, sessionId, { after: cursor, ...(options.signal ? { signal: options.signal } : {}) }), options.signal);
+		if (options.signal?.aborted) throw options.signal.reason;
 		events.push(...page.events);
-		if (!page.hasMore || page.nextAfter <= cursor) return { events, latestSequence: page.nextAfter };
+		if (page.hasMore && page.nextAfter <= cursor) throw new Error("Cloud event cursor did not advance. Retry the conversation.");
+		if (!page.hasMore) return { events, latestSequence: Math.max(cursor, page.nextAfter, ...page.events.map((event) => event.sequence)) };
 		cursor = page.nextAfter;
 	}
 }
@@ -271,6 +275,9 @@ export type PollOptions = {
 	onEvents(events: ClientEvent[], cursor: number): void;
 	signal: AbortSignal;
 	intervalMs?: number;
+	onError?: (error: unknown) => void;
+	/** Source-owned cache/replay coordinator joins snapshot and polling reads. */
+	readPage?: (after: number, signal: AbortSignal) => Promise<ClientEventPage>;
 };
 
 /**
@@ -290,48 +297,38 @@ export type PollOptions = {
 export async function pollCloudEvents(options: PollOptions): Promise<void> {
 	const interval = options.intervalMs ?? 2000;
 	let cursor = options.after;
+	let backoff = 1000;
 	while (!options.signal.aborted) {
-		// Set only when a page reports more is waiting *and* the cursor actually
-		// moved forward (a backlog page capped at the server's eventPageLimit).
-		// Catching up must not idle for a full interval between pages -- at 100
-		// events/page and a 2s interval, a 14k-event backlog would otherwise
-		// trickle in for minutes before reaching the live tail. But hasMore
-		// alone is not enough: if the server ever reports hasMore without the
-		// cursor advancing, treating that as progress spins this loop against a
-		// live server at round-trip rate, ignoring intervalMs entirely. A
-		// non-advancing cursor is "caught up" for pacing purposes even though
-		// the server claims otherwise.
 		let advanced = false;
-		const previousCursor = cursor;
+		let delay = interval;
 		try {
-			const page = await options.client.replayEvents(options.orgId, options.sessionId, {
-				after: cursor,
-				signal: options.signal,
-			});
-			// `nextAfter` is the highest sequence returned, or the supplied cursor
-			// when the page is empty -- so this always advances monotonically and
-			// never regresses on an empty page.
-			cursor = page.nextAfter;
-			advanced = page.hasMore && page.nextAfter > previousCursor;
-			if (page.events.length > 0) {
-				options.onEvents(page.events, cursor);
-			}
-		} catch {
+			const page = await awaitCloudReplay(options.readPage
+				? options.readPage(cursor, options.signal)
+				: options.client.replayEvents(options.orgId, options.sessionId, { after: cursor, signal: options.signal }), options.signal);
 			if (options.signal.aborted) return;
-			// Transient failure: fall through to the wait below and retry.
+			const previousCursor = cursor;
+			const incoming = page.events.filter((event) => event.sessionId === options.sessionId && event.sequence > cursor)
+				.sort((a, b) => a.sequence - b.sequence);
+			// Adoption is synchronous before the local cursor advances.
+			const next = Math.max(cursor, incoming.at(-1)?.sequence ?? cursor);
+			if (incoming.length) options.onEvents(incoming, next);
+			cursor = next;
+			advanced = page.hasMore && cursor > previousCursor;
+			backoff = 1000;
+		} catch (cause) {
+			if (options.signal.aborted) return;
+			options.onError?.(cause);
+			if (cause instanceof CloudApiError && [401, 403, 404, 410].includes(cause.status)) return;
+			if (cause instanceof CloudApiError && cause.status === 429) delay = Math.max(0, (cause.retryAfterSeconds ?? 30) * 1000);
+			else { delay = backoff; backoff = Math.min(8000, backoff * 2); }
 		}
 		if (options.signal.aborted) return;
 		if (advanced) continue;
 		await new Promise<void>((resolve) => {
-			const timer = setTimeout(resolve, interval);
-			options.signal.addEventListener(
-				"abort",
-				() => {
-					clearTimeout(timer);
-					resolve();
-				},
-				{ once: true },
-			);
+			const finish = () => { clearTimeout(timer); options.signal.removeEventListener("abort", finish); resolve(); };
+			const timer = setTimeout(finish, delay);
+			options.signal.addEventListener("abort", finish, { once: true });
+			if (options.signal.aborted) finish();
 		});
 	}
 }

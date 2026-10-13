@@ -129,6 +129,10 @@ export function getAccountSessionOwner(deployment: CloudDeployment = CLOUD_DEPLO
 		tokens,
 		onSignOut: async (account) => {
 			if (!account) return;
+			const { cloudConversationReplayCache } = await import("./conversationReplay");
+			const { clearCloudConversationPages } = await import("../chat/snapshot");
+			cloudConversationReplayCache.clearAccount(deployment.baseUrl, account.id);
+			clearCloudConversationPages(deployment.baseUrl, account.id);
 			const { clearCloudOperationsForAccount } = await import("./operation");
 			await clearCloudOperationsForAccount(deployment.baseUrl, account.id);
 		},

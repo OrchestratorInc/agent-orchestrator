@@ -196,10 +196,8 @@ describe("fetchConversationReplay", () => {
 	it("terminates rather than looping forever when a page claims more without advancing the cursor", async () => {
 		const replayEvents = vi.fn(async () => ({ events: [userEvent], hasMore: true, nextAfter: 0 }));
 		const client = { replayEvents } as unknown as import("@aoagents/cloud-client").CloudClient;
-		const result = await fetchConversationReplay(client, "o1", "s1");
+		await expect(fetchConversationReplay(client, "o1", "s1")).rejects.toThrow(/cursor did not advance/);
 		expect(replayEvents).toHaveBeenCalledTimes(1);
-		expect(result.events).toEqual([userEvent]);
-		expect(result.latestSequence).toBe(0);
 	});
 });
 
@@ -214,6 +212,37 @@ function makeReplayClient(pages: Array<{ events: ClientEvent[]; hasMore: boolean
 }
 
 describe("pollCloudEvents", () => {
+	it.each([401, 403, 404])("stops and surfaces an authoritative %s response", async (status) => {
+		vi.useFakeTimers();
+		const { CloudApiError } = await import("@aoagents/cloud-client");
+		const error = new CloudApiError(status, { error: "unavailable", code: "session_unavailable", message: "Session unavailable", requestId: "r1" });
+		const replayEvents = vi.fn().mockRejectedValue(error); const onError = vi.fn();
+		const controller = new AbortController();
+		const run = pollCloudEvents({ client: { replayEvents } as never, orgId: "o1", sessionId: "s1", after: 0, signal: controller.signal, onEvents: vi.fn(), onError });
+		await vi.advanceTimersByTimeAsync(0); await vi.advanceTimersByTimeAsync(10_000);
+		expect(replayEvents).toHaveBeenCalledOnce(); expect(onError).toHaveBeenCalledWith(error);
+		controller.abort(); await run; vi.useRealTimers();
+	});
+	it("honors Retry-After for 429 and removes each idle abort listener", async () => {
+		vi.useFakeTimers(); const { CloudApiError } = await import("@aoagents/cloud-client");
+		const error = new CloudApiError(429, { error: "busy", code: "rate_limited", message: "Wait", requestId: "r1" }, 3);
+		const replayEvents = vi.fn().mockRejectedValueOnce(error).mockResolvedValue({ events: [], nextAfter: 0, hasMore: false });
+		const controller = new AbortController(); const onError = vi.fn();
+		const add = vi.spyOn(controller.signal, "addEventListener"); const remove = vi.spyOn(controller.signal, "removeEventListener");
+		const run = pollCloudEvents({ client: { replayEvents } as never, orgId: "o1", sessionId: "s1", after: 0, signal: controller.signal, intervalMs: 10, onEvents: vi.fn(), onError });
+		await vi.advanceTimersByTimeAsync(2999); expect(replayEvents).toHaveBeenCalledOnce();
+		await vi.advanceTimersByTimeAsync(1); expect(replayEvents).toHaveBeenCalledTimes(2); expect(onError).toHaveBeenCalledWith(error);
+		await vi.advanceTimersByTimeAsync(50); controller.abort(); await run;
+		expect(remove.mock.calls.length).toBe(add.mock.calls.length); vi.useRealTimers();
+	});
+	it("discards an event that arrives after unsubscribe during its request", async () => {
+		let resolve!: (value: unknown) => void;
+		const replayEvents = vi.fn(() => new Promise((done) => { resolve = done; })); const onEvents = vi.fn();
+		const controller = new AbortController();
+		const run = pollCloudEvents({ client: { replayEvents } as never, orgId: "o1", sessionId: "s1", after: 0, signal: controller.signal, onEvents });
+		controller.abort(); resolve({ events: [userEvent], nextAfter: 1, hasMore: false }); await run;
+		expect(onEvents).not.toHaveBeenCalled();
+	});
 	it("advances the cursor monotonically and delivers new events each tick", async () => {
 		vi.useFakeTimers();
 		const client = makeReplayClient([
@@ -259,7 +288,7 @@ describe("pollCloudEvents", () => {
 
 		await vi.advanceTimersByTimeAsync(0);
 		expect(replayEvents).toHaveBeenCalledTimes(1);
-		await vi.advanceTimersByTimeAsync(10);
+		await vi.advanceTimersByTimeAsync(1_000);
 		expect(replayEvents).toHaveBeenCalledTimes(2);
 		expect(onEvents).toHaveBeenCalledWith([userEvent], 1);
 

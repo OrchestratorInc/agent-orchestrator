@@ -1,6 +1,6 @@
 import type { ServerConfig } from "../config";
 import type { SessionSource } from "../environment/types";
-import { CONVERSATION_POLL_MS, conversationPollIntervalFor } from "./conversationPoll";
+import { conversationPollIntervalFor } from "./conversationPoll";
 
 export type ConversationAccess = {
 	source: SessionSource;
@@ -18,13 +18,12 @@ export function conversationAccess(input: {
 	const { config, source, sessionId } = input;
 	if (!source) return undefined;
 	if (source.kind === "cloud") {
+		if (!source.scopeKey) return undefined;
 		return {
 			source,
-			cacheKey: `cloud/${sessionId}`,
-			pollInterval: CONVERSATION_POLL_MS,
-			// Cloud polling owns its cursor separately; subscribing from zero would
-			// replay the entire transcript as new events after every remount.
-			subscribeToEvents: false,
+			cacheKey: JSON.stringify(["cloud", source.scopeKey, sessionId]),
+			pollInterval: null,
+			subscribeToEvents: true,
 		};
 	}
 	if (!config) return undefined;

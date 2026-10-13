@@ -84,7 +84,7 @@ describe("active turn controls", () => {
 
 	it("shows a paused Coder sandbox before an unavailable conversation fallback", () => {
 		const paused = screenSource.indexOf('if (isResumable(cloudStage) && !conversation.snapshot)');
-		const unavailable = screenSource.indexOf("if (conversation.unavailable && !isResumable(cloudStage)) return <Unavailable");
+		const unavailable = screenSource.indexOf("if (conversation.unavailable && !isResumable(cloudStage) && !conversation.snapshot)");
 		expect(paused).toBeGreaterThan(-1);
 		expect(paused).toBeLessThan(unavailable);
 	});

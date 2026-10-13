@@ -19,7 +19,7 @@ import { useChatViewLease } from "./useChatViewLease";
 
 const config = { hostId: "host-a", host: "a.test", httpPort: "3011", muxPort: "", password: "password" } satisfies ServerConfig;
 let renderer: ReactTestRenderer | undefined;
-function Harness({ cfg = config, id = "session/a" }: { cfg?: ServerConfig | null; id?: string }) { useChatViewLease(cfg, id); return null; }
+function Harness({ cfg = config, id = "session/a", source }: { cfg?: ServerConfig | null; id?: string; source?: import("../environment/types").SessionSource }) { useChatViewLease(cfg, id, source); return null; }
 function requests() { return fixture.request.mock.calls.map(([cfg, path, init]) => ({ host: cfg.hostId, path, ...JSON.parse(init.body) })); }
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -58,6 +58,19 @@ it("releases the lease in background and renews it when the app becomes active",
 it("does not register an unpaired chat", async () => {
 	await act(async () => { renderer = create(<Harness cfg={null} />); });
 	expect(requests()).toEqual([]);
+});
+
+it("renews only passive Cloud presence every minute while focused and active", async () => {
+	const touchPresence = vi.fn(async () => {});
+	const source = { kind: "cloud", scopeKey: "a", touchPresence } as unknown as import("../environment/types").SessionSource;
+	await act(async () => { renderer = create(<Harness cfg={null} source={source} />); });
+	expect(touchPresence).toHaveBeenCalledOnce(); expect(fixture.request).not.toHaveBeenCalled();
+	await act(async () => { await vi.advanceTimersByTimeAsync(59_999); }); expect(touchPresence).toHaveBeenCalledOnce();
+	await act(async () => { await vi.advanceTimersByTimeAsync(1); }); expect(touchPresence).toHaveBeenCalledTimes(2);
+	await act(async () => { fixture.listener?.("background"); await vi.advanceTimersByTimeAsync(120_000); }); expect(touchPresence).toHaveBeenCalledTimes(2);
+	await act(async () => { fixture.listener?.("active"); }); expect(touchPresence).toHaveBeenCalledTimes(3);
+	fixture.focused = false; await act(async () => { renderer!.update(<Harness cfg={null} source={source} />); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(120_000); }); expect(touchPresence).toHaveBeenCalledTimes(3);
 });
 
 it("releases the old host lease before registering a different host", async () => {

@@ -2,6 +2,7 @@ import type { DashboardSession, ProjectInfo, SpawnOptions } from "../api";
 import type { ConversationPage, SendMessageInput, SendMessageResult } from "../chat/api";
 import type { ConversationEvent } from "../chat/sse";
 import type { ChatModel, TurnSettings } from "../chat/types";
+import type { RequestOptions } from "@aoagents/cloud-client";
 
 /** Which environment a source speaks for. */
 export type EnvironmentKind = "local" | "cloud";
@@ -22,11 +23,12 @@ export interface SessionSource {
 	listSessions(): Promise<DashboardSession[]>;
 	createSession(options: SpawnOptions): Promise<{ id: string }>;
 	deleteSession(id: string): Promise<void>;
-	getConversationPage(id: string, beforeSequence?: number): Promise<ConversationPage>;
+	getConversationPage(id: string, beforeSequence?: number, options?: RequestOptions): Promise<ConversationPage>;
 	sendMessage(id: string, input: SendMessageInput): Promise<SendMessageResult>;
 	steerMessage?(id: string, input: SendMessageInput, targetTurnId: string): Promise<SendMessageResult>;
 	cancelTurn(id: string, turnId: string): Promise<void>;
-	subscribeEvents(id: string, listener: (event: ConversationEvent) => void): () => void;
+	subscribeEvents(id: string, listener: (event: ConversationEvent) => void, options?: { after?: number; onError?: (error: unknown) => void }): () => void;
+	touchPresence?(id: string, options?: RequestOptions): Promise<void>;
 	/**
 	 * Wake a paused sandbox. Only meaningful for cloud sessions (see
 	 * `isResumable` in `../cloud/lifecycle`) — a local session has no sandbox

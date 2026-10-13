@@ -21,6 +21,7 @@ import { KeyRow } from "./KeyRow";
 import { terminalPayload } from "./sendRoute";
 import { useVoiceInput } from "../voice/useVoiceInput";
 import type { RouteSession } from "./sessionRoute";
+import { useChatViewLease } from "../chat/useChatViewLease";
 
 const CLOUD_TERMINAL_JS = `
 (function () {
@@ -185,6 +186,7 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 	const startupProblem = cloudStartupProblem(session);
 	const startupCopy = startupProblem ? cloudStartupErrorCopy(startupProblem, !session.cloud?.coderWorkspaceUrl) : undefined;
 	const startupStopped = startupProblem?.phase === "failed" || startupProblem?.phase === "unavailable";
+	useChatViewLease(null, session.id, !paused && !archived && !startupStopped && stage === "connected" ? sessionSource : undefined);
 	const transportIdentity = JSON.stringify([sessionSource?.scopeKey, sessionEpoch, session.id, session.cloud?.workerEpoch, scheme]);
 	const liveTransportIdentity = useRef(transportIdentity);
 	liveTransportIdentity.current = transportIdentity;

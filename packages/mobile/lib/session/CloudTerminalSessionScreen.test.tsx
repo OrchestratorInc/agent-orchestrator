@@ -43,6 +43,7 @@ vi.mock("../cloud/terminal", () => ({ createCloudTerminal: (input: { onStatus: (
 } }));
 vi.mock("../store", () => ({ useApp: () => ({ refreshSource: fixture.refreshSource, sourceFor: () => fixture.source }) }));
 vi.mock("../haptics", () => ({ haptics: { error: vi.fn(), success: vi.fn() } }));
+vi.mock("../chat/useChatViewLease", () => ({ useChatViewLease: vi.fn() }));
 vi.mock("../ThemeProvider", async () => {
 	const { darkTheme } = await import("../theme");
 	return { useTheme: () => darkTheme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (factory: (theme: typeof darkTheme) => unknown) => factory(darkTheme) };
