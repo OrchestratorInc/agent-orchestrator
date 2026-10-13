@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -107,6 +109,27 @@ func TestStalledControllerReleasesOwnershipAndPreservesACPReplay(t *testing.T) {
 	for {
 		frame := readFrame(t, replayReader)
 		if bytes.Contains(frame, []byte(`"agent_message_chunk"`)) {
+			var notification struct {
+				Params struct {
+					Update struct {
+						Chunk struct {
+							Content struct {
+								Text string `json:"text"`
+							} `json:"content"`
+						} `json:"agent_message_chunk"`
+					} `json:"update"`
+				} `json:"params"`
+			}
+			if err := json.Unmarshal(frame, &notification); err != nil {
+				t.Fatalf("decode replay update: %v", err)
+			}
+			want := "before restart"
+			if updates > 0 {
+				want = fmt.Sprintf("%d:%s", updates-1, strings.Repeat("b", 2048))
+			}
+			if notification.Params.Update.Chunk.Content.Text != want {
+				t.Fatalf("replay update %d is missing, duplicated, reordered, or changed", updates)
+			}
 			updates++
 			continue
 		}
