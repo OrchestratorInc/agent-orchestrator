@@ -1,6 +1,6 @@
 import * as Crypto from "expo-crypto";
 import { useRouter } from "expo-router";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Platform } from "react-native";
 import { ApiError } from "./api";
 import { resourceKey, type Scoped, type SourceRef } from "./environment/scopedBoard";
@@ -23,12 +23,17 @@ import { useApp } from "./store";
 export function useOrchestratorLauncher() {
 	const router = useRouter();
 	const { environment, config, configForHost, refreshSource, launchConductorOn } = useApp();
-	const { client, orgId } = useCloudAuth();
+	const auth = useCloudAuth();
+	const { client, orgId } = auth;
+	const liveAuth = useRef(auth); liveAuth.current = auth;
+	const mounted = useRef(true);
+	useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 	const [busyProjects, setBusyProjects] = useState<ReadonlySet<string>>(() => new Set());
 	// A ref as well as state: state is a render behind, and a fast double tap must
 	// not slip a second launch in before the first one has re-rendered.
 	const launching = useRef(new Set<string>());
 	const cloudRequestKeys = useRef(new Map<string, string>());
+	useEffect(() => { setBusyProjects(new Set()); }, [auth.baseUrl, auth.accountId, auth.sessionEpoch]);
 
 	const setBusy = useCallback((projectId: string, busy: boolean) => {
 		setBusyProjects((current) => {
@@ -60,10 +65,14 @@ export function useOrchestratorLauncher() {
 	}, [router, scopedRow]);
 
 	const runLaunch = useCallback(async (row: Scoped<OrchestratorProjectRow>, mode: "chat" | "tui" = "chat") => {
-		const key = resourceKey(row.source, row.value.project.id);
+		const captured = auth;
+		const current = () => mounted.current && (row.source.kind !== "cloud" || captured.isCurrentSession() && liveAuth.current.accountId === captured.accountId && liveAuth.current.orgId === captured.orgId && liveAuth.current.baseUrl === captured.baseUrl);
+		if (!current()) return;
+		const key = row.source.kind === "cloud" ? JSON.stringify([captured.baseUrl, captured.accountId, row.source.id, row.value.project.id]) : resourceKey(row.source, row.value.project.id);
+		const busyKey = resourceKey(row.source, row.value.project.id);
 		if (launching.current.has(key)) return;
 		launching.current.add(key);
-		setBusy(key, true);
+		setBusy(busyKey, true);
 		try {
 			if (row.source.kind === "cloud") {
 				if (row.source.id !== orgId) throw new Error("Your Cloud workspace changed. Please try again.");
@@ -73,15 +82,19 @@ export function useOrchestratorLauncher() {
 					cloudRequestKeys.current.set(key, requestKey);
 				}
 				const id = await spawnCloudOrchestrator(client, orgId, row.value.project.id, requestKey);
+				if (!current()) return;
 				cloudRequestKeys.current.delete(key);
 				await refreshSource(row.source).catch(() => {});
+				if (!current()) return;
 				openSession(row, id, true);
 				return;
 			}
 			const next = await launchConductorOn(row.source, row.value.project.id, false, mode);
+			if (!current()) return;
 			if (next?.id) openSession(row, next.id);
 			else await refreshSource(row.source);
 		} catch (cause) {
+			if (!current()) return;
 			haptics.error();
 			if (row.source.kind === "cloud") {
 				Alert.alert("Couldn't open orchestrator", cause instanceof Error ? cause.message : "Please try again.");
@@ -104,9 +117,9 @@ export function useOrchestratorLauncher() {
 			Alert.alert(copy.title, copy.message);
 		} finally {
 			launching.current.delete(key);
-			setBusy(key, false);
+			if (current()) setBusy(busyKey, false);
 		}
-	}, [client, configForHost, launchConductorOn, openSession, orgId, refreshSource, setBusy]);
+	}, [auth, client, configForHost, launchConductorOn, openSession, orgId, refreshSource, setBusy]);
 
 	/** Opens a running orchestrator, or starts or resumes one that is not. */
 	const openOrchestrator = useCallback((input: Scoped<OrchestratorProjectRow> | OrchestratorProjectRow) => {

@@ -10,8 +10,9 @@ const fixture = vi.hoisted(() => {
 		refreshSource: vi.fn(async () => {}),
 		setOptions: vi.fn(),
 		replace: vi.fn(),
+		write: vi.fn(),
 		onStatus: null as null | ((status: string) => void),
-		terminals: [] as Array<{ input: { onStatus: (status: string) => void; onError: (message: string) => void }; disconnect: ReturnType<typeof vi.fn> }>,
+		terminals: [] as Array<{ input: { onStatus: (status: string) => void; onError: (message: string) => void; onOutput: (bytes: Uint8Array) => void }; disconnect: ReturnType<typeof vi.fn> }>,
 	};
 });
 
@@ -21,7 +22,7 @@ vi.mock("@expo/vector-icons", async () => {
 });
 vi.mock("@fressh/react-native-xtermjs-webview", async () => {
 	const React = await import("react");
-	return { XtermJsWebView: (props: object) => React.createElement("XtermJsWebView", props) };
+	return { XtermJsWebView: React.forwardRef((props: object, ref) => { React.useImperativeHandle(ref, () => ({ write: fixture.write, resize: () => {} }), []); return React.createElement("XtermJsWebView", props); }) };
 });
 vi.mock("expo-router", () => ({ useNavigation: () => ({ setOptions: fixture.setOptions }), useRouter: () => ({ replace: fixture.replace }) }));
 vi.mock("react-native", async () => {
@@ -36,7 +37,7 @@ vi.mock("react-native", async () => {
 vi.mock("react-native-keyboard-controller", () => ({ useKeyboardState: (select: (state: object) => unknown) => select({ height: 0, isVisible: false }) }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock("../cloud/authStore", () => ({ useCloudAuth: () => ({ client: fixture.client, orgId: "org-1" }) }));
-vi.mock("../cloud/terminal", () => ({ createCloudTerminal: (input: { onStatus: (status: string) => void; onError: (message: string) => void }) => {
+vi.mock("../cloud/terminal", () => ({ createCloudTerminal: (input: { onStatus: (status: string) => void; onError: (message: string) => void; onOutput: (bytes: Uint8Array) => void }) => {
 	fixture.onStatus = input.onStatus;
 	const disconnect = vi.fn(); fixture.terminals.push({ input, disconnect });
 	return { connect: async () => {}, disconnect, resize: () => {}, sendInput: () => false, sendPrompt: async () => false };
@@ -79,6 +80,7 @@ beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixture.onStatus = null;
 	fixture.terminals = [];
+	fixture.write.mockClear(); fixture.replace.mockClear();
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
 		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
@@ -94,6 +96,17 @@ afterEach(async () => {
 });
 
 describe("Cloud terminal startup", () => {
+	it("writes output after a cancelled handoff without waiting for a retained WebView to initialize again", async () => {
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} />); });
+		act(() => { component("XtermJsWebView")[0].props.onInitialized(); fixture.terminals[0].input.onOutput(new Uint8Array([1])); });
+		const transition = { id: "h1", sourceMode: "tui", targetMode: "chat", phase: "draining" };
+		const controls = { loading: false, status: { supported: true, targetMode: "chat", currentMode: "tui", transition }, transition } as unknown as import("../cloud/useCloudInterfaceTransition").CloudInterfaceControls;
+		await act(async () => { renderer!.update(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		const resumed = { ...controls, status: { ...controls.status!, transition: { ...controls.status!.transition!, phase: "cancelled" as const } }, transition: { ...controls.transition!, phase: "cancelled" as const } };
+		await act(async () => { renderer!.update(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={resumed} />); });
+		act(() => fixture.terminals.at(-1)!.input.onOutput(new Uint8Array([2])));
+		expect(fixture.write.mock.calls.map(([bytes]) => [...bytes])).toEqual([[1], [2]]);
+	});
 	it("retains terminal history but disconnects and hides input when handoff needs recovery", async () => {
 		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} />); });
 		const old = fixture.terminals[0];

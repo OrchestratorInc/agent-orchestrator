@@ -268,8 +268,12 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 	}, [headerRightReady, navigation, openChat, sessionTitle, styles, switchingChat, t.accent]);
 
 	useEffect(() => {
-		let active = true;
 		xtermReady.current = false;
+		pendingOutput.current = [];
+		return () => { xtermReady.current = false; pendingOutput.current = []; };
+	}, [transportIdentity]);
+	useEffect(() => {
+		let active = true;
 		pendingOutput.current = [];
 		setTerminalState({ identity: transportIdentity, status: "connecting" });
 		setError(null);
@@ -303,7 +307,6 @@ export function CloudTerminalSessionScreen({ session, source, showSpawnStartup =
 			active = false;
 			terminal.disconnect();
 			terminalRef.current = null;
-			xtermReady.current = false;
 			pendingOutput.current = [];
 		};
 	}, [client, orgId, paused, archived, startupStopped, handoffLocked, scheme, session.id, session.cloud?.workerEpoch, source.kind, source.id, sessionSource, transportIdentity]);

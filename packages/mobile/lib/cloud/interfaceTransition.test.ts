@@ -4,6 +4,16 @@ import { cloudInterfaceInputLocked, cloudInterfacePollDelay, cloudInterfaceSettl
 const transition = (phase: SessionInterfaceTransition["phase"] = "target_starting"): SessionInterfaceTransition => ({ id: "h1", sessionId: "s1", sourceMode: "chat", targetMode: "tui", phase, policy: "drain", createdAt: "now", updatedAt: "now" });
 const session = { interfaceMode: "tui", runtimeConnected: true, isTerminated: false } as Session;
 describe("Cloud interface adoption", () => {
+	it("adopts a recovered ready target when the server omits the completed row", () => {
+		const previous = { supported: true, targetMode: "tui", transition: transition("recovery_required") } as SessionInterfaceTransitionStatus;
+		const status = mergeCloudInterfaceStatus(previous, { supported: true, targetMode: "chat" }, session);
+		expect(cloudInterfaceSettledTarget(status)).toBe("tui"); expect(cloudInterfaceInputLocked(status)).toBe(false);
+	});
+	it("settles cancellation by another client when the old source is authoritatively ready", () => {
+		const previous = { supported: true, targetMode: "tui", transition: transition("draining") } as SessionInterfaceTransitionStatus;
+		const status = mergeCloudInterfaceStatus(previous, { supported: true, targetMode: "tui" }, { ...session, interfaceMode: "chat" });
+		expect(status.transition?.phase).toBe("cancelled"); expect(cloudInterfaceInputLocked(status)).toBe(false);
+	});
 	it("does not settle on an early mode commit while target startup is active", () => {
 		const status = mergeCloudInterfaceStatus(undefined, { supported: true, targetMode: "chat", transition: transition() }, session);
 		expect(cloudInterfaceSettledTarget(status)).toBeUndefined(); expect(cloudInterfaceInputLocked(status)).toBe(true);

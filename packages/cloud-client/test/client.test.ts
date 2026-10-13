@@ -79,7 +79,7 @@ describe("CloudClient", () => {
       { ...base, sequence: 1, type: "chat.assistant_delta", payload: { turnId: "t1", attempt: 2, stream: "stdout", text: "hi", itemId: "i1" } },
       { ...base, sequence: 2, type: "chat.activity", payload: { turnId: "t1", attempt: 2, activity: { id: "a1", kind: "command", status: "completed", summary: "Checked", detail: { command: "test" } } } },
       { ...base, sequence: 3, type: "chat.turn_capabilities", payload: { turnId: "t1", attempt: 2, steering: true } },
-      { ...base, sequence: 4, type: "chat.approval_requested", payload: { turnId: "t1", attempt: 2, requestId: "r1", summary: "Run", toolKind: "command", decisions: ["allow", "deny"] } },
+      { ...base, sequence: 4, type: "chat.approval_requested", payload: { turnId: "t1", attempt: 2, requestId: "r1", summary: "Run", toolKind: "command", decisions: [{ id: "allow", label: "Allow" }, { id: "deny", label: "Deny" }] } },
       { ...base, sequence: 5, type: "chat.approval_decided", payload: { turnId: "t1", requestId: "r1", decision: "allow" } },
     ];
     const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: vi.fn<typeof fetch>(async () => jsonResponse({ events, hasMore: false, nextAfter: 5 })) });

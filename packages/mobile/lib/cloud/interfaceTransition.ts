@@ -6,7 +6,8 @@ export function mergeCloudInterfaceStatus(previous: SessionInterfaceTransitionSt
 	let transition = wire.transition;
 	const old = previous?.transition;
 	if (!transition && old) {
-		if ((mobileInterfaceTransitionIsActive(old) || old.phase === "completed") && session.interfaceMode === old.targetMode && session.runtimeConnected && !session.isTerminated) transition = { ...old, phase: "completed" };
+		if ((mobileInterfaceTransitionIsActive(old) || old.phase === "completed" || old.phase === "recovery_required") && session.interfaceMode === old.targetMode && session.runtimeConnected && !session.isTerminated) transition = { ...old, phase: "completed" };
+		else if ((mobileInterfaceTransitionIsActive(old) || old.phase === "recovery_required") && session.interfaceMode === old.sourceMode && session.runtimeConnected && !session.isTerminated) transition = { ...old, phase: "cancelled" };
 		else if (old.phase === "cancelled" || old.phase === "failed" || old.phase === "recovery_required") transition = old;
 		else if (mobileInterfaceTransitionIsActive(old)) transition = old;
 	}

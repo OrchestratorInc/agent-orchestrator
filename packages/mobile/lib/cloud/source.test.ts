@@ -47,7 +47,7 @@ describe("createCloudSessionSource", () => {
 	it("acknowledges the original recovery notice without unlocking either controller", async () => {
 		const acknowledge = vi.fn(async () => ({ ok: true }));
 		const transition = { id: "h1", sourceMode: "chat", targetMode: "tui", phase: "recovery_required", errorDetail: "Recovery needed" };
-		const getSessionInterfaceTransition = vi.fn().mockResolvedValueOnce({ supported: true, targetMode: "tui", transition }).mockResolvedValue({ supported: true, targetMode: "chat" });
+		const getSessionInterfaceTransition = vi.fn().mockResolvedValueOnce({ supported: true, targetMode: "tui", transition }).mockResolvedValue({ supported: true, targetMode: "chat", transition: { ...transition, noticeAcknowledgedAt: "acknowledged" } });
 		const source = createCloudSessionSource({ client: clientStub({ getSession: vi.fn(async () => ({ session: { ...fullSession("s1"), interfaceMode: "tui" } })), getSessionInterfaceTransition, acknowledgeSessionInterfaceTransitionNotice: acknowledge }) as never, orgId: "o1" });
 		await source.getInterfaceTransition!("s1");
 		await source.acknowledgeInterfaceNotice!("s1", "h1");

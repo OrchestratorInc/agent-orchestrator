@@ -47,9 +47,11 @@ export default function CreateCloudProject() {
 	const { client, signedIn, orgId, orgLoading, orgError, retryOrgResolution, accountId, baseUrl, sessionEpoch, offering } = auth;
 	const { scheme } = useThemeState();
 	const scopeKey = accountId && orgId ? cloudAccountScopeKey({ baseUrl, userId: accountId, orgId }) : null;
+	const manualDeployment = baseUrl.replace(/\/+$/, "") === "https://staging-api.aoagents.dev";
 	const authRef = useRef(auth); authRef.current = auth;
 	const mounted = useRef(true);
 	const createAbort = useRef<AbortController | null>(null);
+	const manualAbort = useRef<AbortController | null>(null);
 	const navigationAck = useRef<ReservedProject | null>(null);
 	const [reserved, setReserved] = useState<ReservedProject | null>(null);
 	const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -126,7 +128,9 @@ export default function CreateCloudProject() {
 		};
 	}, []);
 	useEffect(() => {
-		return () => { createAbort.current?.abort(); createAbort.current = null; };
+		manualAbort.current?.abort(); manualAbort.current = null;
+		setToken(""); setRepositoryUrl(""); setDisplayName(""); setDefaultBranch("main"); setReadOnly(false); setHasSavedToken(false); setBusy(false);
+		return () => { createAbort.current?.abort(); createAbort.current = null; manualAbort.current?.abort(); manualAbort.current = null; };
 	}, [scopeKey, sessionEpoch]);
 	useEffect(() => {
 		setCoderConfig(null); setCoderTemplates([]); setComputeError(null);
@@ -158,6 +162,7 @@ export default function CreateCloudProject() {
 
 	const refreshGitHub = useCallback(async (signal: AbortSignal) => {
 		if (!orgId) return false;
+		if (manualDeployment) return false;
 		const nextInstallations = await client.listGitHubInstallations(orgId, { signal });
 		if (signal.aborted) return false;
 		setInstallations(nextInstallations);
@@ -207,7 +212,7 @@ export default function CreateCloudProject() {
 			setSelectedRepositoryId("");
 		}
 		return connectionReady;
-	}, [client, orgId]);
+	}, [client, orgId, manualDeployment]);
 
 	const githubAttempt = useMemo(() => {
 		const attempt = createGitHubConnectionAttempt({
@@ -255,7 +260,7 @@ export default function CreateCloudProject() {
 		syncAttempted.current.clear();
 		setError(null);
 		setGithubError(null);
-		setProjectSource("app");
+		setProjectSource(manualDeployment ? "manual" : "app");
 		setSelectedRepositoryId("");
 		setRepositories([]);
 		setInstallations([]);
@@ -304,7 +309,7 @@ export default function CreateCloudProject() {
 				setTemplateId(config.coder?.templateId ?? ""); setParameterValues(config.coder?.parameters ?? {});
 				setWorkspacePrefix(config.coder?.workspaceNamePrefix ?? "");
 				setStep("agents");
-			} else { setConfigDefaults({}); setStep("github"); }
+			} else { setConfigDefaults({}); setStep(manualDeployment ? initialProjectCreationStep(userConnections) : "github"); }
 			if (results[1].status === "rejected") {
 				setGithubError(messageFor(results[1].reason, "Could not load GitHub repositories."));
 			}
@@ -314,7 +319,7 @@ export default function CreateCloudProject() {
 			setStep("github");
 		});
 		return () => { active = false; abort.abort(); };
-	}, [client, signedIn, orgId, orgLoading, orgError, refreshGitHub, setupAttempt, scopeKey]);
+	}, [client, signedIn, orgId, orgLoading, orgError, refreshGitHub, setupAttempt, scopeKey, sessionEpoch, manualDeployment]);
 
 	useEffect(() => {
 		if (connecting && orgId && step === "github") githubAttempt.start();
@@ -322,7 +327,7 @@ export default function CreateCloudProject() {
 	}, [connecting, orgId, step, githubAttempt]);
 
 	const connectGitHub = async () => {
-		if (!orgId || connecting) return;
+		if (!orgId || connecting || manualDeployment) return;
 		const attempt = ++connectAttempt.current;
 		setGithubError(null);
 		setConnecting(true);
@@ -386,17 +391,23 @@ export default function CreateCloudProject() {
 			setError("Enter a GitHub personal access token.");
 			return;
 		}
-		setBusy(true);
+		const captured = auth;
+		const controller = new AbortController();
+		const current = () => mounted.current && !controller.signal.aborted && captured.isCurrentSession() && authRef.current.accountId === captured.accountId && authRef.current.orgId === captured.orgId;
+		if (!current() || manualAbort.current) return;
+		manualAbort.current = controller; setBusy(true);
 		setError(null);
 		try {
-			await client.putGitHubPAT({ secret: token.trim() });
+			await client.putGitHubPAT({ secret: token.trim() }, { signal: controller.signal });
+			if (!current()) return;
 			setToken("");
 			setHasSavedToken(true);
 			setStep("repository");
 		} catch (cause) {
-			setError(messageFor(cause, "Could not save the GitHub token."));
+			if (current()) setError(messageFor(cause, "Could not save the GitHub token."));
 		} finally {
-			setBusy(false);
+			if (manualAbort.current === controller) manualAbort.current = null;
+			if (current()) setBusy(false);
 		}
 	};
 
@@ -410,14 +421,20 @@ export default function CreateCloudProject() {
 			setError("Project name and default branch are required.");
 			return;
 		}
-		setBusy(true);
+		const captured = auth;
+		const controller = new AbortController();
+		const current = () => mounted.current && !controller.signal.aborted && captured.isCurrentSession() && authRef.current.accountId === captured.accountId && authRef.current.orgId === captured.orgId;
+		if (!current() || manualAbort.current) return;
+		manualAbort.current = controller; setBusy(true);
 		setError(null);
 		setReadOnly(false);
 		try {
-			const access = await client.validateSavedRepositoryAccess({ repositoryUrl: repositoryUrl.trim() });
+			const access = await client.validateSavedRepositoryAccess({ repositoryUrl: repositoryUrl.trim() }, { signal: controller.signal });
+			if (!current()) return;
 			if (access.writeAccess) setStep("agents");
 			else setReadOnly(true);
 		} catch (cause) {
+			if (!current()) return;
 			if (cause instanceof CloudApiError && cause.code === "token_missing") {
 				setStep("github-token");
 				setError("Add a GitHub token before importing this repository.");
@@ -425,7 +442,8 @@ export default function CreateCloudProject() {
 				setError(messageFor(cause, "Could not verify repository access."));
 			}
 		} finally {
-			setBusy(false);
+			if (manualAbort.current === controller) manualAbort.current = null;
+			if (current()) setBusy(false);
 		}
 	};
 

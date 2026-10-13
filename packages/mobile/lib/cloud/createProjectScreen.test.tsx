@@ -26,6 +26,7 @@ const state = vi.hoisted(() => ({
 	getCoderTemplateParameters: vi.fn(async () => ({ parameters: [] })),
 	listProjects: vi.fn(async () => ({ items: [], page: { hasMore: false } })),
 	validateSavedRepositoryAccess: vi.fn(async () => ({ writeAccess: true })),
+	putGitHubPAT: vi.fn(async () => ({})),
 }));
 const storage = vi.hoisted(() => ({ data: new Map<string, string>(), setItem: vi.fn() }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
@@ -93,6 +94,7 @@ beforeEach(() => {
 	state.orgError = null;
 	state.offering = null;
 	state.sessionEpoch = 0;
+	state.accountId = "user-1"; state.baseUrl = "https://cloud.test";
 	storage.data.clear();
 	storage.setItem.mockReset().mockImplementation(async (key: string, value: string) => { storage.data.set(key, value); });
 	vi.clearAllMocks();
@@ -114,6 +116,34 @@ afterEach(async () => {
 });
 
 describe("Add Cloud project sheet", () => {
+	it("clears manual credentials and repository state on account replacement", async () => {
+		state.signedIn = true; state.orgId = "org-1"; state.orgLoading = false;
+		const root = await mount();
+		await act(async () => root.findByProps({ title: "Set up manually with a token" }).props.onPress());
+		act(() => root.findByProps({ accessibilityLabel: "GitHub access token" }).props.onChangeText("synthetic-secret-a"));
+		state.accountId = "user-2"; state.sessionEpoch++;
+		await act(async () => renderer!.update(<CreateCloudProject />));
+		await act(async () => root.findByProps({ title: "Set up manually with a token" }).props.onPress());
+		expect(root.findByProps({ accessibilityLabel: "GitHub access token" }).props.value).toBe("");
+	});
+	it("ignores a late old-account PAT save rather than advancing the new form", async () => {
+		state.signedIn = true; state.orgId = "org-1"; state.orgLoading = false;
+		const root = await mount(); await act(async () => root.findByProps({ title: "Set up manually with a token" }).props.onPress());
+		act(() => root.findByProps({ accessibilityLabel: "GitHub access token" }).props.onChangeText("synthetic-secret-a"));
+		let resolve!: (value: object) => void; state.putGitHubPAT.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+		let saving!: Promise<void>; await act(async () => { saving = root.findByProps({ title: "Save token and continue" }).props.onPress(); });
+		state.accountId = "user-2"; state.sessionEpoch++;
+		await act(async () => renderer!.update(<CreateCloudProject />));
+		await act(async () => { resolve({}); await saving; });
+		expect(root.findAllByProps({ accessibilityLabel: "Repository URL" })).toHaveLength(0);
+	});
+	it("uses manual import directly for the verified staging deployment", async () => {
+		state.signedIn = true; state.orgId = "org-1"; state.orgLoading = false; state.baseUrl = "https://staging-api.aoagents.dev";
+		const root = await mount();
+		expect(root.findAllByProps({ title: "Connect GitHub" })).toHaveLength(0);
+		expect(root.findAllByProps({ accessibilityLabel: "GitHub access token" })).toHaveLength(1);
+		expect(state.startGitHubInstallation).not.toHaveBeenCalled();
+	});
 	async function manualReview() {
 		state.signedIn = true; state.orgId = "org-1"; state.orgLoading = false;
 		state.listUserProviderConnections.mockResolvedValue([
