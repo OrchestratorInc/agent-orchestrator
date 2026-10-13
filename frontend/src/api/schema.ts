@@ -6730,6 +6730,8 @@ export interface operations {
     getAgentModels: {
         parameters: {
             query?: {
+                /** @description Return catalog facts without reading session history for model recency. Cached catalogs are served while discovery refreshes in the background. */
+                catalogOnly?: boolean;
                 /** @description Optional project identifier used as the model-catalog cache scope. */
                 projectId?: string;
             };

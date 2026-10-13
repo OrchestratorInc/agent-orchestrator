@@ -352,7 +352,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 	);
 	const refreshModelsOnOpen = (agentId: AgentId) => {
 		if (!installed.has(agentId) || (needsAuthentication(agentId) && !MULTI_PROVIDER_HARNESSES.has(agentId))) return;
-		const options = agentModelsQueryOptions(agentId, "", hostId);
+		const options = agentModelsQueryOptions(agentId, "", hostId, true);
 		// Read the persisted cache first, then refresh without replacing the
 		// visible list with a loading state. Concurrent opens share one request.
 		void queryClient.fetchQuery({
@@ -1416,7 +1416,7 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	onOpenAccount: () => void;
 }) {
 	const { i18n, t } = useTranslation();
-	const options = agentModelsQueryOptions(agentId, "", hostId);
+	const options = agentModelsQueryOptions(agentId, "", hostId, true);
 	const loginBlocksCatalog = needsLogin && !MULTI_PROVIDER_HARNESSES.has(agentId);
 	const catalog = useQuery({ ...options, enabled: installed && !loginBlocksCatalog });
 	const [page, setPage] = useState(0);

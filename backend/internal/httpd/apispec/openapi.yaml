@@ -205,6 +205,14 @@ paths:
         schema:
           description: Agent adapter identifier.
           type: string
+      - description: Return catalog facts without reading session history for model
+          recency. Cached catalogs are served while discovery refreshes in the background.
+        in: query
+        name: catalogOnly
+        schema:
+          description: Return catalog facts without reading session history for model
+            recency. Cached catalogs are served while discovery refreshes in the background.
+          type: boolean
       - description: Optional project identifier used as the model-catalog cache scope.
         in: query
         name: projectId

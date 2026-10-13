@@ -2438,3 +2438,47 @@ func TestWarmModelCatalogsStartsAsynchronously(t *testing.T) {
 		t.Fatal("background warm did not finish")
 	}
 }
+
+// Catalog browsing must not wait on recency hints used only by task pickers.
+type forbiddenCatalogSessionLookup struct{}
+
+func (forbiddenCatalogSessionLookup) ListAllSessions(context.Context) ([]domain.SessionRecord, error) {
+	panic("catalog-only read scanned session history")
+}
+
+func TestModelCatalogServesPersistedModelsDuringBlockedRefresh(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{
+		"codex\x00": cachedModelRecord(t, "codex", "", time.Now(), false),
+	}}
+	discoverer := &blockingSubsequentModelDiscoverer{
+		fakeModelDiscoverer: successfulModelDiscoverer(),
+		started:             make(chan struct{}), release: make(chan struct{}),
+	}
+	// The persisted catalog came from an earlier daemon process.
+	discoverer.discoverCalls.Store(1)
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("codex", "Codex", nil)}, cache, nil, discoverer)
+	svc.ctx = ctx
+	svc.sessions = forbiddenCatalogSessionLookup{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = svc.ModelCatalog(ctx, "codex", "", true)
+	}()
+	defer func() { close(discoverer.release); <-done }()
+	select {
+	case <-discoverer.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh did not start")
+	}
+	readCtx, stopRead := context.WithTimeout(ctx, time.Second)
+	defer stopRead()
+	got, err := svc.ModelCatalog(readCtx, "codex", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Models) != 1 || got.Models[0].ID != "cached-model" {
+		t.Fatalf("catalog = %#v, want persisted models before refresh completes", got)
+	}
+}

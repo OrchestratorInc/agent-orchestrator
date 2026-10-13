@@ -102,6 +102,10 @@ func (f *fakeAgentCatalog) Models(_ context.Context, agentID, _ string, _ bool) 
 	}, nil
 }
 
+func (f *fakeAgentCatalog) ModelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
+	return f.Models(ctx, agentID, projectID, refresh)
+}
+
 func (f *fakeAgentCatalog) RevalidateModels(ctx context.Context, agentID, projectID string) (ports.AgentModelCatalog, error) {
 	return f.Models(ctx, agentID, projectID, false)
 }

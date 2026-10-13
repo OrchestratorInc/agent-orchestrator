@@ -332,7 +332,7 @@ func (s *Service) monitorModelCatalogFreshness(ctx context.Context) {
 // documented CLI discovery attempt. Discovery failures degrade to the last
 // cached catalog or a custom model input.
 func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
-	catalog, err := s.modelCatalog(ctx, agentID, projectID, refresh)
+	catalog, err := s.ModelCatalog(ctx, agentID, projectID, refresh)
 	if err != nil {
 		return catalog, err
 	}
@@ -341,7 +341,11 @@ func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh
 	return s.withModelUsage(ctx, agentID, projectID, catalog), nil
 }
 
-func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
+// ModelCatalog returns the persisted catalog without session-history enrichment.
+// Settings only browses provider/model facts; recency belongs to task pickers.
+// Cached reads never wait for CLI discovery or input checks, which run in the
+// background. A scope with no persisted catalog still needs its first discovery.
+func (s *Service) ModelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
 	if s.discoverer == nil {
 		return ports.AgentModelCatalog{}, apierr.Internal("MODEL_DISCOVERY_UNAVAILABLE", "Model discovery is unavailable")
 	}

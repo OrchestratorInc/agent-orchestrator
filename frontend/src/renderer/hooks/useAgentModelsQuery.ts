@@ -26,13 +26,14 @@ async function requestAgentModels(
 	projectId: string,
 	mode: "cached" | "refresh" | "revalidate",
 	hostId?: string,
+	catalogOnly = false,
 ): Promise<AgentModelCatalog> {
 	const client = hostId ? clientForHost(hostId) : apiClient;
 	const path = { agent: agentId };
 	const result =
 		mode === "cached"
 			? await client.GET("/api/v1/agents/{agent}/models", {
-					params: { path, query: { projectId: projectId || undefined } },
+					params: { path, query: { projectId: projectId || undefined, ...(catalogOnly ? { catalogOnly: true } : {}) } },
 				})
 			: await client.POST("/api/v1/agents/{agent}/models/refresh", {
 					params: {
@@ -45,10 +46,12 @@ async function requestAgentModels(
 	return agentId === "claude-code" ? { ...catalog, models: foldClaudeAliasDefault(catalog.models) } : catalog;
 }
 
-export function agentModelsQueryOptions(agentId: string, projectId: string, hostId?: string) {
+export function agentModelsQueryOptions(agentId: string, projectId: string, hostId?: string, catalogOnly = false) {
+	const key = agentModelsQueryKey(agentId, projectId, hostId);
 	return queryOptions({
-		queryKey: agentModelsQueryKey(agentId, projectId, hostId),
-		queryFn: () => requestAgentModels(agentId, projectId, "cached", hostId),
+		// Keep catalog browsing separate from task pickers that need recency.
+		queryKey: catalogOnly ? [...key, "catalog"] as const : key,
+		queryFn: () => requestAgentModels(agentId, projectId, "cached", hostId, catalogOnly),
 		enabled: agentId !== "",
 		// A catalog that carries a warning describes a problem the user may fix
 		// outside AO (a login in a terminal), so any remount re-reads it.

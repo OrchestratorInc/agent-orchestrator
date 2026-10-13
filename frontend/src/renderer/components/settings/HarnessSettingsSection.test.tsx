@@ -334,11 +334,17 @@ describe("HarnessSettingsSection", () => {
 	});
 
 
-	it.each(["success", "failure"])("refreshes on each harness open while preserving fresh cached models (%s)", async (outcome) => {
+	it.each([
+		["memory", "success"], ["memory", "failure"], ["database", "success"], ["database", "failure"],
+	])("renders %s cached models before background refresh completes (%s)", async (source, outcome) => {
 		mockInstalledOperations("npm");
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		const key = ["agent-models", "codex", ""];
-		queryClient.setQueryData(key, { agentId: "codex", models: [{ id: "cached", label: "Cached model" }] });
+		const key = ["agent-models", "codex", "", "catalog"];
+		const cached = { agentId: "codex", models: [{ id: "cached", label: "Cached model" }] };
+		if (source === "memory") queryClient.setQueryData(key, cached);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models"
+			? { data: cached } as never : (get as (path: string, options: unknown) => Promise<never>)(path, options));
 		let resolveRefresh!: (value: unknown) => void;
 		let rejectRefresh!: (reason: Error) => void;
 		const pending = new Promise((resolve, reject) => { resolveRefresh = resolve; rejectRefresh = reject; });
@@ -352,6 +358,9 @@ describe("HarnessSettingsSection", () => {
 		// Opening Account already requests refresh; Models never waits for it.
 		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
 		expect(await within(page).findByText("Cached model")).toBeInTheDocument();
+		if (source === "database") expect(apiClient.GET).toHaveBeenCalledWith("/api/v1/agents/{agent}/models", {
+			params: { path: { agent: "codex" }, query: { projectId: undefined, catalogOnly: true } },
+		});
 		expect(within(page).queryByText("Loading models…")).toBeNull();
 		await act(async () => {
 			if (outcome === "success") resolveRefresh({ data: { agentId: "codex", models: [{ id: "fresh", label: "Fresh model" }] } });
