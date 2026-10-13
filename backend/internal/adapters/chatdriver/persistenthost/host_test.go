@@ -118,7 +118,7 @@ func runACPProviderHelper() {
 				// blocking socket write.
 				chunk := strings.Repeat("b", 2048)
 				for i := 0; i < burst; i++ {
-					_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"acp-session-live","update":{"agent_message_chunk":{"content":{"type":"text","text":"%s"}}}}}`+"\n", chunk)
+					_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"acp-session-live","update":{"agent_message_chunk":{"content":{"type":"text","text":"%d:%s"}}}}}`+"\n", i, chunk)
 				}
 			}
 			_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn","providerPid":%d}}`+"\n", frame.ID, os.Getpid())

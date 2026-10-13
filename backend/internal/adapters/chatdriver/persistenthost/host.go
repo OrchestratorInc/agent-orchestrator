@@ -43,8 +43,8 @@ const (
 // reports ErrAttached until the host process is killed. Expiry takes the
 // existing write-failure path — detach, buffer or journal the frame, keep the
 // provider alive — which is the designed resumable detached state. One deadline
-// per write, not per connection: a controller draining steadily, however slowly,
-// never trips it.
+// per write, not per connection: idle time and the total replay duration do not
+// consume the next frame's write budget.
 var clientWriteTimeout = 30 * time.Second
 
 // Protocol selects the provider-wire behavior owned by the host.
