@@ -107,14 +107,14 @@ describe("startup harness update notice", () => {
 		});
 		const before = useUiStore.getState().settingsModal;
 		mountNotice();
-		const button = await screen.findByRole("button", { name: "Update all" });
+		await screen.findByRole("button", { name: "Update all" });
 		// Collapsed, several updates read as one summary card.
 		expect(screen.getAllByRole("article")).toHaveLength(1);
 		expect(screen.getByRole("article", { name: "Harness updates available" })).toBeInTheDocument();
-		await userEvent.dblClick(button);
+		await userEvent.click(screen.getByRole("button", { name: "Show all (3)" }));
+		await userEvent.dblClick(screen.getByRole("button", { name: "Update all" }));
 		await waitFor(() => expect(started).toEqual(["cursor"]));
 		expect(screen.getByRole("button", { name: "Starting updates…" })).toBeDisabled();
-		await userEvent.click(screen.getByRole("button", { name: "Show all (3)" }));
 		expect(within(screen.getByRole("article", { name: "Codex" })).getByRole("button", { name: "Update" })).toBeDisabled();
 		await act(async () => pending.resolve({ error: { message: "Cursor update refused" } } as never));
 		await waitFor(() => expect(started).toEqual(["cursor", "codex", "claude-code"]));
