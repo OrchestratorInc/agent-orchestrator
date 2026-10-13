@@ -135,6 +135,14 @@ type ListProjectsResponse struct {
 	Projects []projectsvc.Summary `json:"projects"`
 }
 
+// CloneProgressQuery is the query string accepted by
+// GET /api/v1/projects/clone/progress. It mirrors the inputs of the prepare
+// call so the daemon can find the matching in-flight clone.
+type CloneProgressQuery struct {
+	RemoteURL         string `query:"remoteUrl" description:"Repository URL the clone was started with."`
+	DestinationParent string `query:"destinationParent" description:"Parent folder the checkout is created in."`
+}
+
 // ProjectResponse is the { project } body shared by POST /projects (201).
 type ProjectResponse struct {
 	Project projectsvc.Project `json:"project"`

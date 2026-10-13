@@ -3297,6 +3297,50 @@ paths:
       summary: Clone a project without registering it so Git setup can be completed
       tags:
       - projects
+  /api/v1/projects/clone/progress:
+    get:
+      operationId: getCloneProgress
+      parameters:
+      - description: Repository URL the clone was started with.
+        in: query
+        name: remoteUrl
+        schema:
+          description: Repository URL the clone was started with.
+          type: string
+      - description: Parent folder the checkout is created in.
+        in: query
+        name: destinationParent
+        schema:
+          description: Parent folder the checkout is created in.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CloneProgress'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Report the progress of the clone started by the matching prepare call
+      tags:
+      - projects
   /api/v1/projects/initialize:
     post:
       operationId: initializeProjectRepository
@@ -11271,6 +11315,46 @@ components:
       - path
       - remoteUrl
       - preparationId
+      type: object
+    CloneProgress:
+      properties:
+        itemsDone:
+          minimum: 0
+          type: integer
+        itemsTotal:
+          minimum: 0
+          type: integer
+        percent:
+          format: double
+          type: number
+        phase:
+          enum:
+          - connecting
+          - enumerating
+          - counting
+          - compressing
+          - receiving
+          - resolving
+          - updating
+          - finalizing
+          type: string
+        speedBytesPerSecond:
+          format: double
+          type: number
+        startedAt:
+          format: date-time
+          type: string
+        transferredBytes:
+          minimum: 0
+          type: integer
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - phase
+      - percent
+      - startedAt
+      - updatedAt
       type: object
     CloneProjectInput:
       properties:

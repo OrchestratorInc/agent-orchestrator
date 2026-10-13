@@ -63,6 +63,36 @@ func (m *Service) PrepareClone(ctx context.Context, in CloneInput) (ClonePrepara
 	return m.prepareClone(ctx, in, true)
 }
 
+// CloneProgress reports the latest parsed git progress of the clone identified
+// by the query's remote URL and destination parent. The lookup derives the
+// same destination path prepareClone computes, so the client only needs the
+// values it already sent.
+func (m *Service) CloneProgress(_ context.Context, in CloneProgressQuery) (CloneProgress, error) {
+	key, err := cloneProgressKey(in.RemoteURL, in.DestinationParent)
+	if err != nil {
+		return CloneProgress{}, err
+	}
+	progress, ok := m.cloneProgress.get(key)
+	if !ok {
+		return CloneProgress{}, apierr.NotFound("CLONE_PROGRESS_NOT_FOUND", "No clone is currently running for this repository and destination.")
+	}
+	return progress, nil
+}
+
+// cloneProgressKey derives the progress registry key for a clone attempt: the
+// final checkout path, exactly as prepareClone computes it.
+func cloneProgressKey(remoteURL, destinationParent string) (string, error) {
+	name, err := cloneRepositoryName(strings.TrimSpace(remoteURL))
+	if err != nil {
+		return "", err
+	}
+	parent, err := normalizePath(destinationParent)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(parent, name), nil
+}
+
 // CleanupPreparedClone removes an unregistered checkout created by PrepareClone.
 func (m *Service) CleanupPreparedClone(ctx context.Context, in ClonePreparationCleanupInput) error {
 	path, err := normalizePath(in.Path)
@@ -162,8 +192,12 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput, resume bool) 
 		}
 	}()
 
-	cmd := aoprocess.CommandContext(ctx, "git", "clone", "--origin", "origin", "--", remoteURL, temporaryPath)
+	cmd := aoprocess.CommandContext(ctx, "git", "clone", "--progress", "--origin", "origin", "--", remoteURL, temporaryPath)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
+	tracker := newCloneProgressTracker(m.clock)
+	m.cloneProgress.add(target, tracker)
+	defer m.cloneProgress.remove(target, tracker)
+	cmd.Stderr = tracker
 	if err := cmd.Run(); err != nil {
 		var executableError *exec.Error
 		if errors.As(err, &executableError) {
@@ -177,6 +211,9 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput, resume bool) 
 	if ctx.Err() != nil {
 		return ClonePreparationResult{}, apierr.Invalid("GIT_CLONE_CANCELLED", "Repository cloning was cancelled.", nil)
 	}
+	// git finished; the remaining marker write and rename are local and fast,
+	// but report them so the last polls do not show a stale receiving phase.
+	tracker.finish()
 	preparationID, err := newClonePreparationID()
 	if err != nil {
 		return ClonePreparationResult{}, apierr.Internal("CLONE_PREPARATION_FAILED", "AO could not identify the prepared clone")

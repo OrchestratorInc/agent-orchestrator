@@ -805,11 +805,13 @@ export function CreateProjectFlow({
 					{cloneDialogOpen ? (
 						<CloneRepositoryDialog
 							remote={Boolean(hostId)}
+							cloning={isPreparingGit}
 							onChooseRemoteDestination={() => setRemoteBrowse({ kind: "clone_destination" })}
 							disabled={isBusy}
 							error={error}
 							existingProjectNames={existingProjectNames}
 							existingProjectPaths={existingProjectPaths}
+							progress={preparedClone.progress}
 							onBack={() => {
 								void leaveCloneDialog(true);
 							}}

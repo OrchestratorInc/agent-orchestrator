@@ -24,6 +24,7 @@ const bridgeMocks = vi.hoisted(() => ({
 }));
 
 const apiMocks = vi.hoisted(() => ({
+	GET: vi.fn(),
 	POST: vi.fn(),
 	apiErrorMessage: vi.fn((error: unknown, fallback = "Request failed") =>
 		typeof error === "object" && error !== null && "message" in error ? String((error as { message?: unknown }).message) : fallback,
@@ -52,6 +53,7 @@ vi.mock("../lib/bridge", () => ({
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: {
+		GET: apiMocks.GET,
 		POST: apiMocks.POST,
 	},
 	apiErrorCode: (error: unknown) =>
@@ -356,6 +358,9 @@ beforeEach(() => {
 	bridgeMocks.connectProviderAuth.mockReset().mockRejectedValue(new Error("No browser auth flow for github in tests"));
 	bridgeMocks.openExternal.mockReset().mockResolvedValue(undefined);
 	apiMocks.POST.mockReset();
+	// The clone-progress poll treats any miss (404, older daemon, empty body)
+	// as "no snapshot yet"; the default mock mirrors that.
+	apiMocks.GET.mockReset().mockResolvedValue({ data: undefined, error: { code: "CLONE_PROGRESS_NOT_FOUND" } });
 	hostMocks.aGet.mockReset(); hostMocks.aPost.mockReset();
 	hostMocks.bGet.mockReset(); hostMocks.bPost.mockReset();
 	apiMocks.apiErrorMessage.mockClear();
