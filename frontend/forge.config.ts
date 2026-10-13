@@ -389,7 +389,11 @@ const config: ForgeConfig = {
 			// The app never re-execs itself as Node (no ELECTRON_RUN_AS_NODE /
 			// fork / utilityProcess); acp-runtime ships its own Node binary.
 			[FuseV1Options.RunAsNode]: false,
-			[FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
+			// Left on: with this fuse off Electron unsets NODE_OPTIONS from its own
+			// environment at startup, so the daemon, agents and terminals it spawns
+			// would silently lose a user's NODE_OPTIONS (Windows system env,
+			// launchctl setenv). Disabling it needs its own change.
+			[FuseV1Options.EnableNodeOptionsEnvironmentVariable]: true,
 			[FuseV1Options.EnableNodeCliInspectArguments]: false,
 			// Enforced on macOS and Windows; Electron does not validate ASAR
 			// integrity on Linux.
