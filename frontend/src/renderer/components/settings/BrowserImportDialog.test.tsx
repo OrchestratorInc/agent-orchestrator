@@ -267,7 +267,7 @@ describe("BrowserImportDialog", () => {
 		{ imported: 12, failure: false, title: "Import complete" },
 		{ imported: 12, failure: true, title: "Import complete" },
 		{ imported: 0, failure: false, title: "Nothing was imported" },
-	])("keeps expected skips informational while reporting $title", async ({ imported, failure, title }) => {
+	])("keeps expected skips informational while reporting $title (cookie-write failure: $failure)", async ({ imported, failure, title }) => {
 		const warnings: BrowserImportWarning[] = [
 			{ code: "expired-cookies-skipped", count: 2 },
 			{ code: "isolated-cookies-skipped", count: 3 },
