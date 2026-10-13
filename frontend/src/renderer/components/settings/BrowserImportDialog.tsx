@@ -333,11 +333,11 @@ function importFailureMessage(reason: unknown, browser: string): ImportFailure {
 		.replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/i, "")
 		.replace(/^Error:\s*/i, "")
 		.trim();
+	if (browser === "Safari" && /unable to open database file|SQLITE_CANTOPEN|\b(?:EACCES|EPERM)\b/i.test(message)) {
+		return { message: appI18n.t("settings.browserImport.safariAccessUnavailable"), recoverable: false };
+	}
 	if (/couldn't create a temporary copy|unable to open database file|database is locked|SQLITE_(?:BUSY|CANTOPEN|LOCKED)/i.test(message)) {
 		return { message: appI18n.t("settings.browserImport.sourceDatabaseUnavailable", { browser }), recoverable: true };
-	}
-	if (browser === "Safari" && /\b(?:EACCES|EPERM)\b/i.test(message)) {
-		return { message: appI18n.t("settings.browserImport.safariAccessUnavailable"), recoverable: false };
 	}
 	return { message: message || fallback, recoverable: false };
 }
