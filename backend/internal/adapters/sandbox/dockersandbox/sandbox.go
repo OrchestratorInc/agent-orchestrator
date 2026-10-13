@@ -157,7 +157,7 @@ func (s *Sandbox) gitCommonDir(ctx context.Context, workspace string) (string, e
 	defer cancel()
 	out, err := s.run.Output(ctx, "git", "-C", workspace, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
-		return "", fmt.Errorf("%w: resolve git dir for %s: %v", ports.ErrSandboxMisconfigured, workspace, err)
+		return "", fmt.Errorf("%w: resolve git dir for %s: %w", ports.ErrSandboxMisconfigured, workspace, err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -230,7 +230,7 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 			if errors.Is(err, ports.ErrSandboxUnavailable) {
 				return ports.SandboxTarget{}, err
 			}
-			return ports.SandboxTarget{}, fmt.Errorf("%w: start sandbox from image %s (the image must exist or be pullable and provide /bin/sh): %v",
+			return ports.SandboxTarget{}, fmt.Errorf("%w: start sandbox from image %s (the image must exist or be pullable and provide /bin/sh): %w",
 				ports.ErrSandboxMisconfigured, req.Config.Image, err)
 		}
 		created = true
@@ -252,7 +252,7 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 					err = fmt.Errorf("%w (removing the new container also failed: %w)", err, rmErr)
 				}
 			}
-			return ports.SandboxTarget{}, fmt.Errorf("%w: image %s has no %q on PATH (and needs /bin/sh): %v",
+			return ports.SandboxTarget{}, fmt.Errorf("%w: image %s has no %q on PATH (and needs /bin/sh): %w",
 				ports.ErrSandboxMisconfigured, req.Config.Image, bin, err)
 		}
 	}
@@ -278,7 +278,7 @@ func (s *Sandbox) output(ctx context.Context, timeout time.Duration, docker stri
 	defer cancel()
 	out, err := s.run.Output(ctx, docker, args...)
 	if err != nil && (dockerreap.IsDockerUnavailable(err) || dockerSocketDenied(err)) {
-		return out, fmt.Errorf("%w: Docker is not running or not reachable: %v", ports.ErrSandboxUnavailable, err)
+		return out, fmt.Errorf("%w: Docker is not running or not reachable: %w", ports.ErrSandboxUnavailable, err)
 	}
 	return out, err
 }
@@ -291,7 +291,7 @@ func (s *Sandbox) Exec(target ports.SandboxTarget, workspacePath string, env map
 	}
 	data, err := renderEnvFile(merged)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ports.ErrSandboxMisconfigured, err)
+		return nil, fmt.Errorf("%w: %w", ports.ErrSandboxMisconfigured, err)
 	}
 	// Set after rendering so hostOnlyEnv cannot drop them.
 	data = append(data, []byte("HOME="+shQuote(filepath.Join(target.ProjectDir, "home"))+"\nAO_SANDBOX='1'\nAO_SANDBOX_RELAY="+shQuote(target.RelayDir)+"\n")...)

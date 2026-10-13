@@ -58,7 +58,8 @@ func (f *sandboxInFlight) begin(project domain.ProjectID) func() {
 		once.Do(func() {
 			f.mu.Lock()
 			defer f.mu.Unlock()
-			if f.count[project]--; f.count[project] <= 0 {
+			f.count[project]--
+			if f.count[project] <= 0 {
 				delete(f.count, project)
 			}
 		})

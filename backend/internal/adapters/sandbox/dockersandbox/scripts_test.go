@@ -2,6 +2,7 @@ package dockersandbox
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,8 +36,8 @@ func TestInstallBinConcurrent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Mode().Perm() != 0o755 {
-			t.Fatalf("%s mode = %v, want 0755", name, info.Mode().Perm())
+		if info.Mode().Perm() != 0o700 {
+			t.Fatalf("%s mode = %v, want 0700", name, info.Mode().Perm())
 		}
 	}
 	entries, err := os.ReadDir(bin)
@@ -130,7 +131,5 @@ func TestAoEnterSourcesEnvAndPrependsBin(t *testing.T) {
 }
 
 func errorsAs(err error, target **exec.ExitError) bool {
-	e, ok := err.(*exec.ExitError)
-	*target = e
-	return ok
+	return errors.As(err, target)
 }

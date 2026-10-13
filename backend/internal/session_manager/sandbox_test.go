@@ -6,12 +6,21 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+// sameReleases compares release calls field by field; reflect.DeepEqual on a
+// struct holding an error is unreliable.
+func sameReleases(a, b []releaseCall) bool {
+	return slices.EqualFunc(a, b, func(x, y releaseCall) bool {
+		return x.inUse == y.inUse && errors.Is(x.err, y.err)
+	})
+}
 
 type releaseCall struct {
 	inUse bool
@@ -288,13 +297,13 @@ func TestKillReleasesSharedSandboxOnlyWhenUnused(t *testing.T) {
 	if _, err := m.Kill(ctx, "mer-1"); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(sb.released, []releaseCall{{inUse: true}}) {
+	if !sameReleases(sb.released, []releaseCall{{inUse: true}}) {
 		t.Fatalf("after first kill released = %+v, want the container kept for mer-2", sb.released)
 	}
 	if _, err := m.Kill(ctx, "mer-2"); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(sb.released, []releaseCall{{inUse: true}, {inUse: false}}) {
+	if !sameReleases(sb.released, []releaseCall{{inUse: true}, {inUse: false}}) {
 		t.Fatalf("after last kill released = %+v, want unused only after mer-2 terminated", sb.released)
 	}
 }
@@ -385,7 +394,7 @@ func TestReleaseSharedSandboxKeepsContainerWhileLaunchInFlight(t *testing.T) {
 	m.releaseSharedSandbox(ctx, "mer")
 	done()
 	m.releaseSharedSandbox(ctx, "mer")
-	if !reflect.DeepEqual(sb.released, []releaseCall{{inUse: true}, {inUse: false}}) {
+	if !sameReleases(sb.released, []releaseCall{{inUse: true}, {inUse: false}}) {
 		t.Fatalf("released = %+v, want in use only while the launch is in flight", sb.released)
 	}
 }
@@ -442,7 +451,7 @@ func TestKillFailingBeforeTerminationKeepsSharedSandbox(t *testing.T) {
 	if _, err := m.Kill(ctx, "mer-1"); err == nil {
 		t.Fatal("kill succeeded, want the runtime error")
 	}
-	if !reflect.DeepEqual(sb.released, []releaseCall{{inUse: true}}) {
+	if !sameReleases(sb.released, []releaseCall{{inUse: true}}) {
 		t.Fatalf("released = %+v, want the container kept for the still-live session", sb.released)
 	}
 }

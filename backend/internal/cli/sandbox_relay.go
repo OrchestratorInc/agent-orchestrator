@@ -29,7 +29,7 @@ const (
 	sandboxRelayJoinTimeout = 10 * time.Second
 )
 
-var sandboxRelayIDPattern = regexp.MustCompile(`^[0-9]+-[0-9]+-[0-9]+$`)
+var sandboxRelayIDPattern = regexp.MustCompile(`^\d+-\d+-\d+$`)
 
 // sandboxRelayPolicy decides which top-level `ao` commands a sandboxed agent
 // may run on the host (#6663). Every root command must be listed. The relay
@@ -103,7 +103,7 @@ func openSandboxRelay(dir string) (*os.Root, error) {
 // goes through the os.Root, which refuses to leave it. It returns after
 // in-flight handlers finish.
 func serveSandboxRelayRoot(ctx context.Context, root *os.Root, run relayRunFunc) {
-	defer root.Close()
+	defer func() { _ = root.Close() }() // read-only root; nothing to flush
 	sem := make(chan struct{}, sandboxRelayMaxInFlight)
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -146,7 +146,7 @@ func listRelayRequests(root *os.Root) []string {
 	if err != nil {
 		return nil
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }() // read-only dir handle
 	entries, _ := d.ReadDir(-1)
 	var ids []string
 	for _, e := range entries {
@@ -230,7 +230,7 @@ func readRelayFile(root *os.Root, name string) (data []byte, tooBig bool, err er
 	if err != nil {
 		return nil, false, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only file handle
 	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
 		return nil, false, errors.New("not a regular file")
 	}

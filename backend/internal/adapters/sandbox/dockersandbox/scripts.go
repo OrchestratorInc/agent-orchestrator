@@ -13,7 +13,7 @@ var scripts embed.FS
 // InstallBin writes the in-container helper scripts into dir. The daemon
 // rewrites them on every Ensure so an upgraded AO never runs stale scripts.
 func InstallBin(dir string) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("sandbox bin dir: %w", err)
 	}
 	for _, name := range []string{"ao", "ao-enter"} {
@@ -49,7 +49,7 @@ func writeScript(dir, name string, data []byte) (err error) {
 	if err = f.Close(); err != nil {
 		return fmt.Errorf("write sandbox script %s: %w", name, err)
 	}
-	if err = os.Chmod(tmp, 0o755); err != nil {
+	if err = os.Chmod(tmp, 0o700); err != nil { //nolint:gosec // helper scripts must be executable; 0700 is owner-only and the container runs as the host uid:gid.
 		return fmt.Errorf("chmod sandbox script %s: %w", name, err)
 	}
 	if err = os.Rename(tmp, filepath.Join(dir, name)); err != nil {

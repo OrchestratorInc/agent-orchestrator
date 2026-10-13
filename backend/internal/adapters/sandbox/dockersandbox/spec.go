@@ -162,7 +162,9 @@ func hasHostOnlyPrefix(k string) bool {
 }
 
 func execArgv(docker string, t ports.SandboxTarget, workspacePath string, argv []string) []string {
-	out := []string{docker, "exec", "-i", "-t", "-w", workspacePath, t.Container,
+	head := []string{docker, "exec", "-i", "-t", "-w", workspacePath, t.Container,
 		"/bin/sh", t.BinDir + "/ao-enter", t.SessionDir + "/env"}
+	out := make([]string, 0, len(head)+len(argv))
+	out = append(out, head...)
 	return append(out, argv...)
 }

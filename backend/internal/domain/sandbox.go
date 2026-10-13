@@ -29,8 +29,8 @@ var (
 	// sandboxImagePattern also rejects a leading '-' so an image can never be
 	// read as a docker flag.
 	sandboxImagePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$`)
-	sandboxCPUsPattern   = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
-	sandboxMemoryPattern = regexp.MustCompile(`^[0-9]+[bkmgBKMG]?$`)
+	sandboxCPUsPattern   = regexp.MustCompile(`^\d+(\.\d+)?$`)
+	sandboxMemoryPattern = regexp.MustCompile(`^\d+[bkmgBKMG]?$`)
 )
 
 // Enabled reports whether agents should run inside a container.
