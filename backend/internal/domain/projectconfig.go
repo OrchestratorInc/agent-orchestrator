@@ -69,6 +69,10 @@ type ProjectConfig struct {
 	// drifting out of sync with a project-config list.
 	ContainerReap ContainerReapConfig `json:"containerReap,omitempty"`
 
+	// Sandbox runs this project's agents inside a local Docker container
+	// (#6663). The zero value keeps agents on the host.
+	Sandbox SandboxConfig `json:"sandbox,omitempty"`
+
 	// AutoReview controls whether new worker sessions spawned for this project
 	// have automatic PR review enabled by default. The default (false) leaves
 	// sessions with auto-review off; enabling it copies the setting into each
@@ -158,8 +162,9 @@ func (c ProjectConfig) DefaultWorkerReviewer() (ReviewerHarness, AgentConfig) {
 
 // RoleOverride overrides the harness and/or agent config for a session role.
 type RoleOverride struct {
-	Harness     AgentHarness `json:"agent,omitempty"`
-	AgentConfig AgentConfig  `json:"agentConfig,omitempty"`
+	Harness     AgentHarness   `json:"agent,omitempty"`
+	AgentConfig AgentConfig    `json:"agentConfig,omitempty"`
+	Sandbox     *SandboxConfig `json:"sandbox,omitempty"`
 }
 
 const (
@@ -243,6 +248,14 @@ func (c ProjectConfig) Validate() error {
 		if err := ro.AgentConfig.Validate(); err != nil {
 			return fmt.Errorf("%s.%w", role, err)
 		}
+		if ro.Sandbox != nil {
+			if err := ro.Sandbox.Validate(); err != nil {
+				return fmt.Errorf("%s.%w", role, err)
+			}
+		}
+	}
+	if err := c.Sandbox.Validate(); err != nil {
+		return err
 	}
 	for _, s := range c.Symlinks {
 		if err := validateRepoRelative(s); err != nil {

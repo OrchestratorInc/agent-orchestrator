@@ -14867,6 +14867,8 @@ components:
           items:
             $ref: '#/components/schemas/DomainReviewerConfig'
           type: array
+        sandbox:
+          $ref: '#/components/schemas/SandboxConfig'
         sessionPrefix:
           type: string
         symlinks:
@@ -15451,6 +15453,8 @@ components:
           type: string
         agentConfig:
           $ref: '#/components/schemas/AgentConfig'
+        sandbox:
+          $ref: '#/components/schemas/SandboxConfig'
       type: object
     RollbackConversationResponse:
       properties:
@@ -15472,6 +15476,19 @@ components:
       required:
       - ok
       - sessionId
+      type: object
+    SandboxConfig:
+      properties:
+        cpus:
+          type: string
+        image:
+          type: string
+        memory:
+          type: string
+        mode:
+          type: string
+        pidsLimit:
+          type: integer
       type: object
     SaveRenderArtifactRequest:
       properties:
