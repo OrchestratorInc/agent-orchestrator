@@ -105,7 +105,7 @@ function ProjectScreenContent() {
 				) : connection !== "open" ? (
 					<EmptyState icon="wifi-off" title="Machine offline" message="This project loads once the app reconnects." />
 				) : (
-					<EmptyState icon="folder" title="Project not found" message="It may have been removed from AO." />
+					<EmptyState icon="folder" title="Project not found" message="It may have been removed from Orchestrator." />
 				)
 			) : (
 				<WorkerBoardList

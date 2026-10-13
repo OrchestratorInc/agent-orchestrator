@@ -43,7 +43,7 @@ export default function MachineNameSheetRoute() {
 	}
 
 	const content = (
-		<SheetScreen title="Name this machine" subtitle="Choose a name you'll recognize in AO.">
+		<SheetScreen title="Name this machine" subtitle="Choose a name you'll recognize in Orchestrator.">
 			<View style={styles.field}>
 				<Text style={styles.label}>MACHINE NAME</Text>
 				<TextInput

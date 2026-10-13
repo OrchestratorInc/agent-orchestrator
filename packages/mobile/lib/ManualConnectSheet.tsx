@@ -87,7 +87,7 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 			haptics.warning();
 			if (e instanceof DifferentMachineError || e instanceof AccountManagedHostError) {
 				setFailure({
-					title: e instanceof AccountManagedHostError ? "Managed by AO Cloud" : "Different machine",
+					title: e instanceof AccountManagedHostError ? "Managed by Orchestrator Cloud" : "Different machine",
 					message: e.message,
 					icon: "alert-circle",
 					showLocalNetworkHint: false,

@@ -4,7 +4,7 @@ import type { ComponentProps } from "react";
 import { TextInput } from "react-native";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true, requestAnimationFrame: (cb: () => void) => { cb(); return 1; } });
-const { storage } = vi.hoisted(() => ({ storage: { getItem: vi.fn(async () => null as string | null), setItem: vi.fn(async () => {}), removeItem: vi.fn(async () => {}) } }));
+const { request, storage } = vi.hoisted(() => ({ request: vi.fn(), storage: { getItem: vi.fn(async (_key: string) => null as string | null), setItem: vi.fn(async (_key: string, _value: string) => {}), removeItem: vi.fn(async (_key: string) => {}) } }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: storage }));
 vi.mock("react-native", () => ({
 	ActivityIndicator: "ActivityIndicator", Image: "Image", Keyboard: { dismiss: vi.fn() },
@@ -16,7 +16,11 @@ vi.mock("react-native-keyboard-controller", () => ({ useReanimatedKeyboardAnimat
 vi.mock("expo-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("expo-secure-store", () => ({}));
 vi.mock("expo-document-picker", () => ({}));
-vi.mock("expo-image-picker", () => ({}));
+vi.mock("expo-image-picker", () => ({ launchImageLibraryAsync: vi.fn() }));
+vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
+vi.mock("../api", () => ({ apiRequest: request, ApiError: class extends Error {}, ATTACHMENT_REQUEST_TIMEOUT_MS: 1 }));
+vi.mock("./conversationEvents", () => ({ subscribeConversationEvents: () => () => {} }));
+vi.mock("./conversationPoll", () => ({ conversationPollIntervalFor: () => null }));
 vi.mock("../icons", () => ({ Feather: "Feather" }));
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn(), success: vi.fn(), error: vi.fn() } }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => ({}), useThemedStyles: (factory: (theme: object) => unknown) => factory({}) }));
@@ -31,7 +35,10 @@ vi.mock("./PRReviewPrompt", () => ({ PRReviewPrompt: "PRReviewPrompt" }));
 
 import { ChatComposer } from "./ChatComposer";
 import { ComposerGlass } from "./composer-glass";
-import { encodeResponseDraft } from "./responseQuotes";
+import { decodeResponseDraft, encodeResponseDraft } from "./responseQuotes";
+import { useMobileConversation } from "./useConversation";
+import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
+import { launchImageLibraryAsync } from "expo-image-picker";
 
 const source = { conversationId: "conversation", messageId: "response", revision: 1 };
 
@@ -42,7 +49,7 @@ const props = () => ({
 	onSend: vi.fn(async () => "send-id"), onSteer: vi.fn(), onAcknowledgeSend: vi.fn(async () => {}), onQuoteHandled: vi.fn(),
 } as unknown as ComponentProps<typeof ChatComposer>);
 let renderer: ReactTestRenderer;
-afterEach(() => { if (renderer) act(() => renderer.unmount()); vi.clearAllMocks(); });
+afterEach(() => { if (renderer) act(() => renderer.unmount()); vi.clearAllMocks(); vi.useRealTimers(); });
 
 it("adds and removes selected text while preserving the existing editable reply, without sending", async () => {
 	const p = props();
@@ -92,4 +99,37 @@ it("restores a saved quote alongside a typed draft", async () => {
 	await act(async () => { renderer = create(<ChatComposer {...p} />); });
 	expect(renderer.root.findByType(TextInput).props.value).toBe("Saved reply");
 	expect(renderer.root.findAllByProps({ accessibilityLabel: "Quoted response: Saved excerpt" })).toHaveLength(1);
+});
+
+it("saves an immediately submitted reply and quote before an old host rejects its image, then restores both", async () => {
+	vi.useFakeTimers();
+	const stored = new Map<string, string>();
+	storage.getItem.mockImplementation(async (key: string) => stored.get(key) ?? null);
+	storage.setItem.mockImplementation(async (key: string, value: string) => { stored.set(key, value); });
+	storage.removeItem.mockImplementation(async (key: string) => { stored.delete(key); });
+	request.mockImplementation(async (_cfg, _path, init) => ({ json: async () => init?.method === "POST"
+		? { paths: [".ao/attachments/image.png"] }
+		: { controller: "ready", capabilities: ["images"], messages: [] } }));
+	vi.mocked(launchImageLibraryAsync).mockResolvedValue({ canceled: false, assets: [{ uri: "qa-image", width: 1, height: 1, base64: "aGVsbG8=", mimeType: "image/png" }] });
+	const p = props();
+	p.config = { host: "localhost", httpPort: "1234", muxPort: "1234", password: "test", hostId: "draft-rejection-host" };
+	function Harness({ quote = true }: { quote?: boolean }) {
+		const conversation = useMobileConversation(p.config, p.sessionId);
+		return <ChatComposer {...p} onSend={conversation.send} onAcknowledgeSend={conversation.acknowledgeSend}
+			quoteRequest={quote ? { id: "immediate", text: "Quoted context", source, composerKey: "session" } : undefined} />;
+	}
+	await act(async () => { renderer = create(<Harness />); });
+	await act(async () => renderer.root.findByType(ChatAttachmentMenu).props.onChoosePhoto());
+	act(() => renderer.root.findByType(TextInput).props.onChangeText("Latest reply"));
+	expect(storage.setItem).not.toHaveBeenCalled(); // The 250 ms autosave has not run.
+	request.mockClear();
+	await act(async () => renderer.root.findByProps({ accessibilityLabel: "Send message" }).props.onPress());
+	expect(request.mock.calls.filter(call => call[2]?.method === "POST")).toEqual([]);
+	const saved = [...stored].find(([key]) => key.startsWith("ao.chat.draft."));
+	expect(saved).toBeDefined();
+	expect(decodeResponseDraft(saved![1])).toMatchObject({ text: "Latest reply", quotes: [{ text: "Quoted context", source }] });
+	await act(async () => renderer.unmount());
+	await act(async () => { renderer = create(<Harness quote={false} />); });
+	expect(renderer.root.findByType(TextInput).props.value).toBe("Latest reply");
+	expect(renderer.root.findAllByProps({ accessibilityLabel: "Quoted response: Quoted context" })).toHaveLength(1);
 });

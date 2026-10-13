@@ -231,10 +231,10 @@ export default function PairScreen() {
 			{repairHost ? (
 				<View style={styles.repairIntro}>
 					<Text style={styles.repairTitle}>Reconnect {repairHost.name}</Text>
-					<Text style={styles.repairText}>Scan the new code from AO → Settings → Connect Mobile on that machine.</Text>
+					<Text style={styles.repairText}>Scan the new code from Orchestrator → Settings → Connect Mobile on that machine.</Text>
 				</View>
 			) : <View style={styles.steps}>
-					<NumberedStep n={1} title="Enable AO on a machine" compact />
+					<NumberedStep n={1} title="Enable Orchestrator on a machine" compact />
 					<NumberedStep n={2} title="Open Connect Mobile or run ao remote-host enable" compact />
 					<NumberedStep n={3} title="Scan the code or enter details manually" compact />
 			</View>}
@@ -336,8 +336,8 @@ function CameraGate({
 			<Text style={styles.gateTitle}>Camera access needed</Text>
 			<Text style={styles.gateHint}>
 				{canAskAgain
-					? "AO uses the camera only to read a pairing QR code."
-					: "Camera access is turned off for AO. Enable it in system settings, or enter your details manually below."}
+					? "Orchestrator uses the camera only to read a pairing QR code."
+					: "Camera access is turned off for Orchestrator. Enable it in system settings, or enter your details manually below."}
 			</Text>
 			{canAskAgain ? (
 				// App Review 5.1.1(iv): the button ahead of the system permission

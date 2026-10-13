@@ -109,7 +109,7 @@ function ReviewDetailContent() {
 
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon="git-pull-request" title="Review belongs to another machine" message="Open it from that machine's session." /></View>;
 	if (!data && !error) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
-	if (!data || !review) return <EmptyState icon={error ? "alert-triangle" : "git-pull-request"} title={error ? "Could not load review" : "No review found"} message={error || "AO has no review state for this pull request yet."} action={<Button title="Try again" icon="refresh-cw" variant="ghost" onPress={() => void load()} />} />;
+	if (!data || !review) return <EmptyState icon={error ? "alert-triangle" : "git-pull-request"} title={error ? "Could not load review" : "No review found"} message={error || "Orchestrator has no review state for this pull request yet."} action={<Button title="Try again" icon="refresh-cw" variant="ghost" onPress={() => void load()} />} />;
 	const primaryAction = reviewBatchAction(review, data.reviews);
 	const runs = reviewRunsForPullRequest([...(data.runs ?? []), ...(review.latestRun ? [review.latestRun] : []), ...(review.previousRun ? [review.previousRun] : [])], review.prUrl);
 	const multiplePullRequests = data.reviews.length > 1;
@@ -240,7 +240,7 @@ function ReviewDetailContent() {
 				<View style={styles.main}>
 					<View style={styles.eyebrow}>
 						{reviewerHarness ? <AgentLogo harness={reviewerHarness} size={14} /> : <Feather name="user" size={13} color={t.textSecondary} />}
-						<Text style={styles.eyebrowText} numberOfLines={1}>AO reviewer</Text>
+						<Text style={styles.eyebrowText} numberOfLines={1}>Orchestrator reviewer</Text>
 					</View>
 					<Text style={styles.title} numberOfLines={1}>{reviewerName(reviewerHarness)}</Text>
 					<View style={styles.statusLine}>
@@ -262,7 +262,7 @@ function ReviewDetailContent() {
 			{controls.stop && autoReviewEnabled ? <Text style={styles.note}>Turn off automatic review before stopping its reviewer session.</Text> : null}
 			{data.reviewerSurface?.controllerError ? <Text accessibilityRole="alert" style={[styles.note, styles.noteError]}>{data.reviewerSurface.controllerError}</Text> : null}
 
-			<ListSectionHeader label="AO review" />
+			<ListSectionHeader label="Orchestrator review" />
 			<View style={styles.row}>
 				<View style={styles.main}>
 					<View style={styles.eyebrow}>
@@ -289,7 +289,7 @@ function ReviewDetailContent() {
 			<ListSectionHeader label="History" count={runs.length} />
 			{runs.length
 				? runs.map((run) => <RunRow key={run.id} run={run} sent={sentRuns.has(run.id)} sending={mutation === `send:${run.id}`} disabled={Boolean(mutation)} onSend={() => void sendRun(run)} />)
-				: <Text style={styles.note}>No AO review for this pull request yet.</Text>}
+				: <Text style={styles.note}>No Orchestrator review for this pull request yet.</Text>}
 		</ScrollView>
 	);
 }

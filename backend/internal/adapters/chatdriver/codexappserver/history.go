@@ -35,11 +35,10 @@ import (
 //	blank title            "thread name must not be empty"
 //	unloaded thread        "thread not found: <id>"
 //
-// thread/rollback is annotated DEPRECATED in the protocol schema, and the
-// provider's own `undo` experimental feature already reports stage "removed". It
-// works on 0.146.0. When it goes, the replacement is thread/fork with lastTurnId,
-// which yields a different thread id — something ChatRollbacker cannot report, so
-// that day needs a port change and not a swap of the call in here.
+// thread/rollback works on 0.146.0. Codex 0.162 replaces it with thread/revert,
+// taking {threadId, beforeTurnId} and retaining the prefix before that turn in
+// the same thread. Neither operation reverts workspace files. An unknown-method
+// refusal is safe to retry through revert; an ordinary refusal is not.
 
 // Asserted so a refactor cannot silently drop one of these: the service
 // feature-detects each interface, and a missing method would read as "the provider
@@ -342,6 +341,19 @@ func (c *conversation) Rollback(ctx context.Context, providerTurnID string) erro
 		"threadId": c.threadID,
 		"numTurns": discard,
 	}, nil); err != nil {
+		var rpcErr *rpcError
+		if errors.As(err, &rpcErr) && (rpcErr.Code == -32601 ||
+			(rpcErr.Code == -32600 && strings.Contains(rpcErr.Message, "unknown variant `thread/rollback`"))) {
+			// Codex 0.162 replaced the count-based operation with an exclusive
+			// turn anchor. Only an unknown-method refusal permits this fallback;
+			// busy/validation/transport failures must never try another mutation.
+			if err := c.conn.request(ctx, "thread/revert", map[string]any{
+				"threadId": c.threadID, "beforeTurnId": providerTurnID,
+			}, nil); err != nil {
+				return asRefusal(fmt.Errorf("thread/revert: %w", err))
+			}
+			return nil
+		}
 		return asRefusal(fmt.Errorf("thread/rollback: %w", err))
 	}
 	return nil

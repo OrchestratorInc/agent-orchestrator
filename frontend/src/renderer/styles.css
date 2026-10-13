@@ -2566,8 +2566,8 @@ html.sidebar-reordering * {
 	transform: none;
 }
 
-/* Artifact sample prompts are list rows like the sidebar's: no press scale. */
-.cursor-chat-surface .artifact-prompt-suggestion:not(:disabled):active {
+/* Welcome sample prompts are list rows like the sidebar's: no press scale. */
+.cursor-chat-surface .welcome-prompt-suggestion:not(:disabled):active {
 	transform: none;
 }
 
@@ -4115,7 +4115,7 @@ html.sidebar-reordering * {
 	width: 100%;
 }
 
-.session-inspector__topbar--browser > .session-inspector-actions-spacer {
+.session-inspector__topbar--browser > .session-inspector__trailing {
 	grid-column: 3;
 	justify-self: end;
 }
@@ -4135,7 +4135,7 @@ html.sidebar-reordering * {
 		grid-row: 1;
 	}
 
-	.session-inspector__topbar--browser > .session-inspector-actions-spacer {
+	.session-inspector__topbar--browser > .session-inspector__trailing {
 		grid-column: 2;
 		grid-row: 1;
 	}
@@ -4207,7 +4207,7 @@ html.sidebar-reordering * {
 	width: 100%;
 }
 
-.session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector-actions-spacer {
+.session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector__trailing {
 	grid-column: 3;
 	justify-self: end;
 }
@@ -4229,7 +4229,7 @@ html.sidebar-reordering * {
 		grid-row: 1;
 	}
 
-	.session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector-actions-spacer {
+	.session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector__trailing {
 		grid-column: 2;
 		grid-row: 1;
 	}
@@ -6131,4 +6131,108 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	outline: 2px solid #6b7280;
 	outline-offset: 4px;
 	border-radius: 10px;
+}
+
+
+/* macOS window transparency.
+ *
+ * Native vibrancy blurs the desktop below the window. To keep translucent
+ * layers from compounding (a tinted panel over a tinted shell reads as a
+ * darker patch), the window follows the material model native apps use:
+ *   1. One tint: only the shell plate paints the theme colour, at 70%. Every
+ *      other chrome surface is clear.
+ *   2. Nested fills are additive overlays (foreground at a few percent), so a
+ *      card or button reads one step up from whatever sits behind it.
+ *   3. Floating surfaces (menus, popovers, tooltips, dialogs) restore the
+ *      solid theme values so they stay legible above the material.
+ * The terminal keeps its own opaque plate. */
+
+/* Solid copies, resolved on :root where the theme declares them. :root raises
+ * specificity past the theme catalog's :root[data-style-theme] blocks. */
+html:root[data-window-translucent="true"] {
+	--solid-bg-primary: var(--color-bg-primary);
+	--solid-bg-secondary: var(--color-bg-secondary);
+	--solid-bg-tertiary: var(--color-bg-tertiary);
+	--solid-bg-sidebar: var(--color-bg-sidebar);
+	--solid-muted: var(--muted);
+	--solid-secondary: var(--secondary);
+	--solid-accent: var(--accent);
+	--solid-sidebar-accent: var(--sidebar-accent);
+}
+
+/* Chrome: clear canvases, overlay fills. Declared on body so the theme's
+ * :root values stay intact for the solid copies above. */
+html[data-window-translucent="true"] body {
+	--color-bg-primary: transparent;
+	--color-bg-sidebar: transparent;
+	--color-bg-secondary: color-mix(in oklch, var(--foreground) 5%, transparent);
+	--color-bg-tertiary: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--muted: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--secondary: color-mix(in oklch, var(--foreground) 6%, transparent);
+	--accent: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--sidebar-accent: color-mix(in oklch, var(--foreground) 7%, transparent);
+	background: transparent;
+}
+
+/* Floating surfaces sit above the material: back to solid theme values.
+ * `.z-overlay` covers custom floating menus built on the shared menu recipe. */
+html[data-window-translucent="true"] :is(
+	.z-overlay,
+	[data-radix-popper-content-wrapper],
+	[role="dialog"],
+	[role="alertdialog"],
+	[role="tooltip"]
+) {
+	--color-bg-primary: var(--solid-bg-primary);
+	--color-bg-secondary: var(--solid-bg-secondary);
+	--color-bg-tertiary: var(--solid-bg-tertiary);
+	--color-bg-sidebar: var(--solid-bg-sidebar);
+	--muted: var(--solid-muted);
+	--secondary: var(--solid-secondary);
+	--accent: var(--solid-accent);
+	--sidebar-accent: var(--solid-sidebar-accent);
+}
+
+/* tokens.css resolves the legacy aliases on :root, before the swaps above.
+ * Re-resolve them wherever the surface tokens change. */
+html[data-window-translucent="true"] :is(
+	body,
+	.z-overlay,
+	[data-radix-popper-content-wrapper],
+	[role="dialog"],
+	[role="alertdialog"],
+	[role="tooltip"]
+) {
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
+}
+
+/* The single tint, on its own layer under the shell's content. The native
+ * browser rules clear .app-shell-root's own background while a page is live,
+ * which would drop the tint; this pseudo-element is untouched by them. */
+html[data-window-translucent="true"] .app-shell-root {
+	position: relative;
+	isolation: isolate;
+}
+
+html[data-window-translucent="true"] .app-shell-root::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	pointer-events: none;
+	background-color: color-mix(in srgb, var(--sidebar) 70%, transparent);
+}
+
+/* The live page is a native view below the shell. Cut the tint out over its
+ * rect (published by useBrowserView) so the page is not tinted. */
+html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-panel[data-browser-native-page="live"]) .app-shell-root::before {
+	mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+	mask-size: 100% 100%, var(--browser-hole-w) var(--browser-hole-h);
+	mask-position: 0 0, var(--browser-hole-x) var(--browser-hole-y);
+	mask-repeat: no-repeat;
+	mask-composite: exclude;
 }
