@@ -10,7 +10,7 @@ describe("paused Cloud terminal", () => {
 	});
 	it("does not connect while any sandbox is paused, archived or finally stopped", () => {
 		expect(source).toContain('const paused = isResumable(stage)');
-		expect(source).toContain("if (paused || archived || startupStopped) return;");
+		expect(source).toContain("if (paused || archived || startupStopped || handoffLocked) return;");
 	});
 
 	it("shows the paused stage and an explicit resume action", () => {

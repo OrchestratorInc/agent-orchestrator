@@ -9,7 +9,7 @@ const actionsSheetSource = readFileSync(new URL("./ConversationActionsSheet.tsx"
 describe("active turn controls", () => {
 	it("remounts the composer when a same-ID session changes host", () => {
 		expect(screenSource).toContain('JSON.stringify([machineIdentity(config), session.id])');
-		expect(screenSource).toContain('JSON.stringify([source.kind, source.id, session.id])');
+		expect(screenSource).toContain('JSON.stringify([sessionSource?.scopeKey, source.kind, source.id, session.id])');
 		expect(screenSource).toContain('key={composerKey}');
 		expect(screenSource).toContain('quoteRequest?.composerKey === composerKey ? quoteRequest : undefined');
 		expect(composerSource).toContain('`ao.chat.draft.${machineIdentity(config)}.${sessionId}`');
@@ -65,7 +65,7 @@ describe("active turn controls", () => {
 	});
 	it("binds conversation and terminal navigation to the routed source", () => {
 		expect(screenSource).toContain("const sessionSource = sourceFor(source)");
-		expect(screenSource).toContain("source: source.kind, sourceId: source.id");
+		expect(screenSource).toContain('await (cloudInterface ?? ownCloudInterface).start("tui", policy, conversation.snapshot?.settings)');
 		expect(screenSource).toContain("killOn(source, session.id)");
 		expect(screenSource).not.toContain('params: { id: session.id, view: "terminal" }');
 	});

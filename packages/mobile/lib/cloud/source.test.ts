@@ -44,6 +44,38 @@ function clientStub<T extends Record<string, unknown> = Record<string, never>>(o
 }
 
 describe("createCloudSessionSource", () => {
+	it("acknowledges the original recovery notice without unlocking either controller", async () => {
+		const acknowledge = vi.fn(async () => ({ ok: true }));
+		const transition = { id: "h1", sourceMode: "chat", targetMode: "tui", phase: "recovery_required", errorDetail: "Recovery needed" };
+		const getSessionInterfaceTransition = vi.fn().mockResolvedValueOnce({ supported: true, targetMode: "tui", transition }).mockResolvedValue({ supported: true, targetMode: "chat" });
+		const source = createCloudSessionSource({ client: clientStub({ getSession: vi.fn(async () => ({ session: { ...fullSession("s1"), interfaceMode: "tui" } })), getSessionInterfaceTransition, acknowledgeSessionInterfaceTransitionNotice: acknowledge }) as never, orgId: "o1" });
+		await source.getInterfaceTransition!("s1");
+		await source.acknowledgeInterfaceNotice!("s1", "h1");
+		const status = await source.getInterfaceTransition!("s1");
+		expect(status.transition?.phase).toBe("recovery_required"); expect(status.transition?.noticeAcknowledgedAt).toEqual(expect.any(String));
+		expect(acknowledge).toHaveBeenCalledWith("o1", "s1", "h1", undefined);
+	});
+	it("refuses an opposite-target active switch and never cancels after source stopping", async () => {
+		const start = vi.fn(); const cancel = vi.fn();
+		const client = clientStub({ getSession: vi.fn(async () => ({ session: { ...fullSession("s1"), interfaceMode: "chat" } })), getSessionInterfaceTransition: vi.fn(async () => ({ supported: true, targetMode: "tui", transition: { id: "h1", targetMode: "tui", phase: "source_stopping" } })), startSessionInterfaceTransition: start, cancelSessionInterfaceTransition: cancel });
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		await expect(source.startInterfaceTransition!("s1", { targetMode: "chat", policy: "interrupt" })).rejects.toThrow(/other interface/i);
+		await expect(source.cancelInterfaceTransition!("s1")).rejects.toThrow(/can no longer be cancelled/i);
+		expect(start).not.toHaveBeenCalled(); expect(cancel).not.toHaveBeenCalled();
+	});
+	it("never sends an approval or cancellation from a retired account source", async () => {
+		const decideChatApproval = vi.fn(); const cancelTurn = vi.fn();
+		const source = createCloudSessionSource({ client: clientStub({ decideChatApproval, cancelTurn }) as never, orgId: "o1", isCurrent: () => false });
+		await expect(source.decideApproval!("s1", "r1", "accept")).rejects.toThrow(/account changed/i);
+		await expect(source.cancelTurn("s1", "t1")).rejects.toThrow(/account changed/i);
+		expect(decideChatApproval).not.toHaveBeenCalled(); expect(cancelTurn).not.toHaveBeenCalled();
+	});
+	it("does not finish a Chat handoff on an early mode commit followed by recovery-required", async () => {
+		const getSession = vi.fn().mockResolvedValueOnce({ session: { ...fullSession("s1"), interfaceMode: "tui" } }).mockResolvedValue({ session: { ...fullSession("s1"), interfaceMode: "chat" } });
+		const getSessionInterfaceTransition = vi.fn().mockResolvedValueOnce({ supported: true, targetMode: "chat" }).mockResolvedValue({ supported: true, targetMode: "tui", transition: { phase: "recovery_required", sourceMode: "tui", targetMode: "chat", errorDetail: "Target failed after the terminal stopped" } });
+		const source = createCloudSessionSource({ client: clientStub({ getSession, getSessionInterfaceTransition, startSessionInterfaceTransition: vi.fn(async () => ({ transition: { phase: "requested", sourceMode: "tui", targetMode: "chat" } })) }) as never, orgId: "o1" });
+		await expect(source.switchToChat!("s1")).rejects.toThrow("Target failed after the terminal stopped");
+	});
 	it("refreshes after the adopted tail and keeps history across source remount", async () => {
 		const event = { sessionId: "s1", sequence: 1, type: "chat.user_message", createdAt: "now", payload: { text: "one" } };
 		const client = clientStub({ getSession: vi.fn(async () => ({ session: fullSession("s1") })), replayEvents: vi.fn().mockResolvedValueOnce({ events: [event], nextAfter: 1, hasMore: false }).mockResolvedValue({ events: [{ ...event, sequence: 2, payload: { text: "two" } }], nextAfter: 2, hasMore: false }) });
@@ -269,7 +301,7 @@ describe("createCloudSessionSource", () => {
 		const startSessionInterfaceTransition = vi.fn();
 		const source = createCloudSessionSource({ client: clientStub({
 			getSession,
-			getSessionInterfaceTransition: vi.fn(async () => ({ supported: true, targetMode: "chat", transition: { phase: "activating", targetMode: "chat" } })),
+			getSessionInterfaceTransition: vi.fn().mockResolvedValueOnce({ supported: true, targetMode: "chat", transition: { phase: "activating", targetMode: "chat" } }).mockResolvedValue({ supported: true, targetMode: "tui" }),
 			startSessionInterfaceTransition,
 		}) as never, orgId: "o1" });
 		await source.switchToChat!("s1");

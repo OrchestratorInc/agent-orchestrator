@@ -2,7 +2,8 @@ import type { DashboardSession, ProjectInfo, SpawnOptions } from "../api";
 import type { ConversationPage, SendMessageInput, SendMessageResult } from "../chat/api";
 import type { ConversationEvent } from "../chat/sse";
 import type { ChatModel, TurnSettings } from "../chat/types";
-import type { RequestOptions } from "@aoagents/cloud-client";
+import type { RequestOptions, StartSessionInterfaceTransitionInput, SessionInterfaceTransition, WorkerOKResponse } from "@aoagents/cloud-client";
+import type { CloudInterfaceStatus } from "../cloud/interfaceTransition";
 
 /** Which environment a source speaks for. */
 export type EnvironmentKind = "local" | "cloud";
@@ -40,7 +41,11 @@ export interface SessionSource {
 	retryStartup?(id: string): Promise<void>;
 	restoreSession?(id: string): Promise<void>;
 	/** Switch a Cloud Terminal session to its structured Chat controller. */
-	switchToChat?(id: string): Promise<void>;
+	switchToChat?(id: string, options?: RequestOptions): Promise<void>;
+	getInterfaceTransition?(id: string, options?: RequestOptions): Promise<CloudInterfaceStatus>;
+	startInterfaceTransition?(id: string, input: StartSessionInterfaceTransitionInput, options?: RequestOptions): Promise<{ transition: SessionInterfaceTransition }>;
+	cancelInterfaceTransition?(id: string, options?: RequestOptions): Promise<WorkerOKResponse>;
+	acknowledgeInterfaceNotice?(id: string, transitionId: string, options?: RequestOptions): Promise<WorkerOKResponse>;
 	/** Answer a Cloud Chat approval shown in the conversation timeline. */
 	decideApproval?(id: string, requestId: string, decisionId: string): Promise<void>;
 	getChatModels?(id: string): Promise<ChatModel[]>;

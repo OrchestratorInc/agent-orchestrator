@@ -53,6 +53,8 @@ import { turnSettingsModelLabel } from "./turnSettingsModel";
 import { brokenMcpServers, can } from "./types";
 import { useMobileConversation } from "./useConversation";
 import { useChatViewLease } from "./useChatViewLease";
+import { useCloudInterfaceTransition } from "../cloud/useCloudInterfaceTransition";
+import { cloudInterfaceInputLocked } from "../cloud/interfaceTransition";
 import { useOpenPage } from "../pageNavigation";
 import { usePRSummaries } from "../usePRSummaries";
 import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
@@ -81,7 +83,7 @@ async function dismissKeyboardBeforeSheet(keyboardVisible: boolean): Promise<voi
 	});
 }
 
-export function ChatSessionScreen({ session, source }: { session: MobileChatSession; source: SourceRef }) {
+export function ChatSessionScreen({ session, source, cloudInterface }: { session: MobileChatSession; source: SourceRef; cloudInterface?: import("../cloud/useCloudInterfaceTransition").CloudInterfaceControls }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const navigation = useNavigation();
@@ -116,7 +118,12 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 	useEffect(() => {
 		if (!cloudSession && connection === "open" && loadFailed) void refreshConversation();
 	}, [cloudSession, connection, loadFailed, refreshConversation]);
-	const interfaceSwitch = useInterfaceTransition(cloudSession ? null : config, cloudSession ? "" : session.id, refreshBoard);
+	const localInterfaceSwitch = useInterfaceTransition(cloudSession ? null : config, cloudSession ? "" : session.id, refreshBoard);
+	const ownCloudInterface = useCloudInterfaceTransition(cloudSession && !cloudInterface ? sessionSource : undefined, session.id, refreshBoard);
+	const interfaceSwitch = cloudSession ? cloudInterface ?? ownCloudInterface : localInterfaceSwitch;
+	const requestInterfaceSwitchRef = useRef(() => {});
+	const flushDraftRef = useRef<(() => Promise<void>) | undefined>(undefined);
+	const draftFlushReady = useCallback((flush: (() => Promise<void>) | undefined) => { flushDraftRef.current = flush; }, []);
 	const actionsEntryRef = useRef<ConversationActionsEntry | undefined>(undefined);
 	const actionsListeners = useRef(new Set<(entry: ConversationActionsEntry) => void>());
 	const [menuOpen, setMenuOpen] = useState(false);
@@ -154,7 +161,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 	useChatViewLease(cloudSession ? null : config, session.id, cloudSession && !terminated && cloudStage === "connected" ? sessionSource : undefined);
 	const cloudProblem = cloudStartupProblem(session);
 	const startupCopy = cloudProblem ? cloudStartupErrorCopy(cloudProblem, !session.cloud?.coderWorkspaceUrl) : undefined;
-	const cloudComposerLocked = cloudSession && (terminated || Boolean(conversation.unavailable)) || cloudStage !== undefined && cloudStage !== "connected";
+	const cloudComposerLocked = cloudSession && (terminated || Boolean(conversation.unavailable) || interfaceSwitch.loading || cloudInterfaceInputLocked(cloudInterface?.status ?? ownCloudInterface.status)) || cloudStage !== undefined && cloudStage !== "connected";
 	const failedStart = cloudSession && cloudProblem?.phase === "failed" ? startupCopy?.message : "projectName" in session || session.provisionState !== "failed"
 		? undefined
 		: session.provisionError || "The session did not finish starting.";
@@ -173,9 +180,9 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 			refreshing: conversation.refreshing,
 			compactSupported: can(snapshot, "compaction") && !conversationActionUnsupported("compact", conversation.actionCodes.compact),
 			mcpReloadSupported: can(snapshot, "mcp_reload") && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp),
-			interfaceSupported: cloudSession ? !terminated : Boolean(interfaceSwitch.status?.supported),
-			interfaceReason: cloudSession ? (terminated ? "This session has ended." : undefined) : interfaceSwitch.status?.reason || interfaceSwitch.error,
-			interfaceSwitching: !cloudSession && (interfaceTransitionActive || interfaceSwitch.starting),
+			interfaceSupported: !terminated && Boolean(interfaceSwitch.status?.supported),
+			interfaceReason: terminated ? "This session has ended." : interfaceSwitch.status?.reason || interfaceSwitch.error,
+			interfaceSwitching: interfaceTransitionActive || interfaceSwitch.starting || cloudSession && cloudInterfaceInputLocked(cloudInterface?.status ?? ownCloudInterface.status),
 		};
 		actionsEntryRef.current = liveEntry;
 		actionsListeners.current.forEach((listener) => listener(liveEntry));
@@ -309,7 +316,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 				? glassHeaderControl("right", (
 					<View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
 						{cloudSession && !terminated ? (
-							<NativeHeaderButton icon="terminal" label="Open Terminal UI" onPress={() => router.replace({ pathname: "/session/[id]", params: { id: session.id, view: "terminal", source: source.kind, sourceId: source.id } })} />
+							<NativeHeaderButton icon="terminal" label="Open Terminal UI" onPress={() => requestInterfaceSwitchRef.current()} />
 						) : null}
 						{reviewPromptCollapsed && reviewPromptPR ? (
 							<Pressable
@@ -329,7 +336,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 		);
 	}, [cloudSession, expandReviewPrompt, headerRightReady, navigation, reviewPromptCollapsed, reviewPromptPR, router, session.id, source.kind, source.id, styles.reviewHeaderPRButton, t, terminated]);
 
-	const composerKey = config ? JSON.stringify([machineIdentity(config), session.id]) : JSON.stringify([source.kind, source.id, session.id]);
+	const composerKey = config ? JSON.stringify([machineIdentity(config), session.id]) : JSON.stringify([sessionSource?.scopeKey, source.kind, source.id, session.id]);
 	const [quoteRequest, setQuoteRequest] = useState<ResponseQuoteRequest>();
 	const quoteSequence = useRef(0);
 	const addResponseToChat = useCallback((text: string, source?: ResponseQuoteRequest["source"]) => {
@@ -453,19 +460,17 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 		async (policy: "drain" | "interrupt") => {
 			setMenuOpen(false);
 			try {
-				await interfaceSwitch.start("tui", policy);
+				if (cloudSession) { await flushDraftRef.current?.(); await (cloudInterface ?? ownCloudInterface).start("tui", policy, conversation.snapshot?.settings); }
+				else await interfaceSwitch.start("tui", policy);
 			} catch (cause) {
-				Alert.alert("Couldn't switch interface", userFacingError(cause));
+				Alert.alert("Couldn't switch interface", cloudSession ? cloudRequestErrorCopy(cause) : userFacingError(cause));
 			}
 		},
-		[interfaceSwitch],
+		[cloudSession, cloudInterface, ownCloudInterface, conversation.snapshot?.settings, interfaceSwitch],
 	);
 
 	const requestInterfaceSwitch = useCallback(() => {
-		if (cloudSession) {
-			router.replace({ pathname: "/session/[id]", params: { id: session.id, view: "terminal", source: source.kind, sourceId: source.id } });
-			return;
-		}
+		if (interfaceTransitionActive || interfaceSwitch.starting || cloudSession && cloudInterfaceInputLocked(cloudInterface?.status ?? ownCloudInterface.status)) return;
 		if (!interfaceSwitch.status?.supported) {
 			Alert.alert("Terminal UI unavailable", interfaceSwitch.status?.reason || interfaceSwitch.error || "This agent cannot resume the same native conversation in Terminal UI.");
 			return;
@@ -486,6 +491,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 			],
 		);
 	}, [cloudSession, interfaceSwitch, router, session.id, source, startInterfaceSwitch, turnActive, turnWaiting]);
+	requestInterfaceSwitchRef.current = requestInterfaceSwitch;
 
 	useEffect(() => {
 		const current = conversation.snapshot;
@@ -508,9 +514,9 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 			refreshing: conversation.refreshing,
 			compactSupported: can(current, "compaction") && !conversationActionUnsupported("compact", conversation.actionCodes.compact),
 			mcpReloadSupported: can(current, "mcp_reload") && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp),
-			interfaceSupported: cloudSession ? !terminated : Boolean(interfaceSwitch.status?.supported),
-			interfaceReason: cloudSession ? (terminated ? "This session has ended." : undefined) : interfaceSwitch.status?.reason || interfaceSwitch.error,
-			interfaceSwitching: !cloudSession && (interfaceTransitionActive || interfaceSwitch.starting),
+			interfaceSupported: !terminated && Boolean(interfaceSwitch.status?.supported),
+			interfaceReason: terminated ? "This session has ended." : interfaceSwitch.status?.reason || interfaceSwitch.error,
+			interfaceSwitching: interfaceTransitionActive || interfaceSwitch.starting || cloudSession && cloudInterfaceInputLocked(cloudInterface?.status ?? ownCloudInterface.status),
 			// Orchestrators are not deleted from here; the board owns their lifecycle.
 			canDelete: !cloudSession && !("projectName" in session),
 			// The daemon refuses to rename the project orchestrator.
@@ -624,6 +630,7 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 			behavior={Platform.OS === "ios" ? "padding" : undefined}
 			keyboardVerticalOffset={Platform.OS === "ios" ? keyboardVerticalOffset(headerHeight) : 0}
 		>
+			{cloudSession && interfaceSwitch.transition?.phase === "recovery_required" && interfaceSwitch.transition.noticeAcknowledgedAt ? <InlineBanner tone="warning" icon="repeat" title="Interface recovery required" body="Your history is preserved. Neither controller can accept input until Cloud recovers this handoff." action="Retry status" onPress={() => void interfaceSwitch.refresh()} /> : null}
 			{interfaceTransitionActive ? (
 				<InlineBanner
 					tone="warning"
@@ -715,6 +722,8 @@ export function ChatSessionScreen({ session, source }: { session: MobileChatSess
 				onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, source.id)) : undefined}
 				sessionId={session.id}
 				config={config}
+				draftScopeKey={cloudSession ? sessionSource?.scopeKey : undefined}
+				onDraftFlushReady={draftFlushReady}
 				snapshot={snapshot}
 				quotaActive={Boolean(quota)}
 				request={request}

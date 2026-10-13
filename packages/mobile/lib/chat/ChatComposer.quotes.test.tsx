@@ -41,6 +41,21 @@ import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
 import { launchImageLibraryAsync } from "expo-image-picker";
 
 const source = { conversationId: "conversation", messageId: "response", revision: 1 };
+it("flushes a scoped Cloud draft before interface handoff and restores it without a daemon config", async () => {
+	const stored = new Map<string, string>();
+	storage.getItem.mockImplementation(async (key: string) => stored.get(key) ?? null);
+	storage.setItem.mockImplementation(async (key: string, value: string) => { stored.set(key, value); });
+	storage.removeItem.mockImplementation(async (key: string) => { stored.delete(key); });
+	let flush: (() => Promise<void>) | undefined;
+	const p = { ...props(), draftScopeKey: "account-one", onDraftFlushReady: (value: (() => Promise<void>) | undefined) => { flush = value; } };
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	act(() => renderer.root.findByType(TextInput).props.onChangeText("Keep this draft"));
+	await act(async () => { await flush?.(); });
+	expect([...stored.values()].some((value) => value.includes("Keep this draft"))).toBe(true);
+	await act(async () => renderer.unmount());
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	expect(renderer.root.findByType(TextInput).props.value).toBe("Keep this draft");
+});
 
 const props = () => ({
 	sessionId: "session", config: null,

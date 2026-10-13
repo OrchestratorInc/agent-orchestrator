@@ -44,6 +44,7 @@ vi.mock("../cloud/terminal", () => ({ createCloudTerminal: (input: { onStatus: (
 vi.mock("../store", () => ({ useApp: () => ({ refreshSource: fixture.refreshSource, sourceFor: () => fixture.source }) }));
 vi.mock("../haptics", () => ({ haptics: { error: vi.fn(), success: vi.fn() } }));
 vi.mock("../chat/useChatViewLease", () => ({ useChatViewLease: vi.fn() }));
+vi.mock("../cloud/useCloudInterfaceTransition", () => ({ useCloudInterfaceTransition: () => undefined }));
 vi.mock("../ThemeProvider", async () => {
 	const { darkTheme } = await import("../theme");
 	return { useTheme: () => darkTheme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (factory: (theme: typeof darkTheme) => unknown) => factory(darkTheme) };
@@ -93,6 +94,15 @@ afterEach(async () => {
 });
 
 describe("Cloud terminal startup", () => {
+	it("retains terminal history but disconnects and hides input when handoff needs recovery", async () => {
+		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} />); });
+		const old = fixture.terminals[0];
+		const controls = { loading: false, starting: false, status: { supported: true, targetMode: "chat", currentMode: "chat", transition: { id: "h1", sourceMode: "tui", targetMode: "chat", phase: "recovery_required", errorDetail: "Target stopped; recovery needed" } }, transition: { id: "h1", sourceMode: "tui", targetMode: "chat", phase: "recovery_required", errorDetail: "Target stopped; recovery needed" }, refresh: vi.fn(), start: vi.fn(), cancel: vi.fn(), acknowledgeNotice: vi.fn() } as unknown as import("../cloud/useCloudInterfaceTransition").CloudInterfaceControls;
+		await act(async () => { renderer!.update(<CloudTerminalSessionScreen session={session("running", true)} source={cloudSource} interfaceSwitch={controls} />); });
+		expect(old.disconnect).toHaveBeenCalledOnce(); expect(component("Composer")).toHaveLength(0);
+		expect(component("XtermJsWebView")).toHaveLength(1); expect(text("Target stopped; recovery needed")).toHaveLength(1);
+		expect(fixture.replace).not.toHaveBeenCalled();
+	});
 	it("replaces the transport on worker epoch change and ignores old ready callbacks", async () => {
 		const initial = { ...session("running", true), cloud: { ...session("running", true).cloud, workerEpoch: 1 } };
 		await act(async () => { renderer = create(<CloudTerminalSessionScreen session={initial} source={cloudSource} />); });

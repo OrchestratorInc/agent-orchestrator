@@ -14,6 +14,12 @@ import { afterDraftWrites, clearPendingSend, needsAttachmentRecovery, pendingSen
 beforeEach(() => saved.clear());
 
 describe("pending Chat send", () => {
+	it("serializes simultaneous reservations so a double tap reuses one identity and payload", async () => {
+		const key = pendingSendKey("scope", "session");
+		const first = { id: "first", draftText: "Inspect", text: "Inspect", hasAttachments: false, settings: { model: "one" } };
+		const [a, b] = await Promise.all([reservePendingSend(key, first), reservePendingSend(key, { ...first, id: "second", settings: { model: "two" } })]);
+		expect(a).toEqual(first); expect(b).toEqual(first); expect(await readPendingSend(key)).toEqual(first);
+	});
 	it("persists exact excerpt references through relaunch and reuses the original delivery", async () => {
 		const key = pendingSendKey("host", "session");
 		const excerpts = [{ conversationId: "conversation", messageId: "response", revision: 3, text: "Title\n• Bullet" }];

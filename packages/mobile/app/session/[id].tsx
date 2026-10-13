@@ -22,6 +22,8 @@ import { useApp } from "../../lib/store";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import type { Theme } from "../../lib/theme";
 import { Button, EmptyState } from "../../lib/ui";
+import { useCloudInterfaceTransition } from "../../lib/cloud/useCloudInterfaceTransition";
+import { cloudInterfaceDisplayMode, cloudInterfaceSettledTarget } from "../../lib/cloud/interfaceTransition";
 
 /**
  * The committed session mode is daemon-authoritative, including after an
@@ -38,9 +40,16 @@ export default function MobileSessionRoute() {
 	const route = resolveSessionRouteSource({ id, source: sourceParam, sourceId, hostId }, [...scopedBoard.sessions, ...scopedBoard.orchestrators]);
 	const source: SourceRef | null = route.kind === "found" ? route.source : null;
 	const currentSource = source ? sourceFor(source) : undefined;
+	const refreshCloudSource = useCallback(async () => { if (source?.kind === "cloud") await refreshSource(source); }, [refreshSource, source?.kind, source?.id]);
+	const cloudInterface = useCloudInterfaceTransition(source?.kind === "cloud" ? currentSource : undefined, id, refreshCloudSource);
 	const listed = source ? [...scopedBoard.sessions, ...scopedBoard.orchestrators]
 		.find((entry) => resourceKey(entry.source, entry.value.id) === resourceKey(source, id))?.value : undefined;
 	const isListed = Boolean(listed);
+	useEffect(() => { if (source?.kind === "cloud" && listed) void cloudInterface.refresh(); }, [currentSource, id, listed?.mode, source?.kind]);
+	useEffect(() => {
+		if (source?.kind !== "cloud" || !cloudInterfaceSettledTarget(cloudInterface.status) || requestedView === undefined) return;
+		router.replace({ pathname: "/session/[id]", params: { id, source: source.kind, sourceId: source.id } });
+	}, [cloudInterface.status, id, requestedView, router, source?.kind, source?.id]);
 	const status = source ? scopedBoard.sources[sourceKey(source)] : undefined;
 	const config = source?.kind === "local" ? configForHost(source.id) : null;
 	const connection = source?.kind === "local" ? hostStates.find((host) => host.hostId === source.id)?.connection ?? "closed" : "closed";
@@ -149,10 +158,11 @@ export default function MobileSessionRoute() {
 
 	switch (view.kind) {
 		case "screen": {
-			const surface = sessionDisplaySurface({ environment: source?.kind ?? null, sessionMode: view.session.mode, requestedView });
-			if (surface === "cloud-terminal" && source) return <CloudTerminalSessionScreen session={view.session} source={source} showSpawnStartup={startup === "spawn"} />;
+			const sessionMode = source?.kind === "cloud" ? cloudInterfaceDisplayMode(cloudInterface.status, view.session.mode) : view.session.mode;
+			const surface = sessionDisplaySurface({ environment: source?.kind ?? null, sessionMode, requestedView: source?.kind === "cloud" && cloudInterface.transition ? undefined : requestedView });
+			if (surface === "cloud-terminal" && source) return <CloudTerminalSessionScreen session={view.session} source={source} showSpawnStartup={startup === "spawn"} interfaceSwitch={cloudInterface} />;
 			if (surface === "local-terminal") return <TerminalSessionScreen session={view.session} source={source ?? undefined} />;
-			if (source) return <ChatSessionScreen session={view.session} source={source} />;
+			if (source) return <ChatSessionScreen session={view.session} source={source} cloudInterface={source.kind === "cloud" ? cloudInterface : undefined} />;
 			return null;
 		}
 		case "loading":

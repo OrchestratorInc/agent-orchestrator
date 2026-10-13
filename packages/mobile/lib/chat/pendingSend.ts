@@ -47,7 +47,7 @@ export async function readPendingSend(key: string): Promise<PendingSendRecord | 
 	return saved;
 }
 
-export async function reservePendingSend(key: string, candidate: PendingSendRecord): Promise<PendingSendRecord> {
+async function reserveUnlocked(key: string, candidate: PendingSendRecord): Promise<PendingSendRecord> {
 	const existing = await readPendingSend(key);
 	if (existing) {
 		if ((existing.kind ?? "send") !== (candidate.kind ?? "send")) {
@@ -64,7 +64,30 @@ export async function reservePendingSend(key: string, candidate: PendingSendReco
 	await AsyncStorage.setItem(key, JSON.stringify(candidate));
 	return candidate;
 }
+export async function reservePendingSend(key: string, candidate: PendingSendRecord): Promise<PendingSendRecord> {
+	let result!: PendingSendRecord;
+	await afterDraftWrites(key, async () => { result = await reserveUnlocked(key, candidate); });
+	return result;
+}
+export function cloudChatDraftKey(scopeKey: string, sessionId: string): string {
+	return "ao.cloud.chat-draft.v1." + encodeURIComponent(JSON.stringify([scopeKey, sessionId]));
+}
+
+/** Explicit logout retires only the verified Cloud account's chat retry data. */
+export async function clearCloudChatForAccount(baseUrl: string, userId: string): Promise<void> {
+	const prefixes = ["ao.chat.pending.", "ao.cloud.chat-draft.v1.", "ao.cloud.turn-settings.v1."];
+	const keys = new Set([...await AsyncStorage.getAllKeys(), ...draftWrites.keys()]);
+	await Promise.all([...keys].filter((key) => {
+		const prefix = prefixes.find((prefix) => key.startsWith(prefix));
+		if (!prefix) return false;
+		try {
+			const [scopeKey] = JSON.parse(decodeURIComponent(key.slice(prefix.length)));
+			const scope = JSON.parse(scopeKey);
+			return Array.isArray(scope) && scope[0] === baseUrl.replace(/\/+$/, "") && scope[1] === userId;
+		} catch { return false; }
+	}).map((key) => afterDraftWrites(key, () => AsyncStorage.removeItem(key))));
+}
 
 export async function clearPendingSend(key: string, id: string): Promise<void> {
-	if ((await readPendingSend(key))?.id === id) await AsyncStorage.removeItem(key);
+	await afterDraftWrites(key, async () => { if ((await readPendingSend(key))?.id === id) await AsyncStorage.removeItem(key); });
 }

@@ -36,7 +36,7 @@ import { userFacingError } from "../connectionError";
 import type { DashboardPR, SessionPRSummary } from "../api";
 import { PRReviewPrompt } from "./PRReviewPrompt";
 import { decodeResponseDraft, encodeResponseDraft, responseReplyText, responseExcerpts, excerptDraftText, isChatExcerpt, type ResponseQuote, type ResponseQuoteRequest } from "./responseQuotes";
-import { afterDraftWrites } from "./pendingSend";
+import { afterDraftWrites, cloudChatDraftKey } from "./pendingSend";
 
 type Attachment =
 	| { id: string; kind: "image"; name: string; bytes: number; image: ChatImage }
@@ -105,7 +105,11 @@ export function ChatComposer({
 	onShowRequest,
 	onDismissRequest,
 	onRestoreRequest,
+	draftScopeKey,
+	onDraftFlushReady,
 }: {
+	draftScopeKey?: string;
+	onDraftFlushReady?(flush: (() => Promise<void>) | undefined): void;
 	quoteRequest?: ResponseQuoteRequest;
 	onQuoteHandled?(id: string): void;
 	reviewPR?: DashboardPR;
@@ -263,7 +267,7 @@ export function ChatComposer({
 	const steerEligible = Boolean(canSteer && hasDraft && attachments.length === 0 && quotes.length === 0);
 	const deliveryPresentation = composerDeliveryPresentation({ active, canSteer: Boolean(canSteer && quotes.length === 0), hasDraft, hasAttachments: attachments.length > 0, hasQueued: visibleQueuedMessages.length > 0 });
 	const stopped = snapshot.controller.state === "stopped";
-	const draftKey = config ? `ao.chat.draft.${machineIdentity(config)}.${sessionId}` : null;
+	const draftKey = config ? `ao.chat.draft.${machineIdentity(config)}.${sessionId}` : draftScopeKey ? cloudChatDraftKey(draftScopeKey, sessionId) : null;
 	const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const openingSuggestion = useRef<string | undefined>(undefined);
 	const pickerGate = useRef(createRequestGate()).current;
@@ -273,6 +277,15 @@ export function ChatComposer({
 	const latestCursor = useRef(cursor);
 	latestText.current = text;
 	latestCursor.current = cursor;
+	useEffect(() => {
+		onDraftFlushReady?.(async () => {
+			if (!draftKey || !draftLoaded) return;
+			if (draftTimer.current) clearTimeout(draftTimer.current);
+			const value = encodeResponseDraft(latestText.current, latestQuotes.current);
+			await afterDraftWrites(draftKey, () => value ? AsyncStorage.setItem(draftKey, value) : AsyncStorage.removeItem(draftKey));
+		});
+		return () => onDraftFlushReady?.(undefined);
+	}, [draftKey, draftLoaded, onDraftFlushReady]);
 	useEffect(() => {
 		if (!quoteRequest || consumedQuote.current === quoteRequest.id) return;
 		consumedQuote.current = quoteRequest.id;

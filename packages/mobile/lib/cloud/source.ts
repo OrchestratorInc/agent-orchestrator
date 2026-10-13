@@ -12,29 +12,17 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { afterDraftWrites } from "../chat/pendingSend";
 import { cloudConversationCapabilities } from "./events";
 import { awaitCloudReplay, cloudConversationReplayCache, type CloudReplayEntry } from "./conversationReplay";
+import { cloudInterfaceDelay, cloudInterfaceInputLocked, cloudInterfaceSettledTarget, mergeCloudInterfaceStatus, type CloudInterfaceStatus } from "./interfaceTransition";
+import type { RequestOptions, SessionInterfaceTransition, StartSessionInterfaceTransitionInput } from "@aoagents/cloud-client";
+import { mobileInterfaceTransitionIsActive, mobileInterfaceTransitionIsCancellable } from "../session/interfaceTransition";
 
 /** How often the cloud transcript is polled for new events. Matches the
  * tunnel-path conversation poll interval mobile already uses elsewhere. */
 const CLOUD_EVENT_POLL_MS = 2_000;
 const CHAT_HANDOFF_POLL_MS = 1_000;
 const CHAT_HANDOFF_TIMEOUT_MS = 60_000;
-const terminalTransitionPhases = new Set(["completed", "failed", "cancelled"]);
 const reasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
-async function waitForChatHandoff(client: CloudClient, orgId: string, id: string): Promise<void> {
-	const deadline = Date.now() + CHAT_HANDOFF_TIMEOUT_MS;
-	for (;;) {
-		const { session } = await client.getSession(orgId, id);
-		if (session.interfaceMode === "chat") return;
-		const status = await client.getSessionInterfaceTransition(orgId, id);
-		const transition = status.transition;
-		if (transition?.phase === "failed" || transition?.phase === "cancelled" || transition?.phase === "recovery_required") {
-			throw new Error(transition.errorDetail || `Cloud could not switch this session to Chat (${transition.phase}).`);
-		}
-		if (Date.now() >= deadline) throw new Error("Cloud is taking too long to switch this session to Chat. Try again shortly.");
-		await new Promise<void>((resolve) => setTimeout(resolve, CHAT_HANDOFF_POLL_MS));
-	}
-}
 
 function toConversationTurn(turn: Turn): ConversationTurn {
 	const state = turn.state === "provisioning"
@@ -76,6 +64,39 @@ export function createCloudSessionSource(input: {
 	const replays = new Map<string, { controller: AbortController; promise: Promise<CloudReplayEntry>; consumers: number }>();
 	const subscriptions = new Map<string, number>();
 	const requireCurrent = () => { if (!isCurrent()) throw new Error("Cloud account changed. Try again."); };
+	const transitionStatus = new Map<string, CloudInterfaceStatus>();
+	const transitionReadSequence = new Map<string, number>();
+	const transitionStarts = new Map<string, { target: string; promise: Promise<{ transition: SessionInterfaceTransition }> }>();
+	const getInterfaceTransition = async (id: string, options?: RequestOptions): Promise<CloudInterfaceStatus> => {
+		requireCurrent(); options?.signal?.throwIfAborted();
+		const sequence = (transitionReadSequence.get(id) ?? 0) + 1; transitionReadSequence.set(id, sequence);
+		const [{ session }, wire] = await Promise.all([client.getSession(orgId, id, options), client.getSessionInterfaceTransition(orgId, id, options)]);
+		requireCurrent(); options?.signal?.throwIfAborted();
+		const next = mergeCloudInterfaceStatus(transitionStatus.get(id), wire, session);
+		if (transitionReadSequence.get(id) !== sequence) return transitionStatus.get(id) ?? next;
+		transitionStatus.set(id, next); return next;
+	};
+	const startInterfaceTransition = (id: string, request: StartSessionInterfaceTransitionInput, options?: RequestOptions): Promise<{ transition: SessionInterfaceTransition }> => {
+		const existing = transitionStarts.get(id);
+		if (existing) return existing.target === request.targetMode ? existing.promise : Promise.reject(new Error("This session is already switching to the other interface."));
+		const promise = (async () => {
+			const status = await getInterfaceTransition(id, options);
+			if (mobileInterfaceTransitionIsActive(status.transition)) {
+				if (status.transition!.targetMode !== request.targetMode) throw new Error("This session is already switching to the other interface.");
+				return { transition: status.transition! };
+			}
+			if (status.transition?.phase === "recovery_required") throw new Error(status.transition.errorDetail || "This session needs interface recovery before switching again.");
+			if (!status.supported) throw new Error(status.reason || "Cloud handoff is unavailable for this agent.");
+			if (request.targetMode === "chat" && (request.model || request.reasoningEffort)) throw new Error("Model overrides are supported only when switching to Terminal.");
+			requireCurrent(); options?.signal?.throwIfAborted();
+			const result = options ? await client.startSessionInterfaceTransition(orgId, id, request, options) : await client.startSessionInterfaceTransition(orgId, id, request);
+			requireCurrent(); options?.signal?.throwIfAborted();
+			transitionReadSequence.set(id, (transitionReadSequence.get(id) ?? 0) + 1);
+			transitionStatus.set(id, { ...status, transition: result.transition });
+			return result;
+		})().finally(() => { if (transitionStarts.get(id)?.promise === promise) transitionStarts.delete(id); });
+		transitionStarts.set(id, { target: request.targetMode, promise }); return promise;
+	};
 	const replay = async (id: string, signal?: AbortSignal): Promise<CloudReplayEntry> => {
 		requireCurrent();
 		let request = replays.get(id);
@@ -148,6 +169,25 @@ export function createCloudSessionSource(input: {
 	return {
 		kind: "cloud",
 		scopeKey,
+		getInterfaceTransition,
+		startInterfaceTransition,
+		cancelInterfaceTransition: async (id, options) => {
+			const status = await getInterfaceTransition(id, options);
+			if (!mobileInterfaceTransitionIsCancellable(status.transition)) throw new Error("The source controller is already stopping. This switch can no longer be cancelled.");
+			requireCurrent(); options?.signal?.throwIfAborted();
+			const result = await client.cancelSessionInterfaceTransition(orgId, id, options);
+			requireCurrent();
+			transitionStatus.set(id, { ...status, transition: { ...status.transition!, phase: "cancelled" } });
+			return result;
+		},
+		acknowledgeInterfaceNotice: async (id, transitionId, options) => {
+			requireCurrent(); options?.signal?.throwIfAborted();
+			const result = await client.acknowledgeSessionInterfaceTransitionNotice(orgId, id, transitionId, options);
+			requireCurrent();
+			const previous = transitionStatus.get(id);
+			if (previous?.transition?.id === transitionId) transitionStatus.set(id, { ...previous, transition: { ...previous.transition, noticeAcknowledgedAt: new Date().toISOString() } });
+			return result;
+		},
 		listProjects: async (): Promise<ProjectInfo[]> =>
 			(await collect((cursor) => client.listProjects(orgId, { cursor }))).map(toProjectInfo),
 		listSessions: async (): Promise<DashboardSession[]> => {
@@ -251,20 +291,27 @@ export function createCloudSessionSource(input: {
 				throw cause;
 			}
 		},
-		switchToChat: async (id) => {
-			const { session } = await client.getSession(orgId, id);
-			if (session.interfaceMode === "chat") return;
-			const status = await client.getSessionInterfaceTransition(orgId, id);
-			if (!status.supported) throw new Error(status.reason || "Cloud Chat is unavailable for this session.");
-			const active = status.transition && !terminalTransitionPhases.has(status.transition.phase);
-			if (active && status.transition?.targetMode !== "chat") {
-				throw new Error("This session is already switching to Terminal. Wait for that change to finish.");
+		switchToChat: async (id, options) => {
+			requireCurrent();
+			let status = await getInterfaceTransition(id, options);
+			if (status.currentMode === "chat" && !cloudInterfaceInputLocked(status)) return;
+			if (status.transition?.phase === "recovery_required") throw new Error(status.transition.errorDetail || "This session needs interface recovery.");
+			if (mobileInterfaceTransitionIsActive(status.transition)) {
+				if (status.transition!.targetMode !== "chat") throw new Error("This session is already switching to Terminal.");
+			} else await startInterfaceTransition(id, { targetMode: "chat", policy: "drain" }, options);
+			const deadline = Date.now() + CHAT_HANDOFF_TIMEOUT_MS;
+			for (;;) {
+				status = await getInterfaceTransition(id, options);
+				if (["failed", "cancelled", "recovery_required"].includes(status.transition?.phase ?? "")) throw new Error(status.transition?.errorDetail || "Cloud could not switch this session to Chat.");
+				if (cloudInterfaceSettledTarget(status) === "chat") return;
+				if (Date.now() >= deadline) throw new Error("Cloud is still switching interfaces. Reopen the session to check its durable status.");
+				await cloudInterfaceDelay(CHAT_HANDOFF_POLL_MS, options?.signal);
 			}
-			if (!active) await client.startSessionInterfaceTransition(orgId, id, { targetMode: "chat", policy: "drain" });
-			await waitForChatHandoff(client, orgId, id);
 		},
 		decideApproval: async (id, requestId, decisionId) => {
+			requireCurrent();
 			await client.decideChatApproval(orgId, id, requestId, decisionId);
+			requireCurrent();
 		},
 		getChatModels: async (id) => {
 			const { session } = await client.getSession(orgId, id);
@@ -278,10 +325,12 @@ export function createCloudSessionSource(input: {
 			settingsBySession.set(id, normalized);
 		},
 		cancelTurn: async (id, turnId) => {
+			requireCurrent();
 			// Keyed by the turn id, not freshly generated per call, so a retried
 			// cancel of the same turn is idempotent instead of firing a second
 			// distinct request.
 			await client.cancelTurn(orgId, id, turnId, { idempotencyKey: `cancel-${turnId}` });
+			requireCurrent();
 		},
 		touchPresence: async (id, options) => {
 			requireCurrent();

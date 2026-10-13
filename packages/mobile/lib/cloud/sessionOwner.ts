@@ -133,6 +133,8 @@ export function getAccountSessionOwner(deployment: CloudDeployment = CLOUD_DEPLO
 			const { clearCloudConversationPages } = await import("../chat/snapshot");
 			cloudConversationReplayCache.clearAccount(deployment.baseUrl, account.id);
 			clearCloudConversationPages(deployment.baseUrl, account.id);
+			const { clearCloudChatForAccount } = await import("../chat/pendingSend");
+			await clearCloudChatForAccount(deployment.baseUrl, account.id);
 			const { clearCloudOperationsForAccount } = await import("./operation");
 			await clearCloudOperationsForAccount(deployment.baseUrl, account.id);
 		},
