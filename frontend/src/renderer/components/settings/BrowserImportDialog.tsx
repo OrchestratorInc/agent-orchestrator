@@ -27,6 +27,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 
 type ImportBridge = AoBridge["browserProfiles"];
 type View = "form" | "running" | "result";
+type ImportFailure = { message: string; recoverable: boolean };
 
 export function BrowserImportDialog({
 	open,
@@ -50,7 +51,7 @@ export function BrowserImportDialog({
 	const [mergeName, setMergeName] = useState("");
 	const [loading, setLoading] = useState(false);
 	const [loadingSourceId, setLoadingSourceId] = useState("");
-	const [error, setError] = useState("");
+	const [error, setError] = useState<ImportFailure | null>(null);
 	const [safariAccessDenied, setSafariAccessDenied] = useState(false);
 	const [progress, setProgress] = useState<BrowserImportProgress | null>(null);
 	const [result, setResult] = useState<BrowserImportResult | null>(null);
@@ -100,7 +101,7 @@ export function BrowserImportDialog({
 			}
 			return hydrated;
 		} catch (reason) {
-			setError(reason instanceof Error ? reason.message : t("settings.browserImport.discoveryFailed"));
+			setError({ message: reason instanceof Error ? reason.message : t("settings.browserImport.discoveryFailed"), recoverable: false });
 			return null;
 		} finally {
 			setLoadingSourceId((current) => current === id ? "" : current);
@@ -122,11 +123,11 @@ export function BrowserImportDialog({
 		setDestinationMode("separate");
 		setDestinationNames({});
 		setMergeName("");
-		setError("");
+		setError(null);
 		setProgress(null);
 		setResult(null);
 		if (!bridge) {
-			setError(t("settings.browserImport.unavailable"));
+			setError({ message: t("settings.browserImport.unavailable"), recoverable: false });
 			return;
 		}
 		setLoading(true);
@@ -148,7 +149,7 @@ export function BrowserImportDialog({
 					}
 				}
 			},
-			(reason) => setError(reason instanceof Error ? reason.message : t("settings.browserImport.discoveryFailed")),
+			(reason) => setError({ message: reason instanceof Error ? reason.message : t("settings.browserImport.discoveryFailed"), recoverable: false }),
 		).finally(() => setLoading(false));
 		// Translation changes must not reset an active import or its outcome.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -176,7 +177,7 @@ export function BrowserImportDialog({
 		if (!next) return;
 		selectedSourceIdRef.current = id;
 		applySourceDefaults(next, setSourceId, setSelectedProfileIds, setDestinationNames, setMergeName, setDestinationMode);
-		setError("");
+		setError(null);
 		if (next.profilesDeferred) {
 			void loadSourceProfiles(id).then((hydrated) => {
 				if (hydrated && selectedSourceIdRef.current === id) {
@@ -196,7 +197,7 @@ export function BrowserImportDialog({
 		));
 		if (ids.length <= 1) setDestinationMode("merge");
 		else if (selectedProfileIds.length <= 1) setDestinationMode("separate");
-		setError("");
+		setError(null);
 	};
 
 	const startImport = async () => {
@@ -204,7 +205,7 @@ export function BrowserImportDialog({
 		const id = crypto.randomUUID();
 		setProgress({ requestId: id, phase: "preparing", completed: 0, total: selectedProfiles.length });
 		setView("running");
-		setError("");
+		setError(null);
 		try {
 			const imported = await bridge.import({
 				requestId: id,
@@ -257,7 +258,7 @@ export function BrowserImportDialog({
 
 				<div className={settingsDialogBodyClass}>
 					{view === "form" && error ? (
-						<p ref={errorRef} tabIndex={-1} className="text-xs text-muted-foreground focus-visible:outline focus-visible:outline-1 focus-visible:outline-border" role="alert">{t("settings.browserImport.tip", { message: error })}</p>
+						<p ref={errorRef} tabIndex={-1} className={error.recoverable ? "text-xs text-muted-foreground" : "rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"} role="alert">{error.recoverable ? t("settings.browserImport.tip", { message: error.message }) : error.message}</p>
 					) : null}
 					{view === "form" && showSafariAccessDenied ? (
 						<p className="text-xs text-muted-foreground" role="status">{t("settings.browserImport.safariAccessUnavailable")}</p>
@@ -266,7 +267,7 @@ export function BrowserImportDialog({
 						<ImportForm
 							destinationMode={destinationMode}
 							destinationNames={destinationNames}
-							error={error}
+							error={error?.message ?? ""}
 							includeCookies={includeCookies}
 							includeHistory={includeHistory}
 							loading={loading}
@@ -278,8 +279,8 @@ export function BrowserImportDialog({
 							selectedProfileIds={selectedProfileIds}
 							setDestinationMode={setDestinationMode}
 							setDestinationNames={setDestinationNames}
-							setIncludeCookies={(value) => { setIncludeCookies(value); setError(""); }}
-							setIncludeHistory={(value) => { setIncludeHistory(value); setError(""); }}
+							setIncludeCookies={(value) => { setIncludeCookies(value); setError(null); }}
+							setIncludeHistory={(value) => { setIncludeHistory(value); setError(null); }}
 							setMergeName={setMergeName}
 							source={source}
 							sourceId={sourceId}
@@ -317,7 +318,7 @@ export function BrowserImportDialog({
 							type="button"
 							variant="footer-primary"
 						>
-							{t(error && source ? "settings.browserImport.retry" : "settings.browserImport.start")}
+							{t(error?.recoverable && source ? "settings.browserImport.retry" : "settings.browserImport.start")}
 						</Button>
 					) : null}
 				</div>
@@ -326,18 +327,20 @@ export function BrowserImportDialog({
 	);
 }
 
-function importFailureMessage(reason: unknown, browser: string): string {
+function importFailureMessage(reason: unknown, browser: string): ImportFailure {
 	const fallback = appI18n.t("settings.browserImport.failed");
 	const raw = reason instanceof Error ? reason.message : typeof reason === "string" ? reason : fallback;
 	const message = raw
 		.replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/i, "")
 		.replace(/^Error:\s*/i, "")
 		.trim();
-	if (/couldn't create a temporary copy|unable to open database file|database is locked|SQLITE_(?:BUSY|CANTOPEN|LOCKED)|\b(?:EACCES|EBUSY|EPERM)\b/i.test(message)) {
-		if (browser === "Safari") return appI18n.t("settings.browserImport.safariAccessUnavailable");
-		return appI18n.t("settings.browserImport.sourceDatabaseUnavailable", { browser });
+	if (/couldn't create a temporary copy|unable to open database file|database is locked|SQLITE_(?:BUSY|CANTOPEN|LOCKED)/i.test(message)) {
+		return { message: appI18n.t("settings.browserImport.sourceDatabaseUnavailable", { browser }), recoverable: true };
 	}
-	return message || fallback;
+	if (browser === "Safari" && /\b(?:EACCES|EPERM)\b/i.test(message)) {
+		return { message: appI18n.t("settings.browserImport.safariAccessUnavailable"), recoverable: false };
+	}
+	return { message: message || fallback, recoverable: false };
 }
 
 function ImportForm({

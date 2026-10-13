@@ -342,6 +342,8 @@ describe("BrowserImportDialog", () => {
 
 	it.each([
 		"unable to open database file",
+		"database is locked",
+		"SQLITE_BUSY: database is locked",
 		"AO couldn't create a temporary copy of Brave's profile database. Fully close Brave, then retry the import.",
 	])("shows a quiet retry tip above the browser dropdown for %s", async (message) => {
 		const braveSource = { ...source, name: "Brave" };
@@ -372,6 +374,39 @@ describe("BrowserImportDialog", () => {
 		expect(alert).not.toHaveTextContent("Error invoking remote method");
 	});
 
+	it.each([
+		"A destination browser profile already exists.",
+		"EPERM: operation not permitted",
+		"An unexpected import failure.",
+	])("keeps non-recoverable import errors actionable: %s", async (message) => {
+		aoBridge.browserProfiles = {
+			...originalBridge,
+			discoverImportSources: vi.fn(async () => ({ sources: [source] })),
+			import: vi.fn(async () => { throw new Error(message); }),
+			onImportProgress: vi.fn(() => () => undefined),
+		};
+		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
+		await screen.findByText("Google Chrome");
+		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent(message);
+		expect(alert).toHaveClass("text-destructive");
+		expect(alert).not.toHaveTextContent("Tip:");
+		expect(screen.getByRole("button", { name: "Start import" })).toBeEnabled();
+		expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+	});
+
+	it("shows missing import support as an error without offering retry", async () => {
+		delete (aoBridge as Partial<AoBridge>).browserProfiles;
+		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("Browser import is unavailable in this build.");
+		expect(alert).toHaveClass("text-destructive");
+		expect(alert).not.toHaveTextContent("Tip:");
+		expect(screen.getByRole("button", { name: "Start import" })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+	});
+
 	it("points Safari users to Full Disk Access when macOS blocks its data", async () => {
 		const bridge: AoBridge["browserProfiles"] = {
 			list: vi.fn(async () => ({ profiles: [] })),
@@ -389,9 +424,10 @@ describe("BrowserImportDialog", () => {
 		await screen.findByText("Safari");
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
 
-		expect(await screen.findByRole("alert")).toHaveTextContent(
-			"Privacy & Security > Full Disk Access, allow AO, then restart AO",
-		);
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("Privacy & Security > Full Disk Access, allow AO, then restart AO");
+		expect(alert).toHaveClass("text-destructive");
+		expect(screen.getByRole("button", { name: "Start import" })).toBeEnabled();
 	});
 
 	it("keeps discovery failures visible and disables import", async () => {
@@ -408,7 +444,10 @@ describe("BrowserImportDialog", () => {
 		aoBridge.browserProfiles = bridge;
 
 		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
-		expect(await screen.findByRole("alert")).toHaveTextContent("Browser discovery failed.");
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("Browser discovery failed.");
+		expect(alert).toHaveClass("text-destructive");
+		expect(alert).not.toHaveTextContent("Tip:");
 		expect(screen.getByRole("button", { name: "Start import" })).toBeDisabled();
 	});
 });
