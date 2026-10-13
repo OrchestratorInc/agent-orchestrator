@@ -1,21 +1,24 @@
 import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import { memo, useCallback, useEffect, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
 	InspectorActivityTimelineView,
-	InspectorPullRequestCardView,
 	InspectorReviewsView,
 	InspectorSection as Section,
 	SessionInspectorShellView,
 	SessionInspectorSummaryView,
+	PRSummaryMeta,
 	inspectorEmptyClass,
+	prBranchRange,
 	type InspectorPullRequest,
+	type PRDisplayTone,
 	type InspectorInlineComment,
 	type InspectorGithubReview,
 	type InspectorReviewGroup,
@@ -27,14 +30,26 @@ import {
 import {
 	Archive,
 	ArrowUpRight,
+	Bell,
+	ChevronRight,
+	CircleAlert,
+	CircleCheck,
+	CircleDashed,
+	CircleX,
+	GitBranch,
 	GitPullRequest,
+	GitPullRequestClosed,
+	GitPullRequestDraft,
 	GitMerge,
 	Globe,
 	Info,
 	Play,
 	Loader2,
+	MoreVertical,
+	PanelRight,
 	SearchCheck,
 	X,
+	type LucideIcon,
 } from "lucide-react";
 import type { components } from "../../api/schema";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
@@ -50,7 +65,10 @@ import { captureRendererEvent } from "../lib/telemetry";
 import { formatTimeCompact } from "../lib/format-time";
 import { AgentAvatar } from "./AgentAvatar";
 import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifactsView";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
+import { TopbarButton } from "./TopbarButton";
+import { DiffCounts, InfoRow, InfoRowLink } from "./InspectorInfoRow";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { CopyButton } from "./chat/CopyButton";
 import { ScriptRunPanel } from "./ScriptRunPanel";
@@ -69,7 +87,7 @@ import { sessionWorkspaceFilesQueryKey, sessionWorkspaceHistoryQueryOptions, use
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTerminateSession";
-import { prBrowserUrl, prCanMerge, prCardPresentation, prNounKeys, prRepositoryFromUrl, prsSpanRepositories, sessionPRDisplaySummaries } from "../lib/pr-display";
+import { prBrowserUrl, prCanMerge, prCardPresentation, prRepositoryFromUrl, prsSpanRepositories, sessionPRDisplaySummaries } from "../lib/pr-display";
 import type { SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import {
 	openPRs,
@@ -169,6 +187,50 @@ const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
 /**
  * Tabbed inspector rail beside the terminal (Summary · Reviews · Browser · Side chat · Files · Artifacts).
  */
+/**
+ * Whether the topbar's trailing column is too narrow for the ⋮ plus the
+ * reserved space under the window-pinned controls, so they would slide over
+ * the address or filter field. The field's grid track does not depend on the
+ * trailing content, so folding never changes the measurement it was based on.
+ */
+function usePinnedActionsFold(
+	trailing: HTMLElement | null,
+	field: HTMLElement | null,
+	onChange: ((folded: boolean) => void) | undefined,
+): boolean {
+	const [folded, setFolded] = useState(false);
+	const foldedRef = useRef(false);
+	const unfoldedWidth = useRef(0);
+	useLayoutEffect(() => {
+		const topbar = trailing?.parentElement;
+		if (!trailing || !topbar || !field) {
+			foldedRef.current = false;
+			setFolded(false);
+			return;
+		}
+		const measure = () => {
+			const trailingRect = trailing.getBoundingClientRect();
+			if (!foldedRef.current) unfoldedWidth.current = trailingRect.width;
+			const fieldRect = field.getBoundingClientRect();
+			// Narrow layouts move the field to its own row, where nothing overlaps.
+			const sameRow = fieldRect.top < trailingRect.bottom && fieldRect.bottom > trailingRect.top;
+			const next = sameRow && topbar.getBoundingClientRect().right - fieldRect.right < unfoldedWidth.current;
+			foldedRef.current = next;
+			setFolded(next);
+		};
+		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(topbar);
+		observer.observe(field);
+		return () => observer.disconnect();
+	}, [field, trailing]);
+	useEffect(() => {
+		onChange?.(folded);
+	}, [folded, onChange]);
+	useEffect(() => () => onChange?.(false), [onChange]);
+	return folded;
+}
+
 export const SessionInspector = memo(function SessionInspector({
 	browserOnly = false,
 	session,
@@ -190,6 +252,10 @@ export const SessionInspector = memo(function SessionInspector({
 	sideChatView,
 	view: viewProp,
 	onViewChange,
+	notificationsUnread = 0,
+	onOpenNotifications,
+	onPinnedActionsFoldChange,
+	onToggleInspector,
 }: {
 	browserOnly?: boolean;
 	session?: WorkspaceSession;
@@ -213,6 +279,15 @@ export const SessionInspector = memo(function SessionInspector({
 	/** Controlled active tab. Omit to let the inspector own its own selection. */
 	view?: InspectorView;
 	onViewChange?: (view: InspectorView) => void;
+	/**
+	 * The window-pinned inspector toggle and bell sit over the topbar's right
+	 * edge. When the address or filter field leaves them too little room, the
+	 * inspector asks the owner to hide them and offers both from its ⋮ menu.
+	 */
+	onPinnedActionsFoldChange?: (folded: boolean) => void;
+	onToggleInspector?: () => void;
+	onOpenNotifications?: () => void;
+	notificationsUnread?: number;
 }) {
 	const { t } = useTranslation();
 	const hostId = hostIdProp ?? session?.hostId;
@@ -221,6 +296,13 @@ export const SessionInspector = memo(function SessionInspector({
 	const [browserTopbarHost, setBrowserTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesTopbarHost, setFilesTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesActionsHost, setFilesActionsHost] = useState<HTMLDivElement | null>(null);
+	const [trailingActions, setTrailingActions] = useState<HTMLDivElement | null>(null);
+	const openingNotifications = useRef(false);
+	const pinnedActionsFolded = usePinnedActionsFold(
+		onPinnedActionsFoldChange && isInspectorVisible ? trailingActions : null,
+		browserTopbarHost ?? filesTopbarHost,
+		onPinnedActionsFoldChange,
+	);
 	const requestedView = viewProp ?? internalView;
 	// Badge the Browser tab when a preview target arrived without us opening it.
 	const browserUnseen = useUiStore((state) =>
@@ -338,9 +420,58 @@ export const SessionInspector = memo(function SessionInspector({
 						) : view === "files" && filesView ? (
 							<div className="files-panel__topbar-host min-w-0 flex-1" ref={setFilesTopbarHost} />
 						) : null}
-						<div className="session-inspector__trailing flex shrink-0 items-center">
+						{/* The ⋮ appears only when the pinned toggle and bell are folded into it. */}
+						<div className="session-inspector__trailing flex shrink-0 items-center" ref={setTrailingActions}>
 							{view === "files" && filesView ? <div className="session-inspector__files-actions flex items-center gap-1" ref={setFilesActionsHost} /> : null}
-							<span aria-hidden="true" className="session-inspector-actions-spacer" />
+							{pinnedActionsFolded ? (
+								<DropdownMenu>
+									<DropdownMenuTrigger asChild>
+										<TopbarButton
+											aria-label={t("inspector.more")}
+											className="relative data-[state=open]:bg-interactive-active data-[state=open]:text-foreground"
+											title={t("inspector.more")}
+											variant="icon"
+										>
+											<MoreVertical aria-hidden="true" className="size-icon-md" />
+											{notificationsUnread > 0 ? (
+												<span aria-hidden="true" className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-accent-strong ring-2 ring-background" />
+											) : null}
+										</TopbarButton>
+									</DropdownMenuTrigger>
+									<DropdownMenuContent
+										align="end"
+										className="min-w-44"
+										data-browser-native-overlay="true"
+										// Opening notifications from here hands focus to their popover.
+										onCloseAutoFocus={(event) => {
+											if (openingNotifications.current) event.preventDefault();
+										}}
+									>
+										{onToggleInspector ? (
+											<DropdownMenuItem onSelect={onToggleInspector}>
+												<PanelRight aria-hidden="true" />
+												{t("shell.closeInspector")}
+											</DropdownMenuItem>
+										) : null}
+										{onOpenNotifications ? (
+											<DropdownMenuItem
+												onSelect={() => {
+													openingNotifications.current = true;
+													requestAnimationFrame(() => {
+														openingNotifications.current = false;
+														onOpenNotifications();
+													});
+												}}
+											>
+												<Bell aria-hidden="true" />
+												{notificationsUnread > 0 ? t("notify.unreadCount", { count: notificationsUnread }) : t("notify.bell")}
+											</DropdownMenuItem>
+										) : null}
+									</DropdownMenuContent>
+								</DropdownMenu>
+							) : (
+								<span aria-hidden="true" className="session-inspector-actions-spacer" />
+							)}
 						</div>
 					</>
 				}
@@ -451,16 +582,7 @@ const SummaryView = memo(function SummaryView({
 			}
 			activityTitle={t("inspector.activity")}
 			artifactCards={
-				hasArtifacts ? (
-					artifacts.map((artifact) => (
-						<ArtifactSummaryCard
-							artifact={artifact}
-							key={artifact.path}
-							onOpenArtifact={onOpenArtifact}
-							session={session}
-						/>
-					))
-				) : undefined
+				hasArtifacts ? <ArtifactSummaryList artifacts={artifacts} onOpenArtifact={onOpenArtifact} session={session} /> : undefined
 			}
 			artifactTitle={hasArtifacts ? artifactSectionTitle : undefined}
 			branch={
@@ -468,11 +590,13 @@ const SummaryView = memo(function SummaryView({
 					hostId={hostId}
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
-					pullRequests={hasPRs ? (
+					pullRequests={hasPRs ? (branchWork) => (
 						<>
 							{prSummaries.map((pr) => (
 								<PRSummaryCard
+									branchWork={pr.number === openPRNumber ? branchWork : undefined}
 									canOpenReviews={canOpenReviews}
+									current={pr.number === openPRNumber}
 									key={pr.url || pr.htmlUrl || pr.number}
 									showRepository={prsSpanRepositories(prSummaries)}
 									onOpenReviews={onOpenReviews}
@@ -484,7 +608,7 @@ const SummaryView = memo(function SummaryView({
 							))}
 							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectQuery.data)} key={pr.url} pr={pr} />)}
 						</>
-					) : null}
+					) : undefined}
 					session={session}
 					title={prSectionTitle}
 				/>
@@ -613,30 +737,41 @@ function isExternalRepository(pr: SessionPRReference, project: components["schem
 
 function LinkedPRCard({ external, pr }: { external: boolean; pr: SessionPRReference }) {
 	const { t } = useTranslation();
+	const kind = pr.provider === "gitlab" ? "MR" : "PR";
+	// Same row as a tracked PR, but AO has only the reported URL: no title,
+	// state or checks. The muted icon and "Not tracked" note say so, and the
+	// info button explains why.
 	return (
-		<article className="min-w-0 w-full rounded-lg border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-2.5">
-			<div className="flex min-w-0 items-center justify-between gap-2">
-				<ProductExternalLink className="inline-flex min-w-0 items-center gap-1 font-mono text-xs font-medium text-settings-label underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" href={pr.url}>
-					<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />
-					<span className="truncate">{pr.host}/{pr.repo} {pr.provider === "gitlab" ? "MR" : "PR"} #{pr.number}</span>
-					<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" />
-				</ProductExternalLink>
-				<CopyButton compact label={t("link.copy")} text={pr.url} />
-			</div>
-			<div className="mt-1.5 flex items-center justify-between gap-2">
-				<div className="flex min-w-0 items-center gap-1 text-xs text-settings-muted">
-					<span>{t("inspector.reportedByWorker")}</span>
+		<article className="flex min-w-0 flex-col py-1.5">
+			<InfoRow
+				action={<div className="flex shrink-0 items-center"><InfoRowLink ariaLabel={t("inspector.openPR", { number: pr.number })} href={pr.url} /><CopyButton compact label={t("link.copy")} text={pr.url} /></div>}
+				icon={GitPullRequest}
+				iconClassName="text-passive"
+				label={
+					<>
+						<span className="font-medium">{kind} #{pr.number}</span>
+						{external ? <span className="text-muted-foreground"> {pr.repo}</span> : null}
+					</>
+				}
+				note={
+					<>
+						{t("inspector.notTracked")}
+						{external ? ` · ${t("inspector.externalRepository")}` : null}
+					</>
+				}
+				noteClassName="text-muted-foreground"
+				title={pr.url}
+				trailing={
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button aria-label={t("inspector.linkedPRInfo")} className="inline-flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" type="button">
+							<button aria-label={t("inspector.linkedPRInfo")} className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-passive transition-colors duration-fast hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" type="button">
 								<Info aria-hidden="true" className="size-icon-2xs" />
 							</button>
 						</TooltipTrigger>
 						<TooltipContent className="max-w-72 leading-normal text-pretty">{t("inspector.linkedPRInfo")}</TooltipContent>
 					</Tooltip>
-				</div>
-				{external ? <span className="shrink-0 rounded-full border border-(--color-border-settings-input) px-1.5 py-0.5 text-[9px] leading-none text-settings-muted">{t("inspector.externalRepository")}</span> : null}
-			</div>
+				}
+			/>
 		</article>
 	);
 }
@@ -916,7 +1051,9 @@ function updateSessionMergePolicy(
 }
 
 function PRSummaryCard({
+	branchWork,
 	canOpenReviews,
+	current,
 	hostId,
 	cloudOrgId,
 	onOpenReviews,
@@ -924,7 +1061,10 @@ function PRSummaryCard({
 	sessionId,
 	showRepository = false,
 }: {
+	/** The branch's commit rows, shown inside the open PR they land on. */
+	branchWork?: ReactNode;
 	canOpenReviews: boolean;
+	current: boolean;
 	hostId?: string;
 	cloudOrgId?: string;
 	onOpenReviews: () => void;
@@ -990,18 +1130,18 @@ function PRSummaryCard({
 		) : undefined,
 	};
 	return (
-		<InspectorPullRequestCardView
-			countNounLabel={(count, noun) => `${count} ${t(prNounKeys[noun], { count })}`}
-			externalIcon={<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" strokeWidth={2} />}
-			externalLink={ProductExternalLink}
+		<PullRequestRows
+			branchWork={branchWork}
+			current={current}
+			stateKey={`${hostId ?? ""}:${sessionId}:${pr.url || pr.number}`}
 			mergeAction={
 				canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
-						className="gap-1 bg-success px-2 text-xs text-on-foreground hover:bg-success/80"
+						className="h-control-sm shrink-0 gap-1 bg-success px-2 text-xs text-on-foreground hover:bg-[color-mix(in_oklch,var(--success),var(--foreground)_10%)]"
 						disabled={mergePr.isPending}
 						onClick={() => mergePr.mutate()}
-						size="sm"
+						size="none"
 						type="button"
 					>
 						{mergePr.isPending ? (
@@ -1017,8 +1157,179 @@ function PRSummaryCard({
 			openLabel={t("inspector.openPR", { number: pr.number })}
 			openedViaLabel={t("pr.openedVia")}
 			pr={viewModel}
-			pullRequestIcon={<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />}
 		/>
+	);
+}
+
+const prToneText: Record<PRDisplayTone, string> = {
+	neutral: "text-muted-foreground",
+	passive: "text-passive",
+	success: "text-success",
+	review: "text-status-in-review",
+	warning: "text-warning",
+	error: "text-error",
+};
+
+const prToneIcon: Record<PRDisplayTone, LucideIcon> = {
+	neutral: CircleDashed,
+	passive: CircleDashed,
+	success: CircleCheck,
+	review: CircleAlert,
+	warning: CircleAlert,
+	error: CircleX,
+};
+
+/**
+ * A pull request as inspector rows: the PR itself, its branches, each status,
+ * and merge readiness. A status that only repeats the readiness label folds
+ * into the readiness row instead of showing twice.
+ */
+/** Per-session PR expansion the person chose; outlives the section's unmount. */
+const prExpansion = new Map<string, boolean>();
+
+function PullRequestRows({
+	branchWork,
+	current,
+	mergeAction,
+	mergeError,
+	openLabel,
+	openedViaLabel,
+	pr,
+	stateKey,
+}: {
+	branchWork?: ReactNode;
+	/** Identifies this PR in this session, for remembering its expansion. */
+	stateKey: string;
+	/** The open or draft PR that new commits update. */
+	current: boolean;
+	mergeAction?: ReactNode;
+	mergeError?: string | null;
+	openLabel: string;
+	openedViaLabel: string;
+	pr: InspectorPullRequest;
+}) {
+	const range = prBranchRange(pr);
+	const readiness = pr.card.readiness;
+	const statuses = pr.card.statusRows ?? (readiness ? [] : [pr.card.primary, ...pr.card.supporting]);
+	const readinessTwin = readiness ? statuses.find((status) => status.label === readiness.label) : undefined;
+	const showStatus = pr.state !== "merged";
+	// The PR new commits update starts open; every other PR starts folded. A
+	// toggle is remembered, so closing the section or switching tabs keeps it.
+	const [expanded, setExpandedState] = useState(() => prExpansion.get(stateKey) ?? current);
+	const setExpanded = (update: (open: boolean) => boolean) => {
+		setExpandedState((open) => {
+			const next = update(open);
+			prExpansion.set(stateKey, next);
+			return next;
+		});
+	};
+	const reduceMotion = useReducedMotion();
+	const state = prStateIcon[pr.state];
+	return (
+		<article className="flex min-w-0 flex-col py-1.5">
+			<InfoRow
+				action={
+					<InfoRowLink ariaLabel={openLabel} href={pr.href}>
+						{pr.additions + pr.deletions > 0 ? <DiffCounts additions={pr.additions} deletions={pr.deletions} /> : null}
+					</InfoRowLink>
+				}
+				expanded={expanded}
+				icon={state.icon}
+				iconClassName={state.className}
+				label={
+					<>
+						<span className="font-medium">PR #{pr.number}</span>
+						{pr.title ? <span> {pr.title}</span> : null}
+						{/* The icon carries the state; keep it for screen readers. */}
+						<span className="sr-only"> {pr.stateLabel}</span>
+					</>
+				}
+				onClick={() => setExpanded((open) => !open)}
+				title={pr.title}
+			/>
+			<AnimatePresence initial={false}>
+				{expanded ? (
+					<motion.div
+						animate={{ height: "auto", opacity: 1, transitionEnd: { overflow: "visible" } }}
+						// The clip box reaches the rows' 6px hover bleed, so pills are never cut.
+						className="-mx-1.5 flex min-w-0 flex-col px-1.5"
+						exit={{ height: 0, opacity: 0, overflow: "hidden" }}
+						initial={{ height: 0, opacity: 0, overflow: "hidden" }}
+						transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
+					>
+						{pr.openedBy ? <PRSummaryMeta className="py-1" externalLink={ProductExternalLink} openedViaLabel={openedViaLabel} pr={{ ...pr, sourceBranch: "", targetBranch: "", changedFiles: 0, additions: 0, deletions: 0 }} /> : null}
+						<PullRequestDetails mergeAction={mergeAction} mergeError={mergeError} pr={pr} range={range} readiness={readiness} readinessTwin={readinessTwin} showStatus={showStatus} statuses={statuses} />
+						{branchWork}
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+		</article>
+	);
+}
+
+// GitHub's state icons and colours, so the header needs no state chip.
+const prStateIcon: Record<InspectorPullRequest["state"], { icon: LucideIcon; className: string }> = {
+	open: { icon: GitPullRequest, className: "text-success" },
+	draft: { icon: GitPullRequestDraft, className: "text-passive" },
+	merged: { icon: GitMerge, className: "text-status-merged" },
+	closed: { icon: GitPullRequestClosed, className: "text-error" },
+};
+
+function PullRequestDetails({
+	mergeAction,
+	mergeError,
+	pr,
+	range,
+	readiness,
+	readinessTwin,
+	showStatus,
+	statuses,
+}: {
+	mergeAction?: ReactNode;
+	mergeError?: string | null;
+	pr: InspectorPullRequest;
+	range: string | undefined;
+	readiness: InspectorPullRequest["card"]["readiness"];
+	readinessTwin: InspectorPullRequest["card"]["primary"] | undefined;
+	showStatus: boolean;
+	statuses: InspectorPullRequest["card"]["primary"][];
+}) {
+	return (
+		<>
+			{range ? <InfoRow icon={GitBranch} label={range} title={range} /> : null}
+			{showStatus
+				? statuses
+						.filter((status) => status !== readinessTwin)
+						.map((status) => (
+							<InfoRow
+								href={status.href}
+								icon={prToneIcon[status.tone]}
+								iconClassName={cn(prToneText[status.tone], status.breathe && "animate-status-pulse")}
+								key={status.key}
+								// One short phrase per row; the rest is a tooltip. "Review status" is
+								// only a heading, so the review row shows its outcome instead.
+								label={status.key === "review" && status.detail ? status.detail : status.label}
+								title={status.detail}
+								trailing={status.key === "review" ? pr.reviewDetailsAction : undefined}
+							/>
+						))
+				: null}
+			{showStatus && readiness ? (
+				<InfoRow
+					href={mergeAction ? undefined : readinessTwin?.href}
+					icon={prToneIcon[readiness.tone]}
+					iconClassName={prToneText[readiness.tone]}
+					label={readiness.label}
+					title={readiness.detail}
+					trailing={mergeAction}
+				/>
+			) : null}
+			{mergeError ? (
+				<p className="mt-1 text-xs leading-normal text-error" role="status">
+					{mergeError}
+				</p>
+			) : null}
+		</>
 	);
 }
 
@@ -1027,6 +1338,64 @@ function PRSummaryCard({
  * Browser panel; markdown/file artifacts open in the inspector's Artifacts view,
  * since artifact files live outside the git workspace.
  */
+const ARTIFACT_PREVIEW_COUNT = 4;
+
+/** The newest artifacts first, capped until the person asks for the rest. */
+function ArtifactSummaryList({
+	artifacts,
+	onOpenArtifact,
+	session,
+}: {
+	artifacts: SessionArtifact[];
+	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+	session: WorkspaceSession;
+}) {
+	const { t } = useTranslation();
+	const [expanded, setExpanded] = useState(false);
+	const reduceMotion = useReducedMotion();
+	const newestFirst = [...artifacts].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+	const hidden = newestFirst.length - ARTIFACT_PREVIEW_COUNT;
+	return (
+		<>
+			{newestFirst.slice(0, ARTIFACT_PREVIEW_COUNT).map((artifact) => (
+				<ArtifactSummaryCard artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} session={session} />
+			))}
+			<AnimatePresence initial={false}>
+				{expanded && hidden > 0 ? (
+					// -mt cancels the list's gap while collapsed; the inner pt restores it once open.
+					<motion.div
+						animate={{ height: "auto", opacity: 1, transitionEnd: { overflow: "visible" } }}
+						className="-mt-1.5"
+						exit={{ height: 0, opacity: 0, overflow: "hidden" }}
+						initial={{ height: 0, opacity: 0, overflow: "hidden" }}
+						transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
+					>
+						<div className="flex flex-col gap-1.5 pt-1.5">
+							{newestFirst.slice(ARTIFACT_PREVIEW_COUNT).map((artifact) => (
+								<ArtifactSummaryCard artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} session={session} />
+							))}
+						</div>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+			{hidden > 0 ? (
+				<Button
+					aria-expanded={expanded}
+					// A faint resting fill: present, but quieter than the rows above it.
+					className="h-control-sm gap-1 self-start bg-interactive-hover px-2.5 text-xs text-muted-foreground hover:bg-interactive-active hover:text-foreground dark:hover:bg-interactive-active focus-visible:ring-2 focus-visible:ring-ring/60"
+					onClick={() => setExpanded((open) => !open)}
+					size="none"
+					type="button"
+					variant="ghost"
+				>
+					{expanded ? t("inspector.showLess") : t("inspector.showMore")}
+					<ChevronRight aria-hidden="true" className={cn("size-icon-sm transition-transform motion-reduce:transition-none", expanded ? "-rotate-90" : "rotate-90")} />
+				</Button>
+			) : null}
+		</>
+	);
+}
+
 function ArtifactSummaryCard({
 	artifact,
 	onOpenArtifact,

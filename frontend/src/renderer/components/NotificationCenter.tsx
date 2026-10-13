@@ -60,6 +60,9 @@ type SessionMeta = { projectId: string; projectName: string; sessionName: string
 
 type NotificationCenterProps = {
 	style?: React.CSSProperties;
+	/** Bumping this opens the panel, for a menu that stands in for the bell. */
+	openRequest?: number;
+	onUnreadCountChange?: (count: number) => void;
 };
 
 const REMOTE_NOTIFICATION_PREFIX = "remote-notification:";
@@ -277,7 +280,7 @@ export function NotificationRuntime() {
 	return null;
 }
 
-export function NotificationCenter({ style }: NotificationCenterProps) {
+export function NotificationCenter({ style, openRequest, onUnreadCountChange }: NotificationCenterProps) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [actionError, setActionError] = useState<string | null>(null);
@@ -495,6 +498,14 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			keepLatestNotificationsPage(queryClient, recentNotificationsQueryKey);
 		}
 	}, [queryClient]);
+
+	useEffect(() => {
+		if (openRequest) setPanelOpen(true);
+	}, [openRequest, setPanelOpen]);
+
+	useEffect(() => {
+		onUnreadCountChange?.(unreadCount);
+	}, [onUnreadCountChange, unreadCount]);
 
 	const retryMarkRead = () => {
 		setMarkReadError(null);
