@@ -43,6 +43,9 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	// Updates started from a notice run right here; the notice shows progress
 	// and any failure instead of sending the user to Settings.
 	const [starting, setStarting] = useState<ReadonlySet<AgentId>>(new Set());
+	const startingRef = useRef(new Set<AgentId>());
+	const updateAllInFlight = useRef(false);
+	const [startingAll, setStartingAll] = useState(false);
 	const [errors, setErrors] = useState<Partial<Record<AgentId, string>>>({});
 	const startedJobs = useRef(new Set<AgentId>());
 	const stackId = useId();
@@ -71,7 +74,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	}, [enabled, jobs.data, queryClient]);
 
 	const startUpdate = async (agentId: AgentId, latestVersion: string, methodId: string) => {
-		if (starting.has(agentId)) return;
+		if (startingRef.current.has(agentId) || activeJob(queryClient.getQueryData<Awaited<ReturnType<typeof fetchInstallJobs>>>(installJobsQueryKey)?.find((job) => job.target === agentId)?.status)) return;
+		startingRef.current.add(agentId);
 		setStarting((current) => new Set([...current, agentId]));
 		setErrors((current) => ({ ...current, [agentId]: undefined }));
 		try {
@@ -101,6 +105,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		} catch (error) {
 			setErrors((current) => ({ ...current, [agentId]: error instanceof Error ? error.message : t("settings.harness.updateFailed") }));
 		} finally {
+			startingRef.current.delete(agentId);
 			setStarting((current) => {
 				const next = new Set(current);
 				next.delete(agentId);
@@ -137,6 +142,28 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		if (updates.length <= 2) setExpanded(false);
 	};
 	const isExpanded = expanded && updates.length > 1;
+	const ready = !authPlans.isPending && !authPlans.isError && !installers.isPending && !installers.isError && !jobs.isPending && !jobs.isError;
+	const updateAllTargets = ready ? updates.flatMap(({ agentId, advisory }) => {
+		const method = installers.data?.find((plan) => plan.agentId === agentId)?.methods.find((candidate) => candidate.id === maintenanceMethodId(advisory));
+		const authPlan = authPlans.data?.find((plan) => plan.agentId === agentId);
+		const needsLogin = authPlan && authPlan.action !== "instructions" && readinessById.get(agentId)?.authentication.state === "unauthorized";
+		if (!method?.available || !method.updateAvailable || needsLogin || starting.has(agentId)
+			|| activeJob(jobs.data?.find((job) => job.target === agentId)?.status)) return [];
+		return [{ agentId, latestVersion: advisory.latestVersion!, methodId: method.id }];
+	}) : [];
+	const startAllUpdates = async () => {
+		if (updateAllInFlight.current || updateAllTargets.length === 0) return;
+		updateAllInFlight.current = true;
+		setStartingAll(true);
+		setExpanded(true);
+		try {
+			// Each notice keeps its existing target/owner recheck and error display.
+			for (const target of updateAllTargets) await startUpdate(target.agentId, target.latestVersion, target.methodId);
+		} finally {
+			updateAllInFlight.current = false;
+			setStartingAll(false);
+		}
+	};
 
 	// Portaled to the end of <body>: Electron applies window drag regions in DOM
 	// order, so a later drag strip (the home page's) would otherwise override no-drag.
@@ -147,7 +174,13 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		// Outside Settings the stack reaches the window's drag region, which would swallow its clicks.
 		style={{ WebkitAppRegion: "no-drag" } as CSSProperties}>
 		{/* The stack toggle sits above the cards so it never reads as part of one notice. */}
-		{updates.length > 1 ? <div className="mb-2 flex justify-end">
+		{updates.length > 1 ? <div className="mb-2 flex items-center justify-between gap-2">
+			<Button type="button" variant="outline" size="sm" className="h-6 bg-card px-2 text-[11px] shadow-sm"
+				disabled={startingAll || updateAllTargets.length === 0} title={t("settings.harness.updateAllHint")} onClick={() => void startAllUpdates()}>
+				{startingAll ? <LoaderCircle className="size-3 animate-spin" aria-hidden="true" /> : null}
+				<span className="tabular-nums">{startingAll ? t("settings.harness.startingAllUpdates")
+					: `${t("settings.harness.updateAll")}${updateAllTargets.length ? ` (${updateAllTargets.length})` : ""}`}</span>
+			</Button>
 			<Button type="button" variant="ghost" size="sm" className="h-6 rounded-md border border-border bg-card px-2 text-[11px] text-settings-muted shadow-sm hover:bg-muted" aria-expanded={isExpanded} aria-controls={stackId} onClick={() => setExpanded(!isExpanded)}>{t(isExpanded ? "settings.harness.hideUpdateStack" : "settings.harness.showUpdateStack", { count: updates.length })}</Button>
 		</div> : null}
 		{/* flow-root keeps the stack's negative margin inside this box, so the cards behind peek out below only. */}
@@ -169,7 +202,6 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				// A job this notice started that failed stays explained here.
 				const failed = startedJobs.current.has(agentId) && (job?.status === "failed" || job?.status === "unsupported" || job?.status === "interrupted");
 				const error = errors[agentId] ?? (failed ? job?.error || t("settings.harness.updateJobFailed") : undefined);
-				const ready = !authPlans.isPending && !authPlans.isError && !installers.isPending && !installers.isError && !jobs.isPending && !jobs.isError;
 				const requestAction = () => {
 					if (!needsLogin && method) {
 						void startUpdate(agentId, advisory.latestVersion!, method.id);
@@ -188,7 +220,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 					<div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
 						<p className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1 text-[11px]"><span className="break-all font-mono text-settings-label" title={t("settings.harness.installedVersion")}>{versionLabel(advisory.currentVersion!)}</span><ArrowRight className="size-3 shrink-0 text-settings-muted" aria-label={t("settings.harness.availableVersion")} /><span className="break-all font-mono font-medium text-settings-accent">{versionLabel(advisory.latestVersion!)}</span></p>
 					{busy ? <Button size="sm" variant="outline" className="h-7 min-w-16 shrink-0 px-2 text-xs" disabled><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />{t("settings.harness.updating")}</Button>
-						: ready && ((needsLogin && authPlan?.available) || (!needsLogin && canUpdate)) ? <Button size="sm" className="h-7 min-w-16 shrink-0 px-2 text-xs" onClick={requestAction}>{t(needsLogin ? authPlan?.action === "setup" ? "settings.harness.setup" : "settings.harness.login" : error ? "settings.harness.retryUpdate" : "settings.harness.update")}</Button>
+						: ready && ((needsLogin && authPlan?.available) || (!needsLogin && canUpdate)) ? <Button size="sm" className="h-7 min-w-16 shrink-0 px-2 text-xs" disabled={startingAll} onClick={requestAction}>{t(needsLogin ? authPlan?.action === "setup" ? "settings.harness.setup" : "settings.harness.login" : error ? "settings.harness.retryUpdate" : "settings.harness.update")}</Button>
 						: ready && !needsLogin && plan?.documentationUrl ? <Button size="sm" variant="outline" className="h-7 shrink-0 px-2 text-xs" title={method?.updateReason ?? t("settings.harness.ownershipUnknown")} onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button>
 						: <Button size="sm" variant="outline" className="h-7 shrink-0 px-2 text-xs" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true })}>{t("settings.harness.viewDetails")}</Button>}
 					</div>

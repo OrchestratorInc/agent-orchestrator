@@ -6,7 +6,7 @@ import { HarnessUpdateNotice } from "./HarnessUpdateNotice";
 import { apiClient } from "../lib/api-client";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { appI18n } from "../i18n";
-import { useHarnessActionRequest, updateAdvisoryQueryKey } from "../hooks/useHarnessUpdates";
+import { useHarnessActionRequest, updateAdvisoryQueryKey, installJobsQueryKey, installerQueryKey } from "../hooks/useHarnessUpdates";
 import { useUiStore } from "../stores/ui-store";
 import type { AgentReadiness } from "../hooks/useAgentReadinessQuery";
 
@@ -34,6 +34,21 @@ function mockStack() {
 		return (original as (path: string, options: unknown) => Promise<never>)(path, options);
 	});
 	vi.mocked(apiClient.POST).mockResolvedValue({ data: readiness } as never);
+}
+
+function mockUpdatableStack() {
+	mockStack();
+	const original = vi.mocked(apiClient.GET).getMockImplementation()!;
+	vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+		if (path === "/api/v1/agents/installers") return { data: { agents: ["claude-code", "codex", "cursor"].map((agentId) => ({
+			agentId, methods: [{ id: "official-installer", available: true, updateAvailable: true }],
+		})) } } as never;
+		if (path === "/api/v1/agents/auth-plans") return { data: { plans: ["claude-code", "codex", "cursor"].map((agentId) => ({ agentId, action: "login", available: true })) } } as never;
+		if (path === "/api/v1/agents/{agent}/update-advisory") return { data: {
+			status: "behind_latest", currentVersion: "1.0.0", latestVersion: "2.0.0", maintenanceMethod: "official-installer",
+		} } as never;
+		return (original as (path: string, options: unknown) => Promise<never>)(path, options);
+	});
 }
 
 describe("startup harness update notice", () => {
@@ -76,6 +91,51 @@ describe("startup harness update notice", () => {
 		expect(apiClient.GET).toHaveBeenCalledWith("/api/v1/agents/{agent}/update-advisory", expect.objectContaining({ params: expect.objectContaining({ query: { refresh: true } }) }));
 		expect(useHarnessActionRequest.getState().request).toBeNull();
 		expect(useUiStore.getState().settingsModal).toBe(before);
+	});
+
+	it("updates the collapsed notification stack once and continues after a failed start", async () => {
+		mockUpdatableStack();
+		const pending = deferred<never>();
+		const original = vi.mocked(apiClient.POST).getMockImplementation()!;
+		const started: string[] = [];
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => {
+			if (path !== "/api/v1/agents/{agent}/install") return (original as (path: string, options: unknown) => Promise<never>)(path, options);
+			const agentId = (options as { params: { path: { agent: string } } }).params.path.agent;
+			started.push(agentId);
+			if (agentId === "cursor") return pending.promise;
+			return { data: { target: agentId, status: "installing" } } as never;
+		});
+		const before = useUiStore.getState().settingsModal;
+		mountNotice();
+		const button = await screen.findByRole("button", { name: "Update all (3)" });
+		expect(screen.getAllByRole("article")).toHaveLength(1);
+		await userEvent.dblClick(button);
+		await waitFor(() => expect(started).toEqual(["cursor"]));
+		expect(screen.getByRole("button", { name: "Starting updates…" })).toBeDisabled();
+		expect(within(screen.getByRole("article", { name: "Codex" })).getByRole("button", { name: "Update" })).toBeDisabled();
+		await act(async () => pending.resolve({ error: { message: "Cursor update refused" } } as never));
+		await waitFor(() => expect(started).toEqual(["cursor", "codex", "claude-code"]));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Cursor update refused");
+		expect(useUiStore.getState().settingsModal).toBe(before);
+		expect(useHarnessActionRequest.getState().request).toBeNull();
+	});
+
+	it("excludes busy, login-required and unsupported harnesses from notification Update all", async () => {
+		mockUpdatableStack();
+		const { client } = mountNotice();
+		await screen.findByRole("button", { name: "Update all (3)" });
+		act(() => {
+			client.setQueryData(["agent-readiness"], { agents: [
+				agentReadiness("claude-code", "Claude Code"),
+				agentReadiness("codex", "Codex", { authentication: "unauthorized" }),
+				agentReadiness("cursor", "Cursor"),
+			] });
+			client.setQueryData(installJobsQueryKey, [{ target: "cursor", status: "installing" }]);
+		});
+		expect(await screen.findByRole("button", { name: "Update all (1)" })).toBeEnabled();
+		act(() => client.setQueryData(installerQueryKey, []));
+		expect(await screen.findByRole("button", { name: "Update all" })).toBeDisabled();
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
 	it("explains a refused update in the notice", async () => {
