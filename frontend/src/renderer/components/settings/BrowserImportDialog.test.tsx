@@ -97,12 +97,20 @@ describe("BrowserImportDialog", () => {
 		expect(screen.getByRole("textbox", { name: "Destination profile name" })).toHaveValue("Google Chrome");
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
 
-		expect(await screen.findByRole("status")).toHaveTextContent("Import complete");
+		expect(await screen.findByRole("heading", { name: "Import complete" })).toBeInTheDocument();
 		const details = screen.getByText(/^Import details/).closest("details")!;
 		expect(details).not.toHaveAttribute("open");
 		expect(details).toHaveTextContent("1 encrypted cookies");
 		expect(screen.queryByText(/completed with warnings/)).not.toBeInTheDocument();
-		expect(screen.getByText("12 cookies · 34 history entries")).toBeInTheDocument();
+		const status = screen.getByRole("status");
+		expect(status).toHaveTextContent(/^12 cookies · 34 history entries$/);
+		expect(status).not.toContainElement(details);
+		expect(status).not.toContainElement(screen.getByText("Cookies and site sign-ins"));
+		expect(status).not.toContainElement(screen.getByText("Select a new profile from the browser toolbar to use the imported data."));
+		expect(screen.getAllByText("Import complete")).toHaveLength(1);
+		await userEvent.click(screen.getByText(/^Import details/));
+		expect(details).toHaveAttribute("open");
+		expect(status).toHaveTextContent(/^12 cookies · 34 history entries$/);
 		await waitFor(() => expect(onImported).toHaveBeenCalledOnce());
 		expect(bridge.import).toHaveBeenCalledWith(expect.objectContaining({
 			sourceId: source.id,
@@ -207,7 +215,7 @@ describe("BrowserImportDialog", () => {
 		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
 		await screen.findByText("Google Chrome");
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
-		expect(await screen.findByRole("status")).toHaveTextContent("Nothing was imported");
+		expect(await screen.findByRole("heading", { name: "Nothing was imported" })).toBeInTheDocument();
 		expect(screen.queryByRole("heading", { name: "Import complete" })).not.toBeInTheDocument();
 	});
 
@@ -226,7 +234,7 @@ describe("BrowserImportDialog", () => {
 		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
 		await screen.findByText("Safari");
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
-		expect(await screen.findByRole("status")).toHaveTextContent("Import complete");
+		expect(await screen.findByRole("heading", { name: "Import complete" })).toBeInTheDocument();
 		expect(screen.getByText("0 cookies · 1 history entries")).toBeInTheDocument();
 	});
 
@@ -244,7 +252,7 @@ describe("BrowserImportDialog", () => {
 		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
 		await screen.findByText("Safari");
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
-		expect(await screen.findByRole("status")).toHaveTextContent("Import complete");
+		expect(await screen.findByRole("heading", { name: "Import complete" })).toBeInTheDocument();
 	});
 
 	it.each([
@@ -270,7 +278,7 @@ describe("BrowserImportDialog", () => {
 		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
 		await screen.findByText("Google Chrome");
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
-		expect(await screen.findByRole("status")).toHaveTextContent(title);
+		expect(await screen.findByRole("heading", { name: title })).toBeInTheDocument();
 		const summary = screen.getByText(/^Import details/);
 		const details = summary.closest("details")!;
 		expect(details).not.toHaveAttribute("open");
@@ -299,12 +307,14 @@ describe("BrowserImportDialog", () => {
 		await userEvent.click(screen.getByRole("checkbox", { name: /Cookies and site sign-ins/ }));
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
 		const status = await screen.findByRole("status");
-		expect(status).toHaveTextContent("Import complete");
-		expect(status).toHaveTextContent("Browsing history");
-		expect(status).not.toHaveTextContent("Cookies and site sign-ins");
+		expect(status).toHaveTextContent(/^0 cookies · 5000 history entries$/);
+		const dialog = screen.getByRole("dialog");
+		expect(dialog).toHaveTextContent("Browsing history");
+		expect(dialog).not.toHaveTextContent("Cookies and site sign-ins");
 		const details = screen.getByText("Import details").closest("details")!;
 		expect(details).not.toHaveAttribute("open");
 		expect(details).toHaveTextContent("27650 history entries");
+		expect(status).not.toContainElement(details);
 		expect(status.querySelector('[class*="warning"]')).toBeNull();
 		expect(status.querySelector('[class*="destructive"]')).toBeNull();
 	});

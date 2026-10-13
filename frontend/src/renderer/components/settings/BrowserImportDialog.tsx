@@ -565,12 +565,11 @@ function ResultStep({ includeCookies, includeHistory, result }: { includeCookies
 	const { t } = useTranslation();
 	const empty = result.entries.every((entry) => entry.importedCookies + entry.importedHistoryEntries === 0);
 	return (
-		<div className="space-y-3" role="status">
-			<span className="sr-only">{t(empty ? "settings.browserImport.empty" : "settings.browserImport.complete")}</span>
+		<div className="space-y-3">
 			{result.entries.map((entry) => (
 				<div className="rounded-xl border border-border px-3" key={entry.destinationProfile.id}>
 					<p className="pt-3 text-sm font-medium">{entry.destinationProfile.name}</p>
-					<p className="pb-2 text-xs text-muted-foreground">{t("settings.browserImport.resultCounts", { cookies: entry.importedCookies, history: entry.importedHistoryEntries })}</p>
+					<p className="pb-2 text-xs text-muted-foreground" role="status">{t("settings.browserImport.resultCounts", { cookies: entry.importedCookies, history: entry.importedHistoryEntries })}</p>
 					{[
 						{ selected: includeCookies, Icon: Cookie, label: "settings.browserImport.cookies" as const, count: entry.importedCookies },
 						{ selected: includeHistory, Icon: HistoryIcon, label: "settings.browserImport.history" as const, count: entry.importedHistoryEntries },
