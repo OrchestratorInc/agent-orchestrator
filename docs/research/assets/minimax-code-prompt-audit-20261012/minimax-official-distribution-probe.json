@@ -1,0 +1,45 @@
+{
+  "https://registry.npmjs.org/%40minimax-ai%2Fcode/0.6.5": {
+    "HTTP": 200,
+    "name": "@minimax-ai/code",
+    "version": "0.6.5",
+    "dist": {
+      "shasum": "f4cc9a67930d9cbeadd481f63eef919185199ef8",
+      "tarball": "https://registry.npmjs.org/@minimax-ai/code/-/code-0.6.5.tgz",
+      "fileCount": 767,
+      "integrity": "sha512-YPf+acIzukNeARVOGZnwswGscvptIbz9SXTwyFITKoRiCjJ2z/GWB+6DziOcyGA0TA33alvtz0rkUnfASNaDZw==",
+      "signatures": [
+        {
+          "sig": "MEUCIQCELR8D5dLx6HDELpO14VNLsbeQi6B8nVwNvLCeuRotSAIgS2LFZmsKJTPjOhU5dpWh/XehPdO6CZNwii3LPUbt60o=",
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+        },
+        {
+          "sig": "MEUCIQChlw842K2eT59/n4PdpxaPdDBzaom7Csg+abq1u2srewIgFXj27LAPXdXpsY6arH3Oi8cQhZpLvnu7gd6ELQIdHKI=",
+          "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+        }
+      ],
+      "unpackedSize": 39900937
+    },
+    "tag": null,
+    "assets": []
+  },
+  "https://api.github.com/repos/MiniMax-AI/minimax-code/releases/tags/v0.6.5": {
+    "HTTP": 200,
+    "name": "MiniMax Code 0.6.5",
+    "version": null,
+    "dist": null,
+    "tag": "v0.6.5",
+    "assets": [
+      {
+        "name": "minimax-code-0.6.5.tar.gz",
+        "url": "https://github.com/MiniMax-AI/minimax-code/releases/download/v0.6.5/minimax-code-0.6.5.tar.gz",
+        "digest": "sha256:16377ae92d6e1c0752ea0a791eb5dc859584ca31d0c1fe67d643c834feda9f02"
+      },
+      {
+        "name": "minimax-code-0.6.5.tar.gz.sha256",
+        "url": "https://github.com/MiniMax-AI/minimax-code/releases/download/v0.6.5/minimax-code-0.6.5.tar.gz.sha256",
+        "digest": "sha256:be69716616036afc7e9f4fd7cc5b3257be32d9708a5daea86b4aa12364b418a6"
+      }
+    ]
+  }
+}

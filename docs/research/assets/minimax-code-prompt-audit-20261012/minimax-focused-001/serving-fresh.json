@@ -1,0 +1,21 @@
+{
+  "at": "2026-10-13T00:00:27.053160+00:00",
+  "servingPID": 1098183,
+  "executable": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/prompt-audit/runtime-memory/minimax/bin/ao",
+  "executableSHA256": "8dfd7b65ce4e801f6100cc0bcca63720c1c7251797ee39d763adab90da61ad73",
+  "backendSource": "103855409714c65310ff1ff109d46cb13a4cb367",
+  "UIcommit": "103855409714c65310ff1ff109d46cb13a4cb367",
+  "electronPID": 1097963,
+  "runFilePath": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/minimax-prompt-running.json",
+  "nativeVersion": "0.6.5_OFFICIAL_NPM_ALL767_MATCH",
+  "sessionId": "prompt-minimax-74fd231b-1",
+  "nativeIDDigest": "b2c0afaadb174bb8d0b17095a3747f7e5b1d304dcd05eb5f5accbe2693cd35b1",
+  "generation": "d5837ba0-57b3-40c0-a31c-4e9cb0ffbf04",
+  "model": "custom_provider:ao-audit-zai/glm-5.3-flash",
+  "screenshot": {
+    "path": "fresh-stock-private-project-user.png",
+    "SHA256": "26592688d8769b6d59812e971392fac13583be0c50aaadfdb74e67031c272435",
+    "captureUTC": "2026-10-12T23:58:49.296Z"
+  },
+  "launchEnvironment": "Documented AO_DEV_DAEMON_BINARY wrapper executes unmodified exact-head CI binary with stock mcode PATH before legacy login-shell entries; HOME unchanged"
+}

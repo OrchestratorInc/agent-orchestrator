@@ -1,0 +1,5 @@
+{
+  "status": "SCREENSHOT_NOT_CAPTURED",
+  "reason": "Actual Electron CDP screenshot timed out; no generated/log substitute is used",
+  "independentKill": "NOT_RUN_NO_LIVE_START_WITNESS; preceding Escape returned cancelled input to native composer"
+}

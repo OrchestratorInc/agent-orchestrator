@@ -1,0 +1,53 @@
+{
+  "scope": "REGISTERED_AO_FOCUSED_ORDINARY_TASK",
+  "at": "2026-10-12T23:53:29.488103+00:00",
+  "source": "103855409714c65310ff1ff109d46cb13a4cb367",
+  "projectId": "prompt-minimax-74fd231b",
+  "sessionId": "prompt-minimax-74fd231b-1",
+  "workspace": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/minimax-prompt-data/worktrees/prompt-minimax-74fd231b/prompt-minimax-74fd231b-1",
+  "nativeIDDigest": "b2c0afaadb174bb8d0b17095a3747f7e5b1d304dcd05eb5f5accbe2693cd35b1",
+  "generation": "d5837ba0-57b3-40c0-a31c-4e9cb0ffbf04",
+  "visibleTask": "-Please create visible.json containing count 1 and cwd equal to the actual current working directory. If it already exists, increment its count once. Finish and wait.",
+  "visibleTaskHasPrivatePathOrToken": false,
+  "privateTokenSHA256": "7b0b25ca2d020109794373f8752d2c28e3c7ead017804396dc4b179b3c9c8f5e",
+  "projectTokenSHA256": "ab1c54a178c1ebabec0acef8b7885e1e43bb1a12cf65ee4fb8f92a8e6d8097f4",
+  "fresh": {
+    "countOnce": true,
+    "correctCwd": true,
+    "privateAction": true,
+    "projectAction": true,
+    "AGENTSPreserved": true,
+    "nativeUserRuleAction": true,
+    "activeToSettled": true
+  },
+  "observedStates": [
+    "idle",
+    "active"
+  ],
+  "controlSession": null,
+  "controlBefore": null,
+  "controlAfterFresh": null,
+  "actualAuthenticatedWireRole": "NOT_CAPTURED",
+  "nativeSyntheticRole": "native additive identity append flag; authenticated wire role not captured",
+  "killRestore": {
+    "killConfirmedAt": "2026-10-13T00:00:32.238406+00:00",
+    "newTokenIntroducedAt": "2026-10-13T00:00:32.651588+00:00",
+    "newTokenSHA256": "699c7e3cfc023267de4909721a37f4ad6ddc5c688f26fc5d1b66799486e5ad81",
+    "nativeSame": true,
+    "generationBefore": "d5837ba0-57b3-40c0-a31c-4e9cb0ffbf04",
+    "generationAfter": "4c16ae10-0458-417a-85ff-43d908007aa4",
+    "ownedNativeProcessesBefore": [],
+    "ownedNativeProcessesReaped": true,
+    "killReply": {
+      "ok": true,
+      "sessionId": "prompt-minimax-74fd231b-1"
+    },
+    "restoreMode": "native",
+    "otherProjectConfigPreserved": true,
+    "oldProofUnchangedBeforeContinuation": true,
+    "unrelatedControlAlive": true,
+    "unrelatedControlGenerationUnchanged": true,
+    "currentComposer": "PENDING_REAL_AO_VIEWPORT_INSPECTION",
+    "ordinaryContinuation": "NOT_RUN"
+  }
+}

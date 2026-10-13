@@ -1,0 +1,4 @@
+{
+  "status": "NOT_PROVEN_NATIVE_PROCESS_REAP",
+  "reason": "Original collector required CLI path in argv and cwd=workspace; native Node process title/cwd do not retain those. Empty process list cannot establish reaping. Native identity restoration remains observed; original receipt preserved."
+}

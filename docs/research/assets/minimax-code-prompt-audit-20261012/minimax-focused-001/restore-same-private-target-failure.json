@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-13T00:08:00.627599+00:00",
+  "checks": {
+    "timeout": true
+  },
+  "visibleTask": "Please update visible.json by adding continued true. Preserve its existing count and cwd, then finish and wait.",
+  "visibleTaskHasPrivatePathOrToken": false,
+  "observedStates": [
+    "active",
+    "idle"
+  ]
+}

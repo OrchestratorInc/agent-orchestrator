@@ -1,0 +1,120 @@
+{
+  "at": "2026-10-13T01:20:57.698496+00:00",
+  "assets": [
+    {
+      "path": "README.md",
+      "SHA256": "476d914ce7ab35b9cb1800382eed158238b10ed3498154973ed57e567d7a8cae",
+      "bytes": 3334
+    },
+    {
+      "path": "main-reconciliation-002.json",
+      "SHA256": "fb1b28254545035488d5198b16929d068a4b9cdd3d01eddefcfcc6a79f077058",
+      "bytes": 776
+    },
+    {
+      "path": "minimax-artifact.json",
+      "SHA256": "505744d9772f41a1baa7b847a3c36ede0f2f34fa740da77dc8501a1924368b42",
+      "bytes": 5560
+    },
+    {
+      "path": "minimax-baseline-cleanup.json",
+      "SHA256": "d6a5b2dcaaa8ac4943a764ba050a7a0cbbcd37b327497dce56c5e90755099e21",
+      "bytes": 912
+    },
+    {
+      "path": "minimax-control-001/receipt.json",
+      "SHA256": "e4bf1a58abf17518139770db17ffd6147aeb2bcfe3456e4a81c2f7689736c718",
+      "bytes": 1444
+    },
+    {
+      "path": "minimax-focused-001/cli-input-current-token-assessment.json",
+      "SHA256": "8fe858b484d3bf6b48b6c7c5d47d0cd506b259aac5a9362affe4729143f7b2b1",
+      "bytes": 472
+    },
+    {
+      "path": "minimax-focused-001/executing-cancel.json",
+      "SHA256": "ab188efcba048f9e4bda8e77bbd7a42f72e00c50c37fae3f4b9d3a4e302df0e4",
+      "bytes": 16744
+    },
+    {
+      "path": "minimax-focused-001/executing-kill.json",
+      "SHA256": "f69b61333cd0e8c29371eafd7f03d808556ba955d27d59cacce74bbb80d3d95a",
+      "bytes": 115
+    },
+    {
+      "path": "minimax-focused-001/first-restore-assessment.json",
+      "SHA256": "69d0066e94f69291f4d22dc3e3a280216cad6682b08efb4aabfc3fa30e11713e",
+      "bytes": 298
+    },
+    {
+      "path": "minimax-focused-001/first-restore-unqualified-process-reap.json",
+      "SHA256": "006c0941fb68b2f5ba62eb1fab0b267a618281bee1da74f6d91e8a5e9ebbc6cf",
+      "bytes": 2304
+    },
+    {
+      "path": "minimax-focused-001/fresh-stock-private-project-user.png",
+      "SHA256": "26592688d8769b6d59812e971392fac13583be0c50aaadfdb74e67031c272435",
+      "bytes": 118622
+    },
+    {
+      "path": "minimax-focused-001/receipt.json",
+      "SHA256": "2baf63cd1f5a51ca90a832926031d7838d8e14b37d3ff5c6d44a0b78e1d49f4a",
+      "bytes": 3318
+    },
+    {
+      "path": "minimax-focused-001/restore-same-private-target-failure.json",
+      "SHA256": "eb4a8bb5019136bdcb39d5798e7fc5c48a1d843b418ff23232bdcbc2277c9fa0",
+      "bytes": 315
+    },
+    {
+      "path": "minimax-focused-001/restored-distinct-target-empty-composer.png",
+      "SHA256": "3cbee3940a1485b6c95dabcba7ad20bd4b05c2c0ab3dee4d06a0d793bc7e6e65",
+      "bytes": 66330
+    },
+    {
+      "path": "minimax-focused-001/restored-distinct-target-ready.png",
+      "SHA256": "15eb34a5a267b622c4d3071f412e4e36278ee775f401a274aaf49c429b84514b",
+      "bytes": 107714
+    },
+    {
+      "path": "minimax-focused-001/restored-stock-empty-composer.png",
+      "SHA256": "c4b70b20b9153d24a06fcdf6c6393520247025bc87ba4b917cdba4fd28440a5e",
+      "bytes": 108141
+    },
+    {
+      "path": "minimax-focused-001/retained-draft-capture-unavailable.json",
+      "SHA256": "c331a997dca0e4b87449437ed089a6c3dd397279e62b975949c3e9f5d783f966",
+      "bytes": 251
+    },
+    {
+      "path": "minimax-focused-001/serving-fresh.json",
+      "SHA256": "27841874143197a983428c2ea75c5f775f1a845958dbd7cd495af3102db013ab",
+      "bytes": 1205
+    },
+    {
+      "path": "minimax-native-provenance.json",
+      "SHA256": "2c470ff3b55b8f879e2377c1f330e49fc554b7ab62559188c1ccf91ce45e33bd",
+      "bytes": 222721
+    },
+    {
+      "path": "minimax-official-distribution-probe.json",
+      "SHA256": "0977c4bb85753bf6512acc0cef9e17c3a94e81c4a0199611e7e566471f5febf0",
+      "bytes": 1725
+    },
+    {
+      "path": "minimax-official-install.json",
+      "SHA256": "7e2a3777469a8fee25b8f31f670bfc0953e0ebf1961c0ba892964cf525b31705",
+      "bytes": 229821
+    },
+    {
+      "path": "minimax-stock-provider-config.json",
+      "SHA256": "cd9d518e9f704c326a04b3d02ecd96208ca1d685a4c774875c4e2c574ea81bd3",
+      "bytes": 561
+    },
+    {
+      "path": "reconciliation.json",
+      "SHA256": "1c829d9121e68634adedddf9b0b3cc00a7cb990030bcfa97cc6d5b65a1ccedb7",
+      "bytes": 882
+    }
+  ]
+}

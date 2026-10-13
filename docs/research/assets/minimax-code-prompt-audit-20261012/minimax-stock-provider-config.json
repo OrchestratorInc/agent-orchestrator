@@ -1,0 +1,29 @@
+{
+  "exit": 0,
+  "providers": [
+    {
+      "id": "minimax_oauth",
+      "enabled": true,
+      "active": true,
+      "hasAPIKey": false,
+      "models": []
+    },
+    {
+      "id": "minimax_api",
+      "enabled": true,
+      "active": false,
+      "hasAPIKey": false,
+      "models": []
+    },
+    {
+      "id": "custom_provider:ao-audit-zai",
+      "enabled": true,
+      "active": true,
+      "hasAPIKey": true,
+      "models": [
+        "glm-5.3-flash"
+      ]
+    }
+  ],
+  "qualification": "Configuration only, no authenticated native provider call yet"
+}

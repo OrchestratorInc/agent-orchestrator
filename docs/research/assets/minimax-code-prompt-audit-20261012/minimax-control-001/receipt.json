@@ -1,0 +1,32 @@
+{
+  "scope": "REGISTERED_AO_FOCUSED_ORDINARY_TASK",
+  "at": "2026-10-12T23:57:58.040154+00:00",
+  "source": "103855409714c65310ff1ff109d46cb13a4cb367",
+  "projectId": "prompt-minimax-10d563ca",
+  "sessionId": "prompt-minimax-10d563ca-1",
+  "workspace": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/minimax-prompt-data/worktrees/prompt-minimax-10d563ca/prompt-minimax-10d563ca-1",
+  "nativeIDDigest": "90da1b8f7a5d01b31c4c4bab94a351053590174076f0072bac2fe80d6d2033b8",
+  "generation": "a6dc2b62-939d-48f2-b2c2-9d4f478d1f5e",
+  "visibleTask": "-Please create visible.json containing count 1 and cwd equal to the actual current working directory. If it already exists, increment its count once. Finish and wait.",
+  "visibleTaskHasPrivatePathOrToken": false,
+  "privateTokenSHA256": "a8fd6074e337dc598b559b9a0d38671b2b77d2f479c6cbfec843083be7792235",
+  "projectTokenSHA256": "ab697e4ab49b76f58f0b0588bf546f7639cae4bf27fdab3982de57db9962faab",
+  "fresh": {
+    "countOnce": true,
+    "correctCwd": true,
+    "privateAction": true,
+    "projectAction": true,
+    "AGENTSPreserved": true,
+    "nativeUserRuleAction": true,
+    "activeToSettled": true
+  },
+  "observedStates": [
+    "idle",
+    "active"
+  ],
+  "controlSession": null,
+  "controlBefore": null,
+  "controlAfterFresh": null,
+  "actualAuthenticatedWireRole": "NOT_CAPTURED",
+  "nativeSyntheticRole": "native additive identity append flag; authenticated wire role not captured"
+}
