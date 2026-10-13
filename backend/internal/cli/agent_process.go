@@ -92,14 +92,27 @@ func (c *commandContext) runSupervisedProcess(ctx context.Context, sessionID, re
 		return
 	}
 
+	stopRelayAndWait := func() {}
 	if relayDir != "" {
 		relayCtx, stopRelay := context.WithCancel(ctx)
-		defer stopRelay()
+		relayDone := make(chan struct{})
 		exe, err := os.Executable()
 		if err != nil {
 			_, _ = fmt.Fprintf(c.deps.Err, "ao: sandbox relay disabled: %v\n", err)
+			close(relayDone)
 		} else {
-			go serveSandboxRelay(relayCtx, relayDir, hostAORunner(exe))
+			go func() {
+				defer close(relayDone)
+				serveSandboxRelay(relayCtx, relayDir, hostAORunner(exe))
+			}()
+		}
+		stopRelayAndWait = func() {
+			stopRelay()
+			select {
+			case <-relayDone:
+			case <-time.After(sandboxRelayJoinTimeout):
+				_, _ = fmt.Fprintln(c.deps.Err, "ao: sandbox relay did not stop in time; continuing")
+			}
 		}
 	}
 
@@ -109,6 +122,7 @@ func (c *commandContext) runSupervisedProcess(ctx context.Context, sessionID, re
 	interrupts := make(chan os.Signal, 1)
 	signal.Notify(interrupts, os.Interrupt)
 	_ = child.Wait()
+	stopRelayAndWait()
 	signal.Stop(interrupts)
 
 	c.reportSupervisedExit(sessionID, reviewID, launchID)

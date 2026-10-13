@@ -25,6 +25,7 @@ const (
 	sandboxRelayMaxBytes    = 8 << 20
 	sandboxRelayMaxInFlight = 4
 	sandboxRelayWaitDelay   = 5 * time.Second
+	sandboxRelayJoinTimeout = 10 * time.Second
 )
 
 var sandboxRelayIDPattern = regexp.MustCompile(`^[0-9]+-[0-9]+-[0-9]+$`)
@@ -200,7 +201,7 @@ func readRelayFile(root *os.Root, name string) (data []byte, tooBig bool, err er
 	if !fi.Mode().IsRegular() {
 		return nil, false, errors.New("not a regular file")
 	}
-	f, err := root.Open(name)
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0) // non-blocking so a swapped-in FIFO cannot hang the open
 	if err != nil {
 		return nil, false, err
 	}
