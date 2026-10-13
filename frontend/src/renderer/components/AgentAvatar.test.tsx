@@ -66,4 +66,10 @@ describe("AgentAvatar", () => {
 		render(<AgentAvatar provider="hermes" />);
 		expect(screen.getByRole("img", { name: "hermes" })).toHaveAttribute("src", expect.stringContaining("hermes.png"));
 	});
+
+	it("renders the Hermes brand asset", () => {
+		render(<AgentAvatar provider="hermes" />);
+
+		expect(screen.getByRole("img", { name: "hermes" })).toHaveAttribute("src", expect.stringContaining("hermes.png"));
+	});
 });
