@@ -1,0 +1,101 @@
+package dockersandbox
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+)
+
+func TestContainerName(t *testing.T) {
+	per := ports.SandboxRequest{SessionID: "proj-12", ProjectID: "My Proj", Config: domain.SandboxConfig{Mode: domain.SandboxModePerAgent}}
+	if got := containerName(per, "abcdef0123456789"); got != "ao-sbx-proj-12" {
+		t.Fatalf("per-agent name = %q", got)
+	}
+	shared := per
+	shared.Config.Mode = domain.SandboxModeShared
+	if got := containerName(shared, "abcdef0123456789"); got != "ao-sbx-my-proj-abcdef01" {
+		t.Fatalf("shared name = %q", got)
+	}
+}
+
+func TestConfigHashChangesWithImageAndMounts(t *testing.T) {
+	cfg := domain.SandboxConfig{Mode: domain.SandboxModeShared, Image: "node:22"}
+	m := []mount{{Path: "/a"}}
+	h := configHash(cfg, m)
+	if h != configHash(cfg, m) {
+		t.Fatal("hash is not deterministic")
+	}
+	cfg2 := cfg
+	cfg2.Image = "node:24"
+	if h == configHash(cfg2, m) || h == configHash(cfg, []mount{{Path: "/b"}}) {
+		t.Fatal("hash ignores image or mounts")
+	}
+}
+
+func TestRunArgs(t *testing.T) {
+	cfg := domain.SandboxConfig{Mode: domain.SandboxModePerAgent, Image: "node:22", CPUs: "2", Memory: "4g", PidsLimit: 256}
+	got := runArgs("ao-sbx-s1", cfg, map[string]string{"ao.session": "s1", "ao.sandbox": "per-agent"},
+		[]mount{{Path: "/w"}, {Path: "/p", ReadOnly: true}}, "501:20")
+	want := []string{"run", "-d", "--init", "--name", "ao-sbx-s1",
+		"--label", "ao.sandbox=per-agent", "--label", "ao.session=s1",
+		"--user", "501:20",
+		"-v", "/w:/w", "-v", "/p:/p:ro",
+		"--cpus", "2", "--memory", "4g", "--pids-limit", "256",
+		"--entrypoint", "/bin/sh", "node:22", "-c", keepAliveScript}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("runArgs =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestRenderEnvFileRoundTripsThroughShell(t *testing.T) {
+	env := map[string]string{
+		"AO_SESSION_ID": "s1",
+		"TRICKY":        "it's $HOME `x` \"q\"\nline2",
+		"PATH":          "/host/only",
+		"DYLD_X":        "drop",
+	}
+	data, err := renderEnvFile(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "/host/only") || strings.Contains(string(data), "DYLD_X") {
+		t.Fatalf("host-only vars leaked:\n%s", data)
+	}
+	f := filepath.Join(t.TempDir(), "env")
+	if err := os.WriteFile(f, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("/bin/sh", "-c", `set -a; . "$1"; printf %s "$TRICKY"`, "sh", f).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != env["TRICKY"] {
+		t.Fatalf("round trip = %q, want %q", out, env["TRICKY"])
+	}
+}
+
+func TestRenderEnvFileRejectsBadKeysAndNUL(t *testing.T) {
+	if _, err := renderEnvFile(map[string]string{"BAD-KEY": "x"}); err == nil {
+		t.Fatal("want error for invalid key")
+	}
+	if _, err := renderEnvFile(map[string]string{"K": "a\x00b"}); err == nil {
+		t.Fatal("want error for NUL value")
+	}
+}
+
+func TestExecArgv(t *testing.T) {
+	target := ports.SandboxTarget{Container: "ao-sbx-s1", BinDir: "/d/sandbox/bin", SessionDir: "/d/sandbox/projects/p/sessions/s1"}
+	got := execArgv("/usr/local/bin/docker", target, "/w/s1", []string{"claude", "--session-id", "x"})
+	want := []string{"/usr/local/bin/docker", "exec", "-i", "-t", "-w", "/w/s1", "ao-sbx-s1",
+		"/bin/sh", "/d/sandbox/bin/ao-enter", "/d/sandbox/projects/p/sessions/s1/env",
+		"claude", "--session-id", "x"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("execArgv = %q", got)
+	}
+}
