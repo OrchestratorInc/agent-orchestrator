@@ -889,12 +889,23 @@ describe("SessionInspector PR section", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("omits the pull request section and PR policies until a PR is known, even for PR output", () => {
+  it("omits PR cards and PR policies until a PR is known, even for PR output", () => {
     renderWithQuery(<SessionInspector session={session([], { outputType: "pr" })} />);
-    expect(screen.queryByText("Pull request")).not.toBeInTheDocument();
+    expect(screen.queryByText(/PR #\d+/)).not.toBeInTheDocument();
     expect(screen.queryByText("No pull request opened yet.")).not.toBeInTheDocument();
     expect(screen.queryByText("Session controls")).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: "Automatically fix CI failures" })).not.toBeInTheDocument();
+  });
+
+  it("titles the branch block Branch without a PR and Pull request with one", () => {
+    const { unmount } = renderWithQuery(<SessionInspector session={session([], { outputType: "none" })} />);
+    expect(screen.getByRole("button", { name: "Branch" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByText("Pull request")).not.toBeInTheDocument();
+    unmount();
+
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")], { outputType: "none" })} />);
+    expect(screen.getByRole("button", { name: "Pull request" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Branch" })).not.toBeInTheDocument();
   });
 
   it("hides the section entirely when the session has no known output type", () => {
@@ -1205,6 +1216,33 @@ describe("SessionInspector Artifacts section", () => {
     );
   });
 
+  it("opens the Artifacts view from the More menu beside the tab list", async () => {
+    const onViewChange = vi.fn();
+    renderWithQuery(
+      <SessionInspector
+        onViewChange={onViewChange}
+        session={session([], {
+          artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })],
+        })}
+      />,
+    );
+
+    const more = screen.getByRole("button", { name: "More" });
+    expect(screen.getByRole("tablist")).not.toContainElement(more);
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    expect(more).not.toHaveAttribute("data-active");
+
+    await userEvent.click(more);
+    const menu = await screen.findByRole("menu");
+    expect(menu).toHaveAttribute("data-browser-native-overlay", "true");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Artifacts" }));
+
+    expect(onViewChange).toHaveBeenCalledWith("artifacts");
+    expect(await screen.findByRole("button", { name: /notes\.md/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("button", { name: "More" })).toHaveAttribute("data-active");
+  });
+
   it("does not render a feedback button on artifact rows", () => {
     renderWithQuery(
       <SessionInspector
@@ -1221,285 +1259,13 @@ describe("SessionInspector Artifacts section", () => {
 });
 
 describe("SessionInspector usage", () => {
-	const canonicalTotals = {
-		inputTokens: 1200,
-		cachedInputTokens: 1000,
-		uncachedInputTokens: 200,
-		outputTokens: 300,
-		processedTokens: 1500,
-	};
-
-	const tokenTotals = (estimatedCost: unknown) => ({ ...canonicalTotals, estimatedCost });
-
-	function mockUsage(estimatedCost: unknown, harnesses?: unknown[]) {
-		const totals = tokenTotals(estimatedCost);
-		getMock.mockImplementation(async (path: string) => {
-			if (path === "/api/v1/usage/sessions/{sessionId}") {
-				return {
-					data: {
-						sessionId: "sess-1",
-						incomplete: false,
-						totals,
-						harnesses: harnesses ?? [
-							{
-								harness: "codex",
-								totals,
-								models: [
-									{ modelId: "gpt-5.5", totals },
-									{ modelId: "gpt-5.5-mini", totals },
-								],
-							},
-						],
-					},
-					error: undefined,
-				};
-			}
-			return { data: undefined };
-		});
-	}
-
-	it("shows detailed token statistics only when Developer Mode is enabled", async () => {
+	it("does not show usage or cost, even in Developer Mode", async () => {
 		useUiStore.getState().setDeveloperMode(true);
-		mockUsage(null);
 
 		renderWithQuery(<SessionInspector session={session([])} />);
-		expect(await screen.findByText("Usage & cost")).toBeInTheDocument();
-		expect(screen.getByText("Tokens processed")).toBeInTheDocument();
-		expect(screen.getByLabelText("1,500 tokens processed")).toBeInTheDocument();
-		expect(screen.getByText("Estimated cost").parentElement?.nextElementSibling).toHaveTextContent("Unavailable");
-		expect(screen.queryByText("Coming soon")).not.toBeInTheDocument();
-		const metrics = screen.getAllByTestId("session-usage-metrics")[0];
-		expect(within(metrics).getAllByRole("term").map((term) => term.textContent)).toEqual([
-			"Fresh Input", "Cache Reads", "Output", "Cache Hit Rate",
-		]);
-		expect(within(metrics).getByLabelText("Cache Reads: 1,000 tokens")).toHaveTextContent("1K");
-		expect(within(metrics).getByLabelText("83.3% cache hit rate (cache reads / total input)")).toHaveTextContent("83.3%");
-		expect(within(metrics).queryByText("Cached Output")).not.toBeInTheDocument();
-		expect(screen.queryByText("Cache write tokens")).not.toBeInTheDocument();
-		expect(screen.queryByText("Reasoning (included in output)")).not.toBeInTheDocument();
-		const agentAttribution = screen.getByText("Codex").parentElement;
-		expect(agentAttribution?.querySelector("img")).toBeInTheDocument();
-		const agentDisclosure = screen.getByRole("button", { name: "Codex usage details" });
-		await userEvent.click(agentDisclosure);
-		const details = screen.getByRole("region", { name: "Codex usage peek" });
-		expect(within(details).getByRole("button", { name: "GPT 5.5 usage details" })).toBeInTheDocument();
-		expect(within(details).getByRole("button", { name: "GPT 5.5 Mini usage details" })).toBeInTheDocument();
-		expect(within(details).queryByText("2 models")).not.toBeInTheDocument();
-		expect(within(details).queryByText("Processed")).not.toBeInTheDocument();
-		expect(within(details).queryByText("Cost")).not.toBeInTheDocument();
-	});
-
-	it("shows icon disclosures without repeated metrics when multiple agents contributed", async () => {
-		useUiStore.getState().setDeveloperMode(true);
-		const totals = { ...canonicalTotals, estimatedCost: null };
-		mockUsage(null, [
-			{ harness: "codex", totals, models: [{ modelId: "gpt-5.5", totals }] },
-			{ harness: "claude-code", totals, models: [{ modelId: "claude-haiku-4-5-20251001", totals }] },
-		]);
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-		const codexDisclosure = await screen.findByRole("button", { name: "Codex usage details" });
-		expect(codexDisclosure.querySelector("img")).toBeInTheDocument();
-
-		await userEvent.click(codexDisclosure);
-		const details = screen.getByRole("region", { name: "Codex usage peek" });
-		expect(within(details).getByRole("button", { name: "GPT 5.5 usage details" })).toBeInTheDocument();
-		expect(within(details).queryByText("1 model")).not.toBeInTheDocument();
-		expect(within(details).queryByText("Processed")).not.toBeInTheDocument();
-		expect(within(details).queryByText("Cost")).not.toBeInTheDocument();
-		expect(within(details).queryByText("Fresh Input")).not.toBeInTheDocument();
-
-		await userEvent.click(screen.getByRole("button", { name: "Claude usage details" }));
-		const claudeDetails = screen.getByRole("region", { name: "Claude usage peek" });
-		const haikuDisclosure = within(claudeDetails).getByRole("button", { name: "Haiku 4.5 usage details" });
-		expect(within(haikuDisclosure).getByText("Haiku 4.5")).toHaveAttribute(
-			"title",
-			"claude-haiku-4-5-20251001",
-		);
-	});
-
-	it("renders complete costs and provider/model attribution", async () => {
-		useUiStore.getState().setDeveloperMode(true);
-		const completeCost = {
-			cachedInputNanos: 100_000_000,
-			coverage: "complete",
-			inputNanos: 540_000_000,
-			outputNanos: 600_000_000,
-			providerAttribution: "observed",
-			totalNanos: 1_240_000_000,
-		};
-		mockUsage(completeCost, [
-			{
-				harness: "claude-code",
-				totals: tokenTotals(completeCost),
-				models: [
-					{
-						modelId: "claude-sonnet-4",
-						totals: tokenTotals({ ...completeCost, totalNanos: 600_000_000 }),
-					},
-				],
-			},
-		]);
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-
-		const section = (await screen.findByText("Usage & cost")).closest(
-			"[data-testid='inspector-section']",
-		) as HTMLElement;
-		// The value carries no coverage qualifier, and the disclosure beside the
-		// heading explains the estimate without claiming it is billing.
-		expect(within(section).getAllByText("$1.24").length).toBeGreaterThan(0);
-		expect(section).not.toHaveTextContent(/[≈≥]\$/);
-		// The row already sits under its agent, so the billing provider is not
-		// repeated in the model name.
-		expect(within(section).getByText("Sonnet 4")).toBeInTheDocument();
-		expect(section).not.toHaveTextContent("anthropic ·");
-
-		await userEvent.hover(within(section).getByRole("button", { name: "About estimated cost" }));
-		const tooltip = await screen.findByRole("tooltip");
-		expect(tooltip).toHaveTextContent(/published API list prices/);
-		expect(tooltip).not.toHaveTextContent(/could not be priced/);
-	});
-
-	it("explains when the displayed price uses an inferred billing provider", async () => {
-		useUiStore.getState().setDeveloperMode(true);
-		mockUsage({
-			cachedInputNanos: 100_000_000,
-			coverage: "complete",
-			inputNanos: 540_000_000,
-			outputNanos: 600_000_000,
-			providerAttribution: "inferred",
-			totalNanos: 1_240_000_000,
-		});
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-
-		const section = (await screen.findByText("Usage & cost")).closest(
-			"[data-testid='inspector-section']",
-		) as HTMLElement;
-		expect(within(section).getAllByText("$1.24").length).toBeGreaterThan(0);
-
-		await userEvent.hover(within(section).getByRole("button", { name: "About estimated cost" }));
-		const tooltip = await screen.findByRole("tooltip");
-		expect(tooltip).toHaveTextContent(/Billing provider not confirmed/);
-		expect(tooltip).toHaveTextContent(/inferred from the model/);
-		expect(tooltip).toHaveTextContent(/Actual charges may differ/);
-	});
-
-	it("explains when an aggregate mixes detected and inferred providers", async () => {
-		useUiStore.getState().setDeveloperMode(true);
-		mockUsage({
-			cachedInputNanos: 100_000_000,
-			coverage: "complete",
-			inputNanos: 540_000_000,
-			outputNanos: 600_000_000,
-			providerAttribution: "mixed",
-			totalNanos: 1_240_000_000,
-		});
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-		const section = (await screen.findByText("Usage & cost")).closest(
-			"[data-testid='inspector-section']",
-		) as HTMLElement;
-		await userEvent.hover(within(section).getByRole("button", { name: "About estimated cost" }));
-
-		const tooltip = await screen.findByRole("tooltip");
-		expect(tooltip).toHaveTextContent(/Some billing providers were detected/);
-		expect(tooltip).toHaveTextContent(/others inferred from their models/);
-		expect(tooltip).toHaveTextContent(/actual charges may differ/i);
-	});
-
-	it("presents a partial total as a plain value and discloses the gap in words", async () => {
-		useUiStore.getState().setDeveloperMode(true);
-		mockUsage({
-			cachedInputNanos: null,
-			coverage: "partial",
-			inputNanos: 2_000_000,
-			outputNanos: 5_000_000,
-			providerAttribution: "observed",
-			totalNanos: 7_000_000,
-		});
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-
-		const section = (await screen.findByText("Usage & cost")).closest(
-			"[data-testid='inspector-section']",
-		) as HTMLElement;
-		expect(within(section).getAllByText("$0.007").length).toBeGreaterThan(0);
-		expect(section).not.toHaveTextContent(/[≈≥]\$/);
-		expect(section).not.toHaveTextContent(/partial/i);
-
-		await userEvent.hover(within(section).getByRole("button", { name: "About estimated cost" }));
-		const tooltip = await screen.findByRole("tooltip");
-		expect(tooltip).toHaveTextContent(/Some usage could not be priced/);
-	});
-
-	// The column itself carries the "nothing here is priced" case: it disappears
-	// when no row has an estimate, so an install without pricing shows no empty
-	// column at all. Once any row is priced the column earns its place, and the
-	// rows that are not priced say so in words rather than trailing a dash.
-	it("drops the cost column only when no agent has an estimate", async () => {
-		useUiStore.getState().setDeveloperMode(true);
-		const totals = tokenTotals(null);
-		mockUsage(null, [
-			{ harness: "codex", totals, models: [{ modelId: "gpt-5.5", totals }] },
-			{ harness: "claude-code", totals, models: [{ modelId: "claude-sonnet-4", totals }] },
-		]);
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-
-		const section = (await screen.findByText("Usage & cost")).closest(
-			"[data-testid='inspector-section']",
-		) as HTMLElement;
-		// The header row's parent is the list container holding every agent row.
-		const agentList = within(section).getByText("Agent").parentElement?.parentElement as HTMLElement;
-		expect(within(agentList).queryByText("Cost")).not.toBeInTheDocument();
-		expect(agentList).not.toHaveTextContent("Unavailable");
-	});
-
-	it("keeps the cost column and marks unpriced agents unavailable", async () => {
-		useUiStore.getState().setDeveloperMode(true);
-		const priced = tokenTotals({
-			cachedInputNanos: 100_000_000,
-			coverage: "complete",
-			inputNanos: 540_000_000,
-			outputNanos: 600_000_000,
-			providerAttribution: "observed",
-			totalNanos: 1_240_000_000,
-		});
-		const unpriced = tokenTotals(null);
-		mockUsage(null, [
-			{ harness: "codex", totals: priced, models: [{ modelId: "gpt-5.5", totals: priced }] },
-			{
-				harness: "claude-code",
-				totals: unpriced,
-				models: [{ modelId: "claude-sonnet-4", totals: unpriced }],
-			},
-		]);
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-
-		const section = (await screen.findByText("Usage & cost")).closest(
-			"[data-testid='inspector-section']",
-		) as HTMLElement;
-		// The header row's parent is the list container holding every agent row.
-		const agentList = within(section).getByText("Agent").parentElement?.parentElement as HTMLElement;
-		expect(within(agentList).getByText("Cost")).toBeInTheDocument();
-		expect(within(agentList).getByText("$1.24")).toBeInTheDocument();
-		expect(within(agentList).getByText("Unavailable")).toBeInTheDocument();
-		expect(within(agentList).queryByText("—")).not.toBeInTheDocument();
-	});
-
-	it("shows an unavailable estimate as words rather than a dash", async () => {
-		useUiStore.getState().setDeveloperMode(true);
-		mockUsage(null);
-
-		renderWithQuery(<SessionInspector session={session([])} />);
-
-		const section = (await screen.findByText("Usage & cost")).closest(
-			"[data-testid='inspector-section']",
-		) as HTMLElement;
-		expect(within(section).getAllByText("Unavailable").length).toBeGreaterThan(0);
+		expect(await screen.findByText("Branch")).toBeInTheDocument();
+		expect(screen.queryByText("Usage & cost")).not.toBeInTheDocument();
+		expect(getMock).not.toHaveBeenCalledWith("/api/v1/usage/sessions/{sessionId}", expect.anything());
 	});
 });
 
@@ -2075,11 +1841,9 @@ describe("SessionInspector Activity section", () => {
     );
 
     for (const title of ["Pull request", "Session controls", "Activity"]) {
-      const heading = screen.getByText(title).parentElement;
-      expect(heading?.parentElement).toHaveAttribute(
-        "data-testid",
-        "inspector-section",
-      );
+      expect(
+        screen.getByText(title).closest('[data-testid="inspector-section"]'),
+      ).toBeInTheDocument();
     }
   });
 
@@ -2279,9 +2043,9 @@ describe("SessionInspector Activity section", () => {
 describe("SessionInspector tabs", () => {
   it("exposes Reviews after Summary and keeps review content out of Summary", async () => {
     mockCommonGets([], "", [reviewState(1, "needs_review")]);
-    renderWithQuery(<SessionInspector session={session([pr(1, "open")])} />);
+    renderWithQuery(<SessionInspector session={session([pr(1, "open")])} sideChatView={<div />} />);
     const tabs = screen.getAllByRole("tab").map((el) => el.textContent?.trim());
-    expect(tabs).toEqual(["Summary", "Reviews", "Browser", "Files"]);
+    expect(tabs).toEqual(["Summary", "Reviews", "Browser", "Side chat", "Files"]);
     expect(screen.queryByText("Review controls")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
@@ -2318,10 +2082,19 @@ describe("SessionInspector tabs", () => {
     expect(screen.queryByText("View review details")).not.toBeInTheDocument();
   });
 
+  it("collapses and expands a section from its heading", async () => {
+    renderWithQuery(<SessionInspector session={session([])} />);
+    const heading = screen.getByRole("button", { name: "Activity" });
+    await userEvent.click(heading);
+    expect(heading).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(heading);
+    expect(heading).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("does not render the overview card in the summary", () => {
     renderWithQuery(
       <SessionInspector
-        session={{ ...session([]), issueId: "github:acme/project-one#42" }}
+        session={{ ...session([], { outputType: "pr" }), issueId: "github:acme/project-one#42" }}
       />,
     );
 
@@ -4480,6 +4253,7 @@ describe("SessionInspector summary reviews", () => {
 
     await screen.findByRole("tab", { name: /Summary/ });
     expect(screen.queryByRole("tab", { name: /Reviews/ })).not.toBeInTheDocument();
+    // No side chat view from the host (side chats off or unsupported): no tab.
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual([
       "Summary",
       "Browser",

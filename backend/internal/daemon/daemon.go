@@ -31,6 +31,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/autoreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/codexops"
@@ -405,9 +406,13 @@ func Run() error {
 	// loudly instead of silently becoming a TUI session.
 	var sessMgr sessionLifecycle
 	chatSvc := chatsvc.New(chatsvc.Options{
-		Store:              store,
-		Sessions:           store,
-		HibernationEnabled: settingsSvc.ChatHibernationEnabled,
+		Store:               store,
+		Sessions:            store,
+		Renders:             attachmentstore.New(cfg.DataDir),
+		DataDir:             cfg.DataDir,
+		ReconcileOutputType: lcStack.LCM.ReconcileSessionOutputType,
+		HibernationEnabled:  settingsSvc.ChatHibernationEnabled,
+		AppRunID:            cfg.AppRunID,
 		StopProviderHost: func(ctx context.Context, id domain.SessionID) error {
 			return persistenthost.Shutdown(ctx, cfg.DataDir, string(id))
 		},
@@ -486,7 +491,12 @@ func Run() error {
 			}
 		},
 	})
+	chatSvc.SetRenderCheck(renderViaDesktop(browserBroker, "__render-check"))
+	chatSvc.SetRenderMeasure(renderViaDesktop(browserBroker, "__render-measure"))
 
+	if err := chatSvc.InitializeSideChats(ctx); err != nil {
+		log.Warn("side chat initialization failed", "error", err)
+	}
 	codexModelDriver := codexappserver.New(codexagent.New(), log)
 	modelDiscoverer := modelcatalog.Discoverer{
 		CodexModels: func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatModel, error) {
@@ -632,7 +642,7 @@ func Run() error {
 		return errors.New("wire report delivery: session manager lacks semantic send support")
 	}
 	var reportCoordinator *reportsvc.Coordinator
-	reportSvc := reportsvc.New(reportsvc.Deps{Store: store, OnCreated: func(domain.ReportRecord) {
+	reportSvc := reportsvc.New(reportsvc.Deps{Store: store, Artifacts: chatSvc, OnCreated: func(domain.ReportRecord) {
 		if reportCoordinator != nil {
 			reportCoordinator.Wake()
 		}
@@ -1033,7 +1043,7 @@ func Run() error {
 		startupReconcileDone = done
 		go func() {
 			defer close(done)
-			if reconcileErr := reconcilePersistentChatHosts(ctx, cfg.DataDir, store); reconcileErr != nil {
+			if reconcileErr := reconcilePersistentChatHosts(ctx, cfg.DataDir, store, cfg.AppRunID); reconcileErr != nil {
 				log.Error("persistent chat host reconciliation on boot failed", "err", reconcileErr)
 			}
 			close(persistentHostsReconciled)

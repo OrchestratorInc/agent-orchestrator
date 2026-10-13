@@ -234,6 +234,7 @@ function toStoredSession(
       id: user.id,
       email: user.email,
       displayName: displayName(user),
+      ...(user.profilePictureUrl ? { avatarUrl: user.profilePictureUrl } : {}),
     },
     storedAt: new Date().toISOString(),
   };

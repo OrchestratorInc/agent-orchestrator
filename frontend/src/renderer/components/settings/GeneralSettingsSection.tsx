@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { ThemePreference, ThemeStyle } from "../../lib/theme";
+import { previewDocumentThemeStyle, type ThemePreference, type ThemeStyle } from "../../lib/theme";
+import { THEMES, getThemeDefinition } from "../../lib/theme-palettes";
 import type { AppLocale } from "../../i18n";
 import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
@@ -11,12 +12,13 @@ import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
+import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
 import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface } from "../../hooks/useSettings";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
-import { isWindowsPlatform } from "../../lib/platform";
+import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
 
 /**
  * Default interface for new sessions. Daemon-owned so `ao spawn` and mobile
@@ -121,17 +123,7 @@ function TerminalShellRows() {
 	);
 }
 
-const COLOR_THEME_OPTIONS = [
-	{ value: "orchestrate", label: "Orchestrate" },
-	{ value: "github", label: "GitHub" },
-	{ value: "catppuccin", label: "Catppuccin" },
-	{ value: "dracula", label: "Dracula" },
-	{ value: "tokyo-night", label: "Tokyo Night" },
-	{ value: "rose-pine", label: "Rosé Pine" },
-	{ value: "nord", label: "Nord" },
-	{ value: "gruvbox", label: "Gruvbox" },
-	{ value: "solarized", label: "Solarized" },
-] satisfies SettingsOption<ThemeStyle>[];
+const COLOR_THEME_OPTIONS = THEMES.map(({ id, label }) => ({ value: id, label })) satisfies SettingsOption<ThemeStyle>[];
 
 export function GeneralSettingsSection({
 	titleHidden,
@@ -143,6 +135,7 @@ export function GeneralSettingsSection({
 	const setThemePreference = useUiStore((state) => state.setThemePreference);
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const setThemeStyle = useUiStore((state) => state.setThemeStyle);
+	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const locale = useLocaleStore((state) => state.locale);
 	const setLocale = useLocaleStore((state) => state.setLocale);
 	const localeSaving = useLocaleStore((state) => state.saving);
@@ -155,6 +148,15 @@ export function GeneralSettingsSection({
 	const setDeveloperMode = useUiStore((state) => state.setDeveloperMode);
 	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
 	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
+
+	// Trigger and menu rows share one layout: name, then the palette on the right.
+	const renderColorTheme = (option: SettingsOption<ThemeStyle> | undefined, compact = false) =>
+		option ? (
+			<>
+				<span className="min-w-0 flex-1 truncate">{option.label}</span>
+				<ThemePaletteSwatch palette={getThemeDefinition(option.value)[resolvedTheme]} compact={compact} />
+			</>
+		) : null;
 
 	const themeOptions = [
 		{ value: "light", label: t("settings.theme.light") },
@@ -184,6 +186,10 @@ export function GeneralSettingsSection({
 							value={themeStyle}
 							options={COLOR_THEME_OPTIONS}
 							onChange={setThemeStyle}
+							onHighlight={(previewed) => previewDocumentThemeStyle(previewed, useUiStore.getState().themeStyle)}
+							menuClassName="min-w-60"
+							renderTrigger={(selected) => renderColorTheme(selected, true)}
+							renderMenuItem={(option) => renderColorTheme(option)}
 						/>
 						<SettingsOptionMenu
 							aria-label={t("settings.theme")}
@@ -254,6 +260,8 @@ export function GeneralSettingsSection({
 				</SettingsRow>
 				{developerMode && <CloudOfferingRow />}
 				{developerMode && <DiagnosticsRow />}
+				{developerMode && <SideChatsRow />}
+				{developerMode && isMacPlatform() && <WindowTranslucencyRow />}
 			</SettingsSection>
 		</>
 	);
@@ -300,6 +308,46 @@ function DiagnosticsRow() {
 				<Switch aria-label={t("settings.diagnostics")} checked={diagnostics} onCheckedChange={setDiagnostics} />
 			</SettingsRow>
 			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">{t("settings.diagnosticsToggleHint")}</p>
+		</div>
+	);
+}
+
+/**
+ * Developer Mode-only toggle for side chats. Renderer state like Diagnostics:
+ * off hides the inspector tab, /btw and /side, and "Add to side chat".
+ */
+function SideChatsRow() {
+	const { t } = useTranslation();
+	const sideChats = useUiStore((state) => state.sideChats);
+	const setSideChats = useUiStore((state) => state.setSideChats);
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow label={t("settings.sideChats")}>
+				<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
+			</SettingsRow>
+			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">{t("settings.sideChatsHint")}</p>
+		</div>
+	);
+}
+
+/**
+ * Developer Mode-only, macOS-only toggle for window translucency: native
+ * vibrancy blurs the desktop behind a translucent shell. Renderer state.
+ */
+function WindowTranslucencyRow() {
+	const { t } = useTranslation();
+	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
+	const setWindowTranslucency = useUiStore((state) => state.setWindowTranslucency);
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow label={t("settings.windowTranslucency")}>
+				<Switch
+					aria-label={t("settings.windowTranslucency")}
+					checked={windowTranslucency}
+					onCheckedChange={setWindowTranslucency}
+				/>
+			</SettingsRow>
+			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">{t("settings.windowTranslucencyHint")}</p>
 		</div>
 	);
 }

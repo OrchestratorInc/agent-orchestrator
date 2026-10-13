@@ -18,6 +18,7 @@ import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 import { rememberedFileDisplayMode, useUiStore, type FileDisplayMode } from "../stores/ui-store";
+import { isAbsoluteFileReference } from "../lib/workspace-file-path";
 import { statusLabel, statusTone } from "../lib/workspace-file-status";
 import {
 	canSplitCompare,
@@ -114,9 +115,13 @@ export function FileContentPane({
 	// A background refetch mid-selection would re-render the pane out from under
 	// an active native text selection.
 	const [selectionOrMenuActive, setSelectionOrMenuActive] = useState(false);
+	// The daemon serves workspace files by relative path only. An absolute path
+	// that reaches here was not inside the session, so say that rather than
+	// sending a request that can only fail.
+	const outsideWorkspace = source.kind === "workspace" && isAbsoluteFileReference(path ?? "");
 	const query = useQuery({
 		...sessionSourceFileQueryOptions(sessionId, source, path ?? "", t(source.kind === "artifact" ? "files.error.loadArtifact" : "files.error.loadWorkspaceFile"), scope, commitSha, previousPath, hostId),
-		enabled: Boolean(path) && !selectionOrMenuActive,
+		enabled: Boolean(path) && !outsideWorkspace && !selectionOrMenuActive,
 	});
 	const hasUnsavedChanges = Boolean(editing && query.data && draft !== query.data.content);
 	useEffect(() => {
@@ -199,6 +204,9 @@ export function FileContentPane({
 
 	if (!path) {
 		return <PanelMessage>{t("files.explorer.selectFile")}</PanelMessage>;
+	}
+	if (outsideWorkspace) {
+		return <PanelMessage>{t("files.error.outsideWorkspace")}</PanelMessage>;
 	}
 	if (query.isPending) {
 		return <PanelMessage>{t("files.loadingDiff")}</PanelMessage>;

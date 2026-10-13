@@ -89,7 +89,20 @@ type checkpointRecord struct {
 
 type checkpointTurn struct {
 	promptID, userID, user, assistant string
-	complete                          bool
+	complete, notice                  bool
+}
+
+// claudeTranscriptNotice reports a note Claude Code writes into its transcript
+// as a user message: a background task's <task-notification>, which can carry
+// text after its closing tag, or the marker for a stopped turn. Chat never
+// shows either as a user message.
+// ponytail: replay sees only the text, because getSessionMessages drops the
+// record's origin, so a human prompt that starts with the same tag is skipped
+// too. Reading origin from the transcript in the bridge would remove the guess.
+func claudeTranscriptNotice(text string) bool {
+	text = strings.TrimSpace(text)
+	return strings.HasPrefix(text, "<task-notification>") ||
+		strings.HasPrefix(text, "[Request interrupted by user") && strings.HasSuffix(text, "]")
 }
 
 // Native logs are append-only graphs, not a list of alternating text messages.
@@ -168,7 +181,15 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			if err != nil {
 				return ports.NativeCheckpointBoundary{}, err
 			}
-			turns = append(turns, checkpointTurn{promptID: record.PromptID, userID: record.UUID, user: text})
+			// Replay never shows a note: Claude Code's own notices, or an isMeta
+			// record, which getSessionMessages drops. A note inside its prompt's
+			// cycle, such as an interrupt marker, adds no turn. One that starts a
+			// cycle keeps its prompt for Stop evidence; the boundary skips it.
+			notice := record.Meta || claudeTranscriptNotice(text)
+			if notice && len(turns) > 0 && turns[len(turns)-1].promptID == record.PromptID {
+				continue
+			}
+			turns = append(turns, checkpointTurn{promptID: record.PromptID, userID: record.UUID, user: text, notice: notice})
 			continue
 		}
 		if len(turns) == 0 {
@@ -239,7 +260,15 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	if !latest.complete {
 		return ports.NativeCheckpointBoundary{}, checkpointUnsettled("native tail still pending")
 	}
-	return ports.NativeCheckpointBoundary{UserMessageID: latest.userID, UserText: latest.user, AssistantText: latest.assistant}, nil
+	// Chat replay skips notes, so their output belongs to the turn before.
+	owner := len(turns) - 1
+	for owner >= 0 && turns[owner].notice {
+		owner--
+	}
+	if owner < 0 {
+		return ports.NativeCheckpointBoundary{}, checkpointUnsettled("no native user boundary")
+	}
+	return ports.NativeCheckpointBoundary{UserMessageID: turns[owner].userID, UserText: turns[owner].user, AssistantText: latest.assistant}, nil
 }
 
 func checkpointToolResults(raw json.RawMessage) bool {

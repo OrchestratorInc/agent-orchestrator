@@ -305,6 +305,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
+	conv.launchMode = cfg.Permissions
 	params := map[string]any{
 		"cwd":               cfg.WorkspacePath,
 		"approvalPolicy":    policy,
@@ -320,8 +321,8 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	// thread/start has no top-level effort field either; carry the durable AO
 	// choice as a config override like thread/resume does, so a fresh thread
 	// does not silently fall back to the provider default.
-	if cfg.Effort != "" {
-		params["config"] = map[string]any{"model_reasoning_effort": cfg.Effort}
+	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
+		params["config"] = config
 	}
 	if cfg.SystemPrompt != "" {
 		params["developerInstructions"] = cfg.SystemPrompt
@@ -379,12 +380,14 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// loaded thread. Host replay bridges output and unresolved server requests
 		// across the daemon detach without waiting for the active turn to settle.
 		conv.readOnly = cfg.ReadOnly
+		conv.launchMode = cfg.Permissions
 		conv.start(cfg.ProviderConversationID, cfg.Model, cfg.Effort)
 		return conv, nil
 	}
 
 	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
 	conv.readOnly = cfg.ReadOnly
+	conv.launchMode = cfg.Permissions
 	params := map[string]any{
 		"threadId":          cfg.ProviderConversationID,
 		"cwd":               cfg.WorkspacePath,
@@ -398,8 +401,8 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	// thread/resume has no top-level effort field. Codex exposes persistent
 	// reasoning effort as a config override, so carry the durable AO choice into
 	// the resumed thread instead of silently falling back to the provider default.
-	if cfg.Effort != "" {
-		params["config"] = map[string]any{"model_reasoning_effort": cfg.Effort}
+	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
+		params["config"] = config
 	}
 	// Developer instructions are launch context, not durable conversation
 	// history. Reapply AO's current standing role when app-server reconstructs a
@@ -423,6 +426,48 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 
 	conv.start(cfg.ProviderConversationID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
+}
+
+// threadConfig is the config override sent with thread/start and
+// thread/resume. Codex layers it above config.toml for this thread only.
+//
+// AO's own "ao" server (html_preview, html_render) is pre-approved. AO answers
+// no mcpServer/elicitation/request, so a prompt could only fail the call.
+// Verified live on codex-cli 0.160.1: a tool not marked read-only raised that
+// request under on-request and was refused under never/read-only, and
+// default_tools_approval_mode "approve" removed both.
+func threadConfig(effort string, servers []ports.ChatMCPServerConfig) map[string]any {
+	config := map[string]any{}
+	if effort != "" {
+		config["model_reasoning_effort"] = effort
+	}
+	if len(servers) == 0 {
+		return config
+	}
+	mcpServers := make(map[string]any, len(servers))
+	for _, server := range servers {
+		entry := map[string]any{}
+		if server.Name == "ao" {
+			entry["default_tools_approval_mode"] = "approve"
+		}
+		if server.Type == "http" {
+			entry["url"] = server.URL
+			if len(server.Headers) > 0 {
+				entry["http_headers"] = server.Headers
+			}
+		} else {
+			entry["command"] = server.Command
+			if len(server.Args) > 0 {
+				entry["args"] = server.Args
+			}
+			if len(server.Env) > 0 {
+				entry["env"] = server.Env
+			}
+		}
+		mcpServers[server.Name] = entry
+	}
+	config["mcp_servers"] = mcpServers
+	return config
 }
 
 // connect spawns app-server and completes the initialize handshake.
@@ -581,6 +626,21 @@ func approvalReviewer(mode ports.PermissionMode) string {
 	return "user"
 }
 
+// SandboxAllowsNetwork reports whether this thread's agent can reach the
+// network. Codex's workspace-write sandbox, used for accept-edits and auto, has
+// no network (AO never grants it), while full access and the read-only
+// reviewer sandbox do.
+func (c *conversation) SandboxAllowsNetwork(turnMode ports.PermissionMode) bool {
+	if c.readOnly {
+		return true
+	}
+	if turnMode == "" {
+		turnMode = c.launchMode
+	}
+	_, sandbox := approvalSettings(turnMode)
+	return sandbox == "danger-full-access"
+}
+
 func launchApprovalSettings(mode ports.PermissionMode, readOnly bool) (policy, sandbox, reviewer string) {
 	if readOnly {
 		return "never", "read-only", "user"
@@ -674,4 +734,63 @@ func codexProcessEnv(ctx context.Context, bin string, env map[string]string) []s
 	}
 	agentlaunch.AugmentRuntimePATHForLaunchBinary(ctx, overlay, []string{bin}, exec.LookPath, agentlaunch.PinnedDir(os.Executable, overlay["AO_DATA_DIR"]))
 	return envSlice(overlay)
+}
+
+// ForkIntoHost starts an inclusive native fork in an independent provider host.
+func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	if sourceProviderConversationID == "" || lastProviderTurnID == "" {
+		return nil, errors.New("source thread and completed turn are required")
+	}
+	if !filepath.IsAbs(cfg.WorkspacePath) {
+		return nil, fmt.Errorf("workspace path must be absolute, got %q", cfg.WorkspacePath)
+	}
+	conv, reconnected, err := d.connectSession(ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false)
+	if err != nil {
+		return nil, err
+	}
+	if reconnected {
+		_ = conv.Close()
+		return nil, errors.New("side provider host already owns a conversation")
+	}
+	policy, sandbox, reviewer := launchApprovalSettings(cfg.Permissions, cfg.ReadOnly)
+	conv.readOnly = cfg.ReadOnly
+	conv.launchMode = cfg.Permissions
+	params := map[string]any{
+		"threadId":          sourceProviderConversationID,
+		"lastTurnId":        conv.nativeID(lastProviderTurnID),
+		"cwd":               cfg.WorkspacePath,
+		"approvalPolicy":    policy,
+		"approvalsReviewer": reviewer,
+		"sandbox":           sandbox,
+	}
+	if cfg.Model != "" {
+		params["model"] = cfg.Model
+	}
+	// Same overrides as thread/start and thread/resume: without the MCP servers
+	// a fresh fork has no AO tools until a restart resumes it.
+	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
+		params["config"] = config
+	}
+	if cfg.SystemPrompt != "" {
+		params["developerInstructions"] = cfg.SystemPrompt
+	}
+	openCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
+	var resp struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+		Model           string `json:"model"`
+		ReasoningEffort string `json:"reasoningEffort"`
+	}
+	if err := conv.conn.request(openCtx, "thread/fork", params, &resp); err != nil {
+		_ = conv.Terminate()
+		return nil, fmt.Errorf("thread/fork in side host: %w", err)
+	}
+	if resp.Thread.ID == "" {
+		_ = conv.Terminate()
+		return nil, errors.New("thread/fork returned no thread id")
+	}
+	conv.start(resp.Thread.ID, resp.Model, resp.ReasoningEffort)
+	return conv, nil
 }

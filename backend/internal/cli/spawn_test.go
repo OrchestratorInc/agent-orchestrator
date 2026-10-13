@@ -541,6 +541,53 @@ func TestSpawnStandaloneOmitsProject(t *testing.T) {
 	}
 }
 
+func TestRequestedOutputArtifactSetsRequestedOutput(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var req map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.WriteString(w, `{"session":{"id":"standalone-1","status":"idle"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	if _, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--standalone", "--agent", "codex", "--name", "Report", "--output", "artifact"); err != nil {
+		t.Fatalf("spawn failed: %v stderr=%s", err, errOut)
+	}
+	if req["requestedOutput"] != "artifact" {
+		t.Fatalf("requestedOutput = %#v, want artifact; request=%#v", req["requestedOutput"], req)
+	}
+}
+
+func TestSpawnOutputRejectsInvalidUse(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "unknown value", args: []string{"--output", "slides"}, want: `--output must be "artifact"`},
+		{name: "orchestrator", args: []string{"--output", "artifact", "--kind", "orchestrator"}, want: "--output is supported for worker sessions only"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"spawn", "--project", "demo", "--name", "worker"}, tc.args...)
+			_, _, err := executeCLI(t, Deps{}, args...)
+			if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err=%v exit=%d, want %q", err, ExitCode(err), tc.want)
+			}
+		})
+	}
+}
+
 func TestSpawnStandaloneRejectsProjectOnlyOptions(t *testing.T) {
 	for _, tc := range []struct {
 		name string

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { rememberedFileDisplayMode, sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "./ui-store";
 import { sessionUiKey } from "../lib/hosts";
+import { previewDocumentThemeStyle } from "../lib/theme";
 
 describe("sidebar visibility", () => {
 	beforeEach(() => {
@@ -23,6 +24,36 @@ describe("sidebar visibility", () => {
 		expect(sidebarIsVisible(state)).toBe(true);
 		expect(sidebarOccupiesLayout(state)).toBe(true);
 		expect(window.localStorage.getItem("ao.sidebar.open")).toBe("true");
+	});
+});
+
+describe("color theme selection", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+		useUiStore.setState({ themeStyle: "orchestrate" });
+		delete document.documentElement.dataset.styleTheme;
+	});
+
+	it("persists a previewed theme without a View Transition", () => {
+		const startViewTransition = vi.fn();
+		Object.defineProperty(document, "startViewTransition", {
+			configurable: true,
+			writable: true,
+			value: startViewTransition,
+		});
+		try {
+			previewDocumentThemeStyle("nord", "orchestrate");
+			useUiStore.getState().setThemeStyle("nord");
+			previewDocumentThemeStyle(null, useUiStore.getState().themeStyle);
+
+			expect(startViewTransition).not.toHaveBeenCalled();
+			expect(useUiStore.getState().themeStyle).toBe("nord");
+			expect(window.localStorage.getItem("ao.theme-style")).toBe("nord");
+			expect(document.documentElement.dataset.styleTheme).toBe("nord");
+		} finally {
+			Reflect.deleteProperty(document, "startViewTransition");
+			delete document.documentElement.dataset.styleTheme;
+		}
 	});
 });
 
@@ -187,6 +218,19 @@ describe("workspace file open requests", () => {
 
 		expect(first).toMatchObject({ sessionId: "session-1", hostId: "host-a", path: "src/App.tsx" });
 		expect(second?.nonce).toBe((first?.nonce ?? 0) + 1);
+	});
+
+	it("stores the artifact source only when one is given", () => {
+		useUiStore.getState().requestWorkspaceFileOpen("session-1", "out/report.md", "host-a", "artifact");
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({
+			sessionId: "session-1",
+			hostId: "host-a",
+			path: "out/report.md",
+			source: "artifact",
+		});
+
+		useUiStore.getState().requestWorkspaceFileOpen("session-1", "src/App.tsx");
+		expect(useUiStore.getState().workspaceFileOpenRequest).not.toHaveProperty("source");
 	});
 
 	it("clears only the matching request generation", () => {

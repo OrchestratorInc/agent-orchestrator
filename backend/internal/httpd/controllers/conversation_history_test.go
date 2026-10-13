@@ -409,6 +409,14 @@ func TestSetTitleRouteReportsAnUnsupportedProvider(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusConflict, "CHAT_RENAME_UNSUPPORTED")
 }
 
+func TestSetTitleRouteRefusesTheProjectOrchestrator(t *testing.T) {
+	srv := newChatTestServer(t, &fakeChatService{setTitle: chatsvc.ErrOrchestratorRename})
+	body, status, headers := doRequest(t, srv, "PUT",
+		"/api/v1/sessions/ao-1/conversation/title", `{"title":"A Name"}`)
+	assertJSON(t, headers)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "ORCHESTRATOR_RENAME_UNSUPPORTED")
+}
+
 // Without a chat driver wired the routes must say "not implemented" rather than
 // panicking on a nil service.
 func TestConversationHistoryRoutesStubWithoutAService(t *testing.T) {

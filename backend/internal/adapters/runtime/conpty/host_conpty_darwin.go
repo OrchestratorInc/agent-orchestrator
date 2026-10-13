@@ -35,6 +35,7 @@ const darwinPTYCloseGrace = 500 * time.Millisecond
 func newConPTY(cwd, shellCmd string, shellArgs []string, cols, rows uint16) (ptyConn, error) {
 	// shellCmd and shellArgs are the runtime launch argv assembled by AO's
 	// trusted agent adapter, not input interpreted by a shell.
+	//nolint:forbidigo // Interactive ConPTY children require direct process control.
 	cmd := exec.Command(shellCmd, shellArgs...) // #nosec G702 -- intentional direct argv execution
 	cmd.Dir = cwd
 	cmd.Env = os.Environ()

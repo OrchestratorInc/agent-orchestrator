@@ -53,6 +53,9 @@ var (
 	// ErrMissingHarness means neither the spawn request nor the project's role
 	// config selected an agent. Worker/orchestrator spawns must be explicit.
 	ErrMissingHarness = errors.New("session: agent harness required")
+	// ErrArtifactOutputUnavailable rejects an artifact-output spawn when the
+	// daemon has no data dir to hold the session's artifact directory.
+	ErrArtifactOutputUnavailable = errors.New("session: artifact output requires an artifact directory")
 	// ErrHarnessInstallActive prevents launch while the harness executable is replaced.
 	ErrHarnessInstallActive = errors.New("session: harness install active")
 	// ErrUnsupportedModel means the requested model is not supported by the
@@ -914,6 +917,9 @@ func New(d Deps) *Manager {
 // materialization fails the still-seed row is deleted outright; a later failure
 // parks the row as terminated and rolls back what was built.
 func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	if cfg.RequestedOutput == domain.RequestedOutputArtifact && m.artifactDir("") == "" {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrArtifactOutputUnavailable)
+	}
 	if cfg.ClientRequestID != "" {
 		existing, found, err := m.store.GetSessionByClientRequestID(ctx, cfg.ClientRequestID)
 		if err != nil {
@@ -1212,6 +1218,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			branch:            branch,
 			prompt:            appendAttachmentReferences(prompt, spawnAttachmentRefs(cfg.Attachments)),
 			systemPrompt:      systemPrompt,
+			systemPromptFile:  systemPromptFile,
 			promptBytes:       promptBytes,
 			systemPromptBytes: systemPromptBytes,
 			preparation:       prep,
@@ -1292,6 +1299,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			workspaceProject: workspaceProject,
 			prompt:           prompt,
 			systemPrompt:     systemPrompt,
+			systemPromptFile: systemPromptFile,
 		})
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, err
@@ -1510,8 +1518,15 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
 	}
-	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode {
+	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode {
 		resolved.Effort = ""
+		return resolved, nil
+	}
+	if cfg.Harness == domain.HarnessCommandCode {
+		// Command Code's `cmd --list-models` catalog advertises no per-model
+		// effort levels, so there is nothing to validate against: forward the
+		// raw level (empty keeps the adapter default) and let `cmd --effort`
+		// reject unknown values at launch.
 		return resolved, nil
 	}
 	modelID := strings.TrimSpace(resolved.Model)
@@ -3234,7 +3249,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	// Recompute standing instructions, then reapply the durable finalized inbound
 	// handoff for this exact native conversation when one exists.
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, false)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
 	}
@@ -5177,6 +5192,7 @@ func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now t
 		// statement that can change it afterwards.
 		Mode:              domain.NormalizeSessionMode(cfg.RequestedMode),
 		Metadata:          domain.SessionMetadata{Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions},
+		RequestedOutput:   cfg.RequestedOutput,
 		OutputType:        domain.SessionOutputNone,
 		AutoReviewEnabled: projectConfig.AutoReview,
 		AutoInjectReview:  true,
@@ -5383,7 +5399,7 @@ func appendAttachmentReferences(prompt string, refs []string) string {
 // empty input box rather than receiving an auto-generated kickoff turn.
 func (m *Manager) buildSpawnTexts(ctx context.Context, cfg ports.SpawnConfig, sessionID domain.SessionID) (prompt, systemPrompt string, err error) {
 	prompt = buildPrompt(cfg)
-	systemPrompt, err = m.buildSystemPrompt(ctx, cfg.Kind, cfg.ProjectID, sessionID)
+	systemPrompt, err = m.buildSystemPrompt(ctx, cfg.Kind, cfg.ProjectID, sessionID, cfg.RequestedOutput, domain.NormalizeSessionMode(cfg.RequestedMode) == domain.SessionModeChat)
 	if err != nil {
 		return "", "", err
 	}
@@ -5394,7 +5410,10 @@ func (m *Manager) buildSpawnTexts(ctx context.Context, cfg ports.SpawnConfig, se
 // given kind from current store state. Restore recomputes them through here
 // rather than persisting them, so a restored worker points at the orchestrator
 // that is active now, not the one from its original spawn.
-func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID) (string, error) {
+// buildSystemPrompt assembles the standing instructions. chat says whether the
+// agent runs as a chat session, the only mode with the html tools and ao render.
+// requestedOutput is the deliverable requested at spawn.
+func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, requestedOutput domain.RequestedOutput, chat bool) (string, error) {
 	project, err := m.loadProject(ctx, projectID)
 	if err != nil {
 		return "", err
@@ -5440,11 +5459,14 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 			cfg.AdditionalSections = append(cfg.AdditionalSections, workspacePrompt)
 		}
 	}
-	if pointer := strings.TrimSpace(m.aoSkillPointer()); pointer != "" {
+	if pointer := strings.TrimSpace(m.aoSkillPointer(chat)); pointer != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer)
 	}
-	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID)); artifactPrompt != "" {
+	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactPrompt)
+	}
+	if kind == domain.KindWorker && requestedOutput == domain.RequestedOutputArtifact {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactOutputPrompt)
 	}
 	return buildSystemPromptText(cfg), nil
 }
@@ -5455,19 +5477,31 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 // project's worktree, not just the AO repo (the only place a repo-relative
 // skills/ path would exist). The skill file carries exact flags and examples,
 // so the standing prompt stays a short pointer rather than a command dump.
-func (m *Manager) aoSkillPointer() string {
+// aoSkillPointer is the always-on AO guide pointer. The html tools and ao
+// render work only in chat sessions, so only a chat prompt names them.
+func (m *Manager) aoSkillPointer(chat bool) string {
 	dir := skillassets.Dir(m.dataDir)
 	skillFile := filepath.ToSlash(filepath.Join(dir, "SKILL.md"))
 	commandsGlob := filepath.ToSlash(filepath.Join(dir, "commands", "*.md"))
 	browserFile := filepath.ToSlash(filepath.Join(dir, "commands", "browser.md"))
 	previewFile := filepath.ToSlash(filepath.Join(dir, "commands", "preview.md"))
-	return "\n\n" + "## Using the ao CLI\n\n" +
+	renderFile := filepath.ToSlash(filepath.Join(dir, "commands", "render.md"))
+	pointer := "\n\n" + "## Using the ao CLI\n\n" +
 		"When using `ao`, read `" + skillFile + "` and only the relevant file under `" + commandsGlob + "`; do not load unrelated command guides.\n\n" +
 		"## AO desktop Browser panel\n\n" +
 		"For frontend work, read `" + previewFile + "` before previewing or starting an app. Static file targets passed to `ao preview` are relative to the session workspace root, regardless of the shell's current directory: use `ao preview README.md`, not `../README.md`. AO serves workspace files through its existing confined loopback preview; do not use `file://` or start a server just to display static files. Never create or modify `package.json` or install dependencies solely to display static files. Do not create `.ao/launch.json` unless the user asks. Automatically open the primary requested browser-displayable artifact immediately after creating or materially updating it, but do not replace an active application preview with a supporting asset. " +
 		"For page inspection or interaction, read `" + browserFile + "` and use `ao browser` from this AO session. Browser network capture is optional and off by default; follow that guide and never enable it for routine browser actions. " +
 		"Do not use Codex/host in-app browser connectors, `agent.browsers.get(\"iab\")`, or a browser MCP for the AO Browser panel: those are separate browser runtimes and cannot see or control AO's session-owned page. " +
 		"`ao browser` operates the same live page the user sees in that panel."
+	if !chat {
+		return pointer
+	}
+	return pointer + "\n\n" +
+		"## Showing pages in chat\n\n" +
+		"When a chart, table, diagram, or mockup is clearer than text, call `html_preview`, then `html_render`. " +
+		"If you cannot see them, search your tools for them. " +
+		"If you find nothing, read `" + renderFile + "` and use `ao render`. " +
+		"Do not use a built-in visualize skill."
 }
 
 func (m *Manager) workspaceProjectPrompt(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID) (string, error) {
@@ -5536,6 +5570,7 @@ func systemPromptFileRequired(harness domain.AgentHarness) bool {
 	case domain.HarnessGemini, domain.HarnessAider,
 		domain.HarnessAgy,
 		domain.HarnessAuggie,
+		domain.HarnessCommandCode,
 		domain.HarnessKiro,
 		domain.HarnessOpenCode,
 		domain.HarnessCopilot,
@@ -5579,19 +5614,32 @@ func (m *Manager) cleanupArtifactDir(id domain.SessionID) {
 	}
 }
 
-func (m *Manager) artifactPrompt(id domain.SessionID) string {
+// artifactPrompt tells the agent where deliverables go. Only a chat session can
+// show a page in its thread, so only a chat prompt sends charts there.
+func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
 	dir := filepath.ToSlash(m.artifactDir(id))
 	if dir == "" {
 		return ""
 	}
+	inThread := ""
+	if chat {
+		inThread = "In a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory. "
+	}
 	return "## Session Artifacts\n\n" +
 		"Any deliverable that is not part of a pull request — a one-pager, analysis, plan, design doc, report, or other generated file — must be written to `" + dir + "`, never into the git workspace, even temporarily. " +
 		"This applies even when a workspace-relative path like `docs/`, `docs/plans/`, or `notes/` would otherwise feel like the natural place for it: if it is not shipping in a PR, it does not belong in the workspace at all. " +
+		inThread +
 		"Keep the workspace limited to code changes that will ship in a PR. Preserve any relative asset links between files you place in the artifact directory. " +
 		"Create a separate document when the user requests a durable document or when the task needs a reviewable deliverable. Ordinary progress updates, concise final answers, and validation summaries can stay in chat or AO report notes; do not create files solely because a response is a summary, plan, analysis, or report. " +
 		"Routine test logs, command output, scratch notes, and intermediate diagnostics are working material, not deliverables. Keep them out of report attachments unless requested or needed to explain an actionable failure. Prefer one consolidated deliverable over many diagnostic files. " +
 		"This directory is local storage. Saving a file here or attaching its reference to an AO report does not authorize external publishing; follow the user's publishing scope."
 }
+
+// artifactOutputPrompt is added for a session spawned with the artifact output
+// kind.
+const artifactOutputPrompt = "## Artifact Output\n\n" +
+	"The user's request in this session is for an artifact. Write the finished deliverable as a file in the session artifact directory: HTML for visual work such as pages, dashboards, and diagrams; Markdown for documents. " +
+	"Do not open a pull request, and do not commit the deliverable to the git workspace. If the request is unclear, ask the user what the artifact should contain before writing it."
 
 func (m *Manager) cleanupSystemPromptDir(id domain.SessionID) {
 	dir := m.systemPromptDir(id)

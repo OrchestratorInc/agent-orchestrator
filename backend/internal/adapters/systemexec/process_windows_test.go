@@ -30,7 +30,8 @@ func TestCommandContextWrapsBatchShimWithComSpec(t *testing.T) {
 	if !strings.EqualFold(cmd.Path, comSpec) {
 		t.Fatalf("Path = %q, want ComSpec", cmd.Path)
 	}
-	if cmd.SysProcAttr == nil || !strings.Contains(cmd.SysProcAttr.CmdLine, `"`+shim+`" "argument with spaces"`) {
+	wantCommand := quoteWindowsBatchArg(shim) + " " + quoteWindowsBatchArg("argument with spaces")
+	if cmd.SysProcAttr == nil || !strings.Contains(cmd.SysProcAttr.CmdLine, wantCommand) {
 		t.Fatalf("CmdLine = %q, want quoted shim and argument", cmd.SysProcAttr.CmdLine)
 	}
 	aoprocess.ConfigureTreeCancellation(cmd)

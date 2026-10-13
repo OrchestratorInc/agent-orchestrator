@@ -62,6 +62,13 @@ describe("FileContentPane", () => {
 		expect(getMock).not.toHaveBeenCalled();
 	});
 
+	it("explains an outside-workspace path without fetching or offering Retry", () => {
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} path="/Users/me/notes/plan.md" sessionId="sess-1" split={false} />);
+		expect(screen.getByText("This file is outside the session's workspace, so it can't be opened here.")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
+		expect(getMock).not.toHaveBeenCalled();
+	});
+
 	it("renders the diff view for a changed file", async () => {
 		getMock.mockResolvedValue({
 			data: {

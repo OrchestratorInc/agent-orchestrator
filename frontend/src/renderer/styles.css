@@ -1099,16 +1099,11 @@ button.settings-row-bar {
 }
 
 .composer-run-controls {
-	display: grid;
+	display: flex;
 	min-width: 0;
-	grid-template-columns: minmax(max-content, 1fr) minmax(0, 1fr);
 	align-items: center;
+	justify-content: flex-start;
 	column-gap: var(--space-2);
-}
-
-.composer-run-controls-with-effort {
-	/* Agent and model share free room; effort keeps enough width for its selected label. */
-	grid-template-columns: minmax(max-content, 1fr) minmax(0, 1fr) minmax(max-content, 0.5fr);
 }
 
 .composer-toolbar-slot {
@@ -1116,7 +1111,7 @@ button.settings-row-bar {
 }
 
 .composer-toolbar .composer-toolbar-option {
-	height: var(--size-settings-action-height);
+	height: var(--size-composer-toolbar-height);
 	/* Same mix formula as the settings-modal dropdown trigger, but anchored to
 	   --card (an opaque color) instead of --color-bg-settings-row. */
 	border-radius: var(--radius-md) !important;
@@ -2571,6 +2566,11 @@ html.sidebar-reordering * {
 	transform: none;
 }
 
+/* Welcome sample prompts are list rows like the sidebar's: no press scale. */
+.cursor-chat-surface .welcome-prompt-suggestion:not(:disabled):active {
+	transform: none;
+}
+
 .activity-run-toggle {
 	color: var(--color-text-muted);
 }
@@ -3152,6 +3152,22 @@ html.sidebar-reordering * {
 	font-size: 0.86em;
 	line-height: 1;
 	vertical-align: -0.06em;
+}
+
+.chat-transcript-reveal {
+	animation: chat-transcript-reveal 360ms ease-out both;
+}
+
+@keyframes chat-transcript-reveal {
+	from {
+		opacity: 0;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-transcript-reveal {
+		animation: none;
+	}
 }
 
 .chat-scroll-viewport {
@@ -4066,6 +4082,10 @@ html.sidebar-reordering * {
  * (gap width + x-transform). Dragging updates --ao-inspector-w directly. */
 
 .session-inspector__topbar {
+	/* Width the tab list can need (four tabs, their gaps and the leading pad).
+	   The centered field never grows past what is left once both side tracks
+	   hold that much, so it cannot overlap the last tab. */
+	--inspector-tabs-reserve: calc(4 * var(--size-control-md) + 3 * var(--space-1) + var(--space-1));
 	background: var(--bg);
 	color: var(--fg);
 	user-select: none;
@@ -4076,13 +4096,13 @@ html.sidebar-reordering * {
    which shifts it right because the tab controls are wider than the actions. */
 .session-inspector__topbar--browser {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 240px) minmax(0, 1fr);
+	grid-template-columns: minmax(0, 1fr) minmax(0, clamp(120px, calc(100cqw - 2 * var(--inspector-tabs-reserve)), 240px)) minmax(0, 1fr);
 	padding-left: 0;
 	transition: grid-template-columns var(--duration-fast) ease;
 }
 
 .session-inspector__topbar--browser:has(.browser-panel__address-bar--editing) {
-	grid-template-columns: minmax(0, 1fr) clamp(240px, 52cqw, 560px) minmax(0, 1fr);
+	grid-template-columns: minmax(0, 1fr) clamp(120px, min(52cqw, calc(100cqw - 2 * var(--inspector-tabs-reserve))), 560px) minmax(0, 1fr);
 }
 
 .session-inspector__topbar--browser > .session-inspector__tablist {
@@ -4095,11 +4115,7 @@ html.sidebar-reordering * {
 	width: 100%;
 }
 
-.session-inspector__topbar > .browser-panel__topbar-host > .browser-panel__address-bar {
-	transform: translateX(clamp(32px, 6cqw, 48px));
-}
-
-.session-inspector__topbar--browser > .session-inspector-actions-spacer {
+.session-inspector__topbar--browser > .session-inspector__trailing {
 	grid-column: 3;
 	justify-self: end;
 }
@@ -4119,7 +4135,7 @@ html.sidebar-reordering * {
 		grid-row: 1;
 	}
 
-	.session-inspector__topbar--browser > .session-inspector-actions-spacer {
+	.session-inspector__topbar--browser > .session-inspector__trailing {
 		grid-column: 2;
 		grid-row: 1;
 	}
@@ -4130,12 +4146,6 @@ html.sidebar-reordering * {
 		width: 180px;
 		justify-self: center;
 		transition: width var(--duration-fast) ease;
-	}
-
-	.session-inspector__topbar--browser
-		> .browser-panel__topbar-host
-		> .browser-panel__address-bar {
-		transform: none;
 	}
 
 	.session-inspector__topbar--browser:has(.browser-panel__address-bar--editing)
@@ -4150,9 +4160,9 @@ html.sidebar-reordering * {
 	width: 100%;
 	box-sizing: border-box;
 	height: var(--size-control-md);
-	border-color: var(--color-border);
+	border-color: transparent;
 	border-radius: var(--radius-md);
-	background: var(--bg);
+	background: var(--color-interactive-active);
 	font-family: var(--font-family-base);
 	font-size: 12px;
 	transition:
@@ -4173,18 +4183,18 @@ html.sidebar-reordering * {
 	}
 }
 
-/* Files tab: the filter field sits in the inspector top bar exactly where the
-   browser's address field does, with the same centered track and focus
-   widening, and drops to its own row at the same narrow width (below). */
+/* Files tab: center the filter in the space between the tabs and the pinned
+   actions. Intrinsic side tracks let it adjust when the review tab appears.
+   It still widens on focus and takes its own row in narrow panels (below). */
 .session-inspector__topbar:has(> .files-panel__topbar-host) {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 240px) minmax(0, 1fr);
+	grid-template-columns: max-content minmax(0, 1fr) max-content;
+	column-gap: var(--space-1);
 	padding-left: 0;
-	transition: grid-template-columns var(--duration-fast) ease;
 }
 
-.session-inspector__topbar:has(> .files-panel__topbar-host :focus) {
-	grid-template-columns: minmax(0, 1fr) clamp(240px, 52cqw, 560px) minmax(0, 1fr);
+.session-inspector__topbar > .files-panel__topbar-host:focus-within {
+	width: min(100%, 52cqw, 560px);
 }
 
 .session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector__tablist {
@@ -4194,22 +4204,18 @@ html.sidebar-reordering * {
 
 .session-inspector__topbar > .files-panel__topbar-host {
 	grid-column: 2;
-	width: 100%;
+	width: min(100%, 240px);
+	justify-self: center;
+	transition: width var(--duration-fast) ease;
 }
 
-.session-inspector__topbar > .files-panel__topbar-host > * {
-	transform: translateX(clamp(32px, 6cqw, 48px));
-}
-
-.session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector-actions-spacer {
+.session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector__trailing {
 	grid-column: 3;
 	justify-self: end;
 }
 
 /* Like the browser's URL field: once zoom or a narrow window leaves too little
-   room, the filter takes its own row so it cannot slide under the tabs. The
-   focused selector repeats the plain one so its wider focus track above never
-   overrides the two-column layout here. */
+   room, the filter takes its own row so it cannot slide under the tabs. */
 @container inspector (max-width: 440px) {
 	.session-inspector__topbar:has(> .files-panel__topbar-host),
 	.session-inspector__topbar:has(> .files-panel__topbar-host :focus) {
@@ -4223,7 +4229,7 @@ html.sidebar-reordering * {
 		grid-row: 1;
 	}
 
-	.session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector-actions-spacer {
+	.session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector__trailing {
 		grid-column: 2;
 		grid-row: 1;
 	}
@@ -4234,10 +4240,6 @@ html.sidebar-reordering * {
 		width: 180px;
 		justify-self: center;
 		transition: width var(--duration-fast) ease;
-	}
-
-	.session-inspector__topbar > .files-panel__topbar-host > * {
-		transform: none;
 	}
 
 	.session-inspector__topbar > .files-panel__topbar-host:focus-within {
@@ -5730,9 +5732,9 @@ body:has(#root .platform-linux) > .files-popout-overlay {
 	width: 100%;
 	box-sizing: border-box;
 	height: var(--size-control-md);
-	border-color: var(--color-border);
+	border-color: transparent;
 	border-radius: var(--radius-md);
-	background: var(--bg);
+	background: var(--color-interactive-active);
 	font-family: var(--font-family-base);
 	font-size: 12px;
 	text-align: center;
@@ -6129,4 +6131,108 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	outline: 2px solid #6b7280;
 	outline-offset: 4px;
 	border-radius: 10px;
+}
+
+
+/* macOS window transparency.
+ *
+ * Native vibrancy blurs the desktop below the window. To keep translucent
+ * layers from compounding (a tinted panel over a tinted shell reads as a
+ * darker patch), the window follows the material model native apps use:
+ *   1. One tint: only the shell plate paints the theme colour, at 70%. Every
+ *      other chrome surface is clear.
+ *   2. Nested fills are additive overlays (foreground at a few percent), so a
+ *      card or button reads one step up from whatever sits behind it.
+ *   3. Floating surfaces (menus, popovers, tooltips, dialogs) restore the
+ *      solid theme values so they stay legible above the material.
+ * The terminal keeps its own opaque plate. */
+
+/* Solid copies, resolved on :root where the theme declares them. :root raises
+ * specificity past the theme catalog's :root[data-style-theme] blocks. */
+html:root[data-window-translucent="true"] {
+	--solid-bg-primary: var(--color-bg-primary);
+	--solid-bg-secondary: var(--color-bg-secondary);
+	--solid-bg-tertiary: var(--color-bg-tertiary);
+	--solid-bg-sidebar: var(--color-bg-sidebar);
+	--solid-muted: var(--muted);
+	--solid-secondary: var(--secondary);
+	--solid-accent: var(--accent);
+	--solid-sidebar-accent: var(--sidebar-accent);
+}
+
+/* Chrome: clear canvases, overlay fills. Declared on body so the theme's
+ * :root values stay intact for the solid copies above. */
+html[data-window-translucent="true"] body {
+	--color-bg-primary: transparent;
+	--color-bg-sidebar: transparent;
+	--color-bg-secondary: color-mix(in oklch, var(--foreground) 5%, transparent);
+	--color-bg-tertiary: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--muted: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--secondary: color-mix(in oklch, var(--foreground) 6%, transparent);
+	--accent: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--sidebar-accent: color-mix(in oklch, var(--foreground) 7%, transparent);
+	background: transparent;
+}
+
+/* Floating surfaces sit above the material: back to solid theme values.
+ * `.z-overlay` covers custom floating menus built on the shared menu recipe. */
+html[data-window-translucent="true"] :is(
+	.z-overlay,
+	[data-radix-popper-content-wrapper],
+	[role="dialog"],
+	[role="alertdialog"],
+	[role="tooltip"]
+) {
+	--color-bg-primary: var(--solid-bg-primary);
+	--color-bg-secondary: var(--solid-bg-secondary);
+	--color-bg-tertiary: var(--solid-bg-tertiary);
+	--color-bg-sidebar: var(--solid-bg-sidebar);
+	--muted: var(--solid-muted);
+	--secondary: var(--solid-secondary);
+	--accent: var(--solid-accent);
+	--sidebar-accent: var(--solid-sidebar-accent);
+}
+
+/* tokens.css resolves the legacy aliases on :root, before the swaps above.
+ * Re-resolve them wherever the surface tokens change. */
+html[data-window-translucent="true"] :is(
+	body,
+	.z-overlay,
+	[data-radix-popper-content-wrapper],
+	[role="dialog"],
+	[role="alertdialog"],
+	[role="tooltip"]
+) {
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
+}
+
+/* The single tint, on its own layer under the shell's content. The native
+ * browser rules clear .app-shell-root's own background while a page is live,
+ * which would drop the tint; this pseudo-element is untouched by them. */
+html[data-window-translucent="true"] .app-shell-root {
+	position: relative;
+	isolation: isolate;
+}
+
+html[data-window-translucent="true"] .app-shell-root::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	pointer-events: none;
+	background-color: color-mix(in srgb, var(--sidebar) 70%, transparent);
+}
+
+/* The live page is a native view below the shell. Cut the tint out over its
+ * rect (published by useBrowserView) so the page is not tinted. */
+html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-panel[data-browser-native-page="live"]) .app-shell-root::before {
+	mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+	mask-size: 100% 100%, var(--browser-hole-w) var(--browser-hole-h);
+	mask-position: 0 0, var(--browser-hole-x) var(--browser-hole-y);
+	mask-repeat: no-repeat;
+	mask-composite: exclude;
 }

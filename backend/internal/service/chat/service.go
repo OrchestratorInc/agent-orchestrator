@@ -66,9 +66,17 @@ type Service struct {
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 	// onModelChanged syncs ChatUI's model override (including clearing it) to
 	// session metadata before the next prompt routes or a later TUI rebuild.
-	onModelChanged     func(domain.SessionID, string)
-	stopProviderHost   func(context.Context, domain.SessionID) error
-	reports            *reportsvc.Coordinator
+	onModelChanged   func(domain.SessionID, string)
+	stopProviderHost func(context.Context, domain.SessionID) error
+	reports          *reportsvc.Coordinator
+	renders          RenderFiles
+	dataDir          string
+	reconcileOutput  func(context.Context, domain.SessionID) error
+	renderCheck      RenderCheck
+	renderMeasure    RenderMeasure
+	// renderMeasures tracks background measures, so tests can wait for them.
+	renderMeasures     sync.WaitGroup
+	sides              *sideManager
 	wakeChat           func(context.Context, domain.SessionID) error
 	hibernationEnabled func() bool
 	viewMu             sync.Mutex
@@ -122,6 +130,7 @@ func (g controllerGate) unlock() { <-g }
 // Options configures a Service. The id factory and clock are injected so tests
 // are deterministic.
 type Options struct {
+	AppRunID   string
 	Store      Store
 	Reader     SnapshotReader
 	PageReader SnapshotPageReader
@@ -146,6 +155,14 @@ type Options struct {
 	// StopProviderHost destroys current ownership on explicit teardown or failed hibernation,
 	// even if its daemon attachment already failed. Never used by StopAll.
 	StopProviderHost func(context.Context, domain.SessionID) error
+	// Renders stores agent HTML renders. Nil refuses PublishRender.
+	Renders RenderFiles
+	// DataDir locates a session's artifact directory when its record names
+	// none, for a render kept as an artifact.
+	DataDir string
+	// ReconcileOutputType updates a session's output type at once after a
+	// render is kept as an artifact. Nil leaves it to the artifact observer.
+	ReconcileOutputType func(context.Context, domain.SessionID) error
 	// HibernationEnabled reads the daemon-owned feature gate. Nil is disabled.
 	HibernationEnabled func() bool
 }
@@ -160,7 +177,7 @@ func New(opts Options) *Service {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{
+	svc := &Service{
 		store:                  opts.Store,
 		reader:                 opts.Reader,
 		pageReader:             opts.PageReader,
@@ -174,6 +191,9 @@ func New(opts Options) *Service {
 		onCodexCapacityChanged: opts.OnCodexCapacityChanged,
 		onModelChanged:         opts.OnModelChanged,
 		stopProviderHost:       opts.StopProviderHost,
+		renders:                opts.Renders,
+		dataDir:                opts.DataDir,
+		reconcileOutput:        opts.ReconcileOutputType,
 		hibernationEnabled:     opts.HibernationEnabled,
 		controllers:            make(map[domain.SessionID]*Controller),
 		ownerControllers:       make(map[domain.ConversationOwner]*Controller),
@@ -184,6 +204,8 @@ func New(opts Options) *Service {
 		wakeRuns:               make(map[domain.SessionID]*wakeRun),
 		backgroundWakes:        make(map[domain.SessionID]bool),
 	}
+	svc.sides = newSideManager(svc, newMemorySideStore(), opts.AppRunID)
+	return svc
 }
 
 func (s *Service) controllerGate(owner domain.ConversationOwner) controllerGate {
@@ -1479,6 +1501,12 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 		return err
 	}
 	defer gate.unlock()
+	// Each side is marked closed before its host stops, and a host that fails to
+	// stop stays queued for the periodic cleanup retry. Stopping the main chat
+	// (Exit agent, agent switch, spawn rollback) must not depend on it.
+	if err := s.closeSessionSides(ctx, id); err != nil {
+		s.log.Warn("side chat cleanup deferred while stopping session", "session", id, "error", err)
+	}
 	s.viewMu.Lock()
 	delete(s.viewClosedAt, id)
 	delete(s.viewLeases, id)
@@ -1539,6 +1567,9 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 // StopForOwner closes a typed-owner controller without touching its parent
 // worker's Chat controller.
 func (s *Service) StopForOwner(ctx context.Context, owner domain.ConversationOwner) error {
+	if owner.Kind == domain.ConversationOwnerSession {
+		return s.Stop(ctx, domain.SessionID(owner.ID))
+	}
 	gate := s.controllerGate(owner)
 	if err := gate.lock(ctx); err != nil {
 		return err
@@ -1574,6 +1605,9 @@ func (s *Service) StopForOwner(ctx context.Context, owner domain.ConversationOwn
 
 // StopAll closes every controller, for daemon shutdown.
 func (s *Service) StopAll(ctx context.Context) {
+	if s.sides != nil {
+		s.sides.stopAll()
+	}
 	s.mu.Lock()
 	type shutdownTarget struct {
 		owner      domain.ConversationOwner
@@ -2441,6 +2475,19 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 	out := append([]ports.ChatConfigOption(nil), options...)
 	for i := range out {
 		out[i].Choices = append([]ports.ChatConfigOptionChoice(nil), out[i].Choices...)
+		if harness == domain.HarnessCommandCode && out[i].ID == "mode" {
+			choices := out[i].Choices[:0]
+			for _, choice := range out[i].Choices {
+				mode, ok := commandCodeApprovalMode(choice.Value)
+				if !ok {
+					continue
+				}
+				choice.PermissionMode = mode
+				choices = append(choices, choice)
+			}
+			out[i].Choices = choices
+			continue
+		}
 		for j := range out[i].Choices {
 			choice := &out[i].Choices[j]
 			choice.PermissionMode = ""
@@ -2472,6 +2519,19 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 		}
 	}
 	return out
+}
+
+func commandCodeApprovalMode(value string) (domain.PermissionMode, bool) {
+	switch value {
+	case "default":
+		return domain.PermissionModeDefault, true
+	case "auto-accept":
+		return domain.PermissionModeAuto, true
+	case "bypass":
+		return domain.PermissionModeBypassPermissions, true
+	default:
+		return "", false
+	}
 }
 
 func openCodeApprovalTier(value string) (domain.PermissionMode, string, bool) {

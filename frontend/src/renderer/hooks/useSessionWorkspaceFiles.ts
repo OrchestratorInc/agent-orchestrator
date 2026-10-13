@@ -117,6 +117,24 @@ async function fetchSessionWorkspaceFile(sessionId: string, path: string, scope:
 	return data as WorkspaceFileDetail;
 }
 
+export type WorkspacePathResolution = components["schemas"]["WorkspacePathResolutionResponse"];
+
+/**
+ * Ask the daemon which session root owns a path. Resolves undefined when the
+ * daemon cannot say (network failure, or a remote host running a build without
+ * this route), so a caller always has a defined fallback.
+ */
+export async function resolveSessionWorkspacePath(sessionId: string, path: string, hostId?: string): Promise<WorkspacePathResolution | undefined> {
+	try {
+		const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/resolve", {
+			params: { path: { sessionId }, query: { path } },
+		});
+		return error ? undefined : data;
+	} catch {
+		return undefined;
+	}
+}
+
 async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: string, path: string, previousPath: string, errorMessage: string, commitSha?: string, hostId?: string): Promise<WorkspaceFileDetail> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/pr/{prNumber}/file", {
 		params: { path: { sessionId, prNumber: number }, query: { path, previousPath, sourceUrl, commitSha } },
