@@ -1173,7 +1173,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const lastChecked = formatTimestamp(installation?.checkedAt);
 		const credential = detectedCredential(details);
 		const executable = advisory?.binaryPath || details.job?.expectedDestination;
-		const hasDetails = Boolean(executable || (isInstalled && details.currentVersion) || advisory?.latestVersion || details.maintenanceMethod);
+		const hasDetails = Boolean((isInstalled && details.currentVersion) || advisory?.latestVersion || details.maintenanceMethod);
 		return <div className="flex flex-col gap-6">
 			<HarnessDetailGroup title={t("settings.harness.health.status")}>
 				<HarnessDetailRow label={t("settings.harness.installation")} description={installation?.state !== "installed" ? installation?.reason || undefined : undefined}>
@@ -1181,6 +1181,9 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				</HarnessDetailRow>
 				{isInstalled ? <HarnessDetailRow label={t("settings.harness.health.authentication")}>
 					<HarnessStateText tone={authState}>{details.authStatus === "configured" ? t("settings.harness.health.authUnverified") : details.authSummary}</HarnessStateText>
+				</HarnessDetailRow> : null}
+				{executable ? <HarnessDetailRow label={t("settings.harness.health.executable")}>
+					<span className="min-w-0 break-all font-mono text-xs text-settings-label">{executable}</span>
 				</HarnessDetailRow> : null}
 				{isInstalled && credential ? <HarnessDetailRow label={t("settings.harness.health.detectedCredential")}>
 					<span className="min-w-0 break-all font-mono text-xs text-settings-label">{credential}</span>
@@ -1190,9 +1193,6 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				</HarnessDetailRow> : null}
 			</HarnessDetailGroup>
 			{hasDetails ? <HarnessDetailGroup title={t("settings.harness.health.details")}>
-				{executable ? <HarnessDetailRow label={t("settings.harness.health.executable")}>
-					<span className="min-w-0 break-all font-mono text-xs text-settings-label">{executable}</span>
-				</HarnessDetailRow> : null}
 				{isInstalled && details.currentVersion ? <HarnessDetailRow label={t(details.versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")}>
 					<span className="break-all font-mono text-xs text-settings-label">{details.versionText}</span>
 				</HarnessDetailRow> : null}
