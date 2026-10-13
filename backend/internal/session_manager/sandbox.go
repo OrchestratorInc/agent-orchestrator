@@ -71,7 +71,17 @@ func (f *sandboxInFlight) active(project domain.ProjectID) bool {
 	return f.count[project] > 0
 }
 
+// sandboxFor returns the sandbox for a role. Workers inherit the project
+// block. The orchestrator runs on the host unless orchestrator.sandbox is set
+// explicitly: the relay cannot spawn or send, so a sandboxed orchestrator is
+// opt-in only (#6663).
 func sandboxFor(kind domain.SessionKind, cfg domain.ProjectConfig) domain.SandboxConfig {
+	if kind == domain.KindOrchestrator {
+		if cfg.Orchestrator.Sandbox != nil {
+			return *cfg.Orchestrator.Sandbox
+		}
+		return domain.SandboxConfig{}
+	}
 	return domain.EffectiveSandbox(cfg.Sandbox, roleOverride(kind, cfg))
 }
 
@@ -118,6 +128,30 @@ func (m *Manager) discardSandbox(ctx context.Context, sb *sandboxLaunch) {
 	defer cancel()
 	if err := m.sandbox.Discard(ctx, sb.target); err != nil {
 		m.logger.Warn("sandbox: discard container after failed launch", "container", sb.target.Container, "error", err)
+	}
+}
+
+// discardTerminatedSandbox removes a killed session's per-agent container
+// itself, so removal does not depend on the container reaper (which a
+// project can opt out of). It acts only once the session row is durably
+// terminated: an unreadable row or a kill that stopped earlier keeps the
+// container, because the agent may still be running in it.
+func (m *Manager) discardTerminatedSandbox(ctx context.Context, id domain.SessionID) {
+	if m.sandbox == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sandboxDiscardBudget)
+	defer cancel()
+	rec, ok, err := m.store.GetSession(ctx, id)
+	if err != nil || !ok || !rec.IsTerminated {
+		return
+	}
+	project, err := m.loadProject(ctx, rec.ProjectID)
+	if err != nil || sandboxFor(rec.Kind, project.Config).Mode != domain.SandboxModePerAgent {
+		return
+	}
+	if err := m.sandbox.DiscardSession(ctx, rec.ProjectID, rec.ID); err != nil {
+		m.logger.Warn("sandbox: discard killed session's container", "sessionID", id, "error", err)
 	}
 }
 

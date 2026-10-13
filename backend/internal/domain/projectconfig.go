@@ -69,8 +69,10 @@ type ProjectConfig struct {
 	// drifting out of sync with a project-config list.
 	ContainerReap ContainerReapConfig `json:"containerReap,omitempty"`
 
-	// Sandbox runs this project's agents inside a local Docker container
-	// (#6663). The zero value keeps agents on the host.
+	// Sandbox runs this project's worker agents inside a local Docker
+	// container (#6663). The zero value keeps agents on the host. The
+	// orchestrator does not inherit this block; it is sandboxed only by an
+	// explicit Orchestrator.Sandbox.
 	Sandbox SandboxConfig `json:"sandbox,omitempty"`
 
 	// AutoReview controls whether new worker sessions spawned for this project

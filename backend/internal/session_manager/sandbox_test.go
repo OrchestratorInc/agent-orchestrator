@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -205,7 +206,11 @@ func TestSpawnSandboxRejectsExplicitChatBeforeCreatingSession(t *testing.T) {
 func TestSpawnSandboxedOrchestratorDefaultChatFallsBackToTerminal(t *testing.T) {
 	sb := &fakeSandbox{}
 	agent := &sandboxAgent{launchArgvAgent: launchArgvAgent{argv: []string{"claude"}}}
-	m, _, rt := newSandboxSpawnManager(sb, agent)
+	m, st, rt := newSandboxSpawnManager(sb, agent)
+	// The orchestrator is sandboxed only by an explicit override.
+	cfg := st.projects["mer"].Config
+	cfg.Orchestrator.Sandbox = &domain.SandboxConfig{Mode: domain.SandboxModePerAgent, Image: "node:22"}
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: cfg}
 
 	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator, Harness: domain.HarnessClaudeCode})
 	if err != nil {
@@ -457,5 +462,167 @@ func TestInterfaceTransitionToTerminalSkipsHostBinaryCheckForSandboxedRole(t *te
 	err := m.preflightInterfaceTarget(ctx, rec, domain.SessionInterfaceTransition{SessionID: "mer-1", TargetMode: domain.SessionModeTUI})
 	if err != nil {
 		t.Fatalf("preflight err = %v, want nil: the harness lives in the image", err)
+	}
+}
+
+// hostlessSandboxAgent models Claude installed only in the image: building a
+// host launch fails, a sandboxed one uses the bare in-image name.
+type hostlessSandboxAgent struct{ sandboxAgent }
+
+func (a *hostlessSandboxAgent) GetLaunchCommand(_ context.Context, cfg ports.LaunchConfig) ([]string, error) {
+	if !cfg.Sandboxed {
+		return nil, fmt.Errorf("%w: claude", ports.ErrAgentBinaryNotFound)
+	}
+	return []string{"claude", "--x"}, nil
+}
+
+func (a *hostlessSandboxAgent) GetRestoreCommand(_ context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
+	if !cfg.Sandboxed {
+		return nil, false, fmt.Errorf("%w: claude", ports.ErrAgentBinaryNotFound)
+	}
+	return []string{"claude", "--resume", "agent-x"}, true, nil
+}
+
+func newHostlessSandboxManager(sb *fakeSandbox) (*Manager, *fakeStore, *fakeRuntime) {
+	m, st, rt := newSandboxSpawnManager(sb, &hostlessSandboxAgent{})
+	m.lookPath = func(name string) (string, error) {
+		if filepath.Base(name) == "claude" {
+			return "", errors.New("claude is not on the host PATH")
+		}
+		return "/bin/true", nil
+	}
+	return m, st, rt
+}
+
+// I1: a sandboxed role never needs the harness on the host.
+func TestSpawnSandboxedSucceedsWithoutHostBinary(t *testing.T) {
+	sb := &fakeSandbox{}
+	m, _, rt := newHostlessSandboxManager(sb)
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}); err != nil {
+		t.Fatal(err)
+	}
+	argv := rt.lastCfg.Argv
+	if got := argv[len(argv)-2:]; !reflect.DeepEqual(got, []string{"claude", "--x"}) {
+		t.Fatalf("argv = %q, want the in-image claude after the docker exec wrap", argv)
+	}
+}
+
+func TestRestoreSandboxedSucceedsWithoutHostBinary(t *testing.T) {
+	sb := &fakeSandbox{}
+	m, st, rt := newHostlessSandboxManager(sb)
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"})
+	rec := st.sessions["mer-1"]
+	rec.Harness = domain.HarnessClaudeCode
+	st.sessions["mer-1"] = rec
+	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	argv := rt.lastCfg.Argv
+	if got := argv[len(argv)-3:]; !reflect.DeepEqual(got, []string{"claude", "--resume", "agent-x"}) {
+		t.Fatalf("argv = %q, want the in-image claude after the docker exec wrap", argv)
+	}
+}
+
+// I2: kill removes a per-agent container itself, independent of the
+// container reaper opt-out, but only once termination is recorded.
+func TestKillDiscardsPerAgentSandboxAfterTermination(t *testing.T) {
+	m, st, _, _ := newManager()
+	sb := &fakeSandbox{}
+	m.sandbox = sb
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: sandboxedConfig(domain.SandboxModePerAgent)}
+	st.sessions["mer-1"] = mkLive("mer-1")
+	if _, err := m.Kill(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(sb.sessionDiscards, []string{"mer/mer-1"}) {
+		t.Fatalf("session discards = %v, want the killed session's container", sb.sessionDiscards)
+	}
+}
+
+func TestKillFailingBeforeTerminationKeepsPerAgentSandbox(t *testing.T) {
+	m, st, rt, _ := newManager()
+	sb := &fakeSandbox{}
+	m.sandbox = sb
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: sandboxedConfig(domain.SandboxModePerAgent)}
+	st.sessions["mer-1"] = mkLive("mer-1")
+	rt.destroyErr = errors.New("runtime still alive")
+	if _, err := m.Kill(ctx, "mer-1"); err == nil {
+		t.Fatal("kill succeeded, want the runtime error")
+	}
+	if len(sb.sessionDiscards) != 0 {
+		t.Fatalf("session discards = %v, want none for a possibly-live agent", sb.sessionDiscards)
+	}
+}
+
+func TestKillSharedSandboxDoesNotDiscardSession(t *testing.T) {
+	m, st, _, _ := newManager()
+	sb := &fakeSandbox{}
+	m.sandbox = sb
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: sandboxedConfig(domain.SandboxModeShared)}
+	st.sessions["mer-1"] = mkLive("mer-1")
+	if _, err := m.Kill(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(sb.sessionDiscards) != 0 {
+		t.Fatalf("session discards = %v, want none in shared mode", sb.sessionDiscards)
+	}
+}
+
+// I2: a restore that fails after Ensure removes the container it ensured.
+func TestRestoreDiscardsContainerWhenRuntimeCreateFails(t *testing.T) {
+	sb := &fakeSandbox{}
+	agent := &sandboxAgent{launchArgvAgent: launchArgvAgent{argv: []string{"claude"}}}
+	m, st, rt := newSandboxSpawnManager(sb, agent)
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"})
+	rt.createErr = errors.New("tmux exploded")
+	if _, err := m.RestoreWithMode(ctx, "mer-1"); err == nil {
+		t.Fatal("restore succeeded, want the runtime error")
+	}
+	if len(sb.discarded) != 1 || sb.discarded[0].Container != "ao-sbx-mer-1" {
+		t.Fatalf("discarded = %+v, want the restored session's container", sb.discarded)
+	}
+	if m.sandboxInFlight.active("mer") {
+		t.Fatal("failed restore left a launch in flight")
+	}
+}
+
+func TestRestoreSuccessKeepsContainer(t *testing.T) {
+	sb := &fakeSandbox{}
+	agent := &sandboxAgent{launchArgvAgent: launchArgvAgent{argv: []string{"claude"}}}
+	m, st, _ := newSandboxSpawnManager(sb, agent)
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"})
+	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(sb.discarded) != 0 {
+		t.Fatalf("discarded = %+v, want the live session's container kept", sb.discarded)
+	}
+}
+
+// I4: the project block applies to workers; the orchestrator runs on the
+// host unless orchestrator.sandbox is set explicitly.
+func TestSandboxForOrchestratorNeedsExplicitOverride(t *testing.T) {
+	cfg := sandboxedConfig(domain.SandboxModePerAgent)
+	if sandboxFor(domain.KindOrchestrator, cfg).Enabled() {
+		t.Fatal("orchestrator inherited the project sandbox block")
+	}
+	if !sandboxFor(domain.KindWorker, cfg).Enabled() {
+		t.Fatal("worker did not inherit the project sandbox block")
+	}
+	cfg.Orchestrator.Sandbox = &domain.SandboxConfig{Mode: domain.SandboxModeShared, Image: "node:22"}
+	if got := sandboxFor(domain.KindOrchestrator, cfg); got.Mode != domain.SandboxModeShared {
+		t.Fatalf("explicit orchestrator sandbox = %+v, want shared", got)
+	}
+}
+
+func TestSpawnOrchestratorIgnoresProjectSandbox(t *testing.T) {
+	sb := &fakeSandbox{}
+	agent := supervisedLaunchAgent{launchArgvAgent{argv: []string{"claude"}}}
+	m, _, rt := newSandboxSpawnManager(sb, agent)
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator, Harness: domain.HarnessClaudeCode, RequestedMode: domain.SessionModeTUI}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sb.ensured) != 0 || rt.created != 1 {
+		t.Fatalf("ensured=%d created=%d, want a host orchestrator launch", len(sb.ensured), rt.created)
 	}
 }

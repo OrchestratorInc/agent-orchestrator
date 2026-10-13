@@ -62,9 +62,10 @@ func (c SandboxConfig) Validate() error {
 	return nil
 }
 
-// EffectiveSandbox returns the sandbox for a role. A role override replaces
-// the project block wholesale, so "orchestrator on host, workers sandboxed"
-// is expressed as an orchestrator override with mode off.
+// EffectiveSandbox returns the sandbox for a worker role. A role override replaces
+// the project block wholesale. The orchestrator does not inherit the project
+// block at all: it is sandboxed only by an explicit orchestrator.sandbox,
+// which the session manager applies (#6663).
 func EffectiveSandbox(base SandboxConfig, role RoleOverride) SandboxConfig {
 	if role.Sandbox != nil {
 		return *role.Sandbox

@@ -1390,6 +1390,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		IssueID:          string(cfg.IssueID),
 		Config:           adapterConfig,
 		Permissions:      adapterConfig.Permissions,
+		Sandboxed:        sb != nil,
 	}
 	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
 	if err != nil {
@@ -2502,6 +2503,9 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 			releaseOperation()
 		}
 	}()
+	// Runs before the operation slot is freed, so a restore cannot ensure a
+	// fresh container that this removal would then take away.
+	defer m.discardTerminatedSandbox(ctx, id)
 
 	if active, err := m.hasActiveInterfaceTransition(ctx, id); err != nil {
 		return KillResult{}, fmt.Errorf("kill %s: interface transition: %w", id, err)
@@ -3297,6 +3301,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("%s %s: no agent adapter for harness %q", operation, rec.ID, rec.Harness)
 	}
+	wasTerminated := rec.IsTerminated
 	// Recompute standing instructions, then reapply the durable finalized inbound
 	// handoff for this exact native conversation when one exists.
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, false)
@@ -3353,16 +3358,26 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	// The row stays terminated until MarkSpawned below; the in-flight mark
 	// keeps a concurrent kill from releasing the shared container meanwhile.
-	defer sb.done()
+	// Until the relaunched agent survives the failure paths below, a failed
+	// restore of a terminated session owns its per-agent container and
+	// removes it. A session that was not terminated may still have a live
+	// agent in that container, so it is left alone.
+	sandboxKept := !wasTerminated
+	defer func() {
+		if sb != nil && !sandboxKept {
+			m.discardSandbox(ctx, sb)
+		}
+		sb.done()
+	}()
 	var argv []string
 	var delivery ports.PromptDeliveryStrategy
 	var mode RestoreMode
 	if forceFresh {
 		argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
-			systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true)
+			systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true, sb != nil)
 	} else {
 		argv, delivery, mode, err = restoreArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
-			systemPrompt, systemPromptFile, agentConfig, rec.Kind, rec.Harness, m.dataDir, env)
+			systemPrompt, systemPromptFile, agentConfig, rec.Kind, rec.Harness, m.dataDir, env, sb != nil)
 	}
 	if err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
@@ -3382,6 +3397,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		SystemPromptFile: systemPromptFile,
 		Config:           agentConfig,
 		Permissions:      agentConfig.Permissions,
+		Sandboxed:        sb != nil,
 	}
 	afterStartPrompt := rec.Metadata.Prompt
 	if delivery == ports.PromptDeliveryAfterStart && mode != RestoreModeNative {
@@ -3477,6 +3493,8 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			return RestoreResult{}, fmt.Errorf("%s %s: deliver prompt: %w", operation, rec.ID, err)
 		}
 	}
+	// The relaunched session is live; later failures leave its container.
+	sandboxKept = true
 	updated, err := m.getRecord(ctx, rec.ID)
 	if err != nil {
 		return RestoreResult{}, err
@@ -6350,13 +6368,13 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 // signals via ok=false (e.g. no native session id captured yet). Returns
 // ErrNotResumable when transcript-preserving restore is required but unavailable,
 // or when a promptless, unresumable worker has nothing to restore from.
-func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, _ domain.AgentHarness, dataDir string, env map[string]string) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
+func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, _ domain.AgentHarness, dataDir string, env map[string]string, sandboxed bool) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
 	ref := ports.SessionRef{
 		ID:            string(id),
 		WorkspacePath: workspacePath,
 		Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: meta.AgentSessionID},
 	}
-	cmd, ok, err := agent.GetRestoreCommand(ctx, ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions})
+	cmd, ok, err := agent.GetRestoreCommand(ctx, ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions, Sandboxed: sandboxed})
 	if err != nil {
 		return nil, "", "", fmt.Errorf("restore command: %w", err)
 	}
@@ -6374,7 +6392,7 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 	// a saved prompt, rather than stranding the work behind ErrNotResumable. A
 	// worker that never got that far (no id, no prompt) still stays unresumable.
 	return freshLaunchArgv(ctx, agent, id, workspacePath, meta, systemPrompt,
-		systemPromptFile, agentConfig, kind, dataDir, conversationLost)
+		systemPromptFile, agentConfig, kind, dataDir, conversationLost, sandboxed)
 }
 
 // nativeConversationMissing reports whether the agent can see a persisted
@@ -6409,7 +6427,7 @@ func nativeConversationMissing(ctx context.Context, agent ports.Agent, ref ports
 // freshLaunchArgv builds the non-resume half of restoreArgv. Interface
 // transitions also use it when an adapter proves its reserved id has no
 // persisted history, both for preflight and for the actual target launch.
-func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, dataDir string, allowPromptless bool) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
+func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, dataDir string, allowPromptless, sandboxed bool) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
 	// A saved prompt is replayed fresh. An orchestrator is promptless by design
 	// and relaunches with the system prompt only. A promptless WORKER has no task
 	// and no session id to restore from: do not blank-relaunch it.
@@ -6429,6 +6447,7 @@ func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID
 		SystemPromptFile: systemPromptFile,
 		Config:           agentConfig,
 		Permissions:      agentConfig.Permissions,
+		Sandboxed:        sandboxed,
 	}
 	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
 	if err != nil {
