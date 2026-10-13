@@ -1,0 +1,37 @@
+{
+  "before": {
+    "pid": 1036873,
+    "exeSHA256": "f94096e061dab6ae7279b7d1325a12c9440a465df5af691260c74c154ff62b13",
+    "binaryVCS": "f0d5c60cd4112068710c4f1b25f45f2a827e05b0",
+    "runtimeHead": "0ca6791a3e7a1f9f3bbff6bdd3152bca26934b89",
+    "publishedHead": "37ab9be24487590f76e2ccc5ede56336784218e2",
+    "uiHead": "9a850b4d0607330a88f3718d4b763d23d1aa4b2f",
+    "nativeIDDigest": "a67a4dbe895cbd08cc832faf562a8762d6b2978cef77f7e0fee9e0a22723bc4e",
+    "utc": "2026-10-12T16:40:01Z",
+    "nativeModel": "glm-4.7 (low)",
+    "nativeOutputIsPriorHistory": true,
+    "session": "zcode-control-2",
+    "noHost": true
+  },
+  "after": {
+    "pid": 1036873,
+    "exeSHA256": "f94096e061dab6ae7279b7d1325a12c9440a465df5af691260c74c154ff62b13",
+    "binaryVCS": "f0d5c60cd4112068710c4f1b25f45f2a827e05b0",
+    "runtimeHead": "0ca6791a3e7a1f9f3bbff6bdd3152bca26934b89",
+    "publishedHead": "37ab9be24487590f76e2ccc5ede56336784218e2",
+    "uiHead": "9a850b4d0607330a88f3718d4b763d23d1aa4b2f",
+    "nativeIDDigest": "a67a4dbe895cbd08cc832faf562a8762d6b2978cef77f7e0fee9e0a22723bc4e",
+    "utc": "2026-10-12T16:40:02Z",
+    "nativeModel": "glm-4.7 (low)",
+    "nativeOutputIsPriorHistory": true,
+    "session": "zcode-control-2",
+    "noHost": true
+  },
+  "captureMetadata": {
+    "captured": "/home/azureuser/.ao/audits/zcode-cortex-20261012/reports/zcode/ao-004/registered-missing-history-rejected.png",
+    "targetURL": "http://localhost:5173/#/projects/zcode-control/sessions/zcode-control-2",
+    "time": "2026-10-12T16:40:02.017Z",
+    "source": "actual Electron renderer Page.captureScreenshot"
+  },
+  "imageSHA256": "ff390f951836970f92343a1146e218070817f834160dfc0fe3114ba73fd0aaa7"
+}

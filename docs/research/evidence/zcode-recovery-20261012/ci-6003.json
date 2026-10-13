@@ -1,0 +1,126 @@
+{
+  "head": "37ab9be24487590f76e2ccc5ede56336784218e2",
+  "checks": [
+    {
+      "name": "api-drift",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342527/job/114897073193"
+    },
+    {
+      "name": "backend-core (0)",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342527/job/114897073508"
+    },
+    {
+      "name": "backend-core (1)",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342527/job/114897073499"
+    },
+    {
+      "name": "build-test",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342527/job/114904369899"
+    },
+    {
+      "name": "chat-race (0)",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342527/job/114897073813"
+    },
+    {
+      "name": "chat-race (1)",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342527/job/114897073385"
+    },
+    {
+      "name": "cloud-build-test",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342527/job/114897073386"
+    },
+    {
+      "name": "container",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342537/job/114896428802"
+    },
+    {
+      "name": "lint",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342527/job/114897073672"
+    },
+    {
+      "name": "mac-update-helper",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342555/job/114896433770"
+    },
+    {
+      "name": "native (macos-latest)",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342537/job/114896429653"
+    },
+    {
+      "name": "native (ubuntu-latest)",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342537/job/114896429217"
+    },
+    {
+      "name": "native (windows-latest)",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342537/job/114896429184"
+    },
+    {
+      "name": "renderer-smoke",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342555/job/114896433379"
+    },
+    {
+      "name": "scan",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342559/job/114896451958"
+    },
+    {
+      "name": "session-store-race",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342527/job/114897073471"
+    },
+    {
+      "name": "source-built-tui",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342522/job/114896438307"
+    },
+    {
+      "name": "sqlc-drift",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342527/job/114897073397"
+    },
+    {
+      "name": "sqlite-race (0)",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342527/job/114897073678"
+    },
+    {
+      "name": "sqlite-race (1)",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342527/job/114897073500"
+    },
+    {
+      "name": "sqlite-race (2)",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342527/job/114897073826"
+    },
+    {
+      "name": "sqlite-race (3)",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342527/job/114897073866"
+    },
+    {
+      "name": "test",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342555/job/114896433310"
+    },
+    {
+      "name": "windows-workspace",
+      "state": "pass",
+      "url": "https://github.com/OrchestratorInc/agent-orchestrator/actions/runs/38274342527/job/114897073419"
+    }
+  ],
+  "allPass": true
+}

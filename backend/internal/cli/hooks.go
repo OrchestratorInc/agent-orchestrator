@@ -20,6 +20,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/zcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
@@ -855,7 +856,7 @@ func shouldEmitSessionStartContext(agent, event string) bool {
 	if agent == "gemini" {
 		return event == "user-prompt-submit"
 	}
-	if agent == string(domain.HarnessOpenHands) {
+	if agent == string(domain.HarnessOpenHands) || agent == string(domain.HarnessZCode) {
 		// OpenHands ignores SessionStart hook output and has no system-prompt
 		// flag; UserPromptSubmit context is appended to each user message.
 		return event == "user-prompt-submit"
@@ -877,17 +878,30 @@ func (c *commandContext) emitSessionStartContext(agent, event, sessionID string)
 		return
 	}
 	path := filepath.Join(dataDir, "prompts", sessionID, "system.md")
-	data, err := os.ReadFile(path) //nolint:gosec // sessionID is bounded by sessionIDPattern.
-	if err != nil {
-		c.reportHookFailure(agent, event, sessionID, fmt.Errorf("read system prompt: %w", err))
-		return
+	var prompt string
+	if agent == string(domain.HarnessZCode) {
+		value, err := zcode.ReadStandingInstructions(context.Background(), "", path)
+		if err != nil {
+			c.reportHookFailure(agent, event, sessionID, err)
+			// A successful native blocking result stops UserPromptSubmit;
+			// crashing/absent hooks still fail open in ZCode itself.
+			_ = json.NewEncoder(c.deps.Out).Encode(map[string]any{"continue": false, "reason": "AO standing instructions are missing, invalid or exceed the supported native context budget"})
+			return
+		}
+		prompt = strings.TrimSpace(value)
+	} else {
+		data, err := os.ReadFile(path) //nolint:gosec // sessionID is bounded by sessionIDPattern.
+		if err != nil {
+			c.reportHookFailure(agent, event, sessionID, fmt.Errorf("read system prompt: %w", err))
+			return
+		}
+		prompt = strings.TrimSpace(string(data))
 	}
-	prompt := strings.TrimSpace(string(data))
 	if prompt == "" {
 		return
 	}
 	var out any
-	if agent == string(domain.HarnessOpenHands) {
+	if agent == string(domain.HarnessOpenHands) || agent == string(domain.HarnessZCode) {
 		out = openHandsContextHookOutput{AdditionalContext: prompt}
 	} else {
 		var start sessionStartHookOutput

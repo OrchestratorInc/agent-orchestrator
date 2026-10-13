@@ -1,0 +1,46 @@
+{
+  "before": {
+    "utc": "2026-10-12T16:23:59Z",
+    "servingPID": 1035444,
+    "servingExecutable": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/zcode/ao-build/ao",
+    "servingSHA256": "f94096e061dab6ae7279b7d1325a12c9440a465df5af691260c74c154ff62b13",
+    "binaryVCS": "f0d5c60cd4112068710c4f1b25f45f2a827e05b0",
+    "runtimeImplementationHead": "0ca6791a3e7a1f9f3bbff6bdd3152bca26934b89",
+    "publishedHead": "37ab9be24487590f76e2ccc5ede56336784218e2",
+    "uiHead": "9a850b4d0607330a88f3718d4b763d23d1aa4b2f",
+    "runfile": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/zcode/ao-004/running.json",
+    "session": "zcode-primary-1",
+    "generation": "ffd51e1a-867c-402c-9815-aaed4fc07377",
+    "nativeIDDigest": "726bf16770d1f7266b1f3f58f25bf6772a13a4133540ce887d11e5938ebce291",
+    "hostPID": 1033752,
+    "hostStartedAt": "2026-10-12T16:09:48.220473554Z",
+    "model": "glm-4.7 (low)",
+    "nativeSource": "aac4755666d09fdcd70272fcf063c077a639015f"
+  },
+  "after": {
+    "utc": "2026-10-12T16:24:00Z",
+    "servingPID": 1035444,
+    "servingExecutable": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/zcode/ao-build/ao",
+    "servingSHA256": "f94096e061dab6ae7279b7d1325a12c9440a465df5af691260c74c154ff62b13",
+    "binaryVCS": "f0d5c60cd4112068710c4f1b25f45f2a827e05b0",
+    "runtimeImplementationHead": "0ca6791a3e7a1f9f3bbff6bdd3152bca26934b89",
+    "publishedHead": "37ab9be24487590f76e2ccc5ede56336784218e2",
+    "uiHead": "9a850b4d0607330a88f3718d4b763d23d1aa4b2f",
+    "runfile": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/zcode/ao-004/running.json",
+    "session": "zcode-primary-1",
+    "generation": "ffd51e1a-867c-402c-9815-aaed4fc07377",
+    "nativeIDDigest": "726bf16770d1f7266b1f3f58f25bf6772a13a4133540ce887d11e5938ebce291",
+    "hostPID": 1033752,
+    "hostStartedAt": "2026-10-12T16:09:48.220473554Z",
+    "model": "glm-4.7 (low)",
+    "nativeSource": "aac4755666d09fdcd70272fcf063c077a639015f"
+  },
+  "captureMetadata": {
+    "captured": "/home/azureuser/.ao/audits/zcode-cortex-20261012/reports/zcode/ao-004/registered-draft-preserved-after-reconnect.png",
+    "targetURL": "http://localhost:5173/#/projects/zcode-primary/sessions/zcode-primary-1",
+    "time": "2026-10-12T16:24:00.308Z",
+    "source": "actual Electron renderer Page.captureScreenshot"
+  },
+  "imageSHA256": "3d0c3100620cebce3bc3c4cc5715bb7f4523f3a2a3bab693e80fa160a7d1ca30",
+  "sourceDiff": "diff --git a/backend/internal/adapters/chatdriver/persistenthost/child_linux.go b/backend/internal/adapters/chatdriver/persistenthost/child_linux.go\nindex 4b73ca1e..b43ddefa 100644\n--- a/backend/internal/adapters/chatdriver/persistenthost/child_linux.go\n+++ b/backend/internal/adapters/chatdriver/persistenthost/child_linux.go\n@@ -72,7 +72,7 @@ func reapAdoptedProviderZombies(providerPID int) {\n \t\treturn\n \t}\n \tfor _, task := range tasks {\n-\t\tdata, err := os.ReadFile(filepath.Join(\"/\", \"proc\", \"self\", \"task\", task.Name(), \"children\"))\n+\t\tdata, err := os.ReadFile(filepath.Join(\"/\", \"proc\", \"self\", \"task\", task.Name(), \"children\")) //nolint:gocritic // Linux procfs discovery requires an absolute root.\n \t\tif err != nil {\n \t\t\tcontinue\n \t\t}\ndiff --git a/docs/harnesses/zcode.md b/docs/harnesses/zcode.md\nindex f7beb34a..0e26ce99 100644\n--- a/docs/harnesses/zcode.md\n+++ b/docs/harnesses/zcode.md\n@@ -2,7 +2,7 @@\n \n AO uses the official [ZCode v3.15.1 source](https://github.com/zai-org/ZCode/tree/aac4755666d09fdcd70272fcf063c077a639015f), commit `aac4755666d09fdcd70272fcf063c077a639015f`, through `zcode app-server`. Its CLI reports `0.16.9`; the upstream product and internal CLI versions differ. The protocol is native ZCode NDJSON, not ACP. Terminal UI, reviewers and TUI/Chat handoff are unsupported. Explicit Terminal requests fail before creating durable resources.\n \n-**Draft qualification:** pinned stock-source CI proves additive private context and exact native history with a synthetic provider. Authenticated standalone Z.ai proof additionally demonstrates correct-workspace edits, separate project rules, leading-dash task delivery, a second message, refreshed private instructions after native process kill, unknown-history rejection, offered permission decisions and executing-child cancellation. Actual registered AO manager/Electron proof and final current-head CI remain pending; standalone proof does not establish integration completion.\n+**Qualification evidence:** pinned stock-source CI proves additive private context and exact native history with a synthetic provider. Authenticated standalone Z.ai proof additionally demonstrates correct-workspace edits, separate project rules, leading-dash task delivery, a second message, refreshed private instructions after native process kill, unknown-history rejection, offered permission decisions and executing-child cancellation. [PR6003](https://github.com/OrchestratorInc/agent-orchestrator/pull/6003) records registered AO manager/Electron receipts, failed controls, source provenance and current-head CI separately; standalone proof does not establish integration completion.\n \n ## Instructions and native controls\n \n@@ -44,3 +44,5 @@ The first actual AO-manager run proved fresh/second/restore instruction consumpt\n Serialized hook JSON must also fit the pinned native 32,768-byte stdout limit. AO rejects escape-expanded output and smaller configured native limits before launching or submitting a turn, preserving the native configuration.\n \n The Linux host periodically reaps direct adopted zombies after native interrupt while keeping the provider alive; it excludes the provider PID owned by exec.Cmd.Wait. The ownership epoch refuses attachment to older hosts without this guarantee.\n+\n+The first subreaper revision stopped native interrupt side effects but retained an adopted zombie while the provider stayed live. That failed control remains separate from the subsequent periodic-reaper qualification. Live evidence records the CI-built runtime head and later documentation/comment-only differences explicitly.\n"
+}

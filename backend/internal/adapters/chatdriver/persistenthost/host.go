@@ -47,6 +47,8 @@ const (
 	// ProtocolUnreal preserves Unreal Agent's AO-private JSONL stream while
 	// fencing ownership with the same stable launch identity used by ACP hosts.
 	ProtocolUnreal Protocol = "unreal"
+	// ProtocolZCode preserves native NDJSON and fences its launch ownership.
+	ProtocolZCode Protocol = "zcode"
 
 	// ACPPromptResultMethod is an AO-private notification emitted when an ACP
 	// prompt finishes after the daemon attachment that issued it has gone away.
@@ -587,6 +589,9 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer func() { _ = listener.Close() }()
 
+	if err := configureProviderOwnership(cfg.Protocol); err != nil {
+		return err
+	}
 	child := aoprocess.Command(cfg.Argv[0], cfg.Argv[1:]...) //nolint:gosec // provider argv is constructed by AO's driver.
 	child.Dir = cfg.Workdir
 	child.Env = cfg.Env

@@ -1,0 +1,28 @@
+{
+  "killReplies": [
+    {
+      "httpStatus": 200,
+      "reply": {
+        "ok": true,
+        "sessionId": "zcode-primary-1"
+      }
+    },
+    {
+      "httpStatus": 200,
+      "reply": {
+        "ok": true,
+        "sessionId": "zcode-control-1"
+      }
+    },
+    {
+      "httpStatus": 200,
+      "reply": {
+        "ok": true,
+        "sessionId": "zcode-control-2"
+      }
+    }
+  ],
+  "ownedHostDescriptorsRemaining": [],
+  "utc": "2026-10-12T16:35:21Z",
+  "productionPID625660Preserved": true
+}

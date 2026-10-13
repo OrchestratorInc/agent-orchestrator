@@ -1,0 +1,25 @@
+{
+  "utc": "2026-10-12T16:52:03Z",
+  "daemonShutdownHTTP": 202,
+  "daemonShutdownReply": {
+    "pid": 1036873,
+    "service": "agent-orchestrator-daemon",
+    "status": "shutting_down"
+  },
+  "ownedDaemonPIDGone": true,
+  "ownedElectronPIDGone": true,
+  "ownershipVerifiedRendererPIDs": [
+    1030973,
+    1030979,
+    1031030,
+    1031957
+  ],
+  "ownedNativeCJSProcessesRemaining": [],
+  "ownedHostDescriptorsRemaining": [],
+  "runfileRemains": false,
+  "originalNativeStoreRestoredHash": "21596a4b02baa1790a849869dd769d7a5332bfc10a156ae6653539c637796c36",
+  "productionPID625660Preserved": true,
+  "dirtyWorktreesAndNativeProfilesPreserved": true,
+  "ownedXvfbPIDGone": true,
+  "laterObservationUTC": "2026-10-12T16:53:01Z"
+}

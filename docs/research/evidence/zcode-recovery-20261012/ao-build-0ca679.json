@@ -1,0 +1,8 @@
+{
+  "implementationHead": "0ca6791a3e7a1f9f3bbff6bdd3152bca26934b89",
+  "binaryVCS": "f0d5c60cd4112068710c4f1b25f45f2a827e05b0",
+  "binarySHA256": "f94096e061dab6ae7279b7d1325a12c9440a465df5af691260c74c154ff62b13",
+  "ciRun": 38273498831,
+  "uiHead": "9a850b4d0607330a88f3718d4b763d23d1aa4b2f",
+  "uiVsImplementationDiff": "backend + tests + docs only; frontend unchanged"
+}

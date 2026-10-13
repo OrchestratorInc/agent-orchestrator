@@ -263,6 +263,14 @@ func TestEveryProductionHarnessReportsModelOrModeConfig(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// ZCode Chat deliberately follows its native provider profile;
+			// inventing a launch model/mode flag would misrepresent its surface.
+			if ha.Harness == domain.HarnessZCode {
+				if len(spec.Fields) != 0 {
+					t.Fatalf("ZCode advertises unsupported launch controls: %#v", spec.Fields)
+				}
+				return
+			}
 			for _, field := range spec.Fields {
 				if field.Key == "model" || field.Key == "mode" {
 					return

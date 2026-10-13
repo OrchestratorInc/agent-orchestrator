@@ -1,0 +1,312 @@
+{
+  "interface": "registered AO Chat",
+  "sourceHead": "0ca6791a3e7a1f9f3bbff6bdd3152bca26934b89",
+  "binaryVCS": "f0d5c60cd4112068710c4f1b25f45f2a827e05b0",
+  "uiHead": "9a850b4d0607330a88f3718d4b763d23d1aa4b2f",
+  "nativeSource": "aac4755666d09fdcd70272fcf063c077a639015f",
+  "nativeModel": "glm-4.7 (low)",
+  "utc": "2026-10-12T15:59:03Z",
+  "proofs": {
+    "fresh": {
+      "correctWorkspaceTask": true,
+      "privateReceipt": true,
+      "projectRule": true,
+      "AGENTSPreserved": true,
+      "initialTaskOnce": true,
+      "privateAbsentFromVisibleUserTask": true
+    },
+    "second": true,
+    "crossSessionIsolation": {
+      "controlPrivate": true,
+      "noPrimaryInstructionFile": true,
+      "controlRules": true
+    },
+    "executingCancellation": {
+      "pid": 1033414,
+      "kernelStart": "86704443",
+      "boundedReaped": true,
+      "noLateSideEffect": true,
+      "interruptReply": {
+        "statusCode": 204
+      }
+    },
+    "independentKill": {
+      "primaryTerminated": true,
+      "childPID": 1033601,
+      "childKernelStart": "86710354",
+      "childBoundedReaped": true,
+      "noLateSideEffect": true,
+      "primaryHostGone": true,
+      "controlHostUnchanged": true,
+      "controlNotTerminated": true
+    },
+    "restore": {
+      "sameNativeHistory": true,
+      "newRuntimeGeneration": true,
+      "newHostPID": true,
+      "freshPrivateReceipt": true,
+      "visibleTask": true,
+      "AGENTSPreserved": true
+    },
+    "controlContinuation": true
+  },
+  "sessions": [
+    "zcode-primary-1",
+    "zcode-control-1"
+  ],
+  "approvalDecisions": [
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    }
+  ],
+  "transitions": [
+    {
+      "session": "zcode-primary-1",
+      "activeObserved": true,
+      "controllerStates": [
+        "ready",
+        "busy",
+        "ready"
+      ],
+      "terminalState": "completed"
+    },
+    {
+      "session": "zcode-primary-1",
+      "activeObserved": true,
+      "controllerStates": [
+        "ready",
+        "busy",
+        "ready"
+      ],
+      "terminalState": "completed"
+    },
+    {
+      "session": "zcode-control-1",
+      "activeObserved": true,
+      "controllerStates": [
+        "ready",
+        "busy",
+        "ready"
+      ],
+      "terminalState": "completed"
+    },
+    {
+      "session": "zcode-primary-1",
+      "activeObserved": false,
+      "controllerStates": [
+        "ready"
+      ],
+      "terminalState": "interrupted"
+    },
+    {
+      "session": "zcode-primary-1",
+      "activeObserved": true,
+      "controllerStates": [
+        "ready",
+        "busy",
+        "ready"
+      ],
+      "terminalState": "completed"
+    },
+    {
+      "session": "zcode-control-1",
+      "activeObserved": true,
+      "controllerStates": [
+        "ready",
+        "busy",
+        "ready"
+      ],
+      "terminalState": "completed"
+    }
+  ],
+  "workspace": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/zcode/ao-004/data/worktrees/zcode-primary/zcode-primary-1",
+  "primarySession": "zcode-primary-1",
+  "initialIdentity": {
+    "nativeIdDigest": "726bf16770d1f7266b1f3f58f25bf6772a13a4133540ce887d11e5938ebce291",
+    "generation": "69748b93-7a01-42c1-95c9-2ed4c32a3007",
+    "hostPID": 1031459,
+    "hostStartedAt": "2026-10-12T15:59:07.846605318Z"
+  },
+  "status": "phase-one-passed",
+  "retainedFailures": [
+    "failed-control-trust-timeout.json"
+  ],
+  "controlSession": "zcode-control-1",
+  "killReply": {
+    "ok": true,
+    "sessionId": "zcode-primary-1"
+  },
+  "restoredIdentity": {
+    "nativeIdDigest": "726bf16770d1f7266b1f3f58f25bf6772a13a4133540ce887d11e5938ebce291",
+    "generation": "c14a4eb9-6790-4b68-a2a2-f95bf3a659c4",
+    "hostPID": 1033752,
+    "hostStartedAt": "2026-10-12T16:09:48.220473554Z"
+  },
+  "permissionPhaseStatus": "failed",
+  "permissionPhaseError": "'draft'"
+}

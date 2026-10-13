@@ -1,0 +1,522 @@
+{
+  "interface": "registered AO Chat",
+  "sourceHead": "0ca6791a3e7a1f9f3bbff6bdd3152bca26934b89",
+  "binaryVCS": "f0d5c60cd4112068710c4f1b25f45f2a827e05b0",
+  "uiHead": "9a850b4d0607330a88f3718d4b763d23d1aa4b2f",
+  "nativeSource": "aac4755666d09fdcd70272fcf063c077a639015f",
+  "nativeModel": "glm-4.7 (low)",
+  "utc": "2026-10-12T15:59:03Z",
+  "proofs": {
+    "fresh": {
+      "correctWorkspaceTask": true,
+      "privateReceipt": true,
+      "projectRule": true,
+      "AGENTSPreserved": true,
+      "initialTaskOnce": true,
+      "privateAbsentFromVisibleUserTask": true
+    },
+    "second": true,
+    "crossSessionIsolation": {
+      "controlPrivate": true,
+      "noPrimaryInstructionFile": true,
+      "controlRules": true
+    },
+    "executingCancellation": {
+      "pid": 1033414,
+      "kernelStart": "86704443",
+      "boundedReaped": true,
+      "noLateSideEffect": true,
+      "interruptReply": {
+        "statusCode": 204
+      }
+    },
+    "independentKill": {
+      "primaryTerminated": true,
+      "childPID": 1033601,
+      "childKernelStart": "86710354",
+      "childBoundedReaped": true,
+      "noLateSideEffect": true,
+      "primaryHostGone": true,
+      "controlHostUnchanged": true,
+      "controlNotTerminated": true
+    },
+    "restore": {
+      "sameNativeHistory": true,
+      "newRuntimeGeneration": true,
+      "newHostPID": true,
+      "freshPrivateReceipt": true,
+      "visibleTask": true,
+      "AGENTSPreserved": true
+    },
+    "controlContinuation": true,
+    "pendingAdmission": {
+      "pendingObserved": true,
+      "ordinaryHeldQueued": true,
+      "ordinaryVisibleTaskOnce": true,
+      "draftBeforePending": "NOT_RUN: first helper attempted insertion after permission editor was hidden"
+    },
+    "pendingReconnect": {
+      "sameNativeHistory": true,
+      "sameHostPID": true,
+      "sameHostStartedAt": true,
+      "samePendingIdentity": true,
+      "ordinaryRemainsQueued": true,
+      "actualElectronStatusAfterRestart": "{\"state\":\"ready\",\"port\":3190,\"pid\":1034685}",
+      "previousDaemonPID": 1031157,
+      "currentDaemonPID": 1034685,
+      "restartRequestTransport": "stranded CDP context retained separately; positive result observed through current Electron bridge"
+    },
+    "permissionReject": {
+      "nativeOfferedReject": true,
+      "queuedOrdinaryEventuallyDelivered": true,
+      "deniedFileAbsent": true
+    },
+    "draftPendingReconnect": {
+      "samePendingIdentity": true,
+      "sameHostPID": true,
+      "sameNativeHistory": true,
+      "draftAbsentFromProviderUserMessages": true,
+      "restartSignal": "owned daemon restart requested"
+    },
+    "permissionCancel": {
+      "cancelledPendingRequest": true,
+      "fileAbsent": true,
+      "draftPreserved": true,
+      "draftActualValue": "AO owned unsent draft preserved",
+      "interruptReply": {
+        "statusCode": 204
+      }
+    },
+    "missingNativeHistory": {
+      "case": "exact owned captured native store temporarily replaced by stock-generated empty store after all native hosts killed",
+      "restoreAdmissionHTTP": 409,
+      "errorEnvelope": {
+        "error": "conflict",
+        "code": "CHAT_RESUME_FAILED",
+        "message": "The agent could not resume its saved conversation. Your AO history is still available.",
+        "requestId": "vps-linux/o1wPUUYn0k-001232",
+        "reporting_owner": "http"
+      },
+      "restoreRejected": true,
+      "noFreshHost": true,
+      "stillTerminated": true,
+      "durableNativeIDDigestUnchanged": true,
+      "nativeIDDigest": "a67a4dbe895cbd08cc832faf562a8762d6b2978cef77f7e0fee9e0a22723bc4e",
+      "originalNativeFileHashes": {
+        "session.sqlite": "21596a4b02baa1790a849869dd769d7a5332bfc10a156ae6653539c637796c36"
+      },
+      "servingBefore": {
+        "pid": 1036873,
+        "exeSHA256": "f94096e061dab6ae7279b7d1325a12c9440a465df5af691260c74c154ff62b13",
+        "binaryVCS": "f0d5c60cd4112068710c4f1b25f45f2a827e05b0",
+        "runtimeHead": "0ca6791a3e7a1f9f3bbff6bdd3152bca26934b89",
+        "publishedHead": "37ab9be24487590f76e2ccc5ede56336784218e2",
+        "uiHead": "9a850b4d0607330a88f3718d4b763d23d1aa4b2f",
+        "nativeIDDigest": "a67a4dbe895cbd08cc832faf562a8762d6b2978cef77f7e0fee9e0a22723bc4e",
+        "utc": "2026-10-12T16:40:01Z",
+        "nativeModel": "glm-4.7 (low)",
+        "nativeOutputIsPriorHistory": true,
+        "session": "zcode-control-2",
+        "noHost": true
+      },
+      "servingAfter": {
+        "pid": 1036873,
+        "exeSHA256": "f94096e061dab6ae7279b7d1325a12c9440a465df5af691260c74c154ff62b13",
+        "binaryVCS": "f0d5c60cd4112068710c4f1b25f45f2a827e05b0",
+        "runtimeHead": "0ca6791a3e7a1f9f3bbff6bdd3152bca26934b89",
+        "publishedHead": "37ab9be24487590f76e2ccc5ede56336784218e2",
+        "uiHead": "9a850b4d0607330a88f3718d4b763d23d1aa4b2f",
+        "nativeIDDigest": "a67a4dbe895cbd08cc832faf562a8762d6b2978cef77f7e0fee9e0a22723bc4e",
+        "utc": "2026-10-12T16:40:02Z",
+        "nativeModel": "glm-4.7 (low)",
+        "nativeOutputIsPriorHistory": true,
+        "session": "zcode-control-2",
+        "noHost": true
+      },
+      "originalNativeFilesRestored": true
+    }
+  },
+  "sessions": [
+    "zcode-primary-1",
+    "zcode-control-1",
+    "zcode-control-2"
+  ],
+  "approvalDecisions": [
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "reject_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-primary-1",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-2",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-2",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-2",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    },
+    {
+      "session": "zcode-control-2",
+      "decisionKind": "allow_once",
+      "reply": {
+        "statusCode": 204
+      }
+    }
+  ],
+  "transitions": [
+    {
+      "session": "zcode-primary-1",
+      "activeObserved": true,
+      "controllerStates": [
+        "ready",
+        "busy",
+        "ready"
+      ],
+      "terminalState": "completed"
+    },
+    {
+      "session": "zcode-primary-1",
+      "activeObserved": true,
+      "controllerStates": [
+        "ready",
+        "busy",
+        "ready"
+      ],
+      "terminalState": "completed"
+    },
+    {
+      "session": "zcode-control-1",
+      "activeObserved": true,
+      "controllerStates": [
+        "ready",
+        "busy",
+        "ready"
+      ],
+      "terminalState": "completed"
+    },
+    {
+      "session": "zcode-primary-1",
+      "activeObserved": false,
+      "controllerStates": [
+        "ready"
+      ],
+      "terminalState": "interrupted"
+    },
+    {
+      "session": "zcode-primary-1",
+      "activeObserved": true,
+      "controllerStates": [
+        "ready",
+        "busy",
+        "ready"
+      ],
+      "terminalState": "completed"
+    },
+    {
+      "session": "zcode-control-1",
+      "activeObserved": true,
+      "controllerStates": [
+        "ready",
+        "busy",
+        "ready"
+      ],
+      "terminalState": "completed"
+    },
+    {
+      "session": "zcode-primary-1",
+      "activeObserved": true,
+      "controllerStates": [
+        "busy",
+        "ready"
+      ],
+      "terminalState": "completed"
+    },
+    {
+      "session": "zcode-primary-1",
+      "activeObserved": true,
+      "controllerStates": [
+        "busy",
+        "ready"
+      ],
+      "terminalState": "interrupted"
+    },
+    {
+      "session": "zcode-control-2",
+      "activeObserved": true,
+      "controllerStates": [
+        "ready",
+        "busy",
+        "ready"
+      ],
+      "terminalState": "completed"
+    }
+  ],
+  "workspace": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/zcode/ao-004/data/worktrees/zcode-primary/zcode-primary-1",
+  "primarySession": "zcode-primary-1",
+  "initialIdentity": {
+    "nativeIdDigest": "726bf16770d1f7266b1f3f58f25bf6772a13a4133540ce887d11e5938ebce291",
+    "generation": "69748b93-7a01-42c1-95c9-2ed4c32a3007",
+    "hostPID": 1031459,
+    "hostStartedAt": "2026-10-12T15:59:07.846605318Z"
+  },
+  "status": "qualified-supported-scope",
+  "retainedFailures": [
+    "failed-control-trust-timeout.json",
+    "failed-helper-cdp-restart-transport.json",
+    "failed-helper-cdp-restart-transport.json",
+    "failed-early-interrupt-during-reattach.json"
+  ],
+  "controlSession": "zcode-control-1",
+  "killReply": {
+    "ok": true,
+    "sessionId": "zcode-primary-1"
+  },
+  "restoredIdentity": {
+    "nativeIdDigest": "726bf16770d1f7266b1f3f58f25bf6772a13a4133540ce887d11e5938ebce291",
+    "generation": "c14a4eb9-6790-4b68-a2a2-f95bf3a659c4",
+    "hostPID": 1033752,
+    "hostStartedAt": "2026-10-12T16:09:48.220473554Z"
+  },
+  "permissionPhaseStatus": "passed",
+  "missingHistoryAuxiliary": {
+    "session": "zcode-control-2",
+    "nativeIdDigest": "a67a4dbe895cbd08cc832faf562a8762d6b2978cef77f7e0fee9e0a22723bc4e",
+    "workspace": "/home/azureuser/.ao/audits/zcode-cortex-20261012/tmp/zcode/ao-004/data/worktrees/zcode-control/zcode-control-2"
+  },
+  "missingHistoryStatus": "passed",
+  "blankHistoryPreparation": {
+    "stockNativeCreatedSchema": true,
+    "sessionRows": 0,
+    "nativeSource": "aac4755666d09fdcd70272fcf063c077a639015f",
+    "originalNativeHistoryPreserved": true,
+    "auxiliaryKillReply": {
+      "ok": true,
+      "sessionId": "zcode-control-2"
+    }
+  },
+  "providerRole": {
+    "sourceConformance": "user-role system-reminder fallback; native MCS promotion conditional",
+    "authenticatedWireRole": "NOT_CAPTURED",
+    "delivery": "private native hook_context; no visible task concatenation or replacement customSystemPrompt"
+  },
+  "publishedImplementationHead": "37ab9be24487590f76e2ccc5ede56336784218e2",
+  "historicalEvidenceLocation": "Root is relocating earlier protocol evidence to the same integration PR; new evidence is here, not6509"
+}
