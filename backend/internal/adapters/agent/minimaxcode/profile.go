@@ -22,12 +22,37 @@ import (
 var hookSource []byte
 
 const profileMarker = "agent-orchestrator: private minimax-code profile\n"
+const standingTransportMarker = "agent-orchestrator: native user-prompt context v1\n"
+const maxStandingBytes = 512 << 10
 
 // GetAgentHooks creates a durable private provider profile. MiniMax's TUI has
 // no process-local permission flag, so the source profile is never edited.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := validateLaunch(ctx, cfg.Config.Permissions, cfg.SystemPrompt, cfg.SystemPromptFile); err != nil {
 		return err
+	}
+	instructions := []byte(cfg.SystemPrompt)
+	if cfg.SystemPromptFile != "" {
+		file, err := os.Open(cfg.SystemPromptFile)
+		if err != nil {
+			return fmt.Errorf("MiniMax required standing instructions: %w", err)
+		}
+		info, statErr := file.Stat()
+		if statErr != nil || !info.Mode().IsRegular() || info.Size() > maxStandingBytes {
+			_ = file.Close()
+			return errors.New("MiniMax standing instructions must be a bounded regular file")
+		}
+		instructions, err = io.ReadAll(io.LimitReader(file, maxStandingBytes+1))
+		closeErr := file.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	if len(instructions) > maxStandingBytes {
+		return errors.New("MiniMax standing instructions exceed the private context limit")
 	}
 	target, err := profilePath(cfg.DataDir, cfg.SessionID)
 	if err != nil {
@@ -57,6 +82,8 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		marker = filepath.Join(target, ".ao-managed")
 	} else if string(existing) != profileMarker {
 		return errors.New("MiniMax private profile ownership marker is invalid")
+	} else if err := requireStandingTransport(target); err != nil {
+		return err
 	}
 	var data []byte
 	if first {
@@ -108,6 +135,14 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		return err
 	}
 	if err := hookutil.AtomicWriteFile(marker, []byte(profileMarker), 0o600); err != nil {
+		return err
+	}
+	if first {
+		if err := hookutil.AtomicWriteFile(filepath.Join(target, "ao-standing-transport"), []byte(standingTransportMarker), 0o600); err != nil {
+			return err
+		}
+	}
+	if err := hookutil.AtomicWriteFile(filepath.Join(target, "standing.txt"), instructions, 0o600); err != nil {
 		return err
 	}
 	for _, dir := range []string{"tmp", "plugins/ao-activity/.claude-plugin", "plugins/ao-activity/hooks"} {
@@ -292,6 +327,13 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 	if err := os.MkdirAll(filepath.Join(launch, "tmp"), 0o700); err != nil {
 		return err
 	}
+	instructions, err := os.ReadFile(filepath.Join(profile, "standing.txt"))
+	if err != nil {
+		return fmt.Errorf("MiniMax private instruction snapshot: %w", err)
+	}
+	if len(instructions) > maxStandingBytes {
+		return errors.New("MiniMax private instruction snapshot exceeds bounds")
+	}
 	f, err := os.OpenFile(filepath.Join(launch, "routing.json"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("MiniMax immutable hook generation: %w", err)
@@ -301,7 +343,18 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 	if writeErr != nil {
 		return writeErr
 	}
-	return closeErr
+	if closeErr != nil {
+		return closeErr
+	}
+	return hookutil.AtomicWriteFile(filepath.Join(launch, "standing.txt"), instructions, 0o600)
+}
+
+func requireStandingTransport(profile string) error {
+	marker, err := os.ReadFile(filepath.Join(profile, "ao-standing-transport"))
+	if err != nil || string(marker) != standingTransportMarker {
+		return errors.New("MiniMax legacy identity-append history cannot refresh AO standing instructions; preserve that history and start a new AO conversation")
+	}
+	return nil
 }
 
 func writeHookConfig(plugin string) error {

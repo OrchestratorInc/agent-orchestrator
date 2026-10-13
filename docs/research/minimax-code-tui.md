@@ -6,7 +6,7 @@ reviewer support, or interface handoff.
 
 ## Qualified native contract
 
-The tested GitHub release is **v0.6.5**, commit
+The historical source-built release tag is **v0.6.5**, commit
 `309e28554ec091bb17b6c4f67111c8c01d688b94`. The published
 `minimax-code-0.6.5.tar.gz` SHA-256 is
 `16377ae92d6e1c0752ea0a791eb5dc859584ca31d0c1fe67d643c834feda9f02`.
@@ -15,10 +15,18 @@ assumed equivalent. Install from the [upstream release](https://github.com/MiniM
 The VPS qualification used Linux x64 and Node 24.21.0.
 
 - A positional task follows `--`, including tasks beginning with a dash.
-- `--append-system-prompt-file` adds AO's private standing instructions without
-  replacing the provider defaults. Restore reapplies the file. Provider-authored
-  proof files consumed both an initial token and a fresh token introduced after
-  confirmed process termination. This proves delivery, not secrecy from model echo.
+- AO standing instructions use the supported native `UserPromptSubmit` command-hook
+  `additionalContext`, once per admitted input, from a bounded0600 immutable
+  current-generation snapshot. Native source wraps this in hidden
+  `<plugin-hook-context>` inside the provider's **user** message; it is not a
+  system/developer override. Native identity, user/project instructions and
+  tool/permission controls remain native-owned. The previous main-identity
+  append route passed a fresh control but failed independently refreshed
+  instructions on stock0.6.5 exact restore, despite NEW-only CLI input.
+- Older AO profiles using identity append are explicitly rejected for restore
+  and left unchanged. Start a new AO conversation for the hook transport;
+  native histories are never rewritten or silently replaced.
+
 - Native identity is `mvs_` followed by 32 hexadecimal characters. Restore uses
   `--session <exact-id>` and never selects the latest conversation.
 - Default, auto, and bypass-permissions map to native `default` (Ask), `auto`,
@@ -176,3 +184,13 @@ Earlier full build/vet passed at 6210538; its full nonrace suite failed in fake
 (writable ancestor), chat (50ms render timeout took 3s), and integration delegate
 setup. These are observed failures, not established baseline failures. The final
 bounded full race/lint outcome is recorded with the published evidence comment.
+
+## Current stock-release qualification
+
+The published NPM0.6.5 package differs from the historical local source build;
+new audit execution pins the official archive integrity and all767 release
+files. Prior source-built receipts remain separate. The new prompt-hook route
+requires current-head GitHub CI and actual stock native/AO fresh and exact-restore
+NEW-token proof before readiness; source/fixture output alone is not provider
+consumption. Authenticated third-party wire role remains NOT_CAPTURED unless
+an explicitly qualified receipt establishes otherwise.

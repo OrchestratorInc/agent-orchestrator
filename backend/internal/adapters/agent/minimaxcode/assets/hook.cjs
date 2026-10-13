@@ -2,8 +2,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {spawnSync} = require('node:child_process');
-function refuse() {
-  process.stdout.write(JSON.stringify({continue:false,systemMessage:'AO refused a MiniMax conversation identity change. Restore the exact original conversation.'})+'\n');
+function refuse(message='AO refused a MiniMax conversation identity change. Restore the exact original conversation.') {
+  process.stdout.write(JSON.stringify({continue:false,systemMessage:message})+'\n');
 }
 try {
   // MiniMax executes cached plugin copies, so __dirname is not the profile.
@@ -46,7 +46,21 @@ try {
   }
   const events={SessionStart:'session-start',UserPromptSubmit:'user-prompt-submit',PermissionRequest:'permission-blocked',PreToolUse:'pre-tool-use',PostToolUse:'post-tool-use',PostToolUseFailure:'post-tool-use-failure',Stop:'stop'};
   if (!events[event]) process.exit(0);
-  spawnSync('ao',['hooks','minimax-code',events[event]],{input:JSON.stringify({...payload,launch_id:launchID}),env:hookEnv,stdio:['pipe','ignore','ignore'],timeout:8000});
+  const callback=spawnSync('ao',['hooks','minimax-code',events[event]],{input:JSON.stringify({...payload,launch_id:launchID}),env:hookEnv,stdio:['pipe','ignore','ignore'],timeout:8000});
+  if(event==='UserPromptSubmit') {
+    if(callback.status!==0){refuse('AO could not verify the current MiniMax runtime generation.');process.exit(0);}
+    const file=path.join(launchDir,'standing.txt');
+    let context;
+    try {
+      const info=fs.statSync(file);
+      if(!info.isFile() || info.size>512*1024){refuse('AO MiniMax private instructions exceed the supported context limit.');process.exit(0);}
+      context=fs.readFileSync(file,'utf8');
+    } catch {
+      refuse('AO MiniMax private instructions are unavailable for this launch.');process.exit(0);
+    }
+    if(Buffer.byteLength(context,'utf8')>512*1024){refuse('AO MiniMax private instructions exceed the supported context limit.');process.exit(0);}
+    if(context) process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'UserPromptSubmit',additionalContext:context}})+'\n');
+  }
 } catch {
   // Missing or unreadable guard state must not authorize a replacement turn.
   refuse();

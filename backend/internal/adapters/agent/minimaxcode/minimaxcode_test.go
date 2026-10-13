@@ -16,7 +16,7 @@ func TestLaunchContract(t *testing.T) {
 	p.resolvedBinary = "/installed/mcode"
 	cfg := ports.LaunchConfig{DataDir: t.TempDir(), SessionID: "test-1", WorkspacePath: t.TempDir(), Prompt: "--help", SystemPromptFile: "/private/instructions", Permissions: ports.PermissionModeAuto}
 	got, err := p.GetLaunchCommand(context.Background(), cfg)
-	want := []string{"/installed/mcode", "--append-system-prompt-file", "/private/instructions", "--", "--help"}
+	want := []string{"/installed/mcode", "--", "--help"}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("launch=%q, %v; want %q", got, err, want)
 	}

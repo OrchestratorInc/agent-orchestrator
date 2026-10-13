@@ -73,7 +73,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if err != nil {
 		return nil, err
 	}
-	return launchArgs(binary, cfg.Config.Model, cfg.SystemPromptFile, "", cfg.Prompt), nil
+	return launchArgs(binary, cfg.Config.Model, "", cfg.Prompt), nil
 }
 
 // GetRestoreCommand validates and restores the exact recorded conversation.
@@ -92,6 +92,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err := validateNativeHistory(ctx, profile, nativeID, cfg.Session.WorkspacePath); err != nil {
 		return nil, false, fmt.Errorf("MiniMax restore refused: %w", err)
 	}
+	if err := requireStandingTransport(profile); err != nil {
+		return nil, false, err
+	}
 	if err := hookutil.AtomicWriteFile(filepath.Join(profile, "ao-native-id"), []byte(nativeID+"\n"), 0o600); err != nil {
 		return nil, false, err
 	}
@@ -99,7 +102,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	return launchArgs(binary, cfg.Config.Model, cfg.SystemPromptFile, nativeID, cfg.Prompt), true, nil
+	return launchArgs(binary, cfg.Config.Model, nativeID, cfg.Prompt), true, nil
 }
 func validateLaunch(ctx context.Context, mode ports.PermissionMode, prompt, file string) error {
 	if err := ctx.Err(); err != nil {
@@ -115,13 +118,10 @@ func validateLaunch(ctx context.Context, mode ports.PermissionMode, prompt, file
 	}
 	return nil
 }
-func launchArgs(binary, model, promptFile, nativeID, prompt string) []string {
+func launchArgs(binary, model, nativeID, prompt string) []string {
 	args := []string{binary}
 	if strings.TrimSpace(model) != "" {
 		args = append(args, "--model", strings.TrimSpace(model))
-	}
-	if promptFile != "" {
-		args = append(args, "--append-system-prompt-file", promptFile)
 	}
 	if nativeID != "" {
 		args = append(args, "--session", nativeID)

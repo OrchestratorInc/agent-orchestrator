@@ -169,3 +169,120 @@ func TestOldHookKeepsItsRuntimeGeneration(t *testing.T) {
 		t.Fatalf("hook generations=%q, %v", data, err)
 	}
 }
+
+func TestStandingHookUsesImmutableCurrentGenerationContext(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX callback fixture")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("Node is required for the MiniMax hook contract")
+	}
+	source := t.TempDir()
+	t.Setenv("MINIMAX_DATA_DIR", source)
+	userRules := []byte("Native user rules must remain intact.\n")
+	if err := os.WriteFile(filepath.Join(source, "AGENTS.md"), userRules, 0600); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "private.txt")
+	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "context", WorkspacePath: t.TempDir(), SystemPromptFile: file}
+	plugin := New()
+	for _, turn := range []struct{ generation, context string }{{"first", "OLD_PRIVATE_CONTEXT"}, {"restored", "NEW_PRIVATE_CONTEXT"}} {
+		if err := os.WriteFile(file, []byte(turn.context), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
+			t.Fatal(err)
+		}
+		cfg.Env = map[string]string{"AO_SESSION_ID": cfg.SessionID, "AO_DATA_DIR": cfg.DataDir, "AO_RUNTIME_LAUNCH_ID": turn.generation}
+		if err := plugin.PrepareRuntimeLaunch(context.Background(), cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profile, _ := profilePath(cfg.DataDir, cfg.SessionID)
+	for _, location := range []string{source, profile} {
+		got, err := os.ReadFile(filepath.Join(location, "AGENTS.md"))
+		if err != nil || string(got) != string(userRules) {
+			t.Fatalf("native user rules changed: %q %v", got, err)
+		}
+	}
+	id := "mvs_01234567890123456789012345678901"
+	if err := os.WriteFile(filepath.Join(profile, "ao-native-id"), []byte(id), 0600); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	callback := fmt.Sprintf("#!%s\nprocess.exit(Number(process.env.FIXTURE_CALLBACK_STATUS || '0'));\n", node)
+	if err := os.WriteFile(filepath.Join(bin, "ao"), []byte(callback), 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Exercise the actual managed helper, not a mock native provider.
+	run := func(generation, event, nativeID, status string) map[string]any {
+		t.Helper()
+		cmd := exec.Command(node, filepath.Join(profile, "plugins", "ao-activity", "hook.cjs"))
+		cmd.Env = append(os.Environ(), "PATH="+bin, "TMPDIR="+filepath.Join(profile, "launches", generation, "tmp"), "FIXTURE_CALLBACK_STATUS="+status)
+		cmd.Stdin = strings.NewReader(fmt.Sprintf(`{"hook_event_name":%q,"session_id":%q}`, event, nativeID))
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var value map[string]any
+		if len(out) > 0 && json.Unmarshal(out, &value) != nil {
+			t.Fatalf("invalid native hook output: %s", out)
+		}
+		return value
+	}
+	for _, turn := range []struct{ generation, context string }{{"first", "OLD_PRIVATE_CONTEXT"}, {"restored", "NEW_PRIVATE_CONTEXT"}} {
+		value := run(turn.generation, "UserPromptSubmit", id, "0")
+		output, ok := value["hookSpecificOutput"].(map[string]any)
+		if !ok || output["hookEventName"] != "UserPromptSubmit" || output["additionalContext"] != turn.context {
+			t.Fatalf("wrong generation context: %+v", value)
+		}
+		if _, ok := value["continue"]; ok {
+			t.Fatal("context injection must not override native admission decisions")
+		}
+		info, err := os.Stat(filepath.Join(profile, "launches", turn.generation, "standing.txt"))
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("private snapshot permissions: %v %v", info, err)
+		}
+	}
+	if value := run("restored", "SessionStart", id, "0"); len(value) != 0 {
+		t.Fatalf("duplicate context at SessionStart: %+v", value)
+	}
+	for _, input := range []struct{ nativeID, status string }{{"mvs_00000000000000000000000000000000", "0"}, {id, "1"}} {
+		value := run("restored", "UserPromptSubmit", input.nativeID, input.status)
+		if value["continue"] != false || value["hookSpecificOutput"] != nil {
+			t.Fatalf("unverified native identity/generation admitted: %+v", value)
+		}
+	}
+	if err := os.Remove(filepath.Join(profile, "launches", "restored", "standing.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if value := run("restored", "UserPromptSubmit", id, "0"); value["continue"] != false || value["hookSpecificOutput"] != nil {
+		t.Fatalf("missing private instructions admitted: %+v", value)
+	}
+}
+
+func TestLegacyIdentityAppendProfileFailsWithoutChangingHistory(t *testing.T) {
+	t.Setenv("MINIMAX_DATA_DIR", t.TempDir())
+	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "legacy", WorkspacePath: t.TempDir()}
+	plugin := New()
+	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	profile, _ := profilePath(cfg.DataDir, cfg.SessionID)
+	history := filepath.Join(profile, "retained-history")
+	original := []byte("Original native history must remain unchanged.\n")
+	if err := os.WriteFile(history, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(profile, "ao-standing-transport")); err != nil {
+		t.Fatal(err)
+	}
+	if err := plugin.GetAgentHooks(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "legacy identity-append") {
+		t.Fatalf("legacy profile silently adopted: %v", err)
+	}
+	got, err := os.ReadFile(history)
+	if err != nil || string(got) != string(original) {
+		t.Fatalf("legacy history changed: %q %v", got, err)
+	}
+}
