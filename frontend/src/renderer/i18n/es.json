@@ -2154,6 +2154,7 @@
 	"settings.browserImport.next": "Siguiente",
 	"settings.browserImport.start": "Iniciar importación",
 	"settings.browserImport.retry": "Reintentar",
+	"settings.browserImport.tip": "Consejo: {{message}}",
 	"settings.browserImport.done": "Listo",
 	"settings.browserImport.detecting": "Buscando perfiles del navegador…",
 	"settings.browserImport.noneFound": "No se encontraron perfiles de navegadores compatibles en este equipo.",

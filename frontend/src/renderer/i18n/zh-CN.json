@@ -2186,6 +2186,7 @@
 	"settings.browserImport.next": "下一步",
 	"settings.browserImport.start": "开始导入",
 	"settings.browserImport.retry": "重试",
+	"settings.browserImport.tip": "提示：{{message}}",
 	"settings.browserImport.done": "完成",
 	"settings.browserImport.detecting": "正在查找浏览器配置文件…",
 	"settings.browserImport.noneFound": "此计算机上未找到受支持的浏览器配置文件。",

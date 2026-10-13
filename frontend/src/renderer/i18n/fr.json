@@ -2154,6 +2154,7 @@
 	"settings.browserImport.next": "Suivant",
 	"settings.browserImport.start": "Démarrer l’importation",
 	"settings.browserImport.retry": "Réessayer",
+	"settings.browserImport.tip": "Conseil : {{message}}",
 	"settings.browserImport.done": "Terminé",
 	"settings.browserImport.detecting": "Recherche des profils de navigateur…",
 	"settings.browserImport.noneFound": "Aucun profil de navigateur pris en charge n’a été trouvé sur cet ordinateur.",

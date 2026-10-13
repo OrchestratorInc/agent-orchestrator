@@ -2120,6 +2120,7 @@
 	"settings.browserImport.next": "Weiter",
 	"settings.browserImport.start": "Import starten",
 	"settings.browserImport.retry": "Erneut versuchen",
+	"settings.browserImport.tip": "Tipp: {{message}}",
 	"settings.browserImport.done": "Fertig",
 	"settings.browserImport.detecting": "Browserprofile werden gesucht…",
 	"settings.browserImport.noneFound": "Auf diesem Computer wurden keine unterstützten Browserprofile gefunden.",

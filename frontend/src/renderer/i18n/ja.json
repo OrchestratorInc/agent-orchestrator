@@ -2120,6 +2120,7 @@
 	"settings.browserImport.next": "次へ",
 	"settings.browserImport.start": "インポート開始",
 	"settings.browserImport.retry": "再試行",
+	"settings.browserImport.tip": "ヒント: {{message}}",
 	"settings.browserImport.done": "完了",
 	"settings.browserImport.detecting": "ブラウザプロファイルを検索中…",
 	"settings.browserImport.noneFound": "このコンピューターに対応するブラウザプロファイルが見つかりませんでした。",

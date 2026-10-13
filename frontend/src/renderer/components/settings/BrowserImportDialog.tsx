@@ -256,6 +256,9 @@ export function BrowserImportDialog({
 				</div>
 
 				<div className={settingsDialogBodyClass}>
+					{view === "form" && error ? (
+						<p ref={errorRef} tabIndex={-1} className="text-xs text-muted-foreground focus-visible:outline focus-visible:outline-1 focus-visible:outline-border" role="alert">{t("settings.browserImport.tip", { message: error })}</p>
+					) : null}
 					{view === "form" && showSafariAccessDenied ? (
 						<p className="text-xs text-muted-foreground" role="status">{t("settings.browserImport.safariAccessUnavailable")}</p>
 					) : null}
@@ -282,9 +285,6 @@ export function BrowserImportDialog({
 							sourceId={sourceId}
 							sources={sources}
 						/>
-					) : null}
-					{view === "form" && error ? (
-						<p ref={errorRef} tabIndex={-1} className="text-xs text-muted-foreground focus-visible:outline focus-visible:outline-1 focus-visible:outline-border" role="alert">{error}</p>
 					) : null}
 					{view === "running" ? (
 						<div className="flex flex-1 flex-col items-center justify-center gap-5 py-12 text-center">

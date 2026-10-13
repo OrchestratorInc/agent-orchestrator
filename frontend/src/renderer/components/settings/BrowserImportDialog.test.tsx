@@ -333,7 +333,7 @@ describe("BrowserImportDialog", () => {
 	it.each([
 		"unable to open database file",
 		"AO couldn't create a temporary copy of Brave's profile database. Fully close Brave, then retry the import.",
-	])("shows quiet retry guidance for %s", async (message) => {
+	])("shows a quiet retry tip above the browser dropdown for %s", async (message) => {
 		const braveSource = { ...source, name: "Brave" };
 		const bridge: AoBridge["browserProfiles"] = {
 			list: vi.fn(async () => ({ profiles: [] })),
@@ -355,7 +355,9 @@ describe("BrowserImportDialog", () => {
 
 		const alert = await screen.findByRole("alert");
 		expect(alert).toHaveClass("text-muted-foreground");
-		expect(alert).toHaveTextContent("Fully close Brave, including background processes, then retry");
+		expect(alert).toHaveTextContent("Tip: Fully close Brave, including background processes, then retry");
+		const picker = screen.getByRole("combobox", { name: "From" });
+		expect(alert.compareDocumentPosition(picker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
 		expect(alert).not.toHaveTextContent("Error invoking remote method");
 	});

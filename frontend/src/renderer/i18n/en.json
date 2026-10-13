@@ -1243,6 +1243,7 @@
 	"settings.browserImport.next": "Next",
 	"settings.browserImport.start": "Start import",
 	"settings.browserImport.retry": "Retry",
+	"settings.browserImport.tip": "Tip: {{message}}",
 	"settings.browserImport.done": "Done",
 	"settings.browserImport.detecting": "Looking for browser profiles…",
 	"settings.browserImport.noneFound": "No supported browser profiles were found on this computer.",

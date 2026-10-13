@@ -2120,6 +2120,7 @@
 	"settings.browserImport.next": "다음",
 	"settings.browserImport.start": "가져오기 시작",
 	"settings.browserImport.retry": "다시 시도",
+	"settings.browserImport.tip": "도움말: {{message}}",
 	"settings.browserImport.done": "완료",
 	"settings.browserImport.detecting": "브라우저 프로필을 찾는 중…",
 	"settings.browserImport.noneFound": "이 컴퓨터에서 지원되는 브라우저 프로필을 찾지 못했습니다.",
