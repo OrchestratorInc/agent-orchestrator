@@ -23,10 +23,17 @@ type fakeSandbox struct {
 	execEnv   map[string]string
 	released  []releaseCall
 	discarded []ports.SandboxTarget
+	// sessionDiscards records DiscardSession calls as "project/session".
+	sessionDiscards []string
 }
 
 func (f *fakeSandbox) Discard(_ context.Context, target ports.SandboxTarget) error {
 	f.discarded = append(f.discarded, target)
+	return nil
+}
+
+func (f *fakeSandbox) DiscardSession(_ context.Context, project domain.ProjectID, session domain.SessionID) error {
+	f.sessionDiscards = append(f.sessionDiscards, string(project)+"/"+string(session))
 	return nil
 }
 

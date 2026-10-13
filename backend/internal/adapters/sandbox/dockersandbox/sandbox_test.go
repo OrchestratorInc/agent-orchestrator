@@ -22,7 +22,14 @@ type fakeRunner struct {
 	t      *testing.T
 	script []fakeCall
 	calls  []string
+	gitDir string // replaces the placeholder fakeGitDir in scripted output
 }
+
+// fakeGitDir in a scripted `git rev-parse` output stands for the test's real
+// git dir, which Ensure must be able to inspect and add hooks/ to.
+const fakeGitDir = "/repo/.git"
+
+func gitDirOf(data string) string { return filepath.Join(data, "repo", ".git") }
 
 func (f *fakeRunner) Output(_ context.Context, name string, args ...string) ([]byte, error) {
 	line := name + " " + strings.Join(args, " ")
@@ -35,13 +42,19 @@ func (f *fakeRunner) Output(_ context.Context, name string, args ...string) ([]b
 	if !strings.Contains(line, c.match) {
 		f.t.Fatalf("call %q does not contain %q", line, c.match)
 	}
-	return []byte(c.out), c.err
+	return []byte(strings.ReplaceAll(c.out, fakeGitDir, f.gitDir)), c.err
 }
 
 func testSandbox(t *testing.T, script []fakeCall) (*Sandbox, *fakeRunner, string) {
 	t.Helper()
 	data := t.TempDir()
-	fr := &fakeRunner{t: t, script: script}
+	if err := os.MkdirAll(gitDirOf(data), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDirOf(data), "config"), []byte("[core]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fr := &fakeRunner{t: t, script: script, gitDir: gitDirOf(data)}
 	t.Cleanup(func() {
 		if len(fr.script) != 0 {
 			t.Errorf("unconsumed fake calls: %v", fr.script)
@@ -68,8 +81,8 @@ func TestEnsureCreatesPerAgentContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := fr.calls[2]
-	for _, want := range []string{"--label ao.session=s1", "-v " + ws + ":" + ws, "-v /repo/.git:/repo/.git",
-		filepath.Join(data, "prompts") + ":ro", filepath.Join(data, "sandbox", "bin") + ":ro",
+	for _, want := range []string{"--label ao.session=s1", "-v " + ws + ":" + ws, "-v " + gitDirOf(data) + ":" + gitDirOf(data) + " ",
+		"-v " + filepath.Join(data, "prompts", "s1") + ":" + filepath.Join(data, "prompts", "s1") + ":ro", filepath.Join(data, "sandbox", "bin") + ":ro",
 		"-v " + filepath.Join(data, "sandbox", "projects", "p", "home") + ":",
 		"-v " + filepath.Join(data, "sandbox", "projects", "p", "claude") + ":",
 		"-v " + filepath.Join(data, "sandbox", "projects", "p", "sessions", "s1") + ":"} {
@@ -91,7 +104,7 @@ func TestEnsureCreatesPerAgentContainer(t *testing.T) {
 func TestEnsureReusesRunningContainerWithSameHash(t *testing.T) {
 	s, _, data := testSandbox(t, nil)
 	ws := filepath.Join(data, "worktrees", "p", "s1")
-	hash := s.hashFor(perAgentReq(ws), "/repo/.git")
+	hash := s.hashFor(perAgentReq(ws), gitDirOf(data))
 	s.run.(*fakeRunner).script = []fakeCall{
 		{match: "rev-parse", out: "/repo/.git\n"},
 		{match: "inspect", out: "running\t" + hash + "\n"},
@@ -105,7 +118,7 @@ func TestEnsureReusesRunningContainerWithSameHash(t *testing.T) {
 func TestEnsureStartsStoppedContainer(t *testing.T) {
 	s, _, data := testSandbox(t, nil)
 	ws := filepath.Join(data, "worktrees", "p", "s1")
-	hash := s.hashFor(perAgentReq(ws), "/repo/.git")
+	hash := s.hashFor(perAgentReq(ws), gitDirOf(data))
 	s.run.(*fakeRunner).script = []fakeCall{
 		{match: "rev-parse", out: "/repo/.git\n"},
 		{match: "inspect", out: "exited\t" + hash + "\n"},
@@ -134,6 +147,8 @@ func TestEnsureMissingHarnessBinary(t *testing.T) {
 		{match: "inspect", err: errors.New("No such object")},
 		{match: "run -d"},
 		{match: "command -v \"$1\" sh claude", err: errors.New("exit status 1")},
+		// The container this call created is removed, not leaked.
+		{match: "rm -f ao-sbx-s1"},
 	})
 	_, err := s.Ensure(context.Background(), perAgentReq(filepath.Join(data, "worktrees", "p", "s1")))
 	if !errors.Is(err, ports.ErrSandboxMisconfigured) || !strings.Contains(err.Error(), `node:22`) || !strings.Contains(err.Error(), `"claude"`) {

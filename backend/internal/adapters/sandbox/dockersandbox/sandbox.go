@@ -114,30 +114,40 @@ func (s *Sandbox) targetFor(container string, project domain.ProjectID, session 
 }
 
 func (s *Sandbox) mounts(req ports.SandboxRequest, gitDir string) ([]mount, error) {
-	work := req.WorkspacePath
-	if req.Config.Mode == domain.SandboxModeShared {
-		work = filepath.Join(s.cfg.ManagedRoot, string(req.ProjectID))
-		rel, err := filepath.Rel(work, req.WorkspacePath)
-		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
-			return nil, fmt.Errorf("%w: shared sandbox needs an AO-managed worktree under %s, got %s",
-				ports.ErrSandboxMisconfigured, work, req.WorkspacePath)
-		}
-	}
+	m := []mount{{Path: req.WorkspacePath}}
 	projectDir := filepath.Join(s.cfg.DataDir, "sandbox", "projects", string(req.ProjectID))
-	state := []mount{{Path: projectDir}}
-	if req.Config.Mode != domain.SandboxModeShared {
-		// Per-agent containers see only their own session dir, not siblings'.
-		state = []mount{
-			{Path: filepath.Join(projectDir, "home")},
-			{Path: filepath.Join(projectDir, "claude")},
-			{Path: filepath.Join(projectDir, "sessions", string(req.SessionID))},
+	// Per-agent containers see only their own session dir and prompts, not
+	// siblings'. A shared container serves every session of the project.
+	state := []mount{
+		{Path: filepath.Join(projectDir, "home")},
+		{Path: filepath.Join(projectDir, "claude")},
+		{Path: filepath.Join(projectDir, "sessions", string(req.SessionID))},
+	}
+	prompts := filepath.Join(s.cfg.DataDir, "prompts", string(req.SessionID))
+	if req.Config.Mode == domain.SandboxModeShared {
+		work, err := sharedWorkRoot(filepath.Join(s.cfg.ManagedRoot, string(req.ProjectID)), req.WorkspacePath)
+		if err != nil {
+			return nil, err
 		}
+		m = []mount{{Path: work}}
+		// The orchestrator's worktree lives under the same project root; an
+		// empty read-only tmpfs hides it from sandboxed workers.
+		if orch := filepath.Join(work, "orchestrator"); !within(orch, req.WorkspacePath) {
+			m = append(m, mount{Path: orch, Tmpfs: true})
+		}
+		state = []mount{{Path: projectDir}}
+		prompts = filepath.Join(s.cfg.DataDir, "prompts")
 	}
-	m := []mount{
-		{Path: work},
-		{Path: gitDir},
-		{Path: filepath.Join(s.cfg.DataDir, "prompts"), ReadOnly: true},
-	}
+	// The git dir stays writable for objects and refs, but the files the
+	// host's git executes or obeys (config, hooks, submodule git dirs) are
+	// read-only overmounts.
+	m = append(m,
+		mount{Path: gitDir},
+		mount{Path: filepath.Join(gitDir, "config"), ReadOnly: true},
+		mount{Path: filepath.Join(gitDir, "hooks"), ReadOnly: true},
+		mount{Path: filepath.Join(gitDir, "modules"), ReadOnly: true},
+		mount{Path: prompts, ReadOnly: true},
+	)
 	m = append(m, state...)
 	return append(m, mount{Path: filepath.Join(s.cfg.DataDir, "sandbox", "bin"), ReadOnly: true}), nil
 }
@@ -185,11 +195,14 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 	target := s.targetFor(name, req.ProjectID, req.SessionID)
 	target.Docker = docker
 	target.Mode = req.Config.Mode
-	for _, dir := range []string{filepath.Join(target.ProjectDir, "home"), filepath.Join(target.ProjectDir, "claude"), filepath.Join(target.RelayDir, "req"),
-		filepath.Join(target.RelayDir, "work"), filepath.Join(target.RelayDir, "resp"), filepath.Join(s.cfg.DataDir, "prompts")} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return ports.SandboxTarget{}, fmt.Errorf("sandbox state dir: %w", err)
-		}
+	if err := ensureStateDirs(target.ProjectDir, req.SessionID); err != nil {
+		return ports.SandboxTarget{}, fmt.Errorf("sandbox state dir: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(s.cfg.DataDir, "prompts", string(req.SessionID)), 0o700); err != nil {
+		return ports.SandboxTarget{}, fmt.Errorf("sandbox prompts dir: %w", err)
+	}
+	if err := prepareGitOvermounts(gitDir); err != nil {
+		return ports.SandboxTarget{}, err
 	}
 	if err := InstallBin(target.BinDir); err != nil {
 		return ports.SandboxTarget{}, err
@@ -199,6 +212,7 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 	if err != nil {
 		return ports.SandboxTarget{}, err
 	}
+	created := false
 	switch {
 	case status != "" && status != "running" && existingHash != hash:
 		// A stopped container with stale config is recreated; the worktree
@@ -219,6 +233,7 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 			return ports.SandboxTarget{}, fmt.Errorf("%w: start sandbox from image %s (the image must exist or be pullable and provide /bin/sh): %v",
 				ports.ErrSandboxMisconfigured, req.Config.Image, err)
 		}
+		created = true
 	case status != "running":
 		if _, err := s.output(ctx, probeTimeout, docker, "start", name); err != nil {
 			return ports.SandboxTarget{}, err
@@ -228,6 +243,14 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 		if _, err := s.output(ctx, probeTimeout, docker, "exec", name, "/bin/sh", "-c", `command -v "$1"`, "sh", bin); err != nil {
 			if errors.Is(err, ports.ErrSandboxUnavailable) {
 				return ports.SandboxTarget{}, err
+			}
+			// Remove only a per-agent container this call created; a reused
+			// or started one may belong to a live session, and shared
+			// containers belong to Release.
+			if created && req.Config.Mode == domain.SandboxModePerAgent {
+				if _, rmErr := s.output(ctx, probeTimeout, docker, "rm", "-f", name); rmErr != nil {
+					err = fmt.Errorf("%w (removing the new container also failed: %w)", err, rmErr)
+				}
 			}
 			return ports.SandboxTarget{}, fmt.Errorf("%w: image %s has no %q on PATH (and needs /bin/sh): %v",
 				ports.ErrSandboxMisconfigured, req.Config.Image, bin, err)
@@ -271,14 +294,9 @@ func (s *Sandbox) Exec(target ports.SandboxTarget, workspacePath string, env map
 		return nil, fmt.Errorf("%w: %v", ports.ErrSandboxMisconfigured, err)
 	}
 	// Set after rendering so hostOnlyEnv cannot drop them.
-	data = append(data, []byte("HOME='"+filepath.Join(target.ProjectDir, "home")+"'\nAO_SANDBOX='1'\nAO_SANDBOX_RELAY='"+target.RelayDir+"'\n")...)
-	path := filepath.Join(target.SessionDir, "env")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return nil, fmt.Errorf("write sandbox env: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return nil, fmt.Errorf("install sandbox env: %w", err)
+	data = append(data, []byte("HOME="+shQuote(filepath.Join(target.ProjectDir, "home"))+"\nAO_SANDBOX='1'\nAO_SANDBOX_RELAY="+shQuote(target.RelayDir)+"\n")...)
+	if err := writeSessionEnv(target, data); err != nil {
+		return nil, err
 	}
 	docker := target.Docker
 	if docker == "" {
@@ -307,6 +325,34 @@ func (s *Sandbox) Discard(ctx context.Context, target ports.SandboxTarget) error
 		return err
 	}
 	return nil
+}
+
+// DiscardSession removes a terminated session's per-agent container, found by
+// its labels so no container target is needed. Shared containers never match;
+// an unreachable Docker is not an error.
+func (s *Sandbox) DiscardSession(ctx context.Context, project domain.ProjectID, session domain.SessionID) error {
+	defer s.lock(containerName(ports.SandboxRequest{SessionID: session, Config: domain.SandboxConfig{Mode: domain.SandboxModePerAgent}}, ""))()
+	docker, err := s.dockerPath()
+	if err != nil {
+		return nil
+	}
+	out, err := s.output(ctx, probeTimeout, docker, "ps", "-a",
+		"--filter", "label="+labelSandbox+"="+string(domain.SandboxModePerAgent),
+		"--filter", "label="+dockerreap.SessionLabel+"="+string(session),
+		"--filter", "label="+labelProject+"="+string(project), "--format", "{{.ID}}")
+	if err != nil {
+		if errors.Is(err, ports.ErrSandboxUnavailable) {
+			return nil
+		}
+		return err
+	}
+	var errs []error
+	for _, id := range strings.Fields(string(out)) {
+		if _, err := s.output(ctx, probeTimeout, docker, "rm", "-f", id); err != nil && !errors.Is(err, ports.ErrSandboxUnavailable) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // dockerSocketDenied reports a Docker socket permission error, which means

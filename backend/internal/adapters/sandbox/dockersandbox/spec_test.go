@@ -128,3 +128,17 @@ func TestExecArgv(t *testing.T) {
 		t.Fatalf("execArgv = %q", got)
 	}
 }
+
+func TestRunArgsTmpfsMount(t *testing.T) {
+	cfg := domain.SandboxConfig{Mode: domain.SandboxModeShared, Image: "node:22"}
+	got := runArgs("c", cfg, nil, []mount{{Path: "/w"}, {Path: "/w/orchestrator", Tmpfs: true}, {Path: "/g/config", ReadOnly: true}}, "")
+	want := []string{"run", "-d", "--init", "--name", "c",
+		"-v", "/w:/w", "--mount", "type=tmpfs,destination=/w/orchestrator,readonly", "-v", "/g/config:/g/config:ro",
+		"--entrypoint", "/bin/sh", "node:22", "-c", keepAliveScript}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("runArgs =\n%q\nwant\n%q", got, want)
+	}
+	if configHash(cfg, []mount{{Path: "/w/orchestrator", Tmpfs: true}}) == configHash(cfg, []mount{{Path: "/w/orchestrator"}}) {
+		t.Fatal("hash ignores the tmpfs flag")
+	}
+}

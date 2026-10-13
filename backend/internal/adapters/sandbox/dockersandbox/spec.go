@@ -33,6 +33,7 @@ const keepAliveScript = `trap "exit 0" TERM INT; while :; do sleep 3600 & wait $
 type mount struct {
 	Path     string `json:"path"`
 	ReadOnly bool   `json:"ro,omitempty"`
+	Tmpfs    bool   `json:"tmpfs,omitempty"` // empty read-only tmpfs that hides Path
 }
 
 var (
@@ -99,6 +100,10 @@ func runArgs(name string, cfg domain.SandboxConfig, labels map[string]string, mo
 		args = append(args, "--user", user)
 	}
 	for _, m := range mounts {
+		if m.Tmpfs {
+			args = append(args, "--mount", "type=tmpfs,destination="+m.Path+",readonly")
+			continue
+		}
 		spec := m.Path + ":" + m.Path
 		if m.ReadOnly {
 			spec += ":ro"
@@ -137,9 +142,14 @@ func renderEnvFile(env map[string]string) ([]byte, error) {
 		if strings.ContainsRune(v, 0) {
 			return nil, fmt.Errorf("sandbox env: %s contains a NUL byte", k)
 		}
-		b.WriteString(k + "='" + strings.ReplaceAll(v, "'", `'\''`) + "'\n")
+		b.WriteString(k + "=" + shQuote(v) + "\n")
 	}
 	return []byte(b.String()), nil
+}
+
+// shQuote single-quotes v for POSIX sh so it is never expanded.
+func shQuote(v string) string {
+	return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'"
 }
 
 func hasHostOnlyPrefix(k string) bool {

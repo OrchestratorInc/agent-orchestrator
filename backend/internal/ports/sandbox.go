@@ -50,6 +50,10 @@ type Sandbox interface {
 	// launch that failed after Ensure. It is a no-op for shared containers
 	// (Release owns those) and returns nil when Docker is unavailable.
 	Discard(ctx context.Context, target SandboxTarget) error
+	// DiscardSession removes a terminated session's per-agent container
+	// without a target (kill has none). It never touches shared containers
+	// and returns nil when Docker is unavailable.
+	DiscardSession(ctx context.Context, project domain.ProjectID, session domain.SessionID) error
 }
 
 // AgentSandboxSupport is implemented by harnesses that can run sandboxed.
