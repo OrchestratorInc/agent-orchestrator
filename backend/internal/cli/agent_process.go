@@ -86,26 +86,38 @@ func (c *commandContext) runSupervisedProcess(ctx context.Context, sessionID, re
 	child.Stdout = c.deps.Out
 	child.Stderr = c.deps.Err
 
+	// Open the relay before the child starts so a failure is reported once,
+	// up front, instead of in-container ao calls hanging until they time out.
+	var relayRoot *os.Root
+	var relayExe string
+	if relayDir != "" {
+		exe, err := os.Executable()
+		if err == nil {
+			relayRoot, err = openSandboxRelay(relayDir)
+		}
+		if err != nil {
+			_, _ = fmt.Fprintf(c.deps.Err, "ao: sandbox relay disabled: %v\n", err)
+		}
+		relayExe = exe
+	}
+
 	if err := child.Start(); err != nil {
+		if relayRoot != nil {
+			_ = relayRoot.Close()
+		}
 		_, _ = fmt.Fprintf(c.deps.Err, "ao: start managed agent: %v\n", err)
 		c.reportSupervisedExit(sessionID, reviewID, launchID)
 		return
 	}
 
 	stopRelayAndWait := func() {}
-	if relayDir != "" {
+	if relayRoot != nil {
 		relayCtx, stopRelay := context.WithCancel(ctx)
 		relayDone := make(chan struct{})
-		exe, err := os.Executable()
-		if err != nil {
-			_, _ = fmt.Fprintf(c.deps.Err, "ao: sandbox relay disabled: %v\n", err)
-			close(relayDone)
-		} else {
-			go func() {
-				defer close(relayDone)
-				serveSandboxRelay(relayCtx, relayDir, hostAORunner(exe))
-			}()
-		}
+		go func() {
+			defer close(relayDone)
+			serveSandboxRelayRoot(relayCtx, relayRoot, hostAORunner(relayExe))
+		}()
 		stopRelayAndWait = func() {
 			stopRelay()
 			select {

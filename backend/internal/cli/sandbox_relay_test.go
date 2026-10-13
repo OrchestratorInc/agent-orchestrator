@@ -308,3 +308,40 @@ func TestCappedBufferTruncates(t *testing.T) {
 		t.Fatalf("buf = %q truncated = %v", c.buf.String(), c.truncated)
 	}
 }
+
+// C1c: the container can replace its session's relay dir with a symlink to
+// any host dir. The relay must refuse it rather than serve (and write
+// responses into) the link target.
+func TestSandboxRelayRefusesSymlinkedRelayDir(t *testing.T) {
+	session := t.TempDir()
+	outside := newRelayDir(t)
+	if err := os.Symlink(outside, filepath.Join(session, "relay")); err != nil {
+		t.Fatal(err)
+	}
+	writeRelayRequest(t, outside, "9-9-9", []string{"hooks", "a", "b"}, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	calls := make(chan struct{}, 1)
+	serveSandboxRelay(ctx, filepath.Join(session, "relay"), func(context.Context, []string, []byte) ([]byte, []byte, int) {
+		calls <- struct{}{}
+		return nil, nil, 0
+	})
+	select {
+	case <-calls:
+		t.Fatal("relay served a request through a symlinked relay dir")
+	default:
+	}
+	if _, err := os.Stat(filepath.Join(outside, "resp", "9-9-9")); err == nil {
+		t.Fatal("relay wrote a response through a symlinked relay dir")
+	}
+}
+
+func TestSandboxRelayReportsUnopenableRelayDir(t *testing.T) {
+	session := t.TempDir()
+	if err := os.Symlink(t.TempDir(), filepath.Join(session, "relay")); err != nil {
+		t.Fatal(err)
+	}
+	if err := serveSandboxRelay(context.Background(), filepath.Join(session, "relay"), nil); err == nil {
+		t.Fatal("serveSandboxRelay = nil, want an error for a symlinked relay dir")
+	}
+}

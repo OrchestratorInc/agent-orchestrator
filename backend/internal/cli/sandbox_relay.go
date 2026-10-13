@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -70,14 +71,38 @@ func sandboxRelayAllowed(argv []string) bool {
 
 type relayRunFunc func(ctx context.Context, argv []string, stdin []byte) (stdout, stderr []byte, code int)
 
-// serveSandboxRelay answers relay requests under dir until ctx ends. The
-// container controls everything under dir, so all access goes through an
-// os.Root that refuses to leave it. It returns after in-flight handlers finish.
-func serveSandboxRelay(ctx context.Context, dir string, run relayRunFunc) {
-	root, err := os.OpenRoot(dir)
+// serveSandboxRelay answers relay requests under dir until ctx ends. It
+// returns an error at once when dir cannot be opened safely.
+func serveSandboxRelay(ctx context.Context, dir string, run relayRunFunc) error {
+	root, err := openSandboxRelay(dir)
 	if err != nil {
-		return
+		return err
 	}
+	serveSandboxRelayRoot(ctx, root, run)
+	return nil
+}
+
+// openSandboxRelay opens the relay dir through its parent (the session dir).
+// The container can replace the relay dir itself with a symlink; opening it
+// as a child root refuses a link that leaves the session dir.
+func openSandboxRelay(dir string) (*os.Root, error) {
+	parent, err := os.OpenRoot(filepath.Dir(dir))
+	if err != nil {
+		return nil, fmt.Errorf("open sandbox relay: %w", err)
+	}
+	defer func() { _ = parent.Close() }()
+	root, err := parent.OpenRoot(filepath.Base(dir))
+	if err != nil {
+		return nil, fmt.Errorf("open sandbox relay: %w", err)
+	}
+	return root, nil
+}
+
+// serveSandboxRelayRoot answers relay requests under root until ctx ends and
+// closes root. The container controls everything under it, so all access
+// goes through the os.Root, which refuses to leave it. It returns after
+// in-flight handlers finish.
+func serveSandboxRelayRoot(ctx context.Context, root *os.Root, run relayRunFunc) {
 	defer root.Close()
 	sem := make(chan struct{}, sandboxRelayMaxInFlight)
 	var wg sync.WaitGroup

@@ -5,6 +5,7 @@ package cli
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -98,5 +99,25 @@ func TestAgentProcessSuperviseReportsReviewExitWithSessionIdentity(t *testing.T)
 	}
 	if capture.path != "/api/v1/reviews/review-7/activity" {
 		t.Fatalf("exit report path = %q, want review activity endpoint", capture.path)
+	}
+}
+
+// A relay that cannot start must say so; otherwise in-container ao calls
+// silently hang until their client timeout.
+func TestAgentProcessSuperviseReportsUnusableSandboxRelay(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, _ := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	missing := filepath.Join(t.TempDir(), "sessions", "s1", "relay")
+
+	_, errOut, err := executeCLI(t, Deps{
+		In:           strings.NewReader(""),
+		ProcessAlive: func(int) bool { return true },
+	}, "agent-process", "supervise", "--session", "ao-7", "--launch", "launch-3", "--sandbox-relay", missing, "--", "sh", "-c", "exit 0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, "sandbox relay") {
+		t.Fatalf("stderr = %q, want a sandbox relay error line", errOut)
 	}
 }
