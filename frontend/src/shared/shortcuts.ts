@@ -380,7 +380,9 @@ export type AppShortcutEvent = { id: AppShortcutId; index?: number };
 // keystroke (readline/vim "next line") and Ctrl+Alt+N collides with AltGr on
 // international layouts (Windows reports AltGr as Ctrl+Alt, so Ctrl+Alt+N
 // would fire while typing ñ/ń/ň), while terminals treat Alt+N as an unbound
-// meta sequence. Handled at the application level (main-process
+// meta sequence. Alt also sits where ⌘ sits on Mac keyboards (beside the
+// spacebar), so the chord keeps the same hand motion when switching between
+// machines. Handled at the application level (main-process
 // before-input-event) so it fires even when focus is inside xterm's helper
 // textarea or a native Browser-preview WebContentsView.
 export function matchesNewSessionShortcut(chord: ShortcutChord, isMac: boolean): boolean {
