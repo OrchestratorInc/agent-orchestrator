@@ -2218,7 +2218,7 @@
 	"settings.browserImport.empty": "未导入任何数据",
 	"settings.browserImport.resultCounts": "{{cookies}} 个 Cookie · {{history}} 条历史记录",
 	"settings.browserImport.skippedCookies": "已跳过 {{count}} 个 Cookie。",
-	"settings.browserImport.skippedItems": "导入详情",
+	"settings.browserImport.importDetails": "导入详情",
 	"settings.browserImport.signInAgain": "某些网站可能需要您重新登录。",
 	"settings.browserImport.useProfile": "请从浏览器工具栏选择新配置文件以使用导入的数据。",
 	"settings.browserImport.warning.cookie-database-missing": "此源配置文件没有可用的 Cookie 数据库。",

@@ -586,7 +586,7 @@ function ResultStep({ empty, includeCookies, includeHistory, result }: { empty: 
 					))}
 					{entry.skippedCookies > 0 || entry.warnings.length > 0 ? (
 						<details className="border-t border-border py-3 text-xs text-muted-foreground">
-							<summary className="cursor-pointer">{t("settings.browserImport.skippedItems")}{entry.skippedCookies > 0 ? ` · ${t("settings.browserImport.skippedCookies", { count: entry.skippedCookies })}` : ""}</summary>
+							<summary className="cursor-pointer">{t("settings.browserImport.importDetails")}{entry.skippedCookies > 0 ? ` · ${t("settings.browserImport.skippedCookies", { count: entry.skippedCookies })}` : ""}</summary>
 							{entry.warnings.map((warning) => <p className="mt-2" key={warning.code}>{warningText(warning)}</p>)}
 							{includeCookies && entry.skippedCookies > 0 ? <p className="mt-2">{t("settings.browserImport.signInAgain")}</p> : null}
 						</details>

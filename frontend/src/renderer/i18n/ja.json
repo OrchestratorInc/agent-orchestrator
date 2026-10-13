@@ -2152,7 +2152,7 @@
 	"settings.browserImport.empty": "データはインポートされませんでした",
 	"settings.browserImport.resultCounts": "Cookie {{cookies}} 件 · 履歴 {{history}} 件",
 	"settings.browserImport.skippedCookies": "{{count}} 件のCookieをスキップしました。",
-	"settings.browserImport.skippedItems": "インポートの詳細",
+	"settings.browserImport.importDetails": "インポートの詳細",
 	"settings.browserImport.signInAgain": "一部のサイトでは、再度ログインが必要になる場合があります。",
 	"settings.browserImport.useProfile": "インポートしたデータを使用するには、ブラウザツールバーから新しいプロファイルを選択してください。",
 	"settings.browserImport.warning.cookie-database-missing": "この元プロファイルのCookieデータベースを利用できませんでした。",

@@ -2152,7 +2152,7 @@
 	"settings.browserImport.empty": "Es wurde nichts importiert",
 	"settings.browserImport.resultCounts": "{{cookies}} Cookies · {{history}} Verlaufseinträge",
 	"settings.browserImport.skippedCookies": "{{count}} Cookies wurden übersprungen.",
-	"settings.browserImport.skippedItems": "Importdetails",
+	"settings.browserImport.importDetails": "Importdetails",
 	"settings.browserImport.signInAgain": "Einige Websites bitten dich möglicherweise, dich erneut anzumelden.",
 	"settings.browserImport.useProfile": "Wähle ein neues Profil in der Browser-Symbolleiste aus, um die importierten Daten zu verwenden.",
 	"settings.browserImport.warning.cookie-database-missing": "Für dieses Quellprofil war keine Cookie-Datenbank verfügbar.",

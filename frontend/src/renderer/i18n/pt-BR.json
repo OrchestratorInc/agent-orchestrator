@@ -2186,7 +2186,7 @@
 	"settings.browserImport.empty": "Nenhum dado foi importado",
 	"settings.browserImport.resultCounts": "{{cookies}} cookies · {{history}} itens do histórico",
 	"settings.browserImport.skippedCookies": "{{count}} cookies foram ignorados.",
-	"settings.browserImport.skippedItems": "Detalhes da importação",
+	"settings.browserImport.importDetails": "Detalhes da importação",
 	"settings.browserImport.signInAgain": "Alguns sites podem pedir que você entre novamente.",
 	"settings.browserImport.useProfile": "Selecione um novo perfil na barra do navegador para usar os dados importados.",
 	"settings.browserImport.warning.cookie-database-missing": "Nenhum banco de dados de cookies estava disponível para este perfil de origem.",
