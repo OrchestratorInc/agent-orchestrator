@@ -56,6 +56,7 @@ type fakeStore struct {
 	deleteErr                          error
 	upsertWTErr                        error
 	listAllErr                         error
+	listSessionsErr                    error
 	getProjectErr                      error
 	getSessionErr                      error
 	updateSessionErr                   error
@@ -317,6 +318,9 @@ func (f *fakeStore) ConversationForSession(_ context.Context, id domain.SessionI
 	return conversation, nil
 }
 func (f *fakeStore) ListSessions(_ context.Context, p domain.ProjectID) ([]domain.SessionRecord, error) {
+	if f.listSessionsErr != nil {
+		return nil, f.listSessionsErr
+	}
 	var out []domain.SessionRecord
 	for _, r := range f.sessions {
 		if r.ProjectID == p {

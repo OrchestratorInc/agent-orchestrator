@@ -800,12 +800,16 @@ func (m *Manager) preflightInterfaceTarget(
 	transition domain.SessionInterfaceTransition,
 ) error {
 	if transition.TargetMode == domain.SessionModeChat {
-		if m.chat == nil {
-			return ports.ErrChatUnsupported
-		}
 		project, err := m.loadProject(ctx, rec.ProjectID)
 		if err != nil {
 			return err
+		}
+		// A chat controller runs the harness on the host (#6663).
+		if sandboxFor(rec.Kind, project.Config).Enabled() {
+			return fmt.Errorf("%w: chat sessions cannot run in a sandbox yet", ports.ErrSandboxMisconfigured)
+		}
+		if m.chat == nil {
+			return ports.ErrChatUnsupported
 		}
 		permissions := effectiveAgentConfig(rec.Harness, rec.Kind, project.Config).Permissions
 		return m.chat.PreflightChat(ctx, rec.Harness, permissions)

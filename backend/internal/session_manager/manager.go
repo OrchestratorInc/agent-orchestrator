@@ -428,6 +428,7 @@ type Manager struct {
 	preview                     PreviewLifecycle
 	browser                     BrowserLifecycle
 	browserCapabilities         BrowserCapabilityIssuer
+	sandbox                     ports.Sandbox // nil: sandboxed roles fail to launch (#6663)
 	attachments                 *attachmentstore.Store
 	attachmentSuffix            func() (string, error)
 	dataDir                     string
@@ -785,6 +786,9 @@ type Deps struct {
 	Preview             PreviewLifecycle
 	Browser             BrowserLifecycle
 	BrowserCapabilities BrowserCapabilityIssuer
+	// Sandbox runs agents of roles with sandbox.mode set inside a container.
+	// Nil makes every sandboxed launch fail; it never falls back to the host.
+	Sandbox ports.Sandbox
 	// DataDir owns durable attachment storage and is exported to spawned agents
 	// as AO_DATA_DIR so their hook commands can open the same store.
 	DataDir string
@@ -833,6 +837,7 @@ func New(d Deps) *Manager {
 		preview:                        d.Preview,
 		browser:                        d.Browser,
 		browserCapabilities:            d.BrowserCapabilities,
+		sandbox:                        d.Sandbox,
 		attachments:                    attachmentstore.New(d.DataDir),
 		attachmentSuffix:               randomSuffix,
 		dataDir:                        d.DataDir,
@@ -1002,6 +1007,16 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	mode := m.resolveSessionMode(ctx, cfg.RequestedMode)
 	if cfg.Kind == domain.KindOrchestrator && !modeExplicitlyRequested {
 		mode = domain.SessionModeChat
+	}
+	// A chat controller runs the harness on the host, so a sandboxed role
+	// cannot use it (#6663). Like an unavailable Chat, an inherited preference
+	// falls back to TUI; an explicit request is refused before any state exists.
+	if mode == domain.SessionModeChat && sandboxFor(cfg.Kind, project.Config).Enabled() {
+		if modeExplicitlyRequested {
+			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: chat sessions cannot run in a sandbox yet; use terminal mode or set sandbox.mode to off", ports.ErrSandboxMisconfigured)
+		}
+		m.logger.Info("spawn: sandboxed role; using TUI instead of default Chat", "harness", cfg.Harness, "kind", cfg.Kind)
+		mode = domain.SessionModeTUI
 	}
 	if mode == domain.SessionModeChat {
 		if m.chat == nil {
@@ -1334,7 +1349,13 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, adapterConfig.Permissions)
-	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
+	sb, err := m.prepareSandboxLaunch(ctx, agent, rec, project.Config, ws.Path, env)
+	if err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, err)
+	}
+	// Host auth and binary probes describe the host, not the container image.
+	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok && sb == nil {
 		status, authErr := validator.ValidateLaunchAuth(ctx, ws.Path, env)
 		if authErr != nil {
 			m.logger.Debug("spawn: launch authentication probe inconclusive; continuing",
@@ -1383,12 +1404,14 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// path the adapter returned) BEFORE handing the launch to the runtime.
 	// tmux happily creates a session+pane around a missing command, so an
 	// unresolved binary would leak through as a "live" session that never ran.
-	if err := m.validateAgentBinary(argv); err != nil {
-		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
-		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, err)
+	if sb == nil {
+		if err := m.validateAgentBinary(argv); err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
+			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, err)
+		}
+		m.augmentRuntimePATHForLaunchBinary(ctx, env, argv)
 	}
-	m.augmentRuntimePATHForLaunchBinary(ctx, env, argv)
-	argv, launchID, err := m.superviseAgentProcess(agent, id, env, argv)
+	argv, launchID, err := m.superviseAgentProcess(agent, id, env, argv, sb)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnSupervisor, err)
@@ -2471,6 +2494,9 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 	if !ok {
 		return KillResult{}, nil // already gone: benign race
 	}
+	// Every exit path, including a preserved workspace: release re-reads the
+	// project's sessions and keeps the container while any is still live.
+	defer m.releaseSharedSandbox(ctx, rec.ProjectID)
 	m.stopPreviewBestEffort(ctx, id)
 	m.destroyBrowserBestEffort(ctx, id)
 	handle := runtimeHandle(rec.Metadata)
@@ -3281,7 +3307,9 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, agentConfig.Permissions)
-	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
+	// Host auth probes describe the host, not the container image.
+	sandboxed := sandboxFor(rec.Kind, project.Config).Enabled()
+	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok && !sandboxed {
 		status, authErr := validator.ValidateLaunchAuth(ctx, ws.Path, env)
 		if authErr != nil {
 			m.logger.Debug("restore: launch authentication probe inconclusive; continuing",
@@ -3291,6 +3319,12 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		}
 	}
 	if err := m.prepareWorkspace(ctx, agent, rec.ID, ws.Path, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
+		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+	}
+	// Before restoreArgv: it reads env (CLAUDE_CONFIG_DIR) to find the
+	// transcript, which PrepareSandbox points at the sandbox's config dir.
+	sb, err := m.prepareSandboxLaunch(ctx, agent, rec, project.Config, ws.Path, env)
+	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
 	}
 	var argv []string
@@ -3330,16 +3364,18 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			return RestoreResult{}, fmt.Errorf("%s %s: after-start prompt: %w", operation, rec.ID, err)
 		}
 	}
-	if err := m.validateAgentBinary(argv); err != nil {
-		m.cleanupSystemPromptDir(rec.ID)
-		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+	if sb == nil {
+		if err := m.validateAgentBinary(argv); err != nil {
+			m.cleanupSystemPromptDir(rec.ID)
+			return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+		}
+		m.augmentRuntimePATHForLaunchBinary(ctx, env, argv)
 	}
-	m.augmentRuntimePATHForLaunchBinary(ctx, env, argv)
 	launchID := strings.TrimSpace(reservedGeneration)
 	if launchID == "" {
-		argv, launchID, err = m.superviseAgentProcess(agent, rec.ID, env, argv)
+		argv, launchID, err = m.superviseAgentProcess(agent, rec.ID, env, argv, sb)
 	} else {
-		argv, err = m.wrapAgentProcessWithLaunchID(agent, rec.ID, env, argv, launchID, true)
+		argv, err = m.wrapAgentProcessWithLaunchID(agent, rec.ID, env, argv, launchID, true, sb)
 	}
 	if err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
@@ -6448,29 +6484,29 @@ func (m *Manager) validateRuntimePrerequisites() error {
 	return nil
 }
 
-func (m *Manager) superviseAgentProcess(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string) ([]string, string, error) {
+func (m *Manager) superviseAgentProcess(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string, sb *sandboxLaunch) ([]string, string, error) {
 	// Switching-capable providers always use the exact-generation
 	// supervisor, even when their native hooks also report exit. That gives a
 	// later semantic handoff a safe foreground-process proof and ensures an exit
 	// races into the non-interpreting tmux sink rather than a shell.
 	_, switchingCapable := agent.(ports.AgentContinuationCapabilityProvider)
-	return m.superviseAgentProcessMode(agent, id, env, argv, switchingCapable)
+	return m.superviseAgentProcessMode(agent, id, env, argv, switchingCapable, sb)
 }
 
 // superviseAgentProcessForSwitch always installs AO's generation-bearing
 // wrapper. Native hooks still report activity, while the wrapper gives crash
 // recovery a process-level proof that a surviving workload belongs to the
 // target generation rather than the provider that was stopped.
-func (m *Manager) superviseAgentProcessForSwitch(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string) ([]string, string, error) {
-	return m.superviseAgentProcessMode(agent, id, env, argv, true)
+func (m *Manager) superviseAgentProcessForSwitch(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string, sb *sandboxLaunch) ([]string, string, error) {
+	return m.superviseAgentProcessMode(agent, id, env, argv, true, sb)
 }
 
-func (m *Manager) superviseAgentProcessMode(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string, force bool) ([]string, string, error) {
+func (m *Manager) superviseAgentProcessMode(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string, force bool, sb *sandboxLaunch) ([]string, string, error) {
 	launchID := m.newLaunchID()
 	if strings.TrimSpace(launchID) == "" {
 		return nil, "", errors.New("generated empty launch id")
 	}
-	wrapped, err := m.wrapAgentProcessWithLaunchID(agent, id, env, argv, launchID, force)
+	wrapped, err := m.wrapAgentProcessWithLaunchID(agent, id, env, argv, launchID, force, sb)
 	if err != nil {
 		return nil, "", err
 	}
@@ -6481,7 +6517,9 @@ func (m *Manager) superviseAgentProcessMode(agent ports.Agent, id domain.Session
 // changing its already-reserved generation. Agent switching uses this after it
 // has assembled the final in-memory continuation for CLIs that can accept the
 // turn directly on fresh/resume launch.
-func (m *Manager) wrapAgentProcessWithLaunchID(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string, launchID string, force bool) ([]string, error) {
+// A non-nil sb runs the agent inside its sandbox container through the
+// supervisor, which also serves the in-container `ao` relay.
+func (m *Manager) wrapAgentProcessWithLaunchID(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string, launchID string, force bool, sb *sandboxLaunch) ([]string, error) {
 	if strings.TrimSpace(launchID) == "" {
 		return nil, errors.New("empty launch id")
 	}
@@ -6493,6 +6531,18 @@ func (m *Manager) wrapAgentProcessWithLaunchID(agent ports.Agent, id domain.Sess
 	if augmenter, ok := agent.(ports.AgentRuntimeLaunchEnv); ok {
 		augmenter.AugmentRuntimeLaunchEnv(env, m.dataDir, id, launchID)
 	}
+	var relayDir string
+	if sb != nil {
+		// Sandboxed launches always use the supervisor: it serves the
+		// in-container `ao` relay and owns the docker exec client process.
+		force = true
+		var err error
+		argv, err = m.sandbox.Exec(sb.target, sb.workspacePath, env, sandboxArgv(argv, sb.binary))
+		if err != nil {
+			return nil, fmt.Errorf("sandbox exec: %w", err)
+		}
+		relayDir = sb.target.RelayDir
+	}
 	detector, ok := agent.(ports.AgentExitDetector)
 	if !force && (!ok || detector.ExitDetectionMode() != ports.AgentExitDetectionSupervisor) {
 		return argv, nil
@@ -6502,8 +6552,12 @@ func (m *Manager) wrapAgentProcessWithLaunchID(agent ports.Agent, id domain.Sess
 	if err != nil {
 		return nil, fmt.Errorf("resolve AO executable: %w", err)
 	}
-	wrapped := make([]string, 0, 8+len(argv))
-	wrapped = append(wrapped, executable, "agent-process", "supervise", "--session", string(id), "--launch", launchID, "--")
+	wrapped := make([]string, 0, 10+len(argv))
+	wrapped = append(wrapped, executable, "agent-process", "supervise", "--session", string(id), "--launch", launchID)
+	if relayDir != "" {
+		wrapped = append(wrapped, "--sandbox-relay", relayDir)
+	}
+	wrapped = append(wrapped, "--")
 	wrapped = append(wrapped, argv...)
 	return wrapped, nil
 }
