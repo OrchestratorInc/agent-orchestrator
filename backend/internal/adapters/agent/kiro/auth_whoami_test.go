@@ -98,3 +98,22 @@ func TestKiroWhoamiAccount(t *testing.T) {
 		t.Fatalf("signed-out account = %+v", account)
 	}
 }
+
+// Kiro's own login decides before KIRO_API_KEY; the key only answers when
+// whoami reports no login.
+func TestKiroLoginWinsOverEnvironmentKey(t *testing.T) {
+	t.Setenv("KIRO_API_KEY", "kiro-env-key")
+	plugin := &Plugin{resolvedBinary: "kiro-cli"}
+
+	withWhoami(t, signedInWhoami, nil)
+	status, account, err := plugin.AuthStatusWithAccount(context.Background())
+	if err != nil || status != ports.AgentAuthStatusAuthorized || account.Email != "user@example.com" {
+		t.Fatalf("signed in: status=%s account=%+v err=%v", status, account, err)
+	}
+
+	withWhoami(t, signedOutWhoami, errors.New("exit status 1"))
+	status, account, err = plugin.AuthStatusWithAccount(context.Background())
+	if err != nil || status != ports.AgentAuthStatusAuthorized || account.Source != "KIRO_API_KEY" {
+		t.Fatalf("signed out with key: status=%s account=%+v err=%v", status, account, err)
+	}
+}

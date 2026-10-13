@@ -8,6 +8,12 @@ import { LOCAL_HOST } from "../lib/hosts";
 export type AgentModelCatalog = components["schemas"]["AgentModelsResponse"];
 
 const MODEL_CATALOG_VALIDATION_INTERVAL_MS = 10 * 60 * 1_000;
+const MODEL_CATALOG_REFRESH_POLL_MS = 3_000;
+
+/** Whether the daemon is still refreshing this catalog in the background. */
+export function isRefreshingCatalog(catalog: Pick<AgentModelCatalog, "refreshState"> | undefined): boolean {
+	return catalog?.refreshState === "refreshing" || catalog?.refreshState === "queued";
+}
 
 export const agentModelsQueryPrefix = (agentId: string) =>
 	["agent-models", agentId] as const;
@@ -47,6 +53,9 @@ export function agentModelsQueryOptions(agentId: string, projectId: string, host
 		// A catalog that carries a warning describes a problem the user may fix
 		// outside AO (a login in a terminal), so any remount re-reads it.
 		staleTime: (query) => (query.state.data?.warning ? 0 : MODEL_CATALOG_VALIDATION_INTERVAL_MS),
+		// The daemon serves its cached catalog at once and refreshes it in the
+		// background; re-read it while that runs so the new one appears.
+		refetchInterval: (query) => (isRefreshingCatalog(query.state.data) ? MODEL_CATALOG_REFRESH_POLL_MS : false),
 	});
 }
 

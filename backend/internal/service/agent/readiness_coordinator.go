@@ -593,6 +593,7 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, timeout)
 	defer cancel()
+	ctx, evidence := ports.WithAuthEvidence(ctx)
 	var status ports.AgentAuthStatus
 	var account domain.AgentAccountIdentity
 	var err error
@@ -610,6 +611,9 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 		}
 		return failedAuthentication(attempted, domain.AgentReadinessReasonAuthCheckFailed, "Authentication check failed."), true
 	}
+	// What the adapter reported about the account, completed by the evidence
+	// it recorded for the decision (an environment variable, file or command).
+	account = account.Merge(evidence.Identity())
 	switch status {
 	case ports.AgentAuthStatusAuthorized:
 		observation := successfulAuthentication(attempted, domain.AgentAuthenticationAuthorized, domain.AgentReadinessReasonAuthorized, item.Manifest.Name+" appears signed in.")

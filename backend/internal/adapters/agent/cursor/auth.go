@@ -37,21 +37,20 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, err
 	}
+	// Native login decides first; the environment key is the fallback.
+	status, steps, err := authprobe.CLIStatusWithDiagnostics(ctx, binary, [][]string{{"status"}}, 3*time.Second, nil)
+	if err != nil && ctx.Err() != nil {
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, steps, err
+	}
+	if err == nil && status == ports.AgentAuthStatusAuthorized {
+		return status, cursorLoginAccount(cursorConfigPath()), steps, nil
+	}
 	if strings.TrimSpace(os.Getenv("CURSOR_API_KEY")) != "" {
 		d := domain.NewAgentAuthDiagnostic("environment", "credential_present")
 		d.Source = "CURSOR_API_KEY"
-		return ports.AgentAuthStatusAuthorized, domain.AgentAccountIdentity{Method: domain.AgentAccountMethodAPIKey}, []domain.AgentAuthDiagnostic{d}, nil
+		return ports.AgentAuthStatusAuthorized, domain.EnvironmentSource("CURSOR_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey), append(steps, d), nil
 	}
-	if status, steps, err := authprobe.CLIStatusWithDiagnostics(ctx, binary, [][]string{{"status"}}, 3*time.Second, nil); err == nil {
-		var account domain.AgentAccountIdentity
-		if status == ports.AgentAuthStatusAuthorized {
-			account = cursorLoginAccount(cursorConfigPath())
-		}
-		return status, account, steps, nil
-	} else if ctx.Err() != nil {
-		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, err
-	}
-	return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, nil
+	return status, domain.AgentAccountIdentity{}, steps, err
 }
 
 func cursorCLIAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStatus, error) {

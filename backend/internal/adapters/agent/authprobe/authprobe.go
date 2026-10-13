@@ -63,6 +63,9 @@ func CLIStatusWithDiagnostics(ctx context.Context, binary string, commands [][]s
 	for _, args := range commands {
 		status, step, err := commandStatus(ctx, binary, args, timeout, classify)
 		steps = append(steps, step)
+		if err == nil && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+			ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, args...))
+		}
 		if err != nil || status != ports.AgentAuthStatusUnknown {
 			return status, steps, err
 		}

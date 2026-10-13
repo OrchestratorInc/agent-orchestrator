@@ -36,12 +36,20 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, err
 	}
+	// Native login decides first; the environment key is the fallback.
+	status, account, steps, err := kiroWhoamiAuthDiagnostics(ctx, binary)
+	if err != nil && ctx.Err() != nil {
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, steps, err
+	}
+	if err == nil && status == ports.AgentAuthStatusAuthorized {
+		return status, account, steps, nil
+	}
 	if strings.TrimSpace(os.Getenv("KIRO_API_KEY")) != "" {
 		d := domain.NewAgentAuthDiagnostic("environment", "credential_present")
 		d.Source = "KIRO_API_KEY"
-		return ports.AgentAuthStatusAuthorized, domain.AgentAccountIdentity{Method: domain.AgentAccountMethodAPIKey}, []domain.AgentAuthDiagnostic{d}, nil
+		return ports.AgentAuthStatusAuthorized, domain.EnvironmentSource("KIRO_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey), append(steps, d), nil
 	}
-	return kiroWhoamiAuthDiagnostics(ctx, binary)
+	return status, account, steps, err
 }
 
 func kiroWhoamiAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStatus, error) {

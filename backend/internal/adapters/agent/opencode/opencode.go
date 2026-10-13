@@ -33,8 +33,10 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 
@@ -186,17 +188,40 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 
 // AuthStatus checks whether opencode has a configured provider credential.
 // Missing credentials remain unknown because opencode can still run its public
-// free models without a provider login.
+// free models without a provider login. opencode's own stored credentials
+// decide first, then `opencode auth list`, and only then a key in the
+// environment.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	binary, err := p.opencodeBinary(ctx)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	if status, ok, err := opencodeLocalAuthStatus(ctx); err != nil {
-		return ports.AgentAuthStatusUnknown, err
-	} else if ok {
+	status, ok, storedErr := opencodeStoredAuthStatus(ctx)
+	if storedErr == nil && ok && usableAuthStatus(status) {
 		return status, nil
 	}
+	if storedErr == nil {
+		listed, err := opencodeAuthListStatus(ctx, binary)
+		if err != nil {
+			return ports.AgentAuthStatusUnknown, err
+		}
+		if listed == ports.AgentAuthStatusAuthorized {
+			return listed, nil
+		}
+	}
+	if envStatus, envOK := opencodeEnvAuthStatus(ctx); envOK {
+		return envStatus, nil
+	}
+	if storedErr != nil {
+		return ports.AgentAuthStatusUnknown, storedErr
+	}
+	if ok {
+		return status, nil
+	}
+	return ports.AgentAuthStatusUnknown, nil
+}
+
+func opencodeAuthListStatus(ctx context.Context, binary string) (ports.AgentAuthStatus, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
@@ -212,10 +237,8 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, nil
 	}
 	if strings.Contains(text, "credential") && err == nil {
+		ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "auth", "list"))
 		return ports.AgentAuthStatusAuthorized, nil
-	}
-	if err != nil {
-		return ports.AgentAuthStatusUnknown, nil
 	}
 	return ports.AgentAuthStatusUnknown, nil
 }
@@ -234,28 +257,58 @@ var opencodeAPIKeyEnvVars = []string{
 	"COHERE_API_KEY",
 }
 
+// opencodeLocalAuthStatus checks opencode's stored credentials, then a key in
+// the environment.
 func opencodeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
+	status, ok, err := opencodeStoredAuthStatus(ctx)
+	if err == nil && ok && usableAuthStatus(status) {
+		return status, true, nil
+	}
+	if envStatus, envOK := opencodeEnvAuthStatus(ctx); envOK {
+		return envStatus, true, nil
+	}
+	return status, ok, err
+}
+
+func usableAuthStatus(status ports.AgentAuthStatus) bool {
+	return status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured
+}
+
+func opencodeEnvAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool) {
+	for _, name := range opencodeAPIKeyEnvVars {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey))
+			return ports.AgentAuthStatusAuthorized, true
+		}
+	}
+	return ports.AgentAuthStatusUnknown, false
+}
+
+// opencodeStoredAuthStatus reads opencode's auth.json, then its database.
+func opencodeStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	for _, name := range opencodeAPIKeyEnvVars {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			return ports.AgentAuthStatusAuthorized, true, nil
-		}
-	}
-
 	dataDir, ok := opencodeDataDir()
 	if !ok {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
-	jsonStatus, jsonOK, err := opencodeAuthJSONStatus(filepath.Join(dataDir, "auth.json"))
+	authPath := filepath.Join(dataDir, "auth.json")
+	jsonStatus, jsonOK, err := opencodeAuthJSONStatus(authPath)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if jsonOK && jsonStatus == ports.AgentAuthStatusAuthorized {
+		evidence := domain.FileSource(authPath).WithMethod(authprobe.JSONProviderMethod(authPath))
+		evidence.Provider = authprobe.JSONProviderNames(authPath)
+		ports.RecordAuthEvidence(ctx, evidence)
 		return jsonStatus, true, nil
 	}
-	if status, ok, err := opencodeDBAuthStatus(ctx, filepath.Join(dataDir, "opencode.db")); err != nil || ok {
+	dbPath := filepath.Join(dataDir, "opencode.db")
+	if status, ok, err := opencodeDBAuthStatus(ctx, dbPath); err != nil || ok {
+		if status == ports.AgentAuthStatusAuthorized {
+			ports.RecordAuthEvidence(ctx, domain.FileSource(dbPath).WithMethod(domain.AgentAccountMethodAccount))
+		}
 		return status, ok, err
 	}
 	if jsonOK {

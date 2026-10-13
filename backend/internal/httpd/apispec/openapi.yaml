@@ -10596,12 +10596,24 @@ components:
           enum:
           - account
           - api_key
+          - token
           type: string
         name:
           type: string
         organization:
           type: string
         plan:
+          type: string
+        provider:
+          type: string
+        source:
+          type: string
+        sourceKind:
+          enum:
+          - environment
+          - file
+          - command
+          - keychain
           type: string
       type: object
     AgentAuthDiagnostic:

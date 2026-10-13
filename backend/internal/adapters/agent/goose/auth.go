@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 
 	yaml "gopkg.in/yaml.v3"
@@ -47,20 +48,30 @@ func gooseLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	for _, name := range gooseAPIKeyEnvVars {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			return ports.AgentAuthStatusAuthorized, true, nil
-		}
-	}
-
+	// Goose's own config and secrets files decide first; a key in the
+	// environment is the fallback. A file read error only surfaces when no
+	// key is set either.
+	var fileErr error
 	for _, path := range gooseConfigPaths() {
 		status, ok, err := gooseAuthStatusFromConfig(path)
 		if err != nil {
-			return ports.AgentAuthStatusUnknown, false, err
+			fileErr = err
+			break
 		}
 		if ok {
+			ports.RecordAuthEvidence(ctx, domain.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey))
 			return status, true, nil
 		}
+	}
+
+	for _, name := range gooseAPIKeyEnvVars {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey))
+			return ports.AgentAuthStatusAuthorized, true, nil
+		}
+	}
+	if fileErr != nil {
+		return ports.AgentAuthStatusUnknown, false, fileErr
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
 }

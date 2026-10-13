@@ -3541,10 +3541,14 @@ export interface components {
         AgentAccountIdentity: {
             email?: string;
             /** @enum {string} */
-            method?: "account" | "api_key";
+            method?: "account" | "api_key" | "token";
             name?: string;
             organization?: string;
             plan?: string;
+            provider?: string;
+            source?: string;
+            /** @enum {string} */
+            sourceKind?: "environment" | "file" | "command" | "keychain";
         };
         AgentAuthDiagnostic: {
             cached: boolean;

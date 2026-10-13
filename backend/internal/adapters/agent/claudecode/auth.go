@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -66,6 +68,39 @@ func (p *Plugin) AuthStatusWithAccount(ctx context.Context) (ports.AgentAuthStat
 	return status, report.account(), err
 }
 
+// credentialEvidence names where the credential the agent uses came from and
+// how it signs in. A token or key supplied directly carries no account
+// profile, so its method replaces the CLI's "claude.ai" report.
+func credentialEvidence(credential agentcreds.Credential) domain.AgentAccountIdentity {
+	method := domain.AgentAccountMethodAccount
+	switch credential.Kind {
+	case agentcreds.KindAPIKey:
+		method = domain.AgentAccountMethodAPIKey
+	case agentcreds.KindOAuthToken, agentcreds.KindAuthToken:
+		method = domain.AgentAccountMethodToken
+	}
+	switch source := strings.TrimSpace(credential.Source); {
+	case source == "keychain":
+		return domain.KeychainSource().WithMethod(domain.AgentAccountMethodAccount)
+	case source == "credentials-file":
+		return domain.FileSource(filepath.Join(claudeConfigDir(), ".credentials.json")).WithMethod(domain.AgentAccountMethodAccount)
+	case envVarName.MatchString(source):
+		return domain.EnvironmentSource(source).WithMethod(method)
+	default:
+		return domain.AgentAccountIdentity{Method: method}
+	}
+}
+
+var envVarName = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+
+func claudeConfigDir() string {
+	if dir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); dir != "" {
+		return dir
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude")
+}
+
 // ValidateLaunchAuth checks the credential in the exact cwd/environment that
 // will be handed to Claude. Launch validation always bypasses the success cache:
 // a provider can revoke a credential without changing anything on disk.
@@ -121,6 +156,18 @@ func (p *Plugin) authStatusAndDiagnostics(ctx context.Context, workingDir string
 	report := claudeAuthReport{}
 	if reportApplies {
 		report = resolved.report
+	}
+
+	if resolved.found {
+		// The credential the verdict is about; a token or key overrides the
+		// CLI's account wording, a stored login keeps its email and plan.
+		evidence := credentialEvidence(resolved.credential)
+		if evidence.Method != domain.AgentAccountMethodAccount {
+			report.AuthMethod = ""
+		}
+		ports.RecordAuthEvidence(ctx, evidence)
+	} else if reportApplies {
+		ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "auth", "status"))
 	}
 
 	// Rungs 1 and 2 — the provider gate and the network probe. This is the
@@ -415,13 +462,22 @@ func claudeLocalAuthStatus(ctx context.Context, opts agentcreds.ResolveOptions) 
 		if value == "" {
 			continue
 		}
+		method := domain.AgentAccountMethodToken
+		if name == "ANTHROPIC_API_KEY" {
+			method = domain.AgentAccountMethodAPIKey
+		}
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(method))
 		return ports.AgentAuthStatusConfigured, nil
 	}
 	cfgPath, err := claudeConfigPath()
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	return claudeConfigAuthStatus(ctx, cfgPath)
+	status, err := claudeConfigAuthStatus(ctx, cfgPath)
+	if status == ports.AgentAuthStatusConfigured {
+		ports.RecordAuthEvidence(ctx, domain.FileSource(cfgPath).WithMethod(domain.AgentAccountMethodAccount))
+	}
+	return status, err
 }
 
 // claudeConfigAuthStatus reads the durable markers Claude Code writes into

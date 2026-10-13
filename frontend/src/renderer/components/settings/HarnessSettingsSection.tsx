@@ -11,10 +11,11 @@ import {
 	useAgentReadinessQuery,
 } from "../../hooks/useAgentReadinessQuery";
 import { agentAuthPlansQueryKeyForHost, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "../../hooks/useAgentAuth";
-import { agentModelsQueryOptions, refreshAgentModels, invalidateAgentModelCatalogs } from "../../hooks/useAgentModelsQuery";
+import { agentModelsQueryOptions, invalidateAgentModelCatalogs, refreshAgentModels } from "../../hooks/useAgentModelsQuery";
 import { fetchSessionMemory, formatCPU, formatMemory, sessionMemoryQueryOptions } from "../../hooks/useSessionMemory";
 import { closeShellTerminal, shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../hooks/useShellTerminals";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
+import { agentModelDisplayLabel, isConcreteModelID, splitClaudeModels } from "../../lib/agent-model-choices";
 import { agentLabel, AGENT_OPTIONS, type AgentId } from "../../lib/agent-options";
 import { CLOUD_AGENT_PROVIDERS, isCloudHarnessConnected } from "../../lib/cloud-agents";
 import { useCloudCp } from "../../hooks/useCloudCp";
@@ -318,6 +319,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		selectedAgentRef.current = agentId;
 		setSelectedAgentId(agentId);
 		setDetailTab(tab);
+		refreshModelsOnOpen(agentId);
 	};
 	const closeDetail = () => {
 		selectedAgentRef.current = null;
@@ -346,6 +348,28 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		() => new Set<AgentId>(agents.data?.agents.filter((agent) => agent.installation.state === "installed").map((agent) => agent.id as AgentId) ?? []),
 		[agents.data],
 	);
+	const refreshModelsOnOpen = (agentId: AgentId) => {
+		if (!installed.has(agentId) || (needsAuthentication(agentId) && !MULTI_PROVIDER_HARNESSES.has(agentId))) return;
+		const options = agentModelsQueryOptions(agentId, "", hostId);
+		// Read the persisted cache first, then refresh without replacing the
+		// visible list with a loading state. Concurrent opens share one request.
+		void queryClient.fetchQuery({
+			queryKey: ["agent-model-revalidation", hostId ?? LOCAL_HOST, agentId, "settings-open"],
+			staleTime: 0,
+			retry: false,
+			queryFn: async () => {
+				await queryClient.prefetchQuery(options);
+				const catalog = await refreshAgentModels(agentId, "", hostId);
+				if (catalog) queryClient.setQueryData(options.queryKey, catalog);
+				return true;
+			},
+		}).catch((error: unknown) => {
+			queryClient.setQueryData<components["schemas"]["AgentModelsResponse"]>(options.queryKey, (cached) => cached ? {
+				...cached,
+				refreshError: error instanceof Error ? error.message : t("settings.harness.models.loadFailed"),
+			} : cached);
+		});
+	};
 	// The page uses the initial installed snapshot immediately, like Install
 	// and Login. A full-catalog background refresh must not delay its first
 	// version lookup. The app-wide notification has its own readiness gate.
@@ -882,10 +906,16 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		// Who the harness is signed in as, when its own login check names it.
 		const account: AgentAccountIdentity | undefined = authStatus === "authorized" || authStatus === "configured" ? readinessAgent?.authentication.account : undefined;
 		const accountWho = account?.email || account?.name;
+		// Who and how the harness is signed in. Where the credential was found
+		// stays in the readiness data for diagnostics; the row does not show it.
 		const accountDescription = account ? [
-			accountWho ? t("settings.harness.signedInAs", { account: accountWho }) : account.method === "api_key" ? t("settings.harness.usingApiKey") : undefined,
+			accountWho ? t("settings.harness.signedInAs", { account: accountWho })
+				: account.method === "api_key" ? t("settings.harness.usingApiKey")
+				: account.method === "token" ? t("settings.harness.usingToken")
+				: account.method === "account" ? t("settings.harness.signedInWithAccount") : undefined,
 			account.plan ? account.plan.charAt(0).toUpperCase() + account.plan.slice(1) : undefined,
 			account.organization,
+			account.provider,
 		].filter(Boolean).join(" · ") || undefined : undefined;
 		const rowAuthWorkflow = authWorkflow?.agentId === agentId ? authWorkflow : null;
 		const authBusy = Boolean(rowAuthWorkflow || authState?.pending);
@@ -1155,6 +1185,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 	};
 
 	const selectedDetails = selectedAgentId ? describe(selectedAgentId) : null;
+	const detailsOpen = Boolean(selectedDetails);
 
 	return (
 		<>
@@ -1165,10 +1196,10 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				</div>
 			) : null}
 
-			<div ref={layoutRef} className={cn("w-full", split && "grid grid-cols-[minmax(14rem,16rem)_minmax(0,1fr)] items-stretch overflow-clip rounded-xl border border-border bg-(--color-bg-primary)")}>
+			<div ref={layoutRef} data-harness-detail={detailsOpen ? "" : undefined} className={cn("w-full min-w-0 max-w-full", detailsOpen && "flex min-h-0 flex-1 flex-col overflow-hidden", split && detailsOpen && "grid-rows-[minmax(0,1fr)]", split && "grid grid-cols-[minmax(14rem,16rem)_minmax(0,1fr)] items-stretch overflow-clip rounded-xl border border-border bg-(--color-bg-primary)")}>
 				{split || !selectedDetails ? (
 					<div className={cn("flex w-full flex-col", split
-						? "sticky top-14 h-full max-h-[calc(100dvh-10rem)] self-start divide-y divide-border overflow-y-auto overscroll-contain bg-(--color-bg-secondary)"
+						? cn("sticky top-14 h-full self-start divide-y divide-border overflow-y-auto overscroll-contain bg-(--color-bg-secondary)", detailsOpen ? "static min-h-0 max-h-full" : "max-h-[calc(100dvh-10rem)]")
 						: "divide-y divide-border overflow-hidden rounded-lg border border-border")}>
 						{rows.map((agentId) => {
 							const details = describe(agentId);
@@ -1210,31 +1241,31 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				) : null}
 				{selectedDetails ? (
 					<div
-						className={cn("flex w-full min-w-0 flex-col gap-4", split && "p-5")}
+						className={cn("flex w-full min-w-0 flex-col gap-4", detailsOpen && "min-h-0 flex-1 overflow-hidden", split && "p-5")}
 						data-agent={selectedDetails.agentId}
 						data-focus-highlighted={highlightedAgentId === selectedDetails.agentId ? "" : undefined}
 						ref={detailRef}
 					>
-						{split ? null : <div>
+						{split ? null : <div className="shrink-0">
 							<Button type="button" size="sm" variant="ghost" className="-ml-2 h-7 gap-1 px-2 text-settings-muted" onClick={closeDetail}>
 								<ChevronLeft aria-hidden="true" />{t("settings.harness.allHarnesses")}
 							</Button>
 						</div>}
 						<div
-							className={cn("-mx-2 flex items-center gap-3 rounded-lg px-2 py-1 transition-[background-color,box-shadow] duration-200", highlightedAgentId === selectedDetails.agentId && "bg-accent-weak ring-2 ring-inset ring-accent")}
+							className={cn("-mx-2 flex shrink-0 items-center gap-3 rounded-lg px-2 py-1 transition-[background-color,box-shadow] duration-200", highlightedAgentId === selectedDetails.agentId && "bg-accent-weak ring-2 ring-inset ring-accent")}
 						>
 							<AgentAvatar className="size-7 shrink-0" decorative provider={selectedDetails.agentId} />
 							{/* Pane title: one step above row labels (15px), below the page heading. */}
 							<span className="min-w-0 flex-1 text-subtitle font-semibold leading-6 text-settings-label" id={`harness-agent-${selectedDetails.agentId}`}>{agentLabel(selectedDetails.agentId)}</span>
 						</div>
-						<Tabs value={detailTab} onValueChange={(value) => setDetailTab(value as HarnessDetailTab)}>
+						<Tabs className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" value={detailTab} onValueChange={(value) => setDetailTab(value as HarnessDetailTab)}>
 							<TabsList className={HARNESS_TABS_CLASS} aria-label={t("settings.harness.detailTabs", { agent: agentLabel(selectedDetails.agentId) })}>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="account">{t("settings.harness.tabAccount")}</TabsTrigger>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="models">{t("settings.harness.tabModels")}</TabsTrigger>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="health">{t("settings.harness.tabHealth")}</TabsTrigger>
 							</TabsList>
-							<TabsContent value="account" className="pt-4">{accountTab(selectedDetails)}</TabsContent>
-							<TabsContent value="models" className="pt-4">
+							<TabsContent value="account" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">{accountTab(selectedDetails)}</TabsContent>
+							<TabsContent value="models" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">
 								<HarnessModelsPanel
 									agentId={selectedDetails.agentId}
 									hostId={hostId}
@@ -1243,7 +1274,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 									onOpenAccount={() => setDetailTab("account")}
 								/>
 							</TabsContent>
-							<TabsContent value="health" className="pt-4">{healthTab(selectedDetails)}</TabsContent>
+							<TabsContent value="health" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">{healthTab(selectedDetails)}</TabsContent>
 						</Tabs>
 					</div>
 				) : null}
@@ -1283,7 +1314,7 @@ function useWideLayout(ref: { current: HTMLElement | null }): boolean {
 }
 
 // Page tabs underline the active section instead of nesting a pill inside a pill.
-const HARNESS_TABS_CLASS = "h-auto w-full justify-start gap-5 rounded-none border-b border-border bg-transparent p-0";
+const HARNESS_TABS_CLASS = "shrink-0 h-auto w-full justify-start gap-5 rounded-none border-b border-border bg-transparent p-0";
 const HARNESS_TAB_CLASS = "-mb-px h-9 flex-none rounded-none border-0 border-b-2 border-transparent bg-transparent px-0.5 shadow-none data-[state=active]:border-foreground data-[state=active]:bg-transparent dark:data-[state=active]:border-foreground dark:data-[state=active]:bg-transparent";
 
 function HarnessStatusDot({ tone }: { tone: HarnessTone }) {
@@ -1291,23 +1322,23 @@ function HarnessStatusDot({ tone }: { tone: HarnessTone }) {
 }
 
 // Harness page sections: one bordered, tonal card per section, rows divided by hairlines.
-const HARNESS_CARD_CLASS = "flex w-full flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-(--color-bg-secondary)";
+const HARNESS_CARD_CLASS = "flex w-full min-w-0 max-w-full flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-(--color-bg-secondary)";
 const HARNESS_CARD_ROW_CLASS = "flex min-h-12 items-center px-3 py-2.5";
 
 function HarnessDetailGroup({ title, children }: { title: string; children: ReactNode }) {
-	return <section className="flex flex-col gap-1.5">
+	return <section className="flex min-w-0 max-w-full flex-col gap-1.5">
 		<h3 className="text-xs font-medium leading-4 text-settings-muted">{title}</h3>
 		<div className={HARNESS_CARD_CLASS}>{children}</div>
 	</section>;
 }
 
 function HarnessDetailRow({ label, description, children }: { label: string; description?: string; children?: ReactNode }) {
-	return <div className={cn(HARNESS_CARD_ROW_CLASS, "flex-wrap gap-x-4 gap-y-1")}>
+	return <div className={cn(HARNESS_CARD_ROW_CLASS, "min-w-0 flex-wrap gap-x-4 gap-y-1 [overflow-wrap:anywhere]")}>
 		<span className="min-w-0 flex-1">
 			<span className="block text-sm leading-5 text-settings-label">{label}</span>
 			{description ? <span className="mt-0.5 block text-pretty text-xs leading-4 text-settings-muted">{description}</span> : null}
 		</span>
-		<span className="flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-1">{children}</span>
+		<span className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-3 gap-y-1">{children}</span>
 	</div>;
 }
 
@@ -1337,12 +1368,9 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	onOpenAccount: () => void;
 }) {
 	const { i18n, t } = useTranslation();
-	const queryClient = useQueryClient();
 	const options = agentModelsQueryOptions(agentId, "", hostId);
 	const loginBlocksCatalog = needsLogin && !MULTI_PROVIDER_HARNESSES.has(agentId);
 	const catalog = useQuery({ ...options, enabled: installed && !loginBlocksCatalog });
-	const [refreshing, setRefreshing] = useState(false);
-	const [refreshError, setRefreshError] = useState<string | null>(null);
 	const [page, setPage] = useState(0);
 	const scope = `${hostId ?? LOCAL_HOST}:${agentId}`;
 	const [providerChoice, setProviderChoice] = useState<{ scope: string; id: string }>();
@@ -1364,29 +1392,18 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 			<Button type="button" size="sm" variant="outline" onClick={onOpenAccount}>{t("settings.harness.tabAccount")}</Button>
 		</div></div>;
 	}
-	const refresh = async () => {
-		setRefreshing(true);
-		setRefreshError(null);
-		try {
-			queryClient.setQueryData(options.queryKey, await refreshAgentModels(agentId, "", hostId));
-		} catch (error) {
-			setRefreshError(error instanceof Error ? error.message : t("settings.harness.models.loadFailed"));
-		} finally {
-			setRefreshing(false);
-		}
-	};
 	const data = catalog.data;
-	const updated = data?.lastSuccessAt ?? data?.fetchedAt;
-	const busy = refreshing || data?.refreshState === "refreshing" || data?.refreshState === "queued";
-	// Long catalogs page through MODELS_PAGE_SIZE at a time; short ones show no paging controls.
-	const models = (showProviders ? selectedProvider?.models : allModels) ?? [];
+	// Claude uses the New Task family order, with older models included in the same paginated list.
+	const catalogModels = (showProviders ? selectedProvider?.models : allModels) ?? [];
+	const claude = agentId === "claude-code" ? splitClaudeModels(catalogModels.filter((model) => isConcreteModelID(model.id))) : undefined;
+	const models = claude ? [...claude.current, ...claude.other] : catalogModels;
 	const pageCount = Math.max(1, Math.ceil(models.length / MODELS_PAGE_SIZE));
 	const currentPage = Math.min(page, pageCount - 1);
 	const pageStart = currentPage * MODELS_PAGE_SIZE;
 	const visibleModels = models.slice(pageStart, pageStart + MODELS_PAGE_SIZE);
-	const error = refreshError ?? (catalog.error instanceof Error ? catalog.error.message : undefined) ?? data?.refreshError;
-	return <div className="flex flex-col gap-3">
-		{showProviders ? <div className="space-y-2">
+	const error = (catalog.error instanceof Error ? catalog.error.message : undefined) ?? data?.refreshError;
+	return <div className="flex min-h-0 flex-1 flex-col gap-3">
+		{showProviders ? <div className="shrink-0 space-y-2">
 			<h3 className="text-sm font-medium text-settings-label">{t("settings.harness.models.provider")}</h3>
 			<SettingsOptionMenu
 				aria-label={t("settings.harness.models.provider")} value={selectedProvider?.id ?? ""}
@@ -1396,31 +1413,20 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 			/>
 			{providers.some((provider) => provider.configured) && !data?.stale ? <p className="text-xs text-settings-muted">{t("settings.harness.models.configuredProviderHint")}</p> : null}
 		</div> : null}
-		<div className="flex items-center justify-between gap-3">
-			<h3 className="text-xs font-medium leading-4 text-settings-muted">{t("settings.harness.models.title")}</h3>
-			<span className="flex items-center gap-2 text-xs text-settings-muted">
-				{updated && Number.isFinite(Date.parse(updated)) ? <span>{t("settings.harness.models.updated", { time: new Date(updated).toLocaleString(i18n.resolvedLanguage, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) })}</span> : null}
-				<Button type="button" size="sm" variant="ghost" className="h-7 px-2" disabled={busy || catalog.isPending} onClick={() => void refresh()}>
-					{busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
-					{t(busy ? "settings.harness.models.refreshing" : "settings.harness.models.refresh")}
-				</Button>
-			</span>
-		</div>
+		<h3 className="shrink-0 text-xs font-medium leading-4 text-settings-muted">{t("settings.harness.models.title")}</h3>
 		{error ? <p role="alert" className="text-xs text-error">{error}</p> : null}
-		{catalog.isPending ? <p className="flex items-center gap-2 px-3 py-6 text-sm text-settings-muted"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("settings.harness.models.loading")}</p>
+		{catalog.isPending ? null
 			: !models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.models.empty")}</p>
-			: <ul className={HARNESS_CARD_CLASS} aria-label={t("settings.harness.models.title")}>
-				{visibleModels.map((model) => <li key={model.id} className={cn(HARNESS_CARD_ROW_CLASS, "gap-4")}>
+			: <ul className={cn(HARNESS_CARD_CLASS, "settings-thin-scrollbar min-h-0 flex-initial overflow-y-auto overscroll-contain")} tabIndex={0} aria-label={t("settings.harness.models.title")}>
+				{visibleModels.map((model) => <li key={model.id} className={cn(HARNESS_CARD_ROW_CLASS, "shrink-0 gap-4")}>
 					<span className="min-w-0 flex-1">
 						<span className="flex flex-wrap items-center gap-2 text-sm leading-5 text-settings-label">
-							{model.label}
+							{agentModelDisplayLabel(agentId, model.label)}
 							{model.isDefault ? <span className="rounded-sm bg-(--color-bg-settings-input) px-1.5 py-0.5 text-[11px] text-settings-muted">{t("settings.harness.models.default")}</span> : null}
 						</span>
-						{model.label !== model.id ? <span className="block break-all font-mono text-[11px] text-settings-muted">{model.id}</span> : null}
 						{/* Only facts the harness reports; nothing is shown in place of a missing value. */}
-						{model.contextWindow || model.inputs?.length ? <span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-settings-muted">
+						{model.contextWindow ? <span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-settings-muted">
 							{model.contextWindow ? <span>{t("settings.harness.models.context")}: {new Intl.NumberFormat(i18n.resolvedLanguage).format(model.contextWindow)}</span> : null}
-							{model.inputs?.length ? <span>{t("settings.harness.models.inputs")}: {model.inputs.map((input) => input === "text" ? t("settings.harness.models.inputText") : input === "image" ? t("settings.harness.models.inputImage") : input).join(" · ")}</span> : null}
 						</span> : null}
 					</span>
 					{model.efforts?.length ? <span className="shrink-0 text-right text-xs text-settings-muted">
@@ -1428,7 +1434,7 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 					</span> : null}
 				</li>)}
 			</ul>}
-		{pageCount > 1 ? <nav className="flex items-center justify-end gap-2 text-xs text-settings-muted" aria-label={t("settings.harness.models.pagination")}>
+		{pageCount > 1 ? <nav className="flex shrink-0 items-center justify-end gap-2 text-xs text-settings-muted" aria-label={t("settings.harness.models.pagination")}>
 			<span className="tabular-nums">{t("settings.harness.models.pageRange", { start: pageStart + 1, end: pageStart + visibleModels.length, total: models.length })}</span>
 			<Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.harness.models.previousPage")} disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>
 				<ChevronLeft aria-hidden="true" />
@@ -1437,7 +1443,6 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 				<ChevronRight aria-hidden="true" />
 			</Button>
 		</nav> : null}
-		<p className="text-xs text-settings-muted">{t("settings.harness.models.hint")}</p>
 	</div>;
 }
 
