@@ -2203,7 +2203,7 @@
 	"settings.browserImport.cookiesDescription": "将可用的网站 Cookie 复制到目标配置文件。",
 	"settings.browserImport.history": "浏览历史记录",
 	"settings.browserImport.historyDescription": "将访问过的页面添加到 AO 地址栏建议中。",
-	"settings.browserImport.capability.chromium-encryption-partial": "新版 Chromium 加密可能导致部分 Cookie 无法导入。AO 会准确显示跳过的内容。",
+	"settings.browserImport.capability.chromium-encryption-partial": "导入后，某些网站可能会要求你重新登录。",
 	"settings.browserImport.capability.chromium-encryption-unsupported": "此平台无法导入加密的 Chromium Cookie。未加密的 Cookie 和历史记录仍可导入。",
 	"settings.browserImport.destinationTitle": "选择目标",
 	"settings.browserImport.keepSeparate": "保持配置文件分离",

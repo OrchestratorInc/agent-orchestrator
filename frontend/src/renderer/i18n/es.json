@@ -2171,7 +2171,7 @@
 	"settings.browserImport.cookiesDescription": "Copia las cookies utilizables de los sitios web en el perfil de destino.",
 	"settings.browserImport.history": "Historial de navegación",
 	"settings.browserImport.historyDescription": "Añade las páginas visitadas a las sugerencias de la barra de direcciones de AO.",
-	"settings.browserImport.capability.chromium-encryption-partial": "El cifrado moderno de Chromium puede impedir la importación de algunas cookies. AO indicará exactamente qué se omitió.",
+	"settings.browserImport.capability.chromium-encryption-partial": "Es posible que algunos sitios te pidan iniciar sesión de nuevo después de la importación.",
 	"settings.browserImport.capability.chromium-encryption-unsupported": "Las cookies cifradas de Chromium no se pueden importar en esta plataforma. Las cookies sin cifrar y el historial siguen disponibles.",
 	"settings.browserImport.destinationTitle": "Elegir destinos",
 	"settings.browserImport.keepSeparate": "Mantener los perfiles separados",

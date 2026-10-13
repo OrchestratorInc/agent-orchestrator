@@ -2171,7 +2171,7 @@
 	"settings.browserImport.cookiesDescription": "Copia cookies de sites utilizáveis para o perfil de destino.",
 	"settings.browserImport.history": "Histórico de navegação",
 	"settings.browserImport.historyDescription": "Adiciona páginas visitadas às sugestões da barra de endereço do AO.",
-	"settings.browserImport.capability.chromium-encryption-partial": "A criptografia moderna do Chromium pode impedir a importação de alguns cookies. O AO informará exatamente o que foi ignorado.",
+	"settings.browserImport.capability.chromium-encryption-partial": "Alguns sites podem pedir que você entre novamente após a importação.",
 	"settings.browserImport.capability.chromium-encryption-unsupported": "Cookies criptografados do Chromium não podem ser importados nesta plataforma. Cookies não criptografados e o histórico continuam disponíveis.",
 	"settings.browserImport.destinationTitle": "Escolher destinos",
 	"settings.browserImport.keepSeparate": "Manter perfis separados",

@@ -2137,7 +2137,7 @@
 	"settings.browserImport.cookiesDescription": "使用可能なWebサイトCookieを宛先プロファイルにコピーします。",
 	"settings.browserImport.history": "閲覧履歴",
 	"settings.browserImport.historyDescription": "訪問済みページをAOのアドレスバー候補に追加します。",
-	"settings.browserImport.capability.chromium-encryption-partial": "最新のChromium暗号化により、一部のCookieをインポートできない場合があります。AOはスキップした内容を正確に表示します。",
+	"settings.browserImport.capability.chromium-encryption-partial": "インポート後、一部のサイトで再度ログインを求められることがあります。",
 	"settings.browserImport.capability.chromium-encryption-unsupported": "このプラットフォームでは暗号化されたChromium Cookieをインポートできません。暗号化されていないCookieと履歴は利用できます。",
 	"settings.browserImport.destinationTitle": "宛先を選択",
 	"settings.browserImport.keepSeparate": "プロファイルを分けて保持",

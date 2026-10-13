@@ -2137,7 +2137,7 @@
 	"settings.browserImport.cookiesDescription": "Kopiert verwendbare Website-Cookies in das Zielprofil.",
 	"settings.browserImport.history": "Browserverlauf",
 	"settings.browserImport.historyDescription": "Fügt besuchte Seiten zu den Vorschlägen der AO-Adressleiste hinzu.",
-	"settings.browserImport.capability.chromium-encryption-partial": "Die moderne Chromium-Verschlüsselung kann den Import einiger Cookies verhindern. AO meldet genau, was übersprungen wurde.",
+	"settings.browserImport.capability.chromium-encryption-partial": "Einige Websites bitten dich nach dem Import möglicherweise, dich erneut anzumelden.",
 	"settings.browserImport.capability.chromium-encryption-unsupported": "Verschlüsselte Chromium-Cookies können auf dieser Plattform nicht importiert werden. Unverschlüsselte Cookies und der Verlauf bleiben verfügbar.",
 	"settings.browserImport.destinationTitle": "Ziele auswählen",
 	"settings.browserImport.keepSeparate": "Profile getrennt halten",

@@ -2137,7 +2137,7 @@
 	"settings.browserImport.cookiesDescription": "사용 가능한 웹사이트 쿠키를 대상 프로필에 복사합니다.",
 	"settings.browserImport.history": "방문 기록",
 	"settings.browserImport.historyDescription": "방문한 페이지를 AO 주소 표시줄 제안에 추가합니다.",
-	"settings.browserImport.capability.chromium-encryption-partial": "최신 Chromium 암호화로 인해 일부 쿠키를 가져오지 못할 수 있습니다. AO가 건너뛴 항목을 정확히 알려줍니다.",
+	"settings.browserImport.capability.chromium-encryption-partial": "가져온 후 일부 사이트에서 다시 로그인하라는 메시지가 표시될 수 있습니다.",
 	"settings.browserImport.capability.chromium-encryption-unsupported": "이 플랫폼에서는 암호화된 Chromium 쿠키를 가져올 수 없습니다. 암호화되지 않은 쿠키와 기록은 계속 사용할 수 있습니다.",
 	"settings.browserImport.destinationTitle": "대상 선택",
 	"settings.browserImport.keepSeparate": "프로필을 분리하여 유지",
