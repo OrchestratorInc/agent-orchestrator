@@ -1622,27 +1622,29 @@ textarea,
 	background: transparent;
 }
 
-/* The Models tab owns its scroll area; keep its harness header and tabs in view.
+/* Open harness details own their scroll areas; the name and tabs stay in view.
    Other settings pages retain the normal full-page scroll. */
-.settings-thin-scrollbar:has([data-harness-models]) {
+.settings-thin-scrollbar:has([data-harness-detail]) {
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
 }
 
-.settings-dialog-body:has([data-harness-models]),
-.settings-dialog-body > div:has([data-harness-models]),
-[data-section="harness"]:has([data-harness-models]),
-[data-section="harness"]:has([data-harness-models]) > div {
+.settings-dialog-body:has([data-harness-detail]),
+.settings-dialog-body > div:has([data-harness-detail]),
+[data-section="harness"]:has([data-harness-detail]),
+[data-section="harness"]:has([data-harness-detail]) > div {
+	min-width: 0;
+	max-width: 100%;
 	min-height: 0;
 	flex: 1;
 }
 
-.settings-dialog-body:has([data-harness-models]) {
+.settings-dialog-body:has([data-harness-detail]) {
 	padding-bottom: 18px;
 }
 
-[data-section="harness"]:has([data-harness-models]) > div > :not([data-harness-models]) {
+[data-section="harness"]:has([data-harness-detail]) > div > :not([data-harness-detail]) {
 	flex-shrink: 0;
 }
 

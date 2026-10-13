@@ -1185,7 +1185,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 	};
 
 	const selectedDetails = selectedAgentId ? describe(selectedAgentId) : null;
-	const modelsOpen = Boolean(selectedDetails) && detailTab === "models";
+	const detailsOpen = Boolean(selectedDetails);
 
 	return (
 		<>
@@ -1196,10 +1196,10 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				</div>
 			) : null}
 
-			<div ref={layoutRef} data-harness-models={modelsOpen ? "" : undefined} className={cn("w-full", modelsOpen && "flex min-h-0 flex-1 flex-col overflow-hidden", split && modelsOpen && "grid-rows-[minmax(0,1fr)]", split && "grid grid-cols-[minmax(14rem,16rem)_minmax(0,1fr)] items-stretch overflow-clip rounded-xl border border-border bg-(--color-bg-primary)")}>
+			<div ref={layoutRef} data-harness-detail={detailsOpen ? "" : undefined} className={cn("w-full min-w-0 max-w-full", detailsOpen && "flex min-h-0 flex-1 flex-col overflow-hidden", split && detailsOpen && "grid-rows-[minmax(0,1fr)]", split && "grid grid-cols-[minmax(14rem,16rem)_minmax(0,1fr)] items-stretch overflow-clip rounded-xl border border-border bg-(--color-bg-primary)")}>
 				{split || !selectedDetails ? (
 					<div className={cn("flex w-full flex-col", split
-						? cn("sticky top-14 h-full self-start divide-y divide-border overflow-y-auto overscroll-contain bg-(--color-bg-secondary)", modelsOpen ? "static min-h-0 max-h-full" : "max-h-[calc(100dvh-10rem)]")
+						? cn("sticky top-14 h-full self-start divide-y divide-border overflow-y-auto overscroll-contain bg-(--color-bg-secondary)", detailsOpen ? "static min-h-0 max-h-full" : "max-h-[calc(100dvh-10rem)]")
 						: "divide-y divide-border overflow-hidden rounded-lg border border-border")}>
 						{rows.map((agentId) => {
 							const details = describe(agentId);
@@ -1241,31 +1241,31 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				) : null}
 				{selectedDetails ? (
 					<div
-						className={cn("flex w-full min-w-0 flex-col gap-4", modelsOpen && "min-h-0 flex-1 overflow-hidden", split && "p-5")}
+						className={cn("flex w-full min-w-0 flex-col gap-4", detailsOpen && "min-h-0 flex-1 overflow-hidden", split && "p-5")}
 						data-agent={selectedDetails.agentId}
 						data-focus-highlighted={highlightedAgentId === selectedDetails.agentId ? "" : undefined}
 						ref={detailRef}
 					>
-						{split ? null : <div>
+						{split ? null : <div className="shrink-0">
 							<Button type="button" size="sm" variant="ghost" className="-ml-2 h-7 gap-1 px-2 text-settings-muted" onClick={closeDetail}>
 								<ChevronLeft aria-hidden="true" />{t("settings.harness.allHarnesses")}
 							</Button>
 						</div>}
 						<div
-							className={cn("-mx-2 flex items-center gap-3 rounded-lg px-2 py-1 transition-[background-color,box-shadow] duration-200", highlightedAgentId === selectedDetails.agentId && "bg-accent-weak ring-2 ring-inset ring-accent")}
+							className={cn("-mx-2 flex shrink-0 items-center gap-3 rounded-lg px-2 py-1 transition-[background-color,box-shadow] duration-200", highlightedAgentId === selectedDetails.agentId && "bg-accent-weak ring-2 ring-inset ring-accent")}
 						>
 							<AgentAvatar className="size-7 shrink-0" decorative provider={selectedDetails.agentId} />
 							{/* Pane title: one step above row labels (15px), below the page heading. */}
 							<span className="min-w-0 flex-1 text-subtitle font-semibold leading-6 text-settings-label" id={`harness-agent-${selectedDetails.agentId}`}>{agentLabel(selectedDetails.agentId)}</span>
 						</div>
-						<Tabs className={modelsOpen ? "flex min-h-0 flex-1 flex-col" : undefined} value={detailTab} onValueChange={(value) => setDetailTab(value as HarnessDetailTab)}>
+						<Tabs className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" value={detailTab} onValueChange={(value) => setDetailTab(value as HarnessDetailTab)}>
 							<TabsList className={HARNESS_TABS_CLASS} aria-label={t("settings.harness.detailTabs", { agent: agentLabel(selectedDetails.agentId) })}>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="account">{t("settings.harness.tabAccount")}</TabsTrigger>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="models">{t("settings.harness.tabModels")}</TabsTrigger>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="health">{t("settings.harness.tabHealth")}</TabsTrigger>
 							</TabsList>
-							<TabsContent value="account" className="pt-4">{accountTab(selectedDetails)}</TabsContent>
-							<TabsContent value="models" className="min-h-0 pt-4 data-[state=active]:flex data-[state=active]:flex-col">
+							<TabsContent value="account" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">{accountTab(selectedDetails)}</TabsContent>
+							<TabsContent value="models" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">
 								<HarnessModelsPanel
 									agentId={selectedDetails.agentId}
 									hostId={hostId}
@@ -1274,7 +1274,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 									onOpenAccount={() => setDetailTab("account")}
 								/>
 							</TabsContent>
-							<TabsContent value="health" className="pt-4">{healthTab(selectedDetails)}</TabsContent>
+							<TabsContent value="health" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">{healthTab(selectedDetails)}</TabsContent>
 						</Tabs>
 					</div>
 				) : null}
@@ -1322,23 +1322,23 @@ function HarnessStatusDot({ tone }: { tone: HarnessTone }) {
 }
 
 // Harness page sections: one bordered, tonal card per section, rows divided by hairlines.
-const HARNESS_CARD_CLASS = "flex w-full flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-(--color-bg-secondary)";
+const HARNESS_CARD_CLASS = "flex w-full min-w-0 max-w-full flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-(--color-bg-secondary)";
 const HARNESS_CARD_ROW_CLASS = "flex min-h-12 items-center px-3 py-2.5";
 
 function HarnessDetailGroup({ title, children }: { title: string; children: ReactNode }) {
-	return <section className="flex flex-col gap-1.5">
+	return <section className="flex min-w-0 max-w-full flex-col gap-1.5">
 		<h3 className="text-xs font-medium leading-4 text-settings-muted">{title}</h3>
 		<div className={HARNESS_CARD_CLASS}>{children}</div>
 	</section>;
 }
 
 function HarnessDetailRow({ label, description, children }: { label: string; description?: string; children?: ReactNode }) {
-	return <div className={cn(HARNESS_CARD_ROW_CLASS, "flex-wrap gap-x-4 gap-y-1")}>
+	return <div className={cn(HARNESS_CARD_ROW_CLASS, "min-w-0 flex-wrap gap-x-4 gap-y-1 [overflow-wrap:anywhere]")}>
 		<span className="min-w-0 flex-1">
 			<span className="block text-sm leading-5 text-settings-label">{label}</span>
 			{description ? <span className="mt-0.5 block text-pretty text-xs leading-4 text-settings-muted">{description}</span> : null}
 		</span>
-		<span className="flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-1">{children}</span>
+		<span className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-3 gap-y-1">{children}</span>
 	</div>;
 }
 
