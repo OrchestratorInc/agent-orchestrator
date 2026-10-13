@@ -42,6 +42,29 @@ function clientStub<T extends Record<string, unknown> = Record<string, never>>(o
 }
 
 describe("createCloudSessionSource", () => {
+	it("adopts the durable session model and keeps supported overrides across remount", async () => {
+		const client = clientStub({ getSession: vi.fn(async () => ({ session: { ...fullSession("s1"), interfaceMode: "chat", model: "durable" } })), replayEvents: vi.fn(async () => ({ events: [], nextAfter: 0, hasMore: false })) });
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		expect((await source.getConversationPage("s1")).settings).toEqual({ model: "durable" });
+		await source.setTurnSettings!("s1", { model: "picked", reasoningEffort: "high" });
+		expect((await createCloudSessionSource({ client: client as never, orgId: "o1" }).getConversationPage("s1")).settings).toEqual({ model: "picked", reasoningEffort: "high" });
+	});
+	it("uses persisted Cloud turn choices even when a remounted source sends before reading its page", async () => {
+		const sendMessage = vi.fn();
+		const client = clientStub({ sendMessage });
+		await createCloudSessionSource({ client: client as never, orgId: "o1" }).setTurnSettings!("s1", { model: "picked", reasoningEffort: "high" });
+		await createCloudSessionSource({ client: client as never, orgId: "o1" }).sendMessage("s1", { text: "Inspect", clientMessageId: "one" });
+		expect(sendMessage).toHaveBeenCalledWith("o1", "s1", { text: "Inspect", model: "picked", reasoningEffort: "high" }, { idempotencyKey: "one" });
+	});
+	it("steers only the captured active turn instead of posting another user message", async () => {
+		const steerTurn = vi.fn(); const sendMessage = vi.fn();
+		const current = { ...fullSession("s1"), interfaceMode: "chat", activeTurn: { id: "t1", state: "running", attemptCount: 1 } };
+		const source = createCloudSessionSource({ client: clientStub({ getSession: vi.fn(async () => ({ session: current })), replayEvents: vi.fn(async () => ({ events: [{ sessionId: "s1", sequence: 1, type: "chat.turn_capabilities", payload: { turnId: "t1", attempt: 1, steering: true }, createdAt: "now" }], nextAfter: 1, hasMore: false })), steerTurn, sendMessage }) as never, orgId: "o1" });
+		await source.steerMessage!("s1", { text: "Guidance", clientMessageId: "steer-one" }, "t1");
+		expect(steerTurn).toHaveBeenCalledWith("o1", "s1", "t1", "Guidance", { idempotencyKey: "steer-one" });
+		await expect(source.steerMessage!("s1", { text: "Guidance", clientMessageId: "steer-two" }, "older")).rejects.toThrow(/turn finished/i);
+		expect(sendMessage).not.toHaveBeenCalled();
+	});
 	it("restores an uncertain spawn with its frozen wire payload and records acceptance before returning", async () => {
 		const client = clientStub({ createSession: vi.fn().mockRejectedValueOnce(new Error("Response lost")).mockResolvedValue({ session: { id: "accepted" } }) });
 		const options = { projectId: "p1", harness: "codex", clientRequestId: "one" };

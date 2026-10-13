@@ -8,6 +8,9 @@ import { toDashboardSession, toProjectInfo } from "./mapping";
 import { cloudRoleDefaults } from "../spawnModel";
 import { acceptCloudOperation, prepareCloudOperation, readCloudOperation, reserveCloudOperation } from "./operation";
 import { cloudHeaderControllerState, cloudLifecycleStage, cloudStartupProblem } from "./lifecycle";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { afterDraftWrites } from "../chat/pendingSend";
+import { cloudConversationCapabilities } from "./events";
 
 /** How often the cloud transcript is polled for new events. Matches the
  * tunnel-path conversation poll interval mobile already uses elsewhere. */
@@ -70,6 +73,22 @@ export function createCloudSessionSource(input: {
 }): SessionSource {
 	const { client, orgId, scopeKey, isCurrent } = input;
 	const settingsBySession = new Map<string, TurnSettings>();
+	const settingsKey = (id: string) => "ao.cloud.turn-settings.v1." + encodeURIComponent(JSON.stringify([scopeKey, id]));
+	const normalizeSettings = (value: TurnSettings): TurnSettings => ({
+		...(typeof value.model === "string" && value.model.trim() ? { model: value.model.trim() } : {}),
+		...(typeof value.reasoningEffort === "string" && reasoningEfforts.has(value.reasoningEffort) ? { reasoningEffort: value.reasoningEffort } : {}),
+		...(value.approvalMode && ["default", "accept-edits", "auto", "bypass-permissions"].includes(value.approvalMode) ? { approvalMode: value.approvalMode } : {}),
+	});
+	const readSettings = async (id: string): Promise<TurnSettings> => {
+		if (settingsBySession.has(id)) return settingsBySession.get(id)!;
+		let value: TurnSettings = {};
+		await afterDraftWrites(settingsKey(id), async () => {
+			const raw = await AsyncStorage.getItem(settingsKey(id));
+			if (raw) value = normalizeSettings(JSON.parse(raw));
+		});
+		if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
+		settingsBySession.set(id, value); return value;
+	};
 	const pendingSpawns = new Map<string, Promise<{ id: string }>>();
 	const acceptedSpawns = new Map<string, string>();
 	const createWorker = async (options: SpawnOptions): Promise<{ id: string }> => {
@@ -122,12 +141,13 @@ export function createCloudSessionSource(input: {
 		},
 		deleteSession: async (id) => { await client.deleteSession(orgId, id); },
 		getConversationPage: async (id) => {
-			const [{ session }, { events, latestSequence }] = await Promise.all([
+			const [{ session }, { events, latestSequence }, overrides] = await Promise.all([
 				client.getSession(orgId, id),
 				// A single replayEvents call is capped at the server's page limit
 				// and reports hasMore; paging to the end here is required so this
 				// shows the live tail of a long conversation, not just its start.
 				fetchConversationReplay(client, orgId, id),
+				readSettings(id),
 			]);
 			const turns = toConversationTurns(events);
 			if (session.activeTurn && !turns.some((turn) => turn.id === session.activeTurn?.id)) {
@@ -148,11 +168,12 @@ export function createCloudSessionSource(input: {
 				hasMoreBefore: false,
 				turns,
 				items: toConversationItems(events),
-				settings: settingsBySession.get(id) ?? {},
+				settings: { ...(session.model ? { model: session.model } : {}), ...overrides },
+				capabilities: cloudConversationCapabilities(session, events),
 			};
 		},
 		sendMessage: async (id, input) => {
-			const settings = settingsBySession.get(id);
+			const settings = await readSettings(id);
 			const message = settings && (settings.model || settings.reasoningEffort || settings.approvalMode)
 				? {
 					text: input.text,
@@ -173,6 +194,14 @@ export function createCloudSessionSource(input: {
 			// return value today (useConversation's `deliver` discards it and
 			// relies on the polled transcript instead), so this is safe.
 			return { duplicate: false };
+		},
+		steerMessage: async (id, input, targetTurnId) => {
+			if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
+			const [{ session }, { events }] = await Promise.all([client.getSession(orgId, id), fetchConversationReplay(client, orgId, id)]);
+			if (session.activeTurn?.id !== targetTurnId || !cloudConversationCapabilities(session, events).includes("steer")) throw new Error("The turn finished or cannot take guidance now. Queue a new message instead.");
+			if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
+			await client.steerTurn(orgId, id, targetTurnId, input.text, { idempotencyKey: input.clientMessageId });
+			return { duplicate: false, turnId: targetTurnId };
 		},
 		// Returns 202 with a body (ResumeSessionResponse), not 204 — the
 		// reconciler owns the actual provider/worker transition from here, so
@@ -217,7 +246,11 @@ export function createCloudSessionSource(input: {
 			return session.harness === "codex" ? (await client.listChatModels(orgId, id)).models : [];
 		},
 		setTurnSettings: async (id, settings) => {
-			settingsBySession.set(id, { ...settings });
+			if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
+			const normalized = normalizeSettings(settings);
+			await afterDraftWrites(settingsKey(id), () => AsyncStorage.setItem(settingsKey(id), JSON.stringify(normalized)));
+			if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
+			settingsBySession.set(id, normalized);
 		},
 		cancelTurn: async (id, turnId) => {
 			// Keyed by the turn id, not freshly generated per call, so a retried

@@ -52,6 +52,7 @@ export type PendingSend = {
 	draftText: string;
 	text: string;
 	kind?: "send" | "steer";
+	targetTurnId?: string;
 	state: "sending" | "failed";
 	error?: string;
 	attachments?: ChatImage[];
@@ -338,7 +339,10 @@ export function useMobileConversation(
 					if (needsAttachmentRecovery(Boolean(pending.restored), pending.hasAttachments, Boolean(pending.attachments?.length || pending.resources?.length))) {
 						throw new Error("Check the conversation first. If the message is absent, discard it here, then reattach the files and send again.");
 					}
-					await access!.source.sendMessage(sessionId, input);
+					if (pending.kind === "steer") {
+						if (!pending.targetTurnId || !access!.source.steerMessage) throw new Error("This guidance has no active turn to retry. Check the conversation, then discard it or queue a new message.");
+						await access!.source.steerMessage(sessionId, input, pending.targetTurnId);
+					} else await access!.source.sendMessage(sessionId, input);
 				} else if (options?.reviewId && !needsAttachmentRecovery(Boolean(pending.restored), pending.hasAttachments, Boolean(pending.attachments?.length || pending.resources?.length))) {
 					await requireConfig(cfg, (c) => sendReviewerConversationMessage(c, options.reviewId!, input));
 				} else {
@@ -419,12 +423,14 @@ export function useMobileConversation(
 	}, [pendingKey]);
 	const steer = useCallback(async (text: string) => {
 		if (!pendingKey) throw new Error(NOT_PAIRED_ACTION_COPY);
+		const targetTurnId = sessionSource?.kind === "cloud" ? snapshot?.turns.find((turn) => turn.state === "running")?.id : undefined;
+		if (sessionSource?.kind === "cloud" && (!targetTurnId || !snapshot?.capabilities?.includes("steer"))) throw new Error("This turn cannot take guidance right now. Queue a new message instead.");
 		const id = clientMessageId();
-		const saved = await reservePendingSend(pendingKey, { id, draftText: text, text, hasAttachments: false, kind: "steer" });
+		const saved = await reservePendingSend(pendingKey, { id, draftText: text, text, hasAttachments: false, kind: "steer", ...(targetTurnId ? { targetTurnId } : {}) });
 		await deliver({ ...saved, state: "sending", restored: saved.id !== id });
 		setActionCodes((old) => ({ ...old, steer: undefined }));
 		return saved.id;
-	}, [pendingKey, deliver]);
+	}, [pendingKey, deliver, sessionSource, snapshot]);
 	const cancelQueuedTurn = useCallback(
 		(turnId: string) => runAction("queue", () => requireConversationAccess(access, (source) => source.cancelTurn(sessionId, turnId))),
 		[access, runAction, sessionId],

@@ -24,6 +24,7 @@ export interface SessionSource {
 	deleteSession(id: string): Promise<void>;
 	getConversationPage(id: string, beforeSequence?: number): Promise<ConversationPage>;
 	sendMessage(id: string, input: SendMessageInput): Promise<SendMessageResult>;
+	steerMessage?(id: string, input: SendMessageInput, targetTurnId: string): Promise<SendMessageResult>;
 	cancelTurn(id: string, turnId: string): Promise<void>;
 	subscribeEvents(id: string, listener: (event: ConversationEvent) => void): () => void;
 	/**

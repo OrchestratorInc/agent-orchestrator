@@ -11,6 +11,8 @@ export type PendingSendRecord = {
 	excerpts?: ChatExcerpt[];
 	/** Absent on records saved by older builds, where every delivery was a send. */
 	kind?: "send" | "steer";
+	/** A restored Cloud steer must never target a different active turn. */
+	targetTurnId?: string;
 };
 
 export function pendingSendKey(host: string, conversation: string): string {
@@ -36,6 +38,7 @@ export async function readPendingSend(key: string): Promise<PendingSendRecord | 
 	const saved = JSON.parse(raw) as PendingSendRecord;
 	if (!saved.id || typeof saved.draftText !== "string" || typeof saved.text !== "string" || typeof saved.hasAttachments !== "boolean" ||
 		(saved.kind !== undefined && saved.kind !== "send" && saved.kind !== "steer") ||
+		(saved.targetTurnId !== undefined && typeof saved.targetTurnId !== "string") ||
 		(saved.excerpts !== undefined && (!Array.isArray(saved.excerpts) || saved.excerpts.length > 8 || !saved.excerpts.every(isChatExcerpt)))) {
 		throw new Error("The previous message's retry record is damaged. Discard it before sending another message.");
 	}

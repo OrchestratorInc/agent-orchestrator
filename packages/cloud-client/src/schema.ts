@@ -2745,6 +2745,13 @@ export interface components {
                 text: string;
                 /** Format: uuid */
                 turnId?: string;
+                /** @enum {string} */
+                origin?: "human" | "automation";
+                displayText?: string;
+                senderLabel?: string;
+                senderSessionId?: string;
+                senderProjectId?: string;
+                senderDisplayName?: string;
             };
             /** Format: date-time */
             createdAt: string;
@@ -2897,7 +2904,11 @@ export interface components {
                 requestId: string;
                 summary: string;
                 toolKind: string;
-                decisions: string[];
+                decisions: {
+                    id: string;
+                    label: string;
+                    kind?: string;
+                }[];
             };
             /** Format: date-time */
             createdAt: string;

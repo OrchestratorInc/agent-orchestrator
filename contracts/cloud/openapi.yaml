@@ -5042,6 +5042,19 @@ components:
             turnId:
               type: string
               format: uuid
+            origin:
+              type: string
+              enum: [human, automation]
+            displayText:
+              type: string
+            senderLabel:
+              type: string
+            senderSessionId:
+              type: string
+            senderProjectId:
+              type: string
+            senderDisplayName:
+              type: string
         createdAt:
           type: string
           format: date-time
@@ -5334,7 +5347,16 @@ components:
             decisions:
               type: array
               items:
-                type: string
+                type: object
+                additionalProperties: false
+                required: [id, label]
+                properties:
+                  id:
+                    type: string
+                  label:
+                    type: string
+                  kind:
+                    type: string
         createdAt:
           type: string
           format: date-time

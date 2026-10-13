@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ClientEvent } from "@aoagents/cloud-client";
-import { fetchConversationReplay, pollCloudEvents, toConversationItems, toConversationTurns } from "./events";
+import { cloudConversationCapabilities, fetchConversationReplay, pollCloudEvents, toConversationItems, toConversationTurns } from "./events";
 
 const userEvent: ClientEvent = {
 	sessionId: "s1", sequence: 1, type: "chat.user_message",
@@ -18,6 +18,26 @@ const deltaTwo: ClientEvent = {
 } as ClientEvent;
 
 describe("toConversationItems", () => {
+	it("keeps provider item identities separate by turn and attempt, but folds revisions of the same item", () => {
+		const delta = (sequence: number, turnId: string, attempt: number, itemId: string, text: string): ClientEvent => ({ ...deltaOne, type: "chat.assistant_delta", sequence, payload: { turnId, attempt, itemId, text, stream: "stdout" } });
+		expect(toConversationItems([delta(1, "t1", 1, "a", "First"), delta(2, "t1", 1, "b", "Second"), delta(3, "t1", 1, "a", " reply"), delta(4, "t1", 2, "a", "Retry"), delta(5, "t2", 1, "a", "Other")]).filter((item) => item.kind === "message").map((item) => item.text)).toEqual(["First reply", "Second", "Retry", "Other"]);
+	});
+	it("folds activity deltas and revisions, preserves new-attempt identity, and safely handles unknown kinds", () => {
+		const activity = (sequence: number, attempt: number, kind: string, status: string, detail: object): ClientEvent => ({ ...userEvent, sequence, type: "chat.activity", payload: { turnId: "t1", attempt, activity: { id: kind === "unknown-kind" ? "unknown" : "cmd", kind, status, summary: "Run tests", detail } } } as ClientEvent);
+		const items = toConversationItems([activity(1, 1, "command", "running", { command: "npm test", outputDelta: "One " }), activity(2, 1, "command", "completed", { outputDelta: "Two" }), activity(3, 2, "command", "recovered", {}), activity(4, 2, "unknown-kind", "unknown-status", { command: { malformed: true } })]);
+		expect(items).toMatchObject([{ activityKind: "command", status: "completed", revision: 2, detail: { output: "One Two" } }, { activityKind: "command", status: "recovered" }, { activityKind: "system", status: "completed" }]);
+		expect(items[2].kind === "activity" && items[2].detail?.command).toBeUndefined();
+	});
+	it("keeps automation provenance and the chosen approval decision", () => {
+		const items = toConversationItems([{ ...userEvent, type: "chat.user_message", payload: { text: "raw", displayText: "Review completed", origin: "automation", senderLabel: "Reviewer", senderSessionId: "reviewer-1" } } as unknown as ClientEvent,
+			{ ...userEvent, sequence: 2, type: "chat.approval_requested", payload: { turnId: "t1", attempt: 1, requestId: "r1", summary: "Write file", toolKind: "edit", decisions: [{ id: "allow", label: "Allow", kind: "allow_once" }] } } as unknown as ClientEvent,
+			{ ...userEvent, sequence: 3, type: "chat.approval_decided", payload: { turnId: "t1", requestId: "r1", decision: "allow" } } as ClientEvent]);
+		expect(items).toMatchObject([{ origin: "automation", text: "Review completed", senderLabel: "Reviewer", senderSessionId: "reviewer-1" }, { status: "completed", detail: { toolKind: "edit", decision: "allow" }, decisions: [{ id: "allow", kind: "allow_once" }] }]);
+	});
+	it("does not settle an active reply when a later message is queued", () => {
+		const items = toConversationItems([deltaOne, { ...userEvent, type: "chat.user_message", sequence: 3, payload: { text: "Next", turnId: "t2" } }, deltaTwo]);
+		expect(items[0]).toMatchObject({ text: "Hi there", streaming: true });
+	});
 	it("maps a user message", () => {
 		const [item] = toConversationItems([userEvent]);
 		expect(item).toMatchObject({
@@ -65,12 +85,12 @@ describe("toConversationItems", () => {
 		}));
 	});
 
-	it("treats the first accepted Cloud message as active while the worker starts", () => {
+	it("keeps an accepted Cloud message queued until the worker actually starts", () => {
 		const queuedMessage = {
 			...userEvent,
 			payload: { text: "hello", turnId: "t1" },
 		} as ClientEvent;
-		expect(toConversationTurns([queuedMessage])).toMatchObject([{ id: "t1", state: "running" }]);
+		expect(toConversationTurns([queuedMessage])).toMatchObject([{ id: "t1", state: "queued" }]);
 	});
 
 	it("settles a Cloud approval after its decision event", () => {
@@ -121,6 +141,38 @@ describe("toConversationItems", () => {
 		expect(items).toHaveLength(2);
 		expect(items[0]).toMatchObject({ role: "assistant", text: "Hi ", streaming: false });
 		expect(items[1]).toMatchObject({ role: "user", text: "meanwhile" });
+	});
+});
+
+describe("Cloud capabilities and rich turn summaries", () => {
+	it("steers only the current running attempt with an explicit capability", () => {
+		const session = { interfaceMode: "chat", runtimeConnected: true, isTerminated: false, activeTurn: { id: "t1", state: "running", attemptCount: 2 } } as import("@aoagents/cloud-client").Session;
+		const capability = (attempt: number, steering: boolean): ClientEvent => ({ ...userEvent, type: "chat.turn_capabilities", payload: { turnId: "t1", attempt, steering } });
+		expect(cloudConversationCapabilities(session, [capability(1, true)])).toEqual([]);
+		expect(cloudConversationCapabilities(session, [capability(2, true)])).toEqual(["steer"]);
+		expect(cloudConversationCapabilities(session, [capability(2, true), capability(2, false)])).toEqual([]);
+		expect(cloudConversationCapabilities({ ...session, activeTurn: { ...session.activeTurn!, state: "queued" } }, [capability(2, true)])).toEqual([]);
+		expect(cloudConversationCapabilities({ ...session, interfaceMode: "tui" }, [capability(2, true)])).toEqual([]);
+	});
+	it("attaches turn diff patches and plans to the existing mobile summary types", () => {
+		const activity = (sequence: number, id: string, kind: string, detail: Record<string, unknown>): ClientEvent => ({ ...userEvent, sequence, type: "chat.activity", payload: { turnId: "t1", attempt: 1, activity: { id, kind, status: "completed", summary: "Changes", detail } } });
+		const patch = "diff --git a/main.ts b/main.ts\n--- a/main.ts\n+++ b/main.ts\n@@ -1 +1 @@\n-old\n+new\n";
+		const events = [activity(1, "files", "file_change", { files: [{ path: "main.ts", status: "modified" }] }), activity(2, "diff", "turn_diff", { diff: patch }), activity(3, "plan", "plan", { steps: [{ text: "Test", status: "completed" }] })];
+		expect(toConversationTurns(events)[0]).toMatchObject({ diff: { files: [{ path: "main.ts", additions: 1, deletions: 1 }] }, plan: { steps: [{ text: "Test", status: "completed" }] } });
+		expect(toConversationItems(events)[0]).toMatchObject({ detail: { files: [{ path: "main.ts", patch }] } });
+	});
+	it("settles all open items and ignores an old attempt's late completion", () => {
+		const event = (sequence: number, attempt: number, type: string, itemId?: string): ClientEvent => ({ ...deltaOne, sequence, type, payload: { turnId: "t1", attempt, itemId, text: "Reply", stream: "stdout" } } as ClientEvent);
+		const events = [event(1, 1, "chat.assistant_delta", "a"), event(2, 2, "chat.turn_started"), event(3, 2, "chat.assistant_delta", "b"), event(4, 1, "chat.turn_completed")];
+		expect(toConversationItems(events)).toMatchObject([{ streaming: false }, { streaming: true }]);
+		expect(toConversationTurns(events)[0].state).toBe("running");
+		expect(toConversationItems([...events, event(5, 2, "chat.turn_completed")])).toMatchObject([{ streaming: false }, { streaming: false }]);
+	});
+	it("does not attach a retry's diff to the previous attempt's file activity", () => {
+		const activity = (sequence: number, attempt: number, kind: string, detail: Record<string, unknown>): ClientEvent => ({ ...userEvent, sequence, type: "chat.activity", payload: { turnId: "t1", attempt, activity: { id: "same", kind, status: "completed", summary: "Changes", detail } } });
+		const patch = (text: string) => "diff --git a/main.ts b/main.ts\n@@ -0,0 +1 @@\n+" + text + "\n";
+		const items = toConversationItems([activity(1, 1, "file_change", { files: [{ path: "main.ts" }] }), activity(2, 1, "turn_diff", { diff: patch("first") }), activity(3, 2, "file_change", { files: [{ path: "main.ts" }] }), activity(4, 2, "turn_diff", { diff: patch("retry") })]);
+		expect(items).toMatchObject([{ detail: { files: [{ patch: patch("first") }] } }, { detail: { files: [{ patch: patch("retry") }] } }]);
 	});
 });
 

@@ -2,7 +2,7 @@ import type { SessionMode } from "../api";
 
 export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped";
 export type TurnState = "queued" | "running" | "completed" | "interrupted" | "failed";
-export type ActivityStatus = "running" | "completed" | "failed" | "cancelled" | "pending" | "resolved";
+export type ActivityStatus = "running" | "completed" | "failed" | "cancelled" | "pending" | "resolved" | "recovered";
 export type ActivityKind =
 	| "command"
 	| "file_change"
@@ -50,6 +50,7 @@ export type ConversationMessage = {
 	kind: "message";
 	id: string;
 	turnId?: string;
+	attempt?: number;
 	sequence: number;
 	revision: number;
 	role: "user" | "assistant";
@@ -59,10 +60,13 @@ export type ConversationMessage = {
 	streaming: boolean;
 	delivery?: DeliveryState;
 	senderLabel?: string;
+	senderSessionId?: string;
+	senderProjectId?: string;
+	senderDisplayName?: string;
 	createdAt: string;
 };
 
-export type DecisionOption = { id: string; label: string };
+export type DecisionOption = { id: string; label: string; kind?: string };
 export type FileChange = DiffFile & { patch?: string; patchTruncated?: boolean };
 export type InputProperty = {
 	type?: "string" | "number" | "integer" | "boolean" | "array";
@@ -161,6 +165,7 @@ export type ConversationActivity = {
 	kind: "activity";
 	id: string;
 	turnId?: string;
+	attempt?: number;
 	sequence: number;
 	revision: number;
 	activityKind: ActivityKind;
