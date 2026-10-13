@@ -292,8 +292,9 @@ describe("startup harness update notice", () => {
 		const { client } = mountNotice();
 		await screen.findByRole("region", { name: "Agent updates available" });
 		act(() => client.setQueryData(["agent-readiness"], { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })] }));
+		const login = await screen.findByRole("button", { name: "Login" });
 		expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
-		await userEvent.click(await screen.findByRole("button", { name: "Login" }));
+		await userEvent.click(login);
 		// The Harness page starts the login once it opens.
 		expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "claude-code", startLogin: true });
 	});

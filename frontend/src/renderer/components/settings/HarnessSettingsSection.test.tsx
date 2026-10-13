@@ -1342,7 +1342,9 @@ describe("HarnessSettingsSection", () => {
 
 		view.rerender(
 			<QueryClientProvider client={view.client}>
-				<HarnessSettingsSection focusAgentId="cursor" />
+				<TooltipProvider>
+					<HarnessSettingsSection focusAgentId="cursor" />
+				</TooltipProvider>
 			</QueryClientProvider>,
 		);
 		expect(scrollIntoView).toHaveBeenCalledTimes(1);

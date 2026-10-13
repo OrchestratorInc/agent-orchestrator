@@ -116,11 +116,13 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const [detailTab, setDetailTab] = useState<HarnessDetailTab>("account");
 	const selectedAgentRef = useRef<AgentId | null>(null);
 	selectedAgentRef.current = selectedAgentId;
+	// Opening a page refreshes its models once readiness says it is installed.
+	const modelsRefreshPending = useRef<AgentId | null>(null);
 	const openDetail = (agentId: AgentId, tab: HarnessDetailTab = "account") => {
 		selectedAgentRef.current = agentId;
 		setSelectedAgentId(agentId);
 		setDetailTab(tab);
-		refreshModelsOnOpen(agentId);
+		modelsRefreshPending.current = agentId;
 	};
 	const closeDetail = () => {
 		selectedAgentRef.current = null;
@@ -165,6 +167,12 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			} : cached);
 		});
 	};
+	useEffect(() => {
+		const agentId = modelsRefreshPending.current;
+		if (!agentId || agentId !== selectedAgentId || !installed.has(agentId)) return;
+		modelsRefreshPending.current = null;
+		refreshModelsOnOpen(agentId);
+	});
 	// The page uses the initial installed snapshot immediately, like Install
 	// and Login. A full-catalog background refresh must not delay its first
 	// version lookup. The app-wide notification has its own readiness gate.
