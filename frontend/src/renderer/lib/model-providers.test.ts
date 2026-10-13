@@ -10,9 +10,17 @@ describe("groupModelProviders", () => {
 		];
 		const groups = groupModelProviders(models, ["router", "not-in-catalog"]);
 		expect(groups.map(({ id, configured }) => ({ id, configured }))).toEqual([
-			{ id: "router", configured: true }, { id: "local", configured: false }, { id: "", configured: false },
+			{ id: "not-in-catalog", configured: true }, { id: "router", configured: true }, { id: "local", configured: false }, { id: "", configured: false },
 		]);
 		expect(groups.flatMap((group) => group.models)).toEqual(models);
+	});
+
+	it("retains reported providers without models or credentials", () => {
+		expect(groupModelProviders([], ["configured"], ["unconfigured", "local", "configured"])).toEqual([
+			{ id: "configured", configured: true, models: [] },
+			{ id: "local", configured: false, models: [] },
+			{ id: "unconfigured", configured: false, models: [] },
+		]);
 	});
 
 	it("keeps a catalog with no provider metadata usable without guessing from IDs", () => {

@@ -3684,6 +3684,7 @@ export interface components {
                 [key: string]: string;
             };
             models: components["schemas"]["AgentModelInfo"][];
+            providers?: string[];
             refreshError?: string;
             refreshRecommended?: boolean;
             /** @enum {string} */

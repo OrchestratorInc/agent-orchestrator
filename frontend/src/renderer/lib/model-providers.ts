@@ -3,8 +3,11 @@ import type { AgentModelCatalog } from "../hooks/useAgentModelsQuery";
 type Model = AgentModelCatalog["models"][number];
 
 /** Group only explicit provider metadata; model namespaces aren't providers. */
-export function groupModelProviders(models: Model[], configuredProviders: string[] = []) {
+export function groupModelProviders(models: Model[], configuredProviders: string[] = [], reportedProviders: string[] = []) {
 	const buckets = new Map<string, Model[]>();
+	for (const provider of [...reportedProviders, ...configuredProviders]) {
+		if (provider.trim()) buckets.set(provider.trim(), []);
+	}
 	for (const model of models) {
 		const provider = model.provider?.trim() ?? "";
 		const bucket = buckets.get(provider) ?? [];

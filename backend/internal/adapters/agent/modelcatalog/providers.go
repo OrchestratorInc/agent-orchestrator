@@ -17,14 +17,14 @@ import (
 // configuredProviders is advisory evidence, never an auth verdict or a filter.
 // Missing/unsupported stores and unresolved key commands leave status unknown.
 func configuredProviders(ctx context.Context, agentID string, env map[string]string) []string {
-	if agentID != "opencode" && agentID != "opencode-v2" && agentID != "pi" && agentID != "omp" {
+	if agentID != "opencode" && agentID != "opencode-v2" && agentID != "kilocode" && agentID != "mimo-code" && agentID != "pi" && agentID != "omp" {
 		return nil
 	}
 	value := func(name string) string {
 		if v, ok := env[name]; ok {
-			return strings.TrimSpace(v)
+			return credentialPresence(v)
 		}
-		return strings.TrimSpace(os.Getenv(name))
+		return credentialPresence(os.Getenv(name))
 	}
 	found := map[string]bool{}
 	if agentID == "opencode" || agentID == "opencode-v2" {
@@ -72,15 +72,19 @@ func configuredProviders(ctx context.Context, agentID string, env map[string]str
 			}
 			authPath = filepath.Join(dir, "auth.json")
 		}
-	case "opencode":
-		dir := value("OPENCODE_DATA_DIR")
+	case "opencode", "kilocode", "mimo-code":
+		name := map[string]string{"opencode": "opencode", "kilocode": "kilo", "mimo-code": "mimocode"}[agentID]
+		dir := ""
+		if agentID == "opencode" {
+			dir = value("OPENCODE_DATA_DIR")
+		}
 		if dir == "" {
 			dataHome := value("XDG_DATA_HOME")
 			if dataHome == "" && home != "" {
 				dataHome = filepath.Join(home, ".local", "share")
 			}
 			if dataHome != "" {
-				dir = filepath.Join(dataHome, "opencode")
+				dir = filepath.Join(dataHome, name)
 			}
 		}
 		if dir != "" {
@@ -135,6 +139,24 @@ func configuredProviders(ctx context.Context, agentID string, env map[string]str
 			}
 		}
 	}
+	// The native models.dev catalog declares each provider's credential variables.
+	// This covers providers beyond AO's small fallback map without guessing names.
+	if path := providerCachePath(agentID, env); path != "" {
+		if raw, err := readProviderCatalog(path); err == nil {
+			var entries map[string]struct {
+				Env []string `json:"env"`
+			}
+			if json.Unmarshal(raw, &entries) == nil {
+				for provider, entry := range entries {
+					for _, key := range entry.Env {
+						if key != "" && value(key) != "" {
+							found[provider] = true
+						}
+					}
+				}
+			}
+		}
+	}
 	providers := make([]string, 0, len(found))
 	for provider := range found {
 		providers = append(providers, provider)
@@ -175,4 +197,13 @@ func ompConfiguredProviders(ctx context.Context, path string) ([]string, bool) {
 		return nil, true
 	}
 	return providers, true
+}
+
+// Catalog-only cloud placeholders never count as configured credentials.
+func credentialPresence(value string) string {
+	value = strings.TrimSpace(value)
+	if value == modelDiscoveryPresenceValue {
+		return ""
+	}
+	return value
 }

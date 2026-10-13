@@ -270,6 +270,8 @@ type AgentModelInfo struct {
 
 // AgentModelCatalog is AO's normalized model-picker response.
 type AgentModelCatalog struct {
+	// Providers includes reported provider IDs even when they currently have no models.
+	Providers []string `json:"providers,omitempty"`
 	// ConfiguredProviders names providers with credential configuration observed
 	// during discovery. Presence is not proof of authorization; absence is unknown.
 	// Only provider IDs are exposed, never credential values or source paths.

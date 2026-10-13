@@ -1320,6 +1320,14 @@ function HarnessStateText({ tone, children }: { tone: HarnessTone; children: Rea
 
 const MODELS_PAGE_SIZE = 10;
 
+// Multi-provider catalogs can be browsed before credentials are configured.
+// Account-scoped harnesses retain their sign-in gate.
+const MULTI_PROVIDER_HARNESSES = new Set<string>([
+	"opencode", "opencode-v2", "kilocode", "pi", "omp", "kimchi", "prime-agent",
+	"crush", "mimo-code", "command-code", "aider", "kimi", "codewhale",
+	"continue", "goose", "vibe", "cline", "autohand", "qwen", "fx",
+]);
+
 /** The harness catalog, browsed by provider. */
 function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAccount }: {
 	agentId: AgentId;
@@ -1331,7 +1339,8 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	const { i18n, t } = useTranslation();
 	const queryClient = useQueryClient();
 	const options = agentModelsQueryOptions(agentId, "", hostId);
-	const catalog = useQuery({ ...options, enabled: installed && !needsLogin });
+	const loginBlocksCatalog = needsLogin && !MULTI_PROVIDER_HARNESSES.has(agentId);
+	const catalog = useQuery({ ...options, enabled: installed && !loginBlocksCatalog });
 	const [refreshing, setRefreshing] = useState(false);
 	const [refreshError, setRefreshError] = useState<string | null>(null);
 	const [page, setPage] = useState(0);
@@ -1339,7 +1348,7 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	const [providerChoice, setProviderChoice] = useState<{ scope: string; id: string }>();
 	const { settings } = useSettings(hostId);
 	const allModels = catalog.data?.models;
-	const providers = useMemo(() => groupModelProviders(allModels ?? [], catalog.data?.configuredProviders), [allModels, catalog.data?.configuredProviders]);
+	const providers = useMemo(() => groupModelProviders(allModels ?? [], catalog.data?.configuredProviders, catalog.data?.providers), [allModels, catalog.data?.configuredProviders, catalog.data?.providers]);
 	const showProviders = providers.some((provider) => provider.id !== "");
 	const savedModel = settings?.harnessDefaults?.[agentId]?.model;
 	const initialModel = allModels?.find((model) => model.id === savedModel) ?? allModels?.find((model) => model.isDefault);
@@ -1348,7 +1357,7 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	const selectedProvider = (providerChoice?.scope === scope ? providers.find((provider) => provider.id === providerChoice.id) : undefined) ?? initialProvider;
 	useEffect(() => setPage(0), [scope, selectedProvider?.id]);
 	const agent = agentLabel(agentId);
-	if (!installed || needsLogin) {
+	if (!installed || loginBlocksCatalog) {
 		return <div className="space-y-3">
 			<div className="flex flex-col items-center gap-3 px-3 py-8 text-center">
 			<p className="text-sm text-settings-muted">{t(installed ? "settings.harness.models.needsLogin" : "settings.harness.models.notInstalled", { agent })}</p>
@@ -1399,7 +1408,7 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 		</div>
 		{error ? <p role="alert" className="text-xs text-error">{error}</p> : null}
 		{catalog.isPending ? <p className="flex items-center gap-2 px-3 py-6 text-sm text-settings-muted"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("settings.harness.models.loading")}</p>
-			: !data?.models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.models.empty")}</p>
+			: !models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.models.empty")}</p>
 			: <ul className={HARNESS_CARD_CLASS} aria-label={t("settings.harness.models.title")}>
 				{visibleModels.map((model) => <li key={model.id} className={cn(HARNESS_CARD_ROW_CLASS, "gap-4")}>
 					<span className="min-w-0 flex-1">

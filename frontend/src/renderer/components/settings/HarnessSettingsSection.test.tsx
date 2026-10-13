@@ -358,7 +358,7 @@ describe("HarnessSettingsSection", () => {
 	it("filters catalog by provider and resets pagination on provider change", async () => {
 		mockInstalledOperations("npm");
 		const models = {
-			agentId: "codex", configuredProviders: ["alpha"], models: [
+			agentId: "codex", providers: ["alpha", "beta", "empty"], configuredProviders: ["alpha"], models: [
 				...Array.from({ length: 12 }, (_, i) => ({ id: `alpha/model-${i}`, label: `Alpha ${i}`, provider: "alpha" })),
 				{ id: "beta/org/model", label: "Beta model", provider: "beta" },
 				{ id: "legacy/model", label: "Legacy model" },
@@ -386,6 +386,26 @@ describe("HarnessSettingsSection", () => {
 		await userEvent.click(screen.getByRole("menuitem", { name: "alpha · 12 · Configured" }));
 		expect(within(list).getByText("Alpha 0")).toBeInTheDocument();
 		expect(within(page).getByText("1–10 of 12")).toBeInTheDocument();
+		await userEvent.click(within(page).getByRole("button", { name: "Provider" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "empty · 0" }));
+		expect(within(page).queryByRole("list", { name: "Available models" })).toBeNull();
+		expect(within(page).queryByRole("button", { name: "Next models" })).toBeNull();
+	});
+
+	it("allows multi-provider browsing while signed out", async () => {
+		const readiness = catalogWithInstalled("codewhale");
+		readiness.agents.find((agent) => agent.id === "codewhale")!.authentication.state = "unauthorized";
+		mockInstalledOperations("npm", readiness);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models"
+			? { data: { agentId: "codewhale", providers: ["available", "empty"], models: [{ id: "model", label: "Browse me", provider: "available" }] } } as never
+			: (get as (path: string, options: unknown) => Promise<never>)(path, options));
+		renderSection("codewhale");
+		const page = await findAgentRow("codewhale");
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		expect(await within(page).findByText("Browse me")).toBeInTheDocument();
+		await userEvent.click(within(page).getByRole("button", { name: "Provider" }));
+		expect(screen.getByRole("menuitem", { name: "empty · 0" })).toBeInTheDocument();
 	});
 
 	it("asks for login before loading models", async () => {

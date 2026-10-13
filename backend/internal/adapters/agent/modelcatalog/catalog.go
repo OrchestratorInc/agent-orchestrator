@@ -281,8 +281,8 @@ func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscov
 		}
 	}
 	if request.AgentID == "opencode" && request.CredentialType != "" {
-		return Discover(ctx, request.AgentID, request.Binary, request.WorkingDir,
-			withOpenCodeCredentialPresence(request.Env, request.CredentialType))
+		return discoverCommandCatalog(ctx, request.AgentID, request.Binary, request.WorkingDir,
+			withOpenCodeCredentialPresence(request.Env, request.CredentialType), false)
 	}
 	env := request.Env
 	if request.AgentID == "opencode-v2" {
@@ -490,6 +490,10 @@ func (Discoverer) LabelAliases(agentID string, models, reference []ports.AgentMo
 
 // Discover executes model catalog discovery for an agent binary.
 func Discover(ctx context.Context, agentID, binary, workingDir string, env map[string]string) (ports.AgentModelCatalog, error) {
+	return discoverCommandCatalog(ctx, agentID, binary, workingDir, env, true)
+}
+
+func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir string, env map[string]string, includeUnconfigured bool) (ports.AgentModelCatalog, error) {
 	base := Base(agentID)
 	if agentID == "unreal-agent" {
 		return discoverUnrealCatalog(env), nil
@@ -532,8 +536,13 @@ func Discover(ctx context.Context, agentID, binary, workingDir string, env map[s
 	if err != nil {
 		return base, fmt.Errorf("%s model discovery: %w", agentID, err)
 	}
+	if includeUnconfigured {
+		reported := localProviderCatalog(runCtx, agentID, binary, workingDir, env)
+		models = append(models, reported.Models...)
+		base.Providers = append(reportedJSONProviders(output), reported.Providers...)
+	}
 	models = normalize(models)
-	if len(models) == 0 {
+	if len(models) == 0 && len(base.Providers) == 0 {
 		return base, fmt.Errorf("%s model discovery returned no models", agentID)
 	}
 	models = applyConfiguredDefault(models, configuredDefaultModel(agentID, workingDir, env))
@@ -541,7 +550,9 @@ func Discover(ctx context.Context, agentID, binary, workingDir string, env map[s
 		models = markCodewhaleResolvedDefault(ctx, binary, workingDir, env, models)
 	}
 	base.Models = models
-	base.ConfiguredProviders = configuredProviders(ctx, agentID, env)
+	if includeUnconfigured {
+		base.ConfiguredProviders = configuredProviders(ctx, agentID, env)
+	}
 	base.Source = "cli"
 	base.FetchedAt = time.Now().UTC()
 	return base, nil
@@ -892,8 +903,8 @@ func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string,
 	// Refresh pre-provider catalogs after upgrading and when observed credential
 	// presence changes. The fingerprint includes names only, never key material.
 	switch agentID {
-	case "opencode", "opencode-v2", "pi", "omp", "kimi", "auggie", "kiro", "codewhale", "kilocode", "crush", "mimo-code", "command-code":
-		config += ";providers-v1=" + strings.Join(configuredProviders(ctx, agentID, env), ",")
+	case "opencode", "opencode-v2", "pi", "omp", "kimchi", "prime-agent", "kimi", "auggie", "kiro", "codewhale", "kilocode", "crush", "mimo-code", "command-code":
+		config += ";providers-v2=" + strings.Join(configuredProviders(ctx, agentID, env), ",") + providerCatalogFingerprint(agentID, env)
 	}
 	if config == "" {
 		// Keep the executable-only fingerprint byte-identical to what earlier
