@@ -260,50 +260,48 @@ new session/group require native cleanup outside this command helper. A clean
 runner report is not evidence that externally interrupted or deliberately
 reparented processes have been reaped.
 
-## Current-source terminal evidence
+## Build provenance and validation scope
 
-Electron can replace an audit daemon. Record the actual serving PID, executable
-hash and build VCS revision/dirty bit, runfile, native identity digest and generation
-before and after capture. A checkout HEAD label alone does not establish the built
-source. Requalify changed binaries, retain earlier dirty-build evidence, and never
-borrow a successful capture's provenance for an incomplete or failed image.
+Record the actual serving daemon PID, executable hash, build revision/dirty bit,
+runfile, native identity digest, and terminal generation before and after UI
+capture or relaunch. Electron may replace the daemon; checkout HEAD alone does
+not identify the binary serving the captured session. Preserve its required
+native profile/PATH environment and requalify changed binaries.
 
-Distinguish cancellation's observed no-late-artifact deadline from a later native
-turn that explicitly requests and receives permission to rerun a cancelled command.
-Retain the stricter failed control. A fresh conversation or narrower confirmation
-bound is a separate control, not proof that the earlier behavior was fixed.
+Report native settlement separately from AO observation latency, and distinguish
+a cancelled command's delayed side effect from a later explicitly authorized
+rerun. Preserve stricter failed probes and label new controls independently.
+Executing-child interrupt and AO Kill are separate gates: record kernel process
+identity, bounded descendant reaping, no delayed artifact, and an unrelated live
+control. State the tested OS; Linux proof does not establish Windows/macOS cleanup.
 
-Explicit user execution constraints override blanket local-validation guidance.
-When routine validation is restricted to PR CI, run only essential authorized
-native/AO proof and minimal artifact builds on the VPS. Record complete current-head
-remote checks; interrupted or omitted local suites remain NOT_RUN. An untouched
-runner's earlier fixture PASS is historical and must not be described as retested.
-
-## Private instruction and proprietary Chat evidence
-
-Record instruction delivery separately from provider message role. Additive native system/developer configuration, hidden user-role hook context and visible task concatenation are different routes. Token consumption proves behavior; it cannot alone establish the provider wire role. Preserve the default native prompt and independent project/user rules. A replace-only custom system prompt is not an additive integration. Capture synthetic contents/roles only through a legitimate controlled provider endpoint, and label authenticated wire role unknown when it was not observed.
-
-Use actual registered daemon Chat sessions for proprietary native protocols; this TUI runner does not qualify their streaming, approval or reconnect contract. A standalone native receipt is a separate prerequisite. Prove new hidden instructions after confirmed Kill with the same native history, and retain failed controls separately. Limit aggregate native hook context or reject competing unbounded hooks; hook fail-open and truncation behavior require explicit boundaries.
-
-Executing-child interrupt and explicit AO Kill are independent gates. A host disappearance is insufficient when a native Bash tool starts a new process group. On Linux record PID plus kernel birth ticks, bounded reaping and the absence of a scheduled late artifact, while an unrelated control session stays usable. Do not infer other operating-system cleanup from a Linux-only proof. Record CI merge-build VCS and any difference from the implementation head separately from the Electron UI head.
+Honor the user's execution constraints. Record complete current-head CI results;
+omitted/interrupted suites remain `NOT_RUN`, and previous fixture results remain
+historical. Distinguish CI merge-build source from the implementation/UI head.
+Qualify proprietary Chat protocols through actual daemon Chat APIs, including
+streaming, approvals, and reconnect; standalone native receipts and this TUI
+runner cannot replace those checks.
 
 ## Evidence ownership by integration PR
 
-For an integration batch, publish each harness's report, JSON receipts, original
-screenshots and adjacent provenance on that harness's integration PR branch or
-as attachments to that PR. Embed the images and link the detailed receipts in
-its PR comments. Record the tested source/native revisions independently of the
-evidence commit. A skill/tooling PR holds reusable instructions, runner/tests
-and a concise session index linking to those integration PRs.
+Keep each harness's detailed reports, JSON receipts, screenshots, and provenance
+on its integration PR branch or as attachments to that PR. Embed images and link
+receipts in its authorized PR report/comment. Keep tested source/native revisions
+separate from the evidence commit. The skill/tooling PR contains reusable guidance,
+runner/tests, and links to external evidence when useful.
 
-When relocating existing evidence, preserve screenshot bytes, original test
-hashes, failure labels and standalone-versus-registered scope. Split combined
-reports by harness. Verify destination assets and published comment links before
-removing the old paths from the skill PR's net diff. Keep immutable historical
-references where needed; relocation does not establish a new runtime PASS.
-
+When relocating evidence, preserve original bytes, hashes, failure labels, and
+standalone-versus-registered scope. Verify destination assets and published links
+before removing old paths. Relocation does not establish a new runtime PASS.
 
 ## Independent standing-instruction controls
+
+Record instruction delivery separately from provider wire role. Additive private
+system/developer inputs, hidden user-role hook context, and visible task text are
+different routes. Observe wire roles only through a legitimate controlled provider
+endpoint; label authenticated roles unknown when unobserved. Preserve native and
+project/user rules; replacing the native system prompt is not additive delivery.
+Bound aggregate native hook context and document fail-open/truncation behavior.
 
 Use an ordinary visible file task that never names the private token, private
 instruction path, private witness, or reading standing/project instructions.
@@ -337,7 +335,6 @@ version-probe failure does not prove missing history rejection. A missing-histor
 control must reach that check, reject restore without a fresh conversation,
 and restore the exact owned withheld history bytes afterward.
 
-If software WebGL produces blank frames, retain them as failed captures. A
-normal Electron graphics fallback may be used for the real app; record its
-flags, exact UI source and serving binary separately. Never replace native
-viewport evidence with DOM text, raw terminal-ring text or generated pixels.
+Failed or blank screenshots remain failed captures. Record any real graphics
+fallback, exact UI source, and serving binary; DOM text, terminal-ring text, and
+generated pixels cannot replace native viewport evidence.

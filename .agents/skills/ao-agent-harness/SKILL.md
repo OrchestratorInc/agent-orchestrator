@@ -48,60 +48,32 @@ processes before retrying. `--no-live` skips provider turns
 and AO sessions, but still builds/starts AO and runs safe binary, version,
 integration, and model-list commands. It is not an execution-free review mode.
 
-## Judge the evidence
+## Judge and hand off the evidence
 
-The strict audit requires every mandatory gate. Native proof does not replace AO auth
-or model evidence. `configured` records credential presence; user authorization
-to test and a successful native call do not change the adapter's returned state.
-Missing evidence stays `BLOCKED`, `FAIL`, or `NOT_RUN`.
+A strict audit requires every mandatory gate and successful cleanup. Credential
+presence is `configured`, not verified authorization. Missing proof stays
+`BLOCKED`, `FAIL`, or `NOT_RUN`. Explicit diagnostic continuation preserves those
+results and cannot produce a full strict PASS.
 
-When explicitly investigating later lifecycle behavior after native proof,
-`--diagnostic-after-native-proof` may continue past configured/unknown AO auth
-or a successful-but-empty model response. It retains the original non-pass
-results and never exits as a full passing audit. Explicit login failures,
-stale probes, missing binaries, and failed HTTP requests still block dependent
-work. See the exact prerequisites in the evidence reference.
+Use the [evidence contract](references/evidence-and-handoff.md) for gate criteria,
+artifacts, login handoff, and publication. Restore HTTP success or synthetic idle
+is insufficient: require native readiness, exact-session continuity, and a fresh
+instruction token introduced only after confirmed kill. Cancellation requires
+an active command's PID/kernel-start witness, confirmed stop, and no delayed
+side effect. Missing native interrupt/readiness contracts skip dependent turns;
+see the [local CLI contract](references/local-cli-contract.md) for configuration
+and optional owned-draft cleanup.
 
-Restore HTTP 200 and synthetic `idle` do not establish native input readiness.
-Supply a cue for the initialized empty composer with the configured model and
-workspace, not an echoed prompt, loading screen, or draft. Missing cancellation
-or restored-readiness contracts yield `NOT_RUN` without sending those turns.
-For a native CLI that restores the cancelled prompt as a draft, the local
-contract documents optional post-cancel cleanup, including a stat-only native
-draft persistence removal witness, for exclusive runner-owned
-sessions. It requires a current audit-draft cue and verified empty composer;
-it never clears a user draft or relaxes restored readiness.
-Activity requires an observed active-to-settled turn. Hidden-instruction token
-consumption proves delivery, not confidentiality against model echo. The runner
-introduces a fresh restore token only after confirmed kill and verifies its
-project-config write before restore, so initial history cannot supply it.
-Cancellation separately requires a tokenized foreground-command start/PID plus
-kernel process-start identity witness while the turn is active, then proves that
-exact process stopped and its delayed
-side effect remained absent after native interrupt input. Settlement alone does
-not pass when the command finished naturally or the native agent refused it.
+Runner token prompts establish assisted instruction consumption. Claims about
+ordinary-task delivery require the reference's independent instruction controls.
+For every inside-AO claim, attach a real screenshot of the claimed TUI/Chat
+interface in the actual AO UI with functional evidence and capture provenance.
+A runner PASS cannot fill missing `AO UI evidence: BLOCKED`.
 
-Every claim that a harness runs **inside AO** requires an attached real screenshot
-of that harness session in the actual AO UI, with AO context and live native
-output visible. Native CLI success, terminal mirrors, text/log PNGs, and synthetic
-UI do not satisfy this requirement. Follow the required capture record and
-publication gate in [Evidence and handoff](references/evidence-and-handoff.md#required-ao-ui-evidence).
-A runner `PASS` alone is insufficient: missing AO UI screenshots leave
-`AO UI evidence: BLOCKED` and the integration handoff incomplete.
-
-Preserve the first failure, later fixes, and controls separately. Label every
-failed/blocked/not-run gate and attach its actual failure screen when available;
-otherwise report `screenshot: unavailable` with the reason. Screenshots show
-visual state; retain functional logs/assertions for cancellation and exact
-restore. Inspect artifacts for secrets before sharing. Report the verdict,
-non-pass gates, tested source and binary, evidence links, and cleanup state.
-Publish detailed PR reports only when requested or already authorized; otherwise
-summarize and attach the same evidence in the authorized handoff.
-
-Keep each harness's detailed reports, JSON receipts, screenshots and provenance
-with its own integration PR, and embed/link them in that PR's comments. A skill
-PR contains reusable guidance, runner/tests and a concise linked session summary.
-See the evidence reference for relocation and publication requirements.
+Keep each attempt and failure distinct. Detailed harness reports, JSON receipts,
+screenshots, and provenance belong with that harness's integration PR. The skill
+contains reusable guidance and tooling. Publish reports only when requested or
+already authorized, and inspect artifacts for secrets before sharing.
 
 ## Validate changes
 

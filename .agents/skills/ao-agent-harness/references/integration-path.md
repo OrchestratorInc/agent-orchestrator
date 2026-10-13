@@ -14,10 +14,12 @@ raise a second adapter PR for work already in flight.
 
 Classify each candidate as already supported, existing PR to complete,
 suitable new integration, blocked by upstream capability, or out of scope.
-A script/IDE-only product without a stable interactive CLI, private instruction
-input, or exact native restore needs a documented blocker, not speculative
-production registration. Supportability depends on demonstrated capabilities,
-not popularity or a successful `--help` command.
+Evaluate the requested interface independently: a Chat-only provider need not
+invent a TUI command. Missing private instruction input, exact native restore,
+or another required capability needs a documented blocker. A deliberately
+limited integration requires explicit user scope and truthful capability
+rejection; it cannot claim a strict full audit PASS. Supportability depends on
+demonstrated capabilities, not popularity or a successful `--help` command.
 
 Use a branch/worktree from current `main` for each independently shippable
 integration. Preserve unrelated dirty work. The audit scripts report evidence;
@@ -111,6 +113,29 @@ unique audit-only token in a provider-authored proof artifact independently in
 TUI and Chat. That establishes instruction consumption, not resistance to
 model echo; never place a real secret in the instruction probe.
 
+Qualify effective native settings, not merely accepted flags: prove model/provider
+selection, permission behavior, workspace writes, and instruction consumption.
+Verify edits land in the actual AO worktree and leave the source checkout unchanged.
+Preserve native defaults, user hooks/rules, tools, and credential filtering.
+Reject unsupported configuration variants rather than silently replacing defaults.
+Native hooks may initialize lazily or fail open; distinguish an observed context
+witness from a pre-execution security boundary. Bound the combined hook payload
+and preserve exact instruction text without truncation.
+
+Keep process/runtime I/O, bounded polling, exclusive input admission, publication,
+and rollback in the manager; keep native command/history interpretation in the
+adapter. Resume must validate durable identity/workspace/history and positively
+observe the loaded target. Reject silent fresh-session fallback and stale launch
+signals. Never fabricate native IDs or replay the initial task as restore.
+Keep startup callbacks nonblocking, and check daemon-startup adoption
+as well as direct resume callers.
+
+Use current rendered terminal cues for adapter input admission. Serialize writes
+and guard pending submissions, drafts, and permission decisions; stale output or
+an echoed prompt must not authorize a send. Qualify long multiline input through
+the actual AO path. Process ownership alone does not establish the current native
+conversation after native new-session or compaction operations.
+
 Any worktree file created by `GetAgentHooks` must be covered by the AO-managed
 sibling `.gitignore`, as enforced by the agent registry tests. Prefer AO data
 storage when the provider supports an explicit external hook/config path.
@@ -178,7 +203,8 @@ proof file before declaring continuity.
 
 Register the driver only after all required cases pass. Do not implement
 `ports.AgentInterfaceHandoff` until TUI and Chat are proven to share identity,
-history, permission state, and cancellation semantics.
+history, permission state, and cancellation semantics. Chat qualification uses
+actual registered daemon Chat sessions and controller states, not the TUI runner.
 
 ## 7. Verification
 
@@ -204,7 +230,18 @@ cd frontend && npm run build
 Run workflow emulation only when allowed by the user and supported by the
 execution host. After pushing, inspect all required GitHub checks on the current
 PR head and report failures or unavailable OS/authenticated-provider coverage
-precisely. Do not publish or deploy as validation.
+precisely. Do not publish or deploy as validation. A native source patch or
+prerelease artifact is not conformance of an unchanged released CLI.
+
+Exercise executing-tool cancellation and AO Kill independently. Record the owned
+PID and kernel start identity, bounded child reaping, delayed side-effect absence,
+and an unrelated usable control session. Distinguish native cancellation latency
+from AO's status-observation cadence and report OS coverage explicitly.
+
+Use the [independent instruction controls](evidence-and-handoff.md#independent-standing-instruction-controls)
+when claiming ordinary-task instruction delivery. Runner token prompts are assisted
+consumption checks; configured context and token consumption do not establish the
+authenticated provider's message role.
 
 For every harness claimed as running inside AO, capture the actual AO session
 UI on the tested build, even when the integration changes only backend code.
@@ -220,7 +257,6 @@ data for desktop-lab verification.
 Before handoff, audit the diff for accidental reviewer changes, generated drift,
 edits to old migrations, provider-profile writes, credentials, temporary data,
 and unsupported capability claims.
-
 
 ## 8. Report and publish the integration
 
@@ -249,219 +285,3 @@ attempt visible even after a successful fix.
 
 Publish the PR/report when requested or already authorized. Do not send reports
 to unrelated channels or merge/publish releases as part of integration testing.
-
-
-## Supported native initialization and subprocess boundaries
-
-When argv resume is broken but the native TUI has a supported interactive resume
-command, qualify that path with native controls before registering it. Validate
-full native identity and real nonempty supported history before launch. Keep
-runtime I/O, bounded polling, exclusive input admission, publication and owned
-rollback in the manager; keep native command/history/terminal interpretation in
-the adapter. Do not label a taskless fresh launch as successful native resume.
-Require a current-launch witness naming the exact target, real loaded messages,
-and the initialized empty composer after the single resume command. A frontend
-banner alone can lie after native fallback. Ignore stale generations/sequences.
-Use the existing current rendered-viewport runtime boundary for terminal cues;
-raw output-ring tails can omit unterminated current rows and retain overwritten
-status frames. Fail closed when rendered evidence is unavailable.
-Never publish the transient fresh ID, and never replay the saved task as restore
-initialization. Check every direct resume caller and daemon-startup adoption path.
-
-Native startup hooks must return promptly. If AO parks callbacks until launch
-publication, use a local generation-scoped witness during initialization; a
-synchronous startup callback can deadlock. Publish the verified target afterward
-and read it back because stale publication signals can be silently discarded.
-Distinguish native conversation-end during interactive resume from process exit.
-If native hook stdout is capped per hook, preserve private instructions through
-ordered bounded chunks only when the native trim/join rule reproduces the original
-context exactly. Split at compatible paragraph boundaries, check native combination,
-and reject oversized indivisible segments or altered whitespace; never truncate.
-
-A visible Cancelled label is insufficient for an executing tool. Wait for a
-child-authored start marker, retain owned PID plus kernel start identity, then
-cancel. Check process reaping, composer recovery and delayed side effects across
-the scheduled deadline. Exercise AO Kill independently, with an unrelated live
-control whose state/generation are rechecked immediately and later. Keep native
-history, cross-session isolation and exact restore as separate assertions.
-
-Prefer supported native SDK/plugin APIs that propagate cancellation into the
-official sandbox while preserving tool schemas/errors/permissions. Prove real
-SDK initialization order and same-name replacement. Do not add a tool to narrowed
-children or overwrite unsupported custom tools. Check saved custom subagents,
-sandboxes/root IDs/session managers and system-prompt overrides as well as argv.
-An initial foreground flag does not constrain model-driven native reconfiguration;
-restrict that route through a supported capability boundary and verify public
-witnesses at the lifecycle phase where they exist. Document explicit human
-in-TUI profile/plugin takeover separately. Do not claim managed guarantees survive
-unsupported takeover or rely on private monkeypatches/terminal interception.
-
-Trace actual native provider/model precedence. A parsed flag or matching one
-saved field does not prove the TUI honored an AO override. Reject overrides when
-the effective selection cannot be proved, and qualify the native configured model
-with real provider/UI evidence. Native decision cards may suppress idle/spinner
-chrome; detect the newest current decision cue regardless of selected option,
-without letting earlier idle/spinner scrollback hide it. Prove ordinary AO input
-is refused while a decision is pending and only positively observed native
-resolution clears it.
-
-Measure native settlement separately from AO observation. Continuous terminal
-classification may still run on the observer's normal ticker rather than emit
-an event immediately. Inspect the actual daemon wiring/tick before choosing a
-confirmation bound; retain a stricter failed probe unchanged. Record current
-rendered-native and AO-state UTC/generation samples, distinguish fast owned tool
-reaping from delayed AO idle/blocked publication, and do not present a longer
-bounded confirmation as an instantaneous or guaranteed status transition.
-
-## Scoped native terminal contracts
-
-A supported additive per-process instruction route can preserve native defaults
-without a literal append-file flag. Qualify the actual selected interface: Hermes
-v0.21.6 classic `--cli` consumes its ephemeral environment prompt, while the modern
-TUI and ACP do not establish that same contract. Compose effective personality or
-prefix settings rather than replacing native safety with an explicit system flag.
-Fail closed for configuration variants whose effective instructions cannot be
-preserved. A model may refuse to disclose private instruction text; a public effect
-whose operands occur only in standing instructions can prove consumption without
-weakening that policy.
-
-With explicit user-authorized scope, a useful terminal adapter may deliberately
-refuse unsupported native restore, Chat, handoff and history surfaces. OpenJarvis
-CLI1.0.4 chat has process-local history. Do not manufacture native IDs or replay
-messages as restore. This narrow working surface does not qualify a strict full
-audit PASS.
-
-Native plain-line REPLs need current rendered input admission, serialized writes,
-and a pending-submission fence with baseline-aware exact echo evidence. Physical
-wrapping and Unicode controls matter. Reject unsupported inputs before writing;
-historical prompts or an embedded composer marker must never authorize a new send
-or answer a later permission question. Missing current composer evidence remains
-unknown even if a separate UI still displays a prompt.
-
-A process lease may establish ownership without identifying its current native
-conversation. Hermes can retain its startup lease ID after `/new` or compression;
-use the actual process's PTY-bound breadcrumb with ownership/cwd corroboration.
-Mutable stopped-generation breadcrumbs can be overwritten by PTY reuse: refuse
-unprovable restore rather than selecting an older conversation.
-
-Native tool environment filtering can drop AO routing variables even when the
-correct `ao` binary is on PATH. Append bounded instructions for the native tool's
-explicit AO-variable passthrough, preserve credential filtering, and verify a
-report receipt in the intended daemon. Do not infer success from model narration.
-
-A native `/new` conversation may have a NULL persisted workspace even after successful coding. Corroborate live identity through the owned process and current native PTY breadcrumb, but refuse persisted restore without its required durable workspace. Preserve cursor-bearing rows when a normal terminal shrinks; never recover readiness by replaying ring history. This vertical preservation does not prove complete width reflow. Explicitly include the actual AO worktree in additive instructions when native tools otherwise default to a configured project directory.
-
-
-## Native ACP Chat qualification lessons (Docker Agent)
-
-A Chat-only provider may still require a common agent metadata plugin for AO's
-binary/auth/config inventory. Reject terminal admission before allocating a
-session, default omitted mode to Chat, and prevent fallback to terminal. Do not
-invent a TUI command or use a permissive permission default to satisfy an interface.
-
-Private additive native hooks can carry standing context while preserving user
-hooks and tools. Include the actual AO workspace explicitly: native cwd isolation
-alone does not prevent an agent from following a source-repository path elsewhere
-in AO context. Prove the write landed in the session worktree and the source
-checkout stayed unchanged. Preserve the first wrong-workspace failure separately.
-
-Use the daemon's actual Chat enums when observing settlement (controller `ready`,
-with no running or queued turns); terminal activity and Chat controller states are
-different contracts. A local credentials inventory does not verify remote access.
-Keep provider token-exhaustion and observer errors visible instead of treating
-those attempts as lifecycle passes. Qualify ACP through real AO APIs, not the
-TUI-only audit runner. Record detached-host and native-child PID/kernel start times
-before daemon replacement, Kill, and exact restore.
-
-
-## Native Mastra TUI lessons
-
-Mastra0.45.0 discards hook additionalContext in its TUI; use its additive native
-plugin instructions and preserve plugin/hook registries and disabledPlugins.
-SessionStart can expose bootstrap session-init; verify restored identity with the
-supported active-session plugin getter. Prevalidate history before resume because
-missing/locked resume may silently create a new thread. Environment permission
-flags alone need live confirmation: code-sdk1.11.0 defaults yolo=true if native
-preferences are absent. Set supported yolo=false in an owned profile and reject
-explicit permissive preferences unless bypass was requested. Protect current
-rendered drafts/permissions with serialized admission. Native optional embedding
-initialization can outlive a turn; do not infer prompt readiness or cancellation
-from an old raw output ring or describe embedding/background ownership as proven.
-
-
-## Pool compatible-provider qualification hold
-
-Pool v1.0.16 initializes ACP and creates standalone sessions without a successful
-model call. With the available authorized Z.ai coding endpoint, it emitted
-`/v4/v1/chat/completions` and failed with 404; explicitly adding `/v1` did not
-repair routing. A direct `/v4/chat/completions` provider control succeeded, but
-that control is not native Pool or AO conformance. Do not convert initialize,
-session/new, empty authMethods or credential presence into authorization.
-Unknown native history hard-failed; valid load/replay remains unproved.
-
-Keep Pool unregistered until a released native provider-path fix or an already
-authorized working endpoint enables full qualification. Unnamed SessionStart
-hooks are additive, but fail open and cap model-visible context at 32 KiB.
-Bound serialized output as well as raw instruction bytes (JSON escaping grows
-payloads); actual hook invocation, consumption and failure detection remain
-required. Source-only helper construction must never count as instruction proof.
-See the [native hold report](../../../../docs/research/pool-acp-hold-2026-10-11.md).
-
-
-## Nested instruction discovery is not global delivery
-
-Freebuff0.2.26 persisted nested AGENTS.md in knowledgeFiles and could read it when
-a visible task requested standing context, yet an ordinary fresh task did not
-apply its mandatory private receipt instruction. Keep those controls separate:
-file-tree inclusion or saved metadata alone does not prove private standing
-instructions independently of user input. Qualify a fresh task that never names
-the private path/token/receipt and verify the privately required side artifact.
-Do not change root/user AGENTS.md or replace native bundled agents to force it.
-
-
-## Pool compatible-provider recovery: lazy private context
-
-The historical Z.ai hold above remains valid for that endpoint. Stock Pool1.0.16
-subsequently completed native and actual AO Chat tool turns with the authorized
-DeepSeek standalone root. Provider-root compatibility requires a real native
-turn; catalog-selected `deepseek-flash` did not validate the unavailable requested
-`deepseek-chat` model. Preserve native model-set rejection and user hooks.
-
-SessionStart hooks require a matcher. Fresh sessions initialize hooks on their
-first prompt; a loaded session interrupted by Kill can also initialize lazily on
-its first continuation. Do not demand a witness immediately after new/load.
-Validate the native session/workspace witness before publishing successful prompt
-completion, and separately prove instruction consumption on real file edits.
-Because native hooks fail open, this check observes missing context after the
-turn; it is not a tool execution security boundary. Live detached-host adoption
-must retain its original context rather than resetting its witness.
-
-A rejected operation can make the model refuse a superficially similar follow-up
-without emitting a new permission request. Preserve that negative attempt, then
-request an independently authorized, distinct operation to exercise cancellation.
-An accepted mode setter alone proves mode negotiation, not permission semantics.
-Prove cancel and Kill with PID plus kernel-start markers, nested child reaping,
-no delayed artifact, an unrelated control session and exact restored history.
-Scope unqualified optional ACP capabilities explicitly, even when initialize
-advertises them. The TUI audit runner cannot replace actual daemon Chat proof.
-See the [recovery report](../../../../docs/research/pool-acp-recovery-2026-10-12.md).
-
-
-## Freebuff instruction transport recovery
-
-Freebuff0.2.26 discovers nested AGENTS.md but its default prompt formatter filters
-project knowledge to root AGENTS.md/CLAUDE.md. Persisted discovery is therefore
-insufficient even before inference. Its home-user map is unfiltered internally,
-but the released CLI/public run transport exposes no additive host input.
-Profile isolation does not redirect home knowledge; same-ID custom agents replace
-native defaults. Do not change HOME/root rules, select a replacement native root,
-or pass a visible instruction-reading task to force qualification.
-
-When upstream-only, provide an unapplied patch against an immutable source
-snapshot and regression acceptance criteria, distinguishing that public snapshot
-from the private release revision. An explicit host overlay must preserve native
-home/project knowledge, tools/permissions and default root; reject unreadable or
-oversized input before a turn. A source proposal or modified local build is not
-stock release conformance. Keep production registration gated until an official
-released input passes ordinary-task independent consumption and actual AO UI
-proof. See the [recovery report](../../../../docs/research/freebuff-recovery-2026-10-12.md).
