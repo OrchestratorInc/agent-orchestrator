@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // previewAPIRequest mirrors the daemon's body for
@@ -23,7 +24,20 @@ type previewAPIRequest struct {
 }
 
 type previewServerStartRequest struct {
-	Configuration string `json:"configuration,omitempty"`
+	Configuration string                   `json:"configuration,omitempty"`
+	Run           *previewInlineRunRequest `json:"run,omitempty"`
+}
+
+// previewInlineRunRequest mirrors controllers.InlinePreviewServerRequest for
+// `ao preview start --run -- <command>`.
+type previewInlineRunRequest struct {
+	RuntimeExecutable string   `json:"runtimeExecutable"`
+	RuntimeArgs       []string `json:"runtimeArgs,omitempty"`
+	Cwd               string   `json:"cwd,omitempty"`
+	Port              int      `json:"port,omitempty"`
+	AutoPort          bool     `json:"autoPort,omitempty"`
+	URL               string   `json:"url,omitempty"`
+	TargetKind        string   `json:"targetKind,omitempty"`
 }
 
 const previewCapabilityHeader = "X-AO-Preview-Capability"
@@ -76,11 +90,45 @@ func newPreviewCommand(ctx *commandContext) *cobra.Command {
 		},
 	})
 	var startJSON bool
+	var run previewRunOptions
 	startCmd := &cobra.Command{
-		Use:   "start [configuration]",
-		Short: "Start a session-owned dev server from .ao/launch.json and open its preview",
-		Args:  atMostOneArg,
+		Use:   "start [configuration] | start --run [flags] -- <command> [args...]",
+		Short: "Start a session-owned dev server from .ao/launch.json or a one-off command and open its preview",
+		Long: "Start a session-owned dev server and open its preview in this worker's Browser panel.\n\n" +
+			"With a configuration name (or no name when launch.json has exactly one entry),\n" +
+			"the server comes from .ao/launch.json. With --run, the command after -- is run\n" +
+			"as a one-off managed server. Nothing is written to the workspace.",
+		Example: `  ao preview start
+  ao preview start web
+  ao preview start --run --port 3000 --url 'http://127.0.0.1:${PORT}/' -- npx next dev -p '${PORT}'
+  ao preview start --run --auto-port -- npm run dev -- --port '${PORT}' --host 127.0.0.1`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if run.enabled {
+				if cmd.ArgsLenAtDash() < 0 || len(args) == 0 {
+					return usageError{errors.New("ao preview start --run requires a command after --")}
+				}
+				return nil
+			}
+			return atMostOneArg(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if run.enabled {
+				if cmd.ArgsLenAtDash() > 0 {
+					return usageError{errors.New("--run takes no configuration name; put the command after --")}
+				}
+				request, err := run.request(cmd, args)
+				if err != nil {
+					return err
+				}
+				status, err := ctx.startInlinePreviewServer(cmd.Context(), request)
+				if err != nil {
+					return err
+				}
+				return writePreviewServerStatus(cmd.OutOrStdout(), status, startJSON)
+			}
+			if err := run.rejectFlagsWithoutRun(cmd); err != nil {
+				return err
+			}
 			configuration := ""
 			if len(args) == 1 {
 				configuration = args[0]
@@ -93,6 +141,7 @@ func newPreviewCommand(ctx *commandContext) *cobra.Command {
 		},
 	}
 	startCmd.Flags().BoolVar(&startJSON, "json", false, "print JSON")
+	run.bind(startCmd.Flags())
 	cmd.AddCommand(startCmd)
 
 	var statusJSON bool
@@ -183,6 +232,83 @@ func (c *commandContext) startPreviewServer(
 		http.MethodPost,
 		"/api/v1/"+path,
 		previewServerStartRequest{Configuration: configuration},
+		&out,
+		headers,
+	)
+	return out, err
+}
+
+// previewRunOptions holds the flags for `ao preview start --run`.
+type previewRunOptions struct {
+	enabled bool
+	url     string
+	port    int
+	auto    bool
+	target  string
+	cwd     string
+}
+
+func (o *previewRunOptions) bind(flags *pflag.FlagSet) {
+	flags.BoolVar(&o.enabled, "run", false, "run the command after -- as a one-off managed server (not written to .ao/launch.json)")
+	flags.StringVar(&o.url, "url", "", "loopback http URL that becomes ready; ${PORT} is expanded (default http://127.0.0.1:${PORT}/)")
+	flags.IntVar(&o.port, "port", 0, "preferred loopback port; omit with --auto-port to let AO choose")
+	flags.BoolVar(&o.auto, "auto-port", false, "choose a free loopback port automatically (default when --port is omitted)")
+	flags.StringVar(&o.target, "target", "", "app (open in the Browser panel, default) or api (health-check only)")
+	flags.StringVar(&o.cwd, "cwd", "", "workspace-relative working directory (default: workspace root)")
+}
+
+// rejectFlagsWithoutRun keeps run-only flags from being silently ignored when
+// the command starts a configured server.
+func (o *previewRunOptions) rejectFlagsWithoutRun(cmd *cobra.Command) error {
+	for _, name := range []string{"url", "port", "auto-port", "target", "cwd"} {
+		if cmd.Flags().Changed(name) {
+			return usageError{fmt.Errorf("--%s requires --run", name)}
+		}
+	}
+	return nil
+}
+
+func (o *previewRunOptions) request(cmd *cobra.Command, args []string) (previewInlineRunRequest, error) {
+	if o.port < 0 || o.port > 65535 {
+		return previewInlineRunRequest{}, usageError{errors.New("--port must be between 0 and 65535")}
+	}
+	if o.port > 0 && o.auto {
+		return previewInlineRunRequest{}, usageError{errors.New("--port and --auto-port are mutually exclusive")}
+	}
+	dash := cmd.ArgsLenAtDash()
+	command := args
+	if dash >= 0 {
+		command = args[dash:]
+	}
+	if len(command) == 0 {
+		return previewInlineRunRequest{}, usageError{errors.New("ao preview start --run requires a command after --")}
+	}
+	return previewInlineRunRequest{
+		RuntimeExecutable: command[0],
+		RuntimeArgs:       command[1:],
+		Cwd:               o.cwd,
+		Port:              o.port,
+		AutoPort:          o.port == 0,
+		URL:               o.url,
+		TargetKind:        o.target,
+	}, nil
+}
+
+func (c *commandContext) startInlinePreviewServer(ctx context.Context, run previewInlineRunRequest) (previewServerStatusDTO, error) {
+	path, err := previewServerPath()
+	if err != nil {
+		return previewServerStatusDTO{}, err
+	}
+	var out previewServerStatusDTO
+	headers, err := previewServerHeaders()
+	if err != nil {
+		return previewServerStatusDTO{}, err
+	}
+	err = c.doJSONPathWithHeaders(
+		ctx,
+		http.MethodPost,
+		"/api/v1/"+path,
+		previewServerStartRequest{Run: &run},
 		&out,
 		headers,
 	)

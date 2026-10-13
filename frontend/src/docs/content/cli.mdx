@@ -210,10 +210,11 @@ Selects what the desktop Browser panel displays for the session identified by `A
 | --- | --- |
 | `ao preview clear` | Clear the selected preview. |
 | `ao preview start [configuration]` | Start exactly one command from `.ao/launch.json`, wait for readiness, and select it. |
+| `ao preview start --run -- <command> [args...]` | Run one command as a session-owned server without writing `.ao/launch.json`. Accepts `--url`, `--port` or `--auto-port`, `--target app\|api`, and `--cwd`. Works for remote Browser preview. |
 | `ao preview status` | Show the managed preview process and recent bounded logs. |
 | `ao preview stop` | Stop the managed process tree. |
 
-`.ao/launch.json` is optional project configuration. Orchestrator does not infer or scaffold development servers, and static files do not require one.
+`.ao/launch.json` is optional project configuration. Orchestrator does not infer or scaffold development servers, and static files do not require one. For a one-off dev server, use `ao preview start --run`: it leaves no file in the worktree, so it does not show up as an uncommitted change.
 
 ### `ao browser`
 

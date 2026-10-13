@@ -286,6 +286,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSessionPreviewResponse":                   "SessionPreviewResponse",
 	"ControllersSetSessionPreviewRequest":                 "SetSessionPreviewRequest",
 	"ControllersStartPreviewServerRequest":                "StartPreviewServerRequest",
+	"ControllersInlinePreviewServerRequest":               "InlinePreviewServerRequest",
 	"ControllersPreviewServerStatusResponse":              "PreviewServerStatusResponse",
 	"ControllersBrowserStatusQuery":                       "BrowserStatusQuery",
 	"ControllersBrowserStatusResponse":                    "BrowserStatusResponse",
@@ -2534,7 +2535,7 @@ func sessionOperations() []operation {
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/preview/server", id: "startSessionPreviewServer", tag: "sessions",
-			summary:    "Start a session-owned server from .ao/launch.json and open its application preview",
+			summary:    "Start a session-owned server from .ao/launch.json or a one-off run request and open its application preview",
 			pathParams: []any{controllers.SessionIDParam{}, controllers.BrowserCapabilityHeader{}, controllers.PreviewCapabilityHeader{}},
 			reqBody:    controllers.StartPreviewServerRequest{},
 			resps: []respUnit{

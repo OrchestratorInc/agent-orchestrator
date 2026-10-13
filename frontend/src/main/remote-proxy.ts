@@ -232,7 +232,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 				if (preview?.kind === "app" && upstreamRes.statusCode === 409 && upstreamRes.headers["x-ao-preview-managed-required"] === "1") {
 					upstreamRes.resume();
 					res.writeHead(409, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-					res.end("<main style='font:16px system-ui;padding:24px'><h1>Remote preview needs a managed server</h1><p>Run <code>ao preview start</code> in this session on the host.</p></main>");
+					res.end("<main style='font:16px system-ui;padding:24px'><h1>Remote preview needs a managed server</h1><p>Run <code>ao preview start --run -- &lt;dev command&gt;</code> in this session on the host, or <code>ao preview start</code> for a configured <code>.ao/launch.json</code> entry.</p></main>");
 					return;
 				}
 				let dropped = false;
