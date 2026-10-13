@@ -596,11 +596,12 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	var status ports.AgentAuthStatus
 	var account domain.AgentAccountIdentity
 	var err error
-	if diagnosticChecker, ok := item.Agent.(ports.AgentAuthDiagnosticsChecker); ok {
-		status, account, diagnostics, err = diagnosticChecker.AuthStatusWithDiagnostics(ctx)
-	} else if accountChecker, ok := item.Agent.(ports.AgentAuthAccountChecker); ok {
-		status, account, err = accountChecker.AuthStatusWithAccount(ctx)
-	} else {
+	switch authChecker := item.Agent.(type) {
+	case ports.AgentAuthDiagnosticsChecker:
+		status, account, diagnostics, err = authChecker.AuthStatusWithDiagnostics(ctx)
+	case ports.AgentAuthAccountChecker:
+		status, account, err = authChecker.AuthStatusWithAccount(ctx)
+	default:
 		status, err = checker.AuthStatus(ctx)
 	}
 	if err != nil {

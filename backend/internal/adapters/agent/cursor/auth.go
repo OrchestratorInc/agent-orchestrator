@@ -48,7 +48,7 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 			account = cursorLoginAccount(cursorConfigPath())
 		}
 		return status, account, steps, nil
-	} else if err != nil && ctx.Err() != nil {
+	} else if ctx.Err() != nil {
 		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, err
 	}
 	return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, nil
