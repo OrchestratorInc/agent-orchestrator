@@ -570,7 +570,13 @@ function ResultStep({ empty, includeCookies, includeHistory, result }: { empty: 
 			{result.entries.map((entry) => (
 				<div className="rounded-lg border border-border px-3" key={entry.destinationProfile.id}>
 					<p className="pt-3 text-sm font-medium">{entry.destinationProfile.name}</p>
-					<p className="pb-2 text-xs text-muted-foreground" role="status">{t("settings.browserImport.resultCounts", { cookies: entry.importedCookies, history: entry.importedHistoryEntries })}</p>
+					<p className="pb-2 text-xs text-muted-foreground" role="status">
+						{includeCookies && includeHistory
+							? t("settings.browserImport.resultCounts", { cookies: entry.importedCookies, history: entry.importedHistoryEntries })
+							: includeCookies
+								? t("settings.browserImport.resultCookies", { count: entry.importedCookies })
+								: t("settings.browserImport.resultHistory", { count: entry.importedHistoryEntries })}
+					</p>
 					{[
 						{ selected: includeCookies, Icon: Cookie, label: "settings.browserImport.cookies" as const, count: entry.importedCookies },
 						{ selected: includeHistory, Icon: HistoryIcon, label: "settings.browserImport.history" as const, count: entry.importedHistoryEntries },

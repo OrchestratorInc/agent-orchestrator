@@ -2151,6 +2151,8 @@
 	"settings.browserImport.complete": "インポート完了",
 	"settings.browserImport.empty": "データはインポートされませんでした",
 	"settings.browserImport.resultCounts": "Cookie {{cookies}} 件 · 履歴 {{history}} 件",
+	"settings.browserImport.resultCookies": "Cookie {{count}} 件",
+	"settings.browserImport.resultHistory": "履歴 {{count}} 件",
 	"settings.browserImport.skippedCookies": "{{count}} 件のCookieをスキップしました。",
 	"settings.browserImport.importDetails": "インポートの詳細",
 	"settings.browserImport.signInAgain": "一部のサイトでは、再度ログインが必要になる場合があります。",

@@ -2151,6 +2151,8 @@
 	"settings.browserImport.complete": "Import abgeschlossen",
 	"settings.browserImport.empty": "Es wurde nichts importiert",
 	"settings.browserImport.resultCounts": "{{cookies}} Cookies · {{history}} Verlaufseinträge",
+	"settings.browserImport.resultCookies": "{{count}} Cookies",
+	"settings.browserImport.resultHistory": "{{count}} Verlaufseinträge",
 	"settings.browserImport.skippedCookies": "{{count}} Cookies wurden übersprungen.",
 	"settings.browserImport.importDetails": "Importdetails",
 	"settings.browserImport.signInAgain": "Einige Websites bitten dich möglicherweise, dich erneut anzumelden.",

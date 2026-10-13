@@ -1274,6 +1274,8 @@
 	"settings.browserImport.complete": "Import complete",
 	"settings.browserImport.empty": "Nothing was imported",
 	"settings.browserImport.resultCounts": "{{cookies}} cookies · {{history}} history entries",
+	"settings.browserImport.resultCookies": "{{count}} cookies",
+	"settings.browserImport.resultHistory": "{{count}} history entries",
 	"settings.browserImport.skippedCookies": "{{count}} cookies were skipped.",
 	"settings.browserImport.importDetails": "Import details",
 	"settings.browserImport.signInAgain": "Some sites may ask you to sign in again.",

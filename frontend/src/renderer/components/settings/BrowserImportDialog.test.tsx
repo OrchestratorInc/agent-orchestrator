@@ -307,7 +307,8 @@ describe("BrowserImportDialog", () => {
 		await userEvent.click(screen.getByRole("checkbox", { name: /Cookies and site sign-ins/ }));
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
 		const status = await screen.findByRole("status");
-		expect(status).toHaveTextContent(/^0 cookies · 5000 history entries$/);
+		expect(status).toHaveTextContent(/^5000 history entries$/);
+		expect(status).not.toHaveTextContent("cookies");
 		const dialog = screen.getByRole("dialog");
 		expect(dialog).toHaveTextContent("Browsing history");
 		expect(dialog).not.toHaveTextContent("Cookies and site sign-ins");
@@ -317,6 +318,28 @@ describe("BrowserImportDialog", () => {
 		expect(status).not.toContainElement(details);
 		expect(status.querySelector('[class*="warning"]')).toBeNull();
 		expect(status.querySelector('[class*="destructive"]')).toBeNull();
+	});
+
+	it("shows only the selected cookie count for a cookies-only import", async () => {
+		aoBridge.browserProfiles = {
+			...originalBridge,
+			discoverImportSources: vi.fn(async () => ({ sources: [source] })),
+			import: vi.fn(async () => ({ sourceName: source.name, entries: [{
+				sourceProfileNames: ["Default"],
+				destinationProfile: { id: "new", name: "Imported Chrome", createdAt: "", updatedAt: "" },
+				importedCookies: 12, importedHistoryEntries: 0, skippedCookies: 0, warnings: [],
+			}] })),
+			onImportProgress: vi.fn(() => () => undefined),
+		};
+		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
+		await screen.findByText("Google Chrome");
+		await userEvent.click(screen.getByRole("checkbox", { name: /Browsing history/ }));
+		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
+		const status = await screen.findByRole("status");
+		expect(status).toHaveTextContent(/^12 cookies$/);
+		expect(status).not.toHaveTextContent("history");
+		expect(screen.getByText("Cookies and site sign-ins")).toBeInTheDocument();
+		expect(screen.queryByText("Browsing history")).not.toBeInTheDocument();
 	});
 
 	it("preserves an import failure across translation updates", async () => {
