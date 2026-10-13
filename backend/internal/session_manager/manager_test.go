@@ -612,6 +612,7 @@ type fakeRuntime struct {
 	destroyErr         error
 	destroyErrSequence []error
 	onDestroy          func(call int, handle ports.RuntimeHandle)
+	onCreate           func()
 	created, destroyed int
 	lastCfg            ports.RuntimeConfig
 	outputs            []string
@@ -731,6 +732,9 @@ func (r *blockingRestartRuntime) Destroy(ctx context.Context, handle ports.Runti
 }
 
 func (r *fakeRuntime) Create(_ context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
+	if r.onCreate != nil {
+		r.onCreate()
+	}
 	createErr := r.createErr
 	if len(r.createErrSequence) > 0 {
 		createErr = r.createErrSequence[0]

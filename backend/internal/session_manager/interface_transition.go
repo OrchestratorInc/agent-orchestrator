@@ -860,6 +860,11 @@ func (m *Manager) preflightInterfaceTarget(
 	if err != nil {
 		return err
 	}
+	// A sandboxed role runs the harness from its image, which the host PATH
+	// cannot vouch for; restore's Ensure checks the image instead (#6663).
+	if sandboxFor(rec.Kind, project.Config).Enabled() {
+		return nil
+	}
 	return m.validateAgentBinary(cmd)
 }
 

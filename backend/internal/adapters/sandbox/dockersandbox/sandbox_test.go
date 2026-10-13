@@ -80,7 +80,7 @@ func TestEnsureCreatesPerAgentContainer(t *testing.T) {
 	if strings.Contains(run, "-v "+filepath.Join(data, "sandbox", "projects", "p")+":") {
 		t.Fatalf("whole project dir mounted in per-agent mode:\n%s", run)
 	}
-	if target.Container != "ao-sbx-s1" || target.SessionDir != filepath.Join(data, "sandbox", "projects", "p", "sessions", "s1") {
+	if target.Container != "ao-sbx-s1" || target.Mode != domain.SandboxModePerAgent || target.SessionDir != filepath.Join(data, "sandbox", "projects", "p", "sessions", "s1") {
 		t.Fatalf("target = %#v", target)
 	}
 	if _, err := os.Stat(filepath.Join(target.BinDir, "ao-enter")); err != nil {
@@ -161,8 +161,12 @@ func TestEnsureSharedHasNoSessionLabel(t *testing.T) {
 		{match: "run -d"},
 		{match: "command -v \"$1\""},
 	}
-	if _, err := s.Ensure(context.Background(), req); err != nil {
+	target, err := s.Ensure(context.Background(), req)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if target.Mode != domain.SandboxModeShared {
+		t.Fatalf("target mode = %q, want shared", target.Mode)
 	}
 	run := fr.calls[2]
 	if strings.Contains(run, "ao.session=") || !strings.Contains(run, "-v "+filepath.Join(data, "worktrees", "p")+":") {
@@ -192,6 +196,48 @@ func TestExecDoesNotPutEnvInArgv(t *testing.T) {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("env file missing %q:\n%s", want, body)
 		}
+	}
+}
+
+func TestExecInvalidEnvKeyIsMisconfigured(t *testing.T) {
+	s, fr, data := testSandbox(t, nil)
+	target := s.targetFor("ao-sbx-s1", "p", "s1")
+	if err := os.MkdirAll(target.SessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.Exec(target, filepath.Join(data, "w"), map[string]string{"MY-VAR": "x"}, []string{"claude"})
+	if !errors.Is(err, ports.ErrSandboxMisconfigured) || !strings.Contains(err.Error(), "MY-VAR") {
+		t.Fatalf("err = %v, want ErrSandboxMisconfigured naming the key", err)
+	}
+	if len(fr.calls) != 0 {
+		t.Fatalf("docker calls = %v", fr.calls)
+	}
+}
+
+func TestDiscardRemovesPerAgentContainer(t *testing.T) {
+	s, _, _ := testSandbox(t, []fakeCall{{match: "rm -f ao-sbx-s1"}})
+	target := s.targetFor("ao-sbx-s1", "p", "s1")
+	target.Mode = domain.SandboxModePerAgent
+	if err := s.Discard(context.Background(), target); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDiscardLeavesSharedContainer(t *testing.T) {
+	s, fr, _ := testSandbox(t, nil)
+	target := s.targetFor("ao-sbx-p-shared", "p", "s1")
+	target.Mode = domain.SandboxModeShared
+	if err := s.Discard(context.Background(), target); err != nil || len(fr.calls) != 0 {
+		t.Fatalf("discard = %v, calls %v; want a no-op", err, fr.calls)
+	}
+}
+
+func TestDiscardDockerUnavailableIsNil(t *testing.T) {
+	s, _, _ := testSandbox(t, []fakeCall{{match: "rm -f ao-sbx-s1", err: errors.New("Cannot connect to the Docker daemon at unix:///var/run/docker.sock")}})
+	target := s.targetFor("ao-sbx-s1", "p", "s1")
+	target.Mode = domain.SandboxModePerAgent
+	if err := s.Discard(context.Background(), target); err != nil {
+		t.Fatalf("discard = %v, want nil when Docker is unavailable", err)
 	}
 }
 

@@ -429,6 +429,7 @@ type Manager struct {
 	browser                     BrowserLifecycle
 	browserCapabilities         BrowserCapabilityIssuer
 	sandbox                     ports.Sandbox // nil: sandboxed roles fail to launch (#6663)
+	sandboxInFlight             sandboxInFlight
 	attachments                 *attachmentstore.Store
 	attachmentSuffix            func() (string, error)
 	dataDir                     string
@@ -1354,6 +1355,15 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, err)
 	}
+	// Until the launched agent survives the tear-down failure paths below, a
+	// failed spawn owns its per-agent container and removes it.
+	sandboxKept := false
+	defer func() {
+		if sb != nil && !sandboxKept {
+			m.discardSandbox(ctx, sb)
+		}
+		sb.done()
+	}()
 	// Host auth and binary probes describe the host, not the container image.
 	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok && sb == nil {
 		status, authErr := validator.ValidateLaunchAuth(ctx, ws.Path, env)
@@ -1489,6 +1499,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnDeliverPrompt, err)
 		}
 	}
+	// Later failures leave the session running, so its container stays.
+	sandboxKept = true
 	if cfg.AutomationRunID != nil {
 		if err := m.markAutomationLaunchCompleted(ctx, id); err != nil {
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
@@ -2468,6 +2480,15 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 	if err := m.cancelAsyncChatSpawn(ctx, id); err != nil {
 		return KillResult{}, fmt.Errorf("kill %s: cancel provisioning: %w", id, err)
 	}
+	// Every exit path, including a preserved workspace: release re-reads the
+	// project's sessions and keeps the container while any is still live.
+	// Deferred before the operation slot so it runs after the slot is freed.
+	var sandboxProject domain.ProjectID
+	defer func() {
+		if sandboxProject != "" {
+			m.releaseSharedSandbox(ctx, sandboxProject)
+		}
+	}()
 
 	if err := m.beginAgentOperation(ctx, id, agentOperationKill); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
@@ -2494,9 +2515,7 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 	if !ok {
 		return KillResult{}, nil // already gone: benign race
 	}
-	// Every exit path, including a preserved workspace: release re-reads the
-	// project's sessions and keeps the container while any is still live.
-	defer m.releaseSharedSandbox(ctx, rec.ProjectID)
+	sandboxProject = rec.ProjectID
 	m.stopPreviewBestEffort(ctx, id)
 	m.destroyBrowserBestEffort(ctx, id)
 	handle := runtimeHandle(rec.Metadata)
@@ -3259,6 +3278,11 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	// a caller hint. The interface-transition coordinator changes that fact only
 	// after stopping the old controller, then reuses this ordinary restore path.
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+		// A chat controller runs the harness on the host (#6663). Refuse rather
+		// than silently resume a sandboxed role outside its container.
+		if sandboxFor(rec.Kind, project.Config).Enabled() {
+			return RestoreResult{}, fmt.Errorf("%s %s: %w: chat sessions cannot run in a sandbox yet; switch the session to terminal mode", operation, rec.ID, ports.ErrSandboxMisconfigured)
+		}
 		if forceFresh {
 			rec.Metadata.ProviderConversationID = ""
 		} else if strings.TrimSpace(rec.Metadata.ProviderConversationID) == "" {
@@ -3327,6 +3351,9 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
 	}
+	// The row stays terminated until MarkSpawned below; the in-flight mark
+	// keeps a concurrent kill from releasing the shared container meanwhile.
+	defer sb.done()
 	var argv []string
 	var delivery ports.PromptDeliveryStrategy
 	var mode RestoreMode

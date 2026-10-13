@@ -22,6 +22,12 @@ type fakeSandbox struct {
 	ensured   []ports.SandboxRequest
 	execEnv   map[string]string
 	released  []releaseCall
+	discarded []ports.SandboxTarget
+}
+
+func (f *fakeSandbox) Discard(_ context.Context, target ports.SandboxTarget) error {
+	f.discarded = append(f.discarded, target)
+	return nil
 }
 
 func (f *fakeSandbox) Ensure(_ context.Context, req ports.SandboxRequest) (ports.SandboxTarget, error) {
@@ -30,7 +36,7 @@ func (f *fakeSandbox) Ensure(_ context.Context, req ports.SandboxRequest) (ports
 		return ports.SandboxTarget{}, f.ensureErr
 	}
 	return ports.SandboxTarget{Container: "ao-sbx-" + string(req.SessionID), Docker: "/usr/bin/docker",
-		BinDir: "/d/sandbox/bin", ProjectDir: "/d/sandbox/projects/p", SessionDir: "/d/s", RelayDir: "/d/s/relay"}, nil
+		BinDir: "/d/sandbox/bin", ProjectDir: "/d/sandbox/projects/p", SessionDir: "/d/s", RelayDir: "/d/s/relay", Mode: req.Config.Mode}, nil
 }
 
 func (f *fakeSandbox) Exec(t ports.SandboxTarget, ws string, env map[string]string, argv []string) ([]string, error) {
@@ -50,13 +56,17 @@ func (f *fakeSandbox) Release(ctx context.Context, _ domain.ProjectID, inUse fun
 // sandboxAgent is a launch-argv agent that can run sandboxed.
 type sandboxAgent struct {
 	launchArgvAgent
-	prepared []string // projectDir, workspacePath per PrepareSandbox call
+	prepared   []string // projectDir, workspacePath per PrepareSandbox call
+	prepareErr error
 }
 
 func (*sandboxAgent) SandboxBinary() string { return "claude" }
 
 func (a *sandboxAgent) PrepareSandbox(env map[string]string, _, projectDir, workspacePath string) error {
 	a.prepared = append(a.prepared, projectDir, workspacePath)
+	if a.prepareErr != nil {
+		return a.prepareErr
+	}
 	env["CLAUDE_CONFIG_DIR"] = projectDir + "/claude"
 	return nil
 }
@@ -138,6 +148,9 @@ func TestSpawnSandboxedLaunchesThroughDockerExec(t *testing.T) {
 	}
 	if sb.execEnv[EnvRuntimeLaunchID] != "launch-7" || sb.execEnv["CLAUDE_CONFIG_DIR"] != "/d/sandbox/projects/p/claude" {
 		t.Fatalf("sandbox env missing launch id or harness state: %v", sb.execEnv)
+	}
+	if len(sb.discarded) != 0 || m.sandboxInFlight.active("mer") {
+		t.Fatalf("successful spawn discarded=%d inFlight=%v, want the container kept and no launch in flight", len(sb.discarded), m.sandboxInFlight.active("mer"))
 	}
 }
 
@@ -314,5 +327,128 @@ func TestInterfaceTransitionToChatRejectedForSandboxedSession(t *testing.T) {
 	err := m.preflightInterfaceTarget(ctx, rec, domain.SessionInterfaceTransition{SessionID: "mer-1", TargetMode: domain.SessionModeChat})
 	if !errors.Is(err, ports.ErrSandboxMisconfigured) {
 		t.Fatalf("preflight err = %v, want ErrSandboxMisconfigured", err)
+	}
+}
+
+func TestSpawnDiscardsContainerWhenPrepareSandboxFails(t *testing.T) {
+	sb := &fakeSandbox{}
+	agent := &sandboxAgent{launchArgvAgent: launchArgvAgent{argv: []string{"claude"}}, prepareErr: errors.New("no credentials")}
+	m, _, rt := newSandboxSpawnManager(sb, agent)
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}); err == nil {
+		t.Fatal("spawn succeeded, want the PrepareSandbox error")
+	}
+	if len(sb.discarded) != 1 || sb.discarded[0].Container != "ao-sbx-mer-1" || rt.created != 0 {
+		t.Fatalf("discarded=%+v created=%d, want exactly one discard and no launch", sb.discarded, rt.created)
+	}
+	if m.sandboxInFlight.active("mer") {
+		t.Fatal("failed spawn left a launch in flight")
+	}
+}
+
+func TestSpawnDiscardsContainerWhenRuntimeCreateFails(t *testing.T) {
+	sb := &fakeSandbox{}
+	agent := &sandboxAgent{launchArgvAgent: launchArgvAgent{argv: []string{"claude"}}}
+	m, _, rt := newSandboxSpawnManager(sb, agent)
+	rt.createErr = errors.New("tmux exploded")
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}); err == nil {
+		t.Fatal("spawn succeeded, want the runtime error")
+	}
+	if len(sb.discarded) != 1 || sb.discarded[0].Mode != domain.SandboxModePerAgent {
+		t.Fatalf("discarded=%+v, want exactly one per-agent discard", sb.discarded)
+	}
+	if m.sandboxInFlight.active("mer") {
+		t.Fatal("failed spawn left a launch in flight")
+	}
+}
+
+func TestReleaseSharedSandboxKeepsContainerWhileLaunchInFlight(t *testing.T) {
+	m, st, _, _ := newManager()
+	sb := &fakeSandbox{}
+	m.sandbox = sb
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
+
+	done := m.sandboxInFlight.begin("mer")
+	m.releaseSharedSandbox(ctx, "mer")
+	done()
+	m.releaseSharedSandbox(ctx, "mer")
+	if !reflect.DeepEqual(sb.released, []releaseCall{{inUse: true}, {inUse: false}}) {
+		t.Fatalf("released = %+v, want in use only while the launch is in flight", sb.released)
+	}
+}
+
+func TestRestoreHoldsInFlightUntilLaunched(t *testing.T) {
+	sb := &fakeSandbox{}
+	agent := &sandboxAgent{launchArgvAgent: launchArgvAgent{argv: []string{"claude"}}}
+	m, st, rt := newSandboxSpawnManager(sb, agent)
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"})
+	var inFlightAtCreate bool
+	rt.onCreate = func() { inFlightAtCreate = m.sandboxInFlight.active("mer") }
+
+	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !inFlightAtCreate || m.sandboxInFlight.active("mer") {
+		t.Fatalf("inFlight at create=%v after=%v, want held through launch and cleared after", inFlightAtCreate, m.sandboxInFlight.active("mer"))
+	}
+}
+
+func TestRestoreChatSessionRefusedForSandboxedRole(t *testing.T) {
+	launcher := &recordingLauncher{}
+	m, st, _ := newChatManager(launcher)
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex, RequestedMode: domain.SessionModeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Kill(ctx, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	// The sandbox is enabled after the chat session exists.
+	project := st.projects[string(chatTestProject)]
+	project.Config.Sandbox = domain.SandboxConfig{Mode: domain.SandboxModePerAgent, Image: "node:22"}
+	st.projects[string(chatTestProject)] = project
+	starts := len(launcher.started)
+
+	_, err = m.RestoreWithMode(ctx, rec.ID)
+	if !errors.Is(err, ports.ErrSandboxMisconfigured) {
+		t.Fatalf("restore err = %v, want ErrSandboxMisconfigured", err)
+	}
+	if len(launcher.started) != starts {
+		t.Fatalf("chat controller started %d times on restore, want 0", len(launcher.started)-starts)
+	}
+}
+
+func TestKillFailingBeforeTerminationKeepsSharedSandbox(t *testing.T) {
+	m, st, rt, _ := newManager()
+	sb := &fakeSandbox{}
+	m.sandbox = sb
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: sandboxedConfig(domain.SandboxModeShared)}
+	st.sessions["mer-1"] = mkLive("mer-1")
+	rt.destroyErr = errors.New("runtime still alive")
+
+	if _, err := m.Kill(ctx, "mer-1"); err == nil {
+		t.Fatal("kill succeeded, want the runtime error")
+	}
+	if !reflect.DeepEqual(sb.released, []releaseCall{{inUse: true}}) {
+		t.Fatalf("released = %+v, want the container kept for the still-live session", sb.released)
+	}
+}
+
+func TestInterfaceTransitionToTerminalSkipsHostBinaryCheckForSandboxedRole(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: sandboxedConfig(domain.SandboxModePerAgent)}
+	agent := &sandboxAgent{launchArgvAgent: launchArgvAgent{argv: []string{"/missing/on/host/claude"}}}
+	m := New(Deps{
+		Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, Sandbox: &fakeSandbox{},
+		LookPath: func(string) (string, error) { return "", errors.New("not found") },
+	})
+	rec := mkLive("mer-1")
+	rec.Kind = domain.KindWorker
+	rec.Harness = domain.HarnessClaudeCode
+	err := m.preflightInterfaceTarget(ctx, rec, domain.SessionInterfaceTransition{SessionID: "mer-1", TargetMode: domain.SessionModeTUI})
+	if err != nil {
+		t.Fatalf("preflight err = %v, want nil: the harness lives in the image", err)
 	}
 }

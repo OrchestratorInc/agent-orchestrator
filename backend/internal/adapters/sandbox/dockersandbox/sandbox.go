@@ -184,6 +184,7 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 
 	target := s.targetFor(name, req.ProjectID, req.SessionID)
 	target.Docker = docker
+	target.Mode = req.Config.Mode
 	for _, dir := range []string{filepath.Join(target.ProjectDir, "home"), filepath.Join(target.ProjectDir, "claude"), filepath.Join(target.RelayDir, "req"),
 		filepath.Join(target.RelayDir, "work"), filepath.Join(target.RelayDir, "resp"), filepath.Join(s.cfg.DataDir, "prompts")} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -267,7 +268,7 @@ func (s *Sandbox) Exec(target ports.SandboxTarget, workspacePath string, env map
 	}
 	data, err := renderEnvFile(merged)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ports.ErrSandboxMisconfigured, err)
 	}
 	// Set after rendering so hostOnlyEnv cannot drop them.
 	data = append(data, []byte("HOME='"+filepath.Join(target.ProjectDir, "home")+"'\nAO_SANDBOX='1'\nAO_SANDBOX_RELAY='"+target.RelayDir+"'\n")...)
@@ -286,6 +287,26 @@ func (s *Sandbox) Exec(target ports.SandboxTarget, workspacePath string, env map
 		}
 	}
 	return execArgv(docker, target, workspacePath, argv), nil
+}
+
+// Discard removes a per-agent container after a failed launch. Shared
+// containers belong to Release; an unreachable Docker is not an error.
+func (s *Sandbox) Discard(ctx context.Context, target ports.SandboxTarget) error {
+	if target.Mode != domain.SandboxModePerAgent || target.Container == "" {
+		return nil
+	}
+	defer s.lock(target.Container)()
+	docker := target.Docker
+	if docker == "" {
+		var err error
+		if docker, err = s.dockerPath(); err != nil {
+			return nil
+		}
+	}
+	if _, err := s.output(ctx, probeTimeout, docker, "rm", "-f", target.Container); err != nil && !errors.Is(err, ports.ErrSandboxUnavailable) {
+		return err
+	}
+	return nil
 }
 
 // dockerSocketDenied reports a Docker socket permission error, which means

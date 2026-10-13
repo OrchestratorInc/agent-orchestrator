@@ -34,6 +34,7 @@ type SandboxTarget struct {
 	ProjectDir string // per-project sandbox state (home, harness config)
 	SessionDir string // per-session env file and relay spool
 	RelayDir   string
+	Mode       domain.SandboxMode // per-agent or shared
 }
 
 // Sandbox runs agent processes inside local containers (#6663).
@@ -45,6 +46,10 @@ type Sandbox interface {
 	// Release removes the project's shared containers. inUse is evaluated under
 	// the project lock; an error or true keeps the containers.
 	Release(ctx context.Context, project domain.ProjectID, inUse func(context.Context) (bool, error)) error
+	// Discard removes the container behind target when it is per-agent, for a
+	// launch that failed after Ensure. It is a no-op for shared containers
+	// (Release owns those) and returns nil when Docker is unavailable.
+	Discard(ctx context.Context, target SandboxTarget) error
 }
 
 // AgentSandboxSupport is implemented by harnesses that can run sandboxed.
