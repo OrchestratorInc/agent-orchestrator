@@ -28,12 +28,14 @@ type ProjectConfig struct {
 	SessionPrefix string `json:"sessionPrefix,omitempty"`
 
 	// Env are extra environment variables forwarded into worker session
-	// runtimes. AO-internal vars (AO_SESSION, AO_PROJECT_ID, …) always win.
+	// runtimes. The AO_ namespace is reserved for AO-owned variables.
 	Env map[string]string `json:"env,omitempty"`
 	// Symlinks are repo-relative paths symlinked into each session workspace.
 	Symlinks []string `json:"symlinks,omitempty"`
 	// PostCreate are shell commands run in the workspace after it is created.
 	PostCreate []string `json:"postCreate,omitempty"`
+	// PreRemove are shell commands run before an AO-managed Git worktree is permanently removed.
+	PreRemove []string `json:"preRemove,omitempty"`
 
 	// AgentRules are project-specific standing instructions for worker sessions.
 	AgentRules string `json:"agentRules,omitempty"`
@@ -73,6 +75,14 @@ type ProjectConfig struct {
 	// new session at spawn time. Users can still override the per-session toggle
 	// after spawn.
 	AutoReview bool `json:"autoReview,omitempty"`
+
+	// WorkersRequestReview changes what worker sessions are told about AO's
+	// native reviewer. When set, a worker requests an AO review of its own PR
+	// (`ao review trigger`) once the PR is pushed and verified, and again after
+	// each fix it pushes. When unset (the default), workers are still taught
+	// the feature but check with the user or orchestrator before using it.
+	// Read at spawn, when the worker prompt is built.
+	WorkersRequestReview bool `json:"workersRequestReview,omitempty"`
 }
 
 // ContainerReapConfig is the project-level opt-out for #2652's Docker
@@ -116,6 +126,34 @@ func (c ProjectConfig) ResolveReviewerHarness(worker AgentHarness) ReviewerHarne
 		return ReviewerKimchi
 	}
 	return FallbackReviewerHarness
+}
+
+// DefaultWorkerReviewer is the reviewer a project gets when it configures no
+// reviewer: the project's default worker agent, with that worker's model and
+// effort. It returns an empty harness when the project pins no worker agent,
+// or when that agent has no unattended-safe reviewer (see
+// ResolveReviewerHarness), so callers keep their existing fallback.
+//
+// Only model and effort carry over. Permissions and mode are worker settings;
+// a reviewer's sandbox is owned by its adapter and must never inherit a
+// worker's bypass permissions.
+func (c ProjectConfig) DefaultWorkerReviewer() (ReviewerHarness, AgentConfig) {
+	worker := c.Worker.Harness
+	if worker == "" {
+		return "", AgentConfig{}
+	}
+	harness := c.ResolveReviewerHarness(worker)
+	if string(harness) != string(worker) {
+		return "", AgentConfig{}
+	}
+	config := AgentConfig{Model: c.AgentConfig.Model, Effort: c.AgentConfig.Effort}
+	if c.Worker.AgentConfig.Model != "" {
+		config.Model = c.Worker.AgentConfig.Model
+	}
+	if c.Worker.AgentConfig.Effort != "" {
+		config.Effort = c.Worker.AgentConfig.Effort
+	}
+	return harness, config
 }
 
 // RoleOverride overrides the harness and/or agent config for a session role.
@@ -184,6 +222,20 @@ func (c ProjectConfig) Validate() error {
 	if err := validateNameComponent("sessionPrefix", c.SessionPrefix); err != nil {
 		return err
 	}
+	seenEnv := make(map[string]bool, len(c.Env))
+	for key, value := range c.Env {
+		if !validEnvName(key) || strings.ContainsRune(value, '\x00') {
+			return fmt.Errorf("env %q: invalid variable name or value", key)
+		}
+		folded := strings.ToUpper(key)
+		if strings.HasPrefix(folded, "AO_") {
+			return fmt.Errorf("env %q: AO_ prefix is reserved", key)
+		}
+		if seenEnv[folded] {
+			return fmt.Errorf("env %q: duplicate variable name", key)
+		}
+		seenEnv[folded] = true
+	}
 	for role, ro := range map[string]RoleOverride{"worker": c.Worker, "orchestrator": c.Orchestrator} {
 		if ro.Harness != "" && !ro.Harness.IsKnown() {
 			return fmt.Errorf("%s.agent: unknown harness %q", role, ro.Harness)
@@ -212,6 +264,19 @@ func (c ProjectConfig) Validate() error {
 		return err
 	}
 	return nil
+}
+
+func validEnvName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		if r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || i > 0 && r >= '0' && r <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func validateNoWhitespaceField(name, value string) error {

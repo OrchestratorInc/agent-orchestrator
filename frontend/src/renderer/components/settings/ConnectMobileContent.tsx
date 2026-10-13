@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Fragment, useEffect, useRef, useState } from "react";
-import { ArrowUpRight, Check, Copy, Loader2, RotateCcw } from "lucide-react";
+import { ArrowUpRight, Check, Coffee, Copy, Loader2, RotateCcw } from "lucide-react";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { captureRendererEvent } from "../../lib/telemetry";
@@ -12,6 +12,7 @@ import { PairingQr } from "./PairingQr";
 import { scramblePairingCodes } from "./qrScramble";
 import { InstallCloudflared } from "./InstallCloudflared";
 import { Button } from "../ui/button";
+import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "../../lib/utils";
 
@@ -103,11 +104,30 @@ export function qrValueFor(input: {
  * Polls only while there is a transient state to wait out, so an idle modal
  * does not keep hitting the daemon for the rest of the session.
  */
-export function mobileStatusRefetchInterval(
-	status: { tunnel?: { running: boolean; ready: boolean } } | undefined,
-): number | false {
-	const tunnel = status?.tunnel;
-	return tunnel?.running && !tunnel.ready ? MOBILE_STATUS_POLL_MS : false;
+type PairingReadinessStatus = {
+	enabled: boolean;
+	noPublicTunnel?: boolean;
+	endpoints?: readonly PairingEndpoint[];
+	tunnel?: {
+		supported?: boolean;
+		running: boolean;
+		ready: boolean;
+		lastError?: string;
+		[k: string]: unknown;
+	};
+};
+
+function pairingIsPending(status: PairingReadinessStatus | undefined): boolean {
+	if (!status?.enabled) return false;
+	if (!status.endpoints || status.endpoints.length === 0) return true;
+	if (status.noPublicTunnel === true) return false;
+	const tunnel = status.tunnel;
+	if (!tunnel || tunnel.ready || tunnel.lastError) return false;
+	return tunnel.supported === true || tunnel.running;
+}
+
+export function mobileStatusRefetchInterval(status: PairingReadinessStatus | undefined): number | false {
+	return pairingIsPending(status) ? MOBILE_STATUS_POLL_MS : false;
 }
 
 const MOBILE_STATUS_POLL_MS = 2_000;
@@ -115,30 +135,21 @@ const MOBILE_STATUS_POLL_MS = 2_000;
 /**
  * Whether the pairing QR is safe to show.
  *
- * The connector takes roughly thirty seconds after the listener comes up
- * before its hostname resolves. A code scanned inside that window carries no
- * tunnel endpoint, so the pairing works on this network and fails everywhere
- * else — with nothing on either side to indicate why. Holding the code back is
- * the same discipline the daemon already applies to advertising the endpoint.
- *
- * A tunnel that is not running at all is not worth waiting for: LAN-only is a
- * legitimate setup, and blocking pairing forever would be worse than the wait.
+ * Pairing can start as soon as any endpoint is reachable. Remote access is
+ * optional and can take up to a minute to start, so it must not block a LAN
+ * code. The status query continues polling while the tunnel starts and the QR
+ * is refreshed with the remote endpoint once the daemon advertises it.
  *
  * A daemon that does not report endpoints at all predates the endpoint race.
  * It has no tunnel to wait for, and its QR still works, so it is shown — the
  * absence of the field is not the same as an empty list.
  */
-export function qrIsReady(status: {
-	enabled: boolean;
-	endpoints?: readonly PairingEndpoint[];
-	tunnel?: { running: boolean; ready: boolean; [k: string]: unknown };
-}): boolean {
+export function qrIsReady(status: PairingReadinessStatus): boolean {
 	if (!status.enabled) return false;
 	// Nothing to encode: a v2 code carries the endpoint list, and there is no
 	// longer a v1 form to fall back to. An absent list is as unready as an empty
 	// one — it means the daemon has not told us where it can be reached.
 	if (!status.endpoints || status.endpoints.length === 0) return false;
-	if (status.tunnel?.running && !status.tunnel.ready) return false;
 	return true;
 }
 
@@ -174,6 +185,8 @@ const STEP_LINK_CLASS =
 
 interface MobileStatus {
 	enabled: boolean;
+	/** User intent, independent of whether cloudflared is installed or running. */
+	noPublicTunnel?: boolean;
 	/** This machine's stable identity, echoed into the pairing code so the phone
 	 * can verify the endpoints it races. Optional: a daemon predating the
 	 * endpoint race does not send it, and the QR falls back to the v1 payload. */
@@ -205,6 +218,14 @@ interface MobileStatus {
 		host: string;
 		port: number;
 		reason: string;
+	};
+	/** macOS-only option to hold the machine awake while the bridge is on.
+	 * Optional: a daemon predating it does not send the block. */
+	keepAwake?: {
+		supported: boolean;
+		enabled: boolean;
+		active: boolean;
+		hasBattery: boolean;
 	};
 }
 
@@ -241,8 +262,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		queryKey: mobileStatusQueryKey,
 		queryFn: fetchMobileStatus,
 		enabled: active,
-		// Only while the connector is coming up — see
-		// mobileStatusRefetchInterval.
+		// Keep refreshing through every enabled-but-not-advertisable startup
+		// state — see mobileStatusRefetchInterval.
 		refetchInterval: (q) => mobileStatusRefetchInterval(q.state.data),
 	});
 
@@ -319,6 +340,31 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onSuccess: invalidate,
 	});
 
+	const setKeepAwake = useMutation({
+		mutationFn: async (keepAwake: boolean) => {
+			const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", { body: { enabled: keepAwake } });
+			if (error) throw new Error(apiErrorMessage(error));
+			return data;
+		},
+		// Flip the cached status up front so the switch never falls back to the
+		// old value between the POST finishing and the refetch landing.
+		onMutate: async (keepAwake) => {
+			await queryClient.cancelQueries({ queryKey: mobileStatusQueryKey });
+			const previous = queryClient.getQueryData<MobileStatus>(mobileStatusQueryKey);
+			if (previous?.keepAwake) {
+				queryClient.setQueryData<MobileStatus>(mobileStatusQueryKey, {
+					...previous,
+					keepAwake: { ...previous.keepAwake, enabled: keepAwake },
+				});
+			}
+			return { previous };
+		},
+		onError: (_error, _keepAwake, context) => {
+			if (context?.previous) queryClient.setQueryData(mobileStatusQueryKey, context.previous);
+		},
+		onSettled: invalidate,
+	});
+
 	// TLS turns itself on wherever Tailscale exists — it is not a switch, and it
 	// is deliberately not tied to the connection picker. iOS refuses cleartext
 	// to a 100.x address, so a Tailscale pairing without it works on Android and
@@ -348,12 +394,14 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const status = query.data;
 	const enabled = optimisticEnabled ?? status?.enabled ?? false;
 	const secureActive = mode === "tailscale" && (status?.securePairing?.active ?? false);
-	const activeHost = secureActive
-		? status!.securePairing.host
-		: mode === "tailscale"
-			? (status?.tailscaleHost ?? "")
-			: (status?.host ?? "");
-	const activePort = secureActive ? status!.securePairing.port : (status?.port ?? 0);
+	// Tunnel-only hosts deliberately have no LAN address. Use the same daemon
+	// endpoint list for both the offer and the address shown beside it.
+	const activeEndpoint = status?.endpoints?.[0];
+	const activeHost = activeEndpoint?.host ?? "";
+	const activePort = activeEndpoint?.port ?? 0;
+	const noEndpointAvailable =
+		!activeEndpoint &&
+		(status?.noPublicTunnel === true || status?.tunnel?.supported === false || Boolean(status?.tunnel?.lastError));
 	// No connector on this machine at all: cloudflared is absent and nothing
 	// installs it. Pairing still works on the local network, so this is a
 	// caveat to state rather than a failure to block on.
@@ -364,7 +412,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		startRemoteAccess.isPending ||
 		regenerate.isPending ||
 		disable.isPending ||
-		setSecure.isPending;
+		setSecure.isPending ||
+		setKeepAwake.isPending;
 
 	const clearActionErrors = () => {
 		enable.reset();
@@ -372,6 +421,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		regenerate.reset();
 		disable.reset();
 		setSecure.reset();
+		setKeepAwake.reset();
 	};
 
 	const copyPassword = async () => {
@@ -406,6 +456,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(regenerate.error instanceof Error && regenerate.error.message) ||
 		(disable.error instanceof Error && disable.error.message) ||
 		(setSecure.error instanceof Error && setSecure.error.message) ||
+		(setKeepAwake.error instanceof Error && setKeepAwake.error.message) ||
 		null;
 
 	if (query.isLoading) {
@@ -422,11 +473,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 
 	const showRealQR =
 		enabled &&
-		activeHost &&
 		!secureBlocked &&
 		qrIsReady({ enabled, endpoints: status?.endpoints, tunnel: status?.tunnel });
-	// v2 when the daemon advertises endpoints, v1 otherwise. Computed once so
-	// the rendered QR and its data attribute cannot drift apart.
+	// Computed once so the rendered v2 QR and its data attribute cannot drift.
 	const qrValue = showRealQR
 		? qrValueFor({
 				hostId: status?.hostId ?? "",
@@ -527,11 +576,11 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 									</button>
 									<Tooltip>
 										<TooltipTrigger asChild>
-											<span className="inline-flex">
+											<span className="ml-0.5 inline-flex align-middle">
 												<button
 													type="button"
 													aria-label={t("mobile.regenerate")}
-													className="ml-0.5 inline-flex size-5 items-center justify-center align-middle text-settings-muted transition-colors hover:text-settings-label disabled:opacity-50"
+													className="inline-flex size-5 items-center justify-center text-settings-muted transition-colors hover:text-settings-label disabled:opacity-50"
 													disabled={busy}
 													onClick={() => {
 														clearActionErrors();
@@ -612,11 +661,20 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 							)}
 						>
 							<div className="relative aspect-square w-full overflow-hidden rounded-md">
-								{enabled && !activeHost ? (
+								{enabled && noEndpointAvailable ? (
 									<div className="flex size-full items-center justify-center bg-(--color-bg-settings-input) p-4">
 										<p className="text-center text-caption leading-(--leading-settings-mobile-hint) text-settings-muted">
 											{mode === "tailscale" ? t("mobile.noTailscaleHost") : t("mobile.noPairingHost")}
 										</p>
+									</div>
+								) : enabled ? (
+									<div
+										className="flex size-full items-center justify-center bg-(--color-bg-settings-input) p-4 text-settings-muted"
+										data-testid="mobile-pairing-preparing"
+										role="status"
+										aria-label={t("mobile.checkingStatus")}
+									>
+										<Loader2 className="size-6 animate-spin" aria-hidden="true" />
 									</div>
 								) : (
 									<>
@@ -661,6 +719,33 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					)}
 					</div>
 			</div>
+
+			{/* macOS only — the daemon reports it unsupported elsewhere. Shown
+			    whether or not the bridge is on: the choice is remembered and takes
+			    effect whenever the mobile connection is. */}
+			{status.keepAwake?.supported && (
+				<div className="flex items-start gap-3" data-testid="mobile-keep-awake">
+					<Coffee className="mt-0.5 size-4 shrink-0 text-settings-muted" aria-hidden="true" />
+					<div className="min-w-0 flex-1">
+						<div className="text-sm leading-5 text-settings-label">{t("mobile.keepAwake.label")}</div>
+						<p className="mt-0.5 text-pretty text-xs leading-4 text-settings-muted">{t("mobile.keepAwake.help")}</p>
+						{status.keepAwake.hasBattery && (
+							<p className="mt-1 text-pretty text-xs leading-4 text-settings-muted" data-testid="mobile-keep-awake-laptop">
+								{t("mobile.keepAwake.laptopNote")}
+							</p>
+						)}
+					</div>
+					<Switch
+						className="mt-0.5"
+						aria-label={t("mobile.keepAwake.label")}
+						checked={status.keepAwake.enabled}
+						onCheckedChange={(next) => {
+							clearActionErrors();
+							setKeepAwake.mutate(next);
+						}}
+					/>
+				</div>
+			)}
 		</div>
 	);
 }

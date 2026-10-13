@@ -52,3 +52,89 @@ func TestPermissionConfigOptions(t *testing.T) {
 		}
 	}
 }
+
+func TestPermissionConfigOptionsMapsCommandCodeModes(t *testing.T) {
+	input := []ports.ChatConfigOption{{
+		ID:      "mode",
+		Current: ports.ChatConfigOptionValue{Select: "default"},
+		Choices: []ports.ChatConfigOptionChoice{
+			{Value: "default", Name: "Default"},
+			{Value: "auto-accept", Name: "Auto Accept"},
+			{Value: "plan", Name: "Plan"},
+			{Value: "dont-ask", Name: "Don't Ask"},
+			{Value: "bypass", Name: "Bypass"},
+		},
+	}}
+
+	got := permissionConfigOptions(domain.HarnessCommandCode, input)
+	want := []struct {
+		value string
+		mode  domain.PermissionMode
+	}{
+		{"default", domain.PermissionModeDefault},
+		{"auto-accept", domain.PermissionModeAuto},
+		{"bypass", domain.PermissionModeBypassPermissions},
+	}
+	if len(got) != 1 || len(got[0].Choices) != len(want) {
+		t.Fatalf("choices = %+v, want only AO-compatible Command Code modes", got)
+	}
+	for i, choice := range got[0].Choices {
+		if choice.Value != want[i].value || choice.PermissionMode != want[i].mode {
+			t.Errorf("choice[%d] = (%q, %q), want (%q, %q)",
+				i, choice.Value, choice.PermissionMode, want[i].value, want[i].mode)
+		}
+	}
+	settings, _ := settingsFromConfigOptions(
+		domain.ConversationSettings{ApprovalMode: domain.PermissionModeBypassPermissions}, got)
+	if settings.ApprovalMode != domain.PermissionModeDefault {
+		t.Fatalf("selecting native default kept approval = %q, want %q",
+			settings.ApprovalMode, domain.PermissionModeDefault)
+	}
+	if len(input[0].Choices) != 5 {
+		t.Fatal("mutated provider catalog")
+	}
+}
+
+func TestPermissionConfigOptionsLabelsOpenCodeTiers(t *testing.T) {
+	// AO injects these as OpenCode agents; build and plan are OpenCode's own
+	// execution modes and must stay out of the approvals vocabulary.
+	for _, harness := range []domain.AgentHarness{domain.HarnessOpenCode, domain.HarnessOpenCodeV2} {
+		for _, tc := range []struct {
+			value string
+			mode  domain.PermissionMode
+			label string
+		}{
+			{"ao-default", domain.PermissionModeDefault, "Use agent permissions"},
+			{"ao-accept-edits", domain.PermissionModeAcceptEdits, "Accept edits"},
+			{"ao-auto", domain.PermissionModeAuto, "Auto-approve"},
+			{"ao-bypass", domain.PermissionModeBypassPermissions, "Bypass permissions"},
+			{"build", "", "build"},
+			{"plan", "", "plan"},
+		} {
+			t.Run(string(harness)+"/"+tc.value, func(t *testing.T) {
+				input := []ports.ChatConfigOption{{
+					ID:      "mode",
+					Current: ports.ChatConfigOptionValue{Select: tc.value},
+					Choices: []ports.ChatConfigOptionChoice{{Value: tc.value, Name: tc.value}},
+				}}
+				got := permissionConfigOptions(harness, input)
+				if got[0].Choices[0].PermissionMode != tc.mode || got[0].Choices[0].Name != tc.label {
+					t.Fatalf("%s -> (%q, %q), want (%q, %q)",
+						tc.value, got[0].Choices[0].PermissionMode, got[0].Choices[0].Name, tc.mode, tc.label)
+				}
+				settings, _ := settingsFromConfigOptions(
+					domain.ConversationSettings{ApprovalMode: domain.PermissionModeDefault}, got)
+				want := tc.mode
+				if want == "" {
+					want = domain.PermissionModeDefault
+				}
+				if settings.ApprovalMode != want {
+					t.Fatalf("%s settings = %q, want %q", tc.value, settings.ApprovalMode, want)
+				}
+				if input[0].Choices[0].Name != tc.value {
+					t.Fatal("mutated provider catalog")
+				}
+			})
+		}
+	}
+}

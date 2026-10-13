@@ -3,17 +3,33 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { deleteMock, getMock, postMock, putMock } = vi.hoisted(() => ({
+const { cloudCpMock, deleteMock, getMock, postMock, putMock } = vi.hoisted(() => ({
+	cloudCpMock: { client: {}, ready: false, baseUrl: "" },
 	deleteMock: vi.fn(),
 	getMock: vi.fn(),
 	postMock: vi.fn(),
 	putMock: vi.fn(),
+}));
+const { remoteGetMock, remotePostMock, remoteDeleteMock, remotePutMock, clientForSessionHostMock } = vi.hoisted(() => ({
+	remoteGetMock: vi.fn(),
+	remotePostMock: vi.fn(),
+	remoteDeleteMock: vi.fn(),
+	remotePutMock: vi.fn(),
+	clientForSessionHostMock: vi.fn(),
 }));
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock, PUT: putMock, DELETE: deleteMock },
 	apiErrorMessage: () => "request failed",
 	hasTrustedApiBaseUrl: () => true,
+}));
+vi.mock("../lib/host-clients", () => ({ clientForSessionHost: clientForSessionHostMock }));
+
+// Keep these hook tests focused on the local daemon path. The real Cloud
+// readiness hooks subscribe to settings/auth queries and can trigger an
+// unrelated refetch while the test is asserting the first response.
+vi.mock("./useCloudCp", () => ({
+	useCloudCp: () => cloudCpMock,
 }));
 
 import { useSessionInterfaceTransition } from "./useSessionInterfaceTransition";
@@ -38,9 +54,249 @@ beforeEach(() => {
 	getMock.mockReset();
 	postMock.mockReset();
 	putMock.mockReset();
+	remoteGetMock.mockReset();
+	remotePostMock.mockReset();
+	remoteDeleteMock.mockReset();
+	remotePutMock.mockReset();
+	clientForSessionHostMock.mockReset().mockImplementation((hostId?: string) => hostId
+		? { GET: remoteGetMock, POST: remotePostMock, DELETE: remoteDeleteMock, PUT: remotePutMock }
+		: { GET: getMock, POST: postMock, DELETE: deleteMock, PUT: putMock });
+	cloudCpMock.client = {};
+	cloudCpMock.ready = false;
+	cloudCpMock.baseUrl = "";
 });
 
 describe("session-scoped interface transition mutations", () => {
+	it("keeps same-ID transitions on their owning host", async () => {
+		const pendingA = deferred<{ data: { ok: boolean }; error: undefined }>();
+		const postA = vi.fn().mockReturnValue(pendingA.promise);
+		const postB = vi.fn().mockResolvedValue({ data: { ok: true }, error: undefined });
+		const status = vi.fn().mockResolvedValue({ data: { supported: true, targetMode: "tui" }, error: undefined });
+		clientForSessionHostMock.mockImplementation((hostId?: string) => hostId === "box-a"
+			? { GET: status, POST: postA }
+			: hostId === "box-b"
+				? { GET: status, POST: postB }
+				: { GET: getMock, POST: postMock });
+		getMock.mockResolvedValue({ data: { supported: true, targetMode: "tui" }, error: undefined });
+		postMock.mockResolvedValue({ data: { ok: true }, error: undefined });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const HookWrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		const { result, rerender } = renderHook(
+			({ hostId }) => useSessionInterfaceTransition("same", hostId),
+			{ initialProps: { hostId: "box-a" as string | undefined }, wrapper: HookWrapper },
+		);
+		let startA!: Promise<unknown>;
+		act(() => { startA = result.current.start({ targetMode: "tui", policy: "drain" }); });
+		await waitFor(() => expect(result.current.starting).toBe(true));
+		rerender({ hostId: "box-b" });
+		expect(result.current.starting).toBe(false);
+		await act(async () => { await result.current.start({ targetMode: "tui", policy: "drain" }); });
+		expect(postB).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/interface-transition", {
+			params: { path: { sessionId: "same" } }, body: { targetMode: "tui", policy: "drain" },
+		});
+		rerender({ hostId: undefined });
+		expect(result.current.starting).toBe(false);
+		await act(async () => { await result.current.start({ targetMode: "tui", policy: "drain" }); });
+		expect(postMock).toHaveBeenCalledOnce();
+		pendingA.resolve({ data: { ok: true }, error: undefined });
+		await act(async () => { await startA; });
+		expect(postA).toHaveBeenCalledOnce();
+		expect(queryClient.getQueryData(["session-interface-transition", "box-a", "same"])).toBeDefined();
+		expect(queryClient.getQueryData(["session-interface-transition", "box-b", "same"])).toBeDefined();
+	});
+	it.each([
+		["tui", "chat"],
+		["chat", "tui"],
+	] as const)("retains a completed Cloud %s to %s handoff until the session list catches up", async (sourceMode, targetMode) => {
+		const transition = {
+			id: "transition-1", sessionId: "session-a", sourceMode, targetMode,
+			policy: "interrupt" as const, phase: "target_starting" as const,
+			createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:01Z",
+		};
+		const getSession = vi.fn()
+			.mockResolvedValueOnce({ session: { interfaceMode: sourceMode } })
+			.mockResolvedValue({ session: { interfaceMode: targetMode } });
+		const getInterfaceTransition = vi.fn()
+			.mockResolvedValueOnce({ supported: true, targetMode, transition })
+			.mockResolvedValue({ supported: true, targetMode: sourceMode });
+		cloudCpMock.client = { getSession, getInterfaceTransition };
+		cloudCpMock.ready = true;
+
+		const { result } = renderHook(
+			() => useSessionInterfaceTransition("session-a", { orgId: "org-a" }),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.transition?.phase).toBe("target_starting"));
+		await act(async () => { await result.current.refreshStatus(); });
+		await waitFor(() => expect(result.current.transition?.phase).toBe("completed"));
+		expect(result.current.transition?.targetMode).toBe(targetMode);
+		await act(async () => { await result.current.refreshStatus(); });
+		await waitFor(() => expect(result.current.transition?.phase).toBe("completed"));
+	});
+
+	it("clears a cancelled Cloud handoff when the source mode remains selected", async () => {
+		const transition = {
+			id: "transition-1", sessionId: "session-a", sourceMode: "tui" as const,
+			targetMode: "chat" as const, policy: "drain" as const,
+			phase: "draining" as const, createdAt: "2026-09-01T00:00:00Z",
+			updatedAt: "2026-09-01T00:00:01Z",
+		};
+		const getSession = vi.fn().mockResolvedValue({ session: { interfaceMode: "tui" } });
+		const getInterfaceTransition = vi.fn()
+			.mockResolvedValueOnce({ supported: true, targetMode: "chat", transition })
+			.mockResolvedValue({ supported: true, targetMode: "chat" });
+		cloudCpMock.client = { getSession, getInterfaceTransition };
+		cloudCpMock.ready = true;
+
+		const { result } = renderHook(
+			() => useSessionInterfaceTransition("session-a", { orgId: "org-a" }),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.transition?.phase).toBe("draining"));
+		await act(async () => { await result.current.refreshStatus(); });
+		await waitFor(() => expect(result.current.transition).toBeUndefined());
+	});
+
+	it("keeps a Cloud handoff active across its status refetch", async () => {
+		const transition = {
+			id: "transition-1",
+			sessionId: "session-a",
+			sourceMode: "tui" as const,
+			targetMode: "chat" as const,
+			policy: "drain" as const,
+			phase: "source_stopping" as const,
+			createdAt: "2026-09-01T00:00:00Z",
+			updatedAt: "2026-09-01T00:00:01Z",
+		};
+		const getSession = vi.fn().mockResolvedValue({
+			session: { interfaceMode: "tui" },
+		});
+		const getInterfaceTransition = vi.fn().mockResolvedValue({
+			supported: true,
+			targetMode: "chat",
+			transition,
+		});
+		cloudCpMock.client = { getSession, getInterfaceTransition };
+		cloudCpMock.ready = true;
+
+		const { result } = renderHook(
+			() => useSessionInterfaceTransition("session-a", { orgId: "org-a" }),
+			{ wrapper },
+		);
+
+		await waitFor(() => expect(result.current.transition?.id).toBe("transition-1"));
+		expect(result.current.transition?.phase).toBe("source_stopping");
+		expect(getMock).not.toHaveBeenCalled();
+	});
+
+	it("cancels a Cloud handoff through the control-plane client", async () => {
+		const cancelInterfaceTransition = vi.fn().mockResolvedValue({ ok: true });
+		cloudCpMock.client = {
+			getSession: vi.fn().mockResolvedValue({ session: { interfaceMode: "tui" } }),
+			getInterfaceTransition: vi.fn().mockResolvedValue({
+				supported: true,
+				targetMode: "chat",
+				transition: {
+					id: "transition-1",
+					sessionId: "session-a",
+					sourceMode: "tui",
+					targetMode: "chat",
+					policy: "drain",
+					phase: "draining",
+					createdAt: "2026-09-01T00:00:00Z",
+					updatedAt: "2026-09-01T00:00:01Z",
+				},
+			}),
+			cancelInterfaceTransition,
+		};
+		cloudCpMock.ready = true;
+
+		const { result } = renderHook(
+			() => useSessionInterfaceTransition("session-a", { orgId: "org-a" }),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.transition?.id).toBe("transition-1"));
+
+		await act(async () => {
+			await result.current.cancel();
+		});
+		expect(cancelInterfaceTransition).toHaveBeenCalledWith("org-a", "session-a");
+		expect(result.current.cancelError).toBeUndefined();
+	});
+
+	it("surfaces a Cloud cancellation failure instead of silently succeeding", async () => {
+		const cancelInterfaceTransition = vi.fn().mockRejectedValue(new Error("cancellation denied"));
+		cloudCpMock.client = {
+			getSession: vi.fn().mockResolvedValue({ session: { interfaceMode: "tui" } }),
+			getInterfaceTransition: vi.fn().mockResolvedValue({
+				supported: true,
+				targetMode: "chat",
+				transition: {
+					id: "transition-1",
+					sessionId: "session-a",
+					sourceMode: "tui",
+					targetMode: "chat",
+					policy: "drain",
+					phase: "draining",
+					createdAt: "2026-09-01T00:00:00Z",
+					updatedAt: "2026-09-01T00:00:01Z",
+				},
+			}),
+			cancelInterfaceTransition,
+		};
+		cloudCpMock.ready = true;
+
+		const { result } = renderHook(
+			() => useSessionInterfaceTransition("session-a", { orgId: "org-a" }),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.transition?.id).toBe("transition-1"));
+		await act(async () => {
+			await expect(result.current.cancel()).rejects.toThrow("cancellation denied");
+		});
+		await waitFor(() => expect(result.current.cancelError).toBe("request failed"));
+		expect(cancelInterfaceTransition).toHaveBeenCalledWith("org-a", "session-a");
+	});
+
+	it("acknowledges a Cloud failure notice through the control-plane client", async () => {
+		const acknowledgeInterfaceTransitionNotice = vi.fn().mockResolvedValue({ ok: true });
+		cloudCpMock.client = {
+			getSession: vi.fn().mockResolvedValue({ session: { interfaceMode: "chat" } }),
+			getInterfaceTransition: vi.fn().mockResolvedValue({
+				supported: true,
+				targetMode: "tui",
+				transition: {
+					id: "transition-1",
+					sessionId: "session-a",
+					sourceMode: "tui",
+					targetMode: "chat",
+					policy: "drain",
+					phase: "failed",
+					createdAt: "2026-09-01T00:00:00Z",
+					updatedAt: "2026-09-01T00:00:01Z",
+				},
+			}),
+			acknowledgeInterfaceTransitionNotice,
+		};
+		cloudCpMock.ready = true;
+
+		const { result } = renderHook(
+			() => useSessionInterfaceTransition("session-a", { orgId: "org-a" }),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.transition?.id).toBe("transition-1"));
+
+		await act(async () => {
+			await result.current.acknowledgeNotice("transition-1");
+		});
+		expect(acknowledgeInterfaceTransitionNotice).toHaveBeenCalledWith(
+			"org-a",
+			"session-a",
+			"transition-1",
+		);
+		expect(result.current.acknowledgeNoticeError).toBeUndefined();
+	});
+
 	it("keeps a deferred start attached to its initiating session after navigation", async () => {
 		const response = deferred<{
 			data: { ok: boolean };

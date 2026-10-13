@@ -17,7 +17,7 @@ import (
 
 // maxDisplayNameLen caps the sidebar label set by `--name`. Mirrored by the
 // daemon's spawn handler so a direct API call is held to the same limit.
-const maxDisplayNameLen = 20
+const maxDisplayNameLen = 100
 
 type spawnOptions struct {
 	project         string
@@ -30,6 +30,7 @@ type spawnOptions struct {
 	issue           string
 	name            string
 	model           string
+	output          string
 	claimPR         string
 	noTakeover      bool
 	skipAgentCheck  bool
@@ -49,6 +50,7 @@ type spawnRequest struct {
 	Branch          string `json:"branch,omitempty"`
 	Prompt          string `json:"prompt,omitempty"`
 	Model           string `json:"model,omitempty"`
+	RequestedOutput string `json:"requestedOutput,omitempty"`
 	DisplayName     string `json:"displayName"`
 }
 
@@ -93,6 +95,12 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			}
 			if opts.kind != "" && opts.kind != "worker" && opts.kind != "orchestrator" {
 				return usageError{fmt.Errorf(`--kind must be "worker" or "orchestrator"`)}
+			}
+			if opts.output != "" && opts.output != "artifact" {
+				return usageError{fmt.Errorf(`--output must be "artifact"`)}
+			}
+			if opts.output != "" && opts.kind == "orchestrator" {
+				return usageError{fmt.Errorf("--output is supported for worker sessions only")}
 			}
 			if opts.standalone {
 				if opts.kind == "orchestrator" {
@@ -164,6 +172,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				Branch:          opts.branch,
 				Prompt:          opts.prompt,
 				Model:           strings.TrimSpace(opts.model),
+				RequestedOutput: opts.output,
 				DisplayName:     name,
 			}
 			var res spawnResult
@@ -174,8 +183,8 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				return fmt.Errorf("daemon returned empty session id for spawn")
 			}
 			claimed := ""
+			var claim claimPRResponse
 			if opts.claimPR != "" {
-				var claim claimPRResponse
 				if err := ctx.postJSON(cmd.Context(), "sessions/"+url.PathEscape(res.Session.ID)+"/pr/claim", claimPRRequest{PR: claimRef, AllowTakeover: !opts.noTakeover}, &claim); err != nil {
 					if killErr := ctx.rollbackSpawnedSession(cmd.Context(), res.Session.ID); killErr != nil {
 						return fmt.Errorf("failed to claim PR %s: %w; rollback of session %s failed: %w", opts.claimPR, err, res.Session.ID, killErr)
@@ -199,8 +208,13 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			if displayName == "" {
 				displayName = name
 			}
-			_, err = fmt.Fprintf(out, "spawned session %s %q (%s)%s%s\n", res.Session.ID, displayName, res.Session.Status, claimLabel, promptSize)
-			return err
+			if _, err := fmt.Fprintf(out, "spawned session %s %q (%s)%s%s\n", res.Session.ID, displayName, res.Session.Status, claimLabel, promptSize); err != nil {
+				return err
+			}
+			if opts.claimPR != "" {
+				return writeClaimPRCheckout(out, claim.BranchChanged)
+			}
+			return nil
 		},
 	}
 	f := cmd.Flags()
@@ -214,16 +228,17 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	})
 	f.StringVar(&opts.project, "project", "", "Project id to spawn the session in (default: AO_PROJECT_ID or the current registered repo)")
 	f.BoolVar(&opts.standalone, "standalone", false, "Spawn a projectless worker in an AO-managed plain directory (requires --agent)")
-	f.StringVar(&opts.harness, "harness", "", "Agent harness / --agent: claude-code, codex, aider, opencode, grok, droid, amp, agy, crush, cursor, qwen, copilot, goose, auggie, continue, devin, cline, kimi, muse, kiro, kilocode, vibe, pi, kimchi, prime-agent, autohand (default: project worker.agent; orchestrator spawns default to project orchestrator.agent; required if the project has none)")
+	f.StringVar(&opts.harness, "harness", "", "Agent harness / --agent: claude-code, codex, aider, opencode, opencode-v2, grok, droid, amp, agy, crush, cursor, qwen, gemini, copilot, goose, auggie, continue, devin, cline, kimi, muse, kiro, kilocode, vibe, pi, kimchi, prime-agent, autohand, omp, fx, unreal-agent, mimo-code, deepseek-harness, openhands, command-code (default: project worker.agent; orchestrator spawns default to project orchestrator.agent; required if the project has none)")
 	f.StringVar(&opts.kind, "kind", "", "Session role: worker or orchestrator (default: worker)")
 	f.StringVar(&opts.mode, "mode", "", "Initial session interface: chat (structured agent connection) or tui (the agent's native terminal). Omitted uses the daemon default; compatible sessions can switch later.")
 	f.StringVar(&opts.branch, "branch", "", "Branch for git project sessions (default: ao/<session-id>/root; unsupported for standalone or Scratch sessions)")
 	f.StringVar(&opts.prompt, "prompt", "", "Initial prompt for the agent")
 	f.StringVar(&opts.model, "model", "", "Agent model override for this session only (e.g. sonnet, gpt-5.6-sol); overrides project/role config without changing it")
+	f.StringVar(&opts.output, "output", "", "Deliverable for the session: artifact asks the agent to write a file in its artifact directory instead of opening a PR (default: ordinary task)")
 	f.StringVar(&opts.issue, "issue", "", "Issue id to associate with the session")
 	f.StringVar(&opts.trackerProvider, "tracker-provider", "github", "Issue tracker provider: github or gitlab (default: github)")
-	f.StringVar(&opts.name, "name", "", "Display name shown in the sidebar (required, max 20 characters)")
-	f.StringVar(&opts.claimPR, "claim-pr", "", "Immediately claim an existing PR for the spawned session")
+	f.StringVar(&opts.name, "name", "", "Display name shown in the sidebar (required, max 100 characters)")
+	f.StringVar(&opts.claimPR, "claim-pr", "", "Claim PR ownership metadata only for the spawned session; does not check out the PR branch")
 	f.BoolVar(&opts.noTakeover, "no-takeover", false, "Refuse if another active session owns the claimed PR (requires --claim-pr)")
 	f.BoolVar(&opts.skipAgentCheck, "skip-agent-check", false, "Skip CLI readiness warnings (the daemon still validates launch readiness)")
 	return cmd

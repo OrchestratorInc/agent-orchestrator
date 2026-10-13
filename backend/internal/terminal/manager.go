@@ -37,6 +37,12 @@ const (
 	// attachment's read loop blocks, so tmux throttles at the source instead of
 	// the connection being torn down under a flood.
 	dataWatermark = 1 << 20
+	// burstFlushInterval spaces writes while output streams. A frame queued
+	// after a quiet period (a keystroke's echo) is written at once; frames
+	// queued within this interval of the previous write wait for it, so a flood
+	// leaves as a few large messages instead of thousands of tiny ones, each of
+	// which costs the renderer an event, a JSON parse and a decode.
+	burstFlushInterval = 4 * time.Millisecond
 )
 
 // Manager serves WebSocket clients, opening one attach Stream per opened pane
@@ -347,7 +353,7 @@ func (m *Manager) Serve(ctx context.Context, conn wsConn) {
 	}
 	defer c.cleanup()
 
-	go c.writeLoop(ctx)
+	go c.writeLoop(ctx, burstFlushInterval)
 	go c.heartbeatLoop(ctx, m.heartbeat)
 
 	for {
@@ -442,12 +448,7 @@ func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 			c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgOpened})
 		},
 		func(data []byte) {
-			c.enqueue(serverMsg{
-				Ch:   chTerminal,
-				ID:   id,
-				Type: msgData,
-				Data: base64.StdEncoding.EncodeToString(data),
-			})
+			c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgData, raw: data})
 		},
 		func() {
 			// Clear the connection's entry for this id before sending exited so
@@ -543,15 +544,40 @@ func newOutQueue() *outQueue {
 	return &outQueue{wake: make(chan struct{}, 1), room: make(chan struct{}, 1)}
 }
 
+// maxMergedData bounds one merged data frame.
+const maxMergedData = 256 << 10
+
 func (q *outQueue) push(msg serverMsg) {
 	q.mu.Lock()
+	// PTY output arrives in many small reads. Output queued behind the writer
+	// for the same terminal joins the frame before it, so a burst is sent as a
+	// few messages instead of thousands of tiny ones (each costing an envelope,
+	// a base64 pass and a renderer write).
+	if n := len(q.frames); n > 0 && msg.raw != nil {
+		if last := &q.frames[n-1]; last.raw != nil && last.Ch == msg.Ch && last.ID == msg.ID &&
+			last.Type == msg.Type && len(last.raw)+len(msg.raw) <= maxMergedData {
+			last.raw = append(last.raw, msg.raw...)
+			q.bytes += len(msg.raw)
+			q.mu.Unlock()
+			return
+		}
+	}
+	if msg.raw != nil {
+		msg.raw = append([]byte(nil), msg.raw...)
+	}
 	q.frames = append(q.frames, msg)
-	q.bytes += len(msg.Data)
+	q.bytes += len(msg.Data) + len(msg.raw)
 	q.mu.Unlock()
 	select {
 	case q.wake <- struct{}{}:
 	default:
 	}
+}
+
+func (q *outQueue) empty() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.frames) == 0
 }
 
 func (q *outQueue) full() bool {
@@ -565,6 +591,12 @@ func (q *outQueue) drain() []serverMsg {
 	frames := q.frames
 	q.frames, q.bytes = nil, 0
 	q.mu.Unlock()
+	for i := range frames {
+		if frames[i].raw != nil {
+			frames[i].Data = base64.StdEncoding.EncodeToString(frames[i].raw)
+			frames[i].raw = nil
+		}
+	}
 	select {
 	case q.room <- struct{}{}:
 	default:
@@ -587,19 +619,49 @@ func (c *connState) enqueue(msg serverMsg) {
 	c.out.push(msg)
 }
 
-func (c *connState) writeLoop(ctx context.Context) {
+func (c *connState) writeLoop(ctx context.Context, flushInterval time.Duration) {
+	var lastWrite time.Time
+	var pace *time.Timer
+	defer func() {
+		if pace != nil {
+			pace.Stop()
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-c.out.wake:
-			for _, msg := range c.out.drain() {
-				if err := c.conn.WriteJSON(ctx, msg); err != nil {
-					c.cancel()
-					return
-				}
+		}
+		// A wake left over from frames an earlier drain already took has nothing
+		// to pace or send.
+		if c.out.empty() {
+			continue
+		}
+		if wait := flushInterval - time.Since(lastWrite); wait > 0 {
+			if pace == nil {
+				pace = time.NewTimer(wait)
+			} else {
+				pace.Reset(wait)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-pace.C:
 			}
 		}
+		msgs := c.out.drain()
+		if len(msgs) == 0 {
+			// Not a write; counting it would hold back the next isolated frame.
+			continue
+		}
+		for _, msg := range msgs {
+			if err := c.conn.WriteJSON(ctx, msg); err != nil {
+				c.cancel()
+				return
+			}
+		}
+		lastWrite = time.Now()
 	}
 }
 

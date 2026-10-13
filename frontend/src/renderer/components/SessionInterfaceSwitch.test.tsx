@@ -35,6 +35,25 @@ function transition(phase: SessionInterfaceTransition["phase"]): SessionInterfac
 }
 
 describe("SessionInterfaceSwitchButton", () => {
+	it("disables the action when Cloud reports a terminated session", () => {
+		const onClick = vi.fn();
+		render(
+			<TooltipProvider>
+				<SessionInterfaceSwitchButton
+					target="chat"
+					supported={false}
+					disabledReason="Terminated sessions must be restored before switching interfaces."
+					onClick={onClick}
+				/>
+			</TooltipProvider>,
+		);
+
+		const button = screen.getByRole("button", { name: "Switch to chat UI" });
+		expect(button).toBeDisabled();
+		fireEvent.click(button);
+		expect(onClick).not.toHaveBeenCalled();
+	});
+
 	it("uses the shared topbar spacing between adjacent session actions", () => {
 		render(
 			<SessionInterfaceActionGroup>
@@ -145,6 +164,7 @@ describe("SessionInterfaceSwitchButton", () => {
 		);
 
 		expect(screen.getByText("Interface switch recovered")).toBeInTheDocument();
+		expect(screen.getByRole("status").querySelector(".text-success")).toBeNull();
 		expect(screen.queryByText("Interface switch needs recovery")).not.toBeInTheDocument();
 
 		rerender(
@@ -173,6 +193,27 @@ describe("SessionInterfaceSwitchButton", () => {
 });
 
 describe("SessionInterfaceSwitchDialog", () => {
+	it("requires an explicit Terminal stop for Cloud without claiming the agent is busy", () => {
+		const onChoose = vi.fn();
+		render(
+			<SessionInterfaceSwitchDialog
+				open
+				target="chat"
+				requireExplicitTerminalStop
+				onOpenChange={vi.fn()}
+				onChoose={onChoose}
+			/>,
+		);
+
+		const dialog = screen.getByRole("dialog", { name: "Switch to Chat UI?" });
+		expect(dialog).toHaveTextContent("AO cannot verify whether this Terminal is idle.");
+		expect(within(dialog).queryByRole("button", { name: /^Finish work, then switch/ })).not.toBeInTheDocument();
+		const action = within(dialog).getByRole("button", { name: /^Terminate and then switch/ });
+		expect(onChoose).not.toHaveBeenCalled();
+		fireEvent.click(action);
+		expect(onChoose).toHaveBeenCalledWith("interrupt");
+	});
+
 	it("focuses Finish work as the safe default", async () => {
 		render(<SessionInterfaceSwitchDialog open target="tui" onOpenChange={vi.fn()} onChoose={vi.fn()} />);
 
@@ -365,27 +406,6 @@ describe("SessionInterfaceTransitionNotice", () => {
 		expect(announcement).toHaveTextContent("Could not dismiss this message. Try again.");
 	});
 
-	it("offers an explicit discard action when drain preserves a draft", () => {
-		const onSwitchWithInterrupt = vi.fn();
-		render(
-			<SessionInterfaceTransitionNotice
-				transition={{
-					...transition("failed"),
-					errorCode: "DRAIN_DRAFT_PRESENT",
-					errorDetail: "AO found unsent text and left the source untouched.",
-				}}
-				onDismiss={vi.fn()}
-				onSwitchWithInterrupt={onSwitchWithInterrupt}
-			/>,
-		);
-
-		const action = screen.getByRole("button", {
-			name: "Discard draft and switch",
-		});
-		fireEvent.click(action);
-		expect(onSwitchWithInterrupt).toHaveBeenCalledOnce();
-	});
-
 	it("offers an explicit cancellation action when a provider decision blocks drain", () => {
 		const onSwitchWithInterrupt = vi.fn();
 		render(
@@ -407,6 +427,28 @@ describe("SessionInterfaceTransitionNotice", () => {
 		expect(onSwitchWithInterrupt).toHaveBeenCalledOnce();
 	});
 
+	it("offers termination only after Docker cannot verify an interactive source is idle", () => {
+		const onSwitchWithInterrupt = vi.fn();
+		render(
+			<SessionInterfaceTransitionNotice
+				transition={{
+					...transition("failed"),
+					errorCode: "SOURCE_DRAIN_FAILED",
+					errorDetail: "source controller activity cannot be verified; use stop now to interrupt it",
+				}}
+				onDismiss={vi.fn()}
+				onSwitchWithInterrupt={onSwitchWithInterrupt}
+			/>,
+		);
+
+		const alert = screen.getByRole("alert");
+		expect(alert).toHaveTextContent("AO cannot verify whether this Terminal is idle.");
+		const action = within(alert).getByRole("button", { name: "Terminate and then switch" });
+		expect(onSwitchWithInterrupt).not.toHaveBeenCalled();
+		fireEvent.click(action);
+		expect(onSwitchWithInterrupt).toHaveBeenCalledOnce();
+	});
+
 	it("does not offer a destructive retry for unrelated failures", () => {
 		render(
 			<SessionInterfaceTransitionNotice
@@ -420,7 +462,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 		);
 
 		expect(screen.queryByRole("button", { name: "Stop now and switch" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Discard draft and switch" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Cancel request and switch" })).not.toBeInTheDocument();
 	});
 
 	it("does not offer a destructive retry when terminal quiescence is unverified", () => {

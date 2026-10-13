@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 )
 
@@ -33,6 +34,14 @@ type Config struct {
 	WorkOSClientID       string
 	WorkOSAPIKey         string
 	WorkOSJWKSURL        string
+	// WorkOSLegacy* describe the WorkOS environment AO signed users in with
+	// before the current one. While set, the control plane also accepts that
+	// environment's tokens, so older desktop builds keep working while users
+	// move to the current environment.
+	WorkOSLegacyIssuer   string
+	WorkOSLegacyClientID string
+	WorkOSLegacyAPIKey   string
+	WorkOSLegacyJWKSURL  string
 	LocalAuthEnabled     bool
 	LocalSessionTTL      time.Duration
 	SandboxProvider      string
@@ -42,12 +51,31 @@ type Config struct {
 	// provider and a client can pick per session. Single-provider deployments
 	// leave it as just the default and are unchanged.
 	AvailableSandboxProviders []string
-	AllowAnonymousCheckout    bool
-	ProviderSecretKey         []byte
-	Release                   string
-	RepositoryBrokerURL       string
-	RepositoryBrokerToken     string
-	EnvironmentControlToken   string
+	// CapabilityGatedProviders lists sandbox providers that require a matching
+	// organization capability (seeded from WorkOS org metadata) before a client
+	// may select them. Empty by default, so every offered provider is ungated
+	// and behavior is unchanged; set AO_CLOUD_CAPABILITY_GATED_PROVIDERS
+	// (comma-separated, e.g. "coder") to turn the gate on once the entitled
+	// organizations have been flagged in WorkOS.
+	CapabilityGatedProviders []string
+	// DefaultOrgCapabilities are the capabilities of an organization that has
+	// none of its own: a personal organization, or a WorkOS organization whose
+	// metadata has no capabilities key (AO_CLOUD_DEFAULT_ORG_CAPABILITIES,
+	// comma-separated, e.g. "freestyle"). Empty by default.
+	DefaultOrgCapabilities []string
+	// DefaultOrgBilling is the billing arrangement of an organization whose
+	// WorkOS metadata sets none (AO_CLOUD_DEFAULT_ORG_BILLING): "self_serve"
+	// (the default) or "contract".
+	DefaultOrgBilling       string
+	AllowAnonymousCheckout  bool
+	ProviderSecretKey       []byte
+	Release                 string
+	RepositoryBrokerURL     string
+	RepositoryBrokerToken   string
+	EnvironmentControlToken string
+	// SupportToken gates the operator support lookup endpoint
+	// (AO_CLOUD_SUPPORT_TOKEN). Empty disables the endpoint.
+	SupportToken string
 
 	// PublicURL is the origin a sandbox worker dials back to. A worker opens
 	// no inbound port, so this is the only way it can reach the control plane.
@@ -72,18 +100,19 @@ type Config struct {
 	// IdlePauseThreshold is how long a session must be quiet, with no turn in
 	// flight, before the control plane pauses its sandbox.
 	IdlePauseThreshold time.Duration
-	// PRStatusPollInterval is how often the pull-request status scanner
-	// refreshes CI, review, and mergeability state from GitHub.
-	PRStatusPollInterval time.Duration
+	// FreestyleIdlePauseThreshold replaces IdlePauseThreshold for Freestyle
+	// sandboxes. Zero disables idle pause for them.
+	FreestyleIdlePauseThreshold time.Duration
 	// TerminalStreamEnabled turns on the low-latency terminal path: workers
 	// hold a persistent stream to the control plane and Postgres NOTIFY
 	// replaces the input/output polling loops. Off means the polled
 	// store-and-forward behavior, byte for byte.
 	TerminalStreamEnabled bool
+	// InterfaceHandoffInterval is how often the durable controller handoff runs.
+	InterfaceHandoffInterval time.Duration
 	// TerminalRelayEnabled forwards terminal output to an attached browser
 	// directly from the worker stream, before the same frame is mirrored to
-	// durable replay storage. It remains opt-in until the hosted entrypoint is
-	// shard-aware across relay replicas.
+	// durable replay storage.
 	TerminalRelayEnabled bool
 
 	NodeOpsBaseURL       string
@@ -100,16 +129,59 @@ type Config struct {
 	NodeOpsWorkerTokenTTL   time.Duration
 	NodeOpsAutoPauseSeconds int
 
+	FreestyleBaseURL         string
+	FreestyleAPIKey          string
+	FreestyleDefaultSnapshot string
+	// FreestyleSnapshotByHarness maps a harness to its prepared snapshot
+	// (AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS, JSON object). Optional; unmapped
+	// harnesses use FreestyleDefaultSnapshot.
+	FreestyleSnapshotByHarness map[string]string
+	FreestyleWorkerTokenTTL    time.Duration
+	FreestyleAutoPauseSeconds  int
+
+	// Stripe billing (AO_CLOUD_STRIPE_*). Billing is enforced only when
+	// StripeSecretKey is set, so local and self-hosted control planes keep
+	// working without Stripe.
+	StripeSecretKey     string
+	StripeWebhookSecret string
+	StripeBaseURL       string
+	// StripePriceIDs maps a plan name to its Stripe price
+	// (AO_CLOUD_STRIPE_PRICE_IDS, JSON object such as {"starter":"price_..."}).
+	StripePriceIDs map[string]string
+	// BillingReturnURL is where Checkout and the Customer Portal send the
+	// browser back to. Defaults to the control plane's /billing/return page.
+	BillingReturnURL string
+	// StripePortalConfiguration is the Customer Portal configuration to open
+	// (AO_CLOUD_STRIPE_PORTAL_CONFIGURATION, bpc_...). Optional.
+	StripePortalConfiguration string
+	// BillingPastDueGrace is how long a past_due subscription keeps working
+	// while Stripe retries the card.
+	BillingPastDueGrace time.Duration
+	// BillingExemptOrgsCreatedBefore grandfathers organizations created before
+	// it (AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE, RFC 3339). Zero: none.
+	BillingExemptOrgsCreatedBefore time.Time
+	// BillingBusyGrace is how long the usage enforcer lets a busy Freestyle
+	// session of an over-limit organization finish its work before pausing it
+	// anyway (AO_CLOUD_BILLING_BUSY_GRACE, default 5m).
+	BillingBusyGrace time.Duration
+	// PaywalledFeatures are the features a self-serve plan must list (Stripe
+	// product metadata ao_features) to be used (AO_CLOUD_PAYWALLED_FEATURES,
+	// comma list). Empty, the default, gates nothing.
+	PaywalledFeatures []string
+
 	DockerHost           string
 	DockerWorkerImage    string
 	DockerNetwork        string
 	DockerNamespace      string
 	DockerWorkerTokenTTL time.Duration
 
-	CoderURL            string
-	CoderAPIToken       string
-	CoderOwner          string
-	CoderTemplateID     string
+	CoderURL        string
+	CoderAPIToken   string
+	CoderOwner      string
+	CoderTemplateID string
+	// CoderTemplateIDs limits the templates sessions on the deployment's Coder
+	// may pick (AO_CLOUD_CODER_TEMPLATE_IDS, comma-separated); empty allows any.
+	CoderTemplateIDs    []string
 	CoderAgentName      string
 	CoderParameters     map[string]string
 	CoderDurableRoot    string
@@ -146,14 +218,22 @@ const defaultNodeOpsAutoPauseSeconds = 0
 // Give background sessions a full hour before their NodeOps VM is paused. A
 // visible workspace terminal still holds its shorter interactive lease, but
 // this default avoids turning an ordinary review break into a cold resume.
+// Give background sessions a full hour before their NodeOps VM is paused. A
+// visible workspace terminal still holds its shorter interactive lease, but
+// this default avoids turning an ordinary review break into a cold resume.
 const defaultIdlePauseThreshold = time.Hour
+
+// defaultFreestyleIdlePauseThreshold pauses a Freestyle session after 15 quiet
+// minutes. Freestyle snapshots memory, so a pause keeps the agent and wakes in
+// about a second; a short threshold costs the user little and keeps idle
+// sessions from holding billed compute.
+const defaultFreestyleIdlePauseThreshold = 15 * time.Minute
 
 const defaultIdlePauseInterval = 30 * time.Second
 
-const defaultPRStatusPollInterval = 30 * time.Second
-
 func Load() (Config, error) {
 	environment := strings.ToLower(strings.TrimSpace(os.Getenv("AO_CLOUD_ENV")))
+	githubLocalTest := boolEnv("AO_CLOUD_GITHUB_LOCAL_TEST", false)
 	hosted := environment == "staging" || environment == "production"
 	defaultHTTPAddress := ":8080"
 	if environment == "development" || environment == "test" {
@@ -163,6 +243,26 @@ func Load() (Config, error) {
 	if raw := strings.TrimSpace(os.Getenv("AO_CLOUD_NODEOPS_ROOTFS_BY_HARNESS")); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &rootFSByHarnessEnv); err != nil {
 			return Config{}, fmt.Errorf("invalid AO_CLOUD_NODEOPS_ROOTFS_BY_HARNESS: %w", err)
+		}
+	}
+	freestyleSnapshotByHarnessEnv := map[string]string{}
+	if raw := strings.TrimSpace(os.Getenv("AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS")); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &freestyleSnapshotByHarnessEnv); err != nil {
+			return Config{}, fmt.Errorf("invalid AO_CLOUD_FREESTYLE_SNAPSHOT_BY_HARNESS: %w", err)
+		}
+	}
+	var billingExemptBefore time.Time
+	if raw := strings.TrimSpace(os.Getenv("AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE")); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid AO_CLOUD_BILLING_EXEMPT_ORGS_CREATED_BEFORE (RFC 3339): %w", err)
+		}
+		billingExemptBefore = parsed
+	}
+	stripePriceIDsEnv := map[string]string{}
+	if raw := strings.TrimSpace(os.Getenv("AO_CLOUD_STRIPE_PRICE_IDS")); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &stripePriceIDsEnv); err != nil {
+			return Config{}, fmt.Errorf("invalid AO_CLOUD_STRIPE_PRICE_IDS: %w", err)
 		}
 	}
 	coderParametersEnv := map[string]string{}
@@ -183,6 +283,10 @@ func Load() (Config, error) {
 		WorkOSClientID:         strings.TrimSpace(os.Getenv("AO_CLOUD_WORKOS_CLIENT_ID")),
 		WorkOSAPIKey:           strings.TrimSpace(os.Getenv("AO_CLOUD_WORKOS_API_KEY")),
 		WorkOSJWKSURL:          strings.TrimSpace(os.Getenv("AO_CLOUD_WORKOS_JWKS_URL")),
+		WorkOSLegacyIssuer:     strings.TrimSpace(os.Getenv("AO_CLOUD_WORKOS_LEGACY_ISSUER")),
+		WorkOSLegacyClientID:   strings.TrimSpace(os.Getenv("AO_CLOUD_WORKOS_LEGACY_CLIENT_ID")),
+		WorkOSLegacyAPIKey:     strings.TrimSpace(os.Getenv("AO_CLOUD_WORKOS_LEGACY_API_KEY")),
+		WorkOSLegacyJWKSURL:    strings.TrimSpace(os.Getenv("AO_CLOUD_WORKOS_LEGACY_JWKS_URL")),
 		LocalAuthEnabled:       boolEnv("AO_CLOUD_LOCAL_AUTH", false),
 		LocalSessionTTL:        durationEnv("AO_CLOUD_LOCAL_SESSION_TTL", 24*time.Hour),
 		AllowAnonymousCheckout: boolEnv("AO_CLOUD_ALLOW_ANONYMOUS_GITHUB_CHECKOUT", false),
@@ -191,7 +295,10 @@ func Load() (Config, error) {
 		SandboxProvider: strings.ToLower(
 			envOrDefault("AO_CLOUD_SANDBOX_PROVIDER", defaultSandboxProvider(hosted)),
 		),
-		Release: strings.TrimSpace(os.Getenv("AO_CLOUD_RELEASE")),
+		CapabilityGatedProviders: lowerCSVList(os.Getenv("AO_CLOUD_CAPABILITY_GATED_PROVIDERS")),
+		DefaultOrgCapabilities:   lowerCSVList(os.Getenv("AO_CLOUD_DEFAULT_ORG_CAPABILITIES")),
+		DefaultOrgBilling:        strings.ToLower(envOrDefault("AO_CLOUD_DEFAULT_ORG_BILLING", "self_serve")),
+		Release:                  strings.TrimSpace(os.Getenv("AO_CLOUD_RELEASE")),
 		RepositoryBrokerURL: strings.TrimRight(
 			strings.TrimSpace(os.Getenv("AO_CLOUD_REPOSITORY_BROKER_URL")), "/",
 		),
@@ -201,6 +308,7 @@ func Load() (Config, error) {
 		EnvironmentControlToken: strings.TrimSpace(
 			os.Getenv("AO_CLOUD_ENV_CONTROL_TOKEN"),
 		),
+		SupportToken: strings.TrimSpace(os.Getenv("AO_CLOUD_SUPPORT_TOKEN")),
 
 		PublicURL:              strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_PUBLIC_URL")), "/"),
 		WorkerSigningKey:       strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_SIGNING_KEY")),
@@ -208,11 +316,18 @@ func Load() (Config, error) {
 		WorkerHelperBinaryPath: strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_HELPER_BINARY_PATH")),
 		MaxSandboxesPerOrg:     intEnvOrDefault("AO_CLOUD_MAX_ACTIVE_SANDBOXES_PER_ORG", 1000),
 		ReconcileInterval:      durationEnv("AO_CLOUD_SANDBOX_RECONCILE_INTERVAL", 2*time.Second),
-		SandboxStartupTimeout:  durationEnv("AO_CLOUD_SANDBOX_STARTUP_TIMEOUT", 3*time.Minute),
+		// Cold coder/Azure VMs routinely need >3 min to first-heartbeat (VM boot +
+		// snap/lxd, a fresh durable-disk mkfs, harness warming), which tripped the
+		// old 3m budget and triggered a needless worker reinstall mid-startup. This
+		// is the value the reconciler actually uses (it overrides the
+		// DefaultStartupTimeout fallback), so it is the one that has to change.
+		SandboxStartupTimeout:  durationEnv("AO_CLOUD_SANDBOX_STARTUP_TIMEOUT", 6*time.Minute),
 		WorkerHeartbeatTimeout: durationEnv("AO_CLOUD_WORKER_HEARTBEAT_TIMEOUT", time.Minute),
 		IdlePauseInterval:      durationEnv("AO_CLOUD_IDLE_PAUSE_INTERVAL", defaultIdlePauseInterval),
 		IdlePauseThreshold:     durationEnv("AO_CLOUD_IDLE_PAUSE_THRESHOLD", defaultIdlePauseThreshold),
-		PRStatusPollInterval:   durationEnv("AO_CLOUD_PR_STATUS_POLL_INTERVAL", defaultPRStatusPollInterval),
+		FreestyleIdlePauseThreshold: durationEnv(
+			"AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD", defaultFreestyleIdlePauseThreshold),
+		InterfaceHandoffInterval: durationEnv("AO_CLOUD_INTERFACE_HANDOFF_INTERVAL", 500*time.Millisecond),
 
 		NodeOpsBaseURL:         strings.TrimSpace(os.Getenv("AO_CLOUD_NODEOPS_BASE_URL")),
 		NodeOpsAPIKey:          strings.TrimSpace(os.Getenv("AO_CLOUD_NODEOPS_API_KEY")),
@@ -227,6 +342,24 @@ func Load() (Config, error) {
 		NodeOpsWorkerTokenTTL: durationEnv(
 			"AO_CLOUD_NODEOPS_WORKER_TOKEN_TTL", sandbox.DefaultWorkerTokenTTL,
 		),
+		FreestyleBaseURL:           strings.TrimSpace(os.Getenv("AO_CLOUD_FREESTYLE_BASE_URL")),
+		FreestyleAPIKey:            strings.TrimSpace(os.Getenv("AO_CLOUD_FREESTYLE_API_KEY")),
+		FreestyleDefaultSnapshot:   strings.TrimSpace(os.Getenv("AO_CLOUD_FREESTYLE_DEFAULT_SNAPSHOT")),
+		FreestyleSnapshotByHarness: freestyleSnapshotByHarnessEnv,
+		FreestyleWorkerTokenTTL: durationEnv(
+			"AO_CLOUD_FREESTYLE_WORKER_TOKEN_TTL", sandbox.DefaultWorkerTokenTTL,
+		),
+		FreestyleAutoPauseSeconds:      intEnvOrDefault("AO_CLOUD_FREESTYLE_AUTO_PAUSE_SECONDS", 0),
+		StripeSecretKey:                strings.TrimSpace(os.Getenv("AO_CLOUD_STRIPE_SECRET_KEY")),
+		StripeWebhookSecret:            strings.TrimSpace(os.Getenv("AO_CLOUD_STRIPE_WEBHOOK_SECRET")),
+		StripeBaseURL:                  strings.TrimSpace(os.Getenv("AO_CLOUD_STRIPE_BASE_URL")),
+		StripePriceIDs:                 stripePriceIDsEnv,
+		BillingReturnURL:               strings.TrimSpace(os.Getenv("AO_CLOUD_BILLING_RETURN_URL")),
+		StripePortalConfiguration:      strings.TrimSpace(os.Getenv("AO_CLOUD_STRIPE_PORTAL_CONFIGURATION")),
+		BillingPastDueGrace:            durationEnv("AO_CLOUD_BILLING_PAST_DUE_GRACE", 7*24*time.Hour),
+		BillingExemptOrgsCreatedBefore: billingExemptBefore,
+		BillingBusyGrace:               durationEnv("AO_CLOUD_BILLING_BUSY_GRACE", 5*time.Minute),
+		PaywalledFeatures:              domain.ParseFeatureList(os.Getenv("AO_CLOUD_PAYWALLED_FEATURES")),
 
 		DockerHost:        envOrDefault("AO_CLOUD_DOCKER_HOST", "unix:///var/run/docker.sock"),
 		DockerWorkerImage: envOrDefault("AO_CLOUD_DOCKER_WORKER_IMAGE", "ao-cloud-worker:local"),
@@ -236,12 +369,13 @@ func Load() (Config, error) {
 			"AO_CLOUD_DOCKER_WORKER_TOKEN_TTL", sandbox.DefaultWorkerTokenTTL,
 		),
 
-		CoderURL:        strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_URL")), "/"),
-		CoderAPIToken:   strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_TOKEN")),
-		CoderOwner:      strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_OWNER")),
-		CoderTemplateID: strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_TEMPLATE_ID")),
-		CoderAgentName:  strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_AGENT_NAME")),
-		CoderParameters: coderParametersEnv,
+		CoderURL:         strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_URL")), "/"),
+		CoderAPIToken:    strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_TOKEN")),
+		CoderOwner:       strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_OWNER")),
+		CoderTemplateID:  strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_TEMPLATE_ID")),
+		CoderAgentName:   strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_AGENT_NAME")),
+		CoderTemplateIDs: commaList(os.Getenv("AO_CLOUD_CODER_TEMPLATE_IDS")),
+		CoderParameters:  coderParametersEnv,
 		CoderDurableRoot: strings.TrimSpace(
 			os.Getenv("AO_CLOUD_CODER_DURABLE_ROOT"),
 		),
@@ -299,32 +433,35 @@ func Load() (Config, error) {
 	default:
 		return Config{}, errors.New("AO_CLOUD_ENV must be development, test, staging, or production")
 	}
-	workosValues := []string{cfg.WorkOSIssuer, cfg.WorkOSClientID, cfg.WorkOSAPIKey}
-	configuredWorkOSValues := 0
-	for _, value := range workosValues {
-		if value != "" {
-			configuredWorkOSValues++
-		}
+	if githubLocalTest && cfg.Environment != "development" {
+		return Config{}, errors.New("AO_CLOUD_GITHUB_LOCAL_TEST may only be enabled in development")
 	}
-	if configuredWorkOSValues != 0 && configuredWorkOSValues != len(workosValues) {
-		return Config{}, errors.New("AO_CLOUD_WORKOS_ISSUER, AO_CLOUD_WORKOS_CLIENT_ID, and AO_CLOUD_WORKOS_API_KEY must be set together")
+	var err error
+	cfg.WorkOSIssuer, cfg.WorkOSJWKSURL, err = resolveWorkOS(
+		"AO_CLOUD_WORKOS",
+		cfg.WorkOSIssuer,
+		cfg.WorkOSClientID,
+		cfg.WorkOSAPIKey,
+		cfg.WorkOSJWKSURL,
+	)
+	if err != nil {
+		return Config{}, err
 	}
-	if strings.TrimRight(cfg.WorkOSIssuer, "/") == workOSAPIBaseURL {
-		cfg.WorkOSIssuer = workOSAPIBaseURL + "/user_management/" + cfg.WorkOSClientID
+	cfg.WorkOSLegacyIssuer, cfg.WorkOSLegacyJWKSURL, err = resolveWorkOS(
+		"AO_CLOUD_WORKOS_LEGACY",
+		cfg.WorkOSLegacyIssuer,
+		cfg.WorkOSLegacyClientID,
+		cfg.WorkOSLegacyAPIKey,
+		cfg.WorkOSLegacyJWKSURL,
+	)
+	if err != nil {
+		return Config{}, err
 	}
-	if cfg.WorkOSIssuer != "" {
-		workOSIssuer := workOSAPIBaseURL + "/user_management/" + cfg.WorkOSClientID
-		if strings.HasPrefix(cfg.WorkOSIssuer, workOSAPIBaseURL+"/user_management/") &&
-			cfg.WorkOSIssuer != workOSIssuer {
-			return Config{}, errors.New("AO_CLOUD_WORKOS_ISSUER must match AO_CLOUD_WORKOS_CLIENT_ID")
-		}
-		if cfg.WorkOSJWKSURL == "" {
-			if cfg.WorkOSIssuer == workOSIssuer {
-				cfg.WorkOSJWKSURL = workOSAPIBaseURL + "/sso/jwks/" + cfg.WorkOSClientID
-			} else {
-				cfg.WorkOSJWKSURL = strings.TrimRight(cfg.WorkOSIssuer, "/") + "/oauth2/jwks"
-			}
-		}
+	if cfg.WorkOSLegacyIssuer != "" && cfg.WorkOSIssuer == "" {
+		return Config{}, errors.New("AO_CLOUD_WORKOS_LEGACY_* requires AO_CLOUD_WORKOS_* to be configured")
+	}
+	if cfg.WorkOSLegacyIssuer != "" && cfg.WorkOSLegacyClientID == cfg.WorkOSClientID {
+		return Config{}, errors.New("AO_CLOUD_WORKOS_LEGACY_CLIENT_ID must differ from AO_CLOUD_WORKOS_CLIENT_ID")
 	}
 	if cfg.WorkOSIssuer == "" && !cfg.LocalAuthEnabled {
 		return Config{}, errors.New("configure WorkOS or enable AO_CLOUD_LOCAL_AUTH")
@@ -343,13 +480,16 @@ func Load() (Config, error) {
 	if cfg.LocalSessionTTL <= 0 {
 		return Config{}, errors.New("AO_CLOUD_LOCAL_SESSION_TTL must be positive")
 	}
-	switch cfg.SandboxProvider {
-	case "ecs", "daytona", "docker", "nodeops", "coder":
-	default:
-		return Config{}, errors.New("AO_CLOUD_SANDBOX_PROVIDER must be coder, daytona, docker, ecs, or nodeops")
+	if cfg.DefaultOrgBilling != "self_serve" && cfg.DefaultOrgBilling != "contract" {
+		return Config{}, errors.New("AO_CLOUD_DEFAULT_ORG_BILLING must be self_serve or contract")
 	}
-	if cfg.Hosted() && cfg.SandboxProvider != "nodeops" && cfg.SandboxProvider != "coder" {
-		return Config{}, errors.New("AO_CLOUD_SANDBOX_PROVIDER must be coder or nodeops in staging and production")
+	switch cfg.SandboxProvider {
+	case "ecs", "daytona", "docker", "nodeops", "coder", "freestyle":
+	default:
+		return Config{}, errors.New("AO_CLOUD_SANDBOX_PROVIDER must be coder, daytona, docker, ecs, freestyle, or nodeops")
+	}
+	if cfg.Hosted() && !hostedSandboxProvider(cfg.SandboxProvider) {
+		return Config{}, errors.New("AO_CLOUD_SANDBOX_PROVIDER must be coder, freestyle, or nodeops in staging and production")
 	}
 	available, err := resolveAvailableProviders(cfg.SandboxProvider, cfg.Hosted())
 	if err != nil {
@@ -388,6 +528,15 @@ func Load() (Config, error) {
 				SSHKeyPath:       cfg.NodeOpsSSHKeyPath,
 				WorkerTokenTTL:   cfg.NodeOpsWorkerTokenTTL,
 				AutoPauseSeconds: cfg.NodeOpsAutoPauseSeconds,
+			}).Validate()
+		case "freestyle":
+			err = (sandbox.FreestyleConfig{
+				BaseURL:           cfg.FreestyleBaseURL,
+				APIKey:            cfg.FreestyleAPIKey,
+				DefaultSnapshot:   cfg.FreestyleDefaultSnapshot,
+				SnapshotByHarness: cfg.FreestyleSnapshotByHarness,
+				WorkerTokenTTL:    cfg.FreestyleWorkerTokenTTL,
+				AutoPauseSeconds:  cfg.FreestyleAutoPauseSeconds,
 			}).Validate()
 		case "coder":
 			err = (sandbox.CoderConfig{
@@ -455,7 +604,7 @@ func Load() (Config, error) {
 			)
 		}
 	}
-	if cfg.SandboxProvider == "nodeops" || cfg.SandboxProvider == "coder" {
+	if cfg.SandboxProvider == "nodeops" || cfg.SandboxProvider == "coder" || cfg.SandboxProvider == "freestyle" {
 		if cfg.WorkerBinaryPath == "" {
 			return Config{}, fmt.Errorf("AO_CLOUD_WORKER_BINARY_PATH is required when AO_CLOUD_SANDBOX_PROVIDER=%s", cfg.SandboxProvider)
 		}
@@ -481,11 +630,36 @@ func Load() (Config, error) {
 	if cfg.TerminalRelayEnabled && !cfg.TerminalStreamEnabled {
 		return Config{}, errors.New("AO_CLOUD_TERMINAL_RELAY requires AO_CLOUD_TERMINAL_STREAM")
 	}
-	if cfg.IdlePauseThreshold < time.Minute {
-		return Config{}, errors.New("AO_CLOUD_IDLE_PAUSE_THRESHOLD must be at least 1m")
+	if cfg.IdlePauseThreshold != 0 && cfg.IdlePauseThreshold < time.Minute {
+		return Config{}, errors.New("AO_CLOUD_IDLE_PAUSE_THRESHOLD must be 0 (disabled) or at least 1m")
 	}
-	if cfg.PRStatusPollInterval <= 0 {
-		return Config{}, errors.New("AO_CLOUD_PR_STATUS_POLL_INTERVAL must be positive")
+	if cfg.FreestyleIdlePauseThreshold != 0 && cfg.FreestyleIdlePauseThreshold < time.Minute {
+		return Config{}, errors.New("AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD must be 0 (disabled) or at least 1m")
+	}
+	if cfg.BillingEnabled() {
+		if cfg.StripeWebhookSecret == "" {
+			return Config{}, errors.New("AO_CLOUD_STRIPE_WEBHOOK_SECRET is required when AO_CLOUD_STRIPE_SECRET_KEY is set")
+		}
+		if len(cfg.StripePriceIDs) == 0 {
+			return Config{}, errors.New("AO_CLOUD_STRIPE_PRICE_IDS is required when AO_CLOUD_STRIPE_SECRET_KEY is set")
+		}
+		for plan, price := range cfg.StripePriceIDs {
+			if strings.TrimSpace(plan) == "" || !strings.HasPrefix(strings.TrimSpace(price), "price_") {
+				return Config{}, fmt.Errorf("AO_CLOUD_STRIPE_PRICE_IDS: plan %q must map to a price_ id", plan)
+			}
+		}
+		if cfg.BillingReturnURL == "" && cfg.PublicURL == "" {
+			return Config{}, errors.New("AO_CLOUD_BILLING_RETURN_URL or AO_CLOUD_PUBLIC_URL is required for billing")
+		}
+		if cfg.BillingPastDueGrace < 0 {
+			return Config{}, errors.New("AO_CLOUD_BILLING_PAST_DUE_GRACE must not be negative")
+		}
+		if cfg.BillingBusyGrace < 0 {
+			return Config{}, errors.New("AO_CLOUD_BILLING_BUSY_GRACE must not be negative")
+		}
+	}
+	if cfg.InterfaceHandoffInterval <= 0 {
+		return Config{}, errors.New("AO_CLOUD_INTERFACE_HANDOFF_INTERVAL must be positive")
 	}
 	if cfg.MaxSandboxesPerOrg < 1 {
 		return Config{}, errors.New("AO_CLOUD_MAX_ACTIVE_SANDBOXES_PER_ORG must be at least 1")
@@ -524,7 +698,9 @@ func Load() (Config, error) {
 	if cfg.GitHub.Enabled() && cfg.GitHub.PublicURL == "" {
 		return Config{}, errors.New("AO_CLOUD_PUBLIC_URL is required when the GitHub App is configured")
 	}
-	if cfg.GitHub.Enabled() && cfg.Environment != "production" {
+	githubAllowed := cfg.Environment == "production" ||
+		(cfg.Environment == "development" && githubLocalTest)
+	if cfg.GitHub.Enabled() && !githubAllowed {
 		return Config{}, errors.New("GitHub App credentials may only be configured in production")
 	}
 	if cfg.GitHub.Enabled() {
@@ -551,6 +727,9 @@ func Load() (Config, error) {
 			return Config{}, errors.New("AO_CLOUD_REPOSITORY_BROKER_TOKEN must be at least 32 characters when GitHub is configured")
 		}
 	}
+	if cfg.SupportToken != "" && len(cfg.SupportToken) < 32 {
+		return Config{}, errors.New("AO_CLOUD_SUPPORT_TOKEN must be at least 32 characters")
+	}
 	brokerConfigured := cfg.RepositoryBrokerURL != "" ||
 		cfg.EnvironmentControlToken != ""
 	if cfg.Environment != "production" && brokerConfigured {
@@ -572,8 +751,42 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+// BillingEnabled reports whether Stripe billing is configured and enforced.
+func (c Config) BillingEnabled() bool {
+	return c.StripeSecretKey != ""
+}
+
+// BillingReturn is the URL Checkout and the Customer Portal return to.
+func (c Config) BillingReturn() string {
+	if c.BillingReturnURL != "" {
+		return c.BillingReturnURL
+	}
+	return c.PublicURL + "/billing/return"
+}
+
 func (c Config) Hosted() bool {
 	return c.Environment == "staging" || c.Environment == "production"
+}
+
+// KeepWarm reports whether the general (non-Freestyle) providers, Coder among
+// them, are kept warm through idle: AO_CLOUD_IDLE_PAUSE_THRESHOLD=0. The
+// reconciler then keeps those sandboxes alive through idle, including
+// extending the Coder workspace deadline that would otherwise auto-stop the VM,
+// so a cloud session behaves like a local one (no teardown, no terminal
+// reconnect on resume). The cost is continuous compute for every
+// non-terminated session. It depends only on the general threshold: the
+// Freestyle threshold (AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD) governs only
+// Freestyle sandboxes and must never turn Coder keep-warm off.
+func (c Config) KeepWarm() bool {
+	return c.IdlePauseThreshold == 0
+}
+
+// IdlePauseScannerEnabled reports whether the idle-pause scanner has any
+// provider to pause. It runs when either threshold is non-zero, applying the
+// Freestyle threshold to Freestyle sandboxes and the general one to every
+// other provider; a zero threshold makes it skip that provider's sessions.
+func (c Config) IdlePauseScannerEnabled() bool {
+	return c.IdlePauseThreshold != 0 || c.FreestyleIdlePauseThreshold != 0
 }
 
 func (c Config) WorkerTokenTTL() time.Duration {
@@ -582,6 +795,9 @@ func (c Config) WorkerTokenTTL() time.Duration {
 	}
 	if c.SandboxProvider == sandbox.ProviderCoder {
 		return c.CoderWorkerTokenTTL
+	}
+	if c.SandboxProvider == sandbox.ProviderFreestyle {
+		return c.FreestyleWorkerTokenTTL
 	}
 	return c.NodeOpsWorkerTokenTTL
 }
@@ -621,6 +837,18 @@ func durationEnv(key string, fallback time.Duration) time.Duration {
 // Hosted environments run on NodeOps, which is also the only provider they are
 // allowed to run on; locally there is no NodeOps account, so the default is the
 // provider a developer can actually reach.
+// hostedSandboxProvider reports whether a provider runs workers on hosted
+// compute and may therefore be offered by a staging or production control
+// plane. Each one's settings are still validated at boot, so a misconfigured
+// hosted provider fails fast.
+func hostedSandboxProvider(provider string) bool {
+	switch provider {
+	case sandbox.ProviderNodeOps, sandbox.ProviderCoder, sandbox.ProviderFreestyle:
+		return true
+	}
+	return false
+}
+
 func defaultSandboxProvider(hosted bool) string {
 	if hosted {
 		return sandbox.ProviderNodeOps
@@ -628,13 +856,24 @@ func defaultSandboxProvider(hosted bool) string {
 	return sandbox.DefaultProvider
 }
 
+// commaList splits a comma-separated setting, dropping blanks.
+func commaList(value string) []string {
+	var list []string
+	for _, part := range strings.Split(value, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			list = append(list, part)
+		}
+	}
+	return list
+}
+
 // resolveAvailableProviders returns the set of providers a control plane offers.
 // It reads AO_CLOUD_SANDBOX_PROVIDERS (a comma-separated list) and always
 // includes defaultProvider, so an unset value yields exactly the single default
 // and existing single-provider deployments are unchanged. Order is preserved
 // (default first) and duplicates are dropped. Every entry must be a known
-// provider, and in hosted environments only nodeops and coder are permitted,
-// mirroring the AO_CLOUD_SANDBOX_PROVIDER rules.
+// provider, and in hosted environments only the hosted providers are
+// permitted, mirroring the AO_CLOUD_SANDBOX_PROVIDER rules.
 func resolveAvailableProviders(defaultProvider string, hosted bool) ([]string, error) {
 	list := []string{defaultProvider}
 	seen := map[string]bool{defaultProvider: true}
@@ -648,18 +887,34 @@ func resolveAvailableProviders(defaultProvider string, hosted bool) ([]string, e
 	}
 	for _, provider := range list {
 		switch provider {
-		case "ecs", "daytona", "docker", "nodeops", "coder":
+		case "ecs", "daytona", "docker", "nodeops", "coder", "freestyle":
 		default:
 			return nil, fmt.Errorf("AO_CLOUD_SANDBOX_PROVIDERS contains unknown provider %q", provider)
 		}
-		if hosted && provider != "nodeops" && provider != "coder" {
+		if hosted && !hostedSandboxProvider(provider) {
 			return nil, fmt.Errorf(
-				"AO_CLOUD_SANDBOX_PROVIDERS may only contain coder or nodeops in staging and production, got %q",
+				"AO_CLOUD_SANDBOX_PROVIDERS may only contain coder, freestyle, or nodeops in staging and production, got %q",
 				provider,
 			)
 		}
 	}
 	return list, nil
+}
+
+// lowerCSVList parses a comma-separated env value into a lowercased, trimmed,
+// de-duplicated slice. A blank value yields nil.
+func lowerCSVList(raw string) []string {
+	seen := map[string]bool{}
+	var list []string
+	for _, part := range strings.Split(raw, ",") {
+		value := strings.ToLower(strings.TrimSpace(part))
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		list = append(list, value)
+	}
+	return list
 }
 
 // providersRequireWorkerHome reports whether any available provider launches a
@@ -709,4 +964,37 @@ func (c Config) String() string {
 		authMode = "local"
 	}
 	return fmt.Sprintf("environment=%s address=%s auth=%s release=%s", c.Environment, c.HTTPAddress, authMode, c.Release)
+}
+
+// resolveWorkOS validates one WorkOS environment's settings and derives its
+// issuer and JWKS URL. The issuer may be the WorkOS API base URL (expanded to
+// the client-specific AuthKit issuer) or a custom AuthKit domain.
+func resolveWorkOS(prefix, issuer, clientID, apiKey, jwksURL string) (string, string, error) {
+	configured := 0
+	for _, value := range []string{issuer, clientID, apiKey} {
+		if value != "" {
+			configured++
+		}
+	}
+	if configured == 0 {
+		return "", jwksURL, nil
+	}
+	if configured != 3 {
+		return "", "", fmt.Errorf("%[1]s_ISSUER, %[1]s_CLIENT_ID, and %[1]s_API_KEY must be set together", prefix)
+	}
+	clientIssuer := workOSAPIBaseURL + "/user_management/" + clientID
+	if strings.TrimRight(issuer, "/") == workOSAPIBaseURL {
+		issuer = clientIssuer
+	}
+	if strings.HasPrefix(issuer, workOSAPIBaseURL+"/user_management/") && issuer != clientIssuer {
+		return "", "", fmt.Errorf("%[1]s_ISSUER must match %[1]s_CLIENT_ID", prefix)
+	}
+	if jwksURL == "" {
+		if issuer == clientIssuer {
+			jwksURL = workOSAPIBaseURL + "/sso/jwks/" + clientID
+		} else {
+			jwksURL = strings.TrimRight(issuer, "/") + "/oauth2/jwks"
+		}
+	}
+	return issuer, jwksURL, nil
 }

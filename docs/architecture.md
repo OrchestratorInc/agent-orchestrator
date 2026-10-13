@@ -1,25 +1,41 @@
-# Agent Orchestrator Architecture
+# Agent Orchestrator architecture
 
-Agent Orchestrator is a long-running Go daemon that supervises multiple parallel AI coding agent sessions. Project sessions own isolated git worktrees; projectless standalone workers own AO-managed plain-directory workspaces. Every session commits to one interface mode at a time. A TUI session runs its agent inside a tmux/conpty runtime; a Chat session runs a native protocol controller without an agent terminal runtime. Codex and all ACP Chat processes live in detached per-session hosts so daemon/desktop replacement reconnects without stopping an in-flight turn. The ACP host additionally preserves connection setup, JSON-RPC correlation, pending interactions, and acknowledged prompt replay while the replacement daemon rebuilds its typed controller. A durable handoff may move a compatible native conversation between TUI and Chat, but both controllers are never live at once. The daemon coordinates both through the same session, lifecycle, workspace, storage, and observation boundaries.
+Agent Orchestrator is a long-running Go daemon that supervises multiple
+parallel AI coding-agent sessions. Project sessions own isolated Git
+worktrees. Projectless standalone workers own AO-managed plain-directory
+workspaces. Every session uses one interface mode at a time.
 
-## Table of Contents
+A TUI session runs its agent inside a native PTY/ConPTY runtime, with tmux as a
+legacy or fallback runtime. A Chat session runs a native protocol controller
+without an agent terminal runtime. Codex and all ACP Chat processes run in
+detached per-session hosts, so replacing the daemon or desktop app does not
+stop an in-flight turn. The ACP host also preserves connection setup, JSON-RPC
+correlation, pending interactions, and acknowledged prompt replay while the
+replacement daemon rebuilds its typed controller.
 
-- [Mental Model](#mental-model)
-- [System Overview](#system-overview)
-- [Core Architectural Principles](#core-architectural-principles)
-- [Component Architecture](#component-architecture)
-- [Data Flows](#data-flows)
+A durable handoff can move a compatible native conversation between TUI and
+Chat, but both controllers are never live at once. The daemon coordinates both
+modes through the same session, lifecycle, workspace, storage, and observation
+boundaries.
+
+## Table of contents
+
+- [Mental model](#mental-model)
+- [System overview](#system-overview)
+- [Core architectural principles](#core-architectural-principles)
+- [Component architecture](#component-architecture)
+- [Data flows](#data-flows)
 - [Persistence and CDC](#persistence-and-cdc)
-- [Status Derivation](#status-derivation)
-- [Lifecycle Management](#lifecycle-management)
-- [Observation Loops](#observation-loops)
-- [HTTP Layer](#http-layer)
-- [Terminal Multiplexing](#terminal-multiplexing)
-- [Browser Runtime Bridge](#browser-runtime-bridge)
+- [Status derivation](#status-derivation)
+- [Lifecycle management](#lifecycle-management)
+- [Observation loops](#observation-loops)
+- [HTTP layer](#http-layer)
+- [Terminal multiplexing](#terminal-multiplexing)
+- [Browser runtime bridge](#browser-runtime-bridge)
 
 ---
 
-## Mental Model
+## Mental model
 
 The fundamental architecture follows a simple three-stage pipeline:
 
@@ -32,23 +48,40 @@ flowchart LR
 
 **Key insight:** Display status is never stored. It is computed at read time from durable facts.
 
-### Durable Session Facts
+### Durable session facts
 
 The only persistent session state is:
 
-- `activity_state` — What the agent last reported (`active`, `idle`, `waiting_input`, `blocked`, `exited`). `waiting_input` is an agent at an empty prompt awaiting its next instruction; `blocked` is an agent stopped on a pending permission/approval decision — automation must never inject input into a blocked session.
+- Claude and Codex TUI hook facts: the current parent turn and native subagent IDs are retained per runtime launch so activity stays active while a background subagent works. Codex also retains a successful spawn tool call until its delayed child-start hook supplies the native ID.
+- `activity_state` — What the agent last reported (`active`, `idle`, `waiting_input`, `blocked`, `exited`). In Chat, `waiting_input` means an approval, input request, or reauthentication is pending. TUI hooks can use it for an empty prompt; `blocked` means a pending permission decision. Automation must never inject input into a blocked session.
+- `hibernated_at` — A Chat provider host was deliberately stopped after a settled idle turn; its native conversation can be resumed on new work.
 - `is_terminated` — Whether the session should be treated as over
 - `session_mode` plus its runtime/provider handle and generation — The currently committed controller epoch
 - `session_interface_transitions` — Durable checkpoints for an in-progress or completed TUI↔Chat handoff
 - PR facts — `pr`, `pr_checks`, `pr_comment` tables
 
-### What is NOT Durable
+### What is not durable
 
 Display status like `working`, `needs_input`, `ci_failed`, `mergeable` are **computed at read time** by the service layer from the durable facts above.
 
+### Chat hibernation boundary
+
+| Agent and controller state | Hibernate? | Reason |
+| --- | --- | --- |
+| Provisioning, connecting, or recovering | No | Controller ownership or provider state is unsettled. |
+| Active or busy; queued/running turn | No | Work is in flight. |
+| Waiting for input or blocked on approval | No | A provider request is still pending. |
+| Idle after an unconfirmed turn | No | The latest prompt has no durable terminal outcome. |
+| Ready and idle after the latest primary turn settled, with the primary Chat tab open | No | A short view lease keeps the provider ready for interaction. |
+| Ready and idle after the latest primary turn settled, with no Chat view | Yes, while Developer Mode enables hibernation, if the native conversation supports resume and no transition or pending work exists | Leaving the Chat tab checks immediately; a 30-second sweep catches turns that finish later. |
+| Hibernated | Already cold | Opening the primary Chat tab, sending, or an AO relay wakes the native conversation in the background. |
+| Exited or terminated | No | Existing resume or restore behavior applies. |
+
+The daemon starts with Chat hibernation disabled; the desktop synchronizes its Developer Mode toggle when the daemon becomes ready. TUI sessions keep their runtime lifecycle. The Chat view renews its lease every 10 seconds; an abandoned lease expires after 30 seconds. A renewal only extends the lease: after a failed wake, reopening the view, sending work, or using the visible retry action can attempt native resume again. Hibernation records a process boundary, not a display status: the session's derived board status continues to use activity and PR facts.
+
 ---
 
-## System Overview
+## System overview
 
 ```mermaid
 graph TB
@@ -87,10 +120,10 @@ graph TB
 
     subgraph Adapters["Adapters"]
         AgentAdapter[Agent Adapters]
-        RuntimeAdapter[Runtime tmux/conpty]
+        RuntimeAdapter[Runtime native PTY / ConPTY / tmux]
         ChatDriver[Native Chat / ACP Drivers]
         WorkspaceAdapter[Git worktree / standalone directory]
-        SCMAdapter[SCM GitHub]
+        SCMAdapter[SCM GitHub/GitLab]
     end
 
     FE -->|REST/SSE| Controllers
@@ -130,9 +163,9 @@ graph TB
 
 ---
 
-## Core Architectural Principles
+## Core architectural principles
 
-### 1. Port-Based Design
+### 1. Port-based design
 
 Core code never depends on concrete implementations. All external systems are accessed through port interfaces defined in `backend/internal/ports/`:
 
@@ -144,7 +177,7 @@ graph LR
 
 ```
 
-### 2. Durable Facts, Derived Status
+### 2. Durable facts, derived status
 
 Storage layer persists minimal facts. Service layer computes display status on-demand:
 
@@ -161,15 +194,15 @@ flowchart LR
 
 ```
 
-### 3. Observer Pattern
+### 3. Observer pattern
 
 Observation is separated from action:
 
-- **Observe layer** — SCM Observer, Runtime Reaper poll external state
-- **Lifecycle layer** — Reduces observations into durable facts
-- **Service layer** — Computes display status from facts
+- **Observe layer:** SCM Observer and Runtime Reaper poll external state.
+- **Lifecycle layer:** Reduces observations into durable facts.
+- **Service layer:** Computes display status from facts.
 
-### 4. Change Data Capture
+### 4. Change data capture
 
 All durable changes flow through a CDC pipeline:
 
@@ -185,9 +218,9 @@ flowchart LR
 
 ---
 
-## Component Architecture
+## Component architecture
 
-### Package Layout
+### Package layout
 
 ```
 backend/internal/
@@ -202,7 +235,7 @@ backend/internal/
 ├── session_manager/     # Internal session command engine
 ├── lifecycle/           # Durable session fact reducer
 ├── observe/             # Observation loops
-│   ├── scm/             # SCM (GitHub) observer
+│   ├── scm/             # SCM (GitHub/GitLab) observer
 │   └── reaper/          # Runtime liveness observer
 ├── storage/             # SQLite persistence
 │   └── sqlite/          # DB, migrations, queries, stores
@@ -212,15 +245,15 @@ backend/internal/
 ├── adapters/            # Concrete adapter implementations
 │   ├── agent/           # 23+ agent harnesses
 │   ├── chatdriver/      # Native provider protocols and reusable ACP transport
-│   ├── runtime/         # tmux/conpty runtimes
+│   ├── runtime/         # native PTY/ConPTY (legacy/fallback tmux) runtimes
 │   ├── workspace/       # git worktree and standalone-directory adapters
-│   ├── scm/             # GitHub
-│   └── tracker/         # GitHub tracker
+│   ├── scm/             # GitHub/GitLab
+│   └── tracker/         # GitHub/GitLab trackers
 ├── daemon/              # Production wiring
 └── config/              # Environment-based configuration
 ```
 
-### Core Data Flow
+### Core data flow
 
 ```mermaid
 sequenceDiagram
@@ -265,7 +298,7 @@ sequenceDiagram
     alt persisted mode = tui
         Note over Mgr: 3a. Launch terminal controller
         Mgr->>Runtime: Create(session)
-        Runtime->>Runtime: Start tmux/conpty
+        Runtime->>Runtime: Start native PTY/ConPTY (legacy/fallback tmux)
         Mgr->>Agent: GetLaunchCommand()
         Agent-->>Mgr: launch command
         Mgr->>Runtime: Execute(agent command)
@@ -289,9 +322,9 @@ sequenceDiagram
 
 ---
 
-## Data Flows
+## Data flows
 
-### Session Spawn Flow
+### Session spawn flow
 
 ```mermaid
 flowchart TD
@@ -307,7 +340,7 @@ flowchart TD
     CreateRow --> Trigger1[CDC: session.created]
     CreateRow --> CreateWS[Create git worktree or standalone directory]
     CreateWS --> LaunchMode{Persisted mode}
-    LaunchMode -->|tui| CreateRT[Launch runtime tmux/conpty]
+    LaunchMode -->|tui| CreateRT[Launch native PTY / ConPTY / tmux]
     CreateRT --> GetCmd[Get agent launch command]
     GetCmd --> ExecAgent[Execute agent in runtime]
     LaunchMode -->|chat| ChatController[Start or resume provider controller]
@@ -320,7 +353,7 @@ flowchart TD
 
 ```
 
-### Session Interface Handoff
+### Session interface handoff
 
 An interface switch is a controller replacement inside the existing AO session,
 not a new session. The session id, optional project, workspace, lifecycle facts,
@@ -435,7 +468,36 @@ support retain the causally newer idle-fact or legacy terminal-idle fallback. An
 unverified idle state has a bounded proof window; active work or a user-paced
 decision remains unbounded.
 
-### Observation Flow
+### Conversation authentication facts
+
+The daemon projects provider credential rejections into `conversations.account_json`
+with explicit `authenticationState` (`unknown`, `required`, or `authenticated`).
+`reauthRequiredAt`/`reauthReason` describe an outstanding demand; the last failure
+and archived provider events remain after recovery. Partial account/plan reports
+never imply usable credentials. A changed auth mode establishes an account-change
+barrier for turns already in flight; repeated reports of the same mode preserve it.
+
+Recovery requires an authoritative completed provider turn with no error, in the
+active provider branch and owning controller generation, started and completed
+after the outstanding demand/account-change barrier. Root-thread correlation
+excludes nested Codex child-thread completions. Imported or synthetic history,
+process readiness, local CLI login, and uncorrelated recovery reports cannot clear
+a demand. ACP and Codex use the same daemon reduction of their normalized turn
+completions; their credential verification and process reconnection remain provider
+specific.
+
+Before claiming a replacement generation, and when reading a snapshot with a
+persisted demand, SQLite reconciles legacy warnings against bounded durable turn
+and archived completion evidence. Evidence selection and clearing share the writer
+transaction with generation/account updates; uncertain or older-generation evidence
+leaves the demand intact. This is a targeted lazy repair, with no blanket database
+migration and no provider/session restart. The renderer may dismiss the current
+failure notice for that mounted conversation. Account JSON changes invalidate Chat
+through a DB-triggered `session_updated` event even without a timeline change;
+dismissal changes no auth fact or
+work authorization. A new failure identity shows a new notice.
+
+### Observation flow
 
 ```mermaid
 flowchart TD
@@ -466,7 +528,7 @@ flowchart TD
 
 ```
 
-### Feedback Routing Flow
+### Feedback routing flow
 
 ```mermaid
 sequenceDiagram
@@ -502,7 +564,7 @@ sequenceDiagram
 
 ## Persistence and CDC
 
-### SQLite Schema
+### SQLite schema
 
 ```mermaid
 erDiagram
@@ -580,7 +642,7 @@ erDiagram
     }
 ```
 
-### CDC Pipeline
+### CDC pipeline
 
 ```mermaid
 flowchart LR
@@ -600,9 +662,9 @@ flowchart LR
 
 ---
 
-## Status Derivation
+## Status derivation
 
-### Display Status Precedence
+### Display status precedence
 
 The `service.Session` computes display status from durable facts using this precedence (highest to lowest):
 
@@ -639,7 +701,7 @@ flowchart TD
 
 ```
 
-### PR Pipeline States
+### PR pipeline states
 
 ```mermaid
 flowchart LR
@@ -660,9 +722,9 @@ flowchart LR
 
 ---
 
-## Lifecycle Management
+## Lifecycle management
 
-### Lifecycle Manager Responsibilities
+### Lifecycle manager responsibilities
 
 The `lifecycle.Manager` is the **canonical write path** for all session lifecycle facts:
 
@@ -703,7 +765,7 @@ flowchart TD
 
 ```
 
-### Session State Machine
+### Session state machine
 
 ```mermaid
 stateDiagram-v2
@@ -738,7 +800,7 @@ stateDiagram-v2
     end note
 ```
 
-### Termination Guardrails
+### Termination guardrails
 
 The lifecycle manager only terminates when **all** conditions are met:
 
@@ -765,9 +827,9 @@ flowchart TD
 
 ---
 
-## Observation Loops
+## Observation loops
 
-### SCM Observer
+### SCM observer
 
 ```mermaid
 flowchart TD
@@ -794,7 +856,7 @@ flowchart TD
 
 ```
 
-### Runtime Reaper
+### Runtime reaper
 
 ```mermaid
 flowchart TD
@@ -827,13 +889,13 @@ flowchart TD
 
 ```
 
-### Observation Integration
+### Observation integration
 
 ```mermaid
 flowchart LR
     subgraph External["External State"]
         GitHub[GitHub API]
-        Runtimes[tmux/conpty]
+        Runtimes[native PTY / ConPTY / tmux]
     end
 
     subgraph Observers["Observation Layer"]
@@ -864,9 +926,9 @@ flowchart LR
 
 ---
 
-## HTTP Layer
+## HTTP layer
 
-### API Structure
+### API structure
 
 ```mermaid
 flowchart TD
@@ -907,12 +969,26 @@ flowchart TD
 
 ```
 
-### Multi-Listener Architecture (Loopback + LAN)
+### Multi-listener architecture (loopback + LAN)
 
 The daemon runs two independent HTTP listeners sharing the same chi router:
 
-1. **Primary (Loopback) Listener** — binds `127.0.0.1:3001` with no authentication. All existing daemon operations (CLI, desktop app) use this listener.
-2. **LAN Listener** (Connect Mobile) — an opt-in second listener that binds `0.0.0.0:3011` (or ephemeral fallback) **only when explicitly enabled** by the user through the desktop app's Settings. It wraps the shared router in bearer-password authentication middleware, serves app API routes to mobile clients, but never exposes loopback-gated control routes (`/shutdown`, telemetry, mobile control commands). All traffic is plaintext HTTP on a home network only, by deliberate security decision — see `docs/adr/0001-lan-listener-for-mobile.md` for rationale and threat model. Auth state (hashed password, per-source lockout) is persisted to `~/.ao/mobile/config.json` and restored on daemon boot.
+1. **Primary (Loopback) Listener:** Binds `127.0.0.1:3001` with no
+   authentication. All existing daemon operations, including the CLI and desktop
+   app, use this listener.
+2. **LAN Listener (Connect Mobile):** An opt-in second listener that binds
+   `0.0.0.0:3011` (or an ephemeral fallback) **only when explicitly enabled**
+   through desktop settings. Bearer-password middleware protects the app API.
+   Loopback-gated shutdown, telemetry, mobile-control, and browser-control routes
+   remain unavailable. Exactly `GET /api/v1/identity` is public for host and
+   contract verification. Direct LAN transport is plaintext for trusted
+   networks. A managed cloudflared HTTPS endpoint wraps the authenticated mobile
+   path. The current v2 offer advertises Tailscale addresses as plaintext;
+   Tailscale TLS setup and QR advertisement remain incomplete. The rotating password is persisted in a mode-`0600`
+   file at `AO_DATA_DIR/mobile/config.json` (normally
+   `~/.ao/data/mobile/config.json`); its comparison hash is in memory. See the
+   [current access guide](../frontend/src/docs/content/configuration/remote-access.mdx)
+   and [historical LAN ADR](adr/0001-lan-listener-for-mobile.md).
 
 The mobile app is a second thin renderer over those same session resources. It
 branches on the session's persisted `mode`: TUI attaches the existing mux PTY,
@@ -923,7 +999,7 @@ commands; no provider or lifecycle policy is implemented in React Native.
 
 For implementation details and security model, consult `docs/adr/0001-lan-listener-for-mobile.md` and the glossary in `CONTEXT.md`.
 
-### Request Flow
+### Request flow
 
 ```mermaid
 sequenceDiagram
@@ -960,7 +1036,7 @@ sequenceDiagram
 
 ---
 
-## Terminal Multiplexing
+## Terminal multiplexing
 
 The mux is the primary agent controller only for TUI-mode sessions. Chat-mode
 sessions have no agent runtime handle and never attach their provider through
@@ -968,7 +1044,7 @@ tmux. They may still open session-scoped shell terminals as a worktree escape
 hatch; those shells are separate resources and do not become the agent
 controller.
 
-### Terminal Architecture
+### Terminal architecture
 
 ```mermaid
 flowchart TD
@@ -987,15 +1063,15 @@ flowchart TD
 
     subgraph Runtime
         TMux[tmux Runtime]
-        MacPTY[macOS native PTY Host]
+        MacPTY[macOS/Linux native PTY Host]
         ConPTY[conpty Runtime]
     end
 
     Browser -->|WebSocket| WS
     WS -->|attach| Mux
     Mux --> Sessions
-    Sessions -->|create| TMux
-    Sessions -->|create new macOS| MacPTY
+    Sessions -->|legacy or startup fallback| TMux
+    Sessions -->|create new macOS/Linux| MacPTY
     Sessions -->|create| ConPTY
 
     TMux -->|PTY attach| Mux
@@ -1007,21 +1083,20 @@ flowchart TD
 
 ```
 
-### Attach Flow
+### Attach flow
 
 ```mermaid
 sequenceDiagram
     participant Client as Browser
     participant WS as WebSocket Handler
     participant Mux as Terminal Mux
-    participant Runtime as tmux/conpty
+    participant Runtime as native PTY/ConPTY (legacy/fallback tmux)
 
     Client->>WS: WebSocket upgrade
     WS->>Mux: Attach(session, rows, cols)
     Mux->>Runtime: Attach(handle, rows, cols)
 
-    Runtime->>Runtime: Create PTY
-    Runtime->>Runtime: Spawn tmux attach
+    Runtime->>Runtime: Connect to detached host or create tmux attach PTY
 
     loop Data Loop
         Runtime->>Mux: PTY output
@@ -1035,10 +1110,10 @@ sequenceDiagram
 
     Client->>WS: Close
     WS->>Mux: Detach
-    Mux->>Runtime: Close PTY
+    Mux->>Runtime: Close attachment stream
 ```
 
-## Browser Runtime Bridge
+## Browser runtime bridge
 
 Browser automation uses a dedicated local socket (`browser.sock` on Unix,
 `ao-browser[-dev]` named pipe on Windows) between the daemon and Electron. The
@@ -1050,6 +1125,8 @@ Electron attaches its debugger directly to the selected session's
 `WebContentsView`, so the protocol transport cannot enumerate or attach to the
 AO renderer or a different session. The loopback `/api/v1/browser` surface is
 blocked entirely on the opt-in LAN listener.
+
+Temporary browser profiles isolate sessions by default. Named persistent profiles can be reused across sessions, sharing their cookies/storage deliberately. Browser import reads supported source profiles without modifying them and stores results under AO data.
 
 Request observation is an explicit, temporary browser command rather than a
 standing debugger feature. Capture is off by default, bound to the active tab
@@ -1063,18 +1140,19 @@ down Electron disables and discards the capture.
 
 ## Load-Bearing Rules
 
-These rules are **load-bearing** — changing them breaks fundamental architectural assumptions:
+These rules are **load-bearing**. Changing them breaks fundamental
+architectural assumptions:
 
-1. **Never store display status** — Status is derived from durable facts at read time
-2. **Never treat failed probes as death** — A failed probe is a fact, not a termination signal
-3. **Never force-delete dirty worktrees** — User data safety over cleanup convenience
-4. **All app state under ~/.ao** — No OS-default app-data locations
-5. **Daemon binds to 127.0.0.1 only** — No network exposure, ever
-6. **CLI is thin** — All logic lives in the daemon, CLI is just an HTTP client
-7. **CDC is source-truth for events** — DB triggers write to change_log, poller fans out
-8. **Adapters are leaves** — Adapters never import core packages, only ports and domain
-9. **Hooks are gitignored** — Every file an adapter writes must be in .gitignore
-10. **Migrations never change** — Add new migrations, never modify existing ones
+1. **Never store display status:** Status is derived from durable facts at read time.
+2. **Never treat failed probes as death:** A failed probe is a fact, not a termination signal.
+3. **Never force-delete dirty worktrees:** User data safety comes before cleanup convenience.
+4. **Keep all app state under `~/.ao`:** Do not use OS-default app-data locations.
+5. **Keep the primary daemon on loopback:** Only the opt-in authenticated mobile path provides off-device access. Control routes remain loopback-gated.
+6. **Keep the CLI thin:** All logic lives in the daemon. The CLI is an HTTP client.
+7. **Use CDC as the source of truth for events:** DB triggers write to `change_log`, and the poller fans out changes.
+8. **Keep adapters as leaves:** Adapters never import core packages, only ports and domain.
+9. **Keep hooks gitignored:** Every file an adapter writes must be in `.gitignore`.
+10. **Never change migrations:** Add new migrations instead of modifying existing ones.
 
 ---
 
@@ -1082,11 +1160,11 @@ These rules are **load-bearing** — changing them breaks fundamental architectu
 
 Agent Orchestrator's architecture is designed around:
 
-- **Separation of concerns** — Observation, persistence, and display are distinct layers
-- **Port-based design** — Core code depends on interfaces, not implementations
-- **Durable minimalism** — Store only facts, compute everything else
-- **Event-driven updates** — CDC broadcasts changes to all subscribers
-- **Isolation** — Each project session owns a git worktree, each standalone worker owns an AO-managed directory, and every session has exactly one live mode-specific controller, including across handoffs
-- **Safety** — Conservative termination, path validation, gitignored hooks
+- **Separation of concerns:** Observation, persistence, and display are distinct layers.
+- **Port-based design:** Core code depends on interfaces, not implementations.
+- **Durable minimalism:** Store only facts, and compute everything else.
+- **Event-driven updates:** CDC broadcasts changes to all subscribers.
+- **Isolation:** Each project session owns a Git worktree, each standalone worker owns an AO-managed directory, and every session has exactly one live mode-specific controller, including across handoffs.
+- **Safety:** Termination is conservative, paths are validated, and hooks are gitignored.
 
 This architecture enables parallel AI agents to work safely while maintaining complete visibility and control.

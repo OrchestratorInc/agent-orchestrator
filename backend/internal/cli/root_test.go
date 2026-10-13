@@ -178,8 +178,10 @@ func TestTelemetryMetaClassifiesRegisteredCommandPaths(t *testing.T) {
 		"ao completion":              {},
 		"ao daemon":                  {},
 		"ao help":                    {},
+		"ao mcp":                     {},
 		"ao pty-host":                {},
 		"ao start":                   {},
+		"ao unreal-provider":         {},
 	}
 
 	var failures []string

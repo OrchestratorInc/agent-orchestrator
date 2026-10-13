@@ -56,7 +56,14 @@ type sessionDTO struct {
 	UpdatedAt    time.Time       `json:"updatedAt"`
 	Status       string          `json:"status"`
 	Branch       string          `json:"branch,omitempty"`
+	BranchState  *branchStateDTO `json:"branchState,omitempty"`
 	PRs          []sessionPRDTO  `json:"prs"`
+}
+
+type branchStateDTO struct {
+	Commits      int    `json:"commits"`
+	RemoteBranch string `json:"remoteBranch,omitempty"`
+	Unpushed     int    `json:"unpushed"`
 }
 
 type sessionActivity struct {
@@ -93,8 +100,9 @@ type sessionResponse struct {
 }
 
 type killSessionResponse struct {
-	SessionID string `json:"sessionId"`
-	Freed     bool   `json:"freed"`
+	SessionID      string `json:"sessionId"`
+	Freed          bool   `json:"freed"`
+	CleanupPending bool   `json:"cleanupPending"`
 }
 
 type restoreSessionResponse struct {
@@ -159,6 +167,7 @@ type sessionListEntry struct {
 	ID             string          `json:"id"`
 	ProjectID      string          `json:"projectId"`
 	Role           string          `json:"role"`
+	DisplayName    string          `json:"displayName,omitempty"`
 	Status         string          `json:"status,omitempty"`
 	Activity       string          `json:"activity,omitempty"`
 	IssueID        string          `json:"issueId,omitempty"`
@@ -192,6 +201,7 @@ func newSessionCommand(ctx *commandContext) *cobra.Command {
 		Short: "Manage agent sessions",
 	}
 	cmd.AddCommand(newSessionListCommand(ctx))
+	cmd.AddCommand(newSessionTopCommand(ctx))
 	cmd.AddCommand(newSessionGetCommand(ctx))
 	cmd.AddCommand(newSessionKillCommand(ctx))
 	cmd.AddCommand(newSessionRestoreCommand(ctx))
@@ -266,7 +276,7 @@ func newSessionRestoreCommand(ctx *commandContext) *cobra.Command {
 	var opts sessionOptions
 	cmd := &cobra.Command{
 		Use:   "restore <id>",
-		Short: "Relaunch a terminated session",
+		Short: "Restore a terminated session or resume an exited agent",
 		Args:  oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := normalizeSessionID(args[0])
@@ -358,7 +368,8 @@ func newSessionClaimPRCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "claim-pr [<session-id>] <pr-ref>",
 		Short: "Attach an existing PR to a session",
-		Long:  "Attach an existing PR to a session. When session-id is omitted, the current session is read from AO_SESSION_ID.",
+		Long: "Attach an existing PR to a session. When session-id is omitted, the current session is read from AO_SESSION_ID.\n\n" +
+			"Claiming updates PR ownership metadata only; it does not check out the PR branch. Verify the workspace branch and HEAD before editing.",
 		Example: `  # From inside an AO worker session
   ao session claim-pr 88
 
@@ -462,21 +473,19 @@ func (c *commandContext) fetchProjectDetails(ctx context.Context, id string) (pr
 func writeClaimPRResult(cmd *cobra.Command, res claimPRResponse) error {
 	out := cmd.OutOrStdout()
 	if len(res.PRs) == 0 {
-		_, err := fmt.Fprintf(out, "session %s claimed PR\n", res.SessionID)
-		return err
+		if _, err := fmt.Fprintf(out, "session %s claimed PR\n", res.SessionID); err != nil {
+			return err
+		}
+	} else {
+		pr := res.PRs[0]
+		if _, err := fmt.Fprintf(out, "session %s claimed PR #%d\n", res.SessionID, pr.Number); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(out, "  pr:       %s\n", pr.URL); err != nil {
+			return err
+		}
 	}
-	pr := res.PRs[0]
-	if _, err := fmt.Fprintf(out, "session %s claimed PR #%d\n", res.SessionID, pr.Number); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(out, "  pr:       %s\n", pr.URL); err != nil {
-		return err
-	}
-	checkout := "already on PR branch"
-	if res.BranchChanged {
-		checkout = "switched to PR branch"
-	}
-	if _, err := fmt.Fprintf(out, "  checkout: %s\n", checkout); err != nil {
+	if err := writeClaimPRCheckout(out, res.BranchChanged); err != nil {
 		return err
 	}
 	for _, owner := range res.TakenOverFrom {
@@ -613,6 +622,10 @@ func (c *commandContext) killSession(ctx context.Context, cmd *cobra.Command, id
 	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/kill", struct{}{}, &res); err != nil {
 		return err
 	}
+	if res.CleanupPending {
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "session %s killed (workspace cleanup pending)\n", res.SessionID)
+		return err
+	}
 	if res.Freed {
 		_, err := fmt.Fprintf(cmd.OutOrStdout(), "session %s killed\n", res.SessionID)
 		return err
@@ -624,10 +637,12 @@ func (c *commandContext) killSession(ctx context.Context, cmd *cobra.Command, id
 }
 
 func (c *commandContext) restoreSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionOptions) error {
-	if opts.project != "" {
-		if _, err := c.fetchScopedSession(ctx, id, opts.project); err != nil {
-			return err
-		}
+	sess, err := c.fetchScopedSession(ctx, id, opts.project)
+	if err != nil {
+		return err
+	}
+	if !sess.IsTerminated && sess.Activity.State == "exited" {
+		return c.resumeSessionAgent(ctx, cmd, id, sessionOptions{})
 	}
 	var res restoreSessionResponse
 	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/restore", struct{}{}, &res); err != nil {
@@ -844,6 +859,7 @@ func sessionListEntries(sessions []sessionDTO, summaries map[string][]sessionPRS
 			ID:             sess.ID,
 			ProjectID:      sess.ProjectID,
 			Role:           sessionRole(sess),
+			DisplayName:    sess.DisplayName,
 			Status:         sess.Status,
 			Activity:       sess.Activity.State,
 			IssueID:        sess.IssueID,
@@ -923,12 +939,12 @@ func writeSessionList(cmd *cobra.Command, sessions []sessionDTO, summaries map[s
 				if _, err := fmt.Fprintf(table, "%s:\n", currentProject); err != nil {
 					return err
 				}
-				if _, err := fmt.Fprintln(table, "  SESSION\tBRANCH\tPR\tCI\tREVIEW\tTHREADS\tACTIVITY\tAGE"); err != nil {
+				if _, err := fmt.Fprintln(table, "  SESSION\tROLE\tBRANCH\tPR\tCI\tREVIEW\tTHREADS\tACTIVITY\tAGE"); err != nil {
 					return err
 				}
 			}
 			pr, ci, review, threads := sessionPRColumns(sess, summaries[sess.ID])
-			if _, err := fmt.Fprintf(table, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sess.ID, emptyDash(sess.Branch), pr, ci, review, threads, emptyDash(sess.Activity.State), sessionAge(now, sess.Activity.LastActivityAt)); err != nil {
+			if _, err := fmt.Fprintf(table, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sess.ID, sessionRole(sess), emptyDash(sess.Branch), pr, ci, review, threads, emptyDash(sess.Activity.State), sessionAge(now, sess.Activity.LastActivityAt)); err != nil {
 				return err
 			}
 		}
@@ -1000,6 +1016,7 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 		{"activity", sess.Activity.State},
 		{"harness", sess.Harness},
 		{"issue", sess.IssueID},
+		{"branch", formatBranchState(sess)},
 		{"terminated", fmt.Sprintf("%t", sess.IsTerminated)},
 	}
 	for _, field := range fields {
@@ -1021,6 +1038,30 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 		}
 	}
 	return nil
+}
+
+// formatBranchState renders the daemon's observed branch facts, for example
+// "feat/x (3 commits, 1 not pushed to origin/feat/x)".
+func formatBranchState(sess sessionDTO) string {
+	state := sess.BranchState
+	if sess.Branch == "" || state == nil {
+		return sess.Branch
+	}
+	commits := fmt.Sprintf("%d commit", state.Commits)
+	if state.Commits != 1 {
+		commits += "s"
+	}
+	switch {
+	case state.RemoteBranch == "":
+		if state.Commits == 0 {
+			return fmt.Sprintf("%s (%s)", sess.Branch, commits)
+		}
+		return fmt.Sprintf("%s (%s, not pushed)", sess.Branch, commits)
+	case state.Unpushed > 0:
+		return fmt.Sprintf("%s (%s, %d not pushed to %s)", sess.Branch, commits, state.Unpushed, state.RemoteBranch)
+	default:
+		return fmt.Sprintf("%s (%s, pushed to %s)", sess.Branch, commits, state.RemoteBranch)
+	}
 }
 
 func sessionRole(sess sessionDTO) string {

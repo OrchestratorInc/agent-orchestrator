@@ -7,11 +7,12 @@ import sys
 from lib.deployment import build_task_definition
 
 
-def assignments(values: list[str]) -> dict[str, str]:
+def assignments(values: list[str], *, allow_empty: bool = False) -> dict[str, str]:
+    """Parse NAME=VALUE pairs. With allow_empty, NAME= removes NAME."""
     result = {}
     for value in values:
         name, separator, assigned = value.partition("=")
-        if not separator or not name or not assigned:
+        if not separator or not name or (not assigned and not allow_empty):
             raise ValueError(f"expected NAME=VALUE, got {value!r}")
         result[name] = assigned
     return result
@@ -29,11 +30,31 @@ def main() -> None:
     parser.add_argument("--runtime-database-user", default="")
     parser.add_argument("--worker-image", default="")
     parser.add_argument(
-        "--sandbox-provider", choices=("nodeops", "coder"), default="nodeops"
+        "--sandbox-provider", choices=("nodeops", "coder", "freestyle"), default="nodeops"
     )
-    parser.add_argument("--set-environment", action="append", default=[])
+    parser.add_argument(
+        "--sandbox-providers",
+        default="",
+        help=(
+            "Comma-separated list of every sandbox provider this control plane "
+            "serves (for example nodeops,coder). Defaults to --sandbox-provider "
+            "for a single-provider deployment. All listed providers' secrets are "
+            "plumbed and preserved."
+        ),
+    )
+    parser.add_argument(
+        "--set-environment",
+        action="append",
+        default=[],
+        help="NAME=VALUE to set; NAME= (empty) removes NAME from the task.",
+    )
     parser.add_argument("--set-secret", action="append", default=[])
     args = parser.parse_args()
+    sandbox_providers = [
+        provider.strip()
+        for provider in args.sandbox_providers.split(",")
+        if provider.strip()
+    ] or None
     source = json.load(sys.stdin)
     payload = build_task_definition(
         source,
@@ -47,7 +68,8 @@ def main() -> None:
         runtime_database_user=args.runtime_database_user,
         worker_image=args.worker_image,
         sandbox_provider=args.sandbox_provider,
-        environment_overrides=assignments(args.set_environment),
+        sandbox_providers=sandbox_providers,
+        environment_overrides=assignments(args.set_environment, allow_empty=True),
         secret_overrides=assignments(args.set_secret),
     )
     json.dump(payload, sys.stdout, separators=(",", ":"))

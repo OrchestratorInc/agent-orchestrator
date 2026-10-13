@@ -12,12 +12,17 @@ import clineLogo from "../assets/agents/cline.svg";
 import claudeLogo from "../assets/agents/claude.svg";
 import claudeCodeLogo from "../assets/agents/claude-code.svg";
 import codexLogo from "../assets/agents/codex.svg";
+import codewhaleLogo from "../assets/agents/codewhale.svg";
+import commandCodeLogo from "../assets/agents/command-code.png";
 import continueLogo from "../assets/agents/continue.png";
 import copilotLogo from "../assets/agents/copilot.svg";
 import crushLogo from "../assets/agents/crush.png";
 import cursorLogo from "../assets/agents/cursor.svg";
 import devinLogo from "../assets/agents/devin.png";
+import deepseekHarnessLogo from "../assets/agents/deepseek-harness.svg";
 import droidLogo from "../assets/agents/droid.png";
+import fxLogo from "../assets/agents/fx.svg";
+import geminiLogo from "../assets/agents/gemini.svg";
 import gooseLogo from "../assets/agents/goose.svg";
 import grokLogo from "../assets/agents/grok.png";
 import hermesLogo from "../assets/agents/hermes.png";
@@ -26,25 +31,33 @@ import kimiLogo from "../assets/agents/kimi.png";
 import kimchiLogo from "../assets/agents/kimchi.svg";
 import kiroLogo from "../assets/agents/kiro.png";
 import museLogo from "../assets/agents/muse.png";
+import mimoCodeLogo from "../assets/agents/mimo-code.svg";
 import ompLogo from "../assets/agents/omp.png";
+import openhandsLogo from "../assets/agents/openhands.svg";
 import opencodeLogo from "../assets/agents/opencode.svg";
 import piLogo from "../assets/agents/pi.png";
 import primeAgentLogo from "../assets/agents/prime-agent.png";
-import qwenLogo from "../assets/agents/qwen.png";
+import qwenLogo from "../assets/agents/qwen.svg";
+import unrealAgentLogo from "../assets/agents/unreal-agent.png";
 import vibeLogo from "../assets/agents/vibe.png";
 
 // Real brand logos keyed by the harness name AO stores on session.provider.
 // Agents without an asset fall back to a lettered tile (fake).
 const LOGOS: AgentLogoSources = {
 	codex: codexLogo,
+	codewhale: codewhaleLogo,
+	"command-code": commandCodeLogo,
 	"claude-code": claudeCodeLogo,
 	claude: claudeLogo,
 	cursor: cursorLogo,
 	opencode: opencodeLogo,
+	"opencode-v2": opencodeLogo,
 	copilot: copilotLogo,
 	aider: aiderLogo,
 	grok: grokLogo,
+	gemini: geminiLogo,
 	droid: droidLogo,
+	fx: fxLogo,
 	crush: crushLogo,
 	qwen: qwenLogo,
 	goose: gooseLogo,
@@ -53,6 +66,7 @@ const LOGOS: AgentLogoSources = {
 	kimi: kimiLogo,
 	muse: museLogo,
 	omp: ompLogo,
+	openhands: openhandsLogo,
 	kiro: kiroLogo,
 	kilocode: kilocodeLogo,
 	vibe: vibeLogo,
@@ -64,6 +78,9 @@ const LOGOS: AgentLogoSources = {
 	agy: agyLogo,
 	auggie: auggieLogo,
 	autohand: autohandLogo,
+	"unreal-agent": unrealAgentLogo,
+	"mimo-code": mimoCodeLogo,
+	"deepseek-harness": deepseekHarnessLogo,
 	hermes: hermesLogo,
 };
 

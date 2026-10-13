@@ -1,5 +1,5 @@
 import userEvent from "@testing-library/user-event";
-import { render as rtlRender, screen } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -188,7 +188,10 @@ describe("provider state chrome", () => {
 			});
 		}
 		const { rerender } = render(<ChatWorkspace snapshot={snapshot} />);
-		expect(screen.getByRole("alert")).toHaveTextContent("Sign in again to keep going");
+		for (const trigger of screen.getAllByRole("button", { name: /Worked for/ })) {
+			fireEvent.click(trigger);
+		}
+		expect(screen.getByRole("alert")).toHaveTextContent("Provider authentication needs attention");
 		expect(screen.getByRole("alert")).toHaveTextContent("login");
 		expect(screen.getByRole("alert")).not.toHaveTextContent("Provider access denied");
 		expect(screen.getAllByText(/Provider access denied/)).toHaveLength(1);
@@ -196,7 +199,7 @@ describe("provider state chrome", () => {
 		expect(screen.getByText("Earlier recovered warning")).toBeInTheDocument();
 
 		rerender(<ChatWorkspace snapshot={structuredClone(snapshot)} />);
-		expect(screen.getByRole("alert")).toHaveTextContent("Sign in again to keep going");
+		expect(screen.getByRole("alert")).toHaveTextContent("Provider authentication needs attention");
 		expect(screen.getByRole("alert")).toHaveTextContent("login");
 		expect(screen.getByRole("alert")).not.toHaveTextContent("Provider access denied");
 		expect(screen.getAllByText(/Provider access denied/)).toHaveLength(1);
@@ -212,7 +215,7 @@ describe("provider state chrome", () => {
 
 	it("keeps credential recovery available when the failure is not in loaded history", () => {
 		render(<ChatWorkspace snapshot={chatFixtureReauth} />);
-		expect(screen.getByRole("alert")).toHaveTextContent(/Sign in again to keep going/);
+		expect(screen.getByRole("alert")).toHaveTextContent(/Provider authentication needs attention/);
 	});
 
 	it("reports a provider-side thread fault while the controller is healthy", () => {
@@ -222,19 +225,23 @@ describe("provider state chrome", () => {
 		expect(screen.queryByText(/agent controller stopped/i)).not.toBeInTheDocument();
 	});
 
-	it("surfaces a tool server that will never answer", () => {
+	it("notes tool servers that did not start, without a reload control", () => {
 		render(<ChatWorkspace snapshot={chatFixtureMcpFailed} />);
-		expect(screen.getByText("2 tool servers did not start")).toBeInTheDocument();
+		expect(screen.getByText("Playwright, Postgres didn’t start. Continuing without them.").closest("[role=status]")).not.toBeNull();
+		expect(screen.queryByRole("button", { name: /Reload/ })).not.toBeInTheDocument();
 	});
 
 	it("says nothing about tool servers when they all started", () => {
 		render(<ChatWorkspace snapshot={chatFixture} />);
-		expect(screen.queryByText(/did not start/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/didn’t start/)).not.toBeInTheDocument();
 	});
 
-	it("disables the tool-server reload while a turn is running", () => {
-		render(<ChatWorkspace snapshot={chatFixtureMcpFailed} onReloadMcpServers={vi.fn()} />);
-		expect(screen.getByRole("button", { name: /Reload/ })).toBeDisabled();
+	it("does not use up the note while the chat panel is behind another tab", () => {
+		const snapshot = { ...chatFixtureMcpFailed, sessionId: "ao-mcp-hidden" };
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot} workspaceActiveTabKey="file:README.md" />);
+		expect(screen.queryByText(/didn’t start/)).not.toBeInTheDocument();
+		rerender(<ChatWorkspace snapshot={snapshot} />);
+		expect(screen.getByText("Playwright, Postgres didn’t start. Continuing without them.")).toBeInTheDocument();
 	});
 });
 
@@ -266,6 +273,9 @@ describe("model reroute", () => {
 				onChooseSettings={vi.fn()}
 			/>,
 		);
+		for (const trigger of screen.getAllByRole("button", { name: /Worked for/ })) {
+			fireEvent.click(trigger);
+		}
 		expect(
 			screen.getByText(/The requested model is at capacity for this account tier/),
 		).toBeInTheDocument();

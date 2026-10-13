@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, FOCUS_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL } from "./shared/shortcuts";
+import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL } from "./shared/shortcuts";
 import { SET_CHAT_DRAFT_RISK_CHANNEL } from "./shared/chat-draft-risk";
 import type { AoBridge } from "./preload";
 
@@ -73,6 +73,17 @@ describe("preload repository branch bridge", () => {
 		await expect(exposedBridge().app.getRepositoryBranch("/repo/project")).resolves.toBe("main");
 
 		expect(electronMocks.invoke).toHaveBeenCalledWith("app:getRepositoryBranch", "/repo/project");
+	});
+});
+
+describe("preload Developer Mode updater bridge", () => {
+	it("sends only the updater eligibility boolean to the main process", async () => {
+		await exposedBridge().updateSettings.setMacDifferentialUpdates(true);
+
+		expect(electronMocks.invoke).toHaveBeenCalledWith(
+			"updateSettings:setMacDifferentialUpdates",
+			true,
+		);
 	});
 });
 
@@ -245,7 +256,7 @@ describe("preload application shortcut bridges", () => {
 		[NEXT_SESSION_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onNextSessionShortcut(listener)],
 		[PREVIOUS_TAB_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onPreviousTabShortcut(listener)],
 		[NEXT_TAB_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onNextTabShortcut(listener)],
-		[FOCUS_TERMINAL_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onFocusTerminalShortcut(listener)],
+		[APP_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onShortcut(listener)],
 	] as const)("delivers and disposes %s", (channel, subscribe) => {
 		const listener = vi.fn();
 		const dispose = subscribe(listener);
@@ -283,6 +294,26 @@ describe("preload uiSettings bridge", () => {
 });
 
 describe("preload browser profile bridge", () => {
+	it("sends revisioned bounds and forwards applied acknowledgements", () => {
+		const bridge = exposedBridge();
+		const input = {
+			viewId: "1:worker-1",
+			revision: 7,
+			rect: { x: 10, y: 20, width: 300, height: 200 },
+			visible: true,
+		};
+		bridge.browser.setBounds(input);
+		expect(electronMocks.send).toHaveBeenCalledWith("browser:setBounds", input);
+
+		const listener = vi.fn();
+		const dispose = bridge.browser.onBoundsApplied(listener);
+		const wrapped = electronMocks.listeners.get("browser:boundsApplied");
+		wrapped?.({}, input);
+		expect(listener).toHaveBeenCalledWith(input);
+		dispose();
+		expect(electronMocks.off).toHaveBeenCalledWith("browser:boundsApplied", wrapped);
+	});
+
 	it("routes profile state, native menu, and CRUD calls over IPC", async () => {
 		const bridge = exposedBridge();
 		await bridge.browser.getProfile("1:worker-1");

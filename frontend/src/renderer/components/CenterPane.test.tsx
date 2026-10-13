@@ -254,13 +254,29 @@ describe("CenterPane toolbar session label", () => {
 		expect(screen.getByRole("tab", { name: /^do the thing/ })).toBeInTheDocument();
 	});
 
+	it("does not offer rename on the project orchestrator's tab", async () => {
+		const user = userEvent.setup();
+		renderCenterPane({ session: { ...worker, id: "sess-orch", kind: "orchestrator" } });
+
+		const tab = screen.getByRole("tab", { name: /^Orchestrator/ });
+		expect(tab).not.toHaveAttribute("aria-keyshortcuts");
+		await user.dblClick(tab);
+		tab.focus();
+		await user.keyboard("{F2}");
+		fireEvent.contextMenu(tab);
+
+		expect(screen.queryByRole("textbox", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(renameSessionMock).not.toHaveBeenCalled();
+	});
+
 	it.each(["", "do the thing"])("does not persist the no-op terminal-tab rename %j", async (nextName) => {
 		const user = userEvent.setup();
 		renderCenterPane({ session: worker });
 
 		await user.dblClick(screen.getByRole("tab", { name: /^do the thing/ }));
 		const input = screen.getByRole("textbox", { name: "Rename do the thing" });
-		expect(input).toHaveAttribute("maxlength", "20");
+		expect(input).toHaveAttribute("maxlength", "100");
 		await user.clear(input);
 		if (nextName) await user.type(input, nextName);
 		await user.keyboard("{Enter}");
@@ -925,6 +941,24 @@ describe("CenterPane toolbar session label", () => {
 
 		fireEvent.click(reviewerTab);
 		expect(onSelectReviewerTerminal).toHaveBeenCalledWith({ handleId: "review-sess-1", harness: "codex" });
+	});
+
+	it("keeps the TUI tab strip and return path when a typed reviewer is selected", () => {
+		const onSelectSessionTerminal = vi.fn();
+		renderCenterPane({
+			session: worker,
+			reviewerChat: { reviewId: "review-1", harness: "codex" },
+			reviewerChatSelected: true,
+			reviewerChatContent: <div data-testid="reviewer-chat-content">reviewer chat</div>,
+			onSelectSessionTerminal,
+		});
+
+		expect(screen.getByTestId("session-workspace-topbar")).toBeInTheDocument();
+		expect(screen.getByTestId("reviewer-chat-content")).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Reviewer" })).toHaveAttribute("aria-selected", "true");
+
+		fireEvent.click(screen.getByRole("tab", { name: /^do the thing/ }));
+		expect(onSelectSessionTerminal).toHaveBeenCalledOnce();
 	});
 
 	it("leaves terminal creation out of the terminal strip", () => {

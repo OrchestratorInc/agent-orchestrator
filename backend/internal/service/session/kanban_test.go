@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -54,6 +56,17 @@ func TestSessionListDerivesKanbanColumn(t *testing.T) {
 			pr:     &domain.PRFacts{URL: "pr1", HeadSHA: "head1"},
 			runs: []domain.CurrentHeadReviewRun{
 				{PRURL: "pr1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested},
+			},
+			want: domain.KanbanValidating,
+		},
+		{
+			name:   "a failed auto review keeps a mergeable pr validating",
+			record: domain.SessionRecord{ID: "mer-1", ProjectID: "mer", AutoReviewEnabled: true},
+			pr: &domain.PRFacts{
+				URL: "pr1", HeadSHA: "head1", Mergeability: domain.MergeMergeable,
+			},
+			runs: []domain.CurrentHeadReviewRun{
+				{PRURL: "pr1", Status: domain.ReviewRunFailed},
 			},
 			want: domain.KanbanValidating,
 		},
@@ -218,6 +231,62 @@ func TestSessionKanbanExternalCommentsDriveNeedsReviewDisplayStatus(t *testing.T
 	}
 	if got.DisplayStatus != contract.DisplayCommented {
 		t.Fatalf("display status = %q, want %q", got.DisplayStatus, contract.DisplayCommented)
+	}
+}
+
+func TestSessionGetInfersArtifactOutputAndValidatingKanban(t *testing.T) {
+	artifactDir := t.TempDir()
+	writeArtifact := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(artifactDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	writeArtifact("a/index.html", "<html><body>artifact</body></html>")
+	writeArtifact("b/readme.md", "# artifact\n")
+	writeArtifact("c/output.txt", "plain text\n")
+
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID:        "mer-1",
+		ProjectID: "mer",
+		Activity:  domain.Activity{State: domain.ActivityActive},
+		Metadata:  domain.SessionMetadata{ArtifactDir: artifactDir},
+		// OutputType is the persisted column lifecycle.Manager.
+		// ReconcileSessionOutputType maintains; Get() no longer re-derives it
+		// from the live artifact scan, so it must be set here directly for
+		// Kanban placement to see it as artifact output.
+		OutputType: domain.SessionOutputArtifact,
+	}
+
+	got, err := (&Service{store: st}).Get(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OutputType != domain.SessionOutputArtifact {
+		t.Fatalf("outputType = %q, want %q", got.OutputType, domain.SessionOutputArtifact)
+	}
+	if got.KanbanColumn != domain.KanbanValidating {
+		t.Fatalf("kanban column = %q, want %q", got.KanbanColumn, domain.KanbanValidating)
+	}
+	if got.DisplayStatus != contract.DisplayWorking {
+		t.Fatalf("display status = %q, want %q", got.DisplayStatus, contract.DisplayWorking)
+	}
+	if len(got.ArtifactFiles) != 3 {
+		t.Fatalf("artifact files = %+v, want 3 inferred files", got.ArtifactFiles)
+	}
+	if got.ArtifactFiles[0].Path != "a/index.html" || got.ArtifactFiles[0].Kind != domain.SessionArtifactHTML {
+		t.Fatalf("first artifact = %+v, want html artifact", got.ArtifactFiles[0])
+	}
+	if got.ArtifactFiles[1].Path != "b/readme.md" || got.ArtifactFiles[1].Kind != domain.SessionArtifactMarkdown {
+		t.Fatalf("second artifact = %+v, want markdown artifact", got.ArtifactFiles[1])
+	}
+	if got.ArtifactFiles[2].Path != "c/output.txt" || got.ArtifactFiles[2].Kind != domain.SessionArtifactGeneric {
+		t.Fatalf("third artifact = %+v, want generic file artifact", got.ArtifactFiles[2])
 	}
 }
 

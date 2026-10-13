@@ -11,6 +11,7 @@ import {
   InspectorPullRequestCardView,
   InspectorReviewsView,
   SessionInspectorShellView,
+  SessionInspectorSummaryView,
   type InspectorReviewLabels,
 } from "./SessionInspectorView";
 import type { ExternalLinkProps } from "./external-link";
@@ -70,6 +71,28 @@ const tabs = [
 ];
 
 describe("SessionInspectorShellView", () => {
+  it("lets side chat own its scrolling and composer padding", () => {
+    render(<SessionInspectorShellView
+      activeView="sideChat" ariaLabel="Session inspector" browserPoppedOut={false}
+      sideChatView={<div data-testid="side-slot" />} tabs={tabs} onViewChange={vi.fn()}
+    />);
+    const body = screen.getByTestId("side-slot").parentElement;
+    expect(body).toHaveClass("p-0", "overflow-hidden");
+    expect(body).not.toHaveClass("p-3", "pb-4", "overflow-y-auto");
+  });
+  it("renders the artifacts view, with no tab selected, and keeps header actions out of the tab list", () => {
+    render(<SessionInspectorShellView
+      activeView="artifacts" ariaLabel="Session inspector" browserPoppedOut={false}
+      artifactsView={<div data-testid="artifacts-slot" />}
+      headerActions={<button type="button">More</button>}
+      tabs={tabs} onViewChange={vi.fn()}
+    />);
+    const body = screen.getByTestId("artifacts-slot").parentElement;
+    expect(body).toHaveClass("p-0", "overflow-hidden");
+    expect(body).not.toHaveClass("overflow-y-auto");
+    expect(screen.getAllByRole("tab").every((tab) => tab.getAttribute("aria-selected") === "false")).toBe(true);
+    expect(screen.getByRole("tablist")).not.toContainElement(screen.getByRole("button", { name: "More" }));
+  });
   it("preserves the tab semantics, responsive labels, badge, and host slots", () => {
     const onViewChange = vi.fn();
     const { rerender } = render(
@@ -167,6 +190,33 @@ describe("SessionInspectorShellView", () => {
 });
 
 describe("portable inspector presentations", () => {
+  it("places execution context before pull request details", () => {
+    render(
+      <SessionInspectorSummaryView
+        activity={<div>activity</div>}
+        activityTitle="Activity"
+        context={<div data-testid="execution-context">context</div>}
+        pullRequestCards={<div>pull request</div>}
+        pullRequestTitle="Pull request"
+      />,
+    );
+
+    const context = screen.getByTestId("execution-context");
+    const pullRequest = screen.getByText("pull request");
+    expect(Boolean(context.compareDocumentPosition(pullRequest) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
+  it("omits the PR/artifacts section entirely when no title is given", () => {
+    render(
+      <SessionInspectorSummaryView
+        activity={<div>activity</div>}
+        activityTitle="Activity"
+      />,
+    );
+
+    expect(screen.queryAllByTestId("inspector-section")).toHaveLength(1);
+  });
+
   it("renders PR facts and host-owned actions from a neutral view model", () => {
     render(
       <InspectorPullRequestCardView

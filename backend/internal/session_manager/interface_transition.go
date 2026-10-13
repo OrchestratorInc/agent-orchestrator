@@ -28,7 +28,6 @@ const (
 
 var (
 	errDrainQuiescenceUnverified = errors.New("AO could not verify that the terminal was idle after the latest input. The source interface was left untouched; retry after the terminal settles")
-	errDrainDraftPresent         = errors.New("AO found unsent text in the terminal composer. The source interface was left untouched; submit or clear the draft and retry, or choose Discard draft and switch")
 	errDrainDecisionPending      = errors.New("AO found a provider decision waiting in Terminal. The source interface was left untouched; answer it in Terminal and retry, or choose Cancel request and switch")
 )
 
@@ -48,7 +47,7 @@ type interfaceTransitionStore interface {
 	ListDeliverableSessionInterfaceTransitions(context.Context) ([]domain.SessionInterfaceTransition, error)
 	AdvanceSessionInterfaceTransition(context.Context, string, domain.SessionInterfaceTransitionPhase, domain.SessionInterfaceTransitionPhase, string, string, string, time.Time) (bool, error)
 	AcknowledgeSessionInterfaceTransitionNotice(context.Context, domain.SessionID, string, time.Time) (domain.SessionInterfaceTransition, bool, error)
-	EnqueueSessionInterfaceTransitionMessage(context.Context, string, string, string, time.Time) error
+	EnqueueSessionInterfaceTransitionMessage(context.Context, string, string, string, time.Time, ports.MessageDeliveryOptions) error
 	ListPendingSessionInterfaceTransitionMessages(context.Context, string) ([]domain.SessionInterfaceTransitionMessage, error)
 	MarkSessionInterfaceTransitionMessageDelivered(context.Context, int64, time.Time) error
 }
@@ -84,11 +83,10 @@ type InterfaceTransitionStatus struct {
 	Transition *domain.SessionInterfaceTransition
 }
 
-// InterfaceTransitionStatus reports static adapter support plus the latest
-// durable attempt. It runs the same native-conversation readiness check as
-// StartInterfaceTransition so the two never disagree: that check may stat the
-// provider transcript and read the current terminal screen, but never launches
-// a provider process. Target binary/auth checks still happen only on POST.
+// InterfaceTransitionStatus reports target availability plus the latest durable
+// attempt. It checks native-conversation readiness and preflights a Chat target
+// without launching a Chat session, so a missing driver runtime does not leave
+// the switch enabled. Launch-time auth and races can still fail after status.
 func (m *Manager) InterfaceTransitionStatus(
 	ctx context.Context,
 	id domain.SessionID,
@@ -108,20 +106,28 @@ func (m *Manager) InterfaceTransitionStatus(
 	} else if target == domain.SessionModeChat && (m.chat == nil || !m.chat.SupportsChat(rec.Harness)) {
 		status.ReasonCode = "CHAT_UNSUPPORTED"
 		status.Reason = fmt.Sprintf("%s does not support Chat UI.", rec.Harness)
-	} else if _, err := m.handoffNativeConversationID(ctx, rec); err != nil {
-		if errors.Is(err, ErrInterfaceHandoffUnsupported) {
-			status.ReasonCode = "INTERFACE_HANDOFF_UNSUPPORTED"
-		} else if errors.Is(err, ErrNativeConversationMissing) {
-			status.ReasonCode = "NATIVE_SESSION_MISSING"
-		} else {
-			// Config-load or transcript-inspection blips must not hard-error
-			// the polled status: report unverified so the client keeps
-			// polling with the control disabled. Start still fails hard.
-			status.ReasonCode = "NATIVE_SESSION_UNVERIFIED"
+	} else if target == domain.SessionModeChat {
+		if err := m.preflightInterfaceTarget(ctx, rec, domain.SessionInterfaceTransition{TargetMode: target}); err != nil {
+			status.ReasonCode = interfaceTransitionErrorCode(err)
+			status.Reason = err.Error()
 		}
-		status.Reason = err.Error()
-	} else {
-		status.Supported = true
+	}
+	if status.ReasonCode == "" {
+		if _, err := m.handoffNativeConversationID(ctx, rec); err != nil {
+			if errors.Is(err, ErrInterfaceHandoffUnsupported) {
+				status.ReasonCode = "INTERFACE_HANDOFF_UNSUPPORTED"
+			} else if errors.Is(err, ErrNativeConversationMissing) {
+				status.ReasonCode = "NATIVE_SESSION_MISSING"
+			} else {
+				// Config-load or transcript-inspection blips must not hard-error
+				// the polled status: report unverified so the client keeps
+				// polling with the control disabled. Start still fails hard.
+				status.ReasonCode = "NATIVE_SESSION_UNVERIFIED"
+			}
+			status.Reason = err.Error()
+		} else {
+			status.Supported = true
+		}
 	}
 	if store, ok := m.store.(interfaceTransitionStore); ok {
 		latest, found, err := store.GetLatestSessionInterfaceTransition(ctx, id)
@@ -435,8 +441,6 @@ func (m *Manager) runInterfaceTransition(
 		switch {
 		case errors.Is(err, errDrainQuiescenceUnverified):
 			code = "DRAIN_QUIESCENCE_UNVERIFIED"
-		case errors.Is(err, errDrainDraftPresent):
-			code = "DRAIN_DRAFT_PRESENT"
 		case errors.Is(err, errDrainDecisionPending):
 			code = "DRAIN_DECISION_PENDING"
 		}
@@ -530,6 +534,7 @@ func (m *Manager) runInterfaceTransition(
 	err = m.startTransitionTarget(ctx, rec.ID, transition.NativeConversationID == "", true, transition.HistoryPolicy)
 	if errors.Is(err, ports.ErrChatHistoryUnsettled) &&
 		!errors.Is(err, ports.ErrChatRecoveryInconclusive) &&
+		!errors.Is(err, ports.ErrChatHistoryLoadFailed) &&
 		len(ports.ChatHistoryMismatchDimensions(err)) == 0 && transition.TargetMode == domain.SessionModeChat {
 		// An ACP history reader may expose an immutable snapshot for one provider
 		// session. Its unsettled result is authoritative for that controller, but
@@ -537,6 +542,8 @@ func (m *Manager) runInterfaceTransition(
 		// starting the target once more obtains a fresh provider observation. Keep
 		// the retry inside this durable transition, after the source was stopped,
 		// so the source is not relaunched and two target controllers never overlap.
+		// A provider that rejected the load outright is not retried: a second
+		// target would spend another full settle budget on the same refusal.
 		if stopErr := m.stopTransitionTargetConclusive(ctx, transition); stopErr != nil {
 			_ = m.retainUnconfirmedTransitionTarget(transition, errors.Join(err, stopErr))
 			return
@@ -546,6 +553,8 @@ func (m *Manager) runInterfaceTransition(
 	if err != nil {
 		code := "TARGET_RESUME_FAILED"
 		switch {
+		case errors.Is(err, ports.ErrChatHistoryLoadFailed):
+			code = "TARGET_HISTORY_LOAD_FAILED"
 		case errors.Is(err, ports.ErrChatHistoryUnavailable):
 			code = "TARGET_HISTORY_UNAVAILABLE"
 		case ports.ChatHistoryMismatchOnlyUntrustedText(err):
@@ -638,9 +647,10 @@ func (m *Manager) nativeConversationID(
 // nativeConversationNotStarted is the only evidence that may turn a missing
 // provider history into an intentional fresh handoff. A missing file or a
 // reserved native id is not enough: both are also observable when persistence
-// is lagging or broken after real work. Chat requires a durable empty root
-// conversation; TUI requires an untouched initial composer. AO must have no
-// hook-derived conversation facts that contradict either proof.
+// is lagging or broken after real work. Chat requires durable emptiness — an
+// empty root conversation, or no conversation at all; TUI requires an
+// untouched initial composer. AO must have no hook-derived conversation facts
+// that contradict either proof.
 func (m *Manager) nativeConversationNotStarted(
 	ctx context.Context,
 	rec domain.SessionRecord,
@@ -687,11 +697,22 @@ func (m *Manager) nativeConversationNotStarted(
 		// Zero proves no message or activity was ever accepted; an empty visible
 		// timeline would not. Startup settings do not consume this sequence.
 		conversation, err := store.ConversationForSession(ctx, rec.ID)
-		if err != nil || conversation.SessionID != rec.ID || conversation.LatestSequence != 0 {
+		switch {
+		case errors.Is(err, domain.ErrNoConversation):
+			// The Chat lifecycle never began: no conversation row means no
+			// branches, turns, or provider history could exist for this
+			// session. A switch into Chat materializes that row only once the
+			// controller starts, so its absence is fresh, not broken. Any other
+			// read failure stays fail-closed below.
+			return true
+		case err != nil || conversation.SessionID != rec.ID || conversation.LatestSequence != 0:
 			return false
 		}
 		branch, err := store.ConversationBranch(ctx, conversation.ID, conversation.ActiveBranchID)
-		if err != nil || branch.SessionID != rec.ID || branch.ParentBranchID != "" ||
+		// A project root's session_id records the orchestrator that created it;
+		// after a rebind the owner is the conversation's current session.
+		if err != nil || branch.ParentBranchID != "" ||
+			(branch.SessionID != rec.ID && conversation.Scope != domain.ConversationScopeProject) ||
 			branch.ProviderConversationID != rec.Metadata.ProviderConversationID {
 			return false
 		}
@@ -786,7 +807,7 @@ func (m *Manager) preflightInterfaceTarget(
 		if err != nil {
 			return err
 		}
-		permissions := effectiveAgentConfig(rec.Kind, project.Config).Permissions
+		permissions := effectiveAgentConfig(rec.Harness, rec.Kind, project.Config).Permissions
 		return m.chat.PreflightChat(ctx, rec.Harness, permissions)
 	}
 	agent, ok := m.agents.Agent(rec.Harness)
@@ -797,11 +818,23 @@ func (m *Manager) preflightInterfaceTarget(
 	if err != nil {
 		return err
 	}
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, false)
 	if err != nil {
 		return err
 	}
-	config := effectiveAgentConfig(rec.Kind, project.Config)
+	config := restoredAgentConfig(rec, project.Config)
+	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+	pinRuntimePermissionEnv(env, config.Permissions)
+	m.augmentAgentRuntimeEnv(agent, env)
+	if validator, ok := agent.(ports.AgentLaunchAuthValidator); ok {
+		status, authErr := validator.ValidateLaunchAuth(ctx, rec.Metadata.WorkspacePath, env)
+		if authErr != nil {
+			m.logger.Debug("interface transition: launch authentication probe inconclusive; continuing",
+				"sessionID", rec.ID, "harness", rec.Harness, "error", authErr)
+		} else if status == ports.AgentAuthStatusUnauthorized {
+			return ports.ErrAgentAuthRequired
+		}
+	}
 	var cmd []string
 	if transition.NativeConversationID == "" {
 		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, rec.Metadata.WorkspacePath,
@@ -899,11 +932,9 @@ func (m *Manager) prepareSourceHandoff(
 
 	var detector ports.TerminalActivityDetector
 	var surfaceInspector ports.TerminalSurfaceInspector
-	var emptyComposerDetector ports.EmptyComposerDetector
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
 		detector, _ = agent.(ports.TerminalActivityDetector)
 		surfaceInspector, _ = agent.(ports.TerminalSurfaceInspector)
-		emptyComposerDetector, _ = agent.(ports.EmptyComposerDetector)
 	}
 	styledOutput, _ := m.runtime.(ports.StyledTerminalOutputReader)
 	// Surface proof is a joint capability: the adapter must understand its TUI
@@ -977,19 +1008,8 @@ func (m *Manager) prepareSourceHandoff(
 						cancelProbe()
 					}
 					return errDrainDecisionPending
-				case observation.Composer == ports.TerminalComposerDraft &&
-					current.Activity.State == domain.ActivityIdle:
-					// A positively identified draft is sufficient to preserve the
-					// source. Work markers are provider chrome heuristics and may
-					// also occur in transcript or draft text, so they cannot hide
-					// unsent input when the durable provider state is idle.
-					if cancelProbe != nil {
-						cancelProbe()
-					}
-					return errDrainDraftPresent
 				case current.Activity.State == domain.ActivityIdle &&
-					observation.Work == ports.TerminalSurfaceWorkIdle &&
-					observation.Composer == ports.TerminalComposerEmpty:
+					observation.Work == ports.TerminalSurfaceWorkIdle:
 					idleProven = true
 				case observation.Work == ports.TerminalSurfaceWorkActive:
 					surfaceKnownBusy = true
@@ -1003,12 +1023,6 @@ func (m *Manager) prepareSourceHandoff(
 				now = time.Now()
 				state, authoritative := detector.DetectTerminalActivity(output)
 				idleProven = authoritative && state == domain.ActivityIdle
-				if idleProven && emptyComposerDetector != nil {
-					// The legacy activity contract cannot carry draft state. At
-					// this destructive boundary, an adapter that can separately
-					// prove composer emptiness must do so before idle is accepted.
-					idleProven = emptyComposerDetector.ComposerIsEmpty(output)
-				}
 			}
 		}
 		if current.Activity.State != domain.ActivityIdle || surfaceKnownBusy {
@@ -1199,10 +1213,15 @@ func (m *Manager) rollbackInterfaceTransition(
 			return
 		}
 	}
+	// A fresh relaunch drops the provider id only in memory. When the epoch never
+	// committed, a Chat source still owns that id durably, so it must resume it:
+	// a fresh start would present an owner the database does not hold.
+	fresh := transition.NativeConversationID == "" &&
+		(modeChanged || transition.SourceMode != domain.SessionModeChat)
 	if err := m.startTransitionTarget(
 		ctx,
 		transition.SessionID,
-		transition.NativeConversationID == "",
+		fresh,
 		false,
 		domain.SessionInterfaceTransitionHistoryStrict,
 	); err != nil {
@@ -1327,7 +1346,7 @@ func (m *Manager) deliverTransitionMessages(
 		}
 	}
 	for _, message := range messages {
-		if err := m.send(ctx, transition.SessionID, message.Message, message.ClientMessageID); err != nil {
+		if err := m.send(ctx, transition.SessionID, message.Message, message.ClientMessageID, ports.MessageDeliveryOptions{AuthoredByUser: message.AuthoredByUser, SenderSessionID: message.SenderSessionID, InteractionAt: message.CreatedAt}); err != nil {
 			return fmt.Errorf("deliver transition %s message %d: %w", transition.ID, message.ID, err)
 		}
 		if err := store.MarkSessionInterfaceTransitionMessageDelivered(ctx, message.ID, m.clock()); err != nil {
@@ -1384,6 +1403,7 @@ func (m *Manager) queueDuringInterfaceTransition(
 	ctx context.Context,
 	id domain.SessionID,
 	message, clientMessageID string,
+	options ports.MessageDeliveryOptions,
 ) (bool, error) {
 	store, ok := m.store.(interfaceTransitionStore)
 	if !ok {
@@ -1396,8 +1416,12 @@ func (m *Manager) queueDuringInterfaceTransition(
 	if strings.TrimSpace(clientMessageID) == "" {
 		clientMessageID = "interface-transition:" + m.newLaunchID()
 	}
+	at := options.InteractionAt
+	if at.IsZero() {
+		at = m.clock()
+	}
 	if err := store.EnqueueSessionInterfaceTransitionMessage(
-		ctx, transition.ID, clientMessageID, message, m.clock(),
+		ctx, transition.ID, clientMessageID, message, at, options,
 	); err != nil {
 		return true, err
 	}
@@ -1523,7 +1547,7 @@ func (m *Manager) hasActiveInterfaceTransition(ctx context.Context, id domain.Se
 // recoverInterruptedInterfaceTransitions closes every durable handoff left
 // active by a daemon exit. A TUI -> Chat transition whose mode commit landed is
 // rolled back first: ordinary Chat restore is context-only and cannot satisfy
-// the handoff's mandatory replay barrier. Reconcile can then restore the source
+// the handoff's mandatory replay barrier. Explicit Resume can restore the source
 // TUI, and a later retry performs native replay again idempotently. A failed
 // target shutdown retains the same rollback obligation in either direction.
 func (m *Manager) recoverInterruptedInterfaceTransitions(
@@ -1677,7 +1701,7 @@ func interfaceTransitionErrorCode(err error) string {
 		return "TARGET_UNAVAILABLE"
 	case errors.Is(err, ports.ErrChatDriverIncompatible):
 		return "TARGET_INCOMPATIBLE"
-	case errors.Is(err, ports.ErrChatAuthRequired):
+	case errors.Is(err, ports.ErrChatAuthRequired), errors.Is(err, ports.ErrAgentAuthRequired):
 		return "TARGET_AUTH_REQUIRED"
 	case errors.Is(err, ErrInterfaceProviderHistoryRecoveryUnavailable):
 		return "PROVIDER_HISTORY_RECOVERY_UNAVAILABLE"

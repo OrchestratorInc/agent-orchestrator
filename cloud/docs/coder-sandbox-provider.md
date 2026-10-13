@@ -2,8 +2,10 @@
 
 AO Cloud can use a customer-operated Coder deployment as its sandbox compute
 provider. AO creates one Coder workspace per AO session, installs `ao-worker`
-through the workspace's existing `coder_agent`, and keeps the rest of the
-session lifecycle behind the same provider-neutral reconciler used by NodeOps.
+in the approved template image, launches it through the workspace's existing
+`coder_agent`, and keeps the rest of the session lifecycle behind the same
+provider-neutral reconciler used by NodeOps. Older templates remain compatible:
+AO verifies the baked binaries and falls back to the PTY upload on a hash miss.
 
 The first implementation is deployment-scoped: every AO organization on that
 control plane uses the same Coder connection and approved template. It does not
@@ -29,7 +31,7 @@ AO calls these Coder API surfaces:
 | Recover by AO session | `GET /api/v2/users/{owner}/workspace/{name}` |
 | Start, stop, delete | `POST /api/v2/workspaces/{id}/builds` |
 | Extend an active workspace deadline | `PUT /api/v2/workspaces/{id}/extend` |
-| Install or repair worker | `GET /api/v2/workspaceagents/{agent}/pty` (WebSocket) |
+| Launch or repair worker | `GET /api/v2/workspaceagents/{agent}/pty` (WebSocket) |
 
 For a quick Community Edition pilot, an API token with `coder:all` is bounded by
 the permissions of this ordinary user and is the simplest setup. On Coder
@@ -73,6 +75,34 @@ path, must exist as a non-symlink mount point, and must survive Coder `stop` the
 `start`. The template must include the `mountpoint` utility so bootstrap can
 verify the contract before writing state.
 
+A bring-your-own (organization) Coder connection relaxes this contract, because
+customer templates commonly keep home on the root filesystem and run as a user
+other than `coder`:
+
+- The durable root defaults to `$HOME` (also accepted as `~`), resolved inside
+  the workspace to the agent user's home directory at bootstrap. An explicit
+  absolute path is still accepted.
+- The root need not be a mount point; it is created (owned by the workspace
+  user) if missing, and the session identity marker alone refuses another
+  session's state. Set `requireMountedDurableRoot: true` on the connection to
+  keep the strict check. A symbolic link is always refused.
+- `startupTimeoutSeconds` on the connection (default 1200, 60-7200) is that
+  session's ready wait and startup ceiling, replacing the deployment
+  `AO_CLOUD_SANDBOX_STARTUP_TIMEOUT` and the 10-minute ceiling.
+- On a startup failure AO marks the session failed and records a user-facing
+  `startupError`, but never stops or deletes the customer's workspace; only a
+  user-initiated session delete removes the workspace AO created.
+
+AO bootstraps only once the agent is `connected` and its `lifecycle_state` is
+`ready`, `start_error`, or `start_timeout`: `created` and `starting` mean the
+template's startup script is still preparing the workspace. (Coder's
+`start_blocks_login` is enforced by clients, not the agent, so AO waits on the
+lifecycle itself.) A workspace terminal that closes before the bootstrap
+begins is retried with backoff, is not counted as a repair attempt, and is
+logged with the agent's status and lifecycle at each attempt. The worker build follows the agent's declared architecture (the
+`coder_agent` `arch`), verified with `uname -m` before anything is installed;
+`amd64` and `arm64` workspaces are supported.
+
 AO derives every stateful path beneath that root:
 
 | State | Path relative to the durable root |
@@ -98,17 +128,38 @@ A first bootstrap writes a session identity marker; a bootstrap after
 stop/start must find the same marker or it fails instead of silently launching
 a fresh agent against an empty filesystem.
 
+For normal startup latency, bake `/usr/local/bin/ao-worker` and
+`/usr/local/bin/ao` from the exact control-plane image into the approved
+workspace image. The reference Dockerfile and Terraform template live under
+`cloud/coder/`. At launch AO compares SHA-256 hashes for both executables with
+the binaries embedded in its own release. A match transfers only the small,
+one-time launch environment; a missing or stale binary uses the full PTY upload
+so template and control-plane rollouts do not have to be perfectly atomic.
+
 Because the worker runs as a separate OS user, bootstrap preserves the durable
-root's existing mode bits while adding traversal-only (`o+x`) access to that
-mount point. It does not make the root listable or readable. Only the derived
-`repository` and `.ao` subdirectories are assigned to `ao-worker`.
+root's existing owner and mode bits while adding others traversal-only (`o+x`)
+access to that mount point, so the root stays non-readable and non-listable to
+other users. Only the derived `repository` and `.ao` subdirectories are assigned
+to `ao-worker`.
+
+The dev-kit multi-repo feature clones each extra repository as a sibling of the
+primary checkout, directly under the durable root, so the worker's group is also
+granted write+traverse (`g+wx`, deliberately not read) on the root entry itself.
+This is applied non-recursively and without transferring ownership, so the root
+owner keeps full access and existing entries keep their modes; it lets the
+worker create and enter `<root>/<name>` without being able to list the root.
+Because directory write governs unlink/rename, the worker can also remove or
+rename the root's top-level entries (there is no sticky bit); when the root is a
+dedicated AO volume this is inert, and when it is a shared home only that user's
+own tooling shares the space. Confining extra clones to a worker-owned sub-root
+would remove even that and is a possible future hardening.
 
 The normal workspace user must have passwordless `sudo` for the pilot
 bootstrap. AO uses it to:
 
 - create the unprivileged `ao-worker` OS user;
-- install the release-pinned `ao-worker` and AO helper binaries under
-  `/usr/local/bin`;
+- install the release-pinned binaries only when the template hash does not
+  match the active control-plane release;
 - create and assign only the derived repository and `.ao` directories to the
   worker user; and
 - launch the worker, which then dials the AO service plane and sends its own
@@ -120,9 +171,10 @@ Code or Codex). Those tools are baked into AO's NodeOps image today; the Coder
 provider deliberately does not mutate a customer's template by installing
 third-party harnesses at session startup.
 
-No worker credential is placed in the PTY URL or command. AO streams a private
-archive over terminal input, writes the launch environment with mode `0600`,
-and deletes that environment file when the worker starts.
+No worker credential is placed in the PTY URL or command. Even on the baked
+fast path, AO streams the private launch environment over terminal input,
+writes it with mode `0600`, and deletes that environment file when the worker
+starts.
 
 For a production rollout, prefer baking the OS user and directories into the
 template or a narrowly scoped install helper over unrestricted passwordless

@@ -41,6 +41,11 @@ export type UpdateOutcome = {
 	trigger: UpdateTrigger;
 	error_category?: UpdateFailureCategory;
 	to_version?: string;
+	differential_eligible?: boolean;
+	transfer_mode?: "differential" | "full";
+	fallback?: boolean;
+	transferred_bytes?: number;
+	target_bytes?: number;
 };
 
 /**
@@ -95,6 +100,15 @@ export function updateFailureOutcome(
 /** Longest release-note text worth pushing to the renderer. */
 export const RELEASE_NOTES_MAX_CHARS = 4000;
 
+/** Trims and bounds release notes that have already been converted to plain text. */
+export function boundPlainReleaseNotes(notes: string | null | undefined): string | undefined {
+	const text = (notes ?? "").trim();
+	if (text === "") return undefined;
+	return text.length > RELEASE_NOTES_MAX_CHARS
+		? `${text.slice(0, RELEASE_NOTES_MAX_CHARS).trimEnd()}…`
+		: text;
+}
+
 /**
  * Flattens electron-updater's release notes into plain text.
  *
@@ -130,8 +144,5 @@ export function normalizeReleaseNotes(
 		.map((line) => line.trim())
 		.join("\n")
 		.trim();
-	if (text === "") return undefined;
-	return text.length > RELEASE_NOTES_MAX_CHARS
-		? `${text.slice(0, RELEASE_NOTES_MAX_CHARS).trimEnd()}…`
-		: text;
+	return boundPlainReleaseNotes(text);
 }

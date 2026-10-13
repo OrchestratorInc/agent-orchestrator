@@ -49,7 +49,6 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 	const updateSettings =
 		opts.updateSettings ??
 		({ enabled: false, channel: "latest", nightlyAck: false, feature: null } satisfies UpdateSettings);
-
 	await page.addInitScript(
 		({ version, daemonState, daemonPort, updateStatus, updateSettings }) => {
 			const unsubscribe = () => () => undefined;
@@ -100,7 +99,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onNextSessionShortcut: unsubscribe,
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
-					onFocusTerminalShortcut: unsubscribe,
+					onShortcut: unsubscribe,
 				},
 				terminal: {
 					saveDroppedFile: async () => "",
@@ -108,6 +107,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onFontSizeShortcut: () => () => undefined,
 				},
 				window: {
+					getZoomFactor: async () => 1,
+					onZoomFactor: () => () => undefined,
 					isMaximized: async () => false,
 					onMaximized: () => () => undefined,
 					isFullScreen: async () => false,
@@ -116,6 +117,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				theme: {
 					set: async () => undefined,
 					persistTerminal: async () => undefined,
+					setWindowBackground: async () => undefined,
+					setWindowTranslucent: async () => undefined,
 				},
 				menu: { action: async () => undefined, notifyShellFocus: () => undefined },
 				clipboard: {
@@ -132,7 +135,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						return unsubscribe();
 					},
 				},
+				sideChats: { capture: async () => undefined },
 				editorHandoff: {
+					copyWorkspacePath: async () => undefined,
 					getState: async () => ({
 						targets: [
 							{ id: "cursor" as const, name: "Cursor", kind: "editor" as const },
@@ -154,9 +159,12 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					signalAgentSwitchVisibility: () => false,
 				},
 				browser: {
+					reconnectRuntime: async () => undefined,
+					getRuntimeState: async () => ({ connected: false }),
 					nativeCompositionEnabled: true,
 					ensure: async (sessionId: string) => navState(`preview:${sessionId}`),
 					setBounds: () => undefined,
+					onBoundsApplied: () => () => undefined,
 					setOverlayOpen: () => undefined,
 					navigate: async ({ viewId }: { viewId: string }) => navState(viewId),
 					historySuggestions: async () => [],
@@ -166,6 +174,30 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					goForward: async (viewId: string) => navState(viewId),
 					reload: async (viewId: string) => navState(viewId),
 					stop: async (viewId: string) => navState(viewId),
+					getFindState: async (viewId: string) => ({
+						viewId,
+						tabId: "t1",
+						query: "",
+						activeMatchOrdinal: 0,
+						matches: 0,
+						finalUpdate: true,
+					}),
+					findInPage: async ({ viewId, query }: { viewId: string; query: string }) => ({
+						viewId,
+						tabId: "t1",
+						query,
+						activeMatchOrdinal: 0,
+						matches: 0,
+						finalUpdate: true,
+					}),
+					stopFindInPage: async ({ viewId }: { viewId: string }) => ({
+						viewId,
+						tabId: "t1",
+						query: "",
+						activeMatchOrdinal: 0,
+						matches: 0,
+						finalUpdate: true,
+					}),
 					getTabs: async (viewId: string) => ({
 						viewId,
 						activeTabId: "t1",
@@ -199,7 +231,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					notifyPanelUsed: () => undefined,
 					notifyPanelBlur: () => undefined,
 					onFocusLocation: unsubscribe,
+					onFindOpen: unsubscribe,
 					onReopenClosedTab: unsubscribe,
+					onClosePanel: unsubscribe,
 					devtools: async (input: { viewId: string }) => ({ viewId: input.viewId, open: false, activeTabId: "" }),
 					destroy: () => undefined,
 					// Annotation contract (mirrors src/preload.ts): useBrowserView subscribes
@@ -213,8 +247,10 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onAnnotationCancel: unsubscribe,
 					onAnnotationState: unsubscribe,
 					onNavState: unsubscribe,
+					onFindState: unsubscribe,
 					onTabsState: unsubscribe,
 					onAgentActivity: unsubscribe,
+					onRuntimeState: unsubscribe,
 					onDevToolsState: unsubscribe,
 					onProfileState: unsubscribe,
 					onProfileManage: unsubscribe,
@@ -241,6 +277,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					setBadge: async (_count: number) => undefined,
 					devBounce: async () => undefined,
 					onClick: unsubscribe,
+					onPlaySound: unsubscribe,
+					reportSoundFailure: () => undefined,
 				},
 				tray: {
 					setAttentionState: () => undefined,
@@ -254,6 +292,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					get: async () => currentUpdateSettings,
 					set: async (next: UpdateSettings) => {
 						currentUpdateSettings = next;
+					},
+					setMacDifferentialUpdates: async (enabled: boolean) => {
+						currentUpdateSettings = { ...currentUpdateSettings, macDifferentialUpdates: enabled };
 					},
 				},
 				uiSettings: {
@@ -287,10 +328,27 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					list: async () => [],
 					getActive: async () => null,
 				},
+				remotes: {
+					list: async () => [],
+					importAccountHost: async () => undefined,
+					pruneAccountHosts: async () => undefined,
+					issueAccountToken: async () => "",
+					add: async () => "offline" as const,
+					update: async () => "offline" as const,
+					remove: async () => undefined,
+					connect: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
+					disconnect: async () => undefined,
+					previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
+					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
+				},
 				cloud: {
 					getSession: async () => null,
 					signIn: async () => undefined,
 					signOut: async () => undefined,
+					cancelProviderAuth: async () => undefined,
+					connectProviderAuth: async () => undefined,
 					localAuthAvailable: async () => false,
 					localRegister: async () => {
 						throw new Error("local auth is unavailable in e2e");
@@ -660,7 +718,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onNextSessionShortcut: unsubscribe,
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
-					onFocusTerminalShortcut: unsubscribe,
+					onShortcut: unsubscribe,
 				},
 				terminal: {
 					saveDroppedFile: async () => "",
@@ -668,6 +726,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onFontSizeShortcut: () => () => undefined,
 				},
 				window: {
+					getZoomFactor: async () => 1,
+					onZoomFactor: () => () => undefined,
 					isMaximized: async () => false,
 					onMaximized: () => () => undefined,
 					isFullScreen: async () => false,
@@ -676,6 +736,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				theme: {
 					set: async () => undefined,
 					persistTerminal: async () => undefined,
+					setWindowBackground: async () => undefined,
+					setWindowTranslucent: async () => undefined,
 				},
 				menu: { action: async () => undefined, notifyShellFocus: () => undefined },
 				clipboard: { writeText: async () => undefined, readText: async () => "" },
@@ -689,7 +751,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						return unsubscribe();
 					},
 				},
+				sideChats: { capture: async () => undefined },
 				editorHandoff: {
+					copyWorkspacePath: async () => undefined,
 					getState: async () => ({
 						targets: [
 							{ id: "cursor" as const, name: "Cursor", kind: "editor" as const },
@@ -711,9 +775,12 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					signalAgentSwitchVisibility: () => false,
 				},
 				browser: {
+					reconnectRuntime: async () => undefined,
+					getRuntimeState: async () => ({ connected: false }),
 					nativeCompositionEnabled: true,
 					ensure: async (sessionId: string) => navState(`preview:${sessionId}`),
 					setBounds: () => undefined,
+					onBoundsApplied: () => () => undefined,
 					setOverlayOpen: () => undefined,
 					navigate: async ({ viewId, url }: { viewId: string; url: string }) =>
 						state.browserError ? navState(viewId, "", state.browserError) : navState(viewId, url),
@@ -724,6 +791,30 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					goForward: async (viewId: string) => navState(viewId),
 					reload: async (viewId: string) => navState(viewId),
 					stop: async (viewId: string) => navState(viewId),
+					getFindState: async (viewId: string) => ({
+						viewId,
+						tabId: "t1",
+						query: "",
+						activeMatchOrdinal: 0,
+						matches: 0,
+						finalUpdate: true,
+					}),
+					findInPage: async ({ viewId, query }: { viewId: string; query: string }) => ({
+						viewId,
+						tabId: "t1",
+						query,
+						activeMatchOrdinal: 0,
+						matches: 0,
+						finalUpdate: true,
+					}),
+					stopFindInPage: async ({ viewId }: { viewId: string }) => ({
+						viewId,
+						tabId: "t1",
+						query: "",
+						activeMatchOrdinal: 0,
+						matches: 0,
+						finalUpdate: true,
+					}),
 					getTabs: async (viewId: string) => ({
 						viewId,
 						activeTabId: "t1",
@@ -757,7 +848,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					notifyPanelUsed: () => undefined,
 					notifyPanelBlur: () => undefined,
 					onFocusLocation: unsubscribe,
+					onFindOpen: unsubscribe,
 					onReopenClosedTab: unsubscribe,
+					onClosePanel: unsubscribe,
 					devtools: async (input: { viewId: string }) => ({ viewId: input.viewId, open: false, activeTabId: "" }),
 					destroy: () => undefined,
 					// Annotation contract (mirrors src/preload.ts): useBrowserView subscribes
@@ -771,8 +864,10 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onAnnotationCancel: unsubscribe,
 					onAnnotationState: unsubscribe,
 					onNavState: unsubscribe,
+					onFindState: unsubscribe,
 					onTabsState: unsubscribe,
 					onAgentActivity: unsubscribe,
+					onRuntimeState: unsubscribe,
 					onDevToolsState: unsubscribe,
 					onProfileState: unsubscribe,
 					onProfileManage: unsubscribe,
@@ -799,12 +894,21 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					setBadge: async (_count: number) => undefined,
 					devBounce: async () => undefined,
 					onClick: unsubscribe,
+					onPlaySound: unsubscribe,
+					reportSoundFailure: () => undefined,
 				},
 				tray: { setAttentionState: () => undefined, onOpenSession: unsubscribe },
 				appState: { getMigration: async () => ({ status: "completed" }), setMigration: async () => undefined },
 				updateSettings: {
-					get: async () => ({ enabled: false, channel: "latest", nightlyAck: false, feature: null }),
+					get: async () => ({
+						enabled: false,
+						channel: "latest",
+						nightlyAck: false,
+						feature: null,
+						macDifferentialUpdates: false,
+					}),
 					set: async () => undefined,
+					setMacDifferentialUpdates: async () => undefined,
 				},
 				uiSettings: {
 					get: async () => ({ ...DEFAULT_UI_SETTINGS }),
@@ -832,10 +936,27 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					list: async () => [],
 					getActive: async () => null,
 				},
+				remotes: {
+					list: async () => [],
+					importAccountHost: async () => undefined,
+					pruneAccountHosts: async () => undefined,
+					issueAccountToken: async () => "",
+					add: async () => "offline" as const,
+					update: async () => "offline" as const,
+					remove: async () => undefined,
+					connect: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
+					disconnect: async () => undefined,
+					previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
+					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
+				},
 				cloud: {
 					getSession: async () => null,
 					signIn: async () => undefined,
 					signOut: async () => undefined,
+					cancelProviderAuth: async () => undefined,
+					connectProviderAuth: async () => undefined,
 					localAuthAvailable: async () => false,
 					localRegister: async () => {
 						throw new Error("local auth is unavailable in e2e");

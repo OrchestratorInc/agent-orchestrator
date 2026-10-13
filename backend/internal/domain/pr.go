@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
@@ -24,6 +25,12 @@ type PRFacts struct {
 	TargetBranch   string
 	HeadSHA        string
 	UpdatedAt      time.Time
+	// StateChangedAt, CIChangedAt and LastReviewAt are when the lifecycle
+	// state, the CI result and the newest review last changed. Unlike
+	// UpdatedAt, none of them advance on an unchanged poll; zero is unknown.
+	StateChangedAt time.Time
+	CIChangedAt    time.Time
+	LastReviewAt   time.Time
 	// ExternalApproved and ExternalChangesRequested are the human review
 	// verdicts AO did not author. Review above aggregates AO's own provider
 	// reviews with everyone else's, so it cannot say whose turn the
@@ -123,6 +130,17 @@ type PullRequestComment struct {
 	IsBot            bool
 	CreatedAt        time.Time
 	AutoInjectReview bool
+}
+
+// IsActionableReviewComment reports whether a review comment should block
+// ready-to-merge state and be surfaced to the agent. Human comments are always
+// actionable; bot comments need a concrete file and line anchor so status
+// chatter does not become a merge blocker.
+func IsActionableReviewComment(resolved, isBot bool, file string, line int) bool {
+	if resolved {
+		return false
+	}
+	return !isBot || (strings.TrimSpace(file) != "" && line > 0)
 }
 
 // PullRequestReviewThread is one normalized review thread for a pull request.
@@ -247,7 +265,7 @@ func (r MergeReadiness) ReadyToMerge() bool {
 
 // MergeReadinessOf projects stored PR facts into the shared readiness rule.
 // hasUnresolvedComments comes from the pr_comment rows AO keeps for the PR,
-// which only ever hold unresolved human threads.
+// filtered to actionable unresolved comments.
 func MergeReadinessOf(pr PullRequest, hasUnresolvedComments bool) MergeReadiness {
 	return MergeReadiness{
 		Draft:              pr.Draft,

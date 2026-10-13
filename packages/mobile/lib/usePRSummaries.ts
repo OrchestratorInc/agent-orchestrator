@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getSessionPR, type SessionPRSummary } from "./api";
-import { useApp } from "./store";
+import { machineIdentity, type ServerConfig } from "./config";
 
 // Lazy, cached loader for the rich PR view.
 //
@@ -11,8 +11,8 @@ import { useApp } from "./store";
 // So it is fetched here rather than in the store: the store polls every 8s, and
 // re-fetching N PR summaries on every tick would be a real battery and latency
 // cost over Tailscale for data that changes on the order of minutes. Instead
-// each session is fetched once, cached for the life of the screen, and only
-// re-fetched when the user pulls to refresh.
+// each session is fetched once per visit, with a short in-memory reuse window
+// across tab navigation. Pull-to-refresh always bypasses that reuse window.
 //
 // The cache lives in a ref, not state: the effect below reads "what do we
 // already have" while it runs, and a state value there would be a stale closure
@@ -22,16 +22,52 @@ import { useApp } from "./store";
 // Enough parallelism to load a screenful quickly without opening thirty sockets
 // at once on a phone.
 const BATCH = 6;
+export const PR_SUMMARY_REUSE_MS = 60_000;
+const MAX_NAVIGATION_ENTRIES = 256;
+const navigationCache = new Map<string, { password: string; expiresAt: number; summaries: SessionPRSummary[] }>();
+
+function navigationSummary(config: ServerConfig, sessionId: string): SessionPRSummary[] | undefined {
+	const id = prSummaryCacheKey(config, sessionId);
+	const entry = navigationCache.get(id);
+	if (!entry) return undefined;
+	if (entry.expiresAt <= Date.now() || entry.password !== config.password) {
+		navigationCache.delete(id);
+		return undefined;
+	}
+	return entry.summaries;
+}
+
+function retainNavigationSummary(config: ServerConfig, sessionId: string, summaries: SessionPRSummary[]) {
+	const now = Date.now();
+	for (const [id, entry] of navigationCache) {
+		if (entry.expiresAt <= now) navigationCache.delete(id);
+	}
+	const id = prSummaryCacheKey(config, sessionId);
+	navigationCache.delete(id);
+	navigationCache.set(id, { password: config.password, expiresAt: now + PR_SUMMARY_REUSE_MS, summaries });
+	if (navigationCache.size > MAX_NAVIGATION_ENTRIES) navigationCache.delete(navigationCache.keys().next().value!);
+}
 
 export type PRSummaryLookup = {
 	/** The rich summary for one PR, or undefined until it has loaded. */
-	summaryFor(sessionId: string, number: number): SessionPRSummary | undefined;
+	summaryFor(config: ServerConfig, sessionId: string, number: number): SessionPRSummary | undefined;
 	/** Re-fetch everything — wired to pull-to-refresh. */
 	reload(): void;
 };
 
-export function usePRSummaries(sessionIds: string[]): PRSummaryLookup {
-	const { config } = useApp();
+export type PRSummarySession = { config: ServerConfig; sessionId: string };
+
+export function prSummaryCacheKey(config: ServerConfig, sessionId: string): string {
+	return JSON.stringify([machineIdentity(config), sessionId]);
+}
+
+// Memory-only: never publish this key or persist it. A new credential must not
+// read a previous pairing's details even when the machine/session IDs match.
+function authorizedCacheKey(config: ServerConfig, sessionId: string): string {
+	return JSON.stringify([prSummaryCacheKey(config, sessionId), config.password]);
+}
+
+export function usePRSummaries(sessions: PRSummarySession[]): PRSummaryLookup {
 	const cache = useRef<Record<string, SessionPRSummary[]>>({});
 	const inFlight = useRef<Set<string>>(new Set());
 	const [, bump] = useState(0);
@@ -41,20 +77,28 @@ export function usePRSummaries(sessionIds: string[]): PRSummaryLookup {
 	const [generation, setGeneration] = useState(0);
 	const fetchedGeneration = useRef(-1);
 
-	// Keyed on the ids, not the array: a tick that changes any session field
-	// yields a new array even when the id set is unchanged.
-	const key = sessionIds.join(",");
+	// A board tick may rebuild the array with the same sessions and endpoints.
+	const key = JSON.stringify(sessions.map(({ config, sessionId }) => [
+		prSummaryCacheKey(config, sessionId), config.host, config.httpPort, config.secure, config.password,
+	]));
 
 	useEffect(() => {
-		if (!config) return;
 		// A reload re-fetches everything; otherwise only what was never loaded.
-		const force = fetchedGeneration.current !== generation;
+		const force = generation > 0 && fetchedGeneration.current !== generation;
 		fetchedGeneration.current = generation;
-		const targets = sessionIds.filter(
-			(id) => id && !inFlight.current.has(id) && (force || cache.current[id] === undefined),
-		);
+		const seen = new Set<string>();
+		const targets = sessions.filter(({ config, sessionId }) => {
+			const id = authorizedCacheKey(config, sessionId);
+			if (!sessionId || seen.has(id)) return false;
+			seen.add(id);
+			if (!force && cache.current[id] === undefined) {
+				const retained = navigationSummary(config, sessionId);
+				if (retained) cache.current[id] = retained;
+			}
+			return !inFlight.current.has(id) && (force || cache.current[id] === undefined);
+		});
 		if (targets.length === 0) return;
-		for (const id of targets) inFlight.current.add(id);
+		for (const { config, sessionId } of targets) inFlight.current.add(authorizedCacheKey(config, sessionId));
 
 		let cancelled = false;
 		void (async () => {
@@ -62,9 +106,10 @@ export function usePRSummaries(sessionIds: string[]): PRSummaryLookup {
 				if (cancelled) return;
 				const chunk = targets.slice(i, i + BATCH);
 				const results = await Promise.all(
-					chunk.map(async (id) => {
+					chunk.map(async ({ config, sessionId }) => {
+						const id = authorizedCacheKey(config, sessionId);
 						try {
-							return [id, await getSessionPR(config, id)] as const;
+							return [id, await getSessionPR(config, sessionId)] as const;
 						} catch {
 							// null means "this attempt failed", which is not the same as
 							// "this session has no PRs" — see below.
@@ -73,8 +118,12 @@ export function usePRSummaries(sessionIds: string[]): PRSummaryLookup {
 					}),
 				);
 				if (cancelled) return;
-				for (const [id, prs] of results) {
-					if (prs) cache.current[id] = prs;
+				for (const [index, [id, prs]] of results.entries()) {
+					if (prs) {
+						cache.current[id] = prs;
+						const { config, sessionId } = chunk[index];
+						retainNavigationSummary(config, sessionId, prs);
+					}
 					// A failed refresh keeps whatever was already on screen. Blanking the
 					// cards back to their thin fallback because one request timed out is
 					// worse than showing detail that is a few seconds stale.
@@ -89,17 +138,18 @@ export function usePRSummaries(sessionIds: string[]): PRSummaryLookup {
 			cancelled = true;
 			// Release anything this run claimed but never resolved, or a re-run
 			// would skip those sessions forever.
-			for (const id of targets) inFlight.current.delete(id);
+			for (const { config, sessionId } of targets) inFlight.current.delete(authorizedCacheKey(config, sessionId));
 		};
-		// `sessionIds` is covered by `key`; the cache is a ref by design.
-	}, [key, config, generation]);
+		// `sessions` is covered by `key`; the cache is a ref by design.
+	}, [key, generation]);
 
 	const reload = useCallback(() => setGeneration((g) => g + 1), []);
 
 	// Reads the ref, so it stays correct without being re-created; the bump above
 	// is what re-renders the list to pick up new entries.
 	const summaryFor = useCallback(
-		(sessionId: string, number: number) => cache.current[sessionId]?.find((p) => p.number === number),
+		(config: ServerConfig, sessionId: string, number: number) =>
+			(cache.current[authorizedCacheKey(config, sessionId)] ?? navigationSummary(config, sessionId))?.find((p) => p.number === number),
 		[],
 	);
 
