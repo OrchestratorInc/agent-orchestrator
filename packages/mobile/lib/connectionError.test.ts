@@ -35,7 +35,7 @@ describe("classifyConnectionFailure", () => {
 	});
 	it("names an incompatible host and stops polling it", () => {
 		expect(classifyConnectionFailure(426)).toBe("incompatible-host");
-		expect(describeConnectionFailure("incompatible-host", target()).message).toContain("Update AO");
+		expect(describeConnectionFailure("incompatible-host", target()).message).toContain("Update Orchestrator");
 		expect(shouldKeepPolling(426)).toBe(false);
 	});
 
@@ -147,12 +147,12 @@ describe("describeConnectionFailure", () => {
 
 	it("points at the machine logs on a server error", () => {
 		const d = describeConnectionFailure("server-error", target());
-		expect(d.message).toContain("AO logs");
+		expect(d.message).toContain("Orchestrator logs");
 	});
 
 	it("rejects a non-AO QR code without mentioning the network", () => {
 		const d = describeConnectionFailure("not-ao-qr", target());
-		expect(d.message).toContain("isn't an AO pairing code");
+		expect(d.message).toContain("isn't an Orchestrator pairing code");
 		expect(d.showLocalNetworkHint).toBe(false);
 	});
 

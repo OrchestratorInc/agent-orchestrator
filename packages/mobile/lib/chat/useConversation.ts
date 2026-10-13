@@ -16,6 +16,7 @@ import {
 	resolveReviewerInput,
 	rollbackConversation,
 	sendConversationMessage,
+	requireConversationExcerptSupport,
 	sendReviewerConversationMessage,
 	setConversationConfigOption,
 	setConversationSettings,
@@ -346,6 +347,9 @@ export function useMobileConversation(
 			let nativeAttachments = attachments;
 			if (attachments?.length) {
 				if (options?.reviewId && !sessionId.trim()) throw new Error("Attachments are unavailable until the worker session is linked.");
+				if (excerpts?.length && !options?.reviewId) {
+					await requireConfig(cfg, (c) => requireConversationExcerptSupport(c, sessionId));
+				}
 				const paths = await requireConfig(cfg, (c) => stageConversationAttachments(c, sessionId, attachments));
 				message = withAttachmentReferences(message, paths);
 				if (!snapshot?.capabilities?.includes("images")) nativeAttachments = undefined;
@@ -360,7 +364,7 @@ export function useMobileConversation(
 			});
 			return saved.id;
 		},
-		[cfg, sessionId, snapshot?.capabilities, deliver, pendingKey],
+		[cfg, options?.reviewId, sessionId, snapshot?.capabilities, deliver, pendingKey],
 	);
 
 	const retrySend = useCallback(

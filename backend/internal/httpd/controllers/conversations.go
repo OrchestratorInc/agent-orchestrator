@@ -790,7 +790,11 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 		writeConversationError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, conversationSnapshotResponse(snapshot))
+	response := conversationSnapshotResponse(snapshot)
+	// Excerpt verification is owned by AO, independently of provider capabilities.
+	// Older daemons ignore this request field, so clients must negotiate support.
+	response.SupportsExcerpts = true
+	envelope.WriteJSON(w, http.StatusOK, response)
 }
 
 func optionalPositiveInt64(raw string) (int64, error) {

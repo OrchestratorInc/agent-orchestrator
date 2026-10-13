@@ -349,6 +349,10 @@ export function ChatComposer({
 		setSubmitting(true);
 		if (draftTimer.current) clearTimeout(draftTimer.current);
 		try {
+			// Submission cancels the debounce; persist before a preflight can reject.
+			if (draftKey) {
+				await afterDraftWrites(draftKey, () => AsyncStorage.setItem(draftKey, encodeResponseDraft(text, quotes)));
+			}
 			const excerpts = responseExcerpts(quotes);
 			const images = attachments.filter((item): item is Extract<Attachment, { kind: "image" }> => item.kind === "image").map((item) => item.image);
 			const resources = attachments.filter((item): item is Extract<Attachment, { kind: "resource" }> => item.kind === "resource").map((item) => item.resource);

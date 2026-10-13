@@ -21,7 +21,7 @@ describe("bug report", () => {
 
 	it("carries the environment a triager would otherwise have to ask for", () => {
 		const summary = bugReportSummary({ build, platform: "ios", osVersion: "26.6", deviceModel: "iPhone 13", paired: true, connection: "closed" });
-		expect(summary).toContain("AO mobile: 1.3.1 (42)");
+		expect(summary).toContain("Orchestrator mobile: 1.3.1 (42)");
 		expect(summary).toContain("Update: abcdef12 on production (runtime fingerpr)");
 		expect(summary).toContain("Platform: ios 26.6");
 		expect(summary).toContain("Device: iPhone 13");
@@ -46,7 +46,7 @@ describe("bug report", () => {
 	it("copies the title and the details together", () => {
 		const text = bugReportClipboard({ build, platform: "ios", osVersion: "26.6", deviceModel: "iPhone 13", paired: true, connection: "open" });
 		expect(text.startsWith("[Bug]: iOS —\n")).toBe(true);
-		expect(text).toContain("AO mobile: 1.3.1 (42)");
+		expect(text).toContain("Orchestrator mobile: 1.3.1 (42)");
 		expect(text).toContain("Device: iPhone 13");
 		expect(text).toContain("Daemon: connected");
 		expect(text).toContain(BUG_REPORT_MARKER);

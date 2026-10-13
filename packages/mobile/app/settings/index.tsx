@@ -172,7 +172,7 @@ export default function SettingsScreen() {
 
 				<SettingsSection title="Account" footer="Paired machines sync across signed-in devices.">
 					<SettingsCard>
-						<CardRow icon="user" label={account ? "AO Cloud" : "Sign in to AO Cloud"} value={account?.email} loading={accountLoading || accountBusy} onPress={account ? undefined : () => {
+						<CardRow icon="user" label={account ? "Orchestrator Cloud" : "Sign in to Orchestrator Cloud"} value={account?.email} loading={accountLoading || accountBusy} onPress={account ? undefined : () => {
 							setAccountBusy(true);
 							void signInToAccount().then(async (value) => {
 								if (!value) return;
@@ -464,7 +464,7 @@ function NotificationsRow() {
 
 	async function onToggle(next: boolean) {
 		if (toggle.blocked) {
-			Alert.alert("Notifications are blocked", "Allow notifications for AO in your system settings, then come back.", [
+			Alert.alert("Notifications are blocked", "Allow notifications for Orchestrator in your system settings, then come back.", [
 				{ text: "Not now", style: "cancel" },
 				{ text: "Open settings", onPress: openNotificationSettings },
 			]);
@@ -590,7 +590,7 @@ function SoftwareUpdateRow() {
 			/>
 			{storePrompt ? (
 				<InlinePanel
-					title="A newer AO is ready"
+					title="A newer version of Orchestrator is ready"
 					copy={describePrompt({ version: storePrompt.version, storeConfirmed: storePrompt.storeConfirmed, storeName: Platform.OS === "ios" ? "App Store" : "Play Store" })}
 					primary={`Open ${Platform.OS === "ios" ? "App Store" : "Play Store"}`}
 					secondary="Not now"
@@ -669,7 +669,7 @@ function FeatureRequestRow() {
 
 function VersionFooter() {
 	const styles = useThemedStyles(makeStyles);
-	return <Text style={styles.versionFooter}>AO {formatVersionLine(buildInfo())}</Text>;
+	return <Text style={styles.versionFooter}>Orchestrator {formatVersionLine(buildInfo())}</Text>;
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({

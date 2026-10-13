@@ -23,7 +23,6 @@ import { providerConnectionsQueryKey, useProviderConnections } from "../../hooks
 import { GitHubTokenField } from "../onboarding/GitHubTokenField";
 import { groupModelProviders } from "../../lib/model-providers";
 import { useSettings } from "../../hooks/useSettings";
-import { HarnessModelDefaults } from "./HarnessModelDefaults";
 import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPanel";
 import { SettingsRow } from "./SettingsRow";
 import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
@@ -1321,7 +1320,7 @@ function HarnessStateText({ tone, children }: { tone: HarnessTone; children: Rea
 
 const MODELS_PAGE_SIZE = 10;
 
-/** The harness catalog and machine defaults for future sessions. */
+/** The harness catalog, browsed by provider. */
 function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAccount }: {
 	agentId: AgentId;
 	hostId?: string;
@@ -1351,7 +1350,6 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	const agent = agentLabel(agentId);
 	if (!installed || needsLogin) {
 		return <div className="space-y-3">
-			<HarnessModelDefaults key={`${hostId ?? LOCAL_HOST}:${agentId}`} agentId={agentId} agentLabel={agent} hostId={hostId} />
 			<div className="flex flex-col items-center gap-3 px-3 py-8 text-center">
 			<p className="text-sm text-settings-muted">{t(installed ? "settings.harness.models.needsLogin" : "settings.harness.models.notInstalled", { agent })}</p>
 			<Button type="button" size="sm" variant="outline" onClick={onOpenAccount}>{t("settings.harness.tabAccount")}</Button>
@@ -1389,7 +1387,6 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 			/>
 			{providers.some((provider) => provider.configured) && !data?.stale ? <p className="text-xs text-settings-muted">{t("settings.harness.models.configuredProviderHint")}</p> : null}
 		</div> : null}
-		<HarnessModelDefaults key={scope} agentId={agentId} agentLabel={agent} hostId={hostId} catalog={data} selectableModels={models} />
 		<div className="flex items-center justify-between gap-3">
 			<h3 className="text-xs font-medium leading-4 text-settings-muted">{t("settings.harness.models.title")}</h3>
 			<span className="flex items-center gap-2 text-xs text-settings-muted">

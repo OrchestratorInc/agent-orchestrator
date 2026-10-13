@@ -295,7 +295,7 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.getByRole("textbox", { name: "Search harnesses" })).toBeInTheDocument();
 	});
 
-	it("lists model metadata, offers defaults, and refreshes the catalog", async () => {
+	it("lists model metadata without the removed defaults section and refreshes the catalog", async () => {
 		mockInstalledOperations("npm");
 		const models = {
 			agentId: "codex", lastSuccessAt: "2026-10-08T09:00:00Z",
@@ -325,7 +325,9 @@ describe("HarnessSettingsSection", () => {
 		expect(within(list).getAllByText(/Inputs/)).toHaveLength(1);
 		const unreported = within(list).getByText("gpt-5.3-mini").closest("li") as HTMLElement;
 		expect(within(unreported).queryByText(/Context|Inputs|Unknown/)).toBeNull();
-		expect(within(page).getByRole("button", { name: "Default model" })).toBeInTheDocument();
+		expect(within(page).queryByText("Defaults for new sessions")).toBeNull();
+		expect(within(page).queryByRole("button", { name: "Default model" })).toBeNull();
+		expect(within(page).queryByRole("button", { name: "Save defaults" })).toBeNull();
 		expect(within(list).getByText("Context (tokens): 200,000")).toBeInTheDocument();
 		expect(within(list).getByText("Inputs: Text · Image")).toBeInTheDocument();
 		await userEvent.click(within(page).getByRole("button", { name: "Refresh" }));
@@ -353,7 +355,7 @@ describe("HarnessSettingsSection", () => {
 		expect(within(page).getByRole("button", { name: "Next models" })).toBeDisabled();
 	});
 
-	it("filters catalog and default choices by provider and resets pagination on provider change", async () => {
+	it("filters catalog by provider and resets pagination on provider change", async () => {
 		mockInstalledOperations("npm");
 		const models = {
 			agentId: "codex", configuredProviders: ["alpha"], models: [
@@ -377,10 +379,6 @@ describe("HarnessSettingsSection", () => {
 		await userEvent.click(screen.getByRole("menuitem", { name: "beta · 1" }));
 		expect(within(list).getByText("Beta model")).toBeInTheDocument();
 		expect(within(page).queryByRole("button", { name: "Next models" })).toBeNull();
-		await userEvent.click(within(page).getByRole("button", { name: "Default model" }));
-		expect(screen.getByRole("menuitem", { name: /Beta model/ })).toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: /Alpha 0/ })).toBeNull();
-		await userEvent.keyboard("{Escape}");
 		await userEvent.click(within(page).getByRole("button", { name: "Provider" }));
 		await userEvent.click(screen.getByRole("menuitem", { name: "Other models · 1" }));
 		expect(within(list).getByText("Legacy model")).toBeInTheDocument();
