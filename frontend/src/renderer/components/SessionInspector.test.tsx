@@ -1216,6 +1216,33 @@ describe("SessionInspector Artifacts section", () => {
     );
   });
 
+  it("opens the Artifacts view from the More menu beside the tab list", async () => {
+    const onViewChange = vi.fn();
+    renderWithQuery(
+      <SessionInspector
+        onViewChange={onViewChange}
+        session={session([], {
+          artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })],
+        })}
+      />,
+    );
+
+    const more = screen.getByRole("button", { name: "More" });
+    expect(screen.getByRole("tablist")).not.toContainElement(more);
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    expect(more).not.toHaveAttribute("data-active");
+
+    await userEvent.click(more);
+    const menu = await screen.findByRole("menu");
+    expect(menu).toHaveAttribute("data-browser-native-overlay", "true");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Artifacts" }));
+
+    expect(onViewChange).toHaveBeenCalledWith("artifacts");
+    expect(await screen.findByRole("button", { name: /notes\.md/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("button", { name: "More" })).toHaveAttribute("data-active");
+  });
+
   it("does not render a feedback button on artifact rows", () => {
     renderWithQuery(
       <SessionInspector

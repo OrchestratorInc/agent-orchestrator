@@ -2,6 +2,7 @@ package acp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,10 +18,13 @@ import (
 // ACP 0.13.5 removed the legacy model selector from its generated API while
 // deployed agents such as Kimi still advertise `models` and implement
 // session/set_model. This narrow wire shim preserves that compatibility without
-// downgrading or forking the SDK: ordinary SDK traffic is forwarded unchanged,
-// and only AO-owned string request ids are intercepted.
+// downgrading or forking the SDK. Requests and responses still use the SDK;
+// update notifications use synchronous delivery so replay backpressure reaches
+// the provider socket instead of overflowing the SDK's notification queue.
 type legacyACPTransport struct {
 	writer *lockedWriteCloser
+	reader *io.PipeReader
+	output *io.PipeWriter
 	nextID atomic.Uint64
 
 	mu      sync.Mutex
@@ -60,46 +64,54 @@ type legacyACPResponse struct {
 	err error
 }
 
-func newLegacyACPTransport(stdin io.WriteCloser, stdout io.Reader) (*legacyACPTransport, io.WriteCloser, io.Reader) {
+func newLegacyACPTransport(stdin io.WriteCloser) (*legacyACPTransport, io.WriteCloser, io.Reader) {
 	writer := &lockedWriteCloser{inner: stdin}
+	sdkReader, sdkWriter := io.Pipe()
 	transport := &legacyACPTransport{
 		writer:  writer,
+		reader:  sdkReader,
+		output:  sdkWriter,
 		pending: make(map[string]chan legacyACPResponse),
 	}
-	sdkReader, sdkWriter := io.Pipe()
-	go transport.forward(stdout, sdkWriter)
 	return transport, writer, sdkReader
 }
 
-func (t *legacyACPTransport) forward(source io.Reader, destination *io.PipeWriter) {
-	reader := bufio.NewReader(source)
+func (t *legacyACPTransport) forward(source io.Reader, notification func(string, json.RawMessage) bool) {
+	reader := &extensionMethodReader{reader: bufio.NewReader(source), maxFrame: maxACPFrameSize}
+	defer func() { _ = t.output.Close() }()
 	for {
-		line, err := reader.ReadBytes('\n')
-		if len(line) > 0 && !t.intercept(line) {
-			if _, writeErr := destination.Write(line); writeErr != nil {
-				_ = destination.CloseWithError(writeErr)
+		line, err := reader.readFrame()
+		if len(line) > 0 && !t.intercept(line, notification) {
+			if _, writeErr := t.output.Write(line); writeErr != nil {
+				_ = t.output.CloseWithError(writeErr)
 				return
 			}
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				_ = destination.Close()
+				_ = t.output.Close()
 			} else {
-				_ = destination.CloseWithError(err)
+				_ = t.output.CloseWithError(err)
 			}
 			return
 		}
 	}
 }
 
-func (t *legacyACPTransport) intercept(line []byte) bool {
+func (t *legacyACPTransport) intercept(line []byte, notification func(string, json.RawMessage) bool) bool {
 	var envelope struct {
 		ID     json.RawMessage      `json:"id"`
+		Method string               `json:"method"`
+		Params json.RawMessage      `json:"params"`
 		Result json.RawMessage      `json:"result"`
 		Error  *acpsdk.RequestError `json:"error"`
 	}
 	if err := json.Unmarshal(line, &envelope); err != nil {
 		return false
+	}
+	if (len(envelope.ID) == 0 || bytes.Equal(envelope.ID, []byte("null"))) &&
+		envelope.Method != "" && notification(envelope.Method, envelope.Params) {
+		return true
 	}
 
 	var requestID string

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +10,6 @@ import { useUiStore } from "../stores/ui-store";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { sessionUiKey } from "../lib/hosts";
 import type { TreeNode } from "../hooks/useSessionWorkspaceTree";
-import type { SessionArtifact } from "../types/workspace";
 
 const { getMock, postMock, hostAGetMock, hostBGetMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn(), hostAGetMock: vi.fn(), hostBGetMock: vi.fn() }));
 
@@ -73,12 +72,6 @@ vi.mock("./FileTree", () => ({
 	},
 }));
 
-vi.mock("./ArtifactFileView", () => ({
-	ArtifactFileView: ({ artifactName, path }: { artifactName: string; path: string }) => (
-		<div data-testid="artifact-view">{`${artifactName}:${path}`}</div>
-	),
-}));
-
 vi.mock("./FileContentPane", () => ({
 	FileContentPane: ({ commitSha, initialEditing, initialMode, path, previousPath, split }: { commitSha?: string; initialEditing?: boolean; initialMode?: string; path: string | null; previousPath?: string; split?: boolean }) => <div data-commit-sha={commitSha ?? ""} data-editing={String(Boolean(initialEditing))} data-mode={initialMode ?? "default"} data-previous-path={previousPath} data-split={String(Boolean(split))} data-testid="content-pane">{path ?? "none"}</div>,
 }));
@@ -109,11 +102,6 @@ function renderWithQuery(children: ReactNode) {
 }
 
 describe("SessionFileExplorer", () => {
-	const artifacts: SessionArtifact[] = [
-		{ kind: "markdown", name: "notes.md", path: "notes.md", size: 12, updatedAt: "2026-09-22T00:00:00Z" },
-		{ kind: "file", name: "plan.md", path: "reports/plan.md", size: 20, updatedAt: "2026-09-22T00:00:00Z" },
-	];
-
 	beforeEach(() => {
 		window.localStorage.clear();
 		useUiStore.setState({ inspectorSessions: {} });
@@ -196,54 +184,6 @@ describe("SessionFileExplorer", () => {
 		expect(onOpenFile).toHaveBeenCalledOnce();
 	});
 
-	it("keeps the tree visible and opens an externally requested file in the center", () => {
-		const onOpenFile = vi.fn();
-		const { client, rerender } = renderWithQuery(
-			<SessionFileExplorer onOpenFile={onOpenFile} sessionId="sess-explorer-reveal" revealRequest={null} />,
-		);
-
-		expect(screen.queryByTestId("content-pane")).not.toBeInTheDocument();
-		rerender(
-			<QueryClientProvider client={client}>
-				<TooltipProvider>
-					<SessionFileExplorer
-						onOpenFile={onOpenFile}
-						revealRequest={{ path: "docs/notes.txt", key: 1 }}
-						sessionId="sess-explorer-reveal"
-					/>
-				</TooltipProvider>
-			</QueryClientProvider>,
-		);
-
-		expect(screen.queryByTestId("content-pane")).not.toBeInTheDocument();
-		expect(screen.getByTestId("tree-changed-only")).toBeInTheDocument();
-		expect(onOpenFile).toHaveBeenCalledWith("docs/notes.txt", { mode: "file" });
-	});
-
-	it("reports a reveal handled once it opens the file, and keeps it pending while maximized", () => {
-		const onOpenFile = vi.fn();
-		const onRevealHandled = vi.fn();
-		const reveal = { path: "docs/notes.txt", key: 3 };
-		const { client, rerender } = renderWithQuery(
-			<SessionFileExplorer isMaximized onOpenFile={onOpenFile} onRevealHandled={onRevealHandled} revealRequest={reveal} sessionId="sess-explorer-reveal-once" />,
-		);
-		// Maximized, the file shows in this view's own preview; the request stays pending.
-		expect(onOpenFile).not.toHaveBeenCalled();
-		expect(onRevealHandled).not.toHaveBeenCalled();
-
-		rerender(
-			<QueryClientProvider client={client}>
-				<TooltipProvider>
-					<SessionFileExplorer onOpenFile={onOpenFile} onRevealHandled={onRevealHandled} revealRequest={reveal} sessionId="sess-explorer-reveal-once" />
-				</TooltipProvider>
-			</QueryClientProvider>,
-		);
-		expect(onOpenFile).toHaveBeenCalledOnce();
-		expect(onOpenFile).toHaveBeenCalledWith("docs/notes.txt", { mode: "file" });
-		expect(onRevealHandled).toHaveBeenCalledOnce();
-		expect(onRevealHandled).toHaveBeenCalledWith(3);
-	});
-
 	it("keeps the tree and content side by side when maximized", async () => {
 		const widthSpy = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(500);
 		useUiStore.getState().setFilesChangedOnly("sess-explorer-maximized", false);
@@ -303,9 +243,8 @@ describe("SessionFileExplorer", () => {
 	});
 
 	it("does not offer artifacts as a Files source in the workspace dropdown", async () => {
-		// A PR keeps the source picker itself visible (with only artifacts and
-		// no PR, the picker has nothing to switch to and does not render at
-		// all), so the Branch submenu can actually be opened and inspected.
+		// A PR keeps the source picker itself visible, so the Branch submenu can
+		// actually be opened and inspected.
 		getMock.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/sessions/{sessionId}/pr") {
 				return { data: { sessionId: "sess-artifacts", prs: [{ number: 42, url: "https://example.test/pr/42", sourceBranch: "feature/files", title: "Files" }] } };
@@ -318,7 +257,7 @@ describe("SessionFileExplorer", () => {
 				},
 			};
 		});
-		renderWithQuery(<SessionFileExplorer artifacts={artifacts} sessionId="sess-artifacts" />);
+		renderWithQuery(<SessionFileExplorer sessionId="sess-artifacts" />);
 
 		expect(await screen.findByRole("tablist", { name: "File view" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "File source" }));
@@ -328,81 +267,12 @@ describe("SessionFileExplorer", () => {
 		expect(screen.queryByRole("menuitem", { name: "Artifacts (2)" })).not.toBeInTheDocument();
 	});
 
-	it("keeps artifact and workspace views available through the source switcher", async () => {
-		const sessionId = "sess-artifact-switch";
-		useUiStore.getState().setFilesChangedOnly(sessionId, false);
-		renderWithQuery(<SessionFileExplorer artifacts={artifacts} isMaximized sessionId={sessionId} />);
-
-		await userEvent.click(screen.getByRole("button", { name: "select src/App.tsx" }));
-		expect(screen.getByTestId("content-pane")).toHaveTextContent("src/App.tsx");
-
-		act(() => {
-			useUiStore.getState().setFilesSource(sessionId, { kind: "artifact" });
-		});
-		await userEvent.click(screen.getByRole("button", { name: "select reports/plan.md" }));
-		expect(screen.getByTestId("artifact-view")).toHaveTextContent("plan.md:reports/plan.md");
-
-		act(() => {
-			useUiStore.getState().setFilesSource(sessionId, { kind: "workspace" });
-		});
-		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
-		expect(screen.getByTestId("content-pane")).toHaveTextContent("src/App.tsx");
-
-		act(() => {
-			useUiStore.getState().setFilesSource(sessionId, { kind: "artifact" });
-		});
-		expect(screen.getByTestId("artifact-view")).toHaveTextContent("plan.md:reports/plan.md");
-	});
-
-	it("opens an externally requested artifact inside the Artifacts source", async () => {
-		renderWithQuery(
-			<SessionFileExplorer
-				artifacts={artifacts}
-				isMaximized
-				revealRequest={{ path: "reports/plan.md", key: 1, source: "artifact" }}
-				sessionId="sess-artifact-reveal"
-			/>,
-		);
-
-		expect(await screen.findByTestId("artifact-view")).toHaveTextContent("plan.md:reports/plan.md");
-		expect(useUiStore.getState().inspectorSessions["sess-artifact-reveal"]?.filesSource).toEqual({ kind: "artifact" });
-	});
-
-	it("returns from an opened artifact to the workspace changes through the Workspace button", async () => {
-		const sessionId = "sess-artifact-back";
-		const onRevealHandled = vi.fn();
-		const reveal = { path: "reports/plan.md", key: 4, source: "artifact" as const };
-		renderWithQuery(
-			<SessionFileExplorer artifacts={artifacts} onRevealHandled={onRevealHandled} revealRequest={reveal} sessionId={sessionId} />,
-		);
-
-		expect(await screen.findByTestId("artifact-view")).toHaveTextContent("plan.md:reports/plan.md");
-		await userEvent.click(screen.getByRole("button", { name: "Workspace" }));
-
-		expect(useUiStore.getState().inspectorSessions[sessionId]?.filesSource).toEqual({ kind: "workspace" });
-		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
-		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
-		expect(onRevealHandled).toHaveBeenCalledWith(4);
-	});
-
-	it("switches back to Workspace when a workspace file is revealed after viewing artifacts", async () => {
-		const sessionId = "sess-workspace-reveal";
+	it("shows the workspace when a stale artifact source is stored", async () => {
+		const sessionId = "sess-stale-artifact-source";
 		useUiStore.getState().setFilesSource(sessionId, { kind: "artifact" });
-		const onOpenFile = vi.fn();
-		renderWithQuery(
-			<SessionFileExplorer
-				artifacts={artifacts}
-				onOpenFile={onOpenFile}
-				revealRequest={{ path: "src/App.tsx", key: 1 }}
-				sessionId={sessionId}
-			/>,
-		);
+		renderWithQuery(<SessionFileExplorer sessionId={sessionId} />);
 
-		await waitFor(() => {
-			expect(useUiStore.getState().inspectorSessions[sessionId]?.filesSource).toEqual({ kind: "workspace" });
-		});
-		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
-		expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx", { mode: "file" });
+		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
 	});
 
 	it("defaults to the continuous changes review and can switch to the full file tree", async () => {
