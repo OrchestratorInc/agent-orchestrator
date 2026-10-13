@@ -6,9 +6,51 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestInstallBinConcurrent(t *testing.T) {
+	bin := t.TempDir()
+	const n = 8
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- InstallBin(bin)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"ao", "ao-enter"} {
+		info, err := os.Stat(filepath.Join(bin, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o755 {
+			t.Fatalf("%s mode = %v, want 0755", name, info.Mode().Perm())
+		}
+	}
+	entries, err := os.ReadDir(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("bin dir entries = %v, want only ao and ao-enter", names)
+	}
+}
 
 func TestRelayClientScriptRoundTrip(t *testing.T) {
 	bin := t.TempDir()
