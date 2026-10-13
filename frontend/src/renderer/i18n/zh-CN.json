@@ -1,4 +1,7 @@
 {
+	"settings.harness.health.detectedCredential": "检测到的凭据",
+	"settings.harness.health.keychain": "系统钥匙串",
+	"settings.harness.health.checkFailed": "无法完成检查。请重试或复制诊断信息。",
 	"settings.harness.health.authContext": "检查使用所选主机上 AO 进程的环境。如果在终端中可以登录，请比较下方的可执行文件、凭据来源和检查时间。无法确定结果并不代表你已退出登录。",
 	"settings.harness.health.authDiagnostics": "身份验证检查",
 	"settings.harness.health.authChecked": "上次完成的身份验证检查",

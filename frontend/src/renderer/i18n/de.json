@@ -1,4 +1,7 @@
 {
+	"settings.harness.health.detectedCredential": "Erkannte Anmeldedaten",
+	"settings.harness.health.keychain": "Systemschlüsselbund",
+	"settings.harness.health.checkFailed": "Die Prüfung konnte nicht abgeschlossen werden. Erneut versuchen oder Diagnosedaten kopieren.",
 	"settings.harness.health.authContext": "Die Prüfungen verwenden die Prozessumgebung von AO auf dem ausgewählten Host. Wenn die Anmeldung im Terminal funktioniert, vergleiche die ausführbare Datei, die Anmeldedatenquelle und den Prüfzeitpunkt unten. Ein uneindeutiges Ergebnis bedeutet nicht, dass du abgemeldet bist.",
 	"settings.harness.health.authDiagnostics": "Authentifizierungsprüfungen",
 	"settings.harness.health.authChecked": "Letzte abgeschlossene Authentifizierungsprüfung",

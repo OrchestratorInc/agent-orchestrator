@@ -1,4 +1,7 @@
 {
+	"settings.harness.health.detectedCredential": "Credencial detectada",
+	"settings.harness.health.keychain": "Chaveiro do sistema",
+	"settings.harness.health.checkFailed": "Não foi possível concluir a verificação. Tente novamente ou copie os diagnósticos.",
 	"settings.harness.health.authContext": "As verificações usam o ambiente do processo do AO no host selecionado. Se o login funciona no terminal, compare o executável, a origem das credenciais e o horário da verificação abaixo. Um resultado inconclusivo não significa que você está desconectado.",
 	"settings.harness.health.authDiagnostics": "Verificações de autenticação",
 	"settings.harness.health.authChecked": "Última verificação de autenticação concluída",

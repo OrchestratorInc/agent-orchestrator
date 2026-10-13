@@ -1,4 +1,7 @@
 {
+	"settings.harness.health.detectedCredential": "감지된 인증 정보",
+	"settings.harness.health.keychain": "시스템 키체인",
+	"settings.harness.health.checkFailed": "검사를 완료하지 못했습니다. 다시 시도하거나 진단 정보를 복사하세요.",
 	"settings.harness.health.authContext": "검사는 선택한 호스트에서 AO 프로세스의 환경을 사용합니다. 터미널에서 로그인이 된다면 아래 실행 파일, 인증 정보 출처, 검사 시간을 비교하세요. 판정 불가는 로그아웃 상태를 의미하지 않습니다.",
 	"settings.harness.health.authDiagnostics": "인증 확인",
 	"settings.harness.health.authChecked": "마지막으로 완료된 인증 확인",

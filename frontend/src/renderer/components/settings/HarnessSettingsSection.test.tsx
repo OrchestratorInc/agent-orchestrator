@@ -525,7 +525,7 @@ describe("HarnessSettingsSection", () => {
 		expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("Latest version: 1.3.0"));
 	});
 
-	it("shows and copies an inconclusive auth attempt separately from the retained login", async () => {
+	it("keeps auth attempt details in the report instead of the Health UI", async () => {
 		const readiness = readyCatalog();
 		Object.assign(readiness.agents[1].authentication, {
 			state: "authorized", freshness: "stale", reasonCode: "auth_check_timeout",
@@ -536,7 +536,10 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const page = await findAgentRow("codex");
 		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
-		expect(within(page).getByText("Authentication check timed out.")).toBeInTheDocument();
+		expect(within(page).queryByText("Authentication check timed out.")).toBeNull();
+		expect(within(page).queryByText("Last completed auth check")).toBeNull();
+		expect(within(page).queryByText("Latest auth attempt")).toBeNull();
+		expect(within(page).queryByText("Update checked")).toBeNull();
 		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
 		const report = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0];
@@ -559,16 +562,42 @@ describe("HarnessSettingsSection", () => {
 		const page = await findAgentRow("codex");
 		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
 		expect(within(page).getByText("Credentials not verified")).toBeInTheDocument();
-		expect(within(page).getByText("The stored token needs renewal.")).toBeInTheDocument();
-		expect(within(page).getByText("Run the harness, then check again.")).toBeInTheDocument();
+		expect(within(page).getByText("Detected credential")).toBeInTheDocument();
+		expect(within(page).getByText("keychain")).toBeInTheDocument();
+		expect(within(page).queryByText("The stored token needs renewal.")).toBeNull();
+		expect(within(page).queryByText("Run the harness, then check again.")).toBeNull();
 		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
 		const report = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0];
 		expect(report).toContain("Source: keychain");
 		expect(report).toContain("Checks use AO's process environment on the selected host.");
-		expect(within(page).getByText(/An inconclusive check does not mean you are signed out/)).toBeInTheDocument();
+		expect(within(page).queryByText(/An inconclusive check does not mean you are signed out/)).toBeNull();
 		expect(report).toContain("Auth check: provider_validation (token_renewal_pending)");
 		expect(report).toContain("Next step: Run the harness, then check again.");
+	});
+
+	it.each([
+		{ kind: "file", source: "~/.pi/agent/auth.json", expected: "~/.pi/agent/auth.json" },
+		{ kind: "environment", source: "OPENAI_API_KEY", expected: "OPENAI_API_KEY" },
+		{ kind: "keychain", source: "", expected: "System keychain" },
+		{ kind: "command", source: "codex login status", expected: undefined },
+	])("shows only the detected credential for a $kind source", async ({ kind, source, expected }) => {
+		const readiness = readyCatalog();
+		Object.assign(readiness.agents[1].authentication, {
+			account: { sourceKind: kind, source },
+			diagnostics: [{ method: "credential_store", code: "credential_file_missing", source: "~/.missing/auth.json",
+				reason: "No file at this location.", checkedAt: "2026-10-10T10:00:00Z", cached: false, durationMs: 0 }],
+		});
+		mockInstalledOperations("npm", readiness);
+		renderSection();
+		const page = await findAgentRow("codex");
+		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
+		if (expected) expect(within(page).getByText(expected)).toBeInTheDocument();
+		else expect(within(page).queryByText("Detected credential")).toBeNull();
+		expect(within(page).queryByText("~/.missing/auth.json")).toBeNull();
+		expect(within(page).queryByText("codex login status")).toBeNull();
+		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
+		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("Source: ~/.missing/auth.json")));
 	});
 
 	it("retains a failed auth request's correlation facts without copying the server message", async () => {
@@ -581,7 +610,8 @@ describe("HarnessSettingsSection", () => {
 			? { error: { code: "AGENT_CHECK_FAILED", requestId: "request-123", message: "secret-token" }, response: { status: 503 } } as never
 			: (post as (path: string, options: unknown) => Promise<never>)(path, options));
 		await userEvent.click(within(page).getByRole("button", { name: "Check again" }));
-		expect(await within(page).findByRole("alert")).toHaveTextContent("AGENT_CHECK_FAILED");
+		expect(await within(page).findByRole("alert")).toHaveTextContent("Could not complete the check.");
+		expect(within(page).queryByText(/AGENT_CHECK_FAILED/)).toBeNull();
 		await userEvent.click(within(page).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
 		const report = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0];

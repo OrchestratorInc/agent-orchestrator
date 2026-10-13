@@ -1,4 +1,7 @@
 {
+	"settings.harness.health.detectedCredential": "Identifiant détecté",
+	"settings.harness.health.keychain": "Trousseau système",
+	"settings.harness.health.checkFailed": "La vérification n’a pas pu aboutir. Réessayez ou copiez les diagnostics.",
 	"settings.harness.health.authContext": "Les vérifications utilisent l’environnement du processus AO sur l’hôte sélectionné. Si la connexion fonctionne dans votre terminal, comparez l’exécutable, la source des identifiants et l’heure de vérification ci-dessous. Un résultat non concluant ne signifie pas que vous êtes déconnecté.",
 	"settings.harness.health.authDiagnostics": "Vérifications d’authentification",
 	"settings.harness.health.authChecked": "Dernière vérification terminée",

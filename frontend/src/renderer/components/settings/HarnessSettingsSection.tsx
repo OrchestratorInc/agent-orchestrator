@@ -1110,6 +1110,21 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		</div>;
 	};
 
+	const detectedCredential = (details: HarnessDetails): string | undefined => {
+		const auth = details.readinessAgent?.authentication;
+		// Display only credential evidence, never a CLI executable or a missing
+		// file that was merely checked. Current probe evidence precedes cached identity.
+		const source = auth?.diagnostics?.find((step) => step.source && step.method === "provider_validation" && step.code !== "credential_missing")?.source
+			|| auth?.diagnostics?.find((step) => step.source && step.method === "environment" && step.code === "credential_present")?.source;
+		if (source) return source;
+		const account = auth?.account;
+		if (account?.sourceKind === "keychain") return t("settings.harness.health.keychain");
+		if (account?.sourceKind === "file" || account?.sourceKind === "environment") return account.source || undefined;
+		return account?.method === "api_key" ? t("settings.harness.usingApiKey")
+			: account?.method === "token" ? t("settings.harness.usingToken")
+			: account?.method === "account" ? t("settings.harness.signedInWithAccount") : undefined;
+	};
+
 	const healthText = (details: HarnessDetails) => {
 		const { agentId, readinessAgent, advisory } = details;
 		return [
@@ -1118,6 +1133,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 			`Installation: ${readinessAgent?.installation.state ?? "unknown"}${readinessAgent?.installation.checkedAt ? ` (checked ${readinessAgent.installation.checkedAt})` : ""}`,
 			readinessAgent?.installation.reason ? `Installation reason: ${readinessAgent.installation.reason}` : "",
 			`Authentication: ${readinessAgent?.authentication.state ?? "unknown"}`,
+			detectedCredential(details) ? `Detected credential: ${detectedCredential(details)}` : "",
 			t("settings.harness.health.authContext"),
 			readinessAgent?.authentication.reason ? `Authentication reason: ${readinessAgent.authentication.reason}` : "",
 			readinessAgent?.authentication.reasonCode ? `Authentication reason code: ${readinessAgent.authentication.reasonCode}` : "",
@@ -1137,6 +1153,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 			].filter(Boolean).join("\n")),
 			`Installed version: ${details.currentVersion ?? "unknown"}`,
 			`Latest version: ${advisory?.latestVersion ?? "unknown"}`,
+			advisory?.checkedAt ? `Update checked: ${advisory.checkedAt}` : "",
 			advisory?.status ? `Update status: ${advisory.status}${advisory.reason ? ` (${advisory.reason})` : ""}` : "",
 			`Maintenance method: ${details.methodId || "unverified"}`,
 			details.advisory?.binaryPath ? `Executable: ${details.advisory.binaryPath}` : "",
@@ -1154,38 +1171,24 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		const checking = checkingAuth.includes(agentId) || agents.isFetching || Boolean(details.advisoryQuery?.isFetching);
 		// Only facts AO has observed: a row with nothing to report is left out rather than filled with a placeholder.
 		const lastChecked = formatTimestamp(installation?.checkedAt);
-		const updateChecked = formatTimestamp(advisory?.checkedAt);
+		const credential = detectedCredential(details);
 		const executable = advisory?.binaryPath || details.job?.expectedDestination;
-		const hasDetails = Boolean(executable || (isInstalled && details.currentVersion) || advisory?.latestVersion || details.maintenanceMethod || updateChecked);
+		const hasDetails = Boolean(executable || (isInstalled && details.currentVersion) || advisory?.latestVersion || details.maintenanceMethod);
 		return <div className="flex flex-col gap-6">
 			<HarnessDetailGroup title={t("settings.harness.health.status")}>
 				<HarnessDetailRow label={t("settings.harness.installation")} description={installation?.state !== "installed" ? installation?.reason || undefined : undefined}>
 					<HarnessStateText tone={installState.tone}>{installState.label}</HarnessStateText>
 				</HarnessDetailRow>
-				{isInstalled ? <HarnessDetailRow label={t("settings.harness.health.authentication")} description={readinessAgent?.authentication.reason || undefined}>
+				{isInstalled ? <HarnessDetailRow label={t("settings.harness.health.authentication")}>
 					<HarnessStateText tone={authState}>{details.authStatus === "configured" ? t("settings.harness.health.authUnverified") : details.authSummary}</HarnessStateText>
+				</HarnessDetailRow> : null}
+				{isInstalled && credential ? <HarnessDetailRow label={t("settings.harness.health.detectedCredential")}>
+					<span className="min-w-0 break-all font-mono text-xs text-settings-label">{credential}</span>
 				</HarnessDetailRow> : null}
 				{lastChecked ? <HarnessDetailRow label={t("settings.harness.health.lastChecked")}>
 					<span className="text-xs text-settings-label">{lastChecked}{installation?.freshness === "stale" ? ` · ${t("settings.harness.health.stale")}` : ""}</span>
 				</HarnessDetailRow> : null}
 			</HarnessDetailGroup>
-			{isInstalled && (readinessAgent?.authentication.checkedAt || readinessAgent?.authentication.attemptedAt || readinessAgent?.authentication.diagnostics?.length || authCheckErrors[agentId]) ? <HarnessDetailGroup title={t("settings.harness.health.authDiagnostics")}>
-				<p className="p-3 text-xs text-settings-muted">{t("settings.harness.health.authContext")}</p>
-				{readinessAgent?.authentication.checkedAt ? <HarnessDetailRow label={t("settings.harness.health.authChecked")}>
-					<span className="text-xs text-settings-label">{formatTimestamp(readinessAgent.authentication.checkedAt)}{readinessAgent.authentication.freshness === "stale" ? ` · ${t("settings.harness.health.stale")}` : ""}</span>
-				</HarnessDetailRow> : null}
-				{readinessAgent?.authentication.attemptedAt ? <HarnessDetailRow label={t("settings.harness.health.authAttempted")}>
-					<span className="text-xs text-settings-label">{formatTimestamp(readinessAgent.authentication.attemptedAt)}</span>
-				</HarnessDetailRow> : null}
-				{(readinessAgent?.authentication.diagnostics ?? []).map((step, index) => <HarnessDetailRow key={`${step.method}-${index}`} label={step.method} description={step.reason}>
-					<div className="min-w-0 space-y-1 text-xs text-settings-muted">
-						<p className="break-words font-mono">{[step.code, step.provider, step.source, step.httpStatus ? `HTTP ${step.httpStatus}` : undefined, step.exitCode !== undefined ? `exit ${step.exitCode}` : undefined].filter(Boolean).join(" · ")}</p>
-						<p>{formatTimestamp(step.checkedAt)} · {step.cached ? t("settings.harness.health.authCached") : `${step.durationMs} ms`}</p>
-						{step.nextStep ? <p>{step.nextStep}</p> : null}
-					</div>
-				</HarnessDetailRow>)}
-				{authCheckErrors[agentId] ? <p role="alert" className="break-words p-3 text-xs text-error">{authCheckErrors[agentId]}</p> : null}
-			</HarnessDetailGroup> : null}
 			{hasDetails ? <HarnessDetailGroup title={t("settings.harness.health.details")}>
 				{executable ? <HarnessDetailRow label={t("settings.harness.health.executable")}>
 					<span className="min-w-0 break-all font-mono text-xs text-settings-label">{executable}</span>
@@ -1200,9 +1203,6 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				{details.maintenanceMethod ? <HarnessDetailRow label={t("settings.harness.installMethod")}>
 					<span className="text-xs text-settings-label">{details.maintenanceMethod.label}</span>
 				</HarnessDetailRow> : null}
-				{updateChecked ? <HarnessDetailRow label={t("settings.harness.health.updateChecked")}>
-					<span className="text-xs text-settings-label">{updateChecked}</span>
-				</HarnessDetailRow> : null}
 			</HarnessDetailGroup> : null}
 			<div className="flex flex-wrap gap-2">
 				<Button type="button" size="sm" variant="outline" disabled={checking || details.busy} onClick={() => refreshInstalledAgent(agentId)}>
@@ -1216,6 +1216,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 					{copiedAgent === agentId ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{t(copiedAgent === agentId ? "settings.harness.copied" : "settings.harness.copyDiagnostics")}
 				</Button>
 			</div>
+			{authCheckErrors[agentId] ? <p role="alert" className="text-xs text-error">{t("settings.harness.health.checkFailed")}</p> : null}
 			<p className="-mt-2 text-xs text-settings-muted">{t("settings.harness.health.hint")}</p>
 		</div>;
 	};

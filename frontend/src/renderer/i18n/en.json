@@ -1,4 +1,7 @@
 {
+	"settings.harness.health.detectedCredential": "Detected credential",
+	"settings.harness.health.keychain": "System keychain",
+	"settings.harness.health.checkFailed": "Could not complete the check. Try again or copy diagnostics.",
 	"settings.harness.health.authContext": "Checks use AO's process environment on the selected host. If login works in your terminal, compare the executable, credential source and check time below. An inconclusive check does not mean you are signed out.",
 	"settings.harness.health.authDiagnostics": "Authentication checks",
 	"settings.harness.health.authChecked": "Last completed auth check",
