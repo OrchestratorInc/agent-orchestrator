@@ -142,15 +142,19 @@ export function canManageBilling(org: Pick<CloudCpOrganization, "role"> | undefi
 
 /**
  * The provider a project's sessions run on: the provider stored on the project
- * (config.sandboxProvider), else the org's default. The control plane applies
- * the same rule when a session is created without a provider.
+ * (config.sandboxProvider), else Coder for a project carrying Coder dev-kit
+ * config (set up before projects recorded their provider), else the org's
+ * default. The control plane applies the same rule when a session is created
+ * without a provider.
  */
 export function projectSandboxProvider(
 	config: object | null | undefined,
 	offering: Pick<ResolvedCloudOffering, "defaultProvider"> | undefined,
 ): string {
-	const stored = (config as { sandboxProvider?: unknown } | null | undefined)?.sandboxProvider;
+	const fields = config as { sandboxProvider?: unknown; coder?: unknown } | null | undefined;
+	const stored = fields?.sandboxProvider;
 	if (typeof stored === "string" && stored.trim() !== "") return stored.trim().toLowerCase();
+	if (fields?.coder !== null && typeof fields?.coder === "object") return CODER_PROVIDER;
 	return offering?.defaultProvider ?? "";
 }
 

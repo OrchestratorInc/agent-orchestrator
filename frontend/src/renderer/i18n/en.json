@@ -330,7 +330,6 @@
 	"createProject.addCodeDescription": "Choose how you want to add code to Agent Orchestrator",
 	"createProject.addCodeTitle": "Add a project",
 	"createProject.machine": "Machine",
-	"createProject.cloudSandbox": "Sandbox",
 	"createProject.sandboxProvider.docker": "Docker",
 	"createProject.sandboxProvider.nodeops": "NodeOps",
 	"createProject.sandboxProvider.coder": "Dev workspace (Coder)",

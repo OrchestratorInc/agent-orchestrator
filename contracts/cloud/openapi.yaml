@@ -2480,9 +2480,11 @@ components:
         providers:
           type: array
           description: >-
-            Sandbox providers the organization may use: every provider the
-            deployment offers. Freestyle sessions are billed; Coder sessions
-            are billed unless the organization holds the coder capability.
+            Sandbox providers the organization may use: coder and freestyle
+            when the deployment offers them, and any other offered provider
+            the capability gate allows. Freestyle sessions are billed; Coder
+            sessions are billed unless the organization holds the coder
+            capability.
           items:
             type: string
         defaultProvider:
@@ -2490,19 +2492,20 @@ components:
           description: >-
             Provider a session gets when none is chosen. With more than one
             provider, the organization's own choice (PUT
-            /orgs/{orgId}/sandbox-provider) comes first. Then, on a deployment
-            that gates coder, coder for an organization with the coder
-            capability and freestyle for everyone else. Otherwise the
-            deployment default when offered, then the first provider, then
-            empty (no cloud sessions).
+            /orgs/{orgId}/sandbox-provider) comes first. Then coder for an
+            organization with the coder capability, freestyle for everyone
+            else, then the deployment default when offered, then the first
+            provider, then empty (no cloud sessions). A new project records
+            this provider, so changing it later moves no existing project.
         billingMode:
           type: string
           enum: [self_serve, contract, "off"]
           description: >-
-            off when the deployment has no Stripe configured; contract when the
-            organization is billed under an agreement, runs on the internal
-            plan, or is grandfathered; self_serve otherwise. Only self_serve
-            organizations are subject to plan limits.
+            off when the deployment has no Stripe configured or the
+            organization is offered no billed provider; self_serve otherwise.
+            Billed sandboxes need a plan for every organization, contract,
+            internal and grandfathered ones included. contract is no longer
+            sent and is kept for older clients.
         kind:
           type: string
           enum: [b2b, b2c, both, none]
@@ -2518,9 +2521,10 @@ components:
         customCoder:
           type: boolean
           description: >-
-            The organization holds the coder capability (WorkOS metadata
-            capabilities=coder): it may connect its own Coder deployment, and
-            its Coder sessions are not billed. Absent from older control planes.
+            The organization may connect its own Coder deployment: it holds the
+            coder capability (WorkOS metadata capabilities=coder), or the
+            deployment offers coder without gating it. Absent from older
+            control planes.
     SandboxProviders:
       type: object
       additionalProperties: false

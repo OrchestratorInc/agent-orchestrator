@@ -257,10 +257,16 @@ func sessionProvider(requested string) string {
 }
 
 // sandboxBilledTx decides whether a new session's sandbox counts against its
-// organization's plan: Freestyle always; Coder unless the organization holds
-// the coder capability. A worker spawned by a parent session on the same
-// provider inherits the parent's billing, so an unbilled orchestrator's
-// workers stay unbilled. Other providers are never billed.
+// organization's plan. Plans sell Coder and Freestyle capacity, which every
+// organization may run on:
+//   - Freestyle is always billed, whatever the organization's capabilities or
+//     billing arrangement.
+//   - Coder is billed unless the organization holds the coder capability. A
+//     worker spawned by a parent session on Coder inherits the parent's
+//     billing, so an unbilled orchestrator's workers stay unbilled.
+//   - Every other provider (docker, nodeops, ...) is not sold by plans and is
+//     not billed. The capability gate (orgAllowsProvider) still decides which
+//     organizations may run on it.
 func sandboxBilledTx(
 	ctx context.Context, tx pgx.Tx, orgID, provider string, coderCapability bool, parentSessionID string,
 ) (bool, error) {
@@ -268,6 +274,7 @@ func sandboxBilledTx(
 	case sandbox.ProviderFreestyle:
 		return true, nil
 	case sandbox.ProviderCoder:
+		// Billed unless the organization holds the coder capability; see below.
 	default:
 		return false, nil
 	}

@@ -127,3 +127,52 @@ func TestOrgDefaultSandboxProvider(t *testing.T) {
 		t.Fatalf("member change: err = %v, want ErrForbidden", err)
 	}
 }
+
+// Billed Coder idle-pauses like Freestyle: the idle scanner sees it as billed
+// and a person looking at it keeps it awake. Coder of an organization with the
+// coder capability is unbilled, so it keeps Coder's keep-warm behavior.
+func TestBilledCoderIsIdlePausedLikeFreestyleAndFreeCoderStaysWarm(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	billed, err := createCoder(store, fixture, "worker", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	free, err := createCoder(store, fixture, "worker", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET desired_state = 'running', observed_state = 'running'
+		WHERE session_id = ANY($1)`, []string{billed.ID, free.ID}); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := store.RunningSandboxSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, ref := range refs {
+		if ref.SessionID == billed.ID || ref.SessionID == free.ID {
+			seen[ref.SessionID] = ref.Billed
+		}
+	}
+	if len(seen) != 2 || !seen[billed.ID] || seen[free.ID] {
+		t.Fatalf("running refs billed = %v; want the billed coder billed and the free coder not", seen)
+	}
+	for _, id := range []string{billed.ID, free.ID} {
+		if err := store.TouchSessionPresence(ctx, principal, fixture.orgID, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	touched := func(id string) bool {
+		var at *time.Time
+		if err := admin.QueryRow(ctx, `SELECT last_interaction_at FROM ao_sandboxes WHERE session_id = $1`, id).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at != nil
+	}
+	if !touched(billed.ID) || touched(free.ID) {
+		t.Fatalf("presence touched billed=%v free=%v; want only the billed coder", touched(billed.ID), touched(free.ID))
+	}
+}

@@ -492,6 +492,10 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 	if !s.validateProjectCoderParameters(w, r, orgID, config) {
 		return
 	}
+	if config, err = s.pinProjectProvider(r.Context(), principalFrom(r), orgID, config); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")
+		return
+	}
 	store, ok := s.store.(githubProjectStore)
 	if !ok {
 		writeError(w, r, http.StatusNotImplemented, "not_implemented", "GitHub project creation is unavailable.")
@@ -565,7 +569,13 @@ func (s *Server) createGitHubScratchProject(
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The scratch project request is invalid.")
 		return
 	}
-	scratchConfig := json.RawMessage(`{"source":"scratch"}`)
+	scratchConfig, err := s.pinProjectProvider(
+		r.Context(), principalFrom(r), orgID, json.RawMessage(`{"source":"scratch"}`),
+	)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "The scratch project could not be prepared.")
+		return
+	}
 	plan, connectionID, ok := s.scratchSessionPlan(
 		w, r, principalFrom(r), orgID, request.Orchestrator.Harness, scratchConfig,
 	)

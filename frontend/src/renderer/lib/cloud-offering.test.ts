@@ -130,6 +130,12 @@ describe("projectSandboxProvider", () => {
 		expect(projectSandboxProvider({}, { defaultProvider: "freestyle" })).toBe("freestyle");
 		expect(projectSandboxProvider(undefined, undefined)).toBe("");
 	});
+
+	it("keeps a project with Coder config on Coder whatever the org default", () => {
+		expect(projectSandboxProvider({ coder: { templateId: "tpl-1" } }, { defaultProvider: "freestyle" })).toBe("coder");
+		expect(projectSandboxProvider({ coder: null }, { defaultProvider: "freestyle" })).toBe("freestyle");
+		expect(projectSandboxProvider({ sandboxProvider: "freestyle", coder: {} }, { defaultProvider: "coder" })).toBe("freestyle");
+	});
 });
 
 describe("canManageBilling", () => {

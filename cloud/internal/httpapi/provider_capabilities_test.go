@@ -33,16 +33,25 @@ func teamPrincipal(capabilities ...string) domain.Principal {
 	return domain.Principal{TeamOrgID: offeringTeamOrgID, ExternalOrgID: "org_workos", OrgCapabilities: capabilities}
 }
 
-// Every provider is open to every organization; the gate decides only who
-// holds the coder capability (Coder by default, bring-your-own Coder).
+// Coder and Freestyle are open to every organization, gated or not; any other
+// provider keeps the capability gate.
 func TestOrgAllowsProvider(t *testing.T) {
-	s := gatedServer()
+	s := &Server{capabilityGatedProviders: map[string]bool{"coder": true, "freestyle": true, "nodeops": true}}
 	for _, caps := range [][]string{nil, {"coder"}, {"feature-x"}, {"feature-x", "coder"}} {
-		for _, provider := range []string{"coder", "nodeops", "freestyle"} {
+		for _, provider := range []string{"coder", "freestyle"} {
 			if !s.orgAllowsProvider(teamPrincipal(caps...), offeringTeamOrgID, provider) {
-				t.Errorf("orgAllowsProvider(caps=%v, %q) = false, want every provider open", caps, provider)
+				t.Errorf("orgAllowsProvider(caps=%v, %q) = false, want coder and freestyle open", caps, provider)
 			}
 		}
+		if s.orgAllowsProvider(teamPrincipal(caps...), offeringTeamOrgID, "nodeops") {
+			t.Errorf("orgAllowsProvider(caps=%v, nodeops) = true, want a gated provider closed without its capability", caps)
+		}
+	}
+	if !s.orgAllowsProvider(teamPrincipal("nodeops"), offeringTeamOrgID, "nodeops") {
+		t.Error("a gated provider must open to an organization holding its capability")
+	}
+	if !s.orgAllowsProvider(domain.Principal{}, offeringPersonalOrgID, "docker") {
+		t.Error("a provider that is not gated must stay open")
 	}
 }
 
@@ -65,8 +74,24 @@ func TestOrgHasCoderCapability(t *testing.T) {
 			}
 		})
 	}
-	if !(&Server{}).orgHasCoderCapability(domain.Principal{}, offeringPersonalOrgID) {
-		t.Fatal("a deployment that does not gate coder gives everyone the coder capability, as before")
+	// The capability alone decides, never the gate: emptying
+	// AO_CLOUD_CAPABILITY_GATED_PROVIDERS must not make Coder free for everyone.
+	if (&Server{}).orgHasCoderCapability(domain.Principal{}, offeringPersonalOrgID) {
+		t.Fatal("an ungated deployment must not give every organization the coder capability")
+	}
+	if !(&Server{}).orgHasCoderCapability(teamPrincipal("coder"), offeringTeamOrgID) {
+		t.Fatal("an ungated deployment must still honor capabilities=coder")
+	}
+	if !(&Server{defaultOrgCapabilities: []string{"coder"}}).orgHasCoderCapability(domain.Principal{}, offeringPersonalOrgID) {
+		t.Fatal("the deployment default capabilities must grant the coder capability")
+	}
+	// A self-hosted deployment that does not gate coder keeps the custom Coder page.
+	ungated := &Server{availableSandboxProviders: []string{"coder"}}
+	if !ungated.orgHasCustomCoder(domain.Principal{}, offeringPersonalOrgID) {
+		t.Fatal("an ungated deployment offering coder must keep the custom Coder page")
+	}
+	if gated.orgHasCustomCoder(teamPrincipal("coder"), offeringTeamOrgID) {
+		t.Fatal("a deployment that does not offer coder has no custom Coder page")
 	}
 }
 
@@ -235,28 +260,29 @@ func getMe(t *testing.T, s *Server, principal domain.Principal) meOfferingBody {
 	return body
 }
 
-// Every organization is offered every provider; the coder capability decides
-// its default and whether it may bring its own Coder.
+// Every organization is offered Coder; a gated provider only with its
+// capability. The coder capability decides whether it may bring its own Coder.
 func TestMeOfferingKinds(t *testing.T) {
 	cases := []struct {
 		name            string
 		caps            []string
+		wantProviders   []string
 		wantDefault     string
 		wantCustomCoder bool
 	}{
-		{"coder capability", []string{"coder"}, "coder", true},
-		{"no coder capability falls back to the deployment default", []string{"nodeops"}, "coder", false},
-		{"no capabilities", []string{"feature-x"}, "coder", false},
+		{"coder capability", []string{"coder"}, []string{"coder"}, "coder", true},
+		{"a gated provider's capability adds it", []string{"nodeops"}, []string{"coder", "nodeops"}, "coder", false},
+		{"no capabilities", []string{"feature-x"}, []string{"coder"}, "coder", false},
 	}
-	all := []string{"coder", "nodeops"}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			all := tc.wantProviders
 			store := &offeringStore{memberships: []domain.Membership{{OrgID: offeringTeamOrgID, Role: "member"}}}
 			body := getMe(t, newOfferingServer(store), teamPrincipal(tc.caps...))
-			if body.Offering.Kind != domain.OfferingKindBoth || body.Offering.DefaultProvider != tc.wantDefault ||
+			if body.Offering.Kind != domain.OfferingKind(all) || body.Offering.DefaultProvider != tc.wantDefault ||
 				!slices.Equal(body.Offering.Providers, all) || body.Offering.CustomCoder != tc.wantCustomCoder {
-				t.Fatalf("offering = %+v, want both providers, default %q, customCoder %v",
-					body.Offering, tc.wantDefault, tc.wantCustomCoder)
+				t.Fatalf("offering = %+v, want providers %v, default %q, customCoder %v",
+					body.Offering, all, tc.wantDefault, tc.wantCustomCoder)
 			}
 			if body.Offering.BillingMode != domain.BillingModeOff || body.Offering.Features == nil {
 				t.Fatalf("offering = %+v, want billingMode off and an empty features array", body.Offering)
@@ -569,4 +595,88 @@ func (s *chosenProviderStore) OrgDefaultSandboxProvider(context.Context, string)
 
 func (s *chosenProviderStore) SetOrgDefaultSandboxProvider(context.Context, domain.Principal, string, string) error {
 	return nil
+}
+
+// A project set up on Coder before projects recorded their provider carries
+// Coder dev-kit config but no sandboxProvider: it stays on Coder even after the
+// organization picks Freestyle in settings. A project with neither follows the
+// choice.
+func TestCreateSessionKeepsCoderConfigProjectOnCoder(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config string
+		want   string
+	}{
+		{"coder config", `{"coder":{"templateId":"tpl-1"}}`, sandbox.ProviderCoder},
+		{"no provider and no coder config", `{}`, sandbox.ProviderFreestyle},
+		{"recorded provider wins", `{"sandboxProvider":"freestyle","coder":{"templateId":"tpl-1"}}`, sandbox.ProviderFreestyle},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &chosenProviderStore{
+				offeringStore: offeringStore{projectConfig: json.RawMessage(tc.config)},
+				chosen:        sandbox.ProviderFreestyle,
+			}
+			rec := httptest.NewRecorder()
+			newGenericOfferingServer(store).createSession(rec, offeringSessionRequest(t, teamPrincipal("coder"), ""))
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			if store.captured.Provider != tc.want {
+				t.Fatalf("provider = %q, want %q", store.captured.Provider, tc.want)
+			}
+		})
+	}
+}
+
+// A new project records the provider its sessions will run on, so changing the
+// default in settings later moves no existing project.
+func TestPinProjectProvider(t *testing.T) {
+	ctx := context.Background()
+	decode := func(t *testing.T, config json.RawMessage) map[string]any {
+		t.Helper()
+		var fields map[string]any
+		if err := json.Unmarshal(config, &fields); err != nil {
+			t.Fatal(err)
+		}
+		return fields
+	}
+	chosen := newGenericOfferingServer(&chosenProviderStore{chosen: sandbox.ProviderCoder})
+	pinned, err := chosen.pinProjectProvider(ctx, teamPrincipal(), offeringTeamOrgID, json.RawMessage(`{"source":"scratch"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fields := decode(t, pinned); fields["sandboxProvider"] != "coder" || fields["source"] != "scratch" {
+		t.Fatalf("pinned = %s, want the settings choice added and other keys kept", pinned)
+	}
+	unchosen := newGenericOfferingServer(&offeringStore{})
+	for _, tc := range []struct {
+		name, principalCap, config, want string
+	}{
+		{"no choice, no capability: Freestyle", "", `{}`, "freestyle"},
+		{"no choice, coder capability: Coder", "coder", `{}`, "coder"},
+		{"coder config: Coder", "", `{"coder":{"templateId":"tpl-1"}}`, "coder"},
+		{"already recorded: kept", "coder", `{"sandboxProvider":"freestyle"}`, "freestyle"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			principal := teamPrincipal()
+			if tc.principalCap != "" {
+				principal = teamPrincipal(tc.principalCap)
+			}
+			pinned, err := unchosen.pinProjectProvider(ctx, principal, offeringTeamOrgID, json.RawMessage(tc.config))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := decode(t, pinned)["sandboxProvider"]; got != tc.want {
+				t.Fatalf("sandboxProvider = %v, want %q", got, tc.want)
+			}
+		})
+	}
+	// With a single provider nothing is pinned: the project follows the deployment.
+	single := New(Options{Store: &offeringStore{}, SandboxProvider: sandbox.ProviderFreestyle,
+		AvailableSandboxProviders: []string{sandbox.ProviderFreestyle}, Provisioning: genericProvisioning(),
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	pinned, err = single.pinProjectProvider(ctx, teamPrincipal(), offeringTeamOrgID, json.RawMessage(`{}`))
+	if err != nil || string(pinned) != `{}` {
+		t.Fatalf("pinned = %s, %v; want the config unchanged", pinned, err)
+	}
 }

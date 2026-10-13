@@ -41,36 +41,39 @@ func (s *Server) orgBillingArrangement(principal domain.Principal, orgID string)
 }
 
 // orgAllowsProvider reports whether an organization may use the given sandbox
-// provider. Every provider this deployment offers is open to every
-// organization; each picks its default in the desktop's settings
-// (putOrgSandboxProvider). The capability gate
-// (AO_CLOUD_CAPABILITY_GATED_PROVIDERS) no longer limits which providers an
-// organization may run on: it decides which organizations hold the coder
-// capability (orgHasCoderCapability), which start on Coder and may bring their
-// own Coder deployment. It does not check that the deployment offers the
-// provider; providersForOrg does both.
-func (s *Server) orgAllowsProvider(domain.Principal, string, string) bool {
-	return true
+// provider. Coder and Freestyle are open to every organization: each picks its
+// default in the desktop's settings (putOrgSandboxProvider), and plans meter
+// both (sandboxBilledTx). Any other provider keeps the capability gate: when it
+// is listed in AO_CLOUD_CAPABILITY_GATED_PROVIDERS, the organization must hold a
+// capability of the same name (see orgCapabilities). It does not check that the
+// deployment offers the provider; providersForOrg does both.
+func (s *Server) orgAllowsProvider(principal domain.Principal, orgID, provider string) bool {
+	if provider == sandbox.ProviderCoder || provider == sandbox.ProviderFreestyle {
+		return true
+	}
+	if !s.capabilityGatedProviders[provider] {
+		return true
+	}
+	return slices.Contains(s.orgCapabilities(principal, orgID), provider)
 }
 
 // orgHasCoderCapability reports whether an organization holds the coder
-// capability: WorkOS organization metadata capabilities=coder (or the
-// deployment defaults, AO_CLOUD_DEFAULT_ORG_CAPABILITIES). Such an organization
-// starts on Coder and may connect its own Coder deployment. On a deployment
-// that does not gate coder, every organization holds it, as before.
+// capability: WorkOS organization metadata capabilities=coder, or the
+// deployment defaults (AO_CLOUD_DEFAULT_ORG_CAPABILITIES). Such an organization
+// starts on Coder and runs it free of any plan. It reads the capability alone,
+// never the capability gate, so emptying AO_CLOUD_CAPABILITY_GATED_PROVIDERS
+// cannot make Coder free for everyone.
 func (s *Server) orgHasCoderCapability(principal domain.Principal, orgID string) bool {
-	if !s.capabilityGatedProviders[sandbox.ProviderCoder] {
-		return true
-	}
 	return slices.Contains(s.orgCapabilities(principal, orgID), sandbox.ProviderCoder)
 }
 
 // orgHasCustomCoder reports whether the organization may connect its own Coder
-// deployment: this deployment offers Coder and the organization holds the coder
-// capability.
+// deployment: this deployment offers Coder, and the organization holds the coder
+// capability or the deployment does not gate coder (a self-hosted control plane
+// without WorkOS capabilities keeps the page, as before).
 func (s *Server) orgHasCustomCoder(principal domain.Principal, orgID string) bool {
 	return slices.Contains(s.availableSandboxProviders, sandbox.ProviderCoder) &&
-		s.orgHasCoderCapability(principal, orgID)
+		(!s.capabilityGatedProviders[sandbox.ProviderCoder] || s.orgHasCoderCapability(principal, orgID))
 }
 
 // providersForOrg is the organization's effective provider list: what this
@@ -101,12 +104,9 @@ type orgSandboxPreferenceStore interface {
 	SetOrgDefaultSandboxProvider(ctx context.Context, principal domain.Principal, orgID, provider string) error
 }
 
-// defaultProviderForOrg is the provider a session gets when nothing chose one.
-// With more than one provider, the organization's choice in settings comes
-// first. Then, on a deployment that gates coder: Coder for an organization with
-// the coder capability, Freestyle for everyone else (every new organization).
-// Otherwise the deployment default when offered, then the first provider, then
-// "" (no cloud sessions).
+// defaultProviderForOrg is the provider a new project, or a session nothing
+// else places, gets. With more than one provider, the organization's choice in
+// settings comes first; otherwise baseProviderForOrg.
 func (s *Server) defaultProviderForOrg(ctx context.Context, principal domain.Principal, orgID string) string {
 	allowed := s.providersForOrg(principal, orgID)
 	if len(allowed) > 1 {
@@ -114,13 +114,20 @@ func (s *Server) defaultProviderForOrg(ctx context.Context, principal domain.Pri
 			return chosen
 		}
 	}
-	if s.capabilityGatedProviders[sandbox.ProviderCoder] {
-		if s.orgHasCoderCapability(principal, orgID) && slices.Contains(allowed, sandbox.ProviderCoder) {
-			return sandbox.ProviderCoder
-		}
-		if slices.Contains(allowed, sandbox.ProviderFreestyle) {
-			return sandbox.ProviderFreestyle
-		}
+	return s.baseProviderForOrg(principal, orgID)
+}
+
+// baseProviderForOrg is the organization's provider before any choice in
+// settings: Coder for an organization with the coder capability, Freestyle for
+// everyone else (every new organization), then the deployment default when
+// offered, then the first provider, then "" (no cloud sessions).
+func (s *Server) baseProviderForOrg(principal domain.Principal, orgID string) string {
+	allowed := s.providersForOrg(principal, orgID)
+	if s.orgHasCoderCapability(principal, orgID) && slices.Contains(allowed, sandbox.ProviderCoder) {
+		return sandbox.ProviderCoder
+	}
+	if slices.Contains(allowed, sandbox.ProviderFreestyle) {
+		return sandbox.ProviderFreestyle
 	}
 	if slices.Contains(allowed, s.sandboxProvider) {
 		return s.sandboxProvider
@@ -129,6 +136,52 @@ func (s *Server) defaultProviderForOrg(ctx context.Context, principal domain.Pri
 		return allowed[0]
 	}
 	return ""
+}
+
+// projectProvider is the provider a project's sessions run on: the project's
+// sandboxProvider, else Coder for a project carrying Coder dev-kit config (set
+// up on Coder before projects recorded their provider), else "" (the
+// organization's default applies).
+func projectProvider(config json.RawMessage) string {
+	if provider := domain.DecodeProjectSandboxProvider(config); provider != "" {
+		return provider
+	}
+	if _, ok := domain.DecodeProjectCoderConfig(config); ok {
+		return sandbox.ProviderCoder
+	}
+	return ""
+}
+
+// pinProjectProvider records on a new project's config the provider its
+// sessions will run on, when the organization has more than one: the
+// project's own (projectProvider), else the organization's default. Changing
+// the default in settings later then moves no existing project. With a single
+// provider the config is left as is, so the project follows the deployment.
+func (s *Server) pinProjectProvider(
+	ctx context.Context, principal domain.Principal, orgID string, config json.RawMessage,
+) (json.RawMessage, error) {
+	if domain.DecodeProjectSandboxProvider(config) != "" || len(s.providersForOrg(principal, orgID)) < 2 {
+		return config, nil
+	}
+	provider := projectProvider(config)
+	if provider == "" {
+		provider = s.defaultProviderForOrg(ctx, principal, orgID)
+	}
+	if provider == "" {
+		return config, nil
+	}
+	fields := map[string]json.RawMessage{}
+	if len(config) > 0 {
+		if err := json.Unmarshal(config, &fields); err != nil {
+			return nil, err
+		}
+	}
+	encoded, err := json.Marshal(provider)
+	if err != nil {
+		return nil, err
+	}
+	fields["sandboxProvider"] = encoded
+	return json.Marshal(fields)
 }
 
 // orgChosenProvider is the provider the organization chose in settings, or ""
@@ -456,9 +509,13 @@ func (s *Server) scratchSessionPlan(
 	orgID, harness string,
 	projectConfig json.RawMessage,
 ) (sandbox.Plan, string, bool) {
-	provider := domain.DecodeProjectSandboxProvider(projectConfig)
+	provider := projectProvider(projectConfig)
 	if provider != "" {
-		if !s.validateProjectSandboxProvider(w, r, principal, orgID, projectConfig) {
+		if !s.orgProviderAvailable(principal, orgID, provider) {
+			writeError(
+				w, r, http.StatusUnprocessableEntity, "provider_unavailable",
+				"The project's sandbox provider is not available to your organization.",
+			)
 			return sandbox.Plan{}, "", false
 		}
 	} else if provider = s.defaultProviderForOrg(r.Context(), principal, orgID); provider == "" {

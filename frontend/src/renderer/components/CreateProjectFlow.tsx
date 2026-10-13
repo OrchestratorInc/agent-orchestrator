@@ -1388,18 +1388,14 @@ function CloudProjectCard({
 	const { client, baseUrl } = useCloudCp();
 	const { org } = useCloudOrg();
 	const queryClient = useQueryClient();
-	// The org's offering decides where the project's sessions run. With more
-	// than one provider the project picks one (config.sandboxProvider, default
-	// the org's default provider) and every session of the project runs there;
-	// with one there is nothing to pick. The coder template picker, size and
-	// workspace prefix appear only when that provider is coder.
+	// The org's offering decides where the project's sessions run: the org's
+	// default provider, chosen in Settings. With more than one provider the
+	// project records it (config.sandboxProvider), so changing the default later
+	// moves no existing project. The coder template picker, size and workspace
+	// prefix appear only when that provider is coder.
 	const offering = useCloudOffering();
 	const offersSandboxChoice = offering.offersProviderChoice;
-	const [projectSandboxProvider, setProjectSandboxProvider] = useState<string | null>(null);
-	const effectiveSandboxProvider =
-		projectSandboxProvider !== null && offering.providers.includes(projectSandboxProvider)
-			? projectSandboxProvider
-			: offering.defaultProvider;
+	const effectiveSandboxProvider = offering.defaultProvider;
 	const usesCoder = effectiveSandboxProvider === CODER_PROVIDER;
 	// A coder project must pick a concrete template before it is created. With no
 	// template, session start fails later with a 422 (coder_template_required) —
@@ -1839,25 +1835,6 @@ function CloudProjectCard({
 						<p className="text-[12px] leading-5 text-destructive" role="alert">{githubOAuthError}</p>
 					) : null}
 				</div>
-
-				{/* Where the project's sessions run, when the control plane offers a choice. */}
-				{offersSandboxChoice && selectedRepo !== undefined ? (
-					<div className="flex items-center justify-between gap-3">
-						<Label htmlFor="create-project-sandbox" className={onboardingFormLabelClass}>
-							{t("createProject.cloudSandbox")}
-						</Label>
-						<Select value={effectiveSandboxProvider} disabled={isCreating} onValueChange={setProjectSandboxProvider}>
-							<SelectTrigger id="create-project-sandbox" className="max-w-[65%]"><SelectValue /></SelectTrigger>
-							<SelectContent position="popper" side="bottom" align="end" sideOffset={4}>
-								{offering.providers.map((provider) => (
-									<SelectItem key={provider} value={provider}>
-										{t(`createProject.sandboxProvider.${provider}`, { defaultValue: provider })}
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
-					</div>
-				) : null}
 
 				{/* Coder template and size are inherited by every session. */}
 				{usesCoder && selectedRepo !== undefined ? (

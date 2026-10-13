@@ -335,7 +335,6 @@
 	"createProject.addCodeDescription": "Clone um repositório ou abra um código que já está neste computador.",
 	"createProject.addCodeTitle": "Adicionar código ao Agent Orchestrator",
 	"createProject.machine": "Computador",
-	"createProject.cloudSandbox": "Sandbox",
 	"createProject.sandboxProvider.docker": "Docker",
 	"createProject.sandboxProvider.nodeops": "NodeOps",
 	"createProject.sandboxProvider.coder": "Espaço de desenvolvimento (Coder)",

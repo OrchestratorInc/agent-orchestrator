@@ -333,7 +333,6 @@
 	"createProject.addCodeDescription": "リポジトリをクローンするか、このコンピューターにあるコードを開きます。",
 	"createProject.addCodeTitle": "Agent Orchestrator にコードを追加",
 	"createProject.machine": "マシン",
-	"createProject.cloudSandbox": "サンドボックス",
 	"createProject.sandboxProvider.docker": "Docker",
 	"createProject.sandboxProvider.nodeops": "NodeOps",
 	"createProject.sandboxProvider.coder": "開発ワークスペース (Coder)",

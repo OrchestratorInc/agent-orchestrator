@@ -556,8 +556,8 @@ func (s *Store) RunningSandboxSessions(ctx context.Context) ([]idlepause.Sandbox
 	err := s.withService(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(
 			ctx,
-			`SELECT session_id, org_id, provider FROM ao_sandboxes
-			WHERE desired_state = 'running' AND observed_state = 'running'`,
+			`SELECT sb.session_id, sb.org_id, sb.provider, `+billedSandboxSQL+` FROM ao_sandboxes sb
+			WHERE sb.desired_state = 'running' AND sb.observed_state = 'running'`,
 		)
 		if err != nil {
 			return fmt.Errorf("list running sandbox sessions: %w", err)
@@ -565,7 +565,7 @@ func (s *Store) RunningSandboxSessions(ctx context.Context) ([]idlepause.Sandbox
 		defer rows.Close()
 		for rows.Next() {
 			var ref idlepause.SandboxRef
-			if err := rows.Scan(&ref.SessionID, &ref.OrgID, &ref.Provider); err != nil {
+			if err := rows.Scan(&ref.SessionID, &ref.OrgID, &ref.Provider, &ref.Billed); err != nil {
 				return err
 			}
 			refs = append(refs, ref)
@@ -661,8 +661,9 @@ func (s *Store) MarkSandboxBusy(ctx context.Context, orgID, sessionID string) er
 // TouchSessionPresence records that a person is looking at a running session
 // (its view is visible in the desktop app): it holds the short interaction
 // lease and counts as an interaction for idle pause. It never wakes a paused
-// session; opening the terminal does that. Only Freestyle sandboxes, which are
-// billed and idle-paused on a short threshold, are touched.
+// session; opening the terminal does that. Only billed sandboxes (Freestyle,
+// and Coder for an organization without the coder capability), which are
+// idle-paused on a short threshold, are touched.
 //
 // Only people who can work in the session (members and editors) keep it
 // awake: a viewer watching a shared session does not hold its owner's
@@ -681,7 +682,7 @@ func (s *Store) TouchSessionPresence(
 			`UPDATE ao_sandboxes SET
 				interactive_until = greatest(coalesce(interactive_until, now()), now() + $3::interval),
 				last_interaction_at = now()
-			WHERE org_id = $1 AND session_id = $2 AND desired_state = 'running' AND provider = 'freestyle'
+			WHERE org_id = $1 AND session_id = $2 AND desired_state = 'running' AND (provider = 'freestyle' OR billed)
 				AND (last_interaction_at IS NULL OR last_interaction_at <= now() - $4::interval)`,
 			orgID, sessionID, intervalString(interactiveSessionLease), intervalString(PresenceInterval))
 		return err
