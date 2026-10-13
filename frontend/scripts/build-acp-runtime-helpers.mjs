@@ -129,22 +129,36 @@ export function patchClaudeContextUsage(adapterPath) {
 }
 
 // Reuse the pinned bridge's native task registry. Ending its process loses the
-// task monitor even when a background shell's process group survives.
+// task monitor even when a background shell's process group survives. Claude
+// Code also starts cycles on its own after an AO turn, for example to answer a
+// finished task's notification. AO has no turn for those, and the finished
+// task has already left the registry, so the SDK's last reported state is the
+// only signal that the agent is still working. A query that never reports idle
+// again keeps its host awake, which is the safe side.
 export function patchClaudeHibernationCheck(adapterPath) {
-	const source = readFileSync(adapterPath, "utf8");
+	let source = readFileSync(adapterPath, "utf8");
 	const method = '"_ao/session/can_hibernate"';
 	if (source.includes(method)) return false;
 	const marker = ".onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params))";
-	if (!source.includes(marker) || !source.includes("session.liveBackgroundTasks.set(message.task_id")) {
+	// task_updated and task_notification both drop a finished task.
+	const ended = "session.liveBackgroundTasks.delete(message.task_id);";
+	if (!source.includes(marker) || !source.includes("session.liveBackgroundTasks.set(message.task_id") ||
+		!source.includes("session.lastSessionState = message.state;") || source.split(ended).length !== 3) {
 		throw new Error("claude-agent-acp no longer matches AO's native-task hibernation check");
 	}
+	source = source.replaceAll(ended, `${ended} session.aoTaskEndedAt = Date.now();`);
 	const registration = `.onRequest(${method}, { parse: params => params }, (ctx) => {
             const id = ctx.params?.sessionId;
             const session = typeof id === "string" && Object.hasOwn(agent.sessions, id) ? agent.sessions[id] : undefined;
             if (!session || session.queryClosed || !(session.liveBackgroundTasks instanceof Map)) {
                 throw RequestError.invalidParams(undefined, "Live Claude session unavailable.");
             }
-            return { canHibernate: !Array.from(session.liveBackgroundTasks.values()).some(task => !task.endedPerLevel) };
+            const sdkIdle = session.lastSessionState === undefined || session.lastSessionState === "idle";
+            // The SDK reports the notification cycle as running 79 ms after the
+            // task leaves the registry (measured on Claude Code 2.1.296).
+            // ponytail: a fixed hold; a slower CLI needs a pending-cycle signal.
+            const cyclePending = Date.now() - (session.aoTaskEndedAt ?? 0) < 10000;
+            return { canHibernate: sdkIdle && !cyclePending && !Array.from(session.liveBackgroundTasks.values()).some(task => !task.endedPerLevel) };
         })
         `;
 	writeFileSync(adapterPath, source.replace(marker, registration + marker));

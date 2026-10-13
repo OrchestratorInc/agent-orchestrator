@@ -52,6 +52,7 @@ export const aoBridge: AoBridge =
 			set: async () => undefined,
 			persistTerminal: async () => undefined,
 			setWindowBackground: async () => undefined,
+			setWindowTranslucent: async () => undefined,
 		},
 		menu: {
 			action: async () => undefined,
@@ -75,6 +76,7 @@ export const aoBridge: AoBridge =
 			restart: async () => ({ state: "starting" }),
 			onStatus: () => () => undefined,
 		},
+		sideChats: { capture: async () => undefined },
 		editorHandoff: {
 			getState: async () => ({
 				targets: [],

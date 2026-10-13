@@ -1,10 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
 	Check,
-	ChevronLeft,
 	Columns2,
 	FolderTree,
 	Folders,
@@ -16,6 +15,7 @@ import {
 } from "lucide-react";
 import {
 	sessionSourceFilesQueryOptions,
+	sessionSourceFileQueryOptions,
 	sessionWorkspaceHistoryQueryOptions,
 	type FilesSource,
 	useWorkspaceFileConnectionState,
@@ -23,11 +23,10 @@ import {
 } from "../hooks/useSessionWorkspaceFiles";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
-import { buildChangedOnlyTree, buildWorkspaceFileTree, type TreeNode } from "../hooks/useSessionWorkspaceTree";
+import { buildChangedOnlyTree, sessionWorkspaceTreeQueryOptions, type TreeNode } from "../hooks/useSessionWorkspaceTree";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
-import type { SessionArtifact } from "../types/workspace";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -49,43 +48,31 @@ import { FileContentPane, type FileOpenOptions } from "./FileContentPane";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 import { WorkspaceReviewPane, type ReviewSourceMenu } from "./diffs/WorkspaceReviewPane";
 import { formatTimeTerse } from "../lib/format-time";
-import { ArtifactFileView } from "./ArtifactFileView";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 import { sessionUiKey } from "../lib/hosts";
 
 const WORKSPACE_SOURCE: FilesSource = { kind: "workspace" };
-const ARTIFACT_SOURCE: FilesSource = { kind: "artifact" };
-const ARTIFACT_SOURCE_VALUE = "__artifacts__";
 // Mirrors the browser panel's tab strip (.browser-panel__tab): no container
 // box, 28px rounded tabs, filled only when active.
 const viewTabClass = "inline-flex h-control-md items-center rounded-md px-2.5 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50";
 
 type SessionFileExplorerProps = {
-	artifacts?: SessionArtifact[];
 	sessionId: string;
 	hostId?: string;
 	isMaximized?: boolean;
 	onOpenFile?: (path: string, options?: FileOpenOptions) => void;
-	onRevealRequestConsumed?: (key: number) => void;
 	onSplitChange?: (split: boolean) => void;
 	onToggleMaximized?: (next: boolean) => void;
-	revealRequest?: { feedback?: boolean; path: string; key: number; source?: "artifact" } | null;
-	/** Called once a reveal request has opened its file, so the owner can drop it. */
-	onRevealHandled?: (key: number) => void;
 	split?: boolean;
 };
 
 export function SessionFileExplorer({
-	artifacts = [],
 	sessionId,
 	hostId,
 	isMaximized = false,
 	onOpenFile,
-	onRevealRequestConsumed,
 	onSplitChange,
 	onToggleMaximized,
-	revealRequest,
-	onRevealHandled,
 	split: controlledSplit,
 }: SessionFileExplorerProps) {
 	const { t } = useTranslation();
@@ -96,7 +83,6 @@ export function SessionFileExplorer({
 	// Maximized, the review pane's edit/preview actions open the file in this
 	// view's own preview (the center pane is hidden behind the overlay).
 	const [previewRequest, setPreviewRequest] = useState<(FileOpenOptions & { key: number }) | null>(null);
-	const [selectedArtifactPath, setSelectedArtifactPath] = useState<string | null>(null);
 	const [sourceNotice, setSourceNotice] = useState("");
 	const [reviewMenu, setReviewMenu] = useState<ReviewSourceMenu | null>(null);
 	// Keyed by PR URL so a commit picked in one PR never applies to another.
@@ -111,7 +97,9 @@ export function SessionFileExplorer({
 	useLayoutEffect(() => markFileViewerPerformance("files-shell-painted"), []);
 
 	const changedOnly = useUiStore((state) => state.inspectorSessions[uiKey]?.filesChangedOnly ?? true);
-	const source = useUiStore((state) => state.inspectorSessions[uiKey]?.filesSource ?? WORKSPACE_SOURCE);
+	const storedSource = useUiStore((state) => state.inspectorSessions[uiKey]?.filesSource);
+	// Artifacts have their own inspector view; a stale artifact source reads as the workspace.
+	const source = !storedSource || storedSource.kind === "artifact" ? WORKSPACE_SOURCE : storedSource;
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
 	const setFilesSource = useUiStore((state) => state.setFilesSource);
 	const annotation = useFileAnnotation(sessionId, {
@@ -123,19 +111,9 @@ export function SessionFileExplorer({
 		() => source.kind === "pull_request" ? { ...source, snapshot } : source,
 		[source, snapshot],
 	);
-	const artifactTree = useMemo(
-		() => buildWorkspaceFileTree(artifacts.map((artifact) => ({ binary: false, path: artifact.path, status: "unmodified" as const }))),
-		[artifacts],
-	);
-	const selectedArtifact = artifacts.find((artifact) => artifact.path === selectedArtifactPath);
-	const artifactFeedbackRequestKey =
-		revealRequest?.source === "artifact" && revealRequest.feedback && revealRequest.path === selectedArtifact?.path
-			? revealRequest.key
-			: undefined;
 
 	const filesQuery = useQuery({
 		...sessionSourceFilesQueryOptions(sessionId, querySource, t("files.error.loadWorkspace"), hostId),
-		enabled: source.kind !== "artifact",
 		refetchInterval: (query) => workspaceFilesRefetchInterval(connectionState, Boolean(query.state.data?.degraded)),
 	});
 	useLayoutEffect(() => {
@@ -181,7 +159,6 @@ export function SessionFileExplorer({
 
 	useEffect(() => {
 		setSelectedPath(null);
-		setSelectedArtifactPath(null);
 		setFilter("");
 		setSourceNotice("");
 		setSelectedPRCommit(null);
@@ -198,30 +175,32 @@ export function SessionFileExplorer({
 	useEffect(() => {
 		window.localStorage.setItem("ao.files.diffStyle", split ? "split" : "unified");
 	}, [split]);
-	useEffect(() => {
-		if (!revealRequest) return;
-		if (revealRequest.source === "artifact") {
-			setFilesSource(uiKey, ARTIFACT_SOURCE);
-			setSelectedArtifactPath(revealRequest.path);
-			return;
-		}
-		setFilesSource(uiKey, WORKSPACE_SOURCE);
-		setFilesChangedOnly(uiKey, false);
-		setSelectedPath(revealRequest.path);
-		// Maximized, the file is shown in this view's own preview; the request
-		// stays pending so un-maximizing still opens it in the centre.
-		if (isMaximized) return;
-		onOpenFile?.(revealRequest.path, { mode: "file" });
-		onRevealHandled?.(revealRequest.key);
-	}, [isMaximized, onOpenFile, onRevealHandled, revealRequest, uiKey, setFilesChangedOnly, setFilesSource]);
+
+	// Give the hovered/focused row a short head start, without issuing a
+	// request for every row the pointer crosses or competing with a busy read.
+	const prefetchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	const prefetchBusy = useRef(false);
+	useEffect(() => () => {
+		if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
+	}, [uiKey, querySource, prCommit?.sha]);
+	const prefetchPath = useCallback((node: TreeNode) => {
+		if (prefetchTimer.current) clearTimeout(prefetchTimer.current);
+		prefetchTimer.current = setTimeout(() => {
+			prefetchTimer.current = undefined;
+			if (prefetchBusy.current) return;
+			if (node.type === "dir" && querySource.kind !== "workspace") return;
+			prefetchBusy.current = true;
+			const request = node.type === "dir"
+				? queryClient.prefetchQuery({ ...sessionWorkspaceTreeQueryOptions(sessionId, node.path, undefined, hostId), staleTime: 5_000 })
+				: queryClient.prefetchQuery({ ...sessionSourceFileQueryOptions(sessionId, querySource, node.path, undefined, "combined", prCommit?.sha, sourceFiles?.find((file) => file.path === node.path)?.previousPath, hostId), staleTime: 5_000 });
+			void request.finally(() => { prefetchBusy.current = false; });
+		}, 100);
+	}, [queryClient, sessionId, hostId, querySource, prCommit?.sha, sourceFiles]);
 
 	const handleSelectPath = (node: TreeNode) => {
 		setPreviewRequest(null);
 		setSelectedPath(node.path);
 		if (!isMaximized && source.kind === "workspace") onOpenFile?.(node.path, { mode: "file" });
-	};
-	const handleSelectArtifact = (node: TreeNode) => {
-		setSelectedArtifactPath(node.path);
 	};
 	const handleViewChange = (next: boolean) => {
 		setPreviewRequest(null);
@@ -235,10 +214,7 @@ export function SessionFileExplorer({
 	};
 	const treeSelectedPath = selectedPath;
 	const selectedPreviousPath = sourceFiles?.find((file) => file.path === selectedPath)?.previousPath;
-	const sourceValue = source.kind === "pull_request" ? source.url : source.kind === "artifact" ? ARTIFACT_SOURCE_VALUE : "workspace";
-	// Artifacts remain viewable by clicking one from the Summary panel (which
-	// switches the Files source programmatically to ARTIFACT_SOURCE), but are
-	// not offered as a manually selectable Files source alongside Workspace/PR.
+	const sourceValue = source.kind === "pull_request" ? source.url : "workspace";
 	const sourceOptions: { value: string; label: string }[] = [
 		{ value: "workspace", label: t("files.explorer.workspaceSource") },
 		...prSummaries.map((pr) => ({ value: pr.url, label: `PR #${pr.number} · ${pr.sourceBranch || pr.title}` })),
@@ -285,7 +261,7 @@ export function SessionFileExplorer({
 	// Docked with nothing to pick or review, the header would hold only the
 	// maximize button (the filter lives in the top bar), so it floats over the
 	// tree's top-right corner instead of reserving an empty row above it.
-	const floatingHeader = !showSourcePicker && Boolean(filesTopbarHost) && !showChanges && !splitView && !hasViewTabs;
+	const floatingHeader = source.kind === "workspace" && !showSourcePicker && Boolean(filesTopbarHost) && !showChanges && !splitView && !hasViewTabs;
 	// In the preview + tree split the (already active) All-files tab doubles as
 	// the tree toggle, so the header doesn't carry two file-tree buttons.
 	const allFilesTabLabel = !showChanges && splitView ? (treeOpen ? t("files.hideFileTree") : t("files.showFileTree")) : t("files.allFiles");
@@ -316,10 +292,10 @@ export function SessionFileExplorer({
 				    flyouts (Branch = Workspace or a PR). */}
 				{/* -ml-2 cancels the trigger's own 8px inline padding so its label
 				    starts on the same 12px gutter as the context row's text below. */}
-				{/* While a PR is shown, Workspace sits before the picker as the way back;
-				    on the workspace itself the trigger already names it. It keys off the
-				    source alone, so it stays reachable while the PR list loads or fails. */}
-				{source.kind === "pull_request" ? (
+				{/* While a PR is shown, Workspace sits before the picker as
+				    the way back; on the workspace itself the trigger already names it. It
+				    keys off the source alone, so it stays reachable while the PR list loads or fails. */}
+				{source.kind !== "workspace" ? (
 					<Button className="-ml-2 h-control-md shrink-0 text-xs" onClick={() => selectSource("workspace")} size="sm" type="button" variant="ghost">
 						{t("files.explorer.workspaceSource")}
 					</Button>
@@ -329,7 +305,7 @@ export function SessionFileExplorer({
 					<DropdownMenuTrigger asChild>
 						<SettingsMenuTrigger
 							aria-label={t("files.explorer.source")}
-							className={cn(source.kind !== "pull_request" && "-ml-2", "h-control-md min-w-0 max-w-72 shrink text-xs")}
+							className={cn(source.kind === "workspace" && "-ml-2", "h-control-md min-w-0 max-w-72 shrink text-xs")}
 							title={currentSourceLabel}
 						>
 							<span className="min-w-0 truncate">{currentSourceLabel}</span>
@@ -496,21 +472,7 @@ export function SessionFileExplorer({
 					{sourceNotice}
 				</p>
 			) : null}
-			{source.kind === "artifact" ? (
-				<ArtifactFilesPanel
-					artifact={selectedArtifact}
-					artifactTree={artifactTree}
-					feedbackRequestKey={artifactFeedbackRequestKey}
-					filter={filter}
-					hostId={hostId}
-					isMaximized={isMaximized}
-					onBack={() => setSelectedArtifactPath(null)}
-					onFeedbackRequestConsumed={onRevealRequestConsumed}
-					onSelect={handleSelectArtifact}
-					selectedPath={selectedArtifactPath}
-					sessionId={sessionId}
-				/>
-			) : showChanges ? (
+			{showChanges ? (
 				filesQuery.isPending ? (
 					<PanelMessage>{t("files.loading")}</PanelMessage>
 				) : filesQuery.isError ? (
@@ -550,6 +512,7 @@ export function SessionFileExplorer({
 									changedOnlyData={changedOnlyData}
 									filterText={filter}
 									onSelectPath={handleSelectPath}
+									onPrefetchPath={prefetchPath}
 									selectedPath={treeSelectedPath}
 									sessionId={sessionId}
 								/>
@@ -566,108 +529,12 @@ export function SessionFileExplorer({
 					changedOnlyData={changedOnlyData}
 					filterText={filter}
 					onSelectPath={handleSelectPath}
+					onPrefetchPath={prefetchPath}
 					selectedPath={treeSelectedPath}
 					sessionId={sessionId}
 				/>
 			)}
 		</section>
-	);
-}
-
-function ArtifactFilesPanel({
-	artifact,
-	artifactTree,
-	feedbackRequestKey,
-	filter,
-	hostId,
-	isMaximized,
-	onBack,
-	onFeedbackRequestConsumed,
-	onSelect,
-	selectedPath,
-	sessionId,
-}: {
-	artifact?: SessionArtifact;
-	artifactTree: TreeNode[];
-	feedbackRequestKey?: number;
-	filter: string;
-	hostId?: string;
-	isMaximized: boolean;
-	onBack: () => void;
-	onFeedbackRequestConsumed?: (key: number) => void;
-	onSelect: (node: TreeNode) => void;
-	selectedPath: string | null;
-	sessionId: string;
-}) {
-	const { t } = useTranslation();
-	if (isMaximized) {
-		return (
-			<ResizablePanelGroup className="min-h-0 flex-1">
-				<ResizablePanel defaultSize="26%" minSize="18%" maxSize="50%">
-					<FileTree
-						changedOnly
-						changedOnlyData={artifactTree}
-						filterText={filter}
-						onSelectPath={onSelect}
-						selectedPath={selectedPath}
-						sessionId={sessionId}
-					/>
-				</ResizablePanel>
-				<ResizableHandle />
-				<ResizablePanel defaultSize="74%" minSize="40%">
-					{artifact ? (
-						<ArtifactFileView
-							artifactName={artifact.name}
-							feedbackRequestKey={feedbackRequestKey}
-							hostId={hostId}
-							onFeedbackRequestConsumed={onFeedbackRequestConsumed}
-							path={artifact.path}
-							rawUrl={artifact.rawUrl}
-							sessionId={sessionId}
-						/>
-					) : (
-						<PanelMessage>{t("files.explorer.selectFile")}</PanelMessage>
-					)}
-				</ResizablePanel>
-			</ResizablePanelGroup>
-		);
-	}
-	if (artifact) {
-		return (
-			<div className="flex min-h-0 flex-1 flex-col">
-				<div className="flex h-8 shrink-0 items-center gap-1 border-b border-border bg-surface px-1">
-					<Button
-						aria-label={t("files.explorer.backToTree")}
-						onClick={onBack}
-						size="icon-sm"
-						type="button"
-						variant="ghost"
-					>
-						<ChevronLeft className="size-icon-sm" aria-hidden="true" />
-					</Button>
-					<span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">{artifact.path}</span>
-				</div>
-				<ArtifactFileView
-					artifactName={artifact.name}
-					feedbackRequestKey={feedbackRequestKey}
-					hostId={hostId}
-					onFeedbackRequestConsumed={onFeedbackRequestConsumed}
-					path={artifact.path}
-					rawUrl={artifact.rawUrl}
-					sessionId={sessionId}
-				/>
-			</div>
-		);
-	}
-	return (
-		<FileTree
-			changedOnly
-			changedOnlyData={artifactTree}
-			filterText={filter}
-			onSelectPath={onSelect}
-			selectedPath={selectedPath}
-			sessionId={sessionId}
-		/>
 	);
 }
 

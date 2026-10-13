@@ -1,8 +1,8 @@
 {
 	"expo": {
-		"name": "AO",
+		"name": "Orchestrator",
 		"slug": "ao-mobile",
-		"version": "2.0.0",
+		"version": "2.1.0",
 		"runtimeVersion": {
 			"policy": "fingerprint"
 		},
@@ -41,8 +41,8 @@
 				]
 			},
 			"infoPlist": {
-				"NSLocalNetworkUsageDescription": "AO connects to Agent Orchestrator running on your computer over your local network.",
-				"NSPhotoLibraryUsageDescription": "AO uses your photo library so you can attach images to an agent conversation.",
+				"NSLocalNetworkUsageDescription": "Orchestrator connects to the Orchestrator app running on your computer over your local network.",
+				"NSPhotoLibraryUsageDescription": "Orchestrator uses your photo library so you can attach images to an agent conversation.",
 				"NSAppTransportSecurity": {
 					"NSAllowsLocalNetworking": true
 				},
@@ -85,22 +85,22 @@
 			[
 				"expo-camera",
 				{
-					"cameraPermission": "Allow AO to scan the pairing QR code.",
+					"cameraPermission": "Allow Orchestrator to scan the pairing QR code.",
 					"recordAudioAndroid": false
 				}
 			],
 			[
 				"expo-image-picker",
 				{
-					"photosPermission": "Allow AO to attach images to agent conversations."
+					"photosPermission": "Allow Orchestrator to attach images to agent conversations."
 				}
 			],
 			"expo-document-picker",
 			[
 				"expo-speech-recognition",
 				{
-					"microphonePermission": "Allow AO to use the microphone so you can dictate prompts to an agent.",
-					"speechRecognitionPermission": "Allow AO to transcribe your speech into prompts for an agent."
+					"microphonePermission": "Allow Orchestrator to use the microphone so you can dictate prompts to an agent.",
+					"speechRecognitionPermission": "Allow Orchestrator to transcribe your speech into prompts for an agent."
 				}
 			],
 			[

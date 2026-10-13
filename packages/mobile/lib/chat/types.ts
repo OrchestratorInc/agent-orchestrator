@@ -1,6 +1,6 @@
 import type { SessionMode } from "../api";
 
-export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped";
+export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped";
 export type TurnState = "queued" | "running" | "completed" | "interrupted" | "failed";
 export type ActivityStatus = "running" | "completed" | "failed" | "cancelled" | "pending" | "resolved";
 export type ActivityKind =
@@ -44,6 +44,8 @@ export type ConversationTurn = {
 };
 
 export type DeliveryState = "queued" | "sending" | "accepted" | "uncertain" | "failed";
+export type ChatExcerpt = { conversationId: string; messageId: string; revision: number; text: string };
+export type ConversationContentSummary = { type: string; text?: string; sourceMessageId?: string; sourceRevision?: number };
 export type ConversationMessage = {
 	kind: "message";
 	id: string;
@@ -53,6 +55,7 @@ export type ConversationMessage = {
 	role: "user" | "assistant";
 	origin: "human" | "automation" | "daemon" | "provider";
 	text: string;
+	content?: ConversationContentSummary[];
 	streaming: boolean;
 	delivery?: DeliveryState;
 	senderLabel?: string;
@@ -203,6 +206,8 @@ export type ConversationThreadState = {
 export type McpServer = { name: string; status: string; error?: string; failureReason?: string };
 
 export type ConversationSnapshot = {
+	/** Daemon-owned source verification; absent on older hosts. */
+	supportsExcerpts?: boolean;
 	conversationId: string;
 	sessionId: string;
 	harness: string;
@@ -267,6 +272,7 @@ export function activeTurn(snapshot: ConversationSnapshot): ConversationTurn | u
 }
 
 export function can(snapshot: ConversationSnapshot | undefined, capability: string): boolean {
+	if (snapshot?.controller.state === "hibernated" && (capability === "compaction" || capability === "rollback")) return false;
 	return Boolean(snapshot?.capabilities?.includes(capability));
 }
 

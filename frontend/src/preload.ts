@@ -255,8 +255,8 @@ const api = {
 		setChatDraftRisk: (risks: readonly ChatDraftBoundaryKind[], copy?: ChatDraftDialogCopy) => {
 			ipcRenderer.send(SET_CHAT_DRAFT_RISK_CHANNEL, risks, copy);
 		},
-		onOpenSettingsShortcut: (listener: () => void) => {
-			const wrapped = () => listener();
+		onOpenSettingsShortcut: (listener: (section?: string) => void) => {
+			const wrapped = (_event: unknown, section?: unknown) => listener(typeof section === "string" ? section : undefined);
 			ipcRenderer.on(OPEN_SETTINGS_SHORTCUT_CHANNEL, wrapped);
 			return () => {
 				ipcRenderer.off(OPEN_SETTINGS_SHORTCUT_CHANNEL, wrapped);
@@ -345,6 +345,10 @@ const api = {
 		// The shell goes transparent over a live native browser page, so whatever
 		// shows through its unpainted gutters is the native window background.
 		setWindowBackground: (color: string) => ipcRenderer.invoke("theme:set-window-background", color) as Promise<void>,
+		// macOS only: swap the painted window background for native vibrancy so
+		// the translucent shell blurs the desktop behind it.
+		setWindowTranslucent: (enabled: boolean) =>
+			ipcRenderer.invoke("theme:set-window-translucent", enabled) as Promise<void>,
 	},
 	menu: {
 		action: (action: string) => ipcRenderer.invoke("menu:action", action) as Promise<void>,
@@ -366,6 +370,9 @@ const api = {
 				ipcRenderer.off("daemon:status", wrapped);
 			};
 		},
+	},
+	sideChats: {
+		capture: (closedSideId?: string, cancelClose = false) => ipcRenderer.invoke("sideChats:capture", closedSideId, cancelClose) as Promise<void>,
 	},
 	editorHandoff: {
 		getState: (sessionId: string) =>

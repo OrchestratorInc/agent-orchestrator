@@ -30,7 +30,7 @@ export type ActivityNode = {
 
 export type ConversationTimelineRenderPlan =
 	| { kind: "empty"; inverted: false; groups: [] }
-	| { kind: "list"; inverted: true; groups: ConversationGroup[] };
+	| { kind: "list"; inverted: boolean; groups: ConversationGroup[] };
 
 export type QueuedConversationMessage = { turnId: string; message: ConversationMessage };
 
@@ -164,11 +164,15 @@ export function latestFirstConversationGroups(
 export function conversationTimelineRenderPlan(
 	snapshot: ConversationSnapshot,
 	items = readableConversationItems(snapshot),
+	platform: "android" | "ios" = "ios",
 ): ConversationTimelineRenderPlan {
-	const groups = latestFirstConversationGroups(snapshot, items);
+	// Android's native text-selection toolbar needs untransformed screen
+	// coordinates. FlatList's inverted transform detaches it from selected text.
+	const inverted = platform !== "android";
+	const groups = inverted ? latestFirstConversationGroups(snapshot, items) : groupConversationByTurn(snapshot, items);
 	return groups.length === 0
 		? { kind: "empty", inverted: false, groups: [] }
-		: { kind: "list", inverted: true, groups };
+		: { kind: "list", inverted, groups };
 }
 
 export function conversationMarkers(snapshot: ConversationSnapshot): ConversationMarker[] {
@@ -191,7 +195,7 @@ function humanMessageTitle(text: string): string {
 }
 
 export function canRollbackTurn(snapshot: ConversationSnapshot, turn: ConversationTurn): boolean {
-	return snapshot.capabilities?.includes("rollback") === true &&
+	return snapshot.controller.state !== "hibernated" && snapshot.capabilities?.includes("rollback") === true &&
 		!snapshot.turns.some((candidate) => candidate.state === "running" || candidate.state === "queued") &&
 		turn.state !== "running" && turn.state !== "queued" &&
 		Boolean(turn.providerTurnId) &&
