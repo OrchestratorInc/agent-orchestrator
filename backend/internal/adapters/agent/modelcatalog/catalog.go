@@ -101,7 +101,7 @@ func (c *signInCheck) check(ctx context.Context, agentID, binary, workingDir str
 var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[[:alpha:]]`)
 
 var commandSpecs = map[string]commandSpec{
-	"aider": {args: []string{"--no-check-update", "--no-git", "--no-gitignore", "--no-analytics", "--list-models", "."}, parser: parseIDLines},
+	"aider": {args: []string{"--no-check-update", "--no-git", "--no-gitignore", "--no-analytics", "--list-models", "."}, parser: parseAiderModels},
 	// `models` alone, never `--pure models`: `--pure` (skip external plugins) is
 	// a global flag whose acceptance varies across opencode builds — a binary that
 	// does not take it globally aborts with "Unrecognized flag: --pure in command
@@ -913,6 +913,9 @@ func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string,
 	switch agentID {
 	case "opencode", "opencode-v2", "pi", "omp", "kimchi", "prime-agent", "kimi", "auggie", "kiro", "codewhale", "kilocode", "crush", "mimo-code", "command-code":
 		config += ";providers-v2=" + strings.Join(configuredProviders(ctx, agentID, env), ",") + providerCatalogFingerprint(agentID, env)
+	case "aider":
+		// Catalogs cached before Aider models carried their LiteLLM provider.
+		config += ";providers-v1"
 	}
 	if config == "" {
 		// Keep the executable-only fingerprint byte-identical to what earlier
@@ -996,6 +999,26 @@ func parseProviderIDLines(output []byte) ([]ports.AgentModelInfo, error) {
 		if provider, name, ok := strings.Cut(models[i].ID, "/"); ok && provider != "" && name != "" {
 			models[i].Provider = provider
 			models[i].Label = name
+		}
+	}
+	return models, err
+}
+
+// Bedrock's own model IDs, which LiteLLM lists without a provider prefix:
+// vendor.model, optionally behind a cross-region inference prefix.
+var bedrockModelIDPattern = regexp.MustCompile(`^(?:(?:us|eu|apac|au|jp|ca|global|us-gov)\.)?(?:ai21|amazon|anthropic|cohere|deepseek|meta|minimax|mistral|moonshot|nvidia|openai|qwen|twelvelabs|writer)\.[a-z0-9]`)
+
+// Aider lists LiteLLM model names, whose prefix before the first slash is the
+// LiteLLM provider. Bare names name no provider, except Bedrock's vendor.model
+// IDs; the rest stay unassigned rather than guessed from the model name.
+func parseAiderModels(output []byte) ([]ports.AgentModelInfo, error) {
+	models, err := parseIDLines(output)
+	for i := range models {
+		if provider, name, ok := strings.Cut(models[i].ID, "/"); ok && provider != "" && name != "" {
+			models[i].Provider = provider
+			models[i].Label = name
+		} else if bedrockModelIDPattern.MatchString(models[i].ID) {
+			models[i].Provider = "bedrock"
 		}
 	}
 	return models, err

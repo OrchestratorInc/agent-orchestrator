@@ -158,11 +158,28 @@ func (c *SettingsController) setHarnessDefault(w http.ResponseWriter, r *http.Re
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	if req.Model == nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "HARNESS_DEFAULT_INVALID", "model is required; use an empty string to reset the default", nil)
+	if req.Model == nil && req.EnabledModels == nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "HARNESS_DEFAULT_INVALID", "model or enabledModels is required; use an empty value to reset it", nil)
 		return
 	}
-	snapshot, err := c.Svc.SetHarnessDefault(r.Context(), domain.AgentHarness(chi.URLParam(r, "agent")), domain.HarnessDefault{Model: *req.Model, Effort: req.Effort})
+	if req.Model == nil && req.Effort != "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "HARNESS_DEFAULT_INVALID", "effort requires model", nil)
+		return
+	}
+	agent := domain.AgentHarness(chi.URLParam(r, "agent"))
+	current, err := c.Svc.Get(r.Context())
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	value := current.HarnessDefaults[string(agent)]
+	if req.Model != nil {
+		value.Model, value.Effort = *req.Model, req.Effort
+	}
+	if req.EnabledModels != nil {
+		value.EnabledModels = *req.EnabledModels
+	}
+	snapshot, err := c.Svc.SetHarnessDefault(r.Context(), agent, value)
 	if errors.Is(err, settingssvc.ErrInvalidHarnessDefault) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "HARNESS_DEFAULT_INVALID", err.Error(), nil)
 		return

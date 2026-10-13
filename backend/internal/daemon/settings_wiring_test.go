@@ -24,7 +24,7 @@ func TestLaunchableDefaultsDropsModelsTheFixedCatalogNoLongerLists(t *testing.T)
 		string(domain.HarnessClaudeCode): {Model: "any-provider-model", Effort: "high"},
 	}}
 	defaults := launchableDefaults{settingssvc.New(store, nil, settingssvc.Offering{}, time.Now)}
-	if got := defaults.HarnessDefault(context.Background(), domain.HarnessAmp); got != (domain.HarnessDefault{}) {
+	if got := defaults.HarnessDefault(context.Background(), domain.HarnessAmp); !got.IsZero() {
 		t.Fatalf("amp default = %+v, want dropped", got)
 	}
 	// Dynamic catalogs are validated at launch, not here.

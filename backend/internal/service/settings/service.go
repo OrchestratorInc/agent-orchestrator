@@ -183,6 +183,34 @@ func (s *Service) ChatHarnesses(candidates []domain.AgentHarness) []domain.Agent
 	return out
 }
 
+// maxEnabledModels bounds the picker allowlist; the largest catalog (Aider via
+// LiteLLM) lists under 2,000 models.
+const maxEnabledModels = 5000
+
+// normalizeEnabledModels trims and de-duplicates ids, keeping the given order.
+func normalizeEnabledModels(ids []string) ([]string, bool) {
+	if len(ids) > maxEnabledModels {
+		return nil, false
+	}
+	out := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || len(id) > 256 || strings.ContainsFunc(id, unicode.IsControl) {
+			return nil, false
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil, true
+	}
+	return out, true
+}
+
 // ErrInvalidHarnessDefault marks invalid preference input at the API boundary.
 var ErrInvalidHarnessDefault = errors.New("invalid harness default")
 
@@ -203,6 +231,11 @@ func (s *Service) SetHarnessDefault(ctx context.Context, agent domain.AgentHarne
 		strings.ContainsFunc(value.Model+value.Effort, unicode.IsControl) || (value.Model == "" && value.Effort != "") {
 		return Snapshot{}, ErrInvalidHarnessDefault
 	}
+	enabled, ok := normalizeEnabledModels(value.EnabledModels)
+	if !ok {
+		return Snapshot{}, fmt.Errorf("%w: enabled models must be at most %d model ids of up to 256 characters", ErrInvalidHarnessDefault, maxEnabledModels)
+	}
+	value.EnabledModels = enabled
 	// Only these adapters currently accept AO's effort setting.
 	if value.Effort != "" && agent != domain.HarnessCodex && agent != domain.HarnessClaudeCode {
 		return Snapshot{}, fmt.Errorf("%w: this harness does not accept reasoning effort", ErrInvalidHarnessDefault)

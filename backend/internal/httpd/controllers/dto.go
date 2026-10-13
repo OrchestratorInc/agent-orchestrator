@@ -3222,11 +3222,15 @@ type UpdateSessionInterfaceRequest struct {
 	DefaultSessionMode string `json:"defaultSessionMode" enum:"chat,tui"`
 }
 
-// UpdateHarnessDefaultRequest replaces one harness preference; an empty model
-// removes it and restores the harness's own selection.
+// UpdateHarnessDefaultRequest changes one harness preference. Model (with
+// Effort) and EnabledModels are each optional; an omitted part keeps its saved
+// value. An empty model restores the harness's own selection, and an empty
+// enabledModels list offers every catalog model again.
 type UpdateHarnessDefaultRequest struct {
-	Model  *string `json:"model" maxLength:"256"`
+	Model  *string `json:"model,omitempty" maxLength:"256"`
 	Effort string  `json:"effort,omitempty" maxLength:"32"`
+	// EnabledModels lists the model ids clients should offer in their pickers.
+	EnabledModels *[]string `json:"enabledModels,omitempty"`
 }
 
 // UpdateCloudOfferingRequest flips the user's cloud toggle.

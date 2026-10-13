@@ -13877,6 +13877,10 @@ components:
         effort:
           maxLength: 32
           type: string
+        enabledModels:
+          items:
+            type: string
+          type: array
         model:
           maxLength: 256
           type: string
@@ -17752,13 +17756,17 @@ components:
         effort:
           maxLength: 32
           type: string
+        enabledModels:
+          items:
+            type: string
+          type:
+          - "null"
+          - array
         model:
           maxLength: 256
           type:
           - "null"
           - string
-      required:
-      - model
       type: object
     UpdateProjectSettingsInput:
       properties:

@@ -2,6 +2,18 @@ export function isConcreteModelID(id: string): boolean {
 	return id !== "" && id.toLowerCase() !== "default";
 }
 
+/**
+ * Narrows a catalog to the models enabled in Settings → Harness → Models.
+ * An empty or unset list means every model. Ids in `keep` (a model a project,
+ * draft, or default already uses) stay listed so a saved choice never vanishes.
+ */
+export function filterEnabledModels<T extends { id: string }>(models: T[], enabled: readonly string[] | undefined, keep: ReadonlyArray<string | undefined> = []): T[] {
+	if (!enabled?.length) return models;
+	const allowed = new Set([...enabled, ...keep.filter((id): id is string => !!id)]);
+	const filtered = models.filter((model) => allowed.has(model.id));
+	return filtered.length ? filtered : models;
+}
+
 export function isDefaultPlaceholderLabel(label: string): boolean {
 	return /^default(?:\s*\([^)]*\))?$/i.test(label.trim());
 }

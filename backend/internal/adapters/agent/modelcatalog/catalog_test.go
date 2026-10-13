@@ -1313,3 +1313,26 @@ func TestCatalogFingerprintTracksTheDeepSeekProfile(t *testing.T) {
 		t.Fatalf("fingerprint unchanged (%q) after the profile's model route changed", second)
 	}
 }
+
+func TestParseAiderModelsGroupsByLiteLLMProvider(t *testing.T) {
+	got, err := parseAiderModels([]byte("Models which match \".\":\n- openrouter/anthropic/claude-3.5-sonnet\n- gemini/gemini-2.5-pro\n- anthropic.claude-3-5-haiku-20241022-v1:0\n- us.amazon.nova-pro-v1:0\n- gpt-4o\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][2]string{
+		"openrouter/anthropic/claude-3.5-sonnet":   {"openrouter", "anthropic/claude-3.5-sonnet"},
+		"gemini/gemini-2.5-pro":                    {"gemini", "gemini-2.5-pro"},
+		"anthropic.claude-3-5-haiku-20241022-v1:0": {"bedrock", "anthropic.claude-3-5-haiku-20241022-v1:0"},
+		"us.amazon.nova-pro-v1:0":                  {"bedrock", "us.amazon.nova-pro-v1:0"},
+		"gpt-4o":                                   {"", "gpt-4o"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("models = %+v", got)
+	}
+	for _, model := range got {
+		expected, ok := want[model.ID]
+		if !ok || model.Provider != expected[0] || model.Label != expected[1] {
+			t.Fatalf("model %q = provider %q label %q, want %v", model.ID, model.Provider, model.Label, expected)
+		}
+	}
+}

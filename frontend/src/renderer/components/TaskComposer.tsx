@@ -26,7 +26,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudAgentInfos, connectedCredentialType, credentialModelScope, isCloudHarnessConnected } from "../lib/cloud-agents";
-import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
+import { agentModelDisplayLabel, filterEnabledModels, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
 import { fallbackEffort } from "../lib/effort";
 import {
 	buildRankedAgentOptions,
@@ -448,11 +448,17 @@ export function TaskComposer({
 	// so there the notice is informational and never reads as blocking.
 	const modelAuthIssue = revalidationWarning === undefined ? modelCatalogAuthIssue(modelCatalogQuery.data) : undefined;
 	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
+	// Settings → Harness → Models picks the models this machine offers; cloud VMs keep their own catalog.
+	const enabledHarnessModels = isCloudProject ? undefined : settings?.harnessDefaults?.[selectedAgent]?.enabledModels;
+	const offeredModels = filterEnabledModels(modelCatalogQuery.data?.models ?? [], enabledHarnessModels, [
+		model, mode, projectModelForSelectedAgent, projectModeForSelectedAgent,
+		isCloudProject ? undefined : settings?.harnessDefaults?.[selectedAgent]?.model,
+	]);
 	const modelCatalog: TaskComposerModelCatalog | undefined = modelCatalogQuery.data
 		? {
 				allowCustom: modelCatalogQuery.data.allowCustom,
 				customModelEntry: modelCatalogQuery.data.customModelEntry,
-				models: modelCatalogQuery.data.models,
+				models: offeredModels,
 				refreshError: modelCatalogQuery.data.refreshError,
 				refreshState: modelCatalogQuery.data.refreshState,
 				retryAt: modelCatalogQuery.data.retryAt,
@@ -460,7 +466,7 @@ export function TaskComposer({
 			}
 		: undefined;
 	// An unmarked first row is not evidence of what the provider will run.
-	const catalogModels = modelCatalogQuery.data?.models?.filter((item) => isConcreteModelID(item.id)) ?? [];
+	const catalogModels = offeredModels.filter((item) => isConcreteModelID(item.id));
 	const catalogDefaultOption =
 		catalogModels.find((item) => item.isDefault)?.id ?? "";
 	const catalogUsesModes = modelCatalogQuery.data?.selectionMode === "mode";
@@ -494,7 +500,9 @@ export function TaskComposer({
 		(!catalogUsesModes && isConcreteModelID(harnessModel) ? harnessModel : "") ||
 		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? "" : catalogDefaultOption) ||
-		claudeFallbackOption;
+		claudeFallbackOption ||
+		// The harness default may be a model Settings hid; open on one that is offered.
+		(!catalogUsesModes && enabledHarnessModels?.length ? catalogModels[0]?.id ?? "" : "");
 	const defaultModeForSelectedAgent =
 		(rememberedModeIsValid ? rememberedMode : "") ||
 		(isConcreteModelID(projectModeForSelectedAgent) ? projectModeForSelectedAgent : "") ||

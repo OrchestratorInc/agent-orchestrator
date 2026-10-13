@@ -4747,6 +4747,7 @@ export interface components {
         };
         HarnessDefault: {
             effort?: string;
+            enabledModels?: string[];
             model?: string;
         };
         IdentityResponse: {
@@ -6261,7 +6262,8 @@ export interface components {
         };
         UpdateHarnessDefaultRequest: {
             effort?: string;
-            model: null | string;
+            enabledModels?: null | string[];
+            model?: null | string;
         };
         UpdateProjectSettingsInput: {
             config: components["schemas"]["ProjectConfig"];

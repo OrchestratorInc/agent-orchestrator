@@ -23,7 +23,7 @@ import { useCloudOrg } from "../../hooks/useCloudOrg";
 import { providerConnectionsQueryKey, useProviderConnections } from "../../hooks/useProviderConnections";
 import { GitHubTokenField } from "../onboarding/GitHubTokenField";
 import { groupModelProviders } from "../../lib/model-providers";
-import { useSettings } from "../../hooks/useSettings";
+import { useSettings, useUpdateHarnessDefault } from "../../hooks/useSettings";
 import { CloudHarnessLoginPanel, type CloudHarness } from "./CloudHarnessLoginPanel";
 import { SettingsRow } from "./SettingsRow";
 import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
@@ -39,6 +39,7 @@ import { AgentAvatar } from "../AgentAvatar";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
+import { Switch } from "../ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { useCloudGate } from "../../hooks/useCloudGate";
 import { SettingsSection } from "./SettingsSection";
@@ -303,8 +304,6 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 	const activeInstallJobs = useRef(new Set<AgentId>());
 	const expandedFailures = useRef(new Map<AgentId, string>());
 	const pendingActions = useRef(new Set<AgentId>());
-	const updateAllInFlight = useRef(false);
-	const [startingAllUpdates, setStartingAllUpdates] = useState(false);
 	const authChecksInFlight = useRef(new Map<AgentId, Promise<AgentAuthProbeResult | undefined>>());
 	const [pendingAgentIds, setPendingAgentIds] = useState<Set<AgentId>>(new Set());
 	const detailRef = useRef<HTMLDivElement>(null);
@@ -634,37 +633,6 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 			return false;
 		} finally {
 			endAction(agentId);
-		}
-	};
-
-	const updateAllReady = !agents.isPending && !agents.isError && !installers.isPending && !installers.isError
-		&& !jobs.isPending && !jobs.isError && !authPlans.isPending && !authPlans.isError
-		&& !authWorkflow && !authStartPendingRef.current
-		&& !AGENT_OPTIONS.some((id) => installed.has(id) && advisoryMap.get(id)?.isPending);
-	// Scope is the selected host, independent of the list's search text.
-	const updateAllTargets = updateAllReady ? AGENT_OPTIONS.flatMap((agentId) => {
-		const query = advisoryMap.get(agentId);
-		const advisory = query?.data;
-		const method = maintenanceMethodId(advisory);
-		if (!installed.has(agentId) || query?.isError || !hasConfirmedHarnessUpdate(advisory)
-			|| needsAuthentication(agentId) || pendingAgentIds.has(agentId) || isActive(jobMap.get(agentId))
-			|| !supportsUpdate(plans.get(agentId)?.methods.find((candidate) => candidate.id === method))) return [];
-		return [{ agentId, method, version: advisory!.latestVersion! }];
-	}) : [];
-	const requestUpdateAll = async () => {
-		if (updateAllInFlight.current || updateAllTargets.length === 0) return;
-		updateAllInFlight.current = true;
-		setStartingAllUpdates(true);
-		try {
-			// Reuse individual version/ownership checks and per-harness errors.
-			// A failed start must not prevent the remaining updates from starting.
-			for (const { agentId, method, version } of updateAllTargets) {
-				if (!mountedRef.current) break;
-				await startAgentOperation(agentId, method, "update", version);
-			}
-		} finally {
-			updateAllInFlight.current = false;
-			if (mountedRef.current) setStartingAllUpdates(false);
 		}
 	};
 
@@ -1193,10 +1161,13 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				</HarnessDetailRow> : null}
 			</HarnessDetailGroup>
 			{hasDetails ? <HarnessDetailGroup title={t("settings.harness.health.details")}>
+				{/* One version row: the installed release with how it compares to the latest. */}
 				{isInstalled && details.currentVersion ? <HarnessDetailRow label={t(details.versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")}>
 					<span className="break-all font-mono text-xs text-settings-label">{details.versionText}</span>
+					{details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-settings-accent">{t("settings.harness.versionAvailable", { version: versionLabel(advisory!.latestVersion!) })}</span>
+						: advisory?.latestVersion && !details.updateUnknown ? <span className="text-xs text-settings-muted">{t(advisory.status === "ahead_of_latest" ? "settings.harness.aheadOfLatest" : "settings.harness.latest")}</span> : null}
 				</HarnessDetailRow> : null}
-				{advisory?.latestVersion ? <HarnessDetailRow label={t("settings.harness.health.latestVersion")}>
+				{advisory?.latestVersion && !(isInstalled && details.currentVersion) ? <HarnessDetailRow label={t("settings.harness.health.latestVersion")}>
 					<span className="break-all font-mono text-xs text-settings-label">{versionLabel(advisory.latestVersion)}</span>
 					{details.updateAvailable ? <span className="whitespace-nowrap text-xs font-medium text-settings-accent">{t("settings.harness.updateAvailable")}</span> : null}
 				</HarnessDetailRow> : null}
@@ -1217,7 +1188,6 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 				</Button>
 			</div>
 			{authCheckErrors[agentId] ? <p role="alert" className="text-xs text-error">{t("settings.harness.health.checkFailed")}</p> : null}
-			<p className="-mt-2 text-xs text-settings-muted">{t("settings.harness.health.hint")}</p>
 		</div>;
 	};
 
@@ -1232,17 +1202,6 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 					{jobs.error instanceof Error ? jobs.error.message : t("settings.harness.loadFailed")}
 				</div>
 			) : null}
-
-			<div className="flex shrink-0 justify-end">
-				<Button type="button" size="sm" variant="outline"
-					disabled={startingAllUpdates || updateAllTargets.length === 0}
-					title={t("settings.harness.updateAllHint")}
-					onClick={() => void requestUpdateAll()}>
-					{startingAllUpdates ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <CircleArrowUp aria-hidden="true" />}
-					<span className="tabular-nums">{startingAllUpdates ? t("settings.harness.startingAllUpdates")
-						: `${t("settings.harness.updateAll")}${updateAllTargets.length > 0 ? ` (${updateAllTargets.length})` : ""}`}</span>
-				</Button>
-			</div>
 
 			<div ref={layoutRef} data-harness-detail={detailsOpen ? "" : undefined} className={cn("w-full min-w-0 max-w-full", detailsOpen && "flex min-h-0 flex-1 flex-col overflow-hidden", split && detailsOpen && "grid-rows-[minmax(0,1fr)]", split && "grid grid-cols-[minmax(14rem,16rem)_minmax(0,1fr)] items-stretch overflow-clip rounded-xl border border-border bg-(--color-bg-primary)")}>
 				{split || !selectedDetails ? (
@@ -1420,6 +1379,7 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	const loginBlocksCatalog = needsLogin && !MULTI_PROVIDER_HARNESSES.has(agentId);
 	const catalog = useQuery({ ...options, enabled: installed && !loginBlocksCatalog });
 	const [page, setPage] = useState(0);
+	const [modelSearch, setModelSearch] = useState("");
 	const scope = `${hostId ?? LOCAL_HOST}:${agentId}`;
 	const [providerChoice, setProviderChoice] = useState<{ scope: string; id: string }>();
 	const { settings } = useSettings(hostId);
@@ -1427,11 +1387,31 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	const providers = useMemo(() => groupModelProviders(allModels ?? [], catalog.data?.configuredProviders, catalog.data?.providers), [allModels, catalog.data?.configuredProviders, catalog.data?.providers]);
 	const showProviders = providers.some((provider) => provider.id !== "");
 	const savedModel = settings?.harnessDefaults?.[agentId]?.model;
+	// Enabled models narrow the project and New Task pickers; an empty list means all of them.
+	const { update: updateHarnessDefault, error: enabledModelsError } = useUpdateHarnessDefault(hostId);
+	const [enabledDraft, setEnabledDraft] = useState<{ scope: string; ids: string[] }>();
+	const enabledIds = enabledDraft?.scope === scope ? enabledDraft.ids : settings?.harnessDefaults?.[agentId]?.enabledModels ?? [];
+	const allModelIds = useMemo(() => (allModels ?? []).map((model) => model.id).filter(isConcreteModelID), [allModels]);
+	const enabledSet = new Set(enabledIds);
+	const isModelEnabled = (id: string) => !enabledIds.length || enabledSet.has(id);
+	const enabledCount = enabledIds.length ? allModelIds.filter((id) => enabledSet.has(id)).length : allModelIds.length;
+	const setModelsEnabled = (ids: string[], on: boolean) => {
+		const next = new Set(enabledIds.length ? enabledIds : allModelIds);
+		for (const id of ids) {
+			if (on) next.add(id); else next.delete(id);
+		}
+		// Disabling every model would read as "no filter", so keep at least one.
+		if (!allModelIds.some((id) => next.has(id))) return;
+		// All enabled is saved as no filter, so models the catalog adds later show up too.
+		const saved = allModelIds.every((id) => next.has(id)) ? [] : [...next];
+		setEnabledDraft({ scope, ids: saved });
+		void updateHarnessDefault({ agentId, enabledModels: saved }).catch(() => setEnabledDraft(undefined));
+	};
 	const initialModel = allModels?.find((model) => model.id === savedModel) ?? allModels?.find((model) => model.isDefault);
 	const initialProviderID = initialModel ? initialModel.provider?.trim() ?? "" : undefined;
 	const initialProvider = providers.find((provider) => provider.id === initialProviderID) ?? providers[0];
 	const selectedProvider = (providerChoice?.scope === scope ? providers.find((provider) => provider.id === providerChoice.id) : undefined) ?? initialProvider;
-	useEffect(() => setPage(0), [scope, selectedProvider?.id]);
+	useEffect(() => { setPage(0); setModelSearch(""); }, [scope, selectedProvider?.id]);
 	const agent = agentLabel(agentId);
 	if (!installed || loginBlocksCatalog) {
 		return <div className="space-y-3">
@@ -1444,12 +1424,18 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 	// Claude uses the New Task family order, with older models included in the same paginated list.
 	const catalogModels = (showProviders ? selectedProvider?.models : allModels) ?? [];
 	const claude = agentId === "claude-code" ? splitClaudeModels(catalogModels.filter((model) => isConcreteModelID(model.id))) : undefined;
-	const models = claude ? [...claude.current, ...claude.other] : catalogModels;
+	const providerModels = claude ? [...claude.current, ...claude.other] : catalogModels;
+	const normalizedModelSearch = modelSearch.trim().toLocaleLowerCase();
+	const models = normalizedModelSearch
+		? providerModels.filter((model) => `${model.label} ${model.id}`.toLocaleLowerCase().includes(normalizedModelSearch))
+		: providerModels;
+	const visibleModelIds = new Set(models.map((model) => model.id));
 	const pageCount = Math.max(1, Math.ceil(models.length / MODELS_PAGE_SIZE));
 	const currentPage = Math.min(page, pageCount - 1);
 	const pageStart = currentPage * MODELS_PAGE_SIZE;
 	const visibleModels = models.slice(pageStart, pageStart + MODELS_PAGE_SIZE);
 	const error = (catalog.error instanceof Error ? catalog.error.message : undefined) ?? data?.refreshError;
+	const showConfiguredGroups = !data?.stale && providers.some((provider) => provider.configured);
 	const renderProviderOption = (id: string, label: string, inMenu: boolean) => {
 		const provider = providers.find((candidate) => candidate.id === id);
 		const count = provider?.models.length ?? 0;
@@ -1469,19 +1455,40 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 			<h3 className="text-sm font-medium text-settings-label">{t("settings.harness.models.provider")}</h3>
 			<SettingsOptionMenu
 				aria-label={t("settings.harness.models.provider")} value={selectedProvider?.id ?? ""}
-				options={providers.map((provider) => ({ value: provider.id, label: provider.id || t("settings.harness.models.unknownProvider") }))}
+				options={providers.map((provider) => ({ value: provider.id, label: provider.id || t("settings.harness.models.unknownProvider"),
+					// Configured providers sort first; head both runs only when there are some.
+					group: showConfiguredGroups ? t(provider.configured ? "settings.harness.models.configuredProvider" : "settings.harness.models.otherProviders") : undefined }))}
 				onChange={(id) => { setProviderChoice({ scope, id }); setPage(0); }}
 				renderTrigger={(option) => option ? renderProviderOption(option.value, option.label, false) : null}
 				renderMenuItem={(option) => renderProviderOption(option.value, option.label, true)}
-				searchable={providers.length > 5} menuAlign="start" triggerClassName="w-full justify-between"
+				searchable={providers.length > 5} searchPlaceholder={t("settings.harness.models.searchProviders")} menuAlign="start"
+				triggerClassName="w-full max-w-(--size-settings-menu-width) justify-between"
 				menuClassName="w-(--radix-dropdown-menu-trigger-width)" menuItemClassName="w-full"
 			/>
 			{providers.some((provider) => provider.configured) && !data?.stale ? <p className="text-xs text-settings-muted">{t("settings.harness.models.configuredProviderHint")}</p> : null}
 		</div> : null}
-		<h3 className="shrink-0 text-xs font-medium leading-4 text-settings-muted">{t("settings.harness.models.title")}</h3>
+		<div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
+			<h3 className="text-xs font-medium leading-4 text-settings-muted">{t("settings.harness.models.title")}</h3>
+			{allModelIds.length ? <span className="text-xs tabular-nums text-settings-muted">{t("settings.harness.models.enabledSummary", { enabled: enabledCount, total: allModelIds.length })}</span> : null}
+			{models.length > 1 ? <span className="ml-auto flex items-center gap-1">
+				<Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-[11px]"
+					disabled={models.every((model) => isModelEnabled(model.id))}
+					onClick={() => setModelsEnabled(models.map((model) => model.id), true)}>{t("settings.harness.models.enableAll")}</Button>
+				<Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-[11px]"
+					disabled={!allModelIds.some((id) => isModelEnabled(id) && !visibleModelIds.has(id))}
+					onClick={() => setModelsEnabled(models.map((model) => model.id), false)}>{t("settings.harness.models.disableAll")}</Button>
+			</span> : null}
+		</div>
+		{enabledModelsError ? <p role="alert" className="text-xs text-error">{enabledModelsError}</p> : null}
+		{providerModels.length > MODELS_PAGE_SIZE ? <label className="flex h-8 shrink-0 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-2.5">
+			<Search aria-hidden="true" className="size-3.5 shrink-0 text-settings-muted" />
+			<input type="search" aria-label={t("settings.models.searchAria", { label: t("settings.harness.models.title").toLocaleLowerCase() })}
+				className="min-w-0 flex-1 bg-transparent text-sm text-settings-label outline-none placeholder:text-settings-muted"
+				placeholder={t("settings.models.searchPlaceholder")} value={modelSearch} onChange={(event) => { setModelSearch(event.target.value); setPage(0); }} />
+		</label> : null}
 		{error ? <p role="alert" className="text-xs text-error">{error}</p> : null}
 		{catalog.isPending ? null
-			: !models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.models.empty")}</p>
+			: !models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t(normalizedModelSearch ? "settings.options.noMatches" : "settings.harness.models.empty")}</p>
 			: <ul className={cn(HARNESS_CARD_CLASS, "settings-thin-scrollbar min-h-0 flex-initial overflow-y-auto overscroll-contain")} tabIndex={0} aria-label={t("settings.harness.models.title")}>
 				{visibleModels.map((model) => <li key={model.id} className={cn(HARNESS_CARD_ROW_CLASS, "shrink-0 gap-4")}>
 					<span className="min-w-0 flex-1">
@@ -1497,6 +1504,12 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 					{model.efforts?.length ? <span className="shrink-0 text-right text-xs text-settings-muted">
 						{t("settings.harness.models.efforts", { levels: model.efforts.join(" · ") })}
 					</span> : null}
+					{isConcreteModelID(model.id) ? <Switch
+						aria-label={t("settings.harness.models.toggleModel", { model: agentModelDisplayLabel(agentId, model.label) })}
+						checked={isModelEnabled(model.id)}
+						disabled={isModelEnabled(model.id) && enabledCount <= 1}
+						onCheckedChange={(on) => setModelsEnabled([model.id], on)}
+					/> : null}
 				</li>)}
 			</ul>}
 		{pageCount > 1 ? <nav className="flex shrink-0 items-center justify-end gap-2 text-xs text-settings-muted" aria-label={t("settings.harness.models.pagination")}>

@@ -85,7 +85,7 @@ func (s *Store) SetHarnessDefault(ctx context.Context, agent domain.AgentHarness
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	path := `$."` + string(agent) + `"`
-	if value.Model == "" {
+	if value.IsZero() {
 		return s.qw.ResetHarnessDefault(ctx, gen.ResetHarnessDefaultParams{HarnessPath: path, UpdatedAt: now})
 	}
 	data, err := json.Marshal(value)
