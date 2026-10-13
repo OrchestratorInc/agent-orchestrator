@@ -290,7 +290,7 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.getByRole("textbox", { name: "Search harnesses" })).toBeInTheDocument();
 	});
 
-	it("lists model metadata, offers defaults, and refreshes the catalog", async () => {
+	it("lists model metadata without a manual refresh button", async () => {
 		mockInstalledOperations("npm");
 		const models = {
 			agentId: "codex", lastSuccessAt: "2026-10-08T09:00:00Z",
@@ -304,28 +304,57 @@ describe("HarnessSettingsSection", () => {
 			? { data: models } as never : (get as (path: string, options: unknown) => Promise<never>)(path, options));
 		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
 		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models/refresh"
-			? { data: { ...models, models: [models.models[0]] } } as never : (post as (path: string, options: unknown) => Promise<never>)(path, options));
+			? { data: models } as never : (post as (path: string, options: unknown) => Promise<never>)(path, options));
 		renderSection();
 		const page = await findAgentRow("codex");
 		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
 		const list = await within(page).findByRole("list", { name: "Available models" });
 		expect(within(list).getByText("GPT-5.3 Codex")).toBeInTheDocument();
-		expect(within(list).getByText("gpt-5.3-codex")).toBeInTheDocument();
+		expect(within(list).queryByText("gpt-5.3-codex")).toBeNull();
 		expect(within(list).getByText("Default")).toBeInTheDocument();
 		expect(within(list).getByText("Effort: low · medium · high")).toBeInTheDocument();
 		// A model without effort levels shows nothing in their place.
 		expect(within(list).queryByText("No effort control")).toBeNull();
-		// Reported context and inputs show once; a model that reports neither shows nothing in their place.
+		// Context remains visible; duplicate IDs and input types are omitted.
 		expect(within(list).getAllByText(/Context/)).toHaveLength(1);
-		expect(within(list).getAllByText(/Inputs/)).toHaveLength(1);
+		expect(within(list).queryByText(/Inputs/)).toBeNull();
 		const unreported = within(list).getByText("gpt-5.3-mini").closest("li") as HTMLElement;
 		expect(within(unreported).queryByText(/Context|Inputs|Unknown/)).toBeNull();
-		expect(within(page).getByRole("button", { name: "Default model" })).toBeInTheDocument();
+		expect(within(page).queryByRole("button", { name: "Default model" })).toBeNull();
+		expect(within(page).queryByText("Defaults for new sessions")).toBeNull();
 		expect(within(list).getByText("Context (tokens): 200,000")).toBeInTheDocument();
-		expect(within(list).getByText("Inputs: Text · Image")).toBeInTheDocument();
-		await userEvent.click(within(page).getByRole("button", { name: "Refresh" }));
+		expect(within(page).queryByRole("button", { name: /Refresh/ })).toBeNull();
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", { params: { path: { agent: "codex" }, query: { projectId: undefined, revalidate: undefined } } });
-		await waitFor(() => expect(within(page).queryByText("gpt-5.3-mini")).toBeNull());
+	});
+
+
+	it.each(["success", "failure"])("refreshes on each harness open while preserving fresh cached models (%s)", async (outcome) => {
+		mockInstalledOperations("npm");
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["agent-models", "codex", ""];
+		queryClient.setQueryData(key, { agentId: "codex", models: [{ id: "cached", label: "Cached model" }] });
+		let resolveRefresh!: (value: unknown) => void;
+		let rejectRefresh!: (reason: Error) => void;
+		const pending = new Promise((resolve, reject) => { resolveRefresh = resolve; rejectRefresh = reject; });
+		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models/refresh"
+			? await pending as never : (post as (path: string, options: unknown) => Promise<never>)(path, options));
+		renderSection(undefined, undefined, undefined, queryClient);
+		const page = await findAgentRow("codex");
+		const refreshCalls = () => vi.mocked(apiClient.POST).mock.calls.filter(([path]) => path === "/api/v1/agents/{agent}/models/refresh");
+		await waitFor(() => expect(refreshCalls()).toHaveLength(1));
+		// Opening Account already requests refresh; Models never waits for it.
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		expect(await within(page).findByText("Cached model")).toBeInTheDocument();
+		expect(within(page).queryByText("Loading models…")).toBeNull();
+		await act(async () => {
+			if (outcome === "success") resolveRefresh({ data: { agentId: "codex", models: [{ id: "fresh", label: "Fresh model" }] } });
+			else rejectRefresh(new Error("Refresh unavailable"));
+		});
+		expect(await within(page).findByText(outcome === "success" ? "Fresh model" : "Cached model")).toBeInTheDocument();
+		backToList();
+		await findAgentRow("codex");
+		await waitFor(() => expect(refreshCalls()).toHaveLength(2));
 	});
 
 	it("shows cached models at once and picks up the background refresh", async () => {
@@ -347,6 +376,40 @@ describe("HarnessSettingsSection", () => {
 		expect(within(page).queryByText("Loading models…")).toBeNull();
 		expect(await within(page).findByText("GPT Fresh", undefined, { timeout: 6_000 })).toBeInTheDocument();
 	}, 15_000);
+
+	it("pages Claude models in New Task order without folding", async () => {
+		mockInstalledOperations();
+		const models = { agentId: "claude-code", models: [
+			{ id: "claude-opus-4-8", label: "Claude Opus 4.8" },
+			...Array.from({ length: 6 }, (_, i) => ({ id: `claude-opus-4-${i}`, label: `Claude Opus 4.${i}` })),
+			{ id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
+			{ id: "claude-fable-5", label: "Claude Fable 5" },
+			{ id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+			{ id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true },
+			{ id: "claude-fable-5-1", label: "Claude Fable 5.1" },
+		] };
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models"
+			? { data: models } as never : (get as (path: string, options: unknown) => Promise<never>)(path, options));
+		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models/refresh"
+			? { data: models } as never : (post as (path: string, options: unknown) => Promise<never>)(path, options));
+		renderSection();
+		const page = await findAgentRow("claude-code");
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		const list = await within(page).findByRole("list", { name: "Available models" });
+		const labels = () => within(list).getAllByRole("listitem").map((row) => row.textContent);
+		expect(labels()).toEqual([
+			"Fable 5.1", "Opus 5.5Default", "Sonnet 5.5", "Haiku 5.5", "Fable 5", "Opus 4.8",
+			"Opus 4.5", "Opus 4.4", "Opus 4.3", "Opus 4.2",
+		]);
+		expect(within(page).queryByRole("button", { name: "Other models" })).toBeNull();
+		expect(within(page).getByText("1–10 of 12")).toBeInTheDocument();
+		await userEvent.click(within(page).getByRole("button", { name: "Next models" }));
+		expect(labels()).toEqual(["Opus 4.1", "Opus 4.0"]);
+		expect(within(page).getByText("11–12 of 12")).toBeInTheDocument();
+		expect(within(page).getByRole("button", { name: "Next models" })).toBeDisabled();
+	});
 
 	it("pages through more than ten models", async () => {
 		mockInstalledOperations("npm");

@@ -1622,6 +1622,30 @@ textarea,
 	background: transparent;
 }
 
+/* The Models tab owns its scroll area; keep its harness header and tabs in view.
+   Other settings pages retain the normal full-page scroll. */
+.settings-thin-scrollbar:has([data-harness-models]) {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.settings-dialog-body:has([data-harness-models]),
+.settings-dialog-body > div:has([data-harness-models]),
+[data-section="harness"]:has([data-harness-models]),
+[data-section="harness"]:has([data-harness-models]) > div {
+	min-height: 0;
+	flex: 1;
+}
+
+.settings-dialog-body:has([data-harness-models]) {
+	padding-bottom: 18px;
+}
+
+[data-section="harness"]:has([data-harness-models]) > div > :not([data-harness-models]) {
+	flex-shrink: 0;
+}
+
 .settings-thin-scrollbar {
 	scrollbar-width: thin;
 	scrollbar-color: color-mix(in srgb, var(--color-scrollbar) 16%, transparent) transparent;
