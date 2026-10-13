@@ -1241,6 +1241,73 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("Only the unit ones, please")).toBeVisible();
 	});
 
+	it("keeps a steer and a mid-turn message visible outside the folded work once the turn settles", () => {
+		const turnId = "turn-settled-steer";
+		const at = "2026-08-11T10:01:00Z";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			latestSequence: 7,
+			turns: [{ id: turnId, state: "completed", requestedAt: at, startedAt: at, completedAt: "2026-08-11T10:43:00Z" }],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "Run the unit tests",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "message", id: "prose", turnId, sequence: 2, revision: 0,
+					role: "assistant", origin: "provider", text: "Starting with the test suite.",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "activity", id: "tool", turnId, sequence: 3, revision: 0,
+					activityKind: "command", status: "completed", summary: "go test ./...",
+					detail: { command: "go test ./..." }, createdAt: at,
+				},
+				{
+					kind: "activity", id: "steer", turnId, sequence: 4, revision: 0,
+					activityKind: "system", status: "completed", summary: "Only the unit ones, please",
+					detail: { event: "steer", text: "Only the unit ones, please", origin: "human" },
+					createdAt: at,
+				},
+				{
+					kind: "activity", id: "tool-2", turnId, sequence: 5, revision: 0,
+					activityKind: "command", status: "completed", summary: "go test ./internal/...",
+					detail: { command: "go test ./internal/..." }, createdAt: at,
+				},
+				{
+					kind: "message", id: "later", turnId, sequence: 6, revision: 0,
+					role: "user", origin: "human", text: "Skip the slow ones too",
+					streaming: false, createdAt: at,
+				},
+				{
+					kind: "message", id: "reply", turnId, sequence: 7, revision: 0,
+					role: "assistant", origin: "provider", text: "Switching to the unit tests.",
+					streaming: false, createdAt: at,
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		// The work folds, but what the user wrote during the turn stays readable,
+		// in order, before the reply.
+		for (const worked of screen.getAllByRole("button", { name: /Worked for/ })) {
+			expect(worked).toHaveAttribute("aria-expanded", "false");
+		}
+		expect(screen.getByText("Only the unit ones, please")).toBeVisible();
+		expect(screen.getByText("Skip the slow ones too")).toBeVisible();
+		const text = screen.getByRole("log").textContent ?? "";
+		const positions = [
+			"Run the unit tests",
+			"Only the unit ones, please",
+			"Skip the slow ones too",
+			"Switching to the unit tests.",
+		].map((fragment) => text.indexOf(fragment));
+		expect(positions.every((position) => position >= 0)).toBe(true);
+		expect(positions).toEqual([...positions].sort((a, b) => a - b));
+	});
+
 	it("replaces the generic working label with Claude's live retry count and backoff", () => {
 		const snapshot = structuredClone(chatFixture);
 		snapshot.items = snapshot.items.filter(
