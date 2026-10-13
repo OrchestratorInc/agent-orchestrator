@@ -994,14 +994,14 @@ func model(id, label string, isDefault bool) ports.AgentModelInfo {
 // These harnesses' native selector is provider/model. Restrict this parsing to
 // commands with that contract: a slash in other catalogs can be a model namespace.
 func parseProviderIDLines(output []byte) ([]ports.AgentModelInfo, error) {
-	models, err := parseIDLines(output)
+	models := parseIDLines(output)
 	for i := range models {
 		if provider, name, ok := strings.Cut(models[i].ID, "/"); ok && provider != "" && name != "" {
 			models[i].Provider = provider
 			models[i].Label = name
 		}
 	}
-	return models, err
+	return models, nil
 }
 
 // Bedrock's own model IDs, which LiteLLM lists without a provider prefix:
@@ -1012,7 +1012,7 @@ var bedrockModelIDPattern = regexp.MustCompile(`^(?:(?:us|eu|apac|au|jp|ca|globa
 // LiteLLM provider. Bare names name no provider, except Bedrock's vendor.model
 // IDs; the rest stay unassigned rather than guessed from the model name.
 func parseAiderModels(output []byte) ([]ports.AgentModelInfo, error) {
-	models, err := parseIDLines(output)
+	models := parseIDLines(output)
 	for i := range models {
 		if provider, name, ok := strings.Cut(models[i].ID, "/"); ok && provider != "" && name != "" {
 			models[i].Provider = provider
@@ -1021,10 +1021,10 @@ func parseAiderModels(output []byte) ([]ports.AgentModelInfo, error) {
 			models[i].Provider = "bedrock"
 		}
 	}
-	return models, err
+	return models, nil
 }
 
-func parseIDLines(output []byte) ([]ports.AgentModelInfo, error) {
+func parseIDLines(output []byte) []ports.AgentModelInfo {
 	text := ansiPattern.ReplaceAllString(string(output), "")
 	var models []ports.AgentModelInfo
 	for _, line := range strings.Split(text, "\n") {
@@ -1039,7 +1039,7 @@ func parseIDLines(output []byte) ([]ports.AgentModelInfo, error) {
 		id := strings.Trim(fields[0], "`\"'[](),:")
 		models = append(models, ports.AgentModelInfo{ID: id, Label: id})
 	}
-	return normalize(models), nil
+	return normalize(models)
 }
 
 func parseMiMoModels(output []byte) ([]ports.AgentModelInfo, error) {

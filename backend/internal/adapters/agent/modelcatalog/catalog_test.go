@@ -813,10 +813,7 @@ func TestDevinDiscoveryUsesACPModelOptions(t *testing.T) {
 }
 
 func TestParseIDLinesAcceptsOnlyWholeModelIDs(t *testing.T) {
-	got, err := parseIDLines([]byte("\x1b[32mModels\x1b[0m\nanthropic/claude-sonnet\nopenai/gpt-5.4\nTip: use --model <id>\nopenai/gpt-5.4 duplicate\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := parseIDLines([]byte("\x1b[32mModels\x1b[0m\nanthropic/claude-sonnet\nopenai/gpt-5.4\nTip: use --model <id>\nopenai/gpt-5.4 duplicate\n"))
 	if len(got) != 2 || got[0].ID != "anthropic/claude-sonnet" || got[1].ID != "openai/gpt-5.4" {
 		t.Fatalf("models = %#v", got)
 	}

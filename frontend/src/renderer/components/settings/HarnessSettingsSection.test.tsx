@@ -485,6 +485,10 @@ describe("HarnessSettingsSection", () => {
 
 	it.each(["codewhale", "fx"] as const)("allows %s browsing while signed out", async (agentId) => {
 		const readiness = catalogWithInstalled(agentId);
+		if (!readiness.agents.some((agent) => agent.id === agentId)) {
+			const [template] = catalogWithInstalled("codewhale").agents.filter((agent) => agent.id === "codewhale");
+			readiness.agents.push({ ...template, id: agentId, label: "FX" });
+		}
 		readiness.agents.find((agent) => agent.id === agentId)!.authentication.state = "unauthorized";
 		mockInstalledOperations("npm", readiness);
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
@@ -519,8 +523,9 @@ describe("HarnessSettingsSection", () => {
 		const page = await findAgentRow("codex");
 		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
 		expect(await within(page).findByText("v1.2.3")).toBeInTheDocument();
-		expect(within(page).getByText("v1.3.0")).toBeInTheDocument();
-		expect(within(page).getByText("Update available")).toBeInTheDocument();
+		// One version row: the installed release with the newer one beside it.
+		expect(within(page).getAllByText("v1.3.0 available").length).toBeGreaterThan(0);
+		expect(within(page).queryByText("Latest version")).toBeNull();
 		expect(within(page).getByText("npm")).toBeInTheDocument();
 		expect(within(page).getByText("Authentication")).toBeInTheDocument();
 		expect(within(page).getByText("Executable")).toBeInTheDocument();
@@ -684,7 +689,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const page = await findAgentRow("codex");
 		expect(await within(page).findByText("Connected")).toBeInTheDocument();
-		await userEvent.click(await within(page).findByRole("button", { name: "Relogin" }));
+		await userEvent.click(await within(page).findByRole("button", { name: "Log in again" }));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", { params: { path: { agent: "codex" } } });
 		expect(await screen.findByRole("button", { name: "Complete login terminal" })).toBeInTheDocument();
 	});
@@ -831,58 +836,6 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByText(/available$/)).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
 		expect(within(row).getByText("Update availability could not be verified.")).toBeInTheDocument();
-	});
-
-	it.each([false, true])("updates every eligible harness once, continuing after a start failure (%s)", async (failFirst) => {
-		mockInstalledOperations("npm");
-		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
-		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
-			if (path === "/api/v1/agents/{agent}/update-advisory") {
-				const id = (options as { params: { path: { agent: string } } }).params.path.agent;
-				return { data: { agentId: id, status: "behind_latest", currentVersion: "1.2.3", latestVersion: "1.3.0",
-					maintenanceMethod: id === "claude-code" ? "homebrew" : id === "codex" ? "npm" : "official-installer" } } as never;
-			}
-			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
-		});
-		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
-		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => {
-			if (failFirst && path === "/api/v1/agents/{agent}/install"
-				&& (options as { params: { path: { agent: string } } }).params.path.agent === "claude-code") {
-				return { error: { error: { code: "UPDATE_FAILED", message: "Cannot update Claude" } } } as never;
-			}
-			return (post as (path: string, options: unknown) => Promise<never>)(path, options);
-		});
-		renderSection();
-		const button = await screen.findByRole("button", { name: "Update all (2)" });
-		fireEvent.click(button);
-		fireEvent.click(button);
-		await waitFor(() => expect(vi.mocked(apiClient.POST).mock.calls.filter((call: readonly unknown[]) => call[0] === "/api/v1/agents/{agent}/install")).toHaveLength(2));
-		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
-			params: { path: { agent: "claude-code" } }, body: { method: "homebrew", operation: "update", expectedVersion: "1.3.0" },
-		});
-		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
-			params: { path: { agent: "codex" } }, body: { method: "npm", operation: "update", expectedVersion: "1.3.0" },
-		});
-		// Cursor advertises a newer release, but its installer cannot update it.
-		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.objectContaining({ params: { path: { agent: "cursor" } } }));
-		if (failFirst) expect((await screen.findAllByText("Cannot update Claude")).length).toBeGreaterThan(0);
-	});
-
-	it.each(["login", "active-job", "unknown-version"])("disables Update all when the only update is blocked by %s", async (blocked) => {
-		const readiness = readyCatalog();
-		if (blocked === "login") readiness.agents[1].authentication.state = "unauthorized";
-		mockInstalledOperations("npm", readiness);
-		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
-		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
-			if (blocked === "active-job" && path === "/api/v1/agents/install-jobs") return { data: { jobs: [{ target: "codex", status: "installing", method: "npm" }] } } as never;
-			if (blocked === "unknown-version" && path === "/api/v1/agents/{agent}/update-advisory") return { data: { status: "unknown" } } as never;
-			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
-		});
-		const { client } = renderSection();
-		await findListRow("codex");
-		await waitFor(() => expect(client.isFetching()).toBe(0));
-		expect(screen.getByRole("button", { name: "Update all" })).toBeDisabled();
-		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
 	it("uses the detected manager rather than a stale saved method", async () => {
@@ -1121,7 +1074,7 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Show diagnostics" })).toBeNull();
 	});
 
-	it.each(["single", "all"])("keeps %s updates and displayed versions scoped to the selected host", async (mode) => {
+	it("keeps updates and displayed versions scoped to the selected host", async () => {
 		mockInstalledOperations("npm");
 		hostMocks.connected = ["remote-1"];
 		const localGET = vi.mocked(apiClient.GET).getMockImplementation()!;
@@ -1145,7 +1098,7 @@ describe("HarnessSettingsSection", () => {
 			expect(within(row).getByText("v9.4.0")).toBeInTheDocument();
 			expect(within(row).queryByText("v1.2.3")).toBeNull();
 			expect(within(row).getByText("v9.5.0 available")).toBeInTheDocument();
-			await userEvent.click(mode === "all" ? await screen.findByRole("button", { name: "Update all (1)" }) : within(row).getByRole("button", { name: "Update" }));
+			await userEvent.click(within(row).getByRole("button", { name: "Update" }));
 			await waitFor(() => expect(hostMocks.remotePOST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything()));
 			expect(hostMocks.remotePOST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "homebrew", operation: "update", expectedVersion: "9.5.0" } });
 			expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
@@ -1298,7 +1251,7 @@ describe("HarnessSettingsSection", () => {
 		expect(await within(row).findByText("Connected")).toBeInTheDocument();
 		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
-		expect(within(row).getByRole("button", { name: "Relogin" })).toBeEnabled();
+		expect(within(row).getByRole("button", { name: "Log in again" })).toBeEnabled();
 	});
 
 	it("offers fx installation while readiness refreshes automatically", async () => {
@@ -1729,7 +1682,7 @@ describe("HarnessSettingsSection", () => {
 		expect(await within(row).findByText("Connected")).toBeInTheDocument();
 		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
-		expect(within(row).getByRole("button", { name: "Relogin" })).toBeEnabled();
+		expect(within(row).getByRole("button", { name: "Log in again" })).toBeEnabled();
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument());
 	});
 

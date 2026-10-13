@@ -1400,6 +1400,9 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 		for (const id of ids) {
 			if (on) next.add(id); else next.delete(id);
 		}
+		saveEnabledModels(next);
+	};
+	const saveEnabledModels = (next: Set<string>) => {
 		// Disabling every model would read as "no filter", so keep at least one.
 		if (!allModelIds.some((id) => next.has(id))) return;
 		// All enabled is saved as no filter, so models the catalog adds later show up too.
@@ -1430,6 +1433,11 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 		? providerModels.filter((model) => `${model.label} ${model.id}`.toLocaleLowerCase().includes(normalizedModelSearch))
 		: providerModels;
 	const visibleModelIds = new Set(models.map((model) => model.id));
+	// Pickers need at least one model, so Disable all keeps the default (or first) one on
+	// when nothing outside this list is enabled.
+	const keptOnDisable = allModelIds.some((id) => isModelEnabled(id) && !visibleModelIds.has(id))
+		? undefined
+		: (models.find((model) => model.isDefault && isConcreteModelID(model.id)) ?? models.find((model) => isConcreteModelID(model.id)))?.id;
 	const pageCount = Math.max(1, Math.ceil(models.length / MODELS_PAGE_SIZE));
 	const currentPage = Math.min(page, pageCount - 1);
 	const pageStart = currentPage * MODELS_PAGE_SIZE;
@@ -1475,8 +1483,8 @@ function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAcco
 					disabled={models.every((model) => isModelEnabled(model.id))}
 					onClick={() => setModelsEnabled(models.map((model) => model.id), true)}>{t("settings.harness.models.enableAll")}</Button>
 				<Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-[11px]"
-					disabled={!allModelIds.some((id) => isModelEnabled(id) && !visibleModelIds.has(id))}
-					onClick={() => setModelsEnabled(models.map((model) => model.id), false)}>{t("settings.harness.models.disableAll")}</Button>
+					disabled={!models.some((model) => model.id !== keptOnDisable && isModelEnabled(model.id))}
+					onClick={() => keptOnDisable ? saveEnabledModels(new Set([keptOnDisable])) : setModelsEnabled(models.map((model) => model.id), false)}>{t("settings.harness.models.disableAll")}</Button>
 			</span> : null}
 		</div>
 		{enabledModelsError ? <p role="alert" className="text-xs text-error">{enabledModelsError}</p> : null}

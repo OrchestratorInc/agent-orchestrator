@@ -107,11 +107,14 @@ describe("startup harness update notice", () => {
 		});
 		const before = useUiStore.getState().settingsModal;
 		mountNotice();
-		const button = await screen.findByRole("button", { name: "Update all (3)" });
+		const button = await screen.findByRole("button", { name: "Update all" });
+		// Collapsed, several updates read as one summary card.
 		expect(screen.getAllByRole("article")).toHaveLength(1);
+		expect(screen.getByRole("article", { name: "Harness updates available" })).toBeInTheDocument();
 		await userEvent.dblClick(button);
 		await waitFor(() => expect(started).toEqual(["cursor"]));
 		expect(screen.getByRole("button", { name: "Starting updates…" })).toBeDisabled();
+		await userEvent.click(screen.getByRole("button", { name: "Show all (3)" }));
 		expect(within(screen.getByRole("article", { name: "Codex" })).getByRole("button", { name: "Update" })).toBeDisabled();
 		await act(async () => pending.resolve({ error: { message: "Cursor update refused" } } as never));
 		await waitFor(() => expect(started).toEqual(["cursor", "codex", "claude-code"]));
@@ -123,7 +126,7 @@ describe("startup harness update notice", () => {
 	it("excludes busy, login-required and unsupported harnesses from notification Update all", async () => {
 		mockUpdatableStack();
 		const { client } = mountNotice();
-		await screen.findByRole("button", { name: "Update all (3)" });
+		expect(await screen.findByRole("button", { name: "Update all" })).toBeEnabled();
 		act(() => {
 			client.setQueryData(["agent-readiness"], { agents: [
 				agentReadiness("claude-code", "Claude Code"),
@@ -132,9 +135,10 @@ describe("startup harness update notice", () => {
 			] });
 			client.setQueryData(installJobsQueryKey, [{ target: "cursor", status: "installing" }]);
 		});
-		expect(await screen.findByRole("button", { name: "Update all (1)" })).toBeEnabled();
+		// Claude Code is still eligible.
+		expect(screen.getByRole("button", { name: "Update all" })).toBeEnabled();
 		act(() => client.setQueryData(installerQueryKey, []));
-		expect(await screen.findByRole("button", { name: "Update all" })).toBeDisabled();
+		await waitFor(() => expect(screen.getByRole("button", { name: "Update all" })).toBeDisabled());
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
@@ -190,13 +194,15 @@ describe("startup harness update notice", () => {
 		expect(useHarnessActionRequest.getState().request).toBeNull();
 	});
 
-	it("ranks by usage then recency, and closing only the top release reveals the next", async () => {
+	it("ranks by usage then recency, and dismissing one release keeps the others", async () => {
 		mockStack();
 		mountNotice();
-		expect(await screen.findByRole("article", { name: "Cursor" })).toBeInTheDocument();
+		expect(await screen.findByRole("article", { name: "Harness updates available" })).toBeInTheDocument();
 		expect(screen.getAllByRole("article")).toHaveLength(1);
+		await userEvent.click(screen.getByRole("button", { name: "Show all (3)" }));
+		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Cursor", "Codex", "Claude Code"]);
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Cursor update" }));
-		expect(screen.getByRole("article", { name: "Codex" })).toBeInTheDocument();
+		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Codex", "Claude Code"]);
 		expect(JSON.parse(localStorage.getItem("ao.harness-update-dismissals.v1")!)).toEqual([JSON.stringify(["local", "cursor", "2.0.0"])]);
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Codex update" }));
 		expect(screen.getByRole("article", { name: "Claude Code" })).toBeInTheDocument();
@@ -207,18 +213,18 @@ describe("startup harness update notice", () => {
 	it("expands and collapses the stack, with independent dismissal of expanded cards", async () => {
 		mockStack();
 		mountNotice();
-		const topCard = await screen.findByRole("article", { name: "Cursor" });
-		expect(screen.queryByText("Harness updates available")).toBeNull();
-		// The toggle sits above the stack, not inside the top notice.
-		expect(within(topCard).queryByRole("button", { name: "Show all (3)" })).toBeNull();
-		await userEvent.click(screen.getByRole("button", { name: "Show all (3)" }));
+		const summary = await screen.findByRole("article", { name: "Harness updates available" });
+		expect(screen.queryByRole("article", { name: "Cursor" })).toBeNull();
+		await userEvent.click(within(summary).getByRole("button", { name: "Show all (3)" }));
 		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Cursor", "Codex", "Claude Code"]);
 		expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Codex update" }));
 		expect(screen.getAllByRole("article")).toHaveLength(2);
 		await userEvent.click(screen.getByRole("button", { name: "Show less" }));
 		expect(screen.getAllByRole("article")).toHaveLength(1);
-		expect(screen.getByRole("article", { name: "Cursor" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show all (2)" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Dismiss all updates" }));
+		expect(screen.queryByRole("region")).toBeNull();
 	});
 
 	it("waits for slower advisories before choosing the top harness", async () => {
@@ -234,7 +240,8 @@ describe("startup harness update notice", () => {
 		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("codex"))).toBeDefined());
 		expect(screen.queryByRole("region")).toBeNull();
 		await act(async () => pending.resolve({ data: { status: "behind_latest", currentVersion: "1.0.0", latestVersion: "2.0.0" } } as never));
-		expect(await screen.findByRole("article", { name: "Cursor" })).toBeInTheDocument();
+		await userEvent.click(await screen.findByRole("button", { name: "Show all (3)" }));
+		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))[0]).toBe("Cursor");
 	});
 
 	it("keeps other update notices when one harness lookup fails", async () => {
@@ -246,17 +253,18 @@ describe("startup harness update notice", () => {
 			return (original as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
 		mountNotice();
-		expect(await screen.findByRole("article", { name: "Codex" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Show all (2)" })).toBeInTheDocument();
+		await userEvent.click(await screen.findByRole("button", { name: "Show all (2)" }));
+		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Codex", "Claude Code"]);
 	});
 
 	it("preserves only the individually dismissed releases on remount", async () => {
 		mockStack();
 		const view = mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "Dismiss Cursor update" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Show all (3)" }));
+		await userEvent.click(screen.getByRole("button", { name: "Dismiss Cursor update" }));
 		view.unmount();
 		mountNotice();
-		expect(await screen.findByRole("article", { name: "Codex" })).toBeInTheDocument();
+		expect(await screen.findByRole("article", { name: "Harness updates available" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Show all (2)" }));
 		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Codex", "Claude Code"]);
 	});

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { foldClaudeAliasDefault, splitClaudeModels } from "./agent-model-choices";
+import { filterEnabledModels, foldClaudeAliasDefault, splitClaudeModels } from "./agent-model-choices";
 
 type TestModel = { id: string; label: string; isDefault?: boolean };
 const model = (label: string, id = label.toLowerCase().replace(/[ .]/g, "-"), extra: { isDefault?: boolean } = {}): TestModel => ({
@@ -57,5 +57,23 @@ describe("foldClaudeAliasDefault", () => {
 	it("never folds a configured alias into a context variant", () => {
 		const models = [model("Opus 5.5", "opus", { isDefault: true }), model("Opus 5.5 (1M context)", "opus[1m]"), model("Sonnet 5.5", "sonnet")];
 		expect(foldClaudeAliasDefault(models)).toBe(models);
+	});
+});
+
+describe("filterEnabledModels", () => {
+	const catalog = [{ id: "a" }, { id: "b" }, { id: "c" }];
+
+	it("offers every model when nothing is enabled", () => {
+		expect(filterEnabledModels(catalog, undefined)).toBe(catalog);
+		expect(filterEnabledModels(catalog, [])).toBe(catalog);
+	});
+
+	it("keeps enabled models and the ones already in use, in catalog order", () => {
+		expect(filterEnabledModels(catalog, ["c", "a"]).map((item) => item.id)).toEqual(["a", "c"]);
+		expect(filterEnabledModels(catalog, ["a"], ["b", undefined]).map((item) => item.id)).toEqual(["a", "b"]);
+	});
+
+	it("falls back to the full catalog when no enabled model is listed any more", () => {
+		expect(filterEnabledModels(catalog, ["gone"])).toBe(catalog);
 	});
 });
