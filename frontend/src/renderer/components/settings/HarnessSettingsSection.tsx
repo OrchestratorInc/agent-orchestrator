@@ -1238,8 +1238,8 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 					title={t("settings.harness.updateAllHint")}
 					onClick={() => void requestUpdateAll()}>
 					{startingAllUpdates ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <CircleArrowUp aria-hidden="true" />}
-					{t(startingAllUpdates ? "settings.harness.startingAllUpdates" : "settings.harness.updateAll")}
-					{!startingAllUpdates && updateAllTargets.length > 0 ? <span className="tabular-nums">({updateAllTargets.length})</span> : null}
+					<span className="tabular-nums">{startingAllUpdates ? t("settings.harness.startingAllUpdates")
+						: `${t("settings.harness.updateAll")}${updateAllTargets.length > 0 ? ` (${updateAllTargets.length})` : ""}`}</span>
 				</Button>
 			</div>
 
