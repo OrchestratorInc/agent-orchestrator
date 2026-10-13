@@ -170,7 +170,7 @@ func runProbe(ctx context.Context, commands ports.CommandRunner, timeout time.Du
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	output := &capturedOutput{max: maxOutputBytes}
-	stderr := io.Writer(io.Discard)
+	stderr := io.Discard
 	if keepStderr {
 		stderr = output
 	}

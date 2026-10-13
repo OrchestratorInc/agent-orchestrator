@@ -3,14 +3,14 @@ import { hasConfirmedHarnessUpdate, maintenanceMethodId, harnessUpdateNoticeKey,
 
 describe("harness update evidence", () => {
 	it("never offers an update without both observed versions and a confirmed verdict", () => {
-		const advisory = { agentId: "codex", status: "behind_latest", currentVersion: "1.2.3", latestVersion: "1.3.0", checkedAt: "2026-10-07T00:00:00Z" };
+		const advisory = { agentId: "codex", status: "behind_latest" as const, currentVersion: "1.2.3", latestVersion: "1.3.0", checkedAt: "2026-10-07T00:00:00Z" };
 		expect(hasConfirmedHarnessUpdate(advisory)).toBe(true);
-		for (const patch of [{ status: "unknown" }, { currentVersion: "" }, { latestVersion: " " }, { latestVersion: "1.2.3" }]) {
+		for (const patch of [{ status: "unknown" as const }, { currentVersion: "" }, { latestVersion: " " }, { latestVersion: "1.2.3" }]) {
 			expect(hasConfirmedHarnessUpdate({ ...advisory, ...patch })).toBe(false);
 		}
 	});
 	it("does not infer installer ownership from an official release lookup", () => {
-		const advisory = { agentId: "claude-code", status: "behind_latest", source: "official-release", checkedAt: "2026-10-07T00:00:00Z" };
+		const advisory = { agentId: "claude-code", status: "behind_latest" as const, source: "official-release", checkedAt: "2026-10-07T00:00:00Z" };
 		expect(maintenanceMethodId(advisory)).toBe("");
 		expect(maintenanceMethodId({ ...advisory, maintenanceMethod: "official-installer" })).toBe("official-installer");
 		expect(maintenanceMethodId({ ...advisory, reason: "ownership_unconfirmed" })).toBe("");
