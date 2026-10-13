@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AoBridge } from "../../../preload";
@@ -236,6 +236,14 @@ describe("BrowserImportDialog", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
 		expect(await screen.findByRole("heading", { name: "Import complete" })).toBeInTheDocument();
 		expect(screen.getByText("0 cookies · 1 history entries")).toBeInTheDocument();
+		const cookieRow = screen.getByText("Cookies and site sign-ins").parentElement!;
+		expect(within(cookieRow).getByText("Nothing was imported")).toHaveClass("sr-only");
+		expect(within(cookieRow).queryByText("Finished")).not.toBeInTheDocument();
+		expect(cookieRow.querySelector("svg:last-child")).toHaveClass("text-muted-foreground");
+		const historyRow = screen.getByText("Browsing history").parentElement!;
+		expect(within(historyRow).getByText("Finished")).toHaveClass("sr-only");
+		expect(within(historyRow).queryByText("Nothing was imported")).not.toBeInTheDocument();
+		expect(historyRow.querySelector("svg:last-child")).toHaveClass("text-success");
 	});
 
 	it("does not warn when a requested cookie store is empty", async () => {
