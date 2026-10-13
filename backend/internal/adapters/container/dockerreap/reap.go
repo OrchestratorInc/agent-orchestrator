@@ -40,7 +40,7 @@ const SpareLabel = "ao.spare"
 // user-facing and synchronous, and the reap runs between runtime destroy and
 // workspace teardown -- an unbounded call against a wedged daemon would block
 // the whole teardown on nothing else being able to make progress. A timeout
-// is treated the same as isDockerUnavailable: reap nothing, per this
+// is treated the same as IsDockerUnavailable: reap nothing, per this
 // package's spare-on-ambiguity bias.
 const reapTimeout = 10 * time.Second
 
@@ -99,7 +99,7 @@ func (r *Reaper) ReapSessionContainers(ctx context.Context, id domain.SessionID)
 		"--filter", fmt.Sprintf("label=%s=%s", SessionLabel, sessionID),
 		"--format", "{{.ID}}\t{{.Label \""+SpareLabel+"\"}}")
 	if err != nil {
-		if isDockerUnavailable(err) {
+		if IsDockerUnavailable(err) {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("dockerreap: list containers for session %s: %w", sessionID, err)
@@ -135,11 +135,12 @@ func (r *Reaper) ReapSessionContainers(ctx context.Context, id domain.SessionID)
 	return removed, errors.Join(errs...)
 }
 
-// isDockerUnavailable reports whether err indicates the docker CLI itself is
+// IsDockerUnavailable reports errors meaning "no usable docker", which callers treat as nothing to do.
+// It reports whether err indicates the docker CLI itself is
 // not installed/runnable, as opposed to a real command failure against a
 // present daemon. Most AO installs run without Docker at all; that must
 // resolve to "nothing to reap," not a kill-blocking error.
-func isDockerUnavailable(err error) bool {
+func IsDockerUnavailable(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		// A wedged docker daemon must resolve to "reap nothing," not a
 		// kill-blocking error -- same bias as every other ambiguous failure
