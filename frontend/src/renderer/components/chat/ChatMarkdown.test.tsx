@@ -15,6 +15,11 @@ vi.mock("../SessionLinkPreviewCard", () => ({
 	},
 }));
 
+const linkSource = vi.hoisted(() => ({ workspaces: [] as Array<{ id: string; sessions: Array<{ id: string; artifactFiles?: Array<{ path: string }> }> }> }));
+vi.mock("../../lib/use-session-link-navigation", () => ({
+	useSessionLinkSource: () => ({ ready: true, isLoading: false, isError: false, workspaces: linkSource.workspaces }),
+}));
+
 // Mermaid needs real SVG layout APIs jsdom lacks; pin the routing boundary and
 // let MermaidBlock.test.tsx own the block's states.
 vi.mock("../../lib/mermaid-diagram", () => ({
@@ -379,6 +384,27 @@ describe("ChatMarkdown", () => {
 		render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen}><ChatMarkdown streaming text="ao://sessions/project/session" /></ChatLinkProvider>);
 		expect(screen.getByRole("link")).toBeInTheDocument();
 		expect(onSessionLinkOpen).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["`worker-1/plan.md`", "ao://sessions/project/worker-1/artifacts/plan.md"],
+		["`/tmp/ao/artifacts/worker-1/plans/q3.md`", "ao://sessions/project/worker-1/artifacts/plans/q3.md"],
+		["`worker-1/plans/my plan.md`", "ao://sessions/project/worker-1/artifacts/plans/my%20plan.md"],
+		["`/tmp/ao data/artifacts/worker-1/plans/my plan.md`", "ao://sessions/project/worker-1/artifacts/plans/my%20plan.md"],
+	])("links inline code naming a listed session artifact: %s", async (text, href) => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }, { path: "plans/q3.md" }, { path: "plans/my plan.md" }] }] }];
+		const onSessionLinkOpen = vi.fn();
+		renderWithSessionLinkHandler(text, onSessionLinkOpen);
+		const link = screen.getByRole("link");
+		expect(link).toHaveAttribute("href", href);
+		await userEvent.setup().click(link);
+		expect(onSessionLinkOpen).toHaveBeenCalledWith(href);
+	});
+
+	it("leaves inline code naming an unlisted artifact as plain code", () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
+		renderWithSessionLinkHandler("`worker-1/other.md` and `/tmp/ao/artifacts/worker-2/plan.md`", vi.fn());
+		expect(screen.queryByRole("link")).not.toBeInTheDocument();
 	});
 
 	it("leaves malformed session-like text inert", () => {

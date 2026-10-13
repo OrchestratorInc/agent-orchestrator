@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -115,14 +116,25 @@ func (p *Plugin) authStatusFor(ctx context.Context, workingDir string, env map[s
 // authStatusAndReport runs the ladder and also returns the CLI report when it
 // describes the credential the agent uses; otherwise the report is empty.
 func (p *Plugin) authStatusAndReport(ctx context.Context, workingDir string, env map[string]string, fresh bool) (ports.AgentAuthStatus, claudeAuthReport, error) {
+	status, report, _, err := p.authStatusAndDiagnostics(ctx, workingDir, env, fresh)
+	return status, report, err
+}
+
+// AuthStatusWithDiagnostics reports each check without running an extra probe.
+func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+	status, report, steps, err := p.authStatusAndDiagnostics(ctx, "", nil, false)
+	return status, report.account(), steps, err
+}
+
+func (p *Plugin) authStatusAndDiagnostics(ctx context.Context, workingDir string, env map[string]string, fresh bool) (ports.AgentAuthStatus, claudeAuthReport, []domain.AgentAuthDiagnostic, error) {
 	// Rung 0 — installed? A missing binary is not an auth failure; saying so
 	// would point the user at a login when they need an install.
 	binary, err := p.claudeBinary(ctx)
 	if err != nil {
 		if errors.Is(err, ports.ErrAgentBinaryNotFound) {
-			return ports.AgentAuthStatusUnknown, claudeAuthReport{}, nil
+			return ports.AgentAuthStatusUnknown, claudeAuthReport{}, nil, nil
 		}
-		return ports.AgentAuthStatusUnknown, claudeAuthReport{}, err
+		return ports.AgentAuthStatusUnknown, claudeAuthReport{}, nil, err
 	}
 
 	// Rung 3 runs first among the evidence rungs, even though rung 2 outranks
@@ -131,7 +143,12 @@ func (p *Plugin) authStatusAndReport(ctx context.Context, workingDir string, env
 	// provider from environment variables instead would risk pointing a
 	// Bedrock credential at api.anthropic.com.
 	//
-	resolved := p.resolveProviderContext(ctx, binary, workingDir, env, p.claudeCLIAuthReport)
+	var steps []domain.AgentAuthDiagnostic
+	resolved := p.resolveProviderContext(ctx, binary, workingDir, env, func(ctx context.Context, binary, cwd string, env map[string]string) (claudeAuthReport, bool) {
+		report, ok, step := p.claudeCLIAuthReportDiagnostic(ctx, binary, cwd, env)
+		steps = append(steps, step)
+		return report, ok
+	})
 	reportedProvider, _ := agentcreds.ParseProvider(resolved.report.APIProvider)
 	// The CLI report speaks for the agent's credential only when it answered
 	// for the same provider.
@@ -156,8 +173,10 @@ func (p *Plugin) authStatusAndReport(ctx context.Context, workingDir string, env
 	// Rungs 1 and 2 — the provider gate and the network probe. This is the
 	// only rung that can prove a credential works, so it is the only one
 	// allowed to return Authorized.
-	if status, ok := p.probeResolvedAuthStatus(ctx, resolved, fresh); ok {
-		return status, report, nil
+	status, ok, step := p.probeResolvedAuthDiagnostics(ctx, resolved, fresh)
+	steps = append(steps, step)
+	if ok {
+		return status, report, steps, nil
 	}
 
 	// Rung 3's own verdict. It cannot prove success, but it is the only local
@@ -167,14 +186,17 @@ func (p *Plugin) authStatusAndReport(ctx context.Context, workingDir string, env
 	if reportApplies {
 		status := resolved.report.status()
 		if status != ports.AgentAuthStatusUnknown {
-			return status, report, nil
+			return status, report, steps, nil
 		}
 	}
 
 	// Rung 4 — local heuristic. Lowest confidence, and the last word only
 	// because it never blocks anything.
-	status, err := claudeLocalAuthStatus(ctx, resolved.opts)
-	return status, report, err
+	status, err = claudeLocalAuthStatus(ctx, resolved.opts)
+	if status == ports.AgentAuthStatusConfigured {
+		steps = append(steps, domain.NewAgentAuthDiagnostic("local_configuration", "credential_present"))
+	}
+	return status, report, steps, err
 }
 
 type claudeProviderContext struct {
@@ -226,44 +248,58 @@ func (p *Plugin) resolveProviderContext(
 // which is what keeps the whole check additive — it can convert an Unknown
 // into a real verdict, and can never manufacture a worse one.
 func (p *Plugin) probeResolvedAuthStatus(ctx context.Context, resolved claudeProviderContext, fresh bool) (ports.AgentAuthStatus, bool) {
-	if !resolved.providerOK {
-		return ports.AgentAuthStatusUnknown, false
-	}
+	status, ok, _ := p.probeResolvedAuthDiagnostics(ctx, resolved, fresh)
+	return status, ok
+}
 
-	// A stored login whose access token is past its recorded expiry would be
-	// rejected by the provider, but that rejection is not a sign-out: Claude
-	// Code renews the token from its refresh token the next time it runs. AO
-	// does not perform that refresh itself (Claude Code serializes it behind a
-	// cross-process lock and rotates the refresh token), so the honest verdict
-	// is "configured" — present, not verified — and nothing is sent.
+func (p *Plugin) probeResolvedAuthDiagnostics(ctx context.Context, resolved claudeProviderContext, fresh bool) (ports.AgentAuthStatus, bool, domain.AgentAuthDiagnostic) {
+	diagnostic := func(code string) domain.AgentAuthDiagnostic {
+		d := domain.NewAgentAuthDiagnostic("provider_validation", code)
+		d.Provider = string(resolved.provider)
+		// Source labels are owned by the credential resolver, never credential values.
+		d.Source = resolved.credential.Source
+		return d
+	}
+	if !resolved.providerOK || (resolved.provider != agentcreds.ProviderFirstParty && resolved.provider != agentcreds.ProviderGateway) {
+		return ports.AgentAuthStatusUnknown, false, diagnostic("provider_unsupported")
+	}
 	if resolved.found && resolved.credential.ExpiredButRenewable(claudeNow()) {
-		return ports.AgentAuthStatusConfigured, true
+		return ports.AgentAuthStatusConfigured, true, diagnostic("token_renewal_pending")
 	}
-
-	// The cache is read before anything is sent, and is keyed on the
-	// credential's fingerprint: a verdict about a credential the agent no
-	// longer uses is not evidence about anything.
-	if !fresh && resolved.found {
-		if cached, hit := p.authCache().get(resolved.credential.Fingerprint(), resolved.provider); hit {
-			if cached.State == agentcreds.StateUnknown {
-				return ports.AgentAuthStatusUnknown, false
-			}
-			return authStatusFromResult(cached), true
-		}
+	if !resolved.found {
+		return ports.AgentAuthStatusUnknown, false, diagnostic("credential_missing")
 	}
-
-	probeCtx, cancel := context.WithTimeout(ctx, agentcreds.DefaultTimeout)
-	defer cancel()
-	result := claudeValidator().ValidateResolvedLocal(
-		probeCtx, resolved.provider, resolved.credential, resolved.found, resolved.opts,
-	)
-	// Cache only decisive verdicts. An inconclusive probe must be retried later
-	// instead of turning one transient failure into minutes of stale silence.
-	p.authCache().put(result)
-	if result.State == agentcreds.StateUnknown {
-		return ports.AgentAuthStatusUnknown, false
+	var result agentcreds.Result
+	cached := false
+	if !fresh {
+		result, cached = p.authCache().get(resolved.credential.Fingerprint(), resolved.provider)
 	}
-	return authStatusFromResult(result), true
+	started := time.Now()
+	if !cached {
+		probeCtx, cancel := context.WithTimeout(ctx, agentcreds.DefaultTimeout)
+		defer cancel()
+		result = claudeValidator().ValidateResolvedLocal(probeCtx, resolved.provider, resolved.credential, resolved.found, resolved.opts)
+		p.authCache().put(result)
+	}
+	code := "provider_inconclusive"
+	switch {
+	case result.State == agentcreds.StateValid:
+		code = "provider_accepted"
+	case result.State == agentcreds.StateInvalid:
+		code = "provider_rejected"
+	case errors.Is(result.Err, context.DeadlineExceeded):
+		code = "probe_timeout"
+	case errors.Is(result.Err, context.Canceled):
+		code = "probe_cancelled"
+	case result.Err != nil && result.HTTPStatus == 0:
+		code = "provider_unreachable"
+	}
+	step := diagnostic(code)
+	step.CheckedAt = result.CheckedAt
+	step.HTTPStatus = result.HTTPStatus
+	step.Cached = cached
+	step.DurationMs = time.Since(started).Milliseconds()
+	return authStatusFromResult(result), result.State != agentcreds.StateUnknown, step
 }
 
 // probeAuthStatus keeps focused tests at the provider-validation boundary.
@@ -362,17 +398,21 @@ func (r claudeAuthReport) status() ports.AgentAuthStatus {
 // the probe could not answer — a timeout, an exec failure, or a version whose
 // output this build cannot parse — and the caller falls to the next rung.
 func (p *Plugin) claudeCLIAuthReport(ctx context.Context, binary, workingDir string, env map[string]string) (claudeAuthReport, bool) {
+	report, ok, _ := p.claudeCLIAuthReportDiagnostic(ctx, binary, workingDir, env)
+	return report, ok
+}
+
+func (p *Plugin) claudeCLIAuthReportDiagnostic(ctx context.Context, binary, workingDir string, env map[string]string) (claudeAuthReport, bool, domain.AgentAuthDiagnostic) {
 	probeCtx, cancel := context.WithTimeout(ctx, claudeAuthProbeTimeout)
 	defer cancel()
-
+	started := time.Now()
 	out, err := claudeAuthCommand(probeCtx, binary, workingDir, env)
+	report, ok := claudeAuthReportFromOutput(out.Stdout)
 	if probeCtx.Err() != nil {
-		return claudeAuthReport{}, false
+		report, ok = claudeAuthReport{}, false
 	}
-	// An unfamiliar non-zero result is not affirmative evidence of missing
-	// credentials, so the exit code is not consulted: only parsable output is.
-	_ = err
-	return claudeAuthReportFromOutput(out.Stdout)
+	step := authprobe.CommandDiagnostic("claude auth status", report.status(), err, probeCtx.Err(), started)
+	return report, ok, step
 }
 
 type claudeCommandOutput struct {

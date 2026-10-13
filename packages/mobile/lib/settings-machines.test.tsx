@@ -87,7 +87,7 @@ it("keeps Environments and Software update rows without their helper paragraphs"
 	expect(texts).toContain("Environments");
 	expect(texts).toContain("Software update");
 	expect(texts).not.toContain("See every saved connection route across all of your machines.");
-	expect(texts).not.toContain("AO installs compatible updates automatically. Native releases open in your app store.");
+	expect(texts).not.toContain("Orchestrator installs compatible updates automatically. Native releases open in your app store.");
 });
 
 it("keeps removal and editing out of Settings, including for paired machines", async () => {

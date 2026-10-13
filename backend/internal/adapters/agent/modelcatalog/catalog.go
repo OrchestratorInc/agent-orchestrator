@@ -109,12 +109,12 @@ var commandSpecs = map[string]commandSpec{
 	// contract every opencode ships; dropping the flag lists an identical catalog
 	// (and still honors the provider-presence env used for cloud scoping) without
 	// betting on a flag that can be rejected.
-	"opencode":    {args: []string{"models"}, parser: parseIDLines},
-	"opencode-v2": {args: []string{"models"}, parser: parseIDLines},
+	"opencode":    {args: []string{"models"}, parser: parseProviderIDLines},
+	"opencode-v2": {args: []string{"models"}, parser: parseProviderIDLines},
 	"grok":        {args: []string{"models"}, parser: parseGrokModels},
 	"cursor":      {args: []string{"models"}, parser: parseCursorModels},
 	"agy":         {args: []string{"models"}, parser: parseAgyModels},
-	"kilocode":    {args: []string{"models"}, parser: parseIDLines},
+	"kilocode":    {args: []string{"models"}, parser: parseProviderIDLines},
 	"pi":          {args: []string{"--list-models"}, parser: parsePiModels},
 	"kimchi":      {args: []string{"--list-models"}, parser: parsePiModels},
 	"prime-agent": {args: []string{"model", "list"}, parser: parsePiModels},
@@ -125,7 +125,7 @@ var commandSpecs = map[string]commandSpec{
 	"codewhale":   {args: []string{"models", "--json"}, parser: parseJSONModels},
 	"copilot":     {args: []string{"help", "config"}, parser: parseCopilotConfigModels},
 	"droid":       {args: []string{"exec", "--help"}, parser: parseDroidHelpModels},
-	"crush":       {args: []string{"models"}, parser: parseIDLines},
+	"crush":       {args: []string{"models"}, parser: parseProviderIDLines},
 	"fx":          {args: []string{"models", "--json"}, parser: parseFXModels},
 	"mimo-code":   {args: []string{"models"}, parser: parseMiMoModels},
 	// `cmd --list-models` prints `provider/model` followed by a marketing
@@ -541,6 +541,7 @@ func Discover(ctx context.Context, agentID, binary, workingDir string, env map[s
 		models = markCodewhaleResolvedDefault(ctx, binary, workingDir, env, models)
 	}
 	base.Models = models
+	base.ConfiguredProviders = configuredProviders(ctx, agentID, env)
 	base.Source = "cli"
 	base.FetchedAt = time.Now().UTC()
 	return base, nil
@@ -888,6 +889,12 @@ func BinaryVersion(ctx context.Context, binary string) string {
 func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string, env map[string]string) string {
 	binaryVersion := BinaryVersion(ctx, binary)
 	config := discoveryConfigInputs(ctx, agentID, workingDir, env)
+	// Refresh pre-provider catalogs after upgrading and when observed credential
+	// presence changes. The fingerprint includes names only, never key material.
+	switch agentID {
+	case "opencode", "opencode-v2", "pi", "omp", "kimi", "auggie", "kiro", "codewhale", "kilocode", "crush", "mimo-code", "command-code":
+		config += ";providers-v1=" + strings.Join(configuredProviders(ctx, agentID, env), ",")
+	}
 	if config == "" {
 		// Keep the executable-only fingerprint byte-identical to what earlier
 		// daemons wrote, so upgrading does not invalidate every cached catalog.
@@ -962,6 +969,19 @@ func model(id, label string, isDefault bool) ports.AgentModelInfo {
 	return ports.AgentModelInfo{ID: id, Label: label, IsDefault: isDefault}
 }
 
+// These harnesses' native selector is provider/model. Restrict this parsing to
+// commands with that contract: a slash in other catalogs can be a model namespace.
+func parseProviderIDLines(output []byte) ([]ports.AgentModelInfo, error) {
+	models, err := parseIDLines(output)
+	for i := range models {
+		if provider, name, ok := strings.Cut(models[i].ID, "/"); ok && provider != "" && name != "" {
+			models[i].Provider = provider
+			models[i].Label = name
+		}
+	}
+	return models, err
+}
+
 func parseIDLines(output []byte) ([]ports.AgentModelInfo, error) {
 	text := ansiPattern.ReplaceAllString(string(output), "")
 	var models []ports.AgentModelInfo
@@ -988,7 +1008,8 @@ func parseMiMoModels(output []byte) ([]ports.AgentModelInfo, error) {
 		if !found || !strings.Contains(id, "/") || !looksLikeModelID(id) {
 			continue
 		}
-		models = append(models, ports.AgentModelInfo{ID: id, Label: id})
+		provider, name, _ := strings.Cut(id, "/")
+		models = append(models, ports.AgentModelInfo{ID: id, Label: name, Provider: provider})
 	}
 	return normalize(models), nil
 }
@@ -1033,23 +1054,48 @@ func parseAgyModels(output []byte) ([]ports.AgentModelInfo, error) {
 func parseCommandCodeModels(output []byte) ([]ports.AgentModelInfo, error) {
 	text := ansiPattern.ReplaceAllString(string(output), "")
 	var models []ports.AgentModelInfo
+	var sectionProvider string
 	for _, rawLine := range strings.Split(text, "\n") {
 		line := strings.TrimSpace(rawLine)
+		// These are provider headings in the native table, not model-name guesses.
+		switch line {
+		case "Anthropic":
+			sectionProvider = "anthropic"
+			continue
+		case "OpenAI":
+			sectionProvider = "openai"
+			continue
+		case "Open Source":
+			sectionProvider = ""
+			continue
+		}
+		if strings.HasPrefix(line, "Pass the full id") || strings.HasPrefix(line, "Docs:") {
+			break
+		}
 		fields := strings.Fields(line)
 		if len(fields) == 0 {
 			continue
 		}
 		id := strings.Trim(fields[0], "`\"'[](),:")
-		// Every Command Code model id carries a provider-qualified separator.
+		// Native model IDs contain a separator; headings do not.
 		// This also rejects the banner and the section headings ("Available
 		// models", "Open Source", "Anthropic"), which would otherwise parse as
 		// one-word ids.
 		if !looksLikeModelID(id) || !strings.ContainsAny(id, "-./:_") {
+			// An unrecognized section must not inherit the preceding provider.
+			if len(fields) == 1 {
+				sectionProvider = ""
+			}
 			continue
 		}
+		provider := sectionProvider
+		if prefix, name, ok := strings.Cut(id, "/"); ok && prefix != "" && name != "" {
+			provider = prefix
+		}
 		models = append(models, ports.AgentModelInfo{
-			ID:    id,
-			Label: id,
+			ID:       id,
+			Label:    id,
+			Provider: provider,
 			// normalize() strips a trailing "(default)" from Label, but the
 			// label is the id here, so the marker has to be read from the row.
 			IsDefault: strings.Contains(strings.ToLower(line), "(default)"),
@@ -1242,14 +1288,21 @@ func parseJSONModels(output []byte) ([]ports.AgentModelInfo, error) {
 		return nil, err
 	}
 	var models []ports.AgentModelInfo
-	var walk func(any)
-	walk = func(value any) {
+	var walk func(any, string)
+	walk = func(value any, inheritedProvider string) {
 		switch node := value.(type) {
 		case []any:
 			for _, item := range node {
-				walk(item)
+				walk(item, inheritedProvider)
 			}
 		case map[string]any:
+			provider := firstString(node, "provider", "providerId", "provider_id")
+			if provider == "" {
+				provider = inheritedProvider
+			}
+			if _, container := node["models"]; container && provider == "" {
+				provider = firstString(node, "id")
+			}
 			id := firstString(node, "selector", "modelId", "model_id", "model_uid", "slug", "model")
 			if id == "" {
 				if _, isProviderContainer := node["models"]; !isProviderContainer {
@@ -1264,7 +1317,7 @@ func parseJSONModels(output []byte) ([]ports.AgentModelInfo, error) {
 				models = append(models, ports.AgentModelInfo{
 					ID:            id,
 					Label:         label,
-					Provider:      firstString(node, "provider", "providerId", "provider_id"),
+					Provider:      provider,
 					IsDefault:     firstBool(node, "isDefault", "is_default", "default"),
 					ContextWindow: catalogContextWindow(node),
 					Inputs:        catalogInputs(node),
@@ -1275,6 +1328,10 @@ func parseJSONModels(output []byte) ([]ports.AgentModelInfo, error) {
 					if modelMap, ok := child.(map[string]any); ok {
 						for alias, item := range modelMap {
 							if modelNode, ok := item.(map[string]any); ok && strings.TrimSpace(alias) != "" && looksLikeModelAliasRecord(modelNode) {
+								modelProvider := firstString(modelNode, "provider", "providerId", "provider_id")
+								if modelProvider == "" {
+									modelProvider = provider
+								}
 								label := firstString(modelNode, "displayName", "display_name", "model_name", "label", "name")
 								if label == "" {
 									label = alias
@@ -1282,23 +1339,23 @@ func parseJSONModels(output []byte) ([]ports.AgentModelInfo, error) {
 								models = append(models, ports.AgentModelInfo{
 									ID:            strings.TrimSpace(alias),
 									Label:         label,
-									Provider:      firstString(modelNode, "provider", "providerId", "provider_id"),
+									Provider:      modelProvider,
 									IsDefault:     firstBool(modelNode, "isDefault", "is_default", "default"),
 									ContextWindow: catalogContextWindow(modelNode),
 									Inputs:        catalogInputs(modelNode),
 								})
 								continue
 							}
-							walk(item)
+							walk(item, provider)
 						}
 						continue
 					}
 				}
-				walk(child)
+				walk(child, provider)
 			}
 		}
 	}
-	walk(root)
+	walk(root, "")
 	return normalize(models), nil
 }
 

@@ -10616,6 +10616,42 @@ components:
           - keychain
           type: string
       type: object
+    AgentAuthDiagnostic:
+      properties:
+        cached:
+          type: boolean
+        checkedAt:
+          format: date-time
+          type: string
+        code:
+          type: string
+        durationMs:
+          format: int64
+          type: integer
+        exitCode:
+          type:
+          - "null"
+          - integer
+        httpStatus:
+          type: integer
+        method:
+          type: string
+        nextStep:
+          type: string
+        provider:
+          type: string
+        reason:
+          type: string
+        source:
+          type: string
+      required:
+      - method
+      - code
+      - reason
+      - checkedAt
+      - cached
+      - durationMs
+      type: object
     AgentAuthPlan:
       properties:
         action:
@@ -10660,6 +10696,10 @@ components:
           type:
           - "null"
           - string
+        diagnostics:
+          items:
+            $ref: '#/components/schemas/AgentAuthDiagnostic'
+          type: array
         freshness:
           enum:
           - fresh
@@ -10892,6 +10932,10 @@ components:
           type: boolean
         binaryVersion:
           type: string
+        configuredProviders:
+          items:
+            type: string
+          type: array
         customModelEntry:
           enum:
           - none
@@ -12984,6 +13028,8 @@ components:
           type: string
         settings:
           $ref: '#/components/schemas/ConversationTurnSettingsPayload'
+        supportsExcerpts:
+          type: boolean
         threadState:
           $ref: '#/components/schemas/ConversationThreadStatePayload'
         title:

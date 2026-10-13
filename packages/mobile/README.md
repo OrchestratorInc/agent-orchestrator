@@ -143,8 +143,8 @@ gitignored** — the run commands prebuild them for you.
    npx expo run:ios --device      # pick your iPhone from the list
    ```
 
-   If Xcode rejects the bundle identifier or team, open `ios/AO.xcworkspace`, select the
-   **AO** target → **Signing & Capabilities**, choose your personal team and let Xcode manage
+   If Xcode rejects the bundle identifier or team, open `ios/Orchestrator.xcworkspace`, select the
+   **Orchestrator** target → **Signing & Capabilities**, choose your personal team and let Xcode manage
    signing, then re-run the command.
 
 4. On first launch iOS asks for **Local Network** access. Allow it, or the app cannot reach
@@ -409,7 +409,7 @@ Play Store** checks on demand.
 | Locked out after repeated failures                | The bridge locks out a source after 5 failed attempts. Wait it out, or toggle Connect Mobile off and on.                                                     |
 | `adb devices` shows `unauthorized`                | Re-accept the USB debugging prompt on the phone.                                                                                                             |
 | iOS app installs, then closes immediately         | Untrusted developer profile: **Settings → General → VPN & Device Management → trust your Apple ID**.                                                         |
-| App runs but can't reach the daemon (iOS)         | The Local Network prompt was denied: **Settings → Privacy & Security → Local Network → AO** → on.                                                            |
+| App runs but can't reach the daemon (iOS)         | The Local Network prompt was denied: **Settings → Privacy & Security → Local Network → Orchestrator** → on.                                                            |
 | Phone can't reach Metro                           | `adb reverse tcp:8081 tcp:8081` (Android), or `npx expo start --tunnel` (either platform).                                                                   |
 | An update never arrives                           | Its runtime version differs from the build's — a native change since that build. Compare `runtimeversion:resolve` with the runtime shown in a bug-report body. |
 | Terminal renders blank                            | The xterm WebView is patched via `patch-package`; confirm `postinstall` ran (`npx patch-package`).                                                           |

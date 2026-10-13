@@ -1319,3 +1319,24 @@ func TestEnsureInstallationReadinessSeesExternalInstallWithoutAuthChecks(t *test
 		t.Fatalf("auth checks = %d, want none from an installation refresh", calls)
 	}
 }
+
+type diagnosticReadinessAgent struct{ accountReadinessAgent }
+
+func (a *diagnosticReadinessAgent) AuthStatusWithDiagnostics(context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+	return a.status, a.account, []domain.AgentAuthDiagnostic{domain.NewAgentAuthDiagnostic("native status", "probe_timeout")}, nil
+}
+
+func TestReadinessCoordinatorRetainsAuthDiagnosticWithoutInventingSignOut(t *testing.T) {
+	a := &diagnosticReadinessAgent{accountReadinessAgent: accountReadinessAgent{status: ports.AgentAuthStatusUnknown}}
+	c := newReadinessCoordinator(readinessCoordinatorConfig{})
+	observation, failed := c.checkAuthentication(readinessHarness("test", "Test", a), domain.AgentReadinessPurposeDisplay)
+	if !failed || len(observation.Diagnostics) != 1 || observation.Diagnostics[0].Code != "probe_timeout" {
+		t.Fatalf("observation=%+v failed=%v", observation, failed)
+	}
+	checked := time.Now().Add(-time.Hour)
+	previous := domain.AgentAuthenticationObservation{State: domain.AgentAuthenticationAuthorized, CheckedAt: &checked}
+	preserveAuthenticationFailure(&previous, observation)
+	if previous.State != domain.AgentAuthenticationAuthorized || previous.Freshness != domain.AgentReadinessStale || len(previous.Diagnostics) != 1 || previous.CheckedAt != &checked {
+		t.Fatalf("previous=%+v", previous)
+	}
+}

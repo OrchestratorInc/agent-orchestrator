@@ -345,6 +345,10 @@ const api = {
 		// The shell goes transparent over a live native browser page, so whatever
 		// shows through its unpainted gutters is the native window background.
 		setWindowBackground: (color: string) => ipcRenderer.invoke("theme:set-window-background", color) as Promise<void>,
+		// macOS only: swap the painted window background for native vibrancy so
+		// the translucent shell blurs the desktop behind it.
+		setWindowTranslucent: (enabled: boolean) =>
+			ipcRenderer.invoke("theme:set-window-translucent", enabled) as Promise<void>,
 	},
 	menu: {
 		action: (action: string) => ipcRenderer.invoke("menu:action", action) as Promise<void>,

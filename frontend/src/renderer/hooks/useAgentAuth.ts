@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AgentCheckError } from "../lib/agent-check-error";
 import type { components } from "../../api/schema";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -51,9 +52,9 @@ export function useStartAgentAuth(hostId?: string, action: "login" | "logout" = 
 }
 
 export async function probeAgentAuth(agentId: string, hostId?: string) {
-	const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/probe", {
+	const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/probe", {
 		params: { path: { agent: agentId } },
 	});
-	if (error || !data) throw new Error(apiErrorMessage(error, "Could not check agent login."));
+	if (error || !data) throw new AgentCheckError("Authentication probe", error, response?.status);
 	return data;
 }

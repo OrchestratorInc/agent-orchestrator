@@ -128,6 +128,20 @@ type SessionArtifactFile struct {
 	UpdatedAt time.Time           `json:"updatedAt"`
 }
 
+// SessionArtifactVersion is one immutable snapshot of a session artifact file.
+// Its content is the blob named by SHA256 in the session's version store;
+// ModTime is the file's observed modification time when it was captured.
+type SessionArtifactVersion struct {
+	SessionID   SessionID
+	Path        string
+	Version     int64
+	SHA256      string
+	Size        int64
+	ContentType string
+	ModTime     time.Time
+	CreatedAt   time.Time
+}
+
 // SessionMetadata is the typed, off-status metadata for a session: operational
 // handles and seed inputs used by Session Manager and reaper.
 type SessionMetadata struct {

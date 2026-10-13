@@ -15,51 +15,46 @@ var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
 // AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	binary, err := p.ResolveBinary(ctx)
-	if err != nil {
-		return ports.AgentAuthStatusUnknown, err
-	}
-	if status, ok, err := devinLocalAuthStatus(ctx, binary); err != nil {
-		return ports.AgentAuthStatusUnknown, err
-	} else if ok {
-		return status, nil
-	}
-	return ports.AgentAuthStatusUnknown, nil
+	status, _, _, err := p.AuthStatusWithDiagnostics(ctx)
+	return status, err
 }
 
-func devinLocalAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStatus, bool, error) {
-	if err := ctx.Err(); err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
+// AuthStatusWithDiagnostics reports which check produced the native verdict.
+func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+	binary, err := p.ResolveBinary(ctx)
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, err
 	}
-	// Devin's own stored login, as `devin auth status` reports it, decides
-	// first; DEVIN_API_KEY in the environment is the fallback.
-	probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-	output, _ := authprobe.CmdRunner(probeCtx, binary, "auth", "status")
 	if err := ctx.Err(); err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, err
 	}
-	status := ports.AgentAuthStatusUnknown
-	if probeCtx.Err() == nil {
-		status = authprobe.StatusFromText(string(output))
+	// Native login decides first; the environment key is the fallback.
+	var identity domain.AgentAccountIdentity
+	status, steps, err := authprobe.CLIStatusWithDiagnostics(ctx, binary, [][]string{{"auth", "status"}}, 8*time.Second, func(output []byte) (ports.AgentAuthStatus, bool) {
+		status := authprobe.StatusFromText(string(output))
+		if status == ports.AgentAuthStatusAuthorized {
+			identity = devinAccountFromStatus(string(output))
+		}
+		return status, true
+	})
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, steps, err
 	}
 	if status == ports.AgentAuthStatusAuthorized {
-		identity := devinAccountFromStatus(string(output))
 		identity.SourceKind = domain.AgentCredentialSourceCommand
 		identity.Source = domain.CommandSource(binary, "auth", "status").Source
 		ports.RecordAuthEvidence(ctx, identity)
-		return status, true, nil
+		return status, identity, steps, nil
 	}
 	if key := strings.TrimSpace(os.Getenv("DEVIN_API_KEY")); strings.HasPrefix(key, "cog_") && len(key) > len("cog_") {
-		identity := domain.EnvironmentSource("DEVIN_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey)
+		identity = domain.EnvironmentSource("DEVIN_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey)
 		identity.Provider = "Devin"
 		ports.RecordAuthEvidence(ctx, identity)
-		return ports.AgentAuthStatusAuthorized, true, nil
+		d := domain.NewAgentAuthDiagnostic("environment", "credential_present")
+		d.Source = "DEVIN_API_KEY"
+		return ports.AgentAuthStatusAuthorized, identity, append(steps, d), nil
 	}
-	if status != ports.AgentAuthStatusUnknown {
-		return status, true, nil
-	}
-	return ports.AgentAuthStatusUnknown, false, nil
+	return status, domain.AgentAccountIdentity{}, steps, nil
 }
 
 // devinAccountFromStatus reads only display fields from a successful native

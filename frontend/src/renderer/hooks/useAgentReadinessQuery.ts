@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { AgentCheckError } from "../lib/agent-check-error";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
@@ -22,10 +23,10 @@ export async function ensureAgentReadiness(
 	purpose: AgentReadinessPurpose = "display",
 	hostId?: string,
 ): Promise<AgentReadiness> {
-	const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/agents/readiness/ensure", {
+	const { data, error, response } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/agents/readiness/ensure", {
 		body: { agentIds, purpose },
 	});
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error || !data) throw new AgentCheckError("Readiness refresh", error, response?.status);
 	return data as AgentReadiness;
 }
 

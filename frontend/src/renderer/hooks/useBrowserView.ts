@@ -188,6 +188,30 @@ function claimLayoutRevision(): number {
 	return nextLayoutRevision;
 }
 
+// The macOS translucent window tints the shell over the vibrancy blur. The live
+// page sits below the shell, so styles.css cuts the tint out over this rect
+// rather than tinting the page. Last visible view owns the hole.
+let browserHoleOwner: string | null = null;
+
+function publishBrowserHole(viewId: string, rect: BrowserRect | null): void {
+	const root = document.documentElement;
+	// Custom properties on :root restyle the whole document, so only write them
+	// while the translucent window actually needs the hole.
+	if (rect && root.dataset.windowTranslucent !== "true") rect = null;
+	if (!rect) {
+		if (browserHoleOwner !== viewId) return;
+		browserHoleOwner = null;
+		delete root.dataset.browserHole;
+		return;
+	}
+	browserHoleOwner = viewId;
+	root.dataset.browserHole = "true";
+	root.style.setProperty("--browser-hole-x", `${rect.x}px`);
+	root.style.setProperty("--browser-hole-y", `${rect.y}px`);
+	root.style.setProperty("--browser-hole-w", `${rect.width}px`);
+	root.style.setProperty("--browser-hole-h", `${rect.height}px`);
+}
+
 // ResizeHandle.tsx sits at the inspector panel's left edge with a
 // `--size-resize-handle-offset` (6px) negative inset, so only its right half
 // (0 to 6px, inside the panel) survives the panel's `overflow-hidden` — the
@@ -323,6 +347,7 @@ export function useBrowserView({
 
 	const sendHiddenBounds = useCallback((id = viewIdRef.current) => {
 		if (!id) return;
+		publishBrowserHole(id, null);
 		window.ao?.browser.setBounds({
 			viewId: id,
 			revision: claimLayoutRevision(),
@@ -357,6 +382,7 @@ export function useBrowserView({
 			rect,
 			visible: rect.width > 0 && rect.height > 0,
 		};
+		publishBrowserHole(id, payload.visible ? rect : null);
 		window.ao?.browser.setBounds(payload);
 	}, [sendHiddenBounds]);
 

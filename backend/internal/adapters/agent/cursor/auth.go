@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -26,26 +27,30 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 // AuthStatusWithAccount also names the account: an API key, or the login
 // Cursor records in its CLI config once `cursor-agent status` confirms it.
 func (p *Plugin) AuthStatusWithAccount(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, error) {
+	status, account, _, err := p.AuthStatusWithDiagnostics(ctx)
+	return status, account, err
+}
+
+// AuthStatusWithDiagnostics retains the evidence from the same auth check.
+func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
-		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, err
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, err
 	}
-	// Cursor's own login, as `cursor-agent status` reports it, decides first;
-	// CURSOR_API_KEY in the environment is the fallback.
-	status, err := cursorCLIAuthStatus(ctx, binary)
+	// Native login decides first; the environment key is the fallback.
+	status, steps, err := authprobe.CLIStatusWithDiagnostics(ctx, binary, [][]string{{"status"}}, 3*time.Second, nil)
 	if err != nil && ctx.Err() != nil {
-		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, err
+		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, steps, err
 	}
 	if err == nil && status == ports.AgentAuthStatusAuthorized {
-		return status, cursorLoginAccount(cursorConfigPath()), nil
+		return status, cursorLoginAccount(cursorConfigPath()), steps, nil
 	}
 	if strings.TrimSpace(os.Getenv("CURSOR_API_KEY")) != "" {
-		return ports.AgentAuthStatusAuthorized, domain.EnvironmentSource("CURSOR_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey), nil
+		d := domain.NewAgentAuthDiagnostic("environment", "credential_present")
+		d.Source = "CURSOR_API_KEY"
+		return ports.AgentAuthStatusAuthorized, domain.EnvironmentSource("CURSOR_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey), append(steps, d), nil
 	}
-	if err == nil && status != ports.AgentAuthStatusUnknown {
-		return status, domain.AgentAccountIdentity{}, nil
-	}
-	return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil
+	return status, domain.AgentAccountIdentity{}, steps, err
 }
 
 func cursorCLIAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStatus, error) {

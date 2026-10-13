@@ -120,7 +120,8 @@ type AgentAuthenticationObservation struct {
 	Reason      string                   `json:"reason"`
 	// Account names the account the check observed, when the harness reports
 	// one. It is display-only and present only with authorized or configured.
-	Account *AgentAccountIdentity `json:"account,omitempty"`
+	Account     *AgentAccountIdentity `json:"account,omitempty"`
+	Diagnostics []AgentAuthDiagnostic `json:"diagnostics,omitempty"`
 }
 
 // AgentAccountMethod is how a harness is signed in.

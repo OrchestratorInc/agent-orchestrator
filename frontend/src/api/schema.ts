@@ -3550,6 +3550,21 @@ export interface components {
             /** @enum {string} */
             sourceKind?: "environment" | "file" | "command" | "keychain";
         };
+        AgentAuthDiagnostic: {
+            cached: boolean;
+            /** Format: date-time */
+            checkedAt: string;
+            code: string;
+            /** Format: int64 */
+            durationMs: number;
+            exitCode?: null | number;
+            httpStatus?: number;
+            method: string;
+            nextStep?: string;
+            provider?: string;
+            reason: string;
+            source?: string;
+        };
         AgentAuthPlan: {
             action: string;
             agentId: string;
@@ -3568,6 +3583,7 @@ export interface components {
             attemptedAt: null | string;
             /** Format: date-time */
             checkedAt: null | string;
+            diagnostics?: components["schemas"]["AgentAuthDiagnostic"][];
             /** @enum {string} */
             freshness: "fresh" | "stale" | "checking";
             reason: string;
@@ -3660,6 +3676,7 @@ export interface components {
             agentId: string;
             allowCustom: boolean;
             binaryVersion?: string;
+            configuredProviders?: string[];
             /** @enum {string} */
             customModelEntry: "none" | "direct" | "configured";
             /** Format: date-time */
@@ -4428,6 +4445,7 @@ export interface components {
             rateLimits?: components["schemas"]["ConversationRateLimitsPayload"];
             sessionId: string;
             settings: components["schemas"]["ConversationTurnSettingsPayload"];
+            supportsExcerpts?: boolean;
             threadState?: components["schemas"]["ConversationThreadStatePayload"];
             title?: string;
             turns: components["schemas"]["ConversationTurnResponse"][];
