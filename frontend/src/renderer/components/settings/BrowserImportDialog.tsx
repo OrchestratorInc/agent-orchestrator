@@ -65,9 +65,8 @@ export function BrowserImportDialog({
 	const requestId = progress?.requestId;
 	const sourceLoading = source ? loadingSourceId === source.id : false;
 	const showSafariAccessDenied = source?.family === "safari" && safariAccessDenied;
-	const resultTitle = result?.entries.every((entry) => entry.importedCookies + entry.importedHistoryEntries === 0)
-		? "settings.browserImport.empty"
-		: "settings.browserImport.complete";
+	const resultEmpty = result?.entries.every((entry) => entry.importedCookies + entry.importedHistoryEntries === 0) ?? false;
+	const resultTitle = resultEmpty ? "settings.browserImport.empty" : "settings.browserImport.complete";
 
 	async function loadSourceProfiles(id: string): Promise<BrowserImportSource | null> {
 		if (!bridge) return null;
@@ -299,7 +298,7 @@ export function BrowserImportDialog({
 							</div>
 						</div>
 					) : null}
-					{view === "result" && result ? <ResultStep includeCookies={includeCookies} includeHistory={includeHistory} result={result} /> : null}
+					{view === "result" && result ? <ResultStep empty={resultEmpty} includeCookies={includeCookies} includeHistory={includeHistory} result={result} /> : null}
 				</div>
 
 				<div className={settingsDialogFooterClass}>
@@ -564,9 +563,8 @@ function OptionsStep({
 	);
 }
 
-function ResultStep({ includeCookies, includeHistory, result }: { includeCookies: boolean; includeHistory: boolean; result: BrowserImportResult }) {
+function ResultStep({ empty, includeCookies, includeHistory, result }: { empty: boolean; includeCookies: boolean; includeHistory: boolean; result: BrowserImportResult }) {
 	const { t } = useTranslation();
-	const empty = result.entries.every((entry) => entry.importedCookies + entry.importedHistoryEntries === 0);
 	return (
 		<div className="space-y-3">
 			{result.entries.map((entry) => (
