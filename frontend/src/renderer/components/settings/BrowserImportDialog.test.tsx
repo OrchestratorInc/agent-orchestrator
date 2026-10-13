@@ -324,8 +324,9 @@ describe("BrowserImportDialog", () => {
 		expect(details).not.toHaveAttribute("open");
 		expect(details).toHaveTextContent("27650 history entries");
 		expect(status).not.toContainElement(details);
-		expect(status.querySelector('[class*="warning"]')).toBeNull();
-		expect(status.querySelector('[class*="destructive"]')).toBeNull();
+		const resultCard = details.parentElement!;
+		expect(resultCard.querySelector('[class*="warning"]')).toBeNull();
+		expect(resultCard.querySelector('[class*="destructive"]')).toBeNull();
 	});
 
 	it("shows only the selected cookie count for a cookies-only import", async () => {
