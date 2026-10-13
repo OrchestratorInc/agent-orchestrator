@@ -53,11 +53,27 @@ func sanitizeName(s string) string {
 	return strings.Trim(nameUnsafeChar.ReplaceAllString(strings.ToLower(s), "-"), "-.")
 }
 
+// nameFor keeps clean IDs as they are. Any ID that sanitization would change
+// (or that sanitizes to nothing) gets a short hash of the original, so IDs
+// that differ only by case or unsafe characters never share a container name.
+func nameFor(id string) string {
+	s := sanitizeName(id)
+	if s != "" && s == id {
+		return s
+	}
+	sum := sha256.Sum256([]byte(id))
+	suffix := hex.EncodeToString(sum[:])[:8]
+	if s == "" {
+		return suffix
+	}
+	return s + "-" + suffix
+}
+
 func containerName(req ports.SandboxRequest, hash string) string {
 	if req.Config.Mode == domain.SandboxModeShared {
-		return "ao-sbx-" + sanitizeName(string(req.ProjectID)) + "-" + hash[:8]
+		return "ao-sbx-" + nameFor(string(req.ProjectID)) + "-" + hash[:8]
 	}
-	return "ao-sbx-" + sanitizeName(string(req.SessionID))
+	return "ao-sbx-" + nameFor(string(req.SessionID))
 }
 
 func configHash(cfg domain.SandboxConfig, mounts []mount) string {

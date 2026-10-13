@@ -1,10 +1,13 @@
 package dockersandbox
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -19,8 +22,34 @@ func TestContainerName(t *testing.T) {
 	}
 	shared := per
 	shared.Config.Mode = domain.SandboxModeShared
-	if got := containerName(shared, "abcdef0123456789"); got != "ao-sbx-my-proj-abcdef01" {
-		t.Fatalf("shared name = %q", got)
+	sum := sha256.Sum256([]byte("My Proj"))
+	want := "ao-sbx-my-proj-" + hex.EncodeToString(sum[:])[:8] + "-abcdef01"
+	if got := containerName(shared, "abcdef0123456789"); got != want {
+		t.Fatalf("shared name = %q, want %q", got, want)
+	}
+}
+
+func TestContainerNameDisambiguatesLossyIDs(t *testing.T) {
+	base := ports.SandboxRequest{ProjectID: "p", Config: domain.SandboxConfig{Mode: domain.SandboxModePerAgent}}
+	upper, lower := base, base
+	upper.SessionID = "Proj-12"
+	lower.SessionID = "proj-12"
+	if containerName(upper, "") == containerName(lower, "") {
+		t.Fatalf("session IDs differing only by case collide: %q", containerName(lower, ""))
+	}
+}
+
+func TestContainerNameFromUnsafeIDIsValidDockerName(t *testing.T) {
+	nameRule := regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]+$`)
+	req := ports.SandboxRequest{SessionID: "!!!", ProjectID: "!!!", Config: domain.SandboxConfig{Mode: domain.SandboxModePerAgent}}
+	name := containerName(req, "")
+	if !strings.HasPrefix(name, "ao-sbx-") || !nameRule.MatchString(strings.TrimPrefix(name, "ao-sbx-")) {
+		t.Fatalf("per-agent name %q is not a valid docker name after ao-sbx-", name)
+	}
+	req.Config.Mode = domain.SandboxModeShared
+	name = containerName(req, "abcdef0123456789")
+	if !strings.HasPrefix(name, "ao-sbx-") || !nameRule.MatchString(strings.TrimPrefix(name, "ao-sbx-")) {
+		t.Fatalf("shared name %q is not a valid docker name after ao-sbx-", name)
 	}
 }
 
