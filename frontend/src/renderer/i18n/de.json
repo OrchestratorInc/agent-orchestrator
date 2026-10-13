@@ -2127,7 +2127,7 @@
 	"settings.browserImport.unavailable": "Der Browserimport ist in diesem Build nicht verfügbar.",
 	"settings.browserImport.discoveryFailed": "Installierte Browser konnten nicht geprüft werden.",
 	"settings.browserImport.failed": "Browserdaten konnten nicht importiert werden.",
-	"settings.browserImport.sourceDatabaseUnavailable": "Schließe {{browser}} vollständig, einschließlich der Hintergrundprozesse, und versuche es erneut. Prüfe bei Bedarf, ob AO auf das Browserprofil zugreifen kann.",
+	"settings.browserImport.sourceDatabaseUnavailable": "Die Profildaten von {{browser}} konnten nicht gelesen werden. Es wurde nichts importiert. Schließe {{browser}} vollständig, einschließlich der Hintergrundprozesse, und versuche es erneut. Prüfe bei Bedarf, ob AO auf das Browserprofil zugreifen kann.",
 	"settings.browserImport.safariAccessUnavailable": "AO konnte nicht auf die Safari-Daten zugreifen. Öffnen Sie in den Systemeinstellungen Datenschutz & Sicherheit > Festplattenvollzugriff, erlauben Sie AO den Zugriff, starten Sie AO neu und versuchen Sie den Import erneut.",
 	"settings.browserImport.profileCount": "{{count}} Profile gefunden",
 	"settings.browserImport.selectProfiles": "Wähle die {{browser}}-Profile aus, die du in AO übernehmen möchtest.",

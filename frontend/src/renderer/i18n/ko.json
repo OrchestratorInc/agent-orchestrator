@@ -2127,7 +2127,7 @@
 	"settings.browserImport.unavailable": "이 빌드에서는 브라우저 가져오기를 사용할 수 없습니다.",
 	"settings.browserImport.discoveryFailed": "설치된 브라우저를 확인하지 못했습니다.",
 	"settings.browserImport.failed": "브라우저 데이터를 가져오지 못했습니다.",
-	"settings.browserImport.sourceDatabaseUnavailable": "백그라운드 프로세스를 포함해 {{browser}}를 완전히 종료한 후 다시 시도하세요. 필요한 경우 AO가 브라우저 프로필에 접근할 수 있는지 확인하세요.",
+	"settings.browserImport.sourceDatabaseUnavailable": "{{browser}}의 프로필 데이터를 읽을 수 없어 아무것도 가져오지 않았습니다. 백그라운드 프로세스를 포함해 {{browser}}를 완전히 종료한 후 다시 시도하세요. 필요한 경우 AO가 브라우저 프로필에 접근할 수 있는지 확인하세요.",
 	"settings.browserImport.safariAccessUnavailable": "AO가 Safari 데이터에 접근하지 못했습니다. 시스템 설정에서 개인정보 보호 및 보안 > 전체 디스크 접근을 열고 AO를 허용한 다음 AO를 다시 시작하여 가져오기를 다시 시도하세요.",
 	"settings.browserImport.profileCount": "프로필 {{count}}개 발견",
 	"settings.browserImport.selectProfiles": "AO로 가져올 {{browser}} 프로필을 선택하세요.",

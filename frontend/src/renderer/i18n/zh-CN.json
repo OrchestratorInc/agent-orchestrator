@@ -2193,7 +2193,7 @@
 	"settings.browserImport.unavailable": "此版本不支持浏览器导入。",
 	"settings.browserImport.discoveryFailed": "无法检查已安装的浏览器。",
 	"settings.browserImport.failed": "无法导入浏览器数据。",
-	"settings.browserImport.sourceDatabaseUnavailable": "请完全关闭 {{browser}}（包括后台进程），然后重试。如有需要，请检查 AO 是否能访问浏览器配置文件。",
+	"settings.browserImport.sourceDatabaseUnavailable": "无法读取 {{browser}} 的配置文件数据，因此未导入任何内容。请完全关闭 {{browser}}（包括后台进程），然后重试。如有需要，请检查 AO 是否能访问浏览器配置文件。",
 	"settings.browserImport.safariAccessUnavailable": "AO 无法访问 Safari 数据。请在系统设置中打开隐私与安全性 > 完全磁盘访问权限，允许 AO 访问，然后重新启动 AO 并再次尝试导入。",
 	"settings.browserImport.profileCount": "找到 {{count}} 个配置文件",
 	"settings.browserImport.selectProfiles": "选择要导入 AO 的 {{browser}} 配置文件。",

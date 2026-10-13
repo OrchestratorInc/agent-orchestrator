@@ -2127,7 +2127,7 @@
 	"settings.browserImport.unavailable": "このビルドではブラウザインポートを利用できません。",
 	"settings.browserImport.discoveryFailed": "インストール済みブラウザを確認できませんでした。",
 	"settings.browserImport.failed": "ブラウザデータをインポートできませんでした。",
-	"settings.browserImport.sourceDatabaseUnavailable": "{{browser}} をバックグラウンドプロセスも含めて完全に終了し、再試行してください。必要に応じて、AO がブラウザのプロファイルにアクセスできるか確認してください。",
+	"settings.browserImport.sourceDatabaseUnavailable": "{{browser}} のプロファイルデータを読み取れなかったため、何もインポートされませんでした。{{browser}} をバックグラウンドプロセスも含めて完全に終了し、再試行してください。必要に応じて、AO がブラウザのプロファイルにアクセスできるか確認してください。",
 	"settings.browserImport.safariAccessUnavailable": "AO は Safari のデータにアクセスできませんでした。システム設定で「プライバシーとセキュリティ」>「フルディスクアクセス」を開き、AO を許可してから AO を再起動し、もう一度インポートしてください。",
 	"settings.browserImport.profileCount": "{{count}} 件のプロファイルが見つかりました",
 	"settings.browserImport.selectProfiles": "AOに取り込む{{browser}}プロファイルを選択してください。",

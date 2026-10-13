@@ -398,7 +398,8 @@ describe("BrowserImportDialog", () => {
 
 		const alert = await screen.findByRole("alert");
 		expect(alert).toHaveClass("text-muted-foreground");
-		expect(alert).toHaveTextContent("Tip: Fully close Brave, including background processes, then retry");
+		expect(alert).toHaveTextContent(/^Tip: Couldn't read Brave's profile data, so nothing was imported\. Fully close Brave/);
+		expect(alert).toHaveTextContent("including background processes, then retry");
 		const picker = screen.getByRole("combobox", { name: "From" });
 		expect(alert.compareDocumentPosition(picker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
