@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type ReactNode, type RefObject, useEffect, useId, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, type Ref, useEffect, useId, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ExternalLinkComponent } from "./external-link";
 import {
@@ -459,10 +459,25 @@ export type InspectorReviewRun = {
 	id: string;
 	inlineComments?: InspectorInlineComment[];
 	resolvedComments?: InspectorInlineComment[];
+	/** The pass reviewed a commit other than the PR's current head. */
+	stale?: boolean;
 	status: string;
 	url?: string | null;
 	verdict: InspectorVerdict;
 };
+
+/** One action in a host-rendered menu (the host owns the menu primitive). */
+export type InspectorActionMenuItem = {
+	disabled?: boolean;
+	href?: string;
+	key: string;
+	label: string;
+	onSelect?: () => void;
+	tone?: "success" | "error";
+};
+
+/** Renders an accessible action menu; `label` names the trigger. */
+export type InspectorActionMenuRenderer = (menu: { items: InspectorActionMenuItem[]; label: string }) => ReactNode;
 
 export type InspectorReviewSummaryAction = {
 	body: string;
@@ -563,6 +578,10 @@ export type InspectorReviewLabels = {
 	showLess: string;
 	showMore: string;
 	commentNumber: (number: number) => string;
+	/** Names a comment's action menu, e.g. "Actions for comment on src/a.ts:12". */
+	commentActions?: (location: string) => string;
+	copyCommentLink?: string;
+	openOnGitHub?: string;
 	unresolvedCount: (count: number) => string;
 	viewInFile: string;
 	viewInFileWorkInProgress: string;
@@ -863,12 +882,12 @@ function ReviewRunHistory({
 	const remaining = Math.max(0, runs.length - visible.length);
 	return (
 		<div className={cn("flex min-w-0 flex-col gap-2", dimmed && "opacity-70")}>
-			{visible.map((run, index) => (
+			{visible.map((run) => (
 				<ReviewSummaryCard
 					actor={run.harness || "reviewer"}
 					body={run.status === "cancelled" || run.status === "failed" ? "" : run.body}
 					externalLink={externalLink}
-					isEarlier={historical || index > 0}
+					isEarlier={historical || Boolean(run.stale)}
 					key={run.id}
 					labels={labels}
 					renderAvatar={renderAvatar}
@@ -1067,6 +1086,98 @@ function ExternalReviewCard({
 	);
 }
 
+type InlineCommentHandler = (comment: InspectorInlineComment & { reviewerId?: string }) => Promise<void> | void;
+
+const disclosureTransition = { duration: 0.22, ease: [0.4, 0, 0.2, 1] } as const;
+
+/** Height and opacity reveal shared by every review disclosure; instant under reduced motion. */
+function Reveal({ children, className, id }: { children: ReactNode; className?: string; id?: string }) {
+	const reduceMotion = useReducedMotion();
+	return (
+		<motion.div
+			animate={{ height: "auto", opacity: 1, transitionEnd: { overflow: "visible" } }}
+			className={className}
+			exit={{ height: 0, opacity: 0, overflow: "hidden" }}
+			id={id}
+			initial={{ height: 0, opacity: 0, overflow: "hidden" }}
+			transition={reduceMotion ? { duration: 0 } : disclosureTransition}
+		>
+			{children}
+		</motion.div>
+	);
+}
+
+const commentDisclosureClass =
+	"flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs font-medium text-muted-foreground transition-colors duration-fast hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
+
+/**
+ * A review's inline comments: open ones listed, resolved ones folded. The
+ * host renders each comment's action menu through `renderActionMenu`.
+ */
+export function InspectorReviewComments({
+	comments,
+	externalLink,
+	labels,
+	onResolveInlineComment,
+	onSendInlineComment,
+	onViewInlineCommentInFile,
+	renderActionMenu,
+	resolvedComments = [],
+	reviewerId,
+	reviewUrl,
+}: {
+	comments: InspectorInlineComment[];
+	externalLink: ExternalLinkComponent;
+	labels: InspectorReviewLabels;
+	onResolveInlineComment?: InlineCommentHandler;
+	onSendInlineComment?: InlineCommentHandler;
+	onViewInlineCommentInFile?: (comment: InspectorInlineComment & { reviewerId?: string }) => void;
+	renderActionMenu?: InspectorActionMenuRenderer;
+	resolvedComments?: InspectorInlineComment[];
+	reviewerId: string;
+	reviewUrl?: string;
+}) {
+	return (
+		<>
+			<GithubInlineComments
+				comments={comments}
+				externalLink={externalLink}
+				labels={labels}
+				onResolveInlineComment={onResolveInlineComment}
+				onSendInlineComment={onSendInlineComment}
+				onViewInlineCommentInFile={onViewInlineCommentInFile}
+				renderActionMenu={renderActionMenu}
+				reviewerId={reviewerId}
+				reviewUrl={reviewUrl}
+			/>
+			{resolvedComments.length > 0 ? (
+				<ResolvedInlineComments
+					comments={resolvedComments}
+					externalLink={externalLink}
+					labels={labels}
+					onViewInlineCommentInFile={onViewInlineCommentInFile}
+					renderActionMenu={renderActionMenu}
+					reviewerId={reviewerId}
+					reviewUrl={reviewUrl}
+				/>
+			) : null}
+		</>
+	);
+}
+
+/** A review body rendered by the host's markdown renderer, unclamped. */
+export function InspectorReviewMarkdown({
+	body,
+	renderMarkdown,
+	testId,
+}: {
+	body: string;
+	renderMarkdown: (body: string) => ReactNode;
+	testId: string;
+}) {
+	return <ReviewMarkdownBody body={body} clamped={false} renderMarkdown={renderMarkdown} testId={testId} />;
+}
+
 function GithubInlineComments({
 	comments,
 	externalLink: ExternalLink,
@@ -1074,27 +1185,36 @@ function GithubInlineComments({
 	onResolveInlineComment,
 	onSendInlineComment,
 	onViewInlineCommentInFile,
+	renderActionMenu,
 	reviewerId,
 	reviewUrl,
 }: {
 	comments: InspectorInlineComment[];
 	externalLink: ExternalLinkComponent;
 	labels: InspectorReviewLabels;
-	onResolveInlineComment?: (comment: InspectorInlineComment & { reviewerId?: string }) => Promise<void> | void;
-	onSendInlineComment?: (comment: InspectorInlineComment & { reviewerId?: string }) => Promise<void> | void;
+	onResolveInlineComment?: InlineCommentHandler;
+	onSendInlineComment?: InlineCommentHandler;
 	onViewInlineCommentInFile?: (comment: InspectorInlineComment & { reviewerId?: string }) => void;
+	renderActionMenu?: InspectorActionMenuRenderer;
 	reviewerId: string;
 	reviewUrl?: string;
 }) {
 	const [open, setOpen] = useState(true);
+	const listId = useId();
 	if (comments.length === 0) return null;
 	return (
 		<section className="min-w-0" data-testid="github-inline-comments">
-			<button aria-expanded={open} className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs font-medium leading-none text-muted-foreground transition-colors hover:bg-interactive-hover/20 hover:text-foreground" onClick={() => setOpen((current) => !current)} type="button">
-				<ChevronIcon className="size-icon-2xs shrink-0" direction={open ? "down" : "right"} />
+			<button aria-controls={listId} aria-expanded={open} className={commentDisclosureClass} onClick={() => setOpen((current) => !current)} type="button">
+				<ChevronIcon className={cn("size-icon-2xs shrink-0 transition-transform duration-fast motion-reduce:transition-none", open && "rotate-90")} direction="right" />
 				<span>{labels.openComments} · {comments.length}</span>
 			</button>
-			{open ? <InlineCommentList comments={comments} externalLink={ExternalLink} labels={labels} onResolveInlineComment={onResolveInlineComment} onSendInlineComment={onSendInlineComment} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={reviewerId} reviewUrl={reviewUrl} /> : null}
+			<AnimatePresence initial={false}>
+				{open ? (
+					<Reveal id={listId}>
+						<InlineCommentList comments={comments} externalLink={ExternalLink} labels={labels} onResolveInlineComment={onResolveInlineComment} onSendInlineComment={onSendInlineComment} onViewInlineCommentInFile={onViewInlineCommentInFile} renderActionMenu={renderActionMenu} reviewerId={reviewerId} reviewUrl={reviewUrl} />
+					</Reveal>
+				) : null}
+			</AnimatePresence>
 		</section>
 	);
 }
@@ -1104,6 +1224,7 @@ function ResolvedInlineComments({
 	externalLink: ExternalLink,
 	labels,
 	onViewInlineCommentInFile,
+	renderActionMenu,
 	reviewerId,
 	reviewUrl,
 }: {
@@ -1111,17 +1232,25 @@ function ResolvedInlineComments({
 	externalLink: ExternalLinkComponent;
 	labels: InspectorReviewLabels;
 	onViewInlineCommentInFile?: (comment: InspectorInlineComment & { reviewerId?: string }) => void;
+	renderActionMenu?: InspectorActionMenuRenderer;
 	reviewerId: string;
 	reviewUrl?: string;
 }) {
 	const [open, setOpen] = useState(false);
+	const listId = useId();
 	return (
-		<section className="min-w-0 border-t border-border/60 pt-2" data-testid="github-resolved-comments">
-			<button aria-expanded={open} className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-xs font-medium leading-none text-muted-foreground transition-colors hover:bg-interactive-hover/20 hover:text-foreground" onClick={() => setOpen((current) => !current)} type="button">
-				<ChevronIcon className="size-icon-2xs shrink-0" direction={open ? "down" : "right"} />
+		<section className="min-w-0" data-testid="github-resolved-comments">
+			<button aria-controls={listId} aria-expanded={open} className={commentDisclosureClass} onClick={() => setOpen((current) => !current)} type="button">
+				<ChevronIcon className={cn("size-icon-2xs shrink-0 transition-transform duration-fast motion-reduce:transition-none", open && "rotate-90")} direction="right" />
 				<span>{labels.resolvedComments(comments.length)}</span>
 			</button>
-			{open ? <InlineCommentList comments={comments} externalLink={ExternalLink} labels={labels} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={reviewerId} reviewUrl={reviewUrl} /> : null}
+			<AnimatePresence initial={false}>
+				{open ? (
+					<Reveal id={listId}>
+						<InlineCommentList comments={comments} externalLink={ExternalLink} labels={labels} onViewInlineCommentInFile={onViewInlineCommentInFile} renderActionMenu={renderActionMenu} reviewerId={reviewerId} reviewUrl={reviewUrl} />
+					</Reveal>
+				) : null}
+			</AnimatePresence>
 		</section>
 	);
 }
@@ -1133,15 +1262,17 @@ function InlineCommentList({
 	onResolveInlineComment,
 	onSendInlineComment,
 	onViewInlineCommentInFile,
+	renderActionMenu,
 	reviewerId,
 	reviewUrl,
 }: {
 	comments: InspectorInlineComment[];
 	externalLink: ExternalLinkComponent;
 	labels: InspectorReviewLabels;
-	onResolveInlineComment?: (comment: InspectorInlineComment & { reviewerId?: string }) => Promise<void> | void;
-	onSendInlineComment?: (comment: InspectorInlineComment & { reviewerId?: string }) => Promise<void> | void;
+	onResolveInlineComment?: InlineCommentHandler;
+	onSendInlineComment?: InlineCommentHandler;
 	onViewInlineCommentInFile?: (comment: InspectorInlineComment & { reviewerId?: string }) => void;
+	renderActionMenu?: InspectorActionMenuRenderer;
 	reviewerId: string;
 	reviewUrl?: string;
 }) {
@@ -1206,6 +1337,7 @@ function InlineCommentList({
 						}
 					} : undefined}
 					onViewInFile={comment.file && onViewInlineCommentInFile ? () => onViewInlineCommentInFile(comment) : undefined}
+					renderActionMenu={renderActionMenu}
 					resolveError={resolveErrorCommentIds.has(comment.id)}
 					resolvedSuccess={manuallyResolvedCommentIds.has(comment.id)}
 					resolving={resolvingCommentIds.has(comment.id)}
@@ -1225,6 +1357,7 @@ function InlineCommentRow({
 	onResolve,
 	onSend,
 	onViewInFile,
+	renderActionMenu,
 	resolveError = false,
 	resolvedSuccess = false,
 	resolving = false,
@@ -1238,6 +1371,7 @@ function InlineCommentRow({
 	onResolve?: () => void;
 	onSend?: () => void;
 	onViewInFile?: () => void;
+	renderActionMenu?: InspectorActionMenuRenderer;
 	resolveError?: boolean;
 	resolvedSuccess?: boolean;
 	resolving?: boolean;
@@ -1264,51 +1398,68 @@ function InlineCommentRow({
 			// Clipboard access may be unavailable in tests or restricted contexts.
 		}
 	};
+	const menuLabel = labels.commentActions?.(fileLabel) ?? "Comment actions";
+	const menuItems: InspectorActionMenuItem[] = [
+		...(onSend && !sent ? [{ disabled: sending, key: "send", label: labels.sendToWorkerAgent, onSelect: onSend }] : []),
+		...(onResolve ? [{ disabled: resolving, key: "resolve", label: labels.resolveComment, onSelect: () => void onResolve() }] : []),
+		...(onViewInFile ? [{ key: "file", label: labels.viewInFile, onSelect: onViewInFile }] : []),
+		...(comment.url ? [{ href: comment.url, key: "open", label: labels.openOnGitHub ?? "Open on GitHub" }] : []),
+		...(comment.url ? [{ key: "copy", label: labels.copyCommentLink ?? "Copy comment link", onSelect: () => void copy(comment.url) }] : []),
+	];
+	const summary = (
+		<>
+			<span className="flex min-w-0 items-center gap-1.5 font-mono text-caption font-medium text-foreground">
+				{canExpand ? <ChevronIcon className={cn("size-icon-2xs shrink-0 text-passive transition-transform duration-fast motion-reduce:transition-none", expanded && "rotate-90")} direction="right" /> : null}
+				<span className="truncate" title={fileLabel}>{fileLabel}</span>
+			</span>
+			{body ? <span data-overflow-axis="horizontal" ref={previewRef} className={cn("mt-1 block min-w-0 text-muted-foreground", expanded ? "whitespace-pre-wrap break-words" : "truncate")}>{expanded ? body : preview}</span> : null}
+		</>
+	);
 	return (
-		<div className="relative flex min-w-0 flex-col gap-1.5 py-2.5 text-xs">
-			<div
-				{...(canExpand ? { "aria-expanded": expanded, role: "button", tabIndex: 0 } : {})}
-				className={cn("w-full min-w-0 rounded-md py-1 text-left transition-colors", canExpand && "cursor-pointer hover:bg-interactive-hover/20")}
-				onClick={canExpand ? () => setExpanded((current) => !current) : undefined}
-				onKeyDown={canExpand ? (event) => {
-					if (event.key === "Enter" || event.key === " ") {
-						event.preventDefault();
-						setExpanded((current) => !current);
-					}
-				} : undefined}
-			>
-				<span className="flex min-w-0 items-start gap-2">
-					<span className="flex min-w-0 flex-1 items-center gap-1.5 font-mono text-2xs font-semibold text-foreground">
-						{canExpand ? <ChevronIcon className="size-icon-2xs shrink-0 text-passive" direction={expanded ? "down" : "right"} /> : null}
-						<span className="truncate" title={fileLabel}>{fileLabel}</span>
+		<div className="relative flex min-w-0 flex-col gap-1.5 py-2 text-xs">
+			{/* The summary toggles and the menu sit side by side, never nested. */}
+			<div className="flex min-w-0 items-start gap-1">
+				{canExpand ? (
+					<button
+						aria-expanded={expanded}
+						className="min-w-0 flex-1 rounded-md px-1.5 py-1 text-left transition-colors duration-fast hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						onClick={() => setExpanded((current) => !current)}
+						type="button"
+					>
+						{summary}
+					</button>
+				) : (
+					<div className="min-w-0 flex-1 px-1.5 py-1">{summary}</div>
+				)}
+				{sent ? (
+					<span aria-label={labels.sentToWorkerAgent} className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-success" role="status" title={labels.sentToWorkerAgent}>
+						<CheckIcon className="size-icon-sm shrink-0" />
 					</span>
-					<span className="flex shrink-0 items-center justify-end" onClick={(event) => event.stopPropagation()}>
-						{sent ? (
-							<span aria-label={labels.sentToWorkerAgent} className="inline-flex size-7 items-center justify-center rounded-md text-success" role="status" title={labels.sentToWorkerAgent}>
-								<CheckIcon className="size-icon-xs shrink-0" />
-							</span>
-						) : null}
-					</span>
-					<span className="relative flex shrink-0 items-start justify-end" onClick={(event) => event.stopPropagation()}>
-						<button aria-expanded={menuOpen} aria-label="Comment actions" className="inline-flex size-7 items-center justify-center rounded-md border border-border/70 text-muted-foreground transition-colors hover:border-border-strong hover:bg-interactive-hover hover:text-foreground" onClick={() => setMenuOpen((current) => !current)} type="button">
-							<MoreHorizontalIcon className="size-icon-xs" />
+				) : null}
+				{renderActionMenu ? (
+					menuItems.length > 0 ? renderActionMenu({ items: menuItems, label: menuLabel }) : null
+				) : (
+					<span className="relative flex shrink-0 items-start justify-end">
+						<button aria-expanded={menuOpen} aria-label={menuLabel} className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors duration-fast hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => setMenuOpen((current) => !current)} type="button">
+							<MoreHorizontalIcon className="size-icon-sm" />
 						</button>
 						{menuOpen ? (
-							<div className="isolate absolute right-0 top-8 z-[100] flex w-40 flex-col rounded-md border border-border-strong bg-[var(--color-bg-settings-menu)] p-1 text-2xs shadow-[0_16px_40px_rgba(0,0,0,0.65)]">
-								{onSend && !sent ? <button className="rounded px-2 py-1.5 text-left text-muted-foreground hover:bg-interactive-hover hover:text-foreground disabled:pointer-events-none disabled:opacity-60" disabled={sending} onClick={() => { setMenuOpen(false); onSend(); }} type="button">{labels.sendToWorkerAgent}</button> : null}
-								{onResolve ? <button className="rounded px-2 py-1.5 text-left text-muted-foreground hover:bg-interactive-hover hover:text-foreground disabled:pointer-events-none disabled:opacity-60" disabled={resolving} onClick={() => void onResolve()} type="button">{labels.resolveComment}</button> : null}
-								{onViewInFile ? <button className="rounded px-2 py-1.5 text-left text-muted-foreground hover:bg-interactive-hover hover:text-foreground" onClick={onViewInFile} type="button">{labels.viewInFile}</button> : null}
-								{comment.url ? <ExternalLink className="rounded px-2 py-1.5 text-muted-foreground no-underline hover:bg-interactive-hover hover:text-foreground" href={comment.url}>Open on GitHub</ExternalLink> : null}
-								{comment.url ? <button className="rounded px-2 py-1.5 text-left text-muted-foreground hover:bg-interactive-hover hover:text-foreground" onClick={() => void copy(comment.url)} type="button">Copy comment link</button> : null}
+							<div className="isolate absolute right-0 top-8 z-overlay flex min-w-40 flex-col rounded-lg border border-border bg-card p-1 text-control shadow-(--shadow-popover)">
+								{menuItems.map((item) =>
+									item.href ? (
+										<ExternalLink className="rounded-md px-2 py-1.5 text-muted-foreground no-underline hover:bg-interactive-hover hover:text-foreground" href={item.href} key={item.key}>{item.label}</ExternalLink>
+									) : (
+										<button className="rounded-md px-2 py-1.5 text-left text-muted-foreground hover:bg-interactive-hover hover:text-foreground disabled:pointer-events-none disabled:opacity-50" disabled={item.disabled} key={item.key} onClick={() => { if (item.key === "send") setMenuOpen(false); item.onSelect?.(); }} type="button">{item.label}</button>
+									),
+								)}
 							</div>
 						) : null}
 					</span>
-				</span>
-				{body ? <span data-overflow-axis="horizontal" ref={previewRef} className={cn("mt-1 block min-w-0 text-muted-foreground", expanded ? "whitespace-pre-wrap break-words" : "truncate")}>{expanded ? body : preview}</span> : null}
+				)}
 			</div>
-			{resolvedSuccess ? <p className="m-0 text-2xs font-medium text-success">{labels.resolvedReview}</p> : null}
-			{resolveError ? <p className="m-0 text-2xs font-medium text-error">{labels.resolveReviewFailed}</p> : null}
-			{sendError && !sent ? <p className="m-0 text-2xs font-medium text-error">{labels.sendToWorkerAgentError}</p> : null}
+			{resolvedSuccess ? <p className="m-0 px-1.5 text-caption font-medium text-success" role="status">{labels.resolvedReview}</p> : null}
+			{resolveError ? <p className="m-0 px-1.5 text-caption font-medium text-error" role="status">{labels.resolveReviewFailed}</p> : null}
+			{sendError && !sent ? <p className="m-0 px-1.5 text-caption font-medium text-error" role="status">{labels.sendToWorkerAgentError}</p> : null}
 		</div>
 	);
 }
@@ -1426,7 +1577,7 @@ function ReviewMarkdownBody({
 }: {
 	body: string;
 	clamped: boolean;
-	elementRef?: RefObject<HTMLDivElement | null>;
+	elementRef?: Ref<HTMLDivElement>;
 	renderMarkdown: (body: string) => ReactNode;
 	testId: string;
 }) {
@@ -1558,11 +1709,11 @@ function ReviewLinks({
 }
 
 function useRenderedOverflow<T extends HTMLElement>(contentKey: string, axis: "horizontal" | "vertical", active = true) {
-	const ref = useRef<T | null>(null);
+	// A callback ref, so a remounted element (e.g. a row that became a button) is measured again.
+	const [element, ref] = useState<T | null>(null);
 	const [isOverflowing, setIsOverflowing] = useState(false);
 	useEffect(() => {
 		if (!active) return;
-		const element = ref.current;
 		if (!element) return;
 		const update = () => {
 			const next = axis === "horizontal"
@@ -1578,6 +1729,6 @@ function useRenderedOverflow<T extends HTMLElement>(contentKey: string, axis: "h
 			window.removeEventListener("resize", update);
 			observer?.disconnect();
 		};
-	}, [active, axis, contentKey]);
+	}, [active, axis, contentKey, element]);
 	return { ref, isOverflowing };
 }

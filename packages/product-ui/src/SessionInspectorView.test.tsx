@@ -286,6 +286,45 @@ describe("portable inspector presentations", () => {
     expect(screen.getByText("2h ago")).toHaveClass("font-mono", "text-passive");
   });
 
+  // List position says nothing about the commit a pass reviewed.
+  it("labels only a stale pass as earlier, never by its place in the list", () => {
+    const run = (id: string, stale: boolean) => ({
+      body: `Body ${id}`,
+      createdAtLabel: "5m ago",
+      harness: "codex",
+      id,
+      stale,
+      status: "complete",
+      verdict: { label: "Approved", tone: "success" as const },
+    });
+    const { rerender } = render(
+      <InspectorReviewsView
+        externalLink={ExternalLink}
+        groups={[{ ao: { runs: [run("run-head", false), run("run-head-older", false)] }, meta: "#12", number: 12, title: "Head" }]}
+        isLoading={false}
+        labels={reviewLabels}
+        renderAvatar={() => null}
+        renderMarkdown={(body) => <p>{body}</p>}
+      />,
+    );
+    expandFirstReviewGroup();
+    fireEvent.click(screen.getByRole("button", { name: /Load 1 more/ }));
+    expect(screen.getByText("Body run-head-older")).toBeInTheDocument();
+    expect(screen.queryByText("Earlier pass")).not.toBeInTheDocument();
+
+    rerender(
+      <InspectorReviewsView
+        externalLink={ExternalLink}
+        groups={[{ ao: { runs: [run("run-old-commit", true)] }, meta: "#12", number: 12, title: "Head" }]}
+        isLoading={false}
+        labels={reviewLabels}
+        renderAvatar={() => null}
+        renderMarkdown={(body) => <p>{body}</p>}
+      />,
+    );
+    expect(screen.getByText("Earlier pass")).toBeInTheDocument();
+  });
+
   it("owns grouped review disclosure while the host supplies markdown and assets", () => {
     const renderAvatar = vi.fn((harness: string) => (
       <span data-testid="avatar">{harness}</span>
@@ -357,7 +396,8 @@ describe("portable inspector presentations", () => {
     expect(screen.queryByText("Not injected")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "View on PR" })).not.toBeInTheDocument();
     expect(renderAvatar).toHaveBeenCalledWith("codex");
-    expect(renderMarkdown).toHaveBeenCalledTimes(2);
+    // Each body goes through the host renderer (re-renders may repeat a call).
+    expect(new Set(renderMarkdown.mock.calls.map(([body]) => body)).size).toBe(2);
   });
 
   it("shows the newest GitHub review when history prepends", () => {
@@ -950,12 +990,30 @@ describe("portable inspector presentations", () => {
     fireEvent.click(screen.getByRole("button", { name: /maya.*Commented/i }));
     const preview = screen.getByText("A short comment");
     setRenderedOverflow(preview, "horizontal", false);
-    expect(preview.closest('[role="button"]')).toBeNull();
+    expect(preview.closest("button")).toBeNull();
 
-    setRenderedOverflow(preview, "horizontal", true);
-    await waitFor(() => expect(preview.closest('[role="button"]')).toHaveAttribute("aria-expanded", "false"));
-    fireEvent.click(preview);
-    expect(preview.closest('[role="button"]')).toHaveAttribute("aria-expanded", "true");
+    // The summary remounts as a real button (never nested with the comment
+    // menu), so the overflow must hold for whichever element renders it.
+    const widths = {
+      clientWidth: Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth"),
+      scrollWidth: Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth"),
+    };
+    const truncated = (element: HTMLElement) => element.textContent === "A short comment";
+    Object.defineProperties(HTMLElement.prototype, {
+      clientWidth: { configurable: true, get() { return 240; } },
+      scrollWidth: { configurable: true, get(this: HTMLElement) { return truncated(this) ? 320 : 240; } },
+    });
+    try {
+      setRenderedOverflow(preview, "horizontal", true);
+      await waitFor(() => expect(screen.getByText("A short comment").closest("button")).toHaveAttribute("aria-expanded", "false"));
+      fireEvent.click(screen.getByText("A short comment"));
+      expect(screen.getByText("A short comment").closest("button")).toHaveAttribute("aria-expanded", "true");
+    } finally {
+      for (const [key, descriptor] of Object.entries(widths)) {
+        if (descriptor) Object.defineProperty(HTMLElement.prototype, key, descriptor);
+        else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key];
+      }
+    }
   });
 
   it("offers AO browser, system browser, and worker-send actions for summaries", async () => {
