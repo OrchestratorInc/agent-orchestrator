@@ -2946,5 +2946,10 @@
 	"settings.billing.usageNote": "Cuenta cada sesión en ejecución: dos sesiones durante una hora usan 2 horas de sesión. Las sesiones en pausa no cuentan.",
 	"settings.billing.cancelNotice": "Tu plan {{plan}} termina el {{date}}. Entonces pasarás a Gratis.",
 	"settings.billing.keepPlan": "Mantener {{plan}}",
-	"settings.billing.freeStarts": "Empieza el {{date}}"
+	"settings.billing.freeStarts": "Empieza el {{date}}",
+	"settings.defaultSandbox.label": "Sandbox en la nube predeterminado",
+	"settings.defaultSandbox.description": "Dónde ejecutan los proyectos nuevos sus sesiones en la nube y adónde van las sesiones cuando un proyecto no ha elegido uno.",
+	"settings.defaultSandbox.single": "Dónde se ejecutan tus sesiones en la nube. Solo hay un sandbox disponible.",
+	"settings.defaultSandbox.adminOnly": "Solo los administradores de la organización pueden cambiar esto.",
+	"settings.defaultSandbox.saveFailed": "No se pudo guardar el sandbox predeterminado. Inténtalo de nuevo."
 }

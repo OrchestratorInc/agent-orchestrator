@@ -201,30 +201,46 @@ func TestCoderOnlyEndpointsForbiddenWithoutCoder(t *testing.T) {
 			Logger:                    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		})
 	}
-	endpoints := map[string]func(*Server, http.ResponseWriter, *http.Request){
+	// Bring-your-own Coder needs the coder capability; the shared deployment's
+	// templates are open to every organization that may run on Coder.
+	customCoder := map[string]func(*Server, http.ResponseWriter, *http.Request){
 		"GET coder-config":    (*Server).getOrgCoderConfig,
 		"PUT coder-config":    (*Server).putOrgCoderConfig,
 		"DELETE coder-config": (*Server).deleteOrgCoderConfig,
-		"GET coder templates": (*Server).listCoderTemplates,
 	}
-	servers := map[string]struct {
-		build func() *Server
-		caps  []string
-	}{
-		"b2c org on a gated deployment": {gated, []string{sandbox.ProviderFreestyle}},
-		"deployment without coder":      {noCoder, []string{sandbox.ProviderCoder}},
-	}
-	for serverName, server := range servers {
-		for endpointName, handler := range endpoints {
-			t.Run(serverName+"/"+endpointName, func(t *testing.T) {
-				rec := httptest.NewRecorder()
-				handler(server.build(), rec, coderConfigRequest(t, http.MethodGet, validCoderConfigBody(), server.caps))
-				if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "provider_forbidden") {
-					t.Fatalf("status = %d, body = %s; want 403 provider_forbidden", rec.Code, rec.Body.String())
-				}
-			})
+	refused := func(t *testing.T, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "provider_forbidden") {
+			t.Fatalf("status = %d, body = %s; want 403 provider_forbidden", rec.Code, rec.Body.String())
 		}
 	}
+	for endpointName, handler := range customCoder {
+		t.Run("org without the coder capability/"+endpointName, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			handler(gated(), rec, coderConfigRequest(t, http.MethodGet, validCoderConfigBody(), []string{sandbox.ProviderFreestyle}))
+			refused(t, rec)
+		})
+	}
+	endpoints := map[string]func(*Server, http.ResponseWriter, *http.Request){
+		"GET coder templates": (*Server).listCoderTemplates,
+	}
+	for name, handler := range customCoder {
+		endpoints[name] = handler
+	}
+	for endpointName, handler := range endpoints {
+		t.Run("deployment without coder/"+endpointName, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			handler(noCoder(), rec, coderConfigRequest(t, http.MethodGet, validCoderConfigBody(), []string{sandbox.ProviderCoder}))
+			refused(t, rec)
+		})
+	}
+	t.Run("org without the coder capability lists the shared templates", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		gated().listCoderTemplates(rec, coderConfigRequest(t, http.MethodGet, validCoderConfigBody(), []string{sandbox.ProviderFreestyle}))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s; want the shared deployment's templates", rec.Code, rec.Body.String())
+		}
+	})
 }
 
 // nonMemberCoderConnStore is an organization's Coder connection seen by a caller

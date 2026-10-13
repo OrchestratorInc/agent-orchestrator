@@ -580,6 +580,7 @@ func New(options Options) *Server {
 			router.Get("/coder-config", server.getOrgCoderConfig)
 			router.Put("/coder-config", server.putOrgCoderConfig)
 			router.Delete("/coder-config", server.deleteOrgCoderConfig)
+			router.Put("/sandbox-provider", server.putOrgSandboxProvider)
 			router.Get("/sessions", server.listSessions)
 			router.Post("/sessions", server.createSession)
 			router.Get("/sandbox/coder/templates", server.listCoderTemplates)

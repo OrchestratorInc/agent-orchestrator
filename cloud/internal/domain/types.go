@@ -187,6 +187,11 @@ type CreateSession struct {
 	// orchestrator, a standalone worker, or a worker created for a project that
 	// has no active orchestrator.
 	ParentSessionID string
+	// CoderCapability: the caller's organization holds the coder capability
+	// (WorkOS metadata capabilities=coder), so its Coder sessions are not
+	// billed. Set by the HTTP layer, which owns the capability rule; a worker
+	// an orchestrator spawns inherits its parent's billing instead.
+	CoderCapability bool
 }
 
 // RepoRef is one additional repository (beyond the project's primary repo) to

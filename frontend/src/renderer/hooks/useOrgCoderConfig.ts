@@ -22,11 +22,13 @@ export const orgCoderConfigQueryKey = ["cloud-org-coder-config"] as const;
 export function useOrgCoderConfig(enabled = true) {
 	const { client, ready } = useCloudCp();
 	const { org } = useCloudOrg();
-	const { hasCoder } = useCloudOffering();
+	// The org's own Coder connection exists only for an org with the coder
+	// capability; the control plane refuses the read for everyone else.
+	const { customCoder } = useCloudOffering();
 	const orgId = org?.id ?? "";
 	return useQuery({
 		queryKey: [...orgCoderConfigQueryKey, orgId],
-		enabled: enabled && hasCoder && ready && orgId !== "",
+		enabled: enabled && customCoder && ready && orgId !== "",
 		staleTime: 60_000,
 		queryFn: async (): Promise<CloudCpOrgCoderConfig | null> => {
 			const response = await client.getOrgCoderConfig(orgId);

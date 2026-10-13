@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
@@ -32,28 +33,40 @@ func teamPrincipal(capabilities ...string) domain.Principal {
 	return domain.Principal{TeamOrgID: offeringTeamOrgID, ExternalOrgID: "org_workos", OrgCapabilities: capabilities}
 }
 
+// Every provider is open to every organization; the gate decides only who
+// holds the coder capability (Coder by default, bring-your-own Coder).
 func TestOrgAllowsProvider(t *testing.T) {
 	s := gatedServer()
+	for _, caps := range [][]string{nil, {"coder"}, {"feature-x"}, {"feature-x", "coder"}} {
+		for _, provider := range []string{"coder", "nodeops", "freestyle"} {
+			if !s.orgAllowsProvider(teamPrincipal(caps...), offeringTeamOrgID, provider) {
+				t.Errorf("orgAllowsProvider(caps=%v, %q) = false, want every provider open", caps, provider)
+			}
+		}
+	}
+}
+
+func TestOrgHasCoderCapability(t *testing.T) {
+	gated := gatedServer()
 	cases := []struct {
-		name         string
-		provider     string
-		capabilities []string
-		want         bool
+		name string
+		caps []string
+		want bool
 	}{
-		{"ungated provider without caps", "nodeops", nil, true},
-		{"ungated provider ignores caps", "nodeops", []string{"coder"}, true},
-		{"gated coder with capability", "coder", []string{"coder"}, true},
-		{"gated coder with capability among others", "coder", []string{"feature-x", "coder"}, true},
-		{"gated coder without any caps", "coder", nil, false},
-		{"gated coder with unrelated cap only", "coder", []string{"feature-x"}, false},
+		{"metadata capabilities=coder", []string{"coder"}, true},
+		{"coder among others", []string{"feature-x", "coder"}, true},
+		{"no capabilities", nil, false},
+		{"unrelated capability", []string{"feature-x"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := s.orgAllowsProvider(teamPrincipal(tc.capabilities...), offeringTeamOrgID, tc.provider)
-			if got != tc.want {
-				t.Fatalf("orgAllowsProvider(caps=%v, %q) = %v, want %v", tc.capabilities, tc.provider, got, tc.want)
+			if got := gated.orgHasCoderCapability(teamPrincipal(tc.caps...), offeringTeamOrgID); got != tc.want {
+				t.Fatalf("orgHasCoderCapability(%v) = %v, want %v", tc.caps, got, tc.want)
 			}
 		})
+	}
+	if !(&Server{}).orgHasCoderCapability(domain.Principal{}, offeringPersonalOrgID) {
+		t.Fatal("a deployment that does not gate coder gives everyone the coder capability, as before")
 	}
 }
 
@@ -119,10 +132,10 @@ func TestProvidersAndDefaultProviderForOrg(t *testing.T) {
 		wantAllowed []string
 		wantDefault string
 	}{
-		{"b2b org", []string{"coder"}, []string{"coder"}, "coder"},
-		{"b2c org falls back to its first allowed provider", []string{"freestyle"}, []string{"freestyle"}, "freestyle"},
-		{"both keeps the deployment default", []string{"freestyle", "coder"}, []string{"coder", "freestyle"}, "coder"},
-		{"entitled to nothing", []string{"feature-x"}, []string{}, ""},
+		{"coder capability starts on coder", []string{"coder"}, []string{"coder", "freestyle"}, "coder"},
+		{"no coder capability starts on freestyle", []string{"freestyle"}, []string{"coder", "freestyle"}, "freestyle"},
+		{"coder capability with freestyle starts on coder", []string{"freestyle", "coder"}, []string{"coder", "freestyle"}, "coder"},
+		{"a new organization starts on freestyle", nil, []string{"coder", "freestyle"}, "freestyle"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -136,7 +149,7 @@ func TestProvidersAndDefaultProviderForOrg(t *testing.T) {
 			if got := s.providersForOrg(principal, offeringTeamOrgID); !slices.Equal(got, tc.wantAllowed) {
 				t.Fatalf("providersForOrg = %v, want %v", got, tc.wantAllowed)
 			}
-			if got := s.defaultProviderForOrg(principal, offeringTeamOrgID); got != tc.wantDefault {
+			if got := s.defaultProviderForOrg(context.Background(), principal, offeringTeamOrgID); got != tc.wantDefault {
 				t.Fatalf("defaultProviderForOrg = %q, want %q", got, tc.wantDefault)
 			}
 		})
@@ -222,36 +235,37 @@ func getMe(t *testing.T, s *Server, principal domain.Principal) meOfferingBody {
 	return body
 }
 
+// Every organization is offered every provider; the coder capability decides
+// its default and whether it may bring its own Coder.
 func TestMeOfferingKinds(t *testing.T) {
 	cases := []struct {
-		name        string
-		caps        []string
-		wantKind    string
-		wantDefault string
-		wantList    []string
+		name            string
+		caps            []string
+		wantDefault     string
+		wantCustomCoder bool
 	}{
-		{"b2b", []string{"coder"}, domain.OfferingKindB2B, "coder", []string{"coder"}},
-		{"b2c", []string{"nodeops"}, domain.OfferingKindB2C, "nodeops", []string{"nodeops"}},
-		{"both", []string{"coder", "nodeops"}, domain.OfferingKindBoth, "coder", []string{"coder", "nodeops"}},
-		{"none", []string{"feature-x"}, domain.OfferingKindNone, "", []string{}},
+		{"coder capability", []string{"coder"}, "coder", true},
+		{"no coder capability falls back to the deployment default", []string{"nodeops"}, "coder", false},
+		{"no capabilities", []string{"feature-x"}, "coder", false},
 	}
+	all := []string{"coder", "nodeops"}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &offeringStore{memberships: []domain.Membership{{OrgID: offeringTeamOrgID, Role: "member"}}}
 			body := getMe(t, newOfferingServer(store), teamPrincipal(tc.caps...))
-			if body.Offering.Kind != tc.wantKind || body.Offering.DefaultProvider != tc.wantDefault ||
-				!slices.Equal(body.Offering.Providers, tc.wantList) {
-				t.Fatalf("offering = %+v, want kind %q default %q providers %v",
-					body.Offering, tc.wantKind, tc.wantDefault, tc.wantList)
+			if body.Offering.Kind != domain.OfferingKindBoth || body.Offering.DefaultProvider != tc.wantDefault ||
+				!slices.Equal(body.Offering.Providers, all) || body.Offering.CustomCoder != tc.wantCustomCoder {
+				t.Fatalf("offering = %+v, want both providers, default %q, customCoder %v",
+					body.Offering, tc.wantDefault, tc.wantCustomCoder)
 			}
 			if body.Offering.BillingMode != domain.BillingModeOff || body.Offering.Features == nil {
 				t.Fatalf("offering = %+v, want billingMode off and an empty features array", body.Offering)
 			}
-			if !slices.Equal(body.SandboxProviders.Available, tc.wantList) || body.SandboxProviders.Default != tc.wantDefault {
+			if !slices.Equal(body.SandboxProviders.Available, all) || body.SandboxProviders.Default != tc.wantDefault {
 				t.Fatalf("sandboxProviders = %+v, want the offering's providers and default", body.SandboxProviders)
 			}
 			if len(body.Organizations) != 1 || body.Organizations[0].Offering == nil ||
-				body.Organizations[0].Offering.Kind != tc.wantKind {
+				body.Organizations[0].Offering.CustomCoder != tc.wantCustomCoder {
 				t.Fatalf("organizations = %+v, want a per-organization offering", body.Organizations)
 			}
 		})
@@ -268,14 +282,14 @@ func TestMeOfferingIsPerOrganization(t *testing.T) {
 		{OrgID: offeringTeamOrgID, Role: "member"},
 	}}
 	body := getMe(t, newOfferingServer(store, "nodeops"), teamPrincipal("coder"))
-	if body.Organizations[0].Offering.Kind != domain.OfferingKindB2C || body.Organizations[0].Offering.DefaultProvider != "nodeops" {
-		t.Fatalf("personal org offering = %+v, want the b2c defaults", body.Organizations[0].Offering)
+	if body.Organizations[0].Offering.CustomCoder {
+		t.Fatalf("personal org offering = %+v, want no custom Coder", body.Organizations[0].Offering)
 	}
-	if body.ActiveOrganizationID != offeringTeamOrgID || body.Offering.Kind != domain.OfferingKindB2B {
-		t.Fatalf("active org = %q offering = %+v, want the team org's b2b offering", body.ActiveOrganizationID, body.Offering)
+	if body.ActiveOrganizationID != offeringTeamOrgID || !body.Offering.CustomCoder || body.Offering.DefaultProvider != "coder" {
+		t.Fatalf("active org = %q offering = %+v, want the team org's coder offering", body.ActiveOrganizationID, body.Offering)
 	}
-	if body.Organizations[1].Offering.Kind != domain.OfferingKindB2B {
-		t.Fatalf("team org offering = %+v, want b2b", body.Organizations[1].Offering)
+	if !body.Organizations[1].Offering.CustomCoder {
+		t.Fatalf("team org offering = %+v, want custom Coder", body.Organizations[1].Offering)
 	}
 }
 
@@ -335,51 +349,101 @@ func offeringSessionRequest(t *testing.T, principal domain.Principal, provider s
 	return req.WithContext(ctx)
 }
 
-// A session created without a provider gets the organization's default, which
-// for a b2c org is not the deployment default.
+// newGenericOfferingServer offers coder (the deployment default) and freestyle,
+// both capability-gated, as staging and production do.
+func newGenericOfferingServer(store Store) *Server {
+	return New(Options{
+		Store:                     store,
+		SandboxProvider:           sandbox.ProviderCoder,
+		AvailableSandboxProviders: []string{sandbox.ProviderCoder, sandbox.ProviderFreestyle},
+		CapabilityGatedProviders:  []string{sandbox.ProviderCoder, sandbox.ProviderFreestyle},
+		DefaultOrgCapabilities:    []string{sandbox.ProviderFreestyle},
+		Provisioning:              genericProvisioning(),
+		Logger:                    slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+}
+
+// genericProvisioning provisions Coder and Freestyle sessions.
+func genericProvisioning() sandbox.ProvisioningDefaults {
+	provisioning := bothProviderProvisioning(sandbox.ProviderCoder)
+	provisioning.Freestyle = sandbox.FreestyleConfig{
+		BaseURL: "https://api.freestyle.test", APIKey: "test-key",
+		DefaultSnapshot: "sc-default", WorkerTokenTTL: 15 * time.Minute,
+	}
+	return provisioning
+}
+
+// A session created without a provider gets the organization's default:
+// Freestyle for an organization without the coder capability, Coder (unbilled)
+// for one with it.
 func TestCreateSessionWithoutProviderUsesOrgDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		caps           []string
+		wantProvider   string
+		wantCapability bool
+	}{
+		{"no coder capability", nil, sandbox.ProviderFreestyle, false},
+		{"coder capability", []string{"coder"}, sandbox.ProviderCoder, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &offeringStore{}
+			rec := httptest.NewRecorder()
+			newGenericOfferingServer(store).createSession(rec, offeringSessionRequest(t, teamPrincipal(tc.caps...), ""))
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			if store.captured.Provider != tc.wantProvider || store.captured.CoderCapability != tc.wantCapability {
+				t.Fatalf("provider %q coder capability %v, want %q %v",
+					store.captured.Provider, store.captured.CoderCapability, tc.wantProvider, tc.wantCapability)
+			}
+		})
+	}
+}
+
+// Any organization may pick Coder; its sessions are billed unless the
+// organization holds the coder capability.
+func TestCreateSessionOnCoderWithoutCapability(t *testing.T) {
 	store := &offeringStore{}
 	rec := httptest.NewRecorder()
-	newOfferingServer(store).createSession(rec, offeringSessionRequest(t, teamPrincipal("nodeops"), ""))
+	newGenericOfferingServer(store).createSession(rec, offeringSessionRequest(t, teamPrincipal(), sandbox.ProviderCoder))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if store.captured.Provider != sandbox.ProviderNodeOps {
-		t.Fatalf("provider = %q, want the org default nodeops", store.captured.Provider)
+	if store.captured.Provider != sandbox.ProviderCoder || store.captured.CoderCapability {
+		t.Fatalf("captured = %+v, want a billed coder session", store.captured)
 	}
 }
 
-// With no provider sent, the gate still applies: an organization entitled to no
-// provider cannot fall through to the deployment default.
-func TestCreateSessionWithoutProviderGatedWhenOrgHasNone(t *testing.T) {
+// A provider the deployment does not offer is still refused.
+func TestCreateSessionRejectsProviderTheDeploymentDoesNotOffer(t *testing.T) {
 	store := &offeringStore{}
 	rec := httptest.NewRecorder()
-	newOfferingServer(store).createSession(rec, offeringSessionRequest(t, teamPrincipal("feature-x"), ""))
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "provider_forbidden") {
-		t.Fatalf("status = %d, body = %s; want 403 provider_forbidden", rec.Code, rec.Body.String())
+	newOfferingServer(store).createSession(rec, offeringSessionRequest(t, teamPrincipal("coder"), sandbox.ProviderFreestyle))
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "provider_unavailable") {
+		t.Fatalf("status = %d, body = %s; want 422 provider_unavailable", rec.Code, rec.Body.String())
 	}
 	if store.created {
-		t.Fatal("no session may be created for an organization without providers")
+		t.Fatal("no session may be created on a provider the deployment does not offer")
 	}
 }
 
-// A project saved for a provider the organization has since lost is refused with
-// a message that names the project's provider.
-func TestCreateSessionRejectsProjectProviderNoLongerAllowed(t *testing.T) {
-	store := &offeringStore{projectConfig: json.RawMessage(`{"sandboxProvider":"coder"}`)}
+// A project saved for a provider the deployment no longer offers is refused.
+func TestCreateSessionRejectsProjectProviderNoLongerOffered(t *testing.T) {
+	store := &offeringStore{projectConfig: json.RawMessage(`{"sandboxProvider":"freestyle"}`)}
 	rec := httptest.NewRecorder()
-	newOfferingServer(store).createSession(rec, offeringSessionRequest(t, teamPrincipal("nodeops"), "nodeops"))
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "This project is set to run on the coder") {
-		t.Fatalf("status = %d, body = %s; want 403 naming the project's provider", rec.Code, rec.Body.String())
+	newOfferingServer(store).createSession(rec, offeringSessionRequest(t, teamPrincipal("nodeops"), ""))
+	if rec.Code < 400 || !strings.Contains(rec.Body.String(), "provider_") {
+		t.Fatalf("status = %d, body = %s; want a provider refusal", rec.Code, rec.Body.String())
 	}
 	if store.created {
-		t.Fatal("no session may be created on a provider the org lost")
+		t.Fatal("no session may be created on a provider the deployment no longer offers")
 	}
 }
 
 func TestCreateProjectRejectsDisallowedSandboxProvider(t *testing.T) {
 	s := newOfferingServer(&offeringStore{})
-	body := `{"displayName":"p","repositoryUrl":"https://github.com/acme/app","defaultBranch":"main","config":{"sandboxProvider":"coder"}}`
+	body := `{"displayName":"p","repositoryUrl":"https://github.com/acme/app","defaultBranch":"main","config":{"sandboxProvider":"freestyle"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/cloud/v1/orgs/"+offeringTeamOrgID+"/projects", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "44444444-4444-4444-4444-444444444444")
@@ -450,8 +514,9 @@ func TestScratchSessionPlanFallsBackWhenBYOHasNoTemplate(t *testing.T) {
 	}
 }
 
+// A scratch orchestrator runs on the organization's chosen default.
 func TestScratchSessionPlanFollowsOrgDefaultForB2C(t *testing.T) {
-	s := newOfferingServer(&offeringStore{})
+	s := newOfferingServer(&chosenProviderStore{offeringStore: offeringStore{}, chosen: sandbox.ProviderNodeOps})
 	principal := teamPrincipal("nodeops")
 	rec := httptest.NewRecorder()
 	plan, connectionID, ok := s.scratchSessionPlan(
@@ -471,8 +536,7 @@ func TestScratchSessionPlanRejects(t *testing.T) {
 		status int
 		code   string
 	}{
-		{"org with no provider", []string{"feature-x"}, `{"source":"scratch"}`, http.StatusForbidden, "provider_forbidden"},
-		{"config names a disallowed provider", []string{"nodeops"}, `{"sandboxProvider":"coder"}`, http.StatusUnprocessableEntity, "provider_unavailable"},
+		{"config names a provider the deployment does not offer", []string{"nodeops"}, `{"sandboxProvider":"freestyle"}`, http.StatusUnprocessableEntity, "provider_unavailable"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -488,4 +552,19 @@ func TestScratchSessionPlanRejects(t *testing.T) {
 			}
 		})
 	}
+}
+
+// chosenProviderStore is an offeringStore whose organization chose a default
+// provider in settings.
+type chosenProviderStore struct {
+	offeringStore
+	chosen string
+}
+
+func (s *chosenProviderStore) OrgDefaultSandboxProvider(context.Context, string) (string, error) {
+	return s.chosen, nil
+}
+
+func (s *chosenProviderStore) SetOrgDefaultSandboxProvider(context.Context, domain.Principal, string, string) error {
+	return nil
 }

@@ -2904,5 +2904,10 @@
 	"settings.billing.usageNote": "実行中のセッションごとに計上されます。2 つのセッションを 1 時間実行すると 2 セッション時間です。一時停止中は計上されません。",
 	"settings.billing.cancelNotice": "{{plan}} プランは {{date}} に終了し、その後は無料プランになります。",
 	"settings.billing.keepPlan": "{{plan}} を継続",
-	"settings.billing.freeStarts": "{{date}} から開始"
+	"settings.billing.freeStarts": "{{date}} から開始",
+	"settings.defaultSandbox.label": "デフォルトのクラウドサンドボックス",
+	"settings.defaultSandbox.description": "新しいプロジェクトのクラウドセッションを実行する場所と、プロジェクトが選択していない場合のセッションの実行先です。",
+	"settings.defaultSandbox.single": "クラウドセッションの実行場所です。利用できるサンドボックスは 1 つだけです。",
+	"settings.defaultSandbox.adminOnly": "これを変更できるのは組織の管理者だけです。",
+	"settings.defaultSandbox.saveFailed": "デフォルトのサンドボックスを保存できませんでした。もう一度お試しください。"
 }

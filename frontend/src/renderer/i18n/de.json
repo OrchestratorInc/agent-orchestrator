@@ -2904,5 +2904,10 @@
 	"settings.billing.usageNote": "Jede laufende Sitzung zählt: Zwei Sitzungen für eine Stunde verbrauchen 2 Sitzungsstunden. Pausierte Sitzungen zählen nicht.",
 	"settings.billing.cancelNotice": "Dein {{plan}}-Tarif endet am {{date}}. Danach wechselst du zu Kostenlos.",
 	"settings.billing.keepPlan": "{{plan}} behalten",
-	"settings.billing.freeStarts": "Ab {{date}}"
+	"settings.billing.freeStarts": "Ab {{date}}",
+	"settings.defaultSandbox.label": "Standard-Cloud-Sandbox",
+	"settings.defaultSandbox.description": "Wo neue Projekte ihre Cloud-Sitzungen ausführen und wohin Sitzungen gehen, wenn ein Projekt keine gewählt hat.",
+	"settings.defaultSandbox.single": "Wo deine Cloud-Sitzungen laufen. Es ist nur eine Sandbox verfügbar.",
+	"settings.defaultSandbox.adminOnly": "Nur Organisationsadmins können das ändern.",
+	"settings.defaultSandbox.saveFailed": "Die Standard-Sandbox konnte nicht gespeichert werden. Versuche es erneut."
 }

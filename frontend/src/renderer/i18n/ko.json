@@ -2904,5 +2904,10 @@
 	"settings.billing.usageNote": "실행 중인 세션마다 계산됩니다. 세션 두 개를 한 시간 실행하면 2 세션 시간입니다. 일시 중지된 세션은 계산되지 않습니다.",
 	"settings.billing.cancelNotice": "{{plan}} 플랜이 {{date}}에 종료되며, 이후 무료 플랜으로 전환됩니다.",
 	"settings.billing.keepPlan": "{{plan}} 유지",
-	"settings.billing.freeStarts": "{{date}}부터 시작"
+	"settings.billing.freeStarts": "{{date}}부터 시작",
+	"settings.defaultSandbox.label": "기본 클라우드 샌드박스",
+	"settings.defaultSandbox.description": "새 프로젝트의 클라우드 세션이 실행되는 곳이며, 프로젝트가 선택하지 않은 경우 세션이 실행되는 곳입니다.",
+	"settings.defaultSandbox.single": "클라우드 세션이 실행되는 곳입니다. 사용할 수 있는 샌드박스는 하나뿐입니다.",
+	"settings.defaultSandbox.adminOnly": "조직 관리자만 변경할 수 있습니다.",
+	"settings.defaultSandbox.saveFailed": "기본 샌드박스를 저장하지 못했습니다. 다시 시도하세요."
 }

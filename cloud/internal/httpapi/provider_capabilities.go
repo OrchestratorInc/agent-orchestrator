@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 )
 
@@ -47,17 +48,36 @@ func (s *Server) orgBillingArrangement(principal domain.Principal, orgID string)
 }
 
 // orgAllowsProvider reports whether an organization may use the given sandbox
-// provider. A provider that is not capability-gated (see
-// AO_CLOUD_CAPABILITY_GATED_PROVIDERS) is always allowed; a gated provider
-// requires the organization to hold a capability of the same name (see
-// orgCapabilities). With no gated providers configured, every provider is
-// allowed and behavior is unchanged. It does not check that the deployment
-// offers the provider; providersForOrg does both.
-func (s *Server) orgAllowsProvider(principal domain.Principal, orgID, provider string) bool {
-	if !s.capabilityGatedProviders[provider] {
+// provider. Every provider this deployment offers is open to every
+// organization; each picks its default in the desktop's settings
+// (putOrgSandboxProvider). The capability gate
+// (AO_CLOUD_CAPABILITY_GATED_PROVIDERS) no longer limits which providers an
+// organization may run on: it decides which organizations hold the coder
+// capability (orgHasCoderCapability), which start on Coder and may bring their
+// own Coder deployment. It does not check that the deployment offers the
+// provider; providersForOrg does both.
+func (s *Server) orgAllowsProvider(domain.Principal, string, string) bool {
+	return true
+}
+
+// orgHasCoderCapability reports whether an organization holds the coder
+// capability: WorkOS organization metadata capabilities=coder (or the
+// deployment defaults, AO_CLOUD_DEFAULT_ORG_CAPABILITIES). Such an organization
+// starts on Coder and may connect its own Coder deployment. On a deployment
+// that does not gate coder, every organization holds it, as before.
+func (s *Server) orgHasCoderCapability(principal domain.Principal, orgID string) bool {
+	if !s.capabilityGatedProviders[sandbox.ProviderCoder] {
 		return true
 	}
-	return slices.Contains(s.orgCapabilities(principal, orgID), provider)
+	return slices.Contains(s.orgCapabilities(principal, orgID), sandbox.ProviderCoder)
+}
+
+// orgHasCustomCoder reports whether the organization may connect its own Coder
+// deployment: this deployment offers Coder and the organization holds the coder
+// capability.
+func (s *Server) orgHasCustomCoder(principal domain.Principal, orgID string) bool {
+	return slices.Contains(s.availableSandboxProviders, sandbox.ProviderCoder) &&
+		s.orgHasCoderCapability(principal, orgID)
 }
 
 // providersForOrg is the organization's effective provider list: what this
@@ -80,11 +100,35 @@ func (s *Server) orgProviderAvailable(principal domain.Principal, orgID, provide
 		s.orgAllowsProvider(principal, orgID, provider)
 }
 
-// defaultProviderForOrg is the provider a session gets when nothing chose one:
-// the deployment default when the organization may use it, otherwise the
-// organization's first allowed provider, otherwise "" (no cloud sessions).
-func (s *Server) defaultProviderForOrg(principal domain.Principal, orgID string) string {
+// orgSandboxPreferenceStore reads and stores the provider an organization chose
+// in settings. The Postgres store implements it; a store without it leaves
+// every organization on its default.
+type orgSandboxPreferenceStore interface {
+	OrgDefaultSandboxProvider(ctx context.Context, orgID string) (string, error)
+	SetOrgDefaultSandboxProvider(ctx context.Context, principal domain.Principal, orgID, provider string) error
+}
+
+// defaultProviderForOrg is the provider a session gets when nothing chose one.
+// With more than one provider, the organization's choice in settings comes
+// first. Then, on a deployment that gates coder: Coder for an organization with
+// the coder capability, Freestyle for everyone else (every new organization).
+// Otherwise the deployment default when offered, then the first provider, then
+// "" (no cloud sessions).
+func (s *Server) defaultProviderForOrg(ctx context.Context, principal domain.Principal, orgID string) string {
 	allowed := s.providersForOrg(principal, orgID)
+	if len(allowed) > 1 {
+		if chosen := s.orgChosenProvider(ctx, orgID); chosen != "" && slices.Contains(allowed, chosen) {
+			return chosen
+		}
+	}
+	if s.capabilityGatedProviders[sandbox.ProviderCoder] {
+		if s.orgHasCoderCapability(principal, orgID) && slices.Contains(allowed, sandbox.ProviderCoder) {
+			return sandbox.ProviderCoder
+		}
+		if slices.Contains(allowed, sandbox.ProviderFreestyle) {
+			return sandbox.ProviderFreestyle
+		}
+	}
 	if slices.Contains(allowed, s.sandboxProvider) {
 		return s.sandboxProvider
 	}
@@ -92,6 +136,24 @@ func (s *Server) defaultProviderForOrg(principal domain.Principal, orgID string)
 		return allowed[0]
 	}
 	return ""
+}
+
+// orgChosenProvider is the provider the organization chose in settings, or ""
+// when it has not chosen one or it cannot be read; a read failure falls back to
+// the organization's default rather than failing session creation.
+func (s *Server) orgChosenProvider(ctx context.Context, orgID string) string {
+	store, ok := s.store.(orgSandboxPreferenceStore)
+	if !ok || orgID == "" {
+		return ""
+	}
+	provider, err := store.OrgDefaultSandboxProvider(ctx, orgID)
+	if err != nil {
+		if !errors.Is(err, postgres.ErrNotFound) {
+			s.logger.Warn("read organization default sandbox provider", "org_id", orgID, "error", err)
+		}
+		return ""
+	}
+	return provider
 }
 
 // billingModeForOrg computes domain.BillingMode for one organization.
@@ -121,6 +183,9 @@ type offeringResponse struct {
 	BillingMode     string   `json:"billingMode"`
 	Kind            string   `json:"kind"`
 	Features        []string `json:"features"`
+	// CustomCoder: the organization may connect its own Coder deployment (it
+	// holds the coder capability); the desktop shows the Coder settings page.
+	CustomCoder bool `json:"customCoder"`
 }
 
 func (s *Server) offeringForOrg(ctx context.Context, principal domain.Principal, orgID string) (offeringResponse, error) {
@@ -131,11 +196,12 @@ func (s *Server) offeringForOrg(ctx context.Context, principal domain.Principal,
 	}
 	return offeringResponse{
 		Providers:       providers,
-		DefaultProvider: s.defaultProviderForOrg(principal, orgID),
+		DefaultProvider: s.defaultProviderForOrg(ctx, principal, orgID),
 		BillingMode:     mode,
 		Kind:            domain.OfferingKind(providers),
 		// Plan feature flags arrive with the paywall; none are gated yet.
-		Features: []string{},
+		Features:    []string{},
+		CustomCoder: s.orgHasCustomCoder(principal, orgID),
 	}, nil
 }
 
@@ -162,6 +228,22 @@ func (s *Server) requireOrgCoder(w http.ResponseWriter, r *http.Request, orgID s
 		return true
 	}
 	writeError(w, r, http.StatusForbidden, "provider_forbidden", "Your organization is not enabled for the Coder sandbox provider.")
+	return false
+}
+
+// requireOrgCustomCoder is requireOrgCoder for the bring-your-own Coder
+// connection endpoints: the organization must also hold the coder capability.
+// The shared deployment's templates stay open to every organization that may
+// run on Coder (requireOrgCoder).
+func (s *Server) requireOrgCustomCoder(w http.ResponseWriter, r *http.Request, orgID string) bool {
+	if !s.requireOrgCoder(w, r, orgID) {
+		return false
+	}
+	if s.orgHasCustomCoder(principalFrom(r), orgID) {
+		return true
+	}
+	writeError(w, r, http.StatusForbidden, "provider_forbidden",
+		"Your organization is not enabled to connect its own Coder deployment.")
 	return false
 }
 
@@ -392,7 +474,7 @@ func (s *Server) scratchSessionPlan(
 		if !s.validateProjectSandboxProvider(w, r, principal, orgID, projectConfig) {
 			return sandbox.Plan{}, "", false
 		}
-	} else if provider = s.defaultProviderForOrg(principal, orgID); provider == "" {
+	} else if provider = s.defaultProviderForOrg(r.Context(), principal, orgID); provider == "" {
 		writeProviderForbidden(w, r, "", false)
 		return sandbox.Plan{}, "", false
 	}

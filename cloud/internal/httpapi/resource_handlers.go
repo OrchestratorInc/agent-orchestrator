@@ -567,7 +567,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	// provider cannot run cloud sessions at all.
 	principal := principalFrom(r)
 	if request.Provider == "" {
-		request.Provider = s.defaultProviderForOrg(principal, orgID)
+		request.Provider = s.defaultProviderForOrg(r.Context(), principal, orgID)
 		if request.Provider == "" {
 			writeProviderForbidden(w, r, "", false)
 			return
@@ -666,6 +666,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			BootstrapContext:    plan.BootstrapContext,
 			Release:             s.release,
 			ParentSessionID:     parentSessionID,
+			CoderCapability:     s.orgHasCoderCapability(principalFrom(r), orgID),
 		},
 	)
 	if err != nil {

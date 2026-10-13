@@ -2884,5 +2884,10 @@
 	"settings.billing.usageNote": "Every running session counts, so two sessions running for an hour use 2 session hours. Paused sessions don't count.",
 	"settings.billing.cancelNotice": "Your {{plan}} plan ends on {{date}}. You'll move to Free then.",
 	"settings.billing.keepPlan": "Keep {{plan}}",
-	"settings.billing.freeStarts": "Starts {{date}}"
+	"settings.billing.freeStarts": "Starts {{date}}",
+	"settings.defaultSandbox.label": "Default cloud sandbox",
+	"settings.defaultSandbox.description": "Where new projects run their cloud sessions, and where sessions go when a project hasn't picked one.",
+	"settings.defaultSandbox.single": "Where your cloud sessions run. Only one sandbox is available.",
+	"settings.defaultSandbox.adminOnly": "Only organization admins can change this.",
+	"settings.defaultSandbox.saveFailed": "Couldn't save the default sandbox. Try again."
 }

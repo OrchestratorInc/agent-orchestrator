@@ -76,7 +76,7 @@ func (s *Server) getOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId must be a UUID.")
 		return
 	}
-	if !s.requireOrgCoder(w, r, orgID) {
+	if !s.requireOrgCustomCoder(w, r, orgID) {
 		return
 	}
 	store, ok := s.store.(providerConnectionStore)
@@ -128,7 +128,7 @@ func (s *Server) putOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, "provider_connections_unavailable", "Provider credential storage is not configured.")
 		return
 	}
-	if !s.requireOrgCoder(w, r, orgID) {
+	if !s.requireOrgCustomCoder(w, r, orgID) {
 		return
 	}
 	// Only an admin may test a connection: a save can reuse the stored token and
@@ -427,7 +427,7 @@ func (s *Server) deleteOrgCoderConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId must be a UUID.")
 		return
 	}
-	if !s.requireOrgCoder(w, r, orgID) {
+	if !s.requireOrgCustomCoder(w, r, orgID) {
 		return
 	}
 	store, ok := s.store.(providerConnectionStore)

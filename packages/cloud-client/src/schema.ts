@@ -882,6 +882,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sandbox-provider": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Set the organization's default sandbox provider: the one sessions get when neither the request nor the project picks one (org admins). Only an organization offered more than one provider may set it (409 no_provider_choice otherwise); a provider the deployment does not offer is 403 provider_forbidden. An empty defaultProvider clears the choice. */
+        put: operations["putOrgSandboxProvider"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/coder-config": {
         parameters: {
             query?: never;
@@ -1482,11 +1501,15 @@ export interface components {
             role: components["schemas"]["OrganizationRole"];
             offering?: components["schemas"]["Offering"];
         };
+        PutOrgSandboxProviderInput: {
+            /** @description A provider from the organization's offering, or empty to clear the choice. */
+            defaultProvider: string;
+        };
         /** @description What an organization may use and how it is billed. The control plane is the source of truth; clients shape their UI from it and the server enforces the same rules on create. */
         Offering: {
-            /** @description Sandbox providers the organization may use: the deployment's providers filtered by the capability gate against the organization's effective capabilities. */
+            /** @description Sandbox providers the organization may use: every provider the deployment offers. Freestyle sessions are billed; Coder sessions are billed unless the organization holds the coder capability. */
             providers: string[];
-            /** @description Provider a session gets when none is chosen: the deployment default when allowed, otherwise the first allowed provider, otherwise empty (no cloud sessions). */
+            /** @description Provider a session gets when none is chosen. With more than one provider, the organization's own choice (PUT /orgs/{orgId}/sandbox-provider) comes first. Then, on a deployment that gates coder, coder for an organization with the coder capability and freestyle for everyone else. Otherwise the deployment default when offered, then the first provider, then empty (no cloud sessions). */
             defaultProvider: string;
             /**
              * @description off when the deployment has no Stripe configured; contract when the organization is billed under an agreement, runs on the internal plan, or is grandfathered; self_serve otherwise. Only self_serve organizations are subject to plan limits.
@@ -1500,6 +1523,8 @@ export interface components {
             kind: "b2b" | "b2c" | "both" | "none";
             /** @description Plan feature flags; empty when none apply. */
             features: string[];
+            /** @description The organization holds the coder capability (WorkOS metadata capabilities=coder): it may connect its own Coder deployment, and its Coder sessions are not billed. Absent from older control planes. */
+            customCoder?: boolean;
         };
         /** @description Legacy provider selector data; the same values as offering.providers and offering.defaultProvider. */
         SandboxProviders: {
@@ -4443,6 +4468,33 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putOrgSandboxProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutOrgSandboxProviderInput"];
+            };
+        };
+        responses: {
+            /** @description The organization's offering with its new default provider. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Offering"];
+                };
             };
             default: components["responses"]["Error"];
         };

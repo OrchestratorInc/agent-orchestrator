@@ -248,10 +248,41 @@ func sessionProvider(requested string) string {
 	return sandbox.DefaultProvider
 }
 
-// billedProvider reports whether sandboxes on provider count against a plan.
-// Only Freestyle is billed; Coder and Docker sandboxes run on capacity the
-// deployment already pays for.
-func billedProvider(provider string) bool { return provider == sandbox.ProviderFreestyle }
+// sandboxBilledTx decides whether a new session's sandbox counts against its
+// organization's plan: Freestyle always; Coder unless the organization holds
+// the coder capability. A worker spawned by a parent session on the same
+// provider inherits the parent's billing, so an unbilled orchestrator's
+// workers stay unbilled. Other providers are never billed.
+func sandboxBilledTx(
+	ctx context.Context, tx pgx.Tx, orgID, provider string, coderCapability bool, parentSessionID string,
+) (bool, error) {
+	switch provider {
+	case sandbox.ProviderFreestyle:
+		return true, nil
+	case sandbox.ProviderCoder:
+	default:
+		return false, nil
+	}
+	if parentSessionID != "" {
+		var parentBilled bool
+		err := tx.QueryRow(ctx,
+			`SELECT billed FROM ao_sandboxes WHERE org_id = $1 AND session_id = $2 AND provider = $3`,
+			orgID, parentSessionID, provider,
+		).Scan(&parentBilled)
+		if err == nil {
+			return parentBilled, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return false, err
+		}
+	}
+	return !coderCapability, nil
+}
+
+// billedSandboxSQL is the predicate for a sandbox (alias sb) that counts
+// against its organization's plan; see sandboxBilledTx. Freestyle sandboxes
+// from before the billed column existed match on their provider.
+const billedSandboxSQL = `(sb.provider = 'freestyle' OR sb.billed)`
 
 // BillingEnforced reports whether plan enforcement is on.
 func (s *Store) BillingEnforced() bool { return s.billing.enforced }
@@ -681,9 +712,9 @@ func usageTx(ctx context.Context, tx pgx.Tx, billing domain.OrgBilling, now time
 			count(*) FILTER (WHERE se.kind <> 'orchestrator' AND sb.desired_state = 'running')
 		FROM ao_sandboxes sb
 		JOIN ao_sessions se ON se.org_id = sb.org_id AND se.id = sb.session_id
-		WHERE sb.org_id = $1 AND sb.provider = $2
+		WHERE sb.org_id = $1 AND `+billedSandboxSQL+`
 			AND sb.observed_state NOT IN ('deleted', 'deleting', 'terminated', 'failed')`,
-		billing.OrgID, sandbox.ProviderFreestyle,
+		billing.OrgID,
 	).Scan(&usage.ActiveOrchestrators, &usage.ActiveWorkers,
 		&usage.RunningOrchestrators, &usage.RunningWorkers); err != nil {
 		return usage, err
@@ -904,19 +935,20 @@ func (p billingPolicy) wakeCheckTx(ctx context.Context, tx pgx.Tx, orgID, sessio
 	if !p.enforced {
 		return nil
 	}
-	var desired, observed, sessionKind, provider string
+	var desired, observed, sessionKind string
+	var billed bool
 	err := tx.QueryRow(ctx,
-		`SELECT sb.desired_state, sb.observed_state, se.kind, sb.provider FROM ao_sandboxes sb
+		`SELECT sb.desired_state, sb.observed_state, se.kind, `+billedSandboxSQL+` FROM ao_sandboxes sb
 		JOIN ao_sessions se ON se.org_id = sb.org_id AND se.id = sb.session_id
 		WHERE sb.org_id = $1 AND sb.session_id = $2`, orgID, sessionID,
-	).Scan(&desired, &observed, &sessionKind, &provider)
+	).Scan(&desired, &observed, &sessionKind, &billed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if !billedProvider(provider) {
+	if !billed {
 		return nil
 	}
 	fresh := needsNewSandbox(observed)
@@ -1117,15 +1149,15 @@ func (s *Store) SampleUsage(ctx context.Context) ([]string, error) {
 	err := s.withService(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO ao_usage_minutes (org_id, minute, session_id)
-			SELECT org_id, date_trunc('minute', now()), session_id FROM ao_sandboxes
-			WHERE desired_state = 'running' AND observed_state = 'running' AND provider = $1
-			ON CONFLICT DO NOTHING`, sandbox.ProviderFreestyle,
+			SELECT sb.org_id, date_trunc('minute', now()), sb.session_id FROM ao_sandboxes sb
+			WHERE sb.desired_state = 'running' AND sb.observed_state = 'running' AND `+billedSandboxSQL+`
+			ON CONFLICT DO NOTHING`,
 		); err != nil {
 			return fmt.Errorf("sample usage: %w", err)
 		}
 		rows, err := tx.Query(ctx,
-			`SELECT DISTINCT org_id::text FROM ao_sandboxes
-			WHERE desired_state = 'running' AND observed_state = 'running' AND provider = $1`, sandbox.ProviderFreestyle)
+			`SELECT DISTINCT sb.org_id::text FROM ao_sandboxes sb
+			WHERE sb.desired_state = 'running' AND sb.observed_state = 'running' AND `+billedSandboxSQL)
 		if err != nil {
 			return err
 		}
@@ -1256,11 +1288,11 @@ func (s *Store) PauseOverLimit(ctx context.Context, orgID string) (int64, error)
 			return nil
 		}
 		tag, err := tx.Exec(ctx,
-			`UPDATE ao_sandboxes SET desired_state = 'paused', startup_started_at = NULL,
+			`UPDATE ao_sandboxes sb SET desired_state = 'paused', startup_started_at = NULL,
 				reconcile_after = now(), updated_at = now()
-			WHERE org_id = $1 AND provider = $2 AND desired_state = 'running'
-				AND session_id = ANY($3::uuid[])`,
-			orgID, sandbox.ProviderFreestyle, targets)
+			WHERE sb.org_id = $1 AND `+billedSandboxSQL+` AND sb.desired_state = 'running'
+				AND sb.session_id = ANY($2::uuid[])`,
+			orgID, targets)
 		if err != nil {
 			return err
 		}
@@ -1278,8 +1310,8 @@ func (s *Store) clearOverLimitTx(ctx context.Context, tx pgx.Tx, orgID string) e
 	return err
 }
 
-// billedRunningSessionsTx lists the organization's Freestyle sessions that
-// are meant to be running and hold a VM, newest first: still starting (just
+// billedRunningSessionsTx lists the organization's billed sessions (see
+// sandboxBilledTx) that are meant to be running and hold a VM, newest first: still starting (just
 // created or woken) before running, then by session creation.
 func billedRunningSessionsTx(ctx context.Context, tx pgx.Tx, orgID string) ([]billedRunningSession, error) {
 	rows, err := tx.Query(ctx,
@@ -1296,11 +1328,11 @@ func billedRunningSessionsTx(ctx context.Context, tx pgx.Tx, orgID string) ([]bi
 			)
 		FROM ao_sandboxes sb
 		JOIN ao_sessions se ON se.org_id = sb.org_id AND se.id = sb.session_id
-		WHERE sb.org_id = $1 AND sb.provider = $2 AND sb.desired_state = 'running'
+		WHERE sb.org_id = $1 AND `+billedSandboxSQL+` AND sb.desired_state = 'running'
 			AND sb.observed_state NOT IN ('deleted', 'deleting', 'terminated', 'failed')
 		ORDER BY (sb.startup_started_at IS NOT NULL) DESC, sb.startup_started_at DESC NULLS LAST,
 			se.created_at DESC, sb.session_id`,
-		orgID, sandbox.ProviderFreestyle)
+		orgID)
 	if err != nil {
 		return nil, err
 	}

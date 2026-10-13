@@ -33,8 +33,8 @@ type CatalogContext = {
 	developerMode: boolean;
 	/** Developer mode with the Diagnostics toggle on — gates the memory and CPU page. */
 	diagnostics: boolean;
-	/** The org's cloud offering includes coder: gates the bring-your-own-Coder page. */
-	hasCoder: boolean;
+	/** The org holds the coder capability: gates the bring-your-own-Coder page. */
+	customCoder: boolean;
 	/** The org is on self-serve billing: gates the Upgrade (plans and usage) page. */
 	selfServeBilling: boolean;
 	focusAgentId?: string;
@@ -100,7 +100,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "coder",
 		icon: Server,
 		label: (t) => t("settings.coder.navLabel"),
-		visible: ({ cloudEnabled, hasCoder }) => cloudEnabled && hasCoder,
+		visible: ({ cloudEnabled, customCoder }) => cloudEnabled && customCoder,
 		render: (_t, titleHidden) => <CoderSettingsSection titleHidden={titleHidden} />,
 	},
 	{

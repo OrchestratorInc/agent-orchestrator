@@ -456,6 +456,7 @@ func (s *Server) createEnvironmentScratchProject(
 			DisplayName:             request.DisplayName,
 			Config:                  configJSON,
 			Session: domain.CreateSession{
+				CoderCapability:     s.orgHasCoderCapability(principal, request.OrgID),
 				Kind:                "orchestrator",
 				Harness:             request.Orchestrator.Harness,
 				DisplayName:         "Orchestrator",

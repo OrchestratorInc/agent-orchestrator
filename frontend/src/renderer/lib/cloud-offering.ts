@@ -29,6 +29,13 @@ export interface ResolvedCloudOffering {
 	/** Undefined while a fallback still waits on the billing summary. */
 	billingMode: CloudCpBillingMode | undefined;
 	features: string[];
+	/**
+	 * The org may connect its own Coder deployment (it holds the coder
+	 * capability), which shows the Coder settings page. An older control plane
+	 * that does not send it offered Coder only to such orgs, so the provider
+	 * list stands in.
+	 */
+	customCoder: boolean;
 	/** "server" when `/me` carried an offering, "fallback" when it was derived. */
 	source: "server" | "fallback";
 }
@@ -99,6 +106,7 @@ export function resolveCloudOffering(
 			kind: offering.kind ?? offeringKindFor(providers),
 			billingMode: offering.billingMode ?? billingModeFromSummary(billing) ?? (billingFailed ? "off" : undefined),
 			features: offering.features ?? [],
+			customCoder: offering.customCoder ?? providers.includes(CODER_PROVIDER),
 			source: "server",
 		};
 	}
@@ -112,6 +120,7 @@ export function resolveCloudOffering(
 		kind: offeringKindFor(providers),
 		billingMode: billingModeFromSummary(billing) ?? (billingFailed ? "off" : undefined),
 		features: [],
+		customCoder: providers.includes(CODER_PROVIDER),
 		source: "fallback",
 	};
 }

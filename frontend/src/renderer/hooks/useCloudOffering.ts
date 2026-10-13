@@ -25,7 +25,7 @@ export const cloudBillingQueryKey = ["cloud-billing"] as const;
 
 export interface UseCloudOfferingResult extends Omit<ResolvedCloudOffering, "source"> {
 	source: ResolvedCloudOffering["source"] | undefined;
-	/** The org's providers include coder: Coder settings and project options apply. */
+	/** The org's providers include coder: Coder project options apply. */
 	hasCoder: boolean;
 	/** More than one server-sent provider: a project picks where its sessions run. */
 	offersProviderChoice: boolean;
@@ -49,6 +49,7 @@ const EMPTY: ResolvedCloudOffering = {
 	kind: "none",
 	billingMode: undefined,
 	features: [],
+	customCoder: false,
 	source: "fallback",
 };
 

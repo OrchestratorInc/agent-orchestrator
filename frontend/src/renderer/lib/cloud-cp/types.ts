@@ -65,6 +65,12 @@ export interface CloudCpOffering {
 	kind: CloudCpOfferingKind;
 	/** Plan feature flags; empty when none. */
 	features: string[];
+	/**
+	 * The org holds the coder capability (WorkOS metadata capabilities=coder):
+	 * it may connect its own Coder deployment, and its Coder sessions are not
+	 * billed. Absent from older control planes.
+	 */
+	customCoder?: boolean;
 }
 
 /** GET /me */

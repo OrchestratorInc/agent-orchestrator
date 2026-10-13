@@ -2886,5 +2886,10 @@
 	"settings.billing.usageNote": "每个运行中的会话都会计时：两个会话运行一小时计 2 会话小时。已暂停的会话不计时。",
 	"settings.billing.cancelNotice": "你的 {{plan}} 套餐将于 {{date}} 结束，之后将转为免费套餐。",
 	"settings.billing.keepPlan": "保留 {{plan}}",
-	"settings.billing.freeStarts": "{{date}} 开始"
+	"settings.billing.freeStarts": "{{date}} 开始",
+	"settings.defaultSandbox.label": "默认云沙盒",
+	"settings.defaultSandbox.description": "新项目运行云会话的位置，以及项目未选择时会话的运行位置。",
+	"settings.defaultSandbox.single": "你的云会话运行的位置。只有一个沙盒可用。",
+	"settings.defaultSandbox.adminOnly": "只有组织管理员可以更改此设置。",
+	"settings.defaultSandbox.saveFailed": "无法保存默认沙盒。请重试。"
 }

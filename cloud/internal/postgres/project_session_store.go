@@ -698,9 +698,14 @@ func createSessionTx(
 	}
 	// The plan's slots and usage limits, checked under the same organization
 	// lock as the quota above, so concurrent creators cannot both take the
-	// last slot. This covers sessions an orchestrator spawns too. Only
-	// Freestyle sandboxes are billed.
-	if billedProvider(sessionProvider(input.Provider)) {
+	// last slot. This covers sessions an orchestrator spawns too. Freestyle
+	// sandboxes are billed, and Coder ones unless the organization holds the
+	// coder capability; a spawned worker inherits its parent's billing.
+	billed, err := sandboxBilledTx(ctx, tx, orgID, sessionProvider(input.Provider), input.CoderCapability, parentSessionID)
+	if err != nil {
+		return domain.Session{}, err
+	}
+	if billed {
 		if err := billing.planAdmissionTx(ctx, tx, orgID, input.Kind, admitCreate, time.Now()); err != nil {
 			return domain.Session{}, err
 		}
@@ -803,10 +808,10 @@ func createSessionTx(
 		ctx,
 		`INSERT INTO ao_sandboxes (
 			session_id, org_id, provider, provider_connection_id,
-			resource_profile, bootstrap_context
-		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6)`,
+			resource_profile, bootstrap_context, billed
+		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7)`,
 		session.ID, orgID, provider, input.SandboxConnectionID,
-		resourceProfile, bootstrapContext,
+		resourceProfile, bootstrapContext, billed,
 	); err != nil {
 		return domain.Session{}, normalizeConstraintError(err)
 	}

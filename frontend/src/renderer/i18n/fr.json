@@ -2946,5 +2946,10 @@
 	"settings.billing.usageNote": "Chaque session en cours compte : deux sessions pendant une heure utilisent 2 heures de session. Les sessions en pause ne comptent pas.",
 	"settings.billing.cancelNotice": "Votre forfait {{plan}} se termine le {{date}}. Vous passerez alors au forfait Gratuit.",
 	"settings.billing.keepPlan": "Garder {{plan}}",
-	"settings.billing.freeStarts": "Commence le {{date}}"
+	"settings.billing.freeStarts": "Commence le {{date}}",
+	"settings.defaultSandbox.label": "Sandbox cloud par défaut",
+	"settings.defaultSandbox.description": "Où les nouveaux projets exécutent leurs sessions cloud, et où vont les sessions quand un projet n'en a pas choisi.",
+	"settings.defaultSandbox.single": "Où s'exécutent vos sessions cloud. Une seule sandbox est disponible.",
+	"settings.defaultSandbox.adminOnly": "Seuls les administrateurs de l'organisation peuvent modifier ce réglage.",
+	"settings.defaultSandbox.saveFailed": "Impossible d'enregistrer la sandbox par défaut. Réessayez."
 }

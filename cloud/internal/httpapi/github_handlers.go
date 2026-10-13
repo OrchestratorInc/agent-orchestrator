@@ -617,6 +617,7 @@ func (s *Server) createGitHubScratchProject(
 			DisplayName:             request.DisplayName,
 			Config:                  scratchConfig,
 			Session: domain.CreateSession{
+				CoderCapability:     s.orgHasCoderCapability(principalFrom(r), orgID),
 				Kind:                "orchestrator",
 				Harness:             request.Orchestrator.Harness,
 				DisplayName:         "Orchestrator",
