@@ -636,7 +636,9 @@ func Run(ctx context.Context, cfg Config) error {
 	providerDone := make(chan error, 1)
 	go func() { providerDone <- h.forwardProvider(stdout) }()
 	if h.acp != nil {
-		go h.watchPromptStall()
+		watchCtx, stopWatch := context.WithCancel(ctx)
+		defer stopWatch()
+		go h.watchPromptStall(watchCtx)
 	}
 	acceptDone := make(chan error, 1)
 	go func() { acceptDone <- h.accept() }()
@@ -893,26 +895,27 @@ func (h *host) deliverProviderFrameLocked(frame []byte, retainedByACP bool) {
 // Turn settlement lives inside the ACP adapter, and the host discards the
 // adapter's stderr, so a lost completion (upstream claude-agent-acp#1145
 // class) leaves the session's Working indicator hanging with nothing to
-// observe. The watchdog gives such turns a terminal error. It never races
-// forwardProvider: both run under h.mu.
-func (h *host) watchPromptStall() {
+// observe. The watchdog gives such turns a terminal error and cancels the
+// adapter's turn. It never races forwardProvider: both relay under h.mu.
+func (h *host) watchPromptStall(ctx context.Context) {
 	ticker := time.NewTicker(promptStallCheckInterval)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-h.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			h.mu.Lock()
-			if h.acp == nil {
-				h.mu.Unlock()
-				continue
-			}
-			frame := h.acp.stalledPromptResponse(h.ctx, h.clientGeneration, time.Now())
-			if frame != nil {
-				h.deliverProviderFrameLocked(frame, true)
+			frames, err := h.acp.failStalledPrompt(ctx, h.clientGeneration, h.client != nil, time.Now())
+			if err == nil && len(frames.client) > 0 {
+				h.deliverProviderFrameLocked(frames.client, true)
 			}
 			h.mu.Unlock()
+			// Like client frames, written outside h.mu: a full stdin pipe must
+			// not stall the provider reader.
+			if len(frames.provider) > 0 {
+				_, _ = h.stdin.Write(frames.provider)
+			}
 		}
 	}
 }
