@@ -7,11 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
-	"github.com/google/uuid"
 )
 
 // The stale identity a replacement orchestrator can inherit: the project
@@ -103,7 +104,7 @@ func reboundRecoveryHandoff(fixture historicalProviderFixture) *domain.ChatProvi
 	return &domain.ChatProviderHandoff{
 		BoundaryID: "recovery-epoch", ConversationID: fixture.conversation.ID,
 		PreviousSessionID: fixture.target.ID, PreviousBranchID: fixture.root.ID,
-		PreviousSequence: fixture.conversation.LatestSequence,
+		PreviousSequence:        fixture.conversation.LatestSequence,
 		ExpectedControllerOwner: fixture.target.ControllerOwner(),
 		RecoverySource: &domain.ChatProviderHandoffRecoverySource{
 			SessionID: fixture.source.ID, ProviderConversationID: "native-428",
@@ -200,7 +201,7 @@ func TestReboundOrchestratorRecoveryPublication(t *testing.T) {
 					mover, err := fixture.store.CreateSession(ctx, domain.SessionRecord{
 						ProjectID: testProject, Kind: domain.KindWorker,
 						Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
-						Metadata: domain.SessionMetadata{ProviderConversationID: "worker-thread"},
+						Metadata:  domain.SessionMetadata{ProviderConversationID: "worker-thread"},
 						CreatedAt: fixture.now.Add(time.Hour), UpdatedAt: fixture.now.Add(time.Hour),
 					})
 					if err != nil {
@@ -233,7 +234,7 @@ func TestReboundOrchestratorRecoveryPublication(t *testing.T) {
 			cfg := chatsvc.StartConfig{
 				SessionID: fixture.target.ID, ProjectID: testProject,
 				Kind: domain.KindOrchestrator, Harness: fixture.target.Harness,
-				WorkspacePath: fixture.target.Metadata.WorkspacePath,
+				WorkspacePath:          fixture.target.Metadata.WorkspacePath,
 				ProviderConversationID: historicalTargetThread, ProviderHandoff: handoff,
 				ExpectedControllerOwner: fixture.target.ControllerOwner(),
 				ControllerReady: func(started chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
@@ -295,7 +296,10 @@ func TestReboundOrchestratorRecoveryPublication(t *testing.T) {
 					t.Fatal(err)
 				}
 				if stale.Active || stale.SessionID != fixture.source.ID ||
-					stale.ProviderConversationID != "native-428" || stale.ParentBranchID != "" == false {
+					stale.ProviderConversationID != "native-428" ||
+					stale.ParentBranchID != fixture.root.ParentBranchID ||
+					stale.ProviderScopeID != fixture.root.ProviderScopeID ||
+					stale.ProviderIDsScoped != fixture.root.ProviderIDsScoped {
 					t.Fatalf("stale epoch was rewritten: %+v", stale)
 				}
 				root, err := fixture.store.ConversationBranch(ctx, conversation.ID, stale.ParentBranchID)
@@ -388,7 +392,7 @@ func TestReboundOrchestratorRecoveryRepeatResumeIsIdempotent(t *testing.T) {
 	_, err := svc.Start(ctx, chatsvc.StartConfig{
 		SessionID: fixture.target.ID, ProjectID: testProject,
 		Kind: domain.KindOrchestrator, Harness: fixture.target.Harness,
-		WorkspacePath: fixture.target.Metadata.WorkspacePath,
+		WorkspacePath:          fixture.target.Metadata.WorkspacePath,
 		ProviderConversationID: historicalTargetThread, ProviderHandoff: handoff,
 		ExpectedControllerOwner: fixture.target.ControllerOwner(),
 		ControllerReady: func(started chatsvc.StartResult) (chatsvc.ControllerCommit, error) {

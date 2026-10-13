@@ -72,7 +72,7 @@ func TestCommitChatSpawnRecoverySourceReproof(t *testing.T) {
 		return &domain.ChatProviderHandoff{
 			BoundaryID: "recovery-epoch", ConversationID: conversation.ID,
 			PreviousSessionID: target.ID, PreviousBranchID: conversation.ActiveBranchID,
-			PreviousSequence: conversation.LatestSequence,
+			PreviousSequence:        conversation.LatestSequence,
 			ExpectedControllerOwner: target.ControllerOwner(),
 			RecoverySource: &domain.ChatProviderHandoffRecoverySource{
 				SessionID: prevRec.ID, ProviderConversationID: "stale-thread",
@@ -278,7 +278,7 @@ func TestCommitChatSpawnRecoverySourceReproof(t *testing.T) {
 		handoff := &domain.ChatProviderHandoff{
 			BoundaryID: "handoff-epoch", ConversationID: conversation.ID,
 			PreviousSessionID: prevRec.ID, PreviousBranchID: conversation.ActiveBranchID,
-			PreviousSequence: conversation.LatestSequence,
+			PreviousSequence:        conversation.LatestSequence,
 			ExpectedControllerOwner: target.ControllerOwner(),
 			RecoverySource: &domain.ChatProviderHandoffRecoverySource{
 				SessionID: prevRec.ID, ProviderConversationID: "stale-thread",
