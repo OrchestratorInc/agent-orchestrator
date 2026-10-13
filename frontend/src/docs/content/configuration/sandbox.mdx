@@ -3,7 +3,9 @@ title: Sandbox
 description: Run Claude Code agents inside Docker containers while Orchestrator, worktrees, and the UI stay on the host.
 ---
 
-The sandbox runs an agent inside a Docker container. Orchestrator, your worktrees, and the desktop app stay on the host. The agent sees its worktree and nothing else from your machine, so a mistaken or hostile command can't reach the rest of your files.
+The sandbox runs an agent inside a Docker container. Orchestrator, your worktrees, and the desktop app stay on the host. The container gets the agent's worktree, the repository's git data, and its own sandbox state. It does not see the rest of your home directory.
+
+The sandbox protects your files and credentials from accidental damage by the agent. It is not a security boundary against a deliberately hostile agent: on Docker Desktop the container can reach network services on your host, including Orchestrator's local API. See [Limits](#limits).
 
 The sandbox is off by default and is configured per project.
 
@@ -33,7 +35,7 @@ There is no Docker access inside the sandbox.
 | `memory` | Memory limit, for example `8g`. |
 | `pidsLimit` | Maximum number of processes in the container. |
 
-A `sandbox` block under `worker` or `orchestrator` replaces the whole project-level block for that role. It does not merge field by field.
+The project-level `sandbox` block applies to workers. A `sandbox` block under `worker` replaces it for workers; it does not merge field by field. The orchestrator ignores the project-level block and runs on the host unless you set `orchestrator.sandbox` explicitly, which is not recommended in this version (see below).
 
 | Mode | Behavior |
 | --- | --- |
@@ -41,15 +43,15 @@ A `sandbox` block under `worker` or `orchestrator` replaces the whole project-le
 | `per-agent` | Each session gets its own container. Sessions are isolated from each other. |
 | `shared` | All sessions in the project share one container. |
 
-In `shared` mode, sessions can see each other's sandbox state: the home directory, Claude config, and env files. Use `per-agent` when sessions must be isolated from each other. Shared mode also requires the workspace to be an Orchestrator-managed worktree.
+In `shared` mode, sessions can see each other's sandbox state: the home directory, Claude config, env files, and system prompts. Use `per-agent` when sessions must be isolated from each other. Shared mode also requires the workspace to be an Orchestrator-managed worktree.
 
 Set the config with `ao project set-config`. It replaces the whole project config, so read the [full-config warning](/configuration/projects#update-from-the-cli) first.
 
 ```bash
-ao project set-config <id> --config-json '{"sandbox":{"mode":"shared","image":"ghcr.io/acme/dev:latest","memory":"8g"},"orchestrator":{"sandbox":{"mode":"off"}}}'
+ao project set-config <id> --config-json '{"sandbox":{"mode":"shared","image":"ghcr.io/acme/dev:latest","memory":"8g"}}'
 ```
 
-Keep the orchestrator role unsandboxed, as the example does. Inside the sandbox the agent can't run the `ao` commands an orchestrator needs.
+Keep the orchestrator unsandboxed, which is the default. Inside the sandbox the agent can't run the `ao` commands an orchestrator needs.
 
 ### Applying changes
 
@@ -74,13 +76,17 @@ Inside the sandbox, only these commands work:
 - `ao version`
 - `ao preview <http(s)-url>`
 
-Everything else (spawn, send, session, render, review, browser, project, and so on) is refused. This keeps the sandbox from being escaped through Orchestrator. `ao mcp` is not available either.
+Everything else (spawn, send, session, render, review, browser, project, and so on) is refused, so the agent can't use these commands to act on the host. `ao mcp` is not available either.
 
 ## Limits
 
+- The sandbox is not a security boundary against a hostile agent. On Docker Desktop the container can reach network services on your host through `host.docker.internal`, including Orchestrator's local API, which has no authentication.
 - Terminal sessions only. Chat-mode sessions are refused for sandboxed roles, and so is restoring an existing chat session. Switch the session to terminal mode first.
 - Agent switching is not supported for sandboxed sessions.
 - Session-title generation still runs the harness briefly on the host, outside the sandbox.
+- Review agents (reviewers) run on the host, outside the sandbox.
+- The repository's git config, hooks, and submodule git directories are read-only inside the sandbox. Git commands that change the config, such as `git remote add` or `git push -u`, fail there.
+- In `shared` mode the orchestrator's worktree is hidden from the container, but sessions in the same container can read each other's worktrees and system prompts.
 
 ## Troubleshooting
 
