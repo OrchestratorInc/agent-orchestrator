@@ -792,6 +792,58 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).getByText("Update availability could not be verified.")).toBeInTheDocument();
 	});
 
+	it.each([false, true])("updates every eligible harness once, continuing after a start failure (%s)", async (failFirst) => {
+		mockInstalledOperations("npm");
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/{agent}/update-advisory") {
+				const id = (options as { params: { path: { agent: string } } }).params.path.agent;
+				return { data: { agentId: id, status: "behind_latest", currentVersion: "1.2.3", latestVersion: "1.3.0",
+					maintenanceMethod: id === "claude-code" ? "homebrew" : id === "codex" ? "npm" : "official-installer" } } as never;
+			}
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => {
+			if (failFirst && path === "/api/v1/agents/{agent}/install"
+				&& (options as { params: { path: { agent: string } } }).params.path.agent === "claude-code") {
+				return { error: { error: { code: "UPDATE_FAILED", message: "Cannot update Claude" } } } as never;
+			}
+			return (post as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		renderSection();
+		const button = await screen.findByRole("button", { name: "Update all (2)" });
+		fireEvent.click(button);
+		fireEvent.click(button);
+		await waitFor(() => expect(vi.mocked(apiClient.POST).mock.calls.filter(([path]) => path === "/api/v1/agents/{agent}/install")).toHaveLength(2));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
+			params: { path: { agent: "claude-code" } }, body: { method: "homebrew", operation: "update", expectedVersion: "1.3.0" },
+		});
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
+			params: { path: { agent: "codex" } }, body: { method: "npm", operation: "update", expectedVersion: "1.3.0" },
+		});
+		// Cursor advertises a newer release, but its installer cannot update it.
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.objectContaining({ params: { path: { agent: "cursor" } } }));
+		if (failFirst) expect((await screen.findAllByText("Cannot update Claude")).length).toBeGreaterThan(0);
+	});
+
+	it.each(["login", "active-job", "unknown-version"])("disables Update all when the only update is blocked by %s", async (blocked) => {
+		const readiness = readyCatalog();
+		if (blocked === "login") readiness.agents[1].authentication.state = "unauthorized";
+		mockInstalledOperations("npm", readiness);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (blocked === "active-job" && path === "/api/v1/agents/install-jobs") return { data: { jobs: [{ target: "codex", status: "installing", method: "npm" }] } } as never;
+			if (blocked === "unknown-version" && path === "/api/v1/agents/{agent}/update-advisory") return { data: { status: "unknown" } } as never;
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		const { client } = renderSection();
+		await findListRow("codex");
+		await waitFor(() => expect(client.isFetching()).toBe(0));
+		expect(screen.getByRole("button", { name: "Update all" })).toBeDisabled();
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
+	});
+
 	it("uses the detected manager rather than a stale saved method", async () => {
 		mockInstalledOperations("unsupported-old-method");
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
@@ -1028,13 +1080,13 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Show diagnostics" })).toBeNull();
 	});
 
-	it("keeps displayed versions and maintenance requests scoped to the selected host", async () => {
+	it.each(["single", "all"])("keeps %s updates and displayed versions scoped to the selected host", async (mode) => {
 		mockInstalledOperations("npm");
 		hostMocks.connected = ["remote-1"];
 		const localGET = vi.mocked(apiClient.GET).getMockImplementation()!;
 		hostMocks.remoteGET.mockImplementation(async (path: string, options: unknown) => {
 			if (path === "/api/v1/agents/{agent}/update-advisory") return { data: {
-				agentId: "codex", status: "behind_latest", currentVersion: "9.4.0", latestVersion: "9.5.0", source: "homebrew",
+				agentId: "codex", status: (options as { params: { path: { agent: string } } }).params.path.agent === "codex" ? "behind_latest" : "current", currentVersion: "9.4.0", latestVersion: "9.5.0", source: "homebrew",
 			} };
 			return (localGET as (path: string, options: unknown) => Promise<unknown>)(path, options);
 		});
@@ -1052,7 +1104,8 @@ describe("HarnessSettingsSection", () => {
 			expect(within(row).getByText("v9.4.0")).toBeInTheDocument();
 			expect(within(row).queryByText("v1.2.3")).toBeNull();
 			expect(within(row).getByText("v9.5.0 available")).toBeInTheDocument();
-			await userEvent.click(within(row).getByRole("button", { name: "Update" }));
+			await userEvent.click(mode === "all" ? await screen.findByRole("button", { name: "Update all (1)" }) : within(row).getByRole("button", { name: "Update" }));
+			await waitFor(() => expect(hostMocks.remotePOST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything()));
 			expect(hostMocks.remotePOST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "homebrew", operation: "update", expectedVersion: "9.5.0" } });
 			expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 		} finally {

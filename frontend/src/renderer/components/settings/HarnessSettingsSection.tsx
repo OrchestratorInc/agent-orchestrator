@@ -303,6 +303,8 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 	const activeInstallJobs = useRef(new Set<AgentId>());
 	const expandedFailures = useRef(new Map<AgentId, string>());
 	const pendingActions = useRef(new Set<AgentId>());
+	const updateAllInFlight = useRef(false);
+	const [startingAllUpdates, setStartingAllUpdates] = useState(false);
 	const authChecksInFlight = useRef(new Map<AgentId, Promise<AgentAuthProbeResult | undefined>>());
 	const [pendingAgentIds, setPendingAgentIds] = useState<Set<AgentId>>(new Set());
 	const detailRef = useRef<HTMLDivElement>(null);
@@ -583,8 +585,9 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 		setPendingAgentIds(new Set(pendingActions.current));
 	};
 
-	const startAgentOperation = async (agentId: AgentId, method: string, operation: AgentOperation): Promise<boolean> => {
-		if (isActive(jobMap.get(agentId)) || authWorkflowRef.current?.agentId === agentId || authStartPendingRef.current) return false;
+	const startAgentOperation = async (agentId: AgentId, method: string, operation: AgentOperation, requestedVersion?: string): Promise<boolean> => {
+		if (isActive(queryClient.getQueryData<InstallJob[]>(jobsKey)?.find((job) => job.target === agentId))
+			|| authWorkflowRef.current?.agentId === agentId || authStartPendingRef.current) return false;
 		if (operation === "update" && (!installed.has(agentId)
 			|| operationMethodId(agentId) !== method
 			|| !supportsUpdate(plans.get(agentId)?.methods.find((candidate) => candidate.id === method)))) return false;
@@ -596,7 +599,7 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 			let expectedVersion: string | undefined;
 			if (operation === "update") {
 				const key = updateAdvisoryQueryKey(agentId, hostId);
-				const target = queryClient.getQueryData<AgentUpdateAdvisory>(key)?.latestVersion;
+				const target = requestedVersion ?? queryClient.getQueryData<AgentUpdateAdvisory>(key)?.latestVersion;
 				await queryClient.cancelQueries({ queryKey: key });
 				const fresh = await fetchUpdateAdvisory(agentId, hostId, true);
 				queryClient.setQueryData(key, fresh);
@@ -631,6 +634,37 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 			return false;
 		} finally {
 			endAction(agentId);
+		}
+	};
+
+	const updateAllReady = !agents.isPending && !agents.isError && !installers.isPending && !installers.isError
+		&& !jobs.isPending && !jobs.isError && !authPlans.isPending && !authPlans.isError
+		&& !authWorkflow && !authStartPendingRef.current
+		&& !AGENT_OPTIONS.some((id) => installed.has(id) && advisoryMap.get(id)?.isPending);
+	// Scope is the selected host, independent of the list's search text.
+	const updateAllTargets = updateAllReady ? AGENT_OPTIONS.flatMap((agentId) => {
+		const query = advisoryMap.get(agentId);
+		const advisory = query?.data;
+		const method = maintenanceMethodId(advisory);
+		if (!installed.has(agentId) || query?.isError || !hasConfirmedHarnessUpdate(advisory)
+			|| needsAuthentication(agentId) || pendingAgentIds.has(agentId) || isActive(jobMap.get(agentId))
+			|| !supportsUpdate(plans.get(agentId)?.methods.find((candidate) => candidate.id === method))) return [];
+		return [{ agentId, method, version: advisory!.latestVersion! }];
+	}) : [];
+	const requestUpdateAll = async () => {
+		if (updateAllInFlight.current || updateAllTargets.length === 0) return;
+		updateAllInFlight.current = true;
+		setStartingAllUpdates(true);
+		try {
+			// Reuse individual version/ownership checks and per-harness errors.
+			// A failed start must not prevent the remaining updates from starting.
+			for (const { agentId, method, version } of updateAllTargets) {
+				if (!mountedRef.current) break;
+				await startAgentOperation(agentId, method, "update", version);
+			}
+		} finally {
+			updateAllInFlight.current = false;
+			if (mountedRef.current) setStartingAllUpdates(false);
 		}
 	};
 
@@ -1195,6 +1229,17 @@ function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChange, sta
 					{jobs.error instanceof Error ? jobs.error.message : t("settings.harness.loadFailed")}
 				</div>
 			) : null}
+
+			<div className="flex shrink-0 justify-end">
+				<Button type="button" size="sm" variant="outline"
+					disabled={startingAllUpdates || updateAllTargets.length === 0}
+					title={t("settings.harness.updateAllHint")}
+					onClick={() => void requestUpdateAll()}>
+					{startingAllUpdates ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <CircleArrowUp aria-hidden="true" />}
+					{t(startingAllUpdates ? "settings.harness.startingAllUpdates" : "settings.harness.updateAll")}
+					{!startingAllUpdates && updateAllTargets.length > 0 ? <span className="tabular-nums">({updateAllTargets.length})</span> : null}
+				</Button>
+			</div>
 
 			<div ref={layoutRef} data-harness-detail={detailsOpen ? "" : undefined} className={cn("w-full min-w-0 max-w-full", detailsOpen && "flex min-h-0 flex-1 flex-col overflow-hidden", split && detailsOpen && "grid-rows-[minmax(0,1fr)]", split && "grid grid-cols-[minmax(14rem,16rem)_minmax(0,1fr)] items-stretch overflow-clip rounded-xl border border-border bg-(--color-bg-primary)")}>
 				{split || !selectedDetails ? (
