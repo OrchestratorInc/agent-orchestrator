@@ -81,7 +81,7 @@ func (s *Service) queueWithoutController(
 	}
 	// The generation is empty on purpose: no controller has claimed this turn.
 	// Drain selects by conversation, so the controller that starts next owns it.
-	created, err := s.store.AppendUserMessage(ctx, conversation.ID, record.ID, "", domain.ConversationMessage{
+	message := domain.ConversationMessage{
 		ID:                  s.newID(),
 		Text:                msg.Text,
 		Origin:              normalizeOrigin(msg.Origin),
@@ -89,7 +89,20 @@ func (s *Service) queueWithoutController(
 		ClientPayloadHash:   msg.ClientPayloadHash,
 		DeliveryContentJSON: deliveryContent,
 		AuthoredByUser:      msg.AuthoredByUser,
-	}, turnID, now)
+	}
+	created, err := s.store.AppendUserMessage(ctx, conversation.ID, record.ID, "", message, turnID, now)
+	if errors.Is(err, domain.ErrConversationRebound) {
+		// An orchestrator's first controller moved its queue to the project
+		// conversation after ensureConversation returned the provisioning row
+		// (#6523). Queue there, after the prompts it moved.
+		conversation, err = s.ensureConversation(ctx, record)
+		if err == nil {
+			err = validateExcerptReferences(msg.Excerpts, conversation.ID)
+		}
+		if err == nil {
+			created, err = s.store.AppendUserMessage(ctx, conversation.ID, record.ID, "", message, turnID, now)
+		}
+	}
 	if err != nil {
 		return domain.ConversationTurn{}, fmt.Errorf("queue message for %s: %w", record.ID, err)
 	}
@@ -119,8 +132,8 @@ func (s *Service) queueWithoutController(
 // conversation later. An orchestrator queues in a session-scoped row too, even
 // though its controller uses the project conversation: binding that narrative
 // here would let a retiring orchestrator's controller drain these prompts and
-// would file them before the context boundary Start records. Start adopts them
-// instead (adoptProvisioningQueue).
+// would file them before the context boundary Start records. Its first controller
+// moves them instead (CreateProjectConversationAdoptingQueue).
 func (s *Service) ensureConversation(
 	ctx context.Context,
 	record domain.SessionRecord,
@@ -138,40 +151,6 @@ func (s *Service) ensureConversation(
 		return domain.ConversationRecord{}, fmt.Errorf("open conversation for %s: %w", record.ID, err)
 	}
 	return conversation, nil
-}
-
-// adoptProvisioningQueue hands an orchestrator's provisioning-time prompts to the
-// project conversation its first controller opened, so they drain there instead
-// of waiting in a row no controller reads (#6523). Only a session that has never
-// had a controller qualifies: a prompt an older build stranded on a session that
-// has since run is stale, and replaying it would repeat work.
-func (s *Service) adoptProvisioningQueue(
-	ctx context.Context,
-	id domain.SessionID,
-	conversation domain.ConversationRecord,
-) (domain.ConversationRecord, error) {
-	if s.sessions == nil {
-		return conversation, nil
-	}
-	record, found, err := s.sessions.GetSession(ctx, id)
-	if err != nil {
-		return domain.ConversationRecord{}, fmt.Errorf("read chat session before adopting queued prompts: %w", err)
-	}
-	if !found || !record.ProvisionState.IsProvisioning() || record.Metadata.ControllerGeneration != "" {
-		return conversation, nil
-	}
-	adopted, err := s.store.AdoptProvisioningQueue(ctx, id, conversation.ID, s.newID, s.now())
-	if err != nil {
-		return domain.ConversationRecord{}, fmt.Errorf("adopt queued prompts for %s: %w", id, err)
-	}
-	if adopted == 0 {
-		return conversation, nil
-	}
-	refreshed, err := s.store.ConversationForSession(ctx, id)
-	if err != nil {
-		return domain.ConversationRecord{}, fmt.Errorf("reload conversation after adopting queued prompts: %w", err)
-	}
-	return refreshed, nil
 }
 
 // DrainQueued dispatches messages saved before the controller started.

@@ -186,6 +186,22 @@ func (q *Queries) AdoptReviewProviderConversationTurn(ctx context.Context, arg A
 	return err
 }
 
+const advanceConversationSequence = `-- name: AdvanceConversationSequence :exec
+UPDATE conversations SET latest_sequence = latest_sequence + ?, updated_at = ?
+WHERE id = ?
+`
+
+type AdvanceConversationSequenceParams struct {
+	LatestSequence int64
+	UpdatedAt      time.Time
+	ID             string
+}
+
+func (q *Queries) AdvanceConversationSequence(ctx context.Context, arg AdvanceConversationSequenceParams) error {
+	_, err := q.db.ExecContext(ctx, advanceConversationSequence, arg.LatestSequence, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const appendConversationActivityOutput = `-- name: AppendConversationActivityOutput :execrows
 UPDATE conversation_activities
 SET command_output = substr(command_output || ?1, 1, ?2),
@@ -1442,6 +1458,113 @@ func (q *Queries) MarkConversationTurnsRolledBack(ctx context.Context, arg MarkC
 	return result.RowsAffected()
 }
 
+const moveConversationActivities = `-- name: MoveConversationActivities :exec
+UPDATE conversation_activities
+SET conversation_id = ?1, branch_id = ?2,
+    sequence = sequence + ?3
+WHERE conversation_activities.conversation_id = ?4
+  AND (conversation_activities.turn_id IS NULL OR conversation_activities.turn_id IN (
+      SELECT id FROM conversation_turns WHERE conversation_turns.conversation_id = ?1
+  ))
+`
+
+type MoveConversationActivitiesParams struct {
+	TargetID       string
+	BranchID       string
+	SequenceOffset int64
+	SourceID       string
+}
+
+func (q *Queries) MoveConversationActivities(ctx context.Context, arg MoveConversationActivitiesParams) error {
+	_, err := q.db.ExecContext(ctx, moveConversationActivities,
+		arg.TargetID,
+		arg.BranchID,
+		arg.SequenceOffset,
+		arg.SourceID,
+	)
+	return err
+}
+
+const moveConversationMessages = `-- name: MoveConversationMessages :exec
+UPDATE conversation_messages
+SET conversation_id = ?1, branch_id = ?2,
+    sequence = sequence + ?3
+WHERE conversation_messages.conversation_id = ?4
+  AND (conversation_messages.turn_id IS NULL OR conversation_messages.turn_id IN (
+      SELECT id FROM conversation_turns WHERE conversation_turns.conversation_id = ?1
+  ))
+`
+
+type MoveConversationMessagesParams struct {
+	TargetID       string
+	BranchID       string
+	SequenceOffset int64
+	SourceID       string
+}
+
+// Messages and activities follow their turns. Offsetting every sequence by the
+// target's latest keeps their order and places them after the target's history.
+func (q *Queries) MoveConversationMessages(ctx context.Context, arg MoveConversationMessagesParams) error {
+	_, err := q.db.ExecContext(ctx, moveConversationMessages,
+		arg.TargetID,
+		arg.BranchID,
+		arg.SequenceOffset,
+		arg.SourceID,
+	)
+	return err
+}
+
+const moveConversationQueuedEditDeliveries = `-- name: MoveConversationQueuedEditDeliveries :exec
+UPDATE conversation_queued_edit_deliveries
+SET conversation_id = ?1
+WHERE conversation_queued_edit_deliveries.conversation_id = ?2
+  AND conversation_queued_edit_deliveries.client_message_id NOT IN (
+      SELECT existing.client_message_id FROM conversation_queued_edit_deliveries AS existing
+      WHERE existing.conversation_id = ?1
+  )
+`
+
+type MoveConversationQueuedEditDeliveriesParams struct {
+	TargetID string
+	SourceID string
+}
+
+// Queued-edit receipts keep a retried edit idempotent after the move.
+func (q *Queries) MoveConversationQueuedEditDeliveries(ctx context.Context, arg MoveConversationQueuedEditDeliveriesParams) error {
+	_, err := q.db.ExecContext(ctx, moveConversationQueuedEditDeliveries, arg.TargetID, arg.SourceID)
+	return err
+}
+
+const moveConversationTurns = `-- name: MoveConversationTurns :exec
+UPDATE conversation_turns
+SET conversation_id = ?1, branch_id = ?2
+WHERE conversation_turns.conversation_id = ?3
+  AND conversation_turns.id NOT IN (
+      SELECT moved.turn_id FROM conversation_messages AS moved
+      JOIN conversation_messages AS delivered
+        ON delivered.conversation_id = ?1
+       AND delivered.client_message_id = moved.client_message_id
+      WHERE moved.conversation_id = ?3
+        AND moved.client_message_id <> ''
+        AND moved.turn_id IS NOT NULL
+  )
+`
+
+type MoveConversationTurnsParams struct {
+	TargetID string
+	BranchID string
+	SourceID string
+}
+
+// Move a provisioning row's turns into the conversation that adopts them. IDs and
+// requested_at stay, so queue order and every turn id a client holds still work.
+// A turn whose prompt already reached the target under the same client message id
+// stays behind: it would break the target's unique client id.
+func (q *Queries) MoveConversationTurns(ctx context.Context, arg MoveConversationTurnsParams) error {
+	_, err := q.db.ExecContext(ctx, moveConversationTurns, arg.TargetID, arg.BranchID, arg.SourceID)
+	return err
+}
+
 const nextConversationSequence = `-- name: NextConversationSequence :one
 UPDATE conversations
 SET latest_sequence = latest_sequence + 1, updated_at = ?
@@ -2261,10 +2384,10 @@ ORDER BY scope = 'project' DESC, created_at DESC, id DESC
 LIMIT 1
 `
 
-// An orchestrator can be bound to both its provisioning-time session row and the
-// project row its controller uses: briefly while its first controller adopts the
-// queue, and for good on databases older builds wrote (#6523). The project row is
-// the live one.
+// An orchestrator's first controller moves the prompts queued during provisioning
+// into the project row and detaches the session-scoped row in one transaction
+// (#6523). Migration 0197 detached the rows older builds left bound to both. If a
+// session is still bound to two rows, the project row is the live one.
 func (q *Queries) SelectConversationBySession(ctx context.Context, currentSessionID *domain.SessionID) (Conversation, error) {
 	row := q.db.QueryRowContext(ctx, selectConversationBySession, currentSessionID)
 	var i Conversation
@@ -2326,6 +2449,41 @@ func (q *Queries) SelectConversationContextResetSequence(ctx context.Context, ar
 	var sequence int64
 	err := row.Scan(&sequence)
 	return sequence, err
+}
+
+const selectConversationDeliveryContent = `-- name: SelectConversationDeliveryContent :many
+SELECT id, delivery_content_json FROM conversation_messages
+WHERE conversation_id = ? AND delivery_content_json <> ''
+`
+
+type SelectConversationDeliveryContentRow struct {
+	ID                  string
+	DeliveryContentJson string
+}
+
+// Delivery content that may hold excerpt references to the conversation it is
+// moving out of.
+func (q *Queries) SelectConversationDeliveryContent(ctx context.Context, conversationID string) ([]SelectConversationDeliveryContentRow, error) {
+	rows, err := q.db.QueryContext(ctx, selectConversationDeliveryContent, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SelectConversationDeliveryContentRow{}
+	for rows.Next() {
+		var i SelectConversationDeliveryContentRow
+		if err := rows.Scan(&i.ID, &i.DeliveryContentJson); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const selectConversationEditAnchor = `-- name: SelectConversationEditAnchor :one
@@ -3403,7 +3561,7 @@ func (q *Queries) SelectProjectConversation(ctx context.Context, projectID *doma
 }
 
 const selectProvisioningConversationsForSession = `-- name: SelectProvisioningConversationsForSession :many
-SELECT id FROM conversations
+SELECT id, latest_sequence FROM conversations
 WHERE current_session_id = ? AND scope = 'session' AND id <> ?
 ORDER BY created_at, id
 `
@@ -3413,21 +3571,26 @@ type SelectProvisioningConversationsForSessionParams struct {
 	ID               string
 }
 
+type SelectProvisioningConversationsForSessionRow struct {
+	ID             string
+	LatestSequence int64
+}
+
 // The session-scoped rows a session is bound to besides the given conversation:
 // where an orchestrator's provisioning-time prompts wait for its project row.
-func (q *Queries) SelectProvisioningConversationsForSession(ctx context.Context, arg SelectProvisioningConversationsForSessionParams) ([]string, error) {
+func (q *Queries) SelectProvisioningConversationsForSession(ctx context.Context, arg SelectProvisioningConversationsForSessionParams) ([]SelectProvisioningConversationsForSessionRow, error) {
 	rows, err := q.db.QueryContext(ctx, selectProvisioningConversationsForSession, arg.CurrentSessionID, arg.ID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []string{}
+	items := []SelectProvisioningConversationsForSessionRow{}
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var i SelectProvisioningConversationsForSessionRow
+		if err := rows.Scan(&i.ID, &i.LatestSequence); err != nil {
 			return nil, err
 		}
-		items = append(items, id)
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -3508,76 +3671,6 @@ func (q *Queries) SelectQueuedConversationTurnOrder(ctx context.Context, convers
 	for rows.Next() {
 		var i SelectQueuedConversationTurnOrderRow
 		if err := rows.Scan(&i.ID, &i.RequestedAt); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const selectQueuedUserMessagesForAdoption = `-- name: SelectQueuedUserMessagesForAdoption :many
-SELECT m.id, m.turn_id, m.origin, m.text, m.client_message_id, m.client_payload_hash,
-       m.delivery_content_json, m.sender_session_id, m.sender_project_id, m.sender_display_name,
-       m.created_at, t.requested_at
-FROM conversation_messages m
-JOIN conversation_turns t ON t.id = m.turn_id AND t.conversation_id = m.conversation_id
-WHERE m.conversation_id = ?
-  AND t.handled_by_session_id = ?
-  AND t.state = 'queued'
-  AND t.promotion_started_at IS NULL
-  AND m.role = 'user'
-ORDER BY m.sequence
-`
-
-type SelectQueuedUserMessagesForAdoptionParams struct {
-	ConversationID     string
-	HandledBySessionID domain.SessionID
-}
-
-type SelectQueuedUserMessagesForAdoptionRow struct {
-	ID                  string
-	TurnID              sql.NullString
-	Origin              domain.MessageOrigin
-	Text                string
-	ClientMessageID     string
-	ClientPayloadHash   sql.NullString
-	DeliveryContentJson string
-	SenderSessionID     string
-	SenderProjectID     string
-	SenderDisplayName   string
-	CreatedAt           time.Time
-	RequestedAt         time.Time
-}
-
-func (q *Queries) SelectQueuedUserMessagesForAdoption(ctx context.Context, arg SelectQueuedUserMessagesForAdoptionParams) ([]SelectQueuedUserMessagesForAdoptionRow, error) {
-	rows, err := q.db.QueryContext(ctx, selectQueuedUserMessagesForAdoption, arg.ConversationID, arg.HandledBySessionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []SelectQueuedUserMessagesForAdoptionRow{}
-	for rows.Next() {
-		var i SelectQueuedUserMessagesForAdoptionRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.TurnID,
-			&i.Origin,
-			&i.Text,
-			&i.ClientMessageID,
-			&i.ClientPayloadHash,
-			&i.DeliveryContentJson,
-			&i.SenderSessionID,
-			&i.SenderProjectID,
-			&i.SenderDisplayName,
-			&i.CreatedAt,
-			&i.RequestedAt,
-		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -3763,6 +3856,20 @@ func (q *Queries) SelectVerifiedAuthenticationTurn(ctx context.Context, arg Sele
 		&i.HandledByReviewID,
 	)
 	return i, err
+}
+
+const setConversationMessageDeliveryContent = `-- name: SetConversationMessageDeliveryContent :exec
+UPDATE conversation_messages SET delivery_content_json = ? WHERE id = ?
+`
+
+type SetConversationMessageDeliveryContentParams struct {
+	DeliveryContentJson string
+	ID                  string
+}
+
+func (q *Queries) SetConversationMessageDeliveryContent(ctx context.Context, arg SetConversationMessageDeliveryContentParams) error {
+	_, err := q.db.ExecContext(ctx, setConversationMessageDeliveryContent, arg.DeliveryContentJson, arg.ID)
+	return err
 }
 
 const settleConversationActivity = `-- name: SettleConversationActivity :exec

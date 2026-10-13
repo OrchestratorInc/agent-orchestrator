@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
@@ -308,13 +310,36 @@ func TestConversationForSessionPrefersProjectNarrativeOverProvisioningRow(t *tes
 	}
 }
 
-// A first orchestrator controller adopts the prompts queued while it
-// provisioned. The move is one transaction: copies keep their order, the
-// originals can no longer drain, and a retried start finds nothing to adopt.
-func TestAdoptProvisioningQueueMovesPromptsOnce(t *testing.T) {
+// A first orchestrator controller takes over the prompts queued while it
+// provisioned (#6523). The rebind and the move are one transaction, the rows keep
+// their IDs so a client's turn ids still resolve, and they land after the context
+// boundary in queue order.
+func TestFirstOrchestratorControllerMovesProvisioningQueue(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	seedProject(t, s, "adopt-chat")
+
+	earlierRecord := sampleRecord("adopt-chat")
+	earlierRecord.Kind = domain.KindOrchestrator
+	earlierRecord.Mode = domain.SessionModeChat
+	earlier, err := s.CreateSession(ctx, earlierRecord)
+	if err != nil {
+		t.Fatalf("create earlier orchestrator: %v", err)
+	}
+	project, err := s.CreateConversation(ctx, "project-row", domain.ConversationScopeProject,
+		"adopt-chat", earlier.ID, histClock)
+	if err != nil {
+		t.Fatalf("create project conversation: %v", err)
+	}
+	if _, err := s.AppendUserMessage(ctx, project.ID, earlier.ID, "gen-earlier", domain.ConversationMessage{
+		ID: "earlier-message", Text: "earlier orchestrator work", Origin: domain.MessageOriginHuman,
+		ClientMessageID: "client-delivered",
+	}, "earlier-turn", histClock); err != nil {
+		t.Fatalf("seed project history: %v", err)
+	}
+	if err := s.SettleTurnByID(ctx, "earlier-turn", domain.TurnStateCompleted, "", histClock); err != nil {
+		t.Fatalf("settle project history: %v", err)
+	}
 
 	record := sampleRecord("adopt-chat")
 	record.Kind = domain.KindOrchestrator
@@ -329,48 +354,85 @@ func TestAdoptProvisioningQueueMovesPromptsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create provisioning conversation: %v", err)
 	}
-	for i, text := range []string{"opening brief", "follow-up"} {
+	excerpt, err := json.Marshal([]ports.ChatContent{{Type: "excerpt", Excerpt: &ports.ChatExcerptContext{
+		Reference: ports.ChatExcerptReference{ConversationID: provisioning.ID, MessageID: "queued-message-0", Text: "brief"},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, queued := range []struct{ text, clientID, content string }{
+		{"opening brief", "client-0", string(excerpt)},
+		{"follow-up", "client-1", ""},
+		{"already delivered", "client-delivered", ""},
+	} {
 		if _, err := s.AppendUserMessage(ctx, provisioning.ID, orchestrator.ID, "", domain.ConversationMessage{
-			ID: fmt.Sprintf("queued-message-%d", i), Text: text, Origin: domain.MessageOriginHuman,
-			ClientMessageID: fmt.Sprintf("client-%d", i),
-		}, fmt.Sprintf("queued-turn-%d", i), histClock.Add(time.Duration(i)*time.Second)); err != nil {
-			t.Fatalf("queue %q: %v", text, err)
+			ID: fmt.Sprintf("queued-message-%d", i), Text: queued.text, Origin: domain.MessageOriginHuman,
+			ClientMessageID: queued.clientID, DeliveryContentJSON: queued.content,
+		}, fmt.Sprintf("queued-turn-%d", i), histClock.Add(time.Duration(i+1)*time.Second)); err != nil {
+			t.Fatalf("queue %q: %v", queued.text, err)
 		}
 	}
-	project, err := s.CreateConversation(ctx, "project-row", domain.ConversationScopeProject,
-		"adopt-chat", orchestrator.ID, histClock.Add(time.Minute))
+	editReceipt := domain.ConversationQueuedEditDelivery{ClientMessageID: "edit-1", RequestHash: "edit-hash"}
+	if err := s.UpdateQueuedTurnMessage(ctx, provisioning.ID, "queued-turn-1", "edited follow-up", "", 0,
+		histClock.Add(10*time.Second), editReceipt); err != nil {
+		t.Fatalf("edit queued follow-up: %v", err)
+	}
+
+	reset := domain.ConversationActivity{
+		ID: "context-reset", Kind: domain.ActivityKindSystem, Status: domain.ActivityStatusCompleted,
+		Summary: "Agent context reset.", ProviderItemID: domain.ConversationContextResetProviderItemID(orchestrator.ID),
+	}
+	opened, err := s.CreateProjectConversationAdoptingQueue(ctx, "unused-id", "adopt-chat", orchestrator.ID,
+		reset, histClock.Add(time.Minute))
 	if err != nil {
-		t.Fatalf("create project conversation: %v", err)
+		t.Fatalf("open project conversation adopting the queue: %v", err)
+	}
+	if opened.ID != project.ID {
+		t.Fatalf("opened conversation = %s, want project row %s", opened.ID, project.ID)
+	}
+	if lookup, err := s.ConversationForSession(ctx, orchestrator.ID); err != nil || lookup.ID != project.ID {
+		t.Fatalf("lookup after adoption = %s, %v; want project row", lookup.ID, err)
 	}
 
-	next := 0
-	newID := func() string {
-		next++
-		return fmt.Sprintf("adopted-%d", next)
-	}
-	adopted, err := s.AdoptProvisioningQueue(ctx, orchestrator.ID, project.ID, newID, histClock.Add(2*time.Minute))
-	if err != nil || adopted != 2 {
-		t.Fatalf("adopt = %d, %v; want 2 prompts", adopted, err)
-	}
-	if again, err := s.AdoptProvisioningQueue(ctx, orchestrator.ID, project.ID, newID, histClock.Add(3*time.Minute)); err != nil || again != 0 {
-		t.Fatalf("retried adopt = %d, %v; want nothing left", again, err)
-	}
-
-	moved, err := s.LoadConversationSnapshot(ctx, project.ID)
+	page, err := s.LoadConversationSnapshotPage(ctx, project.ID, 0, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var texts []string
-	for _, message := range moved.Messages {
+	for _, message := range page.Messages {
 		texts = append(texts, message.Text)
-	}
-	if !reflect.DeepEqual(texts, []string{"opening brief", "follow-up"}) {
-		t.Fatalf("project messages = %q, want both prompts in order", texts)
-	}
-	for _, turn := range moved.Turns {
-		if turn.State != domain.TurnStateQueued || turn.HandledBySessionID != orchestrator.ID {
-			t.Fatalf("adopted turn = %+v, want queued for %s", turn, orchestrator.ID)
+		if message.Sequence > opened.LatestSequence {
+			t.Fatalf("message %s at sequence %d, past the returned latest %d", message.ID, message.Sequence, opened.LatestSequence)
 		}
+	}
+	if !reflect.DeepEqual(texts, []string{"opening brief", "edited follow-up"}) {
+		t.Fatalf("visible project messages = %q, want both prompts after the boundary, in order", texts)
+	}
+	for _, id := range []string{"queued-turn-0", "queued-turn-1"} {
+		turn, err := s.TurnByID(ctx, id)
+		if err != nil || turn.ConversationID != project.ID || turn.State != domain.TurnStateQueued {
+			t.Fatalf("turn %s after adoption = %+v, %v; want queued in the project row under the same id", id, turn, err)
+		}
+	}
+	next, err := s.NextQueuedTurn(ctx, project.ID)
+	if err != nil || next.TurnID != "queued-turn-0" {
+		t.Fatalf("next queued turn = %+v, %v; want the opening brief first", next, err)
+	}
+	var moved []ports.ChatContent
+	if err := json.Unmarshal([]byte(next.DeliveryContentJSON), &moved); err != nil || len(moved) != 1 ||
+		moved[0].Excerpt == nil || moved[0].Excerpt.Reference.ConversationID != project.ID {
+		t.Fatalf("moved excerpt content = %s (%v), want its reference on the project row", next.DeliveryContentJSON, err)
+	}
+	if err := s.UpdateQueuedTurnMessage(ctx, project.ID, "queued-turn-1", "edited follow-up", "", 0,
+		histClock.Add(2*time.Minute), editReceipt); err != nil {
+		t.Fatalf("retried edit after adoption = %v, want the receipt to keep it idempotent", err)
+	}
+
+	// The prompt that already reached the project row under its client id stays
+	// behind, settled, so nothing queued is left in a row no lookup returns.
+	duplicate, err := s.TurnByID(ctx, "queued-turn-2")
+	if err != nil || duplicate.ConversationID != provisioning.ID || duplicate.State == domain.TurnStateQueued {
+		t.Fatalf("duplicate turn = %+v, %v; want it settled in the provisioning row", duplicate, err)
 	}
 	source, err := s.LoadConversationSnapshot(ctx, provisioning.ID)
 	if err != nil {
@@ -379,10 +441,46 @@ func TestAdoptProvisioningQueueMovesPromptsOnce(t *testing.T) {
 	if source.Conversation.SessionID != "" {
 		t.Fatalf("provisioning row still bound to %s", source.Conversation.SessionID)
 	}
-	for _, turn := range source.Turns {
-		if turn.State != domain.TurnStateCancelled {
-			t.Fatalf("source turn %s = %s, want cancelled so it cannot drain", turn.ID, turn.State)
-		}
+
+	again, err := s.CreateProjectConversationAdoptingQueue(ctx, "unused-id", "adopt-chat", orchestrator.ID,
+		reset, histClock.Add(3*time.Minute))
+	if err != nil || again.LatestSequence != opened.LatestSequence {
+		t.Fatalf("retried start = latest %d, %v; want nothing more to move (latest %d)",
+			again.LatestSequence, err, opened.LatestSequence)
+	}
+}
+
+// A Send can read the provisioning row just before the orchestrator's first
+// controller moves the queue out of it. Appending there would accept a prompt
+// that never drains or shows, so the append refuses and the caller looks again.
+func TestQueuedAppendRefusesConversationTheSessionNoLongerHolds(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "rebound-chat")
+
+	record := sampleRecord("rebound-chat")
+	record.Kind = domain.KindOrchestrator
+	record.Mode = domain.SessionModeChat
+	record.ProvisionState = domain.SessionProvisionProvisioning
+	orchestrator, err := s.CreateSession(ctx, record)
+	if err != nil {
+		t.Fatalf("create orchestrator: %v", err)
+	}
+	provisioning, err := s.CreateConversation(ctx, "provisioning-row", domain.ConversationScopeSession,
+		"rebound-chat", orchestrator.ID, histClock)
+	if err != nil {
+		t.Fatalf("create provisioning conversation: %v", err)
+	}
+	if _, err := s.CreateProjectConversationAdoptingQueue(ctx, "project-row", "rebound-chat", orchestrator.ID,
+		domain.ConversationActivity{}, histClock.Add(time.Second)); err != nil {
+		t.Fatalf("open project conversation: %v", err)
+	}
+
+	created, err := s.AppendUserMessage(ctx, provisioning.ID, orchestrator.ID, "", domain.ConversationMessage{
+		ID: "late-message", Text: "sent during start", Origin: domain.MessageOriginHuman,
+	}, "late-turn", histClock.Add(2*time.Second))
+	if !errors.Is(err, domain.ErrConversationRebound) || created {
+		t.Fatalf("append to the moved-out row = created %v, %v; want ErrConversationRebound", created, err)
 	}
 }
 

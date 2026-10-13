@@ -52,8 +52,8 @@ type Store interface {
 	CreateReviewConversation(ctx context.Context, id, reviewID string, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error)
 	OpenNativeConversation(ctx context.Context, id string, scope domain.ConversationScope, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error)
 	CreateProjectConversationWithContextReset(ctx context.Context, id string, project domain.ProjectID, session domain.SessionID, reset domain.ConversationActivity, now time.Time) (domain.ConversationRecord, error)
+	CreateProjectConversationAdoptingQueue(ctx context.Context, id string, project domain.ProjectID, session domain.SessionID, reset domain.ConversationActivity, now time.Time) (domain.ConversationRecord, error)
 	ConversationForSession(ctx context.Context, session domain.SessionID) (domain.ConversationRecord, error)
-	AdoptProvisioningQueue(ctx context.Context, session domain.SessionID, conversationID string, newID func() string, now time.Time) (int, error)
 	ClaimChatControllerGeneration(ctx context.Context, session domain.SessionID, generation string) error
 	ClaimReviewChatController(ctx context.Context, reviewID, providerID, generation string, now time.Time) (bool, error)
 	ConversationBranch(ctx context.Context, conversationID, branchID string) (domain.ConversationBranch, error)
