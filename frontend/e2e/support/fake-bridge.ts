@@ -440,15 +440,25 @@ export type FakeAgentController = {
 	setTerminalHandle: (id: string, handleId: string) => void;
 	setPreview: (id: string, previewUrl: string, previewRevision?: number) => void;
 	setBrowserError: (message: string | null) => void;
-	disconnectEventsWithReplayBacklog: (count: number) => void;
-	signalEventsReopened: () => void;
-	replayBacklogRemaining: () => number;
+	reconnectEventsWithReplayBacklog: (count: number) => void;
+	replayProgress: () => FakeReplayProgress;
+	closeEventsStream: () => void;
+	eventStreams: () => Array<{ url: string; readyState: number }>;
 	startContinuousWorkspaceEvents: (intervalMs: number, eventsPerTick?: number) => void;
 	stopContinuousWorkspaceEvents: () => void;
 	continuousWorkspaceEventCount: () => number;
 	setSnapshotFailures: (count: number) => void;
 	snapshotCallCount: () => number;
 	notify: (n: { id: string; type: string; title: string; body?: string; sessionId?: string }) => void;
+};
+
+/** A CDC gap replay: `remaining` frames are still queued, `abandoned` frames
+ *  (deferred events included) were dropped when the app replaced the stream. */
+export type FakeReplayProgress = {
+	phase: "idle" | "connecting" | "replaying";
+	remaining: number;
+	delivered: number;
+	abandoned: number;
 };
 
 export type FakeUpdateController = {
@@ -587,14 +597,18 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				browserError: null as string | null,
 				eventSources: [] as FakeEventSourceLike[],
 				workspaces: [project],
-				replayBacklogOnNextConnection: 0,
-				replayBacklogRemaining: 0,
-				workerToEmitAfterReplay: null as Session | null,
+				replay: {
+					phase: "idle" as "idle" | "connecting" | "replaying",
+					remaining: 0,
+					delivered: 0,
+					abandoned: 0,
+					deferred: [] as Session[],
+				},
 				raceWorker: null as (typeof workers)[number] | null,
 				continuousWorkspaceEvents: 0,
 				continuousEventTimer: undefined as number | undefined,
 				snapshotCalls: 0,
-			snapshotFailures: 0,
+				snapshotFailures: 0,
 			};
 
 			const findSession = (id: string) => (project.sessions as Session[]).find((s) => s.id === id);
@@ -622,36 +636,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					this.url = String(url);
 					state.eventSources.push(this);
 					// event-transport assigns `.onopen` right after construction; fire on
-					// the next tick so it is already wired. A reconnect can replay a large
-					// CDC backlog in bounded batches while the renderer remains responsive.
-					const replayCount = this.url.endsWith("/api/v1/events") ? state.replayBacklogOnNextConnection : 0;
-					if (replayCount > 0) state.replayBacklogOnNextConnection = 0;
+					// the next tick so it is already wired.
 					setTimeout(() => {
-						if (this.readyState !== 1) return;
-						if (replayCount > 0) {
-							state.replayBacklogRemaining = replayCount;
-							const drainBatch = () => {
-								if (this.readyState !== 1) return;
-								const batch = Math.min(2_000, state.replayBacklogRemaining);
-								// The historical backlog includes unrelated CDC event names. This
-								// synthetic frame is deliberately unhandled by event-transport so the
-								// harness can model queue depth without issuing 378k refetches.
-								for (let i = 0; i < batch; i++) this._dispatch("replay_backlog", "{}");
-								state.replayBacklogRemaining -= batch;
-								if (state.replayBacklogRemaining > 0) {
-									setTimeout(drainBatch, 0);
-									return;
-								}
-								if (state.workerToEmitAfterReplay) {
-									this._dispatch("session_created", JSON.stringify({ sessionId: state.workerToEmitAfterReplay.id }));
-									state.workerToEmitAfterReplay = null;
-								}
-								if (this.onopen) this.onopen({ type: "open" });
-							};
-							drainBatch();
-							return;
-						}
-						if (this.onopen) this.onopen({ type: "open" });
+						if (this.readyState === 1 && this.onopen) this.onopen({ type: "open" });
 					}, 0);
 				}
 				addEventListener(t: string, cb: (ev: unknown) => void) {
@@ -689,6 +676,79 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 			};
 			const pushWorkspaces = (type = "session_updated") => emit("/api/v1/events", type);
 
+			// The app opens the CDC stream as `/api/v1/events?after=latest`.
+			const liveCdcStream = () =>
+				[...state.eventSources]
+					.reverse()
+					.find((source) => source.url.includes("/api/v1/events") && source.readyState !== 2);
+			// The daemon's SSE `data`: the full CDC envelope (backend/internal/cdc/event.go).
+			const cdcFrame = (type: string, session: Session, seq: number) =>
+				JSON.stringify({
+					seq,
+					projectId,
+					sessionId: session.id,
+					type,
+					payload: { id: session.id, activity: "active", isTerminated: false },
+					createdAt: nowIso,
+				});
+			// Chromium's EventSource reconnection time; the daemon sends no `retry:`.
+			const BROWSER_RECONNECT_MS = 3_000;
+			// The daemon replays and flushes in 512-event pages (httpd/events.go).
+			const REPLAY_PAGE = 512;
+			// History arrives in runs from the few workers active at a time, not
+			// round-robin over every session: about 10 sessions per daemon page.
+			const REPLAY_RUN = 50;
+			// Only EventSource's own reconnect replays a gap: it resends Last-Event-ID,
+			// which overrides `?after=latest`. A stream the app constructs (its retry
+			// after CLOSED, or a daemon/base-URL change) starts at head, so when the
+			// app replaces this stream the rest of the gap is never delivered.
+			const reconnectWithReplay = (source: FakeEventSourceLike, count: number) => {
+				const replay = state.replay;
+				if (replay.phase !== "idle") throw new Error("a CDC replay is already in progress");
+				const abandon = () => {
+					replay.abandoned += replay.remaining + replay.deferred.length;
+					replay.remaining = 0;
+					replay.deferred = [];
+					replay.phase = "idle";
+				};
+				// The gap holds history from before it began, not sessions created since.
+				const gapSessions = [...(project.sessions as Session[])];
+				replay.phase = "connecting";
+				replay.remaining = count;
+				source.readyState = 0;
+				source.onerror?.({ type: "error" });
+				setTimeout(() => {
+					if (source.readyState !== 0) return abandon();
+					source.readyState = 1;
+					replay.phase = "replaying";
+					// A real EventSource fires `open` before it delivers replayed frames.
+					source.onopen?.({ type: "open" });
+					let seq = 0;
+					const drainPage = () => {
+						if (source.readyState !== 1) return abandon();
+						const frames = Math.min(REPLAY_PAGE, replay.remaining);
+						for (let i = 0; i < frames; i += 1) {
+							seq += 1;
+							source._dispatch("session_updated", cdcFrame("session_updated", gapSessions[Math.floor(seq / REPLAY_RUN) % gapSessions.length], seq));
+						}
+						replay.remaining -= frames;
+						replay.delivered += frames;
+						if (replay.remaining > 0) {
+							setTimeout(drainPage, 0);
+							return;
+						}
+						// Events committed after the gap began follow it in sequence order.
+						for (const session of replay.deferred) {
+							seq += 1;
+							source._dispatch("session_created", cdcFrame("session_created", session, seq));
+						}
+						replay.deferred = [];
+						replay.phase = "idle";
+					};
+					drainPage();
+				}, BROWSER_RECONNECT_MS);
+			};
+
 			const controller: FakeAgentController = {
 				snapshot: () => {
 					state.snapshotCalls += 1;
@@ -713,7 +773,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				createWorkerDuringNextSnapshot: (w) => { state.raceWorker = w; },
 				createWorkerDuringReplay: (w) => {
 					addWorker(w);
-					state.workerToEmitAfterReplay = findSession(w.id) ?? null;
+					const session = findSession(w.id);
+					if (state.replay.phase === "idle" || !session) pushWorkspaces("session_created");
+					else state.replay.deferred.push(session);
 				},
 				removeWorker: (id) => {
 					const sessions = project.sessions as Session[];
@@ -749,19 +811,27 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				setBrowserError: (message) => {
 					state.browserError = message;
 				},
-				disconnectEventsWithReplayBacklog: (count) => {
-					state.replayBacklogOnNextConnection = Math.max(0, Math.floor(count));
-					const source = [...state.eventSources].reverse().find((candidate) => candidate.url.endsWith("/api/v1/events") && candidate.readyState !== 2);
-					if (source) {
-						source.readyState = 2;
-						source.onerror?.({ type: "error" });
-					}
+				reconnectEventsWithReplayBacklog: (count) => {
+					const source = liveCdcStream();
+					if (!source) throw new Error("no open CDC stream to reconnect");
+					reconnectWithReplay(source, Math.max(0, Math.floor(count)));
 				},
-				signalEventsReopened: () => {
-					const source = [...state.eventSources].reverse().find((candidate) => candidate.url.endsWith("/api/v1/events") && candidate.readyState !== 2);
-					source?.onopen?.({ type: "open" });
+				replayProgress: () => {
+					const { phase, remaining, delivered, abandoned } = state.replay;
+					return { phase, remaining, delivered, abandoned };
 				},
-				replayBacklogRemaining: () => state.replayBacklogRemaining,
+				// EventSource gave up (a failed reconnect): CLOSED, then `error`.
+				// event-transport schedules its own retry with a fresh stream.
+				closeEventsStream: () => {
+					const source = liveCdcStream();
+					if (!source) throw new Error("no open CDC stream to close");
+					source.readyState = 2;
+					source.onerror?.({ type: "error" });
+				},
+				eventStreams: () =>
+					state.eventSources
+						.filter((source) => source.url.includes("/api/v1/events"))
+						.map(({ url, readyState }) => ({ url, readyState })),
 				startContinuousWorkspaceEvents: (intervalMs, eventsPerTick = 1) => {
 					if (state.continuousEventTimer !== undefined) window.clearInterval(state.continuousEventTimer);
 					state.continuousWorkspaceEvents = 0;
