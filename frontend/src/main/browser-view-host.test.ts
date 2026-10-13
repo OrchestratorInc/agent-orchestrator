@@ -2601,18 +2601,12 @@ describe("browser profile partitions and replacement", () => {
 		expect(views[1]!.webContents.loadURL).toHaveBeenCalledWith("https://second.example/");
 	});
 
-	it("starts an unbound worker in a configured profile until the human picks temporary", async () => {
-		const bindings: Record<string, string> = {};
+	it("starts an unbound worker in Temporary when no default profile is set, even with saved profiles", async () => {
+		const bindings: Record<string, string | null> = {};
 		const store = fakeBrowserProfileStore(profile, bindings);
-		const { constructorOptions, host, invoke } = setupTabHost(store);
+		const { host, invoke } = setupTabHost(store);
 		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
-		expect(constructorOptions[0]!.webPreferences.partition).toBe(browserProfilePartition(profile.id));
-		expect(host.getProfileState(nav.viewId)).toMatchObject({ profileId: profile.id, temporary: false });
-
-		await host.switchProfile(nav.viewId, null);
-		host.destroy(nav.viewId);
-		const again = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
-		expect(host.getProfileState(again.viewId)).toMatchObject({ profileId: null, temporary: true });
+		expect(host.getProfileState(nav.viewId)).toMatchObject({ profileId: null, temporary: true });
 	});
 
 	it("releases profile usage when worker tab startup fails", async () => {

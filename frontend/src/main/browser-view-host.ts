@@ -787,7 +787,7 @@ export function createBrowserViewHost(
     const defaultProfileId = store.getDefaultProfileId();
     if (defaultProfileId && store.getProfile(defaultProfileId))
       return defaultProfileId;
-    return store.profiles[0]?.id ?? null;
+    return null;
   };
   const ipcDisposers: Array<() => void> = [];
   let disposePromise: Promise<void> | null = null;
