@@ -1828,10 +1828,6 @@ func (l *deadlineConsumingChatLauncher) DrainChatQueue(_ context.Context, _ doma
 	return nil
 }
 
-func (d fixedSessionModeDefaults) HarnessDefault(context.Context, domain.AgentHarness) domain.HarnessDefault {
-	return domain.HarnessDefault{}
-}
-
 type hookRecordingAgent struct {
 	fakeAgent
 	hookErr   error

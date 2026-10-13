@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -49,14 +50,11 @@ func qwenLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	status, ok, err := qwenStoredAuthStatus(ctx)
-	if err == nil && ok && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+	if err == nil && ok && status.HasCredential() {
 		return status, true, nil
 	}
-	for _, name := range qwenAPIKeyEnvVars {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey))
-			return ports.AgentAuthStatusAuthorized, true, nil
-		}
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, qwenAPIKeyEnvVars...) != "" {
+		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	return status, ok, err
 }
@@ -73,7 +71,7 @@ func qwenStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	settingsPath := filepath.Join(qwenHome, "settings.json")
 	if status, ok, err := qwenAuthStatusFromSettings(settingsPath); err != nil || ok {
 		if status == ports.AgentAuthStatusAuthorized {
-			ports.RecordAuthEvidence(ctx, domain.FileSource(settingsPath).WithMethod(domain.AgentAccountMethodAPIKey))
+			ports.RecordAuthEvidence(ctx, authprobe.FileSource(settingsPath).WithMethod(domain.AgentAccountMethodAPIKey))
 		}
 		return status, ok, err
 	}
@@ -85,7 +83,7 @@ func qwenStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 		status, ok, err := qwenEnvFileAuthStatus(path, names...)
 		if err != nil || ok {
 			if status == ports.AgentAuthStatusAuthorized {
-				ports.RecordAuthEvidence(ctx, domain.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey))
+				ports.RecordAuthEvidence(ctx, authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey))
 			}
 			return status, ok, err
 		}

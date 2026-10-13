@@ -3248,7 +3248,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Choose the default model and effort for new sessions using one harness */
+        /** Choose which models one harness's pickers offer */
         patch: operations["updateHarnessDefault"];
         trace?: never;
     };
@@ -3751,9 +3751,11 @@ export interface components {
             currentVersion?: string;
             latestVersion?: string;
             maintenanceMethod?: string;
-            reason?: string;
+            /** @enum {string} */
+            reason?: "ownership_unconfirmed" | "unsupported_source" | "version_unparseable" | "channel_unconfirmed" | "lookup_failed" | "disabled" | "build_unordered";
             source?: string;
-            status: string;
+            /** @enum {string} */
+            status: "unknown" | "current" | "behind_latest" | "ahead_of_latest";
         };
         AppMemoryResponse: {
             /** @description False when there was no earlier sample to measure against: cpuPercent is unknown, not zero. */
@@ -4746,9 +4748,7 @@ export interface components {
             repoPath: string;
         };
         HarnessDefault: {
-            effort?: string;
             enabledModels?: string[];
-            model?: string;
         };
         IdentityResponse: {
             apiVersion: number;
@@ -6072,9 +6072,9 @@ export interface components {
             terminalInput?: string;
         };
         StartAgentInstallRequest: {
-            /** @description For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found, and a version at or below the installed one is rejected. */
+            /** @description For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found; otherwise that latest release is installed. A version at or below the installed one, or one sent with another operation, is rejected with INVALID_UPDATE_VERSION. */
             expectedVersion?: string;
-            /** @description Server-issued installation method id. Omit to use the recommended viable method. */
+            /** @description Server-issued installation method id. Omit to use the recommended viable method for an install or reinstall, and the method that owns the installed copy for an update. */
             method?: string;
             /**
              * @description Requested operation. Defaults to install for older clients.
@@ -6261,9 +6261,7 @@ export interface components {
             enabled: null | boolean;
         };
         UpdateHarnessDefaultRequest: {
-            effort?: string;
-            enabledModels?: null | string[];
-            model?: null | string;
+            enabledModels: null | string[];
         };
         UpdateProjectSettingsInput: {
             config: components["schemas"]["ProjectConfig"];
@@ -18656,6 +18654,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

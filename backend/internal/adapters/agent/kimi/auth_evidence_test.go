@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -33,7 +34,7 @@ oauth = { storage = "file", key = "oauth/kimi-code" }
 	if status, ok, err := kimiLocalAuthStatus(ctx); err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
 		t.Fatalf("status = (%q, %v, %v)", status, ok, err)
 	}
-	want := domain.FileSource(credentials).WithMethod(domain.AgentAccountMethodAccount)
+	want := authprobe.FileSource(credentials).WithMethod(domain.AgentAccountMethodAccount)
 	if got := evidence.Identity(); got != want {
 		t.Fatalf("evidence = %+v, want %+v", got, want)
 	}

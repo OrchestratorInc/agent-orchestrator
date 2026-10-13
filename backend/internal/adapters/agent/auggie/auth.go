@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -34,11 +35,10 @@ func auggieLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, er
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	status, ok, err := auggieStoredAuthStatus(ctx)
-	if err == nil && ok && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+	if err == nil && ok && status.HasCredential() {
 		return status, true, nil
 	}
-	if strings.TrimSpace(os.Getenv("AUGMENT_SESSION_AUTH")) != "" {
-		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("AUGMENT_SESSION_AUTH").WithMethod(domain.AgentAccountMethodToken))
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodToken, "AUGMENT_SESSION_AUTH") != "" {
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	return status, ok, err
@@ -52,7 +52,7 @@ func auggieStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, e
 	path := filepath.Join(home, ".augment", "session.json")
 	status, ok, err := auggieSessionAuthStatus(path)
 	if status == ports.AgentAuthStatusAuthorized {
-		ports.RecordAuthEvidence(ctx, domain.FileSource(path).WithMethod(domain.AgentAccountMethodAccount))
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAccount))
 	}
 	return status, ok, err
 }

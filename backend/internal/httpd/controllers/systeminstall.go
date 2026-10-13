@@ -18,12 +18,12 @@ import (
 // against the fixed systeminstall.Target allowlist.
 type Installer interface {
 	Start(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
-	StartAgentOperation(ctx context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation, expectedVersion ...string) (systeminstall.Job, error)
+	StartAgentOperation(ctx context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation, expectedVersion string) (systeminstall.Job, error)
 	Status(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
 	AgentPlans(ctx context.Context) ([]systeminstall.AgentPlan, error)
 	AgentJobs(ctx context.Context) ([]systeminstall.Job, error)
 	Verify(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
-	UpdateAdvisory(ctx context.Context, target systeminstall.Target, refresh ...bool) (systeminstall.UpdateAdvisory, error)
+	UpdateAdvisory(ctx context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error)
 }
 
 // SystemInstallController owns the system prerequisite and agent harness install routes.
@@ -151,7 +151,7 @@ func (c *SystemInstallController) verifyAgent(w http.ResponseWriter, r *http.Req
 func writeAgentInstallError(w http.ResponseWriter, r *http.Request, err error) bool {
 	switch {
 	case errors.Is(err, systeminstall.ErrUpdateVersion):
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_UPDATE_VERSION", "expectedVersion must be a supported version and may only be used for updates", nil)
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_UPDATE_VERSION", "expectedVersion is only accepted for updates and must be a version newer than the installed one", nil)
 		return true
 	case errors.Is(err, systeminstall.ErrInstallMethod):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INSTALL_METHOD_UNAVAILABLE", "the selected install method is unavailable", nil)

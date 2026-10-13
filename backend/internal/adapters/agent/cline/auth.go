@@ -27,8 +27,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if providerErr == nil && ok {
 		return status, nil
 	}
-	if strings.TrimSpace(os.Getenv("CLINE_API_KEY")) != "" {
-		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("CLINE_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "CLINE_API_KEY") != "" {
 		return ports.AgentAuthStatusAuthorized, nil
 	}
 	if providerErr != nil {
@@ -92,7 +91,7 @@ func clineProviderAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 
 	if provider, ok := configuredClineProvider(file); ok {
 		if providerAuthorized(provider.Settings) {
-			evidence := domain.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
+			evidence := authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
 			evidence.Provider = provider.Settings.Provider
 			if strings.TrimSpace(provider.Settings.APIKey) != "" || strings.TrimSpace(provider.Settings.APIKeyAlt) != "" {
 				evidence.Method = domain.AgentAccountMethodAPIKey

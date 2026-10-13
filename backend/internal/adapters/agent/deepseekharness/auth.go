@@ -9,6 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -53,11 +54,10 @@ func deepseekLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	status, ok, err := deepseekStoredAuthStatus(ctx)
-	if err == nil && ok && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+	if err == nil && ok && status.HasCredential() {
 		return status, true, nil
 	}
-	if strings.TrimSpace(os.Getenv(deepseekCredentialKey)) != "" {
-		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(deepseekCredentialKey).WithMethod(domain.AgentAccountMethodAPIKey))
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, deepseekCredentialKey) != "" {
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	return status, ok, err
@@ -70,7 +70,7 @@ func deepseekStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool,
 	}
 	status, ok, err := deepseekCredentialsStatus(path)
 	if status == ports.AgentAuthStatusAuthorized {
-		ports.RecordAuthEvidence(ctx, domain.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey))
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey))
 	}
 	return status, ok, err
 }

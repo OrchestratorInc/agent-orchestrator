@@ -39,7 +39,7 @@ func commandCodeAuthStatus(ctx context.Context, binary string) (ports.AgentAuthS
 	// it printed instead of treating the exit code as a probe failure.
 	out, _ := authprobe.CmdRunner(runCtx, binary, "status")
 	status := commandCodeAuthStatusFromOutput(string(out))
-	if status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured {
+	if status.HasCredential() {
 		ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "status"))
 	}
 	return status, nil

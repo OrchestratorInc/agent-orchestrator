@@ -60,14 +60,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return p.authStatusFor(ctx, "", nil, false)
 }
 
-// AuthStatusWithAccount reports the same verdict as AuthStatus plus the
-// account `claude auth status` names, when the CLI answered for the provider
-// the agent actually uses.
-func (p *Plugin) AuthStatusWithAccount(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, error) {
-	status, report, err := p.authStatusAndReport(ctx, "", nil, false)
-	return status, report.account(), err
-}
-
 // credentialEvidence names where the credential the agent uses came from and
 // how it signs in. A token or key supplied directly carries no account
 // profile, so its method replaces the CLI's "claude.ai" report.
@@ -83,7 +75,7 @@ func credentialEvidence(credential agentcreds.Credential) domain.AgentAccountIde
 	case source == "keychain":
 		return domain.KeychainSource().WithMethod(domain.AgentAccountMethodAccount)
 	case source == "credentials-file":
-		return domain.FileSource(filepath.Join(claudeConfigDir(), ".credentials.json")).WithMethod(domain.AgentAccountMethodAccount)
+		return authprobe.FileSource(filepath.Join(claudeConfigDir(), ".credentials.json")).WithMethod(domain.AgentAccountMethodAccount)
 	case envVarName.MatchString(source):
 		return domain.EnvironmentSource(source).WithMethod(method)
 	default:
@@ -109,23 +101,21 @@ func (p *Plugin) ValidateLaunchAuth(ctx context.Context, workingDir string, env 
 }
 
 func (p *Plugin) authStatusFor(ctx context.Context, workingDir string, env map[string]string, fresh bool) (ports.AgentAuthStatus, error) {
-	status, _, err := p.authStatusAndReport(ctx, workingDir, env, fresh)
+	status, _, _, err := p.authStatusAndDiagnostics(ctx, workingDir, env, fresh)
 	return status, err
 }
 
-// authStatusAndReport runs the ladder and also returns the CLI report when it
-// describes the credential the agent uses; otherwise the report is empty.
-func (p *Plugin) authStatusAndReport(ctx context.Context, workingDir string, env map[string]string, fresh bool) (ports.AgentAuthStatus, claudeAuthReport, error) {
-	status, report, _, err := p.authStatusAndDiagnostics(ctx, workingDir, env, fresh)
-	return status, report, err
-}
-
-// AuthStatusWithDiagnostics reports each check without running an extra probe.
+// AuthStatusWithDiagnostics reports the same verdict as AuthStatus plus the
+// account `claude auth status` names, when the CLI answered for the provider
+// the agent actually uses, and each check without running an extra probe.
 func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
 	status, report, steps, err := p.authStatusAndDiagnostics(ctx, "", nil, false)
 	return status, report.account(), steps, err
 }
 
+// authStatusAndDiagnostics runs the ladder and also returns the CLI report
+// when it describes the credential the agent uses; otherwise the report is
+// empty.
 func (p *Plugin) authStatusAndDiagnostics(ctx context.Context, workingDir string, env map[string]string, fresh bool) (ports.AgentAuthStatus, claudeAuthReport, []domain.AgentAuthDiagnostic, error) {
 	// Rung 0 — installed? A missing binary is not an auth failure; saying so
 	// would point the user at a login when they need an install.
@@ -192,10 +182,9 @@ func (p *Plugin) authStatusAndDiagnostics(ctx context.Context, workingDir string
 
 	// Rung 4 — local heuristic. Lowest confidence, and the last word only
 	// because it never blocks anything.
+	// A configured local credential is reported once, from the evidence it
+	// records.
 	status, err = claudeLocalAuthStatus(ctx, resolved.opts)
-	if status == ports.AgentAuthStatusConfigured {
-		steps = append(steps, domain.NewAgentAuthDiagnostic("local_configuration", "credential_present"))
-	}
 	return status, report, steps, err
 }
 
@@ -260,7 +249,7 @@ func (p *Plugin) probeResolvedAuthDiagnostics(ctx context.Context, resolved clau
 		d.Source = resolved.credential.Source
 		return d
 	}
-	if !resolved.providerOK || (resolved.provider != agentcreds.ProviderFirstParty && resolved.provider != agentcreds.ProviderGateway) {
+	if !resolved.providerOK || !agentcreds.ValidatesProvider(resolved.provider) {
 		return ports.AgentAuthStatusUnknown, false, diagnostic("provider_unsupported")
 	}
 	if resolved.found && resolved.credential.ExpiredButRenewable(claudeNow()) {
@@ -411,11 +400,7 @@ func (p *Plugin) claudeCLIAuthReportDiagnostic(ctx context.Context, binary, work
 	if probeCtx.Err() != nil {
 		report, ok = claudeAuthReport{}, false
 	}
-	step := authprobe.CommandDiagnostic("claude auth status", report.status(), err, probeCtx.Err(), started)
-	if source := domain.FileSource(binary).Sanitized(); source != nil {
-		step.Source = source.Source
-	}
-	return report, ok, step
+	return report, ok, authprobe.CommandStep(binary, []string{"auth", "status"}, report.status(), err, probeCtx.Err(), started)
 }
 
 type claudeCommandOutput struct {
@@ -478,7 +463,7 @@ func claudeLocalAuthStatus(ctx context.Context, opts agentcreds.ResolveOptions) 
 	}
 	status, err := claudeConfigAuthStatus(ctx, cfgPath)
 	if status == ports.AgentAuthStatusConfigured {
-		ports.RecordAuthEvidence(ctx, domain.FileSource(cfgPath).WithMethod(domain.AgentAccountMethodAccount))
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(cfgPath).WithMethod(domain.AgentAccountMethodAccount))
 	}
 	return status, err
 }

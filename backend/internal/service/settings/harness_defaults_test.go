@@ -30,30 +30,28 @@ func (s *harnessSettingsStore) SetHarnessDefault(_ context.Context, agent domain
 	}
 	return nil
 }
+
+func harnessDefault(t *testing.T, svc *Service, agent domain.AgentHarness) domain.HarnessDefault {
+	t.Helper()
+	snapshot, err := svc.Get(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot.HarnessDefaults[string(agent)]
+}
+
 func TestHarnessDefaultsValidateAndSurviveServiceRestart(t *testing.T) {
 	ctx := context.Background()
 	store := &harnessSettingsStore{defaults: make(map[string]domain.HarnessDefault)}
 	svc := New(store, nil, Offering{}, nil)
-	for _, tc := range []struct {
-		agent domain.AgentHarness
-		value domain.HarnessDefault
-	}{
-		{"not-an-agent", domain.HarnessDefault{Model: "m"}},
-		{domain.HarnessCodex, domain.HarnessDefault{Effort: "high"}},
-		{domain.HarnessCodex, domain.HarnessDefault{Model: strings.Repeat("m", 257)}},
-		{domain.HarnessCodex, domain.HarnessDefault{Model: "m\nother"}},
-		{domain.HarnessCodex, domain.HarnessDefault{Model: "m", Effort: strings.Repeat("x", 33)}},
-		{domain.HarnessOpenCode, domain.HarnessDefault{Model: "m", Effort: "high"}},
-	} {
-		if _, err := svc.SetHarnessDefault(ctx, tc.agent, tc.value); !errors.Is(err, ErrInvalidHarnessDefault) {
-			t.Fatalf("input %+v: %v", tc, err)
-		}
+	if _, err := svc.SetHarnessDefault(ctx, "not-an-agent", domain.HarnessDefault{EnabledModels: []string{"m"}}); !errors.Is(err, ErrUnknownHarness) {
+		t.Fatalf("unknown harness: %v", err)
 	}
-	if _, err := svc.SetHarnessDefault(ctx, domain.HarnessCodex, domain.HarnessDefault{Model: " m ", Effort: " high "}); err != nil {
+	if _, err := svc.SetHarnessDefault(ctx, domain.HarnessCodex, domain.HarnessDefault{EnabledModels: []string{"m"}}); err != nil {
 		t.Fatal(err)
 	}
 	restarted := New(store, nil, Offering{}, nil)
-	if got := restarted.HarnessDefault(ctx, domain.HarnessCodex); !reflect.DeepEqual(got, domain.HarnessDefault{Model: "m", Effort: "high"}) {
+	if got := harnessDefault(t, restarted, domain.HarnessCodex); !reflect.DeepEqual(got, domain.HarnessDefault{EnabledModels: []string{"m"}}) {
 		t.Fatalf("restart = %+v", got)
 	}
 	store.err = errors.New("write failed")
@@ -64,7 +62,7 @@ func TestHarnessDefaultsValidateAndSurviveServiceRestart(t *testing.T) {
 	if _, err := svc.SetHarnessDefault(ctx, domain.HarnessCodex, domain.HarnessDefault{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := svc.HarnessDefault(ctx, domain.HarnessCodex); !got.IsZero() {
+	if got := harnessDefault(t, svc, domain.HarnessCodex); !got.IsZero() {
 		t.Fatalf("reset = %+v", got)
 	}
 }
@@ -81,7 +79,7 @@ func TestHarnessEnabledModelsAreNormalizedAndBounded(t *testing.T) {
 	if _, err := svc.SetHarnessDefault(ctx, domain.HarnessAider, domain.HarnessDefault{EnabledModels: []string{" gpt-5 ", "claude", "gpt-5"}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := svc.HarnessDefault(ctx, domain.HarnessAider); !reflect.DeepEqual(got.EnabledModels, []string{"gpt-5", "claude"}) || got.Model != "" {
+	if got := harnessDefault(t, svc, domain.HarnessAider); !reflect.DeepEqual(got.EnabledModels, []string{"gpt-5", "claude"}) {
 		t.Fatalf("enabled models = %+v", got)
 	}
 	if _, err := svc.SetHarnessDefault(ctx, domain.HarnessAider, domain.HarnessDefault{EnabledModels: []string{}}); err != nil {

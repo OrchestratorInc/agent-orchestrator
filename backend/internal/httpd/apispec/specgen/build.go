@@ -938,12 +938,13 @@ func shellTerminalOperations() []operation {
 		},
 		{
 			method: http.MethodPatch, path: "/api/v1/settings/harness-defaults/{agent}", id: "updateHarnessDefault", tag: "settings",
-			summary:    "Choose the default model and effort for new sessions using one harness",
+			summary:    "Choose which models one harness's pickers offer",
 			pathParams: []any{controllers.AgentIDParam{}},
 			reqBody:    controllers.UpdateHarnessDefaultRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},

@@ -163,7 +163,7 @@ func TestNpmRegistryVersionReadsOnlyLatestDistTag(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || result.Latest != tt.want {
+			if err != nil || result != tt.want {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
 		})
@@ -182,9 +182,9 @@ func TestVersionProbeRejectsAmbiguousOrPartialVersions(t *testing.T) {
 		{"cli 1.2.3.4.5", ""},
 		{"cli 1.2-beta..2", ""},
 	} {
-		got, ok := findUpdateVersion(tt.input)
+		got, ok := versionSemver.find(tt.input)
 		if ok != (tt.want != "") || got.display != tt.want {
-			t.Errorf("findUpdateVersion(%q) = %q, %t; want %q", tt.input, got.display, ok, tt.want)
+			t.Errorf("versionSemver.find(%q) = %q, %t; want %q", tt.input, got.display, ok, tt.want)
 		}
 	}
 }

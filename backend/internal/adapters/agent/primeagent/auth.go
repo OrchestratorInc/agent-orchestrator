@@ -72,7 +72,7 @@ func primeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	status, found, err := primeStoredAuthStatus(ctx)
-	if err == nil && found && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+	if err == nil && found && status.HasCredential() {
 		return status, true, nil
 	}
 	for _, name := range primeAPIKeyEnvVars {
@@ -106,17 +106,33 @@ func primeStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, er
 		allowPlainKey bool
 	}{{"auth.json", true}, {"models.json", false}} {
 		path := filepath.Join(dir, file.name)
-		status, found, err := primeCredentialJSONStatus(path, file.allowPlainKey)
+		status, found, data, err := primeCredentialJSONStatus(path, file.allowPlainKey)
 		if err != nil || found {
 			if status == ports.AgentAuthStatusAuthorized {
-				evidence := domain.FileSource(path).WithMethod(authprobe.JSONProviderMethod(path))
-				evidence.Provider = authprobe.JSONProviderNames(path)
-				ports.RecordAuthEvidence(ctx, evidence)
+				ports.RecordAuthEvidence(ctx, primeFileEvidence(path, data, file.name == "models.json"))
 			}
 			return status, found, err
 		}
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
+}
+
+// primeFileEvidence names a credential file and the providers it holds.
+// auth.json is keyed by provider; models.json nests them under "providers"
+// and holds API keys.
+func primeFileEvidence(path string, data []byte, models bool) domain.AgentAccountIdentity {
+	if models {
+		var config struct {
+			Providers json.RawMessage `json:"providers"`
+		}
+		_ = json.Unmarshal(data, &config)
+		evidence := authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey)
+		evidence.Provider = authprobe.JSONProviderNames(config.Providers)
+		return evidence
+	}
+	evidence := authprobe.FileSource(path).WithMethod(authprobe.JSONProviderMethod(data))
+	evidence.Provider = authprobe.JSONProviderNames(data)
+	return evidence
 }
 
 // primeFirstSetEnv names the first of names that is set, for display.
@@ -188,25 +204,27 @@ func primeNonEmptyRegularFile(path string) bool {
 	return err == nil && info.Mode().IsRegular() && info.Size() > 0
 }
 
-func primeCredentialJSONStatus(path string, allowPlainKey bool) (ports.AgentAuthStatus, bool, error) {
-	data, err := os.ReadFile(path)
+// primeCredentialJSONStatus also returns the file's contents, so callers
+// parse it without reading it again.
+func primeCredentialJSONStatus(path string, allowPlainKey bool) (ports.AgentAuthStatus, bool, []byte, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // Prime Agent's own credential file
 	if os.IsNotExist(err) {
-		return ports.AgentAuthStatusUnknown, false, nil
+		return ports.AgentAuthStatusUnknown, false, nil, nil
 	}
 	if err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
+		return ports.AgentAuthStatusUnknown, false, nil, err
 	}
 	if strings.TrimSpace(string(data)) == "" {
-		return ports.AgentAuthStatusUnknown, false, nil
+		return ports.AgentAuthStatusUnknown, false, nil, nil
 	}
 	var value any
 	if err := json.Unmarshal(data, &value); err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
+		return ports.AgentAuthStatusUnknown, false, nil, err
 	}
 	if primeJSONHasCredential(value, allowPlainKey) {
-		return ports.AgentAuthStatusAuthorized, true, nil
+		return ports.AgentAuthStatusAuthorized, true, data, nil
 	}
-	return ports.AgentAuthStatusUnknown, false, nil
+	return ports.AgentAuthStatusUnknown, false, nil, nil
 }
 
 func primeJSONHasCredential(value any, allowPlainKey bool) bool {

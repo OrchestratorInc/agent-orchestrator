@@ -72,6 +72,12 @@ const (
 	AgentAuthStatusConfigured AgentAuthStatus = "configured"
 )
 
+// HasCredential reports whether a check found a credential, verified or only
+// configured.
+func (s AgentAuthStatus) HasCredential() bool {
+	return s == AgentAuthStatusAuthorized || s == AgentAuthStatusConfigured
+}
+
 // AuthEvidence collects what an authentication check relied on, so readiness
 // can say why a harness reads as signed in. Adapters record through
 // RecordAuthEvidence; without a collector in the context it does nothing.
@@ -147,15 +153,8 @@ func (e *AuthEvidence) Diagnostics() []domain.AgentAuthDiagnostic {
 	return append([]domain.AgentAuthDiagnostic(nil), e.diagnostics...)
 }
 
-// AgentAuthAccountChecker is an AgentAuthChecker whose check also observes
-// the signed-in account. The readiness coordinator prefers it, so the account
-// comes from the same probe as the verdict rather than a second one.
-type AgentAuthAccountChecker interface {
-	AuthStatusWithAccount(ctx context.Context) (AgentAuthStatus, domain.AgentAccountIdentity, error)
-}
-
-// AgentAuthDiagnosticsChecker adds evidence from the same check as the verdict.
-// The coordinator prefers this over separate account/status probes.
+// AgentAuthDiagnosticsChecker adds the signed-in account and evidence from the
+// same check as the verdict, so neither needs a second probe.
 type AgentAuthDiagnosticsChecker interface {
 	AuthStatusWithDiagnostics(context.Context) (AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error)
 }

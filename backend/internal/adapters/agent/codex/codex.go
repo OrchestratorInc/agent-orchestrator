@@ -8,7 +8,6 @@ package codex
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -321,11 +320,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if !recognized {
 		status = ports.AgentAuthStatusUnknown
 	}
-	step := authprobe.CommandDiagnostic("codex login status", status, err, probeCtx.Err(), started)
-	if source := domain.FileSource(binary).Sanitized(); source != nil {
-		step.Source = source.Source
-	}
-	ports.RecordAuthDiagnostic(ctx, step)
+	ports.RecordAuthDiagnostic(ctx, authprobe.CommandStep(binary, []string{"login", "status"}, status, err, probeCtx.Err(), started))
 	if probeCtx.Err() != nil {
 		return ports.AgentAuthStatusUnknown, probeCtx.Err()
 	}
@@ -333,7 +328,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		if status == ports.AgentAuthStatusAuthorized {
 			evidence := domain.CommandSource(binary, "login", "status").WithMethod(codexLoginMethod(out))
 			if evidence.Method == domain.AgentAccountMethodAccount {
-				evidence.Email, evidence.Name = codexLoginIdentity()
+				evidence.Email, evidence.Name = codexLoginIdentity(ctx)
 			}
 			ports.RecordAuthEvidence(ctx, evidence)
 		}
@@ -346,8 +341,8 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 }
 
 // codexLoginIdentity reads who a ChatGPT login belongs to from the id_token
-// Codex stores in CODEX_HOME/auth.json. Only display claims are read.
-func codexLoginIdentity() (email, name string) {
+// Codex stores in CODEX_HOME/auth.json.
+func codexLoginIdentity(ctx context.Context) (email, name string) {
 	home := strings.TrimSpace(os.Getenv("CODEX_HOME"))
 	if home == "" {
 		userHome, err := os.UserHomeDir()
@@ -356,19 +351,7 @@ func codexLoginIdentity() (email, name string) {
 		}
 		home = filepath.Join(userHome, ".codex")
 	}
-	data, err := os.ReadFile(filepath.Join(home, "auth.json")) //nolint:gosec // Codex's own auth file
-	if err != nil {
-		return "", ""
-	}
-	var auth struct {
-		Tokens struct {
-			IDToken string `json:"id_token"`
-		} `json:"tokens"`
-	}
-	if json.Unmarshal(data, &auth) != nil {
-		return "", ""
-	}
-	return authprobe.TokenIdentity(auth.Tokens.IDToken)
+	return authprobe.CodexAuthFileIdentity(ctx, filepath.Join(home, "auth.json"))
 }
 
 // codexLoginMethod reads how `codex login status` says it is signed in. Only

@@ -214,32 +214,21 @@ func normalizeEnabledModels(ids []string) ([]string, bool) {
 // ErrInvalidHarnessDefault marks invalid preference input at the API boundary.
 var ErrInvalidHarnessDefault = errors.New("invalid harness default")
 
-// HarnessDefault supplies the preference for a new session. An unavailable
-// preference store falls back to the harness's own behavior, as interface does.
-func (s *Service) HarnessDefault(ctx context.Context, agent domain.AgentHarness) domain.HarnessDefault {
-	snapshot, err := s.store.GetAppSettings(ctx)
-	if err != nil {
-		return domain.HarnessDefault{}
-	}
-	return snapshot.HarnessDefaults[string(agent)]
-}
+// ErrUnknownHarness marks a preference for a harness AO does not know.
+var ErrUnknownHarness = errors.New("unknown harness")
 
-// SetHarnessDefault changes only future sessions and only the selected harness.
+// SetHarnessDefault replaces the selected harness's picker preference. The
+// store writes only that harness's entry, so concurrent saves for other
+// harnesses are kept.
 func (s *Service) SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault) (Snapshot, error) {
-	value.Model, value.Effort = strings.TrimSpace(value.Model), strings.TrimSpace(value.Effort)
-	if !slices.Contains(domain.AllHarnesses, agent) || len(value.Model) > 256 || len(value.Effort) > 32 ||
-		strings.ContainsFunc(value.Model+value.Effort, unicode.IsControl) || (value.Model == "" && value.Effort != "") {
-		return Snapshot{}, ErrInvalidHarnessDefault
+	if !slices.Contains(domain.AllHarnesses, agent) {
+		return Snapshot{}, fmt.Errorf("%w %q", ErrUnknownHarness, agent)
 	}
 	enabled, ok := normalizeEnabledModels(value.EnabledModels)
 	if !ok {
 		return Snapshot{}, fmt.Errorf("%w: enabled models must be at most %d model ids of up to 256 characters", ErrInvalidHarnessDefault, maxEnabledModels)
 	}
 	value.EnabledModels = enabled
-	// Only these adapters currently accept AO's effort setting.
-	if value.Effort != "" && agent != domain.HarnessCodex && agent != domain.HarnessClaudeCode {
-		return Snapshot{}, fmt.Errorf("%w: this harness does not accept reasoning effort", ErrInvalidHarnessDefault)
-	}
 	if err := s.store.SetHarnessDefault(ctx, agent, value, s.now()); err != nil {
 		return Snapshot{}, err
 	}

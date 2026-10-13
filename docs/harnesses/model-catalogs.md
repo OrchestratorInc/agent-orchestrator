@@ -6,7 +6,10 @@ can be browsed before login. A **Configured** marker means AO observed credentia
 configuration; it does not mean the provider accepted the credential. Missing
 markers mean unknown configuration, and never hide providers.
 
-The daemon combines native model output with these local sources:
+For Settings browsing, the daemon combines native model output with these
+local sources. New Task, role settings and other model selectors use a separate
+catalog with native output only, so they offer just the providers the harness
+can run now:
 
 | Harness | Additional catalog source | Configured evidence |
 | --- | --- | --- |

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -35,11 +36,10 @@ func museLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	status, ok, err := museStoredAuthStatus(ctx)
-	if err == nil && ok && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+	if err == nil && ok && status.HasCredential() {
 		return status, true, nil
 	}
-	if strings.TrimSpace(os.Getenv(museAPIKeyEnvVar)) != "" {
-		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(museAPIKeyEnvVar).WithMethod(domain.AgentAccountMethodAPIKey))
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, museAPIKeyEnvVar) != "" {
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	return status, ok, err
@@ -52,7 +52,7 @@ func museStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	}
 	status, identity, ok, err := museAuthJSON(path)
 	if status == ports.AgentAuthStatusAuthorized {
-		ports.RecordAuthEvidence(ctx, identity.Merge(domain.FileSource(path)))
+		ports.RecordAuthEvidence(ctx, identity.Merge(authprobe.FileSource(path)))
 	}
 	return status, ok, err
 }

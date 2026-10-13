@@ -19,42 +19,16 @@ var CmdRunner = func(ctx context.Context, name string, arg ...string) ([]byte, e
 	return aoprocess.CommandContext(ctx, name, arg...).CombinedOutput()
 }
 
-// CLIStatus runs bounded local CLI probes and classifies their output.
-// Callers must pass adapter-specific commands; catalog refresh should not run
-// a generic sequence of auth-like commands against every installed binary.
-func CLIStatus(ctx context.Context, binary string, commands [][]string) (ports.AgentAuthStatus, error) {
-	return CLIStatusWithTimeout(ctx, binary, commands, 3*time.Second)
-}
-
 // Classifier reads one probe's raw output. The bool reports whether it
 // recognized the shape at all; false defers to the shared prose classifier.
 type Classifier func(out []byte) (ports.AgentAuthStatus, bool)
 
-// CLIStatusWithClassifier is CLIStatus for a CLI whose status output the shared
-// prose classifier cannot read — structured output, or prose wrapped around it.
-// The adapter's classifier is consulted first and the shared one remains the
-// fallback, so an unrecognized shape still gets the ordinary treatment.
-func CLIStatusWithClassifier(ctx context.Context, binary string, commands [][]string, classify Classifier) (ports.AgentAuthStatus, error) {
-	return cliStatus(ctx, binary, commands, 3*time.Second, classify)
-}
-
-// CLIStatusWithTimeout is CLIStatus with an adapter-specific per-command
-// timeout for CLIs whose native status command has documented startup work.
-func CLIStatusWithTimeout(ctx context.Context, binary string, commands [][]string, timeout time.Duration) (ports.AgentAuthStatus, error) {
-	return cliStatus(ctx, binary, commands, timeout, nil)
-}
-
-func cliStatus(ctx context.Context, binary string, commands [][]string, timeout time.Duration, classify Classifier) (ports.AgentAuthStatus, error) {
-	status, steps, err := CLIStatusWithDiagnostics(ctx, binary, commands, timeout, classify)
-	for _, step := range steps {
-		ports.RecordAuthDiagnostic(ctx, step)
-	}
-	return status, err
-}
-
-// CLIStatusWithDiagnostics retains each bounded probe's outcome without
-// changing the legacy verdict or exposing its stdout/stderr. Commands must be
-// adapter-owned status commands with no credentials in their arguments.
+// CLIStatusWithDiagnostics runs bounded local CLI probes in order and returns
+// the first definite verdict with each probe's outcome, never its stdout or
+// stderr. Callers pass adapter-owned status commands with no credentials in
+// their arguments; catalog refresh must not run a generic sequence of
+// auth-like commands against every installed binary. A classifier, when
+// given, reads each output before the shared prose classifier.
 func CLIStatusWithDiagnostics(ctx context.Context, binary string, commands [][]string, timeout time.Duration, classify Classifier) (ports.AgentAuthStatus, []domain.AgentAuthDiagnostic, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, nil, err
@@ -66,7 +40,7 @@ func CLIStatusWithDiagnostics(ctx context.Context, binary string, commands [][]s
 	for _, args := range commands {
 		status, step, err := commandStatus(ctx, binary, args, timeout, classify)
 		steps = append(steps, step)
-		if err == nil && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+		if err == nil && status.HasCredential() {
 			ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, args...))
 		}
 		if err != nil || status != ports.AgentAuthStatusUnknown {
@@ -91,10 +65,7 @@ func commandStatus(ctx context.Context, binary string, args []string, timeout ti
 			status = StatusFromText(string(out))
 		}
 	}
-	step := CommandDiagnostic(filepath.Base(binary)+" "+strings.Join(args, " "), status, err, probeCtx.Err(), started)
-	if source := domain.FileSource(binary).Sanitized(); source != nil {
-		step.Source = source.Source
-	}
+	step := CommandStep(binary, args, status, err, probeCtx.Err(), started)
 	if probeCtx.Err() != nil {
 		if probeCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
 			return status, step, nil
@@ -102,6 +73,16 @@ func commandStatus(ctx context.Context, binary string, args []string, timeout ti
 		return status, step, probeCtx.Err()
 	}
 	return status, step, nil
+}
+
+// CommandStep is the CommandDiagnostic for binary run with args: it is
+// labelled by the command's base name and sourced from the binary's path.
+func CommandStep(binary string, args []string, status ports.AgentAuthStatus, err, contextErr error, started time.Time) domain.AgentAuthDiagnostic {
+	step := CommandDiagnostic(strings.Join(append([]string{filepath.Base(binary)}, args...), " "), status, err, contextErr, started)
+	if source := FileSource(binary).Sanitized(); source != nil {
+		step.Source = source.Source
+	}
+	return step
 }
 
 // CommandDiagnostic classifies execution facts; it never copies err.Error().
@@ -114,7 +95,7 @@ func CommandDiagnostic(method string, status ports.AgentAuthStatus, err, context
 		code = "probe_cancelled"
 	case status == ports.AgentAuthStatusUnauthorized:
 		code = "cli_signed_out"
-	case status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured:
+	case status.HasCredential():
 		code = "cli_signed_in"
 	case err != nil:
 		code = "command_failed"

@@ -6,12 +6,13 @@ import { HarnessUpdateNotice } from "./HarnessUpdateNotice";
 import { apiClient } from "../lib/api-client";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { appI18n } from "../i18n";
-import { useHarnessActionRequest, updateAdvisoryQueryKey, installJobsQueryKey, installerQueryKey } from "../hooks/useHarnessUpdates";
+import { updateAdvisoryQueryKey, installJobsQueryKey, installerQueryKey } from "../hooks/useHarnessUpdates";
+import { TooltipProvider } from "./ui/tooltip";
 import { useUiStore } from "../stores/ui-store";
 import type { AgentReadiness } from "../hooks/useAgentReadinessQuery";
 
 function mountNotice(enabled = true, client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })) {
-	const view = render(<QueryClientProvider client={client}><HarnessUpdateNotice enabled={enabled} /></QueryClientProvider>);
+	const view = render(<QueryClientProvider client={client}><TooltipProvider><HarnessUpdateNotice enabled={enabled} /></TooltipProvider></QueryClientProvider>);
 	return { client, ...view };
 }
 
@@ -55,7 +56,7 @@ describe("startup harness update notice", () => {
 	beforeEach(async () => {
 		await appI18n.changeLanguage("en");
 		localStorage.clear();
-		useHarnessActionRequest.getState().setRequest(null);
+		useUiStore.setState({ settingsModal: null });
 		const readiness = { agents: [agentReadiness("claude-code", "Claude Code")] };
 		vi.spyOn(apiClient, "GET").mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
@@ -71,7 +72,7 @@ describe("startup harness update notice", () => {
 
 	it("finds updates without mounting Harness settings and starts no installation automatically", async () => {
 		mountNotice();
-		const notice = await screen.findByRole("region", { name: "Harness updates available" });
+		const notice = await screen.findByRole("region", { name: "Agent updates available" });
 		expect(within(notice).getByText("v2.1.291")).toBeInTheDocument();
 		expect(within(notice).getByText("v2.1.292")).toBeInTheDocument();
 		expect(within(notice).getByRole("button", { name: "Update" })).toBeEnabled();
@@ -81,7 +82,7 @@ describe("startup harness update notice", () => {
 	it("updates in place from the notice without opening Settings", async () => {
 		const before = useUiStore.getState().settingsModal;
 		mountNotice();
-		const notice = await screen.findByRole("region", { name: "Harness updates available" });
+		const notice = await screen.findByRole("region", { name: "Agent updates available" });
 		await userEvent.click(within(notice).getByRole("button", { name: "Update" }));
 		// The click re-checks the release, then installs exactly that one here.
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
@@ -89,7 +90,6 @@ describe("startup harness update notice", () => {
 			body: { method: "official-installer", operation: "update", expectedVersion: "2.1.292" },
 		}));
 		expect(apiClient.GET).toHaveBeenCalledWith("/api/v1/agents/{agent}/update-advisory", expect.objectContaining({ params: expect.objectContaining({ query: { refresh: true } }) }));
-		expect(useHarnessActionRequest.getState().request).toBeNull();
 		expect(useUiStore.getState().settingsModal).toBe(before);
 	});
 
@@ -110,7 +110,7 @@ describe("startup harness update notice", () => {
 		await screen.findByRole("button", { name: "Update all" });
 		// Collapsed, several updates read as one summary card.
 		expect(screen.getAllByRole("article")).toHaveLength(1);
-		expect(screen.getByRole("article", { name: "Harness updates available" })).toBeInTheDocument();
+		expect(screen.getByRole("article", { name: "Agent updates available" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Show all (3)" }));
 		await userEvent.dblClick(screen.getByRole("button", { name: "Update all" }));
 		await waitFor(() => expect(started).toEqual(["cursor"]));
@@ -120,7 +120,6 @@ describe("startup harness update notice", () => {
 		await waitFor(() => expect(started).toEqual(["cursor", "codex", "claude-code"]));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Cursor update refused");
 		expect(useUiStore.getState().settingsModal).toBe(before);
-		expect(useHarnessActionRequest.getState().request).toBeNull();
 	});
 
 	it("excludes busy, login-required and unsupported harnesses from notification Update all", async () => {
@@ -149,10 +148,31 @@ describe("startup harness update notice", () => {
 			: { data: { agents: [agentReadiness("claude-code", "Claude Code")] } } as never);
 		vi.mocked(apiClient.GET).mockImplementation(get);
 		mountNotice();
-		const notice = await screen.findByRole("region", { name: "Harness updates available" });
+		const notice = await screen.findByRole("region", { name: "Agent updates available" });
 		await userEvent.click(within(notice).getByRole("button", { name: "Update" }));
 		expect(await within(notice).findByRole("alert")).toHaveTextContent("End claude-code session s-1");
 		expect(within(notice).getByRole("button", { name: "Retry update" })).toBeEnabled();
+	});
+
+	it("stays out of the way while Settings is open", async () => {
+		mountNotice();
+		await screen.findByRole("region", { name: "Agent updates available" });
+		act(() => useUiStore.getState().openGlobalSettings("general"));
+		expect(screen.queryByRole("region")).toBeNull();
+		act(() => useUiStore.getState().closeSettings());
+		expect(await screen.findByRole("region", { name: "Agent updates available" })).toBeInTheDocument();
+	});
+
+	it("refreshes a harness whose update finished before the start request returned", async () => {
+		const readiness = { agents: [agentReadiness("claude-code", "Claude Code")] };
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => path === "/api/v1/agents/{agent}/install"
+			? { data: { target: "claude-code", status: "succeeded" } } as never
+			: { data: readiness } as never);
+		mountNotice();
+		const notice = await screen.findByRole("region", { name: "Agent updates available" });
+		vi.mocked(apiClient.POST).mockClear();
+		await userEvent.click(within(notice).getByRole("button", { name: "Update" }));
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", { body: { agentIds: ["claude-code"], purpose: "display" } }));
 	});
 
 	it("waits for the daemon before starting background requests", () => {
@@ -191,13 +211,12 @@ describe("startup harness update notice", () => {
 		expect(screen.queryByRole("button", { name: "Login" })).toBeNull();
 		await userEvent.click(screen.getByRole("button", { name: "Update" }));
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything()));
-		expect(useHarnessActionRequest.getState().request).toBeNull();
 	});
 
 	it("ranks by usage then recency, and dismissing one release keeps the others", async () => {
 		mockStack();
 		mountNotice();
-		expect(await screen.findByRole("article", { name: "Harness updates available" })).toBeInTheDocument();
+		expect(await screen.findByRole("article", { name: "Agent updates available" })).toBeInTheDocument();
 		expect(screen.getAllByRole("article")).toHaveLength(1);
 		await userEvent.click(screen.getByRole("button", { name: "Show all (3)" }));
 		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Cursor", "Codex", "Claude Code"]);
@@ -213,7 +232,7 @@ describe("startup harness update notice", () => {
 	it("expands and collapses the stack, with independent dismissal of expanded cards", async () => {
 		mockStack();
 		mountNotice();
-		const summary = await screen.findByRole("article", { name: "Harness updates available" });
+		const summary = await screen.findByRole("article", { name: "Agent updates available" });
 		expect(screen.queryByRole("article", { name: "Cursor" })).toBeNull();
 		await userEvent.click(within(summary).getByRole("button", { name: "Show all (3)" }));
 		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Cursor", "Codex", "Claude Code"]);
@@ -264,23 +283,24 @@ describe("startup harness update notice", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Cursor update" }));
 		view.unmount();
 		mountNotice();
-		expect(await screen.findByRole("article", { name: "Harness updates available" })).toBeInTheDocument();
+		expect(await screen.findByRole("article", { name: "Agent updates available" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Show all (2)" }));
 		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Codex", "Claude Code"]);
 	});
 
 	it("offers login first when both login and update are needed", async () => {
 		const { client } = mountNotice();
-		await screen.findByRole("region", { name: "Harness updates available" });
+		await screen.findByRole("region", { name: "Agent updates available" });
 		act(() => client.setQueryData(["agent-readiness"], { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })] }));
-		await userEvent.click(await screen.findByRole("button", { name: "Login" }));
-		expect(useHarnessActionRequest.getState().request?.action).toBe("login");
 		expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
+		await userEvent.click(await screen.findByRole("button", { name: "Login" }));
+		// The Harness page starts the login once it opens.
+		expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "claude-code", startLogin: true });
 	});
 
 	it("dismisses the shown release across remounts but shows a newer target", async () => {
 		const view = mountNotice();
-		await screen.findByRole("region", { name: "Harness updates available" });
+		await screen.findByRole("region", { name: "Agent updates available" });
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Claude Code update" }));
 		expect(screen.queryByRole("region")).toBeNull();
 		view.unmount();

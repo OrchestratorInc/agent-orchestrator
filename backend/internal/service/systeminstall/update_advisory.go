@@ -54,13 +54,13 @@ const (
 // UpdateAdvisory is the daemon's non-mutating comparison for one harness.
 type UpdateAdvisory struct {
 	AgentID           string              `json:"agentId"`
-	Status            UpdateStatus        `json:"status"`
+	Status            UpdateStatus        `json:"status" enum:"unknown,current,behind_latest,ahead_of_latest"`
 	BinaryPath        string              `json:"binaryPath,omitempty"`
 	CurrentVersion    string              `json:"currentVersion,omitempty"`
 	LatestVersion     string              `json:"latestVersion,omitempty"`
 	Source            string              `json:"source,omitempty"`
 	MaintenanceMethod string              `json:"maintenanceMethod,omitempty"`
-	Reason            UpdateUnknownReason `json:"reason,omitempty"`
+	Reason            UpdateUnknownReason `json:"reason,omitempty" enum:"ownership_unconfirmed,unsupported_source,version_unparseable,channel_unconfirmed,lookup_failed,disabled,build_unordered"`
 	CheckedAt         time.Time           `json:"checkedAt"`
 
 	// probeFailed marks an unknown result whose version probe failed or
@@ -99,7 +99,7 @@ type updateAdvisoryCall struct {
 // once on demand, as is one whose release lookup or version probe failed over
 // lookupFailedRetryAfter ago. A refresh re-checks while other readers keep
 // getting the previous result until the new one replaces it.
-func (s *Service) UpdateAdvisory(ctx context.Context, target Target, refresh ...bool) (UpdateAdvisory, error) {
+func (s *Service) UpdateAdvisory(ctx context.Context, target Target, refresh bool) (UpdateAdvisory, error) {
 	if !IsAgentTarget(target) {
 		return UpdateAdvisory{}, fmt.Errorf("systeminstall: unknown harness %q", target)
 	}
@@ -111,13 +111,12 @@ func (s *Service) UpdateAdvisory(ctx context.Context, target Target, refresh ...
 		return UpdateAdvisory{AgentID: string(target), Status: UpdateStatusUnknown, Reason: UpdateReasonDisabled, CheckedAt: now, BinaryPath: s.advisoryBinaryPath(ctx, target)}, nil
 	}
 	s.mu.Lock()
-	forced := len(refresh) > 0 && refresh[0]
-	if cached, found := s.updateAdvisories[target]; found && !forced && !lookupRetryDue(cached, now) {
+	if cached, found := s.updateAdvisories[target]; found && !refresh && !lookupRetryDue(cached, now) {
 		s.mu.Unlock()
 		return cached, nil
 	}
 	call := s.updateAdvisoryCalls[target]
-	if forced {
+	if refresh {
 		// An explicit click needs evidence gathered after the click. An older
 		// in-flight read may finish for its callers, but may not cache over it.
 		call = nil
@@ -249,9 +248,7 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 	var latest string
 	if source.Package != "" {
 		advisory.Source = source.Method
-		var result managedVersionResult
-		result, err = s.managedVersion(ctx, source)
-		latest = result.Latest
+		latest, err = s.managedVersion(ctx, source)
 	} else {
 		// No package manager provably owns the binary, so compare against the
 		// vendor's own release channel, unless the binary sits in another

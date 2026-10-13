@@ -8,26 +8,25 @@ func TestFindUpdateVersionAcceptsSupportedForms(t *testing.T) {
 		input       string
 		wantDisplay string
 		wantCore    [4]uint64
-		wantParts   int
 		wantPre     []string
 		wantBuild   string
 	}{
-		{name: "two components", input: "tool v1.2\n", wantDisplay: "1.2", wantCore: [4]uint64{1, 2}, wantParts: 2},
-		{name: "three components", input: "tool 1.2.3", wantDisplay: "1.2.3", wantCore: [4]uint64{1, 2, 3}, wantParts: 3},
-		{name: "copilot sentence", input: "GitHub Copilot CLI 1.0.91.\nRun 'copilot update' to check for updates.", wantDisplay: "1.0.91", wantCore: [4]uint64{1, 0, 91}, wantParts: 3},
-		{name: "sentence at end", input: "CLI 1.2.3.", wantDisplay: "1.2.3", wantCore: [4]uint64{1, 2, 3}, wantParts: 3},
-		{name: "four components", input: "release=1.2.3.4", wantDisplay: "1.2.3.4", wantCore: [4]uint64{1, 2, 3, 4}, wantParts: 4},
-		{name: "prerelease and build", input: "cli 1.2.3-beta.2+build.7", wantDisplay: "1.2.3-beta.2+build.7", wantCore: [4]uint64{1, 2, 3}, wantParts: 3, wantPre: []string{"beta", "2"}, wantBuild: "build.7"},
+		{name: "two components", input: "tool v1.2\n", wantDisplay: "1.2", wantCore: [4]uint64{1, 2}},
+		{name: "three components", input: "tool 1.2.3", wantDisplay: "1.2.3", wantCore: [4]uint64{1, 2, 3}},
+		{name: "copilot sentence", input: "GitHub Copilot CLI 1.0.91.\nRun 'copilot update' to check for updates.", wantDisplay: "1.0.91", wantCore: [4]uint64{1, 0, 91}},
+		{name: "sentence at end", input: "CLI 1.2.3.", wantDisplay: "1.2.3", wantCore: [4]uint64{1, 2, 3}},
+		{name: "four components", input: "release=1.2.3.4", wantDisplay: "1.2.3.4", wantCore: [4]uint64{1, 2, 3, 4}},
+		{name: "prerelease and build", input: "cli 1.2.3-beta.2+build.7", wantDisplay: "1.2.3-beta.2+build.7", wantCore: [4]uint64{1, 2, 3}, wantPre: []string{"beta", "2"}, wantBuild: "build.7"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := findUpdateVersion(tt.input)
+			got, ok := versionSemver.find(tt.input)
 			if !ok {
-				t.Fatalf("findUpdateVersion(%q) did not find a version", tt.input)
+				t.Fatalf("versionSemver.find(%q) did not find a version", tt.input)
 			}
-			if got.display != tt.wantDisplay || got.core != tt.wantCore || got.parts != tt.wantParts || got.build != tt.wantBuild {
-				t.Fatalf("version = %+v, want display=%q core=%v parts=%d build=%q", got, tt.wantDisplay, tt.wantCore, tt.wantParts, tt.wantBuild)
+			if got.display != tt.wantDisplay || got.core != tt.wantCore || got.build != tt.wantBuild {
+				t.Fatalf("version = %+v, want display=%q core=%v build=%q", got, tt.wantDisplay, tt.wantCore, tt.wantBuild)
 			}
 			if len(got.prerelease) != len(tt.wantPre) {
 				t.Fatalf("prerelease = %v, want %v", got.prerelease, tt.wantPre)
@@ -49,8 +48,8 @@ func TestFindUpdateVersionAcceptsSupportedForms(t *testing.T) {
 
 func TestFindUpdateVersionDoesNotSliceMalformedOrAmbiguousVersions(t *testing.T) {
 	for _, input := range []string{"CLI 1.2.3.4.5", "CLI 1.2.3..", "CLI 1.2.3.foo", "CLI 1.2-beta..2", "CLI 1.2.3.\nRuntime 4.5.6."} {
-		if got, ok := findUpdateVersion(input); ok {
-			t.Errorf("findUpdateVersion(%q) = %q, want unknown", input, got.display)
+		if got, ok := versionSemver.find(input); ok {
+			t.Errorf("versionSemver.find(%q) = %q, want unknown", input, got.display)
 		}
 	}
 }
@@ -112,7 +111,7 @@ func TestBuildSuffixSchemeReadsVendorBuildsAsBuilds(t *testing.T) {
 			}
 		})
 	}
-	if _, ok := findUpdateVersion("Muse Code 1.4.3 (1.4.3-R5018.1)"); ok {
+	if _, ok := versionSemver.find("Muse Code 1.4.3 (1.4.3-R5018.1)"); ok {
 		t.Fatal("semver scheme accepted a release and a different prerelease as one version")
 	}
 	if _, ok := versionBuildSuffix.find("tool 1.4.3-R1 (1.4.3-R2)"); ok {
@@ -151,7 +150,7 @@ func TestBuildSuffixSchemeOrdersByCoreOnly(t *testing.T) {
 
 func TestBuildSuffixSchemeAcceptsHashedRegistryRelease(t *testing.T) {
 	result, ok := managedResult("0.0.1791388870-g4d32fb", versionSchemeFor(TargetAmp))
-	if !ok || result.Latest != "0.0.1791388870-g4d32fb" {
+	if !ok || result != "0.0.1791388870-g4d32fb" {
 		t.Fatalf("result = %+v, %t", result, ok)
 	}
 }

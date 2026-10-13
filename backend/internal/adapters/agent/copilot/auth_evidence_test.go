@@ -44,9 +44,27 @@ func TestCopilotAuthRecordsItsEvidence(t *testing.T) {
 		if status, ok, err := copilotLocalAuthStatus(ctx); err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
 			t.Fatalf("status = (%q, %v, %v)", status, ok, err)
 		}
-		want := domain.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
+		want := authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
 		if got := evidence.Identity(); got != want {
 			t.Fatalf("evidence = %+v, want %+v", got, want)
 		}
 	})
+}
+
+func TestGitHubCLIUserReadsTheActiveHostLogin(t *testing.T) {
+	for name, hosts := range map[string]string{
+		"four-space indent": "github.com:\n    git_protocol: https\n    users:\n        octocat:\n    user: octocat\n",
+		"two-space indent":  "github.com:\n  users:\n    other:\n  user: octocat\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("GH_CONFIG_DIR", dir)
+			if err := os.WriteFile(filepath.Join(dir, "hosts.yml"), []byte(hosts), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := gitHubCLIUser(context.Background()); got != "octocat" {
+				t.Fatalf("gitHubCLIUser = %q, want octocat", got)
+			}
+		})
+	}
 }

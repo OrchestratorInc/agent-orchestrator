@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ func TestHarnessDefaultsPersistIndependentlyAndReset(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := s.SetHarnessDefault(ctx, agent, domain.HarnessDefault{Model: string(agent) + "-model", Effort: "high"}, time.Now()); err != nil {
+			if err := s.SetHarnessDefault(ctx, agent, domain.HarnessDefault{EnabledModels: []string{string(agent) + "-model"}}, time.Now()); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -31,17 +32,17 @@ func TestHarnessDefaultsPersistIndependentlyAndReset(t *testing.T) {
 	if err != nil || len(saved.HarnessDefaults) != 2 {
 		t.Fatalf("saved = %+v, %v", saved, err)
 	}
-	if saved.HarnessDefaults["codex"].Model != "codex-model" || saved.HarnessDefaults["claude-code"].Effort != "high" {
+	if !slices.Equal(saved.HarnessDefaults["codex"].EnabledModels, []string{"codex-model"}) || !slices.Equal(saved.HarnessDefaults["claude-code"].EnabledModels, []string{"claude-code-model"}) {
 		t.Fatalf("defaults lost values: %+v", saved.HarnessDefaults)
 	}
 	if err := s.SetHarnessDefault(ctx, domain.HarnessCodex, domain.HarnessDefault{}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	reset, err := s.GetAppSettings(ctx)
-	if err != nil || len(reset.HarnessDefaults) != 1 || reset.HarnessDefaults["claude-code"].Model == "" {
+	if err != nil || len(reset.HarnessDefaults) != 1 || reset.HarnessDefaults["claude-code"].IsZero() {
 		t.Fatalf("reset changed another harness: %+v, %v", reset, err)
 	}
 	if reset.DefaultSessionMode != initial.DefaultSessionMode || reset.CloudOffering != initial.CloudOffering {
-		t.Fatal("model defaults changed unrelated settings")
+		t.Fatal("harness defaults changed unrelated settings")
 	}
 }

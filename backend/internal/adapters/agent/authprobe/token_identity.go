@@ -1,10 +1,10 @@
 package authprobe
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -45,23 +45,50 @@ func TokenIdentity(token string) (email, name string) {
 	return strings.TrimSpace(claims.Email), name
 }
 
-// JSONProviderNames returns the top-level keys of a JSON credential file that
-// is keyed by provider (OpenCode, Pi and Kilo's auth.json), sorted and joined.
-// Only key names are read back, never the stored credentials.
-func JSONProviderNames(path string) string {
-	data, err := os.ReadFile(path) //nolint:gosec // harness credential file chosen by the adapter
-	if err != nil {
-		return ""
+// CodexAuthFileIdentity reads who a Codex ChatGPT login belongs to from the
+// id_token in a Codex auth.json. Only display claims are read.
+func CodexAuthFileIdentity(ctx context.Context, path string) (email, name string) {
+	if ctx.Err() != nil {
+		return "", ""
 	}
+	data, err := os.ReadFile(path) //nolint:gosec // Codex's own auth file
+	if err != nil {
+		return "", ""
+	}
+	var auth struct {
+		Tokens struct {
+			IDToken string `json:"id_token"`
+		} `json:"tokens"`
+	}
+	if json.Unmarshal(data, &auth) != nil {
+		return "", ""
+	}
+	return TokenIdentity(auth.Tokens.IDToken)
+}
+
+// providerEntries decodes a credential file keyed by provider (OpenCode, Pi
+// and Kilo's auth.json). MCP server entries ("mcp:…") are not providers.
+func providerEntries(data []byte) map[string]json.RawMessage {
 	var entries map[string]json.RawMessage
 	if json.Unmarshal(data, &entries) != nil {
-		return ""
+		return nil
 	}
+	for name := range entries {
+		if trimmed := strings.TrimSpace(name); trimmed == "" || strings.HasPrefix(strings.ToLower(trimmed), "mcp:") {
+			delete(entries, name)
+		}
+	}
+	return entries
+}
+
+// JSONProviderNames returns the provider keys of a provider-keyed credential
+// file's contents, sorted and joined. Only key names are read back, never the
+// stored credentials.
+func JSONProviderNames(data []byte) string {
+	entries := providerEntries(data)
 	names := make([]string, 0, len(entries))
 	for name := range entries {
-		if name = strings.TrimSpace(name); name != "" {
-			names = append(names, name)
-		}
+		names = append(names, strings.TrimSpace(name))
 	}
 	sort.Strings(names)
 	return strings.Join(names, ", ")
@@ -71,19 +98,15 @@ func JSONProviderNames(path string) string {
 // each entry's "type": "api" entries are API keys, "oauth" or "wellknown"
 // entries are account logins. An account login anywhere wins; "" when no
 // entry says.
-func JSONProviderMethod(path string) domain.AgentAccountMethod {
-	data, err := os.ReadFile(path) //nolint:gosec // harness credential file chosen by the adapter
-	if err != nil {
-		return ""
-	}
-	var entries map[string]struct {
-		Type string `json:"type"`
-	}
-	if json.Unmarshal(data, &entries) != nil {
-		return ""
-	}
+func JSONProviderMethod(data []byte) domain.AgentAccountMethod {
 	method := domain.AgentAccountMethod("")
-	for _, entry := range entries {
+	for _, raw := range providerEntries(data) {
+		var entry struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &entry) != nil {
+			continue
+		}
 		switch strings.ToLower(strings.TrimSpace(entry.Type)) {
 		case "oauth", "wellknown":
 			return domain.AgentAccountMethodAccount
@@ -92,70 +115,4 @@ func JSONProviderMethod(path string) domain.AgentAccountMethod {
 		}
 	}
 	return method
-}
-
-// GitHubCLIUser returns the github.com login the GitHub CLI is signed in as,
-// read from its hosts.yml (GH_CONFIG_DIR, then XDG_CONFIG_HOME, then
-// ~/.config/gh). Tokens in the file are never read.
-func GitHubCLIUser() string {
-	dir := strings.TrimSpace(os.Getenv("GH_CONFIG_DIR"))
-	if dir == "" {
-		if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
-			dir = filepath.Join(xdg, "gh")
-		} else if home, err := os.UserHomeDir(); err == nil && home != "" {
-			dir = filepath.Join(home, ".config", "gh")
-		}
-	}
-	if dir == "" {
-		return ""
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "hosts.yml")) //nolint:gosec // GitHub CLI's own config
-	if err != nil {
-		return ""
-	}
-	inGitHub := false
-	childIndent := -1
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		indent := len(line) - len(strings.TrimLeft(line, " \t"))
-		if indent == 0 {
-			inGitHub = strings.TrimSuffix(trimmed, ":") == "github.com"
-			childIndent = -1
-			continue
-		}
-		if !inGitHub {
-			continue
-		}
-		// The active account is the host's own "user:" entry, at the indent of
-		// the host's first child; logins listed under "users:" sit deeper.
-		if childIndent < 0 {
-			childIndent = indent
-		}
-		if indent == childIndent && strings.HasPrefix(trimmed, "user:") {
-			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "user:")), `"'`)
-		}
-	}
-	return ""
-}
-
-// SignedInEmail returns the email a status command prints after "signed in
-// as" (Amp's usage output), or "".
-func SignedInEmail(output string) string {
-	lower := strings.ToLower(output)
-	index := strings.Index(lower, "signed in as")
-	if index < 0 {
-		return ""
-	}
-	fields := strings.Fields(output[index+len("signed in as"):])
-	if len(fields) == 0 {
-		return ""
-	}
-	candidate := strings.Trim(fields[0], `"'()<>,.;:`)
-	if !strings.Contains(candidate, "@") {
-		return ""
-	}
-	return candidate
 }

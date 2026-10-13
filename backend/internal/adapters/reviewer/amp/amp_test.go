@@ -63,9 +63,9 @@ func TestReviewCommandPreflightShapeAndCancellation(t *testing.T) {
 func TestReviewCommandForwardsSavedAmpMode(t *testing.T) {
 	r := &Reviewer{resolveBinary: func(context.Context) (string, error) { return "/opt/amp", nil }}
 	root := t.TempDir()
-	// A saved default reaches the reviewer as the model field, after
-	// domain.HarnessDefault.Apply, exactly as it does for Amp workers.
-	saved := domain.HarnessDefault{Model: "high"}.Apply(domain.AgentConfig{})
+	// A configured model reaches the reviewer as the model field, exactly as
+	// it does for Amp workers.
+	saved := domain.AgentConfig{Model: "high"}
 	spec, err := r.ReviewCommand(context.Background(), ports.ReviewInvocation{TaskPromptRoot: root, Prompt: "Read task.", Config: saved})
 	if err != nil {
 		t.Fatal(err)

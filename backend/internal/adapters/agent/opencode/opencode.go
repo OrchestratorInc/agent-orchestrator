@@ -38,7 +38,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 
 	_ "modernc.org/sqlite" // register sqlite driver for opencode session metadata probes
 )
@@ -197,7 +196,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, err
 	}
 	status, ok, storedErr := opencodeStoredAuthStatus(ctx)
-	if storedErr == nil && ok && usableAuthStatus(status) {
+	if storedErr == nil && ok && status.HasCredential() {
 		return status, nil
 	}
 	if storedErr == nil {
@@ -226,15 +225,14 @@ func opencodeAuthListStatus(ctx context.Context, binary string) (status ports.Ag
 	defer cancel()
 
 	started := time.Now()
-	out, err := aoprocess.CommandContext(probeCtx, binary, "auth", "list").CombinedOutput()
+	out, err := authprobe.CmdRunner(probeCtx, binary, "auth", "list")
 	noCredentials := false
 	defer func() {
-		step := authprobe.CommandDiagnostic("opencode auth list", status, err, probeCtx.Err(), started)
+		step := authprobe.CommandStep(binary, []string{"auth", "list"}, status, err, probeCtx.Err(), started)
 		if noCredentials && probeCtx.Err() == nil {
-			step = domain.NewAgentAuthDiagnostic("opencode auth list", "credential_missing")
-		}
-		if source := domain.FileSource(binary).Sanitized(); source != nil {
-			step.Source = source.Source
+			source := step.Source
+			step = domain.NewAgentAuthDiagnostic(step.Method, "credential_missing")
+			step.Source = source
 		}
 		ports.RecordAuthDiagnostic(ctx, step)
 	}()
@@ -270,26 +268,8 @@ var opencodeAPIKeyEnvVars = []string{
 	"COHERE_API_KEY",
 }
 
-// opencodeLocalAuthStatus checks opencode's stored credentials, then a key in
-// the environment.
-func opencodeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
-	status, ok, err := opencodeStoredAuthStatus(ctx)
-	if err == nil && ok && usableAuthStatus(status) {
-		return status, true, nil
-	}
-	if envStatus, envOK := opencodeEnvAuthStatus(ctx); envOK {
-		return envStatus, true, nil
-	}
-	return status, ok, err
-}
-
-func usableAuthStatus(status ports.AgentAuthStatus) bool {
-	return status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured
-}
-
 func opencodeEnvAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool) {
-	if name := authprobe.FirstCredentialEnvironment(ctx, opencodeAPIKeyEnvVars); name != "" {
-		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey))
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, opencodeAPIKeyEnvVars...) != "" {
 		return ports.AgentAuthStatusAuthorized, true
 	}
 	return ports.AgentAuthStatusUnknown, false
@@ -305,20 +285,20 @@ func opencodeStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool,
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
 	authPath := filepath.Join(dataDir, "auth.json")
-	jsonStatus, jsonOK, err := opencodeAuthJSONStatus(ctx, authPath)
+	jsonStatus, jsonOK, data, err := opencodeAuthJSONStatus(ctx, authPath)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	if jsonOK && jsonStatus == ports.AgentAuthStatusAuthorized {
-		evidence := domain.FileSource(authPath).WithMethod(authprobe.JSONProviderMethod(authPath))
-		evidence.Provider = authprobe.JSONProviderNames(authPath)
+		evidence := authprobe.FileSource(authPath).WithMethod(authprobe.JSONProviderMethod(data))
+		evidence.Provider = authprobe.JSONProviderNames(data)
 		ports.RecordAuthEvidence(ctx, evidence)
 		return jsonStatus, true, nil
 	}
 	dbPath := filepath.Join(dataDir, "opencode.db")
 	if status, ok, err := opencodeDBAuthStatus(ctx, dbPath); err != nil || ok {
 		if status == ports.AgentAuthStatusAuthorized {
-			ports.RecordAuthEvidence(ctx, domain.FileSource(dbPath).WithMethod(domain.AgentAccountMethodAccount))
+			ports.RecordAuthEvidence(ctx, authprobe.FileSource(dbPath).WithMethod(domain.AgentAccountMethodAccount))
 		}
 		return status, ok, err
 	}
@@ -342,25 +322,27 @@ func opencodeDataDir() (string, bool) {
 	return filepath.Join(home, ".local", "share", "opencode"), true
 }
 
-func opencodeAuthJSONStatus(ctx context.Context, path string) (ports.AgentAuthStatus, bool, error) {
+// opencodeAuthJSONStatus also returns the file's contents, so callers parse
+// it without reading it again.
+func opencodeAuthJSONStatus(ctx context.Context, path string) (ports.AgentAuthStatus, bool, []byte, error) {
 	data, err := authprobe.ReadCredentialFile(ctx, path)
 	if os.IsNotExist(err) {
-		return ports.AgentAuthStatusUnknown, false, nil
+		return ports.AgentAuthStatusUnknown, false, nil, nil
 	}
 	if err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
+		return ports.AgentAuthStatusUnknown, false, nil, err
 	}
 	if strings.TrimSpace(string(data)) == "" {
-		return ports.AgentAuthStatusUnknown, true, nil
+		return ports.AgentAuthStatusUnknown, true, data, nil
 	}
 
 	var entries map[string]json.RawMessage
 	if err := json.Unmarshal(data, &entries); err != nil {
 		authprobe.RecordFileDiagnostic(ctx, path, "credential_file_invalid")
-		return ports.AgentAuthStatusUnknown, false, err
+		return ports.AgentAuthStatusUnknown, false, nil, err
 	}
 	if len(entries) == 0 {
-		return ports.AgentAuthStatusUnknown, true, nil
+		return ports.AgentAuthStatusUnknown, true, data, nil
 	}
 	for key, value := range entries {
 		if strings.TrimSpace(key) == "" {
@@ -368,10 +350,10 @@ func opencodeAuthJSONStatus(ctx context.Context, path string) (ports.AgentAuthSt
 		}
 		trimmed := strings.TrimSpace(string(value))
 		if trimmed != "" && trimmed != "null" && trimmed != "{}" {
-			return ports.AgentAuthStatusAuthorized, true, nil
+			return ports.AgentAuthStatusAuthorized, true, data, nil
 		}
 	}
-	return ports.AgentAuthStatusUnknown, true, nil
+	return ports.AgentAuthStatusUnknown, true, data, nil
 }
 
 func opencodeDBAuthStatus(ctx context.Context, path string) (status ports.AgentAuthStatus, ok bool, err error) {

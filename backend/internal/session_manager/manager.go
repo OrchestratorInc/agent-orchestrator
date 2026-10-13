@@ -997,7 +997,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// Resolve the effective agent config (project base + role override + spawn
 	// override) and validate the model before any durable state is created. A
 	// model the harness cannot honor should not leave a seed row behind.
-	agentConfig := m.harnessDefault(ctx, cfg.Harness).Apply(applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config), cfg.AgentConfig))
+	agentConfig := applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config), cfg.AgentConfig)
 	if err := validateSpawnModel(cfg.Harness, agentConfig.Model); err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %s", ErrUnsupportedModel, err.Error())
 	}
@@ -1535,36 +1535,11 @@ func (m *Manager) resolveTUIAgentConfig(ctx context.Context, cfg ports.SpawnConf
 }
 
 func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig) (ports.AgentConfig, error) {
-	preference := m.harnessDefault(ctx, cfg.Harness)
-	resolved, err := m.resolveAgentConfigWith(ctx, cfg, project, preference)
-	if preference.Model != "" && ctx.Err() == nil && (errors.Is(err, ErrUnsupportedModel) || errors.Is(err, ports.ErrModelCapabilitiesUnavailable)) {
-		// A saved default can leave the provider catalog after it was chosen
-		// (a rename or entitlement change), and validating it needs a catalog
-		// that may be stale or unreachable (offline, signed out). Fall back to
-		// the harness's own default instead of failing every new session; a
-		// project or task model still fails the same way without it.
-		if fallback, fallbackErr := m.resolveAgentConfigWith(ctx, cfg, project, domain.HarnessDefault{}); fallbackErr == nil {
-			m.logger.Warn("spawn: saved harness default model could not be validated; using the harness default",
-				"harness", cfg.Harness, "model", preference.Model, "error", err)
-			return fallback, nil
-		}
-	}
-	return resolved, err
-}
-
-func (m *Manager) resolveAgentConfigWith(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig, preference domain.HarnessDefault) (ports.AgentConfig, error) {
 	base := effectiveAgentConfig(cfg.Harness, cfg.Kind, project)
 	requested := cfg.AgentConfig
-	merged := applySpawnAgentConfig(base, requested)
-	resolved := preference.Apply(merged)
-	base = preference.Apply(base)
+	resolved := applySpawnAgentConfig(base, requested)
 	modelChangedWithoutExplicitEffort := requested.Model != "" && requested.Model != base.Model &&
 		!cfg.EffortOverride && requested.Effort == ""
-	// An effort set without a model was chosen for the harness's own default
-	// model. When the saved default model fills in, the effort is kept only if
-	// that model lists it; otherwise the default's own effort applies.
-	effortChosenForOtherModel := merged.Model == "" && merged.Mode == "" && preference.Model != "" &&
-		merged.Effort != "" && !cfg.EffortOverride
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
 	}
@@ -1581,13 +1556,7 @@ func (m *Manager) resolveAgentConfigWith(ctx context.Context, cfg ports.SpawnCon
 	}
 	modelID := strings.TrimSpace(resolved.Model)
 	validateClaudeModel := cfg.Harness == domain.HarnessClaudeCode && modelID != ""
-	// A Codex model that only the saved default supplied is checked against a
-	// fresh catalog even without an effort, so a model the provider retired
-	// falls back to the harness default. Task and project models, and an
-	// unavailable or stale catalog, keep the existing pass-through.
-	inheritedCodexModel := cfg.Harness == domain.HarnessCodex && preference.Model != "" &&
-		merged.Model == "" && merged.Mode == "" && modelID == preference.Model
-	if resolved.Effort == "" && !validateClaudeModel && !inheritedCodexModel {
+	if resolved.Effort == "" && !validateClaudeModel {
 		return resolved, nil
 	}
 	if m.modelCatalog == nil {
@@ -1600,9 +1569,6 @@ func (m *Manager) resolveAgentConfigWith(ctx context.Context, cfg ports.SpawnCon
 	if err != nil {
 		if modelChangedWithoutExplicitEffort {
 			resolved.Effort = ""
-		}
-		if effortChosenForOtherModel {
-			resolved.Effort = preference.Effort
 		}
 		if validateClaudeModel || resolved.Effort != "" {
 			return ports.AgentConfig{}, fmt.Errorf("%w: %w", ports.ErrModelCapabilitiesUnavailable, err)
@@ -1630,9 +1596,6 @@ func (m *Manager) resolveAgentConfigWith(ctx context.Context, cfg ports.SpawnCon
 	if validateClaudeModel && selected == nil {
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
 	}
-	if inheritedCodexModel && selected == nil && !catalog.Stale && len(catalog.Models) > 0 {
-		return ports.AgentConfig{}, fmt.Errorf("%w: saved model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
-	}
 	if selected != nil && len(selected.Efforts) == 0 && cfg.Harness == domain.HarnessClaudeCode {
 		// A family alias ("opus") carries no capabilities of its own; the CLI
 		// resolves it to the family's newest model, which the picker shows.
@@ -1644,9 +1607,6 @@ func (m *Manager) resolveAgentConfigWith(ctx context.Context, cfg ports.SpawnCon
 		if selected == nil || !containsString(selected.Efforts, base.Effort) {
 			resolved.Effort = ""
 		}
-	}
-	if effortChosenForOtherModel && (selected == nil || !containsString(selected.Efforts, resolved.Effort)) {
-		resolved.Effort = preference.Effort
 	}
 	if resolved.Effort == "" {
 		return resolved, nil
@@ -6597,12 +6557,4 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
-}
-
-// harnessDefault supplies machine preferences below project and task choices.
-func (m *Manager) harnessDefault(ctx context.Context, harness domain.AgentHarness) domain.HarnessDefault {
-	if m.defaults != nil {
-		return m.defaults.HarnessDefault(ctx, harness)
-	}
-	return domain.HarnessDefault{}
 }

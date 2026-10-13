@@ -14,24 +14,19 @@ import (
 )
 
 var (
-	_ ports.AgentAuthChecker        = (*Plugin)(nil)
-	_ ports.AgentAuthAccountChecker = (*Plugin)(nil)
+	_ ports.AgentAuthChecker            = (*Plugin)(nil)
+	_ ports.AgentAuthDiagnosticsChecker = (*Plugin)(nil)
 )
 
 // AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	status, _, err := p.AuthStatusWithAccount(ctx)
+	status, _, _, err := p.AuthStatusWithDiagnostics(ctx)
 	return status, err
 }
 
-// AuthStatusWithAccount also names the account: an API key, or the login
-// Cursor records in its CLI config once `cursor-agent status` confirms it.
-func (p *Plugin) AuthStatusWithAccount(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, error) {
-	status, account, _, err := p.AuthStatusWithDiagnostics(ctx)
-	return status, account, err
-}
-
-// AuthStatusWithDiagnostics retains the evidence from the same auth check.
+// AuthStatusWithDiagnostics also names the account: an API key, or the login
+// Cursor records in its CLI config once `cursor-agent status` confirms it. It
+// retains the evidence from the same auth check.
 func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
@@ -43,18 +38,12 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, steps, err
 	}
 	if err == nil && status == ports.AgentAuthStatusAuthorized {
-		return status, cursorLoginAccount(cursorConfigPath()), steps, nil
+		return status, cursorLoginAccount(ctx, cursorConfigPath()), steps, nil
 	}
-	if strings.TrimSpace(os.Getenv("CURSOR_API_KEY")) != "" {
-		d := domain.NewAgentAuthDiagnostic("environment", "credential_present")
-		d.Source = "CURSOR_API_KEY"
-		return ports.AgentAuthStatusAuthorized, domain.EnvironmentSource("CURSOR_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey), append(steps, d), nil
+	if name := authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "CURSOR_API_KEY"); name != "" {
+		return ports.AgentAuthStatusAuthorized, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey), steps, nil
 	}
 	return status, domain.AgentAccountIdentity{}, steps, err
-}
-
-func cursorCLIAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStatus, error) {
-	return authprobe.CLIStatus(ctx, binary, [][]string{{"status"}})
 }
 
 // cursorConfigPath is where the Cursor CLI records its login; tests point it
@@ -69,8 +58,8 @@ var cursorConfigPath = func() string {
 
 // cursorLoginAccount reads the display identity from the CLI config's
 // authInfo. Ids are never read: they are provider identity, not display.
-func cursorLoginAccount(path string) domain.AgentAccountIdentity {
-	if path == "" {
+func cursorLoginAccount(ctx context.Context, path string) domain.AgentAccountIdentity {
+	if path == "" || ctx.Err() != nil {
 		return domain.AgentAccountIdentity{}
 	}
 	data, err := os.ReadFile(path)

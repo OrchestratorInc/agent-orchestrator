@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -27,7 +28,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	status, configErr := autohandConfigAuthStatus(configPath)
 	if configErr == nil && status != ports.AgentAuthStatusUnknown {
 		if status == ports.AgentAuthStatusAuthorized {
-			ports.RecordAuthEvidence(ctx, domain.FileSource(configPath).WithMethod(domain.AgentAccountMethodAccount))
+			ports.RecordAuthEvidence(ctx, authprobe.FileSource(configPath).WithMethod(domain.AgentAccountMethodAccount))
 		}
 		return status, nil
 	}

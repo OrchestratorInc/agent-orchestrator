@@ -346,7 +346,7 @@ func (s *Service) Models(ctx context.Context, agentID, projectID string, refresh
 // Cached reads never wait for CLI discovery or input checks, which run in the
 // background. A scope with no persisted catalog still needs its first discovery.
 func (s *Service) ModelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
-	if agentID == "fx" && projectID == "" {
+	if projectID == "" && s.browsesAllProviders(agentID) {
 		projectID = browsingCatalogScope
 	}
 	return s.modelCatalog(ctx, agentID, projectID, refresh)
@@ -354,6 +354,18 @@ func (s *Service) ModelCatalog(ctx context.Context, agentID, projectID string, r
 
 // This scope cannot collide with a project ID. It must never seed a task picker.
 const browsingCatalogScope = "@browse:all"
+
+// providerBrowser is the optional discoverer capability that names the
+// harnesses whose Settings catalog also lists providers without credentials.
+// Their task pickers keep a separate, configured-only catalog.
+type providerBrowser interface {
+	BrowsesAllProviders(agentID string) bool
+}
+
+func (s *Service) browsesAllProviders(agentID string) bool {
+	browser, ok := s.discoverer.(providerBrowser)
+	return ok && browser.BrowsesAllProviders(agentID)
+}
 
 func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
 	if s.discoverer == nil {
@@ -371,17 +383,6 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, r
 		cached, ok, err := s.cachedCatalog(ctx, agentID, projectID)
 		if err != nil {
 			return ports.AgentModelCatalog{}, err
-		}
-		if !ok && projectID == "" {
-			// The device-global scope (Settings) has never been discovered, but
-			// a project has: show that catalog now and discover this scope in
-			// the background rather than making the page wait.
-			if fallback, found := s.newestCachedCatalog(ctx, agentID); found {
-				go func() { _, _ = s.coalesceModelLoad(s.ctx, agentID, projectID, modelLoadCached) }()
-				fallback = applyCustomModelEntryPolicy(fallback, s.discoverer.Manual(agentID))
-				fallback.RefreshState = "refreshing"
-				return fallback, nil
-			}
 		}
 		if ok {
 			// Claude provider model IDs are credential-scoped. The cache is served
@@ -461,34 +462,6 @@ func (s *Service) checkCatalogInputsInBackground(agentID, projectID, fingerprint
 		s.inputCheckMu.Unlock()
 	}()
 	return true
-}
-
-// newestCachedCatalog returns the most recently successful cached catalog for
-// agentID across every scope.
-func (s *Service) newestCachedCatalog(ctx context.Context, agentID string) (ports.AgentModelCatalog, bool) {
-	if s.cache == nil {
-		return ports.AgentModelCatalog{}, false
-	}
-	records, err := s.cache.ListAgentModelCatalogsByAgent(ctx, agentID)
-	if err != nil {
-		return ports.AgentModelCatalog{}, false
-	}
-	var newest ports.AgentModelCatalog
-	var newestAt time.Time
-	found := false
-	for _, record := range records {
-		if record.ProjectID == browsingCatalogScope {
-			continue
-		}
-		cached, ok, err := s.cachedCatalog(ctx, agentID, record.ProjectID)
-		if err != nil || !ok || len(cached.Catalog.Models) == 0 {
-			continue
-		}
-		if !found || cached.LastSuccessAt.After(newestAt) {
-			newest, newestAt, found = cached.Catalog, cached.LastSuccessAt, true
-		}
-	}
-	return newest, found
 }
 
 func (s *Service) revalidateChangedInputs(agentID, projectID, cachedFingerprint string) {

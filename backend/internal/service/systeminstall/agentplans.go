@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -98,7 +97,7 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 	case TargetCursor:
 		plans = []Plan{s.officialByOS(target, "https://cursor.com/install", "bash", "https://cursor.com/install?win32=true", agentDocumentationURLs[target])}
 	// Aider's installer runs `uv tool install aider-chat`, so uv owns the binary
-	// it leaves behind; listing uv lets updates and removals go through it.
+	// it leaves behind; listing uv lets updates go through it.
 	case TargetAider:
 		plans = []Plan{s.officialByOS(target, "https://aider.chat/install.sh", "sh", "https://aider.chat/install.ps1", agentDocumentationURLs[target]), s.planUV(target, "aider-chat")}
 	case TargetGrok:
@@ -107,7 +106,7 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		official := s.officialByOS(target, "https://code.kimi.com/kimi-code/install.sh", "bash", "https://code.kimi.com/kimi-code/install.ps1", agentDocumentationURLs[target])
 		if s.goos == "darwin" {
 			// Homebrew core ships Kimi as the kimi-code formula; listing it lets AO
-			// recognise, update and remove brew-installed copies.
+			// recognise and update brew-installed copies.
 			plans = []Plan{official, s.planBrew(target, "kimi-code")}
 		} else {
 			plans = []Plan{official}
@@ -392,7 +391,7 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 			plan.Command = append(plan.Command, plan.Package)
 		case "npm":
 			pkg := packageWithoutLatest(plan.Package)
-			plan.Command = []string{"npm", "install", "-g", "--prefix", plan.PackagePrefix, "--allow-scripts=" + pkg, pkg + "@latest"}
+			plan.Command = []string{"npm", "install", "-g", "--prefix", plan.PackagePrefix, pkg + "@latest"}
 		case "winget":
 			plan.Command = []string{"winget", "upgrade", "-e", "--id", plan.Package, "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"}
 		case "uv":
@@ -539,7 +538,7 @@ func pinVendorUpdate(plan Plan, latest string) Plan {
 // vendor self-update runs from that binary rather than whichever copy PATH
 // finds first, and npm acts on the global prefix that holds the package with
 // that prefix's own Node, which need not be the daemon's npm.
-func targetInstalledCopy(plan Plan, target Target, binaryPath string) Plan {
+func targetInstalledCopy(goos string, plan Plan, target Target, binaryPath string) Plan {
 	if len(plan.Command) == 0 {
 		return plan
 	}
@@ -561,7 +560,7 @@ func targetInstalledCopy(plan Plan, target Target, binaryPath string) Plan {
 		}
 		plan.PackagePrefix = prefix
 		plan.ownerPrefixFound = true
-		plan.Command = append(npmCommandForPrefix(prefix), args...)
+		plan.Command = append(npmCommandForPrefix(goos, prefix), args...)
 	}
 	return plan
 }
@@ -614,15 +613,10 @@ func (s *Service) validateNPMUpdateTarget(ctx context.Context, plan Plan, planne
 
 // toolVersion runs a version probe and parses its first line.
 func (s *Service) toolVersion(ctx context.Context, argv ...string) ([3]int, bool) {
-	if s.commands == nil {
+	output, err := runProbe(ctx, s.commands, localProbeTimeout, true, argv)
+	if err != nil {
 		return [3]int{}, false
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	out := &capturedOutput{max: 4096}
-	if err := s.commands.Run(probeCtx, argv, out, out); err != nil {
-		return [3]int{}, false
-	}
-	line, _, _ := strings.Cut(strings.TrimSpace(out.String()), "\n")
+	line, _, _ := strings.Cut(strings.TrimSpace(output), "\n")
 	return parseToolVersion(strings.TrimSpace(line))
 }

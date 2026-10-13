@@ -1818,10 +1818,10 @@ describe("TaskComposer", () => {
 		);
 	});
 
-	it("keeps the saved effort when the saved model lacks the project effort", async () => {
+	function mockEnabledModels(enabledModels: string[]) {
 		h.get.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/settings") {
-				return { data: { defaultSessionMode: "tui", chatHarnesses: [], harnessDefaults: { codex: { model: "gpt-saved", effort: "low" } } } };
+				return { data: { defaultSessionMode: "tui", chatHarnesses: [], harnessDefaults: { codex: { enabledModels } } } };
 			}
 			if (path.includes("/models")) {
 				return {
@@ -1829,26 +1829,46 @@ describe("TaskComposer", () => {
 						agent: "codex",
 						selectionMode: "catalog",
 						models: [
-							{ id: "gpt-default", label: "GPT Default", isDefault: true, efforts: ["low", "medium", "high", "xhigh"] },
-							{ id: "gpt-saved", label: "GPT Saved", efforts: ["low", "medium", "high"] },
+							{ id: "gpt-default", label: "GPT Default", isDefault: true },
+							{ id: "gpt-other", label: "GPT Other" },
 						],
-						allowCustom: true,
+						allowCustom: false,
 						refreshRecommended: false,
 					},
 				};
 			}
-			// The project sets an effort but no model.
-			return { data: { status: "ok", project: { config: { worker: { agent: "codex", agentConfig: { effort: "xhigh" } } } } } };
+			return { data: { status: "ok", project: { config: { worker: { agent: "codex" } } } } };
 		});
-		h.post.mockResolvedValue({ data: { workerId: "sess-saved" } });
+	}
+
+	it("opens on an offered model when Settings hides the catalog default", async () => {
+		mockEnabledModels(["gpt-other"]);
+		h.post.mockResolvedValue({ data: { workerId: "sess-offered" } });
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GPT Saved");
-		await waitFor(() => expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("Low"));
+		const model = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(model).toHaveTextContent("GPT Other"));
+		await userEvent.click(model);
+		expect(screen.queryByRole("menuitem", { name: "GPT Default" })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		fireEvent.change(task(), { target: { value: "Use an offered model" } });
 		fireEvent.click(screen.getByText("Start task"));
 		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
-		// Untouched, the daemon resolves the same saved low; nothing overrides it.
-		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("effort");
+		expect(h.post.mock.calls[0][1].body).toMatchObject({ model: "gpt-other" });
+	});
+
+	it("keeps the catalog default when Settings enables every model", async () => {
+		mockEnabledModels(["gpt-default", "gpt-other"]);
+		h.post.mockResolvedValue({ data: { workerId: "sess-all" } });
+
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		const model = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(model).toHaveTextContent("GPT Default"));
+		fireEvent.change(task(), { target: { value: "Use the default model" } });
+		fireEvent.click(screen.getByText("Start task"));
+		await waitFor(() => expect(h.post).toHaveBeenCalledTimes(1));
+		// The daemon resolves its own default; the composer does not pin it.
+		expect(h.post.mock.calls[0][1].body).not.toHaveProperty("model");
 	});
 
 	it("inherits worker effort visually but sends only explicit task overrides", async () => {

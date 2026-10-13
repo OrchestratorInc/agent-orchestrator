@@ -22,11 +22,12 @@ import {
 } from "../hooks/useAgentReadinessQuery";
 import { type FileAttachmentPayload, useFileAttachments } from "../hooks/useFileAttachments";
 import { useSettings } from "../hooks/useSettings";
+import { useOfferedModels } from "../hooks/useOfferedModels";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudAgentInfos, connectedCredentialType, credentialModelScope, isCloudHarnessConnected } from "../lib/cloud-agents";
-import { agentModelDisplayLabel, filterEnabledModels, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
+import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
 import { fallbackEffort } from "../lib/effort";
 import {
 	buildRankedAgentOptions,
@@ -449,11 +450,11 @@ export function TaskComposer({
 	const modelAuthIssue = revalidationWarning === undefined ? modelCatalogAuthIssue(modelCatalogQuery.data) : undefined;
 	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
 	// Settings → Harness → Models picks the models this machine offers; cloud VMs keep their own catalog.
-	const enabledHarnessModels = isCloudProject ? undefined : settings?.harnessDefaults?.[selectedAgent]?.enabledModels;
-	const offeredModels = filterEnabledModels(modelCatalogQuery.data?.models ?? [], enabledHarnessModels, [
-		model, mode, projectModelForSelectedAgent, projectModeForSelectedAgent,
-		isCloudProject ? undefined : settings?.harnessDefaults?.[selectedAgent]?.model,
-	]);
+	const { models: offeredModels, narrowed: modelsNarrowed } = useOfferedModels(selectedAgent, modelCatalogQuery.data?.models, {
+		hostId,
+		keep: [model, mode, projectModelForSelectedAgent, projectModeForSelectedAgent],
+		skip: isCloudProject,
+	});
 	const modelCatalog: TaskComposerModelCatalog | undefined = modelCatalogQuery.data
 		? {
 				allowCustom: modelCatalogQuery.data.allowCustom,
@@ -491,48 +492,35 @@ export function TaskComposer({
 		);
 	const rememberedModeIsValid =
 		isConcreteModelID(rememberedMode) && catalogModels.some((item) => item.id === rememberedMode);
-	// Machine preferences are scoped to the selected daemon, never to cloud VMs.
-	const harnessDefault = isCloudProject ? undefined : settings?.harnessDefaults?.[selectedAgent];
-	const harnessModel = harnessDefault?.model ?? "";
 	const defaultModelForSelectedAgent =
 		(rememberedModelIsValid ? rememberedModel : "") ||
 		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
-		(!catalogUsesModes && isConcreteModelID(harnessModel) ? harnessModel : "") ||
 		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? "" : catalogDefaultOption) ||
 		claudeFallbackOption ||
-		// The harness default may be a model Settings hid; open on one that is offered.
-		(!catalogUsesModes && enabledHarnessModels?.length ? catalogModels[0]?.id ?? "" : "");
+		// Settings hid the catalog's default model; open on one that is offered.
+		(!catalogUsesModes && modelsNarrowed ? catalogModels[0]?.id ?? "" : "");
 	const defaultModeForSelectedAgent =
 		(rememberedModeIsValid ? rememberedMode : "") ||
 		(isConcreteModelID(projectModeForSelectedAgent) ? projectModeForSelectedAgent : "") ||
-		(catalogUsesModes && isConcreteModelID(harnessModel) ? harnessModel : "") ||
 		(catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? catalogDefaultOption : "");
 	const selectedModel = model || (modelTouched ? (catalogUsesModes ? "" : catalogDefaultOption) : defaultModelForSelectedAgent);
 	const selectedMode = mode || (modelTouched ? (catalogUsesModes ? catalogDefaultOption : "") : defaultModeForSelectedAgent);
 	const selectedModelOrMode = (selectedModel || selectedMode).trim();
 	const projectModelOrMode = projectModelForSelectedAgent || projectModeForSelectedAgent;
-	const inheritedModelOrMode = projectModelOrMode || harnessModel;
-	const requestedModel = selectedModelOrMode && selectedModelOrMode !== inheritedModelOrMode && (
-		selectedModelOrMode !== catalogDefaultOption || isConcreteModelID(inheritedModelOrMode)
+	const requestedModel = selectedModelOrMode && selectedModelOrMode !== projectModelOrMode && (
+		selectedModelOrMode !== catalogDefaultOption || isConcreteModelID(projectModelOrMode)
 	) ? selectedModelOrMode : undefined;
 	const rememberedEffortIsExplicit = Boolean(
 		rememberedConfigForSelectedAgent &&
 			Object.prototype.hasOwnProperty.call(rememberedConfigForSelectedAgent, "effort"),
 	);
-	const inheritedHarnessEffort = selectedModel === harnessModel ? harnessDefault?.effort ?? "" : "";
-	const projectEffortForSelectedAgent = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
-	// As the daemon resolves it: a project effort set without a project model was
-	// chosen for the harness's own default model. When the saved default model
-	// fills in and does not list that effort, the saved default's effort applies.
-	const savedModelFillsIn = harnessModel !== "" && selectedModel === harnessModel && !projectModelOrMode;
-	const projectEffortUnsupported = savedModelFillsIn && projectEffortForSelectedAgent !== "" && modelCatalogQuery.data !== undefined &&
-		!(catalogModels.find((item) => item.id === selectedModel)?.efforts ?? []).includes(projectEffortForSelectedAgent);
-	const inheritedEffort = (projectEffortUnsupported ? "" : projectEffortForSelectedAgent) || inheritedHarnessEffort;
 	const defaultEffortForSelectedAgent = rememberedEffortIsExplicit
 		? (rememberedConfigForSelectedAgent?.effort ?? "")
-		: inheritedEffort;
+		: selectedAgent === configuredProjectAgent
+			? defaultWorkerEffort
+			: "";
 	const { selected: effortModel } = useModelTuning({
 		models: catalogModels,
 		model: selectedModel,
@@ -542,6 +530,7 @@ export function TaskComposer({
 	});
 	const effortOptions = effortModel?.efforts?.filter((option) => option && option.toLowerCase() !== "default") ?? [];
 	const cloudDefaultEffort = isCloudProject && effortOptions.includes("medium") ? "medium" : "";
+	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
 	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
 	const selectedAgentLabel = agentCatalog?.agents.find((item) => item.id === selectedAgent)?.label || selectedAgent;
 	const requiresTuiFallback =

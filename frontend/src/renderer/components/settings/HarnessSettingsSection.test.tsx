@@ -9,8 +9,7 @@ import { agentReadinessQueryKey, useAgentReadinessQuery, type AgentReadiness } f
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { agentReadiness } from "../../test/agent-readiness-fixtures";
 import { TooltipProvider } from "../ui/tooltip";
-import { HarnessSettingsSection, updateAdvisoryRefreshInterval } from "./HarnessSettingsSection";
-import { useHarnessActionRequest } from "../../hooks/useHarnessUpdates";
+import { HarnessSettingsSection } from "./HarnessSettingsSection";
 
 // Cloud sign-in state for the cloud login rows. Signed out by default, which
 // leaves every row on its local-only controls.
@@ -134,16 +133,6 @@ const plans = {
 	],
 };
 
-describe("updateAdvisoryRefreshInterval", () => {
-	it("reads the daemon's cached advisory every fifteen minutes", () => {
-		expect(updateAdvisoryRefreshInterval()).toBe(15 * 60_000);
-	});
-
-	it("retries a failed fetch after five minutes", () => {
-		expect(updateAdvisoryRefreshInterval(true)).toBe(5 * 60_000);
-	});
-});
-
 function ReadinessSelector({ agentId }: { agentId: string }) {
 	const readiness = useAgentReadinessQuery();
 	return (
@@ -244,7 +233,6 @@ describe("HarnessSettingsSection", () => {
 		cloudMocks.cloudEnabled = false;
 		cloudMocks.org = undefined;
 		cloudMocks.connections = [];
-		useHarnessActionRequest.getState().setRequest(null);
 		window.ao!.clipboard.writeText = vi.fn().mockResolvedValue(undefined);
 		vi.spyOn(apiClient, "GET").mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
@@ -273,7 +261,7 @@ describe("HarnessSettingsSection", () => {
 		const listRow = await findListRow("codex");
 		expect(listRow).toHaveAccessibleName("Open Codex details");
 		expect(await within(listRow).findByRole("img", { name: "v1.3.0 available" })).toBeInTheDocument();
-		expect(listRow).toHaveAttribute("title", "Connected");
+		expect(listRow).toHaveAccessibleDescription("Connected");
 		// Versions live on the harness page, not in the list.
 		expect(within(listRow).queryByText("v1.2.3")).toBeNull();
 		expect(within(listRow).queryByText("v1.3.0 available")).toBeNull();
@@ -444,6 +432,72 @@ describe("HarnessSettingsSection", () => {
 		expect(within(list).getByText("Model 11")).toBeInTheDocument();
 		expect(within(page).getByText("11–12 of 12")).toBeInTheDocument();
 		expect(within(page).getByRole("button", { name: "Next models" })).toBeDisabled();
+	});
+
+	function mockModelSwitches(enabledModels: string[]) {
+		mockInstalledOperations("npm");
+		const models = { agentId: "codex", models: [
+			{ id: "gpt-a", label: "GPT A", isDefault: true, efforts: [] },
+			{ id: "gpt-b", label: "GPT B", efforts: [] },
+			{ id: "gpt-c", label: "GPT C", efforts: [] },
+		] };
+		let saved = enabledModels;
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models" ? { data: models } as never
+			: path === "/api/v1/settings" ? { data: { harnessDefaults: { codex: { enabledModels: saved } } } } as never
+			: (get as (path: string, options: unknown) => Promise<never>)(path, options));
+		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models/refresh"
+			? { data: models } as never : (post as (path: string, options: unknown) => Promise<never>)(path, options));
+		const patch = vi.spyOn(apiClient, "PATCH").mockImplementation(async (_path, options) => {
+			saved = (options as { body: { enabledModels: string[] } }).body.enabledModels;
+			return { data: { harnessDefaults: { codex: { enabledModels: saved } } } } as never;
+		});
+		return patch;
+	}
+
+	async function openModels() {
+		renderSection();
+		const page = await findAgentRow("codex");
+		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		await within(page).findByRole("list", { name: "Available models" });
+		return page;
+	}
+
+	it("shows every model in pickers until one is switched off", async () => {
+		const patch = mockModelSwitches([]);
+		const page = await openModels();
+		for (const label of ["GPT A", "GPT B", "GPT C"]) expect(within(page).getByRole("switch", { name: `Show ${label} in model pickers` })).toBeChecked();
+		expect(within(page).getByText("3 of 3 shown in model pickers")).toBeInTheDocument();
+		await userEvent.click(within(page).getByRole("switch", { name: "Show GPT B in model pickers" }));
+		await waitFor(() => expect(patch).toHaveBeenCalledWith("/api/v1/settings/harness-defaults/{agent}", { params: { path: { agent: "codex" } }, body: { enabledModels: ["gpt-a", "gpt-c"] } }));
+		expect(within(page).getByRole("switch", { name: "Show GPT B in model pickers" })).not.toBeChecked();
+		expect(await within(page).findByText("2 of 3 shown in model pickers")).toBeInTheDocument();
+	});
+
+	it("reads saved models the catalog no longer lists as no filter", async () => {
+		mockModelSwitches(["retired-model"]);
+		const page = await openModels();
+		expect(await within(page).findByText("3 of 3 shown in model pickers")).toBeInTheDocument();
+		for (const label of ["GPT A", "GPT B", "GPT C"]) expect(within(page).getByRole("switch", { name: `Show ${label} in model pickers` })).toBeChecked();
+	});
+
+	it("saves Enable all as no filter and keeps the default model on for Disable all", async () => {
+		const patch = mockModelSwitches(["gpt-b"]);
+		const page = await openModels();
+		expect(await within(page).findByText("1 of 3 shown in model pickers")).toBeInTheDocument();
+		// The last model left on cannot be switched off.
+		expect(within(page).getByRole("switch", { name: "Show GPT B in model pickers" })).toBeDisabled();
+		await userEvent.click(within(page).getByRole("button", { name: "Enable all" }));
+		await waitFor(() => expect(patch).toHaveBeenLastCalledWith("/api/v1/settings/harness-defaults/{agent}", { params: { path: { agent: "codex" } }, body: { enabledModels: [] } }));
+		expect(await within(page).findByText("3 of 3 shown in model pickers")).toBeInTheDocument();
+		expect(within(page).getByRole("button", { name: "Enable all" })).toBeDisabled();
+		await userEvent.click(within(page).getByRole("button", { name: "Disable all" }));
+		await waitFor(() => expect(patch).toHaveBeenLastCalledWith("/api/v1/settings/harness-defaults/{agent}", { params: { path: { agent: "codex" } }, body: { enabledModels: ["gpt-a"] } }));
+		expect(await within(page).findByText("1 of 3 shown in model pickers")).toBeInTheDocument();
+		expect(within(page).getByRole("switch", { name: "Show GPT A in model pickers" })).toBeChecked();
+		expect(within(page).getByRole("switch", { name: "Show GPT A in model pickers" })).toBeDisabled();
+		expect(within(page).getByRole("button", { name: "Disable all" })).toBeDisabled();
 	});
 
 	it("filters catalog by provider and resets pagination on provider change", async () => {
@@ -891,15 +945,6 @@ describe("HarnessSettingsSection", () => {
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
-	it("consumes a popup update once through the existing workflow", async () => {
-		mockInstalledOperations("npm");
-		useHarnessActionRequest.getState().setRequest({ agentId: "codex", latestVersion: "1.3.0", action: "update" });
-		renderSection("codex");
-		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "npm", operation: "update", expectedVersion: "1.3.0" } }));
-		expect((vi.mocked(apiClient.POST).mock.calls as unknown[][]).filter(([path]) => path === "/api/v1/agents/{agent}/install")).toHaveLength(1);
-		expect(useHarnessActionRequest.getState().request).toBeNull();
-	});
-
 	it("does not let saved job history override missing current ownership evidence", async () => {
 		mockInstalledOperations("npm");
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
@@ -1344,7 +1389,7 @@ describe("HarnessSettingsSection", () => {
 	it("shows installed harnesses and install actions without authentication UI", async () => {
 		renderSection();
 		// The list carries status as a tooltip; the harness page states it.
-		await waitFor(async () => expect(await findListRow("claude-code")).toHaveAttribute("title", "Installed"), { timeout: 10_000 });
+		await waitFor(async () => expect(await findListRow("claude-code")).toHaveAccessibleDescription("Installed"), { timeout: 10_000 });
 		expect(await findListRow("codex")).toBeInTheDocument();
 		const page = await findAgentRow("claude-code");
 		expect(within(page).getAllByText("Installed").length).toBeGreaterThan(0);

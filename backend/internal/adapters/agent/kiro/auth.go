@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"os"
 	"strings"
 	"time"
 
@@ -14,23 +13,18 @@ import (
 )
 
 var (
-	_ ports.AgentAuthChecker        = (*Plugin)(nil)
-	_ ports.AgentAuthAccountChecker = (*Plugin)(nil)
+	_ ports.AgentAuthChecker            = (*Plugin)(nil)
+	_ ports.AgentAuthDiagnosticsChecker = (*Plugin)(nil)
 )
 
 // AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	status, _, err := p.AuthStatusWithAccount(ctx)
+	status, _, _, err := p.AuthStatusWithDiagnostics(ctx)
 	return status, err
 }
 
-// AuthStatusWithAccount also names the account `whoami` reports.
-func (p *Plugin) AuthStatusWithAccount(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, error) {
-	status, account, _, err := p.AuthStatusWithDiagnostics(ctx)
-	return status, account, err
-}
-
-// AuthStatusWithDiagnostics retains the evidence from the same auth check.
+// AuthStatusWithDiagnostics also names the account `whoami` reports and
+// retains the evidence from the same auth check.
 func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
 	binary, err := p.kiroBinary(ctx)
 	if err != nil {
@@ -44,22 +38,10 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	if err == nil && status == ports.AgentAuthStatusAuthorized {
 		return status, account, steps, nil
 	}
-	if strings.TrimSpace(os.Getenv("KIRO_API_KEY")) != "" {
-		d := domain.NewAgentAuthDiagnostic("environment", "credential_present")
-		d.Source = "KIRO_API_KEY"
-		return ports.AgentAuthStatusAuthorized, domain.EnvironmentSource("KIRO_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey), append(steps, d), nil
+	if name := authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "KIRO_API_KEY"); name != "" {
+		return ports.AgentAuthStatusAuthorized, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey), steps, nil
 	}
 	return status, account, steps, err
-}
-
-func kiroWhoamiAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStatus, error) {
-	status, _, err := kiroWhoamiAuth(ctx, binary)
-	return status, err
-}
-
-func kiroWhoamiAuth(ctx context.Context, binary string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, error) {
-	status, account, _, err := kiroWhoamiAuthDiagnostics(ctx, binary)
-	return status, account, err
 }
 
 func kiroWhoamiAuthDiagnostics(ctx context.Context, binary string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {

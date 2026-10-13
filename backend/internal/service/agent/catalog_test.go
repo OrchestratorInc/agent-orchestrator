@@ -621,6 +621,9 @@ func (f *fakeModelDiscoverer) CatalogFingerprint(_ context.Context, request port
 	return f.version
 }
 
+// BrowsesAllProviders mirrors the production discoverer for FX.
+func (*fakeModelDiscoverer) BrowsesAllProviders(agentID string) bool { return agentID == "fx" }
+
 func (f *fakeModelDiscoverer) Manual(agentID string) ports.AgentModelCatalog {
 	return ports.AgentModelCatalog{
 		AgentID:          agentID,
@@ -1940,26 +1943,22 @@ func TestClaudeModelsRejectProviderCacheWhenCredentialFingerprintChanges(t *test
 	}
 }
 
-func TestModelsServeAnotherScopeWhileGlobalScopeIsDiscovered(t *testing.T) {
+func TestGlobalModelsNeverBorrowAnotherScopesCatalog(t *testing.T) {
 	project := cachedModelRecord(t, "cursor", "project-a", time.Now().Add(-time.Hour), false)
 	project.ProjectID = "project-a"
 	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{"cursor\x00project-a": project}}
-	// Discovery is slow; the read must not wait for it.
 	discoverer := &fakeModelDiscoverer{
 		catalog: ports.AgentModelCatalog{AgentID: "cursor", SelectionMode: ports.ModelSelectionCatalog, Models: []ports.AgentModelInfo{{ID: "cursor/global"}}, Source: "catalog"},
-		delay:   time.Second,
 	}
 	svc := newService([]agentregistry.HarnessAgent{harnessAgent("cursor", "Cursor", nil)}, cache, nil, discoverer)
-	started := time.Now()
+	// A project's catalog can reflect that project's own credentials, so the
+	// device-global scope discovers its own instead of showing it.
 	got, err := svc.Models(context.Background(), "cursor", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
-		t.Fatalf("global read waited %s for discovery", elapsed)
-	}
-	if len(got.Models) == 0 || got.RefreshState != "refreshing" {
-		t.Fatalf("global read = %#v, want the project's cached catalog while discovering", got)
+	if len(got.Models) != 1 || got.Models[0].ID != "cursor/global" {
+		t.Fatalf("global read = %#v, want its own discovery", got)
 	}
 }
 
@@ -2504,13 +2503,6 @@ func TestFXBrowsingUsesSeparatePersistentScope(t *testing.T) {
 	}
 	if _, ok, _ := cache.GetAgentModelCatalog(context.Background(), "fx", browsingCatalogScope); !ok {
 		t.Fatal("missing browsing cache")
-	}
-	// A new picker with no global cache must never borrow the broader catalog.
-	cache.mu.Lock()
-	delete(cache.records, "fx\x00")
-	cache.mu.Unlock()
-	if _, found := svc.newestCachedCatalog(context.Background(), "fx"); found {
-		t.Fatal("browsing catalog leaked into task fallback")
 	}
 }
 

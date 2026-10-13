@@ -21,7 +21,6 @@ type ConfirmDialogProps = {
 	open: boolean;
 	title: string;
 	description: React.ReactNode;
-	children?: React.ReactNode;
 	confirmLabel: string;
 	/** Screen-reader name for the confirm button when "Confirm" alone is vague. */
 	confirmAriaLabel?: string;
@@ -43,7 +42,6 @@ export function ConfirmDialog({
 	open,
 	title,
 	description,
-	children,
 	confirmLabel,
 	confirmAriaLabel,
 	cancelLabel,
@@ -105,12 +103,11 @@ export function ConfirmDialog({
 					</DialogDescription>
 				</div>
 
-				{children || error ? (
+				{error ? (
 					<div className={cn(settingsDialogBodyClass, "p-5 py-3")}>
-						{children}
-						{error ? <p role="alert" className="text-caption leading-4 text-error">
+						<p role="alert" className="text-caption leading-4 text-error">
 							{error}
-						</p> : null}
+						</p>
 					</div>
 				) : null}
 

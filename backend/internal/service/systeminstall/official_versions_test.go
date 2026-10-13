@@ -22,8 +22,6 @@ func TestParseOfficialVersionReadsEachVendorFormat(t *testing.T) {
 		{name: "json manifest", target: TargetDevin, body: `{"version":"3000.11.3","platforms":{}}`, want: "3000.11.3"},
 		{name: "revisioned channel", target: TargetMuse, body: `{"channel":"muse-stable","version":"1.4.3-R5018.1"}`, want: "1.4.3-R5018.1"},
 		{name: "github release", target: TargetOpencode, body: `{"tag_name":"v1.18.34"}`, want: "1.18.34"},
-		{name: "pypi project", target: TargetAider, body: `{"info":{"version":"0.86.2"}}`, want: "0.86.2"},
-		{name: "npm package", target: TargetDroid, body: `{"name":"droid","version":"0.234.0"}`, want: "0.234.0"},
 		{name: "install script url", target: TargetCursor, body: `DOWNLOAD_URL="https://downloads.cursor.com/lab/2026.10.01-e373342/${OS}/${ARCH}/agent-cli-package.tar.gz"`, want: "2026.10.01-e373342"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -73,9 +71,9 @@ func TestUpdateAdvisoryFallsBackToOfficialReleaseForUnownedBinary(t *testing.T) 
 	})
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return false, nil }
 	var packageLookup atomic.Bool
-	s.managedVersion = func(context.Context, Plan) (managedVersionResult, error) {
+	s.managedVersion = func(context.Context, Plan) (string, error) {
 		packageLookup.Store(true)
-		return managedVersionResult{Latest: "9.9.9"}, nil
+		return "9.9.9", nil
 	}
 	s.officialVersion = func(_ context.Context, target Target) (string, error) {
 		if target != TargetClaudeCode {
@@ -83,7 +81,7 @@ func TestUpdateAdvisoryFallsBackToOfficialReleaseForUnownedBinary(t *testing.T) 
 		}
 		return "2.1.291", nil
 	}
-	advisory, err := s.UpdateAdvisory(context.Background(), TargetClaudeCode)
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetClaudeCode, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +104,7 @@ func TestUpdateAdvisoryPrefersOwningPackageOverOfficialRelease(t *testing.T) {
 		t.Fatal("official release queried for a package-owned binary")
 		return "", nil
 	}
-	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +117,7 @@ func TestUpdateAdvisoryUnknownWithoutOfficialSource(t *testing.T) {
 	s := newTestService("darwin")
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) { return VerifyResult{Output: "qwen 0.1.0"}, nil })
 	s.officialVersion = func(context.Context, Target) (string, error) { return "", errNoOfficialSource }
-	advisory, err := s.UpdateAdvisory(context.Background(), TargetQwen)
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetQwen, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +140,7 @@ func TestUpdateAdvisoryComparesOfficialPrereleaseWithLatest(t *testing.T) {
 				return VerifyResult{ResolvedPath: "/Users/test/.local/bin/claude", Output: "claude " + tt.installed}, nil
 			})
 			s.officialVersion = func(context.Context, Target) (string, error) { return "2.0.0", nil }
-			advisory, err := s.UpdateAdvisory(context.Background(), TargetClaudeCode)
+			advisory, err := s.UpdateAdvisory(context.Background(), TargetClaudeCode, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -174,7 +172,7 @@ func TestUpdateAdvisoryComparesBuildSuffixedOfficialReleases(t *testing.T) {
 				return VerifyResult{ResolvedPath: tt.path, Output: tt.output}, nil
 			})
 			s.officialVersion = func(context.Context, Target) (string, error) { return tt.latest, nil }
-			advisory, err := s.UpdateAdvisory(context.Background(), tt.target)
+			advisory, err := s.UpdateAdvisory(context.Background(), tt.target, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -227,6 +225,31 @@ func TestOfficialGitHubVersionFallsBackToAPIWithoutReleaseRedirect(t *testing.T)
 			got, err := officialReleaseVersionWith(client, "darwin", "arm64")(context.Background(), TargetGoose)
 			if err != nil || got != "1.9.0" {
 				t.Fatalf("version=%q err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestOfficialRegistrySourcesShareThePackageLookups(t *testing.T) {
+	for _, tt := range []struct {
+		target Target
+		url    string
+		body   string
+		want   string
+	}{
+		{target: TargetAider, url: "https://pypi.org/pypi/aider-chat/json", body: `{"info":{"version":"0.86.2"}}`, want: "0.86.2"},
+		{target: TargetDroid, url: "https://registry.npmjs.org/-/package/droid/dist-tags", body: `{"latest":"0.234.0","next":"0.235.0-beta.1"}`, want: "0.234.0"},
+	} {
+		t.Run(string(tt.target), func(t *testing.T) {
+			client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.String() != tt.url {
+					t.Fatalf("URL = %s, want %s", request.URL, tt.url)
+				}
+				return managerHTTPResponse(http.StatusOK, tt.body), nil
+			})}
+			got, err := officialReleaseVersionWith(client, "darwin", "arm64")(context.Background(), tt.target)
+			if err != nil || got != tt.want {
+				t.Fatalf("version=%q err=%v, want %q", got, err, tt.want)
 			}
 		})
 	}

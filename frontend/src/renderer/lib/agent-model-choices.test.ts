@@ -64,16 +64,20 @@ describe("filterEnabledModels", () => {
 	const catalog = [{ id: "a" }, { id: "b" }, { id: "c" }];
 
 	it("offers every model when nothing is enabled", () => {
-		expect(filterEnabledModels(catalog, undefined)).toBe(catalog);
-		expect(filterEnabledModels(catalog, [])).toBe(catalog);
+		expect(filterEnabledModels(catalog, undefined)).toEqual({ models: catalog, narrowed: false });
+		expect(filterEnabledModels(catalog, []).models).toBe(catalog);
 	});
 
 	it("keeps enabled models and the ones already in use, in catalog order", () => {
-		expect(filterEnabledModels(catalog, ["c", "a"]).map((item) => item.id)).toEqual(["a", "c"]);
-		expect(filterEnabledModels(catalog, ["a"], ["b", undefined]).map((item) => item.id)).toEqual(["a", "b"]);
+		expect(filterEnabledModels(catalog, ["c", "a"])).toEqual({ models: [{ id: "a" }, { id: "c" }], narrowed: true });
+		expect(filterEnabledModels(catalog, ["a"], ["b", undefined]).models.map((item) => item.id)).toEqual(["a", "b"]);
+	});
+
+	it("reports nothing narrowed when every model is enabled", () => {
+		expect(filterEnabledModels(catalog, ["a", "b", "c"])).toEqual({ models: catalog, narrowed: false });
 	});
 
 	it("falls back to the full catalog when no enabled model is listed any more", () => {
-		expect(filterEnabledModels(catalog, ["gone"])).toBe(catalog);
+		expect(filterEnabledModels(catalog, ["gone"])).toEqual({ models: catalog, narrowed: false });
 	});
 });

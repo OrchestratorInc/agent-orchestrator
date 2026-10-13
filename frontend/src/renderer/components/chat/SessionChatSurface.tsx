@@ -24,6 +24,7 @@ import { useObservedAgentSwitchLifecycle } from "../../hooks/useObservedAgentSwi
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../../hooks/useAgentSwitchVisibility";
 import { useQuery } from "@tanstack/react-query";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
+import { useOfferedModels } from "../../hooks/useOfferedModels";
 import { useSwitchAgentState } from "../../hooks/useSwitchAgent";
 import {
 	useConversation,
@@ -372,7 +373,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// Claude's live list is family aliases; the new-task picker's catalog carries the versions.
 	const isClaude = snapshot?.harness === "claude-code";
 	const claudeCatalog = useQuery({ ...agentModelsQueryOptions("claude-code", "", hostId), enabled: isClaude }).data;
-	const models = useMemo(() => {
+	const catalogModels = useMemo(() => {
 		if (!isClaude || !claudeCatalog?.models.length) return controllerModels;
 		return claudeCatalog.models
 			.filter((model) => model.id.toLowerCase() !== "default")
@@ -382,6 +383,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				default: Boolean(model.isDefault),
 			}));
 	}, [isClaude, claudeCatalog, controllerModels]);
+	// Settings → Harness → Models picks the models offered; the session's current model stays listed.
+	const { models } = useOfferedModels(snapshot?.harness, catalogModels, { hostId, keep: [snapshot?.settings?.model] });
 	const { skills } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && catalogsEnabled && snapshot),

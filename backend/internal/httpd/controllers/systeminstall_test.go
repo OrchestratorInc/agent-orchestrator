@@ -3,6 +3,7 @@ package controllers_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -49,14 +50,12 @@ func (f *fakeInstaller) AgentPlans(context.Context) ([]systeminstall.AgentPlan, 
 	return f.plans, f.plansErr
 }
 
-func (f *fakeInstaller) StartAgentOperation(_ context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation, expectedVersion ...string) (systeminstall.Job, error) {
+func (f *fakeInstaller) StartAgentOperation(_ context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation, expectedVersion string) (systeminstall.Job, error) {
 	f.startCalls++
 	f.lastTarget = target
 	f.lastMethod = method
 	f.lastOperation = operation
-	if len(expectedVersion) > 0 {
-		f.expectedVersion = expectedVersion[0]
-	}
+	f.expectedVersion = expectedVersion
 	return f.startJob, f.startErr
 }
 
@@ -69,9 +68,9 @@ func (f *fakeInstaller) Verify(_ context.Context, target systeminstall.Target) (
 	return f.verifyJob, f.verifyErr
 }
 
-func (f *fakeInstaller) UpdateAdvisory(_ context.Context, target systeminstall.Target, refresh ...bool) (systeminstall.UpdateAdvisory, error) {
+func (f *fakeInstaller) UpdateAdvisory(_ context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error) {
 	f.lastTarget = target
-	f.refreshAdvisory = len(refresh) > 0 && refresh[0]
+	f.refreshAdvisory = refresh
 	return f.advisory, nil
 }
 
@@ -177,6 +176,8 @@ func TestAgentInstallMapsMethodAndActiveHarnessErrors(t *testing.T) {
 		{name: "invalid method", err: systeminstall.ErrInstallMethod, wantStatus: http.StatusBadRequest, wantCode: "INSTALL_METHOD_UNAVAILABLE"},
 		{name: "active droid", err: systeminstall.ErrHarnessActive, wantStatus: http.StatusConflict, wantCode: "HARNESS_ACTIVE"},
 		{name: "install active", err: systeminstall.ErrInstallActive, wantStatus: http.StatusConflict, wantCode: "INSTALL_ACTIVE"},
+		{name: "owner unconfirmed", err: fmt.Errorf("%w: installed with Homebrew", systeminstall.ErrInstallOwner), wantStatus: http.StatusConflict, wantCode: "INSTALL_OWNER_UNCONFIRMED"},
+		{name: "invalid update version", err: systeminstall.ErrUpdateVersion, wantStatus: http.StatusBadRequest, wantCode: "INVALID_UPDATE_VERSION"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			installer := &fakeInstaller{startErr: tt.err}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -286,10 +287,10 @@ func TestNPMPrefixOwningBinaryFindsPrefixesOutsideDaemonNPM(t *testing.T) {
 		if resolved, _ := filepath.EvalSymlinks(prefix); !ok || got != resolved {
 			t.Fatalf("prefix = %q, %t; want %q", got, ok, resolved)
 		}
-		plan := targetInstalledCopy(Plan{Method: "npm", Package: pkg, PackagePrefix: "/daemon/npm", Command: []string{"npm", "install", "-g", "--prefix", "/daemon/npm", "--allow-scripts=" + pkg, pkg + "@latest"}}, TargetPi, bin)
+		plan := targetInstalledCopy(runtime.GOOS, Plan{Method: "npm", Package: pkg, PackagePrefix: "/daemon/npm", Command: []string{"npm", "install", "-g", "--prefix", "/daemon/npm", pkg + "@latest"}}, TargetPi, bin)
 		resolvedNode, _ := filepath.EvalSymlinks(node)
 		resolvedCLI, _ := filepath.EvalSymlinks(cli)
-		if want := []string{resolvedNode, resolvedCLI, "install", "-g", "--prefix", got, "--allow-scripts=" + pkg, pkg + "@latest"}; !slices.Equal(plan.Command, want) || plan.PackagePrefix != got {
+		if want := []string{resolvedNode, resolvedCLI, "install", "-g", "--prefix", got, pkg + "@latest"}; !slices.Equal(plan.Command, want) || plan.PackagePrefix != got {
 			t.Fatalf("command = %v prefix=%q, want %v", plan.Command, plan.PackagePrefix, want)
 		}
 	})
@@ -302,7 +303,7 @@ func TestNPMPrefixOwningBinaryFindsPrefixesOutsideDaemonNPM(t *testing.T) {
 		if !ok {
 			t.Fatal("~/.local npm prefix was not recognised")
 		}
-		plan := targetInstalledCopy(Plan{Method: "npm", Package: pkg, Command: []string{"npm", "install", "-g", "--prefix", "/daemon/npm", pkg + "@latest"}}, TargetPi, bin)
+		plan := targetInstalledCopy(runtime.GOOS, Plan{Method: "npm", Package: pkg, Command: []string{"npm", "install", "-g", "--prefix", "/daemon/npm", pkg + "@latest"}}, TargetPi, bin)
 		if want := []string{"npm", "install", "-g", "--prefix", got, pkg + "@latest"}; !slices.Equal(plan.Command, want) {
 			t.Fatalf("command = %v, want %v", plan.Command, want)
 		}
@@ -353,7 +354,7 @@ func TestManagerOwnsBinaryAcceptsNPMPrefixOtherThanDaemons(t *testing.T) {
 }
 
 func TestVendorUpdateRunsFromTheBinarySessionsRun(t *testing.T) {
-	plan := targetInstalledCopy(Plan{Method: "official-installer", Command: []string{"grok", "update"}}, TargetGrok, "/home/u/.grok/downloads/grok-1.0.13")
+	plan := targetInstalledCopy("linux", Plan{Method: "official-installer", Command: []string{"grok", "update"}}, TargetGrok, "/home/u/.grok/downloads/grok-1.0.13")
 	if want := []string{"/home/u/.grok/downloads/grok-1.0.13", "update"}; !slices.Equal(plan.Command, want) {
 		t.Fatalf("command = %v, want %v", plan.Command, want)
 	}
@@ -426,7 +427,7 @@ func TestNPMUpdateValidatesOwningPrefixNotDaemonPrefix(t *testing.T) {
 	}
 
 	s, ran := setup(t, true, "v22.19.0")
-	job, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate)
+	job, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate, "")
 	if err != nil {
 		t.Fatalf("update rejected for the daemon's prefix: %v", err)
 	}
@@ -448,7 +449,7 @@ func TestNPMUpdateValidatesOwningPrefixNotDaemonPrefix(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, _ := setup(t, tc.writable, tc.node)
-			job, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate)
+			job, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate, "")
 			if err != nil {
 				t.Fatal(err)
 			}

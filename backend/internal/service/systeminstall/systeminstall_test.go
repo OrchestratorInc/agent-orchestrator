@@ -1196,7 +1196,7 @@ func TestHarnessLaunchGateBlocksCodexMaintenanceBeforeSessionEnumeration(t *test
 
 	for _, operation := range []AgentOperation{AgentOperationReinstall, AgentOperationUpdate} {
 		method := "npm"
-		if _, err := s.StartAgentOperation(context.Background(), TargetCodex, method, operation); !errors.Is(err, ErrHarnessActive) {
+		if _, err := s.StartAgentOperation(context.Background(), TargetCodex, method, operation, ""); !errors.Is(err, ErrHarnessActive) {
 			t.Fatalf("%s error = %v, want ErrHarnessActive", operation, err)
 		}
 	}
@@ -1226,7 +1226,7 @@ func TestHarnessMaintenanceGateBlocksCodexLaunchThroughWorkerLifetime(t *testing
 		return VerifyResult{ResolvedPath: "/verified/codex", Output: "codex 2.0.0"}, nil
 	})
 
-	if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate); err != nil {
+	if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate, ""); err != nil {
 		t.Fatalf("StartAgentOperation: %v", err)
 	}
 	select {
@@ -1257,7 +1257,7 @@ func TestHarnessMaintenanceSeesSessionCreatedBeforeLaunchGateRelease(t *testing.
 	s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "codex-1", Harness: domain.HarnessCodex}}}
 	release()
 
-	if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate); !errors.Is(err, ErrHarnessActive) {
+	if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate, ""); !errors.Is(err, ErrHarnessActive) {
 		t.Fatalf("StartAgentOperation error = %v, want ErrHarnessActive", err)
 	}
 }
@@ -1308,7 +1308,7 @@ func TestHarnessMaintenanceAllowsTerminatedAndOtherHarnessSessions(t *testing.T)
 			s.sessions = sessionListerStub{sessions: tt.sessions}
 			s.commands = commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error { return errors.New("stop after guard") })
 
-			if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate); err != nil {
+			if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate, ""); err != nil {
 				t.Fatalf("StartAgentOperation: %v", err)
 			}
 			waitForStatus(t, s, TargetCodex, StatusFailed)
@@ -1487,7 +1487,7 @@ func TestOpenCodeVendorUpdatePinsAdvisoryRelease(t *testing.T) {
 		version = "1.18.35"
 		return nil
 	})
-	if _, err := s.StartAgentOperation(context.Background(), TargetOpencode, "official-installer", AgentOperationUpdate); err != nil {
+	if _, err := s.StartAgentOperation(context.Background(), TargetOpencode, "official-installer", AgentOperationUpdate, ""); err != nil {
 		t.Fatal(err)
 	}
 	s.workers.Wait()
@@ -1617,7 +1617,7 @@ func TestHarnessUpdateIsBlockedWhileItsReviewerRuns(t *testing.T) {
 			// The worker runs Claude Code; only its reviewer uses Codex.
 			s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "claude-worker", Harness: domain.HarnessClaudeCode}}}
 			s.reviewers = reviewers
-			if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate); !errors.Is(err, ErrHarnessActive) {
+			if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate, ""); !errors.Is(err, ErrHarnessActive) {
 				t.Fatalf("update error = %v, want ErrHarnessActive", err)
 			}
 		})
@@ -1651,11 +1651,11 @@ func TestHomebrewUpdateRefreshesMetadataBeforeUpgrading(t *testing.T) {
 		version = "1.3.0"
 		return nil
 	})
-	job, err := s.StartAgentOperation(context.Background(), TargetKimi, "homebrew", AgentOperationUpdate)
+	job, err := s.StartAgentOperation(context.Background(), TargetKimi, "homebrew", AgentOperationUpdate, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if job.Command != "brew update && brew upgrade kimi-code" {
+	if job.Command != "brew update; brew upgrade kimi-code" {
 		t.Fatalf("command = %q", job.Command)
 	}
 	s.workers.Wait()

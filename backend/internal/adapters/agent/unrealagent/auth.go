@@ -2,7 +2,6 @@ package unrealagent
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,8 +64,8 @@ func (p *Plugin) authStatus(ctx context.Context, getenv func(string) string) (po
 		// The stored Codex login decides first; a token in the environment is
 		// the fallback.
 		if path, ok := codexAuthFile(getenv); ok {
-			evidence := domain.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
-			evidence.Email, evidence.Name = codexAuthFileIdentity(path)
+			evidence := authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
+			evidence.Email, evidence.Name = authprobe.CodexAuthFileIdentity(ctx, path)
 			ports.RecordAuthEvidence(ctx, evidence)
 			return credentialStatus(true), nil
 		}
@@ -111,22 +110,4 @@ func codexAuthFile(getenv func(string) string) (string, bool) {
 	}
 	info, err := os.Stat(path)
 	return path, err == nil && info.Mode().IsRegular() && info.Size() > 0
-}
-
-// codexAuthFileIdentity reads who a Codex ChatGPT login belongs to from the
-// id_token in its auth.json. Only display claims are read.
-func codexAuthFileIdentity(path string) (email, name string) {
-	data, err := os.ReadFile(path) //nolint:gosec // Codex's own auth file
-	if err != nil {
-		return "", ""
-	}
-	var auth struct {
-		Tokens struct {
-			IDToken string `json:"id_token"`
-		} `json:"tokens"`
-	}
-	if json.Unmarshal(data, &auth) != nil {
-		return "", ""
-	}
-	return authprobe.TokenIdentity(auth.Tokens.IDToken)
 }

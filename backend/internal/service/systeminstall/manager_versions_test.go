@@ -111,7 +111,7 @@ func TestManagedVersionCheckerUsesNativeCommandsWhenRegistryIsUnreachable(t *tes
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Latest != "1.3.0" {
+			if got != "1.3.0" {
 				t.Fatalf("result = %+v", got)
 			}
 		})
@@ -170,7 +170,7 @@ func TestManagedVersionCheckerFallsBackWhenOutdatedResultIsEmpty(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			checker := newManagedVersionChecker(managerCommandRunner(t, tt.responses...), offlineManagerClient())
 			got, err := checker(context.Background(), tt.plan)
-			if err != nil || got.Latest != "1.3.0" {
+			if err != nil || got != "1.3.0" {
 				t.Fatalf("result=%+v err=%v", got, err)
 			}
 		})
@@ -191,7 +191,7 @@ func TestManagedVersionCheckerReadsLatestDistTagForPrereleaseInstall(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Latest != "1.3.0" || requests != 1 {
+	if got != "1.3.0" || requests != 1 {
 		t.Fatalf("result=%+v requests=%d", got, requests)
 	}
 }
@@ -222,7 +222,7 @@ func TestManagedVersionCheckerQueriesPyPIForOwnedPythonTools(t *testing.T) {
 				return nil
 			})
 			got, err := newManagedVersionChecker(commands, client)(context.Background(), Plan{Method: method, Package: "mistral-vibe"})
-			if err != nil || got.Latest != "2.0.0" {
+			if err != nil || got != "2.0.0" {
 				t.Fatalf("result=%+v err=%v", got, err)
 			}
 			if commandsCalled {
@@ -305,7 +305,7 @@ func TestHomebrewCoreVersionReadsLiveAPIBeforeLocalMetadata(t *testing.T) {
 			})}
 			// Local brew metadata would still report the stale release; it must not be consulted.
 			got, err := newManagedVersionChecker(managerCommandRunner(t), client)(context.Background(), tt.plan)
-			if err != nil || got.Latest != "2.1.285" {
+			if err != nil || got != "2.1.285" {
 				t.Fatalf("result=%+v err=%v", got, err)
 			}
 		})
@@ -322,7 +322,7 @@ func TestHomebrewTapVersionUsesLocalMetadataOnly(t *testing.T) {
 		output: `{"formulae":[{"name":"anomalyco/tap/opencode","installed_versions":["1.18.34"],"current_version":"1.18.35"}],"casks":[]}`,
 	})
 	got, err := newManagedVersionChecker(commands, client)(context.Background(), Plan{Method: "homebrew", Package: "anomalyco/tap/opencode"})
-	if err != nil || got.Latest != "1.18.35" {
+	if err != nil || got != "1.18.35" {
 		t.Fatalf("result=%+v err=%v", got, err)
 	}
 }
@@ -345,7 +345,7 @@ func TestHomebrewCurrentTapFormulaMatchesInfoFullName(t *testing.T) {
 		},
 	)
 	got, err := newManagedVersionChecker(commands, client)(context.Background(), Plan{Method: "homebrew", Package: "anomalyco/tap/opencode"})
-	if err != nil || got.Latest != "1.18.35" {
+	if err != nil || got != "1.18.35" {
 		t.Fatalf("result=%+v err=%v", got, err)
 	}
 	// An unqualified package still matches the short name, and a qualified
@@ -368,7 +368,7 @@ func TestNodeManagersReadRegistryWithoutStartingManager(t *testing.T) {
 				return managerHTTPResponse(http.StatusOK, `{"latest":"1.3.0"}`), nil
 			})}
 			got, err := newManagedVersionChecker(managerCommandRunner(t), client)(context.Background(), Plan{Method: method, Package: "@openai/codex"})
-			if err != nil || got.Latest != "1.3.0" {
+			if err != nil || got != "1.3.0" {
 				t.Fatalf("result=%+v err=%v", got, err)
 			}
 		})

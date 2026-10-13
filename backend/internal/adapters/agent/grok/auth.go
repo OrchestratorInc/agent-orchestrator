@@ -9,6 +9,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -36,11 +37,10 @@ func grokLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	status, ok, err := grokStoredAuthStatus(ctx)
-	if err == nil && ok && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+	if err == nil && ok && status.HasCredential() {
 		return status, true, nil
 	}
-	if strings.TrimSpace(os.Getenv("XAI_API_KEY")) != "" {
-		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("XAI_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "XAI_API_KEY") != "" {
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	return status, ok, err
@@ -58,7 +58,7 @@ func grokStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 	configStatus, configOK, err := grokConfigAuthStatus(configPath)
 	if err != nil || configOK {
 		if configStatus == ports.AgentAuthStatusAuthorized {
-			ports.RecordAuthEvidence(ctx, domain.FileSource(configPath).WithMethod(domain.AgentAccountMethodAPIKey))
+			ports.RecordAuthEvidence(ctx, authprobe.FileSource(configPath).WithMethod(domain.AgentAccountMethodAPIKey))
 		}
 		return configStatus, configOK, err
 	}
@@ -95,7 +95,7 @@ func grokStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 		if json.Unmarshal(value, &session) == nil &&
 			(strings.TrimSpace(session.AccessToken) != "" || strings.TrimSpace(session.RefreshToken) != "") {
 			// The xAI login records who signed in next to its tokens.
-			evidence := domain.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
+			evidence := authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
 			evidence.Email = session.Email
 			evidence.Name = strings.TrimSpace(session.FirstName + " " + session.LastName)
 			ports.RecordAuthEvidence(ctx, evidence)

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite" // read OMP's native credential store
@@ -141,19 +142,10 @@ func configuredProviders(ctx context.Context, agentID string, env map[string]str
 	}
 	// The native models.dev catalog declares each provider's credential variables.
 	// This covers providers beyond AO's small fallback map without guessing names.
-	if path := providerCachePath(agentID, env); path != "" {
-		if raw, err := readProviderCatalog(path); err == nil {
-			var entries map[string]struct {
-				Env []string `json:"env"`
-			}
-			if json.Unmarshal(raw, &entries) == nil {
-				for provider, entry := range entries {
-					for _, key := range entry.Env {
-						if key != "" && value(key) != "" {
-							found[provider] = true
-						}
-					}
-				}
+	for provider, names := range providerEnvNames(providerCachePath(agentID, env)) {
+		for _, key := range names {
+			if key != "" && value(key) != "" {
+				found[provider] = true
 			}
 		}
 	}
@@ -206,4 +198,58 @@ func credentialPresence(value string) string {
 		return ""
 	}
 	return value
+}
+
+type providerEnvEntry struct {
+	size    int64
+	modTime time.Time
+	names   map[string][]string
+}
+
+var providerEnvCache struct {
+	sync.Mutex
+	entries map[string]providerEnvEntry
+}
+
+// providerEnvNames returns the credential variables a models.dev cache
+// declares for each provider. The cache can be tens of megabytes and catalog
+// fingerprints consult it on every cached read, so a parse is kept until the
+// file's size or modification time changes.
+func providerEnvNames(path string) map[string][]string {
+	if path == "" {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil
+	}
+	providerEnvCache.Lock()
+	cached, ok := providerEnvCache.entries[path]
+	providerEnvCache.Unlock()
+	if ok && cached.size == info.Size() && cached.modTime.Equal(info.ModTime()) {
+		return cached.names
+	}
+	raw, err := readProviderCatalog(path)
+	if err != nil {
+		return nil
+	}
+	var entries map[string]struct {
+		Env []string `json:"env"`
+	}
+	if json.Unmarshal(raw, &entries) != nil {
+		return nil
+	}
+	names := make(map[string][]string, len(entries))
+	for provider, entry := range entries {
+		if len(entry.Env) > 0 {
+			names[provider] = entry.Env
+		}
+	}
+	providerEnvCache.Lock()
+	if providerEnvCache.entries == nil {
+		providerEnvCache.entries = make(map[string]providerEnvEntry)
+	}
+	providerEnvCache.entries[path] = providerEnvEntry{size: info.Size(), modTime: info.ModTime(), names: names}
+	providerEnvCache.Unlock()
+	return names
 }

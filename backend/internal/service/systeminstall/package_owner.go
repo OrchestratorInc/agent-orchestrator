@@ -1,6 +1,7 @@
 package systeminstall
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,73 +38,61 @@ func deriveOwnerFromPath(binaryPath string) (derivedOwner, bool) {
 	if target := nodeShimTarget(resolved); target != "" {
 		resolved = target
 	}
-	segments := strings.Split(strings.ReplaceAll(filepath.ToSlash(resolved), `\`, "/"), "/")
-	for index := 0; index+1 < len(segments); index++ {
-		next := segments[index+1]
-		switch strings.ToLower(segments[index]) {
-		case "cellar":
-			return derivedOwner{method: "homebrew", pkg: next}, true
-		case "caskroom":
-			return derivedOwner{method: "homebrew", pkg: next, cask: true}, true
-		case "node_modules":
-			// pnpm, Yarn and Bun keep node_modules too; only npm's own layout
-			// is derived, and only the outermost package installed the binary.
-			if packageLayout(resolved) != layoutNPM {
-				return derivedOwner{}, false
-			}
-			pkg := next
-			if strings.HasPrefix(pkg, "@") && index+2 < len(segments) {
-				pkg += "/" + segments[index+2]
-			}
-			return derivedOwner{method: "npm", pkg: pkg}, true
-		case "tools":
-			if index > 0 && strings.EqualFold(segments[index-1], "uv") {
-				return derivedOwner{method: "uv", pkg: next}, true
-			}
-		case "venvs":
-			if index > 0 && strings.EqualFold(segments[index-1], "pipx") {
-				return derivedOwner{method: "pipx", pkg: next}, true
-			}
-		}
+	// pnpm, Yarn and Bun keep node_modules too; only npm's own layout is
+	// derived, and only the outermost package installed the binary.
+	match := layoutOf(resolved)
+	if match.pkg == "" {
+		return derivedOwner{}, false
 	}
-	return derivedOwner{}, false
+	switch match.layout {
+	case layoutHomebrew:
+		return derivedOwner{method: "homebrew", pkg: homebrewTappedName(match), cask: match.cask}, true
+	case layoutNPM:
+		return derivedOwner{method: "npm", pkg: match.pkg}, true
+	case layoutUV:
+		return derivedOwner{method: "uv", pkg: match.pkg}, true
+	case layoutPipx:
+		return derivedOwner{method: "pipx", pkg: match.pkg}, true
+	default:
+		return derivedOwner{}, false
+	}
+}
+
+// homebrewTappedName qualifies a formula or cask from a third-party tap with
+// that tap (owner/tap/name), read from Homebrew's install receipt. The short
+// name would otherwise resolve to a different core package of the same name.
+func homebrewTappedName(match pathLayout) string {
+	body, err := os.ReadFile(match.receipt)
+	if err != nil {
+		return match.pkg
+	}
+	var receipt struct {
+		Source struct {
+			Tap string `json:"tap"`
+		} `json:"source"`
+	}
+	if json.Unmarshal(body, &receipt) != nil {
+		return match.pkg
+	}
+	switch tap := strings.ToLower(strings.TrimSpace(receipt.Source.Tap)); tap {
+	case "", "homebrew/core", "homebrew/cask":
+		return match.pkg
+	default:
+		if strings.Count(tap, "/") != 1 {
+			return match.pkg
+		}
+		return tap + "/" + match.pkg
+	}
 }
 
 // nodeShimTarget returns the package file a Windows (.cmd/.ps1) or POSIX npm
 // shim launches, or "" when path is not such a shim.
 func nodeShimTarget(path string) string {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case "", ".cmd", ".ps1":
-	default:
+	targets, err := nodeShimTargets(path)
+	if err != nil || len(targets) == 0 {
 		return ""
 	}
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxShimBytes {
-		return ""
-	}
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(body), "\n") {
-		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "@"))
-		if !nodeShimLaunchLine(line) {
-			continue
-		}
-		for _, match := range quotedShimArgument.FindAllStringSubmatch(line, -1) {
-			argument := strings.ReplaceAll(match[1], `\`, "/")
-			for _, prefix := range []string{"%~dp0", "%dp0%", "$basedir", "${basedir}", "$PSScriptRoot"} {
-				if strings.HasPrefix(strings.ToLower(argument), strings.ToLower(prefix)+"/") {
-					argument = filepath.Join(filepath.Dir(path), filepath.FromSlash(argument[len(prefix)+1:]))
-					break
-				}
-			}
-			if filepath.IsAbs(argument) && strings.Contains(filepath.ToSlash(argument), "/node_modules/") {
-				return argument
-			}
-		}
-	}
-	return ""
+	return targets[0]
 }
 
 // derivedOwnerPlan builds the install plan for a derived owner through the

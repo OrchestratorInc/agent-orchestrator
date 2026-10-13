@@ -15,7 +15,6 @@ var (
 type updateVersion struct {
 	display    string
 	core       [4]uint64
-	parts      int
 	prerelease []string
 	build      string
 }
@@ -40,10 +39,6 @@ func versionSchemeFor(target Target) versionScheme {
 	default:
 		return versionSemver
 	}
-}
-
-func findUpdateVersion(text string) (updateVersion, bool) {
-	return versionSemver.find(text)
 }
 
 func (scheme versionScheme) find(text string) (updateVersion, bool) {
@@ -140,7 +135,7 @@ func updateVersionFromMatch(match []string) (updateVersion, bool) {
 	if len(parts) < 2 || len(parts) > 4 {
 		return updateVersion{}, false
 	}
-	parsed := updateVersion{parts: len(parts), build: match[3]}
+	parsed := updateVersion{build: match[3]}
 	for index, part := range parts {
 		value, err := strconv.ParseUint(part, 10, 64)
 		if err != nil {

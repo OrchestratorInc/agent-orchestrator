@@ -7,7 +7,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestProviderSnapshotIncludesUnconfiguredAndEmptyProviders(t *testing.T) {
@@ -160,5 +163,43 @@ func TestPiInstalledCatalogUsesItsOwnPackageWithoutCredentials(t *testing.T) {
 	models := piInstalledModels(context.Background(), filepath.Join(root, "pi/dist/cli.js"), root, nil)
 	if len(models) != 1 || models[0].ID != "custom/org/model" {
 		t.Fatalf("models = %#v", models)
+	}
+}
+
+func TestOnlySettingsBrowsingListsProvidersWithoutCredentials(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake CLI is a shell script")
+	}
+	env := providerTestEnv(t)
+	env["XDG_CACHE_HOME"] = t.TempDir()
+	path := providerCachePath("opencode", env)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"unc":{"models":{"org/model":{"name":"Model"}}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf 'anthropic/claude-sonnet\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	request := ports.AgentModelDiscoveryRequest{AgentID: "opencode", Binary: binary, WorkingDir: t.TempDir(), Env: env}
+	task, err := (Discoverer{}).Discover(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(task.Models) != 1 || task.Models[0].ID != "anthropic/claude-sonnet" {
+		t.Fatalf("task catalog = %#v, want only the CLI's configured models", task.Models)
+	}
+	request.BrowseAll = true
+	browse, err := (Discoverer{}).Discover(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(browse.Models) != 2 {
+		t.Fatalf("browse catalog = %#v, want the cached provider too", browse.Models)
+	}
+	if (Discoverer{}).CatalogFingerprint(context.Background(), request) == (Discoverer{}).CatalogFingerprint(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "opencode", Binary: binary, WorkingDir: request.WorkingDir, Env: env}) {
+		t.Fatal("task and browse catalogs share a fingerprint")
 	}
 }

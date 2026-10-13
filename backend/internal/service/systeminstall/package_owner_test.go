@@ -25,6 +25,8 @@ func TestDeriveOwnerFromPathReadsEachManagersLayout(t *testing.T) {
 	shimPrefix := filepath.Join(root, "AppData", "Roaming", "npm")
 	writeFileAt(t, filepath.Join(shimPrefix, "node_modules", "@google", "gemini-cli", "dist", "index.js"), "")
 	shim := writeFileAt(t, filepath.Join(shimPrefix, "gemini.cmd"), "@ECHO off\r\n\"%_prog%\"  \"%dp0%\\node_modules\\@google\\gemini-cli\\dist\\index.js\" %*\r\n")
+	writeFileAt(t, filepath.Join(root, "homebrew", "Cellar", "opencode", "1.18.34", "INSTALL_RECEIPT.json"), `{"source":{"tap":"anomalyco/tap"}}`)
+	writeFileAt(t, filepath.Join(root, "homebrew", "Cellar", "block-goose-cli", "1.48.0", "INSTALL_RECEIPT.json"), `{"source":{"tap":"homebrew/core"}}`)
 	for _, tt := range []struct {
 		name string
 		path string
@@ -32,6 +34,7 @@ func TestDeriveOwnerFromPathReadsEachManagersLayout(t *testing.T) {
 		ok   bool
 	}{
 		{"homebrew formula", writeFileAt(t, filepath.Join(root, "homebrew", "Cellar", "block-goose-cli", "1.48.0", "bin", "goose"), ""), derivedOwner{method: "homebrew", pkg: "block-goose-cli"}, true},
+		{"tapped homebrew formula", writeFileAt(t, filepath.Join(root, "homebrew", "Cellar", "opencode", "1.18.34", "bin", "opencode"), ""), derivedOwner{method: "homebrew", pkg: "anomalyco/tap/opencode"}, true},
 		{"homebrew cask", writeFileAt(t, filepath.Join(root, "homebrew", "Caskroom", "devin-cli", "3000.6.11", "bin", "devin"), ""), derivedOwner{method: "homebrew", pkg: "devin-cli", cask: true}, true},
 		{"scoped npm package", writeFileAt(t, filepath.Join(root, "node", "lib", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js"), ""), derivedOwner{method: "npm", pkg: "@earendil-works/pi-coding-agent"}, true},
 		{"npm package", writeFileAt(t, filepath.Join(root, "node", "lib", "node_modules", "prime-agent", "dist", "cli.js"), ""), derivedOwner{method: "npm", pkg: "prime-agent"}, true},
@@ -65,7 +68,7 @@ func TestUpdateAdvisoryMaintainsConfirmedOwnerMissingFromHarnessMethods(t *testi
 		t.Fatal("a package-owned binary was compared with the vendor channel")
 		return "", nil
 	}
-	advisory, err := s.UpdateAdvisory(context.Background(), TargetGoose)
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetGoose, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +85,7 @@ func TestUpdateAdvisoryMaintainsConfirmedOwnerMissingFromHarnessMethods(t *testi
 		}
 		for _, method := range plan.Methods {
 			if method.ID == "homebrew" {
-				if !method.UpdateAvailable || method.UpdateCommand != "brew update && brew upgrade block-goose-cli" {
+				if !method.UpdateAvailable || method.UpdateCommand != "brew update; brew upgrade block-goose-cli" {
 					t.Fatalf("Goose homebrew method = %+v", method)
 				}
 				return
@@ -102,7 +105,7 @@ func TestUpdateAdvisoryIgnoresDerivedOwnerTheManagerDoesNotConfirm(t *testing.T)
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return false, nil }
 	s.managedVersion = fixedManagedVersion("1.53.0", nil)
 	s.officialVersion = func(context.Context, Target) (string, error) { return "1.53.0", nil }
-	advisory, err := s.UpdateAdvisory(context.Background(), TargetGoose)
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetGoose, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,12 +129,12 @@ func TestNPMInstallerHarnessUpdatesThroughVendorCommand(t *testing.T) {
 	s.ownsInstallation = func(_ context.Context, path, method, pkg string, cask bool) (bool, error) {
 		return managerOwnsBinary(commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error { return errors.New("no npm") }))(context.Background(), path, method, pkg, cask)
 	}
-	s.managedVersion = func(context.Context, Plan) (managedVersionResult, error) {
+	s.managedVersion = func(context.Context, Plan) (string, error) {
 		t.Fatal("Prime Agent's tarball install was looked up in the npm registry")
-		return managedVersionResult{}, nil
+		return "", nil
 	}
 	s.officialVersion = func(context.Context, Target) (string, error) { return "0.9.8", nil }
-	advisory, err := s.UpdateAdvisory(context.Background(), TargetPrimeAgent)
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetPrimeAgent, false)
 	if err != nil {
 		t.Fatal(err)
 	}

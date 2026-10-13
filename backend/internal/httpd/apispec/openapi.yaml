@@ -9909,6 +9909,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
         "500":
           content:
             application/json:
@@ -9921,7 +9927,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Choose the default model and effort for new sessions using one harness
+      summary: Choose which models one harness's pickers offer
       tags:
       - settings
   /api/v1/settings/session-interface:
@@ -11171,10 +11177,23 @@ components:
         maintenanceMethod:
           type: string
         reason:
+          enum:
+          - ownership_unconfirmed
+          - unsupported_source
+          - version_unparseable
+          - channel_unconfirmed
+          - lookup_failed
+          - disabled
+          - build_unordered
           type: string
         source:
           type: string
         status:
+          enum:
+          - unknown
+          - current
+          - behind_latest
+          - ahead_of_latest
           type: string
       required:
       - agentId
@@ -13874,16 +13893,11 @@ components:
       type: object
     HarnessDefault:
       properties:
-        effort:
-          maxLength: 32
-          type: string
         enabledModels:
           items:
             type: string
+          maxItems: 5000
           type: array
-        model:
-          maxLength: 256
-          type: string
       type: object
     IdentityResponse:
       properties:
@@ -17292,12 +17306,14 @@ components:
         expectedVersion:
           description: For updates, the available version explicitly approved by the
             user. The update must reach it. It is installed only when it lies between
-            the installed version and the latest release AO found, and a version at
-            or below the installed one is rejected.
+            the installed version and the latest release AO found; otherwise that
+            latest release is installed. A version at or below the installed one,
+            or one sent with another operation, is rejected with INVALID_UPDATE_VERSION.
           type: string
         method:
           description: Server-issued installation method id. Omit to use the recommended
-            viable method.
+            viable method for an install or reinstall, and the method that owns the
+            installed copy for an update.
           type: string
         operation:
           description: Requested operation. Defaults to install for older clients.
@@ -17753,20 +17769,15 @@ components:
       type: object
     UpdateHarnessDefaultRequest:
       properties:
-        effort:
-          maxLength: 32
-          type: string
         enabledModels:
           items:
             type: string
+          maxItems: 5000
           type:
           - "null"
           - array
-        model:
-          maxLength: 256
-          type:
-          - "null"
-          - string
+      required:
+      - enabledModels
       type: object
     UpdateProjectSettingsInput:
       properties:

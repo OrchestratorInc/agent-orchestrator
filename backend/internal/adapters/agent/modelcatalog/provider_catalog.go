@@ -20,6 +20,16 @@ import (
 // Missing/unsupported snapshots leave the CLI result intact.
 const providerCatalogReadLimit = 32 << 20
 
+// hasLocalProviderCatalog reports whether localProviderCatalog reads a native
+// provider cache for agentID.
+func hasLocalProviderCatalog(agentID string) bool {
+	switch agentID {
+	case "opencode", "kilocode", "mimo-code", "omp", "pi", "kimchi":
+		return true
+	}
+	return false
+}
+
 func localProviderCatalog(ctx context.Context, agentID, binary, workingDir string, env map[string]string) ports.AgentModelCatalog {
 	var result ports.AgentModelCatalog
 	switch agentID {

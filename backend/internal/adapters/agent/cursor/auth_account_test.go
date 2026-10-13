@@ -1,6 +1,7 @@
 package cursor
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,10 +15,10 @@ func TestCursorLoginAccountReadsDisplayIdentityOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := domain.AgentAccountIdentity{Email: "dev@example.com", Name: "Dev", Method: domain.AgentAccountMethodAccount}
-	if got := cursorLoginAccount(path); got != want {
+	if got := cursorLoginAccount(context.Background(), path); got != want {
 		t.Fatalf("account = %+v, want %+v", got, want)
 	}
-	if got := cursorLoginAccount(filepath.Join(t.TempDir(), "missing.json")); got != (domain.AgentAccountIdentity{}) {
+	if got := cursorLoginAccount(context.Background(), filepath.Join(t.TempDir(), "missing.json")); got != (domain.AgentAccountIdentity{}) {
 		t.Fatalf("missing config account = %+v", got)
 	}
 }

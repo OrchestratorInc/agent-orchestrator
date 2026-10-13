@@ -53,7 +53,7 @@ func TestKiroWhoamiAuthStatus(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			withWhoami(t, tc.out, tc.err)
-			got, err := kiroWhoamiAuthStatus(context.Background(), "kiro-cli")
+			got, _, _, err := kiroWhoamiAuthDiagnostics(context.Background(), "kiro-cli")
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -68,7 +68,7 @@ func TestKiroWhoamiAuthStatus(t *testing.T) {
 // must come from reading the output rather than from the exit code.
 func TestKiroWhoamiIgnoresExitCode(t *testing.T) {
 	withWhoami(t, signedInWhoami, errors.New("exit status 1"))
-	got, err := kiroWhoamiAuthStatus(context.Background(), "kiro-cli")
+	got, _, _, err := kiroWhoamiAuthDiagnostics(context.Background(), "kiro-cli")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestKiroWhoamiIgnoresExitCode(t *testing.T) {
 }
 
 func TestKiroWhoamiWithoutBinaryIsUnknown(t *testing.T) {
-	got, err := kiroWhoamiAuthStatus(context.Background(), "")
+	got, _, _, err := kiroWhoamiAuthDiagnostics(context.Background(), "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -89,12 +89,12 @@ func TestKiroWhoamiWithoutBinaryIsUnknown(t *testing.T) {
 
 func TestKiroWhoamiAccount(t *testing.T) {
 	withWhoami(t, signedInWhoami, nil)
-	status, account, err := kiroWhoamiAuth(context.Background(), "kiro-cli")
+	status, account, _, err := kiroWhoamiAuthDiagnostics(context.Background(), "kiro-cli")
 	if err != nil || status != ports.AgentAuthStatusAuthorized || account.Email != "user@example.com" {
 		t.Fatalf("status=%s account=%+v err=%v", status, account, err)
 	}
 	withWhoami(t, signedOutWhoami, errors.New("exit status 1"))
-	if _, account, _ := kiroWhoamiAuth(context.Background(), "kiro-cli"); account.Email != "" {
+	if _, account, _, _ := kiroWhoamiAuthDiagnostics(context.Background(), "kiro-cli"); account.Email != "" {
 		t.Fatalf("signed-out account = %+v", account)
 	}
 }
@@ -106,13 +106,13 @@ func TestKiroLoginWinsOverEnvironmentKey(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "kiro-cli"}
 
 	withWhoami(t, signedInWhoami, nil)
-	status, account, err := plugin.AuthStatusWithAccount(context.Background())
+	status, account, _, err := plugin.AuthStatusWithDiagnostics(context.Background())
 	if err != nil || status != ports.AgentAuthStatusAuthorized || account.Email != "user@example.com" {
 		t.Fatalf("signed in: status=%s account=%+v err=%v", status, account, err)
 	}
 
 	withWhoami(t, signedOutWhoami, errors.New("exit status 1"))
-	status, account, err = plugin.AuthStatusWithAccount(context.Background())
+	status, account, _, err = plugin.AuthStatusWithDiagnostics(context.Background())
 	if err != nil || status != ports.AgentAuthStatusAuthorized || account.Source != "KIRO_API_KEY" {
 		t.Fatalf("signed out with key: status=%s account=%+v err=%v", status, account, err)
 	}

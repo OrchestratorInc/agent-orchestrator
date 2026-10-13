@@ -631,21 +631,19 @@ func (s *Service) Start(ctx context.Context, target Target) (Job, error) {
 // empty method chooses the first currently viable method for compatibility
 // with older clients.
 func (s *Service) StartAgent(ctx context.Context, target Target, method string) (Job, error) {
-	return s.StartAgentOperation(ctx, target, method, AgentOperationInstall)
+	return s.StartAgentOperation(ctx, target, method, AgentOperationInstall, "")
 }
 
 // StartAgentOperation begins a harness operation using one server-owned
-// method ID and operation.
-func (s *Service) StartAgentOperation(ctx context.Context, target Target, method string, operation AgentOperation, expectedVersion ...string) (Job, error) {
+// method ID and operation. An empty method chooses the recommended method
+// for an install or reinstall and the method that owns the installed copy for
+// an update. expected is the release the user approved for an update, or "".
+func (s *Service) StartAgentOperation(ctx context.Context, target Target, method string, operation AgentOperation, expected string) (Job, error) {
 	if err := ctx.Err(); err != nil {
 		return Job{}, err
 	}
 	if !operation.valid() {
 		return Job{}, fmt.Errorf("%w: unknown install operation %q", ErrInstallMethod, operation)
-	}
-	expected := ""
-	if len(expectedVersion) > 0 {
-		expected = expectedVersion[0]
 	}
 	if expected != "" {
 		if _, ok := parseUpdateVersion(expected); !ok || operation != AgentOperationUpdate {
@@ -699,6 +697,11 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 	if method == "" {
 		plans := planner.agentMethodPlans(target, operation)
 		plan = plans[recommendedPlanIndex(plans)]
+		if operation == AgentOperationUpdate {
+			if owner, ok := s.owningUpdatePlan(ctx, target, plans); ok {
+				plan = owner
+			}
+		}
 	} else {
 		plan, err = planner.resolveAgentMethod(target, method, operation)
 		if err != nil {
@@ -713,7 +716,7 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		}
 		plannedPrefix := plan.PackagePrefix
 		if baseline != nil && baseline.path != "" {
-			plan = targetInstalledCopy(plan, target, baseline.path)
+			plan = targetInstalledCopy(s.goos, plan, target, baseline.path)
 		}
 		plan = s.validateNPMUpdateTarget(ctx, plan, plannedPrefix)
 	}
@@ -740,13 +743,22 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		plan = pinVendorUpdate(plan, pin)
 	}
 
+	now := time.Now().UTC()
+	if plan.Unsupported && operation != AgentOperationInstall {
+		// A refused update or reinstall changes nothing, so it is reported to
+		// the caller without replacing the record of the installation's last job.
+		return Job{
+			Target: target, Status: StatusUnsupported, Method: plan.Method,
+			Command: displayCommand(plan), ExpectedDestination: plan.ExpectedDestination,
+			Error: plan.Reason, Notice: plan.Notice, StartedAt: &now, FinishedAt: &now, UpdatedAt: &now,
+		}, nil
+	}
 	s.mu.Lock()
 	if current, ok := s.jobs[target]; ok && activeStatus(current.Status) {
 		s.mu.Unlock()
 		return Job{}, ErrInstallActive
 	}
 	previous, hadPrevious := s.jobs[target]
-	now := time.Now().UTC()
 	status := StatusInstalling
 	finishedAt := (*time.Time)(nil)
 	if plan.Unsupported {
@@ -792,6 +804,37 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		s.runAgentOperation(s.backgroundContext, plan, operation, job, baseline)
 	}()
 	return initial, nil
+}
+
+// owningUpdatePlan picks the update plan whose method owns the binary
+// sessions run, for an update request that names no method. The latest
+// advisory's maintenance method is preferred; otherwise each available
+// method is checked against the resolved binary. ok is false when no method
+// is confirmed, and the caller's plan is then refused by confirmInstalledOwner.
+func (s *Service) owningUpdatePlan(ctx context.Context, target Target, plans []Plan) (Plan, bool) {
+	s.mu.Lock()
+	advisory, hasAdvisory := s.updateAdvisories[target]
+	s.mu.Unlock()
+	if hasAdvisory && advisory.MaintenanceMethod != "" {
+		for _, plan := range plans {
+			if plan.Method == advisory.MaintenanceMethod && !plan.Unsupported {
+				return plan, true
+			}
+		}
+	}
+	if s.verifier == nil {
+		return Plan{}, false
+	}
+	verified, _ := s.verifier.Verify(ctx, target)
+	if verified.ResolvedPath == "" {
+		return Plan{}, false
+	}
+	for _, plan := range plans {
+		if !plan.Unsupported && s.methodOwnsBinary(ctx, plan, verified.ResolvedPath) {
+			return plan, true
+		}
+	}
+	return Plan{}, false
 }
 
 // requireNoLiveReviewer refuses a harness operation while a reviewer runs on
@@ -1302,6 +1345,8 @@ func (s *Service) resolvePlan(target Target) Plan {
 	return s.planFor(target)
 }
 
+// displayCommand renders the plan for display. Prepare steps are joined with
+// "; " rather than "&&": a failed step is noted and Command still runs.
 func displayCommand(plan Plan) string {
 	if plan.Script != nil {
 		return fmt.Sprintf("%s <downloaded from %s>", strings.Join(plan.Script.Interpreter, " "), plan.Script.URL)
@@ -1314,7 +1359,7 @@ func displayCommand(plan Plan) string {
 	for _, prepare := range plan.Prepare {
 		steps = append(steps, strings.Join(prepare, " "))
 	}
-	return strings.Join(append(steps, strings.Join(argv, " ")), " && ")
+	return strings.Join(append(steps, strings.Join(argv, " ")), "; ")
 }
 
 // capturedOutput is an io.Writer that keeps only the last max bytes written,

@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -172,16 +171,6 @@ type AgentAccountIdentity struct {
 // EnvironmentSource names an environment variable as the credential source.
 func EnvironmentSource(name string) AgentAccountIdentity {
 	return AgentAccountIdentity{SourceKind: AgentCredentialSourceEnvironment, Source: name}
-}
-
-// FileSource names a credential or config file, home-relative when possible.
-func FileSource(path string) AgentAccountIdentity {
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		if rel, err := filepath.Rel(home, path); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			path = filepath.Join("~", rel)
-		}
-	}
-	return AgentAccountIdentity{SourceKind: AgentCredentialSourceFile, Source: path}
 }
 
 // CommandSource names the status command that reported the login, by the

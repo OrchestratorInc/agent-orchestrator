@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
 
@@ -77,7 +76,7 @@ func managerOwnsBinary(commands ports.CommandRunner) func(context.Context, strin
 			if packageLayout(binaryPath) != layoutUV {
 				return false, nil
 			}
-			output, err := runOwnershipCommand(ctx, commands, []string{"uv", "tool", "list", "--show-paths", "--color", "never"})
+			output, err := runProbe(ctx, commands, localProbeTimeout, true, []string{"uv", "tool", "list", "--show-paths", "--color", "never"})
 			if err != nil {
 				return false, err
 			}
@@ -86,7 +85,7 @@ func managerOwnsBinary(commands ports.CommandRunner) func(context.Context, strin
 			if packageLayout(binaryPath) != layoutPipx {
 				return false, nil
 			}
-			output, err := runOwnershipCommand(ctx, commands, []string{"pipx", "list", "--json"})
+			output, err := runProbe(ctx, commands, localProbeTimeout, true, []string{"pipx", "list", "--json"})
 			if err != nil {
 				return false, err
 			}
@@ -132,7 +131,7 @@ func managerOwnsBinary(commands ports.CommandRunner) func(context.Context, strin
 				return false, nil
 			}
 			argv := []string{"winget", "list", "--id", pkg, "--exact", "--source", "winget", "--accept-source-agreements", "--disable-interactivity"}
-			output, err := runOwnershipCommand(ctx, commands, argv)
+			output, err := runProbe(ctx, commands, localProbeTimeout, true, argv)
 			if err != nil {
 				return false, err
 			}
@@ -144,7 +143,7 @@ func managerOwnsBinary(commands ports.CommandRunner) func(context.Context, strin
 }
 
 func managerPath(ctx context.Context, commands ports.CommandRunner, argv []string) (string, error) {
-	output, err := runOwnershipCommand(ctx, commands, argv)
+	output, err := runProbe(ctx, commands, localProbeTimeout, true, argv)
 	if err != nil {
 		return "", err
 	}
@@ -155,14 +154,28 @@ func managerPath(ctx context.Context, commands ports.CommandRunner, argv []strin
 	return filepath.Clean(root), nil
 }
 
-func runOwnershipCommand(ctx context.Context, commands ports.CommandRunner, argv []string) (string, error) {
-	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+// Probe timeouts. Manager metadata commands may reach the network; ownership
+// and runtime probes only read local state.
+const (
+	localProbeTimeout   = 5 * time.Second
+	managerProbeTimeout = 10 * time.Second
+)
+
+// runProbe runs a bounded read-only command and returns its output. Stderr is
+// kept only when keepStderr is set: manager warnings would corrupt JSON output.
+func runProbe(ctx context.Context, commands ports.CommandRunner, timeout time.Duration, keepStderr bool, argv []string) (string, error) {
+	if commands == nil {
+		return "", fmt.Errorf("command runner unavailable")
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	output := &capturedOutput{max: maxOutputBytes}
-	if err := commands.Run(probeCtx, argv, output, output); err != nil {
-		return output.String(), err
+	stderr := io.Writer(io.Discard)
+	if keepStderr {
+		stderr = output
 	}
-	return output.String(), nil
+	err := commands.Run(probeCtx, argv, output, stderr)
+	return output.String(), err
 }
 
 func nodePackageOwnsBinary(binaryPath, modulesRoot, pkg string) (bool, error) {
@@ -179,24 +192,45 @@ func nodePackageOwnsBinary(binaryPath, modulesRoot, pkg string) (bool, error) {
 var quotedShimArgument = regexp.MustCompile(`["']([^"'\r\n]+)["']`)
 
 func nodeShimTargetsPackage(binaryPath, packageRoot string) (bool, error) {
+	targets, err := nodeShimTargets(binaryPath)
+	if err != nil {
+		return false, err
+	}
+	found := false
+	for _, target := range targets {
+		owned, err := pathWithin(packageRoot, target)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil || !owned {
+			return false, err
+		}
+		found = true
+	}
+	return found, nil
+}
+
+// nodeShimTargets returns the node_modules files a Windows (.cmd/.ps1) or
+// POSIX npm shim passes to node, in order; none when path is not such a shim.
+func nodeShimTargets(binaryPath string) ([]string, error) {
 	switch strings.ToLower(filepath.Ext(binaryPath)) {
 	case "", ".cmd", ".ps1":
 	default:
-		return false, nil
+		return nil, nil
 	}
 	file, err := os.Open(binaryPath)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	defer func() { _ = file.Close() }()
 	body, err := io.ReadAll(io.LimitReader(file, maxShimBytes+1))
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if len(body) > maxShimBytes {
-		return false, fmt.Errorf("manager shim exceeds %d bytes", maxShimBytes)
+		return nil, fmt.Errorf("manager shim exceeds %d bytes", maxShimBytes)
 	}
-	found := false
+	var targets []string
 	for _, line := range strings.Split(string(body), "\n") {
 		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "@"))
 		// Accept launcher arguments, never mentions in comments or assignments.
@@ -211,20 +245,12 @@ func nodeShimTargetsPackage(binaryPath, packageRoot string) (bool, error) {
 					break
 				}
 			}
-			if !filepath.IsAbs(argument) || !strings.Contains(strings.ReplaceAll(argument, `\`, "/"), "/node_modules/") {
-				continue
+			if filepath.IsAbs(argument) && strings.Contains(strings.ReplaceAll(argument, `\`, "/"), "/node_modules/") {
+				targets = append(targets, argument)
 			}
-			owned, err := pathWithin(packageRoot, argument)
-			if os.IsNotExist(err) {
-				continue
-			}
-			if err != nil || !owned {
-				return false, err
-			}
-			found = true
 		}
 	}
-	return found, nil
+	return targets, nil
 }
 
 func nodeShimLaunchLine(line string) bool {
@@ -423,9 +449,9 @@ func npmPackageNamed(packageRoot, pkg string) bool {
 // Node when the prefix is a Node installation (nvm, fnm, a tarball), so an
 // update uses the same Node the harness was installed with. Other prefixes,
 // such as ~/.local or %APPDATA%\npm, use npm from PATH.
-func npmCommandForPrefix(prefix string) []string {
+func npmCommandForPrefix(goos, prefix string) []string {
 	node, cli := filepath.Join(prefix, "bin", "node"), filepath.Join(prefix, "lib", "node_modules", "npm", "bin", "npm-cli.js")
-	if runtime.GOOS == "windows" {
+	if goos == "windows" {
 		node, cli = filepath.Join(prefix, "node.exe"), filepath.Join(prefix, "node_modules", "npm", "bin", "npm-cli.js")
 	}
 	if regularFile(node) && regularFile(cli) {

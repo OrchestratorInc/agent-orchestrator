@@ -301,7 +301,15 @@ func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscov
 		}
 		env["XDG_DATA_HOME"] = dataHome
 	}
-	return Discover(ctx, request.AgentID, request.Binary, request.WorkingDir, env)
+	return discoverCommandCatalog(ctx, request.AgentID, request.Binary, request.WorkingDir, env, request.BrowseAll)
+}
+
+// BrowsesAllProviders reports whether Settings browses a broader catalog than
+// task pickers: FX's every-provider listing, or a harness whose native
+// provider cache also lists providers without credentials. Task pickers only
+// offer what the harness can run now.
+func (Discoverer) BrowsesAllProviders(agentID string) bool {
+	return agentID == "fx" || hasLocalProviderCatalog(agentID)
 }
 
 // opencodeCredentialEnv maps an opencode cloud credential type to the env var
@@ -476,6 +484,14 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 	if request.AgentID == "fx" && request.BrowseAll {
 		return fingerprint + ":browse-v1:" + fingerprintConfigPaths([]string{fxSettingsPath(request.Env)})
 	}
+	if hasLocalProviderCatalog(request.AgentID) {
+		// Task catalogs cached before they dropped providers without
+		// credentials must be rediscovered.
+		if request.BrowseAll {
+			return fingerprint + ":browse-v1"
+		}
+		return fingerprint + ":configured-v1"
+	}
 	if request.AgentID != "claude-code" || d.ClaudeFingerprint == nil {
 		return fingerprint
 	}
@@ -496,12 +512,15 @@ func (Discoverer) LabelAliases(agentID string, models, reference []ports.AgentMo
 	return LabelClaudeAliasVersions(models, reference)
 }
 
-// Discover executes model catalog discovery for an agent binary.
+// Discover executes model catalog discovery for an agent binary, listing only
+// the providers it can run now.
 func Discover(ctx context.Context, agentID, binary, workingDir string, env map[string]string) (ports.AgentModelCatalog, error) {
-	return discoverCommandCatalog(ctx, agentID, binary, workingDir, env, true)
+	return discoverCommandCatalog(ctx, agentID, binary, workingDir, env, false)
 }
 
-func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir string, env map[string]string, includeUnconfigured bool) (ports.AgentModelCatalog, error) {
+// discoverCommandCatalog runs the harness's model listing. browseAll adds the
+// providers its native cache knows without credentials, for Settings only.
+func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir string, env map[string]string, browseAll bool) (ports.AgentModelCatalog, error) {
 	base := Base(agentID)
 	if agentID == "unreal-agent" {
 		return discoverUnrealCatalog(env), nil
@@ -544,10 +563,11 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	if err != nil {
 		return base, fmt.Errorf("%s model discovery: %w", agentID, err)
 	}
-	if includeUnconfigured {
+	base.Providers = reportedJSONProviders(output)
+	if browseAll {
 		reported := localProviderCatalog(runCtx, agentID, binary, workingDir, env)
 		models = append(models, reported.Models...)
-		base.Providers = append(reportedJSONProviders(output), reported.Providers...)
+		base.Providers = append(base.Providers, reported.Providers...)
 	}
 	models = normalize(models)
 	if len(models) == 0 && len(base.Providers) == 0 {
@@ -558,7 +578,7 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 		models = markCodewhaleResolvedDefault(ctx, binary, workingDir, env, models)
 	}
 	base.Models = models
-	if includeUnconfigured {
+	if browseAll {
 		base.ConfiguredProviders = configuredProviders(ctx, agentID, env)
 	}
 	base.Source = "cli"
@@ -996,12 +1016,20 @@ func model(id, label string, isDefault bool) ports.AgentModelInfo {
 func parseProviderIDLines(output []byte) ([]ports.AgentModelInfo, error) {
 	models := parseIDLines(output)
 	for i := range models {
-		if provider, name, ok := strings.Cut(models[i].ID, "/"); ok && provider != "" && name != "" {
-			models[i].Provider = provider
-			models[i].Label = name
-		}
+		splitProviderID(&models[i])
 	}
 	return models, nil
+}
+
+// splitProviderID labels a provider/model selector with its provider and the
+// name after the first slash, reporting whether the ID had both parts.
+func splitProviderID(item *ports.AgentModelInfo) bool {
+	provider, name, ok := strings.Cut(item.ID, "/")
+	if !ok || provider == "" || name == "" {
+		return false
+	}
+	item.Provider, item.Label = provider, name
+	return true
 }
 
 // Bedrock's own model IDs, which LiteLLM lists without a provider prefix:
@@ -1012,12 +1040,9 @@ var bedrockModelIDPattern = regexp.MustCompile(`^(?:(?:us|eu|apac|au|jp|ca|globa
 // LiteLLM provider. Bare names name no provider, except Bedrock's vendor.model
 // IDs; the rest stay unassigned rather than guessed from the model name.
 func parseAiderModels(output []byte) ([]ports.AgentModelInfo, error) {
-	models := parseIDLines(output)
+	models, _ := parseProviderIDLines(output)
 	for i := range models {
-		if provider, name, ok := strings.Cut(models[i].ID, "/"); ok && provider != "" && name != "" {
-			models[i].Provider = provider
-			models[i].Label = name
-		} else if bedrockModelIDPattern.MatchString(models[i].ID) {
+		if models[i].Provider == "" && bedrockModelIDPattern.MatchString(models[i].ID) {
 			models[i].Provider = "bedrock"
 		}
 	}
@@ -1047,11 +1072,11 @@ func parseMiMoModels(output []byte) ([]ports.AgentModelInfo, error) {
 	var models []ports.AgentModelInfo
 	for _, line := range strings.Split(text, "\n") {
 		id, _, found := strings.Cut(strings.TrimSpace(line), " — ")
-		if !found || !strings.Contains(id, "/") || !looksLikeModelID(id) {
+		item := ports.AgentModelInfo{ID: id}
+		if !found || !looksLikeModelID(id) || !splitProviderID(&item) {
 			continue
 		}
-		provider, name, _ := strings.Cut(id, "/")
-		models = append(models, ports.AgentModelInfo{ID: id, Label: name, Provider: provider})
+		models = append(models, item)
 	}
 	return normalize(models), nil
 }

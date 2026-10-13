@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -56,16 +57,13 @@ func aiderLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 			break
 		}
 		if ok {
-			ports.RecordAuthEvidence(ctx, domain.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey))
+			ports.RecordAuthEvidence(ctx, authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey))
 			return status, true, nil
 		}
 	}
 
-	for _, name := range aiderAPIKeyEnvVars {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey))
-			return ports.AgentAuthStatusAuthorized, true, nil
-		}
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, aiderAPIKeyEnvVars...) != "" {
+		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	if fileErr != nil {
 		return ports.AgentAuthStatusUnknown, false, fileErr

@@ -23,13 +23,13 @@ func TestUpdateAdvisoryComparesKnownNPMInstallationAndCachesResult(t *testing.T)
 	calls := 0
 	var gotMethod, gotPackage string
 	var gotCask bool
-	s.managedVersion = func(_ context.Context, plan Plan) (managedVersionResult, error) {
+	s.managedVersion = func(_ context.Context, plan Plan) (string, error) {
 		calls++
 		gotMethod, gotPackage, gotCask = plan.Method, packageWithoutLatest(plan.Package), plan.PackageCask
-		return managedVersionResult{Latest: "1.3.0"}, nil
+		return "1.3.0", nil
 	}
 	for range 2 {
-		advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+		advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -74,7 +74,7 @@ func TestOfficialReleaseExposesVendorMaintenanceOnlyOutsidePackageTools(t *testi
 				return VerifyResult{ResolvedPath: path, Output: tt.output}, nil
 			})
 			s.officialVersion = func(context.Context, Target) (string, error) { return "9.9.9", nil }
-			advisory, err := s.UpdateAdvisory(context.Background(), tt.target)
+			advisory, err := s.UpdateAdvisory(context.Background(), tt.target, false)
 			if err != nil || advisory.MaintenanceMethod != tt.method {
 				t.Fatalf("advisory=%+v err=%v, want maintenance %q", advisory, err, tt.method)
 			}
@@ -90,7 +90,7 @@ func TestUpdateAdvisoryExplicitRefreshReprobesCurrentBinary(t *testing.T) {
 	})
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
 	s.managedVersion = fixedManagedVersion("1.3.0", nil)
-	if result, err := s.UpdateAdvisory(context.Background(), TargetCodex); err != nil || result.Status != UpdateStatusBehindLatest {
+	if result, err := s.UpdateAdvisory(context.Background(), TargetCodex, false); err != nil || result.Status != UpdateStatusBehindLatest {
 		t.Fatalf("initial=%+v err=%v", result, err)
 	}
 	version = "1.3.0"
@@ -107,10 +107,10 @@ func TestUpdateAdvisoryRefreshKeepsServingPreviousResult(t *testing.T) {
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
 	release := make(chan struct{})
 	started := make(chan struct{}, 1)
-	s.managedVersion = func(context.Context, Plan) (managedVersionResult, error) {
+	s.managedVersion = func(context.Context, Plan) (string, error) {
 		started <- struct{}{}
 		<-release
-		return managedVersionResult{Latest: "1.4.0"}, nil
+		return "1.4.0", nil
 	}
 	previous := UpdateAdvisory{AgentID: string(TargetCodex), Status: UpdateStatusBehindLatest, CurrentVersion: "1.2.3", LatestVersion: "1.3.0", CheckedAt: time.Now().Add(-time.Hour)}
 	s.updateAdvisories = map[Target]UpdateAdvisory{TargetCodex: previous}
@@ -124,14 +124,14 @@ func TestUpdateAdvisoryRefreshKeepsServingPreviousResult(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("refresh did not start a check")
 	}
-	if advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex); err != nil || advisory != previous {
+	if advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex, false); err != nil || advisory != previous {
 		t.Fatalf("read during refresh = %+v err=%v, want previous %+v", advisory, err, previous)
 	}
 	close(release)
 	if advisory := <-refreshed; advisory.LatestVersion != "1.4.0" {
 		t.Fatalf("refresh = %+v, want latest 1.4.0", advisory)
 	}
-	if advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex); err != nil || advisory.LatestVersion != "1.4.0" {
+	if advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex, false); err != nil || advisory.LatestVersion != "1.4.0" {
 		t.Fatalf("read after refresh = %+v err=%v", advisory, err)
 	}
 }
@@ -146,17 +146,17 @@ func TestUpdateAdvisoryPageRequestCanCancelWhileStartupJoinsSameCheck(t *testing
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var lookups atomic.Int32
-	s.managedVersion = func(context.Context, Plan) (managedVersionResult, error) {
+	s.managedVersion = func(context.Context, Plan) (string, error) {
 		if lookups.Add(1) == 1 {
 			close(started)
 		}
 		<-release
-		return managedVersionResult{Latest: "1.3.0"}, nil
+		return "1.3.0", nil
 	}
 	pageCtx, cancelPage := context.WithCancel(context.Background())
 	pageDone := make(chan error, 1)
 	go func() {
-		_, err := s.UpdateAdvisory(pageCtx, TargetCodex)
+		_, err := s.UpdateAdvisory(pageCtx, TargetCodex, false)
 		pageDone <- err
 	}()
 	select {
@@ -170,7 +170,7 @@ func TestUpdateAdvisoryPageRequestCanCancelWhileStartupJoinsSameCheck(t *testing
 	}
 	startupDone := make(chan UpdateAdvisory, 1)
 	go func() {
-		advisory, _ := s.UpdateAdvisory(context.Background(), TargetCodex)
+		advisory, _ := s.UpdateAdvisory(context.Background(), TargetCodex, false)
 		startupDone <- advisory
 	}()
 	select {
@@ -214,7 +214,7 @@ func TestUpdateAdvisoryRunsAtMostTwoChecksAtOnce(t *testing.T) {
 	done := make(chan error, len(targets))
 	for _, target := range targets {
 		go func() {
-			_, err := s.UpdateAdvisory(context.Background(), target)
+			_, err := s.UpdateAdvisory(context.Background(), target, false)
 			done <- err
 		}()
 	}
@@ -275,7 +275,7 @@ func TestUpdateAdvisoryServesOldResultsAndRetriesOnlyStaleLookupFailures(t *test
 			s.officialVersion = func(context.Context, Target) (string, error) { return "1.0.0", nil }
 			tt.cached.AgentID = string(TargetCodex)
 			s.updateAdvisories = map[Target]UpdateAdvisory{TargetCodex: tt.cached}
-			advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+			advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -314,7 +314,7 @@ func TestUpdateAdvisoryUnknownWhenOwnershipVersionOrLookupUnproven(t *testing.T)
 			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) { return VerifyResult{Output: tt.output}, nil })
 			s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
 			s.managedVersion = fixedManagedVersion(tt.latest, tt.err)
-			advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+			advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -333,7 +333,7 @@ func TestUpdateAdvisoryReportsInstallAheadOfLatest(t *testing.T) {
 	})
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
 	s.managedVersion = fixedManagedVersion("1.3.0", nil)
-	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,11 +350,11 @@ func TestUpdateAdvisoryCurrentAndHomebrewPackage(t *testing.T) {
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
 	var gotMethod, gotPackage string
 	var gotCask bool
-	s.managedVersion = func(_ context.Context, plan Plan) (managedVersionResult, error) {
+	s.managedVersion = func(_ context.Context, plan Plan) (string, error) {
 		gotMethod, gotPackage, gotCask = plan.Method, packageWithoutLatest(plan.Package), plan.PackageCask
-		return managedVersionResult{Latest: "1.3.0"}, nil
+		return "1.3.0", nil
 	}
-	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,11 +373,11 @@ func TestUpdateAdvisoryDetectsPackageOwnerWithoutAOInstallRecord(t *testing.T) {
 	})
 	s.ownsInstallation = func(_ context.Context, _ string, method, _ string, _ bool) (bool, error) { return method == "npm", nil }
 	var gotMethod, gotPackage string
-	s.managedVersion = func(_ context.Context, plan Plan) (managedVersionResult, error) {
+	s.managedVersion = func(_ context.Context, plan Plan) (string, error) {
 		gotMethod, gotPackage = plan.Method, packageWithoutLatest(plan.Package)
-		return managedVersionResult{Latest: "1.3.0"}, nil
+		return "1.3.0", nil
 	}
-	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +399,7 @@ func TestUpdateAdvisoryFollowsBinaryOwnerOverRecordedMethod(t *testing.T) {
 		return method == "homebrew", nil
 	}
 	s.managedVersion = fixedManagedVersion("1.3.0", nil)
-	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,11 +419,11 @@ func TestUpdateAdvisoryRequiresVerifiedPackageOwnership(t *testing.T) {
 	})
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return false, nil }
 	var latestCalled atomic.Bool
-	s.managedVersion = func(context.Context, Plan) (managedVersionResult, error) {
+	s.managedVersion = func(context.Context, Plan) (string, error) {
 		latestCalled.Store(true)
-		return managedVersionResult{Latest: "1.3.0"}, nil
+		return "1.3.0", nil
 	}
-	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,8 +436,8 @@ func TestUpdateAdvisoryRequiresVerifiedPackageOwnership(t *testing.T) {
 }
 
 func fixedManagedVersion(latest string, err error) managedVersionChecker {
-	return func(context.Context, Plan) (managedVersionResult, error) {
-		return managedVersionResult{Latest: latest}, err
+	return func(context.Context, Plan) (string, error) {
+		return latest, err
 	}
 }
 
@@ -501,7 +501,7 @@ func TestUpdateAdvisoryDisabledSkipsAllLookups(t *testing.T) {
 		t.Fatal("disabled update check reached the network")
 		return "", nil
 	}
-	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+	advisory, err := s.UpdateAdvisory(context.Background(), TargetCodex, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -532,7 +532,7 @@ func TestUpdateAdvisoryReportsSessionExecutableEvenWhenProbeFails(t *testing.T) 
 				t.Fatal("unparseable version must not fetch releases")
 				return "", nil
 			}
-			got, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+			got, err := s.UpdateAdvisory(context.Background(), TargetCodex, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -570,7 +570,7 @@ func TestUpdateAdvisoryKeepsExecutableWithoutReleaseChecks(t *testing.T) {
 			s := newTestService("darwin")
 			s.updateChecksDisabled = disabled
 			s.verifier = resolveOnlyAdvisoryVerifier{t: t, path: "/opt/bin/codex"}
-			got, err := s.UpdateAdvisory(context.Background(), TargetCodex)
+			got, err := s.UpdateAdvisory(context.Background(), TargetCodex, false)
 			if err != nil || got.BinaryPath != "/opt/bin/codex" || got.Status != UpdateStatusUnknown {
 				t.Fatalf("advisory = %+v, err=%v", got, err)
 			}

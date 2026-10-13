@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -23,7 +24,7 @@ func TestGrokAuthRecordsTheStoredLoginFile(t *testing.T) {
 	if err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
 		t.Fatalf("status = (%q, %v, %v)", status, ok, err)
 	}
-	want := domain.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
+	want := authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
 	if got := evidence.Identity(); got != want {
 		t.Fatalf("evidence = %+v, want %+v", got, want)
 	}

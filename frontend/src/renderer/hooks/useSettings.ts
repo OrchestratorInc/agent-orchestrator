@@ -7,12 +7,13 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import type { SessionMode } from "../types/workspace";
 
 /** `enabledModels` narrows the models pickers offer; empty or unset means every catalog model. */
-export type HarnessDefault = { model?: string; effort?: string; enabledModels?: string[] };
+export type HarnessDefault = Pick<components["schemas"]["HarnessDefault"], "enabledModels">;
 
 export const settingsQueryKey = ["settings"] as const;
 
@@ -117,19 +118,14 @@ export function useUpdateCloudOffering() {
 	};
 }
 
-/** Saves one host's preference without replacing other harnesses' defaults. */
+/** Saves which models one harness offers without replacing other harnesses' entries. */
 export function useUpdateHarnessDefault(hostId?: string) {
 	const queryClient = useQueryClient();
 	const key = hostId ? ["settings", hostId] : settingsQueryKey;
 	const mutation = useMutation({
-		// Omitted parts keep their saved value, so saving enabled models never resets the default model.
-		mutationFn: async ({ agentId, ...value }: HarnessDefault & { agentId: string }) => {
-			const body = {
-				...("model" in value || "effort" in value ? { model: value.model ?? "", effort: value.effort ?? "" } : {}),
-				...(value.enabledModels ? { enabledModels: value.enabledModels } : {}),
-			};
+		mutationFn: async ({ agentId, enabledModels }: { agentId: string; enabledModels: string[] }) => {
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).PATCH("/api/v1/settings/harness-defaults/{agent}", {
-				params: { path: { agent: agentId } }, body,
+				params: { path: { agent: agentId } }, body: { enabledModels },
 			});
 			if (error) throw error;
 			return data;
@@ -139,5 +135,5 @@ export function useUpdateHarnessDefault(hostId?: string) {
 			await queryClient.invalidateQueries({ queryKey: key, exact: true });
 		},
 	});
-	return { update: mutation.mutateAsync, saving: mutation.isPending, error: mutation.error ? apiErrorMessage(mutation.error) : undefined };
+	return { update: mutation.mutateAsync, error: mutation.error ? apiErrorMessage(mutation.error) : undefined };
 }

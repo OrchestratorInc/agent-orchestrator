@@ -18,7 +18,17 @@ const (
 	layoutUV             = "uv"
 	layoutPipx           = "pipx"
 	layoutWinget         = "winget"
+	// layoutSystem is a directory owned by the operating system or a system
+	// package manager (apt, dnf, Nix, Snap, Flatpak, MacPorts). Neither AO nor
+	// the vendor's self-update maintains a copy there.
+	layoutSystem = "system"
 )
+
+// systemPathPrefixes are the slash-separated, lower-case roots of layoutSystem.
+var systemPathPrefixes = []string{
+	"/usr/bin/", "/usr/sbin/", "/usr/lib/", "/usr/libexec/", "/usr/share/", "/bin/", "/sbin/",
+	"/nix/store/", "/run/current-system/", "/snap/", "/var/lib/snapd/", "/var/lib/flatpak/", "/opt/local/",
+}
 
 // packageLayout names the package tool whose directory layout holds the
 // executable at path, or "" when none does. Version-manager shims are
@@ -28,48 +38,122 @@ func packageLayout(path string) string {
 	if path == "" {
 		return ""
 	}
-	if layout := layoutOf(path); layout == layoutVersionManager {
-		return layout
+	if match := layoutOf(path); match.layout == layoutVersionManager {
+		return match.layout
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		resolved = path
 	}
-	return layoutOf(resolved)
+	return layoutOf(resolved).layout
 }
 
-func layoutOf(path string) string {
+// pathLayout is the package tool whose directory layout holds a path and,
+// where that layout names it, the package directory the path belongs to.
+type pathLayout struct {
+	layout string
+	pkg    string
+	cask   bool
+	// receipt is Homebrew's install receipt for the keg or cask, which names
+	// the tap a formula came from.
+	receipt string
+}
+
+func layoutOf(path string) pathLayout {
 	// Windows separators are normalised explicitly: filepath.ToSlash only
 	// rewrites the host separator, and paths may come from either platform.
-	segments := strings.Split(strings.ToLower(strings.ReplaceAll(filepath.ToSlash(path), `\`, "/")), "/")
-	for i, segment := range segments {
-		if segment == "npm" && i >= 2 && segments[i-1] == "roaming" && segments[i-2] == "appdata" {
-			return layoutNPM
+	slashed := strings.ReplaceAll(filepath.ToSlash(path), `\`, "/")
+	lowered := strings.ToLower(slashed)
+	for _, prefix := range systemPathPrefixes {
+		if strings.HasPrefix(lowered, prefix) {
+			return pathLayout{layout: layoutSystem}
 		}
-		switch segment {
+	}
+	segments := strings.Split(slashed, "/")
+	segment := func(index int) string {
+		if index < 0 || index >= len(segments) {
+			return ""
+		}
+		return strings.ToLower(segments[index])
+	}
+	original := func(index int) string {
+		if index >= len(segments) {
+			return ""
+		}
+		return segments[index]
+	}
+	// npm's Windows global prefix (%APPDATA%\npm) names the layout before the
+	// node_modules directory that names the package.
+	windowsNPM := false
+	for i := range segments {
+		lower := segment(i)
+		if windowsNPM {
+			if lower == "node_modules" {
+				return pathLayout{layout: layoutNPM, pkg: nodePackageAt(segments, i+1)}
+			}
+			continue
+		}
+		if lower == "npm" && segment(i-1) == "roaming" && segment(i-2) == "appdata" {
+			windowsNPM = true
+			continue
+		}
+		switch lower {
 		case "shims", ".volta", ".asdf", "mise":
-			return layoutVersionManager
+			return pathLayout{layout: layoutVersionManager}
 		case ".bun":
-			return layoutBun
-		case "cellar", "caskroom":
-			return layoutHomebrew
+			return pathLayout{layout: layoutBun}
+		case "cellar":
+			match := pathLayout{layout: layoutHomebrew, pkg: original(i + 1)}
+			if i+2 < len(segments) {
+				match.receipt = filepath.FromSlash(strings.Join(segments[:i+3], "/") + "/INSTALL_RECEIPT.json")
+			}
+			return match
+		case "caskroom":
+			match := pathLayout{layout: layoutHomebrew, pkg: original(i + 1), cask: true}
+			if match.pkg != "" {
+				match.receipt = filepath.FromSlash(strings.Join(segments[:i+2], "/") + "/.metadata/INSTALL_RECEIPT.json")
+			}
+			return match
 		case "pipx":
-			return layoutPipx
+			match := pathLayout{layout: layoutPipx}
+			if segment(i+1) == "venvs" {
+				match.pkg = original(i + 2)
+			}
+			return match
 		case "winget":
-			return layoutWinget
+			return pathLayout{layout: layoutWinget}
 		case "pnpm":
-			return layoutPNPM
+			return pathLayout{layout: layoutPNPM}
 		case "yarn":
-			return layoutYarn
+			return pathLayout{layout: layoutYarn}
 		case "node_modules":
-			return layoutNPM
+			return pathLayout{layout: layoutNPM, pkg: nodePackageAt(segments, i+1)}
 		case "uv":
-			if i+1 < len(segments) && segments[i+1] == "tools" {
-				return layoutUV
+			if segment(i+1) == "tools" {
+				return pathLayout{layout: layoutUV, pkg: original(i + 2)}
 			}
 		}
 	}
-	return ""
+	if windowsNPM {
+		return pathLayout{layout: layoutNPM}
+	}
+	return pathLayout{}
+}
+
+// nodePackageAt reads the package name that starts at segments[index] below a
+// node_modules directory, including a scope such as @openai/codex.
+func nodePackageAt(segments []string, index int) string {
+	if index >= len(segments) {
+		return ""
+	}
+	pkg := segments[index]
+	if strings.HasPrefix(pkg, "@") {
+		if index+1 >= len(segments) {
+			return ""
+		}
+		pkg += "/" + segments[index+1]
+	}
+	return pkg
 }
 
 // officialChannelFits reports whether an official release channel describes
@@ -107,29 +191,30 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 		return nil, nil
 	}
 	verified, err := s.verifier.Verify(ctx, target)
-	if err != nil {
-		// A broken binary cannot reveal its owner, but AO's own successful
-		// install through this method still identifies it.
-		job, statusErr := s.Status(ctx, target)
-		if statusErr == nil && job.Status == StatusSucceeded && job.Method == plan.Method {
-			scheme := versionSchemeFor(target)
-			version, _ := scheme.find(job.Output)
-			baseline := &installedBaseline{version: version.display, scheme: scheme}
-			s.mu.Lock()
-			if advisory, ok := s.updateAdvisories[target]; ok && advisory.Status == UpdateStatusBehindLatest {
-				baseline.latest = advisory.LatestVersion
-			}
-			s.mu.Unlock()
-			return baseline, nil
-		}
-		return nil, fmt.Errorf("%w: AO could not confirm which %s installation is in use (%w); update it manually", ErrInstallOwner, target, err)
-	}
-	if !s.methodOwnsBinary(ctx, plan, verified.ResolvedPath) {
-		return nil, fmt.Errorf("%w: the %s that AO runs (%s) was not installed with %s; update it manually with the tool that installed it", ErrInstallOwner, target, verified.ResolvedPath, installMethodLabel(plan.Method))
-	}
 	scheme := versionSchemeFor(target)
-	version, _ := scheme.find(verified.Output)
-	baseline := &installedBaseline{path: verified.ResolvedPath, version: version.display, scheme: scheme}
+	var baseline *installedBaseline
+	switch {
+	case err != nil && verified.ResolvedPath != "":
+		// A broken binary cannot report its version, but AO's own successful
+		// install through this method still identifies it. The update runs on
+		// the resolved path, never on whichever copy PATH finds first.
+		job, statusErr := s.Status(ctx, target)
+		if statusErr != nil || job.Status != StatusSucceeded || job.Method != plan.Method {
+			return nil, fmt.Errorf("%w: AO could not confirm which %s installation is in use (%w); update it manually", ErrInstallOwner, target, err)
+		}
+		version, _ := scheme.find(job.Output)
+		baseline = &installedBaseline{path: verified.ResolvedPath, version: version.display, scheme: scheme}
+	case err != nil:
+		return nil, fmt.Errorf("%w: AO could not confirm which %s installation is in use (%w); update it manually", ErrInstallOwner, target, err)
+	case verified.ResolvedPath == "":
+		return nil, fmt.Errorf("%w: AO could not resolve the %s that sessions run; update it manually", ErrInstallOwner, target)
+	default:
+		if !s.methodOwnsBinary(ctx, plan, verified.ResolvedPath) {
+			return nil, fmt.Errorf("%w: the %s that AO runs (%s) was not installed with %s; update it manually with the tool that installed it", ErrInstallOwner, target, verified.ResolvedPath, installMethodLabel(plan.Method))
+		}
+		version, _ := scheme.find(verified.Output)
+		baseline = &installedBaseline{path: verified.ResolvedPath, version: version.display, scheme: scheme}
+	}
 	s.mu.Lock()
 	if advisory, ok := s.updateAdvisories[target]; ok && advisory.Status == UpdateStatusBehindLatest {
 		baseline.latest = advisory.LatestVersion

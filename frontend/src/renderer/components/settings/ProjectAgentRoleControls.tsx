@@ -5,8 +5,8 @@ import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryKey, agentModelsQueryOptions, refreshAgentModels, revalidateAgentModels, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
-import { useSettings } from "../../hooks/useSettings";
-import { agentModelDisplayLabel, filterEnabledModels, isConcreteModelID, modelChoiceLabel } from "../../lib/agent-model-choices";
+import { useOfferedModels } from "../../hooks/useOfferedModels";
+import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../../lib/agent-model-choices";
 import { LOCAL_HOST } from "../../lib/hosts";
 import { AgentModelCombobox } from "./AgentModelCombobox";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
@@ -56,9 +56,7 @@ export function AgentModelField({
 	const query = useQuery(agentModelsQueryOptions(agentId, projectId, hostId));
 	const catalog: AgentModelCatalog | undefined = query.data;
 	// Settings → Harness → Models picks which local models are offered; Cloud keeps its own catalog.
-	const { settings } = useSettings(hostId);
-	const harnessDefault = followCatalogDefaults ? settings?.harnessDefaults?.[agentId] : undefined;
-	const offeredModels = filterEnabledModels(catalog?.models ?? [], harnessDefault?.enabledModels, [model, mode, harnessDefault?.model]);
+	const { models: offeredModels } = useOfferedModels(agentId, catalog?.models, { hostId, keep: [model, mode], skip: !followCatalogDefaults });
 	const revalidationQuery = useQuery({
 		queryKey: ["agent-model-revalidation", hostId ?? LOCAL_HOST, agentId, projectId, catalog?.validatedAt ?? ""],
 		queryFn: () => revalidateAgentModels(agentId, projectId, hostId),
@@ -89,7 +87,7 @@ export function AgentModelField({
 	}
 
 	if (isMode) {
-		const defaultMode = followCatalogDefaults ? catalog.models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id : "agent";
+		const defaultMode = followCatalogDefaults ? offeredModels.find((item) => item.isDefault && isConcreteModelID(item.id))?.id : "agent";
 		const selectedMode = isConcreteModelID(mode) ? mode : "";
 		const options = offeredModels.filter((item) => isConcreteModelID(item.id)).map((item) => ({
 			value: item.id,

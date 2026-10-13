@@ -231,8 +231,8 @@ type accountReadinessAgent struct {
 	account domain.AgentAccountIdentity
 }
 
-func (a *accountReadinessAgent) AuthStatusWithAccount(context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, error) {
-	return a.status, a.account, nil
+func (a *accountReadinessAgent) AuthStatusWithDiagnostics(context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+	return a.status, a.account, nil, nil
 }
 
 func TestReadinessCoordinatorReportsSignedInAccount(t *testing.T) {

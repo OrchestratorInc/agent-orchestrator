@@ -70,7 +70,7 @@ func TestNPMUpdateValidatesOwningNodeNotDaemonNode(t *testing.T) {
 
 	t.Run("owning Node 24 updates despite daemon Node 20", func(t *testing.T) {
 		s, ran, prefix := setup(t, layout{ownNode: true, nodeVersion: "v24.0.0"})
-		job, err := s.StartAgentOperation(context.Background(), TargetClaudeCode, "npm", AgentOperationUpdate)
+		job, err := s.StartAgentOperation(context.Background(), TargetClaudeCode, "npm", AgentOperationUpdate, "")
 		if err != nil {
 			t.Fatalf("update rejected for the daemon's Node: %v", err)
 		}
@@ -86,7 +86,7 @@ func TestNPMUpdateValidatesOwningNodeNotDaemonNode(t *testing.T) {
 	})
 	t.Run("prefix without its own Node runs on the daemon's", func(t *testing.T) {
 		s, _, _ := setup(t, layout{ownNode: false})
-		job, err := s.StartAgentOperation(context.Background(), TargetClaudeCode, "npm", AgentOperationUpdate)
+		job, err := s.StartAgentOperation(context.Background(), TargetClaudeCode, "npm", AgentOperationUpdate, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -96,7 +96,7 @@ func TestNPMUpdateValidatesOwningNodeNotDaemonNode(t *testing.T) {
 	})
 	t.Run("owning Node too old", func(t *testing.T) {
 		s, _, _ := setup(t, layout{ownNode: true, nodeVersion: "v20.1.0"})
-		job, err := s.StartAgentOperation(context.Background(), TargetClaudeCode, "npm", AgentOperationUpdate)
+		job, err := s.StartAgentOperation(context.Background(), TargetClaudeCode, "npm", AgentOperationUpdate, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -106,7 +106,7 @@ func TestNPMUpdateValidatesOwningNodeNotDaemonNode(t *testing.T) {
 	})
 	t.Run("fresh install still needs the daemon's Node", func(t *testing.T) {
 		s, _, _ := setup(t, layout{ownNode: true, nodeVersion: "v24.0.0"})
-		if _, err := s.StartAgentOperation(context.Background(), TargetClaudeCode, "npm", AgentOperationInstall); !errors.Is(err, ErrInstallMethod) {
+		if _, err := s.StartAgentOperation(context.Background(), TargetClaudeCode, "npm", AgentOperationInstall, ""); !errors.Is(err, ErrInstallMethod) {
 			t.Fatalf("install error = %v, want ErrInstallMethod", err)
 		}
 	})

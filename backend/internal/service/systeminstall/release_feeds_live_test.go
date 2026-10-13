@@ -58,19 +58,13 @@ func TestLiveHarnessReleaseFeeds(t *testing.T) {
 				var lookup func() (string, error)
 				switch {
 				case plan.Method == "npm" || plan.Method == "bun":
-					lookup = func() (string, error) {
-						result, err := npmRegistryVersion(ctx, client, pkg, scheme)
-						return result.Latest, err
-					}
+					lookup = func() (string, error) { return npmRegistryVersion(ctx, client, pkg, scheme) }
 				case plan.Method == "homebrew" && !strings.Contains(pkg, "/"):
 					// Tap packages are read from local brew metadata only.
 					cask := plan.PackageCask
 					lookup = func() (string, error) { return homebrewAPIVersion(ctx, client, pkg, cask) }
 				case plan.Method == "uv" || plan.Method == "pipx":
-					lookup = func() (string, error) {
-						result, err := pypiManagedVersion(ctx, client, pkg, scheme)
-						return result.Latest, err
-					}
+					lookup = func() (string, error) { return pypiManagedVersion(ctx, client, pkg, scheme) }
 				default:
 					continue
 				}

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
@@ -28,7 +30,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if storedErr == nil && ok && status == ports.AgentAuthStatusAuthorized {
 		if login {
 			// A stored login names no account; Amp's own account list does.
-			ports.AddAuthEvidence(ctx, domain.AgentAccountIdentity{Email: ampActiveAccountEmail(ctx, binary)})
+			ports.AddAuthEvidence(ctx, domain.AgentAccountIdentity{Email: ampActiveAccountEmail(ctx, binary, ampSecretsPath())})
 		}
 		return status, nil
 	}
@@ -50,11 +52,29 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return status, nil
 }
 
+// ampAccountEmails remembers the active account per binary and stored
+// login, so repeated checks of an unchanged login run `amp account list` once.
+var ampAccountEmails = struct {
+	sync.Mutex
+	byLogin map[string]string
+}{byLogin: map[string]string{}}
+
 // ampActiveAccountEmail reads the account `amp account list` marks active
-// ("* user@example.com (user_…)"), or "" when Amp cannot say.
-func ampActiveAccountEmail(ctx context.Context, binary string) string {
+// ("* user@example.com (user_…)"), or "" when Amp cannot say. The answer is
+// reused until the secrets file changes.
+func ampActiveAccountEmail(ctx context.Context, binary, secretsPath string) string {
 	if binary == "" {
 		return ""
+	}
+	key := binary
+	if info, err := os.Stat(secretsPath); err == nil {
+		key += "\x00" + info.ModTime().String() + "\x00" + strconv.FormatInt(info.Size(), 10)
+	}
+	ampAccountEmails.Lock()
+	email, cached := ampAccountEmails.byLogin[key]
+	ampAccountEmails.Unlock()
+	if cached {
+		return email
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -62,7 +82,11 @@ func ampActiveAccountEmail(ctx context.Context, binary string) string {
 	if err != nil || probeCtx.Err() != nil {
 		return ""
 	}
-	return ampActiveEmailFromList(string(out))
+	email = ampActiveEmailFromList(string(out))
+	ampAccountEmails.Lock()
+	ampAccountEmails.byLogin[key] = email
+	ampAccountEmails.Unlock()
+	return email
 }
 
 func ampActiveEmailFromList(output string) string {
@@ -81,8 +105,7 @@ func ampActiveEmailFromList(output string) string {
 }
 
 func ampEnvAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool) {
-	if strings.TrimSpace(os.Getenv("AMP_API_KEY")) != "" {
-		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("AMP_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "AMP_API_KEY") != "" {
 		return ports.AgentAuthStatusAuthorized, true
 	}
 	return ports.AgentAuthStatusUnknown, false
@@ -97,7 +120,7 @@ func ampStoredAuthStatus(ctx context.Context) (status ports.AgentAuthStatus, ok,
 	secretsPath := ampSecretsPath()
 	if status, ok, err := ampSecretsAuthStatus(secretsPath); err != nil || ok {
 		if status == ports.AgentAuthStatusAuthorized {
-			ports.RecordAuthEvidence(ctx, domain.FileSource(secretsPath).WithMethod(domain.AgentAccountMethodAccount))
+			ports.RecordAuthEvidence(ctx, authprobe.FileSource(secretsPath).WithMethod(domain.AgentAccountMethodAccount))
 		}
 		return status, ok, true, err
 	}
@@ -107,7 +130,7 @@ func ampStoredAuthStatus(ctx context.Context) (status ports.AgentAuthStatus, ok,
 		return ports.AgentAuthStatusUnknown, false, false, err
 	}
 	if status == ports.AgentAuthStatusAuthorized {
-		ports.RecordAuthEvidence(ctx, domain.FileSource(settingsPath).WithMethod(domain.AgentAccountMethodAPIKey))
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(settingsPath).WithMethod(domain.AgentAccountMethodAPIKey))
 	}
 	return status, ok, false, nil
 }
@@ -204,11 +227,30 @@ func ampUsageAuthStatus(ctx context.Context, binary string) (ports.AgentAuthStat
 	}
 	if err == nil && strings.Contains(strings.ToLower(string(out)), "signed in as") {
 		evidence := domain.CommandSource(binary, "usage").WithMethod(domain.AgentAccountMethodAccount)
-		evidence.Email = authprobe.SignedInEmail(string(out))
+		evidence.Email = ampSignedInEmail(string(out))
 		ports.RecordAuthEvidence(ctx, evidence)
 		return ports.AgentAuthStatusAuthorized, nil
 	}
 	return ports.AgentAuthStatusUnknown, nil
+}
+
+// ampSignedInEmail returns the email `amp usage` prints after "signed in
+// as", or "".
+func ampSignedInEmail(output string) string {
+	lower := strings.ToLower(output)
+	index := strings.Index(lower, "signed in as")
+	if index < 0 {
+		return ""
+	}
+	fields := strings.Fields(output[index+len("signed in as"):])
+	if len(fields) == 0 {
+		return ""
+	}
+	candidate := strings.Trim(fields[0], `"'()<>,.;:`)
+	if !strings.Contains(candidate, "@") {
+		return ""
+	}
+	return candidate
 }
 
 func stringValue(value any) string {

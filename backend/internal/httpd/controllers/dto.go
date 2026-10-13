@@ -2020,9 +2020,9 @@ type AgentUpdateAdvisoryQuery struct {
 // StartAgentInstallRequest selects one method returned by the installer
 // catalog. The daemon still owns the argv behind the method id.
 type StartAgentInstallRequest struct {
-	Method          string                       `json:"method,omitempty" description:"Server-issued installation method id. Omit to use the recommended viable method."`
+	Method          string                       `json:"method,omitempty" description:"Server-issued installation method id. Omit to use the recommended viable method for an install or reinstall, and the method that owns the installed copy for an update."`
 	Operation       systeminstall.AgentOperation `json:"operation,omitempty" enum:"install,reinstall,update" description:"Requested operation. Defaults to install for older clients."`
-	ExpectedVersion string                       `json:"expectedVersion,omitempty" description:"For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found, and a version at or below the installed one is rejected."`
+	ExpectedVersion string                       `json:"expectedVersion,omitempty" description:"For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found; otherwise that latest release is installed. A version at or below the installed one, or one sent with another operation, is rejected with INVALID_UPDATE_VERSION."`
 }
 
 // AgentInstallJobsResponse hydrates Settings with the latest durable job for
@@ -3184,7 +3184,7 @@ type SetConversationTitleResponse struct {
 
 // SettingsResponse is the daemon-owned preference set.
 type SettingsResponse struct {
-	// HarnessDefaults are machine preferences below project and task overrides.
+	// HarnessDefaults are per-harness picker preferences, keyed by harness id.
 	HarnessDefaults map[string]domain.HarnessDefault `json:"harnessDefaults,omitempty"`
 	// DefaultSessionMode applies to sessions created from now on. Changing it
 	// never alters an existing session; only an explicit interface transition can.
@@ -3222,15 +3222,11 @@ type UpdateSessionInterfaceRequest struct {
 	DefaultSessionMode string `json:"defaultSessionMode" enum:"chat,tui"`
 }
 
-// UpdateHarnessDefaultRequest changes one harness preference. Model (with
-// Effort) and EnabledModels are each optional; an omitted part keeps its saved
-// value. An empty model restores the harness's own selection, and an empty
-// enabledModels list offers every catalog model again.
+// UpdateHarnessDefaultRequest replaces one harness's picker preference.
 type UpdateHarnessDefaultRequest struct {
-	Model  *string `json:"model,omitempty" maxLength:"256"`
-	Effort string  `json:"effort,omitempty" maxLength:"32"`
-	// EnabledModels lists the model ids clients should offer in their pickers.
-	EnabledModels *[]string `json:"enabledModels,omitempty"`
+	// EnabledModels lists the model ids (each up to 256 characters) clients
+	// should offer in their pickers. An empty list offers every catalog model.
+	EnabledModels *[]string `json:"enabledModels" required:"true" maxItems:"5000"`
 }
 
 // UpdateCloudOfferingRequest flips the user's cloud toggle.

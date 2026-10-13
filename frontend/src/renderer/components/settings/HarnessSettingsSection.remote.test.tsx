@@ -10,6 +10,7 @@ import { aoBridge } from "../../lib/bridge";
 import { connectHost, disconnectHost } from "../../lib/host-clients";
 import { useUiStore } from "../../stores/ui-store";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
+import { TooltipProvider } from "../ui/tooltip";
 
 const terminal = vi.hoisted(() => ({ createMux: undefined as undefined | (() => { dispose: () => void }), target: undefined as unknown }));
 class FakeWebSocket extends EventTarget {
@@ -103,7 +104,7 @@ it("routes installer, login, readiness, terminal, and cleanup to the selected ho
 	}));
 	await connectHost("http://box-a:3001");
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	const view = render(<QueryClientProvider client={client}><HarnessSettingsSection hostId="box-a" /></QueryClientProvider>);
+	const view = render(<QueryClientProvider client={client}><TooltipProvider><HarnessSettingsSection hostId="box-a" /></TooltipProvider></QueryClientProvider>);
 	expect(screen.getByRole("button", { name: "Host" })).toHaveTextContent("Box A");
 	const codex = await openHarness("codex");
 	await userEvent.click(await within(codex).findByRole("button", { name: "Install" }));
@@ -165,7 +166,7 @@ it("closes a remote login terminal returned after switching away from its host",
 	}));
 	await connectHost("http://box-a:3001");
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	const view = render(<QueryClientProvider client={client}><HarnessSettingsSection /></QueryClientProvider>);
+	const view = render(<QueryClientProvider client={client}><TooltipProvider><HarnessSettingsSection /></TooltipProvider></QueryClientProvider>);
 	await userEvent.click(screen.getByRole("button", { name: "Host" }));
 	await userEvent.click(screen.getByRole("menuitem", { name: "Box A" }));
 	const claude = await openHarness("claude-code");

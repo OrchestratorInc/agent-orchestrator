@@ -9,6 +9,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -44,20 +45,13 @@ func kimiLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	status, found, err := kimiStoredAuthStatus(ctx)
-	if err == nil && found && usableAuthStatus(status) {
+	if err == nil && found && status.HasCredential() {
 		return status, true, nil
 	}
-	for _, name := range kimiAPIKeyEnvVars {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey))
-			return ports.AgentAuthStatusAuthorized, true, nil
-		}
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, kimiAPIKeyEnvVars...) != "" {
+		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	return status, found, err
-}
-
-func usableAuthStatus(status ports.AgentAuthStatus) bool {
-	return status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured
 }
 
 func kimiStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
@@ -80,7 +74,7 @@ func kimiStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 		status, found, err := kimiCredentialsAuthStatus(legacyPath)
 		if err != nil || found {
 			if status == ports.AgentAuthStatusAuthorized {
-				ports.RecordAuthEvidence(ctx, domain.FileSource(legacyPath).WithMethod(domain.AgentAccountMethodAccount))
+				ports.RecordAuthEvidence(ctx, authprobe.FileSource(legacyPath).WithMethod(domain.AgentAccountMethodAccount))
 			}
 			return status, found, err
 		}
@@ -220,7 +214,7 @@ func kimiConfigAuth(path string) (ports.AgentAuthStatus, domain.AgentAccountIden
 	}
 	for _, provider := range config.Providers {
 		if strings.TrimSpace(provider.APIKey) != "" || kimiProviderEnvHasCredential(provider.Env) {
-			return ports.AgentAuthStatusAuthorized, domain.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey), true, nil
+			return ports.AgentAuthStatusAuthorized, authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey), true, nil
 		}
 		if provider.OAuth == nil || strings.TrimSpace(provider.OAuth.Key) == "" {
 			continue
@@ -228,7 +222,7 @@ func kimiConfigAuth(path string) (ports.AgentAuthStatus, domain.AgentAccountIden
 		credentialPath := kimiOAuthCredentialPath(filepath.Dir(path), provider.OAuth.Key)
 		status, found, err := kimiCredentialsAuthStatus(credentialPath)
 		if err != nil || found {
-			return status, domain.FileSource(credentialPath).WithMethod(domain.AgentAccountMethodAccount), found, err
+			return status, authprobe.FileSource(credentialPath).WithMethod(domain.AgentAccountMethodAccount), found, err
 		}
 	}
 	return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, false, nil

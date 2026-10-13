@@ -5,13 +5,19 @@ export function isConcreteModelID(id: string): boolean {
 /**
  * Narrows a catalog to the models enabled in Settings → Harness → Models.
  * An empty or unset list means every model. Ids in `keep` (a model a project,
- * draft, or default already uses) stay listed so a saved choice never vanishes.
+ * draft, or session already uses) stay listed so a saved choice never vanishes.
+ * `narrowed` is true only when some catalog model was hidden.
  */
-export function filterEnabledModels<T extends { id: string }>(models: T[], enabled: readonly string[] | undefined, keep: ReadonlyArray<string | undefined> = []): T[] {
-	if (!enabled?.length) return models;
+export function filterEnabledModels<T extends { id: string }>(
+	models: T[],
+	enabled: readonly string[] | undefined,
+	keep: ReadonlyArray<string | undefined> = [],
+): { models: T[]; narrowed: boolean } {
+	if (!enabled?.length) return { models, narrowed: false };
 	const allowed = new Set([...enabled, ...keep.filter((id): id is string => !!id)]);
 	const filtered = models.filter((model) => allowed.has(model.id));
-	return filtered.length ? filtered : models;
+	// A list that matches nothing any more (renamed or removed models) offers the whole catalog.
+	return filtered.length && filtered.length < models.length ? { models: filtered, narrowed: true } : { models, narrowed: false };
 }
 
 export function isDefaultPlaceholderLabel(label: string): boolean {

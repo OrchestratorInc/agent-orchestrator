@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasConfirmedHarnessUpdate, maintenanceMethodId, harnessUpdateNoticeKey } from "./useHarnessUpdates";
+import { hasConfirmedHarnessUpdate, maintenanceMethodId, harnessUpdateNoticeKey, isActiveInstallJob, isFailedInstallJob, needsHarnessLogin, updateAdvisoryRefreshInterval } from "./useHarnessUpdates";
 
 describe("harness update evidence", () => {
 	it("never offers an update without both observed versions and a confirmed verdict", () => {
@@ -21,5 +21,32 @@ describe("harness update evidence", () => {
 		expect(key).not.toBe(harnessUpdateNoticeKey("claude-code", "2.1.293"));
 		expect(key).not.toBe(harnessUpdateNoticeKey("codex", "2.1.292"));
 		expect(key).not.toBe(harnessUpdateNoticeKey("claude-code", "2.1.292", "remote"));
+	});
+});
+
+describe("updateAdvisoryRefreshInterval", () => {
+	it("reads the daemon's cached advisory every fifteen minutes", () => {
+		expect(updateAdvisoryRefreshInterval()).toBe(15 * 60_000);
+	});
+
+	it("retries a failed fetch after five minutes", () => {
+		expect(updateAdvisoryRefreshInterval(true)).toBe(5 * 60_000);
+	});
+});
+
+describe("harness job and login helpers", () => {
+	it("classifies running and failed install jobs", () => {
+		for (const status of ["running", "installing", "verifying"] as const) expect(isActiveInstallJob({ status })).toBe(true);
+		for (const status of ["failed", "unsupported", "interrupted"] as const) expect(isFailedInstallJob({ status })).toBe(true);
+		expect(isActiveInstallJob({ status: "succeeded" })).toBe(false);
+		expect(isFailedInstallJob({ status: "succeeded" })).toBe(false);
+		expect(isActiveInstallJob(undefined)).toBe(false);
+	});
+
+	it("asks for login only when the harness has a login flow and reads as signed out", () => {
+		expect(needsHarnessLogin({ action: "login" }, "unauthorized")).toBe(true);
+		expect(needsHarnessLogin({ action: "instructions" }, "unauthorized")).toBe(false);
+		expect(needsHarnessLogin({ action: "login" }, "authorized")).toBe(false);
+		expect(needsHarnessLogin(undefined, "unauthorized")).toBe(false);
 	});
 });

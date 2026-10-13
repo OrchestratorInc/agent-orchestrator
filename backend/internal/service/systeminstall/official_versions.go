@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -117,79 +116,62 @@ func officialReleaseVersionWith(client *http.Client, goos, goarch string) func(c
 		if !ok {
 			return "", errNoOfficialSource
 		}
-		if source.kind == officialGitHub {
-			if tag, err := githubLatestReleaseTag(ctx, client, source.ref); err == nil {
+		var raw string
+		var err error
+		switch source.kind {
+		case officialPyPI:
+			raw, err = pypiLatestRelease(ctx, client, source.ref)
+		case officialNPM:
+			raw, err = npmLatestTag(ctx, client, source.ref)
+		case officialGitHub:
+			if tag, tagErr := githubLatestReleaseTag(ctx, client, source.ref); tagErr == nil {
 				return parseOfficialVersion(officialSource{kind: officialText}, []byte(tag))
 			}
 			// Fall back to the REST API, which also follows renamed repositories.
+			body, fetchErr := fetchRegistry(ctx, client, "https://api.github.com/repos/"+source.ref+"/releases/latest", "application/vnd.github+json")
+			if fetchErr != nil {
+				return "", fetchErr
+			}
+			return parseOfficialVersion(source, body)
+		default:
+			body, fetchErr := fetchRegistry(ctx, client, source.ref, "")
+			if fetchErr != nil {
+				return "", fetchErr
+			}
+			return parseOfficialVersion(source, body)
 		}
-		endpoint := source.ref
-		switch source.kind {
-		case officialGitHub:
-			endpoint = "https://api.github.com/repos/" + source.ref + "/releases/latest"
-		case officialPyPI:
-			endpoint = "https://pypi.org/pypi/" + source.ref + "/json"
-		case officialNPM:
-			endpoint = "https://registry.npmjs.org/" + source.ref + "/latest"
-		}
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 		if err != nil {
 			return "", err
 		}
-		if source.kind == officialGitHub {
-			request.Header.Set("Accept", "application/vnd.github+json")
-		}
-		response, err := client.Do(request)
-		if err != nil {
-			return "", err
-		}
-		defer func() { _ = response.Body.Close() }()
-		if response.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("%s returned status %d", endpoint, response.StatusCode)
-		}
-		body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-		if err != nil {
-			return "", err
-		}
-		return parseOfficialVersion(source, body)
+		return parseOfficialVersion(officialSource{kind: officialText}, []byte(raw))
 	}
 }
 
+// parseOfficialVersion reads the version from a release document. PyPI and
+// npm sources are read through the registry lookups shared with package
+// updates, so their raw version is parsed as officialText.
 func parseOfficialVersion(source officialSource, body []byte) (string, error) {
 	var raw string
 	switch source.kind {
 	case officialText:
 		raw = strings.TrimSpace(string(body))
-	case officialJSON, officialGitHub, officialNPM:
+	case officialJSON, officialGitHub:
 		field := source.field
-		switch source.kind {
-		case officialGitHub:
+		if source.kind == officialGitHub {
 			field = "tag_name"
-		case officialNPM:
-			field = "version"
 		}
 		var document map[string]any
 		if err := json.Unmarshal(body, &document); err != nil {
 			return "", err
 		}
 		raw, _ = document[field].(string)
-	case officialPyPI:
-		var document struct {
-			Info struct {
-				Version string `json:"version"`
-			} `json:"info"`
-		}
-		if err := json.Unmarshal(body, &document); err != nil {
-			return "", err
-		}
-		raw = document.Info.Version
 	case officialPage:
 		if found := source.match.FindSubmatch(body); found != nil {
 			raw = string(found[1])
 		}
 	}
 	// Tags such as v1.2.3 and rust-v0.160.1 carry the version after a prefix.
-	version, ok := findUpdateVersion(raw)
+	version, ok := versionSemver.find(raw)
 	if !ok {
 		return "", fmt.Errorf("no version in official release metadata %q", raw)
 	}

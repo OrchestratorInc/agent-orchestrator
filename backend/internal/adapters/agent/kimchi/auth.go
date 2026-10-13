@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -33,11 +34,10 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	// KIMCHI_API_KEY. Kimchi itself gives the variable precedence at launch, so
 	// with both set the launch uses the variable while this names the config.
 	status, configErr := kimchiConfigAuthStatus(ctx, kimchiGlobalConfigPath())
-	if configErr == nil && (status == ports.AgentAuthStatusAuthorized || status == ports.AgentAuthStatusConfigured) {
+	if configErr == nil && status.HasCredential() {
 		return status, nil
 	}
-	if key := strings.TrimSpace(os.Getenv("KIMCHI_API_KEY")); key != "" {
-		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("KIMCHI_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey))
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "KIMCHI_API_KEY") != "" {
 		return ports.AgentAuthStatusAuthorized, nil
 	}
 	return status, configErr
@@ -85,7 +85,7 @@ func kimchiConfigAuthStatus(ctx context.Context, configPath string) (ports.Agent
 	}
 
 	if key := kimchiExtractAPIKey(config); key != "" {
-		ports.RecordAuthEvidence(ctx, domain.FileSource(configPath).WithMethod(domain.AgentAccountMethodAPIKey))
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(configPath).WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, nil
 	}
 	return ports.AgentAuthStatusUnknown, nil

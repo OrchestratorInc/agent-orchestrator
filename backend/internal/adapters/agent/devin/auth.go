@@ -50,9 +50,7 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 		identity = domain.EnvironmentSource("DEVIN_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey)
 		identity.Provider = "Devin"
 		ports.RecordAuthEvidence(ctx, identity)
-		d := domain.NewAgentAuthDiagnostic("environment", "credential_present")
-		d.Source = "DEVIN_API_KEY"
-		return ports.AgentAuthStatusAuthorized, identity, append(steps, d), nil
+		return ports.AgentAuthStatusAuthorized, identity, steps, nil
 	}
 	return status, domain.AgentAccountIdentity{}, steps, nil
 }

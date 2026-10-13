@@ -20,20 +20,16 @@ const maxRegistryMetadataBytes = 1 << 20
 // cannot compare. It is not a lookup failure, so no fallback source is tried.
 var errLatestUnparseable = errors.New("latest release version could not be parsed")
 
-type managedVersionResult struct {
-	Latest string
-}
-
 // managedVersionChecker reads the release the package source publishes as
 // latest. Updates always install that release, so a prerelease install is
 // compared with it rather than with its own prerelease channel.
-type managedVersionChecker func(context.Context, Plan) (managedVersionResult, error)
+type managedVersionChecker func(context.Context, Plan) (string, error)
 
 func newManagedVersionChecker(commands ports.CommandRunner, client *http.Client) managedVersionChecker {
 	if client == nil {
 		client = &http.Client{Timeout: 4 * time.Second}
 	}
-	return func(ctx context.Context, plan Plan) (managedVersionResult, error) {
+	return func(ctx context.Context, plan Plan) (string, error) {
 		plan.Package = packageWithoutLatest(plan.Package)
 		scheme := versionSchemeFor(plan.Target)
 		switch plan.Method {
@@ -48,7 +44,7 @@ func newManagedVersionChecker(commands ports.CommandRunner, client *http.Client)
 			if result, ok := nodeManagerVersion(ctx, commands, plan, scheme); ok {
 				return result, nil
 			}
-			return managedVersionResult{}, fmt.Errorf("%s registry lookup failed: %w", plan.Method, registryErr)
+			return "", fmt.Errorf("%s registry lookup failed: %w", plan.Method, registryErr)
 		case "homebrew":
 			return homebrewManagedVersion(ctx, commands, client, plan, scheme)
 		case "winget":
@@ -56,22 +52,22 @@ func newManagedVersionChecker(commands ports.CommandRunner, client *http.Client)
 		case "uv", "pipx":
 			return pypiManagedVersion(ctx, client, plan.Package, scheme)
 		default:
-			return managedVersionResult{}, fmt.Errorf("unsupported version source %s", plan.Method)
+			return "", fmt.Errorf("unsupported version source %s", plan.Method)
 		}
 	}
 }
 
-func nodeManagerVersion(ctx context.Context, commands ports.CommandRunner, plan Plan, scheme versionScheme) (managedVersionResult, bool) {
+func nodeManagerVersion(ctx context.Context, commands ports.CommandRunner, plan Plan, scheme versionScheme) (string, bool) {
 	if plan.Method != "bun" {
 		return checkNodeManager(ctx, commands, plan, scheme)
 	}
-	output, _ := runManagedVersionCommand(ctx, commands, []string{"bun", "pm", "view", plan.Package, "version"})
+	output, _ := runProbe(ctx, commands, managerProbeTimeout, false, []string{"bun", "pm", "view", plan.Package, "version"})
 	return managedResult(output, scheme)
 }
 
-func checkNodeManager(ctx context.Context, commands ports.CommandRunner, plan Plan, scheme versionScheme) (managedVersionResult, bool) {
+func checkNodeManager(ctx context.Context, commands ports.CommandRunner, plan Plan, scheme versionScheme) (string, bool) {
 	if commands == nil {
-		return managedVersionResult{}, false
+		return "", false
 	}
 	var outdated, view []string
 	switch plan.Method {
@@ -89,19 +85,19 @@ func checkNodeManager(ctx context.Context, commands ports.CommandRunner, plan Pl
 		outdated = []string{"yarn", "global", "outdated", "--json", plan.Package}
 		view = []string{"yarn", "info", plan.Package + "@latest", "version", "--json"}
 	}
-	out, _ := runManagedVersionCommand(ctx, commands, outdated)
+	out, _ := runProbe(ctx, commands, managerProbeTimeout, false, outdated)
 	if latest := parseNodeOutdated(plan.Method, plan.Package, out); latest != "" {
 		if result, ok := managedResult(latest, scheme); ok {
 			return result, true
 		}
 	}
-	out, _ = runManagedVersionCommand(ctx, commands, view)
+	out, _ = runProbe(ctx, commands, managerProbeTimeout, false, view)
 	if latest := parseNodeView(plan.Method, out); latest != "" {
 		if result, ok := managedResult(latest, scheme); ok {
 			return result, true
 		}
 	}
-	return managedVersionResult{}, false
+	return "", false
 }
 
 func parseNodeOutdated(method, pkg, raw string) string {
@@ -161,7 +157,7 @@ func parseNodeView(method, raw string) string {
 	return strings.Trim(strings.TrimSpace(raw), `"`)
 }
 
-func homebrewManagedVersion(ctx context.Context, commands ports.CommandRunner, client *http.Client, plan Plan, scheme versionScheme) (managedVersionResult, error) {
+func homebrewManagedVersion(ctx context.Context, commands ports.CommandRunner, client *http.Client, plan Plan, scheme versionScheme) (string, error) {
 	// brew outdated and brew info read local metadata that is only as fresh as
 	// the last brew update, so they can report a stale release as current.
 	// Core formulae and casks are read from the live Homebrew API first; tap
@@ -171,39 +167,39 @@ func homebrewManagedVersion(ctx context.Context, commands ports.CommandRunner, c
 			if result, ok := managedResult(latest, scheme); ok {
 				return result, nil
 			}
-			return managedVersionResult{}, fmt.Errorf("%w: Homebrew API version", errLatestUnparseable)
+			return "", fmt.Errorf("%w: Homebrew API version", errLatestUnparseable)
 		}
 	}
 	if commands == nil {
-		return managedVersionResult{}, fmt.Errorf("homebrew command runner unavailable")
+		return "", fmt.Errorf("homebrew command runner unavailable")
 	}
 	selector := "--formula"
 	if plan.PackageCask {
 		selector = "--cask"
 	}
 	outdatedArgv := []string{"brew", "outdated", "--json=v2", selector, plan.Package}
-	out, outdatedErr := runManagedVersionCommand(ctx, commands, outdatedArgv)
+	out, outdatedErr := runProbe(ctx, commands, managerProbeTimeout, false, outdatedArgv)
 	if latest := parseHomebrewVersion(out, plan.Package, plan.PackageCask, true); latest != "" {
 		if result, ok := managedResult(latest, scheme); ok {
 			return result, nil
 		}
-		return managedVersionResult{}, fmt.Errorf("%w: Homebrew outdated version", errLatestUnparseable)
+		return "", fmt.Errorf("%w: Homebrew outdated version", errLatestUnparseable)
 	}
 	infoArgv := []string{"brew", "info", "--json=v2", selector, plan.Package}
-	out, infoErr := runManagedVersionCommand(ctx, commands, infoArgv)
+	out, infoErr := runProbe(ctx, commands, managerProbeTimeout, false, infoArgv)
 	if latest := parseHomebrewVersion(out, plan.Package, plan.PackageCask, false); latest != "" {
 		if result, ok := managedResult(latest, scheme); ok {
 			return result, nil
 		}
-		return managedVersionResult{}, fmt.Errorf("%w: Homebrew current version", errLatestUnparseable)
+		return "", fmt.Errorf("%w: Homebrew current version", errLatestUnparseable)
 	}
 	if infoErr != nil {
-		return managedVersionResult{}, infoErr
+		return "", infoErr
 	}
 	if outdatedErr != nil {
-		return managedVersionResult{}, outdatedErr
+		return "", outdatedErr
 	}
-	return managedVersionResult{}, fmt.Errorf("homebrew returned no version for %s", plan.Package)
+	return "", fmt.Errorf("homebrew returned no version for %s", plan.Package)
 }
 
 func parseHomebrewVersion(raw, pkg string, cask, outdated bool) string {
@@ -260,38 +256,38 @@ func parseHomebrewVersion(raw, pkg string, cask, outdated bool) string {
 	return ""
 }
 
-func wingetManagedVersion(ctx context.Context, commands ports.CommandRunner, plan Plan, scheme versionScheme) (managedVersionResult, error) {
+func wingetManagedVersion(ctx context.Context, commands ports.CommandRunner, plan Plan, scheme versionScheme) (string, error) {
 	if commands == nil {
-		return managedVersionResult{}, fmt.Errorf("winget command runner unavailable")
+		return "", fmt.Errorf("winget command runner unavailable")
 	}
 	// Supplying --id makes winget upgrade install the selected update. Listing
 	// without a package selector is read-only; filter the exact ID in the output.
 	argv := []string{"winget", "upgrade", "--disable-interactivity"}
-	out, commandErr := runManagedVersionCommand(ctx, commands, argv)
+	out, commandErr := runProbe(ctx, commands, managerProbeTimeout, false, argv)
 	latest, matches := parseWingetUpgrade(out, plan.Package)
 	if matches == 1 {
 		if result, ok := managedResult(latest, scheme); ok {
 			return result, nil
 		}
-		return managedVersionResult{}, fmt.Errorf("%w: Winget version for %s", errLatestUnparseable, plan.Package)
+		return "", fmt.Errorf("%w: Winget version for %s", errLatestUnparseable, plan.Package)
 	}
 	if matches > 1 {
-		return managedVersionResult{}, fmt.Errorf("winget returned ambiguous rows for %s", plan.Package)
+		return "", fmt.Errorf("winget returned ambiguous rows for %s", plan.Package)
 	}
 	showArgv := []string{"winget", "show", "--id", plan.Package, "--exact", "--source", "winget", "--versions", "--accept-source-agreements", "--disable-interactivity"}
-	showOutput, showErr := runManagedVersionCommand(ctx, commands, showArgv)
+	showOutput, showErr := runProbe(ctx, commands, managerProbeTimeout, false, showArgv)
 	if latest := latestVersionLine(showOutput); latest != "" {
 		if result, ok := managedResult(latest, scheme); ok {
 			return result, nil
 		}
 	}
 	if showErr != nil {
-		return managedVersionResult{}, showErr
+		return "", showErr
 	}
 	if commandErr != nil {
-		return managedVersionResult{}, commandErr
+		return "", commandErr
 	}
-	return managedVersionResult{}, fmt.Errorf("winget returned no version for %s", plan.Package)
+	return "", fmt.Errorf("winget returned no version for %s", plan.Package)
 }
 
 func parseWingetUpgrade(raw, pkg string) (string, int) {
@@ -339,79 +335,98 @@ func latestVersionLine(raw string) string {
 	return latest.display
 }
 
-func npmRegistryVersion(ctx context.Context, client *http.Client, pkg string, scheme versionScheme) (managedVersionResult, error) {
-	// The dist-tags endpoint returns only the tag map. The full package
-	// document lists every published version and exceeds the metadata limit
-	// for popular harnesses such as Claude Code (1.5 MB).
-	var distTags map[string]string
-	if err := fetchRegistryJSON(ctx, client, "https://registry.npmjs.org/-/package/"+url.PathEscape(pkg)+"/dist-tags", &distTags); err != nil {
-		return managedVersionResult{}, err
+func npmRegistryVersion(ctx context.Context, client *http.Client, pkg string, scheme versionScheme) (string, error) {
+	raw, err := npmLatestTag(ctx, client, pkg)
+	if err != nil {
+		return "", err
 	}
-	if result, ok := managedResult(distTags["latest"], scheme); ok {
+	if result, ok := managedResult(raw, scheme); ok {
 		return result, nil
 	}
-	return managedVersionResult{}, fmt.Errorf("%w: npm package %s latest dist-tag %q", errLatestUnparseable, pkg, distTags["latest"])
+	return "", fmt.Errorf("%w: npm package %s latest dist-tag %q", errLatestUnparseable, pkg, raw)
 }
 
-func pypiManagedVersion(ctx context.Context, client *http.Client, pkg string, scheme versionScheme) (managedVersionResult, error) {
+func pypiManagedVersion(ctx context.Context, client *http.Client, pkg string, scheme versionScheme) (string, error) {
+	raw, err := pypiLatestRelease(ctx, client, pkg)
+	if err != nil {
+		return "", err
+	}
+	if result, ok := managedResult(raw, scheme); ok {
+		return result, nil
+	}
+	return "", fmt.Errorf("%w: PyPI version for %s", errLatestUnparseable, pkg)
+}
+
+// npmLatestTag reads the release the npm registry tags latest. The dist-tags
+// endpoint returns only the tag map; the full package document lists every
+// published version and exceeds the metadata limit for popular harnesses
+// such as Claude Code (1.5 MB).
+func npmLatestTag(ctx context.Context, client *http.Client, pkg string) (string, error) {
+	var distTags map[string]string
+	if err := fetchRegistryJSON(ctx, client, "https://registry.npmjs.org/-/package/"+url.PathEscape(pkg)+"/dist-tags", &distTags); err != nil {
+		return "", err
+	}
+	return distTags["latest"], nil
+}
+
+// pypiLatestRelease reads a PyPI project's current release.
+func pypiLatestRelease(ctx context.Context, client *http.Client, pkg string) (string, error) {
 	var metadata struct {
 		Info struct {
 			Version string `json:"version"`
 		} `json:"info"`
 	}
 	if err := fetchRegistryJSON(ctx, client, "https://pypi.org/pypi/"+url.PathEscape(pkg)+"/json", &metadata); err != nil {
-		return managedVersionResult{}, err
+		return "", err
 	}
-	if result, ok := managedResult(metadata.Info.Version, scheme); ok {
-		return result, nil
-	}
-	return managedVersionResult{}, fmt.Errorf("%w: PyPI version for %s", errLatestUnparseable, pkg)
+	return metadata.Info.Version, nil
 }
 
 func fetchRegistryJSON(ctx context.Context, client *http.Client, endpoint string, destination any) error {
-	if client == nil {
-		return fmt.Errorf("registry client unavailable")
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
+	body, err := fetchRegistry(ctx, client, endpoint, "")
 	if err != nil {
 		return err
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("registry status %d", response.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxRegistryMetadataBytes+1))
-	if err != nil {
-		return err
-	}
-	if len(body) > maxRegistryMetadataBytes {
-		return fmt.Errorf("registry metadata exceeds %d bytes", maxRegistryMetadataBytes)
 	}
 	return json.Unmarshal(body, destination)
 }
 
-func managedResult(raw string, scheme versionScheme) (managedVersionResult, bool) {
-	latest, ok := scheme.parse(strings.TrimSpace(raw))
-	if !ok {
-		return managedVersionResult{}, false
+// fetchRegistry GETs a release-metadata document, bounded to
+// maxRegistryMetadataBytes. accept, when set, is sent as the Accept header.
+func fetchRegistry(ctx context.Context, client *http.Client, endpoint, accept string) ([]byte, error) {
+	if client == nil {
+		return nil, fmt.Errorf("registry client unavailable")
 	}
-	return managedVersionResult{Latest: latest.display}, true
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	if accept != "" {
+		request.Header.Set("Accept", accept)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s returned status %d", endpoint, response.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxRegistryMetadataBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxRegistryMetadataBytes {
+		return nil, fmt.Errorf("registry metadata exceeds %d bytes", maxRegistryMetadataBytes)
+	}
+	return body, nil
 }
 
-func runManagedVersionCommand(ctx context.Context, commands ports.CommandRunner, argv []string) (string, error) {
-	if commands == nil {
-		return "", fmt.Errorf("manager command runner unavailable")
+func managedResult(raw string, scheme versionScheme) (string, bool) {
+	latest, ok := scheme.parse(strings.TrimSpace(raw))
+	if !ok {
+		return "", false
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	output := &capturedOutput{max: maxOutputBytes}
-	// Manager warnings are not part of the JSON response.
-	err := commands.Run(probeCtx, argv, output, io.Discard)
-	return output.String(), err
+	return latest.display, true
 }
 
 // homebrewAPIVersion reads the current release of a core formula or cask

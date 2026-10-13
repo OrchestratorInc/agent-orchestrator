@@ -68,8 +68,8 @@ func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInv
 }
 
 // reviewerModeArgs launches the reviewer in the configured Amp mode. Amp's
-// model picker is its mode list, so a model value (such as a saved default)
-// is a mode, as it is for Amp workers. Values Amp does not list are dropped.
+// model picker is its mode list, so a configured model value is a mode, as it
+// is for Amp workers. Values Amp does not list are dropped.
 func reviewerModeArgs(config domain.AgentConfig) []string {
 	mode := strings.TrimSpace(config.Mode)
 	if mode == "" {
