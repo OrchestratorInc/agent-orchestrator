@@ -30,6 +30,7 @@ func newAgentProcessSuperviseCommand(ctx *commandContext) *cobra.Command {
 	var reviewID string
 	var activityReviewID string
 	var launchID string
+	var sandboxRelay string
 	cmd := &cobra.Command{
 		Use:    "supervise (--session <id>|--review <id>) [--activity-review <id>] --launch <id> -- <command> [args...]",
 		Short:  "Supervise one managed agent process (internal)",
@@ -67,7 +68,7 @@ func newAgentProcessSuperviseCommand(ctx *commandContext) *cobra.Command {
 			if activityReviewID == "" {
 				activityReviewID = reviewID
 			}
-			ctx.runSupervisedProcess(cmd.Context(), sessionID, activityReviewID, launchID, args)
+			ctx.runSupervisedProcess(cmd.Context(), sessionID, activityReviewID, launchID, strings.TrimSpace(sandboxRelay), args)
 			return nil
 		},
 	}
@@ -75,10 +76,11 @@ func newAgentProcessSuperviseCommand(ctx *commandContext) *cobra.Command {
 	cmd.Flags().StringVar(&reviewID, "review", "", "AO review id")
 	cmd.Flags().StringVar(&activityReviewID, "activity-review", "", "AO review id to receive process activity")
 	cmd.Flags().StringVar(&launchID, "launch", "", "AO process launch id")
+	cmd.Flags().StringVar(&sandboxRelay, "sandbox-relay", "", "serve in-container ao calls from this spool dir (internal)")
 	return cmd
 }
 
-func (c *commandContext) runSupervisedProcess(ctx context.Context, sessionID, reviewID, launchID string, argv []string) {
+func (c *commandContext) runSupervisedProcess(ctx context.Context, sessionID, reviewID, launchID, relayDir string, argv []string) {
 	child := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec,forbidigo // interactive CLI child must inherit the caller's console.
 	child.Stdin = c.deps.In
 	child.Stdout = c.deps.Out
@@ -88,6 +90,17 @@ func (c *commandContext) runSupervisedProcess(ctx context.Context, sessionID, re
 		_, _ = fmt.Fprintf(c.deps.Err, "ao: start managed agent: %v\n", err)
 		c.reportSupervisedExit(sessionID, reviewID, launchID)
 		return
+	}
+
+	if relayDir != "" {
+		relayCtx, stopRelay := context.WithCancel(ctx)
+		defer stopRelay()
+		exe, err := os.Executable()
+		if err != nil {
+			_, _ = fmt.Fprintf(c.deps.Err, "ao: sandbox relay disabled: %v\n", err)
+		} else {
+			go serveSandboxRelay(relayCtx, relayDir, hostAORunner(exe))
+		}
 	}
 
 	// The child shares the terminal foreground process group and therefore
