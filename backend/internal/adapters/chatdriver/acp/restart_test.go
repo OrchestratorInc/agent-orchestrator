@@ -227,3 +227,22 @@ func TestPersistentACPRequiresDurableSessionIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestPersistentACPInitializeDisconnectReportsProviderExit(t *testing.T) {
+	cfg, start := restartFixture(t, map[string]string{"AO_TEST_PERSISTENT_ACP_CRASH_ON_INITIALIZE": "1"})
+	t.Cleanup(func() { _ = persistenthost.Shutdown(context.Background(), start.DataDir, string(start.SessionID)) })
+
+	_, err := New(cfg, nil).Start(context.Background(), start)
+	if !errors.Is(err, ports.ErrChatDriverIncompatible) {
+		t.Fatalf("Start error = %v, want ErrChatDriverIncompatible", err)
+	}
+	for _, want := range []string{
+		"ACP initialize",
+		"ACP agent process exited (exit status 3)",
+		"stderr: Error: Cannot find module '@anthropic-ai/claude-agent-sdk'",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Start error = %q, want it to contain %q", err, want)
+		}
+	}
+}
