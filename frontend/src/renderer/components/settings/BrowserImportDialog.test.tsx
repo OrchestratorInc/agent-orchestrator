@@ -97,7 +97,11 @@ describe("BrowserImportDialog", () => {
 		expect(screen.getByRole("textbox", { name: "Destination profile name" })).toHaveValue("Google Chrome");
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
 
-		expect(await screen.findByText("Import completed with warnings")).toBeInTheDocument();
+		expect(await screen.findByRole("status")).toHaveTextContent("Import complete");
+		const details = screen.getByText(/^Import details/).closest("details")!;
+		expect(details).not.toHaveAttribute("open");
+		expect(details).toHaveTextContent("1 encrypted cookies");
+		expect(screen.queryByText(/completed with warnings/)).not.toBeInTheDocument();
 		expect(screen.getByText("12 cookies · 34 history entries")).toBeInTheDocument();
 		await waitFor(() => expect(onImported).toHaveBeenCalledOnce());
 		expect(bridge.import).toHaveBeenCalledWith(expect.objectContaining({
@@ -204,10 +208,10 @@ describe("BrowserImportDialog", () => {
 		await screen.findByText("Google Chrome");
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
 		expect(await screen.findByRole("status")).toHaveTextContent("Nothing was imported");
-		expect(screen.queryByText("Import complete")).not.toBeInTheDocument();
+		expect(screen.queryByRole("heading", { name: "Import complete" })).not.toBeInTheDocument();
 	});
 
-	it("warns when Safari history imports but all requested cookies are skipped", async () => {
+	it("shows completion and a neutral cookie status when Safari only imports history", async () => {
 		aoBridge.browserProfiles = {
 			...originalBridge,
 			discoverImportSources: vi.fn(async () => ({ sources: [safariSource] })),
@@ -222,7 +226,7 @@ describe("BrowserImportDialog", () => {
 		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
 		await screen.findByText("Safari");
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
-		expect(await screen.findByRole("status")).toHaveTextContent("Import completed with warnings");
+		expect(await screen.findByRole("status")).toHaveTextContent("Import complete");
 		expect(screen.getByText("0 cookies · 1 history entries")).toBeInTheDocument();
 	});
 
@@ -245,7 +249,7 @@ describe("BrowserImportDialog", () => {
 
 	it.each([
 		{ imported: 12, failure: false, title: "Import complete" },
-		{ imported: 12, failure: true, title: "Import completed with warnings" },
+		{ imported: 12, failure: true, title: "Import complete" },
 		{ imported: 0, failure: false, title: "Nothing was imported" },
 	])("keeps expected skips informational while reporting $title", async ({ imported, failure, title }) => {
 		const warnings: BrowserImportWarning[] = [
@@ -267,15 +271,42 @@ describe("BrowserImportDialog", () => {
 		await screen.findByText("Google Chrome");
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
 		expect(await screen.findByRole("status")).toHaveTextContent(title);
-		const summary = screen.getByText(/^Skipped items/);
+		const summary = screen.getByText(/^Import details/);
 		const details = summary.closest("details")!;
 		expect(details).not.toHaveAttribute("open");
 		expect(details).toHaveTextContent("2 expired cookies were skipped.");
 		expect(details).toHaveTextContent("3 cookies tied to isolated browser contexts");
-		if (failure) expect(screen.getByText("AO could not write 1 cookies to the new profile.").closest("details")).toBeNull();
+		if (failure) expect(details).toHaveTextContent("AO could not write 1 cookies to the new profile.");
 		await userEvent.click(summary);
 		expect(details).toHaveAttribute("open");
 		expect(details).toHaveTextContent("Some sites may ask you to sign in again.");
+	});
+
+	it("keeps history import limits in collapsed details when no cookies were skipped", async () => {
+		aoBridge.browserProfiles = {
+			...originalBridge,
+			discoverImportSources: vi.fn(async () => ({ sources: [source] })),
+			import: vi.fn(async () => ({ sourceName: source.name, entries: [{
+				sourceProfileNames: ["Default"],
+				destinationProfile: { id: "new", name: "Imported Chrome", createdAt: "", updatedAt: "" },
+				importedCookies: 0, importedHistoryEntries: 5000, skippedCookies: 0,
+				warnings: [{ code: "history-limit-truncated" as const, count: 27650 }],
+			}] })),
+			onImportProgress: vi.fn(() => () => undefined),
+		};
+		render(<BrowserImportDialog onImported={() => undefined} onOpenChange={() => undefined} open />);
+		await screen.findByText("Google Chrome");
+		await userEvent.click(screen.getByRole("checkbox", { name: /Cookies and site sign-ins/ }));
+		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
+		const status = await screen.findByRole("status");
+		expect(status).toHaveTextContent("Import complete");
+		expect(status).toHaveTextContent("Browsing history");
+		expect(status).not.toHaveTextContent("Cookies and site sign-ins");
+		const details = screen.getByText("Import details").closest("details")!;
+		expect(details).not.toHaveAttribute("open");
+		expect(details).toHaveTextContent("27650 history entries");
+		expect(status.querySelector('[class*="warning"]')).toBeNull();
+		expect(status.querySelector('[class*="destructive"]')).toBeNull();
 	});
 
 	it("preserves an import failure across translation updates", async () => {
@@ -299,7 +330,10 @@ describe("BrowserImportDialog", () => {
 		}
 	});
 
-	it("explains how to recover when a source browser database cannot be opened", async () => {
+	it.each([
+		"unable to open database file",
+		"AO couldn't create a temporary copy of Brave's profile database. Fully close Brave, then retry the import.",
+	])("shows quiet retry guidance for %s", async (message) => {
 		const braveSource = { ...source, name: "Brave" };
 		const bridge: AoBridge["browserProfiles"] = {
 			list: vi.fn(async () => ({ profiles: [] })),
@@ -309,7 +343,7 @@ describe("BrowserImportDialog", () => {
 			delete: vi.fn(),
 			discoverImportSources: vi.fn(async () => ({ sources: [braveSource] })),
 			import: vi.fn(async () => {
-				throw new Error("Error invoking remote method 'browserProfiles:import:start': Error: unable to open database file");
+				throw new Error(`Error invoking remote method 'browserProfiles:import:start': Error: ${message}`);
 			}),
 			onImportProgress: vi.fn(() => () => undefined),
 		};
@@ -320,9 +354,9 @@ describe("BrowserImportDialog", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Start import" }));
 
 		const alert = await screen.findByRole("alert");
-		expect(alert).toHaveTextContent("AO couldn't access Brave's profile database");
-		expect(alert).toHaveTextContent("Fully close Brave, including background processes, then try again");
-		expect(alert).toHaveTextContent("Encrypted cookies are handled separately");
+		expect(alert).toHaveClass("text-muted-foreground");
+		expect(alert).toHaveTextContent("Fully close Brave, including background processes, then retry");
+		expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
 		expect(alert).not.toHaveTextContent("Error invoking remote method");
 	});
 

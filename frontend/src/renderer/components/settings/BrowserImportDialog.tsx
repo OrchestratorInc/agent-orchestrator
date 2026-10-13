@@ -1,4 +1,4 @@
-import { CheckCircle2, Cookie, History as HistoryIcon, LoaderCircle, TriangleAlert, X } from "lucide-react";
+import { CheckCircle2, CircleMinus, Cookie, History as HistoryIcon, LoaderCircle, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AoBridge } from "../../../preload";
@@ -64,6 +64,9 @@ export function BrowserImportDialog({
 	const requestId = progress?.requestId;
 	const sourceLoading = source ? loadingSourceId === source.id : false;
 	const showSafariAccessDenied = source?.family === "safari" && safariAccessDenied;
+	const resultTitle = result?.entries.every((entry) => entry.importedCookies + entry.importedHistoryEntries === 0)
+		? "settings.browserImport.empty"
+		: "settings.browserImport.complete";
 
 	async function loadSourceProfiles(id: string): Promise<BrowserImportSource | null> {
 		if (!bridge) return null;
@@ -236,7 +239,7 @@ export function BrowserImportDialog({
 
 	return (
 		<Dialog open={open} onOpenChange={(next) => canClose && onOpenChange(next)}>
-			<DialogContent className={settingsDialogContentClass} showCloseButton={false}>
+			<DialogContent className={view === "result" ? `${settingsDialogContentClass} w-[min(30rem,calc(100vw-var(--space-8)))]` : settingsDialogContentClass} showCloseButton={false}>
 				<DialogClose asChild>
 					<button
 						aria-label={t("common.close")}
@@ -248,16 +251,13 @@ export function BrowserImportDialog({
 					</button>
 				</DialogClose>
 				<div className={settingsDialogHeaderClass}>
-					<DialogTitle className="settings-dialog-title">{t("settings.browserImport.title")}</DialogTitle>
-					<DialogDescription>{t("settings.browserImport.description")}</DialogDescription>
+					<DialogTitle className="settings-dialog-title">{t(view === "result" ? resultTitle : "settings.browserImport.title")}</DialogTitle>
+					<DialogDescription className={view === "result" ? "sr-only" : undefined}>{t("settings.browserImport.description")}</DialogDescription>
 				</div>
 
 				<div className={settingsDialogBodyClass}>
-					{view === "form" && error ? (
-						<p ref={errorRef} tabIndex={-1} className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive" role="alert">{error}</p>
-					) : null}
 					{view === "form" && showSafariAccessDenied ? (
-						<p className="text-xs text-warning" role="status">{t("settings.browserImport.safariAccessUnavailable")}</p>
+						<p className="text-xs text-muted-foreground" role="status">{t("settings.browserImport.safariAccessUnavailable")}</p>
 					) : null}
 					{view === "form" ? (
 						<ImportForm
@@ -283,6 +283,9 @@ export function BrowserImportDialog({
 							sources={sources}
 						/>
 					) : null}
+					{view === "form" && error ? (
+						<p ref={errorRef} tabIndex={-1} className="text-xs text-muted-foreground focus-visible:outline focus-visible:outline-1 focus-visible:outline-border" role="alert">{error}</p>
+					) : null}
 					{view === "running" ? (
 						<div className="flex flex-1 flex-col items-center justify-center gap-5 py-12 text-center">
 							<LoaderCircle aria-hidden="true" className="size-8 animate-spin text-accent" />
@@ -295,7 +298,7 @@ export function BrowserImportDialog({
 							</div>
 						</div>
 					) : null}
-					{view === "result" && result ? <ResultStep includeCookies={includeCookies} result={result} /> : null}
+					{view === "result" && result ? <ResultStep includeCookies={includeCookies} includeHistory={includeHistory} result={result} /> : null}
 				</div>
 
 				<div className={settingsDialogFooterClass}>
@@ -314,7 +317,7 @@ export function BrowserImportDialog({
 							type="button"
 							variant="footer-primary"
 						>
-							{t("settings.browserImport.start")}
+							{t(error && source ? "settings.browserImport.retry" : "settings.browserImport.start")}
 						</Button>
 					) : null}
 				</div>
@@ -330,7 +333,7 @@ function importFailureMessage(reason: unknown, browser: string): string {
 		.replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/i, "")
 		.replace(/^Error:\s*/i, "")
 		.trim();
-	if (/unable to open database file|database is locked|SQLITE_(?:BUSY|CANTOPEN|LOCKED)|\b(?:EACCES|EBUSY|EPERM)\b/i.test(message)) {
+	if (/couldn't create a temporary copy|unable to open database file|database is locked|SQLITE_(?:BUSY|CANTOPEN|LOCKED)|\b(?:EACCES|EBUSY|EPERM)\b/i.test(message)) {
 		if (browser === "Safari") return appI18n.t("settings.browserImport.safariAccessUnavailable");
 		return appI18n.t("settings.browserImport.sourceDatabaseUnavailable", { browser });
 	}
@@ -516,8 +519,7 @@ function OptionsStep({
 					<input checked={includeCookies} className="mt-0.5 size-4 shrink-0 accent-accent" onChange={(event) => setIncludeCookies(event.target.checked)} type="checkbox" />
 				</label>
 				{source.cookieSupport !== "supported" ? (
-					<p className="flex items-start gap-2 text-xs text-warning">
-						<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+					<p className="text-xs text-muted-foreground">
 						{t(capabilityKey(source.cookieSupportReason))}
 					</p>
 				) : null}
@@ -559,31 +561,34 @@ function OptionsStep({
 	);
 }
 
-function ResultStep({ includeCookies, result }: { includeCookies: boolean; result: BrowserImportResult }) {
+function ResultStep({ includeCookies, includeHistory, result }: { includeCookies: boolean; includeHistory: boolean; result: BrowserImportResult }) {
 	const { t } = useTranslation();
 	const empty = result.entries.every((entry) => entry.importedCookies + entry.importedHistoryEntries === 0);
-	const partial = result.entries.some((entry) =>
-		(includeCookies && entry.importedCookies === 0 && entry.skippedCookies > 0)
-		|| entry.warnings.some((warning) => !isExpectedSkip(warning))
-		|| entry.skippedCookies > entry.warnings.reduce((count, warning) => count + (isExpectedSkip(warning) ? warning.count ?? 0 : 0), 0),
-	);
-	const warning = empty || partial;
 	return (
-		<div className="space-y-4">
-			<div className={`flex items-start gap-3 rounded-lg border p-3 ${warning ? "border-warning/30 bg-warning/10" : "border-success/30 bg-success/10"}`} role="status">
-				{warning ? <TriangleAlert aria-hidden="true" className="mt-0.5 size-5 text-warning" /> : <CheckCircle2 aria-hidden="true" className="mt-0.5 size-5 text-success" />}
-				<div><p className="text-sm font-semibold">{t(empty ? "settings.browserImport.empty" : partial ? "settings.browserImport.partial" : "settings.browserImport.complete")}</p>{!empty ? <p className="text-xs text-muted-foreground">{t("settings.browserImport.completeDescription", { browser: result.sourceName })}</p> : null}</div>
-			</div>
+		<div className="space-y-3" role="status">
+			<span className="sr-only">{t(empty ? "settings.browserImport.empty" : "settings.browserImport.complete")}</span>
 			{result.entries.map((entry) => (
-				<div className="rounded-lg border border-border p-3" key={entry.destinationProfile.id}>
-					<p className="text-sm font-semibold">{entry.destinationProfile.name}</p>
-					<p className="mt-1 text-xs text-muted-foreground">{t("settings.browserImport.resultCounts", { cookies: entry.importedCookies, history: entry.importedHistoryEntries })}</p>
-					{entry.warnings.filter((warning) => !isExpectedSkip(warning)).map((warning) => <p className="mt-1 text-xs text-warning" key={warning.code}>{warningText(warning)}</p>)}
-					{entry.skippedCookies > 0 ? (
-						<details className="mt-2 text-xs text-muted-foreground">
-							<summary className="cursor-pointer">{t("settings.browserImport.skippedItems")} · {t("settings.browserImport.skippedCookies", { count: entry.skippedCookies })}</summary>
-							{entry.warnings.filter(isExpectedSkip).map((warning) => <p className="mt-1" key={warning.code}>{warningText(warning)}</p>)}
-							<p className="mt-1">{t("settings.browserImport.signInAgain")}</p>
+				<div className="rounded-xl border border-border px-3" key={entry.destinationProfile.id}>
+					<p className="pt-3 text-sm font-medium">{entry.destinationProfile.name}</p>
+					<p className="pb-2 text-xs text-muted-foreground">{t("settings.browserImport.resultCounts", { cookies: entry.importedCookies, history: entry.importedHistoryEntries })}</p>
+					{[
+						{ selected: includeCookies, Icon: Cookie, label: "settings.browserImport.cookies" as const, count: entry.importedCookies },
+						{ selected: includeHistory, Icon: HistoryIcon, label: "settings.browserImport.history" as const, count: entry.importedHistoryEntries },
+					].filter((item) => item.selected).map(({ Icon, label, count }) => (
+						<div className="flex items-center gap-3 border-t border-border py-3 text-sm" key={label}>
+							<Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+							<span className="flex-1">{t(label)}</span>
+							<span className="sr-only">{t(count > 0 ? "settings.browserImport.finished" : "settings.browserImport.empty")}</span>
+							{count > 0
+								? <CheckCircle2 aria-hidden="true" className="size-4 shrink-0 text-success" />
+								: <CircleMinus aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
+						</div>
+					))}
+					{entry.skippedCookies > 0 || entry.warnings.length > 0 ? (
+						<details className="border-t border-border py-3 text-xs text-muted-foreground">
+							<summary className="cursor-pointer">{t("settings.browserImport.skippedItems")}{entry.skippedCookies > 0 ? ` · ${t("settings.browserImport.skippedCookies", { count: entry.skippedCookies })}` : ""}</summary>
+							{entry.warnings.map((warning) => <p className="mt-2" key={warning.code}>{warningText(warning)}</p>)}
+							{includeCookies && entry.skippedCookies > 0 ? <p className="mt-2">{t("settings.browserImport.signInAgain")}</p> : null}
 						</details>
 					) : null}
 				</div>
@@ -591,10 +596,6 @@ function ResultStep({ includeCookies, result }: { includeCookies: boolean; resul
 			{!empty ? <p className="text-xs text-muted-foreground">{t("settings.browserImport.useProfile")}</p> : null}
 		</div>
 	);
-}
-
-function isExpectedSkip(warning: BrowserImportWarning): boolean {
-	return warning.code === "expired-cookies-skipped" || warning.code === "isolated-cookies-skipped";
 }
 
 function warningText(warning: BrowserImportWarning): string {
