@@ -39,21 +39,22 @@ var copilotTokenEnvVars = []string{
 	"GITHUB_TOKEN",
 }
 
-// copilotLocalAuthStatus checks Copilot's own stored login and the GitHub CLI
-// login first; tokens and a BYOK provider in the environment are the fallback.
+// copilotLocalAuthStatus follows Copilot CLI's own credential order: token
+// environment variables first (one silently overrides a stored login), then
+// Copilot's stored login, then the GitHub CLI. A BYOK provider is the fallback.
 func copilotLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
-	}
-	status, ok, err := copilotStoredAuthStatus(ctx)
-	if err == nil && ok && status.HasCredential() {
-		return status, true, nil
 	}
 	for _, name := range copilotTokenEnvVars {
 		if copilotUsableToken(os.Getenv(name)) {
 			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodToken))
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
+	}
+	status, ok, err := copilotStoredAuthStatus(ctx)
+	if err == nil && ok && status.HasCredential() {
+		return status, true, nil
 	}
 	if copilotBYOKConfigured() {
 		// A bring-your-own provider; its API key, if any, is optional.

@@ -14,7 +14,7 @@ import (
 
 func TestCopilotAuthRecordsItsEvidence(t *testing.T) {
 	t.Run("token environment variable", func(t *testing.T) {
-		// No stored Copilot or GitHub CLI login: the environment is the fallback.
+		// No stored Copilot or GitHub CLI login.
 		clearCopilotAuthProbeEnv(t)
 		t.Setenv("COPILOT_HOME", t.TempDir())
 		previous := authprobe.CmdRunner
@@ -45,6 +45,39 @@ func TestCopilotAuthRecordsItsEvidence(t *testing.T) {
 		t.Cleanup(func() { authprobe.CmdRunner = previous })
 		authprobe.CmdRunner = func(context.Context, string, ...string) ([]byte, error) {
 			return []byte("gho_from_env\n"), nil
+		}
+		t.Setenv("GH_TOKEN", "gho_from_env")
+		ctx, evidence := ports.WithAuthEvidence(context.Background())
+		if status, ok, err := copilotLocalAuthStatus(ctx); err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
+			t.Fatalf("status = (%q, %v, %v)", status, ok, err)
+		}
+		want := domain.EnvironmentSource("GH_TOKEN").WithMethod(domain.AgentAccountMethodToken)
+		if got := evidence.Identity(); got != want {
+			t.Fatalf("evidence = %+v, want %+v", got, want)
+		}
+	})
+	// Copilot CLI checks COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, its stored
+	// login, then gh auth token; a variable silently overrides a stored login.
+	t.Run("Copilot's own token variable precedes GH_TOKEN", func(t *testing.T) {
+		clearCopilotAuthProbeEnv(t)
+		t.Setenv("COPILOT_HOME", t.TempDir())
+		t.Setenv("COPILOT_GITHUB_TOKEN", "github_pat_copilot")
+		t.Setenv("GH_TOKEN", "gho_gh")
+		ctx, evidence := ports.WithAuthEvidence(context.Background())
+		if status, ok, err := copilotLocalAuthStatus(ctx); err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
+			t.Fatalf("status = (%q, %v, %v)", status, ok, err)
+		}
+		want := domain.EnvironmentSource("COPILOT_GITHUB_TOKEN").WithMethod(domain.AgentAccountMethodToken)
+		if got := evidence.Identity(); got != want {
+			t.Fatalf("evidence = %+v, want %+v", got, want)
+		}
+	})
+	t.Run("token variable overrides a stored login", func(t *testing.T) {
+		clearCopilotAuthProbeEnv(t)
+		dir := t.TempDir()
+		t.Setenv("COPILOT_HOME", dir)
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"authToken":"oauth-token"}`), 0o600); err != nil {
+			t.Fatal(err)
 		}
 		t.Setenv("GH_TOKEN", "gho_from_env")
 		ctx, evidence := ports.WithAuthEvidence(context.Background())
