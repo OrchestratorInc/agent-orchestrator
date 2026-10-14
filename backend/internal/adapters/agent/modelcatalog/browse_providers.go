@@ -1,7 +1,6 @@
 package modelcatalog
 
 import (
-	"context"
 	"sort"
 	"strings"
 
@@ -16,43 +15,19 @@ import (
 // Kilo, MiMo, Pi, OMP and FX) are not listed here.
 var browseProviderCredentials = map[string]func(workingDir string, env map[string]string) []string{}
 
-// browseSupportedProviders reports, per harness, every provider the installed
-// harness itself supports, read from its own bundle or catalog. Harness
-// Settings lists them all so a provider the user has not set up yet is still
-// visible. Each harness registers its list from its own file.
-// shown holds the providers the catalog already groups models under.
-var browseSupportedProviders = map[string]func(ctx context.Context, request ports.AgentModelDiscoveryRequest, shown []string) []string{}
-
-// markBrowsedProviders lists every provider a Harness Settings catalog has
-// models for, every provider the harness supports, and the ones the harness's
-// credential check finds, and marks the latter as configured.
-func markBrowsedProviders(ctx context.Context, catalog *ports.AgentModelCatalog, request ports.AgentModelDiscoveryRequest) {
+// markBrowsedProviders marks the providers a Harness Settings catalog's
+// credential check finds as configured.
+func markBrowsedProviders(catalog *ports.AgentModelCatalog, request ports.AgentModelDiscoveryRequest) {
 	check := browseProviderCredentials[request.AgentID]
-	supported := browseSupportedProviders[request.AgentID]
-	if check == nil && supported == nil {
+	if check == nil {
 		return
 	}
 	if request.AgentID == "cline" {
 		groupClineModelsByProvider(catalog.Models)
 	}
-	providers := append([]string(nil), catalog.Providers...)
-	for _, model := range catalog.Models {
-		if model.Provider != "" {
-			providers = append(providers, model.Provider)
-		}
-	}
-	if supported != nil {
-		providers = append(providers, supported(ctx, request, uniqueProviders(append([]string(nil), providers...)))...)
-	}
-	configured := append([]string(nil), catalog.ConfiguredProviders...)
-	if check != nil {
-		configured = append(configured, check(request.WorkingDir, request.Env)...)
-	}
-	configured = uniqueProviders(configured)
+	configured := uniqueProviders(append(catalog.ConfiguredProviders, check(request.WorkingDir, request.Env)...))
 	sort.Strings(configured)
 	catalog.ConfiguredProviders = configured
-	// A configured provider is listed even while it has no models.
-	catalog.Providers = uniqueProviders(append(providers, configured...))
 }
 
 // groupClineModelsByProvider groups Cline's ACP model choices by the Cline

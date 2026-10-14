@@ -8,11 +8,6 @@ import (
 	"strings"
 )
 
-// qwenAuthTypes are the provider protocols Qwen Code's modelProviders accepts,
-// in Qwen's own order. Harness Settings lists them all so the provider a user
-// has not set up yet is still visible.
-var qwenAuthTypes = []string{"qwen-oauth", "openai", "openai-responses", "anthropic", "gemini", "vertex-ai"}
-
 // qwenDefaultKeyEnv is the credential variable Qwen reads for a protocol when
 // a model entry names no envKey of its own.
 var qwenDefaultKeyEnv = map[string]string{
@@ -34,22 +29,6 @@ type qwenSettings struct {
 			APIKey       string `json:"apiKey"`
 		} `json:"auth"`
 	} `json:"security"`
-}
-
-// qwenConfigProviders names the modelProviders keys a settings file uses, so a
-// protocol newer than qwenAuthTypes still gets its own group.
-func qwenConfigProviders(raw []byte) []string {
-	var settings qwenSettings
-	if json.Unmarshal(raw, &settings) != nil {
-		return nil
-	}
-	var providers []string
-	for provider := range settings.ModelProviders {
-		if provider = strings.TrimSpace(provider); provider != "" {
-			providers = append(providers, provider)
-		}
-	}
-	return providers
 }
 
 // qwenConfiguredProviders reports the protocols Qwen holds a credential for:

@@ -548,10 +548,9 @@ describe("HarnessSettingsSection", () => {
 		await userEvent.click(screen.getByRole("menuitem", { name: "alpha · 12 · Configured" }));
 		expect(within(list).getByText("Alpha 0")).toBeInTheDocument();
 		expect(within(page).getByText("1–10 of 12")).toBeInTheDocument();
+		// A reported provider with no models has nothing to choose, so it is not offered.
 		await userEvent.click(within(page).getByRole("button", { name: "Provider" }));
-		await userEvent.click(screen.getByRole("menuitem", { name: "empty · 0" }));
-		expect(within(page).queryByRole("list", { name: "Available models" })).toBeNull();
-		expect(within(page).queryByRole("button", { name: "Next models" })).toBeNull();
+		expect(screen.queryByRole("menuitem", { name: "empty · 0" })).toBeNull();
 	});
 
 	it.each(["codewhale", "fx"] as const)("allows %s browsing while signed out", async (agentId) => {
@@ -572,7 +571,8 @@ describe("HarnessSettingsSection", () => {
 		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
 		expect(await within(page).findByText("Browse me")).toBeInTheDocument();
 		await userEvent.click(within(page).getByRole("button", { name: "Provider" }));
-		expect(screen.getByRole("menuitem", { name: "empty · 0" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "available · 1" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "empty · 0" })).toBeNull();
 	});
 
 	it("asks for login before loading models", async () => {

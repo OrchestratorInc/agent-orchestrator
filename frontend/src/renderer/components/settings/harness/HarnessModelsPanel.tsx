@@ -42,7 +42,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 	const [providerChoice, setProviderChoice] = useState<{ scope: string; id: string }>();
 	const { settings } = useSettings(hostId);
 	const allModels = catalog.data?.models;
-	const providers = useMemo(() => groupModelProviders(allModels ?? [], catalog.data?.configuredProviders, catalog.data?.providers), [allModels, catalog.data?.configuredProviders, catalog.data?.providers]);
+	const providers = useMemo(() => groupModelProviders(allModels ?? [], catalog.data?.configuredProviders), [allModels, catalog.data?.configuredProviders]);
 	const showProviders = providers.some((provider) => provider.id !== "");
 	// Switched-off models leave the project, New Task, and chat pickers; models the
 	// catalog adds later are offered.

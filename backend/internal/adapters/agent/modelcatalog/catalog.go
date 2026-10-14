@@ -253,7 +253,7 @@ type ClaudeFingerprintFunc func(context.Context, ports.AgentModelDiscoveryReques
 func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
 	catalog, err := d.discover(ctx, request)
 	if err == nil && request.BrowseAll {
-		markBrowsedProviders(ctx, &catalog, request)
+		markBrowsedProviders(&catalog, request)
 	}
 	return catalog, err
 }
@@ -314,12 +314,12 @@ func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscov
 
 // BrowsesAllProviders reports whether Settings browses a broader catalog than
 // task pickers: FX's every-provider listing, a harness whose native provider
-// cache also lists providers without credentials, or a harness that reports
-// its supported or configured providers. Task pickers only offer what the
-// harness can run now.
+// cache also lists providers without credentials, or a harness that marks
+// its configured providers. Task pickers only offer what the harness can run
+// now.
 func (Discoverer) BrowsesAllProviders(agentID string) bool {
 	return agentID == "fx" || hasLocalProviderCatalog(agentID) ||
-		browseProviderCredentials[agentID] != nil || browseSupportedProviders[agentID] != nil
+		browseProviderCredentials[agentID] != nil
 }
 
 // opencodeCredentialEnv maps an opencode cloud credential type to the env var
@@ -494,7 +494,7 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 	if request.AgentID == "fx" && request.BrowseAll {
 		return fingerprint + ":browse-v1:" + fingerprintConfigPaths([]string{fxSettingsPath(request.Env)})
 	}
-	if request.BrowseAll && (browseProviderCredentials[request.AgentID] != nil || browseSupportedProviders[request.AgentID] != nil) {
+	if request.BrowseAll && browseProviderCredentials[request.AgentID] != nil {
 		// Browsing catalogs cached before they marked this harness's configured
 		// providers must be rediscovered.
 		return fingerprint + ":browse-providers-v2"
@@ -553,7 +553,7 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 		return base, errors.New("codex model discovery requires app-server")
 	}
 	if hasConfigDiscoverySource(agentID) {
-		return discoverConfigCatalog(agentID, workingDir, env, browseAll)
+		return discoverConfigCatalog(agentID, workingDir, env)
 	}
 	spec, ok := commandSpecs[agentID]
 	if !ok {
