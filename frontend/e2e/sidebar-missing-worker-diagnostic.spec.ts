@@ -2,15 +2,38 @@ import { expect, test, type Page } from "@playwright/test";
 import { installFakeAgent, type FakeWorker } from "./support/fake-bridge";
 
 // Opt-in diagnostics only: this fake bridge exercises renderer cache, event,
-// and polling paths. It cannot reproduce Electron background throttling and is
-// excluded from the default @T0/@P0 renderer CI gate.
+// and polling paths. It cannot reproduce Electron background throttling, is
+// excluded from the default @T0/@P0 renderer CI gate, and is skipped by a plain
+// `playwright test` unless AO_SIDEBAR_DIAG=1.
+test.skip(process.env.AO_SIDEBAR_DIAG !== "1", "Opt-in #5038 diagnostics: set AO_SIDEBAR_DIAG=1 to run them");
+
+type Call = (...args: unknown[]) => unknown;
+// The parts of the dev build's QueryClient (`window.__qc`) these diagnostics use.
+type FakeQc = {
+	getQueryData: (key: readonly unknown[]) => unknown;
+	getQueryState: (
+		key: readonly unknown[],
+	) => { status?: string; fetchStatus?: string; fetchFailureCount?: number } | undefined;
+	getQueryCache: () => { onFocus: () => void };
+	invalidateQueries: Call;
+	refetchQueries: Call;
+	fetchQuery: Call;
+};
+
+declare global {
+	interface Window {
+		__qc?: FakeQc;
+		__workspaceFetchLog?: WorkspaceFetchLog;
+		/** True while a setInterval callback runs (see markIntervalCallbacks). */
+		__aoInIntervalCallback?: boolean;
+	}
+}
 
 const sessionList = (page: Page) => page.locator('[data-testid="session-list-fake-proj"]');
 
 const cacheState = (page: Page) =>
 	page.evaluate(() => {
-		const client = (window as unknown as { __qc?: { getQueryData: (key: readonly unknown[]) => unknown } }).__qc;
-		const workspaces = client?.getQueryData(["workspaces"]) as
+		const workspaces = window.__qc?.getQueryData(["workspaces"]) as
 			| Array<{ id: string; sessions: Array<{ id: string; title?: string }> }>
 			| undefined;
 		const workspace = workspaces?.find((item) => item.id === "fake-proj");
@@ -37,6 +60,29 @@ const sidebarRowState = (page: Page, title: string) =>
 		};
 	}, title);
 
+// TanStack schedules refetchInterval through the global setInterval (its
+// timeoutManager looks it up at call time) and the tick runs the queryFn
+// synchronously, so marking interval callbacks identifies poll fetches
+// positively. Installed before the app loads so the poll's first timer is
+// covered too.
+const markIntervalCallbacks = (page: Page) =>
+	page.addInitScript(() => {
+		const setIntervalNative = window.setInterval.bind(window);
+		window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+			if (typeof handler !== "function") return setIntervalNative(handler, timeout, ...args);
+			const marked = (...callArgs: unknown[]) => {
+				const outer = window.__aoInIntervalCallback;
+				window.__aoInIntervalCallback = true;
+				try {
+					(handler as Call)(...callArgs);
+				} finally {
+					window.__aoInIntervalCallback = outer;
+				}
+			};
+			return setIntervalNative(marked, timeout, ...args);
+		}) as typeof window.setInterval;
+	});
+
 async function openLargeExpandedWorkspace(page: Page) {
 	const workers: FakeWorker[] = Array.from({ length: 491 }, (_, index) => {
 		const number = index + 1;
@@ -46,6 +92,7 @@ async function openLargeExpandedWorkspace(page: Page) {
 			createdAt: new Date(Date.UTC(2024, 0, 1) + number * 1_000).toISOString(),
 		};
 	});
+	await markIntervalCallbacks(page);
 	await installFakeAgent(page, { workers, expandProject: true });
 	await page.goto("/#/");
 	const projectRow = page.locator('[data-sidebar="menu-button"]').filter({ hasText: "fake-proj" }).first();
@@ -57,12 +104,7 @@ async function openLargeExpandedWorkspace(page: Page) {
 
 const queryMetrics = (page: Page) =>
 	page.evaluate(() => {
-		const client = (window as unknown as {
-			__qc?: {
-				getQueryState: (key: readonly unknown[]) => { status?: string; fetchStatus?: string; fetchFailureCount?: number } | undefined;
-			};
-		}).__qc;
-		const state = client?.getQueryState(["workspaces"]);
+		const state = window.__qc?.getQueryState(["workspaces"]);
 		return {
 			queryStatus: state?.status ?? "missing",
 			fetchStatus: state?.fetchStatus ?? "missing",
@@ -82,43 +124,36 @@ const setDocumentVisibility = (page: Page, visibility: "visible" | "hidden") =>
 		document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
 	}, visibility);
 
-type FetchTrigger = "invalidate" | "refetch" | "focus" | "retry" | "interval";
+type FetchTrigger = "invalidate" | "refetch" | "fetchQuery" | "focus" | "interval" | "retry" | "other";
 type WorkspaceFetchLog = {
 	fetches: Record<FetchTrigger, number>;
 	/** The trigger of the first workspace fetch whose snapshot held each new session. */
 	firstFetchedBy: Record<string, FetchTrigger>;
 	workspaceInvalidations: number;
-	suppressedFocusRefetches: number;
+	/** `Date.now()` of the latest workspace invalidation, or 0. */
+	lastWorkspaceInvalidationAt: number;
 };
 
-// Attributes each workspace snapshot read to the QueryClient entry point that
-// started it: invalidateQueries (CDC events, the stream's open catch-up),
-// refetchQueries (the stream's error health check) or the query cache's focus
-// fan-out. TanStack runs the queryFn synchronously inside those calls, so an
-// unattributed read came from one of its timers: a retry while the query
-// records a failure, otherwise the 15-second poll. Every wrapper forwards all
-// arguments; event-transport relies on `{ cancelRefetch: false }`.
-const instrumentWorkspaceFetches = (page: Page, options: { suppressFocusRefetch?: boolean } = {}) =>
-	page.evaluate(({ suppressFocusRefetch }) => {
-		type Call = (...args: unknown[]) => unknown;
-		const target = window as unknown as {
-			__qc: {
-				invalidateQueries: Call;
-				refetchQueries: Call;
-				getQueryCache: () => { onFocus: () => void };
-				getQueryData: (key: readonly unknown[]) => unknown;
-				getQueryState: (key: readonly unknown[]) => { fetchFailureCount?: number } | undefined;
-			};
-			__workspaceFetchLog?: WorkspaceFetchLog;
-		};
-		const client = target.__qc;
+// Attributes each workspace snapshot read to what started it. TanStack runs the
+// queryFn synchronously inside the call that starts a fetch, so a read inside
+// invalidateQueries (CDC events, the stream's open catch-up), refetchQueries
+// (the stream's error health check), fetchQuery (route loaders) or the query
+// cache's focus fan-out belongs to that entry point, and a read inside a
+// setInterval callback is the poll. A retry is the only other read made while
+// the query records a failure, since every new fetch resets fetchFailureCount
+// first. Anything left, such as a newly mounted observer's refetchOnMount, is
+// `other`. Every wrapper forwards all arguments; event-transport relies on
+// `{ cancelRefetch: false }`.
+const instrumentWorkspaceFetches = (page: Page) =>
+	page.evaluate(() => {
+		const client = window.__qc!;
 		const log: WorkspaceFetchLog = {
-			fetches: { invalidate: 0, refetch: 0, focus: 0, retry: 0, interval: 0 },
+			fetches: { invalidate: 0, refetch: 0, fetchQuery: 0, focus: 0, interval: 0, retry: 0, other: 0 },
 			firstFetchedBy: {},
 			workspaceInvalidations: 0,
-			suppressedFocusRefetches: 0,
+			lastWorkspaceInvalidationAt: 0,
 		};
-		let trigger: "invalidate" | "refetch" | "focus" | undefined;
+		let trigger: "invalidate" | "refetch" | "fetchQuery" | "focus" | undefined;
 		const attribute = (name: NonNullable<typeof trigger>, call: Call): Call => (...args) => {
 			if (trigger) return call(...args);
 			trigger = name;
@@ -132,16 +167,15 @@ const instrumentWorkspaceFetches = (page: Page, options: { suppressFocusRefetch?
 		client.invalidateQueries = (...args) => {
 			if ((args[0] as { queryKey?: readonly unknown[] } | undefined)?.queryKey?.[0] === "workspaces") {
 				log.workspaceInvalidations += 1;
+				log.lastWorkspaceInvalidationAt = Date.now();
 			}
 			return invalidate(...args);
 		};
 		client.refetchQueries = attribute("refetch", client.refetchQueries.bind(client));
+		// prefetchQuery and ensureQueryData call through this.fetchQuery.
+		client.fetchQuery = attribute("fetchQuery", client.fetchQuery.bind(client));
 		const cache = client.getQueryCache();
-		cache.onFocus = suppressFocusRefetch
-			? () => {
-					log.suppressedFocusRefetches += 1;
-				}
-			: attribute("focus", cache.onFocus.bind(cache));
+		cache.onFocus = attribute("focus", cache.onFocus.bind(cache));
 
 		type Snapshot = Array<{ sessions: Array<{ id: string }> }>;
 		const seen = new Set(
@@ -151,7 +185,7 @@ const instrumentWorkspaceFetches = (page: Page, options: { suppressFocusRefetch?
 		const snapshot = fake.snapshot;
 		fake.snapshot = () => {
 			const failed = (client.getQueryState(["workspaces"])?.fetchFailureCount ?? 0) > 0;
-			const source: FetchTrigger = trigger ?? (failed ? "retry" : "interval");
+			const source: FetchTrigger = trigger ?? (window.__aoInIntervalCallback ? "interval" : failed ? "retry" : "other");
 			log.fetches[source] += 1;
 			const result = snapshot() as Snapshot;
 			for (const session of result.flatMap((workspace) => workspace.sessions)) {
@@ -161,14 +195,33 @@ const instrumentWorkspaceFetches = (page: Page, options: { suppressFocusRefetch?
 			}
 			return result;
 		};
-		target.__workspaceFetchLog = log;
-	}, { suppressFocusRefetch: options.suppressFocusRefetch ?? false });
+		window.__workspaceFetchLog = log;
+	});
 
 const workspaceFetchLog = (page: Page) =>
 	page.evaluate(() => {
-		const log = (window as unknown as { __workspaceFetchLog: WorkspaceFetchLog }).__workspaceFetchLog;
+		const log = window.__workspaceFetchLog!;
 		return { ...log, fetches: { ...log.fetches }, firstFetchedBy: { ...log.firstFetchedBy } };
 	});
+
+// The fake fires `open` from a timer, and the app's catch-up refresh can trail
+// it by an invalidation window. Wait until the newest CDC stream has opened and
+// a workspace invalidation since then has finished fetching.
+const waitForStreamCatchUp = (page: Page) =>
+	expect
+		.poll(
+			() =>
+				page.evaluate(() => {
+					const openedAt = window.__aoFakeAgent!.eventStreams().at(-1)?.openedAt;
+					return (
+						openedAt != null &&
+						window.__workspaceFetchLog!.lastWorkspaceInvalidationAt >= openedAt &&
+						window.__qc!.getQueryState(["workspaces"])?.fetchStatus === "idle"
+					);
+				}),
+			{ timeout: 15_000 },
+		)
+		.toBe(true);
 
 const fetchesSince = (before: WorkspaceFetchLog, after: WorkspaceFetchLog) =>
 	Object.fromEntries(
@@ -199,7 +252,7 @@ test("diagnostic: large workspace snapshot, refetch race, and SSE replay keep th
 	// transport sees an event while the workspace query is fetching.
 	await page.evaluate(() => {
 		window.__aoFakeAgent!.createWorkerDuringNextSnapshot({ id: "race-worker", title: "Race worker" });
-		void (window as unknown as { __qc: { invalidateQueries: (filters: { queryKey: string[] }) => Promise<void> } }).__qc.invalidateQueries({ queryKey: ["workspaces"] });
+		void window.__qc!.invalidateQueries({ queryKey: ["workspaces"] });
 	});
 	await expect.poll(async () => (await cacheState(page)).sessionIds.includes("race-worker"), { timeout: 10_000 }).toBe(true);
 	await expect(sessionList(page).getByText("Race worker", { exact: true })).toBeVisible();
@@ -218,7 +271,8 @@ test("diagnostic: large workspace snapshot, refetch race, and SSE replay keep th
 	await page.evaluate(() => window.__aoFakeAgent!.reconnectEventsWithReplayBacklog(378_000));
 	await expect.poll(async () => (await replayProgress(page)).phase, { timeout: 15_000 }).toBe("replaying");
 	const logAtReplayStart = await workspaceFetchLog(page);
-	await page.evaluate(() => window.__aoFakeAgent!.createWorkerDuringReplay({ id: "replay-worker", title: "Replay worker" }));
+	// While the stream replays, the fake queues new events behind the gap.
+	await page.evaluate(() => window.__aoFakeAgent!.createWorker({ id: "replay-worker", title: "Replay worker" }));
 	const replayCacheAtCapture = await cacheState(page);
 	const duringReplay = {
 		cacheSessionCount: replayCacheAtCapture.sessionCount,
@@ -260,8 +314,9 @@ test("diagnostic: large workspace snapshot, refetch race, and SSE replay keep th
 	expect(afterReplay.streams.at(-1)?.url).toContain("/api/v1/events?after=latest");
 
 	// Model the event being missed entirely while keeping the renderer mounted, so
-	// only the 15-second poll can recover the worker.
-	await expect.poll(async () => (await queryMetrics(page)).fetchStatus).toBe("idle");
+	// only the 15-second poll can recover the worker. Create it only after the
+	// replacement stream's open catch-up has run, or that fetch would find it.
+	await waitForStreamCatchUp(page);
 	await page.evaluate(() => window.__aoFakeAgent!.createWorkerWithoutEvent({ id: "poll-worker", title: "Poll worker" }));
 	const pollStartedAt = await page.evaluate(() => Date.now());
 	const pollCacheBefore = await cacheState(page);
@@ -296,21 +351,23 @@ test("diagnostic: continuous SSE pressure does not starve workspace invalidation
 
 	const before = await workspaceFetchLog(page);
 	const startTime = await page.evaluate(() => Date.now());
-	// Send 100 recognized session frames per 50 ms (2,000/s). Frames that arrive
-	// while rendering blocks the main thread are handed over together, as
-	// EventSource does with a buffered stream, so the rate holds under load.
+	// The daemon sends 100 session_updated CDC envelopes per 50 ms (2,000/s). They
+	// run through event-transport's real handlers, per-session invalidations
+	// included. A backlog that builds while the main thread is busy is handed
+	// over a tick's worth per task, so the renderer can fetch and paint between.
 	await page.evaluate(() => window.__aoFakeAgent!.startContinuousWorkspaceEvents(50, 100));
 	await page.waitForTimeout(1_000);
 	await page.evaluate(() => window.__aoFakeAgent!.createWorker({ id: "continuous-worker", title: "Continuous worker" }));
 	await page.waitForTimeout(120_000);
 	await page.evaluate(() => window.__aoFakeAgent!.stopContinuousWorkspaceEvents());
 	const elapsedMs = await page.evaluate((startedAt) => Date.now() - startedAt, startTime);
-	const eventCount = await page.evaluate(() => window.__aoFakeAgent!.continuousWorkspaceEventCount());
+	const events = await page.evaluate(() => window.__aoFakeAgent!.continuousWorkspaceEvents());
 	const after = await workspaceFetchLog(page);
 	const capturedCache = await cacheState(page);
 	const capture = {
 		elapsedMs,
-		continuousEvents: eventCount,
+		sentEvents: events.sent,
+		deliveredEvents: events.delivered,
 		workspaceInvalidations: after.workspaceInvalidations - before.workspaceInvalidations,
 		fetches: fetchesSince(before, after),
 		firstFetchedBy: after.firstFetchedBy["continuous-worker"],
@@ -320,7 +377,7 @@ test("diagnostic: continuous SSE pressure does not starve workspace invalidation
 	};
 	console.log("SIDEBAR_DIAGNOSTIC continuous-pressure", JSON.stringify(capture));
 	expect(elapsedMs).toBeGreaterThanOrEqual(120_000);
-	expect(eventCount).toBeGreaterThanOrEqual(5_000);
+	expect(events.delivered).toBeGreaterThanOrEqual(5_000);
 	expect(capture.workspaceInvalidations).toBeGreaterThan(0);
 	expect(capture.fetches.invalidate).toBeGreaterThan(0);
 	expect(capture.workerIndex).toBeGreaterThanOrEqual(0);
@@ -410,13 +467,13 @@ test("diagnostic: a delivered SSE event updates the cache while document is hidd
 	await setDocumentVisibility(page, "visible");
 });
 
-test("diagnostic: a missed hidden SSE event recovers on the next interval after visibility returns @SIDEBAR_DIAG", async ({ page }) => {
+test("diagnostic: a missed hidden SSE event waits for the next 15-second poll after visibility returns @SIDEBAR_DIAG", async ({ page }) => {
 	test.setTimeout(180_000);
 	await openLargeExpandedWorkspace(page);
-	// After two hidden minutes the workspace data is past its 10 s staleTime, so
-	// TanStack's focus refetch would recover the worker the moment visibility
-	// returns. Suppress that refetch to measure the interval fallback alone.
-	await instrumentWorkspaceFetches(page, { suppressFocusRefetch: true });
+	// The app's QueryClient defaults to refetchOnWindowFocus: false and the
+	// workspace query keeps it, so returning visibility fetches nothing by itself:
+	// the poll is the only recovery path. Measure how long the worker stays missing.
+	await instrumentWorkspaceFetches(page);
 	await setDocumentVisibility(page, "hidden");
 	await page.waitForTimeout(1_000);
 	const logAtHiddenStart = await workspaceFetchLog(page);
@@ -445,8 +502,7 @@ test("diagnostic: a missed hidden SSE event recovers on the next interval after 
 	const recoveredCache = await cacheState(page);
 	const logAfterRecovery = await workspaceFetchLog(page);
 	const recoveryCapture = {
-		elapsedAfterRestoreMs: await page.evaluate((startedAt) => Date.now() - startedAt, restoreStartedAt),
-		suppressedFocusRefetches: logAfterRecovery.suppressedFocusRefetches - logBeforeRestore.suppressedFocusRefetches,
+		missingAfterRestoreMs: await page.evaluate((startedAt) => Date.now() - startedAt, restoreStartedAt),
 		fetchesSinceRestore: fetchesSince(logBeforeRestore, logAfterRecovery),
 		firstFetchedBy: logAfterRecovery.firstFetchedBy["hidden-missed-worker"],
 		cacheSessionCount: recoveredCache.sessionCount,
@@ -455,17 +511,19 @@ test("diagnostic: a missed hidden SSE event recovers on the next interval after 
 	};
 	console.log("SIDEBAR_DIAGNOSTIC hidden-missed-event-recovery", JSON.stringify(recoveryCapture));
 	await expect(sessionList(page).getByText("Hidden missed worker", { exact: true })).toBeVisible();
-	// The visibility transition did reach TanStack's focus handling.
-	expect(recoveryCapture.suppressedFocusRefetches).toBe(1);
+	// Nothing but the poll fetched the workspace list after visibility returned.
+	expect(recoveryCapture.fetchesSinceRestore).toEqual({ invalidate: 0, refetch: 0, fetchQuery: 0, focus: 0, interval: 1, retry: 0, other: 0 });
 	expect(recoveryCapture.firstFetchedBy).toBe("interval");
+	// The poll keeps its phase while hidden, so the wait is up to one interval.
+	expect(recoveryCapture.missingAfterRestoreMs).toBeLessThanOrEqual(15_000 + 2_000);
 });
 
 test("diagnostic: the app's replacement EventSource catches up a missed event on open @SIDEBAR_DIAG", async ({ page }) => {
 	test.setTimeout(100_000);
 	await openLargeExpandedWorkspace(page);
 	await instrumentWorkspaceFetches(page);
-	// While hidden TanStack neither polls nor refetches on focus, so only the
-	// stream's own callbacks can fetch the workspace list.
+	// While hidden TanStack does not poll (and the workspace query never refetches
+	// on focus), so only the stream's own callbacks can fetch the workspace list.
 	await setDocumentVisibility(page, "hidden");
 	const streamsBeforeClose = await eventStreams(page);
 	const logBeforeClose = await workspaceFetchLog(page);

@@ -434,7 +434,6 @@ export type FakeAgentController = {
 	createWorker: (worker: FakeWorker) => void;
 	createWorkerWithoutEvent: (worker: FakeWorker) => void;
 	createWorkerDuringNextSnapshot: (worker: FakeWorker) => void;
-	createWorkerDuringReplay: (worker: FakeWorker) => void;
 	removeWorker: (id: string) => void;
 	setStatus: (id: string, status: string, activity?: string) => void;
 	setTerminalHandle: (id: string, handleId: string) => void;
@@ -443,22 +442,31 @@ export type FakeAgentController = {
 	reconnectEventsWithReplayBacklog: (count: number) => void;
 	replayProgress: () => FakeReplayProgress;
 	closeEventsStream: () => void;
-	eventStreams: () => Array<{ url: string; readyState: number }>;
+	/** `openedAt` is the `Date.now()` at which the stream last fired `open`. */
+	eventStreams: () => Array<{ url: string; readyState: number; openedAt: number | null }>;
 	startContinuousWorkspaceEvents: (intervalMs: number, eventsPerTick?: number) => void;
 	stopContinuousWorkspaceEvents: () => void;
-	continuousWorkspaceEventCount: () => number;
+	continuousWorkspaceEvents: () => FakePressureProgress;
 	setSnapshotFailures: (count: number) => void;
 	snapshotCallCount: () => number;
 	notify: (n: { id: string; type: string; title: string; body?: string; sessionId?: string }) => void;
 };
 
-/** A CDC gap replay: `remaining` frames are still queued, `abandoned` frames
- *  (deferred events included) were dropped when the app replaced the stream. */
+/** The current (or last) CDC gap replay: `remaining` frames are still queued,
+ *  `abandoned` frames (deferred events included) were dropped when the app
+ *  replaced the stream. The counters reset when a new replay starts. */
 export type FakeReplayProgress = {
 	phase: "idle" | "connecting" | "replaying";
 	remaining: number;
 	delivered: number;
 	abandoned: number;
+};
+
+/** Continuous SSE pressure: frames the daemon has `sent` by elapsed time, and
+ *  how many of them the renderer has been handed so far. */
+export type FakePressureProgress = {
+	sent: number;
+	delivered: number;
 };
 
 export type FakeUpdateController = {
@@ -585,6 +593,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 			interface FakeEventSourceLike {
 				url: string;
 				readyState: number;
+				openedAt: number | null;
 				onopen: ((ev: unknown) => void) | null;
 				onerror: ((ev: unknown) => void) | null;
 				onmessage: ((ev: unknown) => void) | null;
@@ -599,14 +608,22 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				workspaces: [project],
 				replay: {
 					phase: "idle" as "idle" | "connecting" | "replaying",
+					source: undefined as FakeEventSourceLike | undefined,
 					remaining: 0,
 					delivered: 0,
 					abandoned: 0,
-					deferred: [] as Session[],
+					deferred: [] as Array<{ type: string; data?: string }>,
 				},
 				raceWorker: null as (typeof workers)[number] | null,
-				continuousWorkspaceEvents: 0,
-				continuousEventTimer: undefined as number | undefined,
+				cdcSeq: 0,
+				pressure: {
+					timer: undefined as number | undefined,
+					startedAt: 0,
+					stoppedAt: undefined as number | undefined,
+					periodMs: 1,
+					perTick: 1,
+					delivered: 0,
+				},
 				snapshotCalls: 0,
 				snapshotFailures: 0,
 			};
@@ -628,6 +645,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				readonly CLOSED = 2;
 				url: string;
 				readyState = 1;
+				openedAt: number | null = null;
 				onopen: ((ev: unknown) => void) | null = null;
 				onerror: ((ev: unknown) => void) | null = null;
 				onmessage: ((ev: unknown) => void) | null = null;
@@ -638,7 +656,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					// event-transport assigns `.onopen` right after construction; fire on
 					// the next tick so it is already wired.
 					setTimeout(() => {
-						if (this.readyState === 1 && this.onopen) this.onopen({ type: "open" });
+						if (this.readyState !== 1 || !this.onopen) return;
+						this.openedAt = Date.now();
+						this.onopen({ type: "open" });
 					}, 0);
 				}
 				addEventListener(t: string, cb: (ev: unknown) => void) {
@@ -669,8 +689,15 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 
 			const emit = (match: string, type: string, data?: string) => {
 				for (const es of state.eventSources) {
-					if (es.readyState === 2) continue;
 					if (!es.url.includes(match)) continue;
+					// Events committed while EventSource reconnects reach it through the
+					// Last-Event-ID replay, after the gap it is still catching up on.
+					if (es === state.replay.source && state.replay.phase !== "idle") {
+						state.replay.deferred.push({ type, data });
+						continue;
+					}
+					// A real EventSource delivers nothing while CONNECTING or CLOSED.
+					if (es.readyState !== 1) continue;
 					es._dispatch(type, data);
 				}
 			};
@@ -682,9 +709,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					.reverse()
 					.find((source) => source.url.includes("/api/v1/events") && source.readyState !== 2);
 			// The daemon's SSE `data`: the full CDC envelope (backend/internal/cdc/event.go).
-			const cdcFrame = (type: string, session: Session, seq: number) =>
+			const cdcFrame = (type: string, session: Session) =>
 				JSON.stringify({
-					seq,
+					seq: (state.cdcSeq += 1),
 					projectId,
 					sessionId: session.id,
 					type,
@@ -695,9 +722,23 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 			const BROWSER_RECONNECT_MS = 3_000;
 			// The daemon replays and flushes in 512-event pages (httpd/events.go).
 			const REPLAY_PAGE = 512;
-			// History arrives in runs from the few workers active at a time, not
+			// Session events come in runs from the few workers active at a time, not
 			// round-robin over every session: about 10 sessions per daemon page.
-			const REPLAY_RUN = 50;
+			const ACTIVE_RUN = 50;
+			const activeSession = (sessions: Session[], n: number) => sessions[Math.floor(n / ACTIVE_RUN) % sessions.length];
+			const pressureSent = () => {
+				const { startedAt, stoppedAt, periodMs, perTick } = state.pressure;
+				if (!startedAt) return 0;
+				return Math.floor(((stoppedAt ?? performance.now()) - startedAt) / periodMs) * perTick;
+			};
+			const stopPressure = () => {
+				const pressure = state.pressure;
+				if (pressure.timer === undefined) return;
+				window.clearInterval(pressure.timer);
+				pressure.timer = undefined;
+				pressure.stoppedAt = performance.now();
+			};
+
 			// Only EventSource's own reconnect replays a gap: it resends Last-Event-ID,
 			// which overrides `?after=latest`. A stream the app constructs (its retry
 			// after CLOSED, or a daemon/base-URL change) starts at head, so when the
@@ -714,7 +755,10 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				// The gap holds history from before it began, not sessions created since.
 				const gapSessions = [...(project.sessions as Session[])];
 				replay.phase = "connecting";
+				replay.source = source;
 				replay.remaining = count;
+				replay.delivered = 0;
+				replay.abandoned = 0;
 				source.readyState = 0;
 				source.onerror?.({ type: "error" });
 				setTimeout(() => {
@@ -722,14 +766,13 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					source.readyState = 1;
 					replay.phase = "replaying";
 					// A real EventSource fires `open` before it delivers replayed frames.
+					source.openedAt = Date.now();
 					source.onopen?.({ type: "open" });
-					let seq = 0;
 					const drainPage = () => {
 						if (source.readyState !== 1) return abandon();
 						const frames = Math.min(REPLAY_PAGE, replay.remaining);
 						for (let i = 0; i < frames; i += 1) {
-							seq += 1;
-							source._dispatch("session_updated", cdcFrame("session_updated", gapSessions[Math.floor(seq / REPLAY_RUN) % gapSessions.length], seq));
+							source._dispatch("session_updated", cdcFrame("session_updated", activeSession(gapSessions, replay.delivered + i)));
 						}
 						replay.remaining -= frames;
 						replay.delivered += frames;
@@ -738,15 +781,17 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 							return;
 						}
 						// Events committed after the gap began follow it in sequence order.
-						for (const session of replay.deferred) {
-							seq += 1;
-							source._dispatch("session_created", cdcFrame("session_created", session, seq));
-						}
+						for (const frame of replay.deferred) source._dispatch(frame.type, frame.data);
 						replay.deferred = [];
 						replay.phase = "idle";
 					};
 					drainPage();
 				}, BROWSER_RECONNECT_MS);
+			};
+
+			const createWorker = (worker: (typeof workers)[number]) => {
+				addWorker(worker);
+				emit("/api/v1/events", "session_created", cdcFrame("session_created", findSession(worker.id)!));
 			};
 
 			const controller: FakeAgentController = {
@@ -760,23 +805,13 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					const raceWorker = state.raceWorker;
 					if (raceWorker) {
 						state.raceWorker = null;
-						addWorker(raceWorker);
-						pushWorkspaces("session_created");
+						createWorker(raceWorker);
 					}
 					return snapshot;
 				},
-				createWorker: (w) => {
-					addWorker(w);
-					pushWorkspaces("session_created");
-				},
+				createWorker,
 				createWorkerWithoutEvent: addWorker,
 				createWorkerDuringNextSnapshot: (w) => { state.raceWorker = w; },
-				createWorkerDuringReplay: (w) => {
-					addWorker(w);
-					const session = findSession(w.id);
-					if (state.replay.phase === "idle" || !session) pushWorkspaces("session_created");
-					else state.replay.deferred.push(session);
-				},
 				removeWorker: (id) => {
 					const sessions = project.sessions as Session[];
 					const index = sessions.findIndex((session) => session.id === id);
@@ -831,29 +866,44 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				eventStreams: () =>
 					state.eventSources
 						.filter((source) => source.url.includes("/api/v1/events"))
-						.map(({ url, readyState }) => ({ url, readyState })),
+						.map(({ url, readyState, openedAt }) => ({ url, readyState, openedAt })),
 				startContinuousWorkspaceEvents: (intervalMs, eventsPerTick = 1) => {
-					if (state.continuousEventTimer !== undefined) window.clearInterval(state.continuousEventTimer);
-					state.continuousWorkspaceEvents = 0;
-					const period = Math.max(1, Math.floor(intervalMs));
-					const perTick = Math.max(1, Math.floor(eventsPerTick));
-					const startedAt = performance.now();
-					// The daemon keeps sending while rendering blocks the main thread, and
-					// EventSource then hands over the buffered frames together: deliver by
-					// elapsed time, not by how often this timer gets to run.
-					state.continuousEventTimer = window.setInterval(() => {
-						const due = Math.floor((performance.now() - startedAt) / period) * perTick;
-						while (state.continuousWorkspaceEvents < due) {
-							state.continuousWorkspaceEvents += 1;
-							pushWorkspaces("session_updated");
+					stopPressure();
+					const pressure = state.pressure;
+					pressure.startedAt = performance.now();
+					pressure.stoppedAt = undefined;
+					pressure.periodMs = Math.max(1, Math.floor(intervalMs));
+					pressure.perTick = Math.max(1, Math.floor(eventsPerTick));
+					pressure.delivered = 0;
+					const sessions = [...(project.sessions as Session[])];
+					let draining = false;
+					// The daemon keeps sending while rendering blocks the main thread, so
+					// frames come due by elapsed time, not by how often this timer runs.
+					// EventSource dispatches each event as its own task: hand over the
+					// backlog one tick's worth at a time and yield between chunks, so fetch
+					// resolution and rendering can run in between, as in production.
+					const drain = () => {
+						if (pressure.timer !== timer) {
+							draining = false;
+							return;
 						}
-					}, period);
+						const sent = pressureSent();
+						const end = Math.min(sent, pressure.delivered + pressure.perTick);
+						for (; pressure.delivered < end; pressure.delivered += 1) {
+							emit("/api/v1/events", "session_updated", cdcFrame("session_updated", activeSession(sessions, pressure.delivered)));
+						}
+						if (pressure.delivered < sent) setTimeout(drain, 0);
+						else draining = false;
+					};
+					const timer = window.setInterval(() => {
+						if (draining) return;
+						draining = true;
+						drain();
+					}, pressure.periodMs);
+					pressure.timer = timer;
 				},
-				stopContinuousWorkspaceEvents: () => {
-					if (state.continuousEventTimer !== undefined) window.clearInterval(state.continuousEventTimer);
-					state.continuousEventTimer = undefined;
-				},
-				continuousWorkspaceEventCount: () => state.continuousWorkspaceEvents,
+				stopContinuousWorkspaceEvents: stopPressure,
+				continuousWorkspaceEvents: () => ({ sent: pressureSent(), delivered: state.pressure.delivered }),
 				setSnapshotFailures: (count) => { state.snapshotFailures = Math.max(0, Math.floor(count)); },
 				snapshotCallCount: () => state.snapshotCalls,
 				notify: (n) => {
