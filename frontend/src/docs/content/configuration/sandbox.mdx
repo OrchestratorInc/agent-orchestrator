@@ -59,6 +59,8 @@ Keep the orchestrator unsandboxed, which is the default. Inside the sandbox the 
 
 A running per-agent container keeps its old settings until it stops. New settings apply on the next fresh start. Shared containers are created per config, and the old one is removed when the project's last session ends.
 
+Turning sandboxing on or off does not move existing conversations. Claude keeps a sandboxed session's conversation in the sandbox's own config dir, so a session started on the host can't resume inside a sandbox, and the other way round. Restoring such a session fails with `SANDBOX_MISCONFIGURED`; set `sandbox.mode` back to resume it, or start a new session.
+
 ## Git inside the sandbox
 
 The agent can commit, create branches, check out, rebase, and fetch inside the sandbox. Commits use the `user.name` and `user.email` that git on the host has for the repository.

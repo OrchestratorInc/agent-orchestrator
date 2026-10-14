@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -114,6 +115,26 @@ func (m *Manager) prepareSandboxLaunch(ctx context.Context, agent ports.Agent, r
 		return nil, err
 	}
 	return launch, nil
+}
+
+// checkSandboxPlacement refuses to resume a conversation across a sandbox
+// mode change. The harness keeps its conversation in a host or sandbox config
+// dir, so resuming on the other side would silently start over, and copying
+// the transcript across would carry agent-written content out of the sandbox.
+// A session with no native conversation yet has nothing to lose, and a
+// harness that cannot run sandboxed gets its own error from the launch.
+func (m *Manager) checkSandboxPlacement(agent ports.Agent, rec domain.SessionRecord, project domain.ProjectRecord) error {
+	if _, ok := agent.(ports.AgentSandboxSupport); !ok || strings.TrimSpace(rec.Metadata.AgentSessionID) == "" {
+		return nil
+	}
+	was := m.sandbox != nil && m.sandbox.HasSessionState(rec.ProjectID, rec.ID)
+	now := sandboxFor(rec.Kind, project.Config).Enabled()
+	if was == now {
+		return nil
+	}
+	where := map[bool]string{false: "on the host", true: "in a sandbox"}
+	return fmt.Errorf("%w: this session's conversation was started %s, but sandbox.mode now runs it %s; set sandbox.mode back to resume it, or start a new session",
+		ports.ErrSandboxMisconfigured, where[was], where[now])
 }
 
 // discardSandbox removes a failed launch's per-agent container. Shared

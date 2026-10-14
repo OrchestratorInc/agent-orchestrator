@@ -658,6 +658,52 @@ func TestReleaseTerminatedSandboxOnlyForSandboxedSessions(t *testing.T) {
 	}
 }
 
+// A conversation is never resumed across a sandbox mode change: the harness
+// would not find it and would silently start over.
+func TestRestoreRefusesAcrossSandboxModeChange(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		sandboxedAt bool // whether the session has sandbox state
+		cfg         domain.ProjectConfig
+	}{
+		{"host to sandbox", false, sandboxedConfig(domain.SandboxModePerAgent)},
+		{"sandbox to host", true, testRoleAgents()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sb := &fakeSandbox{noState: map[domain.SessionID]bool{"mer-1": !tc.sandboxedAt}}
+			agent := &sandboxAgent{launchArgvAgent: launchArgvAgent{argv: []string{"claude"}}}
+			m, st, rt := newSandboxSpawnManager(sb, agent)
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repos/mer", Config: tc.cfg}
+			seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"})
+
+			_, err := m.RestoreWithMode(ctx, "mer-1")
+			if !errors.Is(err, ports.ErrSandboxMisconfigured) || !strings.Contains(err.Error(), "sandbox.mode back") {
+				t.Fatalf("restore err = %v, want a sandbox mode change refusal", err)
+			}
+			if rt.created != 0 || len(sb.ensured) != 0 {
+				t.Fatalf("runtime creates = %d, ensures = %d, want none", rt.created, len(sb.ensured))
+			}
+		})
+	}
+}
+
+// Without a native conversation there is nothing to lose, so the session
+// follows the current mode.
+func TestRestoreWithoutConversationFollowsNewSandboxMode(t *testing.T) {
+	sb := &fakeSandbox{noState: map[domain.SessionID]bool{"mer-1": true}}
+	agent := &sandboxAgent{launchArgvAgent: launchArgvAgent{argv: []string{"claude"}}}
+	m, st, _ := newSandboxSpawnManager(sb, agent)
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", Prompt: "do it"})
+
+	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(sb.ensured) != 1 {
+		t.Fatalf("ensures = %d, want the restore to run sandboxed", len(sb.ensured))
+	}
+}
+
+// I2: a restore that fails after Ensure removes the container it ensured.
 func TestRestoreDiscardsContainerWhenRuntimeCreateFails(t *testing.T) {
 	sb := &fakeSandbox{}
 	agent := &sandboxAgent{launchArgvAgent: launchArgvAgent{argv: []string{"claude"}}}
