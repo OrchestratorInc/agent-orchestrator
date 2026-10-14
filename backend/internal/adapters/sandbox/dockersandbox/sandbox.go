@@ -230,9 +230,11 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 	}
 	created := false
 	switch {
-	case status != "" && status != "running" && existingHash != hash:
+	case status == "created" || (status != "" && status != "running" && existingHash != hash):
 		// A stopped container with stale config is recreated; the worktree
 		// lives on the host. A running one may hold a live agent: reuse it.
+		// One left in "created" by a failed `docker run` never ran, and
+		// starting it would only repeat that failure.
 		if _, err := s.output(ctx, probeTimeout, docker, "rm", "-f", name); err != nil {
 			return ports.SandboxTarget{}, err
 		}
@@ -249,8 +251,14 @@ func (s *Sandbox) Ensure(ctx context.Context, req ports.SandboxRequest) (ports.S
 			if errors.Is(err, ports.ErrSandboxUnavailable) {
 				return ports.SandboxTarget{}, err
 			}
-			return ports.SandboxTarget{}, fmt.Errorf("%w: start sandbox from image %s (the image must exist or be pullable and provide /bin/sh): %w",
+			err = fmt.Errorf("%w: start sandbox from image %s (the image must exist or be pullable and provide /bin/sh): %w",
 				ports.ErrSandboxMisconfigured, req.Config.Image, err)
+			// `docker run -d` can create the container and then fail to start
+			// it; nothing else ever owns that name, so remove it.
+			if _, rmErr := s.output(ctx, probeTimeout, docker, "rm", "-f", name); rmErr != nil && !errors.Is(rmErr, ports.ErrSandboxUnavailable) {
+				err = fmt.Errorf("%w (removing the failed container also failed: %w)", err, rmErr)
+			}
+			return ports.SandboxTarget{}, err
 		}
 		created = true
 	case status != "running":
@@ -406,10 +414,12 @@ func (s *Sandbox) DiscardSession(ctx context.Context, project domain.ProjectID, 
 }
 
 // dockerSocketDenied reports a Docker socket permission error, which means
-// the daemon is unusable for this user.
+// the daemon is unusable for this user. It matches only the CLI's connect
+// error ("... to connect to the Docker daemon socket" or "... the docker
+// API"), not a permission error from inside a container or image, which
+// `docker run` also reports with a "docker:" prefix.
 func dockerSocketDenied(err error) bool {
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "permission denied") && strings.Contains(msg, "docker")
+	return strings.Contains(strings.ToLower(err.Error()), "permission denied while trying to connect to the docker")
 }
 
 // Release removes the project's shared containers once nothing uses them.

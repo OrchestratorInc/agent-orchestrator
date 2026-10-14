@@ -382,6 +382,7 @@ func TestEnsureRunFailureIsMisconfigured(t *testing.T) {
 	s, _, data := testSandbox(t, []fakeCall{
 		{match: "inspect", err: errors.New("No such object")},
 		{match: "run -d", err: errors.New("pull access denied for node")},
+		{match: "rm -f ao-sbx-s1"},
 	})
 	_, err := s.Ensure(context.Background(), perAgentReq(filepath.Join(data, "worktrees", "p", "s1")))
 	if !errors.Is(err, ports.ErrSandboxMisconfigured) || !strings.Contains(err.Error(), "node:22") {
@@ -396,6 +397,52 @@ func TestEnsureDockerSocketPermissionDenied(t *testing.T) {
 	_, err := s.Ensure(context.Background(), perAgentReq(filepath.Join(data, "worktrees", "p", "s1")))
 	if !errors.Is(err, ports.ErrSandboxUnavailable) {
 		t.Fatalf("err = %v, want ErrSandboxUnavailable", err)
+	}
+}
+
+// A permission error from inside the image is the image's fault, not an
+// unreachable Docker, even though `docker run` prefixes it with "docker:".
+func TestEnsureImagePermissionErrorIsMisconfigured(t *testing.T) {
+	s, _, data := testSandbox(t, []fakeCall{
+		{match: "inspect", err: errors.New("No such object")},
+		{match: "run -d", err: errors.New(`docker: Error response from daemon: failed to create task: exec: "/bin/sh": permission denied`)},
+		{match: "rm -f ao-sbx-s1"},
+	})
+	_, err := s.Ensure(context.Background(), perAgentReq(filepath.Join(data, "worktrees", "p", "s1")))
+	if !errors.Is(err, ports.ErrSandboxMisconfigured) {
+		t.Fatalf("err = %v, want ErrSandboxMisconfigured", err)
+	}
+}
+
+func TestDockerSocketDeniedMatchesOnlyConnectErrors(t *testing.T) {
+	for msg, want := range map[string]bool{
+		"permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock": true,
+		"permission denied while trying to connect to the docker API at unix:///var/run/docker.sock":           true,
+		`docker: Error response from daemon: exec: "/bin/sh": permission denied`:                               false,
+		"docker: invalid mount config: open /data/x: permission denied":                                        false,
+	} {
+		if got := dockerSocketDenied(errors.New(msg)); got != want {
+			t.Errorf("dockerSocketDenied(%q) = %v, want %v", msg, got, want)
+		}
+	}
+}
+
+// A container left in "created" by an earlier failed `docker run` is
+// recreated, not started: it never ran and holds nothing.
+func TestEnsureCreatedContainerIsRecreated(t *testing.T) {
+	s, fr, data := testSandbox(t, nil)
+	req := perAgentReq(filepath.Join(data, "worktrees", "p", "s1"))
+	fr.script = []fakeCall{
+		{match: "inspect", out: "created\t" + hashFor(t, s, req) + "\n"},
+		{match: "rm -f ao-sbx-s1"},
+		{match: "run -d --init --name ao-sbx-s1"},
+		{match: "command -v"},
+	}
+	if _, err := s.Ensure(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if countCalls(fr, " start ") != 0 {
+		t.Fatalf("created container was started:\n%s", strings.Join(fr.calls, "\n"))
 	}
 }
 
