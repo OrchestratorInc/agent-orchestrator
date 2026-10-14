@@ -55,7 +55,6 @@ func TestMigration0203AllowsHermesAndReversesBothHistoricalSchemas(t *testing.T)
 			if rollbackErr == nil {
 				t.Fatal("rollback accepted existing hermes session")
 			}
-			mustExec(t, db, `DROP TABLE IF EXISTS temp.hermes_schema_guard`)
 			// Clear the new harness value before downgrading to the older contract.
 			mustExec(t, db, `UPDATE sessions SET harness = '' WHERE harness = 'hermes'`)
 			downTo(t, db, 194)
@@ -91,6 +90,40 @@ func TestMigration0203RejectsUnrecognizedConstraint(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
 		t.Fatalf("unrecognized constraint silently migrated: %v", err)
 	}
+	var applied int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 203 AND is_applied = 1`).Scan(&applied); err != nil || applied != 0 {
+		t.Fatalf("failed migration marked applied: count = %d, err = %v", applied, err)
+	}
+	mustExec(t, db, `PRAGMA writable_schema = ON`)
+	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''fake'', ''other''))', '''fake''))') WHERE type = 'table' AND name = 'sessions'`)
+	mustExec(t, db, `PRAGMA writable_schema = RESET`)
+	upTo(t, db, 203)
+}
+
+func TestMigration0203RefusesUnrecognizedDownConstraint(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 194)
+	upTo(t, db, 203)
+	mustExec(t, db, `PRAGMA writable_schema = ON`)
+	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''hermes'', ''fake''))', '''fake'', ''hermes''))') WHERE type = 'table' AND name = 'sessions'`)
+	mustExec(t, db, `PRAGMA writable_schema = RESET`)
+	var before string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	gooseMu.Lock()
+	err := goose.DownTo(db, "migrations", 196)
+	gooseMu.Unlock()
+	if err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+		t.Fatalf("unrecognized constraint was downgraded: %v", err)
+	}
+	var after string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'sessions'`).Scan(&after); err != nil || after != before {
+		t.Fatalf("failed downgrade changed schema: %v", err)
+	}
+	mustExec(t, db, `PRAGMA writable_schema = ON`)
+	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''fake'', ''hermes''))', '''hermes'', ''fake''))') WHERE type = 'table' AND name = 'sessions'`)
+	mustExec(t, db, `PRAGMA writable_schema = RESET`)
+	downTo(t, db, 196)
 }
 
 func TestMigration0203AddsHermesBeforeLegacySchemaRepair(t *testing.T) {

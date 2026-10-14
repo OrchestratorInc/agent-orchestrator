@@ -13,11 +13,12 @@ WHERE type = 'table' AND name = 'sessions' AND sql LIKE '%CHECK (harness IN (%' 
 PRAGMA writable_schema = RESET;
 -- +goose StatementEnd
 -- +goose StatementBegin
-CREATE TEMP TABLE hermes_schema_guard (valid INTEGER NOT NULL CHECK (valid = 1));
+CREATE TEMP TABLE IF NOT EXISTS hermes_schema_guard (valid INTEGER NOT NULL CHECK (valid = 1));
 -- +goose StatementEnd
 -- +goose StatementBegin
 INSERT INTO hermes_schema_guard (valid)
-SELECT CASE WHEN instr(COALESCE(sql, ''), '''hermes''') > 0 THEN 1 ELSE 0 END
+SELECT CASE WHEN instr(COALESCE(sql, ''), 'CHECK (harness IN (') > 0
+    AND instr(COALESCE(sql, ''), '''hermes'', ''fake''))') > 0 THEN 1 ELSE 0 END
 FROM (SELECT (SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions') AS sql);
 -- +goose StatementEnd
 -- +goose StatementBegin
@@ -25,12 +26,17 @@ DROP TABLE hermes_schema_guard;
 -- +goose StatementEnd
 
 -- +goose Down
--- Refuse a rollback while native Hermes sessions would violate the restored CHECK.
+-- Refuse a rollback if Hermes rows would violate the restored CHECK or the
+-- constraint no longer has the shape this migration knows how to reverse.
 -- +goose StatementBegin
-CREATE TEMP TABLE hermes_schema_guard (valid INTEGER NOT NULL CHECK (valid = 1));
+CREATE TEMP TABLE IF NOT EXISTS hermes_schema_guard (valid INTEGER NOT NULL CHECK (valid = 1));
 -- +goose StatementEnd
 -- +goose StatementBegin
-INSERT INTO hermes_schema_guard (valid) SELECT CASE WHEN EXISTS (SELECT 1 FROM sessions WHERE harness = 'hermes') THEN 0 ELSE 1 END;
+INSERT INTO hermes_schema_guard (valid)
+SELECT CASE WHEN EXISTS (SELECT 1 FROM sessions WHERE harness = 'hermes')
+    OR NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions'
+        AND sql LIKE '%CHECK (harness IN (%' AND sql LIKE '%''hermes'', ''fake''))%')
+    THEN 0 ELSE 1 END;
 -- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE hermes_schema_guard;
@@ -40,8 +46,22 @@ PRAGMA writable_schema = ON;
 -- +goose StatementEnd
 -- +goose StatementBegin
 UPDATE sqlite_master SET sql = replace(sql, '''hermes'', ''fake''))', '''fake''))')
-WHERE type = 'table' AND name = 'sessions';
+WHERE type = 'table' AND name = 'sessions'
+    AND sql LIKE '%CHECK (harness IN (%' AND sql LIKE '%''hermes'', ''fake''))%';
 -- +goose StatementEnd
 -- +goose StatementBegin
 PRAGMA writable_schema = RESET;
+-- +goose StatementEnd
+-- +goose StatementBegin
+CREATE TEMP TABLE IF NOT EXISTS hermes_schema_guard (valid INTEGER NOT NULL CHECK (valid = 1));
+-- +goose StatementEnd
+-- +goose StatementBegin
+INSERT INTO hermes_schema_guard (valid)
+SELECT CASE WHEN instr(COALESCE(sql, ''), 'CHECK (harness IN (') > 0
+    AND instr(COALESCE(sql, ''), '''fake''))') > 0
+    AND instr(COALESCE(sql, ''), '''hermes''') = 0 THEN 1 ELSE 0 END
+FROM (SELECT (SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions') AS sql);
+-- +goose StatementEnd
+-- +goose StatementBegin
+DROP TABLE hermes_schema_guard;
 -- +goose StatementEnd
