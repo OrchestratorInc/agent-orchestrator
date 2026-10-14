@@ -473,6 +473,7 @@ func New(options Options) *Server {
 		router.With(server.authenticate).Post("/orgs", server.createOrganization)
 		router.With(server.authenticate).Get("/invitations", server.listMyInvitations)
 		router.With(server.authenticate).Get("/me/providers", server.listUserProviderConnections)
+		router.With(server.authenticate).Get("/me/providers/{agent}/models", server.listUserAgentModels)
 		router.With(server.authenticate).Put("/me/providers/{agent}", server.putUserAgentConnection)
 		router.With(server.authenticate).Delete("/me/providers/{agent}", server.deleteUserAgentConnection)
 		router.With(server.authenticate).Put("/me/github-pat", server.putGitHubPAT)

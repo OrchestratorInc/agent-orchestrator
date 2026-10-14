@@ -54,6 +54,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/providers/{agent}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        /** @description Model and reasoning-effort choices reported by a live native worker started with the authenticated user's current provider connection. */
+        get: operations["listUserAgentModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/github/user": {
         parameters: {
             query?: never;
@@ -2993,6 +3012,29 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listUserAgentModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Available models for the current personal provider connection. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatModelsResponse"];
+                };
             };
             default: components["responses"]["Error"];
         };

@@ -381,6 +381,7 @@ export interface CloudCpClient {
 	): Promise<CloudCpTerminalTicketResponse>;
 
 	listUserProviderConnections(options?: CloudCpRequestOptions): Promise<CloudCpProviderConnectionsResponse>;
+	listUserAgentModels(agent: CloudCpAgentProvider, options?: CloudCpRequestOptions): Promise<CloudCpChatModelsResponse>;
 	putUserAgentConnection(
 		agent: CloudCpAgentProvider,
 		body: CloudCpPutAgentConnectionRequest,
@@ -847,6 +848,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 				body,
 				signal: o?.signal,
 			}),
+		listUserAgentModels: (agent, o) =>
+			requestJson("GET", `/me/providers/${seg(agent)}/models`, { signal: o?.signal }),
 
 		listUserProviderConnections: (o) => requestJson("GET", "/me/providers", { signal: o?.signal }),
 		putUserAgentConnection: (agent, body, o) =>

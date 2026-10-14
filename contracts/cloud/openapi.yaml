@@ -100,6 +100,27 @@ paths:
           description: The personal coding-agent credential was disconnected.
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/providers/{agent}/models:
+    parameters:
+      - name: agent
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [claude-code, codex, cursor, opencode]
+    get:
+      operationId: listUserAgentModels
+      tags: [Providers]
+      description: Model and reasoning-effort choices reported by a live native worker started with the authenticated user's current provider connection.
+      responses:
+        "200":
+          description: Available models for the current personal provider connection.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatModelsResponse"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/github/user:
     get:
       operationId: getGitHubUserConnection

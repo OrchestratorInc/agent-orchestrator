@@ -76,6 +76,20 @@ describe("cloud control-plane Coder template parameters", () => {
 	});
 });
 
+describe("cloud control-plane personal model catalogs", () => {
+	it("loads models from the encoded personal provider route", async () => {
+		const models = [{ id: "gpt-supported", displayName: "Supported", default: true }];
+		const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ models }), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+
+		await expect(client.listUserAgentModels("codex")).resolves.toEqual({ models });
+		expect(fetchImpl).toHaveBeenCalledWith(
+			"https://cloud.example.test/api/cloud/v1/me/providers/codex/models",
+			expect.objectContaining({ method: "GET" }),
+		);
+	});
+});
+
 describe("cloud control-plane session lifecycle", () => {
 	it("uses the cloud review endpoints for an encoded session", async () => {
 		const fetchMock = vi.fn(
