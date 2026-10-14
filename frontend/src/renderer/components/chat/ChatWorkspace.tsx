@@ -4538,12 +4538,18 @@ function echoMatchesItem(
 	return item.text === echo.text && item.createdAt >= echo.createdAt;
 }
 
+/** Guidance the user typed into a running turn, not a steer from another AO session. */
+function isHumanSteer(item: ConversationItem): item is ConversationActivity {
+	return item.kind === "activity" && isSteer(item) && !item.detail?.senderSessionId &&
+		(item.detail?.origin ?? "human") === "human";
+}
+
 /**
  * The messages Up and Down recall into the composer, oldest first: the human prompts
- * the timeline shows as sent, then local echoes the daemon has not returned yet. The
- * daemon already leaves other branches out; rolled-back turns and queued prompts,
- * which the dock edits, are skipped here. A repeat of the message before it is one
- * stop, not two.
+ * and steers the timeline shows as sent, then local echoes the daemon has not
+ * returned yet. The daemon already leaves other branches out; rolled-back turns and
+ * queued prompts, which the dock edits, are skipped here. A repeat of the message
+ * before it is one stop, not two.
  */
 function sentMessageHistory(
 	snapshot: ConversationSnapshot,
@@ -4557,8 +4563,11 @@ function sentMessageHistory(
 	const human = snapshot.items.filter(
 		(item): item is ConversationMessage => item.kind === "message" && item.role === "user" && item.origin === "human",
 	);
+	const sent = [...human, ...snapshot.items.filter(isHumanSteer)]
+		.filter((item) => !item.turnId || !skipped.has(item.turnId))
+		.sort((a, b) => a.sequence - b.sequence);
 	const texts = [
-		...human.filter((item) => !item.turnId || !skipped.has(item.turnId)).map((item) => item.text),
+		...sent.map((item) => item.kind === "message" ? item.text : item.detail?.text ?? item.summary),
 		...localEchos
 			.filter((echo) => !echo.queued && !human.some((item) => echoMatchesItem(echo, item, backgroundQueuedTurnIds)))
 			.map((echo) => echo.text),

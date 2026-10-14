@@ -5,8 +5,9 @@ import { installFakeAgent } from "./support/fake-bridge";
 const projectId = "chat-composer-history";
 const sessionId = "chat-composer-history-worker";
 const sent = ["Second ask\nwith a second line", "Latest ask"];
+const review = { name: "review", displayName: "review", description: "Look it over", source: "repo" };
 
-async function openChat(page: Page): Promise<Locator> {
+async function openChat(page: Page, prompts = sent, skills: unknown[] = []): Promise<Locator> {
 	await page.emulateMedia({ reducedMotion: "reduce" });
 	await installFakeAgent(page, {
 		projectId,
@@ -34,17 +35,17 @@ async function openChat(page: Page): Promise<Locator> {
 					harness: "codex",
 					mode: "chat",
 					controller: "ready",
-					latestSequence: sent.length,
+					latestSequence: prompts.length,
 					oldestSequence: 1,
 					hasMoreBefore: false,
-					turns: sent.map((_, index) => ({
+					turns: prompts.map((_, index) => ({
 						id: `turn-${index}`,
 						state: "completed",
 						requestedAt: at,
 						startedAt: at,
 						completedAt: at,
 					})),
-					messages: sent.map((text, index) => ({
+					messages: prompts.map((text, index) => ({
 						kind: "message",
 						id: `message-${index}`,
 						turnId: `turn-${index}`,
@@ -67,7 +68,7 @@ async function openChat(page: Page): Promise<Locator> {
 			return;
 		}
 		if (pathname === `/api/v1/sessions/${sessionId}/conversation/skills`) {
-			await route.fulfill({ json: { skills: [] } });
+			await route.fulfill({ json: { skills } });
 			return;
 		}
 		if (pathname === `/api/v1/sessions/${sessionId}/workspace/files`) {
@@ -80,7 +81,7 @@ async function openChat(page: Page): Promise<Locator> {
 	await page.goto(`/#/projects/${projectId}/sessions/${sessionId}`);
 	const composer = page.getByRole("combobox", { name: "Message the agent" });
 	await expect(composer).toBeVisible({ timeout: 15_000 });
-	await expect(page.getByText("Latest ask").first()).toBeVisible();
+	await expect(page.getByText(prompts.at(-1)!).first()).toBeVisible();
 	await composer.click();
 	return composer;
 }
@@ -120,4 +121,22 @@ test("arrow recall follows native caret moves made just before it @T0", async ({
 	await expect.poll(() => composerText(composer)).toBe("Latest ask");
 	await composer.press("ArrowDown");
 	await expect.poll(() => composerText(composer)).toBe("draft");
+});
+
+// Arrowing to the end of a recalled `/skill` must not complete it: that rewrite would
+// end the walk and save the recalled text over the user's own draft.
+test("arrowing through a recalled skill keeps it and the saved draft @T0", async ({ page }) => {
+	const composer = await openChat(page, ["ask /review"], [review]);
+	await page.keyboard.type("my draft");
+	for (let step = 0; step < "my draft".length; step += 1) await composer.press("ArrowLeft");
+	await composer.press("ArrowUp");
+	await expect.poll(() => composerText(composer)).toBe("ask /review");
+	for (let step = 0; step < "ask /review".length; step += 1) await composer.press("ArrowRight");
+	await expect(page.getByRole("listbox")).toBeVisible();
+	expect(await composerText(composer)).toBe("ask /review");
+	await expect(composer.locator('[data-composer-token="skill"]')).toHaveCount(0);
+
+	await page.reload();
+	const reloaded = page.getByRole("combobox", { name: "Message the agent" });
+	await expect.poll(() => composerText(reloaded), { timeout: 15_000 }).toBe("my draft");
 });

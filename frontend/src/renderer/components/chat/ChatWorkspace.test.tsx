@@ -15,7 +15,7 @@ import {
 	chatFixtureThreadError,
 } from "../../lib/chat-fixture";
 import { appI18n } from "../../i18n";
-import type { ConversationMessage, ConversationSnapshot } from "../../types/conversation";
+import type { ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
@@ -5107,7 +5107,11 @@ describe("sent message recall", () => {
 		kind: "message", id, turnId, sequence, revision: 0, role: "user", origin: "human", text, streaming: false,
 		createdAt: "2026-09-09T00:00:00Z", ...extra,
 	});
-	function historySnapshot(sessionId: string, items: ConversationMessage[], activeBranchId = "branch-1"): ConversationSnapshot {
+	const steer = (id: string, turnId: string, sequence: number, text: string, detail: Record<string, string> = { origin: "human" }): ConversationItem => ({
+		kind: "activity", id, turnId, sequence, revision: 0, activityKind: "system", status: "completed", summary: text,
+		detail: { event: "steer", text, ...detail }, createdAt: "2026-09-09T00:00:00Z",
+	});
+	function historySnapshot(sessionId: string, items: ConversationItem[], activeBranchId = "branch-1"): ConversationSnapshot {
 		return {
 			...chatFixtureEmpty,
 			sessionId,
@@ -5144,6 +5148,29 @@ describe("sent message recall", () => {
 		const recalled: (string | null)[] = [];
 		while (press("ArrowUp")) recalled.push(composerText());
 		expect(recalled).toEqual(["Just sent", "Second ask", "Look at this", "First ask"]);
+	});
+
+	it("recalls the user's steers in sequence order and leaves automation steers out", async () => {
+		const snapshot = historySnapshot("recall-steers", [
+			human("first", "t1", 1, "Earlier ask"),
+			{ ...human("reply", "t1", 3, "An answer"), role: "assistant" },
+			human("second", "t2", 4, "Second ask"),
+			human("undone", "t3", 8, "Undone ask"),
+			// Activities come after the messages here; recall follows their sequence.
+			steer("legacy", "t1", 2, "Legacy guidance", {}),
+			steer("guidance", "t2", 5, "Latest human guidance\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-steer.txt"),
+			steer("automation", "t2", 6, "Automation guidance", { origin: "automation" }),
+			steer("relayed", "t2", 7, "Relayed guidance", { senderSessionId: "worker-1", senderProjectId: "project-1" }),
+			steer("undone-steer", "t3", 9, "Undone guidance"),
+		]);
+		snapshot.turns = snapshot.turns.map((turn) => turn.id === "t3" ? { ...turn, rolledBack: true } : turn);
+		render(<ChatWorkspace snapshot={snapshot} />);
+		expect(screen.getByText("Automation guidance")).toBeInTheDocument();
+		await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "");
+
+		const recalled: (string | null)[] = [];
+		while (press("ArrowUp")) recalled.push(composerText());
+		expect(recalled).toEqual(["Latest human guidance", "Second ask", "Legacy guidance", "Earlier ask"]);
 	});
 
 	it("keeps a walk steady while the same branch gains messages", async () => {

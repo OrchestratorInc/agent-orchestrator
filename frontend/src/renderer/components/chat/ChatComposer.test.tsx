@@ -1212,6 +1212,129 @@ describe("sent message recall", () => {
 		expect(press(field, "ArrowUp")).toBe(false);
 		expect(composerWireText(field)).toBe("still settling");
 	});
+
+	it("never completes a recalled skill as the caret moves through it, so the saved draft stays", async () => {
+		const sessionId = "composer-history-skill";
+		writeChatComposerText(sessionId, "my saved draft");
+		const { field } = renderComposer({ draftSessionId: sessionId, skills: SKILLS, sentMessages: ["ask /review"] });
+		await placeLexicalCaret(field, 0);
+		press(field, "ArrowUp");
+		expect(composerWireText(field)).toBe("ask /review");
+
+		// The caret now sits after an exact `/review`, which typing would auto-complete.
+		await placeLexicalCaretAtEnd(field);
+		await screen.findByRole("listbox");
+		expect(field.querySelector('[data-composer-token="skill"]')).toBeNull();
+		expect(composerWireText(field)).toBe("ask /review");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("my saved draft");
+
+		// The open menu keeps the arrows; once dismissed, Down walks back to the draft.
+		fireEvent.keyDown(field, { key: "Escape" });
+		expect(press(field, "ArrowDown")).toBe(true);
+		expect(composerWireText(field)).toBe("my saved draft");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("my saved draft");
+	});
+
+	it("treats a completion the user accepts in a recalled message as an edit", async () => {
+		const sessionId = "composer-history-skill-accepted";
+		writeChatComposerText(sessionId, "my saved draft");
+		const { field } = renderComposer({ draftSessionId: sessionId, skills: SKILLS, sentMessages: ["ask /rev"] });
+		await placeLexicalCaret(field, 0);
+		press(field, "ArrowUp");
+		await placeLexicalCaretAtEnd(field);
+		await screen.findByRole("listbox");
+
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(field.querySelector('[data-composer-token="skill"]')).not.toBeNull());
+		expect(readChatSessionDraft(sessionId).composer.text).toBe(composerWireText(field));
+		expect(composerWireText(field)).not.toBe("my saved draft");
+	});
+
+	it("takes an image removed while browsing out of the saved draft as well", async () => {
+		const sessionId = "composer-history-removed-image";
+		const path = ".ao/attachments/attachment-history-removed.png";
+		const { field, onSend } = renderComposer({
+			draftSessionId: sessionId,
+			sentMessages: ["earlier ask"],
+			onStageAttachments: vi.fn().mockResolvedValue([path]),
+		});
+		await typeInComposer(field, "compare");
+		fireEvent.paste(field, { clipboardData: clipboardData([png("removed.png")]) });
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).not.toBeNull());
+		expect(readChatSessionDraft(sessionId).composer.text).toContain(path);
+
+		await placeLexicalCaret(field, 0);
+		press(field, "ArrowUp");
+		expect(composerWireText(field)).toBe("earlier ask");
+		await userEvent.click(screen.getByLabelText("Remove removed.png"));
+		await waitFor(() => expect(screen.queryByLabelText("Remove removed.png")).toBeNull());
+		// Still browsing, and leaving now would bring back a draft without the image.
+		expect(composerWireText(field)).toBe("earlier ask");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("compare ");
+
+		expect(press(field, "ArrowDown")).toBe(true);
+		expect(composerWireText(field)).toBe("compare ");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onSend.mock.calls[0]?.[0]).toBe("compare");
+		expect(onSend.mock.calls[0]?.[1]).toBeUndefined();
+	});
+
+	it("waits for a pasted image to finish staging before recalling, so its chip survives", async () => {
+		const path = ".ao/attachments/attachment-history-staging.png";
+		const staging = deferred<string[]>();
+		const { field } = renderComposer({ sentMessages: ["earlier ask"], onStageAttachments: vi.fn(() => staging.promise) });
+		await typeInComposer(field, "compare");
+		fireEvent.paste(field, { clipboardData: clipboardData([png("staging.png")]) });
+		expect(field.querySelector('[data-composer-token="image-pending"]')).not.toBeNull();
+
+		await placeLexicalCaret(field, 0);
+		expect(press(field, "ArrowUp")).toBe(false);
+		expect(field.querySelector('[data-composer-token="image-pending"]')).not.toBeNull();
+
+		await act(async () => staging.resolve([path]));
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).not.toBeNull());
+		await placeLexicalCaret(field, 0);
+		expect(press(field, "ArrowUp")).toBe(true);
+		expect(composerWireText(field)).toBe("earlier ask");
+		expect(press(field, "ArrowDown")).toBe(true);
+		expect(field.querySelector('[data-composer-token="image"]')).not.toBeNull();
+		expect(composerWireText(field)).toBe(`compare ${path} `);
+	});
+
+	it("recalls with Up while a Tab suggestion is offered, which dismisses it like any text", async () => {
+		const onDismiss = vi.fn();
+		const { field, onSend } = renderComposer({
+			sentMessages: SENT,
+			promptSuggestion: { id: "suggestion", text: "Run the tests", onDismiss },
+		});
+		await typeInComposer(field, "");
+		expect(press(field, "ArrowUp")).toBe(true);
+		expect(composerWireText(field)).toBe("latest question");
+		expect(onDismiss).toHaveBeenCalled();
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
+	it("makes a recalled message the draft when an image is pasted into it", async () => {
+		const sessionId = "composer-history-pasted-into-recall";
+		const path = ".ao/attachments/attachment-history-pasted.png";
+		writeChatComposerText(sessionId, "my draft");
+		const { field } = renderComposer({
+			draftSessionId: sessionId,
+			sentMessages: ["earlier ask"],
+			onStageAttachments: vi.fn().mockResolvedValue([path]),
+		});
+		await placeLexicalCaret(field, 0);
+		press(field, "ArrowUp");
+		await placeLexicalCaretAtEnd(field);
+		fireEvent.paste(field, { clipboardData: clipboardData([png("pasted.png")]) });
+		await waitFor(() => expect(field.querySelector('[data-composer-token="image"]')).not.toBeNull());
+
+		expect(composerWireText(field)).toBe(`earlier ask ${path} `);
+		expect(readChatSessionDraft(sessionId).composer.text).toBe(`earlier ask ${path} `);
+		// The walk ended with the edit, so Down at the end no longer replaces the text.
+		expect(press(field, "ArrowDown")).toBe(false);
+	});
 });
 
 describe("steering", () => {
